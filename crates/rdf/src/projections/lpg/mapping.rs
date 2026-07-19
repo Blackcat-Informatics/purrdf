@@ -25,6 +25,7 @@ use super::model::{
     LpgRdfQuad, LpgReifier, annotation_identifier, collect_node_terms, edge_identifier,
     node_identifier, property_atom, reifier_identifier, statement_identifier,
 };
+use super::stream::{IgnoreProgress, LpgProgressObserver, LpgProjectionReport, MappingProgress};
 
 /// Result of RDF→LPG projection.
 #[derive(Debug, Clone)]
@@ -33,6 +34,8 @@ pub struct LpgProjection {
     pub graph: LpgGraph,
     /// Always-computed, located semantic-lowering ledger.
     pub loss_ledger: LossLedger,
+    /// Exact scanned/model/node/edge counters for this projection.
+    pub report: LpgProjectionReport,
 }
 
 /// Result of canonical LPG→RDF lifting.
@@ -58,6 +61,42 @@ pub fn project_lpg<D: DatasetView>(
     view: &D,
     config: &LpgConfig,
 ) -> Result<LpgProjection, ProjectionError> {
+    project_lpg_with_progress(view, config, &mut IgnoreProgress)
+}
+
+/// Project an RDF dataset view while reporting monotonic mapping progress.
+///
+/// # Errors
+///
+/// Returns the same typed mapping failures as [`project_lpg`]. An observer error
+/// also fails the operation immediately and produces a final best-effort aborted
+/// snapshot.
+pub fn project_lpg_with_progress<D, O>(
+    view: &D,
+    config: &LpgConfig,
+    observer: &mut O,
+) -> Result<LpgProjection, ProjectionError>
+where
+    D: DatasetView,
+    O: LpgProgressObserver,
+{
+    let mut progress = MappingProgress::new(observer)?;
+    let result = project_lpg_inner(view, config, &mut progress);
+    if result.is_err() {
+        progress.abort();
+    }
+    result
+}
+
+fn project_lpg_inner<D, O>(
+    view: &D,
+    config: &LpgConfig,
+    progress: &mut MappingProgress<'_, O>,
+) -> Result<LpgProjection, ProjectionError>
+where
+    D: DatasetView,
+    O: LpgProgressObserver,
+{
     let execution_limits = config.execution_limits();
     let mut input_budget = RecordBudget::new(execution_limits.max_input_records());
     let mut model_budget = RecordBudget::new(execution_limits.max_model_records());
@@ -67,6 +106,7 @@ pub fn project_lpg<D: DatasetView>(
 
     for graph in view.named_graphs() {
         input_budget.consume("RDF input")?;
+        progress.scanned()?;
         let term = resolve_term(view, graph, config.limits(), &mut cache)?;
         if !declared_graphs.insert(term.clone()) {
             return Err(ProjectionError::integrity(
@@ -85,6 +125,7 @@ pub fn project_lpg<D: DatasetView>(
     let mut node_types: BTreeMap<ProjectionTerm, BTreeSet<String>> = BTreeMap::new();
     for quad in view.quads() {
         input_budget.consume("RDF input")?;
+        progress.scanned()?;
         if context_in_scope(view, quad.g, config, &mut cache)?.is_none() {
             continue;
         }
@@ -130,6 +171,7 @@ pub fn project_lpg<D: DatasetView>(
     let mut selected_reifiers = BTreeSet::new();
     for quad in view.reifier_quads() {
         input_budget.consume("RDF input")?;
+        progress.scanned()?;
         let Some(graph) = context_in_scope(view, quad.g, config, &mut cache)? else {
             continue;
         };
@@ -168,6 +210,7 @@ pub fn project_lpg<D: DatasetView>(
     let mut annotations = Vec::new();
     for quad in view.annotation_quads() {
         input_budget.consume("RDF input")?;
+        progress.scanned()?;
         let Some(graph) = context_in_scope(view, quad.g, config, &mut cache)? else {
             continue;
         };
@@ -225,6 +268,7 @@ pub fn project_lpg<D: DatasetView>(
     let mut nodes = BTreeMap::new();
     for term in node_terms {
         model_budget.consume("LPG model")?;
+        progress.node()?;
         let id = node_identifier(&term, config.limits())?;
         if let Some(existing) = nodes.get(&id) {
             let existing: &LpgNode = existing;
@@ -284,6 +328,7 @@ pub fn project_lpg<D: DatasetView>(
                     execution_limits.max_edges()
                 )));
             }
+            progress.edge()?;
             let target = term_to_node.get(&quad.object).ok_or_else(|| {
                 ProjectionError::integrity("RDF statement object has no canonical LPG node")
             })?;
@@ -394,9 +439,13 @@ pub fn project_lpg<D: DatasetView>(
     }
     ensure_sound(&ledger, "rdf-1.2-dataset", "lpg")?;
 
+    progress.set_model_records(model_budget.used);
+    let report = progress.finish()?;
+
     Ok(LpgProjection {
         graph,
         loss_ledger: ledger,
+        report,
     })
 }
 

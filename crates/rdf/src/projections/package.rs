@@ -388,7 +388,7 @@ fn encoded_member_len(path_bytes: usize, body_bytes: usize) -> Result<usize, Pro
         .ok_or_else(|| ProjectionError::limit("USTAR member length overflow"))
 }
 
-fn validate_artifact_path(path: &str) -> Result<(), ProjectionError> {
+pub(crate) fn validate_artifact_path(path: &str) -> Result<(), ProjectionError> {
     if path.is_empty() {
         return Err(ProjectionError::package("artifact path is empty"));
     }

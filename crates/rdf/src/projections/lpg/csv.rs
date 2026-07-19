@@ -12,11 +12,18 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use super::super::util::canonical_json_bounded;
-use super::super::{ProjectionError, ProjectionLimits, ProjectionPackage, ProjectionTerm};
-use super::mapping::{LpgProjection, project_lpg};
+use super::super::{
+    ProjectionArtifactSink, ProjectionError, ProjectionLimits, ProjectionPackage,
+    ProjectionPackageSink, ProjectionTerm,
+};
+use super::mapping::{LpgProjection, project_lpg, project_lpg_with_progress};
 use super::model::{
     LpgAnnotation, LpgConfig, LpgEdge, LpgGraph, LpgLabel, LpgNode, LpgProperty, LpgReifier,
     node_identifier,
+};
+use super::stream::{
+    IgnoreProgress, LpgArtifactWriter, LpgProgressObserver, LpgProjectionReport, LpgSinkSession,
+    LpgStreamProjection, graph_report,
 };
 use crate::stable_identifier;
 
@@ -65,6 +72,8 @@ pub struct LpgPackageProjection {
     pub package: ProjectionPackage,
     /// Always-computed RDF-to-LPG semantic-lowering ledger.
     pub loss_ledger: LossLedger,
+    /// Exact scanned/model/node/edge counters for the RDF-to-LPG mapping.
+    pub report: LpgProjectionReport,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,19 +97,28 @@ pub fn write_lpg_csv(
     graph: &LpgGraph,
     config: &LpgConfig,
 ) -> Result<ProjectionPackage, ProjectionError> {
-    graph.validate(config)?;
-    let mut package = ProjectionPackage::new(config.limits());
-    package.insert(GENERIC_NODES, write_generic_nodes(graph, config)?)?;
-    package.insert(GENERIC_EDGES, write_generic_edges(graph, config)?)?;
-    package.insert(
-        GENERIC_SIDEBAND,
-        write_sideband(graph, config, GENERIC_SIDEBAND)?,
-    )?;
-    package.insert(
-        GENERIC_MANIFEST,
-        write_manifest(GENERIC_PROFILE, graph, config)?,
-    )?;
-    Ok(package)
+    let mut sink = ProjectionPackageSink::new(config.limits());
+    write_lpg_csv_to_sink(graph, config, &mut sink, &mut IgnoreProgress)?;
+    sink.into_package()
+}
+
+/// Encode generic LPG CSV artifacts incrementally into a transactional sink.
+///
+/// # Errors
+///
+/// Returns a typed model, sink, observer, CSV, serialization, or resource-limit
+/// failure. The sink transaction is aborted on every failure.
+pub fn write_lpg_csv_to_sink<S, O>(
+    graph: &LpgGraph,
+    config: &LpgConfig,
+    sink: &mut S,
+    observer: &mut O,
+) -> Result<(), ProjectionError>
+where
+    S: ProjectionArtifactSink,
+    O: LpgProgressObserver,
+{
+    stream_lpg_csv(graph, config, sink, observer, graph_report(graph))
 }
 
 /// Project any RDF dataset view directly into the deterministic generic CSV package.
@@ -112,13 +130,74 @@ pub fn project_lpg_csv<D: DatasetView>(
     view: &D,
     config: &LpgConfig,
 ) -> Result<LpgPackageProjection, ProjectionError> {
-    let LpgProjection { graph, loss_ledger } = project_lpg(view, config)?;
+    let LpgProjection {
+        graph,
+        loss_ledger,
+        report,
+    } = project_lpg(view, config)?;
     let package = write_lpg_csv(&graph, config)?;
     Ok(LpgPackageProjection {
         graph,
         package,
         loss_ledger,
+        report,
     })
+}
+
+/// Project RDF directly into incrementally emitted generic LPG CSV artifacts.
+///
+/// # Errors
+///
+/// Returns a typed mapping, sink, observer, CSV, serialization, or resource-limit
+/// failure. The sink transaction is aborted on every failure.
+pub fn project_lpg_csv_to_sink<D, S, O>(
+    view: &D,
+    config: &LpgConfig,
+    sink: &mut S,
+    observer: &mut O,
+) -> Result<LpgStreamProjection, ProjectionError>
+where
+    D: DatasetView,
+    S: ProjectionArtifactSink,
+    O: LpgProgressObserver,
+{
+    let LpgProjection {
+        graph,
+        loss_ledger,
+        report,
+    } = project_lpg_with_progress(view, config, observer)?;
+    stream_lpg_csv(&graph, config, sink, observer, report)?;
+    Ok(LpgStreamProjection {
+        loss_ledger,
+        report,
+    })
+}
+
+fn stream_lpg_csv<S, O>(
+    graph: &LpgGraph,
+    config: &LpgConfig,
+    sink: &mut S,
+    observer: &mut O,
+    report: LpgProjectionReport,
+) -> Result<(), ProjectionError>
+where
+    S: ProjectionArtifactSink,
+    O: LpgProgressObserver,
+{
+    graph.validate(config)?;
+    let mut session = LpgSinkSession::new(sink, observer, config.limits(), report)?;
+    session.write_artifact(GENERIC_EDGES, |output| {
+        encode_generic_edges(output, graph, config)
+    })?;
+    let manifest = write_manifest(GENERIC_PROFILE, graph, config)?;
+    session.write_artifact(GENERIC_MANIFEST, |output| output.write_bytes(&manifest))?;
+    session.write_artifact(GENERIC_NODES, |output| {
+        encode_generic_nodes(output, graph, config)
+    })?;
+    session.write_artifact(GENERIC_SIDEBAND, |output| {
+        encode_sideband(output, graph, config, GENERIC_SIDEBAND)
+    })?;
+    session.commit()
 }
 
 /// Decode the strict generic CSV profile into its canonical LPG model.
@@ -187,58 +266,92 @@ pub fn write_neo4j_csv(
     graph: &LpgGraph,
     config: &LpgConfig,
 ) -> Result<ProjectionPackage, ProjectionError> {
+    let mut sink = ProjectionPackageSink::new(config.limits());
+    write_neo4j_csv_to_sink(graph, config, &mut sink, &mut IgnoreProgress)?;
+    sink.into_package()
+}
+
+/// Encode Neo4j Admin Import artifacts incrementally into a transactional sink.
+///
+/// # Errors
+///
+/// Returns a typed model, sink, observer, CSV, identifier, serialization, or
+/// resource-limit failure. The sink transaction is aborted on every failure.
+pub fn write_neo4j_csv_to_sink<S, O>(
+    graph: &LpgGraph,
+    config: &LpgConfig,
+    sink: &mut S,
+    observer: &mut O,
+) -> Result<(), ProjectionError>
+where
+    S: ProjectionArtifactSink,
+    O: LpgProgressObserver,
+{
+    stream_neo4j_csv(graph, config, sink, observer, graph_report(graph))
+}
+
+fn stream_neo4j_csv<S, O>(
+    graph: &LpgGraph,
+    config: &LpgConfig,
+    sink: &mut S,
+    observer: &mut O,
+    report: LpgProjectionReport,
+) -> Result<(), ProjectionError>
+where
+    S: ProjectionArtifactSink,
+    O: LpgProgressObserver,
+{
     graph.validate(config)?;
     let label_map = label_token_map(graph)?;
     let property_map = property_token_map(graph)?;
     let type_map = relationship_token_map(graph)?;
-    let mut package = ProjectionPackage::new(config.limits());
-    package.insert(
-        NEO4J_MANIFEST,
-        write_manifest(NEO4J_PROFILE, graph, config)?,
-    )?;
-    package.insert(
-        NEO4J_LABEL_MAP,
-        write_token_map(&label_map, NEO4J_LABEL_MAP, config.limits())?,
-    )?;
-    package.insert(
-        NEO4J_PROPERTY_MAP,
-        write_token_map(&property_map, NEO4J_PROPERTY_MAP, config.limits())?,
-    )?;
-    package.insert(
-        NEO4J_TYPE_MAP,
-        write_token_map(&type_map, NEO4J_TYPE_MAP, config.limits())?,
-    )?;
-    package.insert(
-        NEO4J_SIDEBAND,
-        write_sideband(graph, config, NEO4J_SIDEBAND)?,
-    )?;
-
-    let mut node_groups: BTreeMap<Vec<String>, Vec<&LpgNode>> = BTreeMap::new();
+    let mut node_groups: BTreeMap<String, (Vec<String>, Vec<&LpgNode>)> = BTreeMap::new();
     for node in &graph.nodes {
         let labels = native_labels(&node.labels)?;
-        node_groups.entry(labels).or_default().push(node);
-    }
-    for (labels, nodes) in node_groups {
         let path = neo4j_node_path(&labels)?;
-        let bytes = write_neo4j_nodes(&nodes, &labels, config, &path)?;
-        package.insert(path, bytes)?;
+        node_groups
+            .entry(path)
+            .or_insert_with(|| (labels, Vec::new()))
+            .1
+            .push(node);
     }
-
-    let mut relationship_groups: BTreeMap<&str, Vec<&LpgEdge>> = BTreeMap::new();
+    let mut relationship_groups: BTreeMap<String, (String, Vec<&LpgEdge>)> = BTreeMap::new();
     for edge in &graph.edges {
+        let token = relationship_token(&edge.edge_type)?;
+        let path = format!("{NEO4J_REL_PREFIX}{token}.csv");
         relationship_groups
-            .entry(&edge.edge_type)
-            .or_default()
+            .entry(path)
+            .or_insert_with(|| (token, Vec::new()))
+            .1
             .push(edge);
     }
-    for (edge_type, edges) in relationship_groups {
-        let token = relationship_token(edge_type)?;
-        let path = format!("{NEO4J_REL_PREFIX}{token}.csv");
-        let bytes = write_neo4j_relationships(&edges, &token, config, &path)?;
-        package.insert(path, bytes)?;
-    }
 
-    Ok(package)
+    let mut session = LpgSinkSession::new(sink, observer, config.limits(), report)?;
+    session.write_artifact(NEO4J_LABEL_MAP, |output| {
+        encode_token_map(output, &label_map, NEO4J_LABEL_MAP)
+    })?;
+    let manifest = write_manifest(NEO4J_PROFILE, graph, config)?;
+    session.write_artifact(NEO4J_MANIFEST, |output| output.write_bytes(&manifest))?;
+    for (path, (labels, nodes)) in node_groups {
+        session.write_artifact(&path, |output| {
+            encode_neo4j_nodes(output, &nodes, &labels, config, &path)
+        })?;
+    }
+    session.write_artifact(NEO4J_PROPERTY_MAP, |output| {
+        encode_token_map(output, &property_map, NEO4J_PROPERTY_MAP)
+    })?;
+    session.write_artifact(NEO4J_SIDEBAND, |output| {
+        encode_sideband(output, graph, config, NEO4J_SIDEBAND)
+    })?;
+    session.write_artifact(NEO4J_TYPE_MAP, |output| {
+        encode_token_map(output, &type_map, NEO4J_TYPE_MAP)
+    })?;
+    for (path, (token, edges)) in relationship_groups {
+        session.write_artifact(&path, |output| {
+            encode_neo4j_relationships(output, &edges, &token, config, &path)
+        })?;
+    }
+    session.commit()
 }
 
 /// Project any RDF dataset view directly into Neo4j Admin Import CSV artifacts.
@@ -250,12 +363,46 @@ pub fn project_neo4j_csv<D: DatasetView>(
     view: &D,
     config: &LpgConfig,
 ) -> Result<LpgPackageProjection, ProjectionError> {
-    let LpgProjection { graph, loss_ledger } = project_lpg(view, config)?;
+    let LpgProjection {
+        graph,
+        loss_ledger,
+        report,
+    } = project_lpg(view, config)?;
     let package = write_neo4j_csv(&graph, config)?;
     Ok(LpgPackageProjection {
         graph,
         package,
         loss_ledger,
+        report,
+    })
+}
+
+/// Project RDF directly into incrementally emitted Neo4j Admin Import artifacts.
+///
+/// # Errors
+///
+/// Returns a typed mapping, sink, observer, CSV, identifier, serialization, or
+/// resource-limit failure. The sink transaction is aborted on every failure.
+pub fn project_neo4j_csv_to_sink<D, S, O>(
+    view: &D,
+    config: &LpgConfig,
+    sink: &mut S,
+    observer: &mut O,
+) -> Result<LpgStreamProjection, ProjectionError>
+where
+    D: DatasetView,
+    S: ProjectionArtifactSink,
+    O: LpgProgressObserver,
+{
+    let LpgProjection {
+        graph,
+        loss_ledger,
+        report,
+    } = project_lpg_with_progress(view, config, observer)?;
+    stream_neo4j_csv(&graph, config, sink, observer, report)?;
+    Ok(LpgStreamProjection {
+        loss_ledger,
+        report,
     })
 }
 
@@ -390,10 +537,18 @@ fn read_manifest(
     Ok(manifest)
 }
 
-fn write_generic_nodes(graph: &LpgGraph, config: &LpgConfig) -> Result<Vec<u8>, ProjectionError> {
-    let mut writer = csv_writer(GENERIC_NODE_HEADER, GENERIC_NODES, config.limits())?;
+fn encode_generic_nodes<S, O>(
+    output: &mut LpgArtifactWriter<'_, S, O>,
+    graph: &LpgGraph,
+    config: &LpgConfig,
+) -> Result<(), ProjectionError>
+where
+    S: ProjectionArtifactSink,
+    O: LpgProgressObserver,
+{
+    let mut writer = streaming_csv_writer(output, GENERIC_NODE_HEADER, GENERIC_NODES)?;
     for node in &graph.nodes {
-        write_record(
+        write_streaming_record(
             &mut writer,
             [
                 node.id.clone(),
@@ -404,13 +559,21 @@ fn write_generic_nodes(graph: &LpgGraph, config: &LpgConfig) -> Result<Vec<u8>, 
             GENERIC_NODES,
         )?;
     }
-    finish_csv(writer, GENERIC_NODES)
+    finish_streaming_csv(writer, GENERIC_NODES)
 }
 
-fn write_generic_edges(graph: &LpgGraph, config: &LpgConfig) -> Result<Vec<u8>, ProjectionError> {
-    let mut writer = csv_writer(GENERIC_EDGE_HEADER, GENERIC_EDGES, config.limits())?;
+fn encode_generic_edges<S, O>(
+    output: &mut LpgArtifactWriter<'_, S, O>,
+    graph: &LpgGraph,
+    config: &LpgConfig,
+) -> Result<(), ProjectionError>
+where
+    S: ProjectionArtifactSink,
+    O: LpgProgressObserver,
+{
+    let mut writer = streaming_csv_writer(output, GENERIC_EDGE_HEADER, GENERIC_EDGES)?;
     for edge in &graph.edges {
-        write_record(
+        write_streaming_record(
             &mut writer,
             [
                 edge.id.clone(),
@@ -422,7 +585,7 @@ fn write_generic_edges(graph: &LpgGraph, config: &LpgConfig) -> Result<Vec<u8>, 
             GENERIC_EDGES,
         )?;
     }
-    finish_csv(writer, GENERIC_EDGES)
+    finish_streaming_csv(writer, GENERIC_EDGES)
 }
 
 fn read_generic_nodes(
@@ -473,20 +636,25 @@ fn read_generic_edges(
     Ok(edges)
 }
 
-fn write_sideband(
+fn encode_sideband<S, O>(
+    output: &mut LpgArtifactWriter<'_, S, O>,
     graph: &LpgGraph,
     config: &LpgConfig,
     path: &str,
-) -> Result<Vec<u8>, ProjectionError> {
+) -> Result<(), ProjectionError>
+where
+    S: ProjectionArtifactSink,
+    O: LpgProgressObserver,
+{
     let mut named_graphs = Vec::with_capacity(graph.named_graphs.len());
     for graph_name in &graph.named_graphs {
         named_graphs.push((node_identifier(graph_name, config.limits())?, graph_name));
     }
     named_graphs.sort_by(|left, right| left.0.cmp(&right.0));
 
-    let mut writer = csv_writer(SIDEBAND_HEADER, path, config.limits())?;
+    let mut writer = streaming_csv_writer(output, SIDEBAND_HEADER, path)?;
     for (id, graph_name) in named_graphs {
-        write_record(
+        write_streaming_record(
             &mut writer,
             [
                 "named-graph".to_owned(),
@@ -497,7 +665,7 @@ fn write_sideband(
         )?;
     }
     for row in &graph.reifiers {
-        write_record(
+        write_streaming_record(
             &mut writer,
             [
                 "reifier".to_owned(),
@@ -508,7 +676,7 @@ fn write_sideband(
         )?;
     }
     for row in &graph.annotations {
-        write_record(
+        write_streaming_record(
             &mut writer,
             [
                 "annotation".to_owned(),
@@ -518,7 +686,7 @@ fn write_sideband(
             path,
         )?;
     }
-    finish_csv(writer, path)
+    finish_streaming_csv(writer, path)
 }
 
 type SidebandRows = (Vec<ProjectionTerm>, Vec<LpgReifier>, Vec<LpgAnnotation>);
@@ -600,12 +768,17 @@ fn read_sideband(
     Ok((named_graphs, reifiers, annotations))
 }
 
-fn write_neo4j_nodes(
+fn encode_neo4j_nodes<S, O>(
+    output: &mut LpgArtifactWriter<'_, S, O>,
     nodes: &[&LpgNode],
     labels: &[String],
     config: &LpgConfig,
     path: &str,
-) -> Result<Vec<u8>, ProjectionError> {
+) -> Result<(), ProjectionError>
+where
+    S: ProjectionArtifactSink,
+    O: LpgProgressObserver,
+{
     let property_columns = group_property_columns(nodes)?;
     let mut header: Vec<String> = NEO4J_NODE_HEADER
         .iter()
@@ -617,7 +790,7 @@ fn write_neo4j_nodes(
             .map(|token| format!("{token}:string")),
     );
     let header_refs: Vec<&str> = header.iter().map(String::as_str).collect();
-    let mut writer = csv_writer(&header_refs, path, config.limits())?;
+    let mut writer = streaming_csv_writer(output, &header_refs, path)?;
     let label_cell = labels.join(";");
     for node in nodes {
         let mut record = vec![
@@ -630,9 +803,9 @@ fn write_neo4j_nodes(
         for iri in property_columns.values() {
             record.push(native_property_cell(&node.properties, iri, config)?);
         }
-        write_record(&mut writer, record, path)?;
+        write_streaming_record(&mut writer, record, path)?;
     }
-    finish_csv(writer, path)
+    finish_streaming_csv(writer, path)
 }
 
 fn read_neo4j_nodes(
@@ -806,15 +979,20 @@ pub(super) fn native_property_cell(
     }
 }
 
-fn write_neo4j_relationships(
+fn encode_neo4j_relationships<S, O>(
+    output: &mut LpgArtifactWriter<'_, S, O>,
     edges: &[&LpgEdge],
     token: &str,
     config: &LpgConfig,
     path: &str,
-) -> Result<Vec<u8>, ProjectionError> {
-    let mut writer = csv_writer(NEO4J_REL_HEADER, path, config.limits())?;
+) -> Result<(), ProjectionError>
+where
+    S: ProjectionArtifactSink,
+    O: LpgProgressObserver,
+{
+    let mut writer = streaming_csv_writer(output, NEO4J_REL_HEADER, path)?;
     for edge in edges {
-        write_record(
+        write_streaming_record(
             &mut writer,
             [
                 edge.id.clone(),
@@ -826,7 +1004,7 @@ fn write_neo4j_relationships(
             path,
         )?;
     }
-    finish_csv(writer, path)
+    finish_streaming_csv(writer, path)
 }
 
 fn read_neo4j_relationships(
@@ -884,16 +1062,20 @@ fn read_neo4j_relationships(
     Ok(edges)
 }
 
-fn write_token_map(
+fn encode_token_map<S, O>(
+    output: &mut LpgArtifactWriter<'_, S, O>,
     map: &BTreeMap<String, String>,
     path: &str,
-    limits: ProjectionLimits,
-) -> Result<Vec<u8>, ProjectionError> {
-    let mut writer = csv_writer(NEO4J_MAP_HEADER, path, limits)?;
+) -> Result<(), ProjectionError>
+where
+    S: ProjectionArtifactSink,
+    O: LpgProgressObserver,
+{
+    let mut writer = streaming_csv_writer(output, NEO4J_MAP_HEADER, path)?;
     for (token, iri) in map {
-        write_record(&mut writer, [token.as_str(), iri.as_str()], path)?;
+        write_streaming_record(&mut writer, [token.as_str(), iri.as_str()], path)?;
     }
-    finish_csv(writer, path)
+    finish_streaming_csv(writer, path)
 }
 
 fn read_token_map(
@@ -1010,101 +1192,52 @@ fn is_direct_csv_child(path: &str, prefix: &str) -> bool {
     })
 }
 
-struct LimitedCsvBytes {
-    bytes: Vec<u8>,
-    limit: usize,
-    exceeded: bool,
-}
+type StreamingCsvWriter<'a, 'b, S, O> = Writer<&'a mut LpgArtifactWriter<'b, S, O>>;
 
-impl LimitedCsvBytes {
-    fn new(limit: usize) -> Self {
-        Self {
-            bytes: Vec::new(),
-            limit,
-            exceeded: false,
-        }
-    }
-}
-
-impl io::Write for LimitedCsvBytes {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        if self
-            .bytes
-            .len()
-            .checked_add(buffer.len())
-            .is_none_or(|length| length > self.limit)
-        {
-            self.exceeded = true;
-            return Err(io::Error::other("projection CSV byte limit exceeded"));
-        }
-        self.bytes.extend_from_slice(buffer);
-        Ok(buffer.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-type CsvWriter = Writer<LimitedCsvBytes>;
-
-fn csv_writer(
+fn streaming_csv_writer<'a, 'b, S, O>(
+    output: &'a mut LpgArtifactWriter<'b, S, O>,
     header: &[&str],
     path: &str,
-    limits: ProjectionLimits,
-) -> Result<CsvWriter, ProjectionError> {
+) -> Result<StreamingCsvWriter<'a, 'b, S, O>, ProjectionError>
+where
+    S: ProjectionArtifactSink,
+    O: LpgProgressObserver,
+{
     let mut writer = WriterBuilder::new()
         .terminator(Terminator::Any(b'\n'))
-        .from_writer(LimitedCsvBytes::new(limits.max_artifact_bytes()));
-    if let Err(error) = writer.write_record(header) {
-        return Err(csv_write_error(&writer, &error, "write CSV header", path));
-    }
+        .from_writer(output);
+    writer
+        .write_record(header)
+        .map_err(|error| csv_stream_error(&error, "write CSV header", path))?;
     Ok(writer)
 }
 
-fn write_record<I, T>(writer: &mut CsvWriter, record: I, path: &str) -> Result<(), ProjectionError>
+fn write_streaming_record<I, T, W>(
+    writer: &mut Writer<W>,
+    record: I,
+    path: &str,
+) -> Result<(), ProjectionError>
 where
     I: IntoIterator<Item = T>,
     T: AsRef<[u8]>,
+    W: io::Write,
 {
-    if let Err(error) = writer.write_record(record) {
-        return Err(csv_write_error(writer, &error, "write CSV record", path));
-    }
-    Ok(())
-}
-
-fn finish_csv(mut writer: CsvWriter, path: &str) -> Result<Vec<u8>, ProjectionError> {
-    if let Err(error) = writer.flush() {
-        if writer.get_ref().exceeded {
-            return Err(ProjectionError::limit(format!(
-                "CSV artifact exceeds the {}-byte limit",
-                writer.get_ref().limit
-            ))
-            .at_path(path));
-        }
-        return Err(ProjectionError::integrity(format!("flush CSV: {error}")).at_path(path));
-    }
     writer
-        .into_inner()
-        .map(|output| output.bytes)
-        .map_err(|error| ProjectionError::integrity(format!("finish CSV: {error}")).at_path(path))
+        .write_record(record)
+        .map_err(|error| csv_stream_error(&error, "write CSV record", path))
 }
 
-fn csv_write_error(
-    writer: &CsvWriter,
-    error: &::csv::Error,
-    action: &str,
+fn finish_streaming_csv<W: io::Write>(
+    mut writer: Writer<W>,
     path: &str,
-) -> ProjectionError {
-    if writer.get_ref().exceeded {
-        ProjectionError::limit(format!(
-            "CSV artifact exceeds the {}-byte limit",
-            writer.get_ref().limit
-        ))
-        .at_path(path)
-    } else {
-        ProjectionError::integrity(format!("{action}: {error}")).at_path(path)
-    }
+) -> Result<(), ProjectionError> {
+    writer
+        .flush()
+        .map_err(|error| ProjectionError::integrity(format!("flush CSV: {error}")).at_path(path))
+}
+
+fn csv_stream_error(error: &::csv::Error, action: &str, path: &str) -> ProjectionError {
+    ProjectionError::integrity(format!("{action}: {error}")).at_path(path)
 }
 
 fn csv_reader<'a>(
@@ -1660,6 +1793,6 @@ mod tests {
             error.kind(),
             super::super::super::ProjectionErrorKind::ResourceLimit
         );
-        assert_eq!(error.path(), Some(GENERIC_NODES));
+        assert_eq!(error.path(), Some(GENERIC_EDGES));
     }
 }

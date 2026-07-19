@@ -145,6 +145,21 @@ pub(super) struct BoundedText {
     path: &'static str,
 }
 
+pub(super) trait LpgTextWriter {
+    fn push(&mut self, value: &str) -> Result<(), ProjectionError>;
+    fn push_hex(&mut self, value: &[u8]) -> Result<(), ProjectionError>;
+}
+
+impl<T: LpgTextWriter + ?Sized> LpgTextWriter for &mut T {
+    fn push(&mut self, value: &str) -> Result<(), ProjectionError> {
+        (**self).push(value)
+    }
+
+    fn push_hex(&mut self, value: &[u8]) -> Result<(), ProjectionError> {
+        (**self).push_hex(value)
+    }
+}
+
 impl BoundedText {
     pub(super) fn new(
         limits: ProjectionLimits,
@@ -194,6 +209,16 @@ impl BoundedText {
 
     pub(super) fn finish(self) -> Vec<u8> {
         self.bytes
+    }
+}
+
+impl LpgTextWriter for BoundedText {
+    fn push(&mut self, value: &str) -> Result<(), ProjectionError> {
+        Self::push(self, value)
+    }
+
+    fn push_hex(&mut self, value: &[u8]) -> Result<(), ProjectionError> {
+        Self::push_hex(self, value)
     }
 }
 
