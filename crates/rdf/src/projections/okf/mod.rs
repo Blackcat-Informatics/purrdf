@@ -4,6 +4,7 @@
 //! Deterministic, caller-configured RDF 1.2 term views as OKF knowledge bundles.
 
 mod config;
+mod mapping;
 
 pub use config::{
     OKF_TERMS_PROFILE, OkfBodySection, OkfBodyStyle, OkfBodyValueMode, OkfCardinality, OkfCategory,
@@ -11,3 +12,4 @@ pub use config::{
     OkfGraphSelection, OkfIndexConfig, OkfLinkPathStyle, OkfLinkSection, OkfLinkStyle,
     OkfLinkTargetMode, OkfPathStrategy, OkfResourceMapping, OkfTermRendering, OkfValueMode,
 };
+pub use mapping::{OkfGenerationReport, OkfProjection, project_okf_terms};

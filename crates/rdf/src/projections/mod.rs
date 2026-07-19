@@ -97,8 +97,9 @@ pub use obo_graphs::{
 pub use okf::{
     OKF_TERMS_PROFILE, OkfBodySection, OkfBodyStyle, OkfBodyValueMode, OkfCardinality, OkfCategory,
     OkfConceptSelector, OkfFieldMapping, OkfFrontmatterMappings, OkfGenerationConfig,
-    OkfGraphSelection, OkfIndexConfig, OkfLinkPathStyle, OkfLinkSection, OkfLinkStyle,
-    OkfLinkTargetMode, OkfPathStrategy, OkfResourceMapping, OkfTermRendering, OkfValueMode,
+    OkfGenerationReport, OkfGraphSelection, OkfIndexConfig, OkfLinkPathStyle, OkfLinkSection,
+    OkfLinkStyle, OkfLinkTargetMode, OkfPathStrategy, OkfProjection, OkfResourceMapping,
+    OkfTermRendering, OkfValueMode, project_okf_terms,
 };
 pub use package::{ProjectionLimits, ProjectionPackage};
 pub use research_object::{
