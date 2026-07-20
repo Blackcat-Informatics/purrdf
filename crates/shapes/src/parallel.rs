@@ -29,24 +29,30 @@ std::thread_local! {
     static FORCE_CHUNK_SIZE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 }
 
-/// Force the scheduler branch for a deterministic equivalence test.
+/// Force both scheduler branch and chunk geometry for an equivalence test.
 #[cfg(test)]
 #[must_use]
-pub(crate) fn force_parallel_for_test(force: bool) -> ForceParallelGuard {
-    let previous = FORCE_PARALLEL.with(|cell| cell.replace(Some(force)));
-    ForceParallelGuard { previous }
+pub(crate) fn force_scheduler_for_test(parallel: bool, chunk_size: usize) -> ForceSchedulerGuard {
+    let previous_parallel = FORCE_PARALLEL.with(|cell| cell.replace(Some(parallel)));
+    let previous_chunk_size = FORCE_CHUNK_SIZE.with(|cell| cell.replace(Some(chunk_size.max(1))));
+    ForceSchedulerGuard {
+        previous_parallel,
+        previous_chunk_size,
+    }
 }
 
-/// Restores the production scheduler decision when a test scope ends.
+/// Restores both production scheduler decisions when a test scope ends.
 #[cfg(test)]
-pub(crate) struct ForceParallelGuard {
-    previous: Option<bool>,
+pub(crate) struct ForceSchedulerGuard {
+    previous_parallel: Option<bool>,
+    previous_chunk_size: Option<usize>,
 }
 
 #[cfg(test)]
-impl Drop for ForceParallelGuard {
+impl Drop for ForceSchedulerGuard {
     fn drop(&mut self) {
-        FORCE_PARALLEL.with(|cell| cell.set(self.previous));
+        FORCE_PARALLEL.with(|cell| cell.set(self.previous_parallel));
+        FORCE_CHUNK_SIZE.with(|cell| cell.set(self.previous_chunk_size));
     }
 }
 
@@ -112,31 +118,8 @@ where
 mod tests {
     use super::*;
 
-    struct OverrideGuard {
-        parallel: Option<bool>,
-        chunk_size: Option<usize>,
-    }
-
-    impl OverrideGuard {
-        fn new(parallel: bool, chunk_size: usize) -> Self {
-            let previous_parallel = FORCE_PARALLEL.with(|cell| cell.replace(Some(parallel)));
-            let previous_chunk = FORCE_CHUNK_SIZE.with(|cell| cell.replace(Some(chunk_size)));
-            Self {
-                parallel: previous_parallel,
-                chunk_size: previous_chunk,
-            }
-        }
-    }
-
-    impl Drop for OverrideGuard {
-        fn drop(&mut self) {
-            FORCE_PARALLEL.with(|cell| cell.set(self.parallel));
-            FORCE_CHUNK_SIZE.with(|cell| cell.set(self.chunk_size));
-        }
-    }
-
     fn run(items: &[usize], parallel: bool) -> Result<Vec<usize>, usize> {
-        let _guard = OverrideGuard::new(parallel, 3);
+        let _guard = force_scheduler_for_test(parallel, 3);
         try_map_chunks(
             items,
             || (),
@@ -162,6 +145,89 @@ mod tests {
         let items: Vec<usize> = (0..16).collect();
         assert_eq!(run(&items, false), Err(7));
         assert_eq!(run(&items, true), Err(7));
+    }
+
+    #[test]
+    fn exact_error_is_stable_across_workers_and_chunks() {
+        let items: Vec<usize> = (0..32).collect();
+        let run = |threads, parallel, chunk_size| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("test pool must build")
+                .install(|| {
+                    let _guard = force_scheduler_for_test(parallel, chunk_size);
+                    try_map_chunks(
+                        &items,
+                        || (),
+                        |(), out, item| {
+                            if *item == 7 || *item == 11 {
+                                Err(format!("focus-{item} failed"))
+                            } else {
+                                out.push(*item);
+                                Ok(())
+                            }
+                        },
+                    )
+                })
+        };
+        let expected = run(1, false, 1);
+        assert_eq!(expected, Err("focus-7 failed".to_owned()));
+        for threads in [2, 4] {
+            for chunk_size in [1, 2, 3, 8, 64] {
+                assert_eq!(
+                    run(threads, true, chunk_size),
+                    expected,
+                    "error drifted with {threads} workers and chunk size {chunk_size}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn forced_parallel_path_uses_multiple_workers() {
+        use std::collections::BTreeSet;
+        use std::sync::{Barrier, Mutex};
+
+        const WORKERS: usize = 4;
+        let items: Vec<usize> = (0..256).collect();
+        let workers = Mutex::new(BTreeSet::new());
+        let rendezvous = Barrier::new(WORKERS);
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(WORKERS)
+            .build()
+            .expect("test pool must build");
+        let output = pool
+            .install(|| {
+                let _guard = force_scheduler_for_test(true, 1);
+                try_map_chunks(
+                    &items,
+                    || (),
+                    |(), out, item| {
+                        let worker = rayon::current_thread_index()
+                            .expect("parallel work must run on the configured pool");
+                        let first_visit = workers
+                            .lock()
+                            .expect("worker set lock must remain healthy")
+                            .insert(worker);
+                        if first_visit {
+                            rendezvous.wait();
+                        }
+                        out.push(*item);
+                        Ok::<(), String>(())
+                    },
+                )
+            })
+            .expect("forced parallel work must succeed");
+
+        assert_eq!(output, items);
+        assert_eq!(
+            workers
+                .into_inner()
+                .expect("worker set lock must remain healthy")
+                .len(),
+            WORKERS
+        );
     }
 
     #[test]

@@ -1973,11 +1973,89 @@ mod tests {
         );
         let data = load_data_nt(&data_nt);
         let shapes = load_shapes_ttl(&shapes_ttl);
-        let render = |parallel| {
-            let _guard = crate::parallel::force_parallel_for_test(parallel);
-            validate(&data, &shapes).to_ntriples()
+        let render = |threads, parallel, chunk_size| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("test pool must build")
+                .install(|| {
+                    let _guard = crate::parallel::force_scheduler_for_test(parallel, chunk_size);
+                    validate(&data, &shapes).to_ntriples()
+                })
         };
 
-        assert_eq!(render(false), render(true));
+        let expected = render(1, false, 1);
+        for (threads, chunk_size) in [(2, 1), (4, 3), (4, 16)] {
+            assert_eq!(
+                render(threads, true, chunk_size),
+                expected,
+                "user-function report drifted with {threads} workers and chunk size {chunk_size}"
+            );
+        }
+    }
+
+    #[test]
+    fn complete_corpus_matches_across_scheduler_geometries() {
+        use std::fs;
+        use std::path::PathBuf;
+
+        let corpus = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/corpus"));
+        let mut cases: Vec<_> = fs::read_dir(&corpus)
+            .expect("corpus directory must be readable")
+            .filter_map(|entry| {
+                let path = entry.ok()?.path();
+                path.is_dir().then_some(path)
+            })
+            .collect();
+        cases.sort();
+        assert_eq!(cases.len(), 69, "first-party corpus cardinality drifted");
+
+        let geometries: Vec<_> = [(2, 1), (4, 7), (4, 64)]
+            .into_iter()
+            .map(|(threads, chunk_size)| {
+                let pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(threads)
+                    .build()
+                    .expect("test pool must build");
+                (threads, chunk_size, pool)
+            })
+            .collect();
+
+        for case in cases {
+            let case_name = case
+                .file_name()
+                .expect("corpus case must have a name")
+                .to_string_lossy();
+            let data = fs::read_to_string(case.join("data.nt"))
+                .unwrap_or_else(|error| panic!("{case_name}: data.nt: {error}"));
+            let shapes = fs::read_to_string(case.join("shapes.ttl"))
+                .unwrap_or_else(|error| panic!("{case_name}: shapes.ttl: {error}"));
+            let render = || {
+                validate_graphs_with_config(
+                    &data,
+                    &shapes,
+                    Some(crate::model::BoxRoleVocab::for_namespace(
+                        "https://example.org/meta/",
+                    )),
+                )
+                .unwrap_or_else(|error| panic!("{case_name}: validation failed: {error}"))
+                .to_ntriples()
+            };
+
+            let expected = {
+                let _guard = crate::parallel::force_scheduler_for_test(false, 1);
+                render()
+            };
+            for (threads, chunk_size, pool) in &geometries {
+                let actual = pool.install(|| {
+                    let _guard = crate::parallel::force_scheduler_for_test(true, *chunk_size);
+                    render()
+                });
+                assert_eq!(
+                    actual, expected,
+                    "{case_name}: report drifted with {threads} workers and chunk size {chunk_size}"
+                );
+            }
+        }
     }
 }
