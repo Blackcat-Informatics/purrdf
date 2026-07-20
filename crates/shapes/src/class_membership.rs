@@ -718,19 +718,58 @@ fn build_index(
         direct.dedup();
     }
 
-    // If no asserted type can take even the first subclass step, there can be no
-    // virtual membership and no exact-type index is retained. Once one can,
-    // retain every exact type: direct ancestor subjects are required to suppress
-    // direct-plus-derived duplicates during object-bound enumeration.
-    let has_virtual_source = asserted_type_classes
-        .iter()
-        .any(|class| parents.contains_key(class));
-    if !has_virtual_source {
+    // Freeze ancestry before retaining any subject rows. Only an exact type with
+    // at least one proper ancestor can source a virtual membership. A directly
+    // asserted ancestor also needs its subject slice so object-bound enumeration
+    // can suppress direct-plus-derived duplicates. Every other asserted root is
+    // irrelevant to this view and must not inflate the compact index.
+    let mut ancestry: FastMap<TermId, Box<[TermId]>> = FastMap::default();
+    let mut retained_classes = FastSet::default();
+    let mut marks = vec![0u32; dataset.term_count()];
+    let mut generation = 0u32;
+    let mut frontier = Vec::new();
+    for &class in &asserted_type_classes {
+        if !parents.contains_key(&class) {
+            continue;
+        }
+        generation = generation.checked_add(1).unwrap_or_else(|| {
+            marks.fill(0);
+            1
+        });
+        marks[class.index()] = generation;
+        frontier.clear();
+        frontier.push(class);
+        let mut proper = Vec::new();
+        while let Some(child) = frontier.pop() {
+            if let Some(direct) = parents.get(&child) {
+                for &parent in direct {
+                    if marks[parent.index()] != generation {
+                        marks[parent.index()] = generation;
+                        proper.push(parent);
+                        frontier.push(parent);
+                    }
+                }
+            }
+        }
+        if proper.is_empty() {
+            continue;
+        }
+        proper.sort_unstable();
+        retained_classes.insert(class);
+        for &ancestor in &proper {
+            if asserted_type_classes.contains(&ancestor) {
+                retained_classes.insert(ancestor);
+            }
+        }
+        ancestry.insert(class, proper.into_boxed_slice());
+    }
+    if ancestry.is_empty() {
         return None;
     }
+
     let mut rows: Vec<_> = dataset
         .quads()
-        .filter(|quad| quad.g.is_none() && quad.p == rdf_type)
+        .filter(|quad| quad.g.is_none() && quad.p == rdf_type && retained_classes.contains(&quad.o))
         .map(|quad| TypeRow {
             class: quad.o,
             subject: quad.s,
@@ -742,15 +781,13 @@ fn build_index(
     let mut subjects = Vec::with_capacity(rows.len());
     let mut ancestors = Vec::new();
     let mut typed_classes = Vec::new();
-    let mut marks = vec![0u32; dataset.term_count()];
-    let mut generation = 0u32;
-    let mut frontier = Vec::new();
     let mut position = 0usize;
     let mut virtual_upper_bound = 0usize;
     let mut fingerprint = 0xcbf2_9ce4_8422_2325u64;
 
     while position < rows.len() {
         let class = rows[position].class;
+        fingerprint = fingerprint_mix(fingerprint, class.index());
         let subject_start = subjects.len();
         while position < rows.len() && rows[position].class == class {
             subjects.push(rows[position].subject);
@@ -759,28 +796,10 @@ fn build_index(
         }
         let subject_end = subjects.len();
 
-        generation = generation.checked_add(1).unwrap_or_else(|| {
-            marks.fill(0);
-            1
-        });
-        marks[class.index()] = generation;
-        frontier.clear();
-        frontier.push(class);
         let ancestor_start = ancestors.len();
-        while let Some(child) = frontier.pop() {
-            if let Some(direct) = parents.get(&child) {
-                for &parent in direct {
-                    if marks[parent.index()] != generation {
-                        marks[parent.index()] = generation;
-                        ancestors.push(parent);
-                        frontier.push(parent);
-                    }
-                }
-            }
+        if let Some(proper) = ancestry.remove(&class) {
+            ancestors.extend_from_slice(&proper);
         }
-        // The generation marks admit each reachable class once, so sorting is
-        // sufficient to freeze a canonical proper-ancestor slice.
-        ancestors[ancestor_start..].sort_unstable();
         let ancestor_end = ancestors.len();
         for &ancestor in &ancestors[ancestor_start..ancestor_end] {
             fingerprint = fingerprint_mix(fingerprint, ancestor.index());
@@ -1025,6 +1044,47 @@ mod tests {
         );
         assert_eq!(view.len_hint(), Some(dataset.quad_count()));
         assert_eq!(view.build_count(), 1);
+    }
+
+    #[test]
+    fn mixed_abox_retains_only_membership_relevant_type_rows() {
+        let mut builder = RdfDatasetBuilder::new();
+        let rdf_type = builder.intern_iri(rdf::TYPE);
+        let subclass = builder.intern_iri(rdfs::SUB_CLASS_OF);
+        let leaf = builder.intern_iri(&format!("{EX}Leaf"));
+        let root = builder.intern_iri(&format!("{EX}Root"));
+        let active_a = builder.intern_iri(&format!("{EX}active-a"));
+        let active_b = builder.intern_iri(&format!("{EX}active-b"));
+        builder.push_quad(leaf, subclass, root, None);
+        builder.push_quad(active_a, rdf_type, leaf, None);
+        builder.push_quad(active_a, rdf_type, root, None);
+        builder.push_quad(active_b, rdf_type, leaf, None);
+
+        for index in 0..512usize {
+            let class = builder.intern_iri(&format!("{EX}unrelated-class-{index}"));
+            let subject = builder.intern_iri(&format!("{EX}unrelated-subject-{index}"));
+            builder.push_quad(subject, rdf_type, class, None);
+        }
+
+        let dataset = builder.freeze().expect("fixture freezes");
+        let view = ClassMembershipView::new(Arc::clone(&dataset));
+        view.prepare();
+
+        assert_eq!(
+            view.dimensions(),
+            [2, 3, 1, 1, 1, 2],
+            "unrelated asserted roots must not survive in the compact index"
+        );
+        assert_eq!(
+            view.instances_of(root).collect::<Vec<_>>(),
+            vec![active_a, active_b],
+            "direct-plus-derived membership stays unique"
+        );
+        assert_eq!(
+            view.quads().count(),
+            dataset.quad_count() + 1,
+            "only active-b gains one virtual root type"
+        );
     }
 
     #[test]
