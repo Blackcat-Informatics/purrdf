@@ -33,6 +33,7 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 - **capi:** Honor active smoke-test profile
 - **build:** Harden Cargo target discovery
 - **release:** Deduplicate generated changelog entries
+- **capi:** Regenerate header for 0.8.0
 
 ### CI & Build
 
