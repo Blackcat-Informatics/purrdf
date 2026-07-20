@@ -49,6 +49,7 @@
 mod carrier;
 mod csvw;
 mod dataset_description;
+mod dcat_rdf;
 mod error;
 mod lpg;
 mod obo_graphs;
@@ -80,6 +81,7 @@ pub use dataset_description::{
     ConstructViewConfig, ConstructViewProjection, RdfDescriptionProjection, project_construct_view,
     serialize_rdf_description,
 };
+pub use dcat_rdf::{DcatRdfConfig, DcatRdfMappingConfig, DcatRdfSource, project_dcat_rdf};
 pub use error::{ProjectionError, ProjectionErrorKind};
 pub use lpg::{
     LpgAnnotation, LpgConfig, LpgEdge, LpgExecutionLimits, LpgGraph, LpgGraphContext,

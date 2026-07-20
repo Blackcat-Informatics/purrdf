@@ -28,7 +28,8 @@ fn projection_error(error: &ProjectionError) -> PurrdfError {
 /// caller-owned buffers released with `purrdf_buffer_free`. The loss ledger is
 /// always computed and uses PurRDF's versioned canonical JSON schema.
 /// Research-object profiles are `croissant-1.1`, `ro-crate-1.3`,
-/// `datacite-4.6`, `dcat-3`, and `frictionless-data-package-1`.
+/// `datacite-4.6`, `dcat-3`, and `frictionless-data-package-1`. The `dcat-rdf`
+/// dataset-description view is also available as a write-only profile.
 ///
 /// # Safety
 /// `dataset` must be a live handle; `profile` must be a valid C string;

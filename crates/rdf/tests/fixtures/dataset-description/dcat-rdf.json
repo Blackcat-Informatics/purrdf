@@ -1,0 +1,23 @@
+{
+  "profile": "dcat-rdf",
+  "config": {
+    "format": "turtle",
+    "source": {
+      "mode": "construct",
+      "config": {
+        "query": "CONSTRUCT { <https://example.org/dataset> <https://example.org/title> \"DCAT\" } WHERE {}",
+        "base_iri": null,
+        "limits": {
+          "max_artifacts": 4,
+          "max_artifact_bytes": 1000000,
+          "max_total_bytes": 2000000,
+          "max_archive_bytes": 3000000,
+          "max_term_depth": 16
+        },
+        "max_query_bytes": 1000,
+        "max_input_records": 10000,
+        "max_output_records": 100
+      }
+    }
+  }
+}

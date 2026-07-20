@@ -184,6 +184,8 @@ mod tests {
     const CSVW_TERMS_CONFIG: &str = include_str!("../../rdf/tests/fixtures/csvw-terms.json");
     const OKF_TERMS_CONFIG: &str = include_str!("../../rdf/tests/fixtures/okf-terms.json");
     const OKF_TERMS_SOURCE: &str = include_str!("../../rdf/tests/fixtures/okf-terms.trig");
+    const DCAT_RDF_CONFIG: &str =
+        include_str!("../../rdf/tests/fixtures/dataset-description/dcat-rdf.json");
     const RESEARCH_CONFIGS: &[(&str, &str)] = &[
         (
             "croissant-1.1",
@@ -244,6 +246,19 @@ mod tests {
                 lift_projection(&first.archive, profile, config).expect("lift profile");
             assert!(lifted.take_dataset().is_some());
         }
+    }
+
+    #[test]
+    fn wasm_projection_shim_executes_write_only_dcat_rdf_deterministically() {
+        let dataset = Dataset::parse(RESEARCH_SOURCE, "turtle", None).expect("parse source");
+        let first = dataset
+            .project("dcat-rdf", DCAT_RDF_CONFIG)
+            .expect("project dcat-rdf");
+        let second = dataset
+            .project("dcat-rdf", DCAT_RDF_CONFIG)
+            .expect("repeat dcat-rdf");
+        assert_eq!(first.profile, "dcat-rdf");
+        assert_eq!(first.archive, second.archive);
     }
 
     #[test]
