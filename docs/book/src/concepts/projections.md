@@ -3,12 +3,13 @@ SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinform
 SPDX-License-Identifier: CC-BY-4.0
 -->
 
-# Graph, Tabular & Research-Object Projections
+# Graph, Tabular, Dataset-Description & Research-Object Projections
 
-PurRDF projects an RDF 1.2 dataset into graph, tabular, and research-object
-carrier formats without making any of those formats the semantic authority. One
-Rust engine implements the mapping, packages its artifacts as canonical USTAR,
-and is exposed unchanged through Rust, the CLI, Python, WebAssembly, and C.
+PurRDF projects an RDF 1.2 dataset into graph, tabular, dataset-description, and
+research-object formats without making any of those formats the semantic
+authority. One Rust engine implements the mapping, packages its artifacts as
+canonical USTAR, and is exposed unchanged through Rust, the CLI, Python,
+WebAssembly, and C.
 
 Every operation has four non-negotiable properties:
 
@@ -36,11 +37,14 @@ Every operation has four non-negotiable properties:
 | `ro-crate-1.3` | `ro-crate-metadata.json` | RDF ↔ carrier | shared model; profile loss is located |
 | `datacite-4.6` | `datacite.xml` | RDF ↔ carrier | shared model; profile loss is located |
 | `dcat-3` | `dcat.jsonld` | RDF ↔ carrier | shared model; profile loss is located |
+| `dcat-rdf` | `dcat.<native extension>` | RDF → view | mapped or caller-CONSTRUCTed; blank-free RDF |
+| `void` | `void.<native extension>` | RDF → view | selected-graph statistics, partitions, and linksets |
 | `frictionless-data-package-1` | `datapackage.json` | RDF ↔ carrier | shared model; profile loss is located |
 
 The type distinction between `ProjectionProfile` and `LiftProfile` matters:
-curated CSVW/OKF terms, OBO Graphs, and SKOS cannot even be named as lift profiles.
-They are useful views, not pretend interchange formats.
+curated CSVW/OKF terms, OBO Graphs, SKOS, native DCAT RDF, and VoID cannot even
+be named as lift profiles. They are useful views, not pretend interchange
+formats.
 
 ## One canonical LPG model
 
@@ -210,6 +214,65 @@ exercise a non-empty reverse ledger for every profile; a 5×5 metamorphic matrix
 proves the shared semantic intersection stabilizes through every source/target
 pair.
 
+## Native RDF dataset descriptions
+
+`dcat-3` remains the bidirectional JSON-LD research-object carrier described
+above. The separate `dcat-rdf` profile emits a blank-free default graph in any
+registered native RDF syntax. Its tagged `source` is mandatory and has two
+explicit modes:
+
+- `mapped` reuses the caller-configured research-object interpretation, then
+  emits direct RDF IR with the caller's complete DCAT context/role map plus
+  explicit `rdf:type` and XSD-string IRIs. The semantic lowering ledger from
+  the shared model is preserved.
+- `construct` treats one caller-supplied SPARQL CONSTRUCT as the complete view.
+  Query bytes, input records, output records, term depth, artifacts, bodies,
+  and archive bytes are all bounded. The query is parsed at configuration time,
+  runs over the complete dataset including RDF 1.2 statement layers, and must
+  produce a graph.
+
+Both modes use the same deterministic native serializer. The selected syntax
+controls the single `dcat.<extension>` member; configuration never infers a
+vocabulary, query, syntax, or base IRI. Because the result is a description
+view rather than an exact carrier, `dcat-rdf` has no lift profile.
+
+The `void` profile generates a deterministic, blank-free dataset description
+directly in caller-vocabulary RDF. Its configuration names the described
+dataset, the base for stable generated resource IRIs, the source header subject
+and predicates, three distinct header/alignment/metadata graph selectors, a
+non-empty exact set of data graphs, all 22 target roles, local and external
+dataset-prefix registries, optional metadata-link mappings and static dataset
+statements, and every package/execution limit.
+
+Statistics are computed only from the selected data graphs. `triples` counts
+selected statements, `entities` and `distinctSubjects` count distinct subjects,
+`distinctObjects` counts distinct objects, `classes` counts IRI objects of the
+configured type predicate, and `properties` counts predicates. A class
+partition includes every selected statement whose subject has that class; a
+property partition includes statements with exactly that predicate. Partition
+and linkset IRIs use full deterministic identifiers beneath the caller's base.
+
+Alignment rows must have IRI endpoints. Longest-prefix matching classifies each
+endpoint, equal-length ambiguity or no match is an error, and every alignment
+must have at least one local endpoint. Linksets retain source/object
+orientation and are grouped by subject dataset, object dataset, and predicate.
+The generator never guesses ownership, swaps direction, fetches metadata, or
+supplies a VoID/RDF/XSD namespace.
+
+Complete portable `example.org` configurations and an executable TriG source
+are under `crates/rdf/tests/fixtures/dataset-description/`. They run unchanged
+through every host, for example:
+
+```sh
+purrdf project --profile dcat-rdf \
+  --config crates/rdf/tests/fixtures/dataset-description/dcat-rdf.json \
+  --from trig crates/rdf/tests/fixtures/dataset-description/void-source.trig dcat.tar
+
+purrdf project --profile void \
+  --config crates/rdf/tests/fixtures/dataset-description/void.json \
+  --from trig crates/rdf/tests/fixtures/dataset-description/void-source.trig void.tar
+```
+
 ## OBO Graphs and SKOS views
 
 The OBO Graphs writer emits version 0.3.2 nodes, edges and metadata plus directly
@@ -374,8 +437,8 @@ assert_eq!(lifted.dataset.quad_count(), 1);
 ledger. `project_lpg_artifacts_to_sink` dispatches the four LPG profiles into a
 caller-owned `ProjectionArtifactSink` through the same configuration and mapping
 engine; `LpgProgressObserver` supplies structured progress. Lower-level APIs
-also expose the typed LPG, CSVW, OBO, SKOS, and in-memory research-object/artifact
-models.
+also expose the typed LPG, CSVW, OBO, SKOS, DCAT RDF, VoID, and in-memory
+research-object/artifact models.
 
 ## Other production surfaces
 
@@ -397,6 +460,7 @@ Runnable examples live at:
 - `crates/rdf/examples/research_object_roundtrip.rs`
 - `crates/rdf/examples/attached_ro_crate.rs`
 - `crates/cli/examples/projection-roundtrip.sh`
+- `crates/cli/examples/dataset-descriptions.sh`
 - `bindings/python/examples/projection_roundtrip.py`
 - `bindings/python/examples/projection_stream.py`
 - `crates/rdf-wasm/js/examples/projection-roundtrip.mjs`
@@ -424,7 +488,7 @@ The benchmark is report-only. It measures RDF-to-LPG mapping, scoped versus
 explicit-all mapping over a 20-graph carrier, materialized package versus direct
 sink output for every LPG syntax, every LPG read path, exact CSVW write/read,
 exact-versus-curated CSVW over the same 12,000-quad carrier, one-graph versus
-all-graph curated scope, OBO Graphs and SKOS projection, the shared
-research-object model, and all five research-object write/read paths. It also
-reports allocation and artifact-body-size observations over deterministic
-fixtures.
+all-graph curated scope, OBO Graphs and SKOS projection, mapped and CONSTRUCT
+DCAT RDF, VoID generation, the shared research-object model, and all five
+research-object write/read paths. It also reports allocation and
+artifact-body-size observations over deterministic fixtures.

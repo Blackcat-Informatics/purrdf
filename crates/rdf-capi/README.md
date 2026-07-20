@@ -44,10 +44,10 @@ and deterministic dataset-IRI `derived`. Context IRI and `@import` resolution is
 restricted to the immutable registry in the options document; libpurrdf never
 performs network context loading.
 
-## Graph, tabular, and research-object projection carriers
+## Graph, tabular, dataset-description, and research-object projection carriers
 
 `purrdf_project` and `purrdf_lift` expose the same canonical archive engine as
-Rust, Python, WebAssembly, and the CLI. `purrdf_project` accepts all fourteen
+Rust, Python, WebAssembly, and the CLI. `purrdf_project` accepts all sixteen
 profiles; `purrdf_lift` accepts the ten structurally bidirectional ones:
 
 | Profile | Project | Lift |
@@ -65,6 +65,8 @@ profiles; `purrdf_lift` accepts the ten structurally bidirectional ones:
 | `ro-crate-1.3` | yes | yes |
 | `datacite-4.6` | yes | yes |
 | `dcat-3` | yes | yes |
+| `dcat-rdf` | yes | no |
+| `void` | yes | no |
 | `frictionless-data-package-1` | yes | yes |
 
 Configuration is mandatory profile-tagged JSON with caller-owned vocabulary,
@@ -73,6 +75,13 @@ identity, limits, and policy. Projection returns two independent caller-owned
 loss-ledger JSON. Lift returns a caller-owned `PurrdfDataset` plus an independent
 ledger buffer. Free every buffer with `purrdf_buffer_free` and the dataset with
 `purrdf_dataset_free`.
+
+`dcat-rdf` and `void` produce a single native RDF description member and have
+no inverse. Their strict JSON carries the selected syntax, complete
+caller-owned vocabularies and identities, and all mapping/resource policy. The
+portable configurations under `crates/rdf/tests/fixtures/dataset-description/`
+can be passed directly as `config_json`; `void-source.trig` supplies the matching
+example dataset.
 
 `purrdf_project_with_assets` is the attached RO-Crate entry point. It accepts a
 canonical payload-only USTAR under the configuration limits and routes it through

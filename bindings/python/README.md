@@ -108,12 +108,35 @@ print([(loss.code, loss.location) for loss in package.losses])
 ```
 
 Project profiles are `lpg-csv`, `neo4j-csv`, `open-cypher`, `graphml`,
-`csvw-exact`, `csvw-terms`, `okf-terms`, `obo-graphs`, `skos`, `croissant-1.1`, `ro-crate-1.3`,
-`datacite-4.6`, `dcat-3`, and `frictionless-data-package-1`. Curated CSVW/OKF
-terms, OBO Graphs, and SKOS are deliberately write-only, ledgered views. Returned
+`csvw-exact`, `csvw-terms`, `okf-terms`, `obo-graphs`, `skos`, `croissant-1.1`,
+`ro-crate-1.3`, `datacite-4.6`, `dcat-3`, `dcat-rdf`, `void`, and
+`frictionless-data-package-1`. Curated CSVW/OKF terms, OBO Graphs, SKOS, native
+DCAT RDF, and VoID are deliberately write-only, ledgered views. Returned
 archives are canonical deterministic USTAR bytes and every result carries its always-computed
 structured loss records. Research-object contexts, vocabularies, identities,
 and profiles are all mandatory caller configuration.
+
+Native RDF dataset descriptions use the same call. The complete JSON names the
+output syntax and either a mapped/CONSTRUCT DCAT source or the VoID source
+graphs, role vocabulary, dataset-prefix registries, and resource bounds:
+
+```python
+from pathlib import Path
+import purrdf
+
+source = Path("void-source.trig").read_text()
+void_config = Path("void.json").read_text()
+description = purrdf.project(
+    source,
+    format=purrdf.RdfFormat.TRIG,
+    profile="void",
+    config=void_config,
+)
+Path("void.tar").write_bytes(description.archive)
+```
+
+Portable `void-source.trig`, `void.json`, and `dcat-rdf.json` examples are in
+`crates/rdf/tests/fixtures/dataset-description/`.
 
 Attached RO-Crate packaging uses the same call with `assets=` set to a canonical
 payload-only USTAR archive and configuration `packaging: "attached"`. The result

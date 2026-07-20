@@ -1,0 +1,25 @@
+@prefix ex: <https://example.org/> .
+@prefix local: <https://example.org/resource/> .
+@prefix external: <https://external.example/> .
+@prefix specific: <https://external.example/resource/> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+
+ex:source
+    ex:version "1.0" ;
+    ex:abstract "Example linked dataset."@en .
+
+ex:data {
+    local:alice rdf:type ex:Person ;
+        ex:knows local:bob .
+    local:bob rdf:type ex:Person, ex:Agent ;
+        ex:name "Bob" .
+}
+
+ex:alignments {
+    local:alice ex:exactMatch specific:a .
+    external:b ex:relatedMatch local:bob .
+}
+
+ex:metadata {
+    ex:source ex:authority external:catalogue .
+}

@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Deterministic, caller-configured RDF 1.2 graph, tabular, and research-object projections.
+//! Deterministic, caller-configured RDF 1.2 graph, tabular, dataset-description,
+//! and research-object projections.
 //!
 //! Projection codecs share one bounded in-memory package, one durable RDF term
 //! representation, one typed error surface, and one set of escaping/identity
@@ -25,11 +26,13 @@
 //! | RO-Crate 1.3 | RDF ↔ carrier | Shared model plus explicit metadata-only/attached payload contract and located profile losses |
 //! | DataCite 4.6 | RDF ↔ carrier | Shared research-object model with located profile losses |
 //! | DCAT 3 | RDF ↔ carrier | Shared research-object model with located profile losses |
+//! | DCAT native RDF | RDF → view | Mapped or caller-CONSTRUCTed, blank-free RDF in any registered syntax |
+//! | VoID | RDF → view | Caller-vocabulary dataset statistics, partitions, and oriented linksets |
 //! | Frictionless Data Package v1 | RDF ↔ carrier | Shared research-object model with located profile losses |
 //!
 //! [`project_archive`] provides the profile-tagged production entry point.
 //! [`lift_archive`] accepts only [`LiftProfile`], so the type system cannot pretend
-//! that the four write-only views round-trip. Every operation computes a deterministic
+//! that write-only views round-trip. Every operation computes a deterministic
 //! [`purrdf_core::LossLedger`]; deciding whether to display it is a host concern.
 //!
 //! # Configuration and packages
@@ -48,6 +51,8 @@
 
 mod carrier;
 mod csvw;
+mod dataset_description;
+mod dcat_rdf;
 mod error;
 mod lpg;
 mod obo_graphs;
@@ -58,6 +63,7 @@ mod sink;
 mod skos;
 mod term;
 mod util;
+mod void;
 
 pub use carrier::{
     LiftProfile, ProjectionArchive, ProjectionConfig, ProjectionLift, ProjectionProfile,
@@ -75,6 +81,11 @@ pub use csvw::{
     CsvwWarning, CsvwWarningKind, CsvwWriteOutcome, CsvwWritePlan, project_csvw,
     project_csvw_exact, project_csvw_terms, read_csvw, read_csvw_exact, write_csvw,
 };
+pub use dataset_description::{
+    ConstructViewConfig, ConstructViewProjection, RdfDescriptionProjection, project_construct_view,
+    serialize_rdf_description,
+};
+pub use dcat_rdf::{DcatRdfConfig, DcatRdfMappingConfig, DcatRdfSource, project_dcat_rdf};
 pub use error::{ProjectionError, ProjectionErrorKind};
 pub use lpg::{
     LpgAnnotation, LpgConfig, LpgEdge, LpgExecutionLimits, LpgGraph, LpgGraphContext,
@@ -128,4 +139,9 @@ pub use term::{ProjectionDirection, ProjectionTerm};
 pub use util::{
     escape_cypher_identifier, escape_cypher_string, escape_xml_attribute, escape_xml_text,
     stable_identifier, validate_absolute_iri,
+};
+pub use void::{
+    VOID_ROLES, VoidConfig, VoidDatasetPrefix, VoidExecutionLimits, VoidExternalLinkMapping,
+    VoidGraphSelector, VoidRole, VoidSourceRoles, VoidStaticStatement, VoidStaticValue,
+    VoidVocabulary, project_void,
 };

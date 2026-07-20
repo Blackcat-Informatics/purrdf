@@ -16,17 +16,18 @@ import { parsePackument } from "./npm-pack-output.mjs";
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 // The wasm package ships the RDF 1.2 model, SPARQL/SHACL/ShEx engines, the
 // native format registry (Turtle/N-Quads/TriG/JSON-LD/YAML-LD/…), layout, the
-// SVG renderer, and all fourteen graph/tabular/research-object projection
-// profiles. Both ceilings track the optimized wasm artifact (see the Makefile
-// WASM_SIZE_BUDGET_BYTES note); each is the measured size plus about 3%
+// SVG renderer, and all sixteen graph/tabular/dataset-description/research-object
+// projection profiles. Both ceilings track the optimized wasm artifact (see the
+// Makefile WASM_SIZE_BUDGET_BYTES note); each is the measured size plus about 3%
 // headroom. The five strict bidirectional research-object codecs, configured
 // JSON-LD context engine, and scoped LPG mapper account for earlier reviewed
 // increases. The always-on curated CSVW and OKF terms mappers, their closed
-// located-loss contracts, and shared host dispatch account for this one. Node
-// 26/npm 12 measured a 2_491_001-byte tarball and 7_350_572 unpacked bytes.
-// Both ceilings retain about 3% headroom for supported packagers.
-const MAX_TARBALL_BYTES = 2_570_000;
-const MAX_UNPACKED_BYTES = 7_580_000;
+// located-loss contracts, and shared host dispatch account for one increase;
+// bounded CONSTRUCT, mapped native DCAT RDF, and VoID generation account for
+// the latest. Node 26/npm 11 measured a 2_698_568-byte tarball and 7_951_365
+// unpacked bytes. Both ceilings retain about 3% headroom for supported packagers.
+const MAX_TARBALL_BYTES = 2_780_000;
+const MAX_UNPACKED_BYTES = 8_200_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
 const NPM_INSTALL_TIMEOUT_MS = 180_000;
 const SMOKE_TIMEOUT_MS = 60_000;

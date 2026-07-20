@@ -74,6 +74,11 @@ const RESEARCH_SOURCE: &[u8] =
 const CSVW_TERMS_CONFIG: &[u8] = include_bytes!("../../rdf/tests/fixtures/csvw-terms.json");
 const OKF_TERMS_CONFIG: &[u8] = include_bytes!("../../rdf/tests/fixtures/okf-terms.json");
 const OKF_TERMS_SOURCE: &[u8] = include_bytes!("../../rdf/tests/fixtures/okf-terms.trig");
+const DCAT_RDF_CONFIG: &[u8] =
+    include_bytes!("../../rdf/tests/fixtures/dataset-description/dcat-rdf.json");
+const VOID_CONFIG: &[u8] = include_bytes!("../../rdf/tests/fixtures/dataset-description/void.json");
+const VOID_SOURCE: &[u8] =
+    include_bytes!("../../rdf/tests/fixtures/dataset-description/void-source.trig");
 const RESEARCH_CONFIGS: &[(&str, &[u8])] = &[
     (
         "croissant-1.1",
@@ -419,6 +424,96 @@ fn all_research_object_profiles_project_lift_and_repeat_through_the_cli() {
             "{profile} lifted dataset identity"
         );
     }
+}
+
+#[test]
+fn dcat_rdf_projects_deterministically_and_remains_write_only_through_the_cli() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = write(&dir.path().join("source.ttl"), TURTLE);
+    let config = write(&dir.path().join("dcat-rdf.json"), DCAT_RDF_CONFIG);
+    let first = dir.path().join("first.tar");
+    let second = dir.path().join("second.tar");
+    let first_path = first.to_str().expect("first archive path");
+    let second_path = second.to_str().expect("second archive path");
+
+    for output in [first_path, second_path] {
+        let result = run(&[
+            "project",
+            "--profile",
+            "dcat-rdf",
+            "--config",
+            &config,
+            &input,
+            output,
+        ]);
+        assert!(
+            result.status.success(),
+            "dcat-rdf project failed: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+    assert_eq!(
+        std::fs::read(&first).expect("first archive"),
+        std::fs::read(&second).expect("second archive")
+    );
+
+    let lifted = run(&[
+        "lift",
+        "--profile",
+        "dcat-rdf",
+        "--config",
+        &config,
+        first_path,
+        "-",
+    ]);
+    assert_eq!(lifted.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&lifted.stderr).contains("invalid value 'dcat-rdf'"));
+}
+
+#[test]
+fn void_projects_deterministically_and_remains_write_only_through_the_cli() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = write(&dir.path().join("source.trig"), VOID_SOURCE);
+    let config = write(&dir.path().join("void.json"), VOID_CONFIG);
+    let first = dir.path().join("first.tar");
+    let second = dir.path().join("second.tar");
+    let first_path = first.to_str().expect("first archive path");
+    let second_path = second.to_str().expect("second archive path");
+
+    for output in [first_path, second_path] {
+        let result = run(&[
+            "project",
+            "--profile",
+            "void",
+            "--config",
+            &config,
+            "--from",
+            "trig",
+            &input,
+            output,
+        ]);
+        assert!(
+            result.status.success(),
+            "VoID project failed: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+    assert_eq!(
+        std::fs::read(&first).expect("first archive"),
+        std::fs::read(&second).expect("second archive")
+    );
+
+    let lifted = run(&[
+        "lift",
+        "--profile",
+        "void",
+        "--config",
+        &config,
+        first_path,
+        "-",
+    ]);
+    assert_eq!(lifted.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&lifted.stderr).contains("invalid value 'void'"));
 }
 
 #[test]

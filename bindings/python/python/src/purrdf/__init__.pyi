@@ -40,6 +40,8 @@ type ProjectionProfile = Literal[
     "ro-crate-1.3",
     "datacite-4.6",
     "dcat-3",
+    "dcat-rdf",
+    "void",
     "frictionless-data-package-1",
 ]
 type LiftProfile = Literal[

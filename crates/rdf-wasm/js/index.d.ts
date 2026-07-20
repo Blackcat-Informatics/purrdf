@@ -436,11 +436,13 @@ export type ProjectionProfile =
   | "ro-crate-1.3"
   | "datacite-4.6"
   | "dcat-3"
+  | "dcat-rdf"
+  | "void"
   | "frictionless-data-package-1";
 
 export type LiftProfile = Exclude<
   ProjectionProfile,
-  "csvw-terms" | "okf-terms" | "obo-graphs" | "skos"
+  "csvw-terms" | "okf-terms" | "obo-graphs" | "skos" | "dcat-rdf" | "void"
 >;
 
 export interface ProjectionLossLedger {

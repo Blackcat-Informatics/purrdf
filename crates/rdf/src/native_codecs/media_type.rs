@@ -9,6 +9,8 @@
 //! (`native-codec-unsupported-format`) rather than degrading — no optional fallback
 //! codec (`.goals` no-optionality).
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
 use crate::RdfDiagnostic;
 
 /// The RDF text serializations the native codec backend parses and serializes via the
@@ -57,6 +59,10 @@ pub enum NativeRdfFormat {
 pub(crate) struct FormatDescriptor {
     /// The variant this row describes.
     pub format: NativeRdfFormat,
+    /// Stable caller/configuration identifier.
+    pub id: &'static str,
+    /// Canonical artifact file extension without a leading dot.
+    pub extension: &'static str,
     /// The canonical IANA media type — the value [`NativeRdfFormat::media_type`] returns.
     pub media_type: &'static str,
     /// Every additional spelling [`classify`] accepts: alternate media types, bare
@@ -87,6 +93,8 @@ pub(crate) struct FormatDescriptor {
 pub(crate) const FORMATS: &[FormatDescriptor] = &[
     FormatDescriptor {
         format: NativeRdfFormat::Turtle,
+        id: "turtle",
+        extension: "ttl",
         media_type: "text/turtle",
         aliases: &["application/turtle", "turtle", "ttl", ".ttl"],
         carries_star: true,
@@ -97,6 +105,8 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
     },
     FormatDescriptor {
         format: NativeRdfFormat::TriG,
+        id: "trig",
+        extension: "trig",
         media_type: "application/trig",
         aliases: &["trig", ".trig"],
         carries_star: true,
@@ -107,6 +117,8 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
     },
     FormatDescriptor {
         format: NativeRdfFormat::NTriples,
+        id: "ntriples",
+        extension: "nt",
         media_type: "application/n-triples",
         aliases: &["n-triples", "ntriples", "nt", ".nt"],
         carries_star: true,
@@ -117,6 +129,8 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
     },
     FormatDescriptor {
         format: NativeRdfFormat::NQuads,
+        id: "nquads",
+        extension: "nq",
         media_type: "application/n-quads",
         aliases: &["n-quads", "nquads", "nq", ".nq"],
         carries_star: true,
@@ -127,6 +141,8 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
     },
     FormatDescriptor {
         format: NativeRdfFormat::RdfXml,
+        id: "rdfxml",
+        extension: "rdf",
         media_type: "application/rdf+xml",
         // `rdf/xml` + `rdfxml` are absorbed from the wasm resolver so `classify` is a
         // strict superset of every spelling any first-party surface accepts.
@@ -141,6 +157,8 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
     },
     FormatDescriptor {
         format: NativeRdfFormat::TriX,
+        id: "trix",
+        extension: "trix",
         media_type: "application/trix",
         aliases: &["trix", ".trix"],
         carries_star: false,
@@ -151,6 +169,8 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
     },
     FormatDescriptor {
         format: NativeRdfFormat::HexTuples,
+        id: "hextuples",
+        extension: "hext",
         media_type: "application/x-hextuples",
         aliases: &["application/hex+x-ndjson", "hext", "hextuples", ".hext"],
         carries_star: false,
@@ -161,6 +181,8 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
     },
     FormatDescriptor {
         format: NativeRdfFormat::JsonLd,
+        id: "jsonld",
+        extension: "jsonld",
         media_type: "application/ld+json",
         aliases: &["ld+json", "jsonld", "json-ld", ".jsonld"],
         carries_star: true,
@@ -171,6 +193,8 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
     },
     FormatDescriptor {
         format: NativeRdfFormat::YamlLd,
+        id: "yamlld",
+        extension: "yamlld",
         media_type: "application/ld+yaml",
         aliases: &["ld+yaml", "yamlld", "yaml-ld", ".yamlld"],
         carries_star: true,
@@ -192,6 +216,21 @@ pub(crate) fn descriptor(format: NativeRdfFormat) -> &'static FormatDescriptor {
 }
 
 impl NativeRdfFormat {
+    /// Every registered native RDF syntax in registry order.
+    pub fn all() -> impl ExactSizeIterator<Item = Self> {
+        FORMATS.iter().map(|row| row.format)
+    }
+
+    /// Stable lowercase identifier used by strict configuration serialization.
+    pub fn id(self) -> &'static str {
+        descriptor(self).id
+    }
+
+    /// Canonical artifact file extension without a leading dot.
+    pub fn file_extension(self) -> &'static str {
+        descriptor(self).extension
+    }
+
     /// The canonical IANA media type for this format. The inverse of the canonical
     /// rows in [`classify`].
     pub fn media_type(self) -> &'static str {
@@ -236,6 +275,25 @@ impl NativeRdfFormat {
     }
 }
 
+impl Serialize for NativeRdfFormat {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.id())
+    }
+}
+
+impl<'de> Deserialize<'de> for NativeRdfFormat {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        classify(&value).map_err(serde::de::Error::custom)
+    }
+}
+
 /// Resolve a media type or local format id to a [`NativeRdfFormat`].
 ///
 /// The input is lowercased and any `;charset=…` parameter is stripped before
@@ -253,7 +311,11 @@ pub fn classify(media_type: &str) -> Result<NativeRdfFormat, RdfDiagnostic> {
         .to_ascii_lowercase();
     FORMATS
         .iter()
-        .find(|d| d.media_type == normalized || d.aliases.contains(&normalized.as_str()))
+        .find(|d| {
+            d.id == normalized
+                || d.media_type == normalized
+                || d.aliases.contains(&normalized.as_str())
+        })
         .map(|d| d.format)
         .ok_or_else(|| {
             RdfDiagnostic::error(
@@ -358,6 +420,34 @@ mod tests {
                 descriptor.format
             );
         }
+    }
+
+    #[test]
+    fn registry_ids_extensions_and_serde_are_total_and_unique() {
+        let mut ids = std::collections::BTreeSet::new();
+        let mut extensions = std::collections::BTreeSet::new();
+        for row in FORMATS {
+            assert!(ids.insert(row.id), "duplicate format id {}", row.id);
+            assert!(
+                extensions.insert(row.extension),
+                "duplicate format extension {}",
+                row.extension
+            );
+            assert_eq!(classify(row.id).unwrap(), row.format);
+            assert_eq!(
+                classify(&format!(".{}", row.extension)).unwrap(),
+                row.format
+            );
+            let json = serde_json::to_string(&row.format).expect("serialize format");
+            assert_eq!(json, format!("\"{}\"", row.id));
+            assert_eq!(
+                serde_json::from_str::<NativeRdfFormat>(&json).expect("deserialize format"),
+                row.format
+            );
+        }
+        assert_eq!(ids.len(), FORMATS.len());
+        assert_eq!(extensions.len(), FORMATS.len());
+        assert!(serde_json::from_str::<NativeRdfFormat>("\"unknown\"").is_err());
     }
 
     #[test]

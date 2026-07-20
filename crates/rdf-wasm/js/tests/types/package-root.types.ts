@@ -93,10 +93,16 @@ const projection: ProjectionPackage = matched.project("lpg-csv", JSON.stringify(
 const projectionLedger: ProjectionLossLedger = JSON.parse(projection.lossLedgerJson);
 const curatedProfile: ProjectionProfile = "csvw-terms";
 const okfTermsProfile: ProjectionProfile = "okf-terms";
+const dcatRdfProfile: ProjectionProfile = "dcat-rdf";
+const voidProfile: ProjectionProfile = "void";
 // @ts-expect-error curated CSVW terms cannot reconstruct arbitrary source RDF
 const invalidCuratedLift: LiftProfile = "csvw-terms";
 // @ts-expect-error curated OKF terms cannot reconstruct arbitrary source RDF
 const invalidOkfTermsLift: LiftProfile = "okf-terms";
+// @ts-expect-error native DCAT RDF is a write-only description view
+const invalidDcatRdfLift: LiftProfile = "dcat-rdf";
+// @ts-expect-error VoID is a write-only description view
+const invalidVoidLift: LiftProfile = "void";
 const researchProjection: ProjectionPackage = matched.project(
   "frictionless-data-package-1",
   "{}",
@@ -168,8 +174,12 @@ void same;
 void projectionLedger;
 void curatedProfile;
 void okfTermsProfile;
+void dcatRdfProfile;
+void voidProfile;
 void invalidCuratedLift;
 void invalidOkfTermsLift;
+void invalidDcatRdfLift;
+void invalidVoidLift;
 void researchProjection;
 void projectedDataset;
 void visualModel;

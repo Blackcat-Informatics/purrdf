@@ -42,8 +42,9 @@ They live under `crates/*/benches/`:
 - `crates/rdf/benches/projections.rs` — RDF-to-LPG mapping, selective versus
   explicit-all scope, materialized-package versus direct-sink output for all
   four LPG carriers, carrier readers, exact CSVW write/read, OBO Graphs, SKOS,
-  the shared research-object model, and all five research-object carriers, with
-  per-operation allocation observations.
+  mapped/CONSTRUCT DCAT RDF, VoID generation, the shared research-object model,
+  and all five research-object carriers, with per-operation allocation
+  observations.
 - `crates/sparql-algebra/benches/tokenize.rs` — SPARQL/Turtle lexer hot path
   (`IRIREF`, string literals, comments).
 - `crates/sparql-eval/benches/query_eval.rs` — end-to-end SPARQL SELECT
@@ -87,7 +88,7 @@ Additional benches are run package-by-package, e.g.
 | `crates/rdf-core/benches/purremb.rs` | Full validation and resident reopen over a 16,384 x 384 binary32 Matryoshka matrix; target/row/prefix access, exact and coarse-prefix/full-prefix top-10 retrieval, canonical streaming output, a 4,096 x 128 binary64 matrix, and a one-million-chunk hierarchy. |
 | `crates/rdf-core/benches/purremb_alloc.rs` | Allocation calls, requested bytes, retained-byte deltas, and live-byte high-water deltas for PURREMB fixture construction, verification, and streaming. |
 | `crates/rdf/benches/native_codecs.rs` | Throughput of the native Turtle, TriG, N-Triples, N-Quads, RDF/XML, and JSON-LD serializers/parsers; JSON-LD context compilation and expanded/caller/derived modes are reported separately. |
-| `crates/rdf/benches/projections.rs` | Graph, tabular, and research-object mapping/carrier throughput plus LPG scope and materialized-package/direct-sink allocation comparisons over deterministic fixtures. |
+| `crates/rdf/benches/projections.rs` | Graph, tabular, dataset-description, and research-object mapping/carrier throughput plus LPG scope and materialized-package/direct-sink allocation comparisons over deterministic fixtures. |
 | `crates/sparql-algebra/benches/tokenize.rs` | Lexer throughput on long IRI bodies, escaped string literals, and comment tails. |
 | `crates/sparql-eval/benches/query_eval.rs` | End-to-end SPARQL SELECT latency including BGP joins, filters, and aggregates. |
 | `crates/sparql-eval/benches/cost_based_bgp_planner.rs` | Planner regression watch: cost-based BGP ordering vs. the retired structural heuristic. |
@@ -272,21 +273,24 @@ cargo bench -p purrdf-shapes --bench schema_surface --locked --no-run
 cargo bench -p purrdf-shapes --bench schema_surface --locked -- --test
 ```
 
-### Graph, tabular, and research-object projections
+### Graph, tabular, dataset-description, and research-object projections
 
-`crates/rdf/benches/projections.rs` builds five deterministic `example.org`
+`crates/rdf/benches/projections.rs` builds six deterministic `example.org`
 datasets without RNG: a 600-quad general graph, a 12,000-quad graph split evenly
 across 20 named graphs, a 600-quad OBO/OWL graph, an 800-quad SKOS source graph,
-and a 29-quad research-object intersection. The small canonical LPG projection
-contains 408 nodes plus edges. The large scope comparison either retains all 20
-graphs or scans the same trust boundary while retaining one 600-quad graph.
-Criterion measures complete mapping/serialization/parser operations and all
-four large LPG materialized-package/direct-sink pairs; fixture construction and
-strict profile-config parsing stay outside timed loops. A counting global
-allocator also reports calls and requested bytes for representative single
-operations. Attached RO-Crate write/read cases include payload validation,
-metadata, preview, canonical USTAR construction, and strict lift validation.
-Those counts are cumulative allocation traffic, not retained or peak memory.
+the 29-quad research-object intersection, and a 10-quad, four-graph VoID source.
+The small canonical LPG projection contains 408 nodes plus edges. The large
+scope comparison either retains all 20 graphs or scans the same trust boundary
+while retaining one 600-quad graph. Criterion measures complete
+mapping/serialization/parser operations, all four large LPG
+materialized-package/direct-sink pairs, mapped and bounded-CONSTRUCT DCAT RDF
+archive generation over the research fixture, and VoID archive generation;
+fixture construction and strict profile-config parsing stay outside timed
+loops. A counting global allocator also reports calls and requested bytes for
+representative single operations. Attached RO-Crate write/read cases include
+payload validation, metadata, preview, canonical USTAR construction, and strict
+lift validation. Those counts are cumulative allocation traffic, not retained
+or peak memory.
 
 Run it with:
 
@@ -349,6 +353,22 @@ Representative one-operation allocation traffic from the same run:
 | DCAT 3 read | 3,524 | 435,850 |
 | Frictionless Data Package v1 write | 1,025 | 99,013 |
 | Frictionless Data Package v1 read | 2,183 | 259,794 |
+
+The native dataset-description slice was measured separately on 2026-07-19
+with rustc 1.97.1, Linux 7.1.4, and the same AMD Ryzen AI MAX+ 395. The
+production archive path includes mapping or CONSTRUCT evaluation, native Turtle
+serialization, package validation, and canonical USTAR encoding. Strict config
+parsing remains outside the timed loop. The mapped and CONSTRUCT cases scan the
+29-quad research-object source; the VoID case scans its 10 quads across the
+default, data, alignment, and metadata graphs. Throughput is normalized to
+source quads, while VoID's input limit additionally charges named-graph and RDF
+1.2 statement-layer records.
+
+| Operation | Archive bytes | Time | Throughput | Allocation calls | Requested bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| mapped DCAT RDF | 5,632 | 144.85 µs | 200.20 Kquad/s | 2,512 | 219,001 |
+| CONSTRUCT DCAT RDF | 2,048 | 15.436 µs | 1.879 Mquad/s | 134 | 13,913 |
+| VoID generation | 14,336 | 197.34 µs | 50.674 Kquad/s | 3,213 | 394,387 |
 
 The attached RO-Crate slice was measured separately on 2026-07-19 with rustc
 1.97.1, Linux 7.1.4, the same processor, and 10 Criterion samples. The fixture
