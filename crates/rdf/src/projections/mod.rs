@@ -48,6 +48,7 @@
 
 mod carrier;
 mod csvw;
+mod dataset_description;
 mod error;
 mod lpg;
 mod obo_graphs;
@@ -75,6 +76,7 @@ pub use csvw::{
     CsvwWarning, CsvwWarningKind, CsvwWriteOutcome, CsvwWritePlan, project_csvw,
     project_csvw_exact, project_csvw_terms, read_csvw, read_csvw_exact, write_csvw,
 };
+pub use dataset_description::{RdfDescriptionProjection, serialize_rdf_description};
 pub use error::{ProjectionError, ProjectionErrorKind};
 pub use lpg::{
     LpgAnnotation, LpgConfig, LpgEdge, LpgExecutionLimits, LpgGraph, LpgGraphContext,
