@@ -8,6 +8,8 @@
 
 use std::ffi::CString;
 
+use sha2::{Digest, Sha256};
+
 use purrdf::buffer::{PurrdfBuffer, purrdf_buffer_data, purrdf_buffer_free};
 use purrdf::cursor::{
     PurrdfCursor, purrdf_cursor_free, purrdf_cursor_next, purrdf_quads_for_pattern,
@@ -22,7 +24,7 @@ use purrdf::handles::{
     PurrdfDataset, purrdf_dataset_free, purrdf_dataset_quad_count, purrdf_dataset_term_count,
 };
 use purrdf::parse::purrdf_parse;
-use purrdf::projection::{purrdf_lift, purrdf_project};
+use purrdf::projection::{purrdf_lift, purrdf_project, purrdf_project_with_assets};
 use purrdf::query::{purrdf_query, purrdf_query_json};
 use purrdf::rowcursor::{
     PurrdfRowCursor, purrdf_rowcursor_free, purrdf_rowcursor_next, purrdf_rowcursor_term,
@@ -40,6 +42,9 @@ use purrdf::term::{
 use purrdf::version::{
     PURRDF_ABI_MAJOR, PURRDF_ABI_MINOR, PURRDF_ABI_PATCH, purrdf_abi_version, purrdf_capabilities,
 };
+
+const ATTACHED_ARCHIVE_SHA256: &str =
+    "d714b63370b0026a28281f605794520fd4d1bc388ae8e5fdd367c5152cb95f6b";
 
 /// A zeroed output term view the cursor fills.
 fn out_view() -> PurrdfTermView {
@@ -253,6 +258,82 @@ fn projection_archive_and_ledger_round_trip_through_owned_c_handles() {
         let lift_ledger_bytes = buffer_bytes(lift_ledger);
         let lift_ledger_json = String::from_utf8(lift_ledger_bytes).expect("lift ledger");
         assert!(lift_ledger_json.starts_with("{\n  \"schema_version\": 1,"));
+
+        purrdf_buffer_free(lift_ledger);
+        purrdf_dataset_free(lifted);
+        purrdf_buffer_free(project_ledger);
+        purrdf_buffer_free(archive);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+#[test]
+fn attached_ro_crate_payload_round_trips_through_owned_c_handles() {
+    let source = include_str!("../../rdf/tests/fixtures/research-objects/carrier/shared.ttl")
+        .replace("files/train.csv", "data/train.csv")
+        .replace(
+            "\"42\"^^<https://example.org/rdf/role-50>",
+            "\"3\"^^<https://example.org/rdf/role-50>",
+        );
+    let config =
+        include_str!("../../rdf/tests/fixtures/research-objects/carrier/ro-crate-1.3.json")
+            .replace("\"metadata-only\"", "\"attached\"");
+    let parsed = purrdf_rs::ProjectionConfig::from_json(config.as_bytes()).expect("config");
+    let assets = purrdf_rs::ProjectionPackage::from_artifacts(
+        parsed.limits(),
+        [("data/train.csv", b"cat".as_slice())],
+    )
+    .expect("assets")
+    .to_ustar()
+    .expect("asset archive");
+
+    unsafe {
+        let dataset = parse("text/turtle", &source);
+        let profile = CString::new("ro-crate-1.3").expect("profile");
+        let mut archive: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut project_ledger: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_project_with_assets(
+                dataset,
+                profile.as_ptr(),
+                config.as_ptr(),
+                config.len(),
+                assets.as_ptr(),
+                assets.len(),
+                &raw mut archive,
+                &raw mut project_ledger,
+                &raw mut error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        assert!(error.is_null());
+        let archive_bytes = buffer_bytes(archive);
+        assert_eq!(
+            format!("{:x}", Sha256::digest(&archive_bytes)),
+            ATTACHED_ARCHIVE_SHA256
+        );
+        let package = purrdf_rs::ProjectionPackage::from_ustar(&archive_bytes, parsed.limits())
+            .expect("attached package");
+        assert_eq!(package.get("data/train.csv"), Some(b"cat".as_slice()));
+        assert!(package.get("ro-crate-preview.html").is_some());
+
+        let mut lifted: *mut PurrdfDataset = std::ptr::null_mut();
+        let mut lift_ledger: *mut PurrdfBuffer = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_lift(
+                archive_bytes.as_ptr(),
+                archive_bytes.len(),
+                profile.as_ptr(),
+                config.as_ptr(),
+                config.len(),
+                &raw mut lifted,
+                &raw mut lift_ledger,
+                &raw mut error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        assert!(error.is_null());
 
         purrdf_buffer_free(lift_ledger);
         purrdf_dataset_free(lifted);

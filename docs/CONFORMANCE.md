@@ -49,7 +49,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | ShEx 2.1 validation | shexTest v2.1.0 | 1105 | 0 | 0 | 0 | GREEN |
 | ShEx syntax + ShExC/ShExJ round-trip | shexTest v2.1.0 | 9 | 0 | 0 | 0 | GREEN |
 | rdflib LSP drop-in gate | rdflib 7.6 own tests | 85 | 1 | 1 | 0 | GREEN |
-| purrdf.compat parity | first-party (differential vs rdflib) | 387 | 4 | 4 | 0 | GREEN |
+| purrdf.compat parity | first-party (differential vs rdflib) | 388 | 4 | 4 | 0 | GREEN |
 <!-- END GENERATED: conformance-matrix -->
 
 The `Budget` column is the ledger ratchet's committed ceiling (see
@@ -121,7 +121,9 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 - `crates/rdf/tests/fixtures/research-objects/` — adversarial Croissant 1.1,
   RO-Crate 1.3, DataCite 4.6, DCAT 3, and Frictionless Data Package v1 native
   fixtures/goldens plus complete caller-owned carrier configurations and the
-  shared 5×5 semantic-transcode fixture.
+  shared 5×5 semantic-transcode fixture. RO-Crate additionally has exact
+  attached metadata and self-contained preview goldens, payload ownership/size
+  rejection cases, and host-surface parity coverage.
 - `crates/iri/tests/` — the IRI/URI validity vectors and RFC 3986 §5.4
   resolution examples.
 - `bindings/python/tests/rdflib_suite/vendor/` — rdflib 7.6's own tests,

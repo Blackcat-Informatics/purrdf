@@ -284,8 +284,9 @@ Criterion measures complete mapping/serialization/parser operations and all
 four large LPG materialized-package/direct-sink pairs; fixture construction and
 strict profile-config parsing stay outside timed loops. A counting global
 allocator also reports calls and requested bytes for representative single
-operations. Those counts are cumulative allocation traffic, not retained or
-peak memory.
+operations. Attached RO-Crate write/read cases include payload validation,
+metadata, preview, canonical USTAR construction, and strict lift validation.
+Those counts are cumulative allocation traffic, not retained or peak memory.
 
 Run it with:
 
@@ -348,6 +349,15 @@ Representative one-operation allocation traffic from the same run:
 | DCAT 3 read | 3,524 | 435,850 |
 | Frictionless Data Package v1 write | 1,025 | 99,013 |
 | Frictionless Data Package v1 read | 2,183 | 259,794 |
+
+The attached RO-Crate slice was measured separately on 2026-07-19 with rustc
+1.97.1, Linux 7.1.4, the same processor, and 10 Criterion samples. The fixture
+is the 29-quad research object plus one three-byte payload:
+
+| Operation | Time | Throughput | Allocation calls | Requested bytes |
+| --- | ---: | ---: | ---: | ---: |
+| RO-Crate 1.3 attached write | 48.42 µs | 599 Kquad/s | 1,153 | 123,470 |
+| RO-Crate 1.3 attached read | 127.01 µs | 228 Kquad/s | 3,539 | 452,528 |
 
 The large LPG scope and sink extension was measured on 2026-07-19 with rustc
 1.97.1, Linux 7.1.4, and the same AMD Ryzen AI MAX+ 395. The fixture contains

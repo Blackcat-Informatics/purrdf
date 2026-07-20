@@ -4,7 +4,10 @@
 //! In-memory graph, tabular, and research-object projection carrier bindings.
 
 use purrdf::ir::MutableDataset;
-use purrdf::{LiftProfile, ProjectionConfig, ProjectionProfile, lift_archive, project_archive};
+use purrdf::{
+    LiftProfile, ProjectionConfig, ProjectionProfile, RoCrateAssets, lift_archive, project_archive,
+    project_archive_with_assets,
+};
 use wasm_bindgen::prelude::*;
 
 use crate::dataset::{Dataset, diag_to_err};
@@ -84,6 +87,30 @@ impl Dataset {
             loss_ledger_json: outcome.loss_ledger.render_json(),
         })
     }
+
+    /// Project this dataset plus a canonical payload-only USTAR into an attached RO-Crate.
+    #[wasm_bindgen(js_name = projectWithAssets)]
+    pub fn project_with_assets(
+        &self,
+        profile: &str,
+        config_json: &str,
+        assets_archive: &[u8],
+    ) -> Result<ProjectionPackage, JsError> {
+        let profile = profile
+            .parse::<ProjectionProfile>()
+            .map_err(|error| JsError::new(&error.to_string()))?;
+        let config = parse_projection_config(config_json).map_err(|error| JsError::new(&error))?;
+        let assets = RoCrateAssets::from_ustar(assets_archive, config.limits())
+            .map_err(|error| JsError::new(&error.to_string()))?;
+        let frozen = self.inner.freeze().map_err(|error| diag_to_err(&error))?;
+        let outcome = project_archive_with_assets(frozen.as_ref(), profile, &config, &assets)
+            .map_err(|error| JsError::new(&error.to_string()))?;
+        Ok(ProjectionPackage {
+            profile: outcome.profile.as_str().to_owned(),
+            archive: outcome.archive,
+            loss_ledger_json: outcome.loss_ledger.render_json(),
+        })
+    }
 }
 
 /// Lift a strict bidirectional USTAR package into an in-memory RDF dataset.
@@ -111,6 +138,7 @@ pub fn lift_projection(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf::ProjectionPackage as NativeProjectionPackage;
 
     const CONFIG: &str = r#"{
       "profile": "lpg-csv",
@@ -216,6 +244,42 @@ mod tests {
                 lift_projection(&first.archive, profile, config).expect("lift profile");
             assert!(lifted.take_dataset().is_some());
         }
+    }
+
+    #[test]
+    fn wasm_projection_shim_carries_attached_ro_crate_assets() {
+        let source = RESEARCH_SOURCE
+            .replace("files/train.csv", "data/train.csv")
+            .replace(
+                "\"42\"^^<https://example.org/rdf/role-50>",
+                "\"3\"^^<https://example.org/rdf/role-50>",
+            );
+        let config = RESEARCH_CONFIGS[1]
+            .1
+            .replace("\"metadata-only\"", "\"attached\"");
+        let parsed = ProjectionConfig::from_json(config.as_bytes()).expect("attached config");
+        let assets = NativeProjectionPackage::from_artifacts(
+            parsed.limits(),
+            [("data/train.csv", b"cat".as_slice())],
+        )
+        .expect("assets")
+        .to_ustar()
+        .expect("asset archive");
+        let dataset = Dataset::parse(&source, "turtle", None).expect("parse attached source");
+        let first = dataset
+            .project_with_assets("ro-crate-1.3", &config, &assets)
+            .expect("attached project");
+        let second = dataset
+            .project_with_assets("ro-crate-1.3", &config, &assets)
+            .expect("repeat attached project");
+        assert_eq!(first.archive, second.archive);
+        let package = NativeProjectionPackage::from_ustar(&first.archive, parsed.limits())
+            .expect("attached package");
+        assert_eq!(package.get("data/train.csv"), Some(b"cat".as_slice()));
+        assert!(package.get("ro-crate-preview.html").is_some());
+        let mut lifted =
+            lift_projection(&first.archive, "ro-crate-1.3", &config).expect("lift attached crate");
+        assert!(lifted.take_dataset().is_some());
     }
 
     #[test]

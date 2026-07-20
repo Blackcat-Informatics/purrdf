@@ -180,6 +180,18 @@ the complete term-to-absolute-IRI definition map. PurRDF never dereferences a
 context URL, follows `@import`, or supplies a vocabulary. Expanded graphs are
 validated through the same native RDF 1.2 JSON-LD engine used elsewhere.
 
+RO-Crate also requires an explicit `packaging` value. `metadata-only` is the
+single-descriptor form. `attached` accepts a bounded `RoCrateAssets` payload
+carrier and produces `ro-crate-metadata.json`, a self-contained deterministic
+`ro-crate-preview.html`, and the referenced payload members. The engine owns no
+filesystem access: Rust receives `RoCrateAssets`, the CLI receives a canonical
+payload-only USTAR via `--assets`, and the language bindings receive the same
+archive bytes. Local File identities and payload paths must match one-to-one;
+missing/extra assets, reserved paths, duplicate ownership, declared-size drift,
+or a nonstandard attached crate root are integrity errors. The reader validates
+the same contract and exact preview rendering. Preview files are not added to
+`hasPart`; only payload File entities are root data entities.
+
 DataCite configuration supplies the namespace, schema location,
 XML-Schema-instance IRI, controlled values, and common RDF roles. Its reader is
 namespace-aware and rejects DTD/entity input. A separate identifier is used when
@@ -369,13 +381,13 @@ models.
 
 The surface names follow the same profile/config/archive contract:
 
-| Host | Materialized project | Direct LPG artifacts | Lift |
-| --- | --- | --- | --- |
-| Rust | `project_archive` | `project_lpg_artifacts_to_sink` | `lift_archive` |
-| CLI | `purrdf project` | — | `purrdf lift` |
-| Python | `purrdf.project(...)` | `purrdf.project_artifacts(...)` | `purrdf.lift(...)` |
-| JavaScript | `dataset.project(...)` | — | `liftProjection(...)` |
-| C | `purrdf_project(...)` | — | `purrdf_lift(...)` |
+| Host | Materialized project | Attached RO-Crate | Direct LPG artifacts | Lift |
+| --- | --- | --- | --- | --- |
+| Rust | `project_archive` | `project_archive_with_assets` | `project_lpg_artifacts_to_sink` | `lift_archive` |
+| CLI | `purrdf project` | `purrdf project --assets PAYLOADS.tar` | — | `purrdf lift` |
+| Python | `purrdf.project(...)` | `purrdf.project(..., assets=archive)` | `purrdf.project_artifacts(...)` | `purrdf.lift(...)` |
+| JavaScript | `dataset.project(...)` | `dataset.projectWithAssets(...)` | — | `liftProjection(...)` |
+| C | `purrdf_project(...)` | `purrdf_project_with_assets(...)` | — | `purrdf_lift(...)` |
 
 Runnable examples live at:
 
@@ -383,6 +395,7 @@ Runnable examples live at:
 - `crates/rdf/examples/csvw_terms.rs`
 - `crates/rdf/examples/okf_terms.rs`
 - `crates/rdf/examples/research_object_roundtrip.rs`
+- `crates/rdf/examples/attached_ro_crate.rs`
 - `crates/cli/examples/projection-roundtrip.sh`
 - `bindings/python/examples/projection_roundtrip.py`
 - `bindings/python/examples/projection_stream.py`

@@ -657,6 +657,30 @@ int32_t purrdf_project(const PurrdfDataset *dataset,
                        PurrdfError **out_error);
 
 /**
+ * Project a frozen RDF dataset and payload-only USTAR into an attached RO-Crate.
+ *
+ * `assets_archive` is a canonical PurRDF USTAR containing payload members only;
+ * metadata and preview names are reserved to the engine. The profile and tagged
+ * configuration must select attached `ro-crate-1.3` packaging. Output ownership
+ * matches [`purrdf_project`].
+ *
+ * # Safety
+ * `dataset` must be a live handle; `profile` must be a valid C string;
+ * `config_json` and `assets_archive` must be readable for their respective lengths;
+ * the two output pointers must be non-null, distinct, and writable. `out_error` may
+ * be null or writable.
+ */
+int32_t purrdf_project_with_assets(const PurrdfDataset *dataset,
+                                   const char *profile,
+                                   const uint8_t *config_json,
+                                   size_t config_len,
+                                   const uint8_t *assets_archive,
+                                   size_t assets_len,
+                                   PurrdfBuffer **out_archive,
+                                   PurrdfBuffer **out_loss_ledger_json,
+                                   PurrdfError **out_error);
+
+/**
  * Lift a canonical USTAR carrier into a fresh frozen RDF dataset.
  *
  * Only the closed bidirectional profiles are accepted; curated CSVW terms, OBO

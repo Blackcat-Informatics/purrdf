@@ -22,7 +22,7 @@
 //! | OBO Graphs 0.3.2 | RDF → view | Deliberately write-only and loss-ledgered |
 //! | SKOS Turtle | RDF → view | Deliberately write-only and loss-ledgered |
 //! | Croissant 1.1 | RDF ↔ carrier | Shared research-object model with located profile losses |
-//! | RO-Crate 1.3 | RDF ↔ carrier | Shared research-object model with located profile losses |
+//! | RO-Crate 1.3 | RDF ↔ carrier | Shared model plus explicit metadata-only/attached payload contract and located profile losses |
 //! | DataCite 4.6 | RDF ↔ carrier | Shared research-object model with located profile losses |
 //! | DCAT 3 | RDF ↔ carrier | Shared research-object model with located profile losses |
 //! | Frictionless Data Package v1 | RDF ↔ carrier | Shared research-object model with located profile losses |
@@ -61,7 +61,7 @@ mod util;
 
 pub use carrier::{
     LiftProfile, ProjectionArchive, ProjectionConfig, ProjectionLift, ProjectionProfile,
-    lift_archive, project_archive, project_lpg_artifacts_to_sink,
+    lift_archive, project_archive, project_archive_with_assets, project_lpg_artifacts_to_sink,
 };
 pub use csvw::{
     CSVW_TERMS_PROFILE, CsvwAction, CsvwAnnotations, CsvwCell, CsvwColumn, CsvwConfig, CsvwContext,
@@ -108,14 +108,16 @@ pub use research_object::{
     CroissantVocabulary, DATACITE_ARTIFACT, DATACITE_PROFILE, DCAT_ARTIFACT, DCAT_PROFILE,
     DCAT_ROLES, DataCiteConfig, DataCiteControlledValues, DcatConfig, DcatRole, DcatVocabulary,
     FRICTIONLESS_ARTIFACT, FRICTIONLESS_PROFILE, FrictionlessConfig, OfflineJsonLdContext,
-    RESEARCH_ROLES, RO_CRATE_ARTIFACT, RO_CRATE_PROFILE, RO_CRATE_ROLES, ResearchActivity,
-    ResearchAgent, ResearchChecksum, ResearchDataset, ResearchField, ResearchObjectConfig,
-    ResearchObjectIdentity, ResearchObjectModel, ResearchObjectPackageProjection,
-    ResearchObjectPolicy, ResearchObjectProjection, ResearchObjectReadOutcome, ResearchObjectRoles,
-    ResearchRecordSet, ResearchResource, ResearchRole, ResearchText, ResearchValue, RoCrateConfig,
-    RoCrateRole, RoCrateVocabulary, lift_research_object, project_croissant, project_datacite,
-    project_dcat, project_frictionless, project_research_object, project_ro_crate, read_croissant,
-    read_datacite, read_dcat, read_frictionless, read_ro_crate,
+    RESEARCH_ROLES, RO_CRATE_ARTIFACT, RO_CRATE_PREVIEW_ARTIFACT, RO_CRATE_PREVIEW_FILES_PREFIX,
+    RO_CRATE_PROFILE, RO_CRATE_ROLES, ResearchActivity, ResearchAgent, ResearchChecksum,
+    ResearchDataset, ResearchField, ResearchObjectConfig, ResearchObjectIdentity,
+    ResearchObjectModel, ResearchObjectPackageProjection, ResearchObjectPolicy,
+    ResearchObjectProjection, ResearchObjectReadOutcome, ResearchObjectRoles, ResearchRecordSet,
+    ResearchResource, ResearchRole, ResearchText, ResearchValue, RoCrateAssets, RoCrateConfig,
+    RoCratePackaging, RoCrateRole, RoCrateVocabulary, lift_research_object, project_croissant,
+    project_datacite, project_dcat, project_frictionless, project_research_object,
+    project_ro_crate, project_ro_crate_with_assets, read_croissant, read_datacite, read_dcat,
+    read_frictionless, read_ro_crate,
 };
 pub use sink::{ProjectionArtifactSink, ProjectionPackageSink};
 pub use skos::{

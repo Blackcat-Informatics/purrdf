@@ -1287,6 +1287,7 @@ dependencies = [
  "purrdf-sparql-results",
  "purrdf-validate",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -1301,6 +1302,7 @@ dependencies = [
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
  "serde_json",
+ "sha2",
  "tempfile",
 ]
 

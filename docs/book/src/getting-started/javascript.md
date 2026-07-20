@@ -77,8 +77,9 @@ const hello = f.directionalLiteral("مرحبا", "ar", "rtl");
   equality under blank-node relabeling (an exact oracle backed by full RDFC-1.0
   canonicalization).
 - **Graph/tabular/research-object carriers** — `Dataset.project(profile, configJson)` returns
-  canonical USTAR bytes and loss-ledger JSON; `liftProjection(...)` reconstructs
-  RDF for the bidirectional profiles. See
+  canonical USTAR bytes and loss-ledger JSON; `Dataset.projectWithAssets("ro-crate-1.3",
+  configJson, payloadArchive)` adds bounded attached RO-Crate payloads;
+  `liftProjection(...)` reconstructs RDF for the bidirectional profiles. See
   [Graph, Tabular & Research-Object Projections](../concepts/projections.md).
 - **SPARQL** — `QueryEngine` keeps the native plan cache alive across calls and
   exposes typed `select` / `ask` / `construct` / `describe`, atomic `update`,

@@ -5,7 +5,10 @@
 
 use purrdf_core::{DatasetView, LossLedger};
 use purrdf_rdf::JsonLdSerializeOptions;
-use purrdf_rdf::{ProjectionArchive, ProjectionConfig, lift_archive, project_archive};
+use purrdf_rdf::{
+    ProjectionArchive, ProjectionConfig, RoCrateAssets, lift_archive, project_archive,
+    project_archive_with_assets,
+};
 
 use crate::cli::{
     CliLiftProfile, CliNativeRdfFormat, CliProjectionProfile, CliRdfFormat, LedgerTarget,
@@ -19,17 +22,18 @@ use crate::source::{self, ViewOp};
 struct ProjectOp<'a> {
     profile: CliProjectionProfile,
     config: &'a ProjectionConfig,
+    assets: Option<&'a RoCrateAssets>,
 }
 
 impl ViewOp for ProjectOp<'_> {
     type Output = ProjectionArchive;
 
     fn run<D: DatasetView + Sync>(self, view: &D) -> Result<Self::Output, CliError> {
-        Ok(project_archive(
-            view,
-            self.profile.to_profile(),
-            self.config,
-        )?)
+        Ok(if let Some(assets) = self.assets {
+            project_archive_with_assets(view, self.profile.to_profile(), self.config, assets)?
+        } else {
+            project_archive(view, self.profile.to_profile(), self.config)?
+        })
     }
 }
 
@@ -41,6 +45,7 @@ impl ViewOp for ProjectOp<'_> {
 pub(crate) fn run_project(
     profile: CliProjectionProfile,
     config_path: &str,
+    assets_path: Option<&str>,
     from: Option<CliRdfFormat>,
     base: Option<&str>,
     input: &str,
@@ -54,6 +59,16 @@ pub(crate) fn run_project(
         ));
     }
     let config = read_config(config_path, input)?;
+    if assets_path == Some("-") && (config_path == "-" || input == "-") {
+        return Err(CliError::Usage(
+            "projection assets cannot share stdin with configuration or RDF input".to_owned(),
+        ));
+    }
+    let assets = assets_path
+        .map(source::read_bytes)
+        .transpose()?
+        .map(|archive| RoCrateAssets::from_ustar(&archive, config.limits()))
+        .transpose()?;
     let source_format = format::resolve(from, input)?;
     let outcome = source::run_over_input(
         input,
@@ -62,6 +77,7 @@ pub(crate) fn run_project(
         ProjectOp {
             profile,
             config: &config,
+            assets: assets.as_ref(),
         },
     )?;
     sink::write_out(output, &outcome.archive)?;

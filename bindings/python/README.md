@@ -113,7 +113,13 @@ Project profiles are `lpg-csv`, `neo4j-csv`, `open-cypher`, `graphml`,
 terms, OBO Graphs, and SKOS are deliberately write-only, ledgered views. Returned
 archives are canonical deterministic USTAR bytes and every result carries its always-computed
 structured loss records. Research-object contexts, vocabularies, identities,
-and profiles are all mandatory caller configuration. See the runnable
+and profiles are all mandatory caller configuration.
+
+Attached RO-Crate packaging uses the same call with `assets=` set to a canonical
+payload-only USTAR archive and configuration `packaging: "attached"`. The result
+contains the exact payloads, deterministic metadata, and self-contained preview;
+missing, unowned, reserved, or size-inconsistent members raise `ValueError`.
+See the runnable
 [`projection_roundtrip.py`](https://github.com/Blackcat-Informatics/purrdf/blob/main/bindings/python/examples/projection_roundtrip.py)
 file-producing example.
 
