@@ -36,8 +36,8 @@ BINARYEN_VERSION := 130
 # deterministic layout, SVG export, all sixteen graph/tabular/
 # dataset-description/research-object projection profiles, the compiled JSON-LD
 # context/options/registry engine, and validation-scoped asserted-subclass
-# membership shared by native SHACL and SHACL-SPARQL — measures 8_143_242 bytes;
-# 8_400_000 keeps 3.15% headroom. The always-on bounded CONSTRUCT engine, mapped
+# membership shared by native SHACL and SHACL-SPARQL — measures 8_148_368 bytes;
+# 8_400_000 keeps 3.09% headroom. The always-on bounded CONSTRUCT engine, mapped
 # native DCAT RDF emitter, lossless native description serializer, VoID
 # statistics/partition/linkset generator, and shared class-membership view are
 # the capabilities responsible for this reviewed increase. The artifact's size
