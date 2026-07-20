@@ -17,11 +17,16 @@ use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Once};
+use std::time::{Duration, Instant};
 
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf::loss::LossLedger;
-use purrdf_shapes::engine::validate_graphs;
+use purrdf::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
+use purrdf_shapes::engine::{parse_shapes, validate_graphs, validate_projected_dataset};
 use purrdf_shapes::json_schema::CompiledSchema;
+use purrdf_shapes::shapes::Shapes;
 use purrdf_shapes::{
     LinkmlConfig, LinkmlDocument, Namespaces, SchemaDatatypeMap, SchemaImportConfig, emit_linkml,
     import_json_schema, import_linkml,
@@ -33,6 +38,10 @@ thread_local! {
     static ALLOCATED_BYTES: Cell<u64> = const { Cell::new(0) };
 }
 
+static VALIDATION_COUNTING: AtomicBool = AtomicBool::new(false);
+static VALIDATION_ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
+static VALIDATION_ALLOCATED_BYTES: AtomicU64 = AtomicU64::new(0);
+
 struct CountingAllocator;
 
 // SAFETY: every operation forwards the original pointer/layout to the system
@@ -41,6 +50,10 @@ unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         ALLOCATIONS.with(|count| count.set(count.get() + 1));
         ALLOCATED_BYTES.with(|bytes| bytes.set(bytes.get() + layout.size() as u64));
+        if VALIDATION_COUNTING.load(Ordering::Relaxed) {
+            VALIDATION_ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+            VALIDATION_ALLOCATED_BYTES.fetch_add(layout.size() as u64, Ordering::Relaxed);
+        }
         unsafe { System.alloc(layout) }
     }
 
@@ -51,6 +64,10 @@ unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         ALLOCATIONS.with(|count| count.set(count.get() + 1));
         ALLOCATED_BYTES.with(|bytes| bytes.set(bytes.get() + new_size as u64));
+        if VALIDATION_COUNTING.load(Ordering::Relaxed) {
+            VALIDATION_ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+            VALIDATION_ALLOCATED_BYTES.fetch_add(new_size as u64, Ordering::Relaxed);
+        }
         unsafe { System.realloc(ptr, layout, new_size) }
     }
 }
@@ -63,6 +80,35 @@ const IMPORT_PROPERTIES_PER_CLASS: usize = 8;
 const LINKML: &str = "https://w3id.org/linkml/";
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 const LINKML_EMIT_SIZES: &[usize] = &[32, 1_024, 60_000];
+const CORE_FOCUS_SIZES: &[usize] = &[3_000, 100_000, 1_000_000];
+const SPARQL_FOCUS_SIZES: &[usize] = &[64, 512, 4_096];
+const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+const RDFS_SUBCLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+const BENCH_EX: &str = "https://example.org/shacl-bench/";
+
+struct ValidationFixture {
+    dataset: Arc<RdfDataset>,
+    shapes: Shapes,
+    focus_nodes: usize,
+}
+
+struct ValidationCountGuard;
+
+impl ValidationCountGuard {
+    fn start() -> Self {
+        VALIDATION_ALLOCATIONS.store(0, Ordering::Relaxed);
+        VALIDATION_ALLOCATED_BYTES.store(0, Ordering::Relaxed);
+        VALIDATION_COUNTING.store(true, Ordering::Release);
+        Self
+    }
+}
+
+impl Drop for ValidationCountGuard {
+    fn drop(&mut self) {
+        VALIDATION_COUNTING.store(false, Ordering::Release);
+    }
+}
 
 /// Read every `corpus/<case>/{data.nt, shapes.ttl}` pair, sorted by case name.
 fn corpus_cases() -> Vec<(String, String, String)> {
@@ -104,74 +150,185 @@ fn bench_validate(c: &mut Criterion) {
     group.finish();
 }
 
-/// Build a 40-class rdfs:subClassOf chain + 3000 typed focus nodes as N-Triples.
-///
-/// This is the measurement instrument for item 2 (focus-node parallelism).
-/// The engine validates focus nodes SERIALLY: a rayon `par_iter` over this 3000-
-/// node workload was measured here and regressed ~9% (per-focus work is too cheap
-/// — ~5 µs — to amortize thread-pool dispatch and shared-`Store` read contention),
-/// confirming. The frozen `RdfDataset` is `Sync`, so the seam stays ready;
-/// the parallel path re-enters once per-focus cost exceeds ~50–100 µs.
-fn large_hierarchy_inputs() -> (String, String) {
-    // Shape: one NodeShape targeting ex:C0 with sh:pattern + sh:minCount constraints.
-    // Pattern forces per-node regex evaluation (nontrivial per-focus work).
-    let shapes_ttl = r#"
-@prefix sh:   <http://www.w3.org/ns/shacl#> .
-@prefix ex:   <http://example.org/ns#> .
-@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
-@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
-@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+fn core_focus_fixture(focus_nodes: usize) -> ValidationFixture {
+    const CLASS_DEPTH: usize = 40;
 
-ex:HierarchyShape a sh:NodeShape ;
-    sh:targetClass ex:C0 ;
+    let mut builder = RdfDatasetBuilder::new();
+    let rdf_type = builder.intern_iri(RDF_TYPE);
+    let subclass = builder.intern_iri(RDFS_SUBCLASS_OF);
+    let label_predicate = builder.intern_iri(&format!("{BENCH_EX}label"));
+    let value_predicate = builder.intern_iri(&format!("{BENCH_EX}value"));
+    let member_predicate = builder.intern_iri(&format!("{BENCH_EX}member"));
+
+    let focus_classes: Vec<_> = (0..CLASS_DEPTH)
+        .map(|index| builder.intern_iri(&format!("{BENCH_EX}FocusClass{index}")))
+        .collect();
+    let value_classes: Vec<_> = (0..CLASS_DEPTH)
+        .map(|index| builder.intern_iri(&format!("{BENCH_EX}ValueClass{index}")))
+        .collect();
+    for index in 1..CLASS_DEPTH {
+        builder.push_quad(
+            focus_classes[index],
+            subclass,
+            focus_classes[index - 1],
+            None,
+        );
+        builder.push_quad(
+            value_classes[index],
+            subclass,
+            value_classes[index - 1],
+            None,
+        );
+    }
+
+    let member = builder.intern_iri(&format!("{BENCH_EX}shared-member"));
+    builder.push_quad(member, rdf_type, value_classes[CLASS_DEPTH - 1], None);
+
+    for index in 0..focus_nodes {
+        let focus = builder.intern_iri(&format!("{BENCH_EX}item{index}"));
+        let label = builder.intern_literal(RdfLiteral::simple(format!("item-{index}")));
+        let value = builder.intern_literal(RdfLiteral::typed(index.to_string(), XSD_INTEGER));
+        builder.push_quad(focus, rdf_type, focus_classes[CLASS_DEPTH - 1], None);
+        builder.push_quad(focus, label_predicate, label, None);
+        builder.push_quad(focus, value_predicate, value, None);
+        builder.push_quad(focus, member_predicate, member, None);
+    }
+
+    let dataset = builder.freeze().expect("Core focus fixture must freeze");
+    let shapes = parse_shapes(&format!(
+        r#"
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <{BENCH_EX}> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+ex:WholeBundleShape a sh:NodeShape ;
+    sh:targetClass ex:FocusClass0 ;
     sh:property [
         sh:path ex:label ;
         sh:minCount 1 ;
-        sh:pattern "^item-[0-9]+" ;
+        sh:pattern "^item-[0-9]+$" ;
     ] ;
     sh:property [
         sh:path ex:value ;
         sh:datatype xsd:integer ;
+    ] ;
+    sh:property [
+        sh:path ex:member ;
+        sh:class ex:ValueClass0 ;
     ] .
 "#
-    .to_owned();
-
-    // 40-class chain: C39 subClassOf C38 subClassOf … C1 subClassOf C0
-    let mut nt = String::with_capacity(1_200_000);
-    let ex = "http://example.org/ns#";
-    let rdf_type = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-    let sub_class_of = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
-
-    use std::fmt::Write as _;
-    for i in 1..40_usize {
-        let _ = writeln!(nt, "<{ex}C{i}> <{sub_class_of}> <{ex}C{}>  .", i - 1);
+    ))
+    .expect("Core focus shapes must parse");
+    ValidationFixture {
+        dataset,
+        shapes,
+        focus_nodes,
     }
-
-    // 3000 typed nodes: spread across leaf class C39 (all reachable via closure)
-    for i in 0..3000_usize {
-        let _ = writeln!(nt, "<{ex}item{i}> <{rdf_type}> <{ex}C39> .");
-        let _ = writeln!(nt, "<{ex}item{i}> <{ex}label> \"item-{i}\" .");
-        let _ = writeln!(
-            nt,
-            "<{ex}item{i}> <{ex}value> \"{i}\"^^<http://www.w3.org/2001/XMLSchema#integer> ."
-        );
-    }
-
-    (nt, shapes_ttl)
 }
 
-fn bench_validate_large(c: &mut Criterion) {
-    let (data_nt, shapes_ttl) = large_hierarchy_inputs();
+fn sparql_focus_fixture(focus_nodes: usize) -> ValidationFixture {
+    let mut builder = RdfDatasetBuilder::new();
+    let rdf_type = builder.intern_iri(RDF_TYPE);
+    let person = builder.intern_iri(&format!("{BENCH_EX}Person"));
+    let amount_predicate = builder.intern_iri(&format!("{BENCH_EX}amount"));
+    for index in 0..focus_nodes {
+        let focus = builder.intern_iri(&format!("{BENCH_EX}sparql-item{index}"));
+        let amount = builder.intern_literal(RdfLiteral::typed("1", XSD_INTEGER));
+        builder.push_quad(focus, rdf_type, person, None);
+        builder.push_quad(focus, amount_predicate, amount, None);
+    }
+    let dataset = builder.freeze().expect("SPARQL focus fixture must freeze");
+    let shapes = parse_shapes(&format!(
+        r#"
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <{BENCH_EX}> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 
-    let mut group = c.benchmark_group("shacl_validate");
-    group.sample_size(20); // Fewer samples: each iteration is ~10–50ms
-    group.bench_function("large_hierarchy", |b| {
-        b.iter(|| {
-            let report = validate_graphs(&data_nt, &shapes_ttl)
-                .expect("large_hierarchy: validation must not error");
-            std::hint::black_box(report);
-        });
-    });
+ex:tripled a sh:SPARQLFunction ;
+    sh:parameter [ sh:path ex:x ; sh:datatype xsd:integer ] ;
+    sh:returnType xsd:integer ;
+    sh:select "SELECT ((?x * 3) AS ?result) WHERE {{}}" .
+
+ex:WholeBundleSparqlShape a sh:NodeShape ;
+    sh:targetClass ex:Person ;
+    sh:sparql [
+        sh:select "SELECT $this WHERE {{ $this <{BENCH_EX}amount> ?amount . FILTER(<{BENCH_EX}tripled>(?amount) > 100) }}" ;
+    ] .
+"#
+    ))
+    .expect("SPARQL focus shapes must parse");
+    ValidationFixture {
+        dataset,
+        shapes,
+        focus_nodes,
+    }
+}
+
+fn validate_fixture(fixture: &ValidationFixture) {
+    let report = validate_projected_dataset(Arc::clone(&fixture.dataset), &fixture.shapes)
+        .expect("benchmark validation must not error");
+    assert!(report.conforms, "benchmark fixture must conform");
+    black_box(report);
+}
+
+fn print_validation_probe(label: &str, fixture: &ValidationFixture) {
+    validate_fixture(fixture);
+    let guard = ValidationCountGuard::start();
+    let started = Instant::now();
+    validate_fixture(fixture);
+    let elapsed = started.elapsed();
+    drop(guard);
+    println!(
+        "[shacl_focus_validation] case={label} focus_nodes={} quads={} terms={} threads={} elapsed_ns={} allocations={} allocated_bytes={}",
+        fixture.focus_nodes,
+        fixture.dataset.quad_count(),
+        fixture.dataset.term_count(),
+        std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
+        elapsed.as_nanos(),
+        VALIDATION_ALLOCATIONS.load(Ordering::Relaxed),
+        VALIDATION_ALLOCATED_BYTES.load(Ordering::Relaxed),
+    );
+}
+
+fn bench_focus_core(c: &mut Criterion) {
+    let mut group = c.benchmark_group("shacl_focus_core");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(5));
+    for &focus_nodes in CORE_FOCUS_SIZES {
+        let fixture = core_focus_fixture(focus_nodes);
+        let probe = Once::new();
+        group.throughput(Throughput::Elements(focus_nodes as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(focus_nodes),
+            &fixture,
+            move |bencher, fixture| {
+                probe.call_once(|| print_validation_probe("core", fixture));
+                bencher.iter(|| validate_fixture(black_box(fixture)));
+            },
+        );
+    }
+    group.finish();
+}
+
+fn bench_focus_sparql(c: &mut Criterion) {
+    let mut group = c.benchmark_group("shacl_focus_sparql");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(5));
+    for &focus_nodes in SPARQL_FOCUS_SIZES {
+        let fixture = sparql_focus_fixture(focus_nodes);
+        let probe = Once::new();
+        group.throughput(Throughput::Elements(focus_nodes as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(focus_nodes),
+            &fixture,
+            move |bencher, fixture| {
+                probe.call_once(|| print_validation_probe("sparql_function", fixture));
+                bencher.iter(|| validate_fixture(black_box(fixture)));
+            },
+        );
+    }
     group.finish();
 }
 
@@ -499,7 +656,8 @@ fn bench_linkml_slot_emission(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_validate,
-    bench_validate_large,
+    bench_focus_core,
+    bench_focus_sparql,
     bench_schema_import,
     bench_linkml_import,
     bench_linkml_slot_emission
