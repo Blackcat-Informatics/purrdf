@@ -8,6 +8,9 @@
 # no author/PR links), and the preprocessors strip every `#NNN` issue/PR token
 # so the committed CHANGELOG.md stays clean under the repo's issue-reference
 # lint (scripts/check-issue-refs.py, which scans root *.md).
+# Exact rendered scope/message pairs are emitted once per release group. Multiple
+# implementation commits can legitimately share a conventional subject, but one
+# repeated user-facing release-note bullet carries no additional information.
 
 [changelog]
 header = """
@@ -26,9 +29,17 @@ body = """
 {% endif -%}
 {% for group, commits in commits | group_by(attribute="group") %}
 ### {{ group | upper_first }}
-{% for commit in commits %}
+
+{% set_global rendered_entries = [] -%}
+{% for commit in commits -%}
+{% set entry_message = commit.message | split(pat="\n") | first | upper_first | trim -%}
+{% set entry_scope = commit.scope | default(value="") -%}
+{% set entry_key = entry_scope ~ "::" ~ entry_message -%}
+{% if entry_key not in rendered_entries -%}
+{% set_global rendered_entries = rendered_entries | concat(with=entry_key) -%}
 - {% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message | split(pat="\n") | first | upper_first | trim }}
-{%- endfor %}
+{% endif -%}
+{% endfor %}
 
 {% endfor %}
 """
