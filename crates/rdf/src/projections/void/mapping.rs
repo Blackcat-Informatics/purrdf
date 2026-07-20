@@ -432,23 +432,20 @@ fn classify_dataset<'a>(
     })
 }
 
-fn collect_external_links(
-    records: &BTreeSet<SourceRecord>,
-    config: &VoidConfig,
-) -> Result<BTreeMap<String, BTreeSet<String>>, ProjectionError> {
-    let mappings: BTreeMap<&str, &str> = config
-        .external_links()
-        .iter()
-        .map(|mapping| (mapping.source_predicate(), mapping.target_predicate()))
-        .collect();
-    let mut output = BTreeMap::<String, BTreeSet<String>>::new();
+fn collect_external_links<'records, 'config>(
+    records: &'records BTreeSet<SourceRecord>,
+    config: &'config VoidConfig,
+) -> Result<BTreeMap<&'config str, BTreeSet<&'records str>>, ProjectionError> {
+    let mut output = BTreeMap::<&str, BTreeSet<&str>>::new();
     for record in records {
         if &record.graph != config.metadata_graph()
             || iri(&record.subject) != Some(config.header_subject_iri())
         {
             continue;
         }
-        let Some(target_predicate) = mappings.get(record.predicate.as_str()) else {
+        let Some(target_predicate) = config.external_links().iter().find_map(|mapping| {
+            (mapping.source_predicate() == record.predicate).then_some(mapping.target_predicate())
+        }) else {
             continue;
         };
         let Some(object) = iri(&record.object) else {
@@ -457,10 +454,7 @@ fn collect_external_links(
                 record.predicate
             )));
         };
-        output
-            .entry((*target_predicate).to_owned())
-            .or_default()
-            .insert(object.to_owned());
+        output.entry(target_predicate).or_default().insert(object);
     }
     Ok(output)
 }
@@ -471,7 +465,7 @@ fn emit_void(
     abstract_value: &ProjectionTerm,
     data: &DataAnalysis,
     linksets: &[Linkset],
-    external_links: &BTreeMap<String, BTreeSet<String>>,
+    external_links: &BTreeMap<&str, BTreeSet<&str>>,
 ) -> Result<Arc<RdfDataset>, ProjectionError> {
     let mut emitter = VoidEmitter {
         builder: RdfDatasetBuilder::new(),
