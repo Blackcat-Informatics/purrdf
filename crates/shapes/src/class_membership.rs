@@ -13,11 +13,16 @@ use std::sync::{Arc, OnceLock};
 
 use ::purrdf::ir::QuadProbePlan;
 use ::purrdf::{
-    DatasetView, FastMap, GraphMatch, QuadIds, QuadRef, RdfDataset, RdfStoreCapabilities, SmallVec,
-    TermId, TermRef, TermValue,
+    DatasetView, FastMap, FastSet, GraphMatch, QuadIds, QuadRef, RdfDataset, RdfStoreCapabilities,
+    SmallVec, TermId, TermRef, TermValue,
 };
 
 use crate::model::{rdf, rdfs};
+
+#[cfg(test)]
+thread_local! {
+    static THREAD_INDEX_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 /// One asserted type row, sorted by `(class, subject)` while the compact index
 /// is built.
@@ -180,9 +185,12 @@ impl ClassMembershipView {
             .index
             .get_or_init(|| {
                 #[cfg(test)]
-                self.shared
-                    .builds
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                {
+                    self.shared
+                        .builds
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    THREAD_INDEX_BUILDS.with(|builds| builds.set(builds.get() + 1));
+                }
                 build_index(&self.base, rdf_type, subclass_of)
             })
             .as_ref()
@@ -314,6 +322,29 @@ impl ClassMembershipView {
             .builds
             .load(std::sync::atomic::Ordering::Relaxed)
     }
+
+    pub(crate) fn dimensions(&self) -> [usize; 6] {
+        self.index().map_or([0; 6], |index| {
+            [
+                index.typed_classes.len(),
+                index.subjects.len(),
+                index.ancestors.len(),
+                index.superclasses.len(),
+                index.source_classes.len(),
+                index.virtual_upper_bound,
+            ]
+        })
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn reset_thread_index_builds() {
+    THREAD_INDEX_BUILDS.with(|builds| builds.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn thread_index_builds() -> usize {
+    THREAD_INDEX_BUILDS.with(std::cell::Cell::get)
 }
 
 /// A cursor into one canonically sorted subject slice.
@@ -663,28 +694,48 @@ fn build_index(
     rdf_type: TermId,
     subclass_of: TermId,
 ) -> Option<ClassMembershipIndex> {
-    let mut rows = Vec::new();
     let mut parents: FastMap<TermId, Vec<TermId>> = FastMap::default();
+    let mut asserted_type_classes = FastSet::default();
+    let mut previous_type = None;
     for quad in dataset.quads() {
         if quad.g.is_some() {
             continue;
         }
         if quad.p == rdf_type {
-            rows.push(TypeRow {
-                class: quad.o,
-                subject: quad.s,
-            });
+            if previous_type != Some(quad.o) {
+                asserted_type_classes.insert(quad.o);
+                previous_type = Some(quad.o);
+            }
         } else if quad.p == subclass_of {
             parents.entry(quad.s).or_default().push(quad.o);
         }
     }
-    if rows.is_empty() || parents.is_empty() {
+    if parents.is_empty() {
         return None;
     }
     for direct in parents.values_mut() {
         direct.sort_unstable();
         direct.dedup();
     }
+
+    // If no asserted type can take even the first subclass step, there can be no
+    // virtual membership and no exact-type index is retained. Once one can,
+    // retain every exact type: direct ancestor subjects are required to suppress
+    // direct-plus-derived duplicates during object-bound enumeration.
+    let has_virtual_source = asserted_type_classes
+        .iter()
+        .any(|class| parents.contains_key(class));
+    if !has_virtual_source {
+        return None;
+    }
+    let mut rows: Vec<_> = dataset
+        .quads()
+        .filter(|quad| quad.g.is_none() && quad.p == rdf_type)
+        .map(|quad| TypeRow {
+            class: quad.o,
+            subject: quad.s,
+        })
+        .collect();
     rows.sort_unstable();
     rows.dedup();
 
@@ -951,6 +1002,29 @@ mod tests {
         );
         assert_eq!(view.len_hint(), Some(1));
         assert_eq!(view.build_count(), 0, "missing vocabulary skips the scan");
+    }
+
+    #[test]
+    fn direct_root_types_do_not_retain_an_empty_index() {
+        let mut builder = RdfDatasetBuilder::new();
+        let rdf_type = builder.intern_iri(rdf::TYPE);
+        let subclass = builder.intern_iri(rdfs::SUB_CLASS_OF);
+        let child = builder.intern_iri(&format!("{EX}Child"));
+        let root = builder.intern_iri(&format!("{EX}Root"));
+        let subject = builder.intern_iri(&format!("{EX}subject"));
+        builder.push_quad(child, subclass, root, None);
+        builder.push_quad(subject, rdf_type, root, None);
+        let dataset = builder.freeze().expect("fixture freezes");
+        let view = ClassMembershipView::new(Arc::clone(&dataset));
+
+        view.prepare();
+        assert_eq!(view.dimensions(), [0; 6]);
+        assert_eq!(
+            view.quads().collect::<Vec<_>>(),
+            dataset.quads().collect::<Vec<_>>()
+        );
+        assert_eq!(view.len_hint(), Some(dataset.quad_count()));
+        assert_eq!(view.build_count(), 1);
     }
 
     #[test]

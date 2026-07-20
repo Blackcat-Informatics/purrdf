@@ -683,6 +683,16 @@ impl PreparedValidator {
         })
     }
 
+    /// Return compact class-membership index dimensions.
+    ///
+    /// The array contains typed-class entries, stored subject ids, ancestor ids,
+    /// superclass entries, source-class ids, and the virtual-row upper bound.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn __class_membership_dimensions(&self) -> [usize; 6] {
+        self.data.class_view().dimensions()
+    }
+
     /// Project and prepare a frozen dataset.
     ///
     /// # Errors
@@ -848,6 +858,18 @@ impl PreparedValidator {
         }
         Ok(finish_report(all_results))
     }
+}
+
+/// Construct the prepared validation-scoped class-membership dataset view.
+#[doc(hidden)]
+#[must_use]
+pub fn __prepared_class_membership_view(
+    dataset: Arc<RdfDataset>,
+) -> impl ::purrdf::DatasetView<Id = TermId, ProbePlan = ::purrdf::ir::QuadProbePlan> + Clone + Send + Sync
+{
+    let view = crate::class_membership::ClassMembershipView::new(dataset);
+    view.prepare();
+    view
 }
 
 /// Validate a [`ShaclData`] holder against `shapes`.

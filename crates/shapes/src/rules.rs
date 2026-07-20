@@ -1146,6 +1146,7 @@ mod tests {
 
     #[test]
     fn single_sparql_rule_derives_head() {
+        crate::class_membership::reset_thread_index_builds();
         let out = entail(
             "ex:Leaf rdfs:subClassOf ex:Person . ex:alice a ex:Leaf .",
             r#"
@@ -1154,6 +1155,11 @@ mod tests {
                 "CONSTRUCT { $this ex:adult ex:yes } WHERE { $this a ex:Person }" ] ."#,
         );
         assert!(has_iri(&out, "alice", "adult", "yes"));
+        assert_eq!(
+            crate::class_membership::thread_index_builds(),
+            2,
+            "the deriving round and terminating round each build one shared index"
+        );
     }
 
     #[test]
