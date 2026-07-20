@@ -136,14 +136,31 @@ console.log(roundTrip?.size, JSON.parse(projected.lossLedgerJson));
 
 `lpg-csv`, `neo4j-csv`, `open-cypher`, `graphml`, `csvw-exact`, `croissant-1.1`,
 `ro-crate-1.3`, `datacite-4.6`, `dcat-3`, and `frictionless-data-package-1` are
-bidirectional. `csvw-terms`, `okf-terms`, `obo-graphs`, and `skos` are write-only,
-loss-ledgered views and are excluded from the `LiftProfile` TypeScript union.
+bidirectional. `csvw-terms`, `okf-terms`, `obo-graphs`, `skos`, `dcat-rdf`, and
+`void` are write-only, loss-ledgered views and are excluded from the
+`LiftProfile` TypeScript union.
 Research-object contexts, vocabularies, identities, and
 profiles are mandatory caller configuration. Archives are canonical
 deterministic USTAR bytes. Package/lift objects own wasm memory; call `free()`
 when finished, and remember that `takeDataset()` transfers its dataset exactly
 once. A runnable Node example is
 [`projection-roundtrip.mjs`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf-wasm/js/examples/projection-roundtrip.mjs).
+
+For native RDF dataset descriptions, parse the complete source dataset and pass
+the same strict caller-owned JSON used by Rust and the other hosts:
+
+```js
+const dataset = Dataset.parse(sourceTrig, "trig");
+const description = dataset.project("void", voidConfigJson);
+const archive = description.archive;
+description.free();
+dataset.free();
+```
+
+The `dcat-rdf` configuration selects mapped or bounded CONSTRUCT mode; the
+`void` configuration names exact graphs, every target role, dataset-prefix
+ownership, and all limits. Complete examples are in
+`crates/rdf/tests/fixtures/dataset-description/`.
 
 ## API surface
 

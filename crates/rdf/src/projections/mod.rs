@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Deterministic, caller-configured RDF 1.2 graph, tabular, and research-object projections.
+//! Deterministic, caller-configured RDF 1.2 graph, tabular, dataset-description,
+//! and research-object projections.
 //!
 //! Projection codecs share one bounded in-memory package, one durable RDF term
 //! representation, one typed error surface, and one set of escaping/identity
@@ -25,11 +26,13 @@
 //! | RO-Crate 1.3 | RDF ↔ carrier | Shared model plus explicit metadata-only/attached payload contract and located profile losses |
 //! | DataCite 4.6 | RDF ↔ carrier | Shared research-object model with located profile losses |
 //! | DCAT 3 | RDF ↔ carrier | Shared research-object model with located profile losses |
+//! | DCAT native RDF | RDF → view | Mapped or caller-CONSTRUCTed, blank-free RDF in any registered syntax |
+//! | VoID | RDF → view | Caller-vocabulary dataset statistics, partitions, and oriented linksets |
 //! | Frictionless Data Package v1 | RDF ↔ carrier | Shared research-object model with located profile losses |
 //!
 //! [`project_archive`] provides the profile-tagged production entry point.
 //! [`lift_archive`] accepts only [`LiftProfile`], so the type system cannot pretend
-//! that the four write-only views round-trip. Every operation computes a deterministic
+//! that write-only views round-trip. Every operation computes a deterministic
 //! [`purrdf_core::LossLedger`]; deciding whether to display it is a host concern.
 //!
 //! # Configuration and packages

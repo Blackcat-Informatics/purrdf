@@ -242,6 +242,13 @@ profile/config mismatch, an unknown field, or a breached limit is a hard error.
 | `okf-terms` | Caller-declared OKF v0.1 concept bundle | no |
 | `obo-graphs` | OBO Graphs 0.3.2 JSON | no |
 | `skos` | SKOS Turtle concept-scheme view | no |
+| `croissant-1.1` | Croissant 1.1 JSON-LD | yes |
+| `ro-crate-1.3` | RO-Crate 1.3 JSON-LD | yes |
+| `datacite-4.6` | DataCite 4.6 XML | yes |
+| `dcat-3` | DCAT 3 JSON-LD research-object carrier | yes |
+| `dcat-rdf` | Mapped or caller-CONSTRUCTed native DCAT RDF | no |
+| `void` | VoID statistics, partitions, and linksets in native RDF | no |
+| `frictionless-data-package-1` | Frictionless Data Package v1 JSON | yes |
 
 A minimal generic LPG configuration is:
 
@@ -277,7 +284,27 @@ purrdf --loss-ledger=project.loss.json project \
 The archive bytes are deterministic for the same dataset and configuration.
 LPG profiles retain exact RDF sideband for reconstruction, while the semantic
 lowering into a property graph remains visible in the ledger. `csvw-exact` is
-lossless. Curated CSVW/OKF terms, OBO Graphs, and SKOS are intentionally lossy views.
+lossless. Curated CSVW/OKF terms, OBO Graphs, SKOS, native DCAT RDF, and VoID
+are intentionally write-only views.
+
+The two native RDF dataset-description profiles accept the same complete
+caller-owned configurations in every host. `dcat-rdf` selects either the shared
+mapped research-object model or a bounded whole-dataset CONSTRUCT. `void`
+selects exact source graphs and emits bounded statistics, partitions, and
+oriented linksets using caller-supplied role IRIs and dataset prefixes:
+
+```sh
+purrdf project --profile dcat-rdf --config dcat-rdf.json \
+  --from trig source.trig dcat.tar
+purrdf project --profile void --config void.json \
+  --from trig source.trig void.tar
+```
+
+Runnable `example.org` inputs are in
+`crates/rdf/tests/fixtures/dataset-description/`. The resulting archives contain
+one `dcat.<extension>` or `void.<extension>` member selected by the configured
+native syntax. `examples/dataset-descriptions.sh` executes both profiles twice
+and verifies their archive bytes are identical.
 
 ## `lift`
 
@@ -289,7 +316,7 @@ Lift one canonical archive into a native RDF syntax. The accepted profiles are
 `lpg-csv`, `neo4j-csv`, `open-cypher`, `graphml`, `csvw-exact`,
 `croissant-1.1`, `ro-crate-1.3`, `datacite-4.6`, `dcat-3`, and
 `frictionless-data-package-1`. The CLI does not offer curated CSVW terms,
-`okf-terms`, OBO Graphs, or SKOS as pretend reverse mappings;
+`okf-terms`, OBO Graphs, SKOS, native DCAT RDF, or VoID as pretend reverse mappings;
 `purrdf lift --profile okf-terms` is rejected instead of fabricating one. The
 reader rejects non-canonical USTAR, unexpected members, malformed carrier data,
 sideband inconsistencies, and resource-limit violations.

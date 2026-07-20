@@ -14,9 +14,10 @@ use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_mai
 use purrdf_rdf::{
     CsvwConfig, CsvwContext, CsvwDatatype, CsvwMode, CsvwTermsCardinality, CsvwTermsColumn,
     CsvwTermsConfig, CsvwTermsGraphSelection, CsvwTermsIdentityColumn, CsvwTermsLimits,
-    CsvwTermsSelector, CsvwTermsTable, CsvwTermsValueMode, CsvwVocabulary, LiftProfile, LpgConfig,
-    LpgExecutionLimits, LpgIriSelection, LpgNamedGraphSelection, LpgPackageProjection, LpgProgress,
-    LpgScope, LpgStreamProjection, OboGraphsConfig, OboGraphsVocabulary, OboMetadataRoles,
+    CsvwTermsSelector, CsvwTermsTable, CsvwTermsValueMode, CsvwVocabulary, DcatRdfConfig,
+    DcatRdfMappingConfig, DcatRdfSource, LiftProfile, LpgConfig, LpgExecutionLimits,
+    LpgIriSelection, LpgNamedGraphSelection, LpgPackageProjection, LpgProgress, LpgScope,
+    LpgStreamProjection, NativeRdfFormat, OboGraphsConfig, OboGraphsVocabulary, OboMetadataRoles,
     OboOwlRoles, OboRdfRoles, ProjectionArtifactSink, ProjectionConfig, ProjectionError,
     ProjectionLimits, ProjectionProfile, ProjectionTerm, RdfDataset, RdfDatasetBuilder, RdfLiteral,
     ResearchObjectConfig, RoCrateAssets, SkosClassRoles, SkosConfig, SkosDocumentationRoles,
@@ -175,6 +176,10 @@ const RESEARCH_SOURCE: &[u8] =
     include_bytes!("../tests/fixtures/research-objects/carrier/shared.ttl");
 const OKF_TERMS_SOURCE: &[u8] = include_bytes!("../tests/fixtures/okf-terms.trig");
 const OKF_TERMS_CONFIG: &[u8] = include_bytes!("../tests/fixtures/okf-terms.json");
+const DCAT_RDF_CONSTRUCT_CONFIG: &[u8] =
+    include_bytes!("../tests/fixtures/dataset-description/dcat-rdf.json");
+const VOID_SOURCE: &[u8] = include_bytes!("../tests/fixtures/dataset-description/void-source.trig");
+const VOID_CONFIG: &[u8] = include_bytes!("../tests/fixtures/dataset-description/void.json");
 const RESEARCH_CONFIGS: [(ProjectionProfile, LiftProfile, &[u8]); 5] = [
     (
         ProjectionProfile::Croissant11,
@@ -670,6 +675,26 @@ fn benchmark(c: &mut Criterion) {
             )
         })
         .collect();
+    let ProjectionConfig::Dcat3(dcat_config) = &research_configs[3].2 else {
+        panic!("DCAT benchmark config must be tagged dcat-3");
+    };
+    let mapped_dcat_config = ProjectionConfig::DcatRdf(Box::new(DcatRdfConfig::new(
+        NativeRdfFormat::Turtle,
+        DcatRdfSource::Mapped(Box::new(
+            DcatRdfMappingConfig::new(
+                dcat_config.as_ref().clone(),
+                format!("{RDF}type"),
+                format!("{XSD}string"),
+                10_000,
+            )
+            .expect("mapped DCAT RDF config"),
+        )),
+    )));
+    let construct_dcat_config =
+        ProjectionConfig::from_json(DCAT_RDF_CONSTRUCT_CONFIG).expect("CONSTRUCT DCAT RDF config");
+    let void_dataset =
+        parse_dataset(VOID_SOURCE, "application/trig", None).expect("VoID source dataset");
+    let void_config = ProjectionConfig::from_json(VOID_CONFIG).expect("VoID config");
     let attached_source = String::from_utf8(RESEARCH_SOURCE.to_vec())
         .expect("research source UTF-8")
         .replace("files/train.csv", "data/train.csv")
@@ -709,6 +734,27 @@ fn benchmark(c: &mut Criterion) {
                 .expect("research-object projection")
         })
         .collect();
+    let mapped_dcat_archive = project_archive(
+        research_dataset.as_ref(),
+        ProjectionProfile::DcatRdf,
+        &mapped_dcat_config,
+    )
+    .expect("mapped DCAT RDF projection");
+    let construct_dcat_archive = project_archive(
+        research_dataset.as_ref(),
+        ProjectionProfile::DcatRdf,
+        &construct_dcat_config,
+    )
+    .expect("CONSTRUCT DCAT RDF projection");
+    let void_archive =
+        project_archive(void_dataset.as_ref(), ProjectionProfile::Void, &void_config)
+            .expect("VoID projection");
+    println!(
+        "[projections] dataset_description_archives dcat_mapped={} dcat_construct={} void={}",
+        mapped_dcat_archive.archive.len(),
+        construct_dcat_archive.archive.len(),
+        void_archive.archive.len()
+    );
 
     // Warm all paths before taking one-shot allocation deltas.
     let _ = read_lpg_csv(&generic, &lpg_config).expect("generic read");
@@ -828,6 +874,26 @@ fn benchmark(c: &mut Criterion) {
             &okf_terms_config,
         )
         .expect("OKF terms archive")
+    }));
+    black_box(report_allocations("dcat_rdf_mapped", || {
+        project_archive(
+            research_dataset.as_ref(),
+            ProjectionProfile::DcatRdf,
+            &mapped_dcat_config,
+        )
+        .expect("mapped DCAT RDF")
+    }));
+    black_box(report_allocations("dcat_rdf_construct", || {
+        project_archive(
+            research_dataset.as_ref(),
+            ProjectionProfile::DcatRdf,
+            &construct_dcat_config,
+        )
+        .expect("CONSTRUCT DCAT RDF")
+    }));
+    black_box(report_allocations("void_generate", || {
+        project_archive(void_dataset.as_ref(), ProjectionProfile::Void, &void_config)
+            .expect("VoID generation")
     }));
     black_box(report_allocations("research_common_model", || {
         project_research_object(
@@ -1079,6 +1145,49 @@ fn benchmark(c: &mut Criterion) {
             });
         });
         okf.finish();
+    }
+
+    {
+        let mut descriptions = c.benchmark_group("dataset_descriptions");
+        descriptions.throughput(Throughput::Elements(research_dataset.quad_count() as u64));
+        descriptions.bench_function("dcat_rdf_mapped_29_quads", |bencher| {
+            bencher.iter(|| {
+                black_box(
+                    project_archive(
+                        black_box(research_dataset.as_ref()),
+                        ProjectionProfile::DcatRdf,
+                        black_box(&mapped_dcat_config),
+                    )
+                    .expect("mapped DCAT RDF"),
+                );
+            });
+        });
+        descriptions.bench_function("dcat_rdf_construct_29_quads", |bencher| {
+            bencher.iter(|| {
+                black_box(
+                    project_archive(
+                        black_box(research_dataset.as_ref()),
+                        ProjectionProfile::DcatRdf,
+                        black_box(&construct_dcat_config),
+                    )
+                    .expect("CONSTRUCT DCAT RDF"),
+                );
+            });
+        });
+        descriptions.throughput(Throughput::Elements(void_dataset.quad_count() as u64));
+        descriptions.bench_function("void_generate", |bencher| {
+            bencher.iter(|| {
+                black_box(
+                    project_archive(
+                        black_box(void_dataset.as_ref()),
+                        ProjectionProfile::Void,
+                        black_box(&void_config),
+                    )
+                    .expect("VoID generation"),
+                );
+            });
+        });
+        descriptions.finish();
     }
 
     {
