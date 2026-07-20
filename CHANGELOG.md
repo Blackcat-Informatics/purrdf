@@ -4,6 +4,148 @@ All notable changes to the PurRDF crate suite are recorded here. The suite
 ships one lockstep version across crates.io, PyPI, and npm; pre-1.0, a minor
 bump may carry breaking changes and a patch bump is bugfix-only.
 
+## [0.8.0] - 2026-07-20
+
+### Bug Fixes
+
+- Harden purremb contracts and lookups
+- **shapes:** Standardize schema input blanks apart
+- **shapes:** Return typed schema key errors
+- **shapes:** Admit identifier-only ontology ranges
+- **shapes:** Retain custom datatype ranges
+- **shapes:** Bound propagated schema facts
+- **shapes:** Lower unsafe LinkML slots deterministically
+- **shapes:** Bound schema parsing during construction
+- **shapes:** Reject initializer module components
+- **jsonld:** Preserve active-context option semantics
+- **jsonld:** Preserve compact carrier round trips
+- **jsonld:** Bound derived context validation
+- **cli:** Bound JSON-LD options input
+- **python:** Isolate generated namespace bindings
+- **playground:** Route configured JSON-LD formats
+- **capi:** Update projection example scope
+- **wasm:** Update projection scope fixtures
+- **csvw:** Preserve W3C RDF conversion
+- **capi:** Refresh generated projection header
+- **build:** Measure OKF wasm package growth
+- **capi:** Close smoke fixture on seek failure
+- **build:** Make Cargo target fallback safe
+- **capi:** Honor active smoke-test profile
+- **build:** Harden Cargo target discovery
+
+### CI & Build
+
+- **wasm:** Rebaseline scoped projection budgets
+
+### Documentation
+
+- **rdf-core:** Specify the PURREMB v1 format
+- **shapes:** Expose ontology schema workflow
+- **shapes:** Publish LinkML slot migration contract
+- **shapes:** Document rich Pydantic package emission
+- **shapes:** Qualify flat byte compatibility
+- **jsonld:** Document deterministic context compaction
+- **conformance:** Refresh compatibility count
+- **conformance:** Refresh Python parity count
+- **csvw:** Guide curated terms projection
+- **cli:** Enumerate liftable profiles
+- **wasm:** Refresh optimized size measurement
+- **conformance:** Refresh compatibility count
+- **conformance:** Refresh compatibility count
+- **cli:** Explain OKF lift rejection
+- **conformance:** Account for attached parity test
+
+### Features
+
+- **rdf-core:** Add deterministic PURREMB writing
+- **rdf-core:** Add borrowed PURREMB reading
+- **rdf-core:** Add PURREMB binding verification
+- **rdf-core:** Add deterministic .purremb companion format
+- **sssom:** Model set-level document comments
+- **sssom:** Retain parsed document envelopes
+- **sssom:** Serialize typed document envelopes
+- **shapes:** Define ontology schema compilation contract
+- **shapes:** Derive deterministic ontology schema surface
+- **shapes:** Emit ontology-complete schema carriers
+- **shapes:** Define LinkML slot naming contract
+- **shapes:** Verify LinkML slot reports on import
+- **shapes:** Define deterministic Pydantic package topology
+- **shapes:** Emit routed rich Pydantic packages
+- **rdf:** Compile JSON-LD active contexts
+- **rdf:** Compact JSON-LD through a typed carrier
+- **rdf:** Derive deterministic JSON-LD contexts
+- **cli:** Expose configured JSON-LD serialization
+- **bindings:** Expose compiled JSON-LD contexts
+- **lpg:** Require explicit projection scope
+- **lpg:** Stream projection artifacts
+- **lpg:** Expose scoped streaming hosts
+- **csvw:** Define curated terms profile
+- **csvw:** Project scoped curated term tables
+- **projection:** Expose curated CSVW terms
+- **rdf:** Define OKF terms projection contract
+- **rdf:** Generate deterministic OKF term bundles
+- **rdf:** Expose OKF terms across hosts
+- **rdf:** Add attached RO-Crate assets
+- **bindings:** Expose attached RO-Crate packaging
+
+### Other
+
+- Compile ontology-complete developer schema surfaces
+- Make LinkML slot lowering deterministic and reversible
+- Emit deterministic rich Pydantic packages
+- **jsonld:** Document scoped lint exceptions
+- Add deterministic context compaction
+- Preserve typed SSSOM set comments
+- Add scoped streaming LPG projections
+- Add caller-configured curated CSVW projections
+- Add deterministic caller-configured OKF term bundles
+- Add deterministic attached RO-Crate payload packages
+- Add native DCAT and VoID dataset descriptions
+- Benchmark whole-bundle SHACL focus execution
+- Optimize SHACL focus validation invariants
+- Parallelize SHACL focus evaluation deterministically
+- Prepare bounded SHACL validation for realtime use
+- Eliminate SHACL canonical sort key allocations
+- Preserve interned IDs through recursive SHACL checks
+- Prove deterministic SHACL parallel execution
+- Document realtime SHACL validation operations
+- Optimize realtime and whole-bundle SHACL validation
+
+### Performance
+
+- **rdf-core:** Benchmark PURREMB access paths
+- **sssom:** Streamline column selection
+- **shapes:** Cache ontology row sort keys
+- **shapes:** Borrow unchanged LinkML slot locals
+- **shapes:** Reuse Pydantic path buffers
+- **shapes:** Avoid duplicate schema limit traversal
+- **shapes:** Index routed definition owners
+- **jsonld:** Remove carrier hot-path allocation
+- **lpg:** Measure scoped streaming carriers
+- **projection:** Coalesce artifact sink writes
+- **csvw:** Reuse URI expansion allocations
+- **csvw:** Remove curated selection temporaries
+- **csvw:** Borrow curated table memberships
+- **rdf:** Remove OKF classifier scratch allocations
+- **rdf:** Remove attached crate loop allocations
+
+### Refactor
+
+- **shapes:** Clarify routed name guard
+- **jsonld:** Unify context processing
+
+### Testing
+
+- **rdf-core:** Harden PURREMB conformance coverage
+- **shapes:** Prove ontology surface across emitters
+- **shapes:** Keep namespace fixture vocabulary neutral
+- **shapes:** Prove emitter-specific ownership
+- **shapes:** Harden LinkML slot lowering
+- **shapes:** Exercise routed Pydantic packages
+- **jsonld:** Freeze expanded codec baseline
+- **rdf:** Pin OKF terms cross-host parity
+- **rdf:** Freeze attached crate host parity
+
 ## [0.7.0] - 2026-07-17
 
 ### Benchmarks
