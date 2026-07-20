@@ -89,23 +89,13 @@ fn selected_records<D: DatasetView>(
         )));
     }
 
-    let selected_graphs: BTreeSet<VoidGraphSelector> = config
-        .data_graphs()
-        .iter()
-        .chain([
-            config.header_graph(),
-            config.alignment_graph(),
-            config.metadata_graph(),
-        ])
-        .cloned()
-        .collect();
     let mut records = BTreeSet::new();
     for row in view
         .quads()
         .chain(view.reifier_quads())
         .chain(view.annotation_quads())
     {
-        let Some(graph) = selected_graph(view, row.g, &selected_graphs)? else {
+        let Some(graph) = selected_graph(view, row.g, config)? else {
             continue;
         };
         records.insert(resolve_record(view, row, graph, config)?);
@@ -116,14 +106,12 @@ fn selected_records<D: DatasetView>(
 fn selected_graph<D: DatasetView>(
     view: &D,
     graph: Option<D::Id>,
-    selected: &BTreeSet<VoidGraphSelector>,
+    config: &VoidConfig,
 ) -> Result<Option<VoidGraphSelector>, ProjectionError> {
-    let graph = match graph {
-        None => VoidGraphSelector::DefaultGraph,
+    let graph_iri = match graph {
+        None => None,
         Some(graph) => match view.resolve(graph) {
-            TermRef::Iri(iri) => VoidGraphSelector::NamedGraph {
-                graph_iri: iri.to_owned(),
-            },
+            TermRef::Iri(iri) => Some(iri),
             TermRef::Blank { .. } => return Ok(None),
             TermRef::Literal { .. } | TermRef::Triple { .. } => {
                 return Err(ProjectionError::integrity(
@@ -132,7 +120,20 @@ fn selected_graph<D: DatasetView>(
             }
         },
     };
-    Ok(selected.contains(&graph).then_some(graph))
+    Ok(config
+        .data_graphs()
+        .iter()
+        .chain([
+            config.header_graph(),
+            config.alignment_graph(),
+            config.metadata_graph(),
+        ])
+        .find(|selector| match (selector, graph_iri) {
+            (VoidGraphSelector::DefaultGraph, None) => true,
+            (VoidGraphSelector::NamedGraph { graph_iri }, Some(actual)) => graph_iri == actual,
+            (VoidGraphSelector::DefaultGraph | VoidGraphSelector::NamedGraph { .. }, _) => false,
+        })
+        .cloned())
 }
 
 fn resolve_record<D: DatasetView>(
