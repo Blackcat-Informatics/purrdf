@@ -1123,21 +1123,13 @@ fn eval_constraint(
             let mut results = Vec::new();
             let focus = focus_node;
             for value in value_nodes {
-                // Content/recursion arm: this constraint needs the value node's term
-                // (its lexical form, datatype, node kind, or a recursion focus), so
-                // resolve it here. `value` borrows the owned term for the rest of the
-                // arm exactly as before.
+                // Preserve interned identity before materializing the recursion
+                // focus; reverse-resolving the owned term would add a hash probe.
+                let value_id = value.as_id(ds);
                 let value_term = value.to_term(ds);
                 let value = &value_term;
                 // Violation iff the value node DOES conform to the negated shape.
-                if conforms_with_id_depth(
-                    store,
-                    value,
-                    resolve_id(ds, value),
-                    inner_shape,
-                    plan,
-                    depth,
-                )? {
+                if conforms_with_id_depth(store, value, value_id, inner_shape, plan, depth)? {
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path(),
@@ -1357,22 +1349,13 @@ fn eval_constraint(
             let mut results = Vec::new();
             let focus = focus_node;
             for value in value_nodes {
-                // Content/recursion arm: this constraint needs the value node's term
-                // (its lexical form, datatype, node kind, or a recursion focus), so
-                // resolve it here. `value` borrows the owned term for the rest of the
-                // arm exactly as before.
+                // Resolve identity once even when several member shapes recurse.
+                let value_id = value.as_id(ds);
                 let value_term = value.to_term(ds);
                 let value = &value_term;
                 let mut all_conform = true;
                 for member in members {
-                    if !conforms_with_id_depth(
-                        store,
-                        value,
-                        resolve_id(ds, value),
-                        member,
-                        plan,
-                        depth,
-                    )? {
+                    if !conforms_with_id_depth(store, value, value_id, member, plan, depth)? {
                         all_conform = false;
                         break;
                     }
@@ -1402,22 +1385,13 @@ fn eval_constraint(
             let mut results = Vec::new();
             let focus = focus_node;
             for value in value_nodes {
-                // Content/recursion arm: this constraint needs the value node's term
-                // (its lexical form, datatype, node kind, or a recursion focus), so
-                // resolve it here. `value` borrows the owned term for the rest of the
-                // arm exactly as before.
+                // Resolve identity once even when several member shapes recurse.
+                let value_id = value.as_id(ds);
                 let value_term = value.to_term(ds);
                 let value = &value_term;
                 let mut any_conforms = false;
                 for member in members {
-                    if conforms_with_id_depth(
-                        store,
-                        value,
-                        resolve_id(ds, value),
-                        member,
-                        plan,
-                        depth,
-                    )? {
+                    if conforms_with_id_depth(store, value, value_id, member, plan, depth)? {
                         any_conforms = true;
                         break;
                     }
@@ -1447,22 +1421,13 @@ fn eval_constraint(
             let mut results = Vec::new();
             let focus = focus_node;
             for value in value_nodes {
-                // Content/recursion arm: this constraint needs the value node's term
-                // (its lexical form, datatype, node kind, or a recursion focus), so
-                // resolve it here. `value` borrows the owned term for the rest of the
-                // arm exactly as before.
+                // Resolve identity once even when several member shapes recurse.
+                let value_id = value.as_id(ds);
                 let value_term = value.to_term(ds);
                 let value = &value_term;
                 let mut count = 0usize;
                 for member in members {
-                    if conforms_with_id_depth(
-                        store,
-                        value,
-                        resolve_id(ds, value),
-                        member,
-                        plan,
-                        depth,
-                    )? {
+                    if conforms_with_id_depth(store, value, value_id, member, plan, depth)? {
                         count += 1;
                     }
                 }
@@ -1491,20 +1456,12 @@ fn eval_constraint(
             let mut results = Vec::new();
             let focus = focus_node;
             for value in value_nodes {
-                // Content/recursion arm: this constraint needs the value node's term
-                // (its lexical form, datatype, node kind, or a recursion focus), so
-                // resolve it here. `value` borrows the owned term for the rest of the
-                // arm exactly as before.
+                // Preserve interned identity before materializing the recursion
+                // focus; reverse-resolving the owned term would add a hash probe.
+                let value_id = value.as_id(ds);
                 let value_term = value.to_term(ds);
                 let value = &value_term;
-                if !conforms_with_id_depth(
-                    store,
-                    value,
-                    resolve_id(ds, value),
-                    inner_shape,
-                    plan,
-                    depth,
-                )? {
+                if !conforms_with_id_depth(store, value, value_id, inner_shape, plan, depth)? {
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path(),
@@ -1642,23 +1599,17 @@ fn eval_constraint(
             let mut count = 0u64;
             for v in value_nodes {
                 // Each value node is a recursion focus for the qualified shape;
-                // resolve it to an owned term at the recursion boundary.
+                // retain its interned identity across every recursive check.
+                let v_id = v.as_id(ds);
                 let v_term = v.to_term(ds);
                 let v = &v_term;
-                if !conforms_with_id_depth(store, v, resolve_id(ds, v), qshape, plan, depth)? {
+                if !conforms_with_id_depth(store, v, v_id, qshape, plan, depth)? {
                     continue;
                 }
                 let mut sibling_conforms = false;
                 if *disjoint {
                     for sibling in siblings {
-                        if conforms_with_id_depth(
-                            store,
-                            v,
-                            resolve_id(ds, v),
-                            sibling,
-                            plan,
-                            depth,
-                        )? {
+                        if conforms_with_id_depth(store, v, v_id, sibling, plan, depth)? {
                             sibling_conforms = true;
                             break;
                         }
