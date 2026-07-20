@@ -314,7 +314,7 @@ fn analyze_linksets(
     records: &BTreeSet<SourceRecord>,
     config: &VoidConfig,
 ) -> Result<Vec<Linkset>, ProjectionError> {
-    let mut buckets = BTreeMap::<LinksetKey, u64>::new();
+    let mut buckets = BTreeMap::<(&str, &str, &str), u64>::new();
     for record in records
         .iter()
         .filter(|record| &record.graph == config.alignment_graph())
@@ -337,11 +337,11 @@ fn analyze_linksets(
                 record.predicate
             )));
         }
-        let key = LinksetKey {
-            subjects_target: subject_dataset.dataset_iri.to_owned(),
-            objects_target: object_dataset.dataset_iri.to_owned(),
-            predicate: record.predicate.clone(),
-        };
+        let key = (
+            subject_dataset.dataset_iri,
+            object_dataset.dataset_iri,
+            record.predicate.as_str(),
+        );
         let count = buckets.entry(key).or_default();
         *count = count
             .checked_add(1)
@@ -356,19 +356,23 @@ fn analyze_linksets(
     }
 
     let mut linksets = Vec::with_capacity(buckets.len());
-    for (key, triples) in buckets {
+    for ((subjects_target, objects_target, predicate), triples) in buckets {
         let identity = canonical_json_bounded(
-            &(
-                key.subjects_target.as_str(),
-                key.objects_target.as_str(),
-                key.predicate.as_str(),
-            ),
+            &(subjects_target, objects_target, predicate),
             config.limits(),
             "VoID linkset identity key",
         )?;
         let local = stable_identifier("void_linkset", &identity)?;
         let iri = generated_iri(config, &local, "VoID linkset")?;
-        linksets.push(Linkset { iri, key, triples });
+        linksets.push(Linkset {
+            iri,
+            key: LinksetKey {
+                subjects_target: subjects_target.to_owned(),
+                objects_target: objects_target.to_owned(),
+                predicate: predicate.to_owned(),
+            },
+            triples,
+        });
     }
     Ok(linksets)
 }
@@ -382,7 +386,7 @@ fn classify_dataset<'a>(
     iri: &str,
     config: &'a VoidConfig,
 ) -> Result<ClassifiedDataset<'a>, ProjectionError> {
-    let mut matches: Vec<(&VoidDatasetPrefix, bool)> = config
+    let candidates = config
         .local_datasets()
         .iter()
         .map(|binding| (binding, true))
@@ -391,25 +395,37 @@ fn classify_dataset<'a>(
                 .external_datasets()
                 .iter()
                 .map(|binding| (binding, false)),
-        )
-        .filter(|(binding, _)| iri.starts_with(binding.iri_prefix()))
-        .collect();
-    let max_length = matches
-        .iter()
-        .map(|(binding, _)| binding.iri_prefix().len())
-        .max()
-        .ok_or_else(|| {
-            ProjectionError::integrity(format!(
-                "VoID alignment endpoint `{iri}` matches no dataset prefix"
-            ))
-        })?;
-    matches.retain(|(binding, _)| binding.iri_prefix().len() == max_length);
-    if matches.len() != 1 {
+        );
+    let mut best = None::<(&VoidDatasetPrefix, bool)>;
+    let mut ambiguous = false;
+    for (binding, local) in candidates {
+        let prefix = binding.iri_prefix();
+        if !iri.starts_with(prefix) {
+            continue;
+        }
+        let Some((best_binding, _)) = best else {
+            best = Some((binding, local));
+            continue;
+        };
+        match prefix.len().cmp(&best_binding.iri_prefix().len()) {
+            std::cmp::Ordering::Greater => {
+                best = Some((binding, local));
+                ambiguous = false;
+            }
+            std::cmp::Ordering::Equal => ambiguous = true,
+            std::cmp::Ordering::Less => {}
+        }
+    }
+    let Some((binding, local)) = best else {
+        return Err(ProjectionError::integrity(format!(
+            "VoID alignment endpoint `{iri}` matches no dataset prefix"
+        )));
+    };
+    if ambiguous {
         return Err(ProjectionError::integrity(format!(
             "VoID alignment endpoint `{iri}` has an ambiguous longest-prefix classification"
         )));
     }
-    let (binding, local) = matches[0];
     Ok(ClassifiedDataset {
         dataset_iri: binding.dataset_iri(),
         local,
@@ -938,5 +954,25 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn dataset_classification_uses_the_longest_matching_prefix() {
+        let config = config_for(NativeRdfFormat::Turtle);
+        let specific = classify_dataset("https://external.example/resource/item", &config)
+            .expect("specific external prefix");
+        assert_eq!(
+            specific.dataset_iri,
+            "https://external.example/dataset/specific"
+        );
+        assert!(!specific.local);
+
+        let general = classify_dataset("https://external.example/other", &config)
+            .expect("general external prefix");
+        assert_eq!(
+            general.dataset_iri,
+            "https://external.example/dataset/general"
+        );
+        assert!(!general.local);
     }
 }
