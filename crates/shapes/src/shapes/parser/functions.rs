@@ -35,7 +35,7 @@ impl Parser<'_> {
             .chain(self.quads_with(None, Some(rdf::TYPE), Some(sh::FUNCTION)))
             .map(|(subject, _, _)| subject)
             .collect();
-        crate::term::sort_canonical(&mut fn_ids);
+        crate::term::sort_terms_canonical(&mut fn_ids);
         fn_ids.dedup();
 
         let mut registry = UserFunctionRegistry::new();

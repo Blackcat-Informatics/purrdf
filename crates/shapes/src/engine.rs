@@ -16,9 +16,23 @@ use crate::expression::{FnCall, NodeExpr};
 use crate::model::{rdf, rdfs};
 use crate::report::ValidationReport;
 use crate::shapes::{Constraint, PropertyShape, Shape, Shapes, Target};
-use crate::term::{NamedNode, Term, term_id_to_native};
+use crate::term::{NamedNode, Term, canonical_cmp, term_id_to_native};
 
 // ── Target resolution helpers ─────────────────────────────────────────────────
+
+/// Canonically order focus nodes without allocating one rendered key per node.
+/// Large target sets use Rayon's deterministic stable parallel merge sort; small
+/// bounded requests avoid scheduler overhead.
+fn sort_focus_nodes(nodes: &mut [FocusNode]) {
+    const PARALLEL_SORT_MIN_NODES: usize = 4_096;
+
+    if nodes.len() >= PARALLEL_SORT_MIN_NODES && rayon::current_num_threads() > 1 {
+        use rayon::prelude::*;
+        nodes.par_sort_by(|left, right| canonical_cmp(&left.term, &right.term));
+    } else {
+        nodes.sort_by(|left, right| canonical_cmp(&left.term, &right.term));
+    }
+}
 
 /// Resolve a predicate IRI to its interned id in the Core dataset, if present.
 #[inline]
@@ -409,7 +423,7 @@ pub(crate) fn resolve_focus_nodes(
         }
     }
 
-    nodes.sort_by_cached_key(|node| node.term.to_string());
+    sort_focus_nodes(&mut nodes);
     Ok(nodes)
 }
 
@@ -575,7 +589,7 @@ impl PreparedTargets {
                 .cloned()
                 .map(|term| FocusNode { term, id: None }),
         );
-        nodes.sort_by_cached_key(|node| node.term.to_string());
+        sort_focus_nodes(&mut nodes);
         nodes
     }
 }
@@ -844,7 +858,7 @@ impl PreparedValidator {
                 });
             }
         }
-        focus_nodes.sort_by_cached_key(|focus| focus.term.to_string());
+        sort_focus_nodes(&mut focus_nodes);
         self.validate_bounded(&focus_nodes)
     }
 
@@ -867,7 +881,7 @@ impl PreparedValidator {
                 });
             }
         }
-        normalized.sort_by_cached_key(|focus| focus.term.to_string());
+        sort_focus_nodes(&mut normalized);
         normalized
     }
 

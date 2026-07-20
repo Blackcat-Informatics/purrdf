@@ -40,9 +40,9 @@
 //! # Determinism
 //!
 //! [`Term`] is intentionally not `Ord`, so this module orders any set-shaped
-//! output with `crate::term::sort_canonical(&mut v); v.dedup();` (caching the
-//! rendered key once per element; the sibling [`crate::sparql::eval_target`]
-//! sorts the same set-shaped way via the canonical cached-key sorter). The evaluator is
+//! output with `crate::term::sort_terms_canonical(&mut v); v.dedup();`, using the
+//! allocation-free canonical term comparator. The sibling
+//! [`crate::sparql::eval_target`] uses the same ordering. The evaluator is
 //! wasm32-clean: no clocks, threads, RNG, or filesystem.
 
 use ::purrdf::{FastMap, FastSet};
@@ -334,7 +334,7 @@ pub fn eval_node_expr(
             // deterministic. `path::eval`'s crate-wide first-seen iteration order
             // is left untouched (it is used elsewhere for path traversal).
             let mut v = path::eval(store.core(), focus, p);
-            crate::term::sort_canonical(&mut v);
+            crate::term::sort_terms_canonical(&mut v);
             v.dedup();
             Ok(v)
         }
@@ -343,7 +343,7 @@ pub fn eval_node_expr(
             for sub in exprs {
                 out.extend(eval_node_expr(store, focus, sub, guard)?);
             }
-            crate::term::sort_canonical(&mut out);
+            crate::term::sort_terms_canonical(&mut out);
             out.dedup();
             Ok(out)
         }
@@ -364,7 +364,7 @@ pub fn eval_node_expr(
                 acc.retain(|t| next.contains(t));
             }
             let mut out: Vec<Term> = acc.into_iter().collect();
-            crate::term::sort_canonical(&mut out);
+            crate::term::sort_terms_canonical(&mut out);
             out.dedup();
             Ok(out)
         }
@@ -475,20 +475,20 @@ pub fn eval_node_expr(
             }
             // Canonicalize the unioned result (sort+dedup) like every other
             // set-shaped node-expression output.
-            crate::term::sort_canonical(&mut out);
+            crate::term::sort_terms_canonical(&mut out);
             out.dedup();
             Ok(out)
         }
         NodeExpr::Distinct(of) => {
             let mut out = eval_node_expr(store, focus, of, guard)?;
-            crate::term::sort_canonical(&mut out);
+            crate::term::sort_terms_canonical(&mut out);
             out.dedup();
             Ok(out)
         }
         NodeExpr::Count { distinct, of } => {
             let mut out = eval_node_expr(store, focus, of, guard)?;
             if *distinct {
-                crate::term::sort_canonical(&mut out);
+                crate::term::sort_terms_canonical(&mut out);
                 out.dedup();
             }
             // Element count as a canonical `xsd:integer`. `usize::to_string`
@@ -531,7 +531,7 @@ pub fn eval_node_expr(
             // canonical term string) so value-equal keys still yield a
             // byte-stable total order (tie-break).
             let mut distinct: Vec<Term> = keyed.iter().map(|(_, k)| k.clone()).collect();
-            crate::term::sort_canonical(&mut distinct);
+            crate::term::sort_terms_canonical(&mut distinct);
             distinct.dedup();
             let ranked = crate::sparql::eval_order(store.sparql(), &distinct, false)?;
             let mut rank: FastMap<String, usize> = FastMap::default();
@@ -603,7 +603,7 @@ pub fn eval_node_expr(
             // Canonicalize the node-expression set output here (sort+dedup) so
             // sh:offset / sh:limit over a bare Filter set are deterministic
             // rather than store-iteration-order dependent.
-            crate::term::sort_canonical(&mut kept);
+            crate::term::sort_terms_canonical(&mut kept);
             kept.dedup();
             Ok(kept)
         }
@@ -717,7 +717,7 @@ mod tests {
         assert_eq!(result, vec![ex("b"), ex("c")]);
         let sorted = {
             let mut v = result.clone();
-            crate::term::sort_canonical(&mut v);
+            crate::term::sort_terms_canonical(&mut v);
             v
         };
         assert_eq!(result, sorted, "Path result must be returned sorted");
@@ -772,7 +772,7 @@ mod tests {
         // Explicitly assert deterministic (sorted) order.
         let sorted = {
             let mut v = result.clone();
-            crate::term::sort_canonical(&mut v);
+            crate::term::sort_terms_canonical(&mut v);
             v
         };
         assert_eq!(result, sorted);

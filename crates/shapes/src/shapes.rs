@@ -655,7 +655,7 @@ impl<'s> Parser<'s> {
         // are wrapped in a single-property Shape carrying the node's targets.
         let mut node_shapes: Vec<Shape> = Vec::new();
         let mut ids: Vec<Term> = shape_ids.into_iter().collect();
-        crate::term::sort_canonical(&mut ids);
+        crate::term::sort_terms_canonical(&mut ids);
         for term in ids {
             let shape = if self.first_object_of(&term, sh::PATH).is_some() {
                 self.parse_standalone_property_shape(term.clone())?
@@ -891,7 +891,7 @@ impl<'s> Parser<'s> {
 
         // -- Property shapes (via sh:property) --
         let mut property_shape_nodes: Vec<Term> = self.objects_of(id, sh::PROPERTY);
-        crate::term::sort_canonical(&mut property_shape_nodes);
+        crate::term::sort_terms_canonical(&mut property_shape_nodes);
         let mut property_shapes = Vec::new();
         for ps_node in property_shape_nodes {
             property_shapes.push(self.parse_property_shape(&ps_node)?);
@@ -964,7 +964,7 @@ impl<'s> Parser<'s> {
 
         // sh:targetNode
         let mut tn: Vec<Term> = self.objects_of(id, sh::TARGET_NODE);
-        crate::term::sort_canonical(&mut tn);
+        crate::term::sort_terms_canonical(&mut tn);
         for t in tn {
             targets.push(Target::Node(t));
         }
@@ -979,7 +979,7 @@ impl<'s> Parser<'s> {
         // sh:target — SHACL-AF extension targets. Supports plain sh:SPARQLTarget
         // and parameterized sh:SPARQLTargetType instances.
         let mut sparql_targets: Vec<Term> = self.objects_of(id, sh::TARGET);
-        crate::term::sort_canonical(&mut sparql_targets);
+        crate::term::sort_terms_canonical(&mut sparql_targets);
         for t_node in sparql_targets {
             if self.has_type(&t_node, sh::SPARQL_TARGET) {
                 // Plain sh:SPARQLTarget: sh:select is required on the blank node.
@@ -1134,7 +1134,7 @@ impl<'s> Parser<'s> {
         // skipping a shape already being parsed (mirrors parse_node_shape's
         // cycle stub).
         let mut nested_nodes: Vec<Term> = self.objects_of(ps_node, sh::PROPERTY);
-        crate::term::sort_canonical(&mut nested_nodes);
+        crate::term::sort_terms_canonical(&mut nested_nodes);
         let mut property_shapes: Vec<PropertyShape> = Vec::new();
         if !nested_nodes.is_empty() {
             self.in_flight.insert(ps_str.clone());
@@ -1160,7 +1160,7 @@ impl<'s> Parser<'s> {
             .any(|t| matches!(t, Term::Literal(lit) if lit.value() == "true"));
 
         let mut reifier_shape_nodes: Vec<Term> = self.objects_of(ps_node, sh::REIFIER_SHAPE);
-        crate::term::sort_canonical(&mut reifier_shape_nodes);
+        crate::term::sort_terms_canonical(&mut reifier_shape_nodes);
         if (!reifier_shape_nodes.is_empty() || reification_required)
             && !matches!(path, Path::Predicate(_))
         {

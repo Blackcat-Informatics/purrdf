@@ -24,7 +24,7 @@ impl Parser<'_> {
     /// the pre-binding restrictions, or a non-numeric `sh:order`.
     pub(crate) fn parse_rules(&mut self, id: &Term) -> Result<Vec<Rule>, String> {
         let mut rule_nodes: Vec<Term> = self.objects_of(id, sh::RULE);
-        crate::term::sort_canonical(&mut rule_nodes);
+        crate::term::sort_terms_canonical(&mut rule_nodes);
         let mut rules: Vec<Rule> = Vec::with_capacity(rule_nodes.len());
         for rule_node in rule_nodes {
             rules.push(self.parse_rule(id, &rule_node)?);
@@ -57,7 +57,7 @@ impl Parser<'_> {
         };
 
         let mut conditions: Vec<Term> = self.objects_of(rule_node, sh::CONDITION);
-        crate::term::sort_canonical(&mut conditions);
+        crate::term::sort_terms_canonical(&mut conditions);
 
         // Dispatch on rule kind: an explicit rdf:type OR the presence of the
         // kind's structural keys. A node that is both (or neither) is malformed.

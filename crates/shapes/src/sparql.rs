@@ -70,7 +70,7 @@ pub fn eval_target(
         }
     }
 
-    crate::term::sort_canonical(&mut nodes);
+    crate::term::sort_terms_canonical(&mut nodes);
     nodes.dedup();
     Ok(nodes)
 }
@@ -650,7 +650,7 @@ mod tests {
         // Verify sorted order.
         let sorted = {
             let mut v = nodes.clone();
-            crate::term::sort_canonical(&mut v);
+            crate::term::sort_terms_canonical(&mut v);
             v
         };
         assert_eq!(nodes, sorted, "result must be sorted");

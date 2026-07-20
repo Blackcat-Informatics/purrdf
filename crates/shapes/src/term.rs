@@ -26,8 +26,11 @@
 //! Literal lexical forms escape `\\ \" \n \r \t` plus C0 control chars as `\u00XX`,
 //! exactly as oxigraph's N-Triples literal writer.
 
+use std::cmp::Ordering;
+
 use ::purrdf::{RdfDataset, TermRef};
 use ::purrdf::{RdfTextDirection, TermId, TermValue};
+use smallvec::SmallVec;
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
@@ -36,6 +39,11 @@ const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langSt
 /// byte-level ordering contract. Each key is rendered exactly once.
 pub(crate) fn sort_canonical<T: ToString>(values: &mut [T]) {
     values.sort_by_cached_key(ToString::to_string);
+}
+
+/// Stable canonical ordering for RDF terms without materializing display keys.
+pub(crate) fn sort_terms_canonical(values: &mut [Term]) {
+    values.sort_by(canonical_cmp);
 }
 
 /// A native RDF term IRI (named node). Wraps a `String`; mirrors the slice of the
@@ -211,6 +219,197 @@ pub enum Term {
     Literal(Literal),
     /// A quoted triple (RDF 1.2).
     Triple(Box<Triple>),
+}
+
+#[derive(Clone, Copy)]
+enum CanonicalPart<'a> {
+    Raw(&'a [u8]),
+    Escaped(&'a [u8]),
+    Term(&'a Term),
+}
+
+/// Allocation-free iterator over the canonical display bytes of a valid IR term.
+///
+/// The IR limits quoted-triple nesting to 16 levels. The inline stack therefore
+/// covers every dataset term without spilling; manually-constructed terms beyond
+/// that bound remain correct and may spill to the `SmallVec` backing allocation.
+struct CanonicalBytes<'a> {
+    parts: SmallVec<[CanonicalPart<'a>; 96]>,
+    pending_escape: [u8; 6],
+    pending_len: u8,
+    pending_pos: u8,
+}
+
+impl<'a> CanonicalBytes<'a> {
+    fn new(term: &'a Term) -> Self {
+        let mut bytes = Self {
+            parts: SmallVec::new(),
+            pending_escape: [0; 6],
+            pending_len: 0,
+            pending_pos: 0,
+        };
+        bytes.parts.push(CanonicalPart::Term(term));
+        bytes
+    }
+
+    #[inline]
+    fn queue_escape(&mut self, replacement: &[u8]) {
+        self.pending_escape[..replacement.len()].copy_from_slice(replacement);
+        self.pending_len = u8::try_from(replacement.len()).expect("escape fits in six bytes");
+        self.pending_pos = 0;
+    }
+
+    #[inline]
+    fn queue_control_escape(&mut self, byte: u8) {
+        const HEX: &[u8; 16] = b"0123456789ABCDEF";
+        self.pending_escape = [
+            b'\\',
+            b'u',
+            b'0',
+            b'0',
+            HEX[usize::from(byte >> 4)],
+            HEX[usize::from(byte & 0x0f)],
+        ];
+        self.pending_len = 6;
+        self.pending_pos = 0;
+    }
+
+    fn expand_term(&mut self, term: &'a Term) {
+        match term {
+            Term::NamedNode(node) => {
+                self.parts.push(CanonicalPart::Raw(b">"));
+                self.parts.push(CanonicalPart::Raw(node.0.as_bytes()));
+                self.parts.push(CanonicalPart::Raw(b"<"));
+            }
+            Term::BlankNode(label) => {
+                self.parts.push(CanonicalPart::Raw(label.as_bytes()));
+                self.parts.push(CanonicalPart::Raw(b"_:"));
+            }
+            Term::Literal(literal) => {
+                if let Some(language) = &literal.language {
+                    if let Some(direction) = literal.direction {
+                        self.parts.push(CanonicalPart::Raw(match direction {
+                            RdfTextDirection::Ltr => b"--ltr",
+                            RdfTextDirection::Rtl => b"--rtl",
+                        }));
+                    }
+                    self.parts.push(CanonicalPart::Raw(language.as_bytes()));
+                    self.parts.push(CanonicalPart::Raw(b"\"@"));
+                } else if literal.datatype == XSD_STRING || literal.datatype == RDF_LANG_STRING {
+                    self.parts.push(CanonicalPart::Raw(b"\""));
+                } else {
+                    self.parts.push(CanonicalPart::Raw(b">"));
+                    self.parts
+                        .push(CanonicalPart::Raw(literal.datatype.as_bytes()));
+                    self.parts.push(CanonicalPart::Raw(b"\"^^<"));
+                }
+                self.parts
+                    .push(CanonicalPart::Escaped(literal.lexical.as_bytes()));
+                self.parts.push(CanonicalPart::Raw(b"\""));
+            }
+            Term::Triple(triple) => {
+                self.parts.push(CanonicalPart::Raw(b" )>>"));
+                self.parts.push(CanonicalPart::Term(&triple.object));
+                self.parts.push(CanonicalPart::Raw(b"> "));
+                self.parts
+                    .push(CanonicalPart::Raw(triple.predicate.0.as_bytes()));
+                self.parts.push(CanonicalPart::Raw(b" <"));
+                self.parts.push(CanonicalPart::Term(&triple.subject));
+                self.parts.push(CanonicalPart::Raw(b"<<( "));
+            }
+        }
+    }
+}
+
+impl Iterator for CanonicalBytes<'_> {
+    type Item = u8;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.pending_pos < self.pending_len {
+                let byte = self.pending_escape[usize::from(self.pending_pos)];
+                self.pending_pos += 1;
+                return Some(byte);
+            }
+
+            let part = self.parts.last_mut()?;
+            match part {
+                CanonicalPart::Raw(bytes) => {
+                    let Some((&byte, remaining)) = bytes.split_first() else {
+                        self.parts.pop();
+                        continue;
+                    };
+                    *bytes = remaining;
+                    return Some(byte);
+                }
+                CanonicalPart::Escaped(bytes) => {
+                    let Some((&byte, remaining)) = bytes.split_first() else {
+                        self.parts.pop();
+                        continue;
+                    };
+                    *bytes = remaining;
+                    match byte {
+                        b'\\' => self.queue_escape(b"\\\\"),
+                        b'\"' => self.queue_escape(b"\\\""),
+                        b'\n' => self.queue_escape(b"\\n"),
+                        b'\r' => self.queue_escape(b"\\r"),
+                        b'\t' => self.queue_escape(b"\\t"),
+                        control if control < 0x20 => self.queue_control_escape(control),
+                        other => return Some(other),
+                    }
+                }
+                CanonicalPart::Term(term) => {
+                    let term = *term;
+                    self.parts.pop();
+                    self.expand_term(term);
+                }
+            }
+        }
+    }
+}
+
+/// Compare two terms by the exact bytes produced by [`Term::to_string`] without
+/// materializing either rendered value.
+pub(crate) fn canonical_cmp(left: &Term, right: &Term) -> Ordering {
+    match (left, right) {
+        // These two cases cover the overwhelmingly common focus-node terms and
+        // avoid constructing even the inline rendering cursor.
+        (Term::BlankNode(left), Term::BlankNode(right)) => left.cmp(right),
+        (Term::NamedNode(left_node), Term::NamedNode(right_node)) => {
+            let left_iri = left_node.0.as_bytes();
+            let right_iri = right_node.0.as_bytes();
+            let shared = left_iri.len().min(right_iri.len());
+            match left_iri[..shared].cmp(&right_iri[..shared]) {
+                Ordering::Equal if left_iri.len() == right_iri.len() => Ordering::Equal,
+                Ordering::Equal if left_iri.len() < right_iri.len() => {
+                    match b'>'.cmp(&right_iri[shared]) {
+                        // `>` is forbidden inside a valid IRI. Preserve exact behavior
+                        // for manually-constructed unchecked terms nonetheless.
+                        Ordering::Equal => {
+                            CanonicalBytes::new(left).cmp(CanonicalBytes::new(right))
+                        }
+                        order => order,
+                    }
+                }
+                Ordering::Equal => match left_iri[shared].cmp(&b'>') {
+                    Ordering::Equal => CanonicalBytes::new(left).cmp(CanonicalBytes::new(right)),
+                    order => order,
+                },
+                order => order,
+            }
+        }
+        (Term::Literal(_), Term::Literal(_)) => {
+            CanonicalBytes::new(left).cmp(CanonicalBytes::new(right))
+        }
+        // The leading rendering byte establishes these cross-kind orders.
+        (Term::Literal(_), _) => Ordering::Less,
+        (_, Term::Literal(_)) => Ordering::Greater,
+        (Term::BlankNode(_), _) => Ordering::Greater,
+        (_, Term::BlankNode(_)) => Ordering::Less,
+        // IRI-vs-triple and same-kind compound values share a leading byte, so
+        // stream their complete canonical renderings.
+        _ => CanonicalBytes::new(left).cmp(CanonicalBytes::new(right)),
+    }
 }
 
 impl Term {
@@ -472,8 +671,6 @@ pub fn term_value_to_native(value: &TermValue) -> Term {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
-
     use super::*;
 
     fn nn(iri: &str) -> Term {
@@ -536,35 +733,68 @@ mod tests {
     }
 
     #[test]
-    fn canonical_sort_renders_each_key_once() {
-        struct Counted<'a> {
-            key: &'static str,
-            calls: &'a Cell<usize>,
-        }
-        impl std::fmt::Display for Counted<'_> {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                self.calls.set(self.calls.get() + 1);
-                f.write_str(self.key)
+    fn canonical_comparator_matches_rendered_byte_order() {
+        let plain_lang_string = Term::Literal(Literal {
+            lexical: "plain".to_owned(),
+            datatype: RDF_LANG_STRING.to_owned(),
+            language: None,
+            direction: None,
+        });
+        let triple = Term::Triple(Box::new(Triple::new(
+            nn("http://e/s"),
+            NamedNode::new_unchecked("http://e/p"),
+            Term::Literal(Literal::new_simple_literal("quoted\nvalue")),
+        )));
+        let nested_triple = Term::Triple(Box::new(Triple::new(
+            triple.clone(),
+            NamedNode::new_unchecked("http://e/p2"),
+            Term::blank("nested"),
+        )));
+        let terms = vec![
+            nn("http://e/a"),
+            nn("http://e/a/"),
+            nn("http://e/z"),
+            Term::blank("a"),
+            Term::blank("z"),
+            Term::Literal(Literal::new_simple_literal("")),
+            Term::Literal(Literal::new_simple_literal("a\"b\\c\n\r\t\u{0000}\u{001f}")),
+            Term::Literal(Literal::new_simple_literal("é🐈")),
+            Term::Literal(Literal::new_typed_literal(
+                "42",
+                NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#integer"),
+            )),
+            Term::Literal(Literal::new_language_tagged_literal_unchecked(
+                "bonjour", "fr",
+            )),
+            Term::Literal(Literal::new_directional_language_tagged_literal_unchecked(
+                "مرحبا",
+                "ar",
+                RdfTextDirection::Rtl,
+            )),
+            Term::Literal(Literal::new_directional_language_tagged_literal_unchecked(
+                "hello",
+                "en",
+                RdfTextDirection::Ltr,
+            )),
+            plain_lang_string,
+            triple,
+            nested_triple,
+        ];
+
+        for left in &terms {
+            for right in &terms {
+                assert_eq!(
+                    canonical_cmp(left, right),
+                    left.to_string().cmp(&right.to_string()),
+                    "canonical comparison drifted for {left:?} and {right:?}"
+                );
             }
         }
 
-        let calls = Cell::new(0);
-        let mut values = [
-            Counted {
-                key: "c",
-                calls: &calls,
-            },
-            Counted {
-                key: "a",
-                calls: &calls,
-            },
-            Counted {
-                key: "b",
-                calls: &calls,
-            },
-        ];
-        sort_canonical(&mut values);
-        assert_eq!(calls.get(), values.len());
-        assert_eq!(values.map(|value| value.key), ["a", "b", "c"]);
+        let mut expected = terms.clone();
+        expected.sort_by_cached_key(ToString::to_string);
+        let mut actual = terms;
+        sort_terms_canonical(&mut actual);
+        assert_eq!(actual, expected);
     }
 }

@@ -964,7 +964,7 @@ impl ImportContext<'_> {
                     terms.push(term);
                 }
             }
-            crate::term::sort_canonical(&mut terms);
+            crate::term::sort_terms_canonical(&mut terms);
             terms.dedup();
             constraints.push(Constraint::In(terms));
             handled.insert("enum");
@@ -1098,7 +1098,7 @@ impl ImportContext<'_> {
                     terms.push(term);
                 }
             }
-            crate::term::sort_canonical(&mut terms);
+            crate::term::sort_terms_canonical(&mut terms);
             terms.dedup();
             constraints.push(Constraint::In(terms));
             self.record("non-object-definition-dropped", &definition_path(&key));
