@@ -41,6 +41,7 @@ type ProjectionProfile = Literal[
     "datacite-4.6",
     "dcat-3",
     "dcat-rdf",
+    "void",
     "frictionless-data-package-1",
 ]
 type LiftProfile = Literal[

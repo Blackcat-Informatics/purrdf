@@ -44,6 +44,8 @@ _CSVW_TERMS_CONFIG = _REPO / "crates/rdf/tests/fixtures/csvw-terms.json"
 _OKF_TERMS_CONFIG = _REPO / "crates/rdf/tests/fixtures/okf-terms.json"
 _OKF_TERMS_SOURCE = _REPO / "crates/rdf/tests/fixtures/okf-terms.trig"
 _DCAT_RDF_CONFIG = _REPO / "crates/rdf/tests/fixtures/dataset-description/dcat-rdf.json"
+_VOID_CONFIG = _REPO / "crates/rdf/tests/fixtures/dataset-description/void.json"
+_VOID_SOURCE = _REPO / "crates/rdf/tests/fixtures/dataset-description/void-source.trig"
 _RESEARCH_PROFILES = (
     "croissant-1.1",
     "ro-crate-1.3",
@@ -259,6 +261,27 @@ def test_dcat_rdf_executes_deterministically_and_remains_write_only() -> None:
     assert first.archive == second.archive
     with pytest.raises(ValueError, match="not a bidirectional"):
         purrdf.lift(first.archive, profile="dcat-rdf", config=config)
+
+
+def test_void_executes_deterministically_and_remains_write_only() -> None:
+    source = _VOID_SOURCE.read_bytes()
+    config = _VOID_CONFIG.read_bytes()
+    first = purrdf.project(
+        source,
+        format=purrdf.RdfFormat.TRIG,
+        profile="void",
+        config=config,
+    )
+    second = purrdf.project(
+        source,
+        format=purrdf.RdfFormat.TRIG,
+        profile="void",
+        config=config,
+    )
+    assert first.profile == "void"
+    assert first.archive == second.archive
+    with pytest.raises(ValueError, match="not a bidirectional"):
+        purrdf.lift(first.archive, profile="void", config=config)
 
 
 def test_attached_ro_crate_carries_exact_payload_and_preview() -> None:

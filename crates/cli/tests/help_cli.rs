@@ -58,6 +58,7 @@ fn project_and_lift_help_enumerate_truthful_profiles() {
         "datacite-4.6",
         "dcat-3",
         "dcat-rdf",
+        "void",
         "frictionless-data-package-1",
     ] {
         assert!(
@@ -93,6 +94,7 @@ fn project_and_lift_help_enumerate_truthful_profiles() {
     assert!(!lift.contains("csvw-terms"));
     assert!(!lift.contains("okf-terms"));
     assert!(!lift.contains("dcat-rdf"));
+    assert!(!lift.contains("void"));
     for field in ["--profile", "--config", "--to", "IN", "OUT"] {
         assert!(lift.contains(field), "lift help missing `{field}`");
     }

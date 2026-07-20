@@ -142,6 +142,24 @@ test("DCAT RDF executes deterministically and remains write-only through WASM", 
   );
 });
 
+test("VoID executes deterministically and remains write-only through WASM", async () => {
+  const fixture = (name) => new URL(
+    `../../../rdf/tests/fixtures/dataset-description/${name}`,
+    import.meta.url,
+  );
+  const source = await readFile(fixture("void-source.trig"), "utf8");
+  const config = await readFile(fixture("void.json"), "utf8");
+  const dataset = Dataset.parse(source, "trig");
+  const first = dataset.project("void", config);
+  const second = dataset.project("void", config);
+  assert.equal(first.profile, "void");
+  assert.deepEqual(first.archive, second.archive);
+  assert.throws(
+    () => liftProjection(first.archive, "void", config),
+    /not a bidirectional/,
+  );
+});
+
 test("attached RO-Crate matches the cross-host archive through generated WASM", async () => {
   const fixture = (name) => new URL(
     `../../../rdf/tests/fixtures/research-objects/carrier/${name}`,

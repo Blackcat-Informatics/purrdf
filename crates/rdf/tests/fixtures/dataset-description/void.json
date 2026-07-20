@@ -1,0 +1,104 @@
+{
+  "profile": "void",
+  "config": {
+    "format": "turtle",
+    "dataset_iri": "https://example.org/void#dataset",
+    "generated_resource_base_iri": "https://example.org/void#generated-",
+    "header_subject_iri": "https://example.org/source",
+    "source_roles": {
+      "rdf_type": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+      "header_version": "https://example.org/version",
+      "header_abstract": "https://example.org/abstract"
+    },
+    "header_graph": {
+      "mode": "default-graph"
+    },
+    "alignment_graph": {
+      "mode": "named-graph",
+      "graph_iri": "https://example.org/alignments"
+    },
+    "metadata_graph": {
+      "mode": "named-graph",
+      "graph_iri": "https://example.org/metadata"
+    },
+    "data_graphs": [
+      {
+        "mode": "named-graph",
+        "graph_iri": "https://example.org/data"
+      }
+    ],
+    "vocabulary": {
+      "rdf-type": "https://example.org/void-role/rdf-type",
+      "dataset-class": "https://example.org/void-role/dataset-class",
+      "linkset-class": "https://example.org/void-role/linkset-class",
+      "class-partition-class": "https://example.org/void-role/class-partition-class",
+      "property-partition-class": "https://example.org/void-role/property-partition-class",
+      "version": "https://example.org/void-role/version",
+      "abstract": "https://example.org/void-role/abstract",
+      "subset": "https://example.org/void-role/subset",
+      "triples": "https://example.org/void-role/triples",
+      "entities": "https://example.org/void-role/entities",
+      "classes": "https://example.org/void-role/classes",
+      "properties": "https://example.org/void-role/properties",
+      "class-partition": "https://example.org/void-role/class-partition",
+      "property-partition": "https://example.org/void-role/property-partition",
+      "class": "https://example.org/void-role/class",
+      "property": "https://example.org/void-role/property",
+      "distinct-subjects": "https://example.org/void-role/distinct-subjects",
+      "distinct-objects": "https://example.org/void-role/distinct-objects",
+      "subjects-target": "https://example.org/void-role/subjects-target",
+      "objects-target": "https://example.org/void-role/objects-target",
+      "link-predicate": "https://example.org/void-role/link-predicate",
+      "xsd-non-negative-integer": "https://example.org/datatype/non-negative-integer"
+    },
+    "local_datasets": [
+      {
+        "dataset_iri": "https://example.org/void#dataset",
+        "iri_prefix": "https://example.org/resource/"
+      }
+    ],
+    "external_datasets": [
+      {
+        "dataset_iri": "https://external.example/dataset/general",
+        "iri_prefix": "https://external.example/"
+      },
+      {
+        "dataset_iri": "https://external.example/dataset/specific",
+        "iri_prefix": "https://external.example/resource/"
+      }
+    ],
+    "external_links": [
+      {
+        "source_predicate": "https://example.org/authority",
+        "target_predicate": "https://example.org/target/authority"
+      }
+    ],
+    "static_statements": [
+      {
+        "predicate": "https://example.org/target/title",
+        "object": {
+          "kind": "typed-literal",
+          "lexical": "Example VoID description",
+          "datatype": "http://www.w3.org/2001/XMLSchema#string"
+        }
+      }
+    ],
+    "limits": {
+      "max_artifacts": 4,
+      "max_artifact_bytes": 1000000,
+      "max_total_bytes": 2000000,
+      "max_archive_bytes": 3000000,
+      "max_term_depth": 16
+    },
+    "execution_limits": {
+      "max_input_records": 10000,
+      "max_output_records": 1000,
+      "max_partitions": 100,
+      "max_linksets": 100,
+      "max_partition_memberships": 10000,
+      "max_dataset_prefixes": 100,
+      "max_external_link_mappings": 100,
+      "max_static_statements": 100
+    }
+  }
+}

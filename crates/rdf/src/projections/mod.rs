@@ -60,6 +60,7 @@ mod sink;
 mod skos;
 mod term;
 mod util;
+mod void;
 
 pub use carrier::{
     LiftProfile, ProjectionArchive, ProjectionConfig, ProjectionLift, ProjectionProfile,
@@ -135,4 +136,9 @@ pub use term::{ProjectionDirection, ProjectionTerm};
 pub use util::{
     escape_cypher_identifier, escape_cypher_string, escape_xml_attribute, escape_xml_text,
     stable_identifier, validate_absolute_iri,
+};
+pub use void::{
+    VOID_ROLES, VoidConfig, VoidDatasetPrefix, VoidExecutionLimits, VoidExternalLinkMapping,
+    VoidGraphSelector, VoidRole, VoidSourceRoles, VoidStaticStatement, VoidStaticValue,
+    VoidVocabulary, project_void,
 };

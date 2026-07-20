@@ -186,6 +186,10 @@ mod tests {
     const OKF_TERMS_SOURCE: &str = include_str!("../../rdf/tests/fixtures/okf-terms.trig");
     const DCAT_RDF_CONFIG: &str =
         include_str!("../../rdf/tests/fixtures/dataset-description/dcat-rdf.json");
+    const VOID_CONFIG: &str =
+        include_str!("../../rdf/tests/fixtures/dataset-description/void.json");
+    const VOID_SOURCE: &str =
+        include_str!("../../rdf/tests/fixtures/dataset-description/void-source.trig");
     const RESEARCH_CONFIGS: &[(&str, &str)] = &[
         (
             "croissant-1.1",
@@ -258,6 +262,15 @@ mod tests {
             .project("dcat-rdf", DCAT_RDF_CONFIG)
             .expect("repeat dcat-rdf");
         assert_eq!(first.profile, "dcat-rdf");
+        assert_eq!(first.archive, second.archive);
+    }
+
+    #[test]
+    fn wasm_projection_shim_executes_write_only_void_deterministically() {
+        let dataset = Dataset::parse(VOID_SOURCE, "trig", None).expect("parse source");
+        let first = dataset.project("void", VOID_CONFIG).expect("project VoID");
+        let second = dataset.project("void", VOID_CONFIG).expect("repeat VoID");
+        assert_eq!(first.profile, "void");
         assert_eq!(first.archive, second.archive);
     }
 

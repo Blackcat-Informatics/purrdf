@@ -248,6 +248,8 @@ pub(crate) enum CliProjectionProfile {
     /// Native RDF DCAT description view.
     #[value(name = "dcat-rdf")]
     DcatRdf,
+    /// VoID dataset-description and linkset view.
+    Void,
     /// Frictionless Data Package v1.
     #[value(name = "frictionless-data-package-1")]
     FrictionlessDataPackage1,
@@ -271,6 +273,7 @@ impl CliProjectionProfile {
             Self::DataCite46 => ProjectionProfile::DataCite46,
             Self::Dcat3 => ProjectionProfile::Dcat3,
             Self::DcatRdf => ProjectionProfile::DcatRdf,
+            Self::Void => ProjectionProfile::Void,
             Self::FrictionlessDataPackage1 => ProjectionProfile::FrictionlessDataPackage1,
         }
     }

@@ -14,14 +14,14 @@ use super::{
     CroissantConfig, CsvwConfig, CsvwTermsConfig, DataCiteConfig, DcatConfig, DcatRdfConfig,
     FrictionlessConfig, LpgConfig, LpgProgressObserver, LpgStreamProjection, OboGraphsConfig,
     OkfGenerationConfig, ProjectionArtifactSink, ProjectionError, ProjectionLimits,
-    ProjectionPackage, RoCrateAssets, RoCrateConfig, SkosConfig, lift_lpg, project_croissant,
-    project_csvw_exact, project_csvw_terms, project_datacite, project_dcat, project_dcat_rdf,
-    project_frictionless, project_lpg_csv, project_lpg_csv_to_sink, project_lpg_cypher,
-    project_lpg_cypher_to_sink, project_lpg_graphml, project_lpg_graphml_to_sink,
-    project_neo4j_csv, project_neo4j_csv_to_sink, project_obo_graphs, project_okf_terms,
-    project_ro_crate, project_ro_crate_with_assets, project_skos, read_croissant, read_csvw_exact,
-    read_datacite, read_dcat, read_frictionless, read_lpg_csv, read_lpg_cypher, read_lpg_graphml,
-    read_neo4j_csv, read_ro_crate,
+    ProjectionPackage, RoCrateAssets, RoCrateConfig, SkosConfig, VoidConfig, lift_lpg,
+    project_croissant, project_csvw_exact, project_csvw_terms, project_datacite, project_dcat,
+    project_dcat_rdf, project_frictionless, project_lpg_csv, project_lpg_csv_to_sink,
+    project_lpg_cypher, project_lpg_cypher_to_sink, project_lpg_graphml,
+    project_lpg_graphml_to_sink, project_neo4j_csv, project_neo4j_csv_to_sink, project_obo_graphs,
+    project_okf_terms, project_ro_crate, project_ro_crate_with_assets, project_skos, project_void,
+    read_croissant, read_csvw_exact, read_datacite, read_dcat, read_frictionless, read_lpg_csv,
+    read_lpg_cypher, read_lpg_graphml, read_neo4j_csv, read_ro_crate,
 };
 
 const OBO_GRAPHS_PATH: &str = "obo-graphs.json";
@@ -63,6 +63,8 @@ pub enum ProjectionProfile {
     Dcat3,
     /// Native RDF DCAT description view (write-only).
     DcatRdf,
+    /// VoID dataset-description and linkset view (write-only).
+    Void,
     /// Frictionless Data Package v1.
     #[serde(rename = "frictionless-data-package-1")]
     FrictionlessDataPackage1,
@@ -86,6 +88,7 @@ impl ProjectionProfile {
             Self::DataCite46 => "datacite-4.6",
             Self::Dcat3 => "dcat-3",
             Self::DcatRdf => "dcat-rdf",
+            Self::Void => "void",
             Self::FrictionlessDataPackage1 => "frictionless-data-package-1",
         }
     }
@@ -133,6 +136,7 @@ impl FromStr for ProjectionProfile {
             "datacite-4.6" => Ok(Self::DataCite46),
             "dcat-3" => Ok(Self::Dcat3),
             "dcat-rdf" => Ok(Self::DcatRdf),
+            "void" => Ok(Self::Void),
             "frictionless-data-package-1" => Ok(Self::FrictionlessDataPackage1),
             other => Err(ProjectionError::configuration(format!(
                 "unknown projection profile `{other}`"
@@ -143,7 +147,7 @@ impl FromStr for ProjectionProfile {
 
 /// Closed set of profiles accepted by the lift operation.
 ///
-/// Curated CSVW/OKF terms, OBO Graphs, SKOS, and native DCAT RDF cannot be
+/// Curated CSVW/OKF terms, OBO Graphs, SKOS, native DCAT RDF, and VoID cannot be
 /// constructed as this type: they are deliberately write-only views rather than
 /// pretend round-trip carriers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -273,6 +277,8 @@ pub enum ProjectionConfig {
     Dcat3(Box<DcatConfig>),
     /// Native RDF DCAT description configuration.
     DcatRdf(Box<DcatRdfConfig>),
+    /// VoID dataset-description configuration.
+    Void(Box<VoidConfig>),
     /// Frictionless Data Package v1 configuration.
     #[serde(rename = "frictionless-data-package-1")]
     FrictionlessDataPackage1(Box<FrictionlessConfig>),
@@ -320,6 +326,7 @@ impl ProjectionConfig {
             Self::DataCite46(_) => ProjectionProfile::DataCite46,
             Self::Dcat3(_) => ProjectionProfile::Dcat3,
             Self::DcatRdf(_) => ProjectionProfile::DcatRdf,
+            Self::Void(_) => ProjectionProfile::Void,
             Self::FrictionlessDataPackage1(_) => ProjectionProfile::FrictionlessDataPackage1,
         }
     }
@@ -341,6 +348,7 @@ impl ProjectionConfig {
             Self::DataCite46(config) => config.common().limits(),
             Self::Dcat3(config) => config.common().limits(),
             Self::DcatRdf(config) => config.limits(),
+            Self::Void(config) => config.limits(),
             Self::FrictionlessDataPackage1(config) => config.common().limits(),
         }
     }
@@ -450,6 +458,10 @@ pub fn project_archive<D: DatasetView + Sync>(
             let outcome = project_dcat_rdf(view, config)?;
             (outcome.package, outcome.loss_ledger)
         }
+        ProjectionConfig::Void(config) => {
+            let outcome = project_void(view, config)?;
+            (outcome.package, outcome.loss_ledger)
+        }
         ProjectionConfig::FrictionlessDataPackage1(config) => {
             let outcome = project_frictionless(view, config)?;
             (outcome.package, outcome.loss_ledger)
@@ -539,7 +551,7 @@ where
 ///
 /// Rejects malformed/non-canonical archives, a profile/config mismatch, a carrier
 /// outside its closed grammar, inconsistent sideband data, or an invalid lifted
-/// dataset. Curated CSVW/OKF terms, OBO Graphs, SKOS, and native DCAT RDF are
+/// dataset. Curated CSVW/OKF terms, OBO Graphs, SKOS, native DCAT RDF, and VoID are
 /// unrepresentable as [`LiftProfile`].
 pub fn lift_archive(
     archive: &[u8],
@@ -632,6 +644,9 @@ mod tests {
         include_bytes!("../../tests/fixtures/research-objects/carrier/dcat-3.json");
     const DCAT_RDF_CONFIG: &[u8] =
         include_bytes!("../../tests/fixtures/dataset-description/dcat-rdf.json");
+    const VOID_CONFIG: &[u8] = include_bytes!("../../tests/fixtures/dataset-description/void.json");
+    const VOID_SOURCE: &[u8] =
+        include_bytes!("../../tests/fixtures/dataset-description/void-source.trig");
     const FRICTIONLESS_CONFIG: &[u8] = include_bytes!(
         "../../tests/fixtures/research-objects/carrier/frictionless-data-package-1.json"
     );
@@ -741,6 +756,7 @@ mod tests {
         assert!("csvw-terms".parse::<LiftProfile>().is_err());
         assert!("okf-terms".parse::<LiftProfile>().is_err());
         assert!("dcat-rdf".parse::<LiftProfile>().is_err());
+        assert!("void".parse::<LiftProfile>().is_err());
     }
 
     #[test]
@@ -773,6 +789,31 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn void_has_a_strict_unified_write_only_profile() {
+        let dataset =
+            crate::parse_dataset(VOID_SOURCE, "application/trig", None).expect("VoID source");
+        let config = ProjectionConfig::from_json(VOID_CONFIG).expect("VoID config");
+        assert_eq!(config.profile(), ProjectionProfile::Void);
+        assert!(!ProjectionProfile::Void.is_bidirectional());
+        assert_eq!(
+            "void".parse::<ProjectionProfile>(),
+            Ok(ProjectionProfile::Void)
+        );
+        assert!("void".parse::<LiftProfile>().is_err());
+        let encoded = config.to_json().expect("serialize VoID config");
+        assert_eq!(
+            ProjectionConfig::from_json(&encoded).expect("reparse VoID config"),
+            config
+        );
+        let first = project_archive(dataset.as_ref(), ProjectionProfile::Void, &config)
+            .expect("VoID project");
+        let second = project_archive(dataset.as_ref(), ProjectionProfile::Void, &config)
+            .expect("repeat VoID project");
+        assert_eq!(first.archive, second.archive);
+        assert_eq!(first.profile, ProjectionProfile::Void);
     }
 
     #[test]
