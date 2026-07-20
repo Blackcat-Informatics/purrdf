@@ -32,6 +32,7 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 - **build:** Make Cargo target fallback safe
 - **capi:** Honor active smoke-test profile
 - **build:** Harden Cargo target discovery
+- **release:** Deduplicate generated changelog entries
 
 ### CI & Build
 
