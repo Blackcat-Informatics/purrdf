@@ -8,10 +8,10 @@
 
 use std::sync::OnceLock;
 
-use ::purrdf::{FastMap, FastSet, IdSet, RdfDataset, TermId, TermRef};
+use ::purrdf::{FastMap, FastSet, RdfDataset, TermId, TermRef};
 use smallvec::SmallVec;
 
-use crate::data::{GraphFilter, ShaclData, native_quads, quads_for_pattern_ids, resolve_id};
+use crate::data::{GraphFilter, ShaclData, native_quads, resolve_id};
 use crate::engine::ValidationPlan;
 use crate::model::{BoxRoleVocab, rdf, sh};
 use crate::path;
@@ -800,10 +800,7 @@ fn eval_constraint(
 
         // ── Class (per value node; honors asserted rdfs:subClassOf, §4.2.5) ────
         Constraint::Class(class_iri) => {
-            // Hoist the BFS closure computation once, outside the per-value loop.
-            // Previously called inside the loop: O(N×M) → now O(M) + O(N).
-            let closure = plan.class_closure(class_iri);
-            let rdf_type_id = plan.rdf_type_id();
+            let class_id = plan.class_id(class_iri);
             let mut results = Vec::new();
             let focus = focus_node;
             for vn in value_nodes {
@@ -812,7 +809,9 @@ fn eval_constraint(
                 // edge walk), so a conforming value is never materialized. A
                 // non-interned value node has no `rdf:type` edge and is no instance.
                 let violates = match vn.as_id(ds) {
-                    Some(id) => !is_shacl_instance_id(ds, id, rdf_type_id, closure),
+                    Some(id) => {
+                        class_id.is_none_or(|class| !store.class_view().is_instance(id, class))
+                    }
                     None => true,
                 };
                 if violates {
@@ -1664,8 +1663,8 @@ fn eval_constraint(
             // SHACL-SPARQL §5.3.2: on a property shape, the `$PATH` placeholder
             // stands for the shape's path in SPARQL surface syntax.
             let query = substitute_path_placeholder(select, path);
-            crate::sparql::eval_sparql_constraint(
-                store.sparql(),
+            crate::sparql::eval_sparql_constraint_view(
+                store.sparql_view(),
                 focus_node,
                 &query,
                 &NamedNode::from(sh::SPARQL_CONSTRAINT_COMPONENT),
@@ -1733,7 +1732,7 @@ fn eval_constraint(
         } => {
             let sev = csev.clone().unwrap_or_else(|| severity.clone());
             let msg = cmsg.clone().or_else(|| message.clone());
-            let dataset = store.sparql();
+            let dataset = store.sparql_view();
             // The custom-component validators run over the owned term model; resolve
             // the value nodes for the ASK validator's per-value binding.
             let value_terms: Vec<Term> = value_nodes.iter().map(|v| v.to_term(ds)).collect();
@@ -1791,47 +1790,6 @@ pub(crate) fn substitute_path_placeholder(select: &str, path: Option<&Path>) -> 
 }
 
 // ── Helper functions ───────────────────────────────────────────────────────────
-
-/// Whether `value` is a SHACL instance of a class, given a precomputed subclass
-/// closure (SHACL §4.2.5).
-///
-/// `closure` must contain the class IRI itself plus every transitive subclass
-/// derived from asserted `rdfs:subClassOf` edges (as retained by the engine's
-/// dataset-bound validation plan). The caller hoists the closure computation once
-/// before the per-value-node loop to avoid O(N×M) graph-walk cost.
-///
-/// `rdf_type_id` is `rdf:type`'s pre-resolved interned [`TermId`], hoisted once by
-/// the caller (it is loop-invariant across value nodes).  `None` means `rdf:type`
-/// is not interned in this dataset, so no `rdf:type` edge can exist and the value
-/// is not an instance.
-///
-/// `value_id` is the value node's interned [`TermId`]. The check is fully id-native
-/// — the value node is never materialized to an owned term: a literal (never a
-/// class instance) is recognized from its resolved [`TermRef`], and the `rdf:type`
-/// edge walk stays in id space.
-fn is_shacl_instance_id(
-    ds: &RdfDataset,
-    value_id: TermId,
-    rdf_type_id: Option<TermId>,
-    closure: &IdSet,
-) -> bool {
-    // A literal is never a SHACL class instance; only IRIs / blank nodes can be.
-    if matches!(ds.resolve(value_id), TermRef::Literal { .. }) {
-        return false;
-    }
-    // `rdf:type` must be interned for any `rdf:type` edge to exist.
-    let Some(rdf_type) = rdf_type_id else {
-        return false;
-    };
-    quads_for_pattern_ids(
-        ds,
-        Some(value_id),
-        Some(rdf_type),
-        None,
-        GraphFilter::AnyGraph,
-    )
-    .any(|q| closure.contains(&q.o))
-}
 
 /// `xsd:integer` lexical space: optional sign then one-or-more ASCII digits.
 /// Unbounded — no native-int overflow.

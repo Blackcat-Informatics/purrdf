@@ -18,8 +18,8 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use ::purrdf::RdfDataset;
-use ::purrdf::{SparqlEngine, SparqlRequest, SparqlResult, TermValue};
+use ::purrdf::{DatasetView, RdfDataset};
+use ::purrdf::{SparqlRequest, SparqlResult, TermValue};
 use purrdf_sparql_eval::{NativeSparqlEngine, UserFunctionRegistry};
 
 use crate::model::xsd;
@@ -49,12 +49,21 @@ pub fn eval_target(
     select: &str,
     substitutions: &[(String, Term)],
 ) -> Result<Vec<Term>, String> {
+    eval_target_view(&**dataset, select, substitutions)
+}
+
+/// Internal view-generic implementation of [`eval_target`].
+pub(crate) fn eval_target_view<D: DatasetView + Sync>(
+    dataset: &D,
+    select: &str,
+    substitutions: &[(String, Term)],
+) -> Result<Vec<Term>, String> {
     let subs: Vec<(String, TermValue)> = substitutions
         .iter()
         .map(|(name, term)| (name.clone(), term.to_term_value()))
         .collect();
     let solutions =
-        run_select_generic(dataset, select, &subs).map_err(|e| format!("SPARQLTarget {e}"))?;
+        run_select_generic_view(dataset, select, &subs).map_err(|e| format!("SPARQLTarget {e}"))?;
 
     let this_index = column_index(&solutions.0, "this");
 
@@ -109,6 +118,32 @@ pub fn eval_sparql_constraint(
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
 ) -> Result<Vec<ValidationResult>, String> {
+    eval_sparql_constraint_view(
+        &**dataset,
+        focus,
+        select,
+        component,
+        source_shape,
+        severity,
+        message,
+        shapes_graph_iri,
+        current_shape,
+    )
+}
+
+/// Internal view-generic implementation of [`eval_sparql_constraint`].
+#[allow(clippy::too_many_arguments)] // Signature mirrors the SHACL-SPARQL parameter set.
+pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync>(
+    dataset: &D,
+    focus: &Term,
+    select: &str,
+    component: &NamedNode,
+    source_shape: &Term,
+    severity: &Severity,
+    message: Option<&String>,
+    shapes_graph_iri: Option<&str>,
+    current_shape: Option<&Term>,
+) -> Result<Vec<ValidationResult>, String> {
     // Pre-bind `$this` to THIS focus node (GAP-A substitution — the native
     // replacement for oxigraph's per-focus `PreparedSparqlQuery::substitute_variable`).
     // This MUST be per-focus substitution, not an unsubstituted run grouped by a free
@@ -118,9 +153,14 @@ pub fn eval_sparql_constraint(
     // is memoized by the thread-local engine's plan cache, so per-focus evaluation
     // re-runs the plan, not the parse.
     let subs = [("this".to_owned(), focus.to_term_value())];
-    let (variables, rows) =
-        run_select_with_shacl_prebinding(dataset, select, &subs, shapes_graph_iri, current_shape)
-            .map_err(|e| format!("SPARQLConstraint {e}"))?;
+    let (variables, rows) = run_select_with_shacl_prebinding_view(
+        dataset,
+        select,
+        &subs,
+        shapes_graph_iri,
+        current_shape,
+    )
+    .map_err(|e| format!("SPARQLConstraint {e}"))?;
     let path_index = column_index(&variables, "path");
     let value_index = column_index(&variables, "value");
 
@@ -181,12 +221,21 @@ pub fn eval_scalar_expr(
     sparql_expr: &str,
     args: &[(String, Term)],
 ) -> Result<Option<Term>, String> {
+    eval_scalar_expr_view(&**dataset, sparql_expr, args)
+}
+
+/// Internal view-generic implementation of [`eval_scalar_expr`].
+pub(crate) fn eval_scalar_expr_view<D: DatasetView + Sync>(
+    dataset: &D,
+    sparql_expr: &str,
+    args: &[(String, Term)],
+) -> Result<Option<Term>, String> {
     let select = format!("SELECT (({sparql_expr}) AS ?result) WHERE {{}}");
     let subs: Vec<(String, TermValue)> = args
         .iter()
         .map(|(name, term)| (name.clone(), term.to_term_value()))
         .collect();
-    let (variables, rows) = run_select_generic(dataset, &select, &subs)
+    let (variables, rows) = run_select_generic_view(dataset, &select, &subs)
         .map_err(|e| format!("scalar expression {e}"))?;
 
     if rows.len() > 1 {
@@ -243,6 +292,15 @@ pub fn eval_aggregate(
     agg: &str,
     values: &[Term],
 ) -> Result<Option<Term>, String> {
+    eval_aggregate_view(&**dataset, agg, values)
+}
+
+/// Internal view-generic implementation of [`eval_aggregate`].
+pub(crate) fn eval_aggregate_view<D: DatasetView + Sync>(
+    dataset: &D,
+    agg: &str,
+    values: &[Term],
+) -> Result<Option<Term>, String> {
     if !matches!(agg, "MIN" | "MAX" | "SUM") {
         return Err(format!(
             "unsupported aggregate {agg} (expected MIN/MAX/SUM)"
@@ -281,7 +339,7 @@ pub fn eval_aggregate(
 
     let select = format!("SELECT ({agg}(?v) AS ?result) WHERE {{ VALUES (?v) {{ {rows}}} }}");
     let (variables, result_rows) =
-        run_select_generic(dataset, &select, &[]).map_err(|e| format!("aggregate {e}"))?;
+        run_select_generic_view(dataset, &select, &[]).map_err(|e| format!("aggregate {e}"))?;
 
     if result_rows.len() > 1 {
         return Err(format!(
@@ -329,6 +387,15 @@ pub fn eval_order(
     values: &[Term],
     descending: bool,
 ) -> Result<Vec<Term>, String> {
+    eval_order_view(&**dataset, values, descending)
+}
+
+/// Internal view-generic implementation of [`eval_order`].
+pub(crate) fn eval_order_view<D: DatasetView + Sync>(
+    dataset: &D,
+    values: &[Term],
+    descending: bool,
+) -> Result<Vec<Term>, String> {
     if values.is_empty() {
         return Ok(Vec::new());
     }
@@ -353,7 +420,7 @@ pub fn eval_order(
     let order = if descending { "DESC(?v)" } else { "?v" };
     let select = format!("SELECT ?v WHERE {{ VALUES (?v) {{ {rows}}} }} ORDER BY {order}");
     let (variables, result_rows) =
-        run_select_generic(dataset, &select, &[]).map_err(|e| format!("order-by {e}"))?;
+        run_select_generic_view(dataset, &select, &[]).map_err(|e| format!("order-by {e}"))?;
 
     let v_index = column_index(&variables, "v");
     let mut out: Vec<Term> = Vec::with_capacity(result_rows.len());
@@ -429,8 +496,8 @@ pub fn enter_function_scope(registry: Arc<UserFunctionRegistry>) -> FunctionScop
 /// This is the path used by SHACL-AF node expressions (scalar, aggregate,
 /// order-by). It does NOT apply the SHACL-specific pre-binding rewrite used for
 /// `sh:sparql` constraint/component bodies.
-pub(crate) fn run_select_generic(
-    dataset: &Arc<RdfDataset>,
+pub(crate) fn run_select_generic_view<D: DatasetView + Sync>(
+    dataset: &D,
     select: &str,
     substitutions: &[(String, TermValue)],
 ) -> Result<SelectRows, String> {
@@ -443,9 +510,12 @@ pub(crate) fn run_select_generic(
         .with(|engine| {
             CURRENT_FUNCTIONS.with(|functions| match functions.borrow().as_ref() {
                 Some(registry) if !registry.is_empty() => {
-                    engine.query_with_user_functions(dataset, request, registry)
+                    engine.query_with_user_functions_view(dataset, request, registry)
                 }
-                _ => engine.query(dataset, request),
+                _ => {
+                    let prepared = engine.prepare_query(request.query, request.base_iri)?;
+                    engine.query_prepared_view(dataset, &prepared, request.substitutions)
+                }
             })
         })
         .map_err(|e| format!("query evaluation error: {e}"))?;
@@ -467,8 +537,8 @@ pub(crate) fn run_select_generic(
 /// Pre-binds `$this`, and when known `$shapesGraph` and `$currentShape`, then
 /// applies the SHACL-specific substitution rewrite (FILTER/EXISTS expression
 /// substitution and `BOUND($v)` → `true`).
-pub(crate) fn run_select_with_shacl_prebinding(
-    dataset: &Arc<RdfDataset>,
+pub(crate) fn run_select_with_shacl_prebinding_view<D: DatasetView + Sync>(
+    dataset: &D,
     select: &str,
     substitutions: &[(String, TermValue)],
     shapes_graph_iri: Option<&str>,
@@ -486,10 +556,10 @@ pub(crate) fn run_select_with_shacl_prebinding(
         .with(|engine| {
             CURRENT_FUNCTIONS.with(|functions| match functions.borrow().as_ref() {
                 Some(registry) if !registry.is_empty() => engine
-                    .query_with_shacl_prebinding_and_functions(
+                    .query_with_shacl_prebinding_and_functions_view(
                         dataset, select, None, &subs, registry,
                     ),
-                _ => engine.query_with_shacl_prebinding(dataset, select, None, &subs),
+                _ => engine.query_with_shacl_prebinding_view(dataset, select, None, &subs),
             })
         })
         .map_err(|e| format!("query evaluation error: {e}"))?;
@@ -513,14 +583,14 @@ pub(crate) fn run_select_with_shacl_prebinding(
 /// `$shapesGraph` / `$currentShape`) are pre-bound, then the CONSTRUCT template is
 /// instantiated over the WHERE solutions. CONSTRUCT already yields a frozen
 /// `Arc<RdfDataset>`, so this is the sibling of
-/// [`run_select_with_shacl_prebinding`] that returns the `Graph` arm.
+/// [`run_select_with_shacl_prebinding_view`] that returns the `Graph` arm.
 ///
 /// # Errors
 ///
 /// Returns `Err(String)` if execution fails or if the result is not a CONSTRUCT
 /// (`Solutions` / `Boolean` are rejected).
-pub(crate) fn run_construct_with_shacl_prebinding(
-    dataset: &Arc<RdfDataset>,
+pub(crate) fn run_construct_with_shacl_prebinding_view<D: DatasetView + Sync>(
+    dataset: &D,
     construct: &str,
     substitutions: &[(String, TermValue)],
     shapes_graph_iri: Option<&str>,
@@ -538,10 +608,10 @@ pub(crate) fn run_construct_with_shacl_prebinding(
         .with(|engine| {
             CURRENT_FUNCTIONS.with(|functions| match functions.borrow().as_ref() {
                 Some(registry) if !registry.is_empty() => engine
-                    .query_with_shacl_prebinding_and_functions(
+                    .query_with_shacl_prebinding_and_functions_view(
                         dataset, construct, None, &subs, registry,
                     ),
-                _ => engine.query_with_shacl_prebinding(dataset, construct, None, &subs),
+                _ => engine.query_with_shacl_prebinding_view(dataset, construct, None, &subs),
             })
         })
         .map_err(|e| format!("query evaluation error: {e}"))?;
@@ -557,8 +627,8 @@ pub(crate) fn run_construct_with_shacl_prebinding(
 }
 
 /// Run an ASK query using SHACL-SPARQL pre-binding semantics.
-pub(crate) fn run_ask_with_shacl_prebinding(
-    dataset: &Arc<RdfDataset>,
+pub(crate) fn run_ask_with_shacl_prebinding_view<D: DatasetView + Sync>(
+    dataset: &D,
     ask: &str,
     substitutions: &[(String, TermValue)],
     shapes_graph_iri: Option<&str>,
@@ -576,8 +646,10 @@ pub(crate) fn run_ask_with_shacl_prebinding(
         .with(|engine| {
             CURRENT_FUNCTIONS.with(|functions| match functions.borrow().as_ref() {
                 Some(registry) if !registry.is_empty() => engine
-                    .query_with_shacl_prebinding_and_functions(dataset, ask, None, &subs, registry),
-                _ => engine.query_with_shacl_prebinding(dataset, ask, None, &subs),
+                    .query_with_shacl_prebinding_and_functions_view(
+                        dataset, ask, None, &subs, registry,
+                    ),
+                _ => engine.query_with_shacl_prebinding_view(dataset, ask, None, &subs),
             })
         })
         .map_err(|e| format!("query evaluation error: {e}"))?;

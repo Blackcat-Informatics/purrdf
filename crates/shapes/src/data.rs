@@ -11,9 +11,9 @@
 //! stays in id space and resolves to the engine's native [`Term`] value model
 //! only at the boundary. There is NO oxigraph store on this path.
 //!
-//! [`ShaclData`] is the concrete holder threaded through the engine: it borrows
-//! the projected data graph for Core lookups and carries an `Arc<RdfDataset>`
-//! (plus the shapes-graph IRI) so the native
+//! [`ShaclData`] is the concrete holder threaded through the engine: it carries
+//! the projected and SPARQL datasets, their shared asserted-subclass membership
+//! views, and the shapes-graph IRI so the native
 //! [`NativeSparqlEngine`](purrdf_sparql_eval::NativeSparqlEngine) can run
 //! SHACL-SPARQL paths over the combined data(+shapes) dataset.
 
@@ -22,6 +22,7 @@ use std::sync::Arc;
 use ::purrdf::{DatasetView, GraphMatch, QuadIds};
 use ::purrdf::{RdfDataset, TermId};
 
+use crate::class_membership::ClassMembershipView;
 use crate::term::{NamedNode, Term, split_scope_suffix, term_id_to_native};
 
 /// Resolve a pattern term to its interned id using variant-specific dataset
@@ -84,13 +85,18 @@ impl GraphFilter {
 /// Core pattern lookups read `core` (the projected data graph); SHACL-SPARQL paths
 /// hand the native SPARQL engine the combined `sparql` dataset (data in the default
 /// graph, shapes optionally exposed under `shapes_graph_iri`). Both are held as
-/// `Arc`s (usually the SAME frozen graph), so the holder carries no borrow.
+/// `Arc`s (usually the SAME frozen graph), so the holder carries no borrow. Their
+/// class-membership views share one immutable index when the Arcs are identical.
 #[derive(Debug)]
 pub struct ShaclData {
     /// The projected data graph, read for Core pattern lookups.
     core: Arc<RdfDataset>,
     /// The combined data(+shapes) dataset handed to the native SPARQL engine.
     sparql: Arc<RdfDataset>,
+    /// The effective SHACL instance relation over the Core data graph.
+    class_membership: ClassMembershipView,
+    /// The same relation over the dataset visible to SHACL-SPARQL.
+    sparql_view: ClassMembershipView,
     /// The named-graph IRI under which the shapes dataset is exposed, when known.
     shapes_graph_iri: Option<String>,
 }
@@ -103,9 +109,17 @@ impl ShaclData {
         sparql: Arc<RdfDataset>,
         shapes_graph_iri: Option<String>,
     ) -> Self {
+        let class_membership = ClassMembershipView::new(Arc::clone(&core));
+        let sparql_view = if Arc::ptr_eq(&core, &sparql) {
+            class_membership.clone()
+        } else {
+            ClassMembershipView::new(Arc::clone(&sparql))
+        };
         Self {
             core,
             sparql,
+            class_membership,
+            sparql_view,
             shapes_graph_iri,
         }
     }
@@ -134,6 +148,27 @@ impl ShaclData {
     #[inline]
     pub fn sparql(&self) -> &Arc<RdfDataset> {
         &self.sparql
+    }
+
+    /// The effective asserted-subclass instance relation used by native SHACL
+    /// class checks and class targets.
+    #[inline]
+    pub(crate) fn class_view(&self) -> &ClassMembershipView {
+        &self.class_membership
+    }
+
+    /// The effective asserted-subclass instance relation visible to every
+    /// SHACL-SPARQL query surface.
+    #[inline]
+    pub(crate) fn sparql_view(&self) -> &ClassMembershipView {
+        &self.sparql_view
+    }
+
+    /// Force both immutable indexes at a preparation boundary. When Core and
+    /// SPARQL share one dataset, the cloned views share one initialization cell.
+    pub(crate) fn prepare_class_membership(&self) {
+        self.class_membership.prepare();
+        self.sparql_view.prepare();
     }
 
     /// The IRI of the named graph under which the shapes graph is exposed to

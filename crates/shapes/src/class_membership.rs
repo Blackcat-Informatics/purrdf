@@ -132,6 +132,7 @@ impl ClassMembershipView {
 
     /// The frozen asserted dataset wrapped by this view.
     #[inline]
+    #[cfg(test)]
     pub(crate) fn base(&self) -> &Arc<RdfDataset> {
         &self.base
     }
@@ -155,7 +156,7 @@ impl ClassMembershipView {
         {
             return true;
         }
-        self.is_derived(subject, class)
+        self.has_derived_membership(subject, class)
     }
 
     /// Every direct or derived instance of `class`, sorted within the asserted
@@ -188,7 +189,7 @@ impl ClassMembershipView {
     }
 
     fn is_derived(&self, subject: TermId, class: TermId) -> bool {
-        let (Some(rdf_type), Some(index)) = (self.rdf_type, self.index()) else {
+        let Some(rdf_type) = self.rdf_type else {
             return false;
         };
         if self
@@ -204,6 +205,13 @@ impl ClassMembershipView {
         {
             return false;
         }
+        self.has_derived_membership(subject, class)
+    }
+
+    fn has_derived_membership(&self, subject: TermId, class: TermId) -> bool {
+        let (Some(rdf_type), Some(index)) = (self.rdf_type, self.index()) else {
+            return false;
+        };
         self.base
             .quads_for_pattern(Some(subject), Some(rdf_type), None, GraphMatch::Default)
             .any(|quad| index.proper_ancestors(quad.o).binary_search(&class).is_ok())
@@ -301,7 +309,7 @@ impl ClassMembershipView {
     }
 
     #[cfg(test)]
-    fn build_count(&self) -> usize {
+    pub(crate) fn build_count(&self) -> usize {
         self.shared
             .builds
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -831,6 +839,17 @@ mod tests {
             .quads_for_pattern(Some(alice), Some(rdf_type), Some(top), GraphMatch::Default)
             .collect();
         assert_eq!(top_rows.len(), 1, "direct-plus-derived type stays unique");
+        assert_eq!(view.build_count(), 1);
+    }
+
+    #[test]
+    fn parallel_probes_initialize_the_shared_index_once() {
+        use rayon::prelude::*;
+
+        let (view, [_, _, _, mid, _, _, alice, _]) = fixture();
+        (0..256usize).into_par_iter().for_each(|_| {
+            assert!(view.is_instance(alice, mid));
+        });
         assert_eq!(view.build_count(), 1);
     }
 

@@ -11,10 +11,10 @@
 //! parsed and is later consulted by the engine to bind component parameters and
 //! run the matching ASK or SELECT query for each shape usage.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
-use ::purrdf::RdfDataset;
 use ::purrdf::TermValue;
+use ::purrdf::{DatasetView, RdfDataset};
 use ::purrdf::{FastMap, FastSet};
 
 use crate::data::{GraphFilter, native_quads};
@@ -22,7 +22,7 @@ use crate::model::{rdf, rdfs, sh};
 use crate::path;
 use crate::report::{Severity, ValidationResult};
 use crate::shapes::{ComponentValidator, Path, build_prefix_header};
-use crate::sparql::{run_ask_with_shacl_prebinding, run_select_with_shacl_prebinding};
+use crate::sparql::{run_ask_with_shacl_prebinding_view, run_select_with_shacl_prebinding_view};
 use crate::term::{NamedNode, Term, term_value_to_native};
 
 /// Discriminator for a SPARQL validator's query form.
@@ -202,8 +202,8 @@ fn substitute_message_templates(msg: &str, bindings: &[(String, Term)]) -> Strin
 /// parameter bindings. A result of `true` means conforming; `false` emits one
 /// [`ValidationResult`].
 #[allow(clippy::too_many_arguments)] // Signature mirrors the SHACL-SPARQL parameter set.
-pub(crate) fn eval_ask_validator(
-    dataset: &Arc<RdfDataset>,
+pub(crate) fn eval_ask_validator<D: DatasetView + Sync>(
+    dataset: &D,
     focus: &Term,
     value_nodes: &[Term],
     validator: &ComponentValidator,
@@ -228,8 +228,13 @@ pub(crate) fn eval_ask_validator(
         for (name, value) in bindings {
             subs.push((name.clone(), value.to_term_value()));
         }
-        let conforms =
-            run_ask_with_shacl_prebinding(dataset, ask, &subs, shapes_graph_iri, current_shape)?;
+        let conforms = run_ask_with_shacl_prebinding_view(
+            dataset,
+            ask,
+            &subs,
+            shapes_graph_iri,
+            current_shape,
+        )?;
         if !conforms {
             let mut template_bindings: Vec<(String, Term)> = bindings.to_vec();
             template_bindings.push(("value".to_owned(), v.clone()));
@@ -260,8 +265,8 @@ pub(crate) fn eval_ask_validator(
 /// bound. Row bindings take precedence over parameter bindings for message
 /// template substitution.
 #[allow(clippy::too_many_arguments)] // Signature mirrors the SHACL-SPARQL parameter set.
-pub(crate) fn eval_select_validator(
-    dataset: &Arc<RdfDataset>,
+pub(crate) fn eval_select_validator<D: DatasetView + Sync>(
+    dataset: &D,
     focus: &Term,
     validator: &ComponentValidator,
     bindings: &[(String, Term)],
@@ -282,8 +287,13 @@ pub(crate) fn eval_select_validator(
         subs.push((name.clone(), value.to_term_value()));
     }
     let query = crate::constraints::substitute_path_placeholder(select, path);
-    let (variables, rows) =
-        run_select_with_shacl_prebinding(dataset, &query, &subs, shapes_graph_iri, current_shape)?;
+    let (variables, rows) = run_select_with_shacl_prebinding_view(
+        dataset,
+        &query,
+        &subs,
+        shapes_graph_iri,
+        current_shape,
+    )?;
 
     let this_index = variables.iter().position(|v| v == "this");
     let path_index = variables.iter().position(|v| v == "path");
