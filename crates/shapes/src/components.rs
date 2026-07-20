@@ -651,7 +651,7 @@ fn parse_component(
     let param_names: Vec<String> = parameters.iter().map(|p| p.name.clone()).collect();
 
     let mut node_validator_nodes: Vec<Term> = objects_of(data, component, sh::NODE_VALIDATOR);
-    crate::term::sort_canonical(&mut node_validator_nodes);
+    crate::term::sort_terms_canonical(&mut node_validator_nodes);
     let node_validators = node_validator_nodes
         .into_iter()
         .map(|v| {
@@ -667,7 +667,7 @@ fn parse_component(
         .collect::<Result<Vec<Validator>, _>>()?;
     let mut property_validator_nodes: Vec<Term> =
         objects_of(data, component, sh::PROPERTY_VALIDATOR);
-    crate::term::sort_canonical(&mut property_validator_nodes);
+    crate::term::sort_terms_canonical(&mut property_validator_nodes);
     let property_validators = property_validator_nodes
         .into_iter()
         .map(|v| {
@@ -682,7 +682,7 @@ fn parse_component(
         })
         .collect::<Result<Vec<Validator>, _>>()?;
     let mut validator_nodes: Vec<Term> = objects_of(data, component, sh::VALIDATOR);
-    crate::term::sort_canonical(&mut validator_nodes);
+    crate::term::sort_terms_canonical(&mut validator_nodes);
     let validators = validator_nodes
         .into_iter()
         .map(|v| {

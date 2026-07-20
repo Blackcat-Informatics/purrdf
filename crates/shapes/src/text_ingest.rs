@@ -7,13 +7,12 @@
 //! the data graph (N-Triples). It used to drive the oxigraph `io` RDF parser
 //! directly so it could (a) recover the document `@prefix` map — oxigraph stores
 //! drop prefixes, but SHACL-AF `sh:select` queries reference prefixed names — and
-//! (b) accumulate EVERY syntax error in one pass (item 4) instead of
+//! (b) accumulate every independently recoverable syntax error in one pass instead of
 //! short-circuiting on the first.
 //!
 //! This module reproduces both capabilities on top of the native purrdf
-//! codecs ([`::purrdf::parse_dataset`]), which are lenient on the PurRDF
-//! ontology's private-use `@x-purrdf-*` language tags (long BCP-47 subtags) and
-//! carry no oxigraph `io` dependency:
+//! codecs ([`::purrdf::parse_dataset`]), which are lenient on private-use
+//! language tags with long BCP-47 subtags and carry no oxigraph `io` dependency:
 //!
 //! - **Prefix recovery** ([`extract_prefixes`]) re-derives the `(prefix,
 //!   namespace)` pairs by scanning the source text's `@prefix` / SPARQL `PREFIX`
@@ -79,8 +78,8 @@ fn scan_prefixes(text: &str) -> impl Iterator<Item = (String, String)> + '_ {
 ///
 /// On a clean parse the dataset is returned. On a syntax error the document is
 /// re-parsed one top-level statement at a time so EVERY independently-malformed
-/// statement is reported (the multi-error contract, item 4); the returned
-/// `Err` is the list of per-statement error strings.
+/// statement is reported; the returned `Err` is the list of per-statement error
+/// strings.
 pub fn parse_turtle_to_dataset(ttl: &str) -> Result<Arc<RdfDataset>, Vec<String>> {
     if ttl.is_empty() {
         return Ok(empty_dataset());

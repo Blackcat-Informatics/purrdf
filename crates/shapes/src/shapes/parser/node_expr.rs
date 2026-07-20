@@ -101,7 +101,7 @@ impl Parser<'_> {
 
         // sh:languageIn — an RDF list of language-tag string literals
         let mut lang_in_lists: Vec<Term> = self.objects_of(id, sh::LANGUAGE_IN);
-        crate::term::sort_canonical(&mut lang_in_lists);
+        crate::term::sort_terms_canonical(&mut lang_in_lists);
         for list_head in lang_in_lists {
             let items = self.walk_rdf_list(&list_head, id)?;
             let mut tags: Vec<String> = Vec::with_capacity(items.len());
@@ -120,7 +120,7 @@ impl Parser<'_> {
 
         // sh:not — a single nested shape (mirrors sh:node)
         let mut not_refs: Vec<Term> = self.objects_of(id, sh::NOT);
-        crate::term::sort_canonical(&mut not_refs);
+        crate::term::sort_terms_canonical(&mut not_refs);
         for not_ref in not_refs {
             let inner = self.parse_node_shape(not_ref)?;
             constraints.push(Constraint::Not(Box::new(inner)));
@@ -137,7 +137,7 @@ impl Parser<'_> {
         if is_closed {
             let mut ignored: Vec<NamedNode> = Vec::new();
             let mut ignored_lists: Vec<Term> = self.objects_of(id, sh::IGNORED_PROPERTIES);
-            crate::term::sort_canonical(&mut ignored_lists);
+            crate::term::sort_terms_canonical(&mut ignored_lists);
             for list_head in ignored_lists {
                 for item in self.walk_rdf_list(&list_head, id)? {
                     match item {
@@ -168,40 +168,40 @@ impl Parser<'_> {
 
         // sh:minInclusive / sh:maxInclusive
         let mut min_inc: Vec<Term> = self.objects_of(id, sh::MIN_INCLUSIVE);
-        crate::term::sort_canonical(&mut min_inc);
+        crate::term::sort_terms_canonical(&mut min_inc);
         for t in min_inc {
             constraints.push(Constraint::MinInclusive(t));
         }
 
         let mut max_inc: Vec<Term> = self.objects_of(id, sh::MAX_INCLUSIVE);
-        crate::term::sort_canonical(&mut max_inc);
+        crate::term::sort_terms_canonical(&mut max_inc);
         for t in max_inc {
             constraints.push(Constraint::MaxInclusive(t));
         }
 
         // sh:minExclusive / sh:maxExclusive
         let mut min_exc: Vec<Term> = self.objects_of(id, sh::MIN_EXCLUSIVE);
-        crate::term::sort_canonical(&mut min_exc);
+        crate::term::sort_terms_canonical(&mut min_exc);
         for t in min_exc {
             constraints.push(Constraint::MinExclusive(t));
         }
 
         let mut max_exc: Vec<Term> = self.objects_of(id, sh::MAX_EXCLUSIVE);
-        crate::term::sort_canonical(&mut max_exc);
+        crate::term::sort_terms_canonical(&mut max_exc);
         for t in max_exc {
             constraints.push(Constraint::MaxExclusive(t));
         }
 
         // sh:hasValue
         let mut hv: Vec<Term> = self.objects_of(id, sh::HAS_VALUE);
-        crate::term::sort_canonical(&mut hv);
+        crate::term::sort_terms_canonical(&mut hv);
         for t in hv {
             constraints.push(Constraint::HasValue(t));
         }
 
         // sh:in
         let mut in_lists: Vec<Term> = self.objects_of(id, sh::IN);
-        crate::term::sort_canonical(&mut in_lists);
+        crate::term::sort_terms_canonical(&mut in_lists);
         for list_head in in_lists {
             let items = self.walk_rdf_list(&list_head, id)?;
             constraints.push(Constraint::In(items));
@@ -235,21 +235,21 @@ impl Parser<'_> {
 
         // sh:and / sh:or / sh:xone — each is an RDF list of shape nodes
         let mut and_lists: Vec<Term> = self.objects_of(id, sh::AND);
-        crate::term::sort_canonical(&mut and_lists);
+        crate::term::sort_terms_canonical(&mut and_lists);
         for list_head in and_lists {
             let members = self.parse_shape_list(&list_head, id)?;
             constraints.push(Constraint::And(members));
         }
 
         let mut or_lists: Vec<Term> = self.objects_of(id, sh::OR);
-        crate::term::sort_canonical(&mut or_lists);
+        crate::term::sort_terms_canonical(&mut or_lists);
         for list_head in or_lists {
             let members = self.parse_shape_list(&list_head, id)?;
             constraints.push(Constraint::Or(members));
         }
 
         let mut xone_lists: Vec<Term> = self.objects_of(id, sh::XONE);
-        crate::term::sort_canonical(&mut xone_lists);
+        crate::term::sort_terms_canonical(&mut xone_lists);
         for list_head in xone_lists {
             let members = self.parse_shape_list(&list_head, id)?;
             constraints.push(Constraint::Xone(members));
@@ -257,7 +257,7 @@ impl Parser<'_> {
 
         // sh:node
         let mut node_refs: Vec<Term> = self.objects_of(id, sh::NODE);
-        crate::term::sort_canonical(&mut node_refs);
+        crate::term::sort_terms_canonical(&mut node_refs);
         for node_ref in node_refs {
             let inner = self.parse_node_shape(node_ref)?;
             constraints.push(Constraint::Node(Box::new(inner)));
@@ -267,7 +267,7 @@ impl Parser<'_> {
         // The blank node may or may not carry rdf:type sh:SPARQLConstraint;
         // we require only sh:select (which must be a SELECT query).
         let mut sparql_cnodes: Vec<Term> = self.objects_of(id, sh::SPARQL);
-        crate::term::sort_canonical(&mut sparql_cnodes);
+        crate::term::sort_terms_canonical(&mut sparql_cnodes);
         for c_node in sparql_cnodes {
             // sh:select is required.
             let raw_select = self
@@ -338,7 +338,7 @@ impl Parser<'_> {
         // sh:message / sh:severity on the expression node override the shape
         // defaults at eval time (mirroring sh:sparql).
         let mut expr_nodes: Vec<Term> = self.objects_of(id, sh::EXPRESSION);
-        crate::term::sort_canonical(&mut expr_nodes);
+        crate::term::sort_terms_canonical(&mut expr_nodes);
         for expr_node in expr_nodes {
             let expr = self.parse_node_expr(&expr_node)?;
 
@@ -508,7 +508,7 @@ impl Parser<'_> {
     /// parents of `id`, minus the constraint's own shape) are parsed and stored.
     fn parse_qualified_value_shapes(&mut self, id: &Term) -> Result<Vec<Constraint>, String> {
         let mut qvs_nodes: Vec<Term> = self.objects_of(id, sh::QUALIFIED_VALUE_SHAPE);
-        crate::term::sort_canonical(&mut qvs_nodes);
+        crate::term::sort_terms_canonical(&mut qvs_nodes);
 
         let min_count = match self.first_object_of(id, sh::QUALIFIED_MIN_COUNT) {
             Some(t) => Some(crate::shapes::parse_u64(&t).ok_or_else(|| {
@@ -582,14 +582,14 @@ impl Parser<'_> {
         .into_iter()
         .map(|(subject, _, _)| subject)
         .collect();
-        crate::term::sort_canonical(&mut parents);
+        crate::term::sort_terms_canonical(&mut parents);
         parents.dedup();
         for parent in &parents {
             let mut sibling_ps: Vec<Term> = self.objects_of(parent, sh::PROPERTY);
-            crate::term::sort_canonical(&mut sibling_ps);
+            crate::term::sort_terms_canonical(&mut sibling_ps);
             for ps in sibling_ps {
                 let mut qvs: Vec<Term> = self.objects_of(&ps, sh::QUALIFIED_VALUE_SHAPE);
-                crate::term::sort_canonical(&mut qvs);
+                crate::term::sort_terms_canonical(&mut qvs);
                 for q in qvs {
                     if &q != own_qvs && seen.insert(q.clone()) {
                         sibling_nodes.push(q);

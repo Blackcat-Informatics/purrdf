@@ -627,7 +627,7 @@ impl DatasetView for RdfDataset {
 
     #[inline]
     fn term_id_by_value(&self, value: &TermValue) -> Option<TermId> {
-        // Delegate to the inherent lazy reverse value index (no minting).
+        // Delegate to the retained store-once term index (no minting).
         Self::term_id_by_value(self, value)
     }
 

@@ -37,6 +37,7 @@ pub mod instance;
 pub mod json_schema;
 pub mod linkml;
 pub mod model;
+pub(crate) mod parallel;
 pub mod path;
 pub(crate) mod prebinding;
 pub mod pydantic;

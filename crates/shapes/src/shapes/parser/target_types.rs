@@ -29,7 +29,7 @@ impl Parser<'_> {
             .into_iter()
             .map(|(subject, _, _)| subject)
             .collect();
-        crate::term::sort_canonical(&mut ids);
+        crate::term::sort_terms_canonical(&mut ids);
         ids.dedup();
 
         let mut registry: BTreeMap<String, SparqlTargetType> = BTreeMap::new();

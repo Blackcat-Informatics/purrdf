@@ -63,6 +63,9 @@ purrdf = { package = "purrdf-rdf", path = "../rdf", version = "0.7.0" }
 # only — no `union`/`serde`; wasm-clean, `unsafe`-free). Version is pinned once
 # in the root `[workspace.dependencies]`.
 smallvec = { workspace = true }
+# Deterministic indexed focus-node scheduling. Rayon is always-on and
+# wasm32-clean; on single-threaded wasm it executes the same indexed work inline.
+rayon = { workspace = true }
 
 [dev-dependencies]
 purrdf-gts = { workspace = true }

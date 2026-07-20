@@ -14,6 +14,8 @@
 //! `PreparedSparqlQuery::substitute_variable`,  GAP-A).
 
 use std::cell::RefCell;
+use std::marker::PhantomData;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use ::purrdf::RdfDataset;
@@ -68,7 +70,7 @@ pub fn eval_target(
         }
     }
 
-    crate::term::sort_canonical(&mut nodes);
+    crate::term::sort_terms_canonical(&mut nodes);
     nodes.dedup();
     Ok(nodes)
 }
@@ -377,17 +379,18 @@ thread_local! {
     /// query plan cache memoizes each `sh:select`/`sh:SPARQLTarget` parse across the
     /// many focus-node calls of one validation (the oxigraph path kept a pre-parsed
     /// `PreparedSparqlQuery`; a fresh engine per call would re-parse every time — a
-    /// per-focus blowup on the whole-ontology conformance shapes). Validation is
-    /// serial, and the cache is keyed on `(base, query text)`, so reuse is sound.
+    /// per-focus blowup on the whole-ontology conformance shapes). Each focus
+    /// worker reuses its own cache, keyed on `(base, query text)`.
     static SPARQL_ENGINE: NativeSparqlEngine = NativeSparqlEngine::new();
 
     /// The SHACL-AF function registry (`sh:SPARQLFunction`) in scope for the current
     /// validation, set by [`enter_function_scope`]. `run_select_generic` reads it to decide
     /// whether a call-position IRI can resolve to a user function. Kept alongside the
-    /// engine (this module's established thread-local pattern) because validation is
-    /// serial: a single guard on the validation thread covers every `run_select_generic` on
-    /// that thread. Parallel FILTER workers inside the engine do NOT read this — they
-    /// receive the registry through `EvalCtx` (propagated in `fork_for_worker`).
+    /// engine (this module's established thread-local pattern). Whole-bundle
+    /// validation installs one guard per focus chunk, so every rayon worker sees
+    /// the same registry without shared mutation. Parallel FILTER workers inside
+    /// the SPARQL engine do NOT read this — they receive the registry through
+    /// `EvalCtx` (propagated in `fork_for_worker`).
     static CURRENT_FUNCTIONS: RefCell<Option<Arc<UserFunctionRegistry>>> = const { RefCell::new(None) };
 }
 
@@ -398,6 +401,9 @@ thread_local! {
 #[derive(Debug)]
 pub struct FunctionScope {
     previous: Option<Arc<UserFunctionRegistry>>,
+    /// A thread-local restoration guard must be dropped on the thread where it
+    /// was created; this marker makes that invariant compile-time enforced.
+    _not_send: PhantomData<Rc<()>>,
 }
 
 impl Drop for FunctionScope {
@@ -411,7 +417,10 @@ impl Drop for FunctionScope {
 /// restores the previous table when dropped.
 pub fn enter_function_scope(registry: Arc<UserFunctionRegistry>) -> FunctionScope {
     let previous = CURRENT_FUNCTIONS.with(|slot| slot.borrow_mut().replace(registry));
-    FunctionScope { previous }
+    FunctionScope {
+        previous,
+        _not_send: PhantomData,
+    }
 }
 
 /// Run a SELECT query over the dataset using the generic SPARQL `query` path
@@ -641,7 +650,7 @@ mod tests {
         // Verify sorted order.
         let sorted = {
             let mut v = nodes.clone();
-            crate::term::sort_canonical(&mut v);
+            crate::term::sort_terms_canonical(&mut v);
             v
         };
         assert_eq!(nodes, sorted, "result must be sorted");

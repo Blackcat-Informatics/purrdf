@@ -86,6 +86,16 @@ pub fn eval(ds: &RdfDataset, focus: &Term, path: &Path) -> Vec<Term> {
 /// [`eval`]; that owned-term fallback is a genuine necessity, not optionality.
 pub fn eval_ids(ds: &RdfDataset, focus: &Term, path: &Path) -> Option<IdVec> {
     let focus_id = resolve_id(ds, focus)?;
+    Some(eval_ids_from_id(ds, focus_id, path))
+}
+
+/// Id-native value-node producer for a focus node whose interned identity is
+/// already known.
+///
+/// This is the validation hot-path entry point: a focus node is resolved once
+/// when its shape evaluation begins, then every property shape reuses the same
+/// [`TermId`] instead of repeating an interner lookup.
+pub(crate) fn eval_ids_from_id(ds: &RdfDataset, focus_id: TermId, path: &Path) -> IdVec {
     let ids = eval_inner_ids(ds, focus_id, path);
     let mut seen: IdSet = IdSet::default();
     let mut out: IdVec = IdVec::with_capacity(ids.len());
@@ -94,7 +104,7 @@ pub fn eval_ids(ds: &RdfDataset, focus: &Term, path: &Path) -> Option<IdVec> {
             out.push(id);
         }
     }
-    Some(out)
+    out
 }
 
 /// Whether a SHACL property path matches the zero-length (reflexive) path — i.e.
@@ -378,7 +388,7 @@ mod tests {
         let focus = nn("http://example.org/ns#a");
         let path = Path::Predicate(NamedNode::new_unchecked("http://example.org/ns#p"));
         let mut result = eval(&data, &focus, &path);
-        crate::term::sort_canonical(&mut result);
+        crate::term::sort_terms_canonical(&mut result);
         assert_eq!(result.len(), 2);
         assert!(result.contains(&nn("http://example.org/ns#b")));
         assert!(result.contains(&nn("http://example.org/ns#c")));
@@ -427,7 +437,7 @@ mod tests {
         let focus = nn("http://example.org/ns#a");
         let path = Path::Sequence(vec![pred("p"), pred("q")]);
         let mut result = eval(&data, &focus, &path);
-        crate::term::sort_canonical(&mut result);
+        crate::term::sort_terms_canonical(&mut result);
         assert_eq!(
             result,
             vec![nn("http://example.org/ns#c"), nn("http://example.org/ns#d")]
@@ -462,7 +472,7 @@ mod tests {
         let focus = nn("http://example.org/ns#a");
         let path = Path::Alternative(vec![pred("p"), pred("q")]);
         let mut result = eval(&data, &focus, &path);
-        crate::term::sort_canonical(&mut result);
+        crate::term::sort_terms_canonical(&mut result);
         // ex:c is reachable via both branches but reported once (set semantics).
         assert_eq!(
             result,
@@ -484,7 +494,7 @@ mod tests {
         let focus = nn("http://example.org/ns#a");
         let path = Path::ZeroOrMore(Box::new(pred("next")));
         let mut result = eval(&data, &focus, &path);
-        crate::term::sort_canonical(&mut result);
+        crate::term::sort_terms_canonical(&mut result);
         assert_eq!(
             result,
             vec![
@@ -507,7 +517,7 @@ mod tests {
         let focus = nn("http://example.org/ns#a");
         let path = Path::OneOrMore(Box::new(pred("next")));
         let mut result = eval(&data, &focus, &path);
-        crate::term::sort_canonical(&mut result);
+        crate::term::sort_terms_canonical(&mut result);
         assert_eq!(
             result,
             vec![nn("http://example.org/ns#b"), nn("http://example.org/ns#c")]
@@ -526,7 +536,7 @@ mod tests {
         let focus = nn("http://example.org/ns#a");
         let path = Path::OneOrMore(Box::new(pred("next")));
         let mut result = eval(&data, &focus, &path);
-        crate::term::sort_canonical(&mut result);
+        crate::term::sort_terms_canonical(&mut result);
         assert_eq!(
             result,
             vec![nn("http://example.org/ns#a"), nn("http://example.org/ns#b")]
@@ -544,7 +554,7 @@ mod tests {
         let focus = nn("http://example.org/ns#a");
         let path = Path::ZeroOrOne(Box::new(pred("next")));
         let mut result = eval(&data, &focus, &path);
-        crate::term::sort_canonical(&mut result);
+        crate::term::sort_terms_canonical(&mut result);
         // Focus itself (zero steps) plus one step; c (two steps) excluded.
         assert_eq!(
             result,
@@ -570,7 +580,7 @@ mod tests {
             Path::ZeroOrMore(Box::new(pred("r"))),
         ]);
         let mut result = eval(&data, &focus, &path);
-        crate::term::sort_canonical(&mut result);
+        crate::term::sort_terms_canonical(&mut result);
         assert_eq!(
             result,
             vec![
@@ -610,7 +620,7 @@ mod tests {
         let focus = nn("http://example.org/ns#b");
         let path = Path::Inverse(Box::new(Path::ZeroOrMore(Box::new(pred("next")))));
         let mut result = eval(&data, &focus, &path);
-        crate::term::sort_canonical(&mut result);
+        crate::term::sort_terms_canonical(&mut result);
         assert_eq!(
             result,
             vec![nn("http://example.org/ns#a"), nn("http://example.org/ns#b")]

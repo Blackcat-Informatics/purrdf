@@ -214,6 +214,69 @@ These observations are report-only. They establish reproducible workloads and
 make regressions visible; they do not impose latency, throughput, recall, or
 memory thresholds.
 
+### SHACL validation hot paths
+
+The `validate` benchmark contains four deterministic SHACL workloads:
+
+| Group | Fixed fixture and measured boundary |
+| --- | --- |
+| `shacl_validate/corpus_all` | All 69 committed first-party conformance cases, including text ingestion, shapes parsing, target resolution, constraint evaluation, and report assembly. |
+| `shacl_focus_core` | 512, 1,024, 2,048, 3,000, 100,000, and 1,000,000 target nodes. Each node contributes four quads; the shapes exercise a 40-level asserted subclass hierarchy, pattern, datatype, and class constraints. |
+| `shacl_focus_sparql` | 64, 512, and 4,096 target nodes with two quads per node and a caller-declared SHACL-SPARQL function. |
+| `shacl_focus_realtime` | One prepared 1,000,000-node snapshot (4,000,079 quads and 3,000,088 terms), a compatibility focus filter over one node, and id-native prepared requests containing 1, 8, 64, 512, or 4,096 focus nodes. Dataset and shapes preparation stays outside each request's timed loop. |
+
+Run the complete suite, one group, one large bulk case, or the largest bounded
+request with:
+
+```sh
+cargo bench -p purrdf-shapes --bench validate --locked
+cargo bench -p purrdf-shapes --bench validate --locked -- shacl_focus
+cargo bench -p purrdf-shapes --bench validate --locked -- shacl_focus_core/1000000
+cargo bench -p purrdf-shapes --bench validate --locked -- 'shacl_focus_realtime/prepared_ids/4096'
+```
+
+Appending `--test` performs a single-sample smoke run and prints the fixture,
+thread, elapsed-time, allocation-call, and requested-byte probe. It is useful for
+correctness and allocation inspection, not a substitute for Criterion's sampled
+estimates.
+
+`PreparedValidator` is the realtime surface. Preparation owns the immutable
+projected snapshot and parsed shapes, precomputes class closures and target
+identities, and evaluates SHACL-SPARQL targets once. Callers that already hold
+the projected snapshot should use `from_projected_dataset` and pass that exact
+snapshot's dataset-local `TermId` values to `validate_focus_node_ids`. The
+compatibility focus-filter entry point must enumerate whole target sets before
+discarding unrelated nodes and is intentionally retained as a comparison, not
+as the realtime path. Publishing an overlay or replacement snapshot requires a
+new prepared validator.
+
+The production scheduler preserves serial semantics. At 1,024 or fewer focus
+nodes it stays serial. Above that boundary, a multi-threaded build uses indexed
+Rayon chunks with a 64-node minimum and approximately four chunks per worker.
+Each chunk evaluates in canonical source order; chunk outputs are reduced in
+that same order, so report bytes and the selected earliest hard error do not
+depend on worker timing. Canonical focus sorting also stays serial below 4,096
+nodes and uses deterministic stable parallel sorting for larger sets. Unit tests
+force serial and parallel execution across all 69 corpus cases, 2- and 4-worker
+pools, several chunk geometries, SHACL-AF user functions, and competing hard
+errors; a separate test proves genuine four-worker participation.
+
+The following selected one-operation probes were observed on 2026-07-20 with
+rustc 1.97.1, Linux 7.1.4, 32 Rayon workers, and an AMD Ryzen AI MAX+ 395. They
+are report-only host observations, rounded from the emitted probes:
+
+| Operation | Earlier baseline | Current observation |
+| --- | ---: | ---: |
+| Whole-bundle Core validation, 1,000,000 focus nodes | 14.143 s | 339.85 ms |
+| SHACL-SPARQL validation, 4,096 focus nodes | 1.892 s | 79.05 ms |
+| Prepare the 1,000,000-node projected snapshot | not available | 2.31 ms; 119 allocation calls; 14,940 requested bytes |
+| Prepared id-native validation, 4,096 focus nodes | not available | 1.352 ms |
+| Compatibility focus filter, one retained node | not available | 266.93 ms |
+
+The comparison records the workload evolution rather than promising a speedup:
+reproduce it on the target deployment hardware, with the consumer's actual
+shapes and affected-focus expansion, before choosing latency budgets.
+
 ### SHACL schema import
 
 The `shacl_schema_import` group constructs a compact, deterministic draft

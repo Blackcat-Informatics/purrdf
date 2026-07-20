@@ -28,6 +28,8 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, OnceLock};
 
+use hashbrown::HashTable;
+
 use crate::content_id::Blake3ContentId;
 use crate::dataset_view::GraphMatch;
 // Re-exported `pub(crate)` so the sibling `super::dataset::FastHasher` path used by
@@ -45,7 +47,6 @@ use super::term::{BlankScope, InternedTerm, TermId, TermValue, arena_str};
 /// as virtual triples in [`RdfDataset::reifier_quads`].
 const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 
-type ValueIndex = HashMap<u64, Vec<TermId>, FastHasher>;
 /// Lazy successor→predecessors reverse index for
 /// [`RdfDataset::predecessors`]: each successor `TermId` maps to its
 /// predecessor `TermId`s (decoded from the PREDECESSOR-LINK annotation rows),
@@ -218,13 +219,14 @@ pub struct RdfDataset {
     locations: Box<[(QuadHandle, RdfLocation)]>,
     /// Capability flags, computed ONCE at freeze.
     caps: RdfStoreCapabilities,
-    /// Lazy value→id reverse index for [`RdfDataset::term_id_by_value`].
-    /// Keyed by a canonical **hash** of each term's dataset-independent value (with
-    /// `Vec<TermId>` buckets to resolve the rare collision), NOT by full
-    /// [`TermValue`] copies — so building it duplicates **no** term strings (~10×
-    /// leaner than an owned-key map). Built lazily (the builder's interner index is
-    /// dropped at freeze); `OnceLock` keeps the frozen dataset `Send + Sync`.
-    value_index: OnceLock<ValueIndex>,
+    /// Store-once term hash→id index moved intact from the builder at freeze.
+    ///
+    /// Values are only dense `u32` indices into `terms`; equality resolves through
+    /// the arena, so no term strings are duplicated. Retaining the already-built
+    /// table makes every reverse term lookup immediately available without an
+    /// O(term-count) lazy rebuild on a freshly published immutable snapshot.
+    /// Derived, non-serialized, and never consulted by byte-producing paths.
+    term_index: HashTable<u32>,
     /// Lazy permutation quad indexes for indexed
     /// [`quads_for_pattern`](RdfDataset::quads_for_pattern_indexed) (P4b). SPOG
     /// is free (the `quads` table is already freeze-sorted by `(s, p, o, g)`); the
@@ -267,7 +269,7 @@ pub struct RdfDataset {
     /// [`RdfDataset::predecessors`]/[`RdfDataset::predecessor_chain`]. DERIVED,
     /// NON-SERIALIZED: a pure function of the frozen `annotations` table plus
     /// the configured `derivation_predicate`, identical determinism-safety
-    /// rationale to `value_index`/`indexes` — built lazily (`OnceLock` keeps
+    /// rationale to `term_index`/`indexes` — built lazily (`OnceLock` keeps
     /// the frozen dataset `Send + Sync`), never persisted, and read only by
     /// dataset-local `TermId`s (C0.8: never serialized, never read by a
     /// writer).
@@ -535,6 +537,7 @@ impl RdfDataset {
         locations: Box<[(QuadHandle, RdfLocation)]>,
         caps: RdfStoreCapabilities,
         named_graphs: Box<[TermId]>,
+        term_index: HashTable<u32>,
         content_ids: HashMap<TermId, Blake3ContentId, FastHasher>,
         derivation_predicate: Option<TermId>,
     ) -> Self {
@@ -546,7 +549,7 @@ impl RdfDataset {
             annotations,
             locations,
             caps,
-            value_index: OnceLock::new(),
+            term_index,
             indexes: QuadIndexes::default(),
             named_graphs,
             content_ids,
@@ -1114,123 +1117,20 @@ impl RdfDataset {
             .map(|q| QuadIds::from(*q))
     }
 
-    /// Hash an interned term **with zero allocations**, byte-for-byte identically to
-    /// [`TermValue`]'s manual `Hash` (explicit tags; the literal datatype is hashed
-    /// as its resolved IRI string, triple components recurse). The round-trip tests
-    /// fail if this drifts from `TermValue::hash`.
-    fn hash_term<H: Hasher>(&self, id: TermId, state: &mut H) {
-        match &self.terms[id.index()] {
-            InternedTerm::Iri(iri) => {
-                0u8.hash(state);
-                arena_str(&self.arena, *iri).hash(state);
-            }
-            InternedTerm::Blank { label, scope } => {
-                1u8.hash(state);
-                arena_str(&self.arena, *label).hash(state);
-                scope.hash(state);
-            }
-            InternedTerm::Literal(lit) => {
-                2u8.hash(state);
-                arena_str(&self.arena, lit.lexical_form).hash(state);
-                self.hash_iri_string(lit.datatype, state);
-                lit.language.map(|r| arena_str(&self.arena, r)).hash(state);
-                lit.direction.hash(state);
-            }
-            InternedTerm::Triple { s, p, o } => {
-                3u8.hash(state);
-                self.hash_term(*s, state);
-                self.hash_term(*p, state);
-                self.hash_term(*o, state);
-            }
-        }
-    }
-
-    /// Hash the IRI string of a term known to be an interned IRI (a literal datatype).
-    fn hash_iri_string<H: Hasher>(&self, id: TermId, state: &mut H) {
-        match &self.terms[id.index()] {
-            InternedTerm::Iri(iri) => arena_str(&self.arena, *iri).hash(state),
-            // Unreachable for a validated dataset (a literal datatype is always an
-            // IRI); hash the Debug form rather than panic.
-            other => format!("{other:?}").hash(state),
-        }
-    }
-
-    /// Whether an interned term equals a dataset-independent [`TermValue`], compared
-    /// **with zero allocations** directly against the interned representation
-    /// (resolving each string range through the arena, and the literal datatype id
-    /// to its IRI). Resolves hash collisions in [`RdfDataset::term_id_by_value`].
-    fn term_matches_value(&self, id: TermId, value: &TermValue) -> bool {
-        match (&self.terms[id.index()], value) {
-            (InternedTerm::Iri(iri), TermValue::Iri(v)) => arena_str(&self.arena, *iri) == v,
-            (
-                InternedTerm::Blank { label, scope },
-                TermValue::Blank {
-                    label: vl,
-                    scope: vs,
-                },
-            ) => arena_str(&self.arena, *label) == vl && scope == vs,
-            (
-                InternedTerm::Literal(lit),
-                TermValue::Literal {
-                    lexical_form,
-                    datatype,
-                    language,
-                    direction,
-                },
-            ) => {
-                arena_str(&self.arena, lit.lexical_form) == lexical_form
-                    && lit.direction == *direction
-                    && lit.language.map(|r| arena_str(&self.arena, r)) == language.as_deref()
-                    && self.iri_matches(lit.datatype, datatype)
-            }
-            (
-                InternedTerm::Triple { s, p, o },
-                TermValue::Triple {
-                    s: vs,
-                    p: vp,
-                    o: vo,
-                },
-            ) => {
-                self.term_matches_value(*s, vs)
-                    && self.term_matches_value(*p, vp)
-                    && self.term_matches_value(*o, vo)
-            }
-            _ => false,
-        }
-    }
-
     /// Whether a term known to be an interned IRI equals `expected` (zero-alloc).
     fn iri_matches(&self, id: TermId, expected: &str) -> bool {
         matches!(&self.terms[id.index()], InternedTerm::Iri(iri) if arena_str(&self.arena, *iri) == expected)
     }
 
-    /// Canonical hash of a value, matching [`hash_term`](Self::hash_term).
-    fn hash_of<T: Hash>(value: &T) -> u64 {
-        let mut hasher = ahash::AHasher::default();
-        value.hash(&mut hasher);
-        hasher.finish()
-    }
-
-    fn value_index(&self) -> &ValueIndex {
-        self.value_index.get_or_init(|| {
-            let mut map: ValueIndex =
-                HashMap::with_capacity_and_hasher(self.terms.len(), FastHasher::default());
-            for i in 0..self.terms.len() {
-                let id = TermId::from_index(i as u32);
-                let mut hasher = ahash::AHasher::default();
-                self.hash_term(id, &mut hasher);
-                map.entry(hasher.finish()).or_default().push(id);
-            }
-            map
-        })
-    }
-
-    fn find_hashed(&self, hash: u64, mut matches: impl FnMut(TermId) -> bool) -> Option<TermId> {
-        self.value_index()
-            .get(&hash)?
-            .iter()
+    fn find_term_hashed(
+        &self,
+        hash: u64,
+        mut matches: impl FnMut(TermId) -> bool,
+    ) -> Option<TermId> {
+        self.term_index
+            .find(hash, |&index| matches(TermId::from_index(index)))
             .copied()
-            .find(|&id| matches(id))
+            .map(TermId::from_index)
     }
 
     /// The id of an interned IRI, without allocating an owned [`TermValue`].
@@ -1239,7 +1139,7 @@ impl RdfDataset {
         let mut hasher = ahash::AHasher::default();
         0u8.hash(&mut hasher);
         iri.hash(&mut hasher);
-        self.find_hashed(hasher.finish(), |id| self.iri_matches(id, iri))
+        self.find_term_hashed(hasher.finish(), |id| self.iri_matches(id, iri))
     }
 
     /// The id of an interned blank node, without allocating its label.
@@ -1249,7 +1149,7 @@ impl RdfDataset {
         1u8.hash(&mut hasher);
         label.hash(&mut hasher);
         scope.hash(&mut hasher);
-        self.find_hashed(hasher.finish(), |id| {
+        self.find_term_hashed(hasher.finish(), |id| {
             matches!(
                 &self.terms[id.index()],
                 InternedTerm::Blank { label: stored, scope: stored_scope }
@@ -1267,18 +1167,19 @@ impl RdfDataset {
         language: Option<&str>,
         direction: Option<RdfTextDirection>,
     ) -> Option<TermId> {
+        let datatype_id = self.term_id_by_iri(datatype)?;
         let mut hasher = ahash::AHasher::default();
         2u8.hash(&mut hasher);
         lexical_form.hash(&mut hasher);
-        datatype.hash(&mut hasher);
+        datatype_id.hash(&mut hasher);
         language.hash(&mut hasher);
         direction.hash(&mut hasher);
-        self.find_hashed(hasher.finish(), |id| {
+        self.find_term_hashed(hasher.finish(), |id| {
             let InternedTerm::Literal(lit) = &self.terms[id.index()] else {
                 return false;
             };
             arena_str(&self.arena, lit.lexical_form) == lexical_form
-                && self.iri_matches(lit.datatype, datatype)
+                && lit.datatype == datatype_id
                 && lit.language.map(|r| arena_str(&self.arena, r)) == language
                 && lit.direction == direction
         })
@@ -1298,10 +1199,10 @@ impl RdfDataset {
         }
         let mut hasher = ahash::AHasher::default();
         3u8.hash(&mut hasher);
-        self.hash_term(s, &mut hasher);
-        self.hash_term(p, &mut hasher);
-        self.hash_term(o, &mut hasher);
-        self.find_hashed(hasher.finish(), |id| {
+        s.hash(&mut hasher);
+        p.hash(&mut hasher);
+        o.hash(&mut hasher);
+        self.find_term_hashed(hasher.finish(), |id| {
             matches!(
                 self.terms[id.index()],
                 InternedTerm::Triple { s: stored_s, p: stored_p, o: stored_o }
@@ -1313,18 +1214,28 @@ impl RdfDataset {
     /// The id of an interned term given its **dataset-independent** value, or
     /// `None` if the dataset contains no such term (purrdf P4).
     ///
-    /// The reverse hash→id index is built **lazily on first call** (the builder's
-    /// interner index is dropped at freeze) and cached; `OnceLock::get_or_init`
-    /// guarantees a single build even under concurrent first access. The index is
-    /// keyed by a canonical value hash with `Vec<TermId>` collision buckets and
-    /// stores **no** term strings, so building it is allocation-light. Keying on
-    /// [`TermValue`] (not [`TermRef`]) is the correctness rule: a
+    /// Lookup reuses the builder's store-once hash→id table, retained at freeze.
+    /// Compound dataset-independent values are first resolved recursively into
+    /// this dataset's local ids, then probed through that table. Keying the public
+    /// boundary on [`TermValue`] (not [`TermRef`]) remains the correctness rule: a
     /// `TermRef`'s datatype/triple ids are local to whichever dataset minted them.
     #[must_use]
     pub fn term_id_by_value(&self, value: &TermValue) -> Option<TermId> {
-        self.find_hashed(Self::hash_of(value), |id| {
-            self.term_matches_value(id, value)
-        })
+        match value {
+            TermValue::Iri(iri) => self.term_id_by_iri(iri),
+            TermValue::Blank { label, scope } => self.term_id_by_blank(label, *scope),
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => self.term_id_by_literal(lexical_form, datatype, language.as_deref(), *direction),
+            TermValue::Triple { s, p, o } => self.term_id_by_triple(
+                self.term_id_by_value(s)?,
+                self.term_id_by_value(p)?,
+                self.term_id_by_value(o)?,
+            ),
+        }
     }
 
     /// Iterate quads as ID-native [`QuadIds`]. **Zero allocations, infallible, no
@@ -1631,8 +1542,9 @@ impl RdfDataset {
 
     /// Deep-clone a frozen dataset's tables into a fresh owned `RdfDataset`. The
     /// fallback for [`union`](Self::union) when the freshly frozen `Arc` is somehow
-    /// shared (it is not, in practice — `freeze` returns a unique `Arc`). The lazy
-    /// `OnceLock` caches are intentionally NOT cloned; they rebuild on demand.
+    /// shared (it is not, in practice — `freeze` returns a unique `Arc`). The
+    /// store-once term index is structural and cloned with the term table; lazy
+    /// permutation/derivation caches rebuild on demand.
     fn clone_dataset(&self) -> Self {
         Self {
             arena: self.arena.clone(),
@@ -1642,7 +1554,7 @@ impl RdfDataset {
             annotations: self.annotations.clone(),
             locations: self.locations.clone(),
             caps: self.caps,
-            value_index: OnceLock::new(),
+            term_index: self.term_index.clone(),
             indexes: QuadIndexes::default(),
             named_graphs: self.named_graphs.clone(),
             content_ids: self.content_ids.clone(),
@@ -1724,8 +1636,7 @@ impl RdfDataset {
     /// predicate was never interned, or `successor` has no such annotation.
     ///
     /// The SINGLE public predecessor accessor: `O(1)` after the reverse index
-    /// (built once, lazily, on first call via `OnceLock::get_or_init` — mirrors
-    /// [`term_id_by_value`](Self::term_id_by_value)) is warm. The whole
+    /// (built once, lazily, on first call via `OnceLock::get_or_init`) is warm. The whole
     /// annotation table is scanned exactly ONCE to build the index — never
     /// per-call — with each successor's predecessor bucket sorted so the
     /// returned slice's order is deterministic and reproducible regardless of
@@ -1841,9 +1752,8 @@ impl<'a> IntoIterator for &'a RdfDataset {
 // serialization across threads. These guards fail the build if that ever regresses.
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
-    // RdfDataset carries lazy `OnceLock` indexes — the value index and the
-    // permutation quad indexes (P4b). `OnceLock` (not `RefCell`) is what keeps
-    // this guard holding once those interior-mutable caches are added.
+    // RdfDataset carries immutable store-once term indexes plus lazy `OnceLock`
+    // permutation/derivation indexes (P4b). No `RefCell` may enter this surface.
     assert_send_sync::<RdfDataset>();
     assert_send_sync::<TermId>();
     assert_send_sync::<QuadIds>();
@@ -1988,8 +1898,8 @@ mod tests {
     #[test]
     fn term_id_by_value_disambiguates_same_lexical_different_datatype() {
         // Two literals share the lexical form "1" but differ by datatype — the
-        // hash-bucketed index must disambiguate them by value (term_matches_value
-        // resolves the datatype id to its IRI), not collapse them.
+        // retained interner index must resolve the datatype IRI to its local id,
+        // not collapse the two dataset-independent values.
         let mut b = RdfDatasetBuilder::new();
         let as_int = b.intern_literal(RdfLiteral::typed(
             "1",
@@ -2047,14 +1957,14 @@ mod tests {
     }
 
     #[test]
-    fn term_id_by_value_lazy_init_is_thread_safe() {
+    fn term_id_by_value_concurrent_lookup_is_thread_safe() {
         use std::sync::Arc;
         let mut b = RdfDatasetBuilder::new();
         let s = iri(&mut b, "s");
         b.push_quad(s, s, s, None);
         let ds = b.freeze().unwrap(); // Arc<RdfDataset>
         let want = TermValue::Iri("http://example.org/s".to_string());
-        // Many threads race the OnceLock first-init; all must agree.
+        // The retained immutable interner index is directly shareable.
         let handles: Vec<_> = (0..8)
             .map(|_| {
                 let ds = Arc::clone(&ds);
@@ -3081,8 +2991,7 @@ mod tests {
 
         /// Two threads racing to build the lazy predecessor index on first access
         /// observe identical results — `OnceLock::get_or_init` guarantees a single
-        /// build even under concurrent first calls (mirrors `term_id_by_value`'s
-        /// concurrency contract).
+        /// build even under concurrent first calls.
         #[test]
         fn predecessors_concurrent_first_build_is_consistent() {
             let mut b = RdfDatasetBuilder::with_content_addressing(
