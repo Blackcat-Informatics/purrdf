@@ -27,6 +27,7 @@
     html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]
 
+pub(crate) mod class_membership;
 pub(crate) mod components;
 pub mod constraints;
 pub mod data;
