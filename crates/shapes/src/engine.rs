@@ -426,9 +426,8 @@ where
     F: FnMut(&Shape, &Term) -> bool,
 {
     // Install the shapes graph's SHACL-AF function table (`sh:SPARQLFunction`) for
-    // this whole validation pass. Held on the serial validation thread so every
-    // `sh:sparql`/`sh:SPARQLTarget`/`sh:expression` query resolves declared user
-    // functions; the guard restores the previous table on drop.
+    // this whole validation pass. This orchestration-thread scope covers target
+    // resolution; each focus chunk installs the same registry on its worker.
     let _function_scope = crate::sparql::enter_function_scope(Arc::clone(&shapes.functions));
 
     let plan = ValidationPlan::for_shapes(data.core(), shapes);
@@ -439,30 +438,28 @@ where
             continue;
         }
 
-        let focus_nodes = resolve_focus_nodes(data, &shape.targets, &plan)?;
+        let mut focus_nodes = resolve_focus_nodes(data, &shape.targets, &plan)?;
+        // `FnMut` is intentionally applied serially in canonical focus order, so
+        // existing callers observe the same calls even when evaluation dispatches
+        // the retained set to workers.
+        focus_nodes.retain(|focus| include_focus(shape, focus.term()));
 
-        // Per-focus constraint evaluation stays SERIAL. A rayon `par_iter` over the
-        // focus loop was measured on `shacl_validate/large_hierarchy` (3000 focus
-        // nodes) and REGRESSED ~9% (15.71 ms → 16.43 ms), confirming that per-focus
-        // work (~5 µs: an rdfs:subClassOf BFS-backed lookup + a `sh:pattern` regex)
-        // is dwarfed by thread-pool dispatch and shared-`Store` read contention. The
-        // frozen `RdfDataset` is `Sync`, so the seam stays ready, but the
-        // parallel path waits on the re-entry condition: per-focus cost >50–100 µs,
-        // i.e. once SHACL-SPARQL constraints are common or the IR-native backend runs
-        // end-to-end (dropping the shared-`Store` contention). See the issue tracker (item 2).
-        for focus in &focus_nodes {
-            if !include_focus(shape, focus.term()) {
-                continue;
-            }
-            all_results.extend(crate::constraints::validate_shape_with_plan_at(
-                data,
-                focus.term(),
-                focus.id(),
-                shape,
-                shapes.box_role_vocab.as_ref(),
-                &plan,
-            )?);
-        }
+        let shape_results = crate::parallel::try_map_chunks(
+            &focus_nodes,
+            || crate::sparql::enter_function_scope(Arc::clone(&shapes.functions)),
+            |_function_scope, out, focus| {
+                out.extend(crate::constraints::validate_shape_with_plan_at(
+                    data,
+                    focus.term(),
+                    focus.id(),
+                    shape,
+                    shapes.box_role_vocab.as_ref(),
+                    &plan,
+                )?);
+                Ok::<(), String>(())
+            },
+        )?;
+        all_results.extend(shape_results);
     }
 
     // Deterministic sort key: (focus_node, component, source_shape, path, value,
@@ -1385,5 +1382,42 @@ mod tests {
             plan.class_closure(&NamedNode::from("http://example.org/ns#Nested"))
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn forced_parallel_matches_serial_with_user_functions() {
+        use std::fmt::Write as _;
+
+        let mut data_nt = String::new();
+        for index in 0..24 {
+            write!(
+                data_nt,
+                "<http://example.org/ns#item{index}> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n\
+                 <http://example.org/ns#item{index}> <http://example.org/ns#amount> \"1\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n"
+            )
+            .expect("writing to a String cannot fail");
+        }
+        let shapes_ttl = format!(
+            r#"{PREFIXES}
+            ex:tripled a sh:SPARQLFunction ;
+                sh:parameter [ sh:path ex:x ; sh:datatype xsd:integer ] ;
+                sh:returnType xsd:integer ;
+                sh:select "SELECT ((?x * 3) AS ?result) WHERE {{}}" .
+
+            ex:ParallelShape a sh:NodeShape ;
+                sh:targetClass ex:Person ;
+                sh:sparql [
+                    sh:select "SELECT $this WHERE {{ $this <http://example.org/ns#amount> ?amount . FILTER(<http://example.org/ns#tripled>(?amount) > 2) }}" ;
+                ] .
+            "#
+        );
+        let data = load_data_nt(&data_nt);
+        let shapes = load_shapes_ttl(&shapes_ttl);
+        let render = |parallel| {
+            let _guard = crate::parallel::force_parallel_for_test(parallel);
+            validate(&data, &shapes).to_ntriples()
+        };
+
+        assert_eq!(render(false), render(true));
     }
 }

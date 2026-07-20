@@ -80,7 +80,7 @@ const IMPORT_PROPERTIES_PER_CLASS: usize = 8;
 const LINKML: &str = "https://w3id.org/linkml/";
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 const LINKML_EMIT_SIZES: &[usize] = &[32, 1_024, 60_000];
-const CORE_FOCUS_SIZES: &[usize] = &[3_000, 100_000, 1_000_000];
+const CORE_FOCUS_SIZES: &[usize] = &[512, 1_024, 2_048, 3_000, 100_000, 1_000_000];
 const SPARQL_FOCUS_SIZES: &[usize] = &[64, 512, 4_096];
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const RDFS_SUBCLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
@@ -283,7 +283,7 @@ fn print_validation_probe(label: &str, fixture: &ValidationFixture) {
         fixture.focus_nodes,
         fixture.dataset.quad_count(),
         fixture.dataset.term_count(),
-        std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
+        rayon::current_num_threads(),
         elapsed.as_nanos(),
         VALIDATION_ALLOCATIONS.load(Ordering::Relaxed),
         VALIDATION_ALLOCATED_BYTES.load(Ordering::Relaxed),
