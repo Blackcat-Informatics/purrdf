@@ -86,6 +86,16 @@ pub fn eval(ds: &RdfDataset, focus: &Term, path: &Path) -> Vec<Term> {
 /// [`eval`]; that owned-term fallback is a genuine necessity, not optionality.
 pub fn eval_ids(ds: &RdfDataset, focus: &Term, path: &Path) -> Option<IdVec> {
     let focus_id = resolve_id(ds, focus)?;
+    Some(eval_ids_from_id(ds, focus_id, path))
+}
+
+/// Id-native value-node producer for a focus node whose interned identity is
+/// already known.
+///
+/// This is the validation hot-path entry point: a focus node is resolved once
+/// when its shape evaluation begins, then every property shape reuses the same
+/// [`TermId`] instead of repeating an interner lookup.
+pub(crate) fn eval_ids_from_id(ds: &RdfDataset, focus_id: TermId, path: &Path) -> IdVec {
     let ids = eval_inner_ids(ds, focus_id, path);
     let mut seen: IdSet = IdSet::default();
     let mut out: IdVec = IdVec::with_capacity(ids.len());
@@ -94,7 +104,7 @@ pub fn eval_ids(ds: &RdfDataset, focus: &Term, path: &Path) -> Option<IdVec> {
             out.push(id);
         }
     }
-    Some(out)
+    out
 }
 
 /// Whether a SHACL property path matches the zero-length (reflexive) path — i.e.

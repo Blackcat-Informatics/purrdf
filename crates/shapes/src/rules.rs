@@ -37,14 +37,14 @@
 
 use std::sync::Arc;
 
-use ::purrdf::{FastMap, FastSet, IdSet, RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm};
+use ::purrdf::{FastMap, FastSet, RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm};
 
 use crate::constraints::conforms;
 use crate::data::{GraphFilter, ShaclData, quads_for_pattern_ids};
-use crate::engine::resolve_focus_nodes;
+use crate::engine::{FocusNode, ValidationPlan, resolve_focus_nodes};
 use crate::expression::{NodeExpr, RecursionGuard, eval_node_expr};
 use crate::shapes::{Shape, Shapes};
-use crate::term::{NamedNode, Term, Triple, term_id_to_native};
+use crate::term::{Term, Triple, term_id_to_native};
 
 // ── Model ───────────────────────────────────────────────────────────────────────
 
@@ -469,8 +469,9 @@ fn sparql_rule_producer(
 
 /// Resolve the focus nodes of `shape` against the current dataset.
 fn focus_nodes(data: &ShaclData, shape: &Shape) -> Result<Vec<Term>, String> {
-    let mut memo: FastMap<NamedNode, IdSet> = FastMap::default();
-    resolve_focus_nodes(data, &shape.targets, &mut memo)
+    let plan = ValidationPlan::for_shape(data.core(), shape);
+    resolve_focus_nodes(data, &shape.targets, &plan)
+        .map(|nodes| nodes.into_iter().map(FocusNode::into_term).collect())
 }
 
 /// Whether `focus` conforms to every `sh:condition` shape (resolved against the

@@ -12,9 +12,10 @@ use std::sync::Arc;
 use ::purrdf::{FastMap, FastSet, IdSet, RdfDataset, RdfDatasetBuilder, RdfTerm, TermId};
 
 use crate::data::{GraphFilter, ShaclData, quads_for_pattern_ids, resolve_id};
+use crate::expression::{FnCall, NodeExpr};
 use crate::model::{rdf, rdfs};
 use crate::report::ValidationReport;
-use crate::shapes::{Shape, Shapes, Target};
+use crate::shapes::{Constraint, PropertyShape, Shape, Shapes, Target};
 use crate::term::{NamedNode, Term, term_id_to_native};
 
 // ── Target resolution helpers ─────────────────────────────────────────────────
@@ -26,8 +27,8 @@ fn resolve_pred(ds: &RdfDataset, pred: &NamedNode) -> Option<TermId> {
 }
 
 /// Collect distinct subjects of `(?, pred, ?)` across all graphs. Dedup is on the
-/// interned [`TermId`] (`Copy`); only distinct subjects are resolved to a term.
-fn subjects_of(ds: &RdfDataset, pred: &NamedNode) -> Vec<Term> {
+/// interned [`TermId`] (`Copy`).
+fn subjects_of(ds: &RdfDataset, pred: &NamedNode) -> Vec<TermId> {
     let Some(pid) = resolve_pred(ds, pred) else {
         return Vec::new();
     };
@@ -35,15 +36,15 @@ fn subjects_of(ds: &RdfDataset, pred: &NamedNode) -> Vec<Term> {
     let mut result = Vec::new();
     for q in quads_for_pattern_ids(ds, None, Some(pid), None, GraphFilter::AnyGraph) {
         if seen.insert(q.s) {
-            result.push(term_id_to_native(ds, q.s));
+            result.push(q.s);
         }
     }
     result
 }
 
 /// Collect distinct objects of `(?, pred, ?)` across all graphs. Dedup is on the
-/// interned [`TermId`] (`Copy`); only distinct objects are resolved to a term.
-fn objects_of(ds: &RdfDataset, pred: &NamedNode) -> Vec<Term> {
+/// interned [`TermId`] (`Copy`).
+fn objects_of(ds: &RdfDataset, pred: &NamedNode) -> Vec<TermId> {
     let Some(pid) = resolve_pred(ds, pred) else {
         return Vec::new();
     };
@@ -51,7 +52,7 @@ fn objects_of(ds: &RdfDataset, pred: &NamedNode) -> Vec<Term> {
     let mut result = Vec::new();
     for q in quads_for_pattern_ids(ds, None, Some(pid), None, GraphFilter::AnyGraph) {
         if seen.insert(q.o) {
-            result.push(term_id_to_native(ds, q.o));
+            result.push(q.o);
         }
     }
     result
@@ -93,26 +94,193 @@ pub(crate) fn subclass_closure(ds: &RdfDataset, class_iri: &NamedNode) -> IdSet 
     closure
 }
 
+/// Dataset-bound invariant state shared by every focus evaluation in one pass.
+///
+/// All class IRIs reachable from the parsed shape tree are discovered once and
+/// their asserted-subclass closures are materialized before focus evaluation.
+/// The resulting map is immutable, so the same plan can be read concurrently
+/// by validation workers without locks or repeated graph walks.
+#[derive(Debug)]
+pub(crate) struct ValidationPlan {
+    rdf_type_id: Option<TermId>,
+    class_closures: FastMap<NamedNode, IdSet>,
+}
+
+impl ValidationPlan {
+    pub(crate) fn for_shapes(ds: &RdfDataset, shapes: &Shapes) -> Self {
+        Self::from_shape_iter(ds, shapes.node_shapes.iter())
+    }
+
+    pub(crate) fn for_shape(ds: &RdfDataset, shape: &Shape) -> Self {
+        Self::from_shape_iter(ds, std::iter::once(shape))
+    }
+
+    fn from_shape_iter<'a>(ds: &RdfDataset, shapes: impl IntoIterator<Item = &'a Shape>) -> Self {
+        let mut classes: FastSet<NamedNode> = FastSet::default();
+        for shape in shapes {
+            collect_shape_classes(shape, &mut classes);
+        }
+        let class_closures = classes
+            .into_iter()
+            .map(|class| {
+                let closure = subclass_closure(ds, &class);
+                (class, closure)
+            })
+            .collect();
+        Self {
+            rdf_type_id: resolve_id(ds, &Term::NamedNode(NamedNode::from(rdf::TYPE))),
+            class_closures,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn rdf_type_id(&self) -> Option<TermId> {
+        self.rdf_type_id
+    }
+
+    #[inline]
+    pub(crate) fn class_closure(&self, class: &NamedNode) -> &IdSet {
+        self.class_closures
+            .get(class)
+            .expect("every reachable sh:class and sh:targetClass is planned")
+    }
+}
+
+fn collect_shape_classes(shape: &Shape, classes: &mut FastSet<NamedNode>) {
+    for target in &shape.targets {
+        match target {
+            Target::Class(class) => {
+                classes.insert(class.clone());
+            }
+            Target::ImplicitClass(Term::NamedNode(class)) => {
+                classes.insert(class.clone());
+            }
+            Target::SubjectsOf(_)
+            | Target::ObjectsOf(_)
+            | Target::Node(_)
+            | Target::ImplicitClass(_)
+            | Target::Sparql { .. } => {}
+        }
+    }
+    collect_constraints_classes(&shape.constraints, classes);
+    for property in &shape.property_shapes {
+        collect_property_classes(property, classes);
+    }
+}
+
+fn collect_property_classes(property: &PropertyShape, classes: &mut FastSet<NamedNode>) {
+    collect_constraints_classes(&property.constraints, classes);
+    for nested in &property.property_shapes {
+        collect_property_classes(nested, classes);
+    }
+    for reifier_shape in &property.reifier_shapes {
+        collect_shape_classes(reifier_shape, classes);
+    }
+}
+
+fn collect_constraints_classes(constraints: &[Constraint], classes: &mut FastSet<NamedNode>) {
+    for constraint in constraints {
+        match constraint {
+            Constraint::Class(class) => {
+                classes.insert(class.clone());
+            }
+            Constraint::Not(shape) | Constraint::Node(shape) => {
+                collect_shape_classes(shape, classes);
+            }
+            Constraint::And(shapes) | Constraint::Or(shapes) | Constraint::Xone(shapes) => {
+                for shape in shapes {
+                    collect_shape_classes(shape, classes);
+                }
+            }
+            Constraint::QualifiedValueShape {
+                shape, siblings, ..
+            } => {
+                collect_shape_classes(shape, classes);
+                for sibling in siblings {
+                    collect_shape_classes(sibling, classes);
+                }
+            }
+            Constraint::Expression { expr, .. } => collect_expression_classes(expr, classes),
+            Constraint::Datatype(_)
+            | Constraint::NodeKind(_)
+            | Constraint::MinCount(_)
+            | Constraint::MaxCount(_)
+            | Constraint::In(_)
+            | Constraint::HasValue(_)
+            | Constraint::Pattern { .. }
+            | Constraint::MinLength(_)
+            | Constraint::MaxLength(_)
+            | Constraint::UniqueLang(_)
+            | Constraint::LanguageIn(_)
+            | Constraint::Closed { .. }
+            | Constraint::MinInclusive(_)
+            | Constraint::MaxInclusive(_)
+            | Constraint::MinExclusive(_)
+            | Constraint::MaxExclusive(_)
+            | Constraint::Sparql { .. }
+            | Constraint::Equals(_)
+            | Constraint::Disjoint(_)
+            | Constraint::LessThan(_)
+            | Constraint::LessThanOrEquals(_)
+            | Constraint::Component { .. } => {}
+        }
+    }
+}
+
+fn collect_expression_classes(expr: &NodeExpr, classes: &mut FastSet<NamedNode>) {
+    match expr {
+        NodeExpr::Constant(_) | NodeExpr::This | NodeExpr::Path(_) => {}
+        NodeExpr::Filter { nodes, shape } => {
+            collect_expression_classes(nodes, classes);
+            collect_shape_classes(shape, classes);
+        }
+        NodeExpr::Union(items) | NodeExpr::Intersection(items) => {
+            for item in items {
+                collect_expression_classes(item, classes);
+            }
+        }
+        NodeExpr::If { cond, then, els } => {
+            collect_expression_classes(cond, classes);
+            collect_expression_classes(then, classes);
+            collect_expression_classes(els, classes);
+        }
+        NodeExpr::Count { of, .. }
+        | NodeExpr::Distinct(of)
+        | NodeExpr::Min(of)
+        | NodeExpr::Max(of)
+        | NodeExpr::Sum(of)
+        | NodeExpr::Limit { of, .. }
+        | NodeExpr::Offset { of, .. }
+        | NodeExpr::Exists(of) => collect_expression_classes(of, classes),
+        NodeExpr::OrderBy { of, key, .. } => {
+            collect_expression_classes(of, classes);
+            collect_expression_classes(key, classes);
+        }
+        NodeExpr::Call(call) => {
+            let args = match call {
+                FnCall::Builtin { args, .. } | FnCall::UserDefined { args, .. } => args,
+            };
+            for arg in args {
+                collect_expression_classes(arg, classes);
+            }
+        }
+    }
+}
+
 /// Collect subjects that are SHACL instances of `class_iri`: nodes with an
 /// `rdf:type` to `class_iri` or to any asserted (transitive) subclass of it.
 ///
-/// `closure_memo` is a per-`validate_with` call cache keyed by class IRI; the
-/// subclass BFS is performed at most once per distinct class across all shapes.
+/// `plan` carries every dataset-bound subclass closure used by the shape tree;
+/// focus resolution performs no graph-wide closure walk.
 fn instances_of_class(
     ds: &RdfDataset,
     class_iri: &NamedNode,
-    closure_memo: &mut FastMap<NamedNode, IdSet>,
-) -> Vec<Term> {
-    let Some(rdf_type) = resolve_id(ds, &Term::NamedNode(NamedNode::from(rdf::TYPE))) else {
+    plan: &ValidationPlan,
+) -> Vec<TermId> {
+    let Some(rdf_type) = plan.rdf_type_id() else {
         return Vec::new();
     };
-    // Compute the subclass closure at most once per class IRI; clone the key only
-    // on a memo miss (insert requires ownership), never on a hit.
-    if !closure_memo.contains_key(class_iri) {
-        let closure = subclass_closure(ds, class_iri);
-        closure_memo.insert(class_iri.clone(), closure);
-    }
-    let classes = &closure_memo[class_iri];
+    let classes = plan.class_closure(class_iri);
     let mut seen: IdSet = IdSet::default();
     let mut result = Vec::new();
     // Iterate the memoized id set by reference — never clone the whole set per call.
@@ -120,62 +288,101 @@ fn instances_of_class(
         for q in quads_for_pattern_ids(ds, None, Some(rdf_type), Some(class), GraphFilter::AnyGraph)
         {
             if seen.insert(q.s) {
-                result.push(term_id_to_native(ds, q.s));
+                result.push(q.s);
             }
         }
     }
     result
 }
 
+/// A resolved focus node carrying its already-known interned identity.
+#[derive(Debug, Clone)]
+pub(crate) struct FocusNode {
+    term: Term,
+    id: Option<TermId>,
+}
+
+impl FocusNode {
+    #[inline]
+    pub(crate) fn term(&self) -> &Term {
+        &self.term
+    }
+
+    #[inline]
+    pub(crate) fn id(&self) -> Option<TermId> {
+        self.id
+    }
+
+    #[inline]
+    pub(crate) fn into_term(self) -> Term {
+        self.term
+    }
+}
+
 /// Resolve the focus node set for a single shape from its target declarations.
 ///
-/// Results are deduped by `Term` identity and sorted for a stable order.
-///
-/// `closure_memo` is threaded through to [`instances_of_class`] so the subclass
-/// BFS is performed at most once per class IRI per `validate_with` call.
+/// Interned targets are deduplicated in id space and resolved to an owned term
+/// exactly once. Results retain that id for constraint and path evaluation and
+/// are sorted canonically before return.
 pub(crate) fn resolve_focus_nodes(
     data: &ShaclData,
     targets: &[Target],
-    closure_memo: &mut FastMap<NamedNode, IdSet>,
-) -> Result<Vec<Term>, String> {
+    plan: &ValidationPlan,
+) -> Result<Vec<FocusNode>, String> {
     let ds = data.core();
-    let mut seen: FastSet<Term> = FastSet::default();
-    let mut nodes: Vec<Term> = Vec::new();
+    let mut seen_ids: IdSet = IdSet::default();
+    let mut seen_foreign: FastSet<Term> = FastSet::default();
+    let mut nodes: Vec<FocusNode> = Vec::new();
 
     for target in targets {
-        let candidates: Vec<Term> = match target {
-            Target::Class(class_iri) => instances_of_class(ds, class_iri, closure_memo),
-            Target::SubjectsOf(pred) => subjects_of(ds, pred),
-            Target::ObjectsOf(pred) => objects_of(ds, pred),
-            Target::Node(t) => vec![t.clone()],
-            Target::ImplicitClass(t) => {
-                // Same semantics as Class: subjects of (?, rdf:type, t)
-                if let Term::NamedNode(nn) = t {
-                    instances_of_class(ds, nn, closure_memo)
-                } else {
-                    vec![]
+        let ids = match target {
+            Target::Class(class_iri) => Some(instances_of_class(ds, class_iri, plan)),
+            Target::SubjectsOf(pred) => Some(subjects_of(ds, pred)),
+            Target::ObjectsOf(pred) => Some(objects_of(ds, pred)),
+            Target::ImplicitClass(Term::NamedNode(class)) => {
+                Some(instances_of_class(ds, class, plan))
+            }
+            Target::ImplicitClass(_) => Some(Vec::new()),
+            Target::Node(_) | Target::Sparql { .. } => None,
+        };
+        if let Some(ids) = ids {
+            for id in ids {
+                if seen_ids.insert(id) {
+                    nodes.push(FocusNode {
+                        term: term_id_to_native(ds, id),
+                        id: Some(id),
+                    });
                 }
             }
-            // sh:SPARQLTarget: execute the pre-parsed SELECT and collect ?this over
-            // the native SPARQL engine, reading the IR dataset directly.
-            // SELECT-form is enforced at shape-load (shapes.rs rejects
-            // non-SELECT); a residual evaluation failure is surfaced as a hard
-            // validation error rather than a panic.
+            continue;
+        }
+
+        let candidates = match target {
+            Target::Node(term) => vec![term.clone()],
+            // SELECT-form is enforced at shape-load; residual evaluation failures
+            // remain hard validation errors.
             Target::Sparql {
                 select,
                 substitutions,
             } => crate::sparql::eval_target(data.sparql(), select, substitutions)
                 .map_err(|e| format!("sh:target SPARQLTarget failed: {e}"))?,
+            Target::Class(_)
+            | Target::SubjectsOf(_)
+            | Target::ObjectsOf(_)
+            | Target::ImplicitClass(_) => unreachable!("id-native target handled above"),
         };
-        for node in candidates {
-            if seen.insert(node.clone()) {
-                nodes.push(node);
+        for term in candidates {
+            if let Some(id) = resolve_id(ds, &term) {
+                if seen_ids.insert(id) {
+                    nodes.push(FocusNode { term, id: Some(id) });
+                }
+            } else if seen_foreign.insert(term.clone()) {
+                nodes.push(FocusNode { term, id: None });
             }
         }
     }
 
-    // Sort for a stable, deterministic ordering across iterations.
-    crate::term::sort_canonical(&mut nodes);
+    nodes.sort_by_cached_key(|node| node.term.to_string());
     Ok(nodes)
 }
 
@@ -224,19 +431,15 @@ where
     // functions; the guard restores the previous table on drop.
     let _function_scope = crate::sparql::enter_function_scope(Arc::clone(&shapes.functions));
 
+    let plan = ValidationPlan::for_shapes(data.core(), shapes);
     let mut all_results = Vec::new();
-    // Per-call subclass-closure memo: keyed by class IRI, value is the full
-    // transitive closure (interned ids) of asserted rdfs:subClassOf edges below
-    // that class. Shared across all shapes in this validation run; each distinct
-    // class IRI is BFS-walked AT MOST ONCE regardless of how many shapes target it.
-    let mut closure_memo: FastMap<NamedNode, IdSet> = FastMap::default();
 
     for shape in &shapes.node_shapes {
         if shape.deactivated {
             continue;
         }
 
-        let focus_nodes = resolve_focus_nodes(data, &shape.targets, &mut closure_memo)?;
+        let focus_nodes = resolve_focus_nodes(data, &shape.targets, &plan)?;
 
         // Per-focus constraint evaluation stays SERIAL. A rayon `par_iter` over the
         // focus loop was measured on `shacl_validate/large_hierarchy` (3000 focus
@@ -248,14 +451,16 @@ where
         // i.e. once SHACL-SPARQL constraints are common or the IR-native backend runs
         // end-to-end (dropping the shared-`Store` contention). See the issue tracker (item 2).
         for focus in &focus_nodes {
-            if !include_focus(shape, focus) {
+            if !include_focus(shape, focus.term()) {
                 continue;
             }
-            all_results.extend(crate::constraints::validate_shape_with(
+            all_results.extend(crate::constraints::validate_shape_with_plan_at(
                 data,
-                focus,
+                focus.term(),
+                focus.id(),
                 shape,
                 shapes.box_role_vocab.as_ref(),
+                &plan,
             )?);
         }
     }
@@ -1142,6 +1347,43 @@ mod tests {
         assert_eq!(
             unique_lang, 2,
             "fixture must yield two uniqueLang violations (dup @en and @fr)"
+        );
+    }
+
+    #[test]
+    fn validation_plan_collects_target_property_and_nested_classes() {
+        let shapes_ttl = format!(
+            r"{PREFIXES}
+            ex:PlannedShape a sh:NodeShape ;
+                sh:targetClass ex:Root ;
+                sh:property [
+                    sh:path ex:member ;
+                    sh:class ex:Value ;
+                    sh:node [ sh:class ex:Nested ] ;
+                ] .
+            "
+        );
+        let data = load_data_nt(
+            "<http://example.org/ns#Child> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/ns#Root> .\n\
+             <http://example.org/ns#Leaf> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/ns#Value> .\n",
+        );
+        let shapes = load_shapes_ttl(&shapes_ttl);
+        let plan = ValidationPlan::for_shapes(data.as_ref(), &shapes);
+
+        assert_eq!(plan.class_closures.len(), 3);
+        assert_eq!(
+            plan.class_closure(&NamedNode::from("http://example.org/ns#Root"))
+                .len(),
+            2
+        );
+        assert_eq!(
+            plan.class_closure(&NamedNode::from("http://example.org/ns#Value"))
+                .len(),
+            2
+        );
+        assert!(
+            plan.class_closure(&NamedNode::from("http://example.org/ns#Nested"))
+                .is_empty()
         );
     }
 }
