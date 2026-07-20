@@ -256,13 +256,10 @@ fn analyze_data(
         )));
     }
 
-    let mut classes_by_subject = BTreeMap::<ProjectionTerm, Vec<String>>::new();
+    let mut classes_by_subject = BTreeMap::<&ProjectionTerm, Vec<&str>>::new();
     for (class, members) in &class_members {
         for member in members {
-            classes_by_subject
-                .entry(member.clone())
-                .or_default()
-                .push(class.clone());
+            classes_by_subject.entry(member).or_default().push(class);
         }
     }
     let mut class_partitions: BTreeMap<String, Aggregate> = class_members
@@ -286,7 +283,7 @@ fn analyze_data(
                 )));
             }
             class_partitions
-                .get_mut(class)
+                .get_mut(*class)
                 .expect("class aggregate initialized")
                 .record(record, "VoID class partition")?;
         }
