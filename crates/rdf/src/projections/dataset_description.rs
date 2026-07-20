@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use purrdf_core::{DatasetView, LossLedger, RdfDataset, SparqlResult};
+use purrdf_core::{DatasetView, LossLedger, RdfDataset, SparqlResult, TermRef};
 use purrdf_sparql_algebra::{
     AggregateExpression, Expression, Function, GraphPattern, OrderExpression, PurrdfFn, Query,
     SparqlParser, TermPattern, TriplePattern,
@@ -15,7 +15,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::native_codecs::{NativeRdfFormat, serialize_dataset_to_format};
 
-use super::{ProjectionError, ProjectionLimits, ProjectionPackage, ProjectionTerm};
+use super::{ProjectionError, ProjectionLimits, ProjectionPackage};
 
 /// Mandatory bounds and query text for a whole-dataset SPARQL CONSTRUCT view.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -442,8 +442,7 @@ fn reject_blank_term<D: DatasetView>(
     id: D::Id,
     limits: ProjectionLimits,
 ) -> Result<(), ProjectionError> {
-    let term = ProjectionTerm::from_view(view, id, limits)?;
-    if projection_term_contains_blank(&term) {
+    if term_contains_blank(view, id, limits, 0)? {
         return Err(ProjectionError::integrity(
             "RDF dataset descriptions must not contain blank nodes",
         ));
@@ -451,19 +450,29 @@ fn reject_blank_term<D: DatasetView>(
     Ok(())
 }
 
-fn projection_term_contains_blank(term: &ProjectionTerm) -> bool {
-    match term {
-        ProjectionTerm::Blank { .. } => true,
-        ProjectionTerm::Triple {
-            subject,
-            predicate,
-            object,
-        } => {
-            projection_term_contains_blank(subject)
-                || projection_term_contains_blank(predicate)
-                || projection_term_contains_blank(object)
+fn term_contains_blank<D: DatasetView>(
+    view: &D,
+    id: D::Id,
+    limits: ProjectionLimits,
+    depth: usize,
+) -> Result<bool, ProjectionError> {
+    match view.resolve(id) {
+        TermRef::Blank { .. } => Ok(true),
+        TermRef::Triple { s, p, o } => {
+            if depth > limits.max_term_depth() {
+                return Err(ProjectionError::limit(format!(
+                    "RDF triple term exceeds the configured depth limit of {}",
+                    limits.max_term_depth()
+                )));
+            }
+            for component in [s, p, o] {
+                if term_contains_blank(view, component, limits, depth + 1)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
         }
-        ProjectionTerm::Iri { .. } | ProjectionTerm::Literal { .. } => false,
+        TermRef::Iri(_) | TermRef::Literal { .. } => Ok(false),
     }
 }
 
@@ -719,6 +728,32 @@ mod tests {
         assert!(
             serialize_rdf_description(statement, NativeRdfFormat::Turtle, "statement", limits(),)
                 .is_ok()
+        );
+    }
+
+    #[test]
+    fn allocation_free_blank_scan_preserves_the_term_depth_bound() {
+        let mut builder = RdfDatasetBuilder::new();
+        let subject = builder.intern_iri("https://example.org/subject");
+        let predicate = builder.intern_iri("https://example.org/predicate");
+        let object = builder.intern_iri("https://example.org/object");
+        let inner = builder.intern_triple(subject, predicate, object);
+        let middle = builder.intern_triple(subject, predicate, inner);
+        let outer = builder.intern_triple(subject, predicate, middle);
+        builder.push_quad(subject, predicate, outer, None);
+        let dataset = builder.freeze().expect("deep triple-term dataset");
+        let shallow_limits =
+            ProjectionLimits::new(1, 1_000_000, 1_000_000, 1_002_000, 1).expect("limits");
+        let error = serialize_rdf_description(
+            dataset,
+            NativeRdfFormat::Turtle,
+            "description",
+            shallow_limits,
+        )
+        .expect_err("term-depth limit");
+        assert_eq!(
+            error.kind(),
+            super::super::ProjectionErrorKind::ResourceLimit
         );
     }
 
