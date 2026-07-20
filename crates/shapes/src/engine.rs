@@ -896,10 +896,11 @@ where
 /// Validate a frozen [`::purrdf::RdfDataset`] against parsed SHACL shapes, IR-natively.
 ///
 /// The generic engine reads pattern lookups DIRECTLY from a SHACL projection of
-/// the IR — there is no whole-store oxigraph materialization on this path
-/// (SHACL-SPARQL constraints, if any, lazily materialize a query store on demand
-/// only). Named graphs are flattened so GTS bundle partitions behave like the
-/// repository's Turtle source merge, which loads all inputs into one default graph.
+/// the IR. Native and SHACL-SPARQL evaluation share a validation-scoped view
+/// that adds only class memberships implied by asserted `rdfs:subClassOf`
+/// edges; it does not copy or expand the underlying graph. Named graphs are
+/// flattened so GTS bundle partitions behave like the repository's Turtle
+/// source merge, which loads all inputs into one default graph.
 ///
 /// # Errors
 ///
@@ -1891,6 +1892,185 @@ mod tests {
     }
 
     #[test]
+    fn parameterized_sparql_target_uses_subclass_membership_across_entry_points() {
+        let data_nt = concat!(
+            "<http://example.org/ns#Leaf> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/ns#Mid> .\n",
+            "<http://example.org/ns#Mid> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/ns#Person> .\n",
+            "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Leaf> .\n",
+        );
+        let shapes_ttl = format!(
+            "{PREFIXES}\n{}",
+            r#"
+            ex:ByClass a sh:SPARQLTargetType ;
+                sh:parameter [ sh:path ex:class ; sh:order 0 ] ;
+                sh:select "SELECT ?this WHERE { ?this a ?class }" .
+
+            ex:TargetTypeShape a sh:NodeShape ;
+                sh:target [ a ex:ByClass ; ex:class ex:Person ] ;
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            "#,
+        );
+
+        let text_report = validate_graphs(data_nt, &shapes_ttl).expect("text validation");
+        assert_eq!(text_report.results.len(), 1);
+        assert_eq!(
+            text_report.results[0].focus_node,
+            NamedNode::new_unchecked("http://example.org/ns#alice").into_term()
+        );
+
+        let source = load_data_nt(data_nt);
+        let projected = project_dataset(source.as_ref()).expect("projection");
+        let shapes = Arc::new(load_shapes_ttl(&shapes_ttl));
+        let projected_report =
+            validate_projected_dataset(Arc::clone(&projected), &shapes).expect("projected");
+        let prepared = PreparedValidator::from_projected_dataset(projected, Arc::clone(&shapes))
+            .expect("prepared validator");
+        let first = prepared.validate().expect("first prepared validation");
+        let second = prepared.validate().expect("second prepared validation");
+        assert_eq!(text_report.to_ntriples(), projected_report.to_ntriples());
+        assert_eq!(text_report.to_ntriples(), first.to_ntriples());
+        assert_eq!(first.to_ntriples(), second.to_ntriples());
+
+        let reversed = data_nt.lines().rev().collect::<Vec<_>>().join("\n");
+        let reversed_report =
+            validate_graphs(&reversed, &shapes_ttl).expect("permuted text validation");
+        assert_eq!(text_report.to_ntriples(), reversed_report.to_ntriples());
+    }
+
+    #[test]
+    fn ask_and_select_components_query_the_shared_membership_relation() {
+        let data_nt = concat!(
+            "<http://example.org/ns#Leaf> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/ns#Person> .\n",
+            "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Leaf> .\n",
+            "<http://example.org/ns#bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Other> .\n",
+        );
+        let shapes_ttl = format!(
+            "{PREFIXES}\n{}",
+            r#"
+            ex:AskClassComponent a sh:ConstraintComponent ;
+                sh:parameter [ sh:path ex:requiredClass ] ;
+                sh:nodeValidator [
+                    a sh:SPARQLAskValidator ;
+                    sh:ask "ASK { $this a $requiredClass }" ;
+                ] .
+
+            ex:SelectClassComponent a sh:ConstraintComponent ;
+                sh:parameter [ sh:path ex:selectedClass ] ;
+                sh:nodeValidator [
+                    a sh:SPARQLSelectValidator ;
+                    sh:select "SELECT $this WHERE { FILTER NOT EXISTS { $this a $selectedClass } }" ;
+                ] .
+
+            ex:AskShape a sh:NodeShape ;
+                sh:targetNode ex:alice, ex:bob ;
+                ex:requiredClass ex:Person .
+
+            ex:SelectShape a sh:NodeShape ;
+                sh:targetNode ex:alice, ex:bob ;
+                ex:selectedClass ex:Person .
+            "#,
+        );
+
+        let report = validate_graphs(data_nt, &shapes_ttl).expect("component validation");
+        assert_eq!(report.results.len(), 2, "only bob fails both validators");
+        assert!(report.results.iter().all(|result| {
+            result.focus_node == NamedNode::new_unchecked("http://example.org/ns#bob").into_term()
+        }));
+        let components: FastSet<_> = report
+            .results
+            .iter()
+            .map(|result| result.source_constraint_component.as_str())
+            .collect();
+        assert_eq!(components.len(), 2);
+        assert!(components.contains("http://example.org/ns#AskClassComponent"));
+        assert!(components.contains("http://example.org/ns#SelectClassComponent"));
+    }
+
+    #[test]
+    fn declared_function_body_queries_derived_membership() {
+        let data_nt = concat!(
+            "<http://example.org/ns#Leaf> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/ns#Person> .\n",
+            "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Leaf> .\n",
+            "<http://example.org/ns#bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Other> .\n",
+        );
+        let shapes_ttl = format!(
+            "{PREFIXES}\n{}",
+            r#"
+            ex:isPerson a sh:SPARQLFunction ;
+                sh:parameter [ sh:path ex:node ; sh:nodeKind sh:IRI ] ;
+                sh:returnType xsd:boolean ;
+                sh:ask "ASK { ?node a <http://example.org/ns#Person> }" .
+
+            ex:FunctionShape a sh:NodeShape ;
+                sh:targetNode ex:alice, ex:bob ;
+                sh:expression [ ex:isPerson ( sh:this ) ] .
+            "#,
+        );
+
+        let report = validate_graphs(data_nt, &shapes_ttl).expect("function validation");
+        assert_eq!(report.results.len(), 1);
+        assert_eq!(
+            report.results[0].focus_node,
+            NamedNode::new_unchecked("http://example.org/ns#bob").into_term()
+        );
+    }
+
+    #[test]
+    fn native_rdf_type_path_remains_asserted_only() {
+        let data_nt = concat!(
+            "<http://example.org/ns#Leaf> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/ns#Person> .\n",
+            "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Leaf> .\n",
+        );
+        let shapes_ttl = format!(
+            "{PREFIXES}\n{}",
+            r"
+            ex:AssertedPathShape a sh:NodeShape ;
+                sh:targetNode ex:alice ;
+                sh:property [ sh:path rdf:type ; sh:hasValue ex:Person ] .
+            ",
+        );
+        let report = validate_graphs(data_nt, &shapes_ttl).expect("path validation");
+        assert_eq!(report.results.len(), 1);
+        assert!(
+            report.results[0]
+                .source_constraint_component
+                .as_str()
+                .ends_with("HasValueConstraintComponent")
+        );
+    }
+
+    #[test]
+    fn shapes_named_graph_cannot_create_default_graph_membership() {
+        let shapes_ttl = format!(
+            "{PREFIXES}\n{}",
+            r#"
+            ex:Ghost a ex:Leaf .
+            ex:Leaf rdfs:subClassOf ex:Person .
+
+            ex:IsolatedShape a sh:NodeShape ;
+                sh:targetClass ex:Person ;
+                sh:target [
+                    a sh:SPARQLTarget ;
+                    sh:select "SELECT ?this WHERE { ?this a <http://example.org/ns#Person> }" ;
+                ] ;
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            "#,
+        );
+        let shapes = load_shapes_ttl(&shapes_ttl);
+        let projected = project_dataset(load_data_nt("").as_ref()).expect("empty projection");
+        let report = validate_projected_dataset_with_shapes_graph(
+            projected,
+            &shapes,
+            Some("http://example.org/shapes"),
+        )
+        .expect("isolated validation");
+        assert!(
+            report.conforms,
+            "named shapes rows must not target ex:Ghost"
+        );
+    }
+
+    #[test]
     fn forced_parallel_matches_serial_with_user_functions() {
         use std::fmt::Write as _;
 
@@ -1957,7 +2137,7 @@ mod tests {
             })
             .collect();
         cases.sort();
-        assert_eq!(cases.len(), 69, "first-party corpus cardinality drifted");
+        assert_eq!(cases.len(), 70, "first-party corpus cardinality drifted");
 
         let geometries: Vec<_> = [(2, 1), (4, 7), (4, 64)]
             .into_iter()

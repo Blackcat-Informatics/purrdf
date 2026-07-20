@@ -1147,9 +1147,9 @@ mod tests {
     #[test]
     fn single_sparql_rule_derives_head() {
         let out = entail(
-            "ex:alice a ex:Person .",
+            "ex:Leaf rdfs:subClassOf ex:Person . ex:alice a ex:Leaf .",
             r#"
-            ex:S a sh:NodeShape ; sh:targetClass ex:Person ;
+            ex:S a sh:NodeShape ; sh:targetNode ex:alice ;
               sh:rule [ a sh:SPARQLRule ; sh:construct
                 "CONSTRUCT { $this ex:adult ex:yes } WHERE { $this a ex:Person }" ] ."#,
         );

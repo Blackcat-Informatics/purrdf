@@ -18,9 +18,11 @@
 
 `purrdf-shapes` is the native SHACL validator of the PurRDF toolkit — the
 complete SHACL Core feature set plus SHACL-SPARQL constraints and targets,
-running entirely on PurRDF's own interned IR and native SPARQL engine (no
-oxigraph, no PyO3). It validates an RDF 1.2 data graph against a SHACL shapes
-graph with no inference (parity with pySHACL `inference="none"`).
+running entirely on PurRDF's own interned IR and native SPARQL engine. It
+validates an RDF 1.2 data graph against a SHACL shapes graph without general
+RDFS or OWL entailment. SHACL class membership follows asserted
+`rdfs:subClassOf` edges transitively, and the native and SHACL-SPARQL paths see
+the same validation-scoped membership relation.
 
 In four-box terms, the data graph is usually the ABox, the shapes graph is a
 TBox/RBox validation surface, and RDF 1.2 reifier metadata is the CBox. The

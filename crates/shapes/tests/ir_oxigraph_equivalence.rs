@@ -322,8 +322,8 @@ fn and_or_xone_logical_constraints_agree() {
 
 #[test]
 fn sparql_constraint_agrees() {
-    // SHACL-AF `sh:sparql` constraint: the IR backend lazily materializes an
-    // oxigraph Store for SPARQL evaluation; the result must still match the oracle.
+    // SHACL-AF `sh:sparql` constraints run through the native SPARQL engine and
+    // must produce the same report as the independent oracle.
     let shapes = format!(
         r#"{PREFIXES}
         ex:SelfRefShape a sh:NodeShape ;
@@ -345,8 +345,8 @@ fn sparql_constraint_agrees() {
 
 #[test]
 fn sparql_target_agrees() {
-    // SHACL-AF `sh:SPARQLTarget`: focus-node resolution runs through SPARQL, so the
-    // IR backend must materialize its store and agree with the oracle.
+    // SHACL-AF `sh:SPARQLTarget` focus-node resolution runs through the native
+    // SPARQL engine and must agree with the independent oracle.
     let shapes = format!(
         r#"{PREFIXES}
         ex:FooShape a sh:NodeShape ;

@@ -3,9 +3,9 @@
 
 //! SHACL shapes graph parser.
 //!
-//! Parses a SHACL Core shapes graph (loaded into an oxigraph `Store`) into a
-//! fully typed [`Shapes`] structure.  No evaluation logic lives here — that is
-//! Task 3.  Covers full SHACL Core: all six property-path forms (§2.3.1),
+//! Parses a SHACL Core shapes graph from a frozen [`RdfDataset`] into a fully
+//! typed [`Shapes`] structure. No evaluation logic lives here. Covers full
+//! SHACL Core: all six property-path forms (§2.3.1),
 //! property-pair constraints (§4.3), qualified value shapes (§4.5.4–4.5.5), and
 //! SHACL-AF SPARQL constraints/targets.  Malformed constructs (e.g. a literal
 //! `sh:equals` object, a one-member sequence path) cause a hard `Err` rather

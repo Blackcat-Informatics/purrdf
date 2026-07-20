@@ -835,10 +835,12 @@ mod tests {
         assert!(view.is_instance(alice, top));
         assert_eq!(view.build_count(), 1);
 
-        let top_rows: Vec<_> = view
-            .quads_for_pattern(Some(alice), Some(rdf_type), Some(top), GraphMatch::Default)
-            .collect();
-        assert_eq!(top_rows.len(), 1, "direct-plus-derived type stays unique");
+        assert_eq!(
+            view.quads_for_pattern(Some(alice), Some(rdf_type), Some(top), GraphMatch::Default)
+                .count(),
+            1,
+            "direct-plus-derived type stays unique"
+        );
         assert_eq!(view.build_count(), 1);
     }
 
@@ -904,6 +906,34 @@ mod tests {
             2
         );
         assert_eq!(view.named_graphs().collect::<Vec<_>>(), vec![graph]);
+    }
+
+    #[test]
+    fn unrelated_rdfs_and_owl_terms_never_create_membership() {
+        let mut builder = RdfDatasetBuilder::new();
+        let rdf_type = builder.intern_iri(rdf::TYPE);
+        let person = builder.intern_iri(&format!("{EX}Person"));
+        let other = builder.intern_iri(&format!("{EX}Other"));
+        let alice = builder.intern_iri(&format!("{EX}alice"));
+        let bob = builder.intern_iri(&format!("{EX}bob"));
+        let property = builder.intern_iri(&format!("{EX}property"));
+        let value = builder.intern_iri(&format!("{EX}value"));
+        let domain = builder.intern_iri("http://www.w3.org/2000/01/rdf-schema#domain");
+        let range = builder.intern_iri("http://www.w3.org/2000/01/rdf-schema#range");
+        let subproperty = builder.intern_iri("http://www.w3.org/2000/01/rdf-schema#subPropertyOf");
+        let equivalent = builder.intern_iri("http://www.w3.org/2002/07/owl#equivalentClass");
+        builder.push_quad(property, domain, person, None);
+        builder.push_quad(property, range, person, None);
+        builder.push_quad(property, subproperty, rdf_type, None);
+        builder.push_quad(other, equivalent, person, None);
+        builder.push_quad(alice, property, value, None);
+        builder.push_quad(bob, rdf_type, other, None);
+        let view = ClassMembershipView::new(builder.freeze().expect("fixture freezes"));
+
+        assert!(!view.is_instance(alice, person));
+        assert!(!view.is_instance(value, person));
+        assert!(!view.is_instance(bob, person));
+        assert_eq!(view.quads().count(), 6);
     }
 
     #[test]
@@ -989,6 +1019,20 @@ mod tests {
             .count(),
             1
         );
+
+        let targets = crate::sparql::eval_target_view(
+            &view,
+            "SELECT ?this WHERE { ?this a ?class . FILTER(isTriple(?class)) }",
+            &[],
+        )
+        .expect("SPARQL sees the virtual triple-term class");
+        assert_eq!(
+            targets,
+            vec![
+                crate::term::term_id_to_native(view.base(), iri_subject),
+                crate::term::term_id_to_native(view.base(), blank_subject),
+            ]
+        );
     }
 
     #[test]
@@ -1030,10 +1074,10 @@ mod tests {
             .term_id_by_value(&TermValue::iri(rdf::TYPE))
             .expect("rdf:type is interned");
         let top = forward
-            .term_id_by_value(&TermValue::iri(&format!("{EX}Top")))
+            .term_id_by_value(&TermValue::iri(format!("{EX}Top")))
             .expect("top is interned");
         let subject = forward
-            .term_id_by_value(&TermValue::iri(&format!("{EX}subject")))
+            .term_id_by_value(&TermValue::iri(format!("{EX}subject")))
             .expect("subject is interned");
         assert_eq!(
             forward
@@ -1152,17 +1196,17 @@ mod tests {
                     }
                 }
             }
-            for subject in 0..subject_count {
-                for class in 0..class_count {
-                    let bit = subject * 5 + class;
+            for (subject_index, &subject) in subjects.iter().enumerate() {
+                for (class_index, &class) in classes.iter().enumerate() {
+                    let bit = subject_index * 5 + class_index;
                     if type_bits[bit] {
-                        rows.push((subjects[subject], rdf_type, classes[class], None));
+                        rows.push((subject, rdf_type, class, None));
                     }
                     if named_type_bits[bit] {
-                        rows.push((subjects[subject], rdf_type, classes[class], Some(graph)));
+                        rows.push((subject, rdf_type, class, Some(graph)));
                     }
                 }
-                rows.push((subjects[subject], other_predicate, classes[0], None));
+                rows.push((subject, other_predicate, classes[0], None));
             }
             if reverse {
                 rows.reverse();
