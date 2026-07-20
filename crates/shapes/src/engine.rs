@@ -79,7 +79,7 @@ fn objects_of(ds: &RdfDataset, pred: &NamedNode) -> Vec<TermId> {
 /// subclass relationships present in the data. It is NOT OWL/RDFS inference: we
 /// read `rdfs:subClassOf` triples that exist and materialize nothing. (The
 /// "no-inference contract" means no reasoner is run, not that asserted subclass
-/// edges are ignored.) See the issue tracker.
+/// edges are ignored.)
 ///
 /// A class IRI not interned in `ds` yields an empty set: nothing can be typed to
 /// it, so it has no SHACL instances.
@@ -704,6 +704,48 @@ where
 ///
 /// A prepared validator is tied to the exact dataset snapshot it owns. Prepare a
 /// new value after publishing an overlay or replacement snapshot.
+///
+/// # Example
+///
+/// ```
+/// use std::sync::Arc;
+///
+/// use purrdf::RdfDatasetBuilder;
+/// use purrdf_shapes::engine::{PreparedValidator, parse_shapes};
+///
+/// # fn main() -> Result<(), String> {
+/// let mut builder = RdfDatasetBuilder::new();
+/// let rdf_type = builder.intern_iri(
+///     "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+/// );
+/// let person = builder.intern_iri("https://example.org/Person");
+/// let required = builder.intern_iri("https://example.org/required");
+/// let alice = builder.intern_iri("https://example.org/alice");
+/// let present = builder.intern_iri("https://example.org/present");
+/// builder.push_quad(alice, rdf_type, person, None);
+/// builder.push_quad(alice, required, present, None);
+/// let dataset = Arc::new(builder.freeze().map_err(|error| error.to_string())?);
+///
+/// let shapes = Arc::new(parse_shapes(
+///     r#"
+///     @prefix sh: <http://www.w3.org/ns/shacl#> .
+///     @prefix ex: <https://example.org/> .
+///     ex:PersonShape a sh:NodeShape ;
+///         sh:targetClass ex:Person ;
+///         sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+///     "#,
+/// )?);
+/// let validator = PreparedValidator::from_projected_dataset(
+///     Arc::clone(&dataset),
+///     shapes,
+/// )?;
+///
+/// // Reuse `validator` for each affected focus set in this immutable snapshot.
+/// let report = validator.validate_focus_node_ids(&[alice])?;
+/// assert!(report.conforms);
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Debug)]
 pub struct PreparedValidator {
     data: ShaclData,
@@ -1146,9 +1188,8 @@ pub fn parse_shapes_with_config(
     // the oxigraph `io` parser. The native codec drops document prefixes once it folds to
     // the IR, so we recover the `@prefix`/SPARQL `PREFIX` map by scanning the
     // source text: SHACL-AF sh:select queries (and pySHACL) rely on prefixed
-    // names. See the issue tracker. A syntax error is reported per-statement so
-    // a SHACL author sees the full list in one pass (item 4), not the
-    // fix-one-rerun-find-the-next loop.
+    // names. Syntax failures are accumulated per independently recoverable
+    // statement so a SHACL author sees the complete actionable set in one pass.
     let shapes_dataset = crate::text_ingest::parse_turtle_to_dataset(shapes_ttl)
         .map_err(|errors| errors.join("\n"))?;
     let doc_prefixes = crate::text_ingest::extract_prefixes(shapes_ttl);
@@ -1164,10 +1205,10 @@ pub fn parse_shapes_with_config(
 /// The data graph is loaded with the **lenient** RDF parser. A validator must be
 /// able to ingest the data graph before it can validate any shapes against it,
 /// and RDF lexical well-formedness is a separate concern from SHACL conformance.
-/// The purrdf ontology carries private-use `@x-purrdf-*` language tags whose
-/// subtag exceeds BCP-47's 8-char limit (e.g. `@x-purrdf-afrikaans`); the strict
-/// parser rejects the entire file on these, which would make the real ontology
-/// un-validatable. Lenient parsing skips that check so the data ingests. See the issue tracker.
+/// Caller datasets can carry private-use language tags whose subtags exceed
+/// BCP-47's eight-character limit. The strict parser rejects the complete graph
+/// on those lexical forms; lenient parsing keeps RDF ingestion separate from the
+/// SHACL conformance decision.
 ///
 /// # Errors
 ///
@@ -1188,9 +1229,9 @@ pub fn validate_graphs_with_config(
     shapes_ttl: &str,
     box_role_vocab: Option<crate::model::BoxRoleVocab>,
 ) -> Result<ValidationReport, String> {
-    // Parse the data graph via the native codecs. Every malformed
-    // N-Triples line is reported in one pass — same multi-error contract as
-    // `parse_shapes`. See the issue tracker (item 4).
+    // Parse the data graph via the native codecs. Every independently malformed
+    // N-Triples line is reported in one pass, matching `parse_shapes`' complete
+    // syntax-diagnostic contract.
     let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt)
         .map_err(|errors| errors.join("\n"))?;
 
@@ -1266,7 +1307,7 @@ mod tests {
         validate_dataset(data.as_ref(), shapes).expect("validate_dataset must succeed")
     }
 
-    // ── Multi-error syntax reporting (item 4) ─────────────────────────────
+    // ── Multi-error syntax reporting ──────────────────────────────────────
 
     #[test]
     fn parse_shapes_reports_all_syntax_errors() {
@@ -1276,8 +1317,8 @@ mod tests {
         // real, not a one-element surface. (A lexer-level break such as an
         // unterminated string literal instead consumes to EOF and yields a single
         // error; that is correct, not a regression. The recoverable case below is
-        // what proves multi-error reporting works.) If this regresses to a single
-        // error on recoverable input, item 4's premise has broken.
+        // what proves multi-error reporting works.) A regression to a single
+        // error on recoverable input would violate the public diagnostic contract.
         let bad = concat!(
             "@prefix ex: <http://example.org/ns#> .\n",
             "ex:a ex:p .\n",                // missing object → recoverable error
@@ -1295,8 +1336,7 @@ mod tests {
     #[test]
     fn validate_graphs_reports_all_data_syntax_errors() {
         // Multiple malformed N-Triples lines must all be reported in one pass
-        // rather than short-circuiting on the first (the single-error
-        // load-into-store behavior item 4 replaced).
+        // rather than short-circuiting on the first.
         let bad_data = concat!(
             "this is not a triple\n",
             "<http://example.org/s> <http://example.org/p> .\n",
@@ -1493,10 +1533,9 @@ mod tests {
         );
     }
 
-    // Test 4: sh:targetClass honors ASSERTED rdfs:subClassOf (SHACL §4.2.5).
+    // sh:targetClass honors ASSERTED rdfs:subClassOf (SHACL §4.2.5).
     // This is NOT OWL inference — the subclass edge is asserted in the data; we
-    // read it, materialize nothing. (Inverted from the former no-subclass
-    // contract; see the issue tracker.)
+    // read it and materialize nothing.
     #[test]
     fn target_class_honors_asserted_subclass() {
         let shapes_ttl = format!(
