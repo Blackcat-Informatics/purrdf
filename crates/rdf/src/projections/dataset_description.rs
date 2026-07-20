@@ -556,7 +556,10 @@ fn validate_artifact_stem(value: &str) -> Result<(), ProjectionError> {
 
 #[cfg(test)]
 mod tests {
-    use purrdf_core::{BlankScope, PackBuilder, PackView, RdfDatasetBuilder, datasets_isomorphic};
+    use purrdf_core::{
+        BlankScope, PackBuilder, PackView, RdfDatasetBuilder, RdfLiteral, RdfTextDirection,
+        datasets_isomorphic,
+    };
 
     use super::*;
 
@@ -664,6 +667,62 @@ mod tests {
     }
 
     #[test]
+    fn serializers_reject_rdf12_content_the_selected_syntax_would_drop() {
+        let mut directional = RdfDatasetBuilder::new();
+        let subject = directional.intern_iri("https://example.org/subject");
+        let predicate = directional.intern_iri("https://example.org/label");
+        let object = directional.intern_literal(RdfLiteral {
+            lexical_form: "مرحبا".to_owned(),
+            datatype: None,
+            language: Some("ar".to_owned()),
+            direction: Some(RdfTextDirection::Rtl),
+        });
+        directional.push_quad(subject, predicate, object, None);
+        let directional = directional.freeze().expect("directional dataset");
+        assert!(
+            serialize_rdf_description(
+                Arc::clone(&directional),
+                NativeRdfFormat::TriX,
+                "directional",
+                limits(),
+            )
+            .is_err()
+        );
+        assert!(
+            serialize_rdf_description(
+                directional,
+                NativeRdfFormat::Turtle,
+                "directional",
+                limits(),
+            )
+            .is_ok()
+        );
+
+        let mut statement = RdfDatasetBuilder::new();
+        let subject = statement.intern_iri("https://example.org/subject");
+        let predicate = statement.intern_iri("https://example.org/predicate");
+        let object = statement.intern_iri("https://example.org/object");
+        let reifier = statement.intern_iri("https://example.org/assertion");
+        let triple = statement.intern_triple(subject, predicate, object);
+        statement.push_quad(subject, predicate, object, None);
+        statement.push_reifier(reifier, triple);
+        let statement = statement.freeze().expect("statement-layer dataset");
+        assert!(
+            serialize_rdf_description(
+                Arc::clone(&statement),
+                NativeRdfFormat::RdfXml,
+                "statement",
+                limits(),
+            )
+            .is_err()
+        );
+        assert!(
+            serialize_rdf_description(statement, NativeRdfFormat::Turtle, "statement", limits(),)
+                .is_ok()
+        );
+    }
+
+    #[test]
     fn construct_reads_named_graphs_and_is_backend_and_order_independent() {
         let source = construct_source(false);
         let reordered = construct_source(true);
@@ -680,6 +739,23 @@ mod tests {
         assert!(datasets_isomorphic(&resident.dataset, &packed.dataset));
         assert_eq!(resident.input_records, packed.input_records);
         assert_eq!(resident.output_records, packed.output_records);
+    }
+
+    #[test]
+    fn construct_honours_from_dataset_clauses() {
+        let config = ConstructViewConfig::new(
+            "CONSTRUCT { ?s <https://example.org/copied> ?o } FROM <https://example.org/source-graph> WHERE { ?s <https://example.org/source-predicate> ?o }",
+            None,
+            limits(),
+            1_000,
+            3,
+            2,
+        )
+        .expect("CONSTRUCT config with FROM");
+        let projected = project_construct_view(construct_source(false).as_ref(), &config)
+            .expect("CONSTRUCT FROM projection");
+        assert_eq!(projected.input_records, 3);
+        assert_eq!(projected.output_records, 2);
     }
 
     #[test]

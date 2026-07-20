@@ -700,6 +700,7 @@ mod tests {
 
     use super::*;
     use crate::native_codecs::{NativeRdfFormat, parse_dataset};
+    use crate::projections::ProjectionErrorKind;
     use crate::{RdfTerm, dataset_from_quads};
 
     const SOURCE: &[u8] =
@@ -891,6 +892,14 @@ mod tests {
         let tiny: VoidConfig = serde_json::from_value(tiny["config"].clone()).expect("tiny config");
         assert!(project_void(source().as_ref(), &tiny).is_err());
 
+        let mut tiny_input: Value = serde_json::from_slice(CONFIG).expect("fixture JSON");
+        tiny_input["config"]["execution_limits"]["max_input_records"] = Value::from(1);
+        let tiny_input: VoidConfig =
+            serde_json::from_value(tiny_input["config"].clone()).expect("tiny input config");
+        let input_error =
+            project_void(source().as_ref(), &tiny_input).expect_err("input bound must fail");
+        assert_eq!(input_error.kind(), ProjectionErrorKind::ResourceLimit);
+
         let invalid_alignment = String::from_utf8(SOURCE.to_vec())
             .expect("UTF-8 source")
             .replace("specific:a .", "\"not an IRI\" .");
@@ -900,6 +909,20 @@ mod tests {
         assert!(
             project_void(
                 invalid_alignment.as_ref(),
+                &config_for(NativeRdfFormat::Turtle)
+            )
+            .is_err()
+        );
+
+        let unmapped_alignment = String::from_utf8(SOURCE.to_vec())
+            .expect("UTF-8 source")
+            .replace("specific:a .", "<https://unmapped.example/a> .");
+        let unmapped_alignment =
+            parse_dataset(unmapped_alignment.as_bytes(), "application/trig", None)
+                .expect("parse unmapped alignment");
+        assert!(
+            project_void(
+                unmapped_alignment.as_ref(),
                 &config_for(NativeRdfFormat::Turtle)
             )
             .is_err()
