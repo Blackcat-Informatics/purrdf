@@ -50,8 +50,6 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 - **csvw:** Guide curated terms projection
 - **cli:** Enumerate liftable profiles
 - **wasm:** Refresh optimized size measurement
-- **conformance:** Refresh compatibility count
-- **conformance:** Refresh compatibility count
 - **cli:** Explain OKF lift rejection
 - **conformance:** Account for attached parity test
 
@@ -246,7 +244,6 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 - **shapes:** Emit deterministic TypeScript declarations
 - **core:** Register GraphQL loss profile
 - **shapes:** Emit deterministic GraphQL SDL
-- **shapes:** Emit deterministic GraphQL SDL
 - **rdf:** Add projection carrier foundations
 - **rdf:** Add canonical LPG mapping
 - **rdf:** Add LPG CSV adapters
@@ -379,7 +376,6 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 - **shapes:** Resolve sh:class / rdfs:range value-vocab refs to enum $defs
 - **sparql-eval:** Native Rust-closure user-function registry + dispatch
 - **sparql-eval:** Native Rust-closure user-function registry
-- **shapes:** Project value vocabularies to enum $defs (projection-only)
 - **gts:** Two-inventory replication diff, splice reconstruction, and diff_json
 - **gts:** Surface per-frame provenance (content-id + byte range) on the streaming read path
 - **gts:** Stream GTS frames into an RdfEventSink with per-frame provenance
@@ -592,7 +588,6 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 ### CI & Build
 
 - **release:** Edition 2024, publish purrdf-entail, expose entail+validate, bump 0.3.1
-- **release:** Edition 2024, publish purrdf-entail, expose entail+validate, bump 0.3.1
 
 ### Documentation
 
@@ -628,7 +623,6 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 - **sparql-eval:** Correct correlated-EXISTS over address-keyed cache reuse
 - **rdf:** Verify content-chain inclusion via blob/segment-head/MMR-leaf union
 - **shex:** Route numeric_value through the XSD-1.0 float/double restriction
-- **rdf:** Accept empty predicateObjectList item in Turtle parser
 - **rdf:** Accept empty predicateObjectList item in Turtle parser
 - **shex:** Fire group semantic actions only for participating groups
 - **shex:** Make result-shape-map JSON fully round-trip through parse_shape_map
@@ -838,7 +832,6 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 - **sparql-eval:** Single-threaded optimization backlog (items 3–7 + ORDER BY triple residual)
 - **wasm-pkg:** Add Node parse-throughput benchmark
 - **wasm-pkg:** Build the npm artifact with +simd128
-- **wasm-pkg:** Build the npm artifact with +simd128
 - **sparql-eval:** Parallelize BGP inner loop and read-only join probes
 - **sparql-eval:** Parallelize FILTER/filtered-left-join with forked per-worker contexts
 - **sparql-eval:** Parallelize UNION, BIND, and per-group aggregates with deterministic scratch merge
@@ -870,7 +863,6 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 - **entail:** Split reasoner into vocab/interner/rdfs modules + Regime::Rif scaffolding
 - **shapes:** Collapse the non-interned path walker to reflexive inclusion
 - **validate:** Hoist shared validate-to-SARIF helper into purrdf-validate
-- **rdf:** Centralize native-codec format dispatch behind an RdfCodec trait
 - **rdf:** Centralize native-codec format dispatch behind an RdfCodec trait
 
 ### Testing
