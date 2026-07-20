@@ -58,10 +58,8 @@ fn objects_of(ds: &RdfDataset, pred: &NamedNode) -> Vec<TermId> {
     result
 }
 
-/// The transitive closure of asserted `rdfs:subClassOf` at or below `class_iri`,
-/// as interned [`TermId`]s: the set containing `class_iri` itself plus every class
-/// that is a (transitive) subclass of it via `rdfs:subClassOf` triples **asserted
-/// in the data graph**.
+/// Compute the transitive closures of asserted `rdfs:subClassOf` below every
+/// requested class as interned [`TermId`]s.
 ///
 /// This implements SHACL class-membership semantics (§4.2.5), which honor the
 /// subclass relationships present in the data. It is NOT OWL/RDFS inference: we
@@ -69,29 +67,64 @@ fn objects_of(ds: &RdfDataset, pred: &NamedNode) -> Vec<TermId> {
 /// "no-inference contract" means no reasoner is run, not that asserted subclass
 /// edges are ignored.) See the issue tracker.
 ///
-/// A class IRI not interned in `ds` (mentioned by no triple) yields an empty set:
-/// nothing can be typed to it, so it has no SHACL instances.
-pub(crate) fn subclass_closure(ds: &RdfDataset, class_iri: &NamedNode) -> IdSet {
-    let mut closure: IdSet = IdSet::default();
-    let Some(start) = resolve_id(ds, &Term::NamedNode(class_iri.clone())) else {
-        return closure;
+/// A class IRI not interned in `ds` yields an empty set: nothing can be typed to
+/// it, so it has no SHACL instances.
+///
+/// Building a general OSP permutation index merely to read a small class
+/// hierarchy dominates preparation on million-node ABox snapshots. A single
+/// sequential pass is O(quads), allocation-proportional only to actual hierarchy
+/// edges, and is shared by every class used anywhere in the shapes tree.
+fn subclass_closures(
+    ds: &RdfDataset,
+    classes: impl IntoIterator<Item = NamedNode>,
+) -> FastMap<NamedNode, IdSet> {
+    let resolved: Vec<(NamedNode, Option<TermId>)> = classes
+        .into_iter()
+        .map(|class| {
+            let id = ds.term_id_by_iri(class.as_str());
+            (class, id)
+        })
+        .collect();
+    let Some(subclass_predicate) = ds.term_id_by_iri(rdfs::SUB_CLASS_OF) else {
+        return resolved
+            .into_iter()
+            .map(|(class, id)| (class, id.into_iter().collect()))
+            .collect();
     };
-    closure.insert(start);
-    let Some(sco) = resolve_id(ds, &Term::NamedNode(NamedNode::from(rdfs::SUB_CLASS_OF))) else {
-        // No `rdfs:subClassOf` edges in the data: the closure is just the class.
-        return closure;
-    };
-    let mut frontier = vec![start];
-    while let Some(superclass) = frontier.pop() {
-        // Any X with `X rdfs:subClassOf superclass` is a subclass to descend into.
-        for q in quads_for_pattern_ids(ds, None, Some(sco), Some(superclass), GraphFilter::AnyGraph)
-        {
-            if closure.insert(q.s) {
-                frontier.push(q.s);
-            }
+    if !resolved.iter().any(|(_, id)| id.is_some()) {
+        return resolved
+            .into_iter()
+            .map(|(class, _)| (class, IdSet::default()))
+            .collect();
+    }
+
+    let mut subclasses: FastMap<TermId, Vec<TermId>> = FastMap::default();
+    for quad in ds.quads() {
+        if quad.p == subclass_predicate {
+            subclasses.entry(quad.o).or_default().push(quad.s);
         }
     }
-    closure
+
+    resolved
+        .into_iter()
+        .map(|(class, start)| {
+            let mut closure = IdSet::default();
+            if let Some(start) = start {
+                closure.insert(start);
+                let mut frontier = vec![start];
+                while let Some(superclass) = frontier.pop() {
+                    if let Some(direct) = subclasses.get(&superclass) {
+                        for &subclass in direct {
+                            if closure.insert(subclass) {
+                                frontier.push(subclass);
+                            }
+                        }
+                    }
+                }
+            }
+            (class, closure)
+        })
+        .collect()
 }
 
 /// Dataset-bound invariant state shared by every focus evaluation in one pass.
@@ -120,13 +153,7 @@ impl ValidationPlan {
         for shape in shapes {
             collect_shape_classes(shape, &mut classes);
         }
-        let class_closures = classes
-            .into_iter()
-            .map(|class| {
-                let closure = subclass_closure(ds, &class);
-                (class, closure)
-            })
-            .collect();
+        let class_closures = subclass_closures(ds, classes);
         Self {
             rdf_type_id: resolve_id(ds, &Term::NamedNode(NamedNode::from(rdf::TYPE))),
             class_closures,
@@ -386,7 +413,485 @@ pub(crate) fn resolve_focus_nodes(
     Ok(nodes)
 }
 
+/// Dataset-bound target predicates used by [`PreparedValidator`].
+///
+/// Core targets are retained as compact membership indexes instead of eagerly
+/// expanding every target node. A bounded request can therefore test only its
+/// supplied candidates. Explicit and SHACL-SPARQL target results are resolved
+/// once at preparation because they cannot be answered through a Core pattern
+/// lookup.
+#[derive(Debug, Default)]
+struct PreparedTargets {
+    explicit_ids: IdSet,
+    explicit_foreign: FastSet<Term>,
+    target_class_ids: IdSet,
+    subject_predicates: IdSet,
+    object_predicates: IdSet,
+}
+
+impl PreparedTargets {
+    fn for_shape(data: &ShaclData, shape: &Shape, plan: &ValidationPlan) -> Result<Self, String> {
+        let mut prepared = Self::default();
+        for target in &shape.targets {
+            match target {
+                Target::Class(class) => {
+                    prepared
+                        .target_class_ids
+                        .extend(plan.class_closure(class).iter().copied());
+                }
+                Target::ImplicitClass(Term::NamedNode(class)) => {
+                    prepared
+                        .target_class_ids
+                        .extend(plan.class_closure(class).iter().copied());
+                }
+                Target::SubjectsOf(predicate) => {
+                    if let Some(id) = resolve_pred(data.core(), predicate) {
+                        prepared.subject_predicates.insert(id);
+                    }
+                }
+                Target::ObjectsOf(predicate) => {
+                    if let Some(id) = resolve_pred(data.core(), predicate) {
+                        prepared.object_predicates.insert(id);
+                    }
+                }
+                Target::Node(term) => prepared.insert_explicit(data.core(), term.clone()),
+                Target::Sparql {
+                    select,
+                    substitutions,
+                } => {
+                    let candidates =
+                        crate::sparql::eval_target(data.sparql(), select, substitutions)
+                            .map_err(|error| format!("sh:target SPARQLTarget failed: {error}"))?;
+                    for candidate in candidates {
+                        prepared.insert_explicit(data.core(), candidate);
+                    }
+                }
+                Target::ImplicitClass(_) => {}
+            }
+        }
+        Ok(prepared)
+    }
+
+    fn insert_explicit(&mut self, dataset: &RdfDataset, term: Term) {
+        if let Some(id) = resolve_id(dataset, &term) {
+            self.explicit_ids.insert(id);
+        } else {
+            self.explicit_foreign.insert(term);
+        }
+    }
+
+    #[inline]
+    fn contains(&self, data: &ShaclData, plan: &ValidationPlan, focus: &FocusNode) -> bool {
+        let Some(id) = focus.id() else {
+            return self.explicit_foreign.contains(focus.term());
+        };
+        if self.explicit_ids.contains(&id) {
+            return true;
+        }
+
+        let dataset = data.core();
+        if let Some(rdf_type) = plan.rdf_type_id()
+            && !self.target_class_ids.is_empty()
+            && quads_for_pattern_ids(
+                dataset,
+                Some(id),
+                Some(rdf_type),
+                None,
+                GraphFilter::AnyGraph,
+            )
+            .any(|quad| self.target_class_ids.contains(&quad.o))
+        {
+            return true;
+        }
+        if !self.subject_predicates.is_empty()
+            && quads_for_pattern_ids(dataset, Some(id), None, None, GraphFilter::AnyGraph)
+                .any(|quad| self.subject_predicates.contains(&quad.p))
+        {
+            return true;
+        }
+        !self.object_predicates.is_empty()
+            && quads_for_pattern_ids(dataset, None, None, Some(id), GraphFilter::AnyGraph)
+                .any(|quad| self.object_predicates.contains(&quad.p))
+    }
+
+    fn resolve_all(&self, data: &ShaclData, plan: &ValidationPlan) -> Vec<FocusNode> {
+        let dataset = data.core();
+        let mut seen_ids = self.explicit_ids.clone();
+        let mut nodes: Vec<FocusNode> = self
+            .explicit_ids
+            .iter()
+            .copied()
+            .map(|id| FocusNode {
+                term: term_id_to_native(dataset, id),
+                id: Some(id),
+            })
+            .collect();
+
+        if let Some(rdf_type) = plan.rdf_type_id() {
+            for &class in &self.target_class_ids {
+                for quad in quads_for_pattern_ids(
+                    dataset,
+                    None,
+                    Some(rdf_type),
+                    Some(class),
+                    GraphFilter::AnyGraph,
+                ) {
+                    if seen_ids.insert(quad.s) {
+                        nodes.push(FocusNode {
+                            term: term_id_to_native(dataset, quad.s),
+                            id: Some(quad.s),
+                        });
+                    }
+                }
+            }
+        }
+        for &predicate in &self.subject_predicates {
+            for quad in
+                quads_for_pattern_ids(dataset, None, Some(predicate), None, GraphFilter::AnyGraph)
+            {
+                if seen_ids.insert(quad.s) {
+                    nodes.push(FocusNode {
+                        term: term_id_to_native(dataset, quad.s),
+                        id: Some(quad.s),
+                    });
+                }
+            }
+        }
+        for &predicate in &self.object_predicates {
+            for quad in
+                quads_for_pattern_ids(dataset, None, Some(predicate), None, GraphFilter::AnyGraph)
+            {
+                if seen_ids.insert(quad.o) {
+                    nodes.push(FocusNode {
+                        term: term_id_to_native(dataset, quad.o),
+                        id: Some(quad.o),
+                    });
+                }
+            }
+        }
+        nodes.extend(
+            self.explicit_foreign
+                .iter()
+                .cloned()
+                .map(|term| FocusNode { term, id: None }),
+        );
+        nodes.sort_by_cached_key(|node| node.term.to_string());
+        nodes
+    }
+}
+
+fn evaluate_shape_focus_nodes(
+    data: &ShaclData,
+    shapes: &Shapes,
+    shape: &Shape,
+    plan: &ValidationPlan,
+    focus_nodes: &[FocusNode],
+    include_focus: impl Fn(&FocusNode) -> bool + Sync,
+) -> Result<Vec<crate::report::ValidationResult>, String> {
+    crate::parallel::try_map_chunks(
+        focus_nodes,
+        || crate::sparql::enter_function_scope(Arc::clone(&shapes.functions)),
+        |_function_scope, out, focus| {
+            if include_focus(focus) {
+                out.extend(crate::constraints::validate_shape_with_plan_at(
+                    data,
+                    focus.term(),
+                    focus.id(),
+                    shape,
+                    shapes.box_role_vocab.as_ref(),
+                    plan,
+                )?);
+            }
+            Ok::<(), String>(())
+        },
+    )
+}
+
+fn finish_report(mut results: Vec<crate::report::ValidationResult>) -> ValidationReport {
+    // Deterministic sort key: (focus_node, component, source_shape, path, value,
+    // message, severity). The message and severity tiebreakers make the ordering
+    // TOTAL: two results that agree on the first five components (e.g. several
+    // `sh:uniqueLang` violations on one focus, which differ only in their message
+    // text) would otherwise keep their push order, which is a `FastMap`/`FastSet`
+    // iteration order and thus not guaranteed stable across ahash versions or
+    // targets. Sorting on the full serialized identity closes that leak so report
+    // bytes are invariant under data-insertion order and platform.
+    let sort_key = |result: &crate::report::ValidationResult| {
+        (
+            result.focus_node.to_string(),
+            result.source_constraint_component.to_string(),
+            result.source_shape.to_string(),
+            result
+                .result_path
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+            result
+                .value
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+            result.message.clone().unwrap_or_default(),
+            result.severity.clone(),
+        )
+    };
+    results.sort_by_cached_key(sort_key);
+    ValidationReport {
+        conforms: results.is_empty(),
+        results,
+    }
+}
+
+fn validate_with_plan_and_focus_filter<F>(
+    data: &ShaclData,
+    shapes: &Shapes,
+    plan: &ValidationPlan,
+    mut include_focus: F,
+) -> Result<ValidationReport, String>
+where
+    F: FnMut(&Shape, &Term) -> bool,
+{
+    // This orchestration-thread scope covers target resolution; each focus chunk
+    // installs the same SHACL-AF function registry on its worker.
+    let _function_scope = crate::sparql::enter_function_scope(Arc::clone(&shapes.functions));
+    let mut all_results = Vec::new();
+
+    for shape in &shapes.node_shapes {
+        if shape.deactivated {
+            continue;
+        }
+        let mut focus_nodes = resolve_focus_nodes(data, &shape.targets, plan)?;
+        // `FnMut` is intentionally applied serially in canonical focus order, so
+        // existing callers observe the same calls even when evaluation dispatches
+        // the retained set to workers.
+        focus_nodes.retain(|focus| include_focus(shape, focus.term()));
+        all_results.extend(evaluate_shape_focus_nodes(
+            data,
+            shapes,
+            shape,
+            plan,
+            &focus_nodes,
+            |_| true,
+        )?);
+    }
+    Ok(finish_report(all_results))
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
+
+/// Reusable validation state for one immutable projected dataset and shapes graph.
+///
+/// Preparation memoizes every dataset-bound class closure, resolves target
+/// predicates, and evaluates explicit SHACL-SPARQL targets once. Core targets are
+/// kept as compact membership predicates: [`Self::validate_focus_nodes`] and
+/// [`Self::validate_focus_node_ids`] inspect only the caller-supplied candidates
+/// and never enumerate every target node in the dataset. This is the preferred
+/// surface for realtime validation over a large immutable snapshot.
+///
+/// A prepared validator is tied to the exact dataset snapshot it owns. Prepare a
+/// new value after publishing an overlay or replacement snapshot.
+#[derive(Debug)]
+pub struct PreparedValidator {
+    data: ShaclData,
+    shapes: Arc<Shapes>,
+    plan: ValidationPlan,
+    targets: Vec<PreparedTargets>,
+}
+
+impl PreparedValidator {
+    /// Prepare an already-assembled [`ShaclData`] holder and parsed shapes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an active SHACL-SPARQL target cannot be evaluated.
+    pub fn new(data: ShaclData, shapes: Arc<Shapes>) -> Result<Self, String> {
+        let _function_scope = crate::sparql::enter_function_scope(Arc::clone(&shapes.functions));
+        let plan = ValidationPlan::for_shapes(data.core(), &shapes);
+        let targets = shapes
+            .node_shapes
+            .iter()
+            .map(|shape| {
+                if shape.deactivated {
+                    Ok(PreparedTargets::default())
+                } else {
+                    PreparedTargets::for_shape(&data, shape, &plan)
+                }
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok(Self {
+            data,
+            shapes,
+            plan,
+            targets,
+        })
+    }
+
+    /// Project and prepare a frozen dataset.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when projection fails or an active SHACL-SPARQL target
+    /// cannot be evaluated.
+    pub fn from_dataset(data: &RdfDataset, shapes: Arc<Shapes>) -> Result<Self, String> {
+        Self::from_projected_dataset(project_dataset(data)?, shapes)
+    }
+
+    /// Prepare an already-SHACL-projected frozen dataset.
+    ///
+    /// Core and SHACL-SPARQL lookups share the same immutable dataset.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an active SHACL-SPARQL target cannot be evaluated.
+    pub fn from_projected_dataset(
+        projected: Arc<RdfDataset>,
+        shapes: Arc<Shapes>,
+    ) -> Result<Self, String> {
+        let data = ShaclData::new(Arc::clone(&projected), projected, None);
+        Self::new(data, shapes)
+    }
+
+    /// Prepare an already-projected dataset with the shapes graph exposed to
+    /// SHACL-SPARQL paths as a named graph.
+    ///
+    /// `shapes_graph_iri` overrides [`Shapes::shapes_graph`] when supplied.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the combined dataset cannot be frozen or an active
+    /// SHACL-SPARQL target cannot be evaluated.
+    pub fn from_projected_dataset_with_shapes_graph(
+        projected: Arc<RdfDataset>,
+        shapes: Arc<Shapes>,
+        shapes_graph_iri: Option<&str>,
+    ) -> Result<Self, String> {
+        let (sparql, shapes_graph_iri) =
+            build_sparql_dataset(Arc::clone(&projected), &shapes, shapes_graph_iri)?;
+        Self::new(ShaclData::new(projected, sparql, shapes_graph_iri), shapes)
+    }
+
+    /// Validate every target node using the prepared target plan.
+    ///
+    /// Core target sets are enumerated for this whole-bundle operation, but class
+    /// closures, predicate identities, and SHACL-SPARQL target results are reused.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a constraint evaluation hard-fails.
+    pub fn validate(&self) -> Result<ValidationReport, String> {
+        let mut all_results = Vec::new();
+        for (shape, targets) in self.shapes.node_shapes.iter().zip(&self.targets) {
+            if shape.deactivated {
+                continue;
+            }
+            let focus_nodes = targets.resolve_all(&self.data, &self.plan);
+            all_results.extend(evaluate_shape_focus_nodes(
+                &self.data,
+                &self.shapes,
+                shape,
+                &self.plan,
+                &focus_nodes,
+                |_| true,
+            )?);
+        }
+        Ok(finish_report(all_results))
+    }
+
+    /// Validate only the supplied candidate focus nodes that match each shape's
+    /// prepared targets.
+    ///
+    /// Candidates are deduplicated and canonically ordered. Target membership is
+    /// answered through direct IR index probes; whole target sets are not built.
+    /// The caller remains responsible for expanding a graph change into every
+    /// potentially affected focus node (for example, an inverse-path dependency).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a constraint evaluation hard-fails.
+    pub fn validate_focus_nodes(&self, focus_nodes: &[Term]) -> Result<ValidationReport, String> {
+        let focus_nodes = self.normalize_focus_nodes(focus_nodes);
+        self.validate_bounded(&focus_nodes)
+    }
+
+    /// Id-native twin of [`Self::validate_focus_nodes`] for callers already using
+    /// the prepared dataset's interned identities.
+    ///
+    /// [`TermId`] values are dataset-local. Passing an id from another dataset is a
+    /// caller error; out-of-range ids are rejected before lookup.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an out-of-range id or when constraint evaluation
+    /// hard-fails.
+    pub fn validate_focus_node_ids(
+        &self,
+        focus_node_ids: &[TermId],
+    ) -> Result<ValidationReport, String> {
+        let mut seen = IdSet::default();
+        let mut focus_nodes = Vec::with_capacity(focus_node_ids.len());
+        for &id in focus_node_ids {
+            if id.index() >= self.data.core().term_count() {
+                return Err(format!(
+                    "focus node TermId {} is outside the prepared dataset's {}-term table",
+                    id.index(),
+                    self.data.core().term_count()
+                ));
+            }
+            if seen.insert(id) {
+                focus_nodes.push(FocusNode {
+                    term: term_id_to_native(self.data.core(), id),
+                    id: Some(id),
+                });
+            }
+        }
+        focus_nodes.sort_by_cached_key(|focus| focus.term.to_string());
+        self.validate_bounded(&focus_nodes)
+    }
+
+    fn normalize_focus_nodes(&self, focus_nodes: &[Term]) -> Vec<FocusNode> {
+        let mut seen_ids = IdSet::default();
+        let mut seen_foreign = FastSet::default();
+        let mut normalized = Vec::with_capacity(focus_nodes.len());
+        for term in focus_nodes {
+            if let Some(id) = resolve_id(self.data.core(), term) {
+                if seen_ids.insert(id) {
+                    normalized.push(FocusNode {
+                        term: term_id_to_native(self.data.core(), id),
+                        id: Some(id),
+                    });
+                }
+            } else if seen_foreign.insert(term.clone()) {
+                normalized.push(FocusNode {
+                    term: term.clone(),
+                    id: None,
+                });
+            }
+        }
+        normalized.sort_by_cached_key(|focus| focus.term.to_string());
+        normalized
+    }
+
+    fn validate_bounded(&self, focus_nodes: &[FocusNode]) -> Result<ValidationReport, String> {
+        if focus_nodes.is_empty() {
+            return Ok(finish_report(Vec::new()));
+        }
+        let mut all_results = Vec::new();
+        for (shape, targets) in self.shapes.node_shapes.iter().zip(&self.targets) {
+            if shape.deactivated {
+                continue;
+            }
+            all_results.extend(evaluate_shape_focus_nodes(
+                &self.data,
+                &self.shapes,
+                shape,
+                &self.plan,
+                focus_nodes,
+                |focus| targets.contains(&self.data, &self.plan, focus),
+            )?);
+        }
+        Ok(finish_report(all_results))
+    }
+}
 
 /// Validate a [`ShaclData`] holder against `shapes`.
 ///
@@ -412,7 +917,9 @@ pub fn validate_with(data: &ShaclData, shapes: &Shapes) -> Result<ValidationRepo
 /// The filter is called after target resolution and before constraint evaluation.
 /// It lets callers that already know only a bounded set of focus nodes changed
 /// avoid rechecking the clean base graph, while still resolving targets against
-/// the full data graph.
+/// the full data graph. Because this compatibility surface still enumerates each
+/// whole target set, realtime callers should prepare a [`PreparedValidator`] and
+/// use [`PreparedValidator::validate_focus_nodes`] instead.
 ///
 /// # Errors
 ///
@@ -425,76 +932,8 @@ pub fn validate_with_focus_filter<F>(
 where
     F: FnMut(&Shape, &Term) -> bool,
 {
-    // Install the shapes graph's SHACL-AF function table (`sh:SPARQLFunction`) for
-    // this whole validation pass. This orchestration-thread scope covers target
-    // resolution; each focus chunk installs the same registry on its worker.
-    let _function_scope = crate::sparql::enter_function_scope(Arc::clone(&shapes.functions));
-
     let plan = ValidationPlan::for_shapes(data.core(), shapes);
-    let mut all_results = Vec::new();
-
-    for shape in &shapes.node_shapes {
-        if shape.deactivated {
-            continue;
-        }
-
-        let mut focus_nodes = resolve_focus_nodes(data, &shape.targets, &plan)?;
-        // `FnMut` is intentionally applied serially in canonical focus order, so
-        // existing callers observe the same calls even when evaluation dispatches
-        // the retained set to workers.
-        focus_nodes.retain(|focus| include_focus(shape, focus.term()));
-
-        let shape_results = crate::parallel::try_map_chunks(
-            &focus_nodes,
-            || crate::sparql::enter_function_scope(Arc::clone(&shapes.functions)),
-            |_function_scope, out, focus| {
-                out.extend(crate::constraints::validate_shape_with_plan_at(
-                    data,
-                    focus.term(),
-                    focus.id(),
-                    shape,
-                    shapes.box_role_vocab.as_ref(),
-                    &plan,
-                )?);
-                Ok::<(), String>(())
-            },
-        )?;
-        all_results.extend(shape_results);
-    }
-
-    // Deterministic sort key: (focus_node, component, source_shape, path, value,
-    // message, severity). The message and severity tiebreakers make the ordering
-    // TOTAL: two results that agree on the first five components (e.g. several
-    // `sh:uniqueLang` violations on one focus, which differ only in their message
-    // text) would otherwise keep their push order, which is a `FastMap`/`FastSet`
-    // iteration order and thus not guaranteed stable across ahash versions or
-    // targets. Sorting on the full serialized identity closes that leak so report
-    // bytes are invariant under data-insertion order and platform.
-    let sort_key = |r: &crate::report::ValidationResult| {
-        (
-            r.focus_node.to_string(),
-            r.source_constraint_component.to_string(),
-            r.source_shape.to_string(),
-            r.result_path
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_default(),
-            r.value
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_default(),
-            r.message.clone().unwrap_or_default(),
-            r.severity.clone(),
-        )
-    };
-    all_results.sort_by_cached_key(sort_key);
-
-    let conforms = all_results.is_empty();
-
-    Ok(ValidationReport {
-        conforms,
-        results: all_results,
-    })
+    validate_with_plan_and_focus_filter(data, shapes, &plan, &mut include_focus)
 }
 
 /// Validate a frozen [`::purrdf::RdfDataset`] against parsed SHACL shapes, IR-natively.
@@ -1382,6 +1821,113 @@ mod tests {
             plan.class_closure(&NamedNode::from("http://example.org/ns#Nested"))
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn prepared_bounded_validation_matches_filtered_and_whole_reports() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<PreparedValidator>();
+
+        let data = load_data_nt(concat!(
+            "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n",
+            "<http://example.org/ns#alice> <http://example.org/ns#knows> <http://example.org/ns#bob> .\n",
+            "<http://example.org/ns#bob> <http://example.org/ns#knows> <http://example.org/ns#alice> .\n",
+        ));
+        let projected = project_dataset(data.as_ref()).expect("projection must succeed");
+        let shapes = Arc::new(load_shapes_ttl(&format!(
+            r#"{PREFIXES}
+			ex:ClassShape a sh:NodeShape ;
+				sh:targetClass ex:Person ;
+				sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+			ex:SubjectsShape a sh:NodeShape ;
+				sh:targetSubjectsOf ex:knows ;
+				sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+			ex:ObjectsShape a sh:NodeShape ;
+				sh:targetObjectsOf ex:knows ;
+				sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+			ex:NodeShape a sh:NodeShape ;
+				sh:targetNode ex:alice ;
+				sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+			ex:SparqlTargetShape a sh:NodeShape ;
+				sh:target [
+					a sh:SPARQLTarget ;
+					sh:select "SELECT ?this WHERE {{ ?this a <http://example.org/ns#Person> }}" ;
+				] ;
+				sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+			"#,
+        )));
+        let alice = NamedNode::new_unchecked("http://example.org/ns#alice").into_term();
+        let carol = NamedNode::new_unchecked("http://example.org/ns#carol").into_term();
+
+        let expected_bounded = validate_projected_dataset_with_focus_filter(
+            Arc::clone(&projected),
+            &shapes,
+            |_, focus| focus == &alice,
+        )
+        .expect("filtered validation must succeed");
+        let expected_whole = validate_projected_dataset(Arc::clone(&projected), &shapes)
+            .expect("whole validation must succeed");
+        let prepared =
+            PreparedValidator::from_projected_dataset(Arc::clone(&projected), Arc::clone(&shapes))
+                .expect("preparation must succeed");
+
+        let bounded = prepared
+            .validate_focus_nodes(&[alice.clone(), alice])
+            .expect("bounded validation must succeed");
+        assert_eq!(bounded.results.len(), 5, "alice matches every target kind");
+        assert_eq!(bounded.to_ntriples(), expected_bounded.to_ntriples());
+        assert_eq!(
+            prepared
+                .validate()
+                .expect("prepared whole validation")
+                .to_ntriples(),
+            expected_whole.to_ntriples()
+        );
+
+        let alice_id = projected
+            .term_id_by_iri("http://example.org/ns#alice")
+            .expect("alice must be interned");
+        assert_eq!(
+            prepared
+                .validate_focus_node_ids(&[alice_id, alice_id])
+                .expect("id-native bounded validation")
+                .to_ntriples(),
+            expected_bounded.to_ntriples()
+        );
+        assert!(
+            prepared
+                .validate_focus_nodes(&[carol])
+                .expect("untargeted bounded validation")
+                .conforms
+        );
+
+        let invalid = TermId::from_index(
+            u32::try_from(projected.term_count()).expect("small test term table"),
+        );
+        assert!(
+            prepared.validate_focus_node_ids(&[invalid]).is_err(),
+            "out-of-range ids must fail before dataset lookup"
+        );
+    }
+
+    #[test]
+    fn prepared_bounded_validation_keeps_foreign_explicit_targets() {
+        let data = load_data_nt("");
+        let projected = project_dataset(data.as_ref()).expect("projection must succeed");
+        let shapes = Arc::new(load_shapes_ttl(&format!(
+            "{PREFIXES}\n\
+			 ex:ForeignShape a sh:NodeShape ;\n\
+			     sh:targetNode ex:absent ;\n\
+			     sh:property [ sh:path ex:required ; sh:minCount 1 ] ."
+        )));
+        let absent = NamedNode::new_unchecked("http://example.org/ns#absent").into_term();
+        let prepared = PreparedValidator::from_projected_dataset(projected, shapes)
+            .expect("preparation must succeed");
+        let report = prepared
+            .validate_focus_nodes(&[absent])
+            .expect("foreign explicit target must validate");
+        assert_eq!(report.results.len(), 1);
+        assert!(!report.conforms);
     }
 
     #[test]

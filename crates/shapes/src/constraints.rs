@@ -1845,9 +1845,9 @@ pub(crate) fn substitute_path_placeholder(select: &str, path: Option<&Path>) -> 
 /// closure (SHACL §4.2.5).
 ///
 /// `closure` must contain the class IRI itself plus every transitive subclass
-/// derived from asserted `rdfs:subClassOf` edges (as returned by
-/// [`crate::engine::subclass_closure`]).  The caller hoists the closure
-/// computation once before the per-value-node loop to avoid O(N×M) BFS cost.
+/// derived from asserted `rdfs:subClassOf` edges (as retained by the engine's
+/// dataset-bound validation plan). The caller hoists the closure computation once
+/// before the per-value-node loop to avoid O(N×M) graph-walk cost.
 ///
 /// `rdf_type_id` is `rdf:type`'s pre-resolved interned [`TermId`], hoisted once by
 /// the caller (it is loop-invariant across value nodes).  `None` means `rdf:type`

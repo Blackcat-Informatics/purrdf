@@ -976,6 +976,7 @@ impl RdfDatasetBuilder {
             locations.into_boxed_slice(),
             caps,
             named_graphs.into_boxed_slice(),
+            interner.index,
             interner.content_ids,
             derivation_predicate,
         )

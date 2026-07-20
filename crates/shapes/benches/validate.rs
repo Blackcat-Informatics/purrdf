@@ -24,7 +24,10 @@ use std::time::{Duration, Instant};
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf::loss::LossLedger;
 use purrdf::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
-use purrdf_shapes::engine::{parse_shapes, validate_graphs, validate_projected_dataset};
+use purrdf_shapes::engine::{
+    PreparedValidator, parse_shapes, validate_graphs, validate_projected_dataset,
+    validate_projected_dataset_with_focus_filter,
+};
 use purrdf_shapes::json_schema::CompiledSchema;
 use purrdf_shapes::shapes::Shapes;
 use purrdf_shapes::{
@@ -82,6 +85,7 @@ const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 const LINKML_EMIT_SIZES: &[usize] = &[32, 1_024, 60_000];
 const CORE_FOCUS_SIZES: &[usize] = &[512, 1_024, 2_048, 3_000, 100_000, 1_000_000];
 const SPARQL_FOCUS_SIZES: &[usize] = &[64, 512, 4_096];
+const REALTIME_FOCUS_SIZES: &[usize] = &[1, 8, 64, 512, 4_096];
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const RDFS_SUBCLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
@@ -326,6 +330,97 @@ fn bench_focus_sparql(c: &mut Criterion) {
             move |bencher, fixture| {
                 probe.call_once(|| print_validation_probe("sparql_function", fixture));
                 bencher.iter(|| validate_fixture(black_box(fixture)));
+            },
+        );
+    }
+    group.finish();
+}
+
+fn validate_prepared_ids(prepared: &PreparedValidator, focus_ids: &[purrdf::TermId]) {
+    let report = prepared
+        .validate_focus_node_ids(focus_ids)
+        .expect("prepared benchmark validation must not error");
+    assert!(report.conforms, "prepared benchmark fixture must conform");
+    black_box(report);
+}
+
+fn print_realtime_probe(prepared: &PreparedValidator, focus_ids: &[purrdf::TermId]) {
+    validate_prepared_ids(prepared, focus_ids);
+    let guard = ValidationCountGuard::start();
+    let started = Instant::now();
+    validate_prepared_ids(prepared, focus_ids);
+    let elapsed = started.elapsed();
+    drop(guard);
+    println!(
+        "[shacl_focus_realtime] requested_focus_nodes={} elapsed_ns={} allocations={} allocated_bytes={}",
+        focus_ids.len(),
+        elapsed.as_nanos(),
+        VALIDATION_ALLOCATIONS.load(Ordering::Relaxed),
+        VALIDATION_ALLOCATED_BYTES.load(Ordering::Relaxed),
+    );
+}
+
+fn bench_focus_realtime(c: &mut Criterion) {
+    const DATASET_FOCUS_NODES: usize = 1_000_000;
+
+    let fixture = core_focus_fixture(DATASET_FOCUS_NODES);
+    let preparation_guard = ValidationCountGuard::start();
+    let preparation_started = Instant::now();
+    let prepared = PreparedValidator::from_projected_dataset(
+        Arc::clone(&fixture.dataset),
+        Arc::new(fixture.shapes.clone()),
+    )
+    .expect("realtime benchmark preparation must succeed");
+    let preparation_elapsed = preparation_started.elapsed();
+    drop(preparation_guard);
+    println!(
+        "[shacl_focus_prepare] dataset_focus_nodes={DATASET_FOCUS_NODES} elapsed_ns={} allocations={} allocated_bytes={}",
+        preparation_elapsed.as_nanos(),
+        VALIDATION_ALLOCATIONS.load(Ordering::Relaxed),
+        VALIDATION_ALLOCATED_BYTES.load(Ordering::Relaxed),
+    );
+    let all_focus_ids: Vec<_> = (0..*REALTIME_FOCUS_SIZES.last().expect("non-empty sizes"))
+        .map(|index| {
+            fixture
+                .dataset
+                .term_id_by_iri(&format!("{BENCH_EX}item{index}"))
+                .expect("benchmark focus must be interned")
+        })
+        .collect();
+
+    let mut group = c.benchmark_group("shacl_focus_realtime");
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(3));
+
+    let legacy_focus =
+        purrdf_shapes::term::NamedNode::new_unchecked(format!("{BENCH_EX}item0")).into_term();
+    group.throughput(Throughput::Elements(1));
+    group.bench_function(BenchmarkId::new("compat_filter", 1), |bencher| {
+        bencher.iter(|| {
+            let report = validate_projected_dataset_with_focus_filter(
+                Arc::clone(black_box(&fixture.dataset)),
+                black_box(&fixture.shapes),
+                |_, focus| focus == &legacy_focus,
+            )
+            .expect("compatibility filter benchmark must not error");
+            assert!(report.conforms, "benchmark fixture must conform");
+            black_box(report);
+        });
+    });
+
+    for &focus_nodes in REALTIME_FOCUS_SIZES {
+        let focus_ids = &all_focus_ids[..focus_nodes];
+        let probe = Once::new();
+        let prepared_ref = &prepared;
+        group.throughput(Throughput::Elements(focus_nodes as u64));
+        group.bench_with_input(
+            BenchmarkId::new("prepared_ids", focus_nodes),
+            focus_ids,
+            move |bencher, focus_ids| {
+                probe.call_once(|| print_realtime_probe(prepared_ref, focus_ids));
+                bencher
+                    .iter(|| validate_prepared_ids(black_box(prepared_ref), black_box(focus_ids)));
             },
         );
     }
@@ -658,6 +753,7 @@ criterion_group!(
     bench_validate,
     bench_focus_core,
     bench_focus_sparql,
+    bench_focus_realtime,
     bench_schema_import,
     bench_linkml_import,
     bench_linkml_slot_emission
