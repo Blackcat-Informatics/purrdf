@@ -4,6 +4,40 @@ All notable changes to the PurRDF crate suite are recorded here. The suite
 ships one lockstep version across crates.io, PyPI, and npm; pre-1.0, a minor
 bump may carry breaking changes and a patch bump is bugfix-only.
 
+## [0.8.1] - 2026-07-21
+
+### Bug Fixes
+
+- **wasm:** Align npm package size budgets
+
+### CI & Build
+
+- **wasm:** Budget shared SHACL membership view
+
+### Documentation
+
+- **wasm:** Record optimized membership artifact
+- **conformance:** Record subclass corpus case
+
+### Features
+
+- **shapes:** Add subclass membership view
+- **shapes:** Unify subclass membership semantics
+
+### Other
+
+- Unify SHACL subclass membership across native and SPARQL validation
+
+### Performance
+
+- **shapes:** Benchmark subclass membership hot path
+- **shapes:** Prune inactive membership rows
+
+### Testing
+
+- **shapes:** Freeze subclass membership semantics
+- **shapes:** Freeze subclass corpus hashes
+
 ## [0.8.0] - 2026-07-20
 
 ### Bug Fixes
