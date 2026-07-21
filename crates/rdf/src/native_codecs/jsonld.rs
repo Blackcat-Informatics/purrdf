@@ -63,7 +63,11 @@ const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 /// bundle.
 const BUNDLED_SCHEMA_REF: &str = "purrdf.schema.json";
 const MAX_JSON_LD_OUTPUT_BYTES: usize = 256 * 1024 * 1024;
-const MAX_JSON_LD_CARRIER_ROWS: usize = 4_194_304;
+// The carrier row budget (terms + quads + reifiers + annotations). Raised to 2^23 so a
+// large whole-ontology bundle (millions of statements) stays within the decode envelope;
+// the estimated working footprint (`ESTIMATED_CARRIER_ROW_BYTES`) keeps this a memory-safe
+// ceiling, not an unbounded one.
+const MAX_JSON_LD_CARRIER_ROWS: usize = 8_388_608;
 const MAX_JSON_LD_CARRIER_TEXT_BYTES: usize = 256 * 1024 * 1024;
 const ESTIMATED_CARRIER_ROW_BYTES: usize = 256;
 const COMPACTED_CARRIER_WORKING_COPIES: usize = 3;
