@@ -37,9 +37,9 @@ const DEFAULT_MAX_EXPANSION_WORK: usize = 262_144;
 const DEFAULT_MAX_DEFINITION_COMPLEXITY: usize = 131_072;
 const MAX_JSON_LD_DOCUMENT_BYTES: usize = 256 * 1024 * 1024;
 const MAX_JSON_LD_DOCUMENT_DEPTH: usize = 128;
-// Raised to 2^23 in lock-step with `MAX_JSON_LD_CARRIER_ROWS`: a large whole-ontology
-// document expands to millions of values, still inside the memory-safe decode envelope.
-const MAX_JSON_LD_DOCUMENT_VALUES: usize = 8_388_608;
+// Raised to 2^25 in lock-step with `MAX_JSON_LD_CARRIER_ROWS`: a large whole-ontology
+// document expands to tens of millions of values, still inside the memory-safe decode envelope.
+const MAX_JSON_LD_DOCUMENT_VALUES: usize = 33_554_432;
 
 /// Fixed resource ceilings for context decoding and compilation.
 ///

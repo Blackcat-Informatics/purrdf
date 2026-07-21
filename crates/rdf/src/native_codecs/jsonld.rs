@@ -63,12 +63,21 @@ const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 /// bundle.
 const BUNDLED_SCHEMA_REF: &str = "purrdf.schema.json";
 const MAX_JSON_LD_OUTPUT_BYTES: usize = 256 * 1024 * 1024;
-// The carrier row budget (terms + quads + reifiers + annotations). Raised to 2^23 so a
-// large whole-ontology bundle (millions of statements) stays within the decode envelope;
-// the estimated working footprint (`ESTIMATED_CARRIER_ROW_BYTES`) keeps this a memory-safe
+// The carrier row budget (terms + quads + reifiers + annotations). Raised to 2^25 so a
+// large whole-ontology bundle (tens of millions of composed statements — the authored graph
+// + the RDF-1.2 statement layer + the reasoned closure + bundle-internal named graphs) stays
+// within the decode envelope; the estimated working footprint keeps this a memory-safe
 // ceiling, not an unbounded one.
-const MAX_JSON_LD_CARRIER_ROWS: usize = 8_388_608;
+const MAX_JSON_LD_CARRIER_ROWS: usize = 33_554_432;
+// Source-carrier retained-text budget: the interned text actually held once.
 const MAX_JSON_LD_CARRIER_TEXT_BYTES: usize = 256 * 1024 * 1024;
+// Materialized-carrier WORKING-memory budget. The construction estimate
+// (`rows * ESTIMATED_CARRIER_ROW_BYTES + text`) * `COMPACTED_CARRIER_WORKING_COPIES` is a large
+// multiple of the retained text, so a whole-ontology bundle of tens of millions of occurrences
+// estimates into tens of GB even though real materialization stays far lower (the previous
+// codec generation materialized the same bundle unchecked). Kept DISTINCT from the source-text
+// budget so a legitimate large bundle is admitted rather than rejected by a text-sized cap.
+const MAX_JSON_LD_CARRIER_WORKING_BYTES: usize = 32 * 1024 * 1024 * 1024;
 const ESTIMATED_CARRIER_ROW_BYTES: usize = 256;
 const COMPACTED_CARRIER_WORKING_COPIES: usize = 3;
 
@@ -719,7 +728,7 @@ fn validate_materialized_carrier_budget(
         graph,
         annotations_of,
         MAX_JSON_LD_CARRIER_ROWS,
-        MAX_JSON_LD_CARRIER_TEXT_BYTES,
+        MAX_JSON_LD_CARRIER_WORKING_BYTES,
     )
 }
 
