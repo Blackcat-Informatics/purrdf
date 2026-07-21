@@ -210,7 +210,22 @@ impl Namespaces {
     #[must_use]
     pub fn def_key(&self, iri: &str) -> String {
         if self.is_primary(iri) {
-            local_name(iri)
+            let local = local_name(iri);
+            // A primary class whose bare local name collides with a purrdf-RESERVED
+            // JSON-Schema `$def` key (see `RESERVED_DEF_KEYS`) is disambiguated to its
+            // CURIE form (`gmeow:Annotation`) so it never clobbers the reserved
+            // definition — the same colon-bearing keying the cross-namespace twins
+            // already use. The CURIE is a valid `$defs` key and JSON-pointer segment,
+            // and `class_iri_for_def_key` reverses it via `expand_iri`. Falls back to
+            // the bare local name if the primary namespace has no declared prefix to
+            // compact with (then the reserved-key guard in `compile` still fires).
+            if RESERVED_DEF_KEYS.contains(&local.as_str()) {
+                let curie = self.compact_iri(iri);
+                if curie.contains(':') {
+                    return curie;
+                }
+            }
+            local
         } else {
             self.compact_iri(iri)
         }
@@ -1303,15 +1318,7 @@ fn validate_surface_keys(
     ns: &Namespaces,
     vocab_enums: &BTreeMap<String, (String, Value)>,
 ) -> Result<(), SchemaCompileError> {
-    let mut keys: BTreeMap<String, String> = BTreeMap::new();
-    keys.insert(
-        "Annotation".to_owned(),
-        "JSON Schema reserved definition".to_owned(),
-    );
-    keys.insert(
-        "Node".to_owned(),
-        "JSON Schema reserved definition".to_owned(),
-    );
+    let mut keys: BTreeMap<String, String> = reserved_key_seed();
     for class_iri in surface.classes.keys() {
         if !ns.is_known(class_iri) {
             return Err(SchemaCompileError::Namespace {
@@ -1838,6 +1845,24 @@ fn class_def_target_iri(target: &Target) -> Option<&str> {
     }
 }
 
+/// The purrdf-reserved JSON-Schema `$def` keys: the built-in RDF-1.2 `Annotation`
+/// reification definition and the generic `Node` reference definition. A caller
+/// (ontology) class whose local name equals one of these is disambiguated to its
+/// CURIE form by [`Namespaces::def_key`] so it can never clobber the reserved
+/// definition; the collision-seed maps below are built from this SAME set so the
+/// disambiguation set and the reserved set can never drift apart.
+const RESERVED_DEF_KEYS: &[&str] = &["Annotation", "Node"];
+
+/// The initial `key → owner` map seeded with the purrdf-reserved keys
+/// ([`RESERVED_DEF_KEYS`]), each owned by the sentinel "JSON Schema reserved
+/// definition" so a user class colliding with one is reported against a stable name.
+fn reserved_key_seed() -> BTreeMap<String, String> {
+    RESERVED_DEF_KEYS
+        .iter()
+        .map(|k| ((*k).to_owned(), "JSON Schema reserved definition".to_owned()))
+        .collect()
+}
+
 /// Enforce the keying precondition (Gap D): every active `sh:targetClass` /
 /// implicit-class target is in a DECLARED namespace (so [`Namespaces::def_key`]
 /// yields a stable `$defs` key and [`node_def`] can rebuild its `@type` const)
@@ -1851,16 +1876,7 @@ fn target_definition_keys(
     shapes: &Shapes,
     ns: &Namespaces,
 ) -> Result<BTreeMap<String, String>, SchemaCompileError> {
-    let mut key_to_iri = BTreeMap::from([
-        (
-            "Annotation".to_owned(),
-            "JSON Schema reserved definition".to_owned(),
-        ),
-        (
-            "Node".to_owned(),
-            "JSON Schema reserved definition".to_owned(),
-        ),
-    ]);
+    let mut key_to_iri = reserved_key_seed();
     for shape in &shapes.node_shapes {
         if shape.deactivated {
             continue;
@@ -2980,6 +2996,29 @@ mod tests {
         &schema["$defs"][name]
     }
 
+    #[test]
+    fn primary_class_named_annotation_is_disambiguated_from_the_reserved_def() {
+        // A caller (ontology) class whose bare local name collides with a
+        // purrdf-RESERVED JSON-Schema `$def` key ("Annotation") must NOT hard-fail
+        // the build (the pre-fix behavior was a `DefinitionCollision` panic): it is
+        // keyed by its CURIE ("meta:Annotation") so the reserved definition survives.
+        let schema = schema_of(&compile_ttl(
+            r"
+            meta:AnnotationShape a sh:NodeShape ;
+                sh:targetClass meta:Annotation ;
+                sh:property [ sh:path meta:label ; sh:maxCount 1 ] .",
+        ));
+        assert!(
+            def(&schema, "meta:Annotation").is_object(),
+            "the primary class meta:Annotation must be keyed by its CURIE, disambiguated \
+             from the reserved key"
+        );
+        assert!(
+            def(&schema, "Annotation").is_object(),
+            "the purrdf-reserved Annotation $def must remain intact (not clobbered)"
+        );
+    }
+
     /// Whether `ledger` carries an entry matching BOTH `code` exactly AND
     /// `subject` exactly (the shape/class IRI `Ctx::record`/`loss_entry` stored
     /// on `location.subject`) — never a suffix match, so no migrated assertion
@@ -3636,7 +3675,11 @@ mod tests {
     }
 
     #[test]
-    fn ontology_class_collision_is_a_typed_error() {
+    fn ontology_class_named_after_reserved_key_is_disambiguated() {
+        // A caller (ontology) class named after a purrdf-RESERVED JSON-Schema `$def`
+        // key ("Node") is a legitimate class, not a build failure: it is keyed by its
+        // CURIE ("meta:Node") so the reserved definition survives. (Before the
+        // reserved-key disambiguation this returned a DefinitionCollision typed error.)
         let shapes_dataset =
             crate::text_ingest::parse_turtle_to_dataset(PREFIXES).expect("empty shapes Turtle");
         let shapes = from_dataset(&shapes_dataset).expect("empty shapes graph");
@@ -3645,17 +3688,22 @@ mod tests {
              meta:Node a owl:Class ."
         ))
         .expect("ontology Turtle");
-        let error = compile_schema(&SchemaCompileRequest::new(
+        let compilation = compile_schema(&SchemaCompileRequest::new(
             &shapes,
             &fixture_ns(),
             ontology.as_ref(),
             SchemaSurfaceMode::OntologyComplete,
         ))
-        .expect_err("reserved Node definition must collide");
-        assert!(matches!(
-            error,
-            SchemaCompileError::DefinitionCollision { key, .. } if key == "Node"
-        ));
+        .expect("a class named after a reserved key is disambiguated, not a collision");
+        let schema = schema_of(&compilation.compiled);
+        assert!(
+            def(&schema, "meta:Node").is_object(),
+            "the ontology class meta:Node must be keyed by its CURIE, disambiguated from the reserved key"
+        );
+        assert!(
+            def(&schema, "Node").is_object(),
+            "the purrdf-reserved Node $def must remain intact (not clobbered)"
+        );
     }
 
     #[test]
