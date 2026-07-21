@@ -35,7 +35,9 @@ const DEFAULT_MAX_TERMS: usize = 4_096;
 const DEFAULT_MAX_NESTING: usize = 64;
 const DEFAULT_MAX_EXPANSION_WORK: usize = 262_144;
 const DEFAULT_MAX_DEFINITION_COMPLEXITY: usize = 131_072;
-const MAX_JSON_LD_DOCUMENT_BYTES: usize = 256 * 1024 * 1024;
+// Raised to 4 GiB in lock-step with `MAX_JSON_LD_OUTPUT_BYTES`: a whole-ontology JSON-LD
+// document (the round-tripped bundle export) decodes from well over 256MB.
+const MAX_JSON_LD_DOCUMENT_BYTES: usize = 4 * 1024 * 1024 * 1024;
 const MAX_JSON_LD_DOCUMENT_DEPTH: usize = 128;
 // Raised to 2^25 in lock-step with `MAX_JSON_LD_CARRIER_ROWS`: a large whole-ontology
 // document expands to tens of millions of values, still inside the memory-safe decode envelope.

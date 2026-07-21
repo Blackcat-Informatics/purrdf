@@ -62,7 +62,10 @@ const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 /// `schemas-archive/purrdf.schema.json`, so a bare member name resolves inside the
 /// bundle.
 const BUNDLED_SCHEMA_REF: &str = "purrdf.schema.json";
-const MAX_JSON_LD_OUTPUT_BYTES: usize = 256 * 1024 * 1024;
+// The serialized JSON-LD output ceiling. A whole-ontology bundle serializes to well over
+// 256MB (occurrence-repeated IRIs over tens of millions of statements); raised to 4 GiB so a
+// large bundle export is admitted while the ceiling still bounds a runaway serialization.
+const MAX_JSON_LD_OUTPUT_BYTES: usize = 4 * 1024 * 1024 * 1024;
 // The carrier row budget (terms + quads + reifiers + annotations). Raised to 2^25 so a
 // large whole-ontology bundle (tens of millions of composed statements — the authored graph
 // + the RDF-1.2 statement layer + the reasoned closure + bundle-internal named graphs) stays
