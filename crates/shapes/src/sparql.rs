@@ -506,17 +506,21 @@ pub(crate) fn run_select_generic_view<D: DatasetView + Sync>(
         base_iri: None,
         substitutions,
     };
+    // Snapshot the SHACL-AF function registry (an `Arc` clone) BEFORE evaluating, so
+    // no `CURRENT_FUNCTIONS` borrow is held across the query: a `sh:sparql` body whose
+    // evaluation re-enters SHACL validation (a nested shape / SHACL-AF function) installs
+    // its own scope via `enter_function_scope` (a `borrow_mut`), which would panic
+    // ("already borrowed") if the outer immutable borrow were still live.
+    let functions = CURRENT_FUNCTIONS.with(|slot| slot.borrow().clone());
     let result = SPARQL_ENGINE
-        .with(|engine| {
-            CURRENT_FUNCTIONS.with(|functions| match functions.borrow().as_ref() {
-                Some(registry) if !registry.is_empty() => {
-                    engine.query_with_user_functions_view(dataset, request, registry)
-                }
-                _ => {
-                    let prepared = engine.prepare_query(request.query, request.base_iri)?;
-                    engine.query_prepared_view(dataset, &prepared, request.substitutions)
-                }
-            })
+        .with(|engine| match functions.as_ref() {
+            Some(registry) if !registry.is_empty() => {
+                engine.query_with_user_functions_view(dataset, request, registry)
+            }
+            _ => {
+                let prepared = engine.prepare_query(request.query, request.base_iri)?;
+                engine.query_prepared_view(dataset, &prepared, request.substitutions)
+            }
         })
         .map_err(|e| format!("query evaluation error: {e}"))?;
     match result {
@@ -552,15 +556,17 @@ pub(crate) fn run_select_with_shacl_prebinding_view<D: DatasetView + Sync>(
         subs.push(("currentShape".to_owned(), shape.to_term_value()));
     }
 
+    // Snapshot the function registry before evaluating (see the generic path above): a
+    // re-entrant `enter_function_scope` from a nested validation must not collide with a
+    // still-live `CURRENT_FUNCTIONS` borrow.
+    let functions = CURRENT_FUNCTIONS.with(|slot| slot.borrow().clone());
     let result = SPARQL_ENGINE
-        .with(|engine| {
-            CURRENT_FUNCTIONS.with(|functions| match functions.borrow().as_ref() {
-                Some(registry) if !registry.is_empty() => engine
-                    .query_with_shacl_prebinding_and_functions_view(
-                        dataset, select, None, &subs, registry,
-                    ),
-                _ => engine.query_with_shacl_prebinding_view(dataset, select, None, &subs),
-            })
+        .with(|engine| match functions.as_ref() {
+            Some(registry) if !registry.is_empty() => engine
+                .query_with_shacl_prebinding_and_functions_view(
+                    dataset, select, None, &subs, registry,
+                ),
+            _ => engine.query_with_shacl_prebinding_view(dataset, select, None, &subs),
         })
         .map_err(|e| format!("query evaluation error: {e}"))?;
     match result {
@@ -604,15 +610,17 @@ pub(crate) fn run_construct_with_shacl_prebinding_view<D: DatasetView + Sync>(
         subs.push(("currentShape".to_owned(), shape.to_term_value()));
     }
 
+    // Snapshot the function registry before evaluating (see the generic path above): a
+    // re-entrant `enter_function_scope` from a nested validation must not collide with a
+    // still-live `CURRENT_FUNCTIONS` borrow.
+    let functions = CURRENT_FUNCTIONS.with(|slot| slot.borrow().clone());
     let result = SPARQL_ENGINE
-        .with(|engine| {
-            CURRENT_FUNCTIONS.with(|functions| match functions.borrow().as_ref() {
-                Some(registry) if !registry.is_empty() => engine
-                    .query_with_shacl_prebinding_and_functions_view(
-                        dataset, construct, None, &subs, registry,
-                    ),
-                _ => engine.query_with_shacl_prebinding_view(dataset, construct, None, &subs),
-            })
+        .with(|engine| match functions.as_ref() {
+            Some(registry) if !registry.is_empty() => engine
+                .query_with_shacl_prebinding_and_functions_view(
+                    dataset, construct, None, &subs, registry,
+                ),
+            _ => engine.query_with_shacl_prebinding_view(dataset, construct, None, &subs),
         })
         .map_err(|e| format!("query evaluation error: {e}"))?;
     match result {
@@ -642,15 +650,17 @@ pub(crate) fn run_ask_with_shacl_prebinding_view<D: DatasetView + Sync>(
         subs.push(("currentShape".to_owned(), shape.to_term_value()));
     }
 
+    // Snapshot the function registry before evaluating (see the generic path above): a
+    // re-entrant `enter_function_scope` from a nested validation must not collide with a
+    // still-live `CURRENT_FUNCTIONS` borrow.
+    let functions = CURRENT_FUNCTIONS.with(|slot| slot.borrow().clone());
     let result = SPARQL_ENGINE
-        .with(|engine| {
-            CURRENT_FUNCTIONS.with(|functions| match functions.borrow().as_ref() {
-                Some(registry) if !registry.is_empty() => engine
-                    .query_with_shacl_prebinding_and_functions_view(
-                        dataset, ask, None, &subs, registry,
-                    ),
-                _ => engine.query_with_shacl_prebinding_view(dataset, ask, None, &subs),
-            })
+        .with(|engine| match functions.as_ref() {
+            Some(registry) if !registry.is_empty() => engine
+                .query_with_shacl_prebinding_and_functions_view(
+                    dataset, ask, None, &subs, registry,
+                ),
+            _ => engine.query_with_shacl_prebinding_view(dataset, ask, None, &subs),
         })
         .map_err(|e| format!("query evaluation error: {e}"))?;
     match result {
