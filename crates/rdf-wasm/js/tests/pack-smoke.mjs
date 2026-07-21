@@ -24,10 +24,12 @@ const PACKAGE_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 // increases. The always-on curated CSVW and OKF terms mappers, their closed
 // located-loss contracts, and shared host dispatch account for one increase;
 // bounded CONSTRUCT, mapped native DCAT RDF, and VoID generation account for
-// the latest. Node 26/npm 11 measured a 2_698_568-byte tarball and 7_951_365
-// unpacked bytes. Both ceilings retain about 3% headroom for supported packagers.
-const MAX_TARBALL_BYTES = 2_780_000;
-const MAX_UNPACKED_BYTES = 8_200_000;
+// one increase; validation-scoped asserted-subclass membership shared by native
+// SHACL and SHACL-SPARQL accounts for the latest. Node 26/npm 11 measured a
+// 2_796_026-byte tarball and 8_308_910 unpacked bytes. Both ceilings retain about
+// 3% headroom for supported packagers.
+const MAX_TARBALL_BYTES = 2_880_000;
+const MAX_UNPACKED_BYTES = 8_560_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
 const NPM_INSTALL_TIMEOUT_MS = 180_000;
 const SMOKE_TIMEOUT_MS = 60_000;
