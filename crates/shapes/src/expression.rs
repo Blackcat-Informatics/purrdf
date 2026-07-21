@@ -385,8 +385,8 @@ pub fn eval_node_expr(
             let branch = match cond_nodes.as_slice() {
                 [] => els,
                 [t] => {
-                    let ebv = crate::sparql::eval_scalar_expr(
-                        store.sparql(),
+                    let ebv = crate::sparql::eval_scalar_expr_view(
+                        store.sparql_view(),
                         "IF(?c, true, false)",
                         &[("c".to_owned(), t.clone())],
                     )?;
@@ -466,9 +466,11 @@ pub fn eval_node_expr(
                     }
                     // A SPARQL error/unbound result is the correct SHACL-AF "no value"
                     // signal for that tuple — it contributes nothing, not a violation.
-                    if let Some(term) =
-                        crate::sparql::eval_scalar_expr(store.sparql(), &expr_string, &bindings)?
-                    {
+                    if let Some(term) = crate::sparql::eval_scalar_expr_view(
+                        store.sparql_view(),
+                        &expr_string,
+                        &bindings,
+                    )? {
                         out.push(term);
                     }
                 }
@@ -533,7 +535,7 @@ pub fn eval_node_expr(
             let mut distinct: Vec<Term> = keyed.iter().map(|(_, k)| k.clone()).collect();
             crate::term::sort_terms_canonical(&mut distinct);
             distinct.dedup();
-            let ranked = crate::sparql::eval_order(store.sparql(), &distinct, false)?;
+            let ranked = crate::sparql::eval_order_view(store.sparql_view(), &distinct, false)?;
             let mut rank: FastMap<String, usize> = FastMap::default();
             for (i, k) in ranked.iter().enumerate() {
                 rank.insert(k.to_string(), i);
@@ -632,7 +634,7 @@ fn aggregate(
     guard: &mut RecursionGuard,
 ) -> Result<Vec<Term>, String> {
     let operands = eval_node_expr(store, focus, of, guard)?;
-    match crate::sparql::eval_aggregate(store.sparql(), agg, &operands)? {
+    match crate::sparql::eval_aggregate_view(store.sparql_view(), agg, &operands)? {
         Some(term) => Ok(vec![term]),
         None => Ok(Vec::new()),
     }

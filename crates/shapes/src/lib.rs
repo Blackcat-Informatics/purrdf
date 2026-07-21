@@ -3,9 +3,10 @@
 
 //! `purrdf-shapes` — the Rust SHACL Core validator for purrdf.
 //!
-//! Validates a PurRDF RDF 1.2 data graph against a SHACL shapes graph with
-//! NO inference (parity with pySHACL `inference="none"`). The engine core is
-//! PyO3-free and oxigraph-free, so the rlib links into any Rust consumer over
+//! Validates a PurRDF RDF 1.2 data graph against a SHACL shapes graph without
+//! general RDFS or OWL entailment. SHACL class membership follows asserted
+//! `rdfs:subClassOf` edges transitively across native and SHACL-SPARQL paths.
+//! The engine core is PyO3-free, so the rlib links into any Rust consumer over
 //! the interned `purrdf-core` IR. SHACL-SPARQL constraints
 //! (`sh:sparql`/`sh:SPARQLConstraint`) and targets (`sh:SPARQLTarget`) are
 //! implemented in the [`sparql`] module on the native `purrdf-sparql-eval`
@@ -27,6 +28,7 @@
     html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]
 
+pub(crate) mod class_membership;
 pub(crate) mod components;
 pub mod constraints;
 pub mod data;

@@ -125,10 +125,9 @@ impl Rule {
 
 // ── Driver ──────────────────────────────────────────────────────────────────────
 
-/// A rule producer: maps the current frozen dataset to the owned head triples the
-/// rule derives this round (the `Fn(&RdfDataset)` seam, taking the round's `Arc`
-/// so it can hand the SPARQL/expression engines an owned dataset handle).
-type Producer<'a> = Box<dyn Fn(&Arc<RdfDataset>) -> Result<Vec<[Term; 3]>, String> + 'a>;
+/// A rule producer: maps the current round's shared native/SPARQL views to the
+/// owned head triples the rule derives.
+type Producer<'a> = Box<dyn Fn(&ShaclData) -> Result<Vec<[Term; 3]>, String> + 'a>;
 
 /// A prepared rule bound to its owning shape: a producer closure plus its sort
 /// key and identity (for ordering and error messages).
@@ -170,11 +169,6 @@ pub fn apply_rules(data: &ShaclData, shapes: &Shapes) -> Result<Arc<RdfDataset>,
         .map(ToOwned::to_owned)
         .or_else(|| shapes.shapes_graph.clone())
         .filter(|_| shapes.shapes_dataset.quad_count() > 0);
-
-    // The per-round data handed to producers: the base default graph plus the shapes
-    // graph as a named graph (when known). The FINAL entailed dataset is still built
-    // from `base` alone below, so the shapes graph never leaks into the output.
-    let round_base = build_round_base(&base, shapes, shapes_graph_iri.as_deref())?;
 
     // A top-level-shape index for `sh:condition` resolution (id string → shape).
     let mut shape_index: FastMap<String, &Shape> = FastMap::default();
@@ -218,7 +212,7 @@ pub fn apply_rules(data: &ShaclData, shapes: &Shapes) -> Result<Arc<RdfDataset>,
 
     // No rules → the base graph unchanged (still a fresh frozen projection).
     let mut facts = original.clone();
-    let mut current = Arc::clone(&round_base);
+    let mut current_core = Arc::clone(&base);
 
     // Deterministic, input-derived divergence bound: the number of distinct base∪
     // rules terms plus the rule count. Value-preserving rounds never touch it (they
@@ -227,11 +221,17 @@ pub fn apply_rules(data: &ShaclData, shapes: &Shapes) -> Result<Arc<RdfDataset>,
     let mut fresh_rounds = 0usize;
 
     loop {
+        let current_sparql = build_round_base(&current_core, shapes, shapes_graph_iri.as_deref())?;
+        let round_data = ShaclData::new(
+            Arc::clone(&current_core),
+            current_sparql,
+            shapes_graph_iri.clone(),
+        );
         let mut round_new: Vec<[Term; 3]> = Vec::new();
         let mut fresh_offender: Option<(String, Term)> = None;
 
         for prep in &prepared {
-            for triple in (prep.producer)(&current)? {
+            for triple in (prep.producer)(&round_data)? {
                 if facts.contains(&triple) {
                     continue;
                 }
@@ -260,7 +260,7 @@ pub fn apply_rules(data: &ShaclData, shapes: &Shapes) -> Result<Arc<RdfDataset>,
             }
         }
 
-        current = rebuild_dataset(&round_base, &facts, &original)?;
+        current_core = rebuild_dataset(&base, &facts, &original)?;
     }
 
     // Materialize base ⊎ inferred, emitting inferred triples in a stable sorted
@@ -316,9 +316,9 @@ fn prepare_rule<'a>(
             object,
         } => {
             let rule_id = rule_id.clone();
-            Box::new(move |ds: &Arc<RdfDataset>| {
+            Box::new(move |data: &ShaclData| {
                 triple_rule_producer(
-                    ds,
+                    data,
                     shape,
                     subject,
                     predicate,
@@ -326,15 +326,14 @@ fn prepare_rule<'a>(
                     conditions,
                     shape_index,
                     &rule_id,
-                    shapes_graph_iri,
                 )
             })
         }
         RuleBody::Sparql { construct } => {
             let rule_id = rule_id.clone();
-            Box::new(move |ds: &Arc<RdfDataset>| {
+            Box::new(move |data: &ShaclData| {
                 sparql_rule_producer(
-                    ds,
+                    data,
                     shape,
                     construct,
                     conditions,
@@ -358,7 +357,7 @@ fn prepare_rule<'a>(
 /// expressions per focus node and emit the cartesian product as head triples.
 #[allow(clippy::too_many_arguments)]
 fn triple_rule_producer(
-    ds: &Arc<RdfDataset>,
+    data: &ShaclData,
     shape: &Shape,
     subject: &NodeExpr,
     predicate: &NodeExpr,
@@ -366,23 +365,17 @@ fn triple_rule_producer(
     conditions: &[Term],
     shape_index: &FastMap<String, &Shape>,
     rule_id: &str,
-    shapes_graph_iri: Option<&str>,
 ) -> Result<Vec<[Term; 3]>, String> {
-    let data = ShaclData::new(
-        Arc::clone(ds),
-        Arc::clone(ds),
-        shapes_graph_iri.map(ToOwned::to_owned),
-    );
-    let focus_nodes = focus_nodes(&data, shape)?;
+    let focus_nodes = focus_nodes(data, shape)?;
     let mut out: Vec<[Term; 3]> = Vec::new();
     for focus in &focus_nodes {
-        if !conditions_hold(&data, focus, conditions, shape_index)? {
+        if !conditions_hold(data, focus, conditions, shape_index)? {
             continue;
         }
         let mut guard = RecursionGuard::new();
-        let subjects = eval_node_expr(&data, focus, subject, &mut guard)?;
-        let predicates = eval_node_expr(&data, focus, predicate, &mut guard)?;
-        let objects = eval_node_expr(&data, focus, object, &mut guard)?;
+        let subjects = eval_node_expr(data, focus, subject, &mut guard)?;
+        let predicates = eval_node_expr(data, focus, predicate, &mut guard)?;
+        let objects = eval_node_expr(data, focus, object, &mut guard)?;
         for s in &subjects {
             if !s.is_subject() {
                 return Err(format!(
@@ -409,7 +402,7 @@ fn triple_rule_producer(
 /// The `sh:SPARQLRule` producer: run the CONSTRUCT query with `$this` pre-bound to
 /// each focus node and collect the derived triples.
 fn sparql_rule_producer(
-    ds: &Arc<RdfDataset>,
+    data: &ShaclData,
     shape: &Shape,
     construct: &str,
     conditions: &[Term],
@@ -417,22 +410,17 @@ fn sparql_rule_producer(
     rule_id: &str,
     shapes_graph_iri: Option<&str>,
 ) -> Result<Vec<[Term; 3]>, String> {
-    let data = ShaclData::new(
-        Arc::clone(ds),
-        Arc::clone(ds),
-        shapes_graph_iri.map(ToOwned::to_owned),
-    );
-    let focus_nodes = focus_nodes(&data, shape)?;
+    let focus_nodes = focus_nodes(data, shape)?;
     let mut out: Vec<[Term; 3]> = Vec::new();
     for focus in &focus_nodes {
-        if !conditions_hold(&data, focus, conditions, shape_index)? {
+        if !conditions_hold(data, focus, conditions, shape_index)? {
             continue;
         }
         let subs = [("this".to_owned(), focus.to_term_value())];
         // SHACL-AF pre-binds `$this`, `$shapesGraph`, and `$currentShape` for a
         // `sh:SPARQLRule` CONSTRUCT, mirroring the SHACL-SPARQL constraint path.
-        let graph = crate::sparql::run_construct_with_shacl_prebinding(
-            ds,
+        let graph = crate::sparql::run_construct_with_shacl_prebinding_view(
+            data.sparql_view(),
             construct,
             &subs,
             shapes_graph_iri,
@@ -1158,14 +1146,20 @@ mod tests {
 
     #[test]
     fn single_sparql_rule_derives_head() {
+        crate::class_membership::reset_thread_index_builds();
         let out = entail(
-            "ex:alice a ex:Person .",
+            "ex:Leaf rdfs:subClassOf ex:Person . ex:alice a ex:Leaf .",
             r#"
-            ex:S a sh:NodeShape ; sh:targetClass ex:Person ;
+            ex:S a sh:NodeShape ; sh:targetNode ex:alice ;
               sh:rule [ a sh:SPARQLRule ; sh:construct
                 "CONSTRUCT { $this ex:adult ex:yes } WHERE { $this a ex:Person }" ] ."#,
         );
         assert!(has_iri(&out, "alice", "adult", "yes"));
+        assert_eq!(
+            crate::class_membership::thread_index_builds(),
+            2,
+            "the deriving round and terminating round each build one shared index"
+        );
     }
 
     #[test]

@@ -1,0 +1,18 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+
+# Native and SPARQL targets select the same asserted-subclass instances. The
+# constraint deliberately binds both predicate and class as variables so every
+# SHACL-SPARQL graph-pattern shape observes the same effective type relation.
+ex:PersonGate
+    a sh:NodeShape ;
+    sh:targetClass ex:Person ;
+    sh:target [
+        a sh:SPARQLTarget ;
+        sh:select "SELECT ?this WHERE { ?this a <http://example.org/ns#Person> }" ;
+    ] ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:message "person must be approved" ;
+        sh:select "SELECT $this WHERE { $this ?typePredicate ?observedClass . FILTER(?typePredicate = <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> && ?observedClass = <http://example.org/ns#Person>) FILTER NOT EXISTS { $this <http://example.org/ns#approved> true } }" ;
+    ] .

@@ -13,7 +13,6 @@ use ::purrdf::{FastMap, FastSet, IdSet, RdfDataset, RdfDatasetBuilder, RdfTerm, 
 
 use crate::data::{GraphFilter, ShaclData, quads_for_pattern_ids, resolve_id};
 use crate::expression::{FnCall, NodeExpr};
-use crate::model::{rdf, rdfs};
 use crate::report::ValidationReport;
 use crate::shapes::{Constraint, PropertyShape, Shape, Shapes, Target};
 use crate::term::{NamedNode, Term, canonical_cmp, term_id_to_native};
@@ -72,85 +71,13 @@ fn objects_of(ds: &RdfDataset, pred: &NamedNode) -> Vec<TermId> {
     result
 }
 
-/// Compute the transitive closures of asserted `rdfs:subClassOf` below every
-/// requested class as interned [`TermId`]s.
-///
-/// This implements SHACL class-membership semantics (§4.2.5), which honor the
-/// subclass relationships present in the data. It is NOT OWL/RDFS inference: we
-/// read `rdfs:subClassOf` triples that exist and materialize nothing. (The
-/// "no-inference contract" means no reasoner is run, not that asserted subclass
-/// edges are ignored.)
-///
-/// A class IRI not interned in `ds` yields an empty set: nothing can be typed to
-/// it, so it has no SHACL instances.
-///
-/// Building a general OSP permutation index merely to read a small class
-/// hierarchy dominates preparation on million-node ABox snapshots. A single
-/// sequential pass is O(quads), allocation-proportional only to actual hierarchy
-/// edges, and is shared by every class used anywhere in the shapes tree.
-fn subclass_closures(
-    ds: &RdfDataset,
-    classes: impl IntoIterator<Item = NamedNode>,
-) -> FastMap<NamedNode, IdSet> {
-    let resolved: Vec<(NamedNode, Option<TermId>)> = classes
-        .into_iter()
-        .map(|class| {
-            let id = ds.term_id_by_iri(class.as_str());
-            (class, id)
-        })
-        .collect();
-    let Some(subclass_predicate) = ds.term_id_by_iri(rdfs::SUB_CLASS_OF) else {
-        return resolved
-            .into_iter()
-            .map(|(class, id)| (class, id.into_iter().collect()))
-            .collect();
-    };
-    if !resolved.iter().any(|(_, id)| id.is_some()) {
-        return resolved
-            .into_iter()
-            .map(|(class, _)| (class, IdSet::default()))
-            .collect();
-    }
-
-    let mut subclasses: FastMap<TermId, Vec<TermId>> = FastMap::default();
-    for quad in ds.quads() {
-        if quad.p == subclass_predicate {
-            subclasses.entry(quad.o).or_default().push(quad.s);
-        }
-    }
-
-    resolved
-        .into_iter()
-        .map(|(class, start)| {
-            let mut closure = IdSet::default();
-            if let Some(start) = start {
-                closure.insert(start);
-                let mut frontier = vec![start];
-                while let Some(superclass) = frontier.pop() {
-                    if let Some(direct) = subclasses.get(&superclass) {
-                        for &subclass in direct {
-                            if closure.insert(subclass) {
-                                frontier.push(subclass);
-                            }
-                        }
-                    }
-                }
-            }
-            (class, closure)
-        })
-        .collect()
-}
-
 /// Dataset-bound invariant state shared by every focus evaluation in one pass.
 ///
-/// All class IRIs reachable from the parsed shape tree are discovered once and
-/// their asserted-subclass closures are materialized before focus evaluation.
-/// The resulting map is immutable, so the same plan can be read concurrently
-/// by validation workers without locks or repeated graph walks.
+/// All class IRIs reachable from the parsed shape tree are resolved once. Their
+/// membership is answered by [`ShaclData`]'s shared immutable class view.
 #[derive(Debug)]
 pub(crate) struct ValidationPlan {
-    rdf_type_id: Option<TermId>,
-    class_closures: FastMap<NamedNode, IdSet>,
+    class_ids: FastMap<NamedNode, Option<TermId>>,
 }
 
 impl ValidationPlan {
@@ -167,21 +94,20 @@ impl ValidationPlan {
         for shape in shapes {
             collect_shape_classes(shape, &mut classes);
         }
-        let class_closures = subclass_closures(ds, classes);
-        Self {
-            rdf_type_id: resolve_id(ds, &Term::NamedNode(NamedNode::from(rdf::TYPE))),
-            class_closures,
-        }
+        let class_ids = classes
+            .into_iter()
+            .map(|class| {
+                let id = ds.term_id_by_iri(class.as_str());
+                (class, id)
+            })
+            .collect();
+        Self { class_ids }
     }
 
     #[inline]
-    pub(crate) fn rdf_type_id(&self) -> Option<TermId> {
-        self.rdf_type_id
-    }
-
-    #[inline]
-    pub(crate) fn class_closure(&self, class: &NamedNode) -> &IdSet {
-        self.class_closures
+    pub(crate) fn class_id(&self, class: &NamedNode) -> Option<TermId> {
+        *self
+            .class_ids
             .get(class)
             .expect("every reachable sh:class and sh:targetClass is planned")
     }
@@ -311,29 +237,17 @@ fn collect_expression_classes(expr: &NodeExpr, classes: &mut FastSet<NamedNode>)
 /// Collect subjects that are SHACL instances of `class_iri`: nodes with an
 /// `rdf:type` to `class_iri` or to any asserted (transitive) subclass of it.
 ///
-/// `plan` carries every dataset-bound subclass closure used by the shape tree;
-/// focus resolution performs no graph-wide closure walk.
+/// `plan` carries the pre-resolved class identity; the shared class view answers
+/// membership without a graph-wide closure walk during focus resolution.
 fn instances_of_class(
-    ds: &RdfDataset,
+    data: &ShaclData,
     class_iri: &NamedNode,
     plan: &ValidationPlan,
 ) -> Vec<TermId> {
-    let Some(rdf_type) = plan.rdf_type_id() else {
+    let Some(class) = plan.class_id(class_iri) else {
         return Vec::new();
     };
-    let classes = plan.class_closure(class_iri);
-    let mut seen: IdSet = IdSet::default();
-    let mut result = Vec::new();
-    // Iterate the memoized id set by reference — never clone the whole set per call.
-    for &class in classes {
-        for q in quads_for_pattern_ids(ds, None, Some(rdf_type), Some(class), GraphFilter::AnyGraph)
-        {
-            if seen.insert(q.s) {
-                result.push(q.s);
-            }
-        }
-    }
-    result
+    data.class_view().instances_of(class).collect()
 }
 
 /// A resolved focus node carrying its already-known interned identity.
@@ -377,11 +291,11 @@ pub(crate) fn resolve_focus_nodes(
 
     for target in targets {
         let ids = match target {
-            Target::Class(class_iri) => Some(instances_of_class(ds, class_iri, plan)),
+            Target::Class(class_iri) => Some(instances_of_class(data, class_iri, plan)),
             Target::SubjectsOf(pred) => Some(subjects_of(ds, pred)),
             Target::ObjectsOf(pred) => Some(objects_of(ds, pred)),
             Target::ImplicitClass(Term::NamedNode(class)) => {
-                Some(instances_of_class(ds, class, plan))
+                Some(instances_of_class(data, class, plan))
             }
             Target::ImplicitClass(_) => Some(Vec::new()),
             Target::Node(_) | Target::Sparql { .. } => None,
@@ -405,7 +319,7 @@ pub(crate) fn resolve_focus_nodes(
             Target::Sparql {
                 select,
                 substitutions,
-            } => crate::sparql::eval_target(data.sparql(), select, substitutions)
+            } => crate::sparql::eval_target_view(data.sparql_view(), select, substitutions)
                 .map_err(|e| format!("sh:target SPARQLTarget failed: {e}"))?,
             Target::Class(_)
             | Target::SubjectsOf(_)
@@ -449,14 +363,14 @@ impl PreparedTargets {
         for target in &shape.targets {
             match target {
                 Target::Class(class) => {
-                    prepared
-                        .target_class_ids
-                        .extend(plan.class_closure(class).iter().copied());
+                    if let Some(class) = plan.class_id(class) {
+                        prepared.target_class_ids.insert(class);
+                    }
                 }
                 Target::ImplicitClass(Term::NamedNode(class)) => {
-                    prepared
-                        .target_class_ids
-                        .extend(plan.class_closure(class).iter().copied());
+                    if let Some(class) = plan.class_id(class) {
+                        prepared.target_class_ids.insert(class);
+                    }
                 }
                 Target::SubjectsOf(predicate) => {
                     if let Some(id) = resolve_pred(data.core(), predicate) {
@@ -474,7 +388,7 @@ impl PreparedTargets {
                     substitutions,
                 } => {
                     let candidates =
-                        crate::sparql::eval_target(data.sparql(), select, substitutions)
+                        crate::sparql::eval_target_view(data.sparql_view(), select, substitutions)
                             .map_err(|error| format!("sh:target SPARQLTarget failed: {error}"))?;
                     for candidate in candidates {
                         prepared.insert_explicit(data.core(), candidate);
@@ -495,7 +409,7 @@ impl PreparedTargets {
     }
 
     #[inline]
-    fn contains(&self, data: &ShaclData, plan: &ValidationPlan, focus: &FocusNode) -> bool {
+    fn contains(&self, data: &ShaclData, focus: &FocusNode) -> bool {
         let Some(id) = focus.id() else {
             return self.explicit_foreign.contains(focus.term());
         };
@@ -504,16 +418,10 @@ impl PreparedTargets {
         }
 
         let dataset = data.core();
-        if let Some(rdf_type) = plan.rdf_type_id()
-            && !self.target_class_ids.is_empty()
-            && quads_for_pattern_ids(
-                dataset,
-                Some(id),
-                Some(rdf_type),
-                None,
-                GraphFilter::AnyGraph,
-            )
-            .any(|quad| self.target_class_ids.contains(&quad.o))
+        if self
+            .target_class_ids
+            .iter()
+            .any(|&class| data.class_view().is_instance(id, class))
         {
             return true;
         }
@@ -528,7 +436,7 @@ impl PreparedTargets {
                 .any(|quad| self.object_predicates.contains(&quad.p))
     }
 
-    fn resolve_all(&self, data: &ShaclData, plan: &ValidationPlan) -> Vec<FocusNode> {
+    fn resolve_all(&self, data: &ShaclData) -> Vec<FocusNode> {
         let dataset = data.core();
         let mut seen_ids = self.explicit_ids.clone();
         let mut nodes: Vec<FocusNode> = self
@@ -541,21 +449,13 @@ impl PreparedTargets {
             })
             .collect();
 
-        if let Some(rdf_type) = plan.rdf_type_id() {
-            for &class in &self.target_class_ids {
-                for quad in quads_for_pattern_ids(
-                    dataset,
-                    None,
-                    Some(rdf_type),
-                    Some(class),
-                    GraphFilter::AnyGraph,
-                ) {
-                    if seen_ids.insert(quad.s) {
-                        nodes.push(FocusNode {
-                            term: term_id_to_native(dataset, quad.s),
-                            id: Some(quad.s),
-                        });
-                    }
+        for &class in &self.target_class_ids {
+            for subject in data.class_view().instances_of(class) {
+                if seen_ids.insert(subject) {
+                    nodes.push(FocusNode {
+                        term: term_id_to_native(dataset, subject),
+                        id: Some(subject),
+                    });
                 }
             }
         }
@@ -695,7 +595,7 @@ where
 
 /// Reusable validation state for one immutable projected dataset and shapes graph.
 ///
-/// Preparation memoizes every dataset-bound class closure, resolves target
+/// Preparation builds the shared class-membership view, resolves target
 /// predicates, and evaluates explicit SHACL-SPARQL targets once. Core targets are
 /// kept as compact membership predicates: [`Self::validate_focus_nodes`] and
 /// [`Self::validate_focus_node_ids`] inspect only the caller-supplied candidates
@@ -762,6 +662,7 @@ impl PreparedValidator {
     /// Returns an error when an active SHACL-SPARQL target cannot be evaluated.
     pub fn new(data: ShaclData, shapes: Arc<Shapes>) -> Result<Self, String> {
         let _function_scope = crate::sparql::enter_function_scope(Arc::clone(&shapes.functions));
+        data.prepare_class_membership();
         let plan = ValidationPlan::for_shapes(data.core(), &shapes);
         let targets = shapes
             .node_shapes
@@ -780,6 +681,16 @@ impl PreparedValidator {
             plan,
             targets,
         })
+    }
+
+    /// Return compact class-membership index dimensions.
+    ///
+    /// The array contains typed-class entries, stored subject ids, ancestor ids,
+    /// superclass entries, source-class ids, and the virtual-row upper bound.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn __class_membership_dimensions(&self) -> [usize; 6] {
+        self.data.class_view().dimensions()
     }
 
     /// Project and prepare a frozen dataset.
@@ -840,7 +751,7 @@ impl PreparedValidator {
             if shape.deactivated {
                 continue;
             }
-            let focus_nodes = targets.resolve_all(&self.data, &self.plan);
+            let focus_nodes = targets.resolve_all(&self.data);
             all_results.extend(evaluate_shape_focus_nodes(
                 &self.data,
                 &self.shapes,
@@ -942,11 +853,23 @@ impl PreparedValidator {
                 shape,
                 &self.plan,
                 focus_nodes,
-                |focus| targets.contains(&self.data, &self.plan, focus),
+                |focus| targets.contains(&self.data, focus),
             )?);
         }
         Ok(finish_report(all_results))
     }
+}
+
+/// Construct the prepared validation-scoped class-membership dataset view.
+#[doc(hidden)]
+#[must_use]
+pub fn __prepared_class_membership_view(
+    dataset: Arc<RdfDataset>,
+) -> impl ::purrdf::DatasetView<Id = TermId, ProbePlan = ::purrdf::ir::QuadProbePlan> + Clone + Send + Sync
+{
+    let view = crate::class_membership::ClassMembershipView::new(dataset);
+    view.prepare();
+    view
 }
 
 /// Validate a [`ShaclData`] holder against `shapes`.
@@ -995,10 +918,11 @@ where
 /// Validate a frozen [`::purrdf::RdfDataset`] against parsed SHACL shapes, IR-natively.
 ///
 /// The generic engine reads pattern lookups DIRECTLY from a SHACL projection of
-/// the IR — there is no whole-store oxigraph materialization on this path
-/// (SHACL-SPARQL constraints, if any, lazily materialize a query store on demand
-/// only). Named graphs are flattened so GTS bundle partitions behave like the
-/// repository's Turtle source merge, which loads all inputs into one default graph.
+/// the IR. Native and SHACL-SPARQL evaluation share a validation-scoped view
+/// that adds only class memberships implied by asserted `rdfs:subClassOf`
+/// edges; it does not copy or expand the underlying graph. Named graphs are
+/// flattened so GTS bundle partitions behave like the repository's Turtle
+/// source merge, which loads all inputs into one default graph.
 ///
 /// # Errors
 ///
@@ -1840,7 +1764,7 @@ mod tests {
     }
 
     #[test]
-    fn validation_plan_collects_target_property_and_nested_classes() {
+    fn validation_plan_resolves_target_property_and_nested_classes() {
         let shapes_ttl = format!(
             r"{PREFIXES}
             ex:PlannedShape a sh:NodeShape ;
@@ -1859,20 +1783,18 @@ mod tests {
         let shapes = load_shapes_ttl(&shapes_ttl);
         let plan = ValidationPlan::for_shapes(data.as_ref(), &shapes);
 
-        assert_eq!(plan.class_closures.len(), 3);
-        assert_eq!(
-            plan.class_closure(&NamedNode::from("http://example.org/ns#Root"))
-                .len(),
-            2
-        );
-        assert_eq!(
-            plan.class_closure(&NamedNode::from("http://example.org/ns#Value"))
-                .len(),
-            2
+        assert_eq!(plan.class_ids.len(), 3);
+        assert!(
+            plan.class_id(&NamedNode::from("http://example.org/ns#Root"))
+                .is_some()
         );
         assert!(
-            plan.class_closure(&NamedNode::from("http://example.org/ns#Nested"))
-                .is_empty()
+            plan.class_id(&NamedNode::from("http://example.org/ns#Value"))
+                .is_some()
+        );
+        assert!(
+            plan.class_id(&NamedNode::from("http://example.org/ns#Nested"))
+                .is_none()
         );
     }
 
@@ -1882,7 +1804,8 @@ mod tests {
         assert_send_sync::<PreparedValidator>();
 
         let data = load_data_nt(concat!(
-            "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n",
+            "<http://example.org/ns#Employee> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/ns#Person> .\n",
+            "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Employee> .\n",
             "<http://example.org/ns#alice> <http://example.org/ns#knows> <http://example.org/ns#bob> .\n",
             "<http://example.org/ns#bob> <http://example.org/ns#knows> <http://example.org/ns#alice> .\n",
         ));
@@ -1923,6 +1846,8 @@ mod tests {
         let prepared =
             PreparedValidator::from_projected_dataset(Arc::clone(&projected), Arc::clone(&shapes))
                 .expect("preparation must succeed");
+        assert_eq!(prepared.data.class_view().build_count(), 1);
+        assert_eq!(prepared.data.sparql_view().build_count(), 1);
 
         let bounded = prepared
             .validate_focus_nodes(&[alice.clone(), alice])
@@ -1961,6 +1886,11 @@ mod tests {
             prepared.validate_focus_node_ids(&[invalid]).is_err(),
             "out-of-range ids must fail before dataset lookup"
         );
+        assert_eq!(
+            prepared.data.class_view().build_count(),
+            1,
+            "repeated realtime calls must reuse the prepared index"
+        );
     }
 
     #[test]
@@ -1984,14 +1914,196 @@ mod tests {
     }
 
     #[test]
+    fn parameterized_sparql_target_uses_subclass_membership_across_entry_points() {
+        let data_nt = concat!(
+            "<http://example.org/ns#Leaf> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/ns#Mid> .\n",
+            "<http://example.org/ns#Mid> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/ns#Person> .\n",
+            "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Leaf> .\n",
+        );
+        let shapes_ttl = format!(
+            "{PREFIXES}\n{}",
+            r#"
+            ex:ByClass a sh:SPARQLTargetType ;
+                sh:parameter [ sh:path ex:class ; sh:order 0 ] ;
+                sh:select "SELECT ?this WHERE { ?this a ?class }" .
+
+            ex:TargetTypeShape a sh:NodeShape ;
+                sh:target [ a ex:ByClass ; ex:class ex:Person ] ;
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            "#,
+        );
+
+        let text_report = validate_graphs(data_nt, &shapes_ttl).expect("text validation");
+        assert_eq!(text_report.results.len(), 1);
+        assert_eq!(
+            text_report.results[0].focus_node,
+            NamedNode::new_unchecked("http://example.org/ns#alice").into_term()
+        );
+
+        let source = load_data_nt(data_nt);
+        let projected = project_dataset(source.as_ref()).expect("projection");
+        let shapes = Arc::new(load_shapes_ttl(&shapes_ttl));
+        let projected_report =
+            validate_projected_dataset(Arc::clone(&projected), &shapes).expect("projected");
+        let prepared = PreparedValidator::from_projected_dataset(projected, Arc::clone(&shapes))
+            .expect("prepared validator");
+        let first = prepared.validate().expect("first prepared validation");
+        let second = prepared.validate().expect("second prepared validation");
+        assert_eq!(text_report.to_ntriples(), projected_report.to_ntriples());
+        assert_eq!(text_report.to_ntriples(), first.to_ntriples());
+        assert_eq!(first.to_ntriples(), second.to_ntriples());
+
+        let reversed = data_nt.lines().rev().collect::<Vec<_>>().join("\n");
+        let reversed_report =
+            validate_graphs(&reversed, &shapes_ttl).expect("permuted text validation");
+        assert_eq!(text_report.to_ntriples(), reversed_report.to_ntriples());
+    }
+
+    #[test]
+    fn ask_and_select_components_query_the_shared_membership_relation() {
+        let data_nt = concat!(
+            "<http://example.org/ns#Leaf> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/ns#Person> .\n",
+            "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Leaf> .\n",
+            "<http://example.org/ns#bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Other> .\n",
+        );
+        let shapes_ttl = format!(
+            "{PREFIXES}\n{}",
+            r#"
+            ex:AskClassComponent a sh:ConstraintComponent ;
+                sh:parameter [ sh:path ex:requiredClass ] ;
+                sh:nodeValidator [
+                    a sh:SPARQLAskValidator ;
+                    sh:ask "ASK { $this a $requiredClass }" ;
+                ] .
+
+            ex:SelectClassComponent a sh:ConstraintComponent ;
+                sh:parameter [ sh:path ex:selectedClass ] ;
+                sh:nodeValidator [
+                    a sh:SPARQLSelectValidator ;
+                    sh:select "SELECT $this WHERE { FILTER NOT EXISTS { $this a $selectedClass } }" ;
+                ] .
+
+            ex:AskShape a sh:NodeShape ;
+                sh:targetNode ex:alice, ex:bob ;
+                ex:requiredClass ex:Person .
+
+            ex:SelectShape a sh:NodeShape ;
+                sh:targetNode ex:alice, ex:bob ;
+                ex:selectedClass ex:Person .
+            "#,
+        );
+
+        let report = validate_graphs(data_nt, &shapes_ttl).expect("component validation");
+        assert_eq!(report.results.len(), 2, "only bob fails both validators");
+        assert!(report.results.iter().all(|result| {
+            result.focus_node == NamedNode::new_unchecked("http://example.org/ns#bob").into_term()
+        }));
+        let components: FastSet<_> = report
+            .results
+            .iter()
+            .map(|result| result.source_constraint_component.as_str())
+            .collect();
+        assert_eq!(components.len(), 2);
+        assert!(components.contains("http://example.org/ns#AskClassComponent"));
+        assert!(components.contains("http://example.org/ns#SelectClassComponent"));
+    }
+
+    #[test]
+    fn declared_function_body_queries_derived_membership() {
+        let data_nt = concat!(
+            "<http://example.org/ns#Leaf> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/ns#Person> .\n",
+            "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Leaf> .\n",
+            "<http://example.org/ns#bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Other> .\n",
+        );
+        let shapes_ttl = format!(
+            "{PREFIXES}\n{}",
+            r#"
+            ex:isPerson a sh:SPARQLFunction ;
+                sh:parameter [ sh:path ex:node ; sh:nodeKind sh:IRI ] ;
+                sh:returnType xsd:boolean ;
+                sh:ask "ASK { ?node a <http://example.org/ns#Person> }" .
+
+            ex:FunctionShape a sh:NodeShape ;
+                sh:targetNode ex:alice, ex:bob ;
+                sh:expression [ ex:isPerson ( sh:this ) ] .
+            "#,
+        );
+
+        let report = validate_graphs(data_nt, &shapes_ttl).expect("function validation");
+        assert_eq!(report.results.len(), 1);
+        assert_eq!(
+            report.results[0].focus_node,
+            NamedNode::new_unchecked("http://example.org/ns#bob").into_term()
+        );
+    }
+
+    #[test]
+    fn native_rdf_type_path_remains_asserted_only() {
+        let data_nt = concat!(
+            "<http://example.org/ns#Leaf> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/ns#Person> .\n",
+            "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Leaf> .\n",
+        );
+        let shapes_ttl = format!(
+            "{PREFIXES}\n{}",
+            r"
+            ex:AssertedPathShape a sh:NodeShape ;
+                sh:targetNode ex:alice ;
+                sh:property [ sh:path rdf:type ; sh:hasValue ex:Person ] .
+            ",
+        );
+        let report = validate_graphs(data_nt, &shapes_ttl).expect("path validation");
+        assert_eq!(report.results.len(), 1);
+        assert!(
+            report.results[0]
+                .source_constraint_component
+                .as_str()
+                .ends_with("HasValueConstraintComponent")
+        );
+    }
+
+    #[test]
+    fn shapes_named_graph_cannot_create_default_graph_membership() {
+        let shapes_ttl = format!(
+            "{PREFIXES}\n{}",
+            r#"
+            ex:Ghost a ex:Leaf .
+            ex:Leaf rdfs:subClassOf ex:Person .
+
+            ex:IsolatedShape a sh:NodeShape ;
+                sh:targetClass ex:Person ;
+                sh:target [
+                    a sh:SPARQLTarget ;
+                    sh:select "SELECT ?this WHERE { ?this a <http://example.org/ns#Person> }" ;
+                ] ;
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            "#,
+        );
+        let shapes = load_shapes_ttl(&shapes_ttl);
+        let projected = project_dataset(load_data_nt("").as_ref()).expect("empty projection");
+        let report = validate_projected_dataset_with_shapes_graph(
+            projected,
+            &shapes,
+            Some("http://example.org/shapes"),
+        )
+        .expect("isolated validation");
+        assert!(
+            report.conforms,
+            "named shapes rows must not target ex:Ghost"
+        );
+    }
+
+    #[test]
     fn forced_parallel_matches_serial_with_user_functions() {
         use std::fmt::Write as _;
 
         let mut data_nt = String::new();
+        data_nt.push_str(
+            "<http://example.org/ns#Employee> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/ns#Person> .\n",
+        );
         for index in 0..24 {
             write!(
                 data_nt,
-                "<http://example.org/ns#item{index}> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n\
+                "<http://example.org/ns#item{index}> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Employee> .\n\
                  <http://example.org/ns#item{index}> <http://example.org/ns#amount> \"1\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n"
             )
             .expect("writing to a String cannot fail");
@@ -2006,7 +2118,7 @@ mod tests {
             ex:ParallelShape a sh:NodeShape ;
                 sh:targetClass ex:Person ;
                 sh:sparql [
-                    sh:select "SELECT $this WHERE {{ $this <http://example.org/ns#amount> ?amount . FILTER(<http://example.org/ns#tripled>(?amount) > 2) }}" ;
+                    sh:select "SELECT $this WHERE {{ $this a <http://example.org/ns#Person> ; <http://example.org/ns#amount> ?amount . FILTER(<http://example.org/ns#tripled>(?amount) > 2) }}" ;
                 ] .
             "#
         );
@@ -2047,7 +2159,7 @@ mod tests {
             })
             .collect();
         cases.sort();
-        assert_eq!(cases.len(), 69, "first-party corpus cardinality drifted");
+        assert_eq!(cases.len(), 70, "first-party corpus cardinality drifted");
 
         let geometries: Vec<_> = [(2, 1), (4, 7), (4, 64)]
             .into_iter()

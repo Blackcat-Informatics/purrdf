@@ -33,13 +33,15 @@ BINARYEN_VERSION := 130
 # -Oz). `make wasm-pkg-size` (and both CI and the npm release) fail if the built
 # artifact exceeds this. The shipped bundle — RDF 1.2 model, SPARQL/SHACL/ShEx
 # engines, the native format registry (now including JSON-LD/YAML-LD),
-# deterministic layout, SVG export, and all sixteen graph/tabular/
-# dataset-description/research-object projection profiles plus the compiled
-# JSON-LD context/options/registry engine — measures 7_790_823 bytes;
-# 8_030_000 keeps 3.07% headroom. The always-on bounded CONSTRUCT engine,
-# mapped native DCAT RDF emitter, lossless native description serializer, and
-# VoID statistics/partition/linkset generator are the capabilities responsible
-# for this reviewed increase. The artifact's size is a joint function of
+# deterministic layout, SVG export, all sixteen graph/tabular/
+# dataset-description/research-object projection profiles, the compiled JSON-LD
+# context/options/registry engine, and validation-scoped asserted-subclass
+# membership shared by native SHACL and SHACL-SPARQL — measures 8_148_368 bytes;
+# 8_400_000 keeps 3.09% headroom. The always-on bounded CONSTRUCT engine, mapped
+# native DCAT RDF emitter, lossless native description serializer, VoID
+# statistics/partition/linkset generator, and shared class-membership view are
+# the capabilities responsible for this reviewed increase. The artifact's size
+# is a joint function of
 # rustc (tracks stable), wasm-bindgen (pinned in Cargo.toml), and binaryen
 # (pinned via BINARYEN_VERSION), so a moved number is attributable.
 #
@@ -49,7 +51,7 @@ BINARYEN_VERSION := 130
 # artifact grew: a new capability or dependency, or a routine rustc-stable /
 # binaryen bump (a valid, must-be-explained reason). Never raise it merely to
 # turn a red gate green.
-WASM_SIZE_BUDGET_BYTES := 8030000
+WASM_SIZE_BUDGET_BYTES := 8400000
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
