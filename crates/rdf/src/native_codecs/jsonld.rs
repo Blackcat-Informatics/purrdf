@@ -1835,7 +1835,7 @@ mod carrier_law_tests {
     #[test]
     fn reference_multiplicity_is_bounded_at_many() {
         let mut count = 0;
-        for _ in 0..usize::from(u8::MAX) + 1 {
+        for _ in 0..=usize::from(u8::MAX) {
             increment_multiplicity(&mut count);
         }
         assert_eq!(count, 2);
