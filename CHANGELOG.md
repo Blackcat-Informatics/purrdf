@@ -4,6 +4,39 @@ All notable changes to the PurRDF crate suite are recorded here. The suite
 ships one lockstep version across crates.io, PyPI, and npm; pre-1.0, a minor
 bump may carry breaking changes and a patch bump is bugfix-only.
 
+## [0.8.3] - 2026-07-23
+
+### Bug Fixes
+
+- **rdf:** Make JSON-LD byte budgets target independent
+- **rdf:** Harden JSON-LD size arithmetic
+- **capi:** Refresh generated package version
+- **rdf:** Complete JSON-LD portability audit
+- **rdf:** Make JSON-LD byte budgets portable
+
+### CI & Build
+
+- **release:** Gate coordinated tags on full checks
+- **release:** Validate every published surface
+
+### Other
+
+- **shapes:** Restore canonical formatting
+
+### Testing
+
+- **rdf:** Use inclusive multiplicity range
+
+## [0.8.2] - 2026-07-22
+
+### Bug Fixes
+
+- **shapes:** Make SHACL-AF function scope re-entrancy-safe under parallel validation
+- **shapes:** Disambiguate ontology classes named after reserved JSON-Schema $def keys
+- **rdf:** Raise JSON-LD carrier/document row ceilings to 2^23 for large bundles
+- **rdf:** Size the JSON-LD carrier envelope for a whole-ontology bundle
+- **rdf:** Raise JSON-LD output/document byte ceilings for whole-ontology bundles
+
 ## [0.8.1] - 2026-07-21
 
 ### Bug Fixes
