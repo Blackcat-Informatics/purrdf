@@ -8,11 +8,12 @@ use std::cell::Cell;
 use serde::de::{DeserializeSeed, Error as _, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Number, Value};
 
+use super::super::ByteLimit;
 use crate::RdfDiagnostic;
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct StrictJsonLimits {
-    pub(super) bytes: usize,
+    pub(super) bytes: ByteLimit,
     pub(super) depth: usize,
     pub(super) values: usize,
 }
@@ -22,7 +23,7 @@ pub(super) fn parse_strict_json(
     limits: StrictJsonLimits,
     description: &str,
 ) -> Result<Value, RdfDiagnostic> {
-    if bytes.len() > limits.bytes {
+    if !limits.bytes.admits_usize(bytes.len()) {
         return Err(error(format!(
             "{description} is {} bytes; limit is {}",
             bytes.len(),

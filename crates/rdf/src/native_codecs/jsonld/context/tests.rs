@@ -677,7 +677,7 @@ fn fixed_limits_accept_exact_boundaries_and_reject_one_over() {
     assert_eq!(one_over_work.code, "jsonld-context-limit");
 
     let strict = StrictJsonLimits {
-        bytes: 4,
+        bytes: ByteLimit::new(4),
         depth: 1,
         values: 1,
     };

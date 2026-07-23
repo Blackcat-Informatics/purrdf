@@ -65,7 +65,7 @@ enum NodeDisposition {
 struct Builder {
     graphs: BTreeMap<Option<String>, BTreeMap<String, Node>>,
     reserved_blank_nodes: BTreeSet<String>,
-    next_blank_node: usize,
+    next_blank_node: u64,
 }
 
 impl Builder {
@@ -1208,7 +1208,7 @@ fn collect_blank_node_ids(value: &JsonValue, output: &mut BTreeSet<String>) {
 struct Lowerer {
     quads: Vec<RdfQuad>,
     reserved_blank_nodes: BTreeSet<String>,
-    next_list: usize,
+    next_list: u64,
 }
 
 impl Lowerer {
@@ -1450,4 +1450,18 @@ fn lower_literal(literal: &Literal) -> Result<RdfTerm, RdfDiagnostic> {
         (None, None, None) => RdfLiteral::simple(literal.lexical.clone()),
     };
     Ok(RdfTerm::literal(value))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_blank_node_sequence_is_not_pointer_width_limited() {
+        let mut builder = Builder::new(&JsonValue::Null);
+        builder.next_blank_node = u64::from(u32::MAX);
+
+        assert_eq!(builder.fresh_blank_node(), "_:jsonld4294967295");
+        assert_eq!(builder.next_blank_node, u64::from(u32::MAX) + 1);
+    }
 }

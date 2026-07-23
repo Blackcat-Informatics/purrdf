@@ -64,15 +64,20 @@ impl CandidateStats {
 
     fn is_profitable(self, alias: &str, namespace: &str) -> Result<bool, RdfDiagnostic> {
         let compacted_bytes = self
-            .occurrences
-            .checked_mul(alias.len() + 1)
-            .and_then(|bytes| bytes.checked_add(self.suffix_bytes))
+            .compacted_bytes(alias.len())
             .ok_or_else(|| derived_limit("derived namespace compacted-byte count overflow"))?;
         let context_cost = prefix_definition_cost(alias, namespace)?;
         Ok(self
             .expanded_bytes
             .checked_sub(compacted_bytes)
             .is_some_and(|saving| saving > context_cost))
+    }
+
+    fn compacted_bytes(self, alias_bytes: usize) -> Option<usize> {
+        alias_bytes
+            .checked_add(1)
+            .and_then(|width| self.occurrences.checked_mul(width))
+            .and_then(|bytes| bytes.checked_add(self.suffix_bytes))
     }
 }
 
@@ -281,7 +286,7 @@ fn namespace_boundary(iri: &str) -> Option<&str> {
     if !parsed.has_scheme() || parsed.query().is_some() {
         return None;
     }
-    let scheme_end = parsed.scheme()?.len() + 1;
+    let scheme_end = parsed.scheme()?.len().checked_add(1)?;
     let boundary = iri
         .rfind('#')
         .filter(|index| *index >= scheme_end)
@@ -332,6 +337,17 @@ mod tests {
         (0..count)
             .map(|index| format!("{namespace}term{index}"))
             .collect()
+    }
+
+    #[test]
+    fn compacted_byte_estimate_checks_alias_width_before_multiplication() {
+        let stats = CandidateStats {
+            expanded_bytes: usize::MAX,
+            suffix_bytes: 0,
+            occurrences: 1,
+        };
+        assert_eq!(stats.compacted_bytes(0), Some(1));
+        assert_eq!(stats.compacted_bytes(usize::MAX), None);
     }
 
     #[test]

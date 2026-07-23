@@ -117,10 +117,29 @@ release-tags: ## Cut + push rust-v/py-v/npm-v tags for VERSION after coherence c
 		flag { print } \
 	' CHANGELOG.md); \
 		test -n "$$(printf '%s' "$$notes" | tr -d '[:space:]')" || { echo "ERROR: CHANGELOG.md has no release-notes section for [$(VERSION)] — run 'make changelog' and commit it before tagging"; exit 1; }
+	@git fetch --quiet origin main
+	@test "$$(git rev-parse HEAD)" = "$$(git rev-parse refs/remotes/origin/main)" || { echo "ERROR: main is not synchronized with origin/main"; exit 1; }
+	@for tag in "rust-v$(VERSION)" "py-v$(VERSION)" "npm-v$(VERSION)"; do \
+		! git rev-parse --quiet --verify "refs/tags/$$tag" >/dev/null || { echo "ERROR: local tag $$tag already exists"; exit 1; }; \
+		! git ls-remote --exit-code --tags origin "refs/tags/$$tag" >/dev/null 2>&1 || { echo "ERROR: remote tag $$tag already exists"; exit 1; }; \
+	done
+	@echo "Running the complete release preflight before creating any tags..."
+	@$(MAKE) check
+	@$(MAKE) capi-check
+	@$(MAKE) pytest
+	@$(MAKE) wasm-pkg-test
+	@test -z "$$(git status --porcelain)" || { echo "ERROR: full release preflight changed the working tree"; exit 1; }
+	@branch=$$(git branch --show-current); test "$$branch" = "main" || { echo "ERROR: branch changed during release preflight (currently on $$branch)"; exit 1; }
+	@git fetch --quiet origin main
+	@test "$$(git rev-parse HEAD)" = "$$(git rev-parse refs/remotes/origin/main)" || { echo "ERROR: main moved during release preflight; update main and rerun"; exit 1; }
+	@for tag in "rust-v$(VERSION)" "py-v$(VERSION)" "npm-v$(VERSION)"; do \
+		! git rev-parse --quiet --verify "refs/tags/$$tag" >/dev/null || { echo "ERROR: local tag $$tag appeared during release preflight"; exit 1; }; \
+		! git ls-remote --exit-code --tags origin "refs/tags/$$tag" >/dev/null 2>&1 || { echo "ERROR: remote tag $$tag appeared during release preflight"; exit 1; }; \
+	done
 	git tag "rust-v$(VERSION)"
 	git tag "py-v$(VERSION)"
 	git tag "npm-v$(VERSION)"
-	git push origin "rust-v$(VERSION)" "py-v$(VERSION)" "npm-v$(VERSION)"
+	git push --atomic origin "rust-v$(VERSION)" "py-v$(VERSION)" "npm-v$(VERSION)"
 	@echo "OK: pushed rust-v$(VERSION), py-v$(VERSION), npm-v$(VERSION)"
 
 test: ## Run the workspace test suite.
@@ -207,9 +226,9 @@ rdf-core-hygiene: ## Prove the kernel ring-fence: no oxigraph/PyO3 in purrdf-cor
 		echo "OK: $$leaf is zero-dependency"; \
 	done
 
-wasm: ## Prove the release crates build for wasm32-unknown-unknown (SKIP locally if target absent; CI hard-fails).
+wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if target absent; CI hard-fails).
 	@if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
-		cargo check --locked --target wasm32-unknown-unknown --lib \
+		cargo build --locked --release --target wasm32-unknown-unknown --lib \
 			-p purrdf-events -p purrdf-iri -p purrdf-xsd -p purrdf-gts -p purrdf-core -p purrdf-columnar \
 			-p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-sparql-eval \
 			-p purrdf-rdf -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf-entail \
@@ -296,7 +315,7 @@ wasm-pkg-size: wasm-pkg ## Gate the optimized wasm artifact byte size against WA
 	 fi; \
 	 echo "OK: wasm artifact within budget"
 
-wasm-pkg-test: wasm-pkg ## Build the wasm package and run the npm package-root gate.
+wasm-pkg-test: wasm-pkg-size ## Build, size-gate, and test the optimized npm/wasm package.
 	cd crates/rdf-wasm/js && npm ci --ignore-scripts --no-audit --no-fund && npm run check
 
 wasm-pkg-bench: wasm-pkg ## Build the wasm package and run the Node parse-throughput benchmark (report-only; never a gate).

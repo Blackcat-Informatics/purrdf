@@ -166,9 +166,9 @@ jobs:
       - name: Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
         uses: ./.github/actions/wasm-toolchain
 
-      - name: Check release crates on wasm32
+      - name: Build release crates on wasm32
         run: |
-          cargo check --locked --target wasm32-unknown-unknown --lib \
+          cargo build --locked --release --target wasm32-unknown-unknown --lib \
             -p purrdf-events \
             -p purrdf-iri \
             -p purrdf-xsd \

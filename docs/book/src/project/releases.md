@@ -58,24 +58,30 @@ never drift:
 # 1. Bump all three version sources in lockstep (fails unless they end up equal).
 make bump VERSION=0.2.2
 
-# 2. Regenerate the changelog from the conventional-commit history.
+# 2. Regenerate the committed C-ABI header from the bumped crate version.
+make capi-header
+
+# 3. Regenerate the changelog from the conventional-commit history.
 make changelog
 
-# 3. Review, then commit the release bump + changelog.
+# 4. Review, then commit the release bump, generated header, and changelog.
 git add -A && git commit -m "chore(release): 0.2.2"
 
-# 4. Gate: fmt, clippy, tests, hygiene, and the version-coherence + wasm checks.
-make check
-
-# 5. From an up-to-date main, cut and push all three tags in one command.
+# 5. From an up-to-date main, run every release gate, then push all three tags.
 make release-tags VERSION=0.2.2
 ```
 
 `make release-tags` refuses to run unless the working tree is clean, the
-branch is `main`, the version check passes, and `VERSION` matches the tree —
-then it creates and pushes the `rust-v`, `py-v`, and `npm-v` tags together.
-Each tag triggers its own lane, and the cargo lane additionally publishes a
-GitHub Release built from the committed `CHANGELOG.md`.
+branch is `main` and synchronized with `origin/main`, the version check passes,
+`VERSION` matches the tree, the release-notes section exists, and none of the
+three tags already exists locally or remotely. It then runs the Rust and wasm
+workspace gate, the generated C-ABI/header check, the native Python binding
+suite, and the optimized size-gated npm/wasm package tests. Only after every
+surface passes does it recheck the clean synchronized state and atomically push
+the `rust-v`, `py-v`, and `npm-v` tags together. No tag is created before the
+complete cross-surface preflight passes. Each tag triggers its own lane, and the
+cargo lane additionally publishes a GitHub Release built from the committed
+`CHANGELOG.md`.
 
 ## Citing PurRDF
 

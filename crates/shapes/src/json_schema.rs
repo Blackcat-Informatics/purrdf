@@ -1859,7 +1859,12 @@ const RESERVED_DEF_KEYS: &[&str] = &["Annotation", "Node"];
 fn reserved_key_seed() -> BTreeMap<String, String> {
     RESERVED_DEF_KEYS
         .iter()
-        .map(|k| ((*k).to_owned(), "JSON Schema reserved definition".to_owned()))
+        .map(|k| {
+            (
+                (*k).to_owned(),
+                "JSON Schema reserved definition".to_owned(),
+            )
+        })
         .collect()
 }
 
