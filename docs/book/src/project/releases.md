@@ -64,18 +64,19 @@ make changelog
 # 3. Review, then commit the release bump + changelog.
 git add -A && git commit -m "chore(release): 0.2.2"
 
-# 4. Gate: fmt, clippy, tests, hygiene, and the version-coherence + wasm checks.
-make check
-
-# 5. From an up-to-date main, cut and push all three tags in one command.
+# 4. From an up-to-date main, run the full gate, then cut and push all three tags.
 make release-tags VERSION=0.2.2
 ```
 
 `make release-tags` refuses to run unless the working tree is clean, the
-branch is `main`, the version check passes, and `VERSION` matches the tree —
-then it creates and pushes the `rust-v`, `py-v`, and `npm-v` tags together.
-Each tag triggers its own lane, and the cargo lane additionally publishes a
-GitHub Release built from the committed `CHANGELOG.md`.
+branch is `main` and synchronized with `origin/main`, the version check passes,
+`VERSION` matches the tree, the release-notes section exists, and none of the
+three tags already exists locally or remotely. It then runs the complete
+`make check` gate itself, rechecks the clean synchronized state, and atomically
+pushes the `rust-v`, `py-v`, and `npm-v` tags together. No tag is created before
+the full gate passes. Each tag triggers its own lane, and the cargo lane
+additionally publishes a GitHub Release built from the committed
+`CHANGELOG.md`.
 
 ## Citing PurRDF
 
