@@ -31,25 +31,30 @@ is a single coherent flow from `main`, using the version-coherence gate and the
 # 1. Bump all three version sources in lockstep (fails unless they end up equal).
 make bump VERSION=0.2.2
 
-# 2. Regenerate the changelog from the conventional-commit history.
+# 2. Regenerate the committed C-ABI header from the bumped crate version.
+make capi-header
+
+# 3. Regenerate the changelog from the conventional-commit history.
 make changelog
 
-# 3. Review, then commit the release bump + changelog.
+# 4. Review, then commit the release bump, generated header, and changelog.
 git add -A && git commit -m "chore(release): 0.2.2"
 
-# 4. From an up-to-date main, run the full gate, then cut and push all three tags.
+# 5. From an up-to-date main, run every release gate, then push all three tags.
 make release-tags VERSION=0.2.2
 ```
 
 `make release-tags` refuses to run unless the working tree is clean, the branch
 is `main` and synchronized with `origin/main`, `scripts/check-versions.py`
 passes, `VERSION` matches the tree, the release-notes section exists, and none
-of the three tags already exists locally or remotely. It then runs the complete
-`make check` gate itself, rechecks the clean synchronized state, and atomically
-pushes `rust-v0.2.2`, `py-v0.2.2`, and `npm-v0.2.2` together. No tag is created
-before the full gate passes. Each tag triggers its own lane (below); the cargo
-lane additionally publishes a GitHub Release built from the committed
-`CHANGELOG.md`.
+of the three tags already exists locally or remotely. It then runs the Rust and
+wasm workspace gate, the generated C-ABI/header check, the native Python binding
+suite, and the optimized size-gated npm/wasm package tests. Only after every
+surface passes does it recheck the clean synchronized state and atomically push
+`rust-v0.2.2`, `py-v0.2.2`, and `npm-v0.2.2` together. No tag is created before
+the complete cross-surface preflight passes. Each tag triggers its own lane
+(below); the cargo lane additionally publishes a GitHub Release built from the
+committed `CHANGELOG.md`.
 
 The per-lane tag commands in the sections below remain valid for a single-lane
 re-release, but the coherent path above is the default.

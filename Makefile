@@ -125,6 +125,9 @@ release-tags: ## Cut + push rust-v/py-v/npm-v tags for VERSION after coherence c
 	done
 	@echo "Running the complete release preflight before creating any tags..."
 	@$(MAKE) check
+	@$(MAKE) capi-check
+	@$(MAKE) pytest
+	@$(MAKE) wasm-pkg-test
 	@test -z "$$(git status --porcelain)" || { echo "ERROR: full release preflight changed the working tree"; exit 1; }
 	@branch=$$(git branch --show-current); test "$$branch" = "main" || { echo "ERROR: branch changed during release preflight (currently on $$branch)"; exit 1; }
 	@git fetch --quiet origin main
@@ -312,7 +315,7 @@ wasm-pkg-size: wasm-pkg ## Gate the optimized wasm artifact byte size against WA
 	 fi; \
 	 echo "OK: wasm artifact within budget"
 
-wasm-pkg-test: wasm-pkg ## Build the wasm package and run the npm package-root gate.
+wasm-pkg-test: wasm-pkg-size ## Build, size-gate, and test the optimized npm/wasm package.
 	cd crates/rdf-wasm/js && npm ci --ignore-scripts --no-audit --no-fund && npm run check
 
 wasm-pkg-bench: wasm-pkg ## Build the wasm package and run the Node parse-throughput benchmark (report-only; never a gate).
