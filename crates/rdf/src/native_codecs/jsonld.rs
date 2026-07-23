@@ -62,27 +62,67 @@ const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 /// `schemas-archive/purrdf.schema.json`, so a bare member name resolves inside the
 /// bundle.
 const BUNDLED_SCHEMA_REF: &str = "purrdf.schema.json";
-// The serialized JSON-LD output ceiling. A whole-ontology bundle serializes to well over
-// 256MB (occurrence-repeated IRIs over tens of millions of statements); raised to 4 GiB so a
-// large bundle export is admitted while the ceiling still bounds a runaway serialization.
-const MAX_JSON_LD_OUTPUT_BYTES: usize = 4 * 1024 * 1024 * 1024;
+// Logical byte ceilings use u64 through ByteLimit rather than pointer-sized usize. This keeps
+// the carrier contract identical on wasm32 and native targets even when a ceiling exceeds the
+// target address space.
+const MAX_JSON_LD_DOCUMENT_BYTES: ByteLimit = ByteLimit::new(4_u64 * 1024 * 1024 * 1024);
 // The carrier row budget (terms + quads + reifiers + annotations). Raised to 2^25 so a
 // large whole-ontology bundle (tens of millions of composed statements — the authored graph
 // + the RDF-1.2 statement layer + the reasoned closure + bundle-internal named graphs) stays
 // within the decode envelope; the estimated working footprint keeps this a memory-safe
 // ceiling, not an unbounded one.
-const MAX_JSON_LD_CARRIER_ROWS: usize = 33_554_432;
+const MAX_JSON_LD_CARRIER_ROWS: u64 = 33_554_432;
 // Source-carrier retained-text budget: the interned text actually held once.
-const MAX_JSON_LD_CARRIER_TEXT_BYTES: usize = 256 * 1024 * 1024;
+const MAX_JSON_LD_CARRIER_TEXT_BYTES: ByteLimit = ByteLimit::new(256_u64 * 1024 * 1024);
 // Materialized-carrier WORKING-memory budget. The construction estimate
 // (`rows * ESTIMATED_CARRIER_ROW_BYTES + text`) * `COMPACTED_CARRIER_WORKING_COPIES` is a large
 // multiple of the retained text, so a whole-ontology bundle of tens of millions of occurrences
 // estimates into tens of GB even though real materialization stays far lower (the previous
 // codec generation materialized the same bundle unchecked). Kept DISTINCT from the source-text
 // budget so a legitimate large bundle is admitted rather than rejected by a text-sized cap.
-const MAX_JSON_LD_CARRIER_WORKING_BYTES: usize = 32 * 1024 * 1024 * 1024;
-const ESTIMATED_CARRIER_ROW_BYTES: usize = 256;
-const COMPACTED_CARRIER_WORKING_COPIES: usize = 3;
+const MAX_JSON_LD_CARRIER_WORKING_BYTES: ByteLimit = ByteLimit::new(32_u64 * 1024 * 1024 * 1024);
+const ESTIMATED_CARRIER_ROW_BYTES: u64 = 256;
+const COMPACTED_CARRIER_WORKING_COPIES: u64 = 3;
+
+/// A target-independent logical byte ceiling.
+///
+/// Actual buffers remain indexed by `usize`; converting their lengths to `u64` is exact on
+/// every Rust target PurRDF supports. Saturating on a hypothetical wider-pointer target keeps
+/// comparisons fail-closed rather than truncating.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ByteLimit(u64);
+
+impl ByteLimit {
+    const fn new(bytes: u64) -> Self {
+        Self(bytes)
+    }
+
+    fn from_usize(bytes: usize) -> Self {
+        Self(usize_to_u64(bytes))
+    }
+
+    const fn bytes(self) -> u64 {
+        self.0
+    }
+
+    fn admits_usize(self, bytes: usize) -> bool {
+        usize_to_u64(bytes) <= self.bytes()
+    }
+
+    const fn admits_u64(self, bytes: u64) -> bool {
+        bytes <= self.bytes()
+    }
+}
+
+impl std::fmt::Display for ByteLimit {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.bytes().fmt(formatter)
+    }
+}
+
+fn usize_to_u64(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
 
 /// RDF 1.2 reifier predicate.
 pub const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
@@ -309,7 +349,7 @@ pub(crate) fn serialize_ser_graph_with_options(
 }
 
 fn serialize_carrier_expanded(carrier: &CarrierDocument) -> Result<String, RdfDiagnostic> {
-    let mut output = BoundedJsonOutput::new(MAX_JSON_LD_OUTPUT_BYTES);
+    let mut output = BoundedJsonOutput::new(MAX_JSON_LD_DOCUMENT_BYTES);
     carrier.write_expanded_json(&mut output, &build_context())?;
     finish_json_output(output)
 }
@@ -318,7 +358,7 @@ fn serialize_carrier_compacted(
     carrier: &CarrierDocument,
     context: &CompiledJsonLdContext,
 ) -> Result<String, RdfDiagnostic> {
-    let mut output = BoundedJsonOutput::new(MAX_JSON_LD_OUTPUT_BYTES);
+    let mut output = BoundedJsonOutput::new(MAX_JSON_LD_DOCUMENT_BYTES);
     carrier.write_compacted_json(&mut output, context)?;
     finish_json_output(output)
 }
@@ -330,11 +370,11 @@ fn finish_json_output(output: BoundedJsonOutput) -> Result<String, RdfDiagnostic
 
 struct BoundedJsonOutput {
     bytes: Vec<u8>,
-    limit: usize,
+    limit: ByteLimit,
 }
 
 impl BoundedJsonOutput {
-    fn new(limit: usize) -> Self {
+    fn new(limit: ByteLimit) -> Self {
         Self {
             bytes: Vec::new(),
             limit,
@@ -353,7 +393,7 @@ impl IoWrite for BoundedJsonOutput {
             .len()
             .checked_add(bytes.len())
             .ok_or_else(|| std::io::Error::other("JSON-LD output length overflow"))?;
-        if next > self.limit {
+        if !self.limit.admits_usize(next) {
             return Err(std::io::Error::other(format!(
                 "JSON-LD output exceeds {} bytes",
                 self.limit
@@ -652,19 +692,21 @@ fn build_carrier(graph: &SerGraph, fold_lists: bool) -> Result<CarrierDocument, 
 }
 
 fn validate_source_carrier_budget(graph: &SerGraph) -> Result<(), RdfDiagnostic> {
-    let rows = graph
-        .terms
-        .len()
-        .checked_add(graph.quads.len())
-        .and_then(|count| count.checked_add(graph.reifiers.len()))
-        .and_then(|count| count.checked_add(graph.annotations.len()))
-        .ok_or_else(|| decode("JSON-LD carrier row count overflow"))?;
+    let rows = [
+        graph.terms.len(),
+        graph.quads.len(),
+        graph.reifiers.len(),
+        graph.annotations.len(),
+    ]
+    .into_iter()
+    .try_fold(0_u64, |total, count| total.checked_add(usize_to_u64(count)))
+    .ok_or_else(|| decode("JSON-LD carrier row count overflow"))?;
     if rows > MAX_JSON_LD_CARRIER_ROWS {
         return Err(decode(format!(
             "JSON-LD carrier requires {rows} rows; limit is {MAX_JSON_LD_CARRIER_ROWS}"
         )));
     }
-    let retained_text = graph.terms.iter().try_fold(0usize, |total, term| {
+    let retained_text = graph.terms.iter().try_fold(0_u64, |total, term| {
         [
             term.value.as_deref(),
             term.lang.as_deref(),
@@ -672,11 +714,13 @@ fn validate_source_carrier_budget(graph: &SerGraph) -> Result<(), RdfDiagnostic>
         ]
         .into_iter()
         .flatten()
-        .try_fold(total, |total, value| total.checked_add(value.len()))
+        .try_fold(total, |total, value| {
+            total.checked_add(usize_to_u64(value.len()))
+        })
     });
     let retained_text =
         retained_text.ok_or_else(|| decode("JSON-LD carrier retained-text byte count overflow"))?;
-    if retained_text > MAX_JSON_LD_CARRIER_TEXT_BYTES {
+    if !MAX_JSON_LD_CARRIER_TEXT_BYTES.admits_u64(retained_text) {
         return Err(decode(format!(
             "JSON-LD carrier retains {retained_text} text bytes; limit is \
              {MAX_JSON_LD_CARRIER_TEXT_BYTES}"
@@ -687,8 +731,8 @@ fn validate_source_carrier_budget(graph: &SerGraph) -> Result<(), RdfDiagnostic>
 
 #[derive(Debug, Clone, Copy, Default)]
 struct CarrierFootprint {
-    rows: usize,
-    text_bytes: usize,
+    rows: u64,
+    text_bytes: u64,
 }
 
 impl CarrierFootprint {
@@ -738,8 +782,8 @@ fn validate_materialized_carrier_budget(
 fn validate_materialized_carrier_budget_with_limits(
     graph: &SerGraph,
     annotations_of: &AnnotationIndex,
-    max_rows: usize,
-    max_working_bytes: usize,
+    max_rows: u64,
+    max_working_bytes: ByteLimit,
 ) -> Result<(), RdfDiagnostic> {
     let mut footprint = CarrierFootprint::default();
     let mut memo = BTreeMap::new();
@@ -822,13 +866,9 @@ fn validate_materialized_carrier_budget_with_limits(
         )?;
     }
 
-    let structural_bytes = footprint
-        .rows
-        .checked_mul(ESTIMATED_CARRIER_ROW_BYTES)
-        .and_then(|bytes| bytes.checked_add(footprint.text_bytes))
-        .and_then(|bytes| bytes.checked_mul(COMPACTED_CARRIER_WORKING_COPIES))
+    let structural_bytes = estimated_carrier_working_bytes(footprint)
         .ok_or_else(|| decode("JSON-LD carrier working-byte estimate overflow"))?;
-    if footprint.rows > max_rows || structural_bytes > max_working_bytes {
+    if footprint.rows > max_rows || !max_working_bytes.admits_u64(structural_bytes) {
         return Err(decode(format!(
             "JSON-LD materialized carrier requires {} rows and {structural_bytes} working bytes; \
              limits are {max_rows} rows and {max_working_bytes} bytes",
@@ -836,6 +876,14 @@ fn validate_materialized_carrier_budget_with_limits(
         )));
     }
     Ok(())
+}
+
+fn estimated_carrier_working_bytes(footprint: CarrierFootprint) -> Option<u64> {
+    footprint
+        .rows
+        .checked_mul(ESTIMATED_CARRIER_ROW_BYTES)
+        .and_then(|bytes| bytes.checked_add(footprint.text_bytes))
+        .and_then(|bytes| bytes.checked_mul(COMPACTED_CARRIER_WORKING_COPIES))
 }
 
 fn add_annotation_footprint(
@@ -880,13 +928,17 @@ fn carrier_term_footprint(
     })?;
     let mut footprint = CarrierFootprint {
         rows: 1,
-        text_bytes: term
-            .value
-            .as_deref()
-            .map_or(0, str::len)
-            .checked_add(term.lang.as_deref().map_or(0, str::len))
-            .and_then(|bytes| bytes.checked_add(term.direction.as_deref().map_or(0, str::len)))
-            .ok_or_else(|| decode("JSON-LD materialized carrier text count overflow"))?,
+        text_bytes: [
+            term.value.as_deref(),
+            term.lang.as_deref(),
+            term.direction.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .try_fold(0_u64, |total, value| {
+            total.checked_add(usize_to_u64(value.len()))
+        })
+        .ok_or_else(|| decode("JSON-LD materialized carrier text count overflow"))?,
     };
     if term.kind == SerTermKind::Bnode {
         footprint.text_bytes = footprint
@@ -1723,10 +1775,47 @@ fn parse(message: impl Into<String>) -> RdfDiagnostic {
 
 #[cfg(test)]
 mod carrier_law_tests {
+    use std::io::Write as _;
+
     use proptest::prelude::*;
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn logical_byte_budgets_are_target_independent_and_exact() {
+        assert_eq!(MAX_JSON_LD_DOCUMENT_BYTES.bytes(), u64::from(u32::MAX) + 1);
+        assert_eq!(
+            MAX_JSON_LD_CARRIER_WORKING_BYTES.bytes(),
+            32_u64 * 1024 * 1024 * 1024
+        );
+
+        let mut output = BoundedJsonOutput::new(ByteLimit::new(4));
+        output.write_all(b"null").expect("exact output boundary");
+        let error = output
+            .write_all(b" ")
+            .expect_err("one byte over output boundary");
+        assert!(error.to_string().contains("exceeds 4 bytes"));
+    }
+
+    #[test]
+    fn carrier_working_estimate_uses_checked_u64_arithmetic() {
+        let above_u32 = u64::from(u32::MAX) + 1;
+        assert_eq!(
+            estimated_carrier_working_bytes(CarrierFootprint {
+                rows: 0,
+                text_bytes: above_u32,
+            }),
+            above_u32.checked_mul(COMPACTED_CARRIER_WORKING_COPIES)
+        );
+        assert!(
+            estimated_carrier_working_bytes(CarrierFootprint {
+                rows: u64::MAX,
+                text_bytes: 0,
+            })
+            .is_none()
+        );
+    }
 
     fn assert_exact_carrier_lens(dataset: &RdfDataset, context_value: &Value) {
         let graph = build_ser_graph(
@@ -1796,7 +1885,7 @@ mod carrier_law_tests {
                 &build(&one),
                 &annotations,
                 MAX_JSON_LD_CARRIER_ROWS,
-                10_000,
+                ByteLimit::new(10_000),
             )
             .is_ok()
         );
@@ -1804,7 +1893,7 @@ mod carrier_law_tests {
             &build(&many),
             &annotations,
             MAX_JSON_LD_CARRIER_ROWS,
-            10_000,
+            ByteLimit::new(10_000),
         )
         .expect_err("reused literal clones exceed materialized budget");
         assert_eq!(error.code, "native-jsonld-decode");
