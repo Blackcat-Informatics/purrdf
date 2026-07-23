@@ -19,7 +19,7 @@ use serde_json::Value as JsonValue;
 use super::{
     CompiledJsonLdContext, JsonLdContainer, JsonLdDirection, JsonLdNullable, JsonLdTermDefinition,
     JsonLdTermSelection, JsonLdTermSelectionKind, JsonLdTypeMapping, RdfDiagnostic, decode,
-    to_json_object,
+    increment_multiplicity, to_json_object,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -403,7 +403,7 @@ fn plan_graph_index_scope(
     scope: Option<&str>,
     nodes: &[Node],
     named_by_id: &BTreeMap<&str, &NamedGraph>,
-    references: &BTreeMap<String, usize>,
+    references: &BTreeMap<String, u8>,
     context: &CompiledJsonLdContext,
     selection: &JsonLdTermSelection,
     plans: &mut GraphIndexPlans,
@@ -505,7 +505,7 @@ fn consume_graph_index_metadata(
     nodes.retain(|node| !consumed.contains(node.id.as_str()));
 }
 
-fn document_id_reference_counts(document: &Document) -> BTreeMap<String, usize> {
+fn document_id_reference_counts(document: &Document) -> BTreeMap<String, u8> {
     let mut counts = BTreeMap::new();
     for node in document.default_nodes.iter().chain(
         document
@@ -518,7 +518,7 @@ fn document_id_reference_counts(document: &Document) -> BTreeMap<String, usize> 
     counts
 }
 
-fn count_node_term_ids(node: &Node, counts: &mut BTreeMap<String, usize>) {
+fn count_node_term_ids(node: &Node, counts: &mut BTreeMap<String, u8>) {
     for values in node
         .properties
         .values()
@@ -530,17 +530,21 @@ fn count_node_term_ids(node: &Node, counts: &mut BTreeMap<String, usize>) {
     }
 }
 
-fn count_value_term_ids(value: &Value, counts: &mut BTreeMap<String, usize>) {
+fn count_value_term_ids(value: &Value, counts: &mut BTreeMap<String, u8>) {
     count_term_ids(&value.term, counts);
     for annotation in &value.annotations {
-        *counts.entry(annotation.id.clone()).or_default() += 1;
+        let count = counts.entry(annotation.id.clone()).or_default();
+        increment_multiplicity(count);
         count_node_term_ids(annotation, counts);
     }
 }
 
-fn count_term_ids(term: &Term, counts: &mut BTreeMap<String, usize>) {
+fn count_term_ids(term: &Term, counts: &mut BTreeMap<String, u8>) {
     match term {
-        Term::Id(id) => *counts.entry(id.clone()).or_default() += 1,
+        Term::Id(id) => {
+            let count = counts.entry(id.clone()).or_default();
+            increment_multiplicity(count);
+        }
         Term::Triple(triple) => {
             count_term_ids(&triple.subject, counts);
             count_term_ids(&triple.object, counts);
@@ -1722,5 +1726,21 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn graph_container_reference_counts_are_bounded_at_many() {
+        let mut node = Node::new("urn:subject".to_owned());
+        node.properties.insert(
+            "urn:property".to_owned(),
+            (0..=u8::MAX)
+                .map(|_| Value::plain(Term::Id("_:graph".to_owned())))
+                .collect(),
+        );
+        let counts = document_id_reference_counts(&Document {
+            default_nodes: vec![node],
+            named_graphs: Vec::new(),
+        });
+        assert_eq!(counts.get("_:graph"), Some(&2));
     }
 }
