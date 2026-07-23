@@ -962,29 +962,34 @@ fn carrier_term_footprint(
 }
 
 fn fold_document_rdf_lists(document: &mut CarrierDocument) {
-    let mut graph_usage = Vec::with_capacity(document.named_graphs.len() + 1);
-    graph_usage.push(carrier_node_usage(&document.default_nodes));
-    graph_usage.extend(
-        document
-            .named_graphs
-            .iter()
-            .map(|graph| carrier_node_usage(&graph.nodes)),
-    );
-    for (index, graph) in document.named_graphs.iter().enumerate() {
-        graph_usage[index + 1].insert(graph.id.clone());
+    let mut graph_usage = std::iter::once(carrier_node_usage(&document.default_nodes))
+        .chain(
+            document
+                .named_graphs
+                .iter()
+                .map(|graph| carrier_node_usage(&graph.nodes)),
+        )
+        .collect::<Vec<_>>();
+    let (default_usage, named_usage) = graph_usage
+        .split_first_mut()
+        .expect("default graph usage is always present");
+    for (usage, graph) in named_usage.iter_mut().zip(&document.named_graphs) {
+        usage.insert(graph.id.clone());
     }
-    let mut usage_counts: FixedHashMap<String, usize> = FixedHashMap::default();
-    for usage in &graph_usage {
+    // Only zero, one, and many are semantically distinct. Capping at two avoids
+    // pointer-sized occurrence arithmetic while preserving that distinction.
+    let mut usage_counts: FixedHashMap<String, u8> = FixedHashMap::default();
+    for usage in std::iter::once(&*default_usage).chain(named_usage.iter()) {
         for id in usage {
-            *usage_counts.entry(id.clone()).or_default() += 1;
+            let count = usage_counts.entry(id.clone()).or_default();
+            increment_multiplicity(count);
         }
     }
 
     fold_rdf_lists(&mut document.default_nodes, |id| {
-        used_in_another_graph(id, &graph_usage[0], &usage_counts)
+        used_in_another_graph(id, default_usage, &usage_counts)
     });
-    for (index, graph) in document.named_graphs.iter_mut().enumerate() {
-        let current_usage = &graph_usage[index + 1];
+    for (graph, current_usage) in document.named_graphs.iter_mut().zip(named_usage) {
         // A graph name and a node/list identifier inhabit the same RDF blank-node
         // identity space.  Keep that identity explicit even when the only other use
         // of the identifier is as the name of the graph currently being folded.
@@ -998,9 +1003,15 @@ fn fold_document_rdf_lists(document: &mut CarrierDocument) {
 fn used_in_another_graph(
     id: &str,
     current_usage: &FixedHashSet<String>,
-    usage_counts: &FixedHashMap<String, usize>,
+    usage_counts: &FixedHashMap<String, u8>,
 ) -> bool {
-    usage_counts.get(id).copied().unwrap_or_default() > usize::from(current_usage.contains(id))
+    usage_counts.get(id).copied().unwrap_or_default() > u8::from(current_usage.contains(id))
+}
+
+fn increment_multiplicity(count: &mut u8) {
+    if *count < 2 {
+        *count += 1;
+    }
 }
 
 fn carrier_node_usage(nodes: &[CarrierNode]) -> FixedHashSet<String> {
@@ -1082,7 +1093,10 @@ fn fold_rdf_lists(nodes: &mut Vec<CarrierNode>, externally_used: impl Fn(&str) -
         .map(|node| node.id.clone())
         .collect();
 
-    let mut incoming: BTreeMap<String, usize> = BTreeMap::new();
+    // List folding only needs to distinguish a unique incoming edge from
+    // multiple edges, so retain a bounded cardinality instead of an unbounded
+    // pointer-sized counter.
+    let mut incoming: BTreeMap<String, u8> = BTreeMap::new();
     let mut external_heads = BTreeSet::new();
     for node in nodes.iter() {
         for (property, values) in &node.properties {
@@ -1171,7 +1185,7 @@ fn collect_annotation_subjects(node: &CarrierNode, output: &mut BTreeSet<String>
 fn count_list_references(
     value: &CarrierValue,
     candidates: &BTreeSet<String>,
-    incoming: &mut BTreeMap<String, usize>,
+    incoming: &mut BTreeMap<String, u8>,
     external_heads: &mut BTreeSet<String>,
     direct_rest: bool,
 ) {
@@ -1194,13 +1208,14 @@ fn count_list_references(
 fn count_list_term_references(
     term: &CarrierTerm,
     candidates: &BTreeSet<String>,
-    incoming: &mut BTreeMap<String, usize>,
+    incoming: &mut BTreeMap<String, u8>,
     external_heads: &mut BTreeSet<String>,
     direct_rest: bool,
 ) {
     match term {
         CarrierTerm::Id(id) if candidates.contains(id) => {
-            *incoming.entry(id.clone()).or_default() += 1;
+            let count = incoming.entry(id.clone()).or_default();
+            increment_multiplicity(count);
             if !direct_rest {
                 external_heads.insert(id.clone());
             }
@@ -1815,6 +1830,15 @@ mod carrier_law_tests {
             })
             .is_none()
         );
+    }
+
+    #[test]
+    fn reference_multiplicity_is_bounded_at_many() {
+        let mut count = 0;
+        for _ in 0..usize::from(u8::MAX) + 1 {
+            increment_multiplicity(&mut count);
+        }
+        assert_eq!(count, 2);
     }
 
     fn assert_exact_carrier_lens(dataset: &RdfDataset, context_value: &Value) {

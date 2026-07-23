@@ -97,8 +97,13 @@ struct ExpandedGraph<'a>(&'a Document);
 
 impl Serialize for ExpandedGraph<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut graph = serializer
-            .serialize_seq(Some(self.0.default_nodes.len() + self.0.named_graphs.len()))?;
+        let graph_len = self
+            .0
+            .default_nodes
+            .len()
+            .checked_add(self.0.named_graphs.len())
+            .ok_or_else(|| S::Error::custom("JSON-LD expanded graph length overflow"))?;
+        let mut graph = serializer.serialize_seq(Some(graph_len))?;
         let mut nodes = self.0.default_nodes.iter().peekable();
         let mut named = self.0.named_graphs.iter().peekable();
         while nodes.peek().is_some() || named.peek().is_some() {
