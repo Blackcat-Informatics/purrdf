@@ -291,12 +291,52 @@ struct DependsBlock {
     newline: &'static str,
 }
 
+/// Byte offsets of every Turtle comment in `text`: `#` to end of line, except a
+/// `#` inside an `<...>` IRI or a `"..."` string, where it is ordinary content.
+///
+/// A comment is not RDF, so the patcher must be blind to it in BOTH directions:
+/// a comment that merely mentions the predicate must never be mistaken for the
+/// real block, and a `;`/`.` inside a comment must never be mistaken for the
+/// terminator. Prose documenting the predicate is entirely ordinary — a manifest
+/// explaining why `sliceDependsOn` omits something is exactly where the name
+/// appears in prose — so this is the common case, not an exotic one.
+fn comment_spans(text: &str) -> Vec<(usize, usize)> {
+    let bytes = text.as_bytes();
+    let (mut spans, mut i) = (Vec::new(), 0usize);
+    let (mut in_iri, mut in_str) = (false, false);
+    while i < bytes.len() {
+        match bytes[i] as char {
+            '<' if !in_str => in_iri = true,
+            '>' if !in_str => in_iri = false,
+            '"' if !in_iri => in_str = !in_str,
+            '\n' => in_str = false, // an unterminated string never spans a line here
+            '#' if !in_iri && !in_str => {
+                let end = text[i..].find('\n').map_or(text.len(), |n| i + n);
+                spans.push((i, end));
+                i = end;
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    spans
+}
+
+/// Whether `idx` falls inside one of `spans`.
+fn in_span(spans: &[(usize, usize)], idx: usize) -> bool {
+    spans.iter().any(|&(s, e)| idx >= s && idx < e)
+}
+
 /// Locate the `<prefix>:sliceDependsOn` predicate block in the Turtle text.
 /// Scans for the predicate token at a token boundary, then advances past its
 /// object list (objects separated by `,`) until the predicate-list separator `;`
 /// or the statement terminator `.` — tracking `<...>` IRIs and `"..."` strings
-/// so a `;` inside one is never mistaken for the terminator.
+/// so a `;` inside one is never mistaken for the terminator, and skipping
+/// Turtle comments entirely so neither the predicate token nor the terminator
+/// can be matched inside one.
 fn find_depends_on_block(text: &str, vocab: &SliceVocab) -> Option<DependsBlock> {
+    let comments = comment_spans(text);
     let needle = format!("{}:sliceDependsOn", vocab.prefix_name());
     let needle = needle.as_str();
     let bytes = text.as_bytes();
@@ -304,11 +344,13 @@ fn find_depends_on_block(text: &str, vocab: &SliceVocab) -> Option<DependsBlock>
     let pred_start = loop {
         let rel = text[search_from..].find(needle)?;
         let idx = search_from + rel;
-        // Require a token boundary before and after (not part of a longer name).
+        // Require a token boundary before and after (not part of a longer name),
+        // and reject an occurrence inside a comment — prose naming the predicate
+        // is not the predicate.
         let before_ok = idx == 0 || is_token_boundary_before(bytes[idx - 1]);
         let after_idx = idx + needle.len();
         let after_ok = after_idx >= bytes.len() || is_token_boundary_after(bytes[after_idx]);
-        if before_ok && after_ok {
+        if before_ok && after_ok && !in_span(&comments, idx) {
             break idx;
         }
         search_from = idx + needle.len();
@@ -320,6 +362,12 @@ fn find_depends_on_block(text: &str, vocab: &SliceVocab) -> Option<DependsBlock>
     let mut in_str = false;
     let mut terminator = None;
     while i < bytes.len() {
+        // A `;`/`.` inside a comment is prose punctuation, not a terminator —
+        // skip the whole comment rather than inspecting its bytes.
+        if let Some(&(_, end)) = comments.iter().find(|&&(s, e)| i >= s && i < e) {
+            i = end;
+            continue;
+        }
         let c = bytes[i] as char;
         match c {
             '<' if !in_str => in_iri = true,
@@ -682,5 +730,44 @@ mod tests {
         );
         // The label predicate (after the block) is untouched.
         assert!(patched.contains("rdfs:label \"agentic\"@x-purrdf-english ."));
+    }
+
+    /// A COMMENT naming the predicate must never be mistaken for the block.
+    ///
+    /// A manifest documenting why `sliceDependsOn` omits something names the
+    /// predicate in prose, and such a comment routinely contains an unbalanced
+    /// quote and a sentence-ending `.`. Matching it made the patcher rewrite a
+    /// span starting inside the comment and emit malformed Turtle, which the
+    /// post-edit re-parse then rejected — the real block, further down, was never
+    /// reached. Regression fixture modelled on the manifest that broke.
+    #[test]
+    fn a_comment_naming_the_predicate_is_not_mistaken_for_the_block() {
+        let original = format!(
+            "@prefix vocab: <{NS}> .\n\
+             @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
+             \n\
+             # vocab:sliceDependsOn lists ONLY the slices this module's own axioms\n\
+             # depend on. The pedagogy pointers do NOT belong in it: vocab:usesTerm\n\
+             # is an open documentation index (rdfs:range rdfs:Resource — \"a guide\n\
+             # may point at any documented term across any slice\").\n\
+             \n\
+             <{NS}slices/guides>\n\
+             \x20   a vocab:Slice ;\n\
+             \x20   vocab:sliceDependsOn\n\
+             \x20       <{NS}slices/kernel> ,\n\
+             \x20       <{NS}slices/graphrag> ;\n\
+             \x20   rdfs:label \"guides\"@x-purrdf-english .\n"
+        );
+        let patched = apply_proposal(&original, &proposal("guides", &[], &["graphrag"]), &vocab())
+            .expect("a comment naming the predicate must not derail the patcher");
+
+        // The real block was edited: graphrag is gone, kernel survives.
+        assert!(!patched.contains("slices/graphrag"));
+        assert!(patched.contains(&format!("<{NS}slices/kernel>")));
+        // The comment block is byte-preserved, unbalanced quote and all.
+        assert!(patched.contains("# vocab:sliceDependsOn lists ONLY the slices"));
+        assert!(patched.contains("rdfs:Resource — \"a guide"));
+        // And the result is well-formed Turtle.
+        parse_turtle(patched.as_bytes(), "patched.ttl").expect("patched manifest must re-parse");
     }
 }
