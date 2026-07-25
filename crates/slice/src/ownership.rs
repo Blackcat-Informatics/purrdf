@@ -36,6 +36,7 @@ use crate::artifact::{ArtifactRecord, ArtifactRole};
 use crate::catalog::{SliceCatalog, SliceRecord};
 use crate::error::SliceError;
 use crate::rdf_query::{Dataset, NamedNode};
+use crate::vocab::SliceVocab;
 
 // ── Namespace constants ───────────────────────────────────────────────────────
 //
@@ -316,7 +317,7 @@ impl<'a> OwnershipAnalyzer<'a> {
                     continue;
                 }
                 let store = parse_rdf_artifact(artifact)?;
-                let facts = inspect_rdf_dataset(store.inner(), self.catalog.vocab().ns());
+                let facts = inspect_rdf_dataset(store.inner(), self.catalog.vocab());
                 // Collect rdfs:isDefinedBy claims.
                 for (subject, owner) in &facts.is_defined_by {
                     claims
@@ -484,10 +485,7 @@ impl<'a> OwnershipAnalyzer<'a> {
                     let Ok(store) = parse_rdf_artifact(artifact) else {
                         continue;
                     };
-                    entry.insert(inspect_rdf_dataset(
-                        store.inner(),
-                        self.catalog.vocab().ns(),
-                    ));
+                    entry.insert(inspect_rdf_dataset(store.inner(), self.catalog.vocab()));
                 }
                 let referenced = &rdf_facts[&key].referenced_iris;
                 collect_reference_evidence(
@@ -657,7 +655,15 @@ fn parse_rdf_artifact(artifact: &ArtifactRecord) -> Result<Dataset, SliceError> 
 
 /// Inspect one parsed RDF artifact once. Borrowed IRI slices are deduplicated
 /// while walking the interned IR, then only the unique retained values are owned.
-fn inspect_rdf_dataset(store: &RdfDataset, vocab_ns: &str) -> RdfArtifactFacts {
+/// Scan one parsed artifact for the three ownership-relevant fact sets.
+///
+/// `is_defined_by` and `declared_terms` are gated on [`SliceVocab::owns_term`]
+/// — the test is on the SUBJECT's own IRI, so a slice minting into a namespace
+/// the caller never declared contributes no ownership data and every reference
+/// to its terms later resolves to no owner. `referenced_iris` is deliberately
+/// ungated: a reference to an unowned IRI is simply dropped at the ownership
+/// join in [`collect_reference_evidence`].
+fn inspect_rdf_dataset(store: &RdfDataset, vocab: &SliceVocab) -> RdfArtifactFacts {
     let mut is_defined_by: BTreeSet<(&str, &str)> = BTreeSet::new();
     let mut declared_terms: BTreeSet<&str> = BTreeSet::new();
     let mut referenced_iris: BTreeSet<&str> = BTreeSet::new();
@@ -680,13 +686,10 @@ fn inspect_rdf_dataset(store: &RdfDataset, vocab_ns: &str) -> RdfArtifactFacts {
             continue;
         };
 
-        if predicate == RDFS_IS_DEFINED_BY && subject.starts_with(vocab_ns) {
+        if predicate == RDFS_IS_DEFINED_BY && vocab.owns_term(subject) {
             is_defined_by.insert((subject, object));
         }
-        if predicate == RDF_TYPE
-            && subject.starts_with(vocab_ns)
-            && VOCAB_TERM_TYPES.contains(&object)
-        {
+        if predicate == RDF_TYPE && vocab.owns_term(subject) && VOCAB_TERM_TYPES.contains(&object) {
             declared_terms.insert(subject);
         }
     }
@@ -1052,7 +1055,7 @@ mod rdf_fact_tests {
              ex:record ex:mentions <<( ex:term ex:edge \"value\"^^ex:datatype )>> .\n"
         );
         let store = Dataset::parse_turtle(input.as_bytes(), "facts.ttl").expect("valid RDF 1.2");
-        let facts = inspect_rdf_dataset(store.inner(), EX);
+        let facts = inspect_rdf_dataset(store.inner(), &SliceVocab::for_namespace(EX));
 
         assert_eq!(
             facts.is_defined_by,
@@ -1074,5 +1077,43 @@ mod rdf_fact_tests {
                 "missing {local}"
             );
         }
+    }
+
+    /// A slice minting into its own namespace carries ownership when — and only
+    /// when — the caller declared that namespace. Ownership is tested against
+    /// the SUBJECT's IRI, so an undeclared namespace makes the slice's entire
+    /// vocabulary invisible: no `isDefinedBy`, no declared terms, and hence no
+    /// dependency edge for any reference to it.
+    #[test]
+    fn ownership_follows_the_declared_term_namespaces() {
+        const MATH: &str = "https://example.org/math/";
+        let input = format!(
+            "@prefix ex: <{EX}> .\n\
+             @prefix math: <{MATH}> .\n\
+             @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+             @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
+             math:Quantity a owl:Class ; rdfs:isDefinedBy ex:slices/math .\n"
+        );
+        let store = Dataset::parse_turtle(input.as_bytes(), "facts.ttl").expect("valid RDF 1.2");
+        let quantity = NamedNode::new_unchecked(format!("{MATH}Quantity"));
+
+        // Declared: the term is owned, exactly as a framework-namespace term is.
+        let facts = inspect_rdf_dataset(
+            store.inner(),
+            &SliceVocab::for_namespace(EX).with_term_namespaces([MATH]),
+        );
+        assert_eq!(
+            facts.is_defined_by,
+            vec![(quantity.clone(), format!("{EX}slices/math"))]
+        );
+        assert!(facts.declared_terms.contains(&quantity));
+
+        // Undeclared: invisible to ownership, though still collected as a
+        // reference — which is precisely how the reference is silently dropped
+        // at the ownership join.
+        let facts = inspect_rdf_dataset(store.inner(), &SliceVocab::for_namespace(EX));
+        assert!(facts.is_defined_by.is_empty());
+        assert!(facts.declared_terms.is_empty());
+        assert!(facts.referenced_iris.contains(&quantity));
     }
 }

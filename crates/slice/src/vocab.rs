@@ -20,22 +20,58 @@
 //! assert_eq!(vocab.prefix_name(), "vocab");
 //! assert_eq!(vocab.ontology_iri(), "https://example.org/vocab");
 //! ```
+//!
+//! ## Framework namespace vs. owned term namespaces
+//!
+//! Two distinct things are easy to conflate, and conflating them silently
+//! disables ownership analysis for part of a corpus:
+//!
+//! * The **framework namespace** ([`SliceVocab::ns`]) mints the slice-framework
+//!   terms themselves — `Slice`, `sliceTier`, `sliceDependsOn`, the
+//!   analysis-graph terms. There is exactly one.
+//! * The **owned term namespaces** ([`SliceVocab::term_namespaces`]) are the
+//!   namespaces the caller's slices mint ONTOLOGY terms into — the IRIs that
+//!   carry `rdfs:isDefinedBy` and that cross-slice references resolve against.
+//!   A corpus may mint into several, and a slice may mint into a namespace no
+//!   other slice uses.
+//!
+//! The framework namespace is always an owned term namespace, so a single-
+//! namespace caller needs no extra configuration. A caller whose slices mint
+//! elsewhere MUST declare those namespaces with
+//! [`SliceVocab::with_term_namespaces`] — a term in an undeclared namespace is
+//! invisible to the ownership analyzer, so every reference to it resolves to no
+//! owner and contributes no dependency edge.
+//!
+//! ```
+//! use purrdf_slice::SliceVocab;
+//! let vocab = SliceVocab::for_namespace("https://example.org/vocab/")
+//!     .with_term_namespaces(["https://example.org/math/"]);
+//! assert!(vocab.owns_term("https://example.org/vocab/Thing"));
+//! assert!(vocab.owns_term("https://example.org/math/Quantity"));
+//! assert!(!vocab.owns_term("http://www.w3.org/2002/07/owl#Class"));
+//! ```
 
-/// The caller's slice-framework vocabulary: a namespace all term IRIs are
-/// derived from by concatenation (`{ns}{localName}`), plus the CURIE prefix
-/// name used when emitting prefixed names.
+use std::collections::BTreeSet;
+
+/// The caller's slice-framework vocabulary: a namespace all framework term IRIs
+/// are derived from by concatenation (`{ns}{localName}`), the set of namespaces
+/// the caller's slices mint ontology terms into, plus the CURIE prefix name used
+/// when emitting prefixed names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SliceVocab {
     ns: String,
+    term_namespaces: BTreeSet<String>,
     prefix_name: String,
 }
 
 impl SliceVocab {
-    /// Construct a vocabulary rooted at `ns` (every term is `{ns}{localName}`).
+    /// Construct a vocabulary rooted at `ns` (every framework term is
+    /// `{ns}{localName}`), owning terms in `ns` and no other namespace.
     ///
     /// The CURIE prefix name defaults to the last non-empty path segment of the
     /// namespace (e.g. `https://example.org/gm/` → `gm`); override it with
-    /// [`SliceVocab::with_prefix_name`].
+    /// [`SliceVocab::with_prefix_name`]. Declare additional term namespaces with
+    /// [`SliceVocab::with_term_namespaces`].
     #[must_use]
     pub fn for_namespace(ns: &str) -> Self {
         let trimmed = ns.trim_end_matches(['/', '#']);
@@ -47,8 +83,26 @@ impl SliceVocab {
             .to_owned();
         Self {
             ns: ns.to_owned(),
+            term_namespaces: BTreeSet::from([ns.to_owned()]),
             prefix_name,
         }
+    }
+
+    /// Declare additional namespaces the caller's slices mint ontology terms
+    /// into. The framework namespace is always owned and never removed.
+    ///
+    /// Ownership is tested against the TERM IRI itself, so a slice minting
+    /// exclusively into an undeclared namespace contributes no ownership data at
+    /// all and every reference to its terms resolves to no owner.
+    #[must_use]
+    pub fn with_term_namespaces<I, S>(mut self, namespaces: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.term_namespaces
+            .extend(namespaces.into_iter().map(|n| n.as_ref().to_owned()));
+        self
     }
 
     /// Override the CURIE prefix name used for prefixed-name emission.
@@ -58,10 +112,27 @@ impl SliceVocab {
         self
     }
 
-    /// The vocabulary namespace (as given, trailing separator preserved).
+    /// The framework vocabulary namespace (as given, trailing separator
+    /// preserved). This mints the slice-framework terms; it is NOT the test for
+    /// whether an arbitrary term IRI is owned — see [`SliceVocab::owns_term`].
     #[must_use]
     pub fn ns(&self) -> &str {
         &self.ns
+    }
+
+    /// Every namespace the caller's slices mint ontology terms into, including
+    /// the framework namespace. Sorted and deduplicated.
+    #[must_use]
+    pub fn term_namespaces(&self) -> &BTreeSet<String> {
+        &self.term_namespaces
+    }
+
+    /// Whether `iri` lies in one of the owned term namespaces — the single test
+    /// deciding whether a subject can carry ownership and whether a reference
+    /// can resolve to an owning slice.
+    #[must_use]
+    pub fn owns_term(&self, iri: &str) -> bool {
+        self.term_namespaces.iter().any(|ns| iri.starts_with(ns))
     }
 
     /// The CURIE prefix name for emitted prefixed names (`{prefix}:{local}`).
@@ -219,6 +290,31 @@ mod tests {
         let v = SliceVocab::for_namespace("https://example.org/vocab/").with_prefix_name("ex");
         assert_eq!(v.prefix_name(), "ex");
         assert_eq!(v.ns(), "https://example.org/vocab/");
+    }
+
+    #[test]
+    fn framework_namespace_is_always_an_owned_term_namespace() {
+        let v = SliceVocab::for_namespace("https://example.org/vocab/");
+        assert_eq!(
+            v.term_namespaces(),
+            &BTreeSet::from(["https://example.org/vocab/".to_owned()])
+        );
+        assert!(v.owns_term("https://example.org/vocab/Thing"));
+        assert!(!v.owns_term("https://example.org/math/Quantity"));
+    }
+
+    #[test]
+    fn additional_term_namespaces_are_owned_and_never_displace_the_framework_ns() {
+        let v = SliceVocab::for_namespace("https://example.org/vocab/")
+            .with_term_namespaces(["https://example.org/math/", "https://example.org/lang/"]);
+        assert!(v.owns_term("https://example.org/vocab/Slice"));
+        assert!(v.owns_term("https://example.org/math/Quantity"));
+        assert!(v.owns_term("https://example.org/lang/Rendering"));
+        assert!(!v.owns_term("http://www.w3.org/2002/07/owl#Class"));
+        // The framework namespace still mints the framework terms.
+        assert_eq!(v.ns(), "https://example.org/vocab/");
+        assert_eq!(v.slice_class(), "https://example.org/vocab/Slice");
+        assert_eq!(v.term_namespaces().len(), 3);
     }
 
     #[test]
