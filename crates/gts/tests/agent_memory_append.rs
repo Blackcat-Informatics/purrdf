@@ -15,7 +15,7 @@ use purrdf_gts::dict::raw_content_dict;
 use purrdf_gts::examples::agent_memory::{
     Memory, MemoryOptions, RecallOptions, RevisionOptions, StoreOptions, ToolCallOptions,
 };
-use purrdf_gts::reader::{read, read_file_segments};
+use purrdf_gts::reader::{read, read_file_segments, segment_append_state};
 use purrdf_gts::wire::{iter_items, map_get};
 
 fn temp_path(tag: &str) -> std::path::PathBuf {
@@ -282,6 +282,39 @@ fn a_dictionary_capable_store_pins_the_dictionary_exactly_once() {
         "the pinned dictionary must appear exactly once, in the single header"
     );
 
+    let state = segment_append_state(&bytes).expect("the appended header parses");
+    let dict_catalog_ids: BTreeSet<i64> = state
+        .catalog
+        .iter()
+        .filter(|row| row.dct.as_deref() == Some("claims"))
+        .map(|row| row.id)
+        .collect();
+    assert!(
+        !dict_catalog_ids.is_empty(),
+        "the header catalog must bind zstd-family entries to the claims dictionary"
+    );
+    let (items, _torn) = iter_items(&bytes);
+    let selected_ids: Vec<i64> = items
+        .iter()
+        .filter_map(|(_, item)| {
+            let ciborium::value::Value::Map(frame) = item else {
+                return None;
+            };
+            let Some(ciborium::value::Value::Array(chain)) = map_get(frame, "x") else {
+                return None;
+            };
+            let [ciborium::value::Value::Integer(raw)] = chain.as_slice() else {
+                panic!("each memory payload must ride exactly one catalog transform");
+            };
+            Some(i64::try_from(i128::from(*raw)).expect("catalog id fits i64"))
+        })
+        .collect();
+    assert!(
+        !selected_ids.is_empty() && selected_ids.iter().all(|id| dict_catalog_ids.contains(id)),
+        "every transformed memory payload must select a catalog row bound to the claims \
+         dictionary, got {selected_ids:?}"
+    );
+
     let graph = read(&bytes, true, None);
     assert!(
         graph.diagnostics.is_empty(),
@@ -296,6 +329,28 @@ fn a_dictionary_capable_store_pins_the_dictionary_exactly_once() {
         .collect();
     assert_eq!(claims, CLAIMS.iter().map(|c| (*c).to_string()).collect());
     assert_eq!(memory.tool_calls().expect("tool calls").len(), 1);
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn revising_an_unknown_claim_fails_without_appending_an_inert_suppression() {
+    let path = temp_path("unknown-revision");
+    let memory = Memory::new(&path);
+    memory
+        .store("known claim", StoreOptions::default())
+        .expect("store");
+    let before = std::fs::read(&path).expect("store file exists");
+
+    let err = memory
+        .revise("urn:purrdf:claim:absent", RevisionOptions::default())
+        .expect_err("an absent claim must fail closed");
+    assert!(err.to_string().contains("unknown claim"), "{err}");
+    assert_eq!(
+        std::fs::read(&path).expect("store file remains"),
+        before,
+        "a failed revision must append no bytes"
+    );
 
     let _ = std::fs::remove_file(&path);
 }

@@ -1076,15 +1076,23 @@ pub fn segment_append_state(data: &[u8]) -> Result<SegmentAppendState, String> {
             let (Some(cid), Value::Map(fields)) = (as_i128(cid), entry) else {
                 return Err("cannot append: a catalog entry is malformed".to_string());
             };
+            let level = match map_get(fields, "level") {
+                None => None,
+                Some(value) => {
+                    let raw = as_i128(value)
+                        .ok_or_else(|| "cannot append: a catalog level is malformed".to_string())?;
+                    Some(i32::try_from(raw).map_err(|_| {
+                        "cannot append: a catalog level is out of range".to_string()
+                    })?)
+                }
+            };
             catalog.push(CatalogRow {
                 id: i64::try_from(cid)
                     .map_err(|_| "cannot append: a catalog id is out of range".to_string())?,
                 name: text_or(map_get(fields, "name"), "").to_string(),
                 cls: text_or(map_get(fields, "cls"), "encode").to_string(),
                 dct: map_get(fields, "dct").and_then(as_text).map(str::to_string),
-                level: map_get(fields, "level")
-                    .and_then(as_i128)
-                    .and_then(|level| i32::try_from(level).ok()),
+                level,
             });
         }
     }

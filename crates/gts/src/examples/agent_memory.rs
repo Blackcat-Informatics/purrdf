@@ -14,13 +14,14 @@ use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use ciborium::value::Value;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::model::{Graph, Term, TermKind};
-use crate::reader::{read, read_file_segments};
+use crate::reader::{SegmentAppendState, read, read_file_segments, segment_append_state};
 use crate::wire::map_get;
 use crate::writer::{
     FrameOptions, Writer, WriterError, WriterOptions, annot_payload, digest_string, quads_payload,
@@ -159,6 +160,8 @@ pub enum MemoryError {
     EmptyInvocation,
     /// A generated-entity IRI was empty.
     EmptyGeneratedEntity,
+    /// A revision named a claim that is not present in the live segment.
+    UnknownClaim(String),
     /// The GTS writer refused the authoring configuration or an appended frame.
     Author(WriterError),
 }
@@ -176,6 +179,9 @@ impl fmt::Display for MemoryError {
                 f.write_str("invocation must be a non-empty IRI when supplied")
             }
             Self::EmptyGeneratedEntity => f.write_str("generated entity IRIs must be non-empty"),
+            Self::UnknownClaim(claim) => {
+                write!(f, "cannot revise unknown claim {claim:?}")
+            }
             Self::Author(err) => write!(f, "{err}"),
         }
     }
@@ -240,10 +246,26 @@ impl Default for MemoryOptions {
 /// ([`Writer::appending`]). Before, every call minted its own self-contained
 /// pack, so an N-claim file was N headers — and with an in-band dictionary each
 /// of those headers re-pinned the whole dictionary.
+///
+/// # Single-writer requirement
+///
+/// Each path requires exclusive write ownership across every [`Memory`] handle
+/// and process. The append flow derives the current segment head and term base
+/// before writing; concurrent writers could derive the same values and author
+/// conflicting snapshots. Clones of one handle share the in-process append
+/// cache, but this example deliberately does not claim cross-process locking.
 #[derive(Clone, Debug)]
 pub struct Memory {
     path: PathBuf,
     options: MemoryOptions,
+    cache: Arc<Mutex<Option<MemoryCache>>>,
+}
+
+#[derive(Debug)]
+struct MemoryCache {
+    file_len: u64,
+    terms: Vec<Term>,
+    append_state: Option<SegmentAppendState>,
 }
 
 impl Memory {
@@ -258,6 +280,7 @@ impl Memory {
         Self {
             path: path.into(),
             options,
+            cache: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -277,11 +300,15 @@ impl Memory {
     /// The returned writer's bytes are always appended to the file, so the
     /// header is written exactly once per store.
     fn writer(&self) -> Result<Writer> {
-        if self.path.exists() {
-            let existing = fs::read(&self.path)?;
-            if !existing.is_empty() {
-                return Writer::appending(&existing).map_err(MemoryError::Author);
-            }
+        self.refresh_cache()?;
+        let append_state = self
+            .cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .and_then(|cached| cached.append_state.clone());
+        if let Some(state) = append_state {
+            return Writer::continuing(state).map_err(MemoryError::Author);
         }
         Writer::with_options(
             &self.options.profile,
@@ -298,18 +325,49 @@ impl Memory {
     ///
     /// This is the LAST segment's own fold — never the cross-segment union,
     /// whose by-value merge would under-count the ids actually in use.
+    fn refresh_cache(&self) -> Result<()> {
+        let file_len = self.file_len()?;
+        let mut cache = self
+            .cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if cache
+            .as_ref()
+            .is_some_and(|cached| cached.file_len == file_len)
+        {
+            return Ok(());
+        }
+        let (terms, append_state) = if file_len == 0 {
+            (Vec::new(), None)
+        } else {
+            let bytes = fs::read(&self.path)?;
+            let terms = read_file_segments(&bytes)
+                .segments
+                .last()
+                .map_or_else(Vec::new, |segment| segment.terms.clone());
+            let append_state = segment_append_state(&bytes)
+                .map_err(WriterError::InvalidFrame)
+                .map_err(MemoryError::Author)?;
+            (terms, Some(append_state))
+        };
+        *cache = Some(MemoryCache {
+            file_len,
+            terms,
+            append_state,
+        });
+        drop(cache);
+        Ok(())
+    }
+
+    /// The term table of the store's LAST segment, in segment-local id order.
     fn last_segment_terms(&self) -> Result<Vec<Term>> {
-        if !self.path.exists() {
-            return Ok(Vec::new());
-        }
-        let bytes = fs::read(&self.path)?;
-        if bytes.is_empty() {
-            return Ok(Vec::new());
-        }
-        Ok(read_file_segments(&bytes)
-            .segments
-            .last()
-            .map_or_else(Vec::new, |segment| segment.terms.clone()))
+        self.refresh_cache()?;
+        Ok(self
+            .cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map_or_else(Vec::new, |cached| cached.terms.clone()))
     }
 
     /// How many term rows the store's LAST segment already carries.
@@ -321,7 +379,13 @@ impl Memory {
     /// shifted by the same base — otherwise the second claim's rows would
     /// silently point at the FIRST claim's terms.
     fn term_base(&self) -> Result<usize> {
-        Ok(self.last_segment_terms()?.len())
+        self.refresh_cache()?;
+        Ok(self
+            .cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map_or(0, |cached| cached.terms.len()))
     }
 
     /// Append one frame under the store's transform/dictionary profile.
@@ -426,7 +490,7 @@ impl Memory {
         self.append_frame(&mut writer, "quads", quads_payload(&quads))?;
         self.append_frame(&mut writer, "reifies", reifies_payload(&reifies))?;
         self.append_frame(&mut writer, "annot", annot_payload(&annotations))?;
-        self.append(&writer.into_bytes())?;
+        self.commit(writer, &terms)?;
 
         Ok(Claim {
             id: assertion,
@@ -447,7 +511,9 @@ impl Memory {
     pub fn revise(&self, claim_id: &str, options: RevisionOptions<'_>) -> Result<()> {
         let mut writer = self.writer()?;
         let mut iris = SegmentIris::new(&self.last_segment_terms()?);
-        let target = iris.resolve(claim_id);
+        let target = iris
+            .resolve_existing(claim_id)
+            .ok_or_else(|| MemoryError::UnknownClaim(claim_id.to_string()))?;
         let mut annotations = Vec::new();
         if let Some(successor) = options.superseded_by {
             let successor_id = iris.resolve(successor);
@@ -469,7 +535,7 @@ impl Memory {
             None,
         );
         self.append_frame(&mut writer, "suppress", suppression)?;
-        self.append(&writer.into_bytes())
+        self.commit(writer, iris.appended())
     }
 
     /// Append one tool-call provenance record.
@@ -568,7 +634,7 @@ impl Memory {
         let quads = shift_quads(&quads, base);
         self.append_frame(&mut writer, "terms", terms_payload(&terms))?;
         self.append_frame(&mut writer, "quads", quads_payload(&quads))?;
-        self.append(&writer.into_bytes())?;
+        self.commit(writer, &terms)?;
 
         Ok(ToolCallRecord {
             id: call,
@@ -733,12 +799,54 @@ impl Memory {
         }
     }
 
-    fn append(&self, segment: &[u8]) -> Result<()> {
+    fn commit(&self, writer: Writer, appended_terms: &[Term]) -> Result<()> {
+        let head = writer.head().to_vec();
+        let segment = writer.into_bytes();
+        let initial_state = {
+            let cache = self
+                .cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if cache
+                .as_ref()
+                .is_some_and(|cached| cached.append_state.is_some())
+            {
+                None
+            } else {
+                Some(
+                    segment_append_state(&segment)
+                        .map_err(WriterError::InvalidFrame)
+                        .map_err(MemoryError::Author)?,
+                )
+            }
+        };
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.path)?;
-        file.write_all(segment)?;
+        file.write_all(&segment)?;
+        let mut cache = self
+            .cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if cache.is_some() {
+            let file_len = u64::try_from(segment.len()).ok().and_then(|segment_len| {
+                cache
+                    .as_ref()
+                    .and_then(|cached| cached.file_len.checked_add(segment_len))
+            });
+            if let (Some(file_len), Some(cached)) = (file_len, cache.as_mut()) {
+                cached.file_len = file_len;
+                cached.terms.extend_from_slice(appended_terms);
+                match cached.append_state.as_mut() {
+                    Some(state) => state.head = head,
+                    None => cached.append_state = initial_state,
+                }
+            } else {
+                *cache = None;
+            }
+        }
+        drop(cache);
         Ok(())
     }
 
@@ -810,6 +918,11 @@ impl SegmentIris {
         self.appended.push(iri(value));
         self.by_value.insert(value.to_string(), id);
         id
+    }
+
+    /// Resolve a row that must already exist; never mint an inert target.
+    fn resolve_existing(&self, value: &str) -> Option<usize> {
+        self.by_value.get(value).copied()
     }
 
     /// The rows to author, already numbered from the segment's base.

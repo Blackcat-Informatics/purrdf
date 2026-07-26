@@ -484,31 +484,66 @@ type CatalogKey = (String, Option<String>);
 fn assign_catalog_ids(
     base: &[(i64, Codec)],
     dict_names: &BTreeSet<&str>,
-) -> BTreeMap<CatalogKey, i64> {
+) -> Result<BTreeMap<CatalogKey, i64>, WriterError> {
     let mut ids: BTreeMap<CatalogKey, i64> = BTreeMap::new();
-    // Lowest id wins for a duplicated name, so the result never depends on the
-    // caller's row order.
-    let mut ordered: Vec<&(i64, Codec)> = base.iter().collect();
-    ordered.sort_by_key(|(id, codec)| (codec.name.clone(), *id));
-    for (id, codec) in ordered {
-        ids.entry((codec.name.clone(), None)).or_insert(*id);
+    let mut seen_names: BTreeSet<&str> = BTreeSet::new();
+    let mut seen_ids: BTreeSet<i64> = BTreeSet::new();
+    for (id, codec) in base {
+        if !seen_names.insert(&codec.name) {
+            return Err(WriterError::InvalidFrame(format!(
+                "duplicate codec name {:?} in the writer catalog (§5 \"cat\" is a map)",
+                codec.name
+            )));
+        }
+        if !seen_ids.insert(*id) {
+            return Err(WriterError::InvalidFrame(format!(
+                "duplicate codec id {id} in the writer catalog (§5 \"cat\" is a map)"
+            )));
+        }
+        ids.insert((codec.name.clone(), None), *id);
     }
     if dict_names.is_empty() {
-        return ids;
+        return Ok(ids);
     }
-    let mut next = ids.values().copied().max().unwrap_or(-1) + 1;
+    let mut next = base
+        .iter()
+        .map(|(id, _)| *id)
+        .max()
+        .unwrap_or(-1)
+        .checked_add(1)
+        .ok_or_else(|| {
+            WriterError::InvalidFrame(
+                "writer catalog ids leave no range for dictionary-bound entries".to_string(),
+            )
+        })?;
     let dict_capable: BTreeSet<String> = ids
         .keys()
         .filter(|(name, _)| is_dict_capable(name))
         .map(|(name, _)| name.clone())
         .collect();
+    let mut remaining = dict_capable
+        .len()
+        .checked_mul(dict_names.len())
+        .ok_or_else(|| {
+            WriterError::InvalidFrame(
+                "writer catalog entry count overflows while assigning dictionaries".to_string(),
+            )
+        })?;
     for name in dict_capable {
         for dict in dict_names {
             ids.insert((name.clone(), Some((*dict).to_string())), next);
-            next += 1;
+            remaining -= 1;
+            if remaining > 0 {
+                next = next.checked_add(1).ok_or_else(|| {
+                    WriterError::InvalidFrame(
+                        "writer catalog ids overflow while assigning dictionary-bound entries"
+                            .to_string(),
+                    )
+                })?;
+            }
         }
     }
-    ids
+    Ok(ids)
 }
 
 /// Whether a codec accepts an in-band `dct` dictionary (§8.5).
@@ -694,7 +729,7 @@ impl Writer {
             // would ship dead weight no frame could ever name.
             return Err(WriterError::MissingCatalogEntry("zstd".to_string()));
         }
-        let catalog_ids = assign_catalog_ids(&base_catalog, &dict_names);
+        let catalog_ids = assign_catalog_ids(&base_catalog, &dict_names)?;
 
         // The declared level is only meaningful on a zstd-family entry.
         if options.zstd_level.is_some()
@@ -794,18 +829,50 @@ impl Writer {
     pub fn appending(existing: &[u8]) -> Result<Self, WriterError> {
         let state =
             crate::reader::segment_append_state(existing).map_err(WriterError::InvalidFrame)?;
+        Self::continuing(state)
+    }
+
+    /// Continue from an already-recovered append state without re-scanning the
+    /// underlying file. Used by append-heavy in-crate facades that cache the
+    /// last segment's catalog and head between writes.
+    ///
+    /// # Errors
+    /// Returns [`WriterError::InvalidFrame`] when the cached catalog is
+    /// ambiguous or declares conflicting zstd authoring levels.
+    pub(crate) fn continuing(
+        state: crate::reader::SegmentAppendState,
+    ) -> Result<Self, WriterError> {
         // Adopt the catalog that is actually ON THE WIRE — appended frames name
         // ids from the existing header, never a freshly-derived assignment.
-        let catalog_ids: BTreeMap<CatalogKey, i64> = state
+        let mut catalog_ids: BTreeMap<CatalogKey, i64> = BTreeMap::new();
+        let mut seen_ids: BTreeSet<i64> = BTreeSet::new();
+        for row in &state.catalog {
+            if !seen_ids.insert(row.id) {
+                return Err(WriterError::InvalidFrame(format!(
+                    "cannot append: catalog id {} appears more than once",
+                    row.id
+                )));
+            }
+            let key = (row.name.clone(), row.dct.clone());
+            if catalog_ids.insert(key.clone(), row.id).is_some() {
+                return Err(WriterError::InvalidFrame(format!(
+                    "cannot append: catalog entry {key:?} appears more than once"
+                )));
+            }
+        }
+        let declared_levels: BTreeSet<i32> = state
             .catalog
             .iter()
-            .map(|row| ((row.name.clone(), row.dct.clone()), row.id))
+            .filter(|row| is_dict_capable(&row.name))
+            .filter_map(|row| row.level)
             .collect();
-        let declared_zstd_level = state
-            .catalog
-            .iter()
-            .find(|row| is_dict_capable(&row.name) && row.level.is_some())
-            .and_then(|row| row.level);
+        if declared_levels.len() > 1 {
+            return Err(WriterError::InvalidFrame(format!(
+                "cannot append: the segment catalog declares conflicting zstd levels \
+                 {declared_levels:?} (§8.5 \"level\")"
+            )));
+        }
+        let declared_zstd_level = declared_levels.first().copied();
         let (dicts, head) = (state.dicts, state.head);
         Ok(Self {
             catalog_ids,

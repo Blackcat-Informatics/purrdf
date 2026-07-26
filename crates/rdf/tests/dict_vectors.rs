@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Drift-guard tests for the frozen in-band-dictionary corpus vectors:
 //! `vectors/30-dict-rawcontent.gts` (raw-content dictionary, plain `zstd`),
 //! `vectors/31-dict-trained.gts` (FastCOVER-trained dictionary, plain `zstd`),
@@ -26,7 +29,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use ciborium::value::Value;
-use purrdf_gts::compact::{DictPlan, DictStrategy};
+use purrdf_gts::compact::{DEFAULT_DICT_NAME, DictPlan, DictStrategy};
 use purrdf_gts::model::Graph;
 use purrdf_gts::reader::read;
 use purrdf_gts::wire::{iter_items, map_get};
@@ -437,7 +440,7 @@ fn rsyncable_vector_declares_its_level_and_rsyncable_chain_on_the_wire() {
         assert_eq!(chain[0].0, "zstd-rsyncable", "chain must be rsyncable");
         assert_eq!(
             chain[0].1.as_deref(),
-            Some("pack"),
+            Some(DEFAULT_DICT_NAME),
             "every payload frame must be primed by the pinned dictionary"
         );
     }

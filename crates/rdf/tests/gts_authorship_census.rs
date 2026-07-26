@@ -194,7 +194,7 @@ fn strip_test_module(path: &Path, stripped: &str) -> String {
         let closer = format!("{}}}", " ".repeat(indent));
         let end = match lines[index..]
             .iter()
-            .position(|candidate| *candidate == closer)
+            .position(|candidate| candidate.trim_end() == closer)
         {
             Some(offset) => index + offset,
             None => panic!(
@@ -344,8 +344,10 @@ fn every_production_gts_authorship_site_is_in_the_census() {
         .map(|(file, function)| ((*file).to_string(), (*function).to_string()))
         .collect();
     expected.sort();
+    let mut deduped = expected.clone();
+    deduped.dedup();
     assert_eq!(
-        expected.len(),
+        deduped.len(),
         AUTHORSHIP_SITES.len(),
         "AUTHORSHIP_SITES carries a duplicate row"
     );
@@ -464,6 +466,16 @@ mod tests {
     fn code_after_a_test_module_is_still_scanned() {
         let body = strip_line_comments(
             "#[cfg(test)]\nmod tests {\n    fn t() { Writer::new(\"t\"); }\n}\n\n\
+             pub fn later() { Writer::new(\"real\"); }\n",
+        );
+        let trimmed = strip_test_module(Path::new("synthetic.rs"), &body);
+        assert_eq!(sites_in(&trimmed), vec!["later".to_string()]);
+    }
+
+    #[test]
+    fn a_trailing_comment_on_the_module_closer_is_accepted() {
+        let body = strip_line_comments(
+            "#[cfg(test)]\nmod tests {\n    fn t() { Writer::new(\"t\"); }\n} // tests\n\n\
              pub fn later() { Writer::new(\"real\"); }\n",
         );
         let trimmed = strip_test_module(Path::new("synthetic.rs"), &body);

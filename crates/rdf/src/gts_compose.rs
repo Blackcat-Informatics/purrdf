@@ -977,6 +977,96 @@ mod tests {
     }
 
     #[test]
+    fn a_populated_medium_plan_requires_a_total_assignment() {
+        let plan = MediumPlan {
+            dicts: vec![("docs".to_string(), vec![1, 2, 3])],
+            assignment: BTreeMap::new(),
+            zstd_level: Some(12),
+        };
+        let err = plan
+            .select(&FrameSlot::Snapshot)
+            .expect_err("a populated plan may not omit a frame slot");
+        assert!(err.contains("assigns none"), "{err}");
+    }
+
+    #[test]
+    fn emit_gts_carries_a_populated_plan_into_the_header_and_frames() {
+        let builder = ingest_nq("<https://e/s> <https://e/p> <https://e/o> .\n");
+        let samples: Vec<Vec<u8>> = (0..100)
+            .map(|i| format!("documentation payload row {i} with repeated vocabulary\n").into())
+            .collect();
+        let refs: Vec<&[u8]> = samples.iter().map(Vec::as_slice).collect();
+        let dict = purrdf_gts::dict::raw_content_dict(&refs, 1024).expect("dictionary builds");
+        let rep = "purrdf:doc/guide".to_string();
+        let plan = MediumPlan {
+            dicts: vec![("docs".to_string(), dict)],
+            assignment: BTreeMap::from([
+                (
+                    FrameSlot::Blob(rep.clone()),
+                    DictSelection::Named("docs".to_string()),
+                ),
+                (
+                    FrameSlot::Snapshot,
+                    DictSelection::Named("docs".to_string()),
+                ),
+            ]),
+            zstd_level: Some(12),
+        };
+        let bytes = emit_gts(
+            &builder,
+            "dist",
+            Some(vec!["zstd".to_string()]),
+            vec![BlobRow {
+                data: b"# dictionary-backed documentation\n".to_vec(),
+                media_type: "text/markdown".to_string(),
+                rep,
+            }],
+            Vec::new(),
+            None,
+            None,
+            None,
+            DEFAULT_RSYNCABLE_THRESHOLD,
+            &plan,
+        )
+        .expect("dict-primed snapshot emits");
+
+        let state = purrdf_gts::reader::segment_append_state(&bytes).expect("header parses");
+        assert_eq!(
+            state.dicts.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["docs"],
+            "the named dictionary must be pinned in the header"
+        );
+        let dict_ids: std::collections::BTreeSet<i64> = state
+            .catalog
+            .iter()
+            .filter(|row| row.dct.as_deref() == Some("docs"))
+            .map(|row| row.id)
+            .collect();
+        let (items, torn) = purrdf_gts::wire::iter_items(&bytes);
+        assert!(torn.is_none(), "complete emission");
+        let selected: Vec<i64> = items
+            .iter()
+            .filter_map(|(_, item)| {
+                let Value::Map(frame) = item else {
+                    return None;
+                };
+                let Some(Value::Array(chain)) = purrdf_gts::wire::map_get(frame, "x") else {
+                    return None;
+                };
+                let [Value::Integer(raw)] = chain.as_slice() else {
+                    panic!("each emitted payload must ride one transform");
+                };
+                Some(i64::try_from(i128::from(*raw)).expect("catalog id fits"))
+            })
+            .collect();
+        assert_eq!(selected.len(), 2, "one blob plus one snapshot payload");
+        assert!(
+            selected.iter().all(|id| dict_ids.contains(id)),
+            "every emitted payload must select the docs-bound catalog entry: {selected:?}"
+        );
+    }
+
+    #[test]
     fn rsyncable_threshold_only_rewrites_default_zstd() {
         assert_eq!(
             choose_transform(

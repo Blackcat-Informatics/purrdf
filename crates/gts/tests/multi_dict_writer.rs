@@ -13,7 +13,7 @@
 use std::collections::BTreeSet;
 
 use ciborium::value::Value;
-use purrdf_gts::codec::zstd_block_layout;
+use purrdf_gts::codec::{Codec, zstd_block_layout};
 use purrdf_gts::dict::{dictionary_id, raw_content_dict};
 use purrdf_gts::reader::{read, segment_append_state};
 use purrdf_gts::wire::{SELF_DESCRIBE_TAG, append_canonical, canonical, content_id, header_id};
@@ -207,6 +207,89 @@ fn duplicate_dictionary_names_are_refused() {
     )
     .expect_err("a duplicate dictionary name must hard-fail");
     assert!(err.to_string().contains("duplicate"), "{err}");
+}
+
+#[test]
+fn duplicate_codec_names_and_ids_are_refused() {
+    let duplicate_name = Writer::with_options(
+        "purrdf.gts",
+        WriterOptions {
+            catalog: Some(vec![
+                (0, Codec::new("zstd", "compress")),
+                (1, Codec::new("zstd", "compress")),
+            ]),
+            ..WriterOptions::default()
+        },
+    )
+    .expect_err("a duplicate codec name must hard-fail");
+    assert!(
+        duplicate_name.to_string().contains("duplicate codec name"),
+        "{duplicate_name}"
+    );
+
+    let duplicate_id = Writer::with_options(
+        "purrdf.gts",
+        WriterOptions {
+            catalog: Some(vec![
+                (0, Codec::new("identity", "encode")),
+                (0, Codec::new("zstd", "compress")),
+            ]),
+            ..WriterOptions::default()
+        },
+    )
+    .expect_err("a duplicate codec id must hard-fail");
+    assert!(
+        duplicate_id.to_string().contains("duplicate codec id"),
+        "{duplicate_id}"
+    );
+}
+
+fn header_with_catalog(cat: Vec<(Value, Value)>) -> Vec<u8> {
+    let mut header = vec![
+        ("gts".into(), "GTS1".into()),
+        ("v".into(), Value::Integer(1.into())),
+        ("prof".into(), "purrdf.gts".into()),
+        ("cat".into(), Value::Map(cat)),
+    ];
+    header.push(("id".into(), Value::Bytes(header_id(&header))));
+    canonical(&Value::Tag(SELF_DESCRIBE_TAG, Box::new(Value::Map(header))))
+}
+
+#[test]
+fn append_rejects_out_of_range_and_conflicting_declared_levels() {
+    let out_of_range = header_with_catalog(vec![(
+        Value::Integer(0.into()),
+        Value::Map(vec![
+            ("name".into(), "zstd".into()),
+            ("cls".into(), "compress".into()),
+            ("level".into(), Value::Integer(i64::MAX.into())),
+        ]),
+    )]);
+    let malformed = segment_append_state(&out_of_range)
+        .expect_err("an unrepresentable declared level must fail closed");
+    assert!(malformed.contains("level is out of range"), "{malformed}");
+
+    let conflicting = header_with_catalog(vec![
+        (
+            Value::Integer(0.into()),
+            Value::Map(vec![
+                ("name".into(), "zstd".into()),
+                ("cls".into(), "compress".into()),
+                ("level".into(), Value::Integer(3.into())),
+            ]),
+        ),
+        (
+            Value::Integer(1.into()),
+            Value::Map(vec![
+                ("name".into(), "zstd-rsyncable".into()),
+                ("cls".into(), "compress".into()),
+                ("level".into(), Value::Integer(12.into())),
+            ]),
+        ),
+    ]);
+    let err = Writer::appending(&conflicting)
+        .expect_err("conflicting on-wire zstd levels must fail closed");
+    assert!(err.to_string().contains("conflicting zstd levels"), "{err}");
 }
 
 /// (e) A pack whose catalog names a `dct` absent from the header `"dct"` map

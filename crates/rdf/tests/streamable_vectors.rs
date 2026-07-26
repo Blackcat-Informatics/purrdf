@@ -84,7 +84,7 @@ fn frozen_vector_is_byte_identical_to_a_fresh_regeneration() {
 
     assert_eq!(
         regenerated, frozen,
-        "streamable compaction with DictStrategy::None has no platform-dependent \
+        "streamable compaction with DictPlan::undicted() has no platform-dependent \
          floating point (unlike 31-dict-trained's FastCOVER training), so a fresh \
          regeneration from the SAME frozen source must be byte-identical to the \
          frozen vector"

@@ -183,6 +183,13 @@ impl DictPlan {
                 self.transform
             ));
         }
+        if self.zstd_level.is_some() && !zstd_family {
+            return refuse(format!(
+                "the plan declares a zstd level but its transform chain {:?} carries no \
+                 zstd-family codec to encode at it",
+                self.transform
+            ));
+        }
         Ok(())
     }
 }
@@ -1135,6 +1142,29 @@ mod tests {
             content_digest,
             packaging_signer: (fixed_key(99), "pack-test".to_string()),
         }
+    }
+
+    #[test]
+    fn a_declared_zstd_level_requires_a_zstd_family_transform() {
+        let invalid = DictPlan {
+            dicts: Vec::new(),
+            content: DictSelection::Baseline,
+            index: DictSelection::Baseline,
+            transform: Vec::new(),
+            zstd_level: Some(12),
+        };
+        let err = invalid
+            .validate()
+            .expect_err("a level without a zstd-family transform must fail");
+        assert!(err.to_string().contains("no zstd-family codec"), "{err}");
+
+        let valid = DictPlan {
+            transform: vec!["zstd-rsyncable".to_string()],
+            ..invalid
+        };
+        valid
+            .validate()
+            .expect("a level with a zstd-family transform is valid");
     }
 
     #[test]

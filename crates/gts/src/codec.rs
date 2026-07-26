@@ -203,6 +203,10 @@ fn encode_zstd_rsyncable(
             let mut cctx = dict_compressor(level, dict)?;
             let mut block_out = Vec::new();
             for block in data.chunks(RSYNCABLE_BLOCK_SIZE) {
+                // `compress_independent_frame_into` replaces the buffer today,
+                // but make the frame-isolation requirement explicit at this
+                // call site instead of depending on that reuse contract.
+                block_out.clear();
                 cctx.compress_independent_frame_into(block, &mut block_out);
                 out.extend_from_slice(&block_out);
             }
@@ -308,6 +312,13 @@ pub fn zstd_block_layout(payload: &[u8]) -> Result<Vec<ZstdBlockInfo>, CodecErro
             .map_err(|e| CodecError::Failed(format!("zstd frame header is unreadable: {e}")))?;
         let compressed_len = find_frame_compressed_size(rest)
             .map_err(|e| CodecError::Failed(format!("zstd frame is truncated: {e:?}")))?;
+        if compressed_len == 0 || compressed_len > rest.len() {
+            return Err(CodecError::Failed(format!(
+                "zstd frame reports invalid compressed length {compressed_len} for {} remaining \
+                 bytes",
+                rest.len()
+            )));
+        }
         let FrameContentSize::Known(content_len) = header.content_size else {
             return Err(CodecError::Failed(
                 "zstd frame omits its Frame_Content_Size, so its cut point is unobservable".into(),
