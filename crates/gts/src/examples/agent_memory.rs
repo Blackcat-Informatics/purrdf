@@ -442,8 +442,8 @@ impl Memory {
     /// Append a value-wise suppression for a claim, optionally linking a successor.
     ///
     /// A suppression NAMES an existing row, so every IRI here is resolved
-    /// against the live segment's term table rather than re-stated — see
-    /// [`SegmentIris`] for why re-stating it would silently miss the claim.
+    /// against the live segment's term table rather than re-stated — the
+    /// `SegmentIris` resolver prevents re-stating it and silently missing the claim.
     pub fn revise(&self, claim_id: &str, options: RevisionOptions<'_>) -> Result<()> {
         let mut writer = self.writer()?;
         let mut iris = SegmentIris::new(&self.last_segment_terms()?);

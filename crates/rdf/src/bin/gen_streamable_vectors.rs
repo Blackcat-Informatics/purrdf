@@ -23,7 +23,7 @@
 //! a meaningful dictionary against (see `crates/gts/src/dict.rs`), and not the
 //! purpose of this vector (that is what `30-dict-rawcontent`/`31-dict-trained`
 //! freeze). This vector freezes streamable-compaction + certification in
-//! isolation, so it pins [`DictStrategy::None`] deliberately: no `"dct"` header
+//! isolation, so it pins [`DictPlan::undicted`] deliberately: no `"dct"` header
 //! entry, plain (undicted) `zstd`/`identity` frames, and no new
 //! `zstd`/`dct`-capability requirement on the manifest entry.
 //!
