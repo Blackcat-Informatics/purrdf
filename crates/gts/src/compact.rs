@@ -28,33 +28,163 @@ use crate::model::{Graph, Quad, ReifierRow, Suppression, Term, TermKind};
 use crate::reader::{read, read_file_segments};
 use crate::stream;
 use crate::wire::{blake3_256, digest_str, hex, map_get};
-use crate::writer::{Writer, WriterOptions};
+use crate::writer::{self, FrameOptions, Writer, WriterOptions};
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 const XSD_DATETIME: &str = "http://www.w3.org/2001/XMLSchema#dateTime";
 
-/// In-band pack dictionary name pinned in the header `"dct"` map (§5).
-const DICT_NAME: &str = "pack";
-/// Target size of the pinned pack dictionary. FastCOVER/raw-content truncate the
+/// The conventional in-band pack dictionary name for a single-dictionary plan.
+pub const DEFAULT_DICT_NAME: &str = "pack";
+/// Target size of a pinned pack dictionary. FastCOVER/raw-content truncate the
 /// content to fit; a fixed value keeps compaction byte-deterministic.
 const DICT_TARGET_LEN: usize = 16 * 1024;
 
-/// Which in-band dictionary a pack pins for its `zstd` `dct` codec (§8.5).
+/// How one named in-band dictionary's bytes are derived from the content-blob
+/// corpus (§8.5 `dct`).
 ///
 /// Both are byte-deterministic; the trained strategy is the production default
 /// (Req 3 headline is "trained"), and the raw-content strategy is a named
 /// alternate. The choice affects only the pinned dictionary bytes, never the
-/// fold — a reader decodes the in-band dictionary either way.
+/// fold — a reader decodes the in-band dictionary either way. "No dictionary"
+/// is NOT a strategy: it is an empty [`DictPlan::dicts`], so a plan can never
+/// name a dictionary that produces nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DictStrategy {
     /// FastCOVER-trained dictionary (the production default).
     Trained,
     /// Raw-content dictionary (canonical trailing window of the corpus).
     RawContent,
-    /// No pack dictionary — plain `zstd` frames (used when there is no content
-    /// blob corpus to train on).
-    None,
+}
+
+/// Which in-band dictionary primes a frame — TOTAL, never `Option`.
+///
+/// `Option<String>` would let a fall-through mean "no dictionary" by accident;
+/// naming the baseline makes the undicted case a decision someone wrote down.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DictSelection {
+    /// Prime with the pinned dictionary of this name.
+    Named(String),
+    /// Deliberately no dictionary.
+    Baseline,
+}
+
+impl DictSelection {
+    /// The dictionary name, or `None` for [`Self::Baseline`].
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            Self::Named(name) => Some(name),
+            Self::Baseline => None,
+        }
+    }
+}
+
+/// The named multi-dictionary + transform plan a compaction authors under.
+///
+/// Replaces the old single `(DICT_NAME, DictStrategy)` pair: §5 has always
+/// allowed many named in-band dictionaries, and this is how a pack picks them,
+/// selects one for its content frames, and states the transform profile every
+/// authored frame rides (previously content blobs were hard-coded to plain
+/// `zstd` and the streaming-index frames carried an untransformed payload).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DictPlan {
+    /// Named dictionaries to pin in the header `"dct"` map, each with the
+    /// producer deriving its bytes from the content-blob corpus. Empty pins no
+    /// dictionary at all.
+    pub dicts: Vec<(String, DictStrategy)>,
+    /// Which pinned dictionary primes the content-blob frames.
+    pub content: DictSelection,
+    /// Which pinned dictionary primes the streaming-index / content-graph
+    /// frames.
+    pub index: DictSelection,
+    /// The transform chain EVERY authored frame rides — the index frames and
+    /// the content blobs alike. Empty stores payloads untransformed.
+    pub transform: Vec<String>,
+    /// The zstd level declared in the catalog and used by every zstd-family
+    /// frame (§8.5 `level?`).
+    pub zstd_level: Option<i32>,
+}
+
+impl DictPlan {
+    /// No in-band dictionary and no transform: payloads stored as authored.
+    pub fn undicted() -> Self {
+        Self {
+            dicts: Vec::new(),
+            content: DictSelection::Baseline,
+            index: DictSelection::Baseline,
+            transform: Vec::new(),
+            zstd_level: None,
+        }
+    }
+
+    /// One dictionary named [`DEFAULT_DICT_NAME`], priming plain-`zstd` content
+    /// frames — the historical single-dictionary shape.
+    pub fn single(strategy: DictStrategy) -> Self {
+        Self {
+            dicts: vec![(DEFAULT_DICT_NAME.to_string(), strategy)],
+            content: DictSelection::Named(DEFAULT_DICT_NAME.to_string()),
+            index: DictSelection::Baseline,
+            transform: vec!["zstd".to_string()],
+            zstd_level: None,
+        }
+    }
+
+    /// The GMEOW frame profile: one `zstd-rsyncable` transform at `level`,
+    /// every frame primed by one named dictionary.
+    pub fn rsyncable(name: &str, strategy: DictStrategy, level: i32) -> Self {
+        Self {
+            dicts: vec![(name.to_string(), strategy)],
+            content: DictSelection::Named(name.to_string()),
+            index: DictSelection::Named(name.to_string()),
+            transform: vec!["zstd-rsyncable".to_string()],
+            zstd_level: Some(level),
+        }
+    }
+
+    /// Validate the plan's internal consistency (unique non-empty names, every
+    /// selection naming a pinned dictionary, a dictionary only where a
+    /// zstd-family transform can consume it).
+    fn validate(&self) -> Result<(), CompactRefusedError> {
+        let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        for (name, _) in &self.dicts {
+            if name.is_empty() {
+                return refuse("an in-band dictionary name must be non-empty".to_string());
+            }
+            if !seen.insert(name.as_str()) {
+                return refuse(format!("duplicate in-band dictionary name {name:?}"));
+            }
+        }
+        let zstd_family = self
+            .transform
+            .iter()
+            .any(|name| matches!(name.as_str(), "zstd" | "zstd-rsyncable"));
+        for selection in [&self.content, &self.index] {
+            let Some(name) = selection.name() else {
+                continue;
+            };
+            if !seen.contains(name) {
+                return refuse(format!(
+                    "the plan selects dictionary {name:?}, which it does not pin"
+                ));
+            }
+            if !zstd_family {
+                return refuse(format!(
+                    "the plan selects dictionary {name:?} but its transform chain \
+                     {:?} carries no zstd-family codec to prime",
+                    self.transform
+                ));
+            }
+        }
+        if !self.dicts.is_empty() && !zstd_family {
+            return refuse(format!(
+                "the plan pins {} dictionar(y/ies) but its transform chain {:?} carries no \
+                 zstd-family codec, so nothing could ever use them",
+                self.dicts.len(),
+                self.transform
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// The input is not safely compactable (§10.1/§14.1 refuse-don't-trust).
@@ -679,21 +809,24 @@ fn value_idx(v: &Value) -> Option<usize> {
     }
 }
 
-/// Build the in-band pack dictionary over the batched content-blob corpus.
+/// Build every in-band pack dictionary the plan names, over the batched
+/// content-blob corpus.
 ///
 /// The corpus is every content blob's decoded bytes (the sealed original — the
 /// whole source log — is excluded, it is not "content"). A pack with no content
-/// blobs has no corpus, so it pins no dictionary and its frames use plain `zstd`.
+/// blobs has no corpus to build from; a plan that nonetheless NAMES a dictionary
+/// is refused rather than silently downgraded to an undicted pack, because the
+/// caller asked for a density guarantee the pack could not then honour.
 /// The producers are order-independent, so the emitted `dct` bytes equal
 /// `trained_dict`/`raw_content_dict` of the corpus regardless of iteration order.
-fn build_pack_dict(
+fn build_pack_dicts(
     g: &Graph,
     blob_order: &[String],
     sealed_digest: Option<&str>,
-    strategy: DictStrategy,
-) -> Result<Option<(String, Vec<u8>)>, CompactRefusedError> {
-    if strategy == DictStrategy::None {
-        return Ok(None);
+    plan: &DictPlan,
+) -> Result<Vec<(String, Vec<u8>)>, CompactRefusedError> {
+    if plan.dicts.is_empty() {
+        return Ok(Vec::new());
     }
     let mut corpus: Vec<Vec<u8>> = Vec::new();
     for digest in blob_order {
@@ -705,16 +838,29 @@ fn build_pack_dict(
         }
     }
     if corpus.is_empty() {
-        return Ok(None);
+        return refuse(
+            "the plan pins in-band dictionaries but the input has no content blobs to \
+             build them from (§8.5 dct)"
+                .to_string(),
+        );
     }
     let refs: Vec<&[u8]> = corpus.iter().map(Vec::as_slice).collect();
-    let bytes = match strategy {
-        DictStrategy::Trained => dict::trained_dict(&refs, DICT_TARGET_LEN),
-        DictStrategy::RawContent => dict::raw_content_dict(&refs, DICT_TARGET_LEN),
-        DictStrategy::None => unreachable!("handled above"),
+    let mut out = Vec::with_capacity(plan.dicts.len());
+    for (name, strategy) in &plan.dicts {
+        let bytes = match strategy {
+            // The seed is derived from the corpus, so two names sharing a
+            // strategy pin identical bytes — deliberate and deterministic.
+            DictStrategy::Trained => {
+                dict::trained_dict(&refs, DICT_TARGET_LEN, dict::DictSeed::FromCorpus)
+            }
+            DictStrategy::RawContent => dict::raw_content_dict(&refs, DICT_TARGET_LEN),
+        }
+        .map_err(|err| {
+            CompactRefusedError(format!("cannot build the pack dictionary {name:?}: {err}"))
+        })?;
+        out.push((name.clone(), bytes));
     }
-    .map_err(|err| CompactRefusedError(format!("cannot build the pack dictionary: {err}")))?;
-    Ok(Some((DICT_NAME.to_string(), bytes)))
+    Ok(out)
 }
 
 /// Parameters for [`compact_streamable`].
@@ -727,10 +873,10 @@ pub struct CompactionParams<'a> {
     /// Carry the verbatim source bytes as a nested GTS blob (§12.1), role
     /// `"source"` — REQUIRED for `evidence` input.
     pub seal_original: bool,
-    /// The in-band pack dictionary strategy trained over the batched
-    /// content-blob corpus and pinned per pack ([`DictStrategy::Trained`] is
-    /// the production default).
-    pub strategy: DictStrategy,
+    /// The named multi-dictionary + transform plan: which dictionaries the
+    /// pack pins, which one primes which frames, the transform chain every
+    /// authored frame rides, and the declared zstd level.
+    pub plan: DictPlan,
     /// When supplied by the certifying authoring wrapper, embedded as
     /// `stream:contentRefoldDigest` provenance so a repack certifies without
     /// the pre-compaction bytes.
@@ -765,10 +911,11 @@ pub fn compact_streamable(
     let CompactionParams {
         timestamp,
         seal_original,
-        strategy,
+        plan,
         content_digest,
         packaging_signer,
     } = params;
+    plan.validate()?;
     let (mut g, profile) = refusal_gate(data, seal_original)?;
 
     // Delivery plan: most-significant-first — ascending decoded size, digest
@@ -796,10 +943,10 @@ pub fn compact_streamable(
         None
     };
 
-    // Pack dictionary trained over the batched content-blob corpus (the sealed
+    // Pack dictionaries built over the batched content-blob corpus (the sealed
     // original — the whole source — is excluded). The dict producers are
     // order-independent, so blob-delivery order need not be threaded here.
-    let dict = build_pack_dict(&g, &blob_order, sealed_digest.as_deref(), strategy)?;
+    let dicts = build_pack_dicts(&g, &blob_order, sealed_digest.as_deref(), &plan)?;
 
     let index = streaming_index(
         &g,
@@ -815,18 +962,45 @@ pub fn compact_streamable(
         &profile,
         WriterOptions {
             layout: Some("streamable".to_string()),
-            dict,
+            dicts,
+            zstd_level: plan.zstd_level,
             ..WriterOptions::default()
         },
     )
     .map_err(|err| CompactRefusedError(format!("cannot configure the pack writer: {err}")))?;
+
+    // Every authored frame rides the plan's transform chain — the streaming
+    // index and content graph included. Leaving those frames untransformed
+    // while the blobs compressed was a silent split profile: the pack claimed
+    // one frame profile and shipped two.
+    let index_dict = plan.index.name();
+    let authored = |writer: &mut Writer,
+                    frame_type: &str,
+                    payload: Value|
+     -> Result<(), CompactRefusedError> {
+        writer
+            .add_frame_with_options(
+                frame_type,
+                FrameOptions {
+                    payload: Some(payload),
+                    transform: plan.transform.clone(),
+                    dict: index_dict.map(str::to_string),
+                    ..FrameOptions::default()
+                },
+            )
+            .map(|_| ())
+            .map_err(|err| {
+                CompactRefusedError(format!("cannot author the {frame_type} frame: {err}"))
+            })
+    };
+
     // Leading streaming index: the catalog presages everything below it.
-    w.add_terms(&index.terms);
-    w.add_quads(&index.quads);
+    authored(&mut w, "terms", writer::terms_payload(&index.terms))?;
+    authored(&mut w, "quads", writer::quads_payload(&index.quads))?;
     // Content graph, re-emitted from the folded union (ids shifted by `base`).
     if !g.terms.is_empty() {
         let shifted: Vec<Term> = g.terms.iter().map(|t| shift_term(t, base)).collect();
-        w.add_terms(&shifted);
+        authored(&mut w, "terms", writer::terms_payload(&shifted))?;
     }
     if !g.quads.is_empty() {
         let shifted: Vec<Quad> = g
@@ -834,7 +1008,7 @@ pub fn compact_streamable(
             .iter()
             .map(|&(s, p, o, gr)| (s + base, p + base, o + base, gr.map(|x| x + base)))
             .collect();
-        w.add_quads(&shifted);
+        authored(&mut w, "quads", writer::quads_payload(&shifted))?;
     }
     if !g.reifiers.is_empty() {
         let shifted: Vec<ReifierRow> = g
@@ -848,7 +1022,7 @@ pub fn compact_streamable(
                 )
             })
             .collect();
-        w.add_reifies(&shifted);
+        authored(&mut w, "reifies", writer::reifies_payload(&shifted))?;
     }
     if !g.annotations.is_empty() {
         let shifted: Vec<(usize, usize, usize, Option<usize>)> = g
@@ -856,22 +1030,18 @@ pub fn compact_streamable(
             .iter()
             .map(|&(r, p, v, gr)| (r + base, p + base, v + base, gr.map(|x| x + base)))
             .collect();
-        w.add_annot(&shifted);
+        authored(&mut w, "annot", writer::annot_payload(&shifted))?;
     }
     for sup in shifted_suppressions(&g, base) {
-        w.add_suppress(sup.targets, sup.reason.as_deref(), sup.by);
+        let payload = writer::suppress_payload(sup.targets, sup.reason.as_deref(), sup.by);
+        authored(&mut w, "suppress", payload)?;
     }
-    // Blobs in delivery order; declared metadata rides along. When a pack
-    // dictionary is pinned, content-blob frames are re-emitted through the
-    // `zstd` transform so they are actually compressed against `dict` above —
-    // an unused in-band dictionary would otherwise be dead weight. The sealed
+    // Blobs in delivery order; declared metadata rides along, and every content
+    // frame is primed by the dictionary the plan selects for content — an
+    // unused in-band dictionary would otherwise be dead weight. The sealed
     // original (the nested source GTS) is never dict-compressed: it carries
     // its own framing and is excluded from the dictionary training corpus.
-    let content_transform: Vec<String> = if strategy == DictStrategy::None {
-        Vec::new()
-    } else {
-        vec!["zstd".to_string()]
-    };
+    let content_dict = plan.content.name();
     for digest in &blob_order {
         if Some(digest.as_str()) == sealed_digest.as_deref() {
             w.add_blob(
@@ -890,10 +1060,19 @@ pub fn compact_streamable(
             Cow::Borrowed(bytes) => bytes.to_vec(),
             Cow::Owned(bytes) => bytes,
         };
-        if content_transform.is_empty() {
+        if plan.transform.is_empty() {
             w.add_blob_owned(owned, mt.as_deref(), rep.as_deref());
         } else {
-            w.add_blob_transformed(owned, mt.as_deref(), rep.as_deref(), &content_transform);
+            w.add_blob_transformed(
+                owned,
+                mt.as_deref(),
+                rep.as_deref(),
+                &plan.transform,
+                content_dict,
+            )
+            .map_err(|err| {
+                CompactRefusedError(format!("cannot author the content blob frame: {err}"))
+            })?;
         }
     }
     // The MANDATORY packaging head signature: sign ONLY the re-issued
@@ -948,11 +1127,11 @@ mod tests {
     /// A `CompactionParams` with the shared test defaults: fixed timestamp, no
     /// source seal, a fixed packaging signer (the field is mandatory — see
     /// [`CompactionParams::packaging_signer`]).
-    fn params(strategy: DictStrategy, content_digest: Option<&str>) -> CompactionParams<'_> {
+    fn params(plan: DictPlan, content_digest: Option<&str>) -> CompactionParams<'_> {
         CompactionParams {
             timestamp: "2026-01-01T00:00:00Z",
             seal_original: false,
-            strategy,
+            plan,
             content_digest,
             packaging_signer: (fixed_key(99), "pack-test".to_string()),
         }
@@ -961,18 +1140,27 @@ mod tests {
     #[test]
     fn compaction_is_byte_deterministic_with_a_trained_dict() {
         let source = source_with_blobs();
-        let a = compact_streamable(&source, params(DictStrategy::Trained, None))
-            .expect("compaction succeeds");
-        let b = compact_streamable(&source, params(DictStrategy::Trained, None))
-            .expect("compaction succeeds");
+        let a = compact_streamable(
+            &source,
+            params(DictPlan::single(DictStrategy::Trained), None),
+        )
+        .expect("compaction succeeds");
+        let b = compact_streamable(
+            &source,
+            params(DictPlan::single(DictStrategy::Trained), None),
+        )
+        .expect("compaction succeeds");
         assert_eq!(a, b, "a trained-dict compaction must be byte-reproducible");
     }
 
     #[test]
     fn compacted_pack_folds_cleanly_and_blobs_decode_through_the_dict() {
         let source = source_with_blobs();
-        let packed = compact_streamable(&source, params(DictStrategy::Trained, None))
-            .expect("compaction succeeds");
+        let packed = compact_streamable(
+            &source,
+            params(DictPlan::single(DictStrategy::Trained), None),
+        )
+        .expect("compaction succeeds");
         let g = read(&packed, true, None);
         assert!(
             g.diagnostics.is_empty(),
@@ -990,9 +1178,12 @@ mod tests {
     #[test]
     fn the_dictionary_is_invisible_to_the_fold() {
         let source = source_with_blobs();
-        let trained = compact_streamable(&source, params(DictStrategy::Trained, None))
-            .expect("trained compaction");
-        let undicted = compact_streamable(&source, params(DictStrategy::None, None))
+        let trained = compact_streamable(
+            &source,
+            params(DictPlan::single(DictStrategy::Trained), None),
+        )
+        .expect("trained compaction");
+        let undicted = compact_streamable(&source, params(DictPlan::undicted(), None))
             .expect("undicted compaction");
         assert_ne!(
             trained, undicted,
@@ -1019,15 +1210,21 @@ mod tests {
     #[test]
     fn embedded_content_digest_appears_only_when_supplied() {
         let source = source_with_blobs();
-        let without =
-            compact_streamable(&source, params(DictStrategy::Trained, None)).expect("compaction");
+        let without = compact_streamable(
+            &source,
+            params(DictPlan::single(DictStrategy::Trained), None),
+        )
+        .expect("compaction");
         assert!(
             !digest_quad_present(&without),
             "no content-refold digest without one supplied"
         );
         let with = compact_streamable(
             &source,
-            params(DictStrategy::Trained, Some("blake3:0123456789abcdef")),
+            params(
+                DictPlan::single(DictStrategy::Trained),
+                Some("blake3:0123456789abcdef"),
+            ),
         )
         .expect("compaction");
         assert!(
@@ -1124,7 +1321,7 @@ mod tests {
         );
         let source = w.into_bytes();
 
-        let packed = compact_streamable(&source, params(DictStrategy::None, None))
+        let packed = compact_streamable(&source, params(DictPlan::undicted(), None))
             .expect("compaction succeeds");
         let g = read(&packed, true, None);
         assert!(
@@ -1192,7 +1389,7 @@ mod tests {
         );
         let source = w.into_bytes();
 
-        let packed = compact_streamable(&source, params(DictStrategy::None, None))
+        let packed = compact_streamable(&source, params(DictPlan::undicted(), None))
             .expect("compaction succeeds");
         let g = read(&packed, true, None);
         assert!(
@@ -1253,7 +1450,7 @@ mod tests {
         );
         let source = w.into_bytes();
 
-        let packed = compact_streamable(&source, params(DictStrategy::None, None))
+        let packed = compact_streamable(&source, params(DictPlan::undicted(), None))
             .expect("compaction succeeds");
         let g = read(&packed, true, None);
         assert!(
@@ -1306,7 +1503,7 @@ mod tests {
         );
         let source = w.into_bytes();
 
-        let packed = compact_streamable(&source, params(DictStrategy::None, None))
+        let packed = compact_streamable(&source, params(DictPlan::undicted(), None))
             .expect("compaction succeeds");
         let g = read(&packed, true, None);
         assert!(
@@ -1361,7 +1558,7 @@ mod tests {
         );
         let source = w.into_bytes();
 
-        let err = compact_streamable(&source, params(DictStrategy::None, None))
+        let err = compact_streamable(&source, params(DictPlan::undicted(), None))
             .expect_err("a frame-addressed suppression must refuse compaction (§10.1)");
         assert!(
             err.to_string().contains("frame-addressed suppression"),

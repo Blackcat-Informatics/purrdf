@@ -11,7 +11,7 @@
 //! `"unverified"` and `encrypt`-class frames degrade to `missing-key` opaque
 //! nodes. Callers that hold content keys can use [`read_with_options`].
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
 
 use ciborium::value::Value;
@@ -1004,12 +1004,126 @@ fn catalog_from(header: &[(Value, Value)]) -> HashMap<i128, Codec> {
                         name: text_or(map_get(fields, "name"), "").to_string(),
                         cls: text_or(map_get(fields, "cls"), "encode").to_string(),
                         dct,
+                        // §8.5 `level?`: the authoring compression level, made
+                        // observable so a profile can gate on it.
+                        level: map_get(fields, "level")
+                            .and_then(as_i128)
+                            .and_then(|level| i32::try_from(level).ok()),
                     },
                 );
             }
         }
     }
     out
+}
+
+/// One catalog row exactly as it appears on the wire (§5, §8.5), keeping the
+/// dictionary NAME the entry references rather than the resolved bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CatalogRow {
+    /// File-local catalog id.
+    pub id: i64,
+    /// Canonical codec name (§8.5 registry).
+    pub name: String,
+    /// `"encode"` | `"compress"` | `"encrypt"`.
+    pub cls: String,
+    /// Header `"dct"` key this entry binds to, if any.
+    pub dct: Option<String>,
+    /// Declared `level` parameter, if any.
+    pub level: Option<i32>,
+}
+
+/// Everything a writer needs to APPEND to an existing segment rather than
+/// starting a new one: the on-wire catalog, the in-band dictionaries, and the
+/// current head id the next frame must reference as `"prev"`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SegmentAppendState {
+    /// The last segment's catalog rows, ids included.
+    pub catalog: Vec<CatalogRow>,
+    /// The last segment's in-band dictionaries by name (§5 header `"dct"`).
+    pub dicts: BTreeMap<String, Vec<u8>>,
+    /// The id of the last item in the file — the `"prev"` of the next frame.
+    pub head: Vec<u8>,
+}
+
+/// Recover [`SegmentAppendState`] from an existing GTS file.
+///
+/// Reads the LAST segment header (§3.1) and the id of the file's last item, so
+/// a subsequent writer continues that one append-only chain instead of minting
+/// a second header. Nothing is folded and no chain is verified here — this is
+/// the authoring-side inverse of the header parse, not a reader.
+///
+/// # Errors
+/// Returns an error when the file is empty, ends in a torn append, carries no
+/// segment header, or its last item has no `"id"` — appending onto any of those
+/// would silently break the chain.
+pub fn segment_append_state(data: &[u8]) -> Result<SegmentAppendState, String> {
+    let (items, torn) = iter_items(data);
+    if let Some(offset) = torn {
+        return Err(format!(
+            "cannot append to a file with a torn append at byte {offset}"
+        ));
+    }
+    let Some(last_header) = items.iter().rposition(|(_, item)| is_header_item(item)) else {
+        return Err("cannot append: the file carries no GTS segment header".to_string());
+    };
+    let header =
+        unwrap_header(&items[last_header].1).map_err(|err| format!("cannot append: {err}"))?;
+
+    let mut catalog: Vec<CatalogRow> = Vec::new();
+    if let Some(Value::Map(raw)) = map_get(header, "cat") {
+        for (cid, entry) in raw {
+            let (Some(cid), Value::Map(fields)) = (as_i128(cid), entry) else {
+                return Err("cannot append: a catalog entry is malformed".to_string());
+            };
+            catalog.push(CatalogRow {
+                id: i64::try_from(cid)
+                    .map_err(|_| "cannot append: a catalog id is out of range".to_string())?,
+                name: text_or(map_get(fields, "name"), "").to_string(),
+                cls: text_or(map_get(fields, "cls"), "encode").to_string(),
+                dct: map_get(fields, "dct").and_then(as_text).map(str::to_string),
+                level: map_get(fields, "level")
+                    .and_then(as_i128)
+                    .and_then(|level| i32::try_from(level).ok()),
+            });
+        }
+    }
+    catalog.sort_by_key(|row| row.id);
+
+    let mut dicts: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    if let Some(Value::Map(entries)) = map_get(header, "dct") {
+        for (name, bytes) in entries {
+            let (Value::Text(name), Value::Bytes(bytes)) = (name, bytes) else {
+                return Err("cannot append: a header \"dct\" entry is malformed".to_string());
+            };
+            dicts.insert(name.clone(), bytes.clone());
+        }
+    }
+    // Fail closed: every dictionary a catalog entry names must be present, or
+    // frames appended against that entry would be undecodable.
+    for row in &catalog {
+        if let Some(name) = &row.dct
+            && !dicts.contains_key(name)
+        {
+            return Err(format!(
+                "cannot append: catalog id {} names dictionary {name:?}, absent from the \
+                 header \"dct\" map",
+                row.id
+            ));
+        }
+    }
+
+    let last = items.last().expect("a header item was found above");
+    let entries = unwrap_header(&last.1).map_err(|err| format!("cannot append: {err}"))?;
+    let head = match map_get(entries, "id") {
+        Some(Value::Bytes(id)) => id.clone(),
+        _ => return Err("cannot append: the file's last item carries no \"id\"".to_string()),
+    };
+    Ok(SegmentAppendState {
+        catalog,
+        dicts,
+        head,
+    })
 }
 
 /// Read and fold a GTS file into a [`Graph`].

@@ -84,6 +84,10 @@ pub mod statements;
 // enumeration / classification helpers the native golden-capture binary
 // (src/bin/capture_sparql_goldens.rs) uses. Oxigraph-free.
 pub mod capture_support;
+// The ONE definition of the frozen in-band-dictionary corpus vectors' fixed
+// sources and authoring recipes, shared by the maintainer freezing binary
+// (src/bin/gen_dict_vectors.rs) and the drift-guard test (tests/dict_vectors.rs).
+pub mod gts_dict_vectors;
 // Canonical, review-friendly Turtle serializer over the IR: the
 // native replacement for rdflib `longturtle` in `purrdf normalize`. Oxigraph-free.
 pub mod turtle_normalize;

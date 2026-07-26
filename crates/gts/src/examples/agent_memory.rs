@@ -20,9 +20,12 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::model::{Graph, Term, TermKind};
-use crate::reader::read;
+use crate::reader::{read, read_file_segments};
 use crate::wire::map_get;
-use crate::writer::{Writer, digest_string};
+use crate::writer::{
+    FrameOptions, Writer, WriterError, WriterOptions, annot_payload, digest_string, quads_payload,
+    reifies_payload, suppress_payload, terms_payload,
+};
 
 const RDF_VALUE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#value";
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -42,6 +45,9 @@ const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
 const XSD_DATETIME: &str = "http://www.w3.org/2001/XMLSchema#dateTime";
 const PROFILE: &str = "ai-package";
 const INLINE_PAYLOAD_BUDGET: usize = 4096;
+/// Declared zstd level for the default authoring profile — the measured knee
+/// (see `purrdf_rdf::gts_compose::DIST_ZSTD_LEVEL`).
+const DEFAULT_ZSTD_LEVEL: i32 = 12;
 
 /// One recalled claim, the user-facing view of a reified statement.
 #[derive(Clone, Debug, PartialEq)]
@@ -153,6 +159,8 @@ pub enum MemoryError {
     EmptyInvocation,
     /// A generated-entity IRI was empty.
     EmptyGeneratedEntity,
+    /// The GTS writer refused the authoring configuration or an appended frame.
+    Author(WriterError),
 }
 
 impl fmt::Display for MemoryError {
@@ -168,6 +176,7 @@ impl fmt::Display for MemoryError {
                 f.write_str("invocation must be a non-empty IRI when supplied")
             }
             Self::EmptyGeneratedEntity => f.write_str("generated entity IRIs must be non-empty"),
+            Self::Author(err) => write!(f, "{err}"),
         }
     }
 }
@@ -183,21 +192,152 @@ impl From<std::io::Error> for MemoryError {
 /// Convenient result alias for the example API.
 pub type Result<T> = std::result::Result<T, MemoryError>;
 
+/// How a [`Memory`] package authors its frames.
+///
+/// The default is transform-chained and dictionary-capable. The previous
+/// default — a bare `Writer::new(PROFILE)` with no transform at all — stored
+/// every claim's payload uncompressed, which is a degraded default rather than
+/// a chosen one: an agent memory is append-heavy, highly repetitive text, the
+/// single best case for a primed zstd stream.
+#[derive(Clone, Debug)]
+pub struct MemoryOptions {
+    /// GTS profile recorded in the segment header.
+    pub profile: String,
+    /// Transform chain every authored frame payload rides.
+    ///
+    /// `zstd-rsyncable` is the default: an agent memory file is appended to
+    /// constantly and typically lives under rsync/git, so bounded-neighbourhood
+    /// compressed output is worth more than the last few percent of ratio.
+    pub transform: Vec<String>,
+    /// Declared zstd level (§8.5 catalog `level?`).
+    pub zstd_level: Option<i32>,
+    /// In-band dictionaries pinned in the store's ONE header (§5 `"dct"`).
+    ///
+    /// This is why the append mode below matters: a per-claim header would
+    /// repeat every one of these dictionaries — kilobytes — for a few hundred
+    /// bytes of claim.
+    pub dicts: Vec<(String, Vec<u8>)>,
+    /// Which pinned dictionary primes authored frames.
+    pub dict: Option<String>,
+}
+
+impl Default for MemoryOptions {
+    fn default() -> Self {
+        Self {
+            profile: PROFILE.to_string(),
+            transform: vec!["zstd-rsyncable".to_string()],
+            zstd_level: Some(DEFAULT_ZSTD_LEVEL),
+            dicts: Vec::new(),
+            dict: None,
+        }
+    }
+}
+
 /// An append-only grounded-memory package.
+///
+/// A store file carries ONE segment header; each `store`/`revise`/
+/// `record_tool_call` appends frames onto that segment's `prev` chain
+/// ([`Writer::appending`]). Before, every call minted its own self-contained
+/// pack, so an N-claim file was N headers — and with an in-band dictionary each
+/// of those headers re-pinned the whole dictionary.
 #[derive(Clone, Debug)]
 pub struct Memory {
     path: PathBuf,
+    options: MemoryOptions,
 }
 
 impl Memory {
-    /// Open an existing memory package, or create it on first write.
+    /// Open an existing memory package, or create it on first write, with the
+    /// default (transform-chained, dictionary-capable) authoring options.
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+        Self::with_options(path, MemoryOptions::default())
+    }
+
+    /// Open a memory package with explicit authoring options.
+    pub fn with_options(path: impl Into<PathBuf>, options: MemoryOptions) -> Self {
+        Self {
+            path: path.into(),
+            options,
+        }
     }
 
     /// The package path.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// The authoring options in force.
+    pub fn options(&self) -> &MemoryOptions {
+        &self.options
+    }
+
+    /// A writer that CONTINUES the store's single segment, or mints its header
+    /// when the file does not exist yet.
+    ///
+    /// The returned writer's bytes are always appended to the file, so the
+    /// header is written exactly once per store.
+    fn writer(&self) -> Result<Writer> {
+        if self.path.exists() {
+            let existing = fs::read(&self.path)?;
+            if !existing.is_empty() {
+                return Writer::appending(&existing).map_err(MemoryError::Author);
+            }
+        }
+        Writer::with_options(
+            &self.options.profile,
+            WriterOptions {
+                dicts: self.options.dicts.clone(),
+                zstd_level: self.options.zstd_level,
+                ..WriterOptions::default()
+            },
+        )
+        .map_err(MemoryError::Author)
+    }
+
+    /// The term table of the store's LAST segment, in segment-local id order.
+    ///
+    /// This is the LAST segment's own fold — never the cross-segment union,
+    /// whose by-value merge would under-count the ids actually in use.
+    fn last_segment_terms(&self) -> Result<Vec<Term>> {
+        if !self.path.exists() {
+            return Ok(Vec::new());
+        }
+        let bytes = fs::read(&self.path)?;
+        if bytes.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(read_file_segments(&bytes)
+            .segments
+            .last()
+            .map_or_else(Vec::new, |segment| segment.terms.clone()))
+    }
+
+    /// How many term rows the store's LAST segment already carries.
+    ///
+    /// Term ids are SEGMENT-scoped and cumulative across the segment's `terms`
+    /// frames (§7.5). When every claim was its own self-contained pack this was
+    /// always zero; appending into one segment means each new batch of terms is
+    /// numbered from here, and every quad/reifies/annot row it authors must be
+    /// shifted by the same base — otherwise the second claim's rows would
+    /// silently point at the FIRST claim's terms.
+    fn term_base(&self) -> Result<usize> {
+        Ok(self.last_segment_terms()?.len())
+    }
+
+    /// Append one frame under the store's transform/dictionary profile.
+    fn append_frame(&self, writer: &mut Writer, frame_type: &str, payload: Value) -> Result<()> {
+        writer
+            .add_frame_with_options(
+                frame_type,
+                FrameOptions {
+                    payload: Some(payload),
+                    transform: self.options.transform.clone(),
+                    dict: self.options.dict.clone(),
+                    ..FrameOptions::default()
+                },
+            )
+            .map(|_| ())
+            .map_err(MemoryError::Author)
     }
 
     /// Append one claim as a reified RDF 1.2 statement.
@@ -227,7 +367,7 @@ impl Memory {
         );
         let subject = format!("urn:purrdf:claim:{}", digest_string(text.as_bytes()));
 
-        let mut writer = Writer::new(PROFILE);
+        let mut writer = self.writer()?;
         let mut terms = vec![
             iri(&subject),
             iri(RDF_VALUE),
@@ -275,11 +415,18 @@ impl Memory {
             );
         }
 
-        writer.add_terms(&terms);
-        writer.add_quads(&[(0, 1, 2, None)]);
-        writer.add_reifies(&[(3, (0, 1, 2), None)]);
-        writer.add_annot(&annotations);
-        self.append(&writer.to_bytes())?;
+        // Term ids continue the segment's existing table (see `term_base`).
+        let base = self.term_base()?;
+        let terms = shift_terms(&terms, base);
+        let quads = shift_quads(&[(0, 1, 2, None)], base);
+        let reifies = [(3 + base, (base, 1 + base, 2 + base), None)];
+        let annotations = shift_annotations(&annotations, base);
+
+        self.append_frame(&mut writer, "terms", terms_payload(&terms))?;
+        self.append_frame(&mut writer, "quads", quads_payload(&quads))?;
+        self.append_frame(&mut writer, "reifies", reifies_payload(&reifies))?;
+        self.append_frame(&mut writer, "annot", annot_payload(&annotations))?;
+        self.append(&writer.into_bytes())?;
 
         Ok(Claim {
             id: assertion,
@@ -293,28 +440,36 @@ impl Memory {
     }
 
     /// Append a value-wise suppression for a claim, optionally linking a successor.
+    ///
+    /// A suppression NAMES an existing row, so every IRI here is resolved
+    /// against the live segment's term table rather than re-stated — see
+    /// [`SegmentIris`] for why re-stating it would silently miss the claim.
     pub fn revise(&self, claim_id: &str, options: RevisionOptions<'_>) -> Result<()> {
-        let mut writer = Writer::new(PROFILE);
-        let mut terms = vec![iri(claim_id)];
+        let mut writer = self.writer()?;
+        let mut iris = SegmentIris::new(&self.last_segment_terms()?);
+        let target = iris.resolve(claim_id);
         let mut annotations = Vec::new();
         if let Some(successor) = options.superseded_by {
-            terms.push(iri(successor));
-            terms.push(iri(WAS_DERIVED_FROM));
-            annotations.push((1, 2, 0, None));
+            let successor_id = iris.resolve(successor);
+            let derived_from = iris.resolve(WAS_DERIVED_FROM);
+            annotations.push((successor_id, derived_from, target, None));
         }
-        writer.add_terms(&terms);
+        if !iris.appended().is_empty() {
+            self.append_frame(&mut writer, "terms", terms_payload(iris.appended()))?;
+        }
         if !annotations.is_empty() {
-            writer.add_annot(&annotations);
+            self.append_frame(&mut writer, "annot", annot_payload(&annotations))?;
         }
-        writer.add_suppress(
+        let suppression = suppress_payload(
             vec![Value::Map(vec![
                 ("kind".into(), "term".into()),
-                ("id".into(), Value::from(0_u64)),
+                ("id".into(), Value::from(target as u64)),
             ])],
             options.reason,
             None,
         );
-        self.append(&writer.to_bytes())
+        self.append_frame(&mut writer, "suppress", suppression)?;
+        self.append(&writer.into_bytes())
     }
 
     /// Append one tool-call provenance record.
@@ -407,10 +562,13 @@ impl Memory {
             }
         }
 
-        let mut writer = Writer::new(PROFILE);
-        writer.add_terms(&terms);
-        writer.add_quads(&quads);
-        self.append(&writer.to_bytes())?;
+        let mut writer = self.writer()?;
+        let base = self.term_base()?;
+        let terms = shift_terms(&terms, base);
+        let quads = shift_quads(&quads, base);
+        self.append_frame(&mut writer, "terms", terms_payload(&terms))?;
+        self.append_frame(&mut writer, "quads", quads_payload(&quads))?;
+        self.append(&writer.into_bytes())?;
 
         Ok(ToolCallRecord {
             id: call,
@@ -601,6 +759,65 @@ impl Memory {
     }
 }
 
+/// Resolves IRIs against a live segment's EXISTING term table, minting rows
+/// only for the genuinely new ones.
+///
+/// Term ids are POSITIONAL within a segment (§7.5): the reader interns by value
+/// only when it unions distinct segments. So a frame appended into a segment
+/// that re-states an IRI the segment already carries gets a SECOND, different
+/// id for it. That is harmless for a self-contained batch like `store`'s, whose
+/// rows only ever reference their own terms — but it is fatal for anything that
+/// must NAME a row somebody else already keyed on: a `suppress` target or an
+/// `annot` reifier pointing at the duplicate addresses a term no reifier is
+/// bound to, so the directive silently applies to nothing. Pack-per-claim hid
+/// this, because each claim was its own segment and the cross-segment union
+/// merged the two rows by value before anything consulted them.
+struct SegmentIris {
+    by_value: HashMap<String, usize>,
+    appended: Vec<Term>,
+    base: usize,
+}
+
+impl SegmentIris {
+    /// Index the segment's IRI rows; the FIRST id wins, which is the one the
+    /// segment's reifier and quad rows were authored against.
+    fn new(terms: &[Term]) -> Self {
+        let mut by_value: HashMap<String, usize> = HashMap::new();
+        for (id, term) in terms.iter().enumerate() {
+            if term.kind == TermKind::Iri
+                && let Some(value) = term.value.as_deref()
+            {
+                by_value.entry(value.to_string()).or_insert(id);
+            }
+        }
+        Self {
+            by_value,
+            appended: Vec::new(),
+            base: terms.len(),
+        }
+    }
+
+    /// The segment-scoped id of `value`, appending a row when it is new.
+    ///
+    /// A value that is new to THIS segment but present in an earlier one still
+    /// resolves correctly: it is appended here, and the reader's cross-segment
+    /// union merges it with the earlier row by value.
+    fn resolve(&mut self, value: &str) -> usize {
+        if let Some(&id) = self.by_value.get(value) {
+            return id;
+        }
+        let id = self.base + self.appended.len();
+        self.appended.push(iri(value));
+        self.by_value.insert(value.to_string(), id);
+        id
+    }
+
+    /// The rows to author, already numbered from the segment's base.
+    fn appended(&self) -> &[Term] {
+        &self.appended
+    }
+}
+
 fn iri(value: &str) -> Term {
     Term {
         kind: TermKind::Iri,
@@ -628,6 +845,44 @@ fn literal_with_datatype(value: &str, datatype: usize) -> Term {
         datatype: Some(datatype),
         ..lit(value)
     }
+}
+
+/// Shift a locally-numbered term batch into the segment's term-id space.
+///
+/// A term's `dt`/`rf` fields are themselves term ids, and §7.5 requires a `dt`
+/// to name an ALREADY-INTRODUCED term — an unshifted datatype reference would
+/// either dangle or, worse, resolve to some earlier claim's term.
+fn shift_terms(terms: &[Term], base: usize) -> Vec<Term> {
+    terms
+        .iter()
+        .map(|term| Term {
+            kind: term.kind,
+            value: term.value.clone(),
+            datatype: term.datatype.map(|id| id + base),
+            lang: term.lang.clone(),
+            direction: term.direction.clone(),
+            reifier: term.reifier.map(|id| id + base),
+        })
+        .collect()
+}
+
+/// Shift locally-numbered quad rows into the segment's term-id space.
+fn shift_quads(
+    quads: &[(usize, usize, usize, Option<usize>)],
+    base: usize,
+) -> Vec<(usize, usize, usize, Option<usize>)> {
+    quads
+        .iter()
+        .map(|&(s, p, o, g)| (s + base, p + base, o + base, g.map(|g| g + base)))
+        .collect()
+}
+
+/// Shift locally-numbered annotation rows into the segment's term-id space.
+fn shift_annotations(
+    rows: &[(usize, usize, usize, Option<usize>)],
+    base: usize,
+) -> Vec<(usize, usize, usize, Option<usize>)> {
+    shift_quads(rows, base)
 }
 
 fn push_term(terms: &mut Vec<Term>, term: Term) -> usize {

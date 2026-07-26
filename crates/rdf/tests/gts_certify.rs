@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use ciborium::value::Value;
 use ed25519_dalek::SigningKey;
-use purrdf_gts::compact::{DictStrategy, detached_signature_proof};
+use purrdf_gts::compact::{DictPlan, DictStrategy, detached_signature_proof};
 use purrdf_gts::mmr;
 use purrdf_gts::model::{Term, TermKind};
 use purrdf_gts::reader::read;
@@ -214,7 +214,7 @@ fn faithful_repack_verifies_all_ok() {
     let source = source_with_content(1, "author", 5, None);
     let (pack, cert) = compact_and_certify(
         &source,
-        DictStrategy::None,
+        DictPlan::undicted(),
         TIMESTAMP,
         false,
         (fixed_key(7), "pack".to_string()),
@@ -250,7 +250,7 @@ fn content_mutation_breaks_refold_equivalence() {
 
     let (pack, _cert) = compact_and_certify(
         &source,
-        DictStrategy::None,
+        DictPlan::undicted(),
         TIMESTAMP,
         false,
         (fixed_key(7), "pack".to_string()),
@@ -273,7 +273,7 @@ fn codec_recompression_preserves_refold_equivalence() {
 
     let (trained, cert_trained) = compact_and_certify(
         &source,
-        DictStrategy::Trained,
+        DictPlan::single(DictStrategy::Trained),
         TIMESTAMP,
         false,
         (fixed_key(7), "pack-trained".to_string()),
@@ -281,7 +281,7 @@ fn codec_recompression_preserves_refold_equivalence() {
     .expect("trained-dict compaction succeeds");
     let (raw, cert_raw) = compact_and_certify(
         &source,
-        DictStrategy::RawContent,
+        DictPlan::single(DictStrategy::RawContent),
         TIMESTAMP,
         false,
         (fixed_key(9), "pack-raw".to_string()),
@@ -320,7 +320,7 @@ fn broken_seam_is_detected_without_erroring() {
     let source = source_with_content(1, "author", 5, None);
     let (pack, _cert) = compact_and_certify(
         &source,
-        DictStrategy::None,
+        DictPlan::undicted(),
         TIMESTAMP,
         false,
         (fixed_key(7), "pack".to_string()),
@@ -385,7 +385,7 @@ fn accretive_tail_after_pack_chains_cleanly_across_the_seam() {
     let source = source_with_content(1, "author", 5, None);
     let (pack, _cert) = compact_and_certify(
         &source,
-        DictStrategy::None,
+        DictPlan::undicted(),
         TIMESTAMP,
         false,
         (fixed_key(7), "pack".to_string()),
@@ -450,7 +450,7 @@ fn torn_tail_prev_breaks_seam_chain_ok_without_erroring() {
     let source = source_with_content(1, "author", 5, None);
     let (pack, _cert) = compact_and_certify(
         &source,
-        DictStrategy::None,
+        DictPlan::undicted(),
         TIMESTAMP,
         false,
         (fixed_key(7), "pack".to_string()),
@@ -495,7 +495,7 @@ fn missing_authorship_key_fails_signatures_verify_but_full_keyring_succeeds() {
     let source = source_with_content(1, "author", 5, None);
     let (pack, _cert) = compact_and_certify(
         &source,
-        DictStrategy::None,
+        DictPlan::undicted(),
         TIMESTAMP,
         false,
         (fixed_key(7), "pack".to_string()),
@@ -530,7 +530,7 @@ fn compose_chains_matching_certificates_and_rejects_mismatched_ones() {
     let source = source_with_content(1, "author", 3, None);
     let (pack1, cert_ab) = compact_and_certify(
         &source,
-        DictStrategy::None,
+        DictPlan::undicted(),
         TIMESTAMP,
         false,
         (fixed_key(7), "pack1".to_string()),
@@ -538,7 +538,7 @@ fn compose_chains_matching_certificates_and_rejects_mismatched_ones() {
     .expect("first compaction succeeds");
     let (_pack2, cert_bc) = compact_and_certify(
         &pack1,
-        DictStrategy::None,
+        DictPlan::undicted(),
         TIMESTAMP,
         false,
         (fixed_key(9), "pack2".to_string()),
@@ -571,7 +571,7 @@ fn compose_chains_matching_certificates_and_rejects_mismatched_ones() {
     let other_source = source_with_content(2, "author2", 3, Some(0));
     let (_other_pack, cert_other) = compact_and_certify(
         &other_source,
-        DictStrategy::None,
+        DictPlan::undicted(),
         TIMESTAMP,
         false,
         (fixed_key(11), "pack3".to_string()),
@@ -659,7 +659,7 @@ fn signatures_survive_two_repacks_and_key_rotation() {
 
     let (pack1, _cert1) = compact_and_certify(
         &source,
-        DictStrategy::None,
+        DictPlan::undicted(),
         TIMESTAMP,
         false,
         (fixed_key(7), "packaging1".to_string()),
@@ -672,7 +672,7 @@ fn signatures_survive_two_repacks_and_key_rotation() {
     // packaging observation, silently dropping the original authorship set.
     let (pack2, _cert2) = compact_and_certify(
         &pack1,
-        DictStrategy::None,
+        DictPlan::undicted(),
         TIMESTAMP,
         false,
         (fixed_key(9), "packaging2".to_string()),
@@ -758,7 +758,7 @@ fn certificate_canonical_cbor_round_trips_and_is_deterministic() {
     let source = source_with_content(1, "author", 4, None);
     let (_pack, cert) = compact_and_certify(
         &source,
-        DictStrategy::None,
+        DictPlan::undicted(),
         TIMESTAMP,
         false,
         (fixed_key(7), "pack".to_string()),
@@ -859,7 +859,7 @@ fn term_suppression_commutes_through_compaction() {
 
     let (pack, _cert) = compact_and_certify(
         &source,
-        DictStrategy::None,
+        DictPlan::undicted(),
         TIMESTAMP,
         false,
         (fixed_key(7), "pack".to_string()),
@@ -919,7 +919,7 @@ fn quad_suppression_commutes_through_compaction() {
 
     let (pack, _cert) = compact_and_certify(
         &source,
-        DictStrategy::None,
+        DictPlan::undicted(),
         TIMESTAMP,
         false,
         (fixed_key(7), "pack".to_string()),
@@ -963,7 +963,7 @@ fn dropping_the_carried_suppression_flips_suppressions_ok_to_false() {
     let source = source_with_term_suppression(1, "author", true);
     let (pack, _cert) = compact_and_certify(
         &source,
-        DictStrategy::None,
+        DictPlan::undicted(),
         TIMESTAMP,
         false,
         (fixed_key(7), "pack".to_string()),
@@ -1091,7 +1091,7 @@ fn manifestation_typed_content_node_mutation_is_not_masked_by_projection() {
 
     let (pack, _cert) = compact_and_certify(
         &source,
-        DictStrategy::None,
+        DictPlan::undicted(),
         TIMESTAMP,
         false,
         (fixed_key(7), "pack".to_string()),
@@ -1131,7 +1131,7 @@ fn verify_compaction_accepts_large_non_symmetric_content() {
     let source = large_non_symmetric_source(1, "author", 1_500);
     let (pack, cert) = compact_and_certify(
         &source,
-        DictStrategy::None,
+        DictPlan::undicted(),
         TIMESTAMP,
         false,
         (fixed_key(7), "pack".to_string()),

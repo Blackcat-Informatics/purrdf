@@ -18,7 +18,7 @@ use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_mai
 use ed25519_dalek::SigningKey;
 
 use purrdf_gts::codec::encode_chain;
-use purrdf_gts::compact::{CompactionParams, DictStrategy, compact_streamable};
+use purrdf_gts::compact::{CompactionParams, DictPlan, DictStrategy, compact_streamable};
 use purrdf_gts::model::{Graph, Term, TermKind};
 use purrdf_gts::reader::read;
 use purrdf_gts::wire::{canonical, deterministic, encode};
@@ -254,7 +254,7 @@ fn bench_dict_compaction(c: &mut Criterion) {
                 CompactionParams {
                     timestamp: "2026-01-01T00:00:00Z",
                     seal_original: false,
-                    strategy: DictStrategy::Trained,
+                    plan: DictPlan::single(DictStrategy::Trained),
                     content_digest: None,
                     packaging_signer: (SigningKey::from_bytes(&[42u8; 32]), "bench".to_string()),
                 },

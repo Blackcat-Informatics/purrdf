@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 
 use ciborium::value::Value;
 use ed25519_dalek::SigningKey;
-use purrdf_gts::compact::DictStrategy;
+use purrdf_gts::compact::DictPlan;
 use purrdf_gts::reader::read;
 use purrdf_gts::wire::{iter_items, map_get};
 use purrdf_rdf::gts_certify::{compact_and_certify, verify_compaction};
@@ -75,7 +75,7 @@ fn frozen_vector_is_byte_identical_to_a_fresh_regeneration() {
 
     let (regenerated, _cert) = compact_and_certify(
         &source,
-        DictStrategy::None,
+        DictPlan::undicted(),
         TIMESTAMP,
         false,
         (packaging_key(), "pack".to_string()),

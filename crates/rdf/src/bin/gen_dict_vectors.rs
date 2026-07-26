@@ -1,73 +1,46 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Freeze the dict-compaction corpus vectors (Task 7, Part A).
+//! Freeze the in-band-dictionary corpus vectors.
 //!
-//! Maintainer-only binary, mirroring `capture_sparql_goldens`: it authors ONE
-//! fixed, signed GTS source (a stable corpus of repeated-structure content
-//! blobs — exactly the shape a pack dictionary has something to train on),
-//! compacts it under both [`DictStrategy::RawContent`] and
-//! [`DictStrategy::Trained`] via `purrdf_rdf::gts_certify::compact_and_certify`,
-//! and writes the resulting packs as the frozen corpus vectors
-//! `vectors/30-dict-rawcontent.gts` and `vectors/31-dict-trained.gts`.
+//! Maintainer-only binary, mirroring `capture_sparql_goldens`. Every fixed
+//! source and authoring recipe lives in
+//! [`purrdf_rdf::gts_dict_vectors`] — this binary only writes the bytes out, so
+//! the drift-guard test (`tests/dict_vectors.rs`) regenerates from exactly the
+//! same definitions.
 //!
-//! `compact_and_certify` is used (rather than the bare
+//! - `vectors/30-dict-rawcontent.gts` — one raw-content dictionary, plain `zstd`.
+//! - `vectors/31-dict-trained.gts` — one FastCOVER-trained dictionary, plain `zstd`.
+//! - `vectors/32-dict-rsyncable.gts` — one raw-content dictionary priming a
+//!   `zstd-rsyncable` chain at level 12 (GMEOW's mandated frame profile): the
+//!   dictionary primes EVERY independent block, so density improves while the
+//!   block-boundary/delta property is preserved exactly.
+//! - `vectors/33-multi-dict.gts` — TWO named in-band dictionaries in ONE pack
+//!   with per-frame selection between them (§5 `"dct"` has always been a map;
+//!   this is the writer using it).
+//!
+//! 30/32/33 regenerate byte-identically (the raw-content producer has no
+//! platform-dependent floating point); `31-dict-trained.gts` is expected to
+//! reproduce on the SAME authoring platform but MAY differ across platforms
+//! because FastCOVER's scoring involves transcendental floating point (see
+//! `crates/gts/src/dict.rs`). `crates/rdf/tests/dict_vectors.rs` is the drift
+//! guard: byte-equality for 30/32/33, fold-equality for 31.
+//!
+//! `compact_and_certify` is used for 30/31/32 (rather than the bare
 //! `purrdf_gts::compact::compact_streamable`) so the source's detached
 //! authorship signature is carried forward, bound under
 //! `stream:detachedSignatureRoot`, and the pack itself carries a mandatory
-//! packaging (index/head) signature — the frozen vectors exercise the WHOLE
+//! packaging (index/head) signature — those vectors exercise the WHOLE
 //! streamable-compaction + in-band-dictionary feature, not just the codec.
-//!
-//! Re-running this binary regenerates `30-dict-rawcontent.gts` byte-identically
-//! (the raw-content dict producer has no platform-dependent floating point);
-//! `31-dict-trained.gts` is expected to reproduce on the SAME authoring
-//! platform but MAY differ across platforms because FastCOVER's scoring
-//! involves transcendental floating point (see `crates/gts/src/dict.rs`).
-//! `crates/gts/tests/dict_vectors.rs` is the drift guard: byte-equality for
-//! the raw-content vector, fold-equality for the trained vector.
 
 use std::path::Path;
 
-use ed25519_dalek::SigningKey;
-use purrdf_gts::compact::DictStrategy;
-use purrdf_gts::writer::Writer;
+use purrdf_gts::compact::{DictPlan, DictStrategy};
 use purrdf_rdf::capture_support::corpus_repo_root;
 use purrdf_rdf::gts_certify::compact_and_certify;
-
-const TIMESTAMP: &str = "2026-01-01T00:00:00Z";
-
-/// The fixed authorship signing key (`kid` "authorA") every dict-vector source
-/// is signed with.
-fn authorship_key() -> SigningKey {
-    SigningKey::from_bytes(&[3u8; 32])
-}
-
-/// The fixed packaging signing key (`kid` "pack") every dict-vector pack is
-/// packaged with.
-fn packaging_key() -> SigningKey {
-    SigningKey::from_bytes(&[7u8; 32])
-}
-
-/// A fixed, signed GTS source: 40 content-blob frames of repeated structure
-/// (a `<s{i%7}> <p> "dict vector claim {i} about cats"` N-Triples line per
-/// blob), signed under the fixed authorship key, closed with an `index`
-/// footer — a stable corpus a pack dictionary strategy has real structure to
-/// train on.
-fn fixed_source() -> Vec<u8> {
-    let mut w = Writer::new("purrdf.gts");
-    w.sign_with(authorship_key(), "authorA");
-    for i in 0..40u32 {
-        let blob = format!(
-            "<https://example.org/s{}> <https://example.org/p> \"dict vector claim {} about cats\" .\n",
-            i % 7,
-            i
-        )
-        .into_bytes();
-        w.add_blob_owned(blob, Some("text/plain"), None);
-    }
-    w.add_index();
-    w.into_bytes()
-}
+use purrdf_rdf::gts_dict_vectors::{
+    TIMESTAMP, fixed_source, multi_dict_pack, packaging_key, rsyncable_plan,
+};
 
 fn write_vector(path: &Path, bytes: &[u8]) {
     std::fs::write(path, bytes).unwrap_or_else(|err| panic!("write {}: {err}", path.display()));
@@ -78,23 +51,27 @@ fn main() {
     let source = fixed_source();
     let vectors_dir = corpus_repo_root().join("vectors");
 
-    let (raw_pack, _raw_cert) = compact_and_certify(
-        &source,
-        DictStrategy::RawContent,
-        TIMESTAMP,
-        false,
-        (packaging_key(), "pack".to_string()),
-    )
-    .expect("raw-content dict compaction succeeds over the fixed source");
-    write_vector(&vectors_dir.join("30-dict-rawcontent.gts"), &raw_pack);
+    for (name, plan) in [
+        (
+            "30-dict-rawcontent.gts",
+            DictPlan::single(DictStrategy::RawContent),
+        ),
+        (
+            "31-dict-trained.gts",
+            DictPlan::single(DictStrategy::Trained),
+        ),
+        ("32-dict-rsyncable.gts", rsyncable_plan()),
+    ] {
+        let (pack, _cert) = compact_and_certify(
+            &source,
+            plan,
+            TIMESTAMP,
+            false,
+            (packaging_key(), "pack".to_string()),
+        )
+        .unwrap_or_else(|err| panic!("compaction for {name} succeeds: {err:?}"));
+        write_vector(&vectors_dir.join(name), &pack);
+    }
 
-    let (trained_pack, _trained_cert) = compact_and_certify(
-        &source,
-        DictStrategy::Trained,
-        TIMESTAMP,
-        false,
-        (packaging_key(), "pack".to_string()),
-    )
-    .expect("trained dict compaction succeeds over the fixed source");
-    write_vector(&vectors_dir.join("31-dict-trained.gts"), &trained_pack);
+    write_vector(&vectors_dir.join("33-multi-dict.gts"), &multi_dict_pack());
 }

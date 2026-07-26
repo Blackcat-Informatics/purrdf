@@ -14,7 +14,7 @@ use std::collections::HashMap;
 
 use ed25519_dalek::SigningKey;
 use purrdf_gts::compact::{
-    CompactionParams, DictStrategy, compact_streamable, detached_signature_leaves,
+    CompactionParams, DictPlan, compact_streamable, detached_signature_leaves,
     detached_signature_proof,
 };
 use purrdf_gts::mmr;
@@ -70,7 +70,7 @@ fn packaging_params<'a>(packaging_key: SigningKey, packaging_kid: &str) -> Compa
     CompactionParams {
         timestamp: "2026-01-01T00:00:00Z",
         seal_original: false,
-        strategy: DictStrategy::None,
+        plan: DictPlan::undicted(),
         content_digest: None,
         packaging_signer: (packaging_key, packaging_kid.to_string()),
     }

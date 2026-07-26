@@ -46,7 +46,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use ed25519_dalek::SigningKey;
-use purrdf_gts::compact::DictStrategy;
+use purrdf_gts::compact::DictPlan;
 use purrdf_gts::reader::read;
 use purrdf_gts::wire::{hex, map_get};
 use purrdf_rdf::capture_support::corpus_repo_root;
@@ -196,7 +196,7 @@ fn main() {
 
     let (pack, _cert) = compact_and_certify(
         &source,
-        DictStrategy::None,
+        DictPlan::undicted(),
         TIMESTAMP,
         false,
         (packaging_key(), "pack".to_string()),

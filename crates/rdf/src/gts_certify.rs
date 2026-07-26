@@ -32,7 +32,7 @@ use ciborium::value::{Integer, Value};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use sha2::{Digest, Sha256};
 
-use purrdf_gts::compact::{self, CompactionParams, DictStrategy};
+use purrdf_gts::compact::{self, CompactionParams, DictPlan};
 use purrdf_gts::cose::{self, SigStatus};
 use purrdf_gts::model::{Graph, Suppression};
 use purrdf_gts::reader::read;
@@ -995,7 +995,7 @@ pub fn compose(
 /// authored from (should be unreachable; surfaced rather than swallowed).
 pub fn compact_and_certify(
     pre_bytes: &[u8],
-    strategy: DictStrategy,
+    plan: DictPlan,
     timestamp: &str,
     seal_original: bool,
     packaging_signer: (SigningKey, String),
@@ -1012,7 +1012,7 @@ pub fn compact_and_certify(
         CompactionParams {
             timestamp,
             seal_original,
-            strategy,
+            plan,
             content_digest: Some(&digest),
             packaging_signer: (key, kid.clone()),
         },

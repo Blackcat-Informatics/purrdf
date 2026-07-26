@@ -1,100 +1,41 @@
-// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
-
-//! Drift-guard tests for the two frozen dict-compaction corpus vectors
-//! (Task 7, Part B): `vectors/30-dict-rawcontent.gts` (raw-content
-//! in-band pack dictionary — fully cross-platform deterministic) and
-//! `vectors/31-dict-trained.gts` (FastCOVER-trained in-band pack dictionary —
+//! Drift-guard tests for the frozen in-band-dictionary corpus vectors:
+//! `vectors/30-dict-rawcontent.gts` (raw-content dictionary, plain `zstd`),
+//! `vectors/31-dict-trained.gts` (FastCOVER-trained dictionary, plain `zstd`),
+//! `vectors/32-dict-rsyncable.gts` (raw-content dictionary priming a
+//! `zstd-rsyncable` chain at level 12 — GMEOW's mandated frame profile), and
+//! `vectors/33-multi-dict.gts` (TWO named in-band dictionaries in ONE pack with
+//! per-frame selection).
+//!
+//! Every fixed source and authoring recipe lives in
+//! `purrdf_rdf::gts_dict_vectors`, shared with the freezing binary
+//! `crates/rdf/src/bin/gen_dict_vectors.rs`, so a fresh regeneration here always
+//! starts from the SAME bytes the frozen vectors were authored from.
+//!
+//! 30/32/33 are byte oracles; 31 is fold-equality evidence only, because
+//! FastCOVER's scoring involves transcendental floating point and is therefore
 //! deterministic on the authoring platform but not guaranteed byte-identical
-//! cross-platform, since FastCOVER's scoring involves transcendental floating
-//! point; see `crates/gts/src/dict.rs`).
+//! cross-platform (see `crates/gts/src/dict.rs`).
 //!
-//! Both vectors are frozen by `crates/rdf/src/bin/gen_dict_vectors.rs`; this
-//! file duplicates that binary's exact fixed-source builder (a `[[bin]]`
-//! target exposes no library surface a test could import) so a fresh
-//! regeneration here always starts from the SAME bytes the frozen vectors
-//! were authored from.
-//!
-//! Neither vector carries a `<id>.expected.json` cross-engine oracle: that
-//! JSON is produced by gmeow-gts's `vectors.py` generator, which is not
-//! vendored in this repository. `crates/gts/tests/frozen_canonical_bytes.rs`
-//! still covers both (canonical-CBOR byte-exactness of every frozen `.gts`
-//! item); the tests here are the purrdf-local functional/drift guard on top
-//! of that (see `docs/GTS-CONFORMANCE.md` §2).
+//! No vector here carries a `<id>.expected.json` cross-engine oracle: that JSON
+//! is produced by gmeow-gts's `vectors.py` generator, which is not vendored in
+//! this repository. `crates/gts/tests/frozen_canonical_bytes.rs` still covers
+//! them all (canonical-CBOR byte-exactness of every frozen `.gts` item); the
+//! tests here are the purrdf-local functional/drift guard on top of that (see
+//! `docs/GTS-CONFORMANCE.md` §2).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use ciborium::value::Value;
-use ed25519_dalek::SigningKey;
-use purrdf_gts::compact::DictStrategy;
+use purrdf_gts::compact::{DictPlan, DictStrategy};
 use purrdf_gts::model::Graph;
 use purrdf_gts::reader::read;
 use purrdf_gts::wire::{iter_items, map_get};
-use purrdf_gts::writer::Writer;
 use purrdf_rdf::gts_certify::{compact_and_certify, refold_digest, verify_compaction};
-
-const TIMESTAMP: &str = "2026-01-01T00:00:00Z";
-
-/// The fixed authorship signing key (`kid` "authorA") — matches
-/// `gen_dict_vectors::authorship_key`.
-fn authorship_key() -> SigningKey {
-    SigningKey::from_bytes(&[3u8; 32])
-}
-
-/// The fixed packaging signing key (`kid` "pack") — matches
-/// `gen_dict_vectors::packaging_key`.
-fn packaging_key() -> SigningKey {
-    SigningKey::from_bytes(&[7u8; 32])
-}
-
-/// Exactly `gen_dict_vectors::fixed_source`: 40 content-blob frames of
-/// repeated structure, signed under the fixed authorship key, closed with an
-/// `index` footer.
-fn fixed_source() -> Vec<u8> {
-    let mut w = Writer::new("purrdf.gts");
-    w.sign_with(authorship_key(), "authorA");
-    for i in 0..40u32 {
-        let blob = format!(
-            "<https://example.org/s{}> <https://example.org/p> \"dict vector claim {} about cats\" .\n",
-            i % 7,
-            i
-        )
-        .into_bytes();
-        w.add_blob_owned(blob, Some("text/plain"), None);
-    }
-    w.add_index();
-    w.into_bytes()
-}
-
-/// A larger, more redundant source than [`fixed_source`]: 300 content blobs
-/// of long, near-identical text.
-///
-/// [`fixed_source`]'s 40-blob corpus exists to freeze small, fast-folding
-/// vectors, not to demonstrate a net size win — its blob content is small
-/// enough that the pinned dictionary's own bytes (finalized header + trailing
-/// content window, `crates/gts/src/dict.rs`) can outweigh what 40 tiny frames
-/// individually save. This corpus has enough repeated structure for the
-/// dictionary's one-time cost to be genuinely amortized by real per-frame
-/// zstd savings, so a strictly-smaller-pack assertion actually exercises
-/// "compression happened", not an artifact of too little content to benefit.
-fn size_comparison_source() -> Vec<u8> {
-    let mut w = Writer::new("purrdf.gts");
-    w.sign_with(authorship_key(), "authorA");
-    for i in 0..300u32 {
-        let blob = format!(
-            "<https://example.org/s{}> <https://example.org/p> \"dict vector claim {} about \
-             cats and the shared structure repeated across every blob in this redundant \
-             corpus, which a pack dictionary should compress extremely well\" .\n",
-            i % 7,
-            i
-        )
-        .into_bytes();
-        w.add_blob_owned(blob, Some("text/plain"), None);
-    }
-    w.add_index();
-    w.into_bytes()
-}
+use purrdf_rdf::gts_dict_vectors::{
+    MULTI_DICT_NAMES, TIMESTAMP, VECTOR_ZSTD_LEVEL, authorship_key, fixed_source, multi_dict_pack,
+    packaging_key, rsyncable_plan, size_comparison_source,
+};
 
 fn vectors_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vectors")
@@ -195,7 +136,7 @@ fn dict_primed_packs_are_strictly_smaller_than_the_undicted_pack() {
 
     let (rawcontent, _cert) = compact_and_certify(
         &source,
-        DictStrategy::RawContent,
+        DictPlan::single(DictStrategy::RawContent),
         TIMESTAMP,
         false,
         (packaging_key(), "pack".to_string()),
@@ -203,7 +144,7 @@ fn dict_primed_packs_are_strictly_smaller_than_the_undicted_pack() {
     .expect("raw-content dict compaction succeeds over the fixed source");
     let (trained, _cert) = compact_and_certify(
         &source,
-        DictStrategy::Trained,
+        DictPlan::single(DictStrategy::Trained),
         TIMESTAMP,
         false,
         (packaging_key(), "pack".to_string()),
@@ -211,7 +152,7 @@ fn dict_primed_packs_are_strictly_smaller_than_the_undicted_pack() {
     .expect("trained dict compaction succeeds over the fixed source");
     let (undicted, _cert) = compact_and_certify(
         &source,
-        DictStrategy::None,
+        DictPlan::undicted(),
         TIMESTAMP,
         false,
         (packaging_key(), "pack".to_string()),
@@ -248,7 +189,7 @@ fn rawcontent_vector_is_byte_identical_to_a_fresh_regeneration() {
 
     let (regenerated, _cert) = compact_and_certify(
         &source,
-        DictStrategy::RawContent,
+        DictPlan::single(DictStrategy::RawContent),
         TIMESTAMP,
         false,
         (packaging_key(), "pack".to_string()),
@@ -325,7 +266,7 @@ fn trained_vector_folds_identically_to_a_fresh_regeneration() {
 
     let (regenerated, _cert) = compact_and_certify(
         &source,
-        DictStrategy::Trained,
+        DictPlan::single(DictStrategy::Trained),
         TIMESTAMP,
         false,
         (packaging_key(), "pack".to_string()),
@@ -365,7 +306,7 @@ fn trained_vector_folds_identically_to_a_fresh_regeneration() {
     // byte-equality check against a strategy that ignores dict choice.
     let (raw_regenerated, _raw_cert) = compact_and_certify(
         &source,
-        DictStrategy::RawContent,
+        DictPlan::single(DictStrategy::RawContent),
         TIMESTAMP,
         false,
         (packaging_key(), "pack".to_string()),
@@ -375,4 +316,291 @@ fn trained_vector_folds_identically_to_a_fresh_regeneration() {
         regenerated, raw_regenerated,
         "sanity: trained vs raw-content dict strategies pin different bytes"
     );
+}
+
+// ---------------------------------------------------------------------------
+// vectors/32-dict-rsyncable.gts — one dictionary priming a `zstd-rsyncable`
+// chain at level 12 (GMEOW's mandated frame profile).
+// ---------------------------------------------------------------------------
+
+/// The catalog rows of a pack's LAST segment header, as they appear on the wire.
+fn catalog_rows(bytes: &[u8]) -> Vec<purrdf_gts::reader::CatalogRow> {
+    purrdf_gts::reader::segment_append_state(bytes)
+        .expect("a frozen vector's header parses")
+        .catalog
+}
+
+#[test]
+fn rsyncable_vector_is_byte_identical_to_a_fresh_regeneration() {
+    let frozen = read_vector("32-dict-rsyncable.gts");
+    let source = fixed_source();
+
+    let (regenerated, _cert) = compact_and_certify(
+        &source,
+        rsyncable_plan(),
+        TIMESTAMP,
+        false,
+        (packaging_key(), "pack".to_string()),
+    )
+    .expect("rsyncable dict compaction succeeds over the fixed source");
+    assert_eq!(
+        regenerated, frozen,
+        "the raw-content dict producer has no platform-dependent floating point, so a \
+         fresh regeneration from the SAME fixed source must be byte-identical to the \
+         frozen vector"
+    );
+
+    let folded = read(&frozen, true, None);
+    assert!(
+        folded.diagnostics.is_empty(),
+        "the frozen rsyncable vector must fold cleanly: {:?}",
+        folded.diagnostics
+    );
+    assert_eq!(folded.blobs.len(), 40, "every content blob survives");
+    for (digest, entry) in &folded.blobs {
+        entry.decoded_vec().unwrap_or_else(|err| {
+            panic!("blob {digest} decodes against the pinned in-band dictionary: {err}")
+        });
+    }
+    assert!(
+        header_carries_dct_entry(&frozen),
+        "the rsyncable vector's header must pin a named, non-empty \"dct\" entry (§5)"
+    );
+
+    let report =
+        verify_compaction(&source, &frozen, &keyring()).expect("verify_compaction succeeds");
+    assert!(
+        report.all_ok(),
+        "the frozen rsyncable vector must independently verify: {report:?}"
+    );
+}
+
+/// The whole point of the profile: EVERY zstd-family catalog entry declares the
+/// mandated level, and every entry that names a dictionary is `zstd-rsyncable`
+/// (never plain `zstd`) — so a downstream "enforce rsyncable at level 12" gate
+/// has something on the wire to enforce against.
+#[test]
+fn rsyncable_vector_declares_its_level_and_rsyncable_chain_on_the_wire() {
+    let frozen = read_vector("32-dict-rsyncable.gts");
+    let rows = catalog_rows(&frozen);
+
+    assert!(
+        rows.iter().any(|row| row.dct.is_some()),
+        "a dict-primed pack must carry at least one dict-bound catalog entry"
+    );
+    for row in rows
+        .iter()
+        .filter(|row| matches!(row.name.as_str(), "zstd" | "zstd-rsyncable"))
+    {
+        assert_eq!(
+            row.level,
+            Some(VECTOR_ZSTD_LEVEL),
+            "catalog id {} must declare the pack's zstd level on the wire (§8.5 level?)",
+            row.id
+        );
+    }
+
+    // Every payload frame rides EXACTLY ONE transform, and that transform is
+    // the dictionary-primed `zstd-rsyncable` entry — GMEOW's mandated profile
+    // (one transform per payload frame, rsyncable, dict-primed).
+    let chains = frame_codec_chains(&frozen);
+    assert!(!chains.is_empty(), "the pack must carry transformed frames");
+    for chain in &chains {
+        assert_eq!(
+            chain.len(),
+            1,
+            "the mandated profile is EXACTLY one transform per payload frame, got {chain:?}"
+        );
+        assert_eq!(chain[0].0, "zstd-rsyncable", "chain must be rsyncable");
+        assert_eq!(
+            chain[0].1.as_deref(),
+            Some("pack"),
+            "every payload frame must be primed by the pinned dictionary"
+        );
+    }
+}
+
+/// `compact_streamable` authors EVERY payload frame through the plan's chain.
+///
+/// Before, only the content blobs were transformed (and only under a hard-coded
+/// plain `zstd`): the streaming-index and content-graph `terms`/`quads` frames
+/// went out as a bare `"d"` payload with no `"x"` at all. That was a silent
+/// split profile — the pack declared one frame profile and shipped two — and it
+/// is invisible to a chain-shape check that only inspects frames which HAVE an
+/// `"x"`. So this asserts from the other side: the only frames without a
+/// transform are the ones deliberately excluded.
+#[test]
+fn the_only_untransformed_frames_in_a_compacted_pack_are_the_deliberate_exclusions() {
+    let frozen = read_vector("32-dict-rsyncable.gts");
+    let (items, _torn) = iter_items(&frozen);
+
+    let mut untransformed: Vec<String> = Vec::new();
+    let mut transformed = 0usize;
+    for (_, item) in items.iter().skip(1) {
+        let Value::Map(frame) = item else { continue };
+        let Some(Value::Text(kind)) = map_get(frame, "t") else {
+            continue;
+        };
+        if map_get(frame, "x").is_some() {
+            transformed += 1;
+        } else {
+            untransformed.push(kind.clone());
+        }
+    }
+
+    assert!(transformed > 0, "the pack must carry transformed frames");
+    assert_eq!(
+        untransformed,
+        vec!["index".to_string()],
+        "only the `index` FOOTER may ride untransformed — it is §6.2's seek table, \
+         which a streaming reader consults to find every other frame. Any `terms`, \
+         `quads`, `reifies`, `annot`, `suppress`, or content `blob` frame appearing \
+         here means the authored payload silently skipped the plan's transform chain."
+    );
+}
+
+/// Each transformed frame's resolved codec chain as `(name, dict-name)` rows.
+fn frame_codec_chains(bytes: &[u8]) -> Vec<Vec<(String, Option<String>)>> {
+    let by_id: HashMap<i64, (String, Option<String>)> = catalog_rows(bytes)
+        .into_iter()
+        .map(|row| (row.id, (row.name, row.dct)))
+        .collect();
+    let (items, _torn) = iter_items(bytes);
+    let mut out = Vec::new();
+    for (_, item) in items.iter().skip(1) {
+        let Value::Map(frame) = item else { continue };
+        let Some(Value::Array(ids)) = map_get(frame, "x") else {
+            continue;
+        };
+        out.push(
+            ids.iter()
+                .map(|id| {
+                    let Value::Integer(raw) = id else {
+                        panic!("a catalog reference must be an integer")
+                    };
+                    let id = i64::try_from(i128::from(*raw)).expect("catalog id fits i64");
+                    by_id.get(&id).expect("frame names a catalog id").clone()
+                })
+                .collect(),
+        );
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// vectors/33-multi-dict.gts — TWO named dictionaries in ONE pack.
+// ---------------------------------------------------------------------------
+
+/// The header `"dct"` map of a pack, name → bytes.
+fn header_dicts(bytes: &[u8]) -> std::collections::BTreeMap<String, Vec<u8>> {
+    purrdf_gts::reader::segment_append_state(bytes)
+        .expect("a frozen vector's header parses")
+        .dicts
+}
+
+#[test]
+fn multi_dict_vector_is_byte_identical_to_a_fresh_regeneration() {
+    let frozen = read_vector("33-multi-dict.gts");
+    assert_eq!(
+        multi_dict_pack(),
+        frozen,
+        "the multi-dict vector uses only raw-content dictionaries, so a fresh \
+         regeneration must be byte-identical"
+    );
+
+    let folded = read(&frozen, true, None);
+    assert!(
+        folded.diagnostics.is_empty(),
+        "the frozen multi-dict vector must fold cleanly: {:?}",
+        folded.diagnostics
+    );
+    for (digest, entry) in &folded.blobs {
+        entry.decoded_vec().unwrap_or_else(|err| {
+            panic!("blob {digest} decodes against the dictionary it was primed with: {err}")
+        });
+    }
+}
+
+#[test]
+fn multi_dict_vector_pins_two_distinct_dictionaries_and_selects_per_frame() {
+    let frozen = read_vector("33-multi-dict.gts");
+    let dicts = header_dicts(&frozen);
+    assert_eq!(
+        dicts.len(),
+        MULTI_DICT_NAMES.len(),
+        "the pack must pin exactly the declared dictionaries (§5 \"dct\" is a map)"
+    );
+    for name in MULTI_DICT_NAMES {
+        assert!(
+            dicts.contains_key(name),
+            "dictionary {name:?} must be pinned"
+        );
+    }
+    let bytes: Vec<&Vec<u8>> = dicts.values().collect();
+    assert_ne!(
+        bytes[0], bytes[1],
+        "anti-tautology: the two pinned dictionaries must genuinely differ"
+    );
+
+    // The catalog must carry one dict-bound entry per (zstd-family codec,
+    // dictionary) pair PLUS the plain entries — this is precisely the shape the
+    // old `HashMap<String, i64>` name→id table could not represent.
+    let rows = catalog_rows(&frozen);
+    let mut bound: Vec<(String, String)> = rows
+        .iter()
+        .filter_map(|row| row.dct.clone().map(|dct| (row.name.clone(), dct)))
+        .collect();
+    bound.sort();
+    assert_eq!(
+        bound,
+        vec![
+            ("zstd".to_string(), "cats".to_string()),
+            ("zstd".to_string(), "dogs".to_string()),
+            ("zstd-rsyncable".to_string(), "cats".to_string()),
+            ("zstd-rsyncable".to_string(), "dogs".to_string()),
+        ],
+        "the catalog must bind every zstd-family codec to every pinned dictionary"
+    );
+    // Catalog ids are unique — a collapsing name→id map would have lost rows.
+    let mut ids: Vec<i64> = rows.iter().map(|row| row.id).collect();
+    ids.sort_unstable();
+    let unique = {
+        let mut u = ids.clone();
+        u.dedup();
+        u
+    };
+    assert_eq!(ids, unique, "every catalog id must be distinct");
+
+    // Both dictionaries are actually USED: the frames' `"x"` chains name
+    // dict-bound ids from both groups.
+    let used = used_dict_names(&frozen);
+    for name in MULTI_DICT_NAMES {
+        assert!(
+            used.contains(name),
+            "no frame is primed by dictionary {name:?} — the pin would be dead weight"
+        );
+    }
+}
+
+/// The set of dictionary names actually referenced by frames' `"x"` chains.
+fn used_dict_names(bytes: &[u8]) -> std::collections::BTreeSet<String> {
+    let rows = catalog_rows(bytes);
+    let by_id: HashMap<i64, Option<String>> =
+        rows.into_iter().map(|row| (row.id, row.dct)).collect();
+    let (items, _torn) = iter_items(bytes);
+    let mut out = std::collections::BTreeSet::new();
+    for (_, item) in items.iter().skip(1) {
+        let Value::Map(frame) = item else { continue };
+        let Some(Value::Array(ids)) = map_get(frame, "x") else {
+            continue;
+        };
+        for id in ids {
+            let Value::Integer(raw) = id else { continue };
+            let id = i64::try_from(i128::from(*raw)).expect("catalog id fits i64");
+            if let Some(Some(name)) = by_id.get(&id) {
+                out.insert(name.clone());
+            }
+        }
+    }
+    out
 }

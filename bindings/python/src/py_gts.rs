@@ -34,7 +34,9 @@ use pyo3::types::{PyBytes, PyDict, PyList};
 use crate::bundle::{RdfBundle, UnitMetadata};
 // The byte-emitting compose core now lives in the pyo3-free `gts_compose` module
 // (P6); this surface is the thin pyo3 wrapper that delegates to it.
-use crate::gts_compose::{BlobRow, DEFAULT_RSYNCABLE_THRESHOLD, SnapshotBuilder, emit_gts};
+use crate::gts_compose::{
+    BlobRow, DEFAULT_RSYNCABLE_THRESHOLD, MediumPlan, SnapshotBuilder, emit_gts,
+};
 use crate::ir::RdfDataset;
 use crate::provenance::{DatasetProvenance, OriginKind};
 use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs};
@@ -252,6 +254,7 @@ fn snapshot_gts_bytes(
     builder
         .add_dataset(&dataset)
         .map_err(PyValueError::new_err)?;
+    let plan = MediumPlan::dist_default(transform.as_deref());
     emit_gts(
         &builder,
         profile,
@@ -262,6 +265,7 @@ fn snapshot_gts_bytes(
         None,
         None,
         DEFAULT_RSYNCABLE_THRESHOLD,
+        &plan,
     )
     .map_err(PyValueError::new_err)
 }
@@ -580,6 +584,7 @@ fn compile_gts_native(
             all_doc_blobs.extend(bundle_blobs);
         }
 
+        let plan = MediumPlan::dist_default(transform.as_deref());
         emit_gts(
             &builder,
             "dist",
@@ -590,6 +595,7 @@ fn compile_gts_native(
             signer_kid,
             public_key_armor,
             rsyncable_threshold,
+            &plan,
         )
         .map_err(PyValueError::new_err)
     })?;
@@ -644,6 +650,7 @@ fn feedback_bundle_native(
             None,
             None,
             DEFAULT_RSYNCABLE_THRESHOLD,
+            &MediumPlan::dist_default(None),
         )
         .map_err(PyValueError::new_err)
     })?;
