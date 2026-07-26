@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 
 use ciborium::value::Value;
 use ed25519_dalek::SigningKey;
-use purrdf_gts::compact::DictStrategy;
+use purrdf_gts::compact::DictPlan;
 use purrdf_gts::reader::read;
 use purrdf_gts::wire::{iter_items, map_get};
 use purrdf_rdf::gts_certify::{compact_and_certify, verify_compaction};
@@ -75,7 +75,7 @@ fn frozen_vector_is_byte_identical_to_a_fresh_regeneration() {
 
     let (regenerated, _cert) = compact_and_certify(
         &source,
-        DictStrategy::None,
+        DictPlan::undicted(),
         TIMESTAMP,
         false,
         (packaging_key(), "pack".to_string()),
@@ -84,7 +84,7 @@ fn frozen_vector_is_byte_identical_to_a_fresh_regeneration() {
 
     assert_eq!(
         regenerated, frozen,
-        "streamable compaction with DictStrategy::None has no platform-dependent \
+        "streamable compaction with DictPlan::undicted() has no platform-dependent \
          floating point (unlike 31-dict-trained's FastCOVER training), so a fresh \
          regeneration from the SAME frozen source must be byte-identical to the \
          frozen vector"

@@ -39,13 +39,13 @@ used by tier claims:
 | `total-reader` | `03-unknown-codec`, `04-damaged-frame`, `05-torn-append`, `17-pre-segment-hard-fail`, `19-profile-union-opacity`, `28-empty-file`, `28b-non-header-item`, `28c-unsupported-version`, `28d-unknown-frame-type`, `28e-forward-term-reference`, `28f-malformed-transform-shape`, `28g-damaged-compressed-payload`, `28h-malformed-security-metadata` | Graceful degradation, diagnostics, opaque nodes, torn input, malformed/boundary behavior, unsupported headers, damaged compressed payloads, malformed security metadata, and extension-frame opacity. |
 | `graph-fold` | `09-suppression`, `11-datatype-defaulting`, `12-conflicting-reifier`, `13-position-constraint`, `14-bnode-label`, `15-two-segment-union`, `15b-anon-bnode-union`, `16-composed-round-trip`, `18-cross-segment-suppression`, `22-inline-blob` | Core graph fold, value equality, annotations/reifiers, suppressions, blobs, and multi-segment union. |
 | `profile-layout` | `20-language-tag-discipline`, `21-degenerate-composition`, `23-files-profile-tree`, `24-files-profile-dedup`, `25-streamable-source`, `25b-streamable-compacted`, `26-streamable-lie`, `27-streamable-tail` | Profile conventions, archive/files profile behavior, streamable layout, compaction, and publication-tool refusal cases. The live `scripts/interop.sh` guard adds cross-engine `files` pack/unpack/diff command evidence for this subset. |
-| `dict-compaction` | `30-dict-rawcontent`, `31-dict-trained` | In-band pack dictionary compaction (GTS-SPEC §5 header `"dct"`, §8.5 `zstd` `dct` parameter): a streamable compaction of one fixed, signed source, pinning a raw-content dictionary (`30`) or a FastCOVER-trained dictionary (`31`). Both carry a detached authorship signature bound under `stream:detachedSignatureRoot` and a mandatory packaging (index/head) signature, so the pair exercises compaction + certification + in-band dictionaries together, not the codec in isolation. |
+| `dict-compaction` | `30-dict-rawcontent`, `31-dict-trained`, `32-dict-rsyncable`, `33-multi-dict` | In-band pack dictionary compaction (GTS-SPEC §5 header `"dct"`, §8.5 `zstd`/`zstd-rsyncable` `dct` and `level` parameters). `30`–`32` are streamable compactions of one fixed, signed source, pinning a raw-content dictionary (`30`), a FastCOVER-trained dictionary (`31`), or a raw-content dictionary priming a `zstd-rsyncable` chain at a declared level 12 (`32`). All three carry a detached authorship signature bound under `stream:detachedSignatureRoot` and a mandatory packaging (index/head) signature, so they exercise compaction + certification + in-band dictionaries together, not the codec in isolation. `33-multi-dict` pins TWO named dictionaries in one pack with per-frame selection (§5 `"dct"` is a map), proving the catalog can bind each zstd-family codec to each dictionary and that a frame names exactly the one it was primed with. |
 | `okf-bundle` | `vectors/okf/*` Markdown bundle directories | OKF profile import fixtures, folded graph expectations, and unmapped sidecar behavior for profile-aware tools. |
 | `tar-archive` | `vectors/tar/*.tar`, `vectors/tar/*.tar.gz`, `vectors/tar/*.tar.zst` | Tar import/export transform fixtures, including positive archive projections and unsafe archive refusal cases. |
 | `resilience-negative` | `03-unknown-codec`, `04-damaged-frame`, `05-torn-append`, `06-header-tampered`, `17-pre-segment-hard-fail`, `19-profile-union-opacity`, `21-degenerate-composition`, `26-streamable-lie`, `28-empty-file`, `28b-non-header-item`, `28c-unsupported-version`, `28d-unknown-frame-type`, `28e-forward-term-reference`, `28f-malformed-transform-shape`, `28g-damaged-compressed-payload`, `28h-malformed-security-metadata` | Audit overlay for adversarial top-level inputs: truncated CBOR, damaged frames, damaged compression, bad segment boundaries, malformed transform/profile/security metadata, empty/non-header input, and bounded-size refusal/diagnostic behavior. |
 | `streaming-property` | every top-level `vectors/*.gts`, tested at each CBOR item boundary | Prefix-fold totality and monotone fold growth for streaming readers. |
 | `corpus-generator-determinism` | every top-level `vectors/*.gts` | Reference generator reproducibility for the frozen corpus, including intentionally damaged, torn, tampered, and malformed fixtures. This proves corpus-build repeatability, not public Writer conformance. |
-| `writer-determinism` | valid top-level writer outputs, including `25b-streamable-compacted` as the streamable compaction byte oracle, `29-deterministic-writer` as the graph-authoring byte oracle, and `30-dict-rawcontent` as the raw-content in-band pack dictionary byte oracle | Reproducible public writer output, deterministic hashes, deterministic graph authoring, and deterministic compaction under fixed parameters. `31-dict-trained` is deliberately NOT a byte oracle for this subset: FastCOVER training is deterministic per authoring platform but not guaranteed byte-identical across platforms (transcendental floating point in its scoring), so it is fold-equality evidence (`dict-compaction`) rather than a byte-reproducibility claim. Negative corpus fixtures MUST NOT use this subset. |
+| `writer-determinism` | valid top-level writer outputs, including `25b-streamable-compacted` as the streamable compaction byte oracle, `29-deterministic-writer` as the graph-authoring byte oracle, and `30-dict-rawcontent`, `32-dict-rsyncable`, `33-multi-dict` as the in-band pack dictionary byte oracles | Reproducible public writer output, deterministic hashes, deterministic graph authoring, and deterministic compaction under fixed parameters. `32` additionally pins that a dictionary-primed `zstd-rsyncable` chain at a declared level is byte-reproducible, and `33` that catalog id assignment for a MULTI-dictionary pack is a pure function of the sorted `(codec, dictionary)` set — not of the caller's row order or any hash iteration order. `31-dict-trained` is deliberately NOT a byte oracle for this subset: FastCOVER training is deterministic per authoring platform but not guaranteed byte-identical across platforms (transcendental floating point in its scoring), so it is fold-equality evidence (`dict-compaction`) rather than a byte-reproducibility claim. Negative corpus fixtures MUST NOT use this subset. |
 | `crypto-cose` | `vectors/cose/*.json`, `vectors/signed/basic.json` | COSE Sign1 serialization, per-frame signatures, and signature verification behavior. |
 | `crypto-encrypt` | `vectors/encrypt0/basic.json` | COSE Encrypt0 sealing/opening behavior for engines that implement encryption. |
 | `crypto-deferred` | `vectors/crypto-deferred/*.json` | Deferred multi-recipient `COSE_Encrypt` and ECDH-ES+A256KW contract descriptors. These vectors prevent premature support claims; they are not v1 implementation vectors until byte-level fixtures and interop harnesses replace the placeholders. |
@@ -54,18 +54,33 @@ used by tier claims:
 | `security-policy` | `vectors/security/*.json` | Profile trust-policy separation, pseudonymous opaque recipients, and nested-GTS recursion-limit negative cases. |
 | `advanced-index-proof` | `vectors/proofs/*.json` plus implementation-created indexed files | Stable MMR preimages, detached inclusion-proof JSON verification, bad-proof rejection, and optional `index.mmr` reader diagnostics. |
 
-`30-dict-rawcontent.gts` and `31-dict-trained.gts` do not (yet) carry a companion `<id>.expected.json`
-cross-engine oracle: that JSON is produced by gmeow-gts's `vectors.py` generator (§4), which is not
-vendored in this repository. Both `.gts` byte files are still covered by
+`30-dict-rawcontent.gts`, `31-dict-trained.gts`, `32-dict-rsyncable.gts`, and
+`33-multi-dict.gts` each carry a companion `<id>.expected.json` cross-engine fold oracle. The
+oracles are derived from the frozen `.gts` bytes through the production GTS-to-dataset bridge and
+N-Quads serializer, then rendered with the same sorted-key, one-space-indented format as
+gmeow-gts's `vectors.py` generator (§4). Both halves are covered by
 `crates/gts/tests/frozen_canonical_bytes.rs` (canonical-CBOR byte-exactness of every frozen
-top-level vector) and by the purrdf-local functional/drift-guard tests in
-`crates/rdf/tests/dict_vectors.rs`: `30-dict-rawcontent` is checked for byte-identical
-regeneration (the raw-content dict producer has no platform-dependent floating point), and
-`31-dict-trained` is checked for fold-equality on regeneration (decoded blob content and the
-RDFC-1.0 content-refold digest agree) rather than byte-identity, since FastCOVER training is not
-guaranteed byte-reproducible across platforms. Both vectors are additionally checked against
-`purrdf_rdf::gts_certify::verify_compaction` for full §10.1 preservation, including the carried
-`stream:detachedSignatureRoot` binding over the fixed signed source both vectors are authored from.
+top-level vector) and by the functional/drift-guard tests in
+`crates/rdf/tests/dict_vectors.rs`. Fixed sources, authoring recipes, and the fold-oracle renderer
+live in the single shared module `purrdf_rdf::gts_dict_vectors`, so generation and validation
+cannot start from different definitions:
+
+- `30-dict-rawcontent` — byte-identical regeneration (the raw-content dict producer has no
+  platform-dependent floating point).
+- `31-dict-trained` — fold-equality on regeneration (decoded blob content and the RDFC-1.0
+  content-refold digest agree) rather than byte-identity, since FastCOVER training is not
+  guaranteed byte-reproducible across platforms.
+- `32-dict-rsyncable` — byte-identical regeneration, plus wire assertions that every zstd-family
+  catalog entry declares the pack's `level` and that every payload frame rides exactly one
+  dictionary-primed `zstd-rsyncable` transform.
+- `33-multi-dict` — byte-identical regeneration, plus wire assertions that the header pins two
+  genuinely different dictionaries, that the catalog binds each zstd-family codec to each of
+  them under distinct ids, and that frames primed by BOTH are present.
+
+`30`, `31`, and `32` are additionally checked against `purrdf_rdf::gts_certify::verify_compaction`
+for full §10.1 preservation, including the carried `stream:detachedSignatureRoot` binding over the
+fixed signed source they are authored from. `33` is a writer-surface vector rather than a
+compaction, so it carries no certificate.
 
 A tier MAY require a subset plus extra mode-specific assertions. For example,
 `profile-layout` contains files that permissive readers can fold as local GTS bytes, while

@@ -8,7 +8,7 @@
 //! graph/file frame families plus transformed, encrypted, and signed payloads.
 //! Deterministic CBOR and BLAKE3 self-hashes are handled by [`crate::wire`].
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use ciborium::value::Value;
@@ -69,14 +69,28 @@ pub struct WriterOptions {
     pub magic_tag: bool,
     /// Optional layout-state claim. Only `"streamable"` is defined in this revision.
     pub layout: Option<String>,
-    /// Optional in-band pack dictionary for the `zstd` `dct` codec: `(dict_name,
-    /// dict_bytes)` (§5 header `"dct"`, §8.5 `zstd` `dct` parameter).
-    /// `dict_bytes` are stored uncompressed and in-band under `dict_name` in the
-    /// header `"dct"` map; the catalog's `zstd` entry references `dict_name`,
-    /// and every subsequent frame whose transform includes `"zstd"` is encoded
-    /// against `dict_bytes`. Requires the (default or supplied) catalog to
-    /// carry a `"zstd"` entry.
-    pub dict: Option<(String, Vec<u8>)>,
+    /// In-band pack dictionaries for the zstd-family `dct` codecs, as
+    /// `(dict_name, dict_bytes)` rows (§5 header `"dct"`, §8.5 `zstd` /
+    /// `zstd-rsyncable` `dct` parameter).
+    ///
+    /// §5 has always allowed MANY named dictionaries (`"dct": { * tstr =>
+    /// bstr }`) and the reader has always resolved them; this is the writer
+    /// catching up. Each dictionary's bytes are stored uncompressed and in-band
+    /// under its name, and the catalog gains one entry per
+    /// `(zstd-family codec, dictionary)` pair so a frame can name exactly the
+    /// dictionary it was primed with. A frame selects one by name through
+    /// [`FrameOptions::dict`]; names must be unique and non-empty.
+    pub dicts: Vec<(String, Vec<u8>)>,
+    /// The zstd compression level this pack declares for its zstd-family
+    /// catalog entries (§8.5 `level?`).
+    ///
+    /// Declaring the level makes it a WIRE FACT: a reader recovers it from the
+    /// catalog ([`crate::codec::Codec::level`]) and a deployment profile can
+    /// require, say, level 12 without trusting the producer's word. Because the
+    /// catalog would otherwise be able to lie, a frame that requests a
+    /// different [`FrameOptions::zstd_level`] than the declared one is a hard
+    /// error rather than a silent divergence.
+    pub zstd_level: Option<i32>,
 }
 
 impl Default for WriterOptions {
@@ -86,7 +100,8 @@ impl Default for WriterOptions {
             meta: None,
             magic_tag: true,
             layout: None,
-            dict: None,
+            dicts: Vec::new(),
+            zstd_level: None,
         }
     }
 }
@@ -117,7 +132,19 @@ pub struct FrameOptions {
     /// Codec names applied in array order before optional encryption.
     pub transform: Vec<String>,
     /// Optional per-frame zstd level for `zstd` and `zstd-rsyncable` transforms.
+    ///
+    /// When the writer declares [`WriterOptions::zstd_level`], this must either
+    /// be `None` (inherit the declared level) or equal it — a frame encoded at
+    /// a level the catalog does not declare would make the catalog a lie.
     pub zstd_level: Option<i32>,
+    /// Name of the in-band pack dictionary priming this frame's zstd-family
+    /// transform (§5 header `"dct"`), selected from [`WriterOptions::dicts`].
+    ///
+    /// A name absent from the writer's dictionary table is a HARD ERROR, never
+    /// a silent no-dictionary encode: the frame's `"x"` chain would then point
+    /// at a plain codec entry and the pack would quietly lose the density the
+    /// caller asked for. `None` means "no dictionary" — an explicit choice.
+    pub dict: Option<String>,
     /// Public frame metadata (`"pub"`).
     pub pub_meta: Option<Value>,
     /// Recipient metadata rows (`"to"`).
@@ -309,6 +336,84 @@ pub fn snapshot_from_graph(
     Ok(writer.into_bytes())
 }
 
+/// The canonical `terms`-frame payload.
+pub(crate) fn terms_payload(terms: &[Term]) -> Value {
+    Value::Array(terms.iter().map(term_to_wire).collect())
+}
+
+/// The canonical `quads`-frame payload (graph slot dropped when `None`).
+pub(crate) fn quads_payload(quads: &[Quad]) -> Value {
+    Value::Array(
+        quads
+            .iter()
+            .map(|&(s, p, o, g)| {
+                let mut row = Vec::with_capacity(3 + usize::from(g.is_some()));
+                row.push(iv(s as i64));
+                row.push(iv(p as i64));
+                row.push(iv(o as i64));
+                if let Some(gv) = g {
+                    row.push(iv(gv as i64));
+                }
+                Value::Array(row)
+            })
+            .collect(),
+    )
+}
+
+/// The canonical `reifies`-frame payload.
+pub(crate) fn reifies_payload(bindings: &[ReifierRow]) -> Value {
+    Value::Array(
+        bindings
+            .iter()
+            .map(|&(rid, (s, p, o), g)| {
+                let mut row = Vec::with_capacity(4 + usize::from(g.is_some()));
+                row.push(iv(rid as i64));
+                row.push(iv(s as i64));
+                row.push(iv(p as i64));
+                row.push(iv(o as i64));
+                if let Some(gv) = g {
+                    row.push(iv(gv as i64));
+                }
+                Value::Array(row)
+            })
+            .collect(),
+    )
+}
+
+/// The canonical `annot`-frame payload.
+pub(crate) fn annot_payload(rows: &[AnnotationRow]) -> Value {
+    Value::Array(
+        rows.iter()
+            .map(|&(s, p, o, g)| {
+                let mut row = Vec::with_capacity(3 + usize::from(g.is_some()));
+                row.push(iv(s as i64));
+                row.push(iv(p as i64));
+                row.push(iv(o as i64));
+                if let Some(gv) = g {
+                    row.push(iv(gv as i64));
+                }
+                Value::Array(row)
+            })
+            .collect(),
+    )
+}
+
+/// The canonical `suppress`-frame payload.
+pub(crate) fn suppress_payload(
+    targets: Vec<Value>,
+    reason: Option<&str>,
+    by: Option<usize>,
+) -> Value {
+    let mut payload: Vec<(Value, Value)> = vec![("targets".into(), Value::Array(targets))];
+    if let Some(r) = reason {
+        payload.push(("reason".into(), r.into()));
+    }
+    if let Some(b) = by {
+        payload.push(("by".into(), Value::from(b as u64)));
+    }
+    Value::Map(payload)
+}
+
 fn default_catalog() -> Vec<(i64, Codec)> {
     vec![
         (0, Codec::new("identity", "encode")),
@@ -339,7 +444,13 @@ fn default_catalog() -> Vec<(i64, Codec)> {
 // `SigningKey`'s `Debug` impl redacts the secret scalar, so deriving is safe here.
 #[derive(Debug)]
 pub struct Writer {
-    name_to_id: HashMap<String, i64>,
+    // Catalog lookup keyed by `(codec_name, dictionary_name)` — see
+    // `assign_catalog_ids`. A plain `HashMap<String, i64>` cannot express a
+    // catalog carrying N `zstd-rsyncable` entries (one per dictionary): the
+    // same-named entries collapse and the surviving id becomes whichever one
+    // HashMap iteration happened to visit last, which would make the emitted
+    // bundle bytes NONDETERMINISTIC.
+    catalog_ids: BTreeMap<CatalogKey, i64>,
     prev: Vec<u8>,
     buf: Vec<u8>,
     // Per-frame byte offsets and types, in append order — the raw material
@@ -350,10 +461,94 @@ pub struct Writer {
     frame_ids: Vec<Vec<u8>>,
     // When set, every appended frame is COSE_Sign1-signed over its id (§9.2).
     signer: Option<(ed25519_dalek::SigningKey, String)>,
-    // When set (via `WriterOptions::dict`), every frame whose transform
-    // includes `"zstd"` is encoded against this pinned pack dictionary (§5
-    // header `"dct"`, §8.5 `zstd` `dct` parameter).
-    dict_bytes: Option<Vec<u8>>,
+    // The pinned in-band pack dictionaries by name (§5 header `"dct"`), which a
+    // frame selects through `FrameOptions::dict`.
+    dicts: BTreeMap<String, Vec<u8>>,
+    // The level declared in the zstd-family catalog entries (§8.5 `level?`).
+    declared_zstd_level: Option<i32>,
+}
+
+/// A catalog lookup key: the canonical codec name plus the in-band dictionary
+/// (if any) that entry is bound to (§5, §8.5).
+type CatalogKey = (String, Option<String>);
+
+/// Assign a catalog id to every `(codec_name, dictionary_name)` pair, as a PURE
+/// FUNCTION of the base catalog and the sorted dictionary-name set.
+///
+/// Base (dictionary-free) entries keep the ids the caller supplied. Each
+/// zstd-family codec then gains one entry per dictionary; those synthetic ids
+/// are handed out in ascending `(codec_name, dict_name)` order starting above
+/// every id already in use. Nothing here depends on hash iteration order, so the
+/// same `(catalog, dicts)` inputs always yield the same catalog — and therefore
+/// the same header bytes.
+fn assign_catalog_ids(
+    base: &[(i64, Codec)],
+    dict_names: &BTreeSet<&str>,
+) -> Result<BTreeMap<CatalogKey, i64>, WriterError> {
+    let mut ids: BTreeMap<CatalogKey, i64> = BTreeMap::new();
+    let mut seen_names: BTreeSet<&str> = BTreeSet::new();
+    let mut seen_ids: BTreeSet<i64> = BTreeSet::new();
+    for (id, codec) in base {
+        if !seen_names.insert(&codec.name) {
+            return Err(WriterError::InvalidFrame(format!(
+                "duplicate codec name {:?} in the writer catalog (§5 \"cat\" is a map)",
+                codec.name
+            )));
+        }
+        if !seen_ids.insert(*id) {
+            return Err(WriterError::InvalidFrame(format!(
+                "duplicate codec id {id} in the writer catalog (§5 \"cat\" is a map)"
+            )));
+        }
+        ids.insert((codec.name.clone(), None), *id);
+    }
+    if dict_names.is_empty() {
+        return Ok(ids);
+    }
+    let mut next = base
+        .iter()
+        .map(|(id, _)| *id)
+        .max()
+        .unwrap_or(-1)
+        .checked_add(1)
+        .ok_or_else(|| {
+            WriterError::InvalidFrame(
+                "writer catalog ids leave no range for dictionary-bound entries".to_string(),
+            )
+        })?;
+    let dict_capable: BTreeSet<String> = ids
+        .keys()
+        .filter(|(name, _)| is_dict_capable(name))
+        .map(|(name, _)| name.clone())
+        .collect();
+    let mut remaining = dict_capable
+        .len()
+        .checked_mul(dict_names.len())
+        .ok_or_else(|| {
+            WriterError::InvalidFrame(
+                "writer catalog entry count overflows while assigning dictionaries".to_string(),
+            )
+        })?;
+    for name in dict_capable {
+        for dict in dict_names {
+            ids.insert((name.clone(), Some((*dict).to_string())), next);
+            remaining -= 1;
+            if remaining > 0 {
+                next = next.checked_add(1).ok_or_else(|| {
+                    WriterError::InvalidFrame(
+                        "writer catalog ids overflow while assigning dictionary-bound entries"
+                            .to_string(),
+                    )
+                })?;
+            }
+        }
+    }
+    Ok(ids)
+}
+
+/// Whether a codec accepts an in-band `dct` dictionary (§8.5).
+fn is_dict_capable(name: &str) -> bool {
+    matches!(name, "zstd" | "zstd-rsyncable")
 }
 
 impl Writer {
@@ -506,38 +701,65 @@ impl Writer {
                 options.layout
             )));
         }
-        let catalog: HashMap<i64, Codec> = options
-            .catalog
-            .unwrap_or_else(default_catalog)
-            .into_iter()
-            .collect();
-        let name_to_id: HashMap<String, i64> = catalog
-            .iter()
-            .map(|(id, c)| (c.name.clone(), *id))
-            .collect();
+        let base_catalog = options.catalog.unwrap_or_else(default_catalog);
 
-        let (dict_name, dict_bytes) = match options.dict {
-            Some((name, bytes)) => {
-                if !name_to_id.contains_key("zstd") {
-                    return Err(WriterError::MissingCatalogEntry("zstd".to_string()));
-                }
-                (Some(name), Some(bytes))
+        // Pinned dictionaries, keyed by name. A duplicate or empty name is a
+        // hard error: `"dct"` is a map, so a duplicate would silently drop one
+        // dictionary's bytes while frames still referenced it by name.
+        let mut dicts: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+        for (name, bytes) in options.dicts {
+            if name.is_empty() {
+                return Err(WriterError::InvalidFrame(
+                    "an in-band dictionary name must be non-empty (§5 \"dct\")".to_string(),
+                ));
             }
-            None => (None, None),
-        };
+            if dicts.insert(name.clone(), bytes).is_some() {
+                return Err(WriterError::InvalidFrame(format!(
+                    "duplicate in-band dictionary name {name:?} (§5 \"dct\" is a map)"
+                )));
+            }
+        }
+        let dict_names: BTreeSet<&str> = dicts.keys().map(String::as_str).collect();
+        if !dict_names.is_empty()
+            && !base_catalog
+                .iter()
+                .any(|(_, codec)| is_dict_capable(&codec.name))
+        {
+            // Fail closed: pinning a dictionary no catalog entry can reference
+            // would ship dead weight no frame could ever name.
+            return Err(WriterError::MissingCatalogEntry("zstd".to_string()));
+        }
+        let catalog_ids = assign_catalog_ids(&base_catalog, &dict_names)?;
 
-        let cat_entries: Vec<(Value, Value)> = catalog
+        // The declared level is only meaningful on a zstd-family entry.
+        if options.zstd_level.is_some()
+            && !catalog_ids.keys().any(|(name, _)| is_dict_capable(name))
+        {
+            return Err(WriterError::InvalidFrame(
+                "zstd_level requires a zstd or zstd-rsyncable catalog entry".to_string(),
+            ));
+        }
+
+        let cls_by_name: BTreeMap<&str, &str> = base_catalog
             .iter()
-            .map(|(id, c)| {
+            .map(|(_, codec)| (codec.name.as_str(), codec.cls.as_str()))
+            .collect();
+        let cat_entries: Vec<(Value, Value)> = catalog_ids
+            .iter()
+            .map(|((name, dict), id)| {
+                let cls = cls_by_name.get(name.as_str()).copied().unwrap_or("encode");
                 let mut ce: Vec<(Value, Value)> = vec![
-                    ("name".into(), c.name.clone().into()),
-                    ("cls".into(), c.cls.clone().into()),
+                    ("name".into(), name.clone().into()),
+                    ("cls".into(), cls.to_string().into()),
                 ];
-                if c.name == "zstd"
-                    && let Some(name) = &dict_name
-                {
+                if let Some(dict) = dict {
                     // §5 codec `"dct"` references the header `"dct"` map key.
-                    ce.push(("dct".into(), name.clone().into()));
+                    ce.push(("dct".into(), dict.clone().into()));
+                }
+                if let Some(level) = options.zstd_level.filter(|_| is_dict_capable(name)) {
+                    // §8.5 `level?`: declared so the authoring level is
+                    // recoverable from the wire, not merely asserted.
+                    ce.push(("level".into(), iv(i64::from(level))));
                 }
                 (iv(*id), Value::Map(ce))
             })
@@ -554,12 +776,17 @@ impl Writer {
             // covered by the genesis self-hash (§3.3, §5).
             header.push(("layout".into(), layout.into()));
         }
-        if let (Some(name), Some(bytes)) = (&dict_name, &dict_bytes) {
+        if !dicts.is_empty() {
             // §5: dictionaries are stored uncompressed and in-band; the header
             // "dct" map covers the genesis self-hash below like every other key.
             header.push((
                 "dct".into(),
-                Value::Map(vec![(name.clone().into(), Value::Bytes(bytes.clone()))]),
+                Value::Map(
+                    dicts
+                        .iter()
+                        .map(|(name, bytes)| (name.clone().into(), Value::Bytes(bytes.clone())))
+                        .collect(),
+                ),
             ));
         }
         if let Some(meta) = options.meta {
@@ -576,14 +803,87 @@ impl Writer {
         };
 
         Ok(Self {
-            name_to_id,
+            catalog_ids,
             prev: id,
             buf,
             offsets: Vec::new(),
             types: Vec::new(),
             frame_ids: Vec::new(),
             signer: None,
-            dict_bytes,
+            dicts,
+            declared_zstd_level: options.zstd_level,
+        })
+    }
+
+    /// Continue an EXISTING segment: no header is emitted, and appended frames
+    /// chain from `head` against `catalog`/`dicts` recovered from that header.
+    ///
+    /// This is the counterpart to the header-minting constructors: a store that
+    /// grows one claim at a time must not pay a full GTS header (plus a repeat
+    /// of every in-band dictionary — kilobytes) per claim. [`Self::into_bytes`]
+    /// returns ONLY the appended frames, ready to append to the existing file.
+    ///
+    /// # Errors
+    /// Returns [`WriterError::InvalidFrame`] when `existing` carries no readable
+    /// segment header, or its frame chain cannot be walked to a head id.
+    pub fn appending(existing: &[u8]) -> Result<Self, WriterError> {
+        let state =
+            crate::reader::segment_append_state(existing).map_err(WriterError::InvalidFrame)?;
+        Self::continuing(state)
+    }
+
+    /// Continue from an already-recovered append state without re-scanning the
+    /// underlying file. Used by append-heavy in-crate facades that cache the
+    /// last segment's catalog and head between writes.
+    ///
+    /// # Errors
+    /// Returns [`WriterError::InvalidFrame`] when the cached catalog is
+    /// ambiguous or declares conflicting zstd authoring levels.
+    pub(crate) fn continuing(
+        state: crate::reader::SegmentAppendState,
+    ) -> Result<Self, WriterError> {
+        // Adopt the catalog that is actually ON THE WIRE — appended frames name
+        // ids from the existing header, never a freshly-derived assignment.
+        let mut catalog_ids: BTreeMap<CatalogKey, i64> = BTreeMap::new();
+        let mut seen_ids: BTreeSet<i64> = BTreeSet::new();
+        for row in &state.catalog {
+            if !seen_ids.insert(row.id) {
+                return Err(WriterError::InvalidFrame(format!(
+                    "cannot append: catalog id {} appears more than once",
+                    row.id
+                )));
+            }
+            let key = (row.name.clone(), row.dct.clone());
+            if catalog_ids.insert(key.clone(), row.id).is_some() {
+                return Err(WriterError::InvalidFrame(format!(
+                    "cannot append: catalog entry {key:?} appears more than once"
+                )));
+            }
+        }
+        let declared_levels: BTreeSet<i32> = state
+            .catalog
+            .iter()
+            .filter(|row| is_dict_capable(&row.name))
+            .filter_map(|row| row.level)
+            .collect();
+        if declared_levels.len() > 1 {
+            return Err(WriterError::InvalidFrame(format!(
+                "cannot append: the segment catalog declares conflicting zstd levels \
+                 {declared_levels:?} (§8.5 \"level\")"
+            )));
+        }
+        let declared_zstd_level = declared_levels.first().copied();
+        let (dicts, head) = (state.dicts, state.head);
+        Ok(Self {
+            catalog_ids,
+            prev: head,
+            buf: Vec::new(),
+            offsets: Vec::new(),
+            types: Vec::new(),
+            frame_ids: Vec::new(),
+            signer: None,
+            dicts,
+            declared_zstd_level,
         })
     }
 
@@ -612,16 +912,35 @@ impl Writer {
         &self.prev
     }
 
-    fn chain_ids(&self, chain: &[String]) -> Result<Vec<i64>, WriterError> {
+    /// Resolve a transform chain to catalog ids, binding every zstd-family
+    /// codec to `dict` when one is selected.
+    ///
+    /// A dict-capable codec with a selected dictionary MUST resolve to the
+    /// `(codec, dict)` catalog entry — silently falling back to the plain entry
+    /// would emit frames whose declared chain does not describe how they were
+    /// actually encoded, and no reader could recover the payload.
+    fn chain_ids(&self, chain: &[String], dict: Option<&str>) -> Result<Vec<i64>, WriterError> {
         chain
             .iter()
             .map(|name| {
-                self.name_to_id
-                    .get(name)
+                let key = match dict {
+                    Some(dict) if is_dict_capable(name) => (name.clone(), Some(dict.to_string())),
+                    _ => (name.clone(), None),
+                };
+                self.catalog_ids
+                    .get(&key)
                     .copied()
                     .ok_or_else(|| WriterError::MissingCatalogEntry(name.clone()))
             })
             .collect()
+    }
+
+    /// Look up a codec id by canonical name with no dictionary bound.
+    fn plain_codec_id(&self, name: &str) -> Result<i64, WriterError> {
+        self.catalog_ids
+            .get(&(name.to_string(), None))
+            .copied()
+            .ok_or_else(|| WriterError::MissingCatalogEntry(name.to_string()))
     }
 
     /// Append one frame and return its `"id"`.
@@ -662,6 +981,7 @@ impl Writer {
             raw,
             transform,
             zstd_level,
+            dict,
             pub_meta,
             mut recipients,
             signature,
@@ -679,13 +999,34 @@ impl Writer {
                 "transform/encrypt requires a payload or raw source".to_string(),
             ));
         }
-        if zstd_level.is_some()
-            && !transform
-                .iter()
-                .any(|name| matches!(name.as_str(), "zstd" | "zstd-rsyncable"))
-        {
+        if zstd_level.is_some() && !transform.iter().any(|name| is_dict_capable(name)) {
             return Err(WriterError::InvalidFrame(
                 "zstd_level requires a zstd or zstd-rsyncable transform".to_string(),
+            ));
+        }
+        // A frame may not encode at a level the catalog does not declare — the
+        // declared `level` is a wire fact readers gate on, not a hint.
+        if let (Some(declared), Some(requested)) = (self.declared_zstd_level, zstd_level)
+            && declared != requested
+        {
+            return Err(WriterError::InvalidFrame(format!(
+                "frame zstd_level {requested} contradicts the pack's declared level \
+                 {declared} (§8.5 catalog \"level\")"
+            )));
+        }
+        // Fail closed on an unknown dictionary name: never a silent no-dict encode.
+        let dict_bytes: Option<&[u8]> = match dict.as_deref() {
+            None => None,
+            Some(name) => Some(self.dicts.get(name).map(Vec::as_slice).ok_or_else(|| {
+                WriterError::InvalidFrame(format!(
+                    "frame names in-band dictionary {name:?}, which this pack does not pin \
+                     (§5 header \"dct\")"
+                ))
+            })?),
+        };
+        if dict_bytes.is_some() && !transform.iter().any(|name| is_dict_capable(name)) {
+            return Err(WriterError::InvalidFrame(
+                "a frame dictionary requires a zstd or zstd-rsyncable transform".to_string(),
             ));
         }
         let mut frame: Vec<(Value, Value)> = vec![("t".into(), frame_type.into())];
@@ -696,28 +1037,27 @@ impl Writer {
                 (None, Some(payload)) => canonical(&payload),
                 (None, None) => unreachable!("validated transform source above"),
             };
-            let mut x_ids: Vec<i64> = self.chain_ids(&transform)?;
+            let mut x_ids: Vec<i64> = self.chain_ids(&transform, dict.as_deref())?;
             if !transform.is_empty() {
-                // The pack dictionary only primes plain `zstd` frames (§8.5);
-                // `zstd-rsyncable`'s independent blocks are out of scope for a
-                // single frame dictionary (codec.rs rejects that combination).
-                let dict = if transform.iter().any(|name| name == "zstd") {
-                    self.dict_bytes.as_deref()
-                } else {
-                    None
-                };
+                // §8.5: BOTH zstd-family transforms take a dictionary. For
+                // `zstd-rsyncable` the dictionary primes each independent block,
+                // so the block-boundary/delta property survives intact.
                 source = encode_chain_with_options(
                     &transform,
                     &source,
-                    EncodeOptions { zstd_level, dict },
+                    EncodeOptions {
+                        // Inherit the declared pack level, but only for a chain
+                        // that actually carries a zstd-family transform.
+                        zstd_level: zstd_level.or_else(|| {
+                            self.declared_zstd_level
+                                .filter(|_| transform.iter().any(|name| is_dict_capable(name)))
+                        }),
+                        dict: dict_bytes,
+                    },
                 )?;
             }
             if let Some(encrypt) = encrypt {
-                let encrypt_id = self
-                    .name_to_id
-                    .get("cose-encrypt0")
-                    .copied()
-                    .ok_or_else(|| WriterError::MissingCatalogEntry("cose-encrypt0".into()))?;
+                let encrypt_id = self.plain_codec_id("cose-encrypt0")?;
                 source = crate::cose::encrypt0(&source, &encrypt.kid, &encrypt.key, &encrypt.iv);
                 x_ids.push(encrypt_id);
                 recipients.push(Value::Map(vec![("kid".into(), encrypt.kid.into())]));
@@ -771,63 +1111,22 @@ impl Writer {
 
     /// Append a `terms` frame.
     pub fn add_terms(&mut self, terms: &[Term]) -> Vec<u8> {
-        let payload = Value::Array(terms.iter().map(term_to_wire).collect());
-        self.add_frame("terms", Some(payload), None, None, None)
+        self.add_frame("terms", Some(terms_payload(terms)), None, None, None)
     }
 
     /// Append a `quads` frame (graph slot dropped when `None`).
     pub fn add_quads(&mut self, quads: &[Quad]) -> Vec<u8> {
-        let rows: Vec<Value> = quads
-            .iter()
-            .map(|&(s, p, o, g)| {
-                let mut row = Vec::with_capacity(3 + usize::from(g.is_some()));
-                row.push(iv(s as i64));
-                row.push(iv(p as i64));
-                row.push(iv(o as i64));
-                if let Some(gv) = g {
-                    row.push(iv(gv as i64));
-                }
-                Value::Array(row)
-            })
-            .collect();
-        self.add_frame("quads", Some(Value::Array(rows)), None, None, None)
+        self.add_frame("quads", Some(quads_payload(quads)), None, None, None)
     }
 
     /// Append a `reifies` frame.
     pub fn add_reifies(&mut self, bindings: &[ReifierRow]) -> Vec<u8> {
-        let rows: Vec<Value> = bindings
-            .iter()
-            .map(|&(rid, (s, p, o), g)| {
-                let mut row = Vec::with_capacity(4 + usize::from(g.is_some()));
-                row.push(iv(rid as i64));
-                row.push(iv(s as i64));
-                row.push(iv(p as i64));
-                row.push(iv(o as i64));
-                if let Some(gv) = g {
-                    row.push(iv(gv as i64));
-                }
-                Value::Array(row)
-            })
-            .collect();
-        self.add_frame("reifies", Some(Value::Array(rows)), None, None, None)
+        self.add_frame("reifies", Some(reifies_payload(bindings)), None, None, None)
     }
 
     /// Append an `annot` frame.
     pub fn add_annot(&mut self, rows: &[AnnotationRow]) -> Vec<u8> {
-        let rows: Vec<Value> = rows
-            .iter()
-            .map(|&(s, p, o, g)| {
-                let mut row = Vec::with_capacity(3 + usize::from(g.is_some()));
-                row.push(iv(s as i64));
-                row.push(iv(p as i64));
-                row.push(iv(o as i64));
-                if let Some(gv) = g {
-                    row.push(iv(gv as i64));
-                }
-                Value::Array(row)
-            })
-            .collect();
-        self.add_frame("annot", Some(Value::Array(rows)), None, None, None)
+        self.add_frame("annot", Some(annot_payload(rows)), None, None, None)
     }
 
     /// Build the `pub` metadata map (`digest`/`mt`/`rep`) shared by every blob-frame writer.
@@ -859,31 +1158,34 @@ impl Writer {
     }
 
     /// Append an owned inline `blob` frame whose payload is carried through
-    /// `transform` (e.g. `["zstd"]`) before being stored in `"d"`.
+    /// `transform` (e.g. `["zstd-rsyncable"]`) before being stored in `"d"`,
+    /// primed by the named in-band pack dictionary when `dict` is supplied.
     ///
-    /// When this writer was constructed with [`WriterOptions::dict`], any
-    /// `"zstd"` transform in `transform` encodes against the pinned pack
-    /// dictionary, matching [`Writer::add_frame_with_options`]'s dict wiring.
     /// Metadata (`digest`/`mt`/`rep`) is computed over the pre-transform bytes,
     /// so readers observe the same content digest as an untransformed blob.
+    ///
+    /// # Errors
+    /// Returns [`WriterError`] when `dict` names a dictionary this pack does not
+    /// pin, or the transform chain cannot be resolved or applied.
     pub fn add_blob_transformed(
         &mut self,
         data: Vec<u8>,
         mt: Option<&str>,
         rep: Option<&str>,
         transform: &[String],
-    ) -> Vec<u8> {
+        dict: Option<&str>,
+    ) -> Result<Vec<u8>, WriterError> {
         let pub_meta = Self::blob_pub_meta(&data, mt, rep);
         self.add_frame_with_options(
             "blob",
             FrameOptions {
                 raw: Some(data),
                 transform: transform.to_vec(),
+                dict: dict.map(str::to_string),
                 pub_meta,
                 ..FrameOptions::default()
             },
         )
-        .expect("invalid frame options")
     }
 
     /// Append a `meta` frame.
@@ -898,14 +1200,8 @@ impl Writer {
         reason: Option<&str>,
         by: Option<usize>,
     ) -> Vec<u8> {
-        let mut payload: Vec<(Value, Value)> = vec![("targets".into(), Value::Array(targets))];
-        if let Some(r) = reason {
-            payload.push(("reason".into(), r.into()));
-        }
-        if let Some(b) = by {
-            payload.push(("by".into(), Value::from(b as u64)));
-        }
-        self.add_frame("suppress", Some(Value::Map(payload)), None, None, None)
+        let payload = suppress_payload(targets, reason, by);
+        self.add_frame("suppress", Some(payload), None, None, None)
     }
 
     /// Append an `index` footer covering every frame appended so far (§6.2).

@@ -18,7 +18,7 @@
 //! The Python wrapper delegates to THIS core; there is one
 //! definition of "the snapshot".
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use ciborium::value::Value;
 use purrdf_gts::model::{Term, TermKind};
@@ -468,6 +468,98 @@ pub fn choose_transform(
     }
 }
 
+/// Which frame slot an assignment row addresses.
+///
+/// One total assignment covers EVERY authored frame: the snapshot itself and
+/// each blob, keyed by its content-representation tag.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum FrameSlot {
+    /// The single canonical `snapshot` frame.
+    Snapshot,
+    /// A `blob` frame carrying this `pub.rep` representation tag.
+    Blob(String),
+}
+
+/// Which in-band dictionary primes a frame — TOTAL, never `Option`.
+///
+/// An `Option<&str>` fall-through would let "the caller forgot this rep" and
+/// "this rep is deliberately undicted" be the same value. They are not: the
+/// first is a bug that silently costs density, the second is a decision.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DictSelection {
+    /// Prime with the pinned dictionary of this name.
+    Named(String),
+    /// Deliberately no dictionary.
+    Baseline,
+}
+
+/// The medium-level authoring plan: which in-band dictionaries the bundle pins,
+/// which one primes which frame, and the zstd level it declares.
+///
+/// This replaces two pieces of implicit behaviour: a bundle used to be able to
+/// carry at most one dictionary applied by name-matching inside the writer, and
+/// its zstd level was INFERRED from the profile string (`profile == "dist"`),
+/// so level 12 was unreachable under any other profile no matter what the
+/// caller wanted. Both are now caller-stated data.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MediumPlan {
+    /// Named in-band dictionaries pinned in the header `"dct"` map (§5).
+    pub dicts: Vec<(String, Vec<u8>)>,
+    /// The TOTAL frame → dictionary assignment. When [`Self::dicts`] is
+    /// non-empty, every authored frame slot must appear here; a missing slot is
+    /// a hard error, never a silent baseline encode.
+    pub assignment: BTreeMap<FrameSlot, DictSelection>,
+    /// The zstd level for every zstd-family frame, declared in the catalog
+    /// (§8.5 `level?`). Explicit — never derived from the profile name.
+    pub zstd_level: Option<i32>,
+}
+
+impl MediumPlan {
+    /// A plan with no dictionaries at `level`.
+    pub fn undicted(zstd_level: Option<i32>) -> Self {
+        Self {
+            dicts: Vec::new(),
+            assignment: BTreeMap::new(),
+            zstd_level,
+        }
+    }
+
+    /// The standard bundle plan: no dictionaries, [`DIST_ZSTD_LEVEL`] declared
+    /// whenever `transform` is a zstd-family chain.
+    ///
+    /// CHAIN-gated, never profile-gated: a level is meaningful exactly when
+    /// there is a zstd codec to apply it to, and has nothing to do with what
+    /// the header's profile string says.
+    pub fn dist_default(transform: Option<&[String]>) -> Self {
+        let chain: &[String] = transform.unwrap_or(&[]);
+        let zstd_family = transform.is_none()
+            || chain
+                .iter()
+                .any(|name| name == "zstd" || name == "zstd-rsyncable");
+        Self::undicted(zstd_family.then_some(DIST_ZSTD_LEVEL))
+    }
+
+    /// Resolve the dictionary for `slot`.
+    ///
+    /// With no dictionaries pinned there is nothing to choose between, so the
+    /// baseline is the only inhabitant of the choice and needs no row. With
+    /// dictionaries pinned, a missing row is a hard error.
+    fn select(&self, slot: &FrameSlot) -> Result<Option<&str>, String> {
+        if self.dicts.is_empty() {
+            return Ok(None);
+        }
+        match self.assignment.get(slot) {
+            Some(DictSelection::Named(name)) => Ok(Some(name)),
+            Some(DictSelection::Baseline) => Ok(None),
+            None => Err(format!(
+                "the medium plan pins {} dictionar(y/ies) but assigns none to {slot:?}; \
+                 every frame slot needs an explicit DictSelection",
+                self.dicts.len()
+            )),
+        }
+    }
+}
+
 /// Emit the snapshot bundle bytes from an accumulated builder (`_Builder.to_gts`).
 #[allow(clippy::too_many_arguments)]
 pub fn emit_gts(
@@ -480,6 +572,7 @@ pub fn emit_gts(
     signer_kid: Option<String>,
     public_key_armor: Option<String>,
     rsyncable_threshold: usize,
+    plan: &MediumPlan,
 ) -> Result<Vec<u8>, String> {
     // No-optionality: signing is all-or-nothing across ALL THREE fields
     // (secret, kid, public key). A partial config — e.g. a `signer_kid` with no
@@ -500,28 +593,40 @@ pub fn emit_gts(
 
     let base_chain = transform.unwrap_or_else(|| vec!["zstd".to_string()]);
 
-    // Per-frame zstd level (purrdf-gts 0.9.11). The writer default is `Fastest` (~level
-    // 1) — which is why switching the `dist` bundle to `zstd-rsyncable` bloated it
-    // (16.7 MB gzip → 27 MB Fastest-zstd). The committed `dist` bundle is regenerated
-    // often and lives in git, so a higher level pays off (smaller blob + smaller
-    // git delta), while rsyncable keeps chunk boundaries stable. Other profiles are
-    // not committed artifacts and keep the Fastest default.
-    //
-    // A `zstd_level` is meaningful only for a zstd-family frame; the writer hard-fails
-    // a level paired with a non-zstd transform. Gate the level on the actual chain (not
-    // just the `dist` profile name) so a caller may still emit a `dist`-profile snapshot
-    // under `gzip`/`identity` — the production bundle passes `zstd-rsyncable`, so it
-    // keeps level 12.
+    // The zstd level is whatever the CALLER declared — never inferred from the
+    // profile string. The old `profile == "dist"` gate made level 12 reachable
+    // only under one literal profile name, so a caller emitting a non-`dist`
+    // bundle silently got the writer's ~level-1 default no matter what it
+    // wanted. A level is still meaningful only for a zstd-family chain (the
+    // writer hard-fails a level paired with a non-zstd transform), so it is
+    // gated on the chain and on nothing else.
     let chain_is_zstd = base_chain
         .iter()
         .any(|t| t == "zstd" || t == "zstd-rsyncable");
-    let zstd_level: Option<i32> = if profile == "dist" && chain_is_zstd {
-        Some(DIST_ZSTD_LEVEL)
-    } else {
-        None
-    };
+    let zstd_level: Option<i32> = plan.zstd_level.filter(|_| chain_is_zstd);
+    if plan.zstd_level.is_some() && !chain_is_zstd {
+        return Err(format!(
+            "the medium plan declares zstd level {:?} but the transform chain {base_chain:?} \
+             carries no zstd-family codec",
+            plan.zstd_level
+        ));
+    }
+    if !plan.dicts.is_empty() && !chain_is_zstd {
+        return Err(format!(
+            "the medium plan pins in-band dictionaries but the transform chain \
+             {base_chain:?} carries no zstd-family codec to prime"
+        ));
+    }
 
-    let mut writer = Writer::new(profile);
+    let mut writer = Writer::with_options(
+        profile,
+        purrdf_gts::writer::WriterOptions {
+            dicts: plan.dicts.clone(),
+            zstd_level,
+            ..purrdf_gts::writer::WriterOptions::default()
+        },
+    )
+    .map_err(|err| err.to_string())?;
     if signing {
         let secret = signer_secret.expect("signing implies a secret");
         let kid = signer_kid.ok_or("signing requires a kid")?;
@@ -544,6 +649,7 @@ pub fn emit_gts(
     all_blobs.sort_by(|a, b| a.rep.cmp(&b.rep).then_with(|| a.data.cmp(&b.data)));
     for blob in all_blobs {
         let chain = choose_transform(&base_chain, blob.data.len(), rsyncable_threshold);
+        let dict = plan.select(&FrameSlot::Blob(blob.rep.clone()))?;
         // `add_blob` does not take a transform; author the frame directly so the
         // per-payload rsyncable selection is honored (parity with `_Builder`).
         let pub_meta = Value::Map(vec![
@@ -559,6 +665,7 @@ pub fn emit_gts(
             transform: chain,
             pub_meta: Some(pub_meta),
             zstd_level,
+            dict: dict.map(str::to_string),
             ..Default::default()
         };
         writer
@@ -569,10 +676,12 @@ pub fn emit_gts(
     let payload = builder.snapshot_payload();
     let snapshot_bytes = canonical(&payload);
     let chain = choose_transform(&base_chain, snapshot_bytes.len(), rsyncable_threshold);
+    let snapshot_dict = plan.select(&FrameSlot::Snapshot)?;
     let options = purrdf_gts::writer::FrameOptions {
         payload: Some(payload),
         transform: chain,
         zstd_level,
+        dict: snapshot_dict.map(str::to_string),
         ..Default::default()
     };
     writer
@@ -799,6 +908,7 @@ mod tests {
             None,
             None,
             DEFAULT_RSYNCABLE_THRESHOLD,
+            &MediumPlan::undicted(None),
         )
         .expect("emit");
         let graph = purrdf_gts::reader::read(&bytes, true, None);
@@ -820,6 +930,7 @@ mod tests {
             None,
             None,
             DEFAULT_RSYNCABLE_THRESHOLD,
+            &MediumPlan::undicted(None),
         )
         .expect("emit base");
         let with_blobs = emit_gts(
@@ -840,6 +951,7 @@ mod tests {
             None,
             None,
             DEFAULT_RSYNCABLE_THRESHOLD,
+            &MediumPlan::undicted(None),
         )
         .expect("emit blobs");
         let base_graph = purrdf_gts::reader::read(&base, true, None);
@@ -865,6 +977,96 @@ mod tests {
     }
 
     #[test]
+    fn a_populated_medium_plan_requires_a_total_assignment() {
+        let plan = MediumPlan {
+            dicts: vec![("docs".to_string(), vec![1, 2, 3])],
+            assignment: BTreeMap::new(),
+            zstd_level: Some(12),
+        };
+        let err = plan
+            .select(&FrameSlot::Snapshot)
+            .expect_err("a populated plan may not omit a frame slot");
+        assert!(err.contains("assigns none"), "{err}");
+    }
+
+    #[test]
+    fn emit_gts_carries_a_populated_plan_into_the_header_and_frames() {
+        let builder = ingest_nq("<https://e/s> <https://e/p> <https://e/o> .\n");
+        let samples: Vec<Vec<u8>> = (0..100)
+            .map(|i| format!("documentation payload row {i} with repeated vocabulary\n").into())
+            .collect();
+        let refs: Vec<&[u8]> = samples.iter().map(Vec::as_slice).collect();
+        let dict = purrdf_gts::dict::raw_content_dict(&refs, 1024).expect("dictionary builds");
+        let rep = "purrdf:doc/guide".to_string();
+        let plan = MediumPlan {
+            dicts: vec![("docs".to_string(), dict)],
+            assignment: BTreeMap::from([
+                (
+                    FrameSlot::Blob(rep.clone()),
+                    DictSelection::Named("docs".to_string()),
+                ),
+                (
+                    FrameSlot::Snapshot,
+                    DictSelection::Named("docs".to_string()),
+                ),
+            ]),
+            zstd_level: Some(12),
+        };
+        let bytes = emit_gts(
+            &builder,
+            "dist",
+            Some(vec!["zstd".to_string()]),
+            vec![BlobRow {
+                data: b"# dictionary-backed documentation\n".to_vec(),
+                media_type: "text/markdown".to_string(),
+                rep,
+            }],
+            Vec::new(),
+            None,
+            None,
+            None,
+            DEFAULT_RSYNCABLE_THRESHOLD,
+            &plan,
+        )
+        .expect("dict-primed snapshot emits");
+
+        let state = purrdf_gts::reader::segment_append_state(&bytes).expect("header parses");
+        assert_eq!(
+            state.dicts.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["docs"],
+            "the named dictionary must be pinned in the header"
+        );
+        let dict_ids: std::collections::BTreeSet<i64> = state
+            .catalog
+            .iter()
+            .filter(|row| row.dct.as_deref() == Some("docs"))
+            .map(|row| row.id)
+            .collect();
+        let (items, torn) = purrdf_gts::wire::iter_items(&bytes);
+        assert!(torn.is_none(), "complete emission");
+        let selected: Vec<i64> = items
+            .iter()
+            .filter_map(|(_, item)| {
+                let Value::Map(frame) = item else {
+                    return None;
+                };
+                let Some(Value::Array(chain)) = purrdf_gts::wire::map_get(frame, "x") else {
+                    return None;
+                };
+                let [Value::Integer(raw)] = chain.as_slice() else {
+                    panic!("each emitted payload must ride one transform");
+                };
+                Some(i64::try_from(i128::from(*raw)).expect("catalog id fits"))
+            })
+            .collect();
+        assert_eq!(selected.len(), 2, "one blob plus one snapshot payload");
+        assert!(
+            selected.iter().all(|id| dict_ids.contains(id)),
+            "every emitted payload must select the docs-bound catalog entry: {selected:?}"
+        );
+    }
+
+    #[test]
     fn rsyncable_threshold_only_rewrites_default_zstd() {
         assert_eq!(
             choose_transform(
@@ -884,6 +1086,116 @@ mod tests {
         );
     }
 
+    /// (i) The declared zstd level is CHAIN-gated, never PROFILE-gated.
+    ///
+    /// Before, `emit_gts` computed `profile == "dist" && chain_is_zstd` itself,
+    /// so level 12 was unreachable under any other profile name no matter what
+    /// the caller asked for — a silent capability degradation keyed on a string.
+    /// The level now comes from the caller's [`MediumPlan`] and is filtered only
+    /// by whether the chain carries a zstd-family codec.
+    #[test]
+    fn the_declared_zstd_level_is_chain_gated_not_profile_gated() {
+        let builder = ingest_nq("<https://e/s> <https://e/p> <https://e/o> .\n");
+        let emit = |profile: &str, chain: Vec<String>, plan: &MediumPlan| {
+            emit_gts(
+                &builder,
+                profile,
+                Some(chain),
+                Vec::new(),
+                Vec::new(),
+                None,
+                None,
+                None,
+                DEFAULT_RSYNCABLE_THRESHOLD,
+                plan,
+            )
+        };
+        let declared_levels = |bytes: &[u8]| -> Vec<Option<i32>> {
+            purrdf_gts::reader::segment_append_state(bytes)
+                .expect("header parses")
+                .catalog
+                .iter()
+                .filter(|row| matches!(row.name.as_str(), "zstd" | "zstd-rsyncable"))
+                .map(|row| row.level)
+                .collect()
+        };
+        let rsyncable = || vec!["zstd-rsyncable".to_string()];
+
+        // A profile that is emphatically NOT "dist" still records level 12.
+        let custom = emit(
+            "urn:purrdf:profile:not-dist",
+            rsyncable(),
+            &MediumPlan::undicted(Some(12)),
+        )
+        .expect("a non-dist profile may declare a level");
+        let custom_levels = declared_levels(&custom);
+        assert!(!custom_levels.is_empty(), "zstd-family entries exist");
+        assert!(
+            custom_levels.iter().all(|level| *level == Some(12)),
+            "a non-\"dist\" profile with an explicit level must record it: {custom_levels:?}"
+        );
+
+        // The OTHER direction, which is what actually falsifies profile
+        // inference: the literal "dist" profile with no declared level records
+        // NO level. If any path still inferred from the profile string, this
+        // would come back as Some(12).
+        let dist_unlevelled =
+            emit("dist", rsyncable(), &MediumPlan::undicted(None)).expect("emit dist");
+        assert!(
+            declared_levels(&dist_unlevelled)
+                .iter()
+                .all(Option::is_none),
+            "the \"dist\" profile must NOT conjure a level the caller did not declare"
+        );
+
+        // And the profile string is inert: same plan, same chain, two different
+        // profile names, identical declared levels.
+        let dist_levelled = emit("dist", rsyncable(), &MediumPlan::undicted(Some(12)))
+            .expect("emit dist with a level");
+        assert_eq!(
+            declared_levels(&dist_levelled),
+            custom_levels,
+            "the profile string must not change the declared level"
+        );
+
+        // A level with nothing to apply it to is a HARD ERROR, not a silent drop.
+        let err = emit(
+            "dist",
+            vec!["identity".to_string()],
+            &MediumPlan::undicted(Some(12)),
+        )
+        .expect_err("a level on a non-zstd chain must hard-fail");
+        assert!(err.contains("no zstd-family codec"), "{err}");
+    }
+
+    /// [`MediumPlan::dist_default`] is likewise gated on the CHAIN it is handed.
+    #[test]
+    fn the_default_medium_plan_declares_a_level_only_for_a_zstd_chain() {
+        assert_eq!(
+            MediumPlan::dist_default(Some(&["zstd-rsyncable".to_string()])).zstd_level,
+            Some(DIST_ZSTD_LEVEL)
+        );
+        assert_eq!(
+            MediumPlan::dist_default(Some(&["zstd".to_string()])).zstd_level,
+            Some(DIST_ZSTD_LEVEL)
+        );
+        assert_eq!(
+            MediumPlan::dist_default(Some(&["identity".to_string()])).zstd_level,
+            None,
+            "a level is meaningless without a zstd-family codec"
+        );
+        assert_eq!(
+            MediumPlan::dist_default(Some(&["gzip".to_string()])).zstd_level,
+            None
+        );
+        // `None` means "the caller stated no chain", and `emit_gts` then defaults
+        // to `["zstd"]` — so the level must ride along with that default.
+        assert_eq!(
+            MediumPlan::dist_default(None).zstd_level,
+            Some(DIST_ZSTD_LEVEL)
+        );
+    }
+
     #[test]
     fn partial_signing_configuration_is_rejected() {
         let builder = ingest_nq("<https://e/s> <https://e/p> <https://e/o> .\n");
@@ -897,6 +1209,7 @@ mod tests {
             Some("kid".to_string()),
             None,
             DEFAULT_RSYNCABLE_THRESHOLD,
+            &MediumPlan::undicted(None),
         )
         .expect_err("partial signing must hard-fail");
         assert!(err.contains("all three or none"), "{err}");

@@ -39,7 +39,7 @@ fn payload() -> Vec<u8> {
         .collect()
 }
 
-fn write_blob_frame(writer: &mut Writer, data: Vec<u8>) {
+fn write_blob_frame(writer: &mut Writer, data: Vec<u8>, dict: Option<&str>) {
     let digest = digest_str(&data);
     writer
         .add_frame_with_options(
@@ -47,6 +47,7 @@ fn write_blob_frame(writer: &mut Writer, data: Vec<u8>) {
             FrameOptions {
                 raw: Some(data),
                 transform: vec!["zstd".to_string()],
+                dict: dict.map(str::to_string),
                 pub_meta: Some(ciborium::value::Value::Map(vec![(
                     "digest".into(),
                     digest.into(),
@@ -68,17 +69,17 @@ fn dict_pinned_gts_file_folds_identically_to_undictioned_file() {
     let mut with_dict = Writer::with_options(
         "purrdf.gts",
         WriterOptions {
-            dict: Some(("pack0".to_string(), dict)),
+            dicts: vec![("pack0".to_string(), dict)],
             ..WriterOptions::default()
         },
     )
     .expect("writer with dict constructs");
-    write_blob_frame(&mut with_dict, data.clone());
+    write_blob_frame(&mut with_dict, data.clone(), Some("pack0"));
     let with_dict_bytes = with_dict.into_bytes();
 
     // Written without a dictionary — same logical content.
     let mut without_dict = Writer::new("purrdf.gts");
-    write_blob_frame(&mut without_dict, data.clone());
+    write_blob_frame(&mut without_dict, data.clone(), None);
     let without_dict_bytes = without_dict.into_bytes();
 
     // The dict pins bytes uncompressed and in-band, so the dict-primed file
@@ -132,12 +133,12 @@ fn tampering_the_pinned_dictionary_bytes_is_detected_as_a_header_self_hash_misma
     let mut writer = Writer::with_options(
         "purrdf.gts",
         WriterOptions {
-            dict: Some(("pack0".to_string(), dict.clone())),
+            dicts: vec![("pack0".to_string(), dict.clone())],
             ..WriterOptions::default()
         },
     )
     .expect("writer with dict constructs");
-    write_blob_frame(&mut writer, data);
+    write_blob_frame(&mut writer, data, Some("pack0"));
     let mut bytes = writer.into_bytes();
 
     // The dictionary is stored uncompressed and in-band (§5), so its bytes

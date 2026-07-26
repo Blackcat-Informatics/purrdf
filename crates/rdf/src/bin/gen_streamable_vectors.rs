@@ -23,7 +23,7 @@
 //! a meaningful dictionary against (see `crates/gts/src/dict.rs`), and not the
 //! purpose of this vector (that is what `30-dict-rawcontent`/`31-dict-trained`
 //! freeze). This vector freezes streamable-compaction + certification in
-//! isolation, so it pins [`DictStrategy::None`] deliberately: no `"dct"` header
+//! isolation, so it pins [`DictPlan::undicted`] deliberately: no `"dct"` header
 //! entry, plain (undicted) `zstd`/`identity` frames, and no new
 //! `zstd`/`dct`-capability requirement on the manifest entry.
 //!
@@ -42,18 +42,13 @@
 //! timestamp/keys below, with no platform-dependent floating point on this path
 //! (unlike `31-dict-trained`'s FastCOVER training).
 
-use std::collections::BTreeMap;
 use std::path::Path;
 
 use ed25519_dalek::SigningKey;
-use purrdf_gts::compact::DictStrategy;
-use purrdf_gts::reader::read;
-use purrdf_gts::wire::{hex, map_get};
+use purrdf_gts::compact::DictPlan;
 use purrdf_rdf::capture_support::corpus_repo_root;
-use purrdf_rdf::gts::dataset_from_gts_graph;
 use purrdf_rdf::gts_certify::compact_and_certify;
-use purrdf_rdf::{SerializeGraph, serialize_dataset};
-use serde_json::{Value as Json, json};
+use purrdf_rdf::gts_dict_vectors::{expected_fold_json, render_expected_json};
 
 /// The rewrite time recorded as `stream:timestamp` — matches
 /// `gen_dict_vectors::TIMESTAMP` so every frozen corpus vector authored under
@@ -91,112 +86,13 @@ fn write_vector(path: &Path, bytes: &[u8]) {
     println!("wrote {} ({} bytes)", path.display(), bytes.len());
 }
 
-/// The blob table as `digest -> {"mt": ..., "size": ...}`, `mt` from the
-/// folded blob's declared `"pub"` metadata and `size` its DECODED length
-/// (matching every other `vectors/*.expected.json` blob entry).
-fn blobs_json(g: &purrdf_gts::model::Graph) -> Json {
-    let mut out = BTreeMap::new();
-    for (digest, entry) in &g.blobs {
-        let mt = g
-            .blob_meta
-            .iter()
-            .find(|(d, _)| d == digest)
-            .and_then(|(_, meta)| match meta {
-                ciborium::value::Value::Map(entries) => match map_get(entries, "mt") {
-                    Some(ciborium::value::Value::Text(t)) => Some(t.clone()),
-                    _ => None,
-                },
-                _ => None,
-            })
-            .unwrap_or_else(|| panic!("blob {digest} has no declared \"mt\" metadata"));
-        let size = entry
-            .decoded_len()
-            .unwrap_or_else(|err| panic!("blob {digest} decodes: {err}"));
-        out.insert(digest.clone(), json!({"mt": mt, "size": size}));
-    }
-    Json::Object(out.into_iter().collect())
-}
-
-/// The folded pack's content, rendered as sorted N-Quads text lines through
-/// the SAME GTS→dataset bridge and native N-Quads serializer
-/// `purrdf_rdf::gts_certify` verification uses — never a bespoke renderer that
-/// could silently drift from the production fold path.
-fn nquads_sorted(g: &purrdf_gts::model::Graph) -> Vec<String> {
-    let dataset =
-        dataset_from_gts_graph(g).unwrap_or_else(|err| panic!("GTS to dataset bridge: {err}"));
-    let text = serialize_dataset(&dataset, "application/n-quads", SerializeGraph::Dataset)
-        .unwrap_or_else(|err| panic!("serialize n-quads: {err:?}"));
-    let text = String::from_utf8(text).expect("n-quads serializer emits UTF-8");
-    let mut lines: Vec<String> = text
-        .lines()
-        .map(str::to_owned)
-        .filter(|l| !l.is_empty())
-        .collect();
-    lines.sort();
-    lines
-}
-
-/// The expected-fold JSON for `pack`, built entirely from its OWN fresh fold —
-/// matching the schema (`docs/GTS-CONFORMANCE.md` §4) and `sort_keys=true`,
-/// one-space-indent style of every other `vectors/*.expected.json`.
-fn expected_fold_json(pack: &[u8]) -> Json {
-    let g = read(pack, true, None);
-    assert!(
-        g.diagnostics.is_empty(),
-        "the freshly compacted pack must fold cleanly: {:?}",
-        g.diagnostics
-    );
-
-    let nquads = nquads_sorted(&g);
-    let mut profiles: Vec<String> = g.segment_profiles.clone();
-    profiles.sort();
-    profiles.dedup();
-    let streamable: Vec<Json> = g
-        .segment_streamable
-        .iter()
-        .map(|s| json!({"claimed": s.claimed, "covered": s.covered, "tail": s.tail}))
-        .collect();
-    let segment_heads: Vec<String> = g.segment_heads.iter().map(|h| hex(h)).collect();
-
-    json!({
-        "blobs": blobs_json(&g),
-        "diagnostics": g.diagnostics.iter().map(|d| d.code.clone()).collect::<Vec<_>>(),
-        "mode": "default",
-        "quads": nquads.len(),
-        "nquads": nquads,
-        "opaque_reasons": g.opaque.iter().map(|o| o.reason.clone()).collect::<Vec<_>>(),
-        "profiles": profiles,
-        "segment_heads": segment_heads,
-        "segments": g.segment_heads.len(),
-        "streamable": streamable,
-        "suppressions": g.suppressions.len(),
-        "terms": g.terms.len(),
-    })
-}
-
-/// Render `value` with `sort_keys=true`, one-space-indent JSON — matching
-/// every other frozen `vectors/*.expected.json` (produced upstream by
-/// gmeow-gts's `python/src/gts/vectors.py::expected_for`, `json.dump(...,
-/// indent=1, sort_keys=True)`). `serde_json::Value::Object` is BTreeMap-backed
-/// in this workspace (no `preserve_order` feature anywhere in the dependency
-/// tree), so keys are already sorted; only the indent width needs matching.
-fn render_expected_json(value: &Json) -> String {
-    let mut buf = Vec::new();
-    let formatter = serde_json::ser::PrettyFormatter::with_indent(b" ");
-    let mut ser = serde_json::Serializer::with_formatter(&mut buf, formatter);
-    serde::Serialize::serialize(value, &mut ser).expect("serialize expected.json");
-    let mut text = String::from_utf8(buf).expect("serde_json emits UTF-8");
-    text.push('\n');
-    text
-}
-
 fn main() {
     let source = read_source();
     let vectors_dir = vectors_dir();
 
     let (pack, _cert) = compact_and_certify(
         &source,
-        DictStrategy::None,
+        DictPlan::undicted(),
         TIMESTAMP,
         false,
         (packaging_key(), "pack".to_string()),

@@ -1,0 +1,89 @@
+{
+ "blobs": {
+  "blake3:00a4247cc0cacfc2a3fd87a878d57ea91edc96a799c3ef306d67f4248c32b336": {
+   "mt": "text/plain",
+   "size": 99
+  },
+  "blake3:13a0812452866316f87b599cb1b8909128ec376688502ad94b833fe9bdddc2e7": {
+   "mt": "text/plain",
+   "size": 99
+  },
+  "blake3:1b88f16409d7c4a6da4e52bd7bf616ac2d40a1583c33b53904b475645ba0b683": {
+   "mt": "text/plain",
+   "size": 99
+  },
+  "blake3:524390150d0dd4e8207973b67ce966c885b9a900bd15c1552880ea053e1ea12e": {
+   "mt": "text/plain",
+   "size": 99
+  },
+  "blake3:5b9fb68342ad6cb8d1f93f070cd68b757d9aa550accd18d26221cac03f00713e": {
+   "mt": "text/plain",
+   "size": 99
+  },
+  "blake3:61f389de0894eac6a5861daa27e554339efccc90c1b21c0fdfc8c5cdeabe5699": {
+   "mt": "text/plain",
+   "size": 99
+  },
+  "blake3:69167fe66b3983bc3b6e8bbbf1d626447e7bb211bd39a8ce12c3b45cd6ee9dc1": {
+   "mt": "text/plain",
+   "size": 70092
+  },
+  "blake3:79b909bbfcd9cb5c2092a08e8642abbfc5173d752de6272307b4ae46e333a9a7": {
+   "mt": "text/plain",
+   "size": 99
+  },
+  "blake3:a75ece3fb700fd27143da30b950f2b6d031be86649e624facf14c184c2ab4b20": {
+   "mt": "text/plain",
+   "size": 99
+  },
+  "blake3:acf5255ea9290f1f2e6530b45d3227e8e8c354fbfe4f39224dc292df756bc55f": {
+   "mt": "text/plain",
+   "size": 99
+  },
+  "blake3:b83d957e827af9c352ca4ad12fdbd665515346c11e0f9073a27975ed8bc25280": {
+   "mt": "text/plain",
+   "size": 99
+  },
+  "blake3:bbf01c9444db6cacda5ae0d946cb649acedc186bcb33f61b98d5102d8e443686": {
+   "mt": "text/plain",
+   "size": 99
+  },
+  "blake3:bdcbb6615441061b9a580e2d6029494708df90d86a07cbf52d051b71b88a443c": {
+   "mt": "text/plain",
+   "size": 99
+  },
+  "blake3:cf07815649129d483f3f49863ea0155d8720c887cd17da88b419af86bbc68a48": {
+   "mt": "text/plain",
+   "size": 99
+  },
+  "blake3:e3e5a2321971f1f456c2c22d5e28fd7ca5486537b527fda97388d775d53e2fb3": {
+   "mt": "text/plain",
+   "size": 70092
+  },
+  "blake3:f3a0ee469885a2d896fd969d39d57db668f3f6dd0358f7e006f151f0adab41fa": {
+   "mt": "text/plain",
+   "size": 99
+  }
+ },
+ "diagnostics": [],
+ "mode": "default",
+ "nquads": [],
+ "opaque_reasons": [],
+ "profiles": [
+  "purrdf.gts"
+ ],
+ "quads": 0,
+ "segment_heads": [
+  "5274acb124238283420747430565b956f5bf583d7a2d5a09c73069bec8144383"
+ ],
+ "segments": 1,
+ "streamable": [
+  {
+   "claimed": false,
+   "covered": 0,
+   "tail": 0
+  }
+ ],
+ "suppressions": 0,
+ "terms": 0
+}
