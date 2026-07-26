@@ -16,12 +16,11 @@
 //! deterministic on the authoring platform but not guaranteed byte-identical
 //! cross-platform (see `crates/gts/src/dict.rs`).
 //!
-//! No vector here carries a `<id>.expected.json` cross-engine oracle: that JSON
-//! is produced by gmeow-gts's `vectors.py` generator, which is not vendored in
-//! this repository. `crates/gts/tests/frozen_canonical_bytes.rs` still covers
-//! them all (canonical-CBOR byte-exactness of every frozen `.gts` item); the
-//! tests here are the purrdf-local functional/drift guard on top of that (see
-//! `docs/GTS-CONFORMANCE.md` §2).
+//! Every vector carries a `<id>.expected.json` fold oracle in the shared
+//! one-space-indented, sorted-key GTS corpus format. The generator and this
+//! drift guard use the same production GTS-to-dataset projection and N-Quads
+//! serializer, while this test always derives the comparison from the frozen
+//! `.gts` bytes themselves.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -33,8 +32,9 @@ use purrdf_gts::reader::read;
 use purrdf_gts::wire::{iter_items, map_get};
 use purrdf_rdf::gts_certify::{compact_and_certify, refold_digest, verify_compaction};
 use purrdf_rdf::gts_dict_vectors::{
-    MULTI_DICT_NAMES, TIMESTAMP, VECTOR_ZSTD_LEVEL, authorship_key, fixed_source, multi_dict_pack,
-    packaging_key, rsyncable_plan, size_comparison_source,
+    MULTI_DICT_NAMES, TIMESTAMP, VECTOR_ZSTD_LEVEL, authorship_key, expected_fold_json,
+    fixed_source, multi_dict_pack, packaging_key, render_expected_json, rsyncable_plan,
+    size_comparison_source,
 };
 
 fn vectors_dir() -> PathBuf {
@@ -45,11 +45,34 @@ fn read_vector(name: &str) -> Vec<u8> {
     std::fs::read(vectors_dir().join(name)).unwrap_or_else(|err| panic!("read {name}: {err}"))
 }
 
+fn read_expected(name: &str) -> String {
+    std::fs::read_to_string(vectors_dir().join(name))
+        .unwrap_or_else(|err| panic!("read {name}: {err}"))
+}
+
 fn keyring() -> HashMap<String, ed25519_dalek::VerifyingKey> {
     HashMap::from([
         ("authorA".to_string(), authorship_key().verifying_key()),
         ("pack".to_string(), packaging_key().verifying_key()),
     ])
+}
+
+#[test]
+fn every_dictionary_vector_expected_json_matches_its_frozen_fold() {
+    for stem in [
+        "30-dict-rawcontent",
+        "31-dict-trained",
+        "32-dict-rsyncable",
+        "33-multi-dict",
+    ] {
+        let vector = read_vector(&format!("{stem}.gts"));
+        let expected = read_expected(&format!("{stem}.expected.json"));
+        assert_eq!(
+            render_expected_json(&expected_fold_json(&vector)),
+            expected,
+            "{stem}.expected.json must be the deterministic fold oracle for the frozen bytes"
+        );
+    }
 }
 
 /// Sorted `(digest, decoded bytes)` for every blob in `g` — an order- and

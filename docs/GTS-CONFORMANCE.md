@@ -54,14 +54,16 @@ used by tier claims:
 | `security-policy` | `vectors/security/*.json` | Profile trust-policy separation, pseudonymous opaque recipients, and nested-GTS recursion-limit negative cases. |
 | `advanced-index-proof` | `vectors/proofs/*.json` plus implementation-created indexed files | Stable MMR preimages, detached inclusion-proof JSON verification, bad-proof rejection, and optional `index.mmr` reader diagnostics. |
 
-`30-dict-rawcontent.gts`, `31-dict-trained.gts`, `32-dict-rsyncable.gts`, and `33-multi-dict.gts`
-do not (yet) carry a companion `<id>.expected.json` cross-engine oracle: that JSON is produced by
-gmeow-gts's `vectors.py` generator (§4), which is not vendored in this repository. All four `.gts`
-byte files are still covered by `crates/gts/tests/frozen_canonical_bytes.rs` (canonical-CBOR
-byte-exactness of every frozen top-level vector) and by the purrdf-local functional/drift-guard
-tests in `crates/rdf/tests/dict_vectors.rs`, whose fixed sources and authoring recipes live in the
-single shared module `purrdf_rdf::gts_dict_vectors` so a regeneration always starts from the same
-bytes the vectors were frozen from:
+`30-dict-rawcontent.gts`, `31-dict-trained.gts`, `32-dict-rsyncable.gts`, and
+`33-multi-dict.gts` each carry a companion `<id>.expected.json` cross-engine fold oracle. The
+oracles are derived from the frozen `.gts` bytes through the production GTS-to-dataset bridge and
+N-Quads serializer, then rendered with the same sorted-key, one-space-indented format as
+gmeow-gts's `vectors.py` generator (§4). Both halves are covered by
+`crates/gts/tests/frozen_canonical_bytes.rs` (canonical-CBOR byte-exactness of every frozen
+top-level vector) and by the functional/drift-guard tests in
+`crates/rdf/tests/dict_vectors.rs`. Fixed sources, authoring recipes, and the fold-oracle renderer
+live in the single shared module `purrdf_rdf::gts_dict_vectors`, so generation and validation
+cannot start from different definitions:
 
 - `30-dict-rawcontent` — byte-identical regeneration (the raw-content dict producer has no
   platform-dependent floating point).

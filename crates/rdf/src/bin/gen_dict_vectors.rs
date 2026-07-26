@@ -32,6 +32,8 @@
 //! `stream:detachedSignatureRoot`, and the pack itself carries a mandatory
 //! packaging (index/head) signature — those vectors exercise the WHOLE
 //! streamable-compaction + in-band-dictionary feature, not just the codec.
+//! Every `.gts` output is accompanied by an `.expected.json` oracle rendered
+//! from that exact file's own fold in the shared cross-engine corpus format.
 
 use std::path::Path;
 
@@ -39,12 +41,24 @@ use purrdf_gts::compact::{DictPlan, DictStrategy};
 use purrdf_rdf::capture_support::corpus_repo_root;
 use purrdf_rdf::gts_certify::compact_and_certify;
 use purrdf_rdf::gts_dict_vectors::{
-    TIMESTAMP, fixed_source, multi_dict_pack, packaging_key, rsyncable_plan,
+    TIMESTAMP, expected_fold_json, fixed_source, multi_dict_pack, packaging_key,
+    render_expected_json, rsyncable_plan,
 };
 
-fn write_vector(path: &Path, bytes: &[u8]) {
+fn write_vector_and_expected(path: &Path, bytes: &[u8]) {
     std::fs::write(path, bytes).unwrap_or_else(|err| panic!("write {}: {err}", path.display()));
     println!("wrote {} ({} bytes)", path.display(), bytes.len());
+
+    let expected = render_expected_json(&expected_fold_json(bytes));
+    let mut expected_path = path.to_path_buf();
+    expected_path.set_extension("expected.json");
+    std::fs::write(&expected_path, &expected)
+        .unwrap_or_else(|err| panic!("write {}: {err}", expected_path.display()));
+    println!(
+        "wrote {} ({} bytes)",
+        expected_path.display(),
+        expected.len()
+    );
 }
 
 fn main() {
@@ -70,8 +84,8 @@ fn main() {
             (packaging_key(), "pack".to_string()),
         )
         .unwrap_or_else(|err| panic!("compaction for {name} succeeds: {err:?}"));
-        write_vector(&vectors_dir.join(name), &pack);
+        write_vector_and_expected(&vectors_dir.join(name), &pack);
     }
 
-    write_vector(&vectors_dir.join("33-multi-dict.gts"), &multi_dict_pack());
+    write_vector_and_expected(&vectors_dir.join("33-multi-dict.gts"), &multi_dict_pack());
 }
