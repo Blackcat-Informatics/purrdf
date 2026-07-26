@@ -4,6 +4,28 @@ All notable changes to the PurRDF crate suite are recorded here. The suite
 ships one lockstep version across crates.io, PyPI, and npm; pre-1.0, a minor
 bump may carry breaking changes and a patch bump is bugfix-only.
 
+## [0.8.5] - 2026-07-26
+
+### Bug Fixes
+
+- **slice:** Scope ownership by declared term namespaces, not the framework ns
+- **slice:** Never mistake a Turtle comment for the sliceDependsOn block
+- **docs:** Repair public GTS links
+- **gts:** Harden dictionary append invariants
+
+### Documentation
+
+- **gts:** Register zstd-rsyncable level?/dct? and the dict-vector corpus
+
+### Features
+
+- **gts:** Multi-dictionary packs, rsyncable dict priming, and a declared zstd level
+- **gts:** Support multi-dictionary rsyncable packs
+
+### Testing
+
+- **gts:** Freeze dictionary vector fold oracles
+
 ## [0.8.3] - 2026-07-23
 
 ### Bug Fixes
