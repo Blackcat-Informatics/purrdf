@@ -23,9 +23,9 @@ signatures and encryption, and cross-language conformance through a shared vecto
 | Field | Value |
 |---|---|
 | Status | Working draft |
-| Document version | 0.9-draft |
+| Document version | 0.9.1-draft |
 | Wire-format major version | 1, encoded in the segment header `"v"` field |
-| Date | 2026-06-18 |
+| Date | 2026-07-25 |
 | Document DOI | <https://doi.org/10.67342/6pta6imnmw/v1> |
 | Stability | Wire-format changes remain possible until v1.0 |
 | Change control | Blackcat Informatics / [GTS governance process](./GTS-GOVERNANCE.md) |
@@ -50,6 +50,23 @@ core format.
 This section records changes to this specification document. Package releases, package version
 numbers, and per-engine release notes are separate artifacts and are not implied by the document
 version.
+
+**Changes in v0.9.1-draft (2026-07-25):**
+
+- Registers `level`? and `dct`? as parameters of `zstd-rsyncable` (§8.5), matching `zstd`, and
+  promotes the catalog entry's `"level"` from an unknown extension key to a declared `? "level":
+  int` in the CDDL (§5, §21). This is a registry clarification, not a wire-format change: header
+  and frame preimages are unchanged (§22 already includes every extension key), so a file
+  authored before this revision still verifies bit-for-bit.
+- States normatively (§8.4) that a `zstd-rsyncable` payload is a sequence of independent
+  per-`block_size` zstd frames, that a `dct` primes **every** block with the **same**
+  dictionary and carries no state across a block boundary, and that priming therefore leaves
+  the block cut points — and the bounded-neighbourhood delta-transfer property — identical to
+  the undicted encoding. Every primed block carries the dictionary's `Dictionary_ID` in its own
+  frame header, so the binding is checkable without decompressing.
+- States that a declared `level` is an observable authoring fact a deployment profile may
+  require, and that a writer declaring one MUST encode every frame naming that catalog entry at
+  that level.
 
 **Changes in v0.9-draft (2026-06-18):**
 
@@ -522,7 +539,8 @@ codec = {
   "name" : tstr,                      ; "identity" | "gzip" | "zstd" | "lzma2" | "cose-encrypt" | ...
   "cls"  : "encode" / "compress" / "encrypt",
   ? "dct": tstr,                      ; references header "dct" key (dict codecs)
-  ? "p"  : any,                       ; codec parameters (e.g. lzma2 level)
+  ? "level": int,                     ; declared compression level (§8.5 level?)
+  ? "p"  : any,                       ; further codec parameters
 }
 ```
 
@@ -963,6 +981,32 @@ delta compression (e.g. Git packfiles) at the cost of a small compression-ratio
 overhead. The only rsyncable codec defined in this revision is `zstd-rsyncable`
 (§8.5).
 
+`zstd-rsyncable` encodes its input as a sequence of **independent** zstd frames,
+one per `block_size` bytes of *uncompressed* input (the final block MAY be
+short). A conformant decoder decompresses the frames in order and concatenates
+the results.
+
+**Dictionaries and rsyncable codecs.** `zstd-rsyncable` takes the same optional
+`dct` parameter as `zstd` (§5 header `"dct"`). When a `dct` is present, a writer
+MUST prime **every** block of the payload with the **same** dictionary, and MUST
+NOT carry any other encoder state across a block boundary. A dictionary is
+history the encoder is given *before* a block, never state accumulated *between*
+blocks, so priming leaves the blocks mutually independent: the block cut points
+remain at exactly the same uncompressed offsets as the undicted encoding of the
+same input, and the bounded-neighbourhood (delta-transfer) property of §8.4 is
+preserved unchanged. A reader MUST decode each block against the dictionary the
+frame's catalog entry names; every primed block carries that dictionary's
+`Dictionary_ID` in its own zstd frame header, so the binding is verifiable
+without decompressing.
+
+**Declared `level`.** The optional `level` parameter on `zstd` and
+`zstd-rsyncable` records the compression level the payload was authored at. It
+is never required for decoding — zstd is self-describing — but declaring it
+makes the authoring level an **observable** property of the file, so a
+deployment profile can require a level rather than trust a producer's claim.
+A writer that declares a `level` MUST encode every frame naming that catalog
+entry at that level.
+
 ### 8.5 Canonical codec registry (v1)
 
 Catalog entries are referenced by integer id within a file (§5), but each entry's `"name"` MUST
@@ -973,7 +1017,7 @@ be a canonical identifier from this registry so writers interoperate:
 | `identity`      | `encode`   | yes       | none                          |
 | `gzip`          | `compress` | yes       | `level`?                      |
 | `zstd`          | `compress` | yes       | `level`?, `window`?, `dct`?   |
-| `zstd-rsyncable`| `compress` | no        | `block_size`: uint (default 65536) |
+| `zstd-rsyncable`| `compress` | no        | `block_size`: uint (default 65536), `level`?, `dct`? |
 | `lzma2`         | `compress` | no        | `level`?, `dct`?              |
 | `base64url`     | `encode`   | no        | none (unpadded)               |
 | `base85`        | `encode`   | no        | none                          |
@@ -2136,6 +2180,7 @@ codec = {
   "name": tstr,
   "cls": "encode" / "compress" / "encrypt",
   ? "dct": tstr,
+  ? "level": int,
   ? "p": any,
   * extension-key => any,
 }
