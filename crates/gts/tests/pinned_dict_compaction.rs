@@ -489,17 +489,21 @@ fn a_mixed_plan_pins_the_callers_bytes_and_derives_the_rest() {
     let pack = compact_streamable(&source, params(mixed)).expect("a mixed plan compacts");
 
     let dct = header_dct(&pack);
-    // The header `"dct"` map is ordered by NAME, never by plan order — that is
-    // what keeps the emitted bytes a function of the dictionary SET rather than
-    // of how the caller happened to sequence the plan. Sort the expectation
-    // rather than hard-coding one arrangement, so renaming a fixture dictionary
-    // cannot quietly turn this into an assertion about alphabetical luck.
+    // WHICH dictionaries are pinned, and exactly how many — nothing about their
+    // arrangement. `header_dct` funnels the wire entries through a `BTreeMap`,
+    // so its key order is sorted by construction and this assertion could not
+    // observe the wire's ordering even if it wanted to. Sort the expectation to
+    // say so honestly, rather than hard-coding one arrangement and leaving a
+    // future fixture rename to discover it was asserting alphabetical luck.
+    // Order-independence is a claim about BYTES, and
+    // `the_order_dictionaries_appear_in_a_plan_does_not_change_the_bytes` is
+    // where it is actually tested.
     let mut expected_names = vec![PINNED_NAME, "pack-local"];
     expected_names.sort_unstable();
     assert_eq!(
         dct.keys().collect::<Vec<_>>(),
         expected_names,
-        "both dictionaries must be pinned in the header, ordered by name"
+        "exactly these two dictionaries must be pinned in the header"
     );
     assert_eq!(
         dct[PINNED_NAME], shipped,
