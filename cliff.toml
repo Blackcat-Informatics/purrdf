@@ -16,6 +16,14 @@
 # leading **BREAKING** marker on its bullet. Pre-1.0 the suite ships breaking
 # changes under a minor bump, so the changelog is the only place a consumer can
 # see that a bump carries one — it must never be silent.
+#
+# The marker is resolved over the release's WHOLE commit set before any bullet is
+# rendered, because the squash merge keeps the branch history as a second parent:
+# the squash subject `feat(gts)!: X` and the branch commit `feat(gts): X` reduce
+# to the same scope/message pair once the `(#NNN)` is preprocessed away, and the
+# dedup above keeps whichever git-cliff sorts first — the NON-breaking one. A
+# per-commit `commit.breaking` test on the surviving bullet therefore renders no
+# marker at all on exactly the releases that need it most.
 
 [changelog]
 header = """
@@ -32,6 +40,15 @@ body = """
 {% else -%}
 ## [Unreleased]
 {% endif -%}
+{% set_global breaking_keys = [] -%}
+{% for commit in commits -%}
+{% if commit.breaking -%}
+{% set breaking_message = commit.message | split(pat="\n") | first | upper_first | trim -%}
+{% set breaking_scope = commit.scope | default(value="") -%}
+{% set breaking_key = breaking_scope ~ "::" ~ breaking_message -%}
+{% set_global breaking_keys = breaking_keys | concat(with=breaking_key) -%}
+{% endif -%}
+{% endfor -%}
 {% for group, commits in commits | group_by(attribute="group") %}
 ### {{ group | upper_first }}
 
@@ -42,7 +59,7 @@ body = """
 {% set entry_key = entry_scope ~ "::" ~ entry_message -%}
 {% if entry_key not in rendered_entries -%}
 {% set_global rendered_entries = rendered_entries | concat(with=entry_key) -%}
-- {% if commit.breaking %}**BREAKING** {% endif %}{% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message | split(pat="\n") | first | upper_first | trim }}
+- {% if entry_key in breaking_keys %}**BREAKING** {% endif %}{% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message | split(pat="\n") | first | upper_first | trim }}
 {% endif -%}
 {% endfor %}
 
