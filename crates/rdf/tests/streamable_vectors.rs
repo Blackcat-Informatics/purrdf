@@ -158,7 +158,7 @@ fn frozen_vector_pins_no_pack_dictionary() {
     // decoded bytes) — not the repeated-structure corpus a pack dictionary has
     // anything real to train on (that is what `30-dict-rawcontent`/
     // `31-dict-trained` freeze). `gen_streamable_vectors` deliberately compacts
-    // with `DictStrategy::None`, so the frozen pack carries no `"dct"` header
+    // with `DictPlan::undicted()`, so the frozen pack carries no `"dct"` header
     // entry and no zstd-compressed frames.
     let frozen = read_vector("25b-streamable-compacted.gts");
 
@@ -170,7 +170,7 @@ fn frozen_vector_pins_no_pack_dictionary() {
     assert!(
         !header_carries_dct_entry(&frozen),
         "25b-streamable-compacted.gts header must carry no \"dct\" entry \
-         (DictStrategy::None pins no in-band pack dictionary)"
+         (DictPlan::undicted pins no in-band pack dictionary)"
     );
 
     // Separate codec-behavior check: with no dictionary pinned, this frozen
@@ -187,6 +187,6 @@ fn frozen_vector_pins_no_pack_dictionary() {
     assert_eq!(
         zstd_frames, 0,
         "25b-streamable-compacted.gts must carry no zstd-compressed frames \
-         (DictStrategy::None, no in-band pack dictionary)"
+         (DictPlan::undicted, no in-band pack dictionary)"
     );
 }

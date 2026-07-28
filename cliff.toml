@@ -11,6 +11,11 @@
 # Exact rendered scope/message pairs are emitted once per release group. Multiple
 # implementation commits can legitimately share a conventional subject, but one
 # repeated user-facing release-note bullet carries no additional information.
+#
+# A conventional `type(scope)!:` subject or a `BREAKING CHANGE:` footer renders a
+# leading **BREAKING** marker on its bullet. Pre-1.0 the suite ships breaking
+# changes under a minor bump, so the changelog is the only place a consumer can
+# see that a bump carries one — it must never be silent.
 
 [changelog]
 header = """
@@ -37,7 +42,7 @@ body = """
 {% set entry_key = entry_scope ~ "::" ~ entry_message -%}
 {% if entry_key not in rendered_entries -%}
 {% set_global rendered_entries = rendered_entries | concat(with=entry_key) -%}
-- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message | split(pat="\n") | first | upper_first | trim }}
+- {% if commit.breaking %}**BREAKING** {% endif %}{% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message | split(pat="\n") | first | upper_first | trim }}
 {% endif -%}
 {% endfor %}
 
@@ -80,7 +85,9 @@ commit_parsers = [
   { message = ".*", group = "Other" },
 ]
 
-protect_breaking_commits = false
+# A breaking commit is never dropped by a `skip = true` parser: pre-1.0 a minor
+# bump MAY carry breaking changes, so the marker must always reach the changelog.
+protect_breaking_commits = true
 filter_commits = false
 # Only the canonical crates.io release tags mark releases; the parallel
 # `py-v*` / `npm-v*` tags carry the same version and are not release boundaries.
