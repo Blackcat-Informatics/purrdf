@@ -26,7 +26,7 @@ use purrdf_rdf::gts_certify::{compact_and_certify, refold_digest, verify_compact
 use purrdf_rdf::gts_dict_vectors::{TIMESTAMP, VECTOR_ZSTD_LEVEL, authorship_key, fixed_source};
 
 /// The name the caller pins its shipped dictionary under.
-const PINNED_NAME: &str = "gmeow-bundle-v1";
+const PINNED_NAME: &str = "shipped-bundle-v1";
 
 fn packaging_key() -> ed25519_dalek::SigningKey {
     ed25519_dalek::SigningKey::from_bytes(&[7u8; 32])
@@ -45,7 +45,7 @@ fn shipped_dictionary() -> Vec<u8> {
     let corpus: Vec<Vec<u8>> = (0..400u32)
         .map(|i| {
             format!(
-                "<https://gmeow.example/slice/logic#c{}> <https://gmeow.example/p/grounds> \
+                "<https://example.org/slice/logic#c{}> <https://example.org/p/grounds> \
                  \"a shipped-vocabulary sentence unrelated to any packed content, {}\" .\n",
                 i % 23,
                 i

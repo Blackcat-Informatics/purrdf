@@ -37,7 +37,7 @@ use purrdf_gts::wire::{iter_items, map_get};
 use purrdf_gts::writer::Writer;
 
 /// The name the caller pins its shipped dictionary under.
-const PINNED_NAME: &str = "gmeow-bundle-v1";
+const PINNED_NAME: &str = "shipped-bundle-v1";
 /// The zstd level the pinned plans declare (§8.5 `level?`).
 const LEVEL: i32 = 12;
 /// The fixed rewrite timestamp — never ambient time (§14.1).
@@ -55,7 +55,7 @@ fn shipped_dictionary() -> Vec<u8> {
     let corpus: Vec<Vec<u8>> = (0..400u32)
         .map(|i| {
             format!(
-                "<https://gmeow.example/slice/logic#c{}> <https://gmeow.example/p/grounds> \
+                "<https://example.org/slice/logic#c{}> <https://example.org/p/grounds> \
                  \"a shipped-vocabulary sentence unrelated to any packed content, {}\" .\n",
                 i % 23,
                 i
@@ -489,10 +489,17 @@ fn a_mixed_plan_pins_the_callers_bytes_and_derives_the_rest() {
     let pack = compact_streamable(&source, params(mixed)).expect("a mixed plan compacts");
 
     let dct = header_dct(&pack);
+    // The header `"dct"` map is ordered by NAME, never by plan order — that is
+    // what keeps the emitted bytes a function of the dictionary SET rather than
+    // of how the caller happened to sequence the plan. Sort the expectation
+    // rather than hard-coding one arrangement, so renaming a fixture dictionary
+    // cannot quietly turn this into an assertion about alphabetical luck.
+    let mut expected_names = vec![PINNED_NAME, "pack-local"];
+    expected_names.sort_unstable();
     assert_eq!(
         dct.keys().collect::<Vec<_>>(),
-        vec![PINNED_NAME, "pack-local"],
-        "both dictionaries must be pinned in the header"
+        expected_names,
+        "both dictionaries must be pinned in the header, ordered by name"
     );
     assert_eq!(
         dct[PINNED_NAME], shipped,
@@ -559,6 +566,43 @@ fn a_mixed_plan_pins_the_callers_bytes_and_derives_the_rest() {
         decoded_blobs(&folded),
         decoded_blobs(&read(&source, true, None)),
         "every blob decodes against the dictionary it was primed with"
+    );
+}
+
+/// The emitted bytes are a function of the dictionary SET, not of the order the
+/// caller listed it in. Catalog ids are assigned over the SORTED (codec,
+/// dict-name) set and the header `"dct"` map is name-ordered, so sequencing the
+/// same two dictionaries the other way round must reproduce the pack byte for
+/// byte. Without this, "compaction is deterministic" would hold only for callers
+/// who happen to build their plan in the same order twice.
+#[test]
+fn the_order_dictionaries_appear_in_a_plan_does_not_change_the_bytes() {
+    let shipped = shipped_dictionary();
+    let source = source_with_blobs();
+    let plan = |reversed: bool| {
+        let pinned = (
+            PINNED_NAME.to_string(),
+            DictStrategy::Pinned(shipped.clone()),
+        );
+        let derived = ("pack-local".to_string(), DictStrategy::RawContent);
+        DictPlan {
+            dicts: if reversed {
+                vec![derived, pinned]
+            } else {
+                vec![pinned, derived]
+            },
+            content: DictSelection::Named(PINNED_NAME.to_string()),
+            index: DictSelection::Named("pack-local".to_string()),
+            transform: vec!["zstd-rsyncable".to_string()],
+            zstd_level: Some(LEVEL),
+        }
+    };
+
+    let forward = compact_streamable(&source, params(plan(false))).expect("forward plan compacts");
+    let reversed = compact_streamable(&source, params(plan(true))).expect("reversed plan compacts");
+    assert_eq!(
+        forward, reversed,
+        "the same dictionary set listed in either order must compact to identical bytes"
     );
 }
 

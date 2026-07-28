@@ -192,19 +192,19 @@ impl DictPlan {
             // must actually be a finalized zstd dictionary a frame can be primed
             // with and a reader can resolve. A derived strategy cannot reach
             // here — its producer already finalizes.
+            //
+            // The parse IS the whole gate: `dictionary_id` decodes the finalized
+            // dictionary, and that decode already rejects a zero `Dictionary_ID`
+            // (§8.5 `dct` — a zero id cannot prime a zstd encoder). A separate
+            // `id == 0` branch here would be unreachable, and an unreachable
+            // guard advertises an invariant it does not enforce.
             if let DictStrategy::Pinned(bytes) = strategy {
-                let id = dict::dictionary_id(bytes).map_err(|err| {
+                dict::dictionary_id(bytes).map_err(|err| {
                     CompactRefusedError(format!(
                         "the pinned dictionary {name:?} is not a parseable finalized zstd \
                          dictionary: {err}"
                     ))
                 })?;
-                if id == 0 {
-                    return refuse(format!(
-                        "the pinned dictionary {name:?} declares Dictionary_ID 0, which cannot \
-                         prime a zstd encoder (§8.5 dct)"
-                    ));
-                }
             }
         }
         let zstd_family = self
