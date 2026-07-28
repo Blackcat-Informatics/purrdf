@@ -36,25 +36,54 @@ const XSD_DATETIME: &str = "http://www.w3.org/2001/XMLSchema#dateTime";
 
 /// The conventional in-band pack dictionary name for a single-dictionary plan.
 pub const DEFAULT_DICT_NAME: &str = "pack";
-/// Target size of a pinned pack dictionary. FastCOVER/raw-content truncate the
-/// content to fit; a fixed value keeps compaction byte-deterministic.
+/// Target size of a DERIVED in-band pack dictionary. FastCOVER/raw-content
+/// truncate the corpus to fit; a fixed value keeps compaction
+/// byte-deterministic. [`DictStrategy::Pinned`] bytes are never truncated — they
+/// are the caller's, verbatim.
 const DICT_TARGET_LEN: usize = 16 * 1024;
 
-/// How one named in-band dictionary's bytes are derived from the content-blob
-/// corpus (§8.5 `dct`).
+/// Where one named in-band dictionary's bytes come from (§8.5 `dct`).
 ///
-/// Both are byte-deterministic; the trained strategy is the production default
-/// (Req 3 headline is "trained"), and the raw-content strategy is a named
-/// alternate. The choice affects only the pinned dictionary bytes, never the
-/// fold — a reader decodes the in-band dictionary either way. "No dictionary"
-/// is NOT a strategy: it is an empty [`DictPlan::dicts`], so a plan can never
-/// name a dictionary that produces nothing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// [`Self::Trained`] and [`Self::RawContent`] DERIVE the bytes from the pack's
+/// own content-blob corpus. [`Self::Pinned`] carries caller-supplied bytes used
+/// VERBATIM. All three end up pinned in the header `"dct"` map — the variant
+/// names where the bytes come from, not whether they are stored in-band.
+///
+/// The derived strategies are byte-deterministic functions of the corpus: the
+/// trained one is the production default (Req 3 headline is "trained"), the
+/// raw-content one a named alternate. [`Self::Pinned`] exists because a derived
+/// dictionary cannot honour an EXTERNAL dictionary id: a consumer that ships
+/// named dictionaries and asks for a pack "under dictionary X" must get X's
+/// actual bytes, not a pack-local re-derivation wearing X's name — otherwise one
+/// id resolves to many byte sequences and stops identifying a decodable
+/// dictionary at all.
+///
+/// The choice affects only the dictionary bytes, never the fold — a reader
+/// decodes the in-band dictionary either way. "No dictionary" is NOT a strategy:
+/// it is an empty [`DictPlan::dicts`], so a plan can never name a dictionary
+/// that produces nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DictStrategy {
-    /// FastCOVER-trained dictionary (the production default).
+    /// FastCOVER-trained over the content-blob corpus (the production default).
     Trained,
-    /// Raw-content dictionary (canonical trailing window of the corpus).
+    /// Raw-content over the content-blob corpus (its canonical trailing window).
     RawContent,
+    /// Caller-supplied finalized zstd dictionary bytes, used verbatim: no
+    /// training, no corpus derivation, no truncation. These exact bytes ride the
+    /// header `"dct"` map under the plan's name, so the pinned name resolves to
+    /// exactly the dictionary the caller shipped.
+    Pinned(Vec<u8>),
+}
+
+impl DictStrategy {
+    /// Whether this strategy DERIVES its bytes from the pack's content-blob
+    /// corpus — and therefore requires the pack to have one.
+    fn derives_from_corpus(&self) -> bool {
+        match self {
+            Self::Trained | Self::RawContent => true,
+            Self::Pinned(_) => false,
+        }
+    }
 }
 
 /// Which in-band dictionary primes a frame — TOTAL, never `Option`.
@@ -89,8 +118,12 @@ impl DictSelection {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DictPlan {
     /// Named dictionaries to pin in the header `"dct"` map, each with the
-    /// producer deriving its bytes from the content-blob corpus. Empty pins no
-    /// dictionary at all.
+    /// strategy that supplies its bytes — derived from the content-blob corpus
+    /// ([`DictStrategy::Trained`]/[`DictStrategy::RawContent`]) or supplied
+    /// verbatim by the caller ([`DictStrategy::Pinned`]). The two kinds may be
+    /// MIXED in one plan: each entry's bytes are obtained independently, and a
+    /// corpus is required only if some entry actually derives from one. Empty
+    /// pins no dictionary at all.
     pub dicts: Vec<(String, DictStrategy)>,
     /// Which pinned dictionary primes the content-blob frames.
     pub content: DictSelection,
@@ -141,17 +174,37 @@ impl DictPlan {
         }
     }
 
-    /// Validate the plan's internal consistency (unique non-empty names, every
-    /// selection naming a pinned dictionary, a dictionary only where a
-    /// zstd-family transform can consume it).
+    /// Validate the plan's internal consistency (unique non-empty names, usable
+    /// caller-supplied dictionary bytes, every selection naming a pinned
+    /// dictionary, a dictionary only where a zstd-family transform can consume
+    /// it).
     fn validate(&self) -> Result<(), CompactRefusedError> {
         let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
-        for (name, _) in &self.dicts {
+        for (name, strategy) in &self.dicts {
             if name.is_empty() {
                 return refuse("an in-band dictionary name must be non-empty".to_string());
             }
             if !seen.insert(name.as_str()) {
                 return refuse(format!("duplicate in-band dictionary name {name:?}"));
+            }
+            // Refuse-don't-trust on the ONE input the compactor does not
+            // produce itself: caller-supplied bytes are used verbatim, so they
+            // must actually be a finalized zstd dictionary a frame can be primed
+            // with and a reader can resolve. A derived strategy cannot reach
+            // here — its producer already finalizes.
+            if let DictStrategy::Pinned(bytes) = strategy {
+                let id = dict::dictionary_id(bytes).map_err(|err| {
+                    CompactRefusedError(format!(
+                        "the pinned dictionary {name:?} is not a parseable finalized zstd \
+                         dictionary: {err}"
+                    ))
+                })?;
+                if id == 0 {
+                    return refuse(format!(
+                        "the pinned dictionary {name:?} declares Dictionary_ID 0, which cannot \
+                         prime a zstd encoder (§8.5 dct)"
+                    ));
+                }
             }
         }
         let zstd_family = self
@@ -816,15 +869,24 @@ fn value_idx(v: &Value) -> Option<usize> {
     }
 }
 
-/// Build every in-band pack dictionary the plan names, over the batched
-/// content-blob corpus.
+/// Obtain every in-band pack dictionary the plan names: derived entries over the
+/// batched content-blob corpus, [`DictStrategy::Pinned`] entries verbatim.
 ///
 /// The corpus is every content blob's decoded bytes (the sealed original — the
 /// whole source log — is excluded, it is not "content"). A pack with no content
-/// blobs has no corpus to build from; a plan that nonetheless NAMES a dictionary
-/// is refused rather than silently downgraded to an undicted pack, because the
+/// blobs has no corpus to DERIVE from; a plan whose entries derive is therefore
+/// refused rather than silently downgraded to an undicted pack, because the
 /// caller asked for a density guarantee the pack could not then honour.
-/// The producers are order-independent, so the emitted `dct` bytes equal
+///
+/// That refusal is a consequence of derivation, not of pinning a dictionary at
+/// all: caller-supplied bytes exist independently of the pack's content, so a
+/// wholly-[`DictStrategy::Pinned`] plan never touches the corpus and compacts a
+/// blob-less input (a terms/quads-only log) exactly as it compacts any other. A
+/// MIXED plan is accepted and each entry is obtained on its own terms — but its
+/// derived entries still need a corpus, so a mixed plan over a blob-less input
+/// hits the same refusal.
+///
+/// The derived producers are order-independent, so the emitted `dct` bytes equal
 /// `trained_dict`/`raw_content_dict` of the corpus regardless of iteration order.
 fn build_pack_dicts(
     g: &Graph,
@@ -835,21 +897,30 @@ fn build_pack_dicts(
     if plan.dicts.is_empty() {
         return Ok(Vec::new());
     }
+    // Only DERIVED entries need the corpus; decoding every content blob for a
+    // wholly-pinned plan would be pure waste, and demanding one would be the
+    // very refusal this function must no longer raise.
+    let derives = plan
+        .dicts
+        .iter()
+        .any(|(_, strategy)| strategy.derives_from_corpus());
     let mut corpus: Vec<Vec<u8>> = Vec::new();
-    for digest in blob_order {
-        if Some(digest.as_str()) == sealed_digest {
-            continue;
+    if derives {
+        for digest in blob_order {
+            if Some(digest.as_str()) == sealed_digest {
+                continue;
+            }
+            if let Some(bytes) = blob_bytes(g, digest)? {
+                corpus.push(bytes.into_owned());
+            }
         }
-        if let Some(bytes) = blob_bytes(g, digest)? {
-            corpus.push(bytes.into_owned());
+        if corpus.is_empty() {
+            return refuse(
+                "the plan pins in-band dictionaries but the input has no content blobs to \
+                 build them from (§8.5 dct)"
+                    .to_string(),
+            );
         }
-    }
-    if corpus.is_empty() {
-        return refuse(
-            "the plan pins in-band dictionaries but the input has no content blobs to \
-             build them from (§8.5 dct)"
-                .to_string(),
-        );
     }
     let refs: Vec<&[u8]> = corpus.iter().map(Vec::as_slice).collect();
     let mut out = Vec::with_capacity(plan.dicts.len());
@@ -861,6 +932,9 @@ fn build_pack_dicts(
                 dict::trained_dict(&refs, DICT_TARGET_LEN, dict::DictSeed::FromCorpus)
             }
             DictStrategy::RawContent => dict::raw_content_dict(&refs, DICT_TARGET_LEN),
+            // Verbatim: the caller's bytes ARE the dictionary. Validated as a
+            // parseable finalized dictionary by `DictPlan::validate`.
+            DictStrategy::Pinned(bytes) => Ok(bytes.clone()),
         }
         .map_err(|err| {
             CompactRefusedError(format!("cannot build the pack dictionary {name:?}: {err}"))
@@ -881,8 +955,9 @@ pub struct CompactionParams<'a> {
     /// `"source"` — REQUIRED for `evidence` input.
     pub seal_original: bool,
     /// The named multi-dictionary + transform plan: which dictionaries the
-    /// pack pins, which one primes which frames, the transform chain every
-    /// authored frame rides, and the declared zstd level.
+    /// pack pins (derived from the pack's own corpus, or supplied verbatim by
+    /// the caller — see [`DictStrategy`]), which one primes which frames, the
+    /// transform chain every authored frame rides, and the declared zstd level.
     pub plan: DictPlan,
     /// When supplied by the certifying authoring wrapper, embedded as
     /// `stream:contentRefoldDigest` provenance so a repack certifies without
@@ -909,8 +984,10 @@ pub struct CompactionParams<'a> {
 ///
 /// # Errors
 /// Returns [`CompactRefusedError`] when the input is not safely compactable, a
-/// blob cannot be decoded, the pack dictionary cannot be built, or the writer
-/// rejects the configuration.
+/// blob cannot be decoded, a pinned dictionary's caller-supplied bytes are not a
+/// usable finalized zstd dictionary, a DERIVED pack dictionary cannot be built
+/// (including when the input carries no content-blob corpus to derive one from),
+/// or the writer rejects the configuration.
 pub fn compact_streamable(
     data: &[u8],
     params: CompactionParams<'_>,
@@ -950,8 +1027,9 @@ pub fn compact_streamable(
         None
     };
 
-    // Pack dictionaries built over the batched content-blob corpus (the sealed
-    // original — the whole source — is excluded). The dict producers are
+    // Pack dictionaries: derived entries built over the batched content-blob
+    // corpus (the sealed original — the whole source — is excluded), pinned
+    // entries taken verbatim from the plan. The derived producers are
     // order-independent, so blob-delivery order need not be threaded here.
     let dicts = build_pack_dicts(&g, &blob_order, sealed_digest.as_deref(), &plan)?;
 
