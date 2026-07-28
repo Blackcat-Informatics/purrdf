@@ -4,6 +4,28 @@ All notable changes to the PurRDF crate suite are recorded here. The suite
 ships one lockstep version across crates.io, PyPI, and npm; pre-1.0, a minor
 bump may carry breaking changes and a patch bump is bugfix-only.
 
+## [0.9.0] - 2026-07-28
+
+### Bug Fixes
+
+- **gts:** Use neutral fixtures, drop an unreachable guard, surface breaking changes
+
+### CI & Build
+
+- **changelog:** Mark a breaking release when the squash duplicates a subject
+
+### Documentation
+
+- **gts:** Name the real undicted plan in the frozen-vector test
+
+### Features
+
+- **BREAKING** **gts:** Pin caller-supplied in-band dictionary bytes in a compaction plan
+
+### Testing
+
+- **gts:** Say what the mixed-plan header assertion can actually observe
+
 ## [0.8.5] - 2026-07-26
 
 ### Bug Fixes
