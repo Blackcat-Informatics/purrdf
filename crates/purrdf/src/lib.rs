@@ -164,11 +164,9 @@ pub mod entail {
 /// [`entail`] evaluates its calculi on.
 ///
 /// Re-exported because the entailment surface CARRIES its types, not merely uses
-/// them: [`entail::EntailError::Evaluate`](purrdf_entail::EntailError::Evaluate)
-/// holds a [`datalog::seminaive::EvalError`](purrdf_datalog::seminaive::EvalError),
-/// and [`entail::ReasoningReport`](purrdf_entail::ReasoningReport) hands out a
-/// [`datalog::cache::ContractHash`](purrdf_datalog::cache::ContractHash) and a
-/// [`datalog::seminaive::BudgetReport`](purrdf_datalog::seminaive::BudgetReport).
+/// them: [`entail::EntailError::Evaluate`] holds a
+/// [`datalog::seminaive::EvalError`], and [`entail::ReasoningReport`] hands out
+/// a [`datalog::cache::ContractHash`] and a [`datalog::seminaive::BudgetReport`].
 /// A consumer that matches on the error or stores the budget must be able to WRITE
 /// those type names, and this module is where it names them — never by adding a
 /// second dependency on `purrdf-datalog`.

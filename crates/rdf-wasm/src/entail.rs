@@ -27,7 +27,7 @@
 //!
 //! # Why the report is not optional
 //!
-//! [`materialize_impl`] returns the closure **and** the rendered reasoning report,
+//! `materialize_impl` returns the closure **and** the rendered reasoning report,
 //! never one without the other. All seventy-eight OWL 2 RL rules now run, so under
 //! `owl-rl` the report's load-bearing lines are the `boundary` ones: a binding that
 //! answered "OWL-RL entailment" without saying which CONSTRUCTS the run could not
