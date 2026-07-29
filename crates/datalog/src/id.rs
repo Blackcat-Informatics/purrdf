@@ -146,6 +146,9 @@ pub enum Rule {}
 /// Brand: a materialised-row handle. See [`RowId`].
 #[derive(Debug)]
 pub enum Row {}
+/// Brand: a hash-consed proof-term handle. See [`ProofId`].
+#[derive(Debug)]
+pub enum Proof {}
 
 /// A dense per-interner atomic-term handle.
 pub type TermId = Id<Term>;
@@ -161,6 +164,13 @@ pub type PartitionId = Id<Partition>;
 pub type RuleId = Id<Rule>;
 /// A dense per-stratum materialised-row handle.
 pub type RowId = Id<Row>;
+/// A dense per-arena hash-consed proof-term handle.
+///
+/// Minted by [`crate::proof::ProofArena`] in interning order, and — like every other `Id` —
+/// a runtime handle only. A proof's SERIALIZED form carries no `ProofId`: it numbers nodes
+/// by their position in a canonical emission walk, so two arenas that built the same proof
+/// through different sequences encode to the same bytes.
+pub type ProofId = Id<Proof>;
 
 /// The argument handle every arena'd row tuple uses.
 ///
@@ -211,6 +221,7 @@ mod tests {
             );
             assert_eq!(RuleId::from_index(slot).index(), slot, "slot {slot} rule");
             assert_eq!(RowId::from_index(slot).index(), slot, "slot {slot} row");
+            assert_eq!(ProofId::from_index(slot).index(), slot, "slot {slot} proof");
         }
         // Slot 0 is stored as NonZeroU32(1) — the niche is genuinely used.
         assert_eq!(PartitionId::from_index(0).index(), 0);
@@ -229,6 +240,7 @@ mod tests {
         assert_eq!(size_of::<Option<PartitionId>>(), size_of::<PartitionId>());
         assert_eq!(size_of::<Option<RowId>>(), size_of::<RowId>());
         assert_eq!(size_of::<Option<RuleId>>(), size_of::<RuleId>());
+        assert_eq!(size_of::<Option<ProofId>>(), size_of::<ProofId>());
         // A TermRef is exactly its wrapped TermId — the row-tuple argument handle
         // adds no width over the atomic handle it carries, and inherits the niche.
         assert_eq!(size_of::<TermRef>(), size_of::<TermId>());

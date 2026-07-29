@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The content-addressed plan cache: compile a [`DlClause`] program once, reuse the
-//! immutable [`Executable`] every time the same program is presented again.
+//! The content-addressed plan cache and the crate's CALCULUS IDENTITY: compile a
+//! [`DlClause`] program once, reuse the immutable [`Executable`] every time the same program
+//! is presented again, and say — in 32 bytes — which calculus produced a given result.
 //!
 //! # Content addressing, not identity
 //!
@@ -17,6 +18,19 @@
 //! change meaning across a dependency bump. Only [`blake3::Hasher::update`] is used, never
 //! `update_rayon`, so hashing is sequential on every target and the `wasm32` build carries
 //! no thread pool.
+//!
+//! # The contract hash is computed over DATA, never over source text
+//!
+//! [`contract_hash`] identifies the calculus a result came from. It hashes the things that
+//! can change an answer — the clause program in canonical form, the three fixed budget
+//! constants, and the hand-maintained [`CALCULUS_VERSION`] — and it hashes them AS DATA.
+//!
+//! The obvious alternative is to embed the evaluator's own source text in the binary and
+//! checksum that. This crate does not, and the reason is a hard budget rather than taste:
+//! the workspace ships against a `wasm32` artifact-size ceiling with low single-digit
+//! percent headroom, so paying thousands of lines of embedded literal text for a checksum
+//! would spend all of it — to learn something the rule tables plus one version constant
+//! already say. Nothing in this crate embeds source text, and a repository gate asserts it.
 //!
 //! # The cache is owned, never global
 //!
@@ -35,11 +49,14 @@
 //! output.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::sync::Arc;
 
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause};
 use crate::plan::Executable;
-use crate::seminaive::{EvalError, compile};
+use crate::seminaive::{
+    EvalError, MAX_JOIN_STEPS, MAX_STORED_FACTS, MAX_TERM_ARENA_BYTES, compile,
+};
 
 /// Version of the planner and its executable-kernel shape.
 ///
@@ -174,6 +191,158 @@ pub fn canonical_rule_hash(rules: &[DlClause]) -> [u8; 32] {
         }
     }
     *hasher.finalize().as_bytes()
+}
+
+// ── The contract hash: which calculus produced this result ──────────────────────
+
+/// The version of everything about this crate's calculus that is NOT expressible as data.
+///
+/// [`contract_hash`] hashes the clause program and the budget constants directly, because
+/// they are values. This constant covers the rest of the evaluator's semantics — the parts
+/// that live in code and would otherwise change an answer silently.
+///
+/// # The bump contract
+///
+/// Bump this constant in the same change that alters any of the following. The list is
+/// exhaustive by construction: it is every input to an answer that is neither a clause nor a
+/// budget.
+///
+/// * **Which solutions a rule body admits** — the semi-naive delta decomposition, the
+///   generalized-diagonal equality filter, the partition sweep an unbound predicate or graph
+///   drives, or the treatment of a constant the store has never interned.
+/// * **Negation-as-failure semantics** — the ground-versus-existential probe rule, or what
+///   an unbound position in a negated atom is taken to mean.
+/// * **The round-winner tiebreak** — `(proof height, summed source heights, sorted source
+///   facts, rule index, source facts)`. It decides which derivation is REPORTED for a fact
+///   two rules both derive, and a derivation is an observable.
+/// * **The stratification policy** — the dependency edge set (the coupling edges a variable
+///   predicate position adds included) or the stratum assignment.
+/// * **The commit discipline** — the lexical commit order, dense row-id minting, or the
+///   proof-height recurrence, all three of which the tiebreak above reads.
+/// * **Program admission** — the head-form gate or the range-restriction rule, since a
+///   program that starts or stops compiling has a different answer either way.
+/// * **The lexical surface convention** — how a clause constant renders, or how the default
+///   graph is denoted, because those are the bytes clause text and stored data are compared
+///   as.
+///
+/// # What does NOT oblige a bump
+///
+/// A purely PHYSICAL change that the crate's differential tests hold to identical
+/// observations: index selection, the sideways-information-passing order, cyclic
+/// certification, the choice between the leapfrog triejoin and the indexed binary fallback,
+/// and round scheduling. `leapfrog_and_binary_joins_agree` and
+/// `sequential_and_parallel_rounds_agree` are the standing obligations that make that
+/// exclusion safe — they assert those choices move neither the facts, the derivations nor
+/// the budget report. Such a change bumps [`PLAN_SOLVER_VERSION`] instead, which is what
+/// [`PlanIdentity`] keys a cached PLAN on.
+pub const CALCULUS_VERSION: &str = "purrdf-datalog-calculus-v1";
+
+/// Domain-separation tag for [`contract_hash`].
+const CONTRACT_DIGEST_TAG: &str = "purrdf-datalog-contract-v1";
+
+/// The identity of the calculus that produced a result.
+///
+/// A 32-byte BLAKE3 digest, renderable as lowercase hex so it can be handed straight to
+/// [`PlanIdentity::new`] as the caller's contract hash, logged, or compared.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ContractHash {
+    /// The folded digest.
+    digest: [u8; 32],
+}
+
+impl ContractHash {
+    /// The 32-byte digest.
+    pub fn digest(&self) -> &[u8; 32] {
+        &self.digest
+    }
+
+    /// The digest as 64 lowercase hex characters.
+    pub fn to_hex(&self) -> String {
+        let mut out = String::with_capacity(64);
+        for byte in self.digest {
+            out.push(
+                char::from_digit(u32::from(byte >> 4), 16).expect("a nibble is one hex digit"),
+            );
+            out.push(
+                char::from_digit(u32::from(byte & 0x0f), 16).expect("a nibble is one hex digit"),
+            );
+        }
+        out
+    }
+}
+
+impl fmt::Display for ContractHash {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.to_hex())
+    }
+}
+
+/// The identity of the calculus `rules` would be evaluated under by THIS crate.
+///
+/// # What it covers
+///
+/// Three inputs, all of them data:
+///
+/// * [`canonical_rule_hash`] of the clause program — reused, never re-derived, so the
+///   contract hash inherits every order-sensitivity and every field separation that function
+///   already proves;
+/// * the three fixed budget ceilings [`MAX_JOIN_STEPS`], [`MAX_STORED_FACTS`] and
+///   [`MAX_TERM_ARENA_BYTES`] — a budget change turns an answer into a refusal or a refusal
+///   into an answer, which is as large a difference as an answer can have;
+/// * [`CALCULUS_VERSION`], covering the evaluator semantics that are code rather than data.
+///   See that constant for exactly when a change obliges a bump.
+///
+/// # The property that matters is ONE-DIRECTIONAL
+///
+/// **No false negatives.** Anything that can change an answer must change this hash. The
+/// converse is explicitly NOT promised: two calculi that happen to agree on every answer may
+/// still hash differently, and that is the safe direction. A cache that invalidates too
+/// often is merely slow; a cache that invalidates too rarely is wrong — it serves an answer
+/// computed under a calculus that no longer exists, and nothing downstream can tell. So when
+/// a change's effect on answers is uncertain, bump; over-invalidation is never the bug.
+///
+/// # Not the plan address
+///
+/// This is not [`PlanIdentity`]. That address answers "may I reuse this compiled plan?" and
+/// so folds in [`PLAN_SOLVER_VERSION`], a physical property. This one answers "which calculus
+/// is this result from?", and the planner is not the calculus: the two join kernels are held
+/// to producing identical relations by a differential test, so which one ran is not
+/// something a result's identity should record.
+pub fn contract_hash(rules: &[DlClause]) -> ContractHash {
+    contract_digest(
+        rules,
+        CALCULUS_VERSION,
+        MAX_JOIN_STEPS,
+        MAX_STORED_FACTS as u64,
+        MAX_TERM_ARENA_BYTES as u64,
+    )
+}
+
+/// The digest recipe behind [`contract_hash`], with every input passed explicitly.
+///
+/// The parameters exist so the tests can prove each input actually reaches the digest: a
+/// `const` cannot be perturbed at runtime, so a test that could only call
+/// [`contract_hash`] could assert the budgets matter only by rebuilding the crate. The
+/// public entry point supplies exactly the real constants, and
+/// `the_contract_hash_is_the_recipe_over_the_real_constants` pins that, so this seam cannot
+/// drift away from the thing it stands in for.
+fn contract_digest(
+    rules: &[DlClause],
+    calculus_version: &str,
+    max_join_steps: u64,
+    max_stored_facts: u64,
+    max_term_arena_bytes: u64,
+) -> ContractHash {
+    let mut hasher = blake3::Hasher::new();
+    frame_str(&mut hasher, CONTRACT_DIGEST_TAG);
+    frame_str(&mut hasher, calculus_version);
+    hasher.update(&max_join_steps.to_le_bytes());
+    hasher.update(&max_stored_facts.to_le_bytes());
+    hasher.update(&max_term_arena_bytes.to_le_bytes());
+    hasher.update(&canonical_rule_hash(rules));
+    ContractHash {
+        digest: *hasher.finalize().as_bytes(),
+    }
 }
 
 /// The content address of one compiled plan.
@@ -903,6 +1072,138 @@ mod tests {
     #[should_panic(expected = "capacity must be non-zero")]
     fn a_zero_capacity_cache_is_refused() {
         let _ = PlanCache::new(0);
+    }
+
+    // ── The contract hash ───────────────────────────────────────────────────────
+
+    /// The public entry point IS the recipe over the real constants.
+    ///
+    /// The tests below perturb the recipe's parameters, which is only evidence about
+    /// `contract_hash` because this equality holds: it is what stops the seam from drifting
+    /// away from the constants it stands in for.
+    #[test]
+    fn the_contract_hash_is_the_recipe_over_the_real_constants() {
+        let rules = transitive_step(Q);
+        assert_eq!(
+            contract_hash(&rules),
+            contract_digest(
+                &rules,
+                CALCULUS_VERSION,
+                MAX_JOIN_STEPS,
+                MAX_STORED_FACTS as u64,
+                MAX_TERM_ARENA_BYTES as u64,
+            )
+        );
+    }
+
+    /// EVERY input moves the hash: the rule table, each of the three budget ceilings, and
+    /// the calculus version. One test per input, each perturbing exactly one thing, so a
+    /// dropped input cannot hide behind another.
+    #[test]
+    fn every_contract_input_moves_the_hash() {
+        let rules = transitive_step(Q);
+        let reference = contract_hash(&rules);
+
+        // The rule table.
+        assert_ne!(
+            reference,
+            contract_hash(&transitive_step(R)),
+            "a different program is a different contract"
+        );
+        assert_ne!(
+            reference,
+            contract_hash(&colliding_rules()),
+            "a different program size is a different contract"
+        );
+
+        // Each budget ceiling, one at a time.
+        let recipe = |steps: u64, facts: u64, bytes: u64| {
+            contract_digest(&rules, CALCULUS_VERSION, steps, facts, bytes)
+        };
+        let real = (
+            MAX_JOIN_STEPS,
+            MAX_STORED_FACTS as u64,
+            MAX_TERM_ARENA_BYTES as u64,
+        );
+        assert_eq!(recipe(real.0, real.1, real.2), reference);
+        assert_ne!(
+            reference,
+            recipe(real.0 + 1, real.1, real.2),
+            "MAX_JOIN_STEPS must reach the digest"
+        );
+        assert_ne!(
+            reference,
+            recipe(real.0, real.1 + 1, real.2),
+            "MAX_STORED_FACTS must reach the digest"
+        );
+        assert_ne!(
+            reference,
+            recipe(real.0, real.1, real.2 + 1),
+            "MAX_TERM_ARENA_BYTES must reach the digest"
+        );
+
+        // The calculus version.
+        assert_ne!(
+            reference,
+            contract_digest(
+                &rules,
+                "purrdf-datalog-calculus-v-not-this-one",
+                real.0,
+                real.1,
+                real.2,
+            ),
+            "CALCULUS_VERSION must reach the digest"
+        );
+
+        // The three budgets are separately framed: swapping two of them is a different
+        // contract, so the fixed-width encoding cannot alias one ceiling with another.
+        assert_ne!(recipe(7, 9, real.2), recipe(9, 7, real.2));
+    }
+
+    /// The contract hash is byte-STABLE: the same program hashes to the same 32 bytes on
+    /// every run and on every target.
+    ///
+    /// The frozen value is the point. Recomputing the digest twice in one process proves
+    /// nothing about a second process, so the expected hex is pinned here. If this
+    /// assertion fails, exactly one of two things happened: the digest's ENCODING changed
+    /// (legitimate, and the new value goes here in the same change that bumps
+    /// [`CALCULUS_VERSION`]), or an input drifted without anyone deciding it should.
+    #[test]
+    fn the_contract_hash_is_frozen() {
+        let hash = contract_hash(&transitive_step(Q));
+        assert_eq!(
+            hash.to_hex(),
+            "562beee0c93eadac0dd410551abba8f622ce14883694ac03a7467f626f129cfd",
+            "the contract hash of the fixture program moved"
+        );
+        // Recomputation is stable, and the two renderings agree.
+        assert_eq!(hash, contract_hash(&transitive_step(Q)));
+        assert_eq!(hash.to_string(), hash.to_hex());
+        assert_eq!(hash.to_hex().len(), 64);
+        assert!(hash.to_hex().chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(hash.digest(), contract_hash(&transitive_step(Q)).digest());
+    }
+
+    /// The contract hash is not the clause digest and not the plan address: it is a third,
+    /// separately domain-separated thing, and it is usable as `PlanIdentity`'s contract.
+    #[test]
+    fn the_contract_hash_is_distinct_from_the_other_two_digests() {
+        let rules = transitive_step(Q);
+        let contract = contract_hash(&rules);
+        assert_ne!(
+            contract.digest(),
+            &canonical_rule_hash(&rules),
+            "the contract is not the bare clause digest"
+        );
+        assert_ne!(
+            contract.digest(),
+            PlanIdentity::new(CONTRACT, &rules).digest(),
+            "the contract is not the plan address"
+        );
+        // It is exactly what `PlanIdentity` wants as its caller-supplied contract hash.
+        let identity = PlanIdentity::new(&contract.to_hex(), &rules);
+        assert_eq!(identity, PlanIdentity::new(&contract.to_hex(), &rules));
+        assert_ne!(identity, PlanIdentity::new(CONTRACT, &rules));
     }
 
     /// The solver version participates in the address, so a planner change cannot be

@@ -100,6 +100,17 @@
 //!   relations by a differential test. Rounds are rule-parallel through rayon's indexed
 //!   `par_iter`, merged strictly in program order.
 //!
+//! # Checkable proofs
+//!
+//! - [`proof`] — the hash-consed proof-term arena. A
+//!   [`Derivation`](seminaive::Derivation) is a LOG: believing it means believing the engine
+//!   that wrote it. A [`ProofArena`](proof::ProofArena) term is checked by
+//!   [`check`](proof::ProofArena::check), which re-derives the conclusion from the premises
+//!   and the named clause and returns the fact IT computed — so a step the rule does not
+//!   license is rejected however well-formed the record of it is. Terms are interned, so a
+//!   shared subproof is stored once; a proof is named by a BLAKE3 content digest over its
+//!   canonical encoding, never by a fabricated IRI.
+//!
 //! # Reuse
 //!
 //! - [`cache`] — the caller-owned, content-addressed plan cache. A compiled program is
@@ -107,6 +118,10 @@
 //!   canonical digest of the clause program, so an identical program is compiled once. The
 //!   cache is owned by the caller's planner and is never a process global: a hidden global
 //!   would make a result depend on evaluation history.
+//!   [`contract_hash`](cache::contract_hash) is the crate's own answer to "which calculus
+//!   produced this result": the clause program, the three fixed budgets and a
+//!   hand-maintained [`CALCULUS_VERSION`](cache::CALCULUS_VERSION), hashed as DATA rather
+//!   than as source text.
 //!
 //! # The correctness oracle
 //!
@@ -125,6 +140,7 @@ pub mod clause;
 pub mod cursor;
 pub mod id;
 pub mod plan;
+pub mod proof;
 pub mod seminaive;
 pub mod store;
 
