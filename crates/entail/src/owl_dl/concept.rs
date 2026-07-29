@@ -233,6 +233,26 @@ impl ConceptTable {
         self.neg[id as usize].expect("negation cache populated by finalize()")
     }
 
+    /// The id of the NNF of `¬c`, or `None` when the negation cache has no entry yet.
+    ///
+    /// The total sibling of [`ConceptTable::negate`], for the one caller that walks the
+    /// WHOLE table rather than a concept it just interned: a normalization pass over every
+    /// id cannot assume [`ConceptTable::finalize`] has run, and a missing negation there
+    /// means one fewer derived axiom rather than a panic.
+    pub(crate) fn negation(&self, id: u32) -> Option<u32> {
+        self.neg[id as usize]
+    }
+
+    /// How many concepts are interned — the exclusive upper bound of the valid ids.
+    ///
+    /// Read by the normalization pass that turns the whole table into a rule table: the
+    /// concept ids are dense and assigned in first-seen order, so `0..len()` enumerates
+    /// every concept exactly once, in a sequence that is a function of the parse order
+    /// alone.
+    pub(crate) fn len(&self) -> usize {
+        self.concepts.len()
+    }
+
     /// Convenience concept-id lookups for common atoms.
     pub(crate) fn top(&mut self) -> u32 {
         self.intern(Concept::Top)

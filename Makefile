@@ -92,7 +92,15 @@ WASM_SIZE_BUDGET_BYTES := 9430000
 # gate fails until it is updated in the same commit that moved it. That is the
 # point — it converts "someone will notice the artifact grew" into a red gate,
 # and it is why the growth attribution above can be trusted.
-WASM_SIZE_MEASURED_BYTES := 9288106
+#
+# Currently 9_313_841. The 25_735 bytes above the previous 9_288_106 are the
+# consequence-based classifier (crates/entail/src/owl_dl/saturate.rs): a
+# normalization pass over the concept table plus the saturation fixpoint that
+# derives the whole class taxonomy at once, which the exported `classify` and
+# `realize` services now reach instead of running one tableau refutation per
+# ordered pair of named classes. It replaces an algorithm rather than adding a
+# capability, so the ceiling is untouched.
+WASM_SIZE_MEASURED_BYTES := 9313841
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -212,7 +220,7 @@ book: book-samples ## Build The PurRDF Book (mdBook user guide) into docs/book/b
 	mdbook build docs/book
 
 bench: ## Run criterion benchmarks (report-only; never a gate).
-	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-sparql-eval -p purrdf-shapes -p purrdf-wasm
+	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-sparql-eval -p purrdf-shapes -p purrdf-wasm -p purrdf-entail
 
 columnar-oracle: ## Verify production Parquet files through the dev-only DuckDB oracle.
 	bash scripts/check-columnar-oracle.sh

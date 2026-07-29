@@ -338,9 +338,14 @@ impl Reasoner {
 
     /// The subsumption hierarchy over the ontology's named classes.
     ///
-    /// Costs one tableau decision per ORDERED pair of named classes plus the consistency
-    /// check — `n² + 1` in all, which [`DlCertificate::decisions`] reports so the cost is a
-    /// measurement rather than a surprise.
+    /// Costs ONE consequence-based saturation over the whole clause set, plus the
+    /// consistency check, plus one tableau decision for each pair the saturation could
+    /// neither derive nor rule out. Inside the fragment that calculus is complete for — an
+    /// `EL⁺⁺`-shaped Horn terminology with no inverse role, no nominal, no disjunction, no
+    /// universal restriction and no cardinality restriction — the residue is empty and the
+    /// whole taxonomy costs the single consistency decision; outside it the residual pairs are
+    /// refuted the way they always were. [`DlCertificate::decisions`] reports how many
+    /// tableau runs it actually took, so the cost stays a measurement rather than a surprise.
     ///
     /// # Errors
     ///

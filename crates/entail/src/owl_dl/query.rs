@@ -39,12 +39,16 @@
 //!
 //! # The injections
 //!
-//! Each is an entailed fact, never a fabricated one, and each is decided by the tableau:
+//! Each is an entailed fact, never a fabricated one, and each is decided by the reasoner
+//! rather than pattern-matched out of the data:
 //!
 //! 1. **Classification + realization** of the data's named vocabulary — every entailed
 //!    `C rdfs:subClassOf D` between named classes (reflexive and `owl:Nothing`/`owl:Thing`
 //!    included) and every entailed `i rdf:type C` — so `?c`/`?x`-quantified type and
-//!    subclass patterns range over the reasoned vocabulary.
+//!    subclass patterns range over the reasoned vocabulary. The subclass half is ONE
+//!    consequence-based saturation ([`crate::owl_dl::saturate`]) rather than a refutation per
+//!    ordered pair; the residual pairs an out-of-fragment ontology leaves underived still go
+//!    to the tableau, so the injected relation is the same one either way.
 //! 2. **Query class-expression retrieval** — for each `(_, rdf:type, R)` /
 //!    `(?c, rdfs:subClassOf, R)` / `(R, rdfs:subClassOf, ?c)` whose `R` is an (anonymous)
 //!    class expression written in the query, the class expression is parsed with the
@@ -79,6 +83,7 @@ use crate::EntailError;
 use crate::interner::{Interner, intern_into};
 use crate::owl_dl::concept::{Concept, Role};
 use crate::owl_dl::parser::{CeExtractor, TripleIndex, Vocab, index_insert};
+use crate::owl_dl::saturate::{Taxonomy, saturate};
 use crate::owl_dl::{Kb, class_concept, tableau};
 use crate::report::{Construct, ReasoningReport};
 use crate::vocab::{OWL_SAMEAS, RDF_TYPE, RDFS_DOMAIN, RDFS_RANGE, RDFS_SUBCLASSOF};
@@ -246,7 +251,15 @@ pub fn materialize_dl_reported(
     b.push_dataset(ds);
     let mut fresh = Fresh::new();
 
-    inject_classification(&mut b, &kb, &named_cid)?;
+    // ONE consequence-based saturation over the whole clause set, shared by the
+    // classification injection below. The subsumption relation between named classes is a
+    // single fixpoint, not `n²` refutations, and it is computed after the consistency check
+    // above because an inconsistent knowledge base entails everything and this calculus
+    // reads the TBox only.
+    let seeds: Vec<u32> = named_cid.values().copied().collect();
+    let taxonomy = saturate(&kb, &seeds);
+
+    inject_classification(&mut b, &kb, &named_cid, &taxonomy)?;
     inject_realization(&mut b, &kb, &named_cid)?;
     inject_roles(&mut b, &kb, &roles, &data_index)?;
     inject_same_as(&mut b, &kb, &data_index);
@@ -623,15 +636,27 @@ fn intern_tasks(
 }
 
 /// Inject every entailed `C rdfs:subClassOf D` between named classes.
+///
+/// The relation comes from the ONE saturation the caller already ran, not from a second
+/// `n²` sweep of the tableau. The emitted triples are unchanged — reflexive `C ⊑ C` and the
+/// `owl:Thing`/`owl:Nothing` edges included, because the augmentation's claim is to hold
+/// every entailed ground atom over the query's vocabulary and `?c rdfs:subClassOf ?c` is one
+/// of them — since inside the saturation's fragment the derivation IS the entailment
+/// relation, and outside it the underivable pairs still go to
+/// [`Kb::entails_subclass`].
 fn inject_classification(
     b: &mut RdfDatasetBuilder,
     kb: &Kb,
     named_cid: &BTreeMap<u32, u32>,
+    taxonomy: &Taxonomy,
 ) -> Result<(), EntailError> {
     let sub_class = b.intern_iri(RDFS_SUBCLASSOF);
+    let complete = taxonomy.is_complete();
     for (&c_iri, &c_cid) in named_cid {
         for (&d_iri, &d_cid) in named_cid {
-            if kb.entails_subclass(c_cid, d_cid)? {
+            let holds = taxonomy.derives(c_cid, d_cid)
+                || (!complete && kb.entails_subclass(c_cid, d_cid)?);
+            if holds {
                 let s = intern_into(b, kb.interner.value(c_iri));
                 let o = intern_into(b, kb.interner.value(d_iri));
                 b.push_quad(s, sub_class, o, None);

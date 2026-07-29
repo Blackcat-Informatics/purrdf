@@ -65,3 +65,10 @@ criterion = { workspace = true }
 # depths — a regression watch on the semi-naive fixpoint. Report-only.
 name = "chase"
 harness = false
+
+[[bench]]
+# OWL-Direct classification latency over a synthetic EL terminology at three signature
+# sizes — a regression watch on the consequence-based classifier, whose cost is superlinear
+# in the signature rather than in the axiom count. Report-only.
+name = "classify"
+harness = false

@@ -231,8 +231,8 @@ impl DlCertificate {
 
     /// The per-decision step cap every run of this service ran under.
     ///
-    /// Per DECISION, not per service call: classification asks one subsumption question
-    /// per ordered pair of named classes, and a budget shared across them would turn a
+    /// Per DECISION, not per service call: a service may ask several questions — realization
+    /// asks one per (individual, class) pair — and a budget shared across them would turn a
     /// large-but-easy ontology into a `BudgetExhausted` report for no reason. So the cap
     /// bounds each question and [`Self::steps`] reports the sum.
     #[must_use]
@@ -243,7 +243,11 @@ impl DlCertificate {
     /// How many tableau runs this service made.
     ///
     /// The denominator for [`Self::steps`], and the thing that makes a service's cost
-    /// legible: `classify` over `n` named classes makes `n² + 1` of them.
+    /// legible. It counts REFUTATIONS, so a service whose answer is derived rather than
+    /// refuted reports a small number: `classify` used to make `n² + 1` of these and now
+    /// makes exactly ONE on an ontology inside the classifying saturation's fragment, plus
+    /// one per pair that saturation left underived on an ontology outside it. A number that
+    /// drops when an algorithm is replaced is the point of measuring it.
     #[must_use]
     pub const fn decisions(&self) -> u64 {
         self.decisions

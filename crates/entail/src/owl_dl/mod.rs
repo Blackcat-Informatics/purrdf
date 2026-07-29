@@ -3,10 +3,12 @@
 
 //! The native OWL-Direct (Description-Logic) reasoner core.
 //!
-//! Three layers compose here: [`concept`] is the DL syntax and its structural
+//! Four layers compose here: [`concept`] is the DL syntax and its structural
 //! interner; [`parser`] reverse-maps an [`RdfDataset`] into a [`Kb`] (TBox, RBox,
 //! ABox, plus anonymous class expressions); [`tableau`] is the `ALCOIQ` completion
-//! procedure that decides consistency. [`Kb`] ties them together and exposes the
+//! procedure that decides consistency; and [`saturate`] is the consequence-based
+//! calculus that derives the WHOLE named-class subsumption relation in one fixpoint,
+//! so classification is not a loop over the tableau. [`Kb`] ties them together and exposes the
 //! internal reasoning seams — [`Kb::is_consistent`], [`Kb::entails_instance`],
 //! [`Kb::entails_subclass`], and [`Kb::instances_of`] — which the query-answering layer
 //! ([`crate::owl_dl::query`]) drives. Those seams are internal: the public one is
@@ -36,6 +38,7 @@ pub(crate) mod concept;
 pub(crate) mod constructs;
 pub(crate) mod parser;
 pub(crate) mod query;
+pub(crate) mod saturate;
 pub(crate) mod tableau;
 
 /// The concept a named class IRI denotes: `⊤` for `owl:Thing`, `⊥` for `owl:Nothing`, else
