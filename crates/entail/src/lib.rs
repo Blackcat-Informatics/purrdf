@@ -25,6 +25,11 @@
 //! `rdf:`/`rdfs:`/`owl:` IRI from the entailment spec itself. `D` (datatype)
 //! entailment remains an [`EntailError::Unsupported`] boundary, which the caller
 //! records as a typed, spec-inherent gap.
+//!
+//! What each regime *is* and what this crate currently *does* are both data, not
+//! prose: [`rules`] returns the specification rule table a [`Regime`] is defined by
+//! (78 [`RuleId`]s for `OWL-RL`, 16 for `RDFS`), and [`implemented`] returns the
+//! subset the chase fires today. The difference is the regime's measurable gap.
 
 use std::sync::Arc;
 
@@ -35,11 +40,13 @@ pub(crate) mod owl_dl;
 pub(crate) mod rdfs;
 pub mod rif;
 mod rif_xml;
+pub(crate) mod rules;
 pub(crate) mod vocab;
 
 pub use owl_dl::query::{QNode, QTriple, materialize_dl};
 pub use rif::{Atom, Fact, RifTerm, Rule, RuleSet, materialize_rif};
 pub use rif_xml::{ParsedRifDocument, RifImport, parse_rif_xml, resolve_rif_imports};
+pub use rules::{ParseRuleIdError, RuleId, implemented, rules};
 
 /// A SPARQL entailment regime (`sparql:entailmentRegime`), by its W3C IRI's local
 /// name.
@@ -239,7 +246,8 @@ mod tests {
     #[test]
     fn rdf_regime_types_predicates_as_property() {
         // Bare RDF entailment: the predicate of every triple is an rdf:Property
-        // (rule rdf1 / rdfs4a), even when the predicate is not otherwise typed.
+        // (rule `rdfD2`, spelled `rdf1` in RDF 1.0), even when the predicate is not
+        // otherwise typed.
         let p = "http://example.org/ns#b";
         let y = "http://example.org/ns#c";
         let ds = dataset(&[(X, p, y)]);

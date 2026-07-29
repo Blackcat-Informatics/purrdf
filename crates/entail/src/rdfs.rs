@@ -44,8 +44,8 @@ pub(crate) fn copy_of(ds: &RdfDataset) -> Result<Arc<RdfDataset>, EntailError> {
 /// predicate-typing rule.
 ///
 /// The RDF Semantics entail that any resource used in the predicate position of a
-/// triple is an `rdf:Property` (rule rdf1 / rdfs4a — `s p o ⇒ p rdf:type
-/// rdf:Property`). The full RDF axiomatic-triple schema is infinite and is *not*
+/// triple is an `rdf:Property` (rule `rdfD2`, spelled `rdf1` in RDF 1.0 — `s p o ⇒ p
+/// rdf:type rdf:Property`). The full RDF axiomatic-triple schema is infinite and is *not*
 /// materialized; only this single, decidable rule is applied, which is all the bare
 /// RDF entailment regime requires for BGP query answering over a finite graph.
 pub(crate) fn close_rdf(ds: &RdfDataset) -> Result<Arc<RdfDataset>, EntailError> {
