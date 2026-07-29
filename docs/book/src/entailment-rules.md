@@ -21,8 +21,8 @@ and it is the same set a `ReasoningReport` names under `missing`.
 | Regime | `--regime` | Defined | Implemented |
 | --- | --- | ---: | ---: |
 | Simple | `simple` | 0 | 0 |
-| RDF | `rdf` | 3 | 1 |
-| RDFS | `rdfs` | 18 | 14 |
+| RDF | `rdf` | 3 | 3 |
+| RDFS | `rdfs` | 18 | 18 |
 | OWL-RL | `owl-rl` | 78 | 78 |
 | OWL-Direct | `owl-direct` | 0 | 0 |
 | RIF | `rif` | 0 | 0 |
@@ -33,20 +33,20 @@ rules for: `Simple` is the identity closure, and `OWL-Direct` and `RIF` are
 served by a tableau and by a caller-supplied rule set respectively, neither of
 which is a fixed table.
 
-## RDF — 1 of 3 rules implemented
+## RDF — 3 of 3 rules implemented
 
 | Rule | Specification | Implemented |
 | --- | --- | :---: |
-| `rdfD1` | RDF 1.2 Semantics §8.1.1 (RDF patterns) | no |
-| `rdfD1a` | RDF 1.2 Semantics §8.1.1 (RDF patterns) | no |
+| `rdfD1` | RDF 1.2 Semantics §8.1.1 (RDF patterns) | yes |
+| `rdfD1a` | RDF 1.2 Semantics §8.1.1 (RDF patterns) | yes |
 | `rdfD2` | RDF 1.2 Semantics §8.1.1 (RDF patterns) | yes |
 
-## RDFS — 14 of 18 rules implemented
+## RDFS — 18 of 18 rules implemented
 
 | Rule | Specification | Implemented |
 | --- | --- | :---: |
-| `rdfD1` | RDF 1.2 Semantics §8.1.1 (RDF patterns) | no |
-| `rdfD1a` | RDF 1.2 Semantics §8.1.1 (RDF patterns) | no |
+| `rdfD1` | RDF 1.2 Semantics §8.1.1 (RDF patterns) | yes |
+| `rdfD1a` | RDF 1.2 Semantics §8.1.1 (RDF patterns) | yes |
 | `rdfD2` | RDF 1.2 Semantics §8.1.1 (RDF patterns) | yes |
 | `rdfs1` | RDF 1.2 Semantics §9.2.1 (RDFS patterns) | yes |
 | `rdfs2` | RDF 1.2 Semantics §9.2.1 (RDFS patterns) | yes |
@@ -61,8 +61,8 @@ which is a fixed table.
 | `rdfs11` | RDF 1.2 Semantics §9.2.1 (RDFS patterns) | yes |
 | `rdfs12` | RDF 1.2 Semantics §9.2.1 (RDFS patterns) | yes |
 | `rdfs13` | RDF 1.2 Semantics §9.2.1 (RDFS patterns) | yes |
-| `rdfs14` | RDF 1.2 Semantics §9.2.1 (RDFS patterns) | no |
-| `rdfs14a` | RDF 1.2 Semantics §9.2.1 (RDFS patterns) | no |
+| `rdfs14` | RDF 1.2 Semantics §9.2.1 (RDFS patterns) | yes |
+| `rdfs14a` | RDF 1.2 Semantics §9.2.1 (RDFS patterns) | yes |
 
 ## OWL-RL — 78 of 78 rules implemented
 

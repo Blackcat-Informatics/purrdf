@@ -25,11 +25,14 @@ const PACKAGE_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 // located-loss contracts, and shared host dispatch account for one increase;
 // bounded CONSTRUCT, mapped native DCAT RDF, and VoID generation account for
 // one increase; validation-scoped asserted-subclass membership shared by native
-// SHACL and SHACL-SPARQL accounts for the latest. Node 26/npm 11 measured a
-// 2_796_026-byte tarball and 8_308_910 unpacked bytes. Both ceilings retain about
-// 3% headroom for supported packagers.
-const MAX_TARBALL_BYTES = 2_880_000;
-const MAX_UNPACKED_BYTES = 8_560_000;
+// SHACL and SHACL-SPARQL accounts for one. The latest is the reasoning surface:
+// the exported entailment API in crates/rdf-wasm/src/entail.rs links
+// purrdf-entail and purrdf-datalog into the wasm artifact, so both ceilings move
+// with the WASM_SIZE_BUDGET_BYTES raise that records it. Node 24.18.0/npm 11.16.0
+// measured a 2_977_978-byte tarball and 8_944_110 unpacked bytes over 8 entries.
+// Both ceilings retain about 3% headroom for supported packagers.
+const MAX_TARBALL_BYTES = 3_070_000;
+const MAX_UNPACKED_BYTES = 9_220_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
 const NPM_INSTALL_TIMEOUT_MS = 180_000;
 const SMOKE_TIMEOUT_MS = 60_000;

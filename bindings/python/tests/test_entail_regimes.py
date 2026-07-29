@@ -71,10 +71,13 @@ MATERIALIZABLE = [
     entail.Regime.RDFS,
     entail.Regime.OWL_RL,
 ]
+# Exactly two regimes are refused, both for spec-inherent reasons: OWL-Direct
+# needs the query's class expressions and RIF needs a parsed rule set. D was
+# once here; it is materializable now, and a test asserting otherwise would
+# pin a capability gap that has been closed.
 NOT_MATERIALIZABLE = [
     entail.Regime.OWL_DIRECT,
     entail.Regime.RIF,
-    entail.Regime.D,
 ]
 ACCEPTED_SPELLINGS = [
     "simple",
@@ -194,7 +197,7 @@ def test_repeated_calls_are_byte_identical(regime: entail.Regime) -> None:
 def test_every_regime_member_is_accepted(regime: entail.Regime) -> None:
     """No `Regime` member is rejected as an unknown value.
 
-    The three that cannot be forward-materialized are refused for *that* reason —
+    The two that cannot be forward-materialized are refused for *that* reason —
     the message names the regimes that can be — and never as a bad argument.
     """
     assert isinstance(entail.rules(regime), list)
@@ -232,26 +235,30 @@ def test_owl_rl_rule_inventory_is_the_specification_table() -> None:
     # RDFS is its own 18-rule table; RDF is 3; the rest have none.
     assert len(entail.rules(entail.Regime.RDFS)) == 18
     assert len(entail.rules(entail.Regime.RDF)) == 3
+    # D is the datatype table; Simple and the two refused regimes state no rules.
+    assert len(entail.rules(entail.Regime.D)) == 5
     for regime in [entail.Regime.SIMPLE, *NOT_MATERIALIZABLE]:
         assert entail.rules(regime) == []
         assert entail.implemented_rules(regime) == []
 
 
-def test_implemented_rules_are_a_strict_subset_and_the_gap_is_visible() -> None:
-    """The point of exposing both: a caller can MEASURE the gap, not trust prose.
+def test_implemented_rules_are_measurable_against_the_specification_table() -> None:
+    """The point of exposing both: a caller can MEASURE coverage, not trust prose.
 
-    The counts are deliberately not hard-coded — implementing another rule must
-    not fail this test — but the shape is: non-empty, strictly smaller, ordered
-    as a subsequence of the specification table.
+    The assertions here must survive the table filling up. An earlier version
+    demanded a *strict* subset and a *non-empty* gap — which reads as
+    count-independent but is not: both encode "the gap never closes", so
+    completing the table failed the test that existed to track it. What is
+    actually invariant is the partition (fired and missing cover the table
+    exactly, without overlap) and the ordering.
     """
     spec = entail.rules(entail.Regime.OWL_RL)
     fired = entail.implemented_rules(entail.Regime.OWL_RL)
 
     assert fired, "OWL-RL fires at least one rule"
-    assert set(fired) < set(spec), "implemented is a STRICT subset of the table"
+    assert set(fired) <= set(spec), "every implemented rule is a specification rule"
     gap = [rule for rule in spec if rule not in fired]
-    assert gap, "the gap is real and non-empty"
-    assert len(fired) + len(gap) == len(spec)
+    assert len(fired) + len(gap) == len(spec), "fired and missing partition the table"
     # Same relative order as the specification table (a subsequence, not a set).
     assert [rule for rule in spec if rule in fired] == fired
 
@@ -270,8 +277,17 @@ def test_the_gap_is_exactly_the_reports_missing_lines(regime: entail.Regime) -> 
         if line.startswith("missing ")
     ]
     assert missing == gap
-    head = "completeness exact" if not gap else f"completeness sound-incomplete {len(gap)}"
-    assert f"\n{head}\n" in report
+    if gap:
+        assert f"\ncompleteness sound-incomplete {len(gap)}\n" in report
+    else:
+        # A complete rule table reports `exact`, or `exact-within-boundaries`
+        # when the run still met a construct outside the table — a distinction
+        # the report draws precisely so a complete table cannot claim more than
+        # it delivered.
+        completeness = next(
+            line for line in report.splitlines() if line.startswith("completeness ")
+        )
+        assert completeness in ("completeness exact", "completeness exact-within-boundaries")
 
 
 # ── Refusals ────────────────────────────────────────────────────────────────────

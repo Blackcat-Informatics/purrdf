@@ -35,13 +35,19 @@ BINARYEN_VERSION := 130
 # engines, the native format registry (now including JSON-LD/YAML-LD),
 # deterministic layout, SVG export, all sixteen graph/tabular/
 # dataset-description/research-object projection profiles, the compiled JSON-LD
-# context/options/registry engine, and validation-scoped asserted-subclass
-# membership shared by native SHACL and SHACL-SPARQL — measures 8_148_368 bytes;
-# 8_400_000 keeps 3.09% headroom. The always-on bounded CONSTRUCT engine, mapped
-# native DCAT RDF emitter, lossless native description serializer, VoID
-# statistics/partition/linkset generator, and shared class-membership view are
-# the capabilities responsible for this reviewed increase. The artifact's size
-# is a joint function of
+# context/options/registry engine, validation-scoped asserted-subclass
+# membership shared by native SHACL and SHACL-SPARQL, and now the entailment
+# engine — measures 8_767_155 bytes; 9_040_000 keeps 3.11% headroom. The
+# reasoning surface is the capability responsible for this reviewed increase:
+# crates/rdf-wasm/src/entail.rs exports regimes, rule inventories and
+# materialization to JS, so purrdf-entail and the purrdf-datalog semi-naive
+# engine under it are now reachable from an exported symbol and link into the
+# artifact — the 78-rule OWL 2 RL table, the RDF/RDFS/D tables, the existential
+# chase, the 93-entry construct table, and the OWL-Direct ALCOIQ tableau. A
+# symbol-retaining diagnostic build of the same module attributes 183_789 bytes
+# of function bodies to purrdf-entail and 191_671 to purrdf-datalog, 3.99% of
+# its code section, against a 618_787-byte rise over the 8_148_368 measured for
+# the previous ceiling. The artifact's size is a joint function of
 # rustc (tracks stable), wasm-bindgen (pinned in Cargo.toml), and binaryen
 # (pinned via BINARYEN_VERSION), so a moved number is attributable.
 #
@@ -51,7 +57,7 @@ BINARYEN_VERSION := 130
 # artifact grew: a new capability or dependency, or a routine rustc-stable /
 # binaryen bump (a valid, must-be-explained reason). Never raise it merely to
 # turn a red gate green.
-WASM_SIZE_BUDGET_BYTES := 8400000
+WASM_SIZE_BUDGET_BYTES := 9040000
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
