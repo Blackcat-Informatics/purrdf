@@ -17,6 +17,10 @@
       "ledgered": 5,
       "note": "5 upstream-errata fixtures with non-canonical XSD lexicals (cast-decimal/double/float, coalesce01, plus-1-corrected); the entailment-regime cases (OWL-Direct/DL via the ALCOIQ tableau, RIF-rule, RDF-axiomatic-triple) are all native now"
     },
+    "Entailment (OWL 2 DL consistency)": {
+      "ledgered": 29,
+      "note": "vendored W3C OWL 2 suite (261 consistency/inconsistency cases) graded against the OWL-Direct ALCOIQ tableau; 29 ledgered divergences, each typed in crates/sparql-conformance/src/owl2.rs::LEDGER — 26 unread-axiom incompletenesses (asymmetric/irreflexive property characteristics, property disjointness, negative property assertions, owl:hasKey, bottom properties, owl:differentFrom/owl:AllDifferent, owl:AllDisjointClasses, the non-empty-domain requirement), 3 withheld runs (owl:hasSelf, a literal-subject realization, a cyclic class expression), and 1 unsoundness (an implicit unique-name assumption on owl:oneOf nominals). Consistency-shaped: this row does NOT measure the OWL 2 RL rule table"
+    },
     "SHACL Core + SHACL-SPARQL": {
       "ledgered": 0,
       "note": "no ledgered gaps"

@@ -14,9 +14,19 @@
 //! per-manifest [`Summary`] prints a tally (`passed / xfail / unexpected-pass /
 //! failed`). An xfail that unexpectedly PASSES is a hard error so the registry
 //! cannot rot.
+//!
+//! The crate also hosts a second, unrelated corpus: [`owl2`] grades the vendored
+//! W3C OWL 2 suite (`entailment-suite/w3c-owl2/`) against PurRDF's `OWL-Direct`
+//! ALCOIQ tableau. That corpus is *consistency*-shaped — it validates the DL
+//! lane's satisfiability verdicts and says nothing about the OWL 2 RL rule table
+//! — and it feeds the conformance matrix's own `Entailment` row rather than
+//! folding into the SPARQL row. It lives here because this is the workspace's
+//! `publish = false` conformance crate, so its corpus never enters a published
+//! `.crate`.
 
 pub mod compare;
 pub mod manifest;
+pub mod owl2;
 pub mod paths;
 pub mod rif_xml;
 pub mod rs_resultset;

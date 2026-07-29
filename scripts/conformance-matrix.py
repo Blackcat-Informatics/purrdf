@@ -281,6 +281,42 @@ def _suite_sparql() -> SuiteResult:
     )
 
 
+def _suite_entailment() -> SuiteResult:
+    """W3C OWL 2 suite graded against the native `OWL-Direct` ALCOIQ tableau.
+
+    This row is CONSISTENCY-shaped and says so: all 261 vendored cases are
+    `otest:ConsistencyTest` / `otest:InconsistencyTest`, so it measures the
+    DL/tableau lane's satisfiability verdicts. It does NOT measure the OWL 2 RL
+    rule table (a forward-materialization chase, covered by authored per-rule
+    fixtures in `purrdf-entail`). Entailment used to fold silently into the
+    SPARQL row, where a regression in it was invisible.
+    """
+    cmd = [
+        "cargo", "test", "-p", "purrdf-sparql-conformance", "--locked",
+        "--test", "owl2_conformance", "--", "--nocapture",
+    ]
+    rc, out = _run(cmd, _REPO_ROOT)
+    _, _, cargo_failed = _cargo_tally(out)
+    m = re.search(
+        r"OWL2-ENTAILMENT: agreed (\d+) ledgered (\d+) unledgered (\d+) "
+        r"stale (\d+) total (\d+)",
+        out,
+    )
+    if m:
+        agreed, ledgered, unledgered, stale, total = (int(m.group(i)) for i in range(1, 6))
+        detail = f"{agreed}/{total} DL consistency verdicts · {ledgered} ledgered"
+        return SuiteResult(
+            "Entailment (OWL 2 DL consistency)", "W3C OWL 2 test suite",
+            passed=agreed, xskip=ledgered, failed=unledgered + stale,
+            detail=detail,
+            ok=(rc == 0 and cargo_failed == 0 and unledgered == 0 and stale == 0),
+            log=out,
+        )
+    return _suite_cargo(
+        "Entailment (OWL 2 DL consistency)", "W3C OWL 2 test suite", cmd
+    )
+
+
 def _suite_py_rdflib_gate(build: bool) -> SuiteResult:
     """rdflib's OWN vendored tests run against the purrdf drop-in."""
     log = ""
@@ -434,6 +470,7 @@ def native_suites() -> list[SuiteResult]:
         ),
         _suite_codec(),
         _suite_sparql(),
+        _suite_entailment(),
         _suite_shacl_w3c(),
         _suite_shapes_corpus(),
         _suite_shacl_rules(),
@@ -593,8 +630,8 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.write_doc and args.no_python:
-        # The committed doc block reflects the full 10-row matrix; a native-only
-        # run cannot reproduce it.
+        # The committed doc block reflects the full 12-row matrix (10 native Rust
+        # suites + the 2 Python gates); a native-only run cannot reproduce it.
         parser.error("--write-doc requires the full suite (do not pass --no-python)")
 
     results = native_suites()

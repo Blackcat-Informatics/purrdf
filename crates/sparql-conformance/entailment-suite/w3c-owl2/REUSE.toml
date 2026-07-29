@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# REUSE.toml (REUSE spec 3.3): declares licensing for the vendored W3C OWL 2
+# payload in this tree. The payload is 522 files across 261 cases, so it is
+# annotated by TWO globs rather than 522 per-file `.license` sidecars — the same
+# declaration, one place to keep true on a re-vendor.
+#
+# Both globs name `LicenseRef-W3C-Test-Suite`, NOT the bare SPDX id `W3C`. The
+# bare `W3C` id denotes the W3C Software Notice and License, which is a different
+# document from the W3C Test Suite License these files are published under; see
+# LICENSES/LicenseRef-W3C-Test-Suite.txt and PROVENANCE.md.
+
+version = 1
+
+# Every case's verbatim W3C RDF/XML premise ontology.
+[[annotations]]
+path = ["cases/*/source/premise.rdf"]
+SPDX-FileCopyrightText = "2009 W3C (Massachusetts Institute of Technology, ERCIM, Keio, Beihang)"
+SPDX-License-Identifier = "LicenseRef-W3C-Test-Suite"
+
+# Every case's published-verdict record. This is the suite's own
+# `otest:ConsistencyTest` / `otest:InconsistencyTest` classification, carried as
+# JSON by the upstream flattening (PROVENANCE.md §Fidelity), so it is W3C-derived
+# material and licensed as such rather than as first-party configuration.
+[[annotations]]
+path = ["cases/*/profile.json"]
+SPDX-FileCopyrightText = "2009 W3C (Massachusetts Institute of Technology, ERCIM, Keio, Beihang)"
+SPDX-License-Identifier = "LicenseRef-W3C-Test-Suite"
