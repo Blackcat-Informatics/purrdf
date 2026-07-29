@@ -232,9 +232,25 @@ impl Construct {
     pub const fn reason(self) -> &'static str {
         match self {
             Self::NamedGraph => {
-                "the chase reads and writes the default graph only, so quads in a named \
-                 graph neither supply premises nor receive conclusions; they are carried \
-                 through the closure unchanged"
+                "RDF HAS NO STANDARD ENTAILMENT RELATION FOR A DATASET, so what a run over \
+                 one does is a DEFINED CHOICE rather than a derived consequence, and this \
+                 boundary is where PurRDF states which choice it made. RDF 1.2 Semantics \
+                 defines entailment over a GRAPH and SPARQL's entailment regimes are \
+                 defined over the ACTIVE graph; neither says what a dataset entails, and \
+                 the union, the per-graph reading and the quad-level reading are three \
+                 different answers no specification picks between. PurRDF's defined \
+                 behaviour is: the DEFAULT graph is closed against itself; each NAMED graph \
+                 is closed against the union of itself and the default graph; and a \
+                 conclusion lands in the graph that PRODUCED it, so a conclusion the \
+                 default graph already draws on its own is a default-graph conclusion and \
+                 is not restated in a named graph that also reached it. Two named graphs \
+                 therefore never join — neither is ever in the other's seed — and the \
+                 layout that motivates the whole choice works: a terminology in the default \
+                 graph and instances in a named graph derive into the NAMED graph. The cost \
+                 is real and is measured rather than hidden: a dataset with n named graphs \
+                 is 1 + n evaluations of the same declared program, whose join steps are \
+                 SUMMED into the budget while the two occupancy coordinates report the peak \
+                 single store"
             }
             Self::TripleTerm => {
                 "rdfs14 and rdfs14a replace a triple term with a FRESH blank node typed \
@@ -516,12 +532,12 @@ pub struct InconsistencyWitness {
     rule: RuleId,
     /// The asserted triples that satisfied them, in the rule's premise order.
     premises: Vec<WitnessTriple>,
-    /// The graph the premises were read from; `None` is the default graph.
+    /// The graph whose closure refused; `None` is the default graph.
     graph: Option<TermValue>,
 }
 
 impl InconsistencyWitness {
-    /// A witness that `rule` fired on `premises`, read from `graph`.
+    /// A witness that `rule` fired on `premises` while closing `graph`.
     ///
     /// `premises` is in the rule's own premise order, so a reader can line the triples up
     /// against the specification's rule table entry.
@@ -546,7 +562,15 @@ impl InconsistencyWitness {
         &self.premises
     }
 
-    /// The graph the premises were read from; `None` is the default graph.
+    /// The graph whose CLOSURE refused; `None` is the default graph.
+    ///
+    /// A dataset is closed graph by graph — the default graph against itself, each named
+    /// graph against the union of itself and the default graph — so a named graph's run has
+    /// both in its seed and a premise may be asserted in either. Naming the graph being
+    /// CLOSED is therefore the accurate claim, and it is the one a caller needs: it says
+    /// which closure is unusable. Reading it as "every premise is asserted here" would be an
+    /// overclaim; the premises themselves are in [`Self::premises`], to be looked for in
+    /// this graph and in the default graph.
     #[must_use]
     pub fn graph(&self) -> Option<&TermValue> {
         self.graph.as_ref()
@@ -602,14 +626,42 @@ impl RunStats {
         self.fired[rule.index()] += 1;
     }
 
-    /// Record one conclusion the RDF 1.2 IR could not hold.
-    pub(crate) const fn drop_generalized(&mut self) {
-        self.generalized_rdf_drops += 1;
+    /// Fold ONE graph's evaluation into this tally.
+    ///
+    /// A dataset is closed graph by graph — see [`crate::engine`] for the defined semantics
+    /// — so a run over a dataset with `n` named graphs is `1 + n` evaluations and the
+    /// report has to describe all of them at once. The three coordinates are aggregated
+    /// under their own meanings rather than under one convenient rule:
+    ///
+    /// * `join_steps` is WORK, so it SUMS. The number a caller wants is what the whole run
+    ///   enumerated, and reporting one graph's slice of it would understate the cost of the
+    ///   very semantics that multiplied it.
+    /// * `stored_facts` and `term_arena_bytes` are OCCUPANCY of one store, and each
+    ///   evaluation gets its own store which is dropped when it ends. The ceiling they are
+    ///   measured against is per-store, so the honest aggregate is the PEAK — the largest
+    ///   single store the run ever held — and summing them would report a footprint that
+    ///   never existed at any instant.
+    ///
+    /// A dataset with no named graph is one evaluation, for which the sum and the peak are
+    /// both that evaluation's own figure, so nothing about a single-graph run moves.
+    pub(crate) fn absorb(&mut self, budget: BudgetReport) {
+        self.budget = BudgetReport::new(
+            self.budget.join_steps().saturating_add(budget.join_steps()),
+            self.budget.stored_facts().max(budget.stored_facts()),
+            self.budget
+                .term_arena_bytes()
+                .max(budget.term_arena_bytes()),
+        );
     }
 
-    /// Record one conclusion withheld because it mentions a surrogate blank node.
-    pub(crate) const fn drop_surrogate(&mut self) {
-        self.surrogate_drops += 1;
+    /// Record `count` conclusions the RDF 1.2 IR could not hold.
+    pub(crate) const fn drop_generalized(&mut self, count: u64) {
+        self.generalized_rdf_drops += count;
+    }
+
+    /// Record `count` conclusions withheld because they mention a surrogate blank node.
+    pub(crate) const fn drop_surrogate(&mut self, count: u64) {
+        self.surrogate_drops += count;
     }
 }
 
@@ -621,18 +673,22 @@ impl RunStats {
 struct DatasetSurvey {
     /// Whether any quad sits outside the default graph.
     named_graph: bool,
-    /// Whether any default-graph quad mentions a triple term.
+    /// Whether any quad of ANY graph mentions a triple term.
     triple_term: bool,
 }
 
 impl DatasetSurvey {
     /// Survey `ds`.
+    ///
+    /// The triple-term question ranges over EVERY graph, not the default one alone,
+    /// because every graph is now reasoned over: a named graph is closed against the union
+    /// of itself and the default graph, so a triple term sitting in one is a term this
+    /// crate's chase cannot look inside exactly as a default-graph one is.
     fn of(ds: &RdfDataset) -> Self {
         let mut survey = Self::default();
         for quad in ds.quad_refs() {
             if quad.g.is_some() {
                 survey.named_graph = true;
-                continue;
             }
             if matches!(quad.s, TermRef::Triple { .. })
                 || matches!(quad.p, TermRef::Triple { .. })

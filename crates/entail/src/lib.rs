@@ -50,6 +50,25 @@
 //! (78 [`RuleId`]s for `OWL-RL`, 18 for `RDFS`), and [`implemented`] returns the
 //! subset the chase fires today. The difference is the regime's measurable gap.
 //!
+//! # Every answer can say WHY, and the two lanes say it differently
+//!
+//! [`explain`] is the audit surface, and it deliberately gives the two engines two types
+//! rather than one, because they do not explain the same thing:
+//!
+//! * [`explain_conclusion`] answers a chase conclusion with a [`ChaseProof`] — the actual
+//!   DERIVATION, whose [`check`](ChaseProof::check) re-derives the head from the premises
+//!   against the clause program rather than re-reading the claim.
+//! * [`justify`] answers a Description-Logic axiom with a [`Justification`] — a MINIMAL
+//!   ENTAILING SUBSET of the ontology, found by black-box shrinking, whose two halves are
+//!   re-decidable: [`is_sufficient`](Justification::is_sufficient) and
+//!   [`is_minimal`](Justification::is_minimal).
+//!
+//! A tableau performs no derivation steps, so it has no proof to check; a justification is
+//! the checkable analogue, and forcing one type on both would let a caller read a tableau
+//! answer as though a rule had fired. Neither is named by a minted IRI — a justification is
+//! a set of axioms already in the input, and where an identifier is useful it is a BLAKE3
+//! CONTENT DIGEST.
+//!
 //! # Every call says what it did
 //!
 //! [`materialize`] returns a [`ReasoningReport`] with every closure — not on request, not
@@ -70,6 +89,7 @@ pub(crate) mod axioms;
 pub(crate) mod calculus;
 pub(crate) mod datatypes;
 pub(crate) mod engine;
+pub mod explain;
 pub(crate) mod interner;
 pub(crate) mod lists;
 pub(crate) mod owl_dl;
@@ -82,6 +102,7 @@ pub(crate) mod surrogates;
 pub(crate) mod vocab;
 
 pub use calculus::calculus_program;
+pub use explain::{ChaseProof, ExplainError, Justification, explain_conclusion, justify};
 pub use owl_dl::query::{QNode, QTriple, materialize_dl, materialize_dl_reported};
 pub use reasoner::{
     Certified, ClassHierarchy, ConservativeKeep, DlAxiom, DlCertificate, DlCompleteness,
@@ -250,8 +271,26 @@ impl std::error::Error for EntailError {}
 /// Compute the entailment closure of `ds` under `regime`, and say what was done.
 ///
 /// Returns the closure — a new dataset holding every original quad plus the inferred
-/// triples, in the default graph; `Simple` returns a faithful copy — together with the
-/// [`ReasoningReport`] for the run.
+/// triples, each in the graph that produced it; `Simple` returns a faithful copy —
+/// together with the [`ReasoningReport`] for the run.
+///
+/// # What a DATASET entails is a defined choice, and this is the choice
+///
+/// RDF 1.2 Semantics defines entailment over a GRAPH and SPARQL's entailment regimes are
+/// defined over the ACTIVE graph. Neither says what a dataset entails, so a reasoner handed
+/// one has to choose, and PurRDF's defined behaviour is:
+///
+/// * the DEFAULT graph is closed against itself;
+/// * each NAMED graph is closed against the union of itself and the default graph;
+/// * a conclusion lands in the graph that PRODUCED it, so a conclusion the default graph
+///   already draws on its own is not restated in a named graph that also reached it.
+///
+/// Two named graphs therefore never join. Every run whose input holds a named graph reports
+/// the [`Construct::NamedGraph`] boundary, whose reason states this as a defined choice
+/// rather than a derived one — and whose cost is measured rather than hidden: `n` named
+/// graphs is `1 + n` evaluations, whose join steps are summed into
+/// [`ReasoningReport::budget`] while the two occupancy coordinates report the peak single
+/// store.
 ///
 /// # The report is not optional
 ///
@@ -1025,7 +1064,8 @@ mod tests {
                 ),
             ]
         );
-        // The chase reads the default graph only, so the witness came from it.
+        // The witness names the graph whose CLOSURE refused. This fixture is a default-graph
+        // dataset, so it is that one, and `None` IS the default graph.
         assert!(witness.graph().is_none());
         // The message names the rule, so a caller who only logs the error still learns
         // which axiom their data broke.
@@ -1062,6 +1102,179 @@ mod tests {
         };
         assert_eq!(witness.rule(), RuleId::PrpIrp);
         assert_eq!(witness.premises().len(), 2);
+    }
+
+    // ── The defined dataset semantics ───────────────────────────────────────────
+
+    /// Build a dataset from `(s, p, o, graph)` IRI quads.
+    fn quads(rows: &[(&str, &str, &str, Option<&str>)]) -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        for (s, p, o, g) in rows {
+            let s = iri(&mut b, s);
+            let p = iri(&mut b, p);
+            let o = iri(&mut b, o);
+            let g = g.map(|g| iri(&mut b, g));
+            b.push_quad(s, p, o, g);
+        }
+        b.freeze().expect("freeze")
+    }
+
+    /// Whether `ds` holds `(s, p, o)` in `graph`.
+    fn has_in(ds: &RdfDataset, s: &str, p: &str, o: &str, graph: Option<&str>) -> bool {
+        ds.quad_refs().any(|q| {
+            matches!(q.s, TermRef::Iri(si) if si == s)
+                && matches!(q.p, TermRef::Iri(pi) if pi == p)
+                && matches!(q.o, TermRef::Iri(oi) if oi == o)
+                && match (q.g, graph) {
+                    (None, None) => true,
+                    (Some(TermRef::Iri(gi)), Some(want)) => gi == want,
+                    _ => false,
+                }
+        })
+    }
+
+    /// A fixture named graph.
+    const G: &str = "http://example.org/g";
+    /// A SECOND fixture named graph — the sibling a named graph must never join with.
+    const H: &str = "http://example.org/h";
+
+    /// THE LAYOUT THE SEMANTICS EXISTS FOR: schema in the default graph, instances in a
+    /// named graph, conclusions in the NAMED graph.
+    ///
+    /// And the two things that must NOT happen beside it: the conclusion does not appear in
+    /// the default graph, which holds no instance, and moving the schema into a sibling
+    /// named graph loses the conclusion entirely.
+    #[test]
+    fn a_named_graph_is_closed_against_itself_and_the_default_graph() {
+        let ds = quads(&[(A, RDFS_SUBCLASSOF, B, None), (X, RDF_TYPE, A, Some(G))]);
+        for regime in [Regime::Rdfs, Regime::OwlRl] {
+            let (closed, report) = materialize(&ds, regime).expect("runnable regime");
+            assert!(
+                has_in(&closed, X, RDF_TYPE, B, Some(G)),
+                "{regime:?}: the default graph's terminology did not reach the named \
+                 graph's instance"
+            );
+            assert!(
+                !has_in(&closed, X, RDF_TYPE, B, None),
+                "{regime:?}: a named graph's conclusion reached the default graph"
+            );
+            // The boundary is what says this is a DEFINED choice rather than a derived one.
+            assert!(
+                report
+                    .boundaries()
+                    .iter()
+                    .any(|b| b.construct() == Construct::NamedGraph),
+                "{regime:?}"
+            );
+        }
+
+        // THE CROSS-GRAPH JOIN THAT MUST NOT HAPPEN. One term moves — the terminology goes
+        // into a sibling named graph — and the conclusion is drawn in no graph at all.
+        let split = quads(&[(A, RDFS_SUBCLASSOF, B, Some(H)), (X, RDF_TYPE, A, Some(G))]);
+        for regime in [Regime::Rdfs, Regime::OwlRl] {
+            let (closed, _) = materialize(&split, regime).expect("runnable regime");
+            for graph in [None, Some(G), Some(H)] {
+                assert!(
+                    !has_in(&closed, X, RDF_TYPE, B, graph),
+                    "{regime:?}: two named graphs joined, into {graph:?}"
+                );
+            }
+            // The sibling WAS closed, so the absence above is the missing join rather than
+            // a lane that stopped reasoning.
+            assert!(
+                closed.quad_refs().count() > split.quad_refs().count(),
+                "{regime:?}: nothing at all was derived"
+            );
+        }
+    }
+
+    /// A conclusion the DEFAULT graph draws on its own is not restated in a named graph that
+    /// also reached it.
+    ///
+    /// `D` is the sharpest witness available: its whole rule table is Table 8, `dt-type1` is
+    /// premise-free, and the other four conclude only literal subjects. Every graph's run
+    /// therefore draws exactly the same thirty-two `rdfs:Datatype` typings, and the closure
+    /// of a two-graph dataset must hold thirty-two of them and not sixty-four.
+    #[test]
+    fn a_default_graph_conclusion_is_not_restated_in_a_named_graph() {
+        let ds = quads(&[(A, RDFS_SUBCLASSOF, B, None), (X, RDF_TYPE, A, Some(G))]);
+        let (closed, _) = materialize(&ds, Regime::D).expect("d");
+        let datatype = "http://www.w3.org/2000/01/rdf-schema#Datatype";
+        let typings = closed
+            .quad_refs()
+            .filter(|q| matches!(q.o, TermRef::Iri(o) if o == datatype))
+            .count();
+        assert_eq!(typings, 32, "dt-type1 typed the datatypes once per graph");
+        assert!(
+            closed
+                .quad_refs()
+                .all(|q| !matches!(q.o, TermRef::Iri(o) if o == datatype) || q.g.is_none())
+        );
+    }
+
+    /// THE COST OF THE SEMANTICS IS MEASURED, NOT HIDDEN — and the three coordinates are
+    /// aggregated under their own meanings.
+    ///
+    /// `join_steps` is WORK and sums across the `1 + n` evaluations; `stored_facts` and
+    /// `term_arena_bytes` are OCCUPANCY of one store, each evaluation gets its own, so they
+    /// report the PEAK. Summing the occupancy coordinates would name a footprint that never
+    /// existed at any instant, and reporting one graph's slice of the work would understate
+    /// exactly the cost this semantics adds.
+    #[test]
+    fn the_budget_sums_the_work_and_peaks_the_occupancy() {
+        let one_graph = quads(&[(A, RDFS_SUBCLASSOF, B, None)]);
+        let two_graphs = quads(&[(A, RDFS_SUBCLASSOF, B, None), (X, RDF_TYPE, A, Some(G))]);
+        let (_, single) = materialize(&one_graph, Regime::Rdfs).expect("rdfs");
+        let (_, dual) = materialize(&two_graphs, Regime::Rdfs).expect("rdfs");
+
+        // Two evaluations of a program whose seed differs by one quad: the work roughly
+        // doubles, and it is REPORTED as the total rather than as one lane's share.
+        assert!(
+            dual.budget().join_steps() > single.budget().join_steps() * 3 / 2,
+            "the second evaluation's work is missing from the budget: {} vs {}",
+            dual.budget().join_steps(),
+            single.budget().join_steps()
+        );
+        // The occupancy is a PEAK, so it grows by the extra graph's own facts and nowhere
+        // near doubles. Anything at or above the sum would mean the coordinate was summed.
+        assert!(
+            dual.budget().stored_facts() < single.budget().stored_facts() * 2,
+            "an occupancy coordinate was summed: {} vs {}",
+            dual.budget().stored_facts(),
+            single.budget().stored_facts()
+        );
+        assert!(dual.budget().stored_facts() >= single.budget().stored_facts());
+        assert!(dual.budget().term_arena_bytes() < single.budget().term_arena_bytes() * 2);
+    }
+
+    /// An inconsistency found while closing a NAMED graph names that graph.
+    ///
+    /// The premise pair is split across the default graph and `g` — which is exactly what
+    /// makes the run refuse, since neither graph is inconsistent on its own — so this also
+    /// pins that a named graph really is closed against the union rather than against
+    /// itself.
+    #[test]
+    fn an_inconsistency_in_a_named_graph_names_that_graph() {
+        let disjoint = "http://www.w3.org/2002/07/owl#disjointWith";
+        let ds = quads(&[
+            (A, disjoint, B, None),
+            (X, RDF_TYPE, A, Some(G)),
+            (X, RDF_TYPE, B, Some(G)),
+        ]);
+        let Err(EntailError::Inconsistent(witness)) = materialize(&ds, Regime::OwlRl) else {
+            panic!("the union of the default graph and g is inconsistent under cax-dw");
+        };
+        assert_eq!(witness.rule(), RuleId::CaxDw);
+        assert_eq!(witness.graph(), Some(&TermValue::iri(G)));
+
+        // The same three triples with the two typings in DIFFERENT named graphs is
+        // consistent, because neither union holds both.
+        let split = quads(&[
+            (A, disjoint, B, None),
+            (X, RDF_TYPE, A, Some(G)),
+            (X, RDF_TYPE, B, Some(H)),
+        ]);
+        assert!(materialize(&split, Regime::OwlRl).is_ok());
     }
 
     /// An ILL-TYPED LITERAL is an inconsistency under `D` as well as under `OWL-RL`, and

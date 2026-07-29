@@ -5,17 +5,12 @@
 # Regenerate deliberately with:
 #   cargo test -p purrdf-entail --test oracle -- --ignored --exact regenerate_goldens
 #
-# fixture: named_graph
-# AWKWARD CASE — a quad outside the default graph. RDF has no standard entailment
-# relation for a DATASET, so PurRDF states one: the default graph is closed
-# against itself, each named graph against the union of itself and the default
-# graph, and a conclusion lands in the graph that PRODUCED it. `x p y` in graph g
-# is therefore a premise of g's own closure, and everything it licenses appears IN
-# g; the named-graph boundary is what says this is a defined choice rather than a
-# derived one. This is also rdfD2's near-miss, and a sharper one than it was: p is
-# typed rdf:Property in g and NOT in the default graph, so the absence of the
-# default-graph line is evidence that the routing works rather than that the rule
-# did not fire.
+# fixture: reifies_as_domain_class
+# rdf:reifies as the OBJECT OF rdfs:domain — that is, read as a CLASS. Nothing
+# forbids it: rdfs:domain's range is rdfs:Class, a user may declare rdf:reifies
+# one, and prp-dom / rdfs2 then types the subject of every p-triple with it. The
+# near miss is `domain`, which is this fixture with the domain object changed to
+# example.org/A.
 #
 # EVERY GOLDEN IN THIS CORPUS MOVED AT THE ENGINE SWAP — `materialize` stopped
 # running a hand-written chase and started evaluating the DL-clause program
@@ -254,156 +249,17 @@
 #
 # WHAT MOVED IN THIS GOLDEN:
 #
-# Cause 2 — RDF gains `rdf:type rdf:type rdf:Property` (rdfD2 1 -> 2).
-# Cause 1 — RDFS and OWL-RL lose four triples (rdfs6 2 -> 0, rdfs10 2 -> 0):
-# `A rdfs:subClassOf A` and `B rdfs:subClassOf B` fired on the ENDPOINTS of the
-# input's subClassOf edge rather than on rdfs:Class instances, and
-# `rdfs:subClassOf rdfs:subPropertyOf rdfs:subClassOf` /
-# `rdfs:subPropertyOf rdfs:subPropertyOf rdfs:subPropertyOf` fired on predicates
-# rather than on rdf:Property instances.
-# What this fixture is FOR is untouched: the named-graph quad is still carried
-# through unchanged, still supplies no premise, and the boundary is still reported.
-#
-# AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.
-# RDFS closure 2 -> 123 lines: the 113-line input-independent block cause C
-# describes, plus 10 about this fixture's own terms —
-#
-#   ex:A rdf:type rdfs:Class
-#   ex:A rdf:type rdfs:Resource
-#   ex:A rdfs:subClassOf ex:A
-#   ex:A rdfs:subClassOf ex:B
-#   ex:A rdfs:subClassOf rdfs:Resource
-#   ex:B rdf:type rdfs:Class
-#   ex:B rdf:type rdfs:Resource
-#   ex:B rdfs:subClassOf ex:B
-#   ex:B rdfs:subClassOf rdfs:Resource
-#   ex:x ex:p ex:y ex:g
-#
-# What this fixture is FOR is untouched: the named-graph quad is still carried
-# through, still supplies no premise, and the boundary is still reported — which
-# is now a sharper claim, because rdfs4 would type x, p and y rdfs:Resource if
-# the chase read that graph, and it does not. The default-graph subClassOf edge
-# gets the full axiomatic treatment: both endpoints typed rdfs:Class and both
-# reflexives drawn.
-#
-# AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.
-# OWL-RL closure 2 -> 11 lines: the nine-line input-independent prp-ap block
-# cause ii describes, and nothing else: no rule this change added has a premise
-# in this input, so the fixture's own conclusions are exactly what they were.
-# The tally gains prp-ap=9.
-#
-# AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF
-# and RDFS are byte-identical.
-# OWL-RL closure 11 -> 102 lines: the 98-line input-independent premise-free block
-# cause iii describes — which subsumes the nine prp-ap lines the previous change's
-# cause ii named — plus 4 about this fixture's own terms.
-# All 2 lines that were there before are unchanged.
-# What is new are 2 reflexive `owl:sameAs` assertions. eq-ref draws one for every term
-# of every triple; these are the ones the shared block does not already hold and no
-# other rule had already reached, by subject:
-#
-#   ex:A ex:B
-#
-# AND THE ABSENCES ARE THE POINT, ON THIS FIXTURE MORE THAN ANY OTHER: x, p and y get
-# NO reflexive assertion. They appear only in the named graph, the chase reads the
-# default graph only, and eq-ref's premise is a triple of the graph it reads — so a
-# rule that fires on literally every triple still does not reach them. A chase that
-# had started reading named graphs would show up here as three extra lines.
-#
-# The tally gains eq-ref=52 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the
-# report's missing list is empty where it held 41 ids, and its completeness reads
-# exact-within-boundaries where it read sound-incomplete.
-# THE NEW D SECTION: this fixture's 2 input quads plus dt-type1's thirty-two
-# rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only
-# triples with a literal subject, and the D lane holds no rule that could consume one,
-# so its closure is Simple entailment plus one premise-free rule. Its boundary list
-# adds named-graph, which the input holds.
-#
-# AT THE DATASET SEMANTICS — THIS IS THE ONLY COMMITTED GOLDEN THAT MOVED, AND IT IS
-# THE ONLY ONE THAT COULD HAVE: it is the corpus's only fixture with a quad outside
-# the default graph, and nothing about a single-graph run changes. RDF has no
-# standard entailment relation for a dataset — RDF 1.2 Semantics defines entailment
-# over a GRAPH and SPARQL's regimes over the ACTIVE graph — so a reasoner handed one
-# must choose, and PurRDF now states its choice instead of producing nothing: the
-# default graph is closed against itself, each named graph against the union of
-# itself and the default graph, and a conclusion lands in the graph that PRODUCED
-# it. The named-graph boundary's reason is where that is written down, and it says
-# so as a DEFINED behaviour rather than a derived one.
-#
-#   Simple is byte-identical: the identity closure was already faithful to every
-#   graph, which is what made its `exact` honest and still does.
-#
-#   RDF closure 4 -> 5 lines. The one new line is
-#
-#     ex:p rdf:type rdf:Property ex:g
-#
-#   — rdfD2 over g's own seed. The tally goes rdfD2 2 -> 3. Note the GRAPH on that
-#   line: `ex:p rdf:type rdf:Property` is still absent from the DEFAULT graph, which
-#   is what keeps this fixture rdfD2's near-miss, and makes it a sharper one than it
-#   was — the rule fired, and the conclusion went where it was produced.
-#
-#   RDFS closure 123 -> 128 lines, all five in ex:g and all five about the three
-#   terms that appear only there —
-#
-#     ex:p rdf:type rdf:Property ex:g
-#     ex:p rdf:type rdfs:Resource ex:g
-#     ex:p rdfs:subPropertyOf ex:p ex:g
-#     ex:x rdf:type rdfs:Resource ex:g
-#     ex:y rdf:type rdfs:Resource ex:g
-#
-#   The tally gains rdfD2 4 -> 5, rdfs4 24 -> 27, rdfs6 17 -> 18. NOT ONE of the 113
-#   input-independent vocabulary lines is restated in ex:g, and that is the
-#   `conclusion lands in the graph that produced it` rule doing its work: g's run
-#   re-derives every one of them — the default graph is in its seed — and every one
-#   is already a default-graph conclusion, so none is emitted twice.
-#
-#   OWL-RL closure 102 -> 105 lines: three eq-ref reflexives in ex:g, for the three
-#   terms the default graph does not hold —
-#
-#     ex:p ex:x ex:y
-#
-#   — and the tally gains eq-ref 52 -> 55. THE PREVIOUS SECTION PREDICTED EXACTLY
-#   THIS. It ends `A chase that had started reading named graphs would show up here
-#   as three extra lines`, and here are the three lines. That prediction was written
-#   as a tripwire and it fired as designed; it is left standing rather than edited,
-#   because this accounting is append-only and a reader who wants to know what the
-#   answer used to be should be able to read it.
-#
-#   D closure is UNCHANGED at 34 lines, and that is the strongest single line of
-#   evidence in this golden. The D lane is Simple entailment plus dt-type1, which is
-#   premise-free: g's run draws the same thirty-two rdfs:Datatype typings the default
-#   graph's run drew, every one of them is already a default-graph conclusion, and so
-#   the named graph gains NOTHING. A per-graph closure that restated its seed's
-#   conclusions would show up here as thirty-two duplicated lines.
-#
-#   THE BUDGET ROUGHLY DOUBLED, WHICH IS THE COST OF THE SEMANTICS AND IS REPORTED
-#   RATHER THAN HIDDEN. One named graph is 1 + 1 = two evaluations of the same
-#   declared program, so join-steps — which is WORK — sums: RDF 25 -> 58, RDFS
-#   8,515 -> 17,291, OWL-RL 1,730 -> 3,562. stored-facts and term-arena-bytes are
-#   OCCUPANCY of one store, each evaluation gets its own and drops it, and the
-#   ceiling they are measured against is per-store — so they report the PEAK rather
-#   than a sum that never existed at any instant: RDFS 182 -> 188 facts,
-#   1,870 -> 1,936 bytes.
-#
-#   THE CORPUS WORST CASE MOVED, into a fixture this change ADDED rather than into
-#   an existing one. `named_graph_closure_near_miss` holds TWO named graphs, so its
-#   RDFS run is three evaluations and costs 24,970 join steps; the previous worst
-#   case, `subclass_chain`'s single-graph RDFS run at 10,393, is untouched. Against
-#   the fixed ceilings: 24,970 of 1,048,576 join steps is 2.4%. The corpus's largest
-#   single STORE is still subclass_chain's 219 stored facts of 131,072 — 0.17% —
-#   because occupancy is a peak and a third evaluation does not enlarge any one
-#   store. NO CEILING MOVED, and none may: they are constants, measured against and
-#   never raised.
-# exercises: rdfD2
+# NEW FIXTURE — no committed golden moved; this one did not exist.
+# exercises: rdfs2 prp-dom
 
 --- input (2 lines) ---
-<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .
-<http://example.org/x> <http://example.org/p> <http://example.org/y> <http://example.org/g> .
+<http://example.org/p> <http://www.w3.org/2000/01/rdf-schema#domain> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> .
+<http://example.org/x> <http://example.org/p> <http://example.org/y> .
 
 === regime Simple ===
 --- closure (2 lines) ---
-<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .
-<http://example.org/x> <http://example.org/p> <http://example.org/y> <http://example.org/g> .
+<http://example.org/p> <http://www.w3.org/2000/01/rdf-schema#domain> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> .
+<http://example.org/x> <http://example.org/p> <http://example.org/y> .
 --- report ---
   completeness: exact
   missing: (0)
@@ -416,40 +272,33 @@
 
 === regime RDF ===
 --- closure (5 lines) ---
-<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .
-<http://example.org/p> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> <http://example.org/g> .
-<http://example.org/x> <http://example.org/p> <http://example.org/y> <http://example.org/g> .
+<http://example.org/p> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://example.org/p> <http://www.w3.org/2000/01/rdf-schema#domain> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> .
+<http://example.org/x> <http://example.org/p> <http://example.org/y> .
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
-<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://www.w3.org/2000/01/rdf-schema#domain> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
 --- report ---
   completeness: exact-within-boundaries
   missing: (0)
   rules-fired: (1)
       rdfD2=3
-  boundaries: (4)
-      named-graph axiomatic-triples datatype-value-space surrogate
-  budget: join-steps=58 stored-facts=8 term-arena-bytes=526
+  boundaries: (3)
+      axiomatic-triples datatype-value-space surrogate
+  budget: join-steps=33 stored-facts=8 term-arena-bytes=530
   contract-hash: 9724540a02daf06f349ba8aecf52f9e3e21abf7042d1bfcc630172baa7f23ee3
   inconsistency: none
   overclaims: false
 
 === regime RDFS ===
---- closure (128 lines) ---
-<http://example.org/A> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
-<http://example.org/A> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
-<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/A> .
-<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .
-<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
-<http://example.org/B> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
-<http://example.org/B> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
-<http://example.org/B> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .
-<http://example.org/B> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
-<http://example.org/p> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> <http://example.org/g> .
-<http://example.org/p> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> <http://example.org/g> .
-<http://example.org/p> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://example.org/p> <http://example.org/g> .
-<http://example.org/x> <http://example.org/p> <http://example.org/y> <http://example.org/g> .
-<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> <http://example.org/g> .
-<http://example.org/y> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> <http://example.org/g> .
+--- closure (124 lines) ---
+<http://example.org/p> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://example.org/p> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://example.org/p> <http://www.w3.org/2000/01/rdf-schema#domain> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> .
+<http://example.org/p> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://example.org/p> .
+<http://example.org/x> <http://example.org/p> <http://example.org/y> .
+<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> .
+<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://example.org/y> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#Alt> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#Alt> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#Alt> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Alt> .
@@ -493,7 +342,10 @@
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#object> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#object> .
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#predicate> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#predicate> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#predicate> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> .
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> .
@@ -567,34 +419,35 @@
   completeness: exact-within-boundaries
   missing: (0)
   rules-fired: (9)
-      rdfD2=5 rdfs1=3 rdfs2=23 rdfs3=12 rdfs4=27 rdfs6=18 rdfs8=18 rdfs10=17
+      rdfD2=5 rdfs1=3 rdfs2=23 rdfs3=12 rdfs4=25 rdfs6=18 rdfs8=17 rdfs10=16
       rdfs13=3
-  boundaries: (4)
-      named-graph axiomatic-triples datatype-value-space surrogate
-  budget: join-steps=17291 stored-facts=188 term-arena-bytes=1936
+  boundaries: (3)
+      axiomatic-triples datatype-value-space surrogate
+  budget: join-steps=8589 stored-facts=184 term-arena-bytes=1892
   contract-hash: f6a5eff90528f49ba8d3b83ae7feac8e3b71586f320fb478c6ddb60ca6dc979e
   inconsistency: none
   overclaims: false
 
 === regime OWL-RL ===
---- closure (105 lines) ---
-<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .
-<http://example.org/A> <http://www.w3.org/2002/07/owl#sameAs> <http://example.org/A> .
-<http://example.org/B> <http://www.w3.org/2002/07/owl#sameAs> <http://example.org/B> .
-<http://example.org/p> <http://www.w3.org/2002/07/owl#sameAs> <http://example.org/p> <http://example.org/g> .
-<http://example.org/x> <http://example.org/p> <http://example.org/y> <http://example.org/g> .
-<http://example.org/x> <http://www.w3.org/2002/07/owl#sameAs> <http://example.org/x> <http://example.org/g> .
-<http://example.org/y> <http://www.w3.org/2002/07/owl#sameAs> <http://example.org/y> <http://example.org/g> .
+--- closure (106 lines) ---
+<http://example.org/p> <http://www.w3.org/2000/01/rdf-schema#domain> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> .
+<http://example.org/p> <http://www.w3.org/2002/07/owl#sameAs> <http://example.org/p> .
+<http://example.org/x> <http://example.org/p> <http://example.org/y> .
+<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> .
+<http://example.org/x> <http://www.w3.org/2002/07/owl#sameAs> <http://example.org/x> .
+<http://example.org/y> <http://www.w3.org/2002/07/owl#sameAs> <http://example.org/y> .
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#PlainLiteral> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#PlainLiteral> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/1999/02/22-rdf-syntax-ns#PlainLiteral> .
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#XMLLiteral> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#XMLLiteral> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/1999/02/22-rdf-syntax-ns#XMLLiteral> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> .
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> .
 <http://www.w3.org/2000/01/rdf-schema#Datatype> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
 <http://www.w3.org/2000/01/rdf-schema#Literal> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
 <http://www.w3.org/2000/01/rdf-schema#Literal> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2000/01/rdf-schema#Literal> .
 <http://www.w3.org/2000/01/rdf-schema#comment> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
 <http://www.w3.org/2000/01/rdf-schema#comment> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2000/01/rdf-schema#comment> .
+<http://www.w3.org/2000/01/rdf-schema#domain> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2000/01/rdf-schema#domain> .
 <http://www.w3.org/2000/01/rdf-schema#isDefinedBy> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
 <http://www.w3.org/2000/01/rdf-schema#isDefinedBy> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2000/01/rdf-schema#isDefinedBy> .
 <http://www.w3.org/2000/01/rdf-schema#label> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
@@ -686,19 +539,19 @@
 --- report ---
   completeness: exact-within-boundaries
   missing: (0)
-  rules-fired: (6)
-      eq-ref=55 prp-ap=9 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5
-  boundaries: (2)
-      named-graph datatype-value-space
-  budget: join-steps=3562 stored-facts=105 term-arena-bytes=2355
+  rules-fired: (7)
+      eq-ref=55 prp-ap=9 prp-dom=1 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5
+  boundaries: (1)
+      datatype-value-space
+  budget: join-steps=1827 stored-facts=106 term-arena-bytes=2408
   contract-hash: 61a9a84001b40b06a8dfe4b38e331ca1943893cbd191b272d6ffead048fa2de0
   inconsistency: none
   overclaims: false
 
 === regime D ===
 --- closure (34 lines) ---
-<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .
-<http://example.org/x> <http://example.org/p> <http://example.org/y> <http://example.org/g> .
+<http://example.org/p> <http://www.w3.org/2000/01/rdf-schema#domain> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> .
+<http://example.org/x> <http://example.org/p> <http://example.org/y> .
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#PlainLiteral> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#XMLLiteral> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
 <http://www.w3.org/2000/01/rdf-schema#Literal> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
@@ -736,9 +589,9 @@
   missing: (0)
   rules-fired: (1)
       dt-type1=32
-  boundaries: (2)
-      named-graph datatype-value-space
-  budget: join-steps=0 stored-facts=34 term-arena-bytes=1690
+  boundaries: (1)
+      datatype-value-space
+  budget: join-steps=0 stored-facts=34 term-arena-bytes=1694
   contract-hash: 20ac9aa48ce8dd9b25bc7239798566da2d1559458c6ed12befa520c3fdb16cb7
   inconsistency: none
   overclaims: false

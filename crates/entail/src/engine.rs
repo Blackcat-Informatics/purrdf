@@ -50,14 +50,42 @@
 //! store and may still serve as a premise, so a conclusion that is itself representable is
 //! not withheld merely because its derivation passed through one that was not.
 //!
+//! # A dataset is closed graph by graph, and that is a DEFINED choice
+//!
+//! RDF has no standard entailment relation for a *dataset*: RDF 1.2 Semantics defines
+//! entailment over a graph, and SPARQL's entailment regimes are defined over the active
+//! graph. A reasoner handed a dataset therefore has to choose, and the choice PurRDF makes
+//! is stated here and reported as the [`Construct::NamedGraph`](crate::Construct::NamedGraph)
+//! boundary on every run whose input has a named graph:
+//!
+//! * the DEFAULT graph is closed against itself;
+//! * each NAMED graph is closed against the union of itself and the default graph;
+//! * a conclusion lands in the graph that produced it — a conclusion the default graph
+//!   already draws on its own is a default-graph conclusion and is not restated in the
+//!   named graph that also reached it.
+//!
+//! That is what makes the layout every real dataset uses work: a terminology in the default
+//! graph and instances in a named graph derive the expected triples INTO the named graph.
+//! Two named graphs never join, because neither is ever in the other's seed.
+//!
+//! The declared clause program is untouched by this — every atom over specification
+//! vocabulary still names
+//! [`ClauseTerm::DefaultGraph`](purrdf_datalog::clause::ClauseTerm::DefaultGraph), which
+//! `the_declared_programs_read_and_write_the_default_graph_only` still asserts. What varies
+//! is the SEED: [`close_graph`] fills the store's default partition with the union it is
+//! closing, runs the graph-agnostic program over it, and [`close`] routes the answer back
+//! to the graph that produced it. One statement of the calculus, `1 + n` evaluations of it.
+//!
 //! # Determinism
 //!
 //! Derivations arrive in `purrdf-datalog`'s total order — lexical by `(fact, rule,
 //! sources)` — and are emitted in that order, so the derived quads reach the builder in a
 //! sequence that is a function of the fact set alone. [`Terms`] is a `BTreeMap`, so no
-//! hash iteration reaches anything either.
+//! hash iteration reaches anything either. The named graphs are visited in ascending
+//! [`surface_of`] order — a total order over term VALUES, not over interned ids — so the
+//! emission sequence is a function of the dataset's content alone.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::sync::Arc;
 
@@ -101,8 +129,61 @@ pub(crate) fn literal_surface(lexical: &str, datatype: &str) -> String {
 /// A faithful copy of `ds` (the identity closure for `Simple`).
 pub(crate) fn copy_of(ds: &RdfDataset) -> Result<Arc<RdfDataset>, EntailError> {
     let mut b = RdfDatasetBuilder::new();
-    b.push_dataset(ds);
+    copy_into(&mut b, ds);
     b.freeze().map_err(|e| EntailError::Build(e.to_string()))
+}
+
+/// Copy every quad, side-table row and graph declaration of `ds` into `b`, PRESERVING
+/// blank-node scopes.
+///
+/// # Why not `push_dataset`
+///
+/// [`RdfDatasetBuilder::push_dataset`] is the standardize-apart primitive: it allocates a
+/// FRESH [`BlankScope`](purrdf_core::BlankScope) for the dataset it merges, so `_:b` from
+/// two sources cannot collide. That is exactly right for a MERGE and exactly wrong here,
+/// because a closure is not a merge of two datasets — it is one dataset plus conclusions
+/// ABOUT it, and those conclusions name the very blank nodes the copy just re-scoped.
+/// Interning a conclusion's `_:b` through [`intern_into`] would then mint a SECOND node with
+/// the same label and the original scope, so the closure would carry two blank nodes where
+/// the input had one: the copied triples about the first, the inferred triples about the
+/// second, and nothing joining them. A blank-node GRAPH NAME is the sharpest case — the
+/// conclusions of a named graph's own closure would land in a graph the input does not have
+/// — and `a_blank_node_graph_name_survives_the_closure` is the assertion that they do not.
+///
+/// There is nothing to standardize apart from: one source dataset, whose scopes are already
+/// internally consistent, and a set of conclusions drawn over its own terms.
+///
+/// The reifier and annotation SIDE TABLES ride along, because a closure that silently
+/// dropped them would delete every reifier in a caller's data the moment they asked for
+/// entailment, and no assertion about the quads would notice.
+fn copy_into(b: &mut RdfDatasetBuilder, ds: &RdfDataset) {
+    for quad in ds.quads() {
+        let s = intern_into(b, &ds.term_value(quad.s));
+        let p = intern_into(b, &ds.term_value(quad.p));
+        let o = intern_into(b, &ds.term_value(quad.o));
+        let g = quad.g.map(|g| intern_into(b, &ds.term_value(g)));
+        b.push_quad(s, p, o, g);
+    }
+    for (reifier, triple, graph) in ds.reifiers_with_graph() {
+        let reifier = intern_into(b, &ds.term_value(reifier));
+        let triple = intern_into(b, &ds.term_value(triple));
+        let graph = graph.map(|g| intern_into(b, &ds.term_value(g)));
+        b.push_reifier_in_graph(reifier, triple, graph);
+    }
+    for (reifier, predicate, object, graph) in ds.annotations_with_graph() {
+        let reifier = intern_into(b, &ds.term_value(reifier));
+        let predicate = intern_into(b, &ds.term_value(predicate));
+        let object = intern_into(b, &ds.term_value(object));
+        let graph = graph.map(|g| intern_into(b, &ds.term_value(g)));
+        b.push_annotation_in_graph(reifier, predicate, object, graph);
+    }
+    // A named graph a dataset DECLARES but puts no quad in is part of its content, and a
+    // closure that dropped the declaration would answer a different question about which
+    // graphs exist.
+    for graph in ds.named_graphs() {
+        let graph = intern_into(b, &ds.term_value(graph));
+        b.declare_named_graph(graph);
+    }
 }
 
 /// Close `ds` under `regime`'s declared calculus and emit `original + inferred`.
@@ -123,34 +204,249 @@ pub(crate) fn copy_of(ds: &RdfDataset) -> Result<Arc<RdfDataset>, EntailError> {
 /// [`Construct::AxiomaticTriples`](crate::Construct::AxiomaticTriples) says both this and
 /// the unbounded `rdf:_n` family in one boundary.
 ///
-/// The default graph alone supplies premises and receives conclusions — every atom over
-/// SPEC vocabulary names
+/// # A dataset is closed graph by graph
+///
+/// See the [module docs](self) for the defined semantics and for why it has to BE a defined
+/// choice: the default graph is closed against itself, each named graph against the union
+/// of itself and the default graph, and a conclusion lands in the graph that produced it.
+/// A dataset holding `n` named graphs therefore costs `1 + n` evaluations of the same
+/// declared program, which is a real multiplication of the work and is REPORTED —
+/// [`RunStats::absorb`] sums the join steps across the runs and takes the peak of the two
+/// occupancy coordinates, so a caller reads the total enumeration and the worst single
+/// store rather than one lane's slice of either.
+///
+/// The clause program itself is graph-agnostic: every atom over SPEC vocabulary names
 /// [`ClauseTerm::DefaultGraph`](purrdf_datalog::clause::ClauseTerm::DefaultGraph), which
-/// `the_declared_programs_read_and_write_the_default_graph_only` asserts — so quads in a
-/// named graph are carried through untouched and the run reports the
-/// [`Construct::NamedGraph`](crate::Construct::NamedGraph) boundary. The atoms of the
-/// INTERNAL relations ([`crate::lists`]) use that fourth position for the relation's third
-/// argument instead, which is not a graph at all and never reaches the answer.
+/// `the_declared_programs_read_and_write_the_default_graph_only` asserts, and each run
+/// seeds that one partition with the union it is closing. The atoms of the INTERNAL
+/// relations ([`crate::lists`]) use that fourth position for the relation's third argument
+/// instead, which is not a graph at all and never reaches the answer.
 ///
 /// # The collections are walked before the clauses run
 ///
-/// The `OWL-RL` lane's rule table writes `LIST[…]`, a meta-notation no clause has, so this
-/// function walks each RDF collection an OWL axiom points at into an internal relation
-/// before evaluating. A malformed or cyclic collection is [`EntailError::MalformedList`]
-/// rather than a closure over its well-formed prefix.
+/// The `OWL-RL` lane's rule table writes `LIST[…]`, a meta-notation no clause has, so each
+/// run walks each RDF collection an OWL axiom points at into an internal relation before
+/// evaluating. A malformed or cyclic collection is [`EntailError::MalformedList`] rather
+/// than a closure over its well-formed prefix.
 pub(crate) fn close(
     ds: &RdfDataset,
     regime: Regime,
 ) -> Result<(Arc<RdfDataset>, RunStats), EntailError> {
     let (program, attribution) = program_with_attribution(regime);
 
+    // The named graphs, keyed by their canonical surface so the visit order is a function
+    // of the dataset's CONTENT rather than of the order its quads happened to intern in.
+    let mut named: BTreeMap<String, TermValue> = BTreeMap::new();
+    for quad in ds.quads() {
+        if let Some(graph) = quad.g {
+            let value = ds.term_value(graph);
+            named.entry(surface_of(&value)).or_insert(value);
+        }
+    }
+
+    let mut stats = RunStats::none();
+    let default_run = close_graph(ds, regime, &program, &attribution, None)?;
+    stats.absorb(default_run.budget);
+    stats.drop_generalized(default_run.generalized_rdf_drops);
+    stats.drop_surrogate(default_run.surrogate_drops);
+
+    let mut b = RdfDatasetBuilder::new();
+    copy_into(&mut b, ds);
+    // What the DEFAULT graph draws on its own. A named-graph run re-derives every one of
+    // these — the default graph is in its seed — and restating them inside the named graph
+    // would put a conclusion in a graph that did not produce it.
+    let mut default_conclusions: BTreeSet<(String, String, String)> = BTreeSet::new();
+    for conclusion in &default_run.conclusions {
+        default_conclusions.insert(conclusion.key());
+        stats.commit(conclusion.rule);
+        emit(&mut b, conclusion, None);
+    }
+    for graph in named.values() {
+        let run = close_graph(ds, regime, &program, &attribution, Some(graph))?;
+        stats.absorb(run.budget);
+        stats.drop_generalized(run.generalized_rdf_drops);
+        stats.drop_surrogate(run.surrogate_drops);
+        let g = intern_into(&mut b, graph);
+        for conclusion in &run.conclusions {
+            if default_conclusions.contains(&conclusion.key()) {
+                continue;
+            }
+            stats.commit(conclusion.rule);
+            emit(&mut b, conclusion, Some(g));
+        }
+    }
+    let dataset = b.freeze().map_err(|e| EntailError::Build(e.to_string()))?;
+    Ok((dataset, stats))
+}
+
+/// One conclusion a graph's run drew, already known representable in RDF 1.2.
+#[derive(Debug, Clone)]
+struct Conclusion {
+    /// The rule the derivation is credited to.
+    rule: ChaseRule,
+    /// The subject term.
+    subject: TermValue,
+    /// The predicate term.
+    predicate: TermValue,
+    /// The object term.
+    object: TermValue,
+}
+
+impl Conclusion {
+    /// The triple's identity, as the three canonical surfaces.
+    ///
+    /// A surface triple rather than the [`TermValue`]s themselves because [`surface_of`] is
+    /// injective (see its own documentation) and a `String` triple is `Ord` without asking
+    /// `TermValue` to be.
+    fn key(&self) -> (String, String, String) {
+        (
+            surface_of(&self.subject),
+            surface_of(&self.predicate),
+            surface_of(&self.object),
+        )
+    }
+}
+
+/// What closing one graph produced and consumed.
+#[derive(Debug)]
+struct GraphRun {
+    /// The conclusions, in the evaluator's own total derivation order.
+    conclusions: Vec<Conclusion>,
+    /// What this evaluation consumed of the three fixed ceilings.
+    budget: purrdf_datalog::seminaive::BudgetReport,
+    /// Conclusions this run abandoned because the RDF 1.2 IR cannot hold them.
+    generalized_rdf_drops: u64,
+    /// Conclusions this run withheld because they mention a surrogate blank node.
+    surrogate_drops: u64,
+}
+
+/// Push `conclusion` into `b`, in `graph`.
+fn emit(b: &mut RdfDatasetBuilder, conclusion: &Conclusion, graph: Option<purrdf_core::TermId>) {
+    let s = intern_into(b, &conclusion.subject);
+    let p = intern_into(b, &conclusion.predicate);
+    let o = intern_into(b, &conclusion.object);
+    b.push_quad(s, p, o, graph);
+}
+
+/// Close ONE graph of `ds` under `regime`'s declared calculus.
+///
+/// `graph` is the graph being closed: `None` is the default graph, closed against itself;
+/// `Some(g)` is the named graph `g`, closed against the union of itself and the default
+/// graph. The union is what is SEEDED — the store's default partition holds it — so the
+/// graph-agnostic program is evaluated unchanged and [`close`] routes the answer back.
+///
+/// # The axiomatic triples are seeded, not concluded
+///
+/// [`crate::axioms`]'s finite table is inserted into the fact store beside the graph's own
+/// quads, because that is what the definition of RDFS entailment says it is: a premise
+/// every interpretation satisfies, not something a rule derives. Its CONSEQUENCES are
+/// derivations like any other and are credited to the rule that drew them —
+/// `:a rdfs:subClassOf :b` reaches `:a rdfs:subClassOf :a` through `rdfs3` and then
+/// `rdfs10`, and both firings appear in the report.
+///
+/// The axioms themselves are therefore NOT emitted: they are neither in `ds` nor
+/// derivations, and inventing a rule id to credit them to would put a firing in the tally
+/// that no rule of the specification's tables licenses. A closure that omits an entailed
+/// triple is an incompleteness, so it is reported —
+/// [`Construct::AxiomaticTriples`](crate::Construct::AxiomaticTriples) says both this and
+/// the unbounded `rdf:_n` family in one boundary.
+fn close_graph(
+    ds: &RdfDataset,
+    regime: Regime,
+    program: &[DlClause],
+    attribution: &[ChaseRule],
+    graph: Option<&TermValue>,
+) -> Result<GraphRun, EntailError> {
+    let (edb, terms) = seed(ds, regime, program, graph)?;
+
+    // A lane whose calculus states an EXISTENTIAL rule is evaluated by the restricted
+    // chase; every other lane keeps the semi-naive evaluator, which refuses a non-atomic
+    // head by name. The routing is a property of the PROGRAM rather than a lane list, so a
+    // rule that later becomes existential moves its own lane without a second edit here.
+    if program
+        .iter()
+        .any(|clause| clause.head_form() == HeadForm::Existential)
+    {
+        return chase_graph(program, attribution, edb, &terms);
+    }
+
+    let executable = compile(program.to_vec()).map_err(EntailError::Evaluate)?;
+    let evaluation = evaluate(&executable, edb).map_err(EntailError::Evaluate)?;
+
+    // AN INCONSISTENCY IS DECIDED BEFORE AN ANSWER IS BUILT. Seventeen OWL 2 RL rules
+    // conclude `false`, and a match on one of them says the knowledge base entails
+    // everything — so there is no closure to hand back, only evidence. The first clash in
+    // the evaluation's own total derivation order is the witness, which makes the choice a
+    // function of the program and the data rather than of the round a rule happened to
+    // fire in.
+    if let Some(witness) = first_clash(&evaluation, attribution, &terms, regime, graph) {
+        return Err(EntailError::Inconsistent(Box::new(witness)));
+    }
+
+    // The budget is the evaluator's own measurement, not a second tally kept alongside it.
+    let mut run = GraphRun {
+        conclusions: Vec::new(),
+        budget: evaluation.budget(),
+        generalized_rdf_drops: 0,
+        surrogate_drops: 0,
+    };
+    for derivation in evaluation.derivations() {
+        let fact = derivation.fact();
+        // An INTERNAL conclusion is bookkeeping, not an answer. `prp-spo2` and `prp-key`
+        // accumulate their list traversals in relations whose predicate is an
+        // interner-local id ([`crate::lists`]), and those rows are premises for the rule's
+        // own final clause and nothing else. They are neither materialized — no internal
+        // id may reach the dataset builder, let alone a serializer — nor credited, because
+        // a per-rule count is "triples this rule was first to add" and a traversal row is
+        // not a triple. Dropping them is also NOT the generalized-RDF boundary: nothing
+        // was lost, so nothing is reported.
+        if is_internal(&fact.predicate) {
+            continue;
+        }
+        let subject = terms.value(&fact.subject);
+        let predicate = terms.value(&fact.predicate);
+        if !admits_subject(subject) || !admits_predicate(predicate) {
+            run.generalized_rdf_drops += 1;
+            continue;
+        }
+        // Recorded only once the conclusion is known to be representable, so the per-rule
+        // counts sum to exactly the inferred triples a caller can see.
+        run.conclusions.push(Conclusion {
+            rule: attribution[derivation.rule()],
+            subject: subject.clone(),
+            predicate: predicate.clone(),
+            object: terms.value(&fact.object).clone(),
+        });
+    }
+    Ok(run)
+}
+
+/// Fill a fresh [`RelationStore`] with everything one graph's run reasons FROM, and the
+/// surface dictionary that reads its answers back.
+///
+/// The seed is the union being closed — the default graph always, plus `graph` when there
+/// is one — together with `regime`'s axiomatic triples and the three pre-passes whose
+/// premises no clause can express. It is a function of `(ds, regime, program, graph)` and
+/// nothing else, which is what lets [`crate::explain`] rebuild the very store an answer was
+/// produced from and re-derive a conclusion against it.
+///
+/// # Errors
+///
+/// [`EntailError::MalformedList`] if an RDF collection an OWL 2 axiom points at is not a
+/// well-formed collection.
+pub(crate) fn seed(
+    ds: &RdfDataset,
+    regime: Regime,
+    program: &[DlClause],
+    graph: Option<&TermValue>,
+) -> Result<(RelationStore, Terms), EntailError> {
     let mut terms = Terms::default();
-    terms.record_program(&program);
+    terms.record_program(program);
     terms.record_literals();
     let mut edb = RelationStore::new();
     // The axiomatic triples are PREMISES, not conclusions: `S RDFS entails E` is defined
     // over the interpretations satisfying S *and* the axioms, and no rule of §9.2.1
-    // concludes one. Seeding them beside the dataset's own quads is that definition,
+    // concludes one. Seeding them beside the graph's own quads is that definition,
     // written down. See `crate::axioms` for the table and for which lanes assert it.
     for &(subject, predicate, object) in axioms_for(regime) {
         let subject = terms.record(&TermValue::iri(subject));
@@ -162,8 +458,16 @@ pub(crate) fn close(
     let mut literals = LiteralIndex::default();
     let mut surrogates = SurrogateIndex::default();
     for quad in ds.quads() {
-        if quad.g.is_some() {
-            continue; // entailment operates over the default graph
+        // The seed is the union this run closes: the default graph always, plus the named
+        // graph when there is one. Every OTHER named graph is left out, which is what makes
+        // a cross-graph join impossible rather than merely unobserved.
+        let in_seed = match (quad.g, graph) {
+            (None, _) => true,
+            (Some(g), Some(target)) => ds.term_value(g) == *target,
+            (Some(_), None) => false,
+        };
+        if !in_seed {
+            continue;
         }
         let subject = terms.record(&ds.term_value(quad.s));
         let predicate = terms.record(&ds.term_value(quad.p));
@@ -203,8 +507,8 @@ pub(crate) fn close(
         }
     }
     // The XSD value spaces OWL 2 Profiles Table 8 quantifies over, decided ONCE over the
-    // literals the dataset holds. See [`crate::datatypes`] for why an infinite premise is
-    // a boundary rather than a loop, and why an unmodelled datatype is not judged.
+    // literals this run's seed holds. See [`crate::datatypes`] for why an infinite premise
+    // is a boundary rather than a loop, and why an unmodelled datatype is not judged.
     if decides_datatypes(regime) {
         // A datatype the pre-pass names is a TERM of the store, and `dt-type2` writes it
         // into an `rdf:type` object, so the dictionary has to be able to read it back —
@@ -220,7 +524,7 @@ pub(crate) fn close(
     }
 
     // What `rdfD1` and `rdfs14` OBSERVE — a datatyped literal, a triple term — decided
-    // once over the dataset's own terms. The clause language has no term-kind test, so
+    // once over the seed's own terms. The clause language has no term-kind test, so
     // neither premise is expressible as a clause; see [`crate::surrogates`].
     if mints_surrogates(regime) {
         let iris: Vec<String> = surrogates.iris().map(str::to_owned).collect();
@@ -232,66 +536,10 @@ pub(crate) fn close(
         }
     }
 
-    // A lane whose calculus states an EXISTENTIAL rule is evaluated by the restricted
-    // chase; every other lane keeps the semi-naive evaluator, which refuses a non-atomic
-    // head by name. The routing is a property of the PROGRAM rather than a lane list, so a
-    // rule that later becomes existential moves its own lane without a second edit here.
-    if program
-        .iter()
-        .any(|clause| clause.head_form() == HeadForm::Existential)
-    {
-        return chase_close(ds, &program, &attribution, edb, &terms);
-    }
-
-    let executable = compile(program).map_err(EntailError::Evaluate)?;
-    let evaluation = evaluate(&executable, edb).map_err(EntailError::Evaluate)?;
-
-    // AN INCONSISTENCY IS DECIDED BEFORE AN ANSWER IS BUILT. Seventeen OWL 2 RL rules
-    // conclude `false`, and a match on one of them says the knowledge base entails
-    // everything — so there is no closure to hand back, only evidence. The first clash in
-    // the evaluation's own total derivation order is the witness, which makes the choice a
-    // function of the program and the data rather than of the round a rule happened to
-    // fire in.
-    if let Some(witness) = first_clash(&evaluation, &attribution, &terms, regime) {
-        return Err(EntailError::Inconsistent(Box::new(witness)));
-    }
-
-    // The budget is the evaluator's own measurement, not a second tally kept alongside it.
-    let mut stats = RunStats::of_budget(evaluation.budget());
-    let mut b = RdfDatasetBuilder::new();
-    b.push_dataset(ds);
-    for derivation in evaluation.derivations() {
-        let fact = derivation.fact();
-        // An INTERNAL conclusion is bookkeeping, not an answer. `prp-spo2` and `prp-key`
-        // accumulate their list traversals in relations whose predicate is an
-        // interner-local id ([`crate::lists`]), and those rows are premises for the rule's
-        // own final clause and nothing else. They are neither materialized — no internal
-        // id may reach the dataset builder, let alone a serializer — nor credited, because
-        // a per-rule count is "triples this rule was first to add" and a traversal row is
-        // not a triple. Dropping them is also NOT the generalized-RDF boundary: nothing
-        // was lost, so nothing is reported.
-        if is_internal(&fact.predicate) {
-            continue;
-        }
-        let subject = terms.value(&fact.subject);
-        let predicate = terms.value(&fact.predicate);
-        if !admits_subject(subject) || !admits_predicate(predicate) {
-            stats.drop_generalized();
-            continue;
-        }
-        // Credited only once the conclusion is known to be representable, so the per-rule
-        // counts sum to exactly the inferred triples a caller can see.
-        stats.commit(attribution[derivation.rule()]);
-        let s = intern_into(&mut b, subject);
-        let p = intern_into(&mut b, predicate);
-        let o = intern_into(&mut b, terms.value(&fact.object));
-        b.push_quad(s, p, o, None);
-    }
-    let dataset = b.freeze().map_err(|e| EntailError::Build(e.to_string()))?;
-    Ok((dataset, stats))
+    Ok((edb, terms))
 }
 
-/// Evaluate an EXISTENTIAL calculus with the restricted chase and materialize its answer.
+/// Evaluate an EXISTENTIAL calculus with the restricted chase and read its answer.
 ///
 /// # Why a second evaluation path, and what it does NOT change
 ///
@@ -322,18 +570,20 @@ pub(crate) fn close(
 /// terms the store was SEEDED with plus the program's own constants, and a witness is
 /// neither — so a witness surface is never looked up, because the fact carrying it was
 /// already dropped.
-fn chase_close(
-    ds: &RdfDataset,
+fn chase_graph(
     program: &[DlClause],
     attribution: &[ChaseRule],
     edb: RelationStore,
     terms: &Terms,
-) -> Result<(Arc<RdfDataset>, RunStats), EntailError> {
+) -> Result<GraphRun, EntailError> {
     let outcome = chase(program, edb).map_err(EntailError::Chase)?;
-    let witnesses: std::collections::BTreeSet<&str> = outcome.witnesses().witnesses().collect();
-    let mut stats = RunStats::of_budget(outcome.budget());
-    let mut b = RdfDatasetBuilder::new();
-    b.push_dataset(ds);
+    let witnesses: BTreeSet<&str> = outcome.witnesses().witnesses().collect();
+    let mut run = GraphRun {
+        conclusions: Vec::new(),
+        budget: outcome.budget(),
+        generalized_rdf_drops: 0,
+        surrogate_drops: 0,
+    };
     for derivation in outcome.derivations() {
         let fact = derivation.fact();
         // Bookkeeping, not an answer — the two surrogate relations and the observation
@@ -345,23 +595,23 @@ fn chase_close(
             .into_iter()
             .any(|surface| witnesses.contains(surface.as_str()))
         {
-            stats.drop_surrogate();
+            run.surrogate_drops += 1;
             continue;
         }
         let subject = terms.value(&fact.subject);
         let predicate = terms.value(&fact.predicate);
         if !admits_subject(subject) || !admits_predicate(predicate) {
-            stats.drop_generalized();
+            run.generalized_rdf_drops += 1;
             continue;
         }
-        stats.commit(attribution[derivation.clause()]);
-        let s = intern_into(&mut b, subject);
-        let p = intern_into(&mut b, predicate);
-        let o = intern_into(&mut b, terms.value(&fact.object));
-        b.push_quad(s, p, o, None);
+        run.conclusions.push(Conclusion {
+            rule: attribution[derivation.clause()],
+            subject: subject.clone(),
+            predicate: predicate.clone(),
+            object: terms.value(&fact.object).clone(),
+        });
     }
-    let dataset = b.freeze().map_err(|e| EntailError::Build(e.to_string()))?;
-    Ok((dataset, stats))
+    Ok(run)
 }
 
 /// Whether `regime`'s lane walks the RDF collections its axioms point at.
@@ -425,13 +675,14 @@ fn first_clash(
     attribution: &[ChaseRule],
     terms: &Terms,
     regime: Regime,
+    graph: Option<&TermValue>,
 ) -> Option<InconsistencyWitness> {
     let owl = matches!(regime, Regime::OwlRl);
     evaluation
         .derivations()
         .iter()
         .find(|derivation| derivation.fact().predicate == CLASH_RELATION)
-        .map(|derivation| witness_of(derivation, attribution, terms, owl))
+        .map(|derivation| witness_of(derivation, attribution, terms, owl, graph))
 }
 
 /// The witness a clash derivation carries.
@@ -440,6 +691,7 @@ fn witness_of(
     attribution: &[ChaseRule],
     terms: &Terms,
     owl: bool,
+    graph: Option<&TermValue>,
 ) -> InconsistencyWitness {
     // The rule is read from the clash row's own subject where it names one, and from the
     // clause attribution otherwise; the two agree, and `a_clash_row_names_its_own_rule`
@@ -460,10 +712,12 @@ fn witness_of(
             )
         })
         .collect();
-    // The chase reads and writes the default graph only, so a witness is always drawn
-    // from it; `None` IS the default graph, and naming one would be inventing a graph the
-    // premises did not come from.
-    InconsistencyWitness::new(rule, premises, None)
+    // The graph whose CLOSURE found the clash. A named-graph run is seeded with the union
+    // of that graph and the default graph, so its premises may come from either — naming
+    // the graph being closed is therefore the honest answer, because it is the run that
+    // refused rather than a claim that every premise is asserted there. `None` IS the
+    // default graph, which is closed against itself, so for it the two coincide.
+    InconsistencyWitness::new(rule, premises, graph.cloned())
 }
 
 /// Whether `value` may occupy a triple SUBJECT position in RDF 1.2 — an IRI or a blank
@@ -492,7 +746,7 @@ fn admits_predicate(value: &TermValue) -> bool {
 /// ([`Self::record`]). The evaluator mints no terms, so those two sets are exhaustive and
 /// [`Self::value`] is total — see the [module docs](self).
 #[derive(Debug, Default)]
-struct Terms {
+pub(crate) struct Terms {
     /// Surfaces to the values they were rendered from, in lexical surface order.
     by_surface: BTreeMap<String, TermValue>,
 }
@@ -553,7 +807,7 @@ impl Terms {
     /// atom binds, and no declared clause is existential, so every term of every derived
     /// fact came from a seeded fact or from a program constant — and both were recorded
     /// before evaluation started.
-    fn value(&self, surface: &str) -> &TermValue {
+    pub(crate) fn value(&self, surface: &str) -> &TermValue {
         self.by_surface.get(surface).unwrap_or_else(|| {
             panic!("the evaluator mints no terms, so {surface} must have been recorded")
         })
@@ -584,7 +838,7 @@ impl Terms {
 ///   `rdf:langString` by C0.1) or `^^<` (a datatype IRI) or nothing (`xsd:string`);
 /// * a triple term's three components are separated by the spaces its delimiters reserve,
 ///   and each recurses through the same argument.
-fn surface_of(value: &TermValue) -> String {
+pub(crate) fn surface_of(value: &TermValue) -> String {
     let mut out = String::new();
     write_surface(value, &mut out);
     out
@@ -952,10 +1206,16 @@ mod tests {
 
     /// EVERY atom over SPEC vocabulary names the default graph.
     ///
-    /// [`super::close`] seeds the default graph alone and emits every conclusion into it;
-    /// this is the statement that makes that a faithful evaluation of the program rather
-    /// than a silent restriction of it. A rule that later reasons per-graph fails here,
-    /// which is the signal to teach the seeding and the emission about graphs.
+    /// The declared calculus is GRAPH-AGNOSTIC, and this is the statement that keeps it so.
+    /// [`super::close_graph`] seeds the store's one default partition with the union it is
+    /// closing — the default graph alone, or a named graph together with the default graph
+    /// — evaluates the unchanged program over it, and [`super::close`] routes the answer
+    /// back to the graph that produced it. That is what makes `1 + n` evaluations a faithful
+    /// evaluation of ONE program rather than `1 + n` variants of it, and it is why the
+    /// dataset semantics needed no clause to change.
+    ///
+    /// A rule that later names a graph of its own fails here, which is the signal that the
+    /// per-graph seeding above can no longer stand in for it.
     ///
     /// An INTERNAL relation's atom is excluded, and the exclusion is the point rather than
     /// a hole: its fourth position is not a graph at all but the relation's third argument
@@ -1074,5 +1334,60 @@ mod tests {
         ]);
         let error = close(&ds, Regime::OwlRl).expect_err("a cycle is refused");
         assert!(error.to_string().contains("cyclic"), "{error}");
+    }
+
+    /// A BLANK NODE IN THE INPUT IS ONE BLANK NODE IN THE CLOSURE, in every position —
+    /// including the GRAPH NAME.
+    ///
+    /// [`super::copy_into`] exists for this. `push_dataset` would have re-scoped the input's
+    /// blank nodes as though a merge were happening, and a conclusion re-interned through
+    /// [`intern_into`] carries the ORIGINAL scope, so the closure would hold two blank nodes
+    /// per input one: the copied triples about the first and the inferred triples about the
+    /// second. With a blank-node graph name the split is starker still — the named graph's
+    /// own conclusions would land in a graph the input does not have.
+    ///
+    /// Asserted over the CANONICAL form, because that is what a caller sees and because
+    /// RDFC-1.0 assigns one label per distinct node: three labels here would be the defect,
+    /// two is the answer.
+    #[test]
+    fn a_blank_node_graph_name_survives_the_closure() {
+        let mut b = RdfDatasetBuilder::new();
+        let graph = b.intern_blank("g", BlankScope::DEFAULT);
+        let subject = b.intern_blank("s", BlankScope::DEFAULT);
+        let sub = b.intern_iri(RDFS_SUBCLASSOF);
+        let object = b.intern_iri(EX_B);
+        b.push_quad(subject, sub, object, Some(graph));
+        let ds = b.freeze().expect("the fixture freezes");
+
+        let closed = close(&ds, Regime::OwlRl).expect("owl-rl closes it").0;
+        let nquads = purrdf_core::canonicalize(&closed).nquads;
+        let labels: BTreeSet<&str> = nquads
+            .split_whitespace()
+            .filter(|token| token.starts_with("_:"))
+            .collect();
+        assert_eq!(
+            labels.len(),
+            2,
+            "the input has exactly two blank nodes — the subject and the graph — and the \
+             closure must not double either:\n{nquads}"
+        );
+        // The conclusions really did land in the input's own graph rather than beside it:
+        // eq-ref types both blank nodes, and every one of its conclusions is in that graph.
+        let derived: Vec<&str> = nquads
+            .lines()
+            .filter(|line| line.contains(crate::vocab::OWL_SAMEAS) && line.starts_with("_:"))
+            .collect();
+        assert!(!derived.is_empty(), "eq-ref drew nothing:\n{nquads}");
+        for line in derived {
+            let graph_token = line
+                .split_whitespace()
+                .rev()
+                .nth(1)
+                .expect("a quad has a graph slot before its terminator");
+            assert!(
+                graph_token.starts_with("_:"),
+                "a conclusion left the blank-node graph it was drawn in: {line}"
+            );
+        }
     }
 }

@@ -98,6 +98,13 @@ const RDFS_CONTAINERMEMBERSHIPPROPERTY: &str =
     "http://www.w3.org/2000/01/rdf-schema#ContainerMembershipProperty";
 /// `rdfs:member`.
 const RDFS_MEMBER: &str = "http://www.w3.org/2000/01/rdf-schema#member";
+/// `rdf:reifies` — RDF 1.2's reifier property.
+///
+/// Reserved vocabulary the entailment rules say NOTHING special about: an `rdf:reifies`
+/// annotation triple is an ordinary triple and flows through `prp-dom`, `prp-rng`,
+/// `prp-spo1` and the `scm-*` family exactly as `example.org/p` does. The `reifies_*`
+/// fixtures below enumerate that, position by position and rule by rule.
+const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 /// `owl:SymmetricProperty`.
 const OWL_SYMMETRIC: &str = "http://www.w3.org/2002/07/owl#SymmetricProperty";
 /// `owl:TransitiveProperty`.
@@ -226,6 +233,20 @@ const EX_R: &str = "http://example.org/r";
 const EX_SAYS: &str = "http://example.org/says";
 /// Fixture property `example.org/mentions`.
 const EX_MENTIONS: &str = "http://example.org/mentions";
+/// Fixture REIFIER resource `example.org/reifier` — the subject of an `rdf:reifies`
+/// annotation triple.
+///
+/// An IRI rather than a blank node, deliberately: RDF 1.2 admits either, and an IRI keeps
+/// every assertion below about the RULES rather than about blank-node relabelling.
+const EX_REIFIER: &str = "http://example.org/reifier";
+/// Fixture individual `example.org/t` — an `rdf:reifies` OBJECT that is an IRI.
+///
+/// RDF 1.2 writes a triple TERM there, and the `reifies_*` fixtures use one wherever the
+/// interaction is about the triple term. This constant is for the cases where it is not:
+/// `prp-rng` concludes into SUBJECT position, and a triple term cannot occupy one, so an
+/// IRI object is what makes that rule's conclusion observable at all rather than dropped
+/// as generalized RDF.
+const EX_T: &str = "http://example.org/t";
 /// Fixture individual `example.org/x`.
 const EX_X: &str = "http://example.org/x";
 /// Fixture individual `example.org/y`.
@@ -238,6 +259,12 @@ const EX_U: &str = "http://example.org/u";
 const EX_V: &str = "http://example.org/v";
 /// Fixture named graph `example.org/g`.
 const EX_G: &str = "http://example.org/g";
+/// A SECOND fixture named graph, `example.org/h`.
+///
+/// Two named graphs is the smallest dataset that can show a cross-graph join NOT happening:
+/// each named graph is closed against the union of itself and the default graph, so `h` is
+/// never in `g`'s seed and a premise pair split across the two derives nothing.
+const EX_H: &str = "http://example.org/h";
 /// Fixture individual `example.org/w`.
 const EX_W: &str = "http://example.org/w";
 /// Fixture property `example.org/chained`, the head of a property-chain axiom.
@@ -802,11 +829,16 @@ const CORPUS: &[Fixture] = &[
     Fixture {
         name: "named_graph",
         doc: &[
-            "AWKWARD CASE — a quad outside the default graph. The chase reads and writes",
-            "the default graph only, so `x p y` in graph g supplies no premise and receives",
-            "no conclusion; it is carried through unchanged and a named-graph boundary is",
-            "reported. This is also rdfD2's near-miss: p is a predicate, but not a",
-            "DEFAULT-GRAPH predicate, so it is not typed rdf:Property.",
+            "AWKWARD CASE — a quad outside the default graph. RDF has no standard entailment",
+            "relation for a DATASET, so PurRDF states one: the default graph is closed",
+            "against itself, each named graph against the union of itself and the default",
+            "graph, and a conclusion lands in the graph that PRODUCED it. `x p y` in graph g",
+            "is therefore a premise of g's own closure, and everything it licenses appears IN",
+            "g; the named-graph boundary is what says this is a defined choice rather than a",
+            "derived one. This is also rdfD2's near-miss, and a sharper one than it was: p is",
+            "typed rdf:Property in g and NOT in the default graph, so the absence of the",
+            "default-graph line is evidence that the routing works rather than that the rule",
+            "did not fire.",
         ],
         exercises: &["rdfD2"],
         changed: &[
@@ -874,8 +906,337 @@ const CORPUS: &[Fixture] = &[
             "triples with a literal subject, and the D lane holds no rule that could consume one,",
             "so its closure is Simple entailment plus one premise-free rule. Its boundary list",
             "adds named-graph, which the input holds.",
+            "",
+            "AT THE DATASET SEMANTICS — THIS IS THE ONLY COMMITTED GOLDEN THAT MOVED, AND IT IS",
+            "THE ONLY ONE THAT COULD HAVE: it is the corpus's only fixture with a quad outside",
+            "the default graph, and nothing about a single-graph run changes. RDF has no",
+            "standard entailment relation for a dataset — RDF 1.2 Semantics defines entailment",
+            "over a GRAPH and SPARQL's regimes over the ACTIVE graph — so a reasoner handed one",
+            "must choose, and PurRDF now states its choice instead of producing nothing: the",
+            "default graph is closed against itself, each named graph against the union of",
+            "itself and the default graph, and a conclusion lands in the graph that PRODUCED",
+            "it. The named-graph boundary's reason is where that is written down, and it says",
+            "so as a DEFINED behaviour rather than a derived one.",
+            "",
+            "  Simple is byte-identical: the identity closure was already faithful to every",
+            "  graph, which is what made its `exact` honest and still does.",
+            "",
+            "  RDF closure 4 -> 5 lines. The one new line is",
+            "",
+            "    ex:p rdf:type rdf:Property ex:g",
+            "",
+            "  — rdfD2 over g's own seed. The tally goes rdfD2 2 -> 3. Note the GRAPH on that",
+            "  line: `ex:p rdf:type rdf:Property` is still absent from the DEFAULT graph, which",
+            "  is what keeps this fixture rdfD2's near-miss, and makes it a sharper one than it",
+            "  was — the rule fired, and the conclusion went where it was produced.",
+            "",
+            "  RDFS closure 123 -> 128 lines, all five in ex:g and all five about the three",
+            "  terms that appear only there —",
+            "",
+            "    ex:p rdf:type rdf:Property ex:g",
+            "    ex:p rdf:type rdfs:Resource ex:g",
+            "    ex:p rdfs:subPropertyOf ex:p ex:g",
+            "    ex:x rdf:type rdfs:Resource ex:g",
+            "    ex:y rdf:type rdfs:Resource ex:g",
+            "",
+            "  The tally gains rdfD2 4 -> 5, rdfs4 24 -> 27, rdfs6 17 -> 18. NOT ONE of the 113",
+            "  input-independent vocabulary lines is restated in ex:g, and that is the",
+            "  `conclusion lands in the graph that produced it` rule doing its work: g's run",
+            "  re-derives every one of them — the default graph is in its seed — and every one",
+            "  is already a default-graph conclusion, so none is emitted twice.",
+            "",
+            "  OWL-RL closure 102 -> 105 lines: three eq-ref reflexives in ex:g, for the three",
+            "  terms the default graph does not hold —",
+            "",
+            "    ex:p ex:x ex:y",
+            "",
+            "  — and the tally gains eq-ref 52 -> 55. THE PREVIOUS SECTION PREDICTED EXACTLY",
+            "  THIS. It ends `A chase that had started reading named graphs would show up here",
+            "  as three extra lines`, and here are the three lines. That prediction was written",
+            "  as a tripwire and it fired as designed; it is left standing rather than edited,",
+            "  because this accounting is append-only and a reader who wants to know what the",
+            "  answer used to be should be able to read it.",
+            "",
+            "  D closure is UNCHANGED at 34 lines, and that is the strongest single line of",
+            "  evidence in this golden. The D lane is Simple entailment plus dt-type1, which is",
+            "  premise-free: g's run draws the same thirty-two rdfs:Datatype typings the default",
+            "  graph's run drew, every one of them is already a default-graph conclusion, and so",
+            "  the named graph gains NOTHING. A per-graph closure that restated its seed's",
+            "  conclusions would show up here as thirty-two duplicated lines.",
+            "",
+            "  THE BUDGET ROUGHLY DOUBLED, WHICH IS THE COST OF THE SEMANTICS AND IS REPORTED",
+            "  RATHER THAN HIDDEN. One named graph is 1 + 1 = two evaluations of the same",
+            "  declared program, so join-steps — which is WORK — sums: RDF 25 -> 58, RDFS",
+            "  8,515 -> 17,291, OWL-RL 1,730 -> 3,562. stored-facts and term-arena-bytes are",
+            "  OCCUPANCY of one store, each evaluation gets its own and drops it, and the",
+            "  ceiling they are measured against is per-store — so they report the PEAK rather",
+            "  than a sum that never existed at any instant: RDFS 182 -> 188 facts,",
+            "  1,870 -> 1,936 bytes.",
+            "",
+            "  THE CORPUS WORST CASE MOVED, into a fixture this change ADDED rather than into",
+            "  an existing one. `named_graph_closure_near_miss` holds TWO named graphs, so its",
+            "  RDFS run is three evaluations and costs 24,970 join steps; the previous worst",
+            "  case, `subclass_chain`'s single-graph RDFS run at 10,393, is untouched. Against",
+            "  the fixed ceilings: 24,970 of 1,048,576 join steps is 2.4%. The corpus's largest",
+            "  single STORE is still subclass_chain's 219 stored facts of 131,072 — 0.17% —",
+            "  because occupancy is a peak and a third evaluation does not enlarge any one",
+            "  store. NO CEILING MOVED, and none may: they are constants, measured against and",
+            "  never raised.",
         ],
         quads: &[t_in(EX_X, EX_P, EX_Y, EX_G), t(EX_A, RDFS_SUBCLASSOF, EX_B)],
+    },
+    Fixture {
+        name: "named_graph_closure",
+        doc: &[
+            "THE LAYOUT THE DATASET SEMANTICS EXISTS FOR — a terminology in the DEFAULT graph",
+            "and instances in a NAMED graph, which is how essentially every real dataset is",
+            "arranged and which used to produce nothing at all. `A rdfs:subClassOf B` sits in",
+            "the default graph, `x rdf:type A` sits in ex:g, and each named graph is closed",
+            "against the union of itself and the default graph — so rdfs9 / cax-sco has both",
+            "premises and `x rdf:type B` is derived INTO ex:g, the graph that produced it.",
+            "Its near-miss moves the terminology into a SECOND named graph, where the same two",
+            "premises are in two graphs neither of which is in the other's seed.",
+        ],
+        exercises: &["rdfs9", "cax-sco"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_A, RDFS_SUBCLASSOF, EX_B),
+            t_in(EX_X, RDF_TYPE, EX_A, EX_G),
+        ],
+    },
+    Fixture {
+        name: "named_graph_closure_near_miss",
+        doc: &[
+            "THE CROSS-GRAPH JOIN THAT MUST NOT HAPPEN. Exactly `named_graph_closure` with one",
+            "term changed — the terminology moves from the default graph into a second named",
+            "graph ex:h — and that one change removes rdfs9's premise from ex:g's seed, because",
+            "a named graph is closed against the union of itself and the DEFAULT graph and",
+            "never against a sibling. `x rdf:type B` is therefore derived in NO graph: not in",
+            "ex:g, which holds the instance and not the terminology; not in ex:h, which holds",
+            "the terminology and not the instance; and not in the default graph, which holds",
+            "neither. ex:h's own closure still draws everything the subClassOf edge licenses",
+            "about A and B, so the absence is attributable to the missing JOIN rather than to a",
+            "lane that stopped reasoning.",
+        ],
+        exercises: &["rdfs9", "cax-sco"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t_in(EX_A, RDFS_SUBCLASSOF, EX_B, EX_H),
+            t_in(EX_X, RDF_TYPE, EX_A, EX_G),
+        ],
+    },
+    // ── rdf:reifies is ORDINARY DATA, enumerated position by position ────────────
+    //
+    // RDF 1.2's reifier property carries no entailment of its own: no rule of any lane in
+    // this crate mentions `rdf:reifies`, and the only thing the specifications say about it
+    // is three AXIOMATIC triples (`rdf:reifies rdf:type rdf:Property`, `rdfs:domain
+    // rdfs:Resource`, `rdfs:range rdfs:Proposition`), which the RDFS lane seeds as premises
+    // like every other axiom. Everything else follows from the rules a user's own triples
+    // trigger — and nothing had ever pinned WHICH. These ten pairs do, one interaction each,
+    // and every one of them reuses or mirrors an existing non-reifier fixture so the
+    // comparison is `rdf:reifies` against `example.org/p` in the same position.
+    Fixture {
+        name: "reifies_subject_position",
+        doc: &[
+            "rdf:reifies in SUBJECT position. A user may type the reifier property like any",
+            "other, and scm-op then draws the reflexive sub-property and equivalence for it.",
+            "Its near miss is `object_property`, which is this fixture with the subject",
+            "changed to example.org/p — so the conclusion is about the rule, not about the",
+            "term being reserved vocabulary.",
+        ],
+        exercises: &["scm-op"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[t(RDF_REIFIES, RDF_TYPE, OWL_OBJECTPROPERTY)],
+    },
+    Fixture {
+        name: "reifies_object_position",
+        doc: &[
+            "rdf:reifies in OBJECT position — named as an ordinary resource by an ordinary",
+            "triple, whose property has a range. rdfs3 / prp-rng types it, exactly as it",
+            "types example.org/y in `range`, which is this fixture with that object changed",
+            "and is its near miss.",
+        ],
+        exercises: &["rdfs3", "prp-rng"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[t(EX_P, RDFS_RANGE, EX_B), t(EX_X, EX_P, RDF_REIFIES)],
+    },
+    Fixture {
+        name: "reifies_as_domain_class",
+        doc: &[
+            "rdf:reifies as the OBJECT OF rdfs:domain — that is, read as a CLASS. Nothing",
+            "forbids it: rdfs:domain's range is rdfs:Class, a user may declare rdf:reifies",
+            "one, and prp-dom / rdfs2 then types the subject of every p-triple with it. The",
+            "near miss is `domain`, which is this fixture with the domain object changed to",
+            "example.org/A.",
+        ],
+        exercises: &["rdfs2", "prp-dom"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[t(EX_P, RDFS_DOMAIN, RDF_REIFIES), t(EX_X, EX_P, EX_Y)],
+    },
+    Fixture {
+        name: "reifies_as_range_class",
+        doc: &[
+            "rdf:reifies as the OBJECT OF rdfs:range — the other half of the pair above, and",
+            "the same reading: rdf:reifies is a class name here, and rdfs3 / prp-rng types",
+            "the object of every p-triple with it. The near miss is `range`.",
+        ],
+        exercises: &["rdfs3", "prp-rng"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[t(EX_P, RDFS_RANGE, RDF_REIFIES), t(EX_X, EX_P, EX_Y)],
+    },
+    Fixture {
+        name: "reifies_domain",
+        doc: &[
+            "THE CASE THE TASK NAMES: a user puts rdfs:domain ON rdf:reifies, and an",
+            "annotation triple then types its REIFIER. `ex:reifier rdf:reifies",
+            "<<( A rdfs:subClassOf B )>>` is an ordinary triple, prp-dom / rdfs2 has both",
+            "premises, and `ex:reifier rdf:type ex:A` follows.",
+            "",
+            "Note what is NOT concluded: the quoted `A rdfs:subClassOf B` is NOT asserted",
+            "anywhere in this fixture, so nothing in any closure says A is a sub-class of B.",
+            "A triple term is one opaque term to the chase — the triple-term boundary — and",
+            "an annotation triple about it does not un-quote it.",
+        ],
+        exercises: &["rdfs2", "prp-dom"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(RDF_REIFIES, RDFS_DOMAIN, EX_A),
+            t_quoted(EX_REIFIER, RDF_REIFIES, EX_A, RDFS_SUBCLASSOF, EX_B),
+        ],
+    },
+    Fixture {
+        name: "reifies_domain_near_miss",
+        doc: &[
+            "`reifies_domain` with ONE term changed — the domain is declared on",
+            "example.org/p instead of on rdf:reifies — so prp-dom / rdfs2 has no premise",
+            "over the annotation triple and the reifier is not typed ex:A.",
+        ],
+        exercises: &["rdfs2", "prp-dom"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_P, RDFS_DOMAIN, EX_A),
+            t_quoted(EX_REIFIER, RDF_REIFIES, EX_A, RDFS_SUBCLASSOF, EX_B),
+        ],
+    },
+    Fixture {
+        name: "reifies_range",
+        doc: &[
+            "rdfs:range ON rdf:reifies. The object of an rdf:reifies triple is typed —",
+            "and the object here is an IRI rather than a triple term ON PURPOSE, because",
+            "prp-rng concludes into SUBJECT position and RDF 1.2 admits no triple term",
+            "there. With a triple-term object the very same rule fires and its conclusion",
+            "is abandoned as generalized RDF, which",
+            "`a_reifier_range_conclusion_over_a_triple_term_is_abandoned_and_reported`",
+            "asserts over `reifies_domain`, whose reifies object IS a triple term. Both",
+            "halves are real behaviour and each is pinned where it is observable.",
+        ],
+        exercises: &["rdfs3", "prp-rng"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(RDF_REIFIES, RDFS_RANGE, EX_B),
+            t(EX_REIFIER, RDF_REIFIES, EX_T),
+        ],
+    },
+    Fixture {
+        name: "reifies_range_near_miss",
+        doc: &[
+            "`reifies_range` with ONE term changed — the range is declared on example.org/p",
+            "instead of on rdf:reifies — so the reifies object is not typed ex:B.",
+        ],
+        exercises: &["rdfs3", "prp-rng"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[t(EX_P, RDFS_RANGE, EX_B), t(EX_REIFIER, RDF_REIFIES, EX_T)],
+    },
+    Fixture {
+        name: "reifies_subproperty",
+        doc: &[
+            "rdfs:subPropertyOf ON rdf:reifies. prp-spo1 / rdfs7 rewrites the annotation",
+            "triple's PREDICATE and copies its object through unchanged — and that object is",
+            "a TRIPLE TERM, so the conclusion `ex:reifier ex:q <<( A rdfs:subClassOf B )>>`",
+            "is the sharpest available statement that a rule applied to a reifier neither",
+            "looks inside the quoted triple nor folds it into something representable.",
+        ],
+        exercises: &["rdfs7", "prp-spo1"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(RDF_REIFIES, RDFS_SUBPROPERTYOF, EX_Q),
+            t_quoted(EX_REIFIER, RDF_REIFIES, EX_A, RDFS_SUBCLASSOF, EX_B),
+        ],
+    },
+    Fixture {
+        name: "reifies_subproperty_near_miss",
+        doc: &[
+            "`reifies_subproperty` with ONE term changed — the sub-property axiom is stated",
+            "about example.org/p instead of rdf:reifies — so the annotation triple is not",
+            "rewritten and no ex:q triple exists.",
+        ],
+        exercises: &["rdfs7", "prp-spo1"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_P, RDFS_SUBPROPERTYOF, EX_Q),
+            t_quoted(EX_REIFIER, RDF_REIFIES, EX_A, RDFS_SUBCLASSOF, EX_B),
+        ],
+    },
+    Fixture {
+        name: "reifies_domain_widened",
+        doc: &[
+            "scm-dom1 over rdf:reifies: a domain declared on the reifier property is",
+            "inherited by every super-class of that domain. Purely schema-level — there is",
+            "no annotation triple here at all — which is what separates this from",
+            "`reifies_domain`. Its near miss is `domain_widened`, this fixture with the",
+            "domain's subject changed to example.org/r.",
+        ],
+        exercises: &["scm-dom1"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(RDF_REIFIES, RDFS_DOMAIN, EX_A),
+            t(EX_A, RDFS_SUBCLASSOF, EX_B),
+        ],
+    },
+    Fixture {
+        name: "reifies_range_widened",
+        doc: &[
+            "scm-rng1 over rdf:reifies — the range half of the pair above. Its near miss is",
+            "`range_widened`.",
+        ],
+        exercises: &["scm-rng1"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(RDF_REIFIES, RDFS_RANGE, EX_A),
+            t(EX_A, RDFS_SUBCLASSOF, EX_B),
+        ],
+    },
+    Fixture {
+        name: "reifies_inside_triple_term",
+        doc: &[
+            "A REIFIER INSIDE A TRIPLE TERM. The quoted triple is itself an rdf:reifies",
+            "triple, and the enclosing triple's property has a super-property, so prp-spo1 /",
+            "rdfs7 rewrites the OUTER predicate and carries the whole quoted term through",
+            "unchanged. Nothing looks inside it: the reifier does not become a subject of",
+            "anything, the quoted rdf:reifies triple is not asserted, and no domain or range",
+            "of rdf:reifies applies to it — a triple term is one term, and the triple-term",
+            "boundary is what says so.",
+        ],
+        exercises: &["rdfs7", "prp-spo1"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_SAYS, RDFS_SUBPROPERTYOF, EX_MENTIONS),
+            t_quoted(EX_X, EX_SAYS, EX_REIFIER, RDF_REIFIES, EX_T),
+        ],
+    },
+    Fixture {
+        name: "reifies_inside_triple_term_near_miss",
+        doc: &[
+            "`reifies_inside_triple_term` with ONE term changed — the sub-property axiom is",
+            "about example.org/p rather than example.org/says — so the outer triple is not",
+            "rewritten and the quoted reifier term reaches no new triple.",
+        ],
+        exercises: &["rdfs7", "prp-spo1"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_P, RDFS_SUBPROPERTYOF, EX_MENTIONS),
+            t_quoted(EX_X, EX_SAYS, EX_REIFIER, RDF_REIFIES, EX_T),
+        ],
     },
     Fixture {
         name: "domain",
@@ -5492,6 +5853,25 @@ fn fixture_exercise_lists_name_real_rules() {
 enum Conclusion {
     /// A triple over three IRIs — the common case.
     Iris(&'static str, &'static str, &'static str),
+    /// A triple whose object is an RDF 1.2 TRIPLE TERM over three IRIs.
+    ///
+    /// `prp-spo1` and `rdfs7` rewrite a triple's PREDICATE and copy its object through
+    /// whatever kind of term that object is, so a rule applied to an `rdf:reifies`
+    /// annotation triple concludes into this shape. The chase never looks inside the term
+    /// — that is the triple-term boundary — and this is what "carried through unchanged"
+    /// looks like as a checkable line.
+    Quoted {
+        /// The subject IRI.
+        subject: &'static str,
+        /// The predicate IRI.
+        predicate: &'static str,
+        /// The quoted triple's subject IRI.
+        qs: &'static str,
+        /// The quoted triple's predicate IRI.
+        qp: &'static str,
+        /// The quoted triple's object IRI.
+        qo: &'static str,
+    },
     /// A triple whose object is a datatyped literal, which `cls-hv1` concludes whenever the
     /// `owl:hasValue` is one, and which `dt-eq`'s downstream `eq-rep-o` conclusion always
     /// is.
@@ -5514,6 +5894,13 @@ impl Conclusion {
     fn line(self) -> String {
         match self {
             Self::Iris(s, p, o) => format!("<{s}> <{p}> <{o}> ."),
+            Self::Quoted {
+                subject,
+                predicate,
+                qs,
+                qp,
+                qo,
+            } => format!("<{subject}> <{predicate}> <<( <{qs}> <{qp}> <{qo}> )>> ."),
             Self::Literal {
                 subject,
                 predicate,
@@ -5653,6 +6040,15 @@ enum RuleFixtures {
 type Row = (RuleId, &'static str, Conclusion, &'static str);
 
 /// `Regime::Rdf`'s registered rules.
+///
+/// `named_graph` is `rdfD2`'s near miss, and under the defined dataset semantics it is a
+/// SHARPER one than it used to be. Its only predicate sits in `ex:g`, each named graph is
+/// closed against the union of itself and the default graph, and a conclusion lands in the
+/// graph that produced it — so `ex:p rdf:type rdf:Property` IS drawn, in `ex:g`, and the
+/// DEFAULT-graph line this row denies is absent because the routing put the conclusion
+/// where it belongs. The control therefore witnesses the routing rather than a rule that
+/// failed to fire, and `a_named_graph_is_closed_and_its_conclusions_land_in_it` asserts both
+/// halves so neither can quietly become the other.
 const RDF_ROWS: &[Row] = &[(
     RuleId::RdfD2,
     "plain_triple",
@@ -6759,6 +7155,17 @@ fn the_registry_and_the_corpus_agree() {
             }
         }
     }
+    // The reifier enumeration is a SECOND registry over the same corpus, keyed by
+    // INTERACTION rather than by rule — because "what happens when a user puts rdfs:domain
+    // on rdf:reifies" is not a question a rule-keyed table can ask, and several of its rows
+    // land on rules the per-rule registry already spends its one row on. Its fixtures count
+    // as referenced for the same reason theirs do: something asserts a conclusion over them.
+    for interaction in REIFIER_INTERACTIONS {
+        for name in [interaction.positive, interaction.near_miss] {
+            assert!(corpus.contains(name), "{name} is not in the corpus");
+            *used.entry(name).or_default() += 1;
+        }
+    }
     // A `CLASH_CORPUS` fixture exists ONLY to be a registry row's half, so every one of
     // them must be reached — there is no "carries its own test" escape on that side, and a
     // clash fixture nothing names would be an input nothing ever runs.
@@ -6782,6 +7189,13 @@ fn the_registry_and_the_corpus_agree() {
         [
             "divergence_broad_triggers",
             "divergence_literal_subject",
+            // The two dataset-semantics fixtures. The registry is keyed by RULE and asks
+            // "did this rule fire", which is not the question either of these poses: both
+            // turn on rdfs9 / cax-sco firing or not firing IN A PARTICULAR GRAPH, and a
+            // registry row's conclusion is a graph-less triple. Their own test is
+            // `a_terminology_in_the_default_graph_types_instances_in_a_named_graph`.
+            "named_graph_closure",
+            "named_graph_closure_near_miss",
             "shared_conclusion",
             "triple_term",
         ]
@@ -6792,10 +7206,14 @@ fn the_registry_and_the_corpus_agree() {
 
 // ── The awkward cases, and the two documented divergences ───────────────────────
 
-/// The named-graph boundary: a premise in a named graph fires nothing, and the quad is
-/// carried through untouched.
+/// A named graph is closed, its conclusions land in IT, and the default graph does not
+/// receive them.
+///
+/// The three halves of the defined dataset semantics, over the one fixture that has a quad
+/// outside the default graph. RDF has no standard entailment relation for a dataset, so
+/// what a run does with one is a choice; this is the choice, asserted rather than described.
 #[test]
-fn a_named_graph_supplies_no_premises_and_receives_no_conclusions() {
+fn a_named_graph_is_closed_and_its_conclusions_land_in_it() {
     for regime in [Regime::Rdf, Regime::Rdfs, Regime::OwlRl] {
         let ds = build(fixture("named_graph"));
         let (closed, report) = materialize(&ds, regime).expect("runnable regime");
@@ -6811,9 +7229,413 @@ fn a_named_graph_supplies_no_premises_and_receives_no_conclusions() {
             lines.contains(&format!("<{EX_X}> <{EX_P}> <{EX_Y}> <{EX_G}> .")),
             "{regime:?} did not carry the named-graph quad through"
         );
+        // The premise IS read, and its conclusion is in the graph that produced it. Which
+        // conclusion depends on the lane: the two RDF-shaped lanes type the predicate
+        // (rdfD2), and OWL-RL — whose tables omit the RDF axiomatic material entirely —
+        // reaches the same three terms through eq-ref instead. Both are named, so neither
+        // lane can pass on the other's evidence.
+        let drawn = match regime {
+            Regime::OwlRl => format!("<{EX_P}> <{OWL_SAMEAS}> <{EX_P}> <{EX_G}> ."),
+            _ => format!("<{EX_P}> <{RDF_TYPE}> <{RDF_PROPERTY}> <{EX_G}> ."),
+        };
         assert!(
-            !lines.contains(&nquads_line(EX_P, RDF_TYPE, RDF_PROPERTY)),
-            "{regime:?} drew a conclusion from a named-graph premise"
+            lines.lines().any(|line| line == drawn),
+            "{regime:?} did not close the named graph: {drawn}"
+        );
+        // …and NOT in the default graph, which never held the premise.
+        let default_graph_form = drawn.replace(&format!(" <{EX_G}> ."), " .");
+        assert!(
+            !lines.lines().any(|line| line == default_graph_form),
+            "{regime:?} routed a named graph's conclusion into the default graph"
+        );
+        assert!(
+            !lines
+                .lines()
+                .any(|line| line == nquads_line(EX_P, RDF_TYPE, RDF_PROPERTY)),
+            "{regime:?} routed a named graph's conclusion into the default graph"
+        );
+    }
+}
+
+/// THE LAYOUT THE SEMANTICS EXISTS FOR: a terminology in the default graph and instances in
+/// a named graph derive the expected triples INTO the named graph.
+///
+/// And the control that makes it a statement about the JOIN rather than about the lane:
+/// move the terminology into a sibling named graph and the same conclusion appears in no
+/// graph at all, because a named graph is closed against the union of itself and the
+/// DEFAULT graph and never against a sibling.
+#[test]
+fn a_terminology_in_the_default_graph_types_instances_in_a_named_graph() {
+    let derived = format!("<{EX_X}> <{RDF_TYPE}> <{EX_B}> <{EX_G}> .");
+    for regime in [Regime::Rdfs, Regime::OwlRl] {
+        let positive = canonicalize(
+            &materialize(&build(fixture("named_graph_closure")), regime)
+                .expect("runnable regime")
+                .0,
+        )
+        .nquads;
+        assert!(
+            positive.lines().any(|line| line == derived),
+            "{regime:?}: the terminology did not reach the named graph's instances"
+        );
+        // The conclusion is in ex:g and NOWHERE else — not in the default graph, which
+        // holds the terminology but no instance.
+        assert!(
+            !positive
+                .lines()
+                .any(|line| line == nquads_line(EX_X, RDF_TYPE, EX_B)),
+            "{regime:?}: a named graph's conclusion reached the default graph"
+        );
+
+        // THE CROSS-GRAPH JOIN THAT MUST NOT HAPPEN.
+        let near_miss = canonicalize(
+            &materialize(&build(fixture("named_graph_closure_near_miss")), regime)
+                .expect("runnable regime")
+                .0,
+        )
+        .nquads;
+        for graph in ["", &format!(" <{EX_G}>"), &format!(" <{EX_H}>")] {
+            let line = format!("<{EX_X}> <{RDF_TYPE}> <{EX_B}>{graph} .");
+            assert!(
+                !near_miss.lines().any(|l| l == line),
+                "{regime:?}: two named graphs joined — {line}"
+            );
+        }
+        // …and the sibling graph really was closed, so the absence above is the missing
+        // join rather than a lane that did nothing.
+        assert!(
+            near_miss.lines().any(|line| line
+                == format!("<{EX_A}> <{RDF_TYPE}> <{RDFS_CLASS}> <{EX_H}> .")
+                || line == format!("<{EX_A}> <{OWL_SAMEAS}> <{EX_A}> <{EX_H}> .")),
+            "{regime:?}: the sibling graph drew nothing at all:\n{near_miss}"
+        );
+    }
+}
+
+// ── rdf:reifies is ordinary data, and this is the enumeration ───────────────────
+
+/// One `rdf:reifies` interaction: where the term sits, and what that makes fire.
+///
+/// A two-sided control like every registry row: the positive fixture's closure must hold
+/// `conclusion` and the near miss's must not. The near miss differs from the positive in
+/// EXACTLY ONE TERM, and for six of the ten that one term is `rdf:reifies` itself replaced
+/// by `example.org/p` — which is the whole claim of this table, stated as evidence: the
+/// reifier property is ordinary data, and a rule fires on it exactly when it would have
+/// fired on a user's own IRI in the same position.
+#[derive(Debug, Clone, Copy)]
+struct ReifierInteraction {
+    /// What this row pins, for a reader of a failure message.
+    what: &'static str,
+    /// The regime the interaction is asserted under.
+    ///
+    /// Not every lane: `prp-dom`, `prp-rng`, `prp-spo1`, `scm-dom1` and `scm-rng1` are OWL
+    /// 2 RL's own, and the two positional rows are asserted under `RDFS`, where the
+    /// corresponding `rdfs2`/`rdfs3` live. Naming the lane per row is what keeps each
+    /// assertion about ONE rule table.
+    regime: Regime,
+    /// The fixture the conclusion must be PRESENT in.
+    positive: &'static str,
+    /// The conclusion, as the canonical N-Quads line it must be (or must not be).
+    conclusion: Conclusion,
+    /// The fixture the same conclusion must be ABSENT from.
+    near_miss: &'static str,
+}
+
+/// EVERY `rdf:reifies` interaction this crate's rule set can have, enumerated.
+///
+/// Ten rows, and the enumeration is the point: the term can occupy a subject, an object,
+/// the class slot of an `rdfs:domain` or an `rdfs:range`, the property slot of either, a
+/// sub-property axiom, or the inside of a triple term, and each of those makes a DIFFERENT
+/// rule fire. Choosing three of them and calling the interaction understood is exactly the
+/// gap this table closes.
+const REIFIER_INTERACTIONS: &[ReifierInteraction] = &[
+    ReifierInteraction {
+        what: "rdf:reifies in SUBJECT position is typed like any property (scm-op)",
+        regime: Regime::OwlRl,
+        positive: "reifies_subject_position",
+        conclusion: Conclusion::Iris(RDF_REIFIES, OWL_EQUIVALENTPROPERTY, RDF_REIFIES),
+        near_miss: "object_property",
+    },
+    ReifierInteraction {
+        what: "rdf:reifies in OBJECT position is typed by the property's range (rdfs3)",
+        regime: Regime::Rdfs,
+        positive: "reifies_object_position",
+        conclusion: Conclusion::Iris(RDF_REIFIES, RDF_TYPE, EX_B),
+        near_miss: "range",
+    },
+    ReifierInteraction {
+        what: "rdf:reifies as the OBJECT OF rdfs:domain is read as a class (rdfs2)",
+        regime: Regime::Rdfs,
+        positive: "reifies_as_domain_class",
+        conclusion: Conclusion::Iris(EX_X, RDF_TYPE, RDF_REIFIES),
+        near_miss: "domain",
+    },
+    ReifierInteraction {
+        what: "rdf:reifies as the OBJECT OF rdfs:range is read as a class (rdfs3)",
+        regime: Regime::Rdfs,
+        positive: "reifies_as_range_class",
+        conclusion: Conclusion::Iris(EX_Y, RDF_TYPE, RDF_REIFIES),
+        near_miss: "range",
+    },
+    ReifierInteraction {
+        what: "prp-dom over an annotation triple types the REIFIER",
+        regime: Regime::OwlRl,
+        positive: "reifies_domain",
+        conclusion: Conclusion::Iris(EX_REIFIER, RDF_TYPE, EX_A),
+        near_miss: "reifies_domain_near_miss",
+    },
+    ReifierInteraction {
+        what: "prp-rng over an annotation triple types the REIFIED term",
+        regime: Regime::OwlRl,
+        positive: "reifies_range",
+        conclusion: Conclusion::Iris(EX_T, RDF_TYPE, EX_B),
+        near_miss: "reifies_range_near_miss",
+    },
+    ReifierInteraction {
+        what: "prp-spo1 rewrites an annotation triple's predicate, triple term and all",
+        regime: Regime::OwlRl,
+        positive: "reifies_subproperty",
+        conclusion: Conclusion::Quoted {
+            subject: EX_REIFIER,
+            predicate: EX_Q,
+            qs: EX_A,
+            qp: RDFS_SUBCLASSOF,
+            qo: EX_B,
+        },
+        near_miss: "reifies_subproperty_near_miss",
+    },
+    ReifierInteraction {
+        what: "scm-dom1 widens a domain declared ON rdf:reifies",
+        regime: Regime::OwlRl,
+        positive: "reifies_domain_widened",
+        conclusion: Conclusion::Iris(RDF_REIFIES, RDFS_DOMAIN, EX_B),
+        near_miss: "domain_widened",
+    },
+    ReifierInteraction {
+        what: "scm-rng1 widens a range declared ON rdf:reifies",
+        regime: Regime::OwlRl,
+        positive: "reifies_range_widened",
+        conclusion: Conclusion::Iris(RDF_REIFIES, RDFS_RANGE, EX_B),
+        near_miss: "range_widened",
+    },
+    ReifierInteraction {
+        what: "a REIFIER INSIDE A TRIPLE TERM is carried through as one opaque term",
+        regime: Regime::OwlRl,
+        positive: "reifies_inside_triple_term",
+        conclusion: Conclusion::Quoted {
+            subject: EX_X,
+            predicate: EX_MENTIONS,
+            qs: EX_REIFIER,
+            qp: RDF_REIFIES,
+            qo: EX_T,
+        },
+        near_miss: "reifies_inside_triple_term_near_miss",
+    },
+];
+
+/// EVERY enumerated `rdf:reifies` interaction fires where it should and nowhere else.
+#[test]
+fn every_reifier_interaction_has_a_positive_and_a_near_miss() {
+    for interaction in REIFIER_INTERACTIONS {
+        let ReifierInteraction {
+            what,
+            regime,
+            positive,
+            conclusion,
+            near_miss,
+        } = *interaction;
+        assert_ne!(
+            positive, near_miss,
+            "{what}: a near miss must be a DIFFERENT input"
+        );
+        let line = conclusion.line();
+        assert!(
+            closure_lines(positive, regime).contains(&line),
+            "{what}: {positive} did not reach {line} under {regime:?}"
+        );
+        assert!(
+            !closure_lines(near_miss, regime).contains(&line),
+            "{what}: near miss {near_miss} reached {line} anyway under {regime:?}"
+        );
+    }
+    // The table really is an ENUMERATION and not a sample: ten distinct positives, ten
+    // distinct claims, and no row silently duplicating another's evidence.
+    let positives: BTreeSet<&str> = REIFIER_INTERACTIONS.iter().map(|i| i.positive).collect();
+    assert_eq!(positives.len(), REIFIER_INTERACTIONS.len());
+    let claims: BTreeSet<String> = REIFIER_INTERACTIONS
+        .iter()
+        .map(|i| i.conclusion.line())
+        .collect();
+    assert_eq!(claims.len(), REIFIER_INTERACTIONS.len());
+}
+
+/// NO RULE OF ANY LANE MENTIONS `rdf:reifies`, which is why the table above is a statement
+/// about ORDINARY data rather than about special handling.
+///
+/// Six of the ten rows differ from their near miss by replacing `rdf:reifies` with
+/// `example.org/p` and nothing else, so a lane that special-cased the term would break
+/// them. This is the same claim made from the other side, against the declared calculus
+/// itself: not one clause of any regime names the reifier property. What the RDFS lane DOES
+/// say about it is three axiomatic PREMISES, and those are data too.
+#[test]
+fn no_clause_of_any_lane_mentions_the_reifier_property() {
+    for regime in ORACLE_REGIMES.map(|(regime, _)| regime) {
+        for clause in purrdf_entail::calculus_program(regime) {
+            for atom in clause.body().iter().chain(clause.head_atoms()) {
+                for term in atom.terms() {
+                    assert_ne!(
+                        term.surface().as_deref(),
+                        Some(format!("<{RDF_REIFIES}>").as_str()),
+                        "{regime:?}: a clause names rdf:reifies, so the reifier property is \
+                         no longer ordinary data and the enumeration above no longer says \
+                         what it claims"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// A TRIPLE TERM IS NOT UN-QUOTED BY AN ANNOTATION TRIPLE ABOUT IT.
+///
+/// `reifies_domain` asserts `ex:reifier rdf:reifies <<( A rdfs:subClassOf B )>>` and never
+/// asserts `A rdfs:subClassOf B`. No closure of any regime may hold it: reifying a triple
+/// says something ABOUT it, not that it holds, and a chase that looked inside the term
+/// would be asserting the ontology's own annotations as axioms.
+#[test]
+fn a_reified_triple_is_not_asserted_by_reifying_it() {
+    for (regime, _) in ORACLE_REGIMES {
+        let lines = closure_lines("reifies_domain", regime);
+        assert!(
+            !lines.contains(&nquads_line(EX_A, RDFS_SUBCLASSOF, EX_B)),
+            "{regime:?}: reifying a triple asserted it"
+        );
+        // …and nothing DOWNSTREAM of that non-assertion appeared either: had the quoted
+        // subClassOf been asserted, rdfs9 / cax-sco would have typed the reifier's own
+        // domain typing through it. `ex:reifier rdf:type ex:B` is that consequence, and it
+        // is absent because its premise is.
+        assert!(
+            !lines.contains(&nquads_line(EX_REIFIER, RDF_TYPE, EX_B)),
+            "{regime:?}: a consequence of the quoted triple reached the closure"
+        );
+    }
+}
+
+/// A RANGE ON `rdf:reifies` CONCLUDES INTO A TRIPLE TERM'S SUBJECT POSITION, WHICH RDF 1.2
+/// CANNOT HOLD — so the conclusion is abandoned and the run says so.
+///
+/// `reifies_domain`'s annotation triple has a TRIPLE-TERM object, and the RDFS lane seeds
+/// `rdf:reifies rdfs:range rdfs:Proposition` as an axiom, so `rdfs3` really does derive
+/// `<<( A rdfs:subClassOf B )>> rdf:type rdfs:Proposition`. That is a generalized-RDF triple:
+/// it is derived in the evaluator's own term space, dropped when the answer is materialized,
+/// and reported. Both halves are asserted — nothing in the closure has a triple term in
+/// subject position, and the boundary is on the report — because the failure mode is the
+/// drop happening silently.
+#[test]
+fn a_reifier_range_conclusion_over_a_triple_term_is_abandoned_and_reported() {
+    let ds = build(fixture("reifies_domain"));
+    let (closed, report) = materialize(&ds, Regime::Rdfs).expect("rdfs");
+    assert!(
+        report
+            .boundaries()
+            .iter()
+            .any(|b| b.construct().as_str() == "generalized-rdf"),
+        "the axiomatic range of rdf:reifies did not reach the triple term"
+    );
+    assert!(
+        report
+            .boundaries()
+            .iter()
+            .any(|b| b.construct().as_str() == "triple-term"),
+        "the input holds a triple term and the report must say so"
+    );
+    for line in canonicalize(&closed).nquads.lines() {
+        assert!(
+            !line.starts_with("<<("),
+            "a triple term reached subject position: {line}"
+        );
+    }
+}
+
+/// A REIFIER SIDE-TABLE ROUND-TRIPS BYTE-IDENTICALLY THROUGH `materialize`.
+///
+/// The RDF 1.2 IR carries reifier bindings and annotations in SIDE TABLES rather than as
+/// quads, and `purrdf_core::canonicalize` renders each as a sentinel row so the two stay
+/// observable in the canonical form. A closure is a NEW dataset built from the input plus
+/// the inferred triples, so the side tables have to be carried across that rebuild — and
+/// nothing had ever asserted that they are. If they were dropped, every reifier in a
+/// caller's data would vanish the moment they asked for entailment, and no assertion about
+/// the quads would notice.
+///
+/// Every term here is an IRI on purpose: RDFC-1.0 assigns blank-node labels itself, so a
+/// blank reifier would make this a test of the canonicalizer's labelling under a changed
+/// quad set rather than of the side table surviving. The COUNTS are checked for a blank
+/// reifier too, below, which is the part that does not depend on labelling.
+#[test]
+fn a_reifier_side_table_round_trips_through_materialize() {
+    let mut b = RdfDatasetBuilder::new();
+    let reifier = b.intern_iri(EX_REIFIER);
+    let s = b.intern_iri(EX_A);
+    let p = b.intern_iri(RDFS_SUBCLASSOF);
+    let o = b.intern_iri(EX_B);
+    let triple = b.intern_triple(s, p, o);
+    let says = b.intern_iri(EX_SAYS);
+    let x = b.intern_iri(EX_X);
+    b.push_quad(s, p, o, None);
+    b.push_quad(x, says, triple, None);
+    b.push_reifier(reifier, triple);
+    b.push_annotation(reifier, says, x);
+    let ds = b.freeze().expect("freeze");
+
+    /// The sentinel rows `purrdf_core::canonicalize` writes for the two side tables.
+    fn overlay(nquads: &str) -> Vec<String> {
+        nquads
+            .lines()
+            .filter(|line| line.contains("urn:purrdf:rdfc:"))
+            .map(ToOwned::to_owned)
+            .collect()
+    }
+    let before = overlay(&canonicalize(&ds).nquads);
+    assert_eq!(
+        before.len(),
+        2,
+        "the fixture must exercise BOTH side tables"
+    );
+
+    for (regime, name) in ORACLE_REGIMES {
+        let (closed, _) = materialize(&ds, regime).expect("the five oracle regimes run");
+        assert_eq!(
+            overlay(&canonicalize(&closed).nquads),
+            before,
+            "{name}: the reifier side table did not survive materialization"
+        );
+        assert_eq!(closed.reifier_refs().count(), 1, "{name}");
+        assert_eq!(closed.annotation_refs().count(), 1, "{name}");
+    }
+
+    // The same claim for a BLANK-node reifier, as counts rather than bytes: RDFC-1.0
+    // assigns the label, and the closure's quad set is not the input's, so the label may
+    // legitimately differ. What may not differ is that the rows are still there.
+    let mut b = RdfDatasetBuilder::new();
+    let s = b.intern_iri(EX_A);
+    let p = b.intern_iri(RDFS_SUBCLASSOF);
+    let o = b.intern_iri(EX_B);
+    let triple = b.intern_triple(s, p, o);
+    let says = b.intern_iri(EX_SAYS);
+    let x = b.intern_iri(EX_X);
+    let blank = b.intern_blank("r", purrdf_core::BlankScope::DEFAULT);
+    b.push_quad(x, says, triple, None);
+    b.push_reifier(blank, triple);
+    b.push_annotation(blank, says, x);
+    let ds = b.freeze().expect("freeze");
+    for (regime, name) in ORACLE_REGIMES {
+        let (closed, _) = materialize(&ds, regime).expect("the five oracle regimes run");
+        assert_eq!(closed.reifier_refs().count(), 1, "{name}");
+        assert_eq!(closed.annotation_refs().count(), 1, "{name}");
+        assert_eq!(
+            overlay(&canonicalize(&closed).nquads).len(),
+            2,
+            "{name}: a blank-node reifier's side-table rows went missing"
         );
     }
 }
