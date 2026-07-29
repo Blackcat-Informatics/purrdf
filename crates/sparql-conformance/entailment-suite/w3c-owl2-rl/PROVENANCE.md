@@ -148,16 +148,16 @@ table omits) as opposed to descriptions of what the profile cannot reach.
 ## What the oracle measured
 
 ```
-OWL2-RL-ENTAILMENT: agreed 33 ledgered 17 unledgered 0 stale 0 total 50 actionable 1
+OWL2-RL-ENTAILMENT: agreed 34 ledgered 16 unledgered 0 stale 0 total 50 actionable 0
 ```
 
 - **Negative lane: 23 / 23 agree. No unsoundness was found** — the chase never
   derived a triple W3C publishes as not entailed.
-- **Positive lane: 10 of 27 agree.** The other 17 are ledgered with typed reasons:
+- **Positive lane: 11 of 27 agree.** The other 16 are ledgered with typed reasons:
   8 `schema-conclusion`, 6 `negative-conclusion`, 1 `construct-outside-rl`,
-  1 `imports-unresolved`, 1 `missing-rule`.
+  1 `imports-unresolved`.
 
-The 17 are not 17 bugs. Sixteen of them are structural properties of the OWL 2
+The 16 are not 16 bugs. Every one of them is a structural property of the OWL 2
 RL/RDF rule table rather than of this implementation: every head in Tables 4–9 is
 an assertional triple over named terms or `false`, so no conforming RL rule set
 derives a schema axiom (`p a owl:TransitiveProperty`, an `rdfs:range`, an
@@ -166,14 +166,24 @@ fact (`owl:differentFrom`, membership in an `owl:complementOf`), which follows
 only by refutation. W3C still tags those cases `otest:profile RL`, because that
 tag describes the *ontology's* profile and not what the rule table reaches.
 
-The seventeenth is the interesting one. `webont-differentfrom-001` is
-`a owl:differentFrom b` ⊨ `b owl:differentFrom a` — plain symmetry, a positive
-assertional head over two named individuals, shaped exactly like `prp-symp`, and
-sound to state. It is **not one of the 78 rules of Tables 4–9**: Table 4's
-`owl:differentFrom` rules only conclude `false`. So PurRDF's `OWL-RL 78 / 78`
-rule-table coverage is complete *and* the chase stops one triple short of a
-W3C-published entailment. Both are true, and the headline number hides the gap
-between them — which is exactly what an independent oracle is for.
+### The one that was NOT structural, and how it was closed
+
+`webont-differentfrom-001` is `a owl:differentFrom b` ⊨ `b owl:differentFrom a` —
+plain symmetry, a positive assertional head over two named individuals, shaped
+exactly like `prp-symp`, and sound to state. It is **not one of the 78 rules of
+Tables 4–9**: Table 4's `owl:differentFrom` rules only conclude `false`. So a
+rule set can be complete for the table and still stop one triple short of a
+W3C-published entailment, which is exactly what an independent oracle is for.
+
+PurRDF states it, and states it as PurRDF's rather than as W3C's.
+`purrdf_entail::RuleId::ExtEqDiffSym` (`ext-eq-diff-sym`) lives in a rule family
+declared to sit outside every specification table: `extensions(Regime::OwlRl)`
+names it, `rules(Regime::OwlRl)` and `implemented(Regime::OwlRl)` are both still
+exactly the same 78 and name none of it, `RuleId::is_extension` decides which is
+which, and every rendered report carries an `extension ext-eq-diff-sym` line
+beside its `missing` lines. So this row moved 33 → 34 and the ledger's
+`actionable` count 1 → 0, while `OWL-RL 78 / 78` still means Tables 4–9 and
+nothing else.
 
 ## The upstream census (`census.tsv`)
 

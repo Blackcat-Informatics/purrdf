@@ -4,9 +4,10 @@
 //! Regenerates the committed entailment rule inventory
 //! (`docs/book/src/entailment-rules.md`) from the crate's own public API.
 //!
-//! The table is READ from [`purrdf_entail::RuleId`], [`purrdf_entail::rules`] and
-//! [`purrdf_entail::implemented`] rather than transcribed, so a rule added to or removed
-//! from the calculus changes the document mechanically. `scripts/check-generated.sh`
+//! The table is READ from [`purrdf_entail::RuleId`], [`purrdf_entail::rules`],
+//! [`purrdf_entail::implemented`] and [`purrdf_entail::extensions`] rather than
+//! transcribed, so a rule added to or removed from the calculus changes the document
+//! mechanically. `scripts/check-generated.sh`
 //! re-runs this and diffs the result against the committed file, which is what stops the
 //! prose and the code from drifting apart again: a coverage claim in this repository is
 //! now a build artifact, not an assertion someone has to remember to update.
@@ -15,7 +16,7 @@
 
 use std::fmt::Write as _;
 
-use purrdf_entail::{Regime, RuleId, implemented, rules};
+use purrdf_entail::{Regime, RuleId, extensions, implemented, rules};
 
 /// Every [`Regime`], in the order the document presents them.
 ///
@@ -109,7 +110,12 @@ fn render() -> Result<String, String> {
          **Defined** is the rule table the specification defines the regime by\n\
          (`rules(regime)`). **Implemented** is the subset this workspace's evaluator\n\
          actually fires (`implemented(regime)`). Their difference is the regime's gap,\n\
-         and it is the same set a `ReasoningReport` names under `missing`.\n\n",
+         and it is the same set a `ReasoningReport` names under `missing`.\n\n\
+         Neither column counts an **extension** — a rule this workspace fires that no\n\
+         specification table states. Those are listed in their own section below\n\
+         (`extensions(regime)`), never folded into a coverage number, so a figure like\n\
+         `OWL-RL 78 / 78` stays a claim about OWL 2 Profiles §4.3 Tables 4–9 and about\n\
+         nothing else.\n\n",
     );
 
     out.push_str("## Coverage by regime\n\n");
@@ -131,6 +137,41 @@ fn render() -> Result<String, String> {
          served by a tableau and by a caller-supplied rule set respectively, neither of\n\
          which is a fixed table.\n",
     );
+
+    out.push_str("\n## Extensions\n\n");
+    out.push_str(
+        "A rule this workspace's evaluator fires that **no specification table states**.\n\
+         An extension appears in neither column above, for any regime: `rules(regime)` and\n\
+         `implemented(regime)` name only specification rules, and `extensions(regime)`\n\
+         names only these. `RuleId::is_extension` decides which is which, and a\n\
+         `ReasoningReport` renders the list under `extension` beside the `missing` list —\n\
+         so a caller that must act only on normative conclusions can tell from the report\n\
+         rather than from prose.\n\n\
+         Every entry is sound under the semantics of the vocabulary it reads; that is the\n\
+         only standard a rule with no specification to appeal to can meet.\n\n",
+    );
+    let extended: Vec<(Regime, &[RuleId])> = ALL_REGIMES
+        .into_iter()
+        .map(|regime| (regime, extensions(regime)))
+        .filter(|(_, list)| !list.is_empty())
+        .collect();
+    if extended.is_empty() {
+        out.push_str("No regime declares one.\n");
+    } else {
+        out.push_str("| Regime | `--regime` | Rule |\n");
+        out.push_str("| --- | --- | --- |\n");
+        for (regime, list) in extended {
+            for rule in list {
+                let _ = writeln!(
+                    out,
+                    "| {} | `{}` | `{}` |",
+                    regime_name(regime),
+                    regime_token(regime),
+                    rule.as_str(),
+                );
+            }
+        }
+    }
 
     for regime in ALL_REGIMES {
         let defined = rules(regime);

@@ -44,7 +44,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML) | W3C rdf-tests | 250 | 0 | 0 | 0 | GREEN |
 | SPARQL 1.1/1.2 evaluation (full corpus) | W3C sparql11 + sparql12 + first-party | 800 | 5 | 5 | 0 | GREEN |
 | Entailment (OWL 2 DL consistency) | W3C OWL 2 test suite | 256 | 5 | 5 | 0 | GREEN |
-| Entailment (OWL 2 RL, W3C entailment tests) | W3C OWL 2 entailment tests | 33 | 17 | 17 | 0 | GREEN |
+| Entailment (OWL 2 RL, W3C entailment tests) | W3C OWL 2 entailment tests | 34 | 16 | 16 | 0 | GREEN |
 | SHACL Core + SHACL-SPARQL | W3C data-shapes | 126 | 0 | 0 | 0 | GREEN |
 | SHACL (first-party corpus) | first-party frozen reports | 70 | 0 | 0 | 0 | GREEN |
 | SHACL Rules | DASH + first-party | 17 | 0 | 0 | 0 | GREEN |
@@ -82,8 +82,8 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | SPARQL 1.1/1.2 | full W3C sparql11 (query+update) + sparql12 + entailment, via `purrdf-sparql-conformance` | **800** pass · 5 typed xfail · 0 fail (all W3C `service` federation cases green; SPARQL 1.1 query+update fully vendored; SPARQL 1.2 RDF-star triple-term/reifier/annotation surface fully passing; the 5 non-passes are upstream-errata fixtures with non-canonical XSD lexicals) |
 | Entailment (SPARQL regimes) | W3C sparql11 `entailment/` group, via `purrdf-sparql-conformance` | **70 / 70** · 0 ledgered — RDF/RDFS/OWL-RL chase, open-world OWL-Direct via the ALCOIQ tableau, RIF-Core rule engine, and RDF-axiomatic predicate typing |
 | Entailment (OWL 2 DL consistency) | vendored W3C OWL 2 test suite, `crates/sparql-conformance/entailment-suite/w3c-owl2/` | **256 / 261** agreeing verdicts · 5 typed-ledger divergences · 0 unledgered · 0 stale. Consistency-shaped corpus (226 `otest:ConsistencyTest` + 35 `otest:InconsistencyTest`), so it grades the DL/tableau lane only; the upstream manifest's entailment tests are graded by the row below. It is also a **subset** — 261 of the 482 consistency-shaped cases upstream — and of the 221 it leaves out, **156 the tableau decides today** (93 consistent + 63 inconsistent), 30 do not terminate under a 40 s ceiling, 12 are withheld (7 reasoner, 5 parse) and 23 carry no RDF/XML premise |
-| Entailment (OWL 2 RL, W3C entailment tests) | vendored W3C OWL 2 entailment corpus, `crates/sparql-conformance/entailment-suite/w3c-owl2-rl/` | **33 / 50** agreeing · 17 typed-ledger divergences · 0 unledgered · 0 stale. Negative lane **23 / 23**: **no unsoundness** — the chase never derived a triple W3C publishes as *not* entailed. Positive lane **10 / 27**. 16 of the 17 divergences are structural limits of OWL 2 RL itself (8 schema-conclusion, 6 negative-conclusion, 1 construct-outside-rl, 1 imports-unresolved); exactly **1 is actionable** (1 missing-rule) |
-| Entailment rule tables | `purrdf-entail` `rules()` / `implemented()` | `OWL-RL` **78 / 78** (OWL 2 Profiles §4.3 Tables 4–9) · `RDFS` **18 / 18** · `RDF` **3 / 3** · `D` **5 / 5** (§4.3 Table 8). This is **rule-table coverage, not entailment conformance** — the two are measured separately, and the row above is the second one: W3C's own OWL 2 RL entailment tests score 10 of 27 positive and 23 of 23 negative. Every materializable regime is rule-complete; the four existential rules (`rdfD1`, `rdfD1a`, `rdfs14`, `rdfs14a`) fire through the restricted chase and their surrogate blank nodes are withheld at the materialization boundary rather than answered. Per-rule detail is generated and drift-guarded: [`docs/book/src/entailment-rules.md`](book/src/entailment-rules.md) |
+| Entailment (OWL 2 RL, W3C entailment tests) | vendored W3C OWL 2 entailment corpus, `crates/sparql-conformance/entailment-suite/w3c-owl2-rl/` | **34 / 50** agreeing · 16 typed-ledger divergences · 0 unledgered · 0 stale. Negative lane **23 / 23**: **no unsoundness** — the chase never derived a triple W3C publishes as *not* entailed. Positive lane **11 / 27**. 16 of the 16 divergences are structural limits of OWL 2 RL itself (8 schema-conclusion, 6 negative-conclusion, 1 construct-outside-rl, 1 imports-unresolved); **0 are actionable** (0 missing-rule) |
+| Entailment rule tables | `purrdf-entail` `rules()` / `implemented()` | `OWL-RL` **78 / 78** (OWL 2 Profiles §4.3 Tables 4–9) · `RDFS` **18 / 18** · `RDF` **3 / 3** · `D` **5 / 5** (§4.3 Table 8). This is **rule-table coverage, not entailment conformance** — the two are measured separately, and the row above is the second one: W3C's own OWL 2 RL entailment tests score 11 of 27 positive and 23 of 23 negative. Neither column counts an **extension** — the one rule the `OWL-RL` lane fires that no specification table states (`ext-eq-diff-sym`, symmetry of `owl:differentFrom`) is `extensions(Regime::OwlRl)`, is in neither `rules()` nor `implemented()`, and is rendered on its own `extension` line in every report. Every materializable regime is rule-complete; the four existential rules (`rdfD1`, `rdfD1a`, `rdfs14`, `rdfs14a`) fire through the restricted chase and their surrogate blank nodes are withheld at the materialization boundary rather than answered. Per-rule detail is generated and drift-guarded: [`docs/book/src/entailment-rules.md`](book/src/entailment-rules.md) |
 | RDFC-1.0 canonicalization | W3C fixtures, `crates/rdf/tests/fixtures/rdfc/` | **65** vectors (64 eval + 1 negative), green |
 | rdflib drop-in (LSP) gate | rdflib 7.6 own vendored tests | **85** pass · 1 strict-xfail (ledgered) |
 | purrdf.compat parity | first-party differential vs rdflib 7.6 | **495** pass · 4 strict-xfail (ledgered) |
@@ -308,19 +308,28 @@ issue, so the matrix stays honest:
      derived a triple W3C publishes as *not* entailed. That is a soundness
      result over every negative case, unfiltered by profile.
 
-     The positive lane is **10 of 27**, with 17 typed divergences in
-     `purrdf_sparql_conformance::owl2_rl::LEDGER`. 16 are structural limits
+     The positive lane is **11 of 27**, with 16 typed divergences in
+     `purrdf_sparql_conformance::owl2_rl::LEDGER`. All 16 are structural limits
      of OWL 2 RL rather than of this implementation — every head in Tables 4–9
      is an assertional triple over named terms or `false`, so no conforming RL
      rule set derives a schema axiom (8 `schema-conclusion`) or a negative fact
      (6 `negative-conclusion`), the profile states no rule for constructs
      outside its syntax (1 `construct-outside-rl`), and one upstream premise is
-     incomplete as exported (1 `imports-unresolved`). **Exactly one is
-     actionable** (1 `missing-rule`): `a owl:differentFrom b` entails
-     `b owl:differentFrom a`, sound and shaped exactly like `prp-symp`, yet not
-     among the 78 rules because Table 4's `owl:differentFrom` rules only ever
-     conclude `false`. Both facts are true at once, which is why the scoreboard
-     reports rule-table coverage and entailment conformance as separate rows.
+     incomplete as exported (1 `imports-unresolved`). **0 are actionable**
+     (0 `missing-rule`).
+
+     The one entry that used to be actionable is CLOSED, and closing it is why
+     the report has an `extension` line. `a owl:differentFrom b` entails
+     `b owl:differentFrom a` — sound, and shaped exactly like `prp-symp`, yet
+     not among the 78 rules because Table 4's `owl:differentFrom` rules only
+     ever conclude `false`. PurRDF states it as `ext-eq-diff-sym`, in a rule
+     family declared to be OUTSIDE every specification table:
+     `extensions(Regime::OwlRl)` names it, `rules()` and `implemented()` are
+     still exactly the same 78 and name none of it, and every rendered report
+     carries `extension ext-eq-diff-sym` so a caller that must act only on
+     normative conclusions can tell. Both facts are still true at once, which is
+     why the scoreboard reports rule-table coverage and entailment conformance
+     as separate rows.
 - **SHACL** — the W3C `core/` and `sparql/` suites now pass **126 / 126**
   with **0 ledgered xfails**. A validation-only SHACL-AF corpus is vendored from
   pySHACL's DASH tests under `vectors/shacl/af/` and is discovered and gated by

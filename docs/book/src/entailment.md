@@ -104,11 +104,14 @@ Where the numbers stop:
   rules, and a run that met a boundary still reports
   `Completeness::ExactWithinBoundaries` rather than `Exact`. The two claims are
   reported separately on purpose. Nor is a complete rule table entailment
-  conformance: on W3C's own OWL 2 RL entailment tests the chase reaches 10 of
+  conformance: on W3C's own OWL 2 RL entailment tests the chase reaches 11 of
   27 published positive entailments and correctly withholds on 23 of 23
   negative ones (see [Conformance](#conformance) below). 78 / 78 says every
-  rule of Tables 4–9 is implemented — and one W3C-published entailment is
-  reachable by a sound rule that simply is not in those tables.
+  rule of Tables 4–9 is implemented — and the one W3C-published entailment
+  that is reachable only by a sound rule outside those tables is reached by an
+  **extension**, `ext-eq-diff-sym`, which `extensions(Regime::OwlRl)` names,
+  neither `rules()` nor `implemented()` names, and every report renders on its
+  own `extension` line.
 - **Seventeen OWL 2 RL rules conclude `false`.** "Implemented" for those means
   *decided*: a body match becomes `EntailError::Inconsistent` carrying a witness
   that names the rule and the asserted triples that satisfied it. That is the
@@ -242,7 +245,7 @@ Two corpora measure two different things, and the distinction matters:
   carry no RDF/XML premise — so the exclusion was payload triage, not a
   capability limit, and "256 of 261" is a number over a corpus rather than over
   what W3C published. The harness measures and prints all of it on every run.
-- **W3C OWL 2 RL entailment tests — 33 of 50 cases agree, 17 ledgered**, zero
+- **W3C OWL 2 RL entailment tests — 34 of 50 cases agree, 16 ledgered**, zero
   unledgered. This is the independent oracle for the rule table: W3C's own
   entailment tests, forward-materialized under `Regime::OwlRl` and checked for
   whether the published conclusion maps into the closure. The two lanes prove
@@ -253,20 +256,30 @@ Two corpora measure two different things, and the distinction matters:
   holds over *all* 23 negative cases — soundness is owed on every case, so none
   were filtered by profile.
 
-  The positive lane is **10 of 27** — the 27 positive entailments W3C itself
-  places inside the RL profile under RDF-Based semantics. 16 of the 17
+  The positive lane is **11 of 27** — the 27 positive entailments W3C itself
+  places inside the RL profile under RDF-Based semantics. 16 of the 16
   divergences are structural limits of OWL 2 RL rather than of this
   implementation: every head in Profiles §4.3 Tables 4–9 is an assertional
   triple over named terms or `false`, so no conforming RL rule set derives a
   schema axiom (8 `schema-conclusion`) or a negative fact (6
   `negative-conclusion`), and the profile states no rule at all for constructs
   outside its syntax (1 `construct-outside-rl`); one more premise is incomplete
-  as exported (1 `imports-unresolved`). **Exactly one is actionable** (1
-  `missing-rule`): `a owl:differentFrom b` entails `b owl:differentFrom a`,
-  which is sound and shaped exactly like `prp-symp`, yet is not among the 78
-  rules — Table 4's `owl:differentFrom` rules only ever conclude `false`.
-  Closing it means adding a rule *beyond* the normative table, so it is counted
-  apart from the profile's structural limits rather than buried among them.
+  as exported (1 `imports-unresolved`). **0 are actionable** (0
+  `missing-rule`).
+
+  The one case that used to be actionable is closed by an **extension**, and
+  the extension is labelled rather than absorbed. `a owl:differentFrom b`
+  entails `b owl:differentFrom a`, which is sound — `owl:differentFrom` denotes
+  inequality and inequality is symmetric — and shaped exactly like `prp-symp`,
+  yet is not among the 78 rules, because Table 4's `owl:differentFrom` rules
+  only ever conclude `false`. PurRDF states it as `ext-eq-diff-sym`, in a rule
+  family declared to sit *outside* every specification table:
+  `extensions(Regime::OwlRl)` returns it, `rules()` and `implemented()` are
+  still exactly the same 78 and return none of it, `RuleId::is_extension`
+  decides which is which, and every rendered report carries an
+  `extension ext-eq-diff-sym` line beside its `missing` lines. So the closure a
+  caller gets is Tables 4–9 plus a list it can read and reject, and
+  `OWL-RL 78 / 78` remains a claim about Tables 4–9 and nothing else.
 
 The live scoreboard is
 [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md).

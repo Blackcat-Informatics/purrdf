@@ -6,19 +6,31 @@
 //! [`RuleId`] names every rule of the two calculi this crate speaks about — the 78
 //! OWL 2 RL/RDF rules of the OWL 2 Profiles specification, §4.3, Tables 4–9, and the
 //! 18 RDF / RDFS entailment patterns of RDF 1.2 Semantics, §8.1.1 and §9.2.1 — as data
-//! rather than as prose. Two functions turn a [`Regime`] into a rule list:
+//! rather than as prose — plus the rules this crate fires that NO specification table
+//! states. Three functions turn a [`Regime`] into a rule list:
 //!
 //! * [`rules`] — the rule table the regime is *defined by*: what the specification
 //!   says a complete implementation must fire.
 //! * [`implemented`] — the subset this crate's chase actually fires today.
+//! * [`extensions`] — what the chase fires BEYOND that table, if anything.
 //!
 //! `rules(r)` minus `implemented(r)` is therefore the regime's gap, expressed as an
-//! executable artifact instead of an assertion in a README. Both return `&'static`
+//! executable artifact instead of an assertion in a README, and `extensions(r)` is the
+//! overshoot in the other direction, expressed the same way. All three return `&'static`
 //! slices in specification table order, so the inventory is deterministic and free of
 //! map iteration. For `RDF`, `RDFS`, `OWL-RL` and `D` the gap is now EMPTY — which is a
 //! claim about the RULE TABLE and not about the closure; see
 //! [`Completeness::ExactWithinBoundaries`](crate::Completeness::ExactWithinBoundaries) for
 //! the difference and why a report states both.
+//!
+//! # The two directions are never mixed
+//!
+//! An extension is not an implemented rule with a footnote: it is in a fourth category
+//! that [`RuleId::is_extension`] decides, and neither [`rules`] nor [`implemented`] ever
+//! names one. That is what keeps `OWL-RL 78 / 78` a true statement about OWL 2
+//! Profiles §4.3 Tables 4–9 while the lane's closure is strictly larger than those tables
+//! license, and it is why a report renders the extension list beside the fired list rather
+//! than folding one into the other.
 //!
 //! PurRDF mints no vocabulary here: [`RuleId`] carries specification rule *names*
 //! (`"eq-ref"`, `"cls-svf1"`, `"rdfs4"`), not IRIs.
@@ -60,9 +72,11 @@ macro_rules! rule_ids {
         /// A single entailment rule, by its canonical specification name.
         ///
         /// Variants are declared in specification table order — OWL 2 RL Tables 4, 5,
-        /// 6, 7, 8, 9, then the RDF patterns, then the RDFS patterns — and the derived
-        /// [`Ord`] follows that declaration order, so any ordered collection of
-        /// `RuleId` reads in the order the specifications present the rules.
+        /// 6, 7, 8, 9, then the RDF patterns, then the RDFS patterns, then the
+        /// EXTENSIONS this crate declares beyond every specification table — and the
+        /// derived [`Ord`] follows that declaration order, so any ordered collection of
+        /// `RuleId` reads in the order the specifications present the rules and the
+        /// non-normative rules sort last, where they cannot be mistaken for one.
         #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub enum RuleId {
             $( $(#[$attr])* $variant, )+
@@ -71,7 +85,9 @@ macro_rules! rule_ids {
         impl RuleId {
             /// Every rule id this crate knows, in specification table order: the 78
             /// OWL 2 RL rules of Tables 4–9, then the RDF patterns of RDF 1.2
-            /// Semantics §8.1.1, then the RDFS patterns of §9.2.1.
+            /// Semantics §8.1.1, then the RDFS patterns of §9.2.1, then the
+            /// extensions — which are LAST, and are the only entries
+            /// [`RuleId::is_extension`] answers `true` for.
             pub const ALL: &'static [Self] = &[ $( Self::$variant, )+ ];
 
             /// The canonical spelling used by the current specification, exactly as the
@@ -84,6 +100,40 @@ macro_rules! rule_ids {
                 match self {
                     $( Self::$variant => $spelling, )+
                 }
+            }
+        }
+
+        impl RuleId {
+            /// Whether this rule is an EXTENSION — a rule this crate's chase fires that
+            /// no specification table states.
+            ///
+            /// Decided by the canonical spelling's `ext-` prefix, which no rule of
+            /// OWL 2 Profiles §4.3 Tables 4–9 or of RDF 1.2 Semantics §8.1.1 / §9.2.1
+            /// carries — `the_extension_prefix_is_disjoint_from_the_specification_names`
+            /// asserts that over the whole enum, so the predicate cannot start
+            /// answering `true` for a normative rule because someone added a variant.
+            ///
+            /// This is the line between "PurRDF implements the table" and "PurRDF's
+            /// closure is the table's". [`rules`] and [`implemented`] describe the
+            /// first and never name an extension; [`extensions`] names exactly the
+            /// second, and a caller that wants strictly normative behaviour compares a
+            /// report's fired rules against it.
+            ///
+            /// ```
+            /// use purrdf_entail::{Regime, RuleId, extensions, implemented, rules};
+            ///
+            /// assert!(RuleId::ExtEqDiffSym.is_extension());
+            /// assert!(!RuleId::PrpSymp.is_extension());
+            /// // An extension is in no specification table, by construction.
+            /// for &rule in extensions(Regime::OwlRl) {
+            ///     assert!(rule.is_extension());
+            ///     assert!(!rules(Regime::OwlRl).contains(&rule));
+            ///     assert!(!implemented(Regime::OwlRl).contains(&rule));
+            /// }
+            /// ```
+            #[must_use]
+            pub const fn is_extension(self) -> bool {
+                matches!(self.as_str().as_bytes(), [b'e', b'x', b't', b'-', ..])
             }
         }
 
@@ -400,6 +450,25 @@ rule_ids! {
     /// `_:nnn rdf:type rdfs:Proposition` holds. Axiomatic; no premise. Added in
     /// RDF 1.2.
     Rdfs14a = "rdfs14a",
+
+    // --- EXTENSIONS. Not a specification rule; see `RuleId::is_extension`. ---
+    /// `ext-eq-diff-sym`: `?x owl:differentFrom ?y` ⇒ `?y owl:differentFrom ?x`.
+    ///
+    /// **Not one of the 78.** No rule of OWL 2 Profiles §4.3 Tables 4–9 has an
+    /// `owl:differentFrom` head at all: the table's three `owl:differentFrom`
+    /// rules (`eq-diff1`, `eq-diff2`, `eq-diff3`) read the property in a BODY and
+    /// conclude `false`. This one concludes a triple, so it belongs to no table
+    /// and is declared as an extension — [`is_extension`](Self::is_extension)
+    /// answers `true` for it, [`extensions`] lists it, and neither [`rules`] nor
+    /// [`implemented`] does.
+    ///
+    /// It is SOUND. `owl:differentFrom` denotes inequality of interpretations and
+    /// `≠` is symmetric, so the symmetric triple holds in every model of the
+    /// premise. And it reaches no `false` the normative table did not already
+    /// reach: the only rules with `owl:differentFrom` in a body are `eq-diff1..3`,
+    /// each of which pairs it with `owl:sameAs`, and `owl:sameAs` is already closed
+    /// under `eq-sym` — so a clash on `(x, y)` was already a clash on `(y, x)`.
+    ExtEqDiffSym = "ext-eq-diff-sym",
 }
 
 impl fmt::Display for RuleId {
@@ -688,6 +757,13 @@ static IMPLEMENTED_OWL_RL: [RuleId; 78] = splice_owl_rl();
 /// The rules the `D` lane evaluates: OWL 2 Profiles §4.3 Table 8, entire.
 static IMPLEMENTED_D: [RuleId; 5] = OWL_RL_DATATYPES;
 
+/// The rules the `OWL-RL` lane fires that no specification table states.
+///
+/// One, and its whole content is symmetry of `owl:differentFrom`. See
+/// [`RuleId::ExtEqDiffSym`] for the soundness argument and [`extensions`] for why the
+/// list is published separately rather than folded into [`implemented`].
+static EXTENSIONS_OWL_RL: [RuleId; 1] = [RuleId::ExtEqDiffSym];
+
 /// The rule table `regime` is *defined by* — what the specification requires of a
 /// complete implementation, not what this crate currently does.
 ///
@@ -786,12 +862,59 @@ pub fn implemented(regime: Regime) -> &'static [RuleId] {
     }
 }
 
+/// The rules `regime`'s lane fires that NO specification table states.
+///
+/// The third inventory, and the one that keeps the other two honest. [`rules`] is what a
+/// specification defines the regime by and [`implemented`] is the subset this crate
+/// evaluates, so `rules(r).len()` and `implemented(r).len()` are both statements about a
+/// normative table — `OWL-RL` is 78 and 78, and stays 78 and 78 however far this list
+/// grows. Everything the chase fires BEYOND that table is here, and nowhere else.
+///
+/// Publishing it separately rather than widening [`implemented`] is the whole point: a
+/// caller that wants strictly normative behaviour needs to be able to tell, from data,
+/// which conclusions its closure owes to a rule W3C wrote and which to a rule PurRDF
+/// added. Folding the two together would make `78 / 78` a number about a mixed set.
+///
+/// Every entry answers [`RuleId::is_extension`] with `true` and appears in neither
+/// [`rules`] nor [`implemented`], for every regime. The slice is `&'static` and in
+/// declaration order, like the other two.
+///
+/// * `OwlRl` — one: `ext-eq-diff-sym`, symmetry of `owl:differentFrom`. It is sound and
+///   shaped exactly like `prp-symp`, and it is not in Tables 4–9 because the table's only
+///   `owl:differentFrom` rules conclude `false`. See [`RuleId::ExtEqDiffSym`].
+/// * every other regime — none. Extending a lane is a decision taken per lane, and no
+///   other lane has one taken for it.
+///
+/// ```
+/// use purrdf_entail::{Regime, RuleId, extensions, implemented, rules};
+///
+/// // The normative statement is unmoved: the OWL 2 RL table is 78 rules, all fired.
+/// assert_eq!(rules(Regime::OwlRl).len(), 78);
+/// assert_eq!(implemented(Regime::OwlRl).len(), 78);
+/// // And what the lane adds beyond it is one named rule, stated as data.
+/// assert_eq!(extensions(Regime::OwlRl), &[RuleId::ExtEqDiffSym]);
+/// assert!(extensions(Regime::Rdfs).is_empty());
+/// ```
+#[must_use]
+pub fn extensions(regime: Regime) -> &'static [RuleId] {
+    match regime {
+        Regime::OwlRl => &EXTENSIONS_OWL_RL,
+        Regime::Simple
+        | Regime::Rdf
+        | Regime::Rdfs
+        | Regime::OwlDirect
+        | Regime::Rif
+        | Regime::D => &NO_RULES,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        IMPLEMENTED_D, IMPLEMENTED_OWL_RL, IMPLEMENTED_RDF, IMPLEMENTED_RDFS, OWL_RL_CLASS_AXIOMS,
-        OWL_RL_CLASS_EXPRESSIONS, OWL_RL_DATATYPES, OWL_RL_EQUALITY, OWL_RL_PROPERTY_AXIOMS,
-        OWL_RL_SCHEMA_VOCABULARY, RDF_PATTERNS, RDFS_PATTERNS, RuleId, implemented, rules,
+        EXTENSIONS_OWL_RL, IMPLEMENTED_D, IMPLEMENTED_OWL_RL, IMPLEMENTED_RDF, IMPLEMENTED_RDFS,
+        OWL_RL_CLASS_AXIOMS, OWL_RL_CLASS_EXPRESSIONS, OWL_RL_DATATYPES, OWL_RL_EQUALITY,
+        OWL_RL_PROPERTY_AXIOMS, OWL_RL_SCHEMA_VOCABULARY, RDF_PATTERNS, RDFS_PATTERNS, RuleId,
+        extensions, implemented, rules,
     };
     use crate::Regime;
     use std::collections::BTreeSet;
@@ -1050,7 +1173,11 @@ mod tests {
 
     #[test]
     fn as_str_and_from_str_round_trip_for_every_variant() {
-        assert_eq!(RuleId::ALL.len(), 96, "78 OWL 2 RL + 3 RDF + 15 RDFS");
+        assert_eq!(
+            RuleId::ALL.len(),
+            97,
+            "78 OWL 2 RL + 3 RDF + 15 RDFS + 1 extension"
+        );
         for &id in RuleId::ALL {
             let spelling = id.as_str();
             assert_eq!(
@@ -1229,6 +1356,63 @@ mod tests {
         for regime in ALL_REGIMES {
             assert!(std::ptr::eq(rules(regime), rules(regime)));
             assert!(std::ptr::eq(implemented(regime), implemented(regime)));
+            assert!(std::ptr::eq(extensions(regime), extensions(regime)));
         }
+    }
+
+    /// THE `ext-` PREFIX IS DISJOINT FROM EVERY SPECIFICATION SPELLING.
+    ///
+    /// [`RuleId::is_extension`] reads the canonical spelling, which is only sound if no
+    /// published rule name begins `ext-`. It does not — OWL 2 Profiles §4.3 uses `eq-`,
+    /// `prp-`, `cls-`, `cax-`, `dt-` and `scm-`, and RDF 1.2 Semantics uses `rdfD` and
+    /// `rdfs` — and this is what keeps that true as the enum grows: a normative rule added
+    /// with an `ext-` spelling, or an extension added without one, fails here.
+    #[test]
+    fn the_extension_prefix_is_disjoint_from_the_specification_names() {
+        let tabled: BTreeSet<RuleId> = ALL_REGIMES
+            .into_iter()
+            .flat_map(|regime| rules(regime).iter().copied())
+            .collect();
+        for &rule in RuleId::ALL {
+            let spelled = rule.as_str().starts_with("ext-");
+            assert_eq!(
+                rule.is_extension(),
+                spelled,
+                "{rule}: is_extension disagrees with the spelling"
+            );
+            assert_eq!(
+                rule.is_extension(),
+                !tabled.contains(&rule),
+                "{rule}: an extension is exactly a rule no specification table names"
+            );
+        }
+    }
+
+    /// The extension inventory, pinned exactly, and pinned to be DISJOINT from the other
+    /// two — which is the property that keeps `OWL-RL 78 / 78` a claim about Tables 4–9.
+    #[test]
+    fn extension_lists_are_pinned_exactly() {
+        assert_eq!(extensions(Regime::OwlRl), &EXTENSIONS_OWL_RL);
+        assert_eq!(extensions(Regime::OwlRl), &[RuleId::ExtEqDiffSym]);
+        for regime in ALL_REGIMES {
+            if matches!(regime, Regime::OwlRl) {
+                continue;
+            }
+            assert!(
+                extensions(regime).is_empty(),
+                "{}: no extension is declared for this lane",
+                regime_name(regime)
+            );
+        }
+        // The three inventories are pairwise disjoint, for every regime.
+        for regime in ALL_REGIMES {
+            for extension in extensions(regime) {
+                assert!(!rules(regime).contains(extension));
+                assert!(!implemented(regime).contains(extension));
+            }
+        }
+        // And the sizes the whole project quotes are unmoved by the extension.
+        assert_eq!(rules(Regime::OwlRl).len(), 78);
+        assert_eq!(implemented(Regime::OwlRl).len(), 78);
     }
 }

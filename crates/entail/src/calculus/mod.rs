@@ -46,14 +46,30 @@
 //! * [`cls`] — Table 6, the class-expression rules;
 //! * [`cax`] — Table 7, the class-axiom rules with no RDFS counterpart;
 //! * [`dt`] — Table 8, the datatype rules;
-//! * [`scm`] — Table 9, the schema-vocabulary rules with no RDFS counterpart.
+//! * [`scm`] — Table 9, the schema-vocabulary rules with no RDFS counterpart;
+//! * [`ext`] — the rules this chase fires that NO specification table states.
 //!
-//! This module concatenates whatever those seven export, in the fixed family order `rdfs`,
-//! `eq`, `prp`, `cls`, `cax`, `dt`, `scm` — RDF/RDFS first, then the OWL 2 RL tables in
-//! table order — and turns the result into [`ChaseRule`], its inventory bindings and the
-//! clause program. Adding a rule is therefore an edit to ONE family module: nothing here
-//! names an individual rule, so two families can grow at once without touching the same
-//! lines.
+//! This module concatenates whatever those eight export, in the fixed family order `rdfs`,
+//! `eq`, `prp`, `cls`, `cax`, `dt`, `scm`, `ext` — RDF/RDFS first, then the OWL 2 RL
+//! tables in table order, then the extensions — and turns the result into [`ChaseRule`],
+//! its inventory bindings and the clause program. Adding a rule is therefore an edit to
+//! ONE family module: nothing here names an individual rule, so two families can grow at
+//! once without touching the same lines.
+//!
+//! # The EXTENSIONS come last, and the order is part of the change
+//!
+//! [`ext`] is not a table, and a reader looking for what OWL 2 Profiles §4.3 says must be
+//! able to read the six OWL families without filtering it out. Its position at the END of
+//! the family list is also what keeps this change small in the digest: a `false`-headed
+//! rule is lowered into a clause naming a clash marker built from the rule's DECLARATION
+//! INDEX, so a family spliced anywhere but last would renumber the seventeen markers and
+//! move every lane's contract hash. Appended, it moves exactly one — the lane that
+//! actually gained a clause.
+//!
+//! An extension is reported as one. [`crate::rules`] and [`crate::implemented`] never name
+//! it, [`crate::extensions`] names only it, and [`crate::RuleId::is_extension`] decides
+//! which is which — so `OWL-RL 78 / 78` stays a claim about Tables 4–9 while the lane's
+//! closure is strictly larger than those tables license.
 //!
 //! # A rule that concludes `false` is LOWERED, not refused
 //!
@@ -93,6 +109,7 @@ pub(crate) mod cax;
 pub(crate) mod cls;
 pub(crate) mod dt;
 pub(crate) mod eq;
+pub(crate) mod ext;
 pub(crate) mod prp;
 pub(crate) mod rdfs;
 pub(crate) mod scm;
@@ -101,6 +118,7 @@ use cax::cax_rules;
 use cls::cls_rules;
 use dt::dt_rules;
 use eq::eq_rules;
+use ext::ext_rules;
 use prp::prp_rules;
 use rdfs::rdfs_rules;
 use scm::scm_rules;
@@ -358,7 +376,9 @@ macro_rules! collect_families {
     };
 }
 
-collect_families! { { rdfs_rules, eq_rules, prp_rules, cls_rules, cax_rules, dt_rules, scm_rules } }
+collect_families! {
+    { rdfs_rules, eq_rules, prp_rules, cls_rules, cax_rules, dt_rules, scm_rules, ext_rules }
+}
 
 /// The internal id that names WHICH rule a [`CLASH_RELATION`] row came from.
 ///
@@ -593,7 +613,7 @@ mod tests {
         calculus_program, clash_marker, clash_rule, clauses_for, constraint_clause,
         declared_constraints, fired_rule_ids, program_with_attribution,
     };
-    use crate::{Regime, RuleId, implemented, rules};
+    use crate::{Regime, RuleId, extensions, implemented, rules};
     use purrdf_datalog::cache::contract_hash;
     use purrdf_datalog::chase::certify;
     use purrdf_datalog::clause::HeadForm;
@@ -692,21 +712,73 @@ mod tests {
     }
 
     /// The chase's tags ARE the inventory: for every regime, the rule ids the lane fires
-    /// equal `implemented(regime)` plus, for `OWL-RL` only, the three RDFS-shaped rules
-    /// that lane fires under no OWL 2 RL name.
+    /// equal `implemented(regime)` plus `extensions(regime)` plus, for `OWL-RL` only, the
+    /// three RDFS-shaped rules that lane fires under no OWL 2 RL name.
     ///
     /// This is the join that keeps a firing tally from claiming a rule the inventory does
-    /// not, or the inventory from claiming a rule that never fires.
+    /// not, or the inventory from claiming a rule that never fires. The three summands are
+    /// named separately on purpose: a rule that quietly moved between `implemented` and
+    /// `extensions` would keep the union equal and is caught by
+    /// `the_extensions_are_in_no_specification_table` instead.
     #[test]
     fn the_fired_rule_ids_are_exactly_the_inventory() {
         for regime in ALL_REGIMES {
             let fired: BTreeSet<RuleId> = fired_rule_ids(regime).into_iter().collect();
             let mut expected: BTreeSet<RuleId> = implemented(regime).iter().copied().collect();
+            expected.extend(extensions(regime).iter().copied());
             if matches!(regime, Regime::OwlRl) {
                 expected.extend(OWL_RL_RDFS_SHAPED_EXTRAS);
             }
             assert_eq!(fired, expected, "{regime:?}");
         }
+    }
+
+    /// AN EXTENSION IS IN NO SPECIFICATION TABLE, AND THE TABLES DID NOT MOVE.
+    ///
+    /// The one assertion the whole `ext` family rests on. `rules(OwlRl)` and
+    /// `implemented(OwlRl)` are still 78 — the same 78 — and every rule this crate fires
+    /// beyond them is named by [`crate::extensions`], answers
+    /// [`RuleId::is_extension`] with `true`, and is fired by a lane that lists it.
+    #[test]
+    fn the_extensions_are_in_no_specification_table() {
+        // The normative claim, stated as a number and as a set.
+        assert_eq!(rules(Regime::OwlRl).len(), 78);
+        assert_eq!(implemented(Regime::OwlRl).len(), 78);
+        assert_eq!(rules(Regime::OwlRl), implemented(Regime::OwlRl));
+        for regime in ALL_REGIMES {
+            for &extension in extensions(regime) {
+                assert!(extension.is_extension(), "{extension} is not marked one");
+                // In NO table, for NO regime — not merely absent from its own lane's.
+                for other in ALL_REGIMES {
+                    assert!(
+                        !rules(other).contains(&extension),
+                        "{extension} in {other:?}"
+                    );
+                    assert!(
+                        !implemented(other).contains(&extension),
+                        "{extension} in implemented({other:?})"
+                    );
+                }
+                // And it is a rule that actually RUNS in the lane that declares it.
+                assert!(
+                    fired_rule_ids(regime).contains(&extension),
+                    "{regime:?} lists {extension} and does not fire it"
+                );
+            }
+        }
+        // Every rule id the enum knows is either a specification rule or an extension,
+        // and the extensions are exactly the ones some lane declares.
+        let declared: BTreeSet<RuleId> = ALL_REGIMES
+            .into_iter()
+            .flat_map(|regime| extensions(regime).iter().copied())
+            .collect();
+        let marked: BTreeSet<RuleId> = RuleId::ALL
+            .iter()
+            .copied()
+            .filter(|rule| rule.is_extension())
+            .collect();
+        assert_eq!(declared, marked);
+        assert_eq!(marked, BTreeSet::from([RuleId::ExtEqDiffSym]));
     }
 
     /// The three extras really are absent from the OWL 2 RL rule table — the reason they
@@ -822,8 +894,9 @@ mod tests {
 
     /// The `OWL-RL` lane's clause count, pinned. It is not the rule count: `prp-ap` states
     /// nine clauses, `dt-type1` thirty-two, `eq-ref` three, the two collection traversals
-    /// three each, and five rules state a conjunctive conclusion as two.
-    const PINNED_OWL_RL_CLAUSES: usize = 135;
+    /// three each, and five rules state a conjunctive conclusion as two. The last of them
+    /// is the one EXTENSION clause, `ext-eq-diff-sym`.
+    const PINNED_OWL_RL_CLAUSES: usize = 136;
 
     /// The contract hash is `purrdf-datalog`'s, over the declared program — not a second
     /// recipe that could drift from it.
@@ -887,8 +960,14 @@ mod tests {
     /// conclusions are unchanged. That is the direction the digest is allowed to be
     /// conservative in: a consumer refusing a cached closure it could have kept is a cost,
     /// whereas trusting one minted under a different rule set is a defect.
+    ///
+    /// It moved once for the `ext` family: the lane now states `ext-eq-diff-sym` as a
+    /// 136th clause. The other three digests did NOT move, and that is the whole reason
+    /// the family is concatenated LAST — an extension declared anywhere earlier would have
+    /// renumbered the clash markers and moved the `RDF`, `RDFS` and `D` digests for a rule
+    /// none of those lanes fires.
     const PINNED_OWL_RL_HASH: &str =
-        "61a9a84001b40b06a8dfe4b38e331ca1943893cbd191b272d6ffead048fa2de0";
+        "8f93a9083fda8e971f558750cf5291b38b6f4838c82148a3b67e3ce7c5dc9c09";
     /// The `D` lane's, moved by the same renumbering — `dt-not-type` is a constraint too.
     const PINNED_D_HASH: &str = "20ac9aa48ce8dd9b25bc7239798566da2d1559458c6ed12befa520c3fdb16cb7";
 
@@ -914,8 +993,8 @@ mod tests {
     }
 
     /// The lane membership is a partition the enum cannot silently widen: `RDFS` fires
-    /// fourteen rules, `OWL-RL` seventy-eight, `RDF` one, `D` five, and nothing else fires
-    /// at all.
+    /// eighteen rules, `OWL-RL` seventy-eight plus four that are not in its table, `RDF`
+    /// three, `D` five, and nothing else fires at all.
     ///
     /// `RDFS` is no longer a subset of `OWL-RL`, and that is deliberate: OWL 2 Profiles
     /// §4.3 omits the RDF and RDFS axiomatic triples, so the five rules the `RDFS` lane
@@ -932,8 +1011,12 @@ mod tests {
         assert_eq!(count(Regime::Rdf), 3);
         assert_eq!(count(Regime::Rdfs), 18);
         // The whole of OWL 2 Profiles §4.3 Tables 4-9 — seventy-eight rules — plus the
-        // three RDFS-shaped rules the lane fires under no OWL name.
-        assert_eq!(count(Regime::OwlRl), 78 + 3);
+        // three RDFS-shaped rules the lane fires under no OWL name, plus the one
+        // EXTENSION it fires under no specification name at all. The three summands are
+        // written out rather than added up, because each is a different KIND of claim and
+        // a rule moving between them must fail here.
+        assert_eq!(count(Regime::OwlRl), 78 + 3 + 1);
+        assert_eq!(extensions(Regime::OwlRl).len(), 1);
         assert_eq!(count(Regime::D), 5);
         for regime in [Regime::Simple, Regime::OwlDirect, Regime::Rif] {
             assert_eq!(count(regime), 0, "{regime:?}");

@@ -16,6 +16,12 @@ run disagree. Regenerate with `make metadata`.
 actually fires (`implemented(regime)`). Their difference is the regime's gap,
 and it is the same set a `ReasoningReport` names under `missing`.
 
+Neither column counts an **extension** — a rule this workspace fires that no
+specification table states. Those are listed in their own section below
+(`extensions(regime)`), never folded into a coverage number, so a figure like
+`OWL-RL 78 / 78` stays a claim about OWL 2 Profiles §4.3 Tables 4–9 and about
+nothing else.
+
 ## Coverage by regime
 
 | Regime | `--regime` | Defined | Implemented |
@@ -32,6 +38,23 @@ A regime with a zero-length rule table is one this crate does not enumerate
 rules for: `Simple` is the identity closure, and `OWL-Direct` and `RIF` are
 served by a tableau and by a caller-supplied rule set respectively, neither of
 which is a fixed table.
+
+## Extensions
+
+A rule this workspace's evaluator fires that **no specification table states**.
+An extension appears in neither column above, for any regime: `rules(regime)` and
+`implemented(regime)` name only specification rules, and `extensions(regime)`
+names only these. `RuleId::is_extension` decides which is which, and a
+`ReasoningReport` renders the list under `extension` beside the `missing` list —
+so a caller that must act only on normative conclusions can tell from the report
+rather than from prose.
+
+Every entry is sound under the semantics of the vocabulary it reads; that is the
+only standard a rule with no specification to appeal to can meet.
+
+| Regime | `--regime` | Rule |
+| --- | --- | --- |
+| OWL-RL | `owl-rl` | `ext-eq-diff-sym` |
 
 ## RDF — 3 of 3 rules implemented
 

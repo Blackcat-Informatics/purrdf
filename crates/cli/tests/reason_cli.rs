@@ -707,7 +707,7 @@ fn report_bare_writes_the_certificate_to_stderr() {
     assert!(err.ends_with("inconsistency none\n"), "{err}");
     // The SHARED renderer's banner. Its presence is what says the CLI stopped keeping a
     // private renderer of its own, whose grammar nothing compared against this one.
-    assert!(err.starts_with("purrdf-reasoning-report 2\n"), "{err}");
+    assert!(err.starts_with("purrdf-reasoning-report 3\n"), "{err}");
 
     // stdout carried no report: the data channel is untouched.
     assert!(String::from_utf8_lossy(&o.stdout).is_empty());
@@ -744,7 +744,7 @@ fn report_to_a_path_is_byte_identical_across_runs() {
     }
     let a = std::fs::read(&first).expect("read first report");
     assert_eq!(a, std::fs::read(&second).expect("read second report"));
-    assert!(String::from_utf8_lossy(&a).starts_with("purrdf-reasoning-report 2\nregime rdfs\n"));
+    assert!(String::from_utf8_lossy(&a).starts_with("purrdf-reasoning-report 3\nregime rdfs\n"));
 }
 
 /// AN INCONSISTENT INPUT STILL WRITES ITS REPORT, and the report names the witness.
@@ -777,7 +777,7 @@ fn an_inconsistent_run_writes_the_report_and_still_fails() {
 
     let written = std::fs::read_to_string(&report).expect("--report was written anyway");
     assert!(
-        written.starts_with("purrdf-reasoning-report 2\nregime owl-rl\n"),
+        written.starts_with("purrdf-reasoning-report 3\nregime owl-rl\n"),
         "{written}"
     );
     assert!(

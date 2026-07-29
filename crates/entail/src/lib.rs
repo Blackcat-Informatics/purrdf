@@ -127,11 +127,11 @@ pub use reasoner::{
 };
 pub use report::{
     Boundary, Completeness, Construct, InconsistencyWitness, InconsistentRun, ReasoningReport,
-    WitnessTriple,
+    TerminationCertificate, WitnessTriple,
 };
 pub use rif::{Atom, Fact, RifTerm, Rule, RuleSet, materialize_rif};
 pub use rif_xml::{ParsedRifDocument, RifImport, parse_rif_xml, resolve_rif_imports};
-pub use rules::{ParseRuleIdError, RuleId, implemented, rules};
+pub use rules::{ParseRuleIdError, RuleId, extensions, implemented, rules};
 
 /// A SPARQL entailment regime (`sparql:entailmentRegime`), by its W3C IRI's local
 /// name.
@@ -521,6 +521,12 @@ mod tests {
     const B: &str = "http://example.org/B";
     const C: &str = "http://example.org/C";
     const X: &str = "http://example.org/x";
+    const Y: &str = "http://example.org/y";
+
+    /// `owl:sameAs` — `eq-diff1`'s first premise.
+    const OWL_SAMEAS: &str = "http://www.w3.org/2002/07/owl#sameAs";
+    /// `owl:differentFrom` — what the one extension rule concludes.
+    const OWL_DIFFERENTFROM: &str = "http://www.w3.org/2002/07/owl#differentFrom";
 
     const RDFS_DOMAIN: &str = "http://www.w3.org/2000/01/rdf-schema#domain";
     const RDFS_RANGE: &str = "http://www.w3.org/2000/01/rdf-schema#range";
@@ -926,7 +932,7 @@ mod tests {
     fn boundaries_beside_exact_is_unconstructible() {
         let budget = purrdf_datalog::seminaive::BudgetReport::new(0, 0, 0);
         let build = |regime: Regime, boundaries: Vec<Boundary>| {
-            ReasoningReport::new(regime, Vec::new(), boundaries, budget, None, 0)
+            ReasoningReport::new(regime, Vec::new(), boundaries, budget, None, 0, None)
         };
         for regime in [
             Regime::Simple,
@@ -1033,6 +1039,149 @@ mod tests {
             let regime = plan.regime();
             let (_, report) = materialize(&ds, plan).expect("a lane that mints no surrogate");
             assert_eq!(report.withheld_surrogates(), 0, "{regime:?}");
+        }
+    }
+
+    /// THE EXTENSION FIRES, AND IT IS REPORTED AS AN EXTENSION.
+    ///
+    /// `a owl:differentFrom b` entails `b owl:differentFrom a` — W3C publishes it as
+    /// `webont-differentfrom-001` — and no rule of OWL 2 Profiles §4.3 Tables 4–9 has an
+    /// `owl:differentFrom` head, so the chase reaches it only through the extension this
+    /// crate declares. This asserts BOTH halves of that sentence at once: the triple is in
+    /// the closure, the rule that put it there is named, and the report says that rule is
+    /// not one of the seventy-eight.
+    #[test]
+    fn the_different_from_extension_fires_and_is_labelled_as_one() {
+        let ds = dataset(&[(X, OWL_DIFFERENTFROM, Y)]);
+        let (closed, report) = materialize(&ds, Materialization::OwlRl).expect("a consistent run");
+
+        // The conclusion.
+        assert!(
+            has(&closed, Y, OWL_DIFFERENTFROM, X),
+            "the symmetric triple is not in the closure"
+        );
+        // …credited to the extension, and to nothing else.
+        let fired: Vec<(RuleId, u64)> = report.rules_fired().to_vec();
+        assert!(
+            fired.contains(&(RuleId::ExtEqDiffSym, 1)),
+            "the symmetric triple was not credited to ext-eq-diff-sym: {fired:?}"
+        );
+        // …and labelled. A caller wanting strictly normative behaviour reads exactly this.
+        assert_eq!(report.extensions(), &[RuleId::ExtEqDiffSym]);
+        for (rule, _) in &fired {
+            assert_eq!(
+                rule.is_extension(),
+                report.extensions().contains(rule),
+                "{rule} is labelled inconsistently with the report's extension list"
+            );
+        }
+        // THE NORMATIVE STATEMENT IS UNMOVED. The extension is in neither inventory, so
+        // `78 / 78` is still a claim about Tables 4-9 and about nothing else.
+        assert_eq!(rules(Regime::OwlRl).len(), 78);
+        assert_eq!(implemented(Regime::OwlRl).len(), 78);
+        assert!(!rules(Regime::OwlRl).contains(&RuleId::ExtEqDiffSym));
+        assert!(!implemented(Regime::OwlRl).contains(&RuleId::ExtEqDiffSym));
+        // Every OTHER rule the run fired IS in the normative table (or is one of the three
+        // RDFS-shaped rules OWL 2 RL/RDF omits from its own tables and this lane fires).
+        for (rule, _) in &fired {
+            if rule.is_extension() {
+                continue;
+            }
+            assert!(
+                implemented(Regime::OwlRl).contains(rule) || rules(Regime::Rdfs).contains(rule),
+                "{rule} is neither normative nor declared an extension"
+            );
+        }
+        // And no other lane gets it: `RDFS` says nothing about `owl:differentFrom`.
+        let (rdfs, rdfs_report) = materialize(&ds, Materialization::Rdfs).expect("a closure");
+        assert!(!has(&rdfs, Y, OWL_DIFFERENTFROM, X));
+        assert!(rdfs_report.extensions().is_empty());
+    }
+
+    /// THE EXTENSION REFUSES NOTHING THE TABLE DID NOT ALREADY REFUSE.
+    ///
+    /// The only rules that read `owl:differentFrom` in a BODY are `eq-diff1..3`, and
+    /// `eq-diff1` pairs it with `owl:sameAs` — which `eq-sym` already closes. So a clash
+    /// the symmetric triple enables was reachable without it, and this is the pair of runs
+    /// that shows it: `x sameAs y` with `x differentFrom y` refuses, and so does the
+    /// mirror image, exactly as it did before the extension existed.
+    #[test]
+    fn the_different_from_extension_decides_no_new_run() {
+        for (same, different) in [((X, Y), (X, Y)), ((X, Y), (Y, X)), ((Y, X), (X, Y))] {
+            let ds = dataset(&[
+                (same.0, OWL_SAMEAS, same.1),
+                (different.0, OWL_DIFFERENTFROM, different.1),
+            ]);
+            let refusal = materialize(&ds, Materialization::OwlRl)
+                .expect_err("same-and-different is an inconsistency");
+            let EntailError::Inconsistent(run) = refusal else {
+                panic!("expected an inconsistency for {same:?}/{different:?}");
+            };
+            assert_eq!(run.witness().rule(), RuleId::EqDiff1);
+        }
+        // And a graph that only says two things are different still CLOSES.
+        let (_, report) = materialize(
+            &dataset(&[(X, OWL_DIFFERENTFROM, Y)]),
+            Materialization::OwlRl,
+        )
+        .expect("difference alone is consistent");
+        assert_eq!(report.inconsistency(), None);
+    }
+
+    /// THE TERMINATION CERTIFICATE REACHES THE REPORT, AND IT IS NOT ONE CONSTANT.
+    ///
+    /// The chase proves weak acyclicity before it runs a round and used to discard the
+    /// proof. It is carried now — for the two lanes that need one, and for no others,
+    /// which is the honest split: a program that invents no term has no obligation to
+    /// discharge, and rendering a proof for it would be a claim about an analysis that
+    /// never ran.
+    ///
+    /// The two certified lanes do NOT agree, which is the fact worth pinning: the
+    /// certificate is a function of the clause set, so `RDFS` (four existential rules)
+    /// proves more than `RDF` (two), and a line that read the same for both would be
+    /// carrying no information.
+    #[test]
+    fn the_termination_certificate_is_reported_where_a_chase_ran() {
+        let ds = literal_object_fixture();
+        let rdf = materialize(&ds, Materialization::Rdf).expect("closed").1;
+        let rdfs = materialize(&ds, Materialization::Rdfs).expect("closed").1;
+        let rdf_certificate = rdf.termination().expect("the RDF lane is chased");
+        let rdfs_certificate = rdfs.termination().expect("the RDFS lane is chased");
+        assert!(rdf_certificate.existential_edges() > 0);
+        assert!(rdf_certificate.positions() > 0);
+        assert_ne!(
+            rdf_certificate, rdfs_certificate,
+            "the certificate is a function of the CLAUSE SET, so two different rule tables \
+             must not prove the same thing"
+        );
+        assert!(
+            rdfs_certificate.existential_edges() > rdf_certificate.existential_edges(),
+            "RDFS states rdfs14/rdfs14a besides rdfD1/rdfD1a"
+        );
+        // It is `purrdf-datalog`'s own sentence, not a second spelling of it.
+        assert_eq!(
+            rdf_certificate.to_string(),
+            format!(
+                "weakly acyclic: {} refined position(s), {} existential edge(s), none in a cycle",
+                rdf_certificate.positions(),
+                rdf_certificate.existential_edges()
+            )
+        );
+        // It does NOT vary with the data — a certificate that moved per input would be
+        // describing the run rather than the program that admitted it.
+        let other = materialize(&dataset(&[(X, RDF_TYPE, A)]), Materialization::Rdfs)
+            .expect("closed")
+            .1;
+        assert_eq!(other.termination(), Some(rdfs_certificate));
+        // And the lanes that invent no term report no certificate at all.
+        for plan in [
+            Materialization::Simple,
+            Materialization::OwlRl,
+            Materialization::D,
+        ] {
+            let regime = plan.regime();
+            let report = materialize(&ds, plan).expect("closed").1;
+            assert_eq!(report.termination(), None, "{regime:?}");
         }
     }
 

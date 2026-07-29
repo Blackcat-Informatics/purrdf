@@ -90,18 +90,19 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
+use purrdf_datalog::cache::PlanCache;
 use purrdf_datalog::chase::chase;
 use purrdf_datalog::clause::{ClauseTerm, DlClause, HeadForm};
-use purrdf_datalog::seminaive::{Derivation, compile, evaluate};
+use purrdf_datalog::seminaive::{Derivation, evaluate};
 use purrdf_datalog::store::RelationStore;
 
 use crate::axioms::axioms_for;
-use crate::calculus::{ChaseRule, clash_rule, program_with_attribution};
+use crate::calculus::{ChaseRule, calculus_contract_hash, clash_rule, program_with_attribution};
 use crate::datatypes::LiteralIndex;
 use crate::interner::intern_into;
 use crate::lists::{CLASH_RELATION, ListIndex, is_internal};
-use crate::report::RunStats;
 use crate::report::{InconsistencyWitness, InconsistentRun, ReasoningReport, WitnessTriple};
+use crate::report::{RunStats, TerminationCertificate};
 use crate::surrogates::SurrogateIndex;
 use crate::vocab::{XSD_NONNEGATIVEINTEGER, XSD_STRING};
 use crate::{EntailError, Regime};
@@ -215,6 +216,13 @@ fn copy_into(b: &mut RdfDatasetBuilder, ds: &RdfDataset) {
 /// occupancy coordinates, so a caller reads the total enumeration and the worst single
 /// store rather than one lane's slice of either.
 ///
+/// It is `1 + n` EVALUATIONS and exactly ONE compilation. The plan those clauses compile
+/// to is a pure function of the clauses, so a `PlanCache` built here and threaded through
+/// every [`close_graph`] call turns `1 + n` planning passes over a ~200-clause calculus
+/// into one. The cache is scoped to this call and passed by `&mut`: a longer-lived one
+/// would make what a run costs — and what it computes, if a compile were ever a function
+/// of anything but the clauses — depend on which runs came before it.
+///
 /// The clause program itself is graph-agnostic: every atom over SPEC vocabulary names
 /// [`ClauseTerm::DefaultGraph`](purrdf_datalog::clause::ClauseTerm::DefaultGraph), which
 /// `the_declared_programs_read_and_write_the_default_graph_only` asserts, and each run
@@ -244,11 +252,22 @@ pub(crate) fn close(
         }
     }
 
+    // ONE compilation per calculus per CALL. `close_graph` is invoked `1 + n` times for a
+    // dataset with `n` named graphs, over the same declared program every time, so
+    // compiling inside it made a run over a hundred named graphs plan the ~200-clause
+    // OWL-RL calculus a hundred and one times for a plan that is a pure function of the
+    // clauses. The cache is CALL-SCOPED and threaded by `&mut`: a longer-lived one would
+    // make an answer's cost — and, if a compile ever became fallible on state, an answer —
+    // depend on what some earlier evaluation happened to compile, which is exactly the
+    // hidden history `purrdf-datalog` refuses to keep. Capacity two, because one call
+    // presents exactly one program and the second slot is slack rather than a policy.
+    let mut plans = PlanCache::new(2);
     let mut stats = RunStats::none();
-    let default_run = close_graph(ds, regime, &program, &attribution, None)?;
+    let default_run = close_graph(ds, regime, &program, &attribution, None, &mut plans)?;
     stats.absorb(default_run.budget);
     stats.drop_generalized(default_run.generalized_rdf_drops);
     stats.drop_surrogate(default_run.surrogate_drops);
+    stats.certify(default_run.termination);
     if let Some(witness) = default_run.clash {
         return Err(refuse(ds, regime, &stats, witness));
     }
@@ -265,10 +284,11 @@ pub(crate) fn close(
         emit(&mut b, conclusion, None);
     }
     for graph in named.values() {
-        let run = close_graph(ds, regime, &program, &attribution, Some(graph))?;
+        let run = close_graph(ds, regime, &program, &attribution, Some(graph), &mut plans)?;
         stats.absorb(run.budget);
         stats.drop_generalized(run.generalized_rdf_drops);
         stats.drop_surrogate(run.surrogate_drops);
+        stats.certify(run.termination);
         if let Some(witness) = run.clash {
             return Err(refuse(ds, regime, &stats, witness));
         }
@@ -350,6 +370,14 @@ struct GraphRun {
     /// run. `conclusions` is empty when this is `Some`: an inconsistent knowledge base
     /// entails every triple, so nothing the evaluation derived is an answer.
     clash: Option<InconsistencyWitness>,
+    /// The proof that admitted the program, when the restricted chase evaluated it.
+    ///
+    /// `None` on the semi-naive path, which invents no term and therefore has no
+    /// termination obligation to discharge. `Some` on the chase path, where the analysis
+    /// runs before the first round and refusing it is the only reason a program is
+    /// rejected for termination — so a `GraphRun` that exists always carries a certificate
+    /// that says the program is weakly acyclic.
+    termination: Option<TerminationCertificate>,
 }
 
 /// Push `conclusion` into `b`, in `graph`.
@@ -388,6 +416,7 @@ fn close_graph(
     program: &[DlClause],
     attribution: &[ChaseRule],
     graph: Option<&TermValue>,
+    plans: &mut PlanCache,
 ) -> Result<GraphRun, EntailError> {
     let (edb, terms) = seed(ds, regime, program, graph)?;
 
@@ -402,7 +431,15 @@ fn close_graph(
         return chase_graph(program, attribution, edb, &terms);
     }
 
-    let executable = compile(program.to_vec()).map_err(EntailError::Evaluate)?;
+    // The plan is a pure function of the clause program, and `close` hands every graph of
+    // one call the SAME program — so the second graph onward reads the compiled plan back
+    // instead of planning it again. The key is the calculus's own contract hash, which is
+    // what the report already publishes as the identity of the rule set that ran, so the
+    // cache cannot answer with a plan for a different calculus.
+    let executable = plans
+        .get_or_compile(&calculus_contract_hash(regime).to_hex(), program.to_vec())
+        .into_plan()
+        .map_err(EntailError::Evaluate)?;
     let evaluation = evaluate(&executable, edb).map_err(EntailError::Evaluate)?;
 
     // AN INCONSISTENCY IS DECIDED BEFORE AN ANSWER IS BUILT. Seventeen OWL 2 RL rules
@@ -419,16 +456,20 @@ fn close_graph(
             generalized_rdf_drops: 0,
             surrogate_drops: 0,
             clash: Some(witness),
+            termination: None,
         });
     }
 
     // The budget is the evaluator's own measurement, not a second tally kept alongside it.
+    // The semi-naive path states no existential rule and so invents no term: its fixpoint
+    // is bounded by the active domain and there is no acyclicity analysis to report.
     let mut run = GraphRun {
         conclusions: Vec::new(),
         budget: evaluation.budget(),
         generalized_rdf_drops: 0,
         surrogate_drops: 0,
         clash: None,
+        termination: None,
     };
     for derivation in evaluation.derivations() {
         let fact = derivation.fact();
@@ -627,6 +668,10 @@ fn chase_graph(
         // so a chase evaluation has nothing to clash on. That is a property of their rule
         // tables, not an omission here.
         clash: None,
+        // THE PROOF IS CARRIED OUT, NOT DISCARDED. `chase` certifies the clause set before
+        // it runs a round, and this is that verdict — the reason this evaluation was
+        // admitted at all — travelling with the facts it justifies.
+        termination: TerminationCertificate::of_chase(outcome.termination()),
     };
     for derivation in outcome.derivations() {
         let fact = derivation.fact();
@@ -981,15 +1026,16 @@ fn write_u_escape(ch: char, out: &mut String) {
 
 #[cfg(test)]
 mod tests {
-    use super::{admits_predicate, admits_subject, close, surface_of};
+    use super::{Conclusion, admits_predicate, admits_subject, close, close_graph, surface_of};
     use crate::Regime;
-    use crate::calculus::ALL_REGIMES;
+    use crate::calculus::{ALL_REGIMES, calculus_contract_hash, program_with_attribution};
     use crate::calculus_program;
     use crate::vocab::{
         OWL_HASKEY, OWL_INTERSECTIONOF, OWL_PROPERTYCHAINAXIOM, OWL_UNIONOF, RDF_FIRST, RDF_NIL,
         RDF_REST, RDF_TYPE, RDFS_SUBCLASSOF, XSD_STRING,
     };
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfTextDirection, TermValue};
+    use purrdf_datalog::cache::PlanCache;
     use purrdf_datalog::clause::{ClauseTerm, DlClause};
     use purrdf_datalog::store::RelationStore;
     use std::collections::BTreeSet;
@@ -1030,6 +1076,10 @@ mod tests {
     const EX_Y: &str = "http://example.org/y";
     /// A fixture individual.
     const EX_Z: &str = "http://example.org/z";
+    /// A fixture named graph.
+    const EX_G: &str = "http://example.org/g";
+    /// A SECOND fixture named graph — two are what make a `1 + n` run more than `1 + 1`.
+    const EX_H: &str = "http://example.org/h";
     /// A fixture individual.
     const EX_W: &str = "http://example.org/w";
     /// A fixture individual.
@@ -1433,5 +1483,133 @@ mod tests {
                 "a conclusion left the blank-node graph it was drawn in: {line}"
             );
         }
+    }
+
+    /// ONE CALL COMPILES THE CALCULUS ONCE, HOWEVER MANY GRAPHS THE DATASET HOLDS.
+    ///
+    /// A dataset with `n` named graphs is `1 + n` evaluations of the SAME declared program
+    /// — see [`close`] for why the semantics require that — and the plan those clauses
+    /// compile to is a pure function of the clauses. Compiling inside [`close_graph`] made
+    /// a hundred-graph OWL-RL run plan a ~200-clause calculus a hundred and one times.
+    ///
+    /// The measurement is the cache's own occupancy, which is honest because
+    /// `PlanCache::insert` runs on a MISS and only on a miss: an entry appears exactly when
+    /// a compile happened, so counting the calls after which the cache grew counts the
+    /// compiles. Four graph closures, one compile.
+    ///
+    /// It is also what pins the cache to a CALL. `close` builds one and threads it by
+    /// `&mut`; nothing here is reachable from a later call, so a run's answer and its cost
+    /// cannot depend on what an earlier run happened to compile.
+    #[test]
+    fn one_call_compiles_the_calculus_once_however_many_graphs_it_holds() {
+        let mut b = RdfDatasetBuilder::new();
+        let sub = b.intern_iri(RDFS_SUBCLASSOF);
+        let a = b.intern_iri(EX_A);
+        let c = b.intern_iri(EX_B);
+        b.push_quad(a, sub, c, None);
+        let mut graphs: Vec<Option<TermValue>> = vec![None];
+        for name in [EX_G, EX_H, EX_S] {
+            let g = b.intern_iri(name);
+            let x = b.intern_iri(EX_X);
+            let ty = b.intern_iri(RDF_TYPE);
+            b.push_quad(x, ty, a, Some(g));
+            graphs.push(Some(TermValue::iri(name)));
+        }
+        let ds = b.freeze().expect("the fixture freezes");
+
+        let (program, attribution) = program_with_attribution(Regime::OwlRl);
+        let mut plans = PlanCache::new(2);
+        let mut compiles = 0_usize;
+        for graph in &graphs {
+            let before = plans.len();
+            close_graph(
+                &ds,
+                Regime::OwlRl,
+                &program,
+                &attribution,
+                graph.as_ref(),
+                &mut plans,
+            )
+            .expect("each graph closes");
+            compiles += usize::from(plans.len() > before);
+        }
+        assert_eq!(graphs.len(), 4, "the default graph plus three named ones");
+        assert_eq!(
+            compiles, 1,
+            "four graph closures over one declared program must compile it once"
+        );
+        assert_eq!(plans.len(), 1, "one program, one cached plan");
+
+        // …and the entry is the CALCULUS's, keyed by the identity the report publishes, so
+        // the cache cannot answer a lane with another lane's plan.
+        let lookup = plans.get_or_compile(
+            &calculus_contract_hash(Regime::OwlRl).to_hex(),
+            program.clone(),
+        );
+        assert!(
+            lookup.cache_hit(),
+            "the plan the four closures shared is warm"
+        );
+        assert_eq!(lookup.plan_builds(), 0);
+        let other = plans.get_or_compile(
+            &calculus_contract_hash(Regime::D).to_hex(),
+            calculus_program(Regime::D),
+        );
+        assert!(
+            !other.cache_hit(),
+            "a different calculus is a different entry"
+        );
+    }
+
+    /// The cached plan changes NOTHING about the answer.
+    ///
+    /// The optimization is only worth having if it is invisible. The property at issue is
+    /// narrow and is tested as such: closing one graph with a plan that was compiled for a
+    /// DIFFERENT graph of the same dataset must give exactly what closing it with a plan
+    /// compiled for itself gives. A plan that had absorbed anything from the store it was
+    /// first evaluated against — a seeded term, a graph name, a partition — would show up
+    /// here as two different conclusion lists for the same graph.
+    #[test]
+    fn a_warm_plan_and_a_cold_one_close_a_graph_identically() {
+        let mut b = RdfDatasetBuilder::new();
+        let sub = b.intern_iri(RDFS_SUBCLASSOF);
+        let ty = b.intern_iri(RDF_TYPE);
+        let a = b.intern_iri(EX_A);
+        let c = b.intern_iri(EX_B);
+        let x = b.intern_iri(EX_X);
+        let y = b.intern_iri(EX_Y);
+        let g = b.intern_iri(EX_G);
+        let h = b.intern_iri(EX_H);
+        b.push_quad(a, sub, c, None);
+        b.push_quad(x, ty, a, Some(g));
+        b.push_quad(y, ty, c, Some(h));
+        let ds = b.freeze().expect("the fixture freezes");
+
+        let (program, attribution) = program_with_attribution(Regime::OwlRl);
+        let conclusions = |plans: &mut PlanCache, graph: Option<&TermValue>| {
+            close_graph(&ds, Regime::OwlRl, &program, &attribution, graph, plans)
+                .expect("the graph closes")
+                .conclusions
+                .iter()
+                .map(Conclusion::key)
+                .collect::<Vec<_>>()
+        };
+
+        let target = TermValue::iri(EX_H);
+        // COLD: a cache that has never seen this program.
+        let mut fresh = PlanCache::new(2);
+        let cold = conclusions(&mut fresh, Some(&target));
+        // WARM: the very plan the default graph and ex:g already ran, reused.
+        let mut shared = PlanCache::new(2);
+        let _ = conclusions(&mut shared, None);
+        let _ = conclusions(&mut shared, Some(&TermValue::iri(EX_G)));
+        assert_eq!(shared.len(), 1, "the two earlier graphs left one plan");
+        let warm = conclusions(&mut shared, Some(&target));
+
+        assert!(!cold.is_empty(), "the fixture derived nothing");
+        assert_eq!(
+            warm, cold,
+            "a reused plan produced a different answer than a freshly compiled one"
+        );
     }
 }

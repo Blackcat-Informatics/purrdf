@@ -70,8 +70,8 @@
 //! * **Width-independent numbers.** Counts render as plain decimal, so a 32-bit
 //!   host (wasm32) and a 64-bit host produce the same bytes.
 //! * **Fixed line discipline.** `\n` endings, one fact per line, always a
-//!   trailing newline, and a leading `purrdf-reasoning-report 1` banner so a
-//!   later change to the format is visible instead of silent.
+//!   trailing newline, and a leading [`REPORT_FORMAT_BANNER`] line so a later
+//!   change to the format is visible instead of silent.
 //!
 //! # Portability
 //!
@@ -123,10 +123,20 @@ pub const PROGRAM_REGIME_NAMES: [&str; 1] = ["rif"];
 
 /// The version banner every rendered report opens with.
 ///
-/// `2` because the grammar moved, which is the whole reason a banner is emitted at all.
-/// Against `1`: the `withheld-surrogates` count is now rendered (it was reachable only
+/// `3` because the grammar moved, which is the whole reason a banner is emitted at all.
+/// Against `2`, two lines are new and nothing was removed:
+///
+/// * `extension <rule-id>` — the rules the run's calculus states that NO specification
+///   table does. Without it a caller reading `completeness exact-within-boundaries` and
+///   `fired ext-eq-diff-sym 1` had to know, from prose, that one of those ids is not in
+///   OWL 2 Profiles §4.3 and the other seventy-eight are.
+/// * `termination …` — the weak-acyclicity certificate the restricted chase computed to
+///   admit the program it then ran. It was computed on every `rdf` and `rdfs` run and read
+///   by nothing, so a proof the workspace had already paid for reached no caller.
+///
+/// Against `1`: the `withheld-surrogates` count is rendered (it was reachable only
 /// from the CLI's private renderer, so the four existential rules were unobservable from
-/// Python, WASM and the C ABI); an inconsistency now renders its GRAPH and its premise
+/// Python, WASM and the C ABI); an inconsistency renders its GRAPH and its premise
 /// TRIPLES rather than a bare count; and the trailing `overclaims` line is gone, because
 /// `ReasoningReport` no longer carries a completeness field that could contradict its
 /// boundary list and a rendered constant is not a gate.
@@ -134,7 +144,7 @@ pub const PROGRAM_REGIME_NAMES: [&str; 1] = ["rif"];
 /// It is also the marker that lets a REFUSAL carry a report: an inconsistent run has no
 /// closure, so its certificate travels in the error message, beginning at the first line
 /// equal to this banner. See [`render_entail_error`].
-pub const REPORT_FORMAT_BANNER: &str = "purrdf-reasoning-report 2";
+pub const REPORT_FORMAT_BANNER: &str = "purrdf-reasoning-report 3";
 
 /// The media type this boundary parses its input document as.
 ///
@@ -449,10 +459,11 @@ fn rule_lines(rules: &[purrdf_entail::RuleId]) -> String {
 /// The grammar, in emission order — one fact per line, `\n`-terminated:
 ///
 /// ```text
-/// purrdf-reasoning-report 2
+/// purrdf-reasoning-report 3
 /// regime <cli-spelling>
 /// completeness exact | completeness exact-within-boundaries | completeness sound-incomplete <count>
 /// missing <rule-id>                       (0..n, specification table order)
+/// extension <rule-id>                     (0..n, declaration order)
 /// fired <rule-id> <conclusions>           (0..n, specification table order)
 /// boundary <construct> <reason>           (0..n, Construct declaration order)
 /// budget join-steps <n>
@@ -460,10 +471,32 @@ fn rule_lines(rules: &[purrdf_entail::RuleId]) -> String {
 /// budget term-arena-bytes <n>
 /// contract-hash <64 lowercase hex>
 /// withheld-surrogates <n>
+/// termination none | termination weakly-acyclic positions <n> existential-edges <n>
 /// inconsistency none | inconsistency <rule-id> premises <n>
 /// inconsistency-graph default | inconsistency-graph <term>   (only after a witness)
 /// inconsistency-premise <s> <p> <o>       (n of them, the rule's own premise order)
 /// ```
+///
+/// `extension` is the mirror image of `missing`, and the two sit together because they
+/// answer the same question from opposite sides. A `missing` id is a rule the
+/// specification defines and this workspace does not fire, so the closure may be SMALLER
+/// than the regime requires. An `extension` id is a rule this workspace fires that no
+/// specification table states, so the closure may be LARGER — still sound, but larger.
+/// `owl-rl` renders exactly one (`ext-eq-diff-sym`, symmetry of `owl:differentFrom`) and
+/// every other regime renders none, which is what lets a caller that must act only on
+/// normative conclusions decide from the report rather than from prose. Note what it does
+/// NOT say: it names the rules the run's calculus STATES beyond the table, whether or not
+/// they fired, because a caller choosing whether to trust a closure needs to know which
+/// rule set produced it. Whether an extension actually contributed is the `fired` line.
+///
+/// `termination` is the chase's own proof that the run had to stop. `rdf` and `rdfs` state
+/// existentially quantified rules and are evaluated by `purrdf-datalog`'s restricted
+/// chase, which INVENTS terms — so their programs are certified weakly acyclic before a
+/// round runs, and an uncertified one is refused outright rather than run under a budget.
+/// The two numbers are the size of that proof and are a function of the CLAUSE SET, so
+/// they differ between those two lanes and do not vary with the data. Every other regime
+/// renders `none`, which says its rules invent no term and so owe no proof — not that
+/// termination is unknown.
 ///
 /// `completeness` has three forms and the middle one is the interesting one:
 /// `exact-within-boundaries` says the rule TABLE was complete and the run still
@@ -564,6 +597,12 @@ impl fmt::Display for RenderedReport<'_> {
         for rule in completeness.missing() {
             writeln!(f, "missing {}", rule.as_str())?;
         }
+        // Beside `missing`, and for the same reason: both say how the calculus that ran
+        // differs from the table the regime is named after, and a reader who sees only one
+        // of them learns half of that.
+        for rule in report.extensions() {
+            writeln!(f, "extension {}", rule.as_str())?;
+        }
         for &(rule, count) in report.rules_fired() {
             writeln!(f, "fired {} {count}", rule.as_str())?;
         }
@@ -581,6 +620,15 @@ impl fmt::Display for RenderedReport<'_> {
         writeln!(f, "budget term-arena-bytes {}", budget.term_arena_bytes())?;
         writeln!(f, "contract-hash {}", report.contract_hash().to_hex())?;
         writeln!(f, "withheld-surrogates {}", report.withheld_surrogates())?;
+        match report.termination() {
+            None => writeln!(f, "termination none")?,
+            Some(certificate) => writeln!(
+                f,
+                "termination weakly-acyclic positions {} existential-edges {}",
+                certificate.positions(),
+                certificate.existential_edges()
+            )?,
+        }
         let Some(witness) = report.inconsistency() else {
             return writeln!(f, "inconsistency none");
         };

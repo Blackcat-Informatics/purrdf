@@ -393,8 +393,11 @@ struct Fixture {
     /// answer is licensed.
     ///
     /// Rendered into the golden beneath [`ENGINE_SWAP`], [`AXIOMATIC_PATH`],
-    /// [`OWL_RL_TABLES`] and [`OWL_RL_COMPLETE`], each of which states one change's causes
-    /// ONCE; these lines name the actual triples and tallies each cause moved HERE. It is
+    /// [`OWL_RL_TABLES`], [`OWL_RL_COMPLETE`], [`EXISTENTIAL_CHASE`], [`REPORT_SURFACE`]
+    /// and [`EXTENSION_AND_CERTIFICATE`], each of which states one change's causes ONCE;
+    /// these lines name the actual triples and tallies each cause moved HERE. The last
+    /// three of those changes moved no fixture's own data in a way a per-fixture note could
+    /// add to, so they name the goldens they DID move inside the shared block instead. It is
     /// append-only — a fixture's entry accumulates one section per change it lived
     /// through, so a reader of one golden can see the whole history of that answer without
     /// leaving the file.
@@ -736,6 +739,116 @@ const REPORT_SURFACE: &[&str] = &[
     "     regimes closing normally and the refusing one rendering `--- refused:",
     "     inconsistent ---`, the witness's premises, and a report whose `inconsistency:`",
     "     names the rule.",
+];
+
+/// What moved when the `OWL-RL` lane gained its first EXTENSION rule and the report started
+/// carrying the chase's termination certificate.
+///
+/// A shared block rather than a per-fixture note, for the reason [`EXISTENTIAL_CHASE`] is
+/// one: no fixture's own data changed, and the cause is identical in all 142 files. The
+/// three goldens whose ANSWER moved are named here by name, with their triples and their
+/// numbers, because they are the whole of the fixture-specific accounting this change owes
+/// — and two of the three are `CLASH_CORPUS` fixtures, whose `changed` field states the
+/// same sentence verbatim for every member and so cannot hold a per-fixture note.
+const EXTENSION_AND_CERTIFICATE: &[&str] = &[
+    "AND EVERY GOLDEN MOVED A SEVENTH TIME — the OWL-RL lane states its first rule that no",
+    "specification table states, and every report now carries the two lines that say so and",
+    "say what proved the run had to stop. THREE of the 142 closures moved; the other 139 are",
+    "byte-identical except for the OWL-RL contract hash and the two new report lines. Four",
+    "causes.",
+    "",
+    "  A. ONE EXTENSION RULE FIRES, AND IT IS NOT ONE OF THE 78. `ext-eq-diff-sym` says",
+    "     `?x owl:differentFrom ?y` entails `?y owl:differentFrom ?x`. It is SOUND —",
+    "     owl:differentFrom denotes inequality of interpretations and inequality is",
+    "     symmetric, so every model of the premise is a model of the conclusion — and it is",
+    "     NOT in OWL 2 Profiles §4.3 Tables 4-9, because the table's only owl:differentFrom",
+    "     rules (eq-diff1, eq-diff2, eq-diff3) read the property in a BODY and conclude",
+    "     `false`. No rule of the table has an owl:differentFrom head at all. W3C's own",
+    "     webont-differentfrom-001 publishes exactly this entailment as positive, which is",
+    "     how a rule set can be complete for the table and still stop one triple short of a",
+    "     published entailment; that case now agrees, and the RL entailment lane goes 33/50",
+    "     to 34/50 with the positive lane 10 of 27 to 11 of 27 and the ledger's ACTIONABLE",
+    "     count 1 to 0.",
+    "",
+    "     IT REFUSES NOTHING THE TABLE DID NOT ALREADY REFUSE, which is the property a new",
+    "     conclusion in a calculus holding seventeen `false`-headed rules actually owes. The",
+    "     only rules reading owl:differentFrom in a body are eq-diff1..3. eq-diff2 and",
+    "     eq-diff3 do not read it at all — their premises are an owl:AllDifferent axiom, its",
+    "     list and owl:sameAs — so this rule cannot reach them. eq-diff1 pairs it with",
+    "     owl:sameAs, and owl:sameAs is already closed under eq-sym: a clash on (y, x) that",
+    "     this rule's conclusion enabled was already a clash on (x, y) from the same data.",
+    "     The set of runs that refuse is therefore unchanged, and eq_diff1_clash and",
+    "     dt_diff_clash below still refuse on the same rule, in the same graph, with the",
+    "     same premises in the same order.",
+    "",
+    "  B. EVERY REPORT GAINED AN `extensions:` LINE, AND IT IS THE MIRROR OF `missing:`.",
+    "     `missing` names rules the specification defines and this chase does not fire, so",
+    "     the closure may be SMALLER than the regime requires. `extensions` names rules this",
+    "     chase fires that no specification defines, so it may be LARGER — sound still, but",
+    "     larger. Without it a reader of `fired ext-eq-diff-sym 1` would have to know from",
+    "     prose which of the ids on that line are W3C's. It reads `(1) ext-eq-diff-sym` in",
+    "     every OWL-RL section and `(0)` everywhere else.",
+    "",
+    "     rules(OWL-RL) AND implemented(OWL-RL) ARE STILL 78, AND STILL THE SAME 78. The",
+    "     extension is in neither, for any regime; `extensions(regime)` is a third inventory",
+    "     and RuleId::is_extension decides which is which. That is what keeps `OWL-RL 78/78`",
+    "     a statement about Tables 4-9 while this lane's closure is strictly larger than",
+    "     those tables license.",
+    "",
+    "  C. EVERY REPORT GAINED A `termination:` LINE — a proof the workspace was already",
+    "     computing and then discarding. The RDF and RDFS lanes state existentially",
+    "     quantified rules and are run by the restricted chase, which INVENTS terms; such a",
+    "     fixpoint is not terminating by construction, so purrdf-datalog certifies",
+    "     constant-refined weak acyclicity over the clause set's position dependency graph",
+    "     before it runs a round and refuses an uncertified program outright. The verdict",
+    "     reached no caller. It does now, and it is not one constant: RDF reads",
+    "     `weakly-acyclic positions=10 existential-edges=4` and RDFS reads `positions=27",
+    "     existential-edges=8`, because the certificate is a function of the CLAUSE SET —",
+    "     RDFS states rdfs14 and rdfs14a besides rdfD1 and rdfD1a. It does NOT vary with the",
+    "     data: every golden in this corpus shows those same two strings. Simple, OWL-RL and",
+    "     D read `none`, which says their rules invent no term and so owe no proof — not",
+    "     that termination is unknown.",
+    "",
+    "  D. THE OWL-RL CONTRACT HASH MOVED, AND NO OTHER LANE'S DID. That is the whole reason",
+    "     the extension family is concatenated LAST. A rule concluding `false` is lowered",
+    "     into a clause naming a clash marker built from the rule's DECLARATION INDEX, so a",
+    "     family spliced anywhere earlier would renumber the seventeen markers and move the",
+    "     RDF, RDFS and D digests too — for a rule none of those lanes fires. Appended, it",
+    "     moves exactly the one digest whose program gained a clause: 61a9a840… to 8f93a908…",
+    "     The OWL-RL program is 136 clauses where it was 135.",
+    "",
+    "  THE THREE CLOSURES THAT MOVED, IN FULL — every fixture in this corpus whose",
+    "  owl:differentFrom data gives the new rule a premise, and no others:",
+    "",
+    "    eq_diff1_consistent — OWL-RL closure 106 -> 108 lines. Its input is `x owl:sameAs y`",
+    "    and `x owl:differentFrom z`. The two new lines are",
+    "",
+    "      ex:z owl:differentFrom ex:x     (ext-eq-diff-sym, from the input assertion)",
+    "      ex:z owl:differentFrom ex:y     (eq-rep-o, substituting y for x in that new triple",
+    "                                       under the asserted owl:sameAs)",
+    "",
+    "    so the tally gains ext-eq-diff-sym=1 and eq-rep-o=1 and goes from 8 rules to 10.",
+    "    Both are licensed: the first by symmetry of inequality, the second by a rule of",
+    "    Table 4 that was always there and had nothing to substitute into. The fixture still",
+    "    pins what it was written to pin — it is eq-diff1's CONTROL, the two assertions are",
+    "    still about different pairs, and the run still closes.",
+    "",
+    "    eq_diff1_clash — no closure (it refuses), same witness, same two premises. Only its",
+    "    budget moved: join-steps 1853 -> 1857.",
+    "",
+    "    dt_diff_clash — no closure (it refuses), same witness (eq-diff1), same two premises.",
+    "    Only its budget moved: join-steps 2931 -> 2570, DOWNWARD.",
+    "",
+    "  THE BUDGET MOVED IN THOSE THREE GOLDENS AND IN NO OTHER, AND ONCE IT WENT DOWN.",
+    "  join-steps counts candidate solutions the evaluation ENUMERATED, not conclusions it",
+    "  drew, so a clause whose body has no match in a fixture's data costs nothing — which is",
+    "  why 139 goldens show the same number they showed before. Where the clause does have a",
+    "  premise, adding it changes what the whole program compiles to and which round each",
+    "  fact first appears in, so the count can move in EITHER direction while the answer does",
+    "  not. The unmoved coordinates are the evidence that the answer did not: stored-facts and",
+    "  term-arena-bytes are identical in dt_diff_clash and eq_diff1_clash, both witnesses and",
+    "  all four premises are identical, and eq_diff1_consistent's stored-facts rises by",
+    "  exactly the two triples named above (106 -> 108).",
 ];
 
 // ── The corpus ──────────────────────────────────────────────────────────────────
@@ -5635,6 +5748,18 @@ fn render_report(out: &mut String, report: &ReasoningReport) {
         .map(|rule| rule.as_str().to_owned())
         .collect();
     write_wrapped(out, indent, "missing:", &missing);
+    // The MIRROR of `missing`, and rendered beside it for that reason: `missing` is what
+    // the specification defines and this chase does not fire, `extensions` is what this
+    // chase fires and NO specification defines. Together they say exactly how the calculus
+    // that produced the closure below differs from the table the regime is named after.
+    // It is a function of the regime, like `missing`, so a golden pins that PurRDF's
+    // OWL-RL lane is Tables 4-9 plus one named rule and that no other lane is extended.
+    let extensions: Vec<String> = report
+        .extensions()
+        .iter()
+        .map(|rule| rule.as_str().to_owned())
+        .collect();
+    write_wrapped(out, indent, "extensions:", &extensions);
     let fired: Vec<String> = report
         .rules_fired()
         .iter()
@@ -5667,6 +5792,26 @@ fn render_report(out: &mut String, report: &ReasoningReport) {
         budget.term_arena_bytes()
     );
     let _ = writeln!(out, "{indent}contract-hash: {}", report.contract_hash());
+    // THE PROOF THAT THE RUN HAD TO STOP. The `RDF` and `RDFS` lanes state existentially
+    // quantified rules and are evaluated by the restricted chase, which INVENTS terms — so
+    // their clause sets are certified weakly acyclic before a round runs, and an
+    // uncertified one is refused rather than run. The two numbers are the size of that
+    // proof, they are a function of the CLAUSE SET rather than of the data, and they
+    // differ between the two chased lanes: a golden that showed one string for both would
+    // be pinning a constant. Every other lane invents no term and owes no proof, which is
+    // what `none` says here.
+    let _ = writeln!(
+        out,
+        "{indent}termination: {}",
+        report.termination().map_or_else(
+            || "none".to_owned(),
+            |c| format!(
+                "weakly-acyclic positions={} existential-edges={}",
+                c.positions(),
+                c.existential_edges()
+            )
+        )
+    );
     let _ = writeln!(
         out,
         "{indent}inconsistency: {}",
@@ -5735,6 +5880,8 @@ fn render_golden(fixture: &Fixture) -> String {
     write_comment_block(&mut out, EXISTENTIAL_CHASE);
     out.push_str("#\n");
     write_comment_block(&mut out, REPORT_SURFACE);
+    out.push_str("#\n");
+    write_comment_block(&mut out, EXTENSION_AND_CERTIFICATE);
     out.push_str("#\n# WHAT MOVED IN THIS GOLDEN:\n#\n");
     write_comment_block(&mut out, fixture.changed);
     let _ = writeln!(out, "# exercises: {}", fixture.exercises.join(" "));

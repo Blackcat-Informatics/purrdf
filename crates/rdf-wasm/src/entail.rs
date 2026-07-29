@@ -548,7 +548,7 @@ mod tests {
         // Asserted as the invariant rather than as a `sound-incomplete <n>`
         // literal: the count moves every time a rule lands, the honesty gate does
         // not, and a `boundary` line outlives a rule table going complete.
-        assert!(closed.report().starts_with("purrdf-reasoning-report 2\n"));
+        assert!(closed.report().starts_with("purrdf-reasoning-report 3\n"));
         assert!(closed.report().contains("\nregime rdfs\n"));
         assert!(closed.report().contains("\ncompleteness "));
         assert!(closed.report().contains("\nboundary "));
@@ -703,7 +703,7 @@ mod tests {
         );
         assert!(tableau.certificate().contains("\ncompleteness decided\n"));
         let chase = materialize_impl(TAXONOMY, "owl-rl", "").expect("owl-rl");
-        assert!(chase.report().starts_with("purrdf-reasoning-report 2\n"));
+        assert!(chase.report().starts_with("purrdf-reasoning-report 3\n"));
         assert!(!chase.report().contains("completeness decided"));
     }
 

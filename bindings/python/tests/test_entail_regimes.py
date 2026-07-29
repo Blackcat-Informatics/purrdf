@@ -177,7 +177,7 @@ def test_base_triples_survive_the_closure() -> None:
 def test_report_names_the_rules_that_fired() -> None:
     """The report is not optional and says what the run actually did."""
     _closure, report = entail.materialize(_dataset(), entail.Regime.OWL_RL, "")
-    assert report.startswith("purrdf-reasoning-report 2\n")
+    assert report.startswith("purrdf-reasoning-report 3\n")
     assert "\nregime owl-rl\n" in report
     # The conclusion counts are the engine's to report, so only the fact that
     # these two rules ran is asserted here — the counts live in the Rust golden
@@ -250,7 +250,7 @@ def test_every_regime_member_materializes(regime: entail.Regime, program: str) -
     assert isinstance(entail.implemented_rules(regime), list)
     closure, report = entail.materialize(_dataset(), regime, program)
     assert closure.quad_count() >= 4
-    assert report.startswith("purrdf-reasoning-report 2\n")
+    assert report.startswith("purrdf-reasoning-report 3\n")
     assert report.endswith("inconsistency none\n")
     # …and the text path agrees, byte for byte, on the same regime and program.
     text_closure, text_report = entail.materialize_nt(SCHEMA, regime, program)
@@ -556,7 +556,7 @@ def test_an_inconsistent_run_raises_with_its_report_and_witness_triples() -> Non
     assert "cax-dw was satisfied by 3 asserted triples" in message
     # The certificate begins at the banner, so a caller splits there rather than
     # parsing prose.
-    banner = "purrdf-reasoning-report 2\n"
+    banner = "purrdf-reasoning-report 3\n"
     assert banner in message
     report = message[message.index(banner) :]
     assert report.startswith(f"{banner}regime owl-rl\n")
@@ -578,5 +578,5 @@ def test_the_dataset_path_refuses_an_inconsistent_run_the_same_way() -> None:
     with pytest.raises(ValueError) as raised:
         entail.materialize(dataset, entail.Regime.OWL_RL, "")
     message = str(raised.value)
-    assert "purrdf-reasoning-report 2\n" in message
+    assert "purrdf-reasoning-report 3\n" in message
     assert message.count("\ninconsistency-premise ") == 3

@@ -13,6 +13,9 @@
 //!   asserted. When a later change teaches the
 //!   chase a rule, every report improves without anyone remembering to edit a claim.
 //! * [`ReasoningReport::rules_fired`] says which rules produced conclusions, and how many.
+//! * [`ReasoningReport::extensions`] says which of the rules that COULD have fired are not
+//!   in any specification table, so a closure that is larger than the normative rule set
+//!   licenses says so rather than reading as if it were the specification's own.
 //! * [`Boundary`] says which constructs the run could not fully handle, and why.
 //! * [`ReasoningReport::contract_hash`] names the calculus, so a cached verdict minted
 //!   under a different rule set can be refused rather than trusted.
@@ -47,13 +50,106 @@
 //! boundaries are in [`Construct`] declaration order. Two identical runs produce
 //! byte-identical reports.
 
+use core::fmt;
+
 use purrdf_core::{RdfDataset, TermRef, TermValue};
 use purrdf_datalog::cache::ContractHash;
+use purrdf_datalog::chase::ChaseTermination;
 use purrdf_datalog::seminaive::BudgetReport;
 
 use crate::Regime;
 use crate::calculus::{ChaseRule, calculus_contract_hash};
-use crate::rules::{RuleId, implemented, rules};
+use crate::rules::{RuleId, extensions, implemented, rules};
+
+/// A run's PROOF that the evaluation it describes had to stop.
+///
+/// The restricted chase invents terms — `rdfD1`, `rdfD1a`, `rdfs14` and `rdfs14a` conclude
+/// about a fresh blank node — and a term-inventing fixpoint is not terminating by
+/// construction the way a Datalog fixpoint over a fixed active domain is. So
+/// `purrdf-datalog` does not assume it: `chase::certify` computes constant-refined weak
+/// acyclicity over the clause set's position dependency graph and refuses a program whose
+/// existential edge lies in a cycle. This is the certificate that admitted the program
+/// PurRDF actually ran, carried out to the caller instead of discarded.
+///
+/// # It is a NEWTYPE, not `ChaseTermination` re-exported
+///
+/// `purrdf_datalog::chase::ChaseTermination` has two variants and only one of them can
+/// reach a report: an uncertified program is
+/// `ChaseError::NonTerminating` and produces no run at all. Storing that enum here would
+/// put a variant in a report that no run can carry — the same unrepresentable-state
+/// question [`Completeness`] answers by deriving rather than storing — so the report
+/// carries the certified case's two numbers and there is no `Unbounded` value to read. Its
+/// fields are private and its one (crate-internal) constructor refuses the other variant,
+/// so an uncertified verdict has no way in even from inside this crate.
+///
+/// The sentence is still `purrdf-datalog`'s: [`fmt::Display`] delegates to
+/// `ChaseTermination`'s, so the prose has one author and cannot drift.
+///
+/// ```
+/// use purrdf_core::RdfDatasetBuilder;
+/// use purrdf_entail::{Materialization, materialize};
+///
+/// let ds = RdfDatasetBuilder::new().freeze().expect("an empty dataset");
+/// // A chased lane carries its certificate.
+/// let (_, rdfs) = materialize(&ds, Materialization::Rdfs).expect("closed");
+/// let certificate = rdfs.termination().expect("the RDFS lane is chased");
+/// assert!(certificate.existential_edges() > 0);
+/// assert!(certificate.to_string().starts_with("weakly acyclic: "));
+/// // A lane that invents no term has no obligation to prove, and says so.
+/// let (_, owl) = materialize(&ds, Materialization::OwlRl).expect("closed");
+/// assert!(owl.termination().is_none());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerminationCertificate {
+    /// Distinct refined positions in the position dependency graph — the proof's size.
+    positions: usize,
+    /// Distinct existential edges checked, none of which lies in a cycle.
+    existential_edges: usize,
+}
+
+impl TerminationCertificate {
+    /// The certificate `termination` states, or `None` if it certified nothing.
+    ///
+    /// The refusal case is unreachable from a completed run — `chase` returns
+    /// `ChaseError::NonTerminating` for it rather than an outcome — so this returning
+    /// `None` for `Unbounded` is what makes the type's invariant hold by construction
+    /// rather than by convention.
+    pub(crate) const fn of_chase(termination: &ChaseTermination) -> Option<Self> {
+        match termination {
+            ChaseTermination::WeaklyAcyclic {
+                positions,
+                existential_edges,
+            } => Some(Self {
+                positions: *positions,
+                existential_edges: *existential_edges,
+            }),
+            ChaseTermination::Unbounded { .. } => None,
+        }
+    }
+
+    /// How many distinct refined positions the dependency graph holds — the proof's size.
+    #[must_use]
+    pub const fn positions(&self) -> usize {
+        self.positions
+    }
+
+    /// How many distinct existential edges were checked, none of them in a cycle.
+    #[must_use]
+    pub const fn existential_edges(&self) -> usize {
+        self.existential_edges
+    }
+}
+
+impl fmt::Display for TerminationCertificate {
+    /// `purrdf-datalog`'s own sentence, delegated rather than restated.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        ChaseTermination::WeaklyAcyclic {
+            positions: self.positions,
+            existential_edges: self.existential_edges,
+        }
+        .fmt(f)
+    }
+}
 
 /// How much of `regime`'s specified rule table was available to a run.
 ///
@@ -720,6 +816,15 @@ pub(crate) struct RunStats {
     /// The [`Construct::Surrogate`] boundary's observation; see its reason for why a
     /// SPARQL entailment regime may not answer with one.
     pub(crate) surrogate_drops: u64,
+    /// The proof that admitted the program, for a lane the restricted chase evaluated.
+    ///
+    /// `None` for a lane the semi-naive evaluator ran, and that is a statement rather than
+    /// a missing measurement: a program of definite clauses invents no term, so its
+    /// fixpoint is bounded by the active domain and there is no obligation to prove. The
+    /// certificate is a function of the CLAUSE SET, so every graph of a multi-graph run
+    /// computes the same one and [`RunStats::certify`] records it rather than combining
+    /// it.
+    pub(crate) termination: Option<TerminationCertificate>,
 }
 
 impl RunStats {
@@ -735,6 +840,7 @@ impl RunStats {
             budget,
             generalized_rdf_drops: 0,
             surrogate_drops: 0,
+            termination: None,
         }
     }
 
@@ -779,6 +885,17 @@ impl RunStats {
     /// Record `count` conclusions withheld because they mention a surrogate blank node.
     pub(crate) const fn drop_surrogate(&mut self, count: u64) {
         self.surrogate_drops += count;
+    }
+
+    /// Record the certificate that admitted this run's program.
+    ///
+    /// Assigned rather than folded: `certify` is a pure function of the clause set, so the
+    /// `1 + n` graph evaluations of one `materialize` call all compute the same
+    /// certificate, and combining `n` copies of one value would suggest they could differ.
+    pub(crate) const fn certify(&mut self, certificate: Option<TerminationCertificate>) {
+        if let Some(certificate) = certificate {
+            self.termination = Some(certificate);
+        }
     }
 }
 
@@ -847,6 +964,8 @@ pub struct ReasoningReport {
     inconsistency: Option<InconsistencyWitness>,
     /// How many conclusions were withheld because they mention a surrogate blank node.
     withheld_surrogates: u64,
+    /// The termination proof that admitted the program, for a lane the chase evaluated.
+    termination: Option<TerminationCertificate>,
 }
 
 impl ReasoningReport {
@@ -882,6 +1001,7 @@ impl ReasoningReport {
     ///     BudgetReport::new(0, 0, 0),
     ///     None,
     ///     0,
+    ///     None,
     /// );
     /// assert_eq!(bounded.completeness(), Completeness::ExactWithinBoundaries);
     ///
@@ -893,6 +1013,7 @@ impl ReasoningReport {
     ///     BudgetReport::new(0, 0, 0),
     ///     None,
     ///     0,
+    ///     None,
     /// );
     /// assert_eq!(plain.completeness(), Completeness::Exact);
     /// ```
@@ -904,6 +1025,7 @@ impl ReasoningReport {
         budget: BudgetReport,
         inconsistency: Option<InconsistencyWitness>,
         withheld_surrogates: u64,
+        termination: Option<TerminationCertificate>,
     ) -> Self {
         Self {
             regime,
@@ -913,6 +1035,7 @@ impl ReasoningReport {
             contract_hash: calculus_contract_hash(regime),
             inconsistency,
             withheld_surrogates,
+            termination,
         }
     }
 
@@ -958,6 +1081,7 @@ impl ReasoningReport {
             stats.budget,
             inconsistency,
             stats.surrogate_drops,
+            stats.termination,
         )
     }
 
@@ -999,6 +1123,10 @@ impl ReasoningReport {
             // The tableau invents no surrogate: it decides satisfiability rather than
             // materializing a closure, so there is nothing to withhold.
             0,
+            // No chase ran, so there is no acyclicity verdict to carry. The tableau's own
+            // bound is a step cap, and exhausting it is a refusal rather than a run with a
+            // weaker certificate.
+            None,
         )
     }
 
@@ -1068,6 +1196,38 @@ impl ReasoningReport {
         &self.boundaries
     }
 
+    /// The rules the run's calculus states that NO specification table does — exactly what
+    /// [`extensions`] answers for this report's own regime.
+    ///
+    /// The twin of `completeness().missing()`, and the other half of the same question. A
+    /// `missing` id is a rule the specification defines and this chase does not fire, so
+    /// the closure may be smaller than the regime requires. An extension is a rule this
+    /// chase fires and no specification defines, so the closure may be LARGER — sound
+    /// still, but larger — and a caller that must not act on a conclusion outside the
+    /// normative table needs to be told which rules those are before it reads
+    /// [`Self::rules_fired`].
+    ///
+    /// It is DERIVED from the regime, exactly as completeness is derived from the
+    /// boundary list, so no report can carry an extension list that disagrees with the
+    /// calculus its contract hash names. Empty for every lane but `OWL-RL`, whose single
+    /// entry is `ext-eq-diff-sym`.
+    ///
+    /// ```
+    /// use purrdf_core::RdfDatasetBuilder;
+    /// use purrdf_entail::{Materialization, RuleId, materialize};
+    ///
+    /// let ds = RdfDatasetBuilder::new().freeze().expect("an empty dataset");
+    /// let (_, report) = materialize(&ds, Materialization::OwlRl).expect("a consistent closure");
+    /// assert_eq!(report.extensions(), &[RuleId::ExtEqDiffSym]);
+    ///
+    /// let (_, report) = materialize(&ds, Materialization::Rdfs).expect("a consistent closure");
+    /// assert!(report.extensions().is_empty());
+    /// ```
+    #[must_use]
+    pub fn extensions(&self) -> &'static [RuleId] {
+        extensions(self.regime)
+    }
+
     /// What the run consumed of the three fixed evaluation ceilings.
     ///
     /// The coordinates carry `purrdf-datalog`'s meanings: candidate conclusions
@@ -1123,6 +1283,35 @@ impl ReasoningReport {
     #[must_use]
     pub const fn withheld_surrogates(&self) -> u64 {
         self.withheld_surrogates
+    }
+
+    /// The PROOF that this run's evaluation had to stop, when one was needed.
+    ///
+    /// `Some` exactly for the two lanes whose rule tables state an existentially
+    /// quantified conclusion — `RDF` (`rdfD1`, `rdfD1a`) and `RDFS` (those two plus
+    /// `rdfs14`, `rdfs14a`). Those are evaluated by `purrdf-datalog`'s restricted chase,
+    /// which INVENTS terms, and a term-inventing fixpoint has to be shown to converge
+    /// rather than assumed to: the chase computes constant-refined weak acyclicity over
+    /// the clause set's position dependency graph before it runs a round, and refuses the
+    /// program outright if an existential edge lies in a cycle. This is that computation's
+    /// verdict, carried out rather than thrown away.
+    ///
+    /// `None` for every other lane, and that is a claim rather than an absence: `Simple`,
+    /// `OWL-RL` and `D` state no existential rule, so their programs invent no term, their
+    /// fixpoints are bounded by the active domain, and there is nothing for an acyclicity
+    /// analysis to be about. `OWL-Direct` and `RIF` are not this chase's lanes at all.
+    ///
+    /// # It can only ever be a certificate, and it is not always the same one
+    ///
+    /// The uncertified verdict never reaches here — an existential edge in a cycle is
+    /// `ChaseError::NonTerminating`, so the run produces no report to carry it — which is
+    /// why [`TerminationCertificate`] holds the certified case's numbers and no variant
+    /// for the other. What the numbers say still varies: the certificate is a function of
+    /// the CLAUSE SET, so the `RDF` lane's differs from the `RDFS` lane's, and a rule
+    /// added to either moves that lane's. It does not vary with the data.
+    #[must_use]
+    pub const fn termination(&self) -> Option<TerminationCertificate> {
+        self.termination
     }
 }
 

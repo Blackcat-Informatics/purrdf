@@ -875,7 +875,10 @@ def build_claims(
             r"(?P<structural>\d+) of the (?P<ledgered>\d+) divergences are structural limits "
             r"of OWL 2 RL itself \((?P<schema>\d+) schema-conclusion, (?P<neg>\d+) "
             r"negative-conclusion, (?P<outside>\d+) construct-outside-rl, (?P<imports>\d+) "
-            r"imports-unresolved\); exactly \*\*(?P<actionable>\d+) is actionable\*\* "
+            # `is`/`are` because the count moves: the ledger held exactly one
+            # actionable divergence and now holds none, and a pattern that
+            # hard-codes the singular stops matching the moment it is fixed.
+            r"imports-unresolved\); \*\*(?P<actionable>\d+) (?:is|are) actionable\*\* "
             r"\((?P<missing>\d+) missing-rule\)",
         ),
         (
@@ -892,7 +895,8 @@ def build_claims(
                 r"its syntax \((?P<outside>\d+) `construct-outside-rl`\), and one "
                 r"upstream premise is incomplete as exported "
                 r"\((?P<imports>\d+) `imports-unresolved`\)\. "
-                r"\*\*Exactly one is actionable\*\* \((?P<missing>\d+) `missing-rule`\)"
+                r"\*\*(?P<actionable>\d+) (?:is|are) actionable\*\* "
+                r"\((?P<missing>\d+) `missing-rule`\)"
             ),
         ),
         (
@@ -912,7 +916,8 @@ def build_claims(
                 r"outside its syntax \((?P<outside>\d+) `construct-outside-rl`\); one "
                 r"more premise is incomplete as exported "
                 r"\((?P<imports>\d+) `imports-unresolved`\)\. "
-                r"\*\*Exactly one is actionable\*\* \((?P<actionable>\d+) `missing-rule`\)"
+                r"\*\*(?P<actionable>\d+) (?:is|are) actionable\*\* "
+                r"\((?P<missing>\d+) `missing-rule`\)"
             ),
         ),
     ]

@@ -145,8 +145,9 @@ pub fn query_with_entailment(
 /// produce a closure this lane already has as an `Arc`. Every field is a property of the
 /// regime and not of the data: `Simple` has no rule table (so nothing can be missing), it
 /// copies every quad of every graph faithfully (so it meets no boundary), and it evaluates
-/// no program (so it consumes none of the three ceilings). The contract hash is derived
-/// inside [`ReasoningReport::new`] from the regime itself.
+/// no program (so it consumes none of the three ceilings), and it invents no term (so it
+/// has no termination obligation to discharge). The contract hash is derived inside
+/// [`ReasoningReport::new`] from the regime itself.
 fn simple_report() -> ReasoningReport {
     ReasoningReport::new(
         Regime::Simple,
@@ -155,6 +156,7 @@ fn simple_report() -> ReasoningReport {
         BudgetReport::new(0, 0, 0),
         None,
         0,
+        None,
     )
 }
 

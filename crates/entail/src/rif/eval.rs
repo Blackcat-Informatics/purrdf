@@ -215,9 +215,12 @@ impl Terms {
 ///
 /// # Errors
 ///
-/// [`EntailError::Parse`] if a rule is not range-restricted; [`EntailError::Build`] if the
-/// derived dataset cannot be frozen; [`EntailError::Overclaim`] if the assembled report
-/// contradicts its own evidence (the same gate [`materialize`](crate::materialize) applies).
+/// [`EntailError::Parse`] if a rule is not range-restricted, and [`EntailError::Build`] if
+/// the derived dataset cannot be frozen. Those are the only two: this lane's rule set is
+/// definite Horn, so nothing in it can derive an inconsistency, and a report that
+/// contradicts its own evidence is unrepresentable rather than refused — completeness is
+/// computed from the boundary list by [`ReasoningReport::completeness`] and is not a field
+/// that could disagree with it.
 pub fn materialize_rif(
     ds: &RdfDataset,
     rules: &RuleSet,
@@ -309,6 +312,10 @@ fn rif_report(
         // The evaluator mints no term — a head variable not bound by the body is refused at
         // compile time — so there is no surrogate to withhold.
         0,
+        // …and a rule set that invents no term needs no termination proof: this lane's
+        // fixpoint is bounded by the active domain, so there is no acyclicity analysis to
+        // report the verdict of.
+        None,
     )
 }
 

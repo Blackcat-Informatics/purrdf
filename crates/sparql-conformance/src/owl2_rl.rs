@@ -46,6 +46,17 @@
 //! this shape could have that head" ([`RlGap::NegativeConclusion`],
 //! [`RlGap::SchemaConclusion`], [`RlGap::ConstructOutsideRl`]).
 //!
+//! # The chase is measured with its EXTENSION, and the extension is named
+//!
+//! `purrdf_entail::Regime::OwlRl`'s calculus is OWL 2 Profiles §4.3 Tables 4–9
+//! plus whatever `purrdf_entail::extensions(Regime::OwlRl)` lists — today one rule,
+//! `ext-eq-diff-sym`, symmetry of `owl:differentFrom`. That is the closure this
+//! module grades, because it is the closure a caller gets. It does not blur the two
+//! claims: `rules(OwlRl)` and `implemented(OwlRl)` are both still exactly 78, the
+//! extension appears in neither, and every rendered report carries an `extension`
+//! line naming it — so a reader of this scoreboard can tell which agreements the
+//! normative table reached on its own.
+//!
 //! Grading a positive case is one-sided in the honest direction: matching proves
 //! entailment (the chase is sound), and failing to match is always a real,
 //! reportable limit of the lane. Grading a negative case is one-sided the other
@@ -142,9 +153,20 @@ pub enum RlGap {
     /// still does not reach the conclusion.
     ///
     /// Closing one of these means adding a rule *beyond* the normative table,
-    /// which is a decision with a cost (the lane would no longer be exactly
-    /// Tables 4–9) and is why the scoreboard counts these separately instead of
-    /// burying them among the profile's structural limits.
+    /// which is a decision with a cost and is why the scoreboard counts these
+    /// separately instead of burying them among the profile's structural limits.
+    /// That cost is paid by DECLARING the extra rule as an extension rather than
+    /// by widening the table: `purrdf_entail::extensions` names every rule the
+    /// chase fires that no specification states, `rules` and `implemented` name
+    /// none of them, and a rendered report carries an `extension` line — so the
+    /// lane is exactly Tables 4–9 plus a list a caller can read and reject.
+    ///
+    /// The ledger holds no entry of this kind today: the one it did hold
+    /// (`webont-differentfrom-001`, symmetry of `owl:differentFrom`) was closed
+    /// that way. The variant stays because the classification is what a future
+    /// divergence of this shape must be filed under, and because
+    /// [`Self::is_actionable`] is the predicate that separates "PurRDF could
+    /// reach this" from "no conforming RL rule set could".
     MissingRule,
     /// The conclusion is a **schema axiom** — a property characteristic, an
     /// `rdfs:range`, an anonymous class expression, an `owl:AllDifferent`
@@ -246,24 +268,27 @@ pub struct LedgerEntry {
 /// Nothing is skipped at discovery time — all 50 cases run, and a case absent
 /// from this table must agree.
 pub const LEDGER: &[LedgerEntry] = &[
-    // --- MISSING RULE: `owl:differentFrom` is not closed under symmetry -------
-    //     The whole premise of `webont-differentfrom-001` is `a owl:differentFrom
-    //     b`, and its whole conclusion is `b owl:differentFrom a`. That is
-    //     symmetry: the head is a positive assertional triple over two named
-    //     individuals, exactly the shape `prp-symp` already has, and stating it is
-    //     sound.
+    // --- NO MISSING RULE. The one entry this table used to open with is CLOSED. -
+    //     `webont-differentfrom-001` is `a owl:differentFrom b` entailing
+    //     `b owl:differentFrom a`. Its head is a positive assertional triple over
+    //     two named individuals, exactly the shape `prp-symp` already has, and
+    //     stating it is sound — and it is NOT one of the 78 rules of OWL 2
+    //     Profiles §4.3 Tables 4–9, because Table 4's `owl:differentFrom` rules
+    //     (`eq-diff1..3`) only ever conclude `false`.
     //
-    //     And it is NOT one of the 78 rules of OWL 2 Profiles §4.3 Tables 4–9.
-    //     Table 4's `owl:differentFrom` rules (`eq-diff1..3`) only ever conclude
-    //     `false`; nothing in the normative table has an `owl:differentFrom` head.
-    //     So PurRDF implements the whole table, the chase still stops one triple
-    //     short of a W3C-published entailment, and BOTH facts are true. This entry
-    //     is the concrete reason "OWL-RL 78 / 78" must not be read as "conformant
-    //     on W3C's OWL 2 RL entailment tests".
-    LedgerEntry {
-        case: "webont-differentfrom-001",
-        gap: RlGap::MissingRule,
-    },
+    //     PurRDF now states it, as `purrdf_entail::RuleId::ExtEqDiffSym`, in a
+    //     rule family that is declared to be OUTSIDE every specification table:
+    //     `extensions(Regime::OwlRl)` names it, `rules(Regime::OwlRl)` and
+    //     `implemented(Regime::OwlRl)` are still exactly the 78 and do not, and a
+    //     rendered report carries an `extension ext-eq-diff-sym` line so a caller
+    //     that must act only on normative conclusions can tell. So this case now
+    //     AGREES, and it agrees through a rule that is labelled as PurRDF's rather
+    //     than smuggled into a count that says W3C's.
+    //
+    //     Every other entry below is a structural limit of the OWL 2 RL profile
+    //     rather than something PurRDF withholds: `RlGap::is_actionable` is now
+    //     false for all of them, and `only_missing_rules_are_actionable` pins that
+    //     the actionable set is EMPTY.
     // --- NEGATIVE CONCLUSION: only reachable by refutation --------------------
     //     Each of these concludes a negative fact — an `owl:differentFrom`, or
     //     membership in an anonymous `owl:complementOf` class. The premise refutes
@@ -1291,7 +1316,7 @@ mod tests {
             .collect();
         assert_eq!(
             actionable,
-            ["webont-differentfrom-001"],
+            [] as [&str; 0],
             "the actionable set changed; a new entry means the rule table owes a conclusion it \
              does not produce, and a lost entry means one was fixed — either way, say so in the \
              ledger comment and here"

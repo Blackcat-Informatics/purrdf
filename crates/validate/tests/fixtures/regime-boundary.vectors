@@ -27,7 +27,42 @@
 # non-example.org IRIs below are the `rdf:`/`rdfs:`/`owl:` terms the entailment
 # specifications themselves define.
 #
-# WHY THIS ARTIFACT MOVED: THE REPORT GRAMMAR IS AT 2, AND THE WITHHELD COUNT IS IN IT.
+# WHY THIS ARTIFACT MOVED: THE REPORT GRAMMAR IS AT 3 — THE EXTENSION LIST AND THE
+# TERMINATION CERTIFICATE ARE IN IT.
+#
+# No closure changed by one byte; every change is in a `@report` body, and the banner
+# went from 2 to 3 so the two new lines are visible rather than silent.
+#
+# `extension <rule-id>` is NEW, and it is the mirror of `missing`. The OWL-RL lane now
+# states one rule that NO specification table states — `ext-eq-diff-sym`, symmetry of
+# `owl:differentFrom`, which is sound (inequality is symmetric) and which OWL 2
+# Profiles §4.3 Tables 4-9 do not contain, because the table's only
+# `owl:differentFrom` rules read it in a body and conclude `false`. `missing` says the
+# closure may be SMALLER than the regime requires; `extension` says it may be LARGER.
+# Without the line a caller reading `fired ext-eq-diff-sym 1` would have to know from
+# prose which ids on those lines are W3C's. Both `owl-rl` cases below carry it and
+# every other case reads no `extension` line at all. `rules(owl-rl)` and
+# `implemented(owl-rl)` are still exactly the same 78: the extension is in neither.
+#
+# `termination …` is NEW, and it is a proof this workspace was already computing and
+# then throwing away. `rdf` and `rdfs` state existentially quantified rules and are
+# evaluated by the restricted chase, which INVENTS terms — so their clause sets are
+# certified weakly acyclic before a round runs, and an uncertified one is refused
+# outright rather than run under a budget. The verdict reached no caller. It does now,
+# and it is not one constant: `rdf` reads `positions 10 existential-edges 4` and
+# `rdfs` reads `positions 27 existential-edges 8`, because the certificate is a
+# function of the CLAUSE SET (RDFS states `rdfs14`/`rdfs14a` besides
+# `rdfD1`/`rdfD1a`). It does not vary with the data. `simple`, `owl-rl`, `d`,
+# `owl-direct` and `rif` read `none`, which says their rules invent no term and so owe
+# no proof — not that termination is unknown.
+#
+# The `owl-rl` contract hash moved with the new clause (61a9a840… to 8f93a908…) and no
+# other lane's did, because the extension family is concatenated LAST: a rule that
+# concludes `false` is lowered into a clause naming a marker built from its
+# DECLARATION INDEX, so a family spliced earlier would renumber every marker after it
+# and move digests for lanes that fire none of the affected rules.
+#
+# AN EARLIER MOVE: THE REPORT GRAMMAR WENT TO 2, AND THE WITHHELD COUNT WENT IN IT.
 #
 # No closure changed by one byte; every change below is in a `@report` body. Three
 # things moved, and the banner went from 1 to 2 so they are visible rather than
@@ -100,7 +135,7 @@
 <http://example.org/x> <http://example.org/p> <http://example.org/y> <http://example.org/g> .
 <http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .
 @report
-purrdf-reasoning-report 2
+purrdf-reasoning-report 3
 regime simple
 completeness exact
 budget join-steps 0
@@ -108,6 +143,7 @@ budget stored-facts 0
 budget term-arena-bytes 0
 contract-hash 4151090ce6c2ecdae843e351420ddcf10f79e525c60b4c6d07bebeabaa07fbd5
 withheld-surrogates 0
+termination none
 inconsistency none
 @end
 
@@ -120,7 +156,7 @@ inconsistency none
 <http://example.org/x> <http://example.org/p> <http://example.org/y> .
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
 @report
-purrdf-reasoning-report 2
+purrdf-reasoning-report 3
 regime rdf
 completeness exact-within-boundaries
 fired rdfD2 2
@@ -132,6 +168,7 @@ budget stored-facts 6
 budget term-arena-bytes 433
 contract-hash 9724540a02daf06f349ba8aecf52f9e3e21abf7042d1bfcc630172baa7f23ee3
 withheld-surrogates 3
+termination weakly-acyclic positions 10 existential-edges 4
 inconsistency none
 @end
 
@@ -287,7 +324,7 @@ inconsistency none
 <http://www.w3.org/2001/XMLSchema#string> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
 <http://www.w3.org/2001/XMLSchema#string> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2001/XMLSchema#string> .
 @report
-purrdf-reasoning-report 2
+purrdf-reasoning-report 3
 regime rdfs
 completeness exact-within-boundaries
 fired rdfD2 5
@@ -309,6 +346,7 @@ budget stored-facts 201
 budget term-arena-bytes 1958
 contract-hash f6a5eff90528f49ba8d3b83ae7feac8e3b71586f320fb478c6ddb60ca6dc979e
 withheld-surrogates 11
+termination weakly-acyclic positions 27 existential-edges 8
 inconsistency none
 @end
 
@@ -458,9 +496,10 @@ inconsistency none
 <http://www.w3.org/2002/07/owl#versionInfo> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
 <http://www.w3.org/2002/07/owl#versionInfo> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#versionInfo> .
 @report
-purrdf-reasoning-report 2
+purrdf-reasoning-report 3
 regime owl-rl
 completeness exact-within-boundaries
+extension ext-eq-diff-sym
 fired eq-ref 58
 fired prp-ap 9
 fired prp-symp 3
@@ -474,8 +513,9 @@ boundary datatype-value-space rdfD1 and rdfD1a conclude about a FRESH blank node
 budget join-steps 2133
 budget stored-facts 127
 budget term-arena-bytes 2500
-contract-hash 61a9a84001b40b06a8dfe4b38e331ca1943893cbd191b272d6ffead048fa2de0
+contract-hash 8f93a9083fda8e971f558750cf5291b38b6f4838c82148a3b67e3ce7c5dc9c09
 withheld-surrogates 0
+termination none
 inconsistency none
 @end
 
@@ -609,7 +649,7 @@ inconsistency none
 <http://www.w3.org/2001/XMLSchema#string> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
 <http://www.w3.org/2001/XMLSchema#string> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2001/XMLSchema#string> .
 @report
-purrdf-reasoning-report 2
+purrdf-reasoning-report 3
 regime rdfs
 completeness exact-within-boundaries
 fired rdfD2 5
@@ -630,6 +670,7 @@ budget stored-facts 192
 budget term-arena-bytes 1966
 contract-hash f6a5eff90528f49ba8d3b83ae7feac8e3b71586f320fb478c6ddb60ca6dc979e
 withheld-surrogates 16
+termination weakly-acyclic positions 27 existential-edges 8
 inconsistency none
 @end
 
@@ -674,7 +715,7 @@ inconsistency none
 <http://www.w3.org/2001/XMLSchema#unsignedLong> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
 <http://www.w3.org/2001/XMLSchema#unsignedShort> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
 @report
-purrdf-reasoning-report 2
+purrdf-reasoning-report 3
 regime d
 completeness exact-within-boundaries
 fired dt-type1 32
@@ -685,6 +726,7 @@ budget stored-facts 98
 budget term-arena-bytes 1759
 contract-hash 20ac9aa48ce8dd9b25bc7239798566da2d1559458c6ed12befa520c3fdb16cb7
 withheld-surrogates 0
+termination none
 inconsistency none
 @end
 
@@ -813,9 +855,10 @@ inconsistency none
 <http://www.w3.org/2002/07/owl#versionInfo> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
 <http://www.w3.org/2002/07/owl#versionInfo> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#versionInfo> .
 @report
-purrdf-reasoning-report 2
+purrdf-reasoning-report 3
 regime owl-rl
 completeness exact-within-boundaries
+extension ext-eq-diff-sym
 fired eq-ref 58
 fired eq-sym 1
 fired eq-rep-s 1
@@ -829,8 +872,9 @@ boundary datatype-value-space rdfD1 and rdfD1a conclude about a FRESH blank node
 budget join-steps 2058
 budget stored-facts 115
 budget term-arena-bytes 2466
-contract-hash 61a9a84001b40b06a8dfe4b38e331ca1943893cbd191b272d6ffead048fa2de0
+contract-hash 8f93a9083fda8e971f558750cf5291b38b6f4838c82148a3b67e3ce7c5dc9c09
 withheld-surrogates 0
+termination none
 inconsistency none
 @end
 
@@ -855,7 +899,7 @@ inconsistency none
 <http://www.w3.org/2002/07/owl#Nothing> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2002/07/owl#Thing> .
 <http://www.w3.org/2002/07/owl#Thing> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2002/07/owl#Thing> .
 @report
-purrdf-reasoning-report 2
+purrdf-reasoning-report 3
 regime owl-direct
 completeness exact
 budget join-steps 0
@@ -863,6 +907,7 @@ budget stored-facts 0
 budget term-arena-bytes 0
 contract-hash 4151090ce6c2ecdae843e351420ddcf10f79e525c60b4c6d07bebeabaa07fbd5
 withheld-surrogates 0
+termination none
 inconsistency none
 @end
 
@@ -876,7 +921,7 @@ inconsistency none
 <http://example.org/lillith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Animal> .
 <http://example.org/lillith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .
 @report
-purrdf-reasoning-report 2
+purrdf-reasoning-report 3
 regime rif
 completeness exact
 budget join-steps 1
@@ -884,5 +929,6 @@ budget stored-facts 2
 budget term-arena-bytes 128
 contract-hash 4151090ce6c2ecdae843e351420ddcf10f79e525c60b4c6d07bebeabaa07fbd5
 withheld-surrogates 0
+termination none
 inconsistency none
 @end
