@@ -40,6 +40,7 @@ crates=(
   purrdf-gts
   purrdf-core
   purrdf-columnar
+  purrdf-datalog
   purrdf-entail
   purrdf-sparql-algebra
   purrdf-sparql-results

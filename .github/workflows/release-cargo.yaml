@@ -87,6 +87,7 @@ jobs:
             -p purrdf-gts \
             -p purrdf-core \
             -p purrdf-columnar \
+            -p purrdf-datalog \
             -p purrdf-entail \
             -p purrdf-sparql-algebra \
             -p purrdf-sparql-results \
@@ -160,6 +161,7 @@ jobs:
             purrdf-gts
             purrdf-core
             purrdf-columnar
+            purrdf-datalog
             purrdf-entail
             purrdf-sparql-algebra
             purrdf-sparql-results

@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "purrdf-datalog"
+description = "PurRDF native Datalog: deterministic wasm-clean semi-naive evaluation over a columnar relation store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/purrdf-datalog"
+rust-version.workspace = true
+readme = "README.md"
+keywords = ["datalog", "rdf", "reasoning", "fixpoint", "entailment"]
+categories = ["algorithms", "data-structures"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+# Fixed-key store-once interners and the arrangement's probe tables. Fixed-key
+# (not RandomState) because getrandom is absent on wasm32 and because iteration
+# order must never reach an output path.
+ahash = { workspace = true }
+hashbrown = { workspace = true }

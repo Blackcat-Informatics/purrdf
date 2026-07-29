@@ -1337,6 +1337,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "purrdf-datalog"
+version = "0.9.0"
+dependencies = [
+ "ahash",
+ "hashbrown 0.15.5",
+]
+
+[[package]]
 name = "purrdf-entail"
 version = "0.9.0"
 dependencies = [
