@@ -447,7 +447,13 @@ def _suite_py_rdflib_gate(build: bool) -> SuiteResult:
 
 
 def _suite_py_compat(build: bool) -> SuiteResult:
-    """The full first-party compat parity pytest suite."""
+    """The whole Python binding pytest suite, compat-parity differential included.
+
+    Named for what it RUNS rather than for one of its parts: the command is
+    `pytest tests`, so the count covers every binding test — entailment, GTS,
+    projections, shapes — and not only the rdflib differential. A row labelled for
+    the differential alone reports a number that is not the differential's.
+    """
     log = ""
     if build:
         rc, bout = _run(
@@ -456,7 +462,7 @@ def _suite_py_compat(build: bool) -> SuiteResult:
         log += bout
         if rc != 0:
             return SuiteResult(
-                "purrdf.compat parity", "first-party (differential vs rdflib)",
+                "Python binding suite", "first-party (incl. compat differential vs rdflib)",
                 failed=-1, detail="maturin develop FAILED", ok=False, log=log,
             )
     rc, out = _run(
@@ -470,7 +476,7 @@ def _suite_py_compat(build: bool) -> SuiteResult:
     errors = _int(re.search(r"(\d+) error", out))
     detail = f"{passed} pass · {xfailed} strict-xfail (ledgered)"
     return SuiteResult(
-        "purrdf.compat parity", "first-party (differential vs rdflib)",
+        "Python binding suite", "first-party (incl. compat differential vs rdflib)",
         passed=passed, xskip=xfailed, failed=failed + xpassed + errors,
         detail=detail, ok=(rc == 0), log=log,
     )

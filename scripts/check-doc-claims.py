@@ -733,7 +733,7 @@ def build_claims(
     shex_pass, _ = matrix["ShEx 2.1 validation"]
     codec_pass, _ = matrix["Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML)"]
     rdflib_pass, rdflib_x = matrix["rdflib LSP drop-in gate"]
-    compat_pass, compat_x = matrix["purrdf.compat parity"]
+    compat_pass, compat_x = matrix["Python binding suite"]
 
     rl_pass, rl_ledger = matrix[_RL_SUITE_ROW]
     rl_total = rl_pass + rl_ledger
@@ -1359,15 +1359,15 @@ def build_claims(
             "the rdflib drop-in scoreboard row",
             _CONFORMANCE,
             r"\*\*(?P<passed>\d+)\*\* pass · (?P<xfail>\d+) strict-xfail "
-            r"\(ledgered\) \|\n\| purrdf\.compat parity",
+            r"\(ledgered\) \|\n\| Python binding suite",
             {"passed": rdflib_pass, "xfail": rdflib_x},
             mat,
         ),
         Claim(
-            "the purrdf.compat parity scoreboard row",
+            "the Python binding suite scoreboard row",
             _CONFORMANCE,
-            r"first-party differential vs rdflib 7\.6 \| \*\*(?P<passed>\d+)\*\* "
-            r"pass · (?P<xfail>\d+) strict-xfail",
+            r"compat differential vs rdflib 7\.6 included \| "
+            r"\*\*(?P<passed>\d+)\*\* pass · (?P<xfail>\d+) strict-xfail",
             {"passed": compat_pass, "xfail": compat_x},
             mat,
         ),

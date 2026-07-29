@@ -46,7 +46,7 @@
 //!
 //! That state is not detected here. It is UNREPRESENTABLE: [`DlCertificate`] stores no
 //! completeness field at all, only the exhausted flag and the boundary list
-//! [`Session`] actually measured. [`DlCertificate::completeness`] COMPUTES the verdict from
+//! the reasoning session actually measured. [`DlCertificate::completeness`] COMPUTES the verdict from
 //! those two on every call, so `Decided` beside a non-empty boundary list is a value no
 //! caller — inside this crate or outside it — has a constructor for. This crate's tests
 //! exercise the derivation over every reachable combination rather than gating a predicate
@@ -196,7 +196,8 @@ impl DlCertificate {
     /// happened; failing that, a non-empty boundary list is
     /// [`DlCompleteness::DecidedWithinBoundaries`]; and only a run with neither is
     /// [`DlCompleteness::Decided`]. That is what makes a `Decided` verdict beside a
-    /// non-empty boundary list a value nothing can construct — not [`Session::certificate`],
+    /// non-empty boundary list a value nothing can construct — not the producer inside
+    /// this crate,
     /// and not a consumer assembling one from parts, because there is no second field for
     /// the two to disagree over.
     #[must_use]
