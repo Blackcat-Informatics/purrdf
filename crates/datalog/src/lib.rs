@@ -67,6 +67,27 @@
 //!   store-independent per-rule join plan it memoizes: body partition, flat binding
 //!   frame, sideways-information-passing order, index selection, and the certified
 //!   cyclic subplans a worst-case-optimal join consumes.
+//!
+//! # Evaluation
+//!
+//! - [`seminaive`] — the stratified semi-naive fixpoint itself:
+//!   [`compile`](seminaive::compile) turns a rule program into an
+//!   [`Executable`](plan::Executable) or names the negative cycle that makes it
+//!   non-stratifiable, and [`evaluate`](seminaive::evaluate) runs each stratum to its
+//!   least fixpoint over a seeded store. The positive body of every rule goes through one
+//!   of two kernels — the indexed binary join, or a leapfrog triejoin over a
+//!   planner-certified cyclic component — and the two are held to producing identical
+//!   relations by a differential test. Rounds are rule-parallel through rayon's indexed
+//!   `par_iter`, merged strictly in program order.
+//!
+//! # The correctness oracle
+//!
+//! Reproducibility and correctness are different properties, and only one of them is
+//! tested by running the same program twice: a systematically wrong evaluator is perfectly
+//! reproducible. The crate's correctness oracle is therefore a corpus of Datalog programs
+//! whose answers have a CLOSED FORM — transitive closure of a chain, the complete
+//! reachability of a cycle, the same-generation pairs of a two-level tree — asserted by
+//! exact set equality against a golden built by construction rather than by an engine.
 
 pub mod arena;
 pub mod binding_pattern;
@@ -74,7 +95,11 @@ pub mod bitset;
 pub mod cursor;
 pub mod id;
 pub mod plan;
+pub mod seminaive;
 pub mod store;
+
+#[cfg(test)]
+pub(crate) mod synth_corpus;
 
 #[cfg(test)]
 pub(crate) mod test_support {

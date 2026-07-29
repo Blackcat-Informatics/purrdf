@@ -101,6 +101,21 @@ impl PlanTerm {
     pub fn is_var(&self) -> bool {
         matches!(self, Self::Var(_))
     }
+
+    /// The lexical surface of a CONSTANT term — the exact bytes the store interns — or
+    /// `None` for a variable, whose surface is a runtime binding rather than a plan-time
+    /// property.
+    ///
+    /// This is the single rendering convention: an IRI is bracketed, a literal is already
+    /// its own surface. An executor grounding a head or a negated atom renders through
+    /// here, so plan constants and stored data are always compared as the same bytes.
+    pub fn surface(&self) -> Option<String> {
+        match self {
+            Self::Iri(iri) => Some(format!("<{iri}>")),
+            Self::Literal(surface) => Some(surface.clone()),
+            Self::Var(_) => None,
+        }
+    }
 }
 
 /// The lexical surface of a CONSTANT term — the exact bytes the store interns.
@@ -110,13 +125,9 @@ impl PlanTerm {
 /// Panics on a variable: every caller reaches this only after matching a constant, so a
 /// variable here is a planner bug, never a data state.
 fn constant_surface(term: &PlanTerm) -> String {
-    match term {
-        PlanTerm::Iri(iri) => format!("<{iri}>"),
-        PlanTerm::Literal(surface) => surface.clone(),
-        PlanTerm::Var(name) => {
-            unreachable!("constant_surface is called only for a constant term, not {name:?}")
-        }
-    }
+    term.surface().unwrap_or_else(|| {
+        unreachable!("constant_surface is called only for a constant term, not {term:?}")
+    })
 }
 
 /// One binary body or head atom: `predicate(subject, object)`, optionally negated.
@@ -1205,6 +1216,12 @@ impl Executable {
         self.strata.len()
     }
 
+    /// The number of rules, so an executor can size a per-rule side table by index
+    /// instead of discovering the index space by sweeping every stratum.
+    pub fn rule_count(&self) -> usize {
+        self.rules.len()
+    }
+
     /// Whether stratum `k` has no rules (a trivially-saturated empty stratum).
     ///
     /// # Panics
@@ -1643,6 +1660,23 @@ mod tests {
 
     // ── Stratification and the type-state pipeline ──────────────────────────────
 
+    /// A constant term renders to the exact bytes the store interns; a variable has no
+    /// plan-time surface at all, because its surface is a runtime binding.
+    #[test]
+    fn plan_term_surface_is_the_stored_bytes_of_a_constant_only() {
+        assert_eq!(
+            PlanTerm::iri("https://example.org/a").surface().as_deref(),
+            Some("<https://example.org/a>")
+        );
+        assert_eq!(
+            PlanTerm::literal("\"7\"^^<http://www.w3.org/2001/XMLSchema#integer>")
+                .surface()
+                .as_deref(),
+            Some("\"7\"^^<http://www.w3.org/2001/XMLSchema#integer>")
+        );
+        assert_eq!(PlanTerm::var("?x").surface(), None);
+    }
+
     #[test]
     fn stratify_lifts_a_negated_dependency_one_stratum() {
         // q :- p.   r :- q, not p.
@@ -1709,6 +1743,11 @@ mod tests {
             .into_executable();
 
         assert_eq!(exe.stratum_count(), 2);
+        assert_eq!(
+            exe.rule_count(),
+            2,
+            "the rule index space is the authored program, not the stratum grouping"
+        );
         assert!(!exe.stratum_is_empty(0));
         assert_eq!(exe.stratum_rule_indices(0), [0]);
         assert_eq!(exe.stratum_rule_indices(1), [1]);

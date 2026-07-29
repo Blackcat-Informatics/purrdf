@@ -93,6 +93,9 @@ pub struct TermInterner {
     by_surface: HashTable<TermId>,
     /// First-seen surface per id, in insertion order (slot = id index).
     surfaces: Vec<String>,
+    /// Running total of `surfaces`' bytes, maintained on intern so the dictionary's
+    /// footprint is an O(1) read rather than an O(n) sweep. See [`Self::byte_len`].
+    bytes: usize,
 }
 
 impl TermInterner {
@@ -113,6 +116,7 @@ impl TermInterner {
             return id;
         }
         let id = TermId::from_index(self.surfaces.len());
+        self.bytes += surface.len();
         self.surfaces.push(surface.to_owned());
         let surfaces = &self.surfaces;
         self.by_surface
@@ -150,6 +154,16 @@ impl TermInterner {
     /// The number of distinct terms interned.
     pub fn len(&self) -> usize {
         self.surfaces.len()
+    }
+
+    /// The total bytes of the interned surfaces — the dictionary's term-arena footprint.
+    ///
+    /// Counts each distinct surface ONCE (a repeated term is stored once), and counts the
+    /// surface bytes only, not the `Vec`/`HashTable` bookkeeping around them. This is the
+    /// quantity the evaluator's arena ceiling is expressed against, so the ceiling is a
+    /// property of the data rather than of an allocator's growth policy.
+    pub fn byte_len(&self) -> usize {
+        self.bytes
     }
 
     /// Whether the dictionary holds no terms.
@@ -809,6 +823,12 @@ impl RelationStore {
         &self.interner
     }
 
+    /// The bytes of interned term surfaces held by this store's dictionary — the
+    /// term-arena footprint the evaluator's arena ceiling is measured against.
+    pub fn term_bytes(&self) -> usize {
+        self.interner.byte_len()
+    }
+
     /// The interned [`PredId`] for `predicate`, if any relation of this store carries
     /// it; never inserts. `None` means no relation, so any selection on it is empty.
     pub fn pred_id(&self, predicate: &str) -> Option<PredId> {
@@ -1184,6 +1204,36 @@ mod tests {
         );
         assert_eq!(s.pred_id(KNOWS), Some(PredId::from_index(0)));
         assert_eq!(s.pred_id("https://example.org/absent"), None);
+    }
+
+    /// The term-arena footprint counts each DISTINCT surface once, grows only on a fresh
+    /// intern, and is the same whichever order the terms arrive in — so the evaluator's
+    /// arena ceiling is a property of the data, not of an insertion sequence.
+    #[test]
+    fn store_term_bytes_counts_each_distinct_surface_once() {
+        let mut s = RelationStore::new();
+        assert_eq!(s.term_bytes(), 0);
+        assert!(s.interner().is_empty());
+
+        s.insert(KNOWS, &iri("a"), &iri("b"));
+        let after_first = s.term_bytes();
+        assert_eq!(after_first, iri("a").len() + iri("b").len());
+
+        // A repeat of both terms under a second predicate interns nothing new.
+        s.insert(LIKES, &iri("a"), &iri("b"));
+        assert_eq!(s.term_bytes(), after_first);
+
+        // A new term adds exactly its own bytes.
+        s.insert(KNOWS, &iri("a"), &iri("c"));
+        assert_eq!(s.term_bytes(), after_first + iri("c").len());
+        assert_eq!(s.term_bytes(), s.interner().byte_len());
+
+        // The same terms in the opposite order reach the same total.
+        let mut reversed = RelationStore::new();
+        reversed.insert(KNOWS, &iri("a"), &iri("c"));
+        reversed.insert(LIKES, &iri("a"), &iri("b"));
+        reversed.insert(KNOWS, &iri("a"), &iri("b"));
+        assert_eq!(reversed.term_bytes(), s.term_bytes());
     }
 
     /// Resolving an id no dictionary minted is a programming error, reported as a panic

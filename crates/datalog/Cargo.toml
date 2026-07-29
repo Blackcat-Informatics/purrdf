@@ -31,3 +31,8 @@ path = "src/lib.rs"
 # order must never reach an output path.
 ahash = { workspace = true }
 hashbrown = { workspace = true }
+# Rule-parallel semi-naive rounds. Used ONLY in indexed, order-stable form
+# (`par_iter` over a rule-index slice, collected and reduced in program order);
+# never `par_sort`/`par_bridge`. Degrades to inline-sequential on
+# wasm32-unknown-unknown, so the wasm gate holds.
+rayon = { workspace = true }
