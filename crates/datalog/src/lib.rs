@@ -48,11 +48,33 @@
 //! - [`bitset`] — the dense round-delta membership bitset over row ids.
 //! - [`binding_pattern`] — the arity-generic adornment lattice shared by demand
 //!   keying and index selection.
+//!
+//! # The relation store and its cursors
+//!
+//! - [`store`] — the columnar [`RelationStore`](store::RelationStore): one shared
+//!   arrangement per predicate, held as sorted immutable batches plus a mutable
+//!   tail, deduped by a galloping probe rather than by hashing, and generic over an
+//!   abelian [`Weight`](store::Weight) monoid so signed (Z-set) multiplicities —
+//!   and hence retraction — are a compiled property of the representation.
+//! - [`cursor`] — the zero-allocation lending cursor over one arrangement, and the
+//!   globally value-ordered trie cursor the leapfrog join seeks over.
+//!
+//! # Planning
+//!
+//! - [`plan`] — the consuming type-state pipeline
+//!   `Parsed → Stratified → Planned → Executable`, which makes an unstratified or
+//!   unplanned program unrepresentable at the executor boundary, plus the
+//!   store-independent per-rule join plan it memoizes: body partition, flat binding
+//!   frame, sideways-information-passing order, index selection, and the certified
+//!   cyclic subplans a worst-case-optimal join consumes.
 
 pub mod arena;
 pub mod binding_pattern;
 pub mod bitset;
+pub mod cursor;
 pub mod id;
+pub mod plan;
+pub mod store;
 
 #[cfg(test)]
 pub(crate) mod test_support {
