@@ -3,14 +3,43 @@
 
 //! Query-directed OWL-Direct materialization.
 //!
-//! `OWL-Direct` is open-world: unlike the RDFS / OWL-RL chase there is no finite
-//! "closure graph" whose simple-entailment matching answers every query. Instead the
-//! reasoner is handed the query's basic graph pattern and produces an *augmented*
-//! dataset whose simple-entailment answers coincide with the OWL Direct-Semantics
-//! answers **for that query** — so the unmodified SPARQL evaluator, run over the
-//! augmentation, yields the certain answers.
+//! `OWL-Direct` is open-world: unlike the RDFS / OWL-RL chase there is no finite "closure
+//! graph" whose simple-entailment matching answers every query. Instead the reasoner is
+//! handed the query's basic graph pattern and produces an *augmented* dataset over which
+//! the unmodified SPARQL evaluator computes the answers.
 //!
-//! Three augmentations are injected, each an entailed fact (never a fabricated one):
+//! # Exactly what the augmentation delivers
+//!
+//! This used to be described as "a dataset whose simple-entailment answers coincide with
+//! the Direct-Semantics answers for that query", full stop. That claim is stronger than
+//! any finite augmentation can support, and nothing tested it. What holds, and what is
+//! tested, is narrower and stated here rather than in a design note nobody reads.
+//!
+//! Write `σ` for a substitution mapping the BGP's variables to terms of the **scoping
+//! graph** — the named terms of the data. SPARQL's entailment regimes require exactly that
+//! (a solution binding a variable to a term outside the scoping graph is not an answer the
+//! regime admits), and for such a `σ` the certain answers of a conjunction decompose:
+//! `KB ⊨ (t₁ ∧ … ∧ tₙ)σ` iff `KB ⊨ tᵢσ` for every `i`, because each `tᵢσ` is ground. So a
+//! dataset holding every entailed ground atom over the query's own vocabulary, matched by
+//! simple entailment, yields precisely the certain answers **for a BGP all of whose
+//! variables are distinguished**. That is the claim, and it is the one the injections below
+//! are built to satisfy.
+//!
+//! # The residue, and why it is a boundary rather than a footnote
+//!
+//! A query BLANK NODE is not a distinguished variable — SPARQL reads it as an existential —
+//! and for `∃x. A(x) ∧ B(x)` the decomposition above fails outright: an open-world model
+//! may satisfy the conjunction through an ANONYMOUS element that no finite augmentation can
+//! name. That is not a gap this construction could close by injecting more facts; it is a
+//! statement about the shape of the problem. So a query blank node that is not part of a
+//! class expression's scaffold raises
+//! [`Construct::NonDistinguishedVariable`](crate::Construct::NonDistinguishedVariable), and
+//! the run's [`ReasoningReport`] stops saying [`Completeness::Exact`](crate::Completeness).
+//! A caller gets a sound answer set and is told, in data, that it may not be complete.
+//!
+//! # The injections
+//!
+//! Each is an entailed fact, never a fabricated one, and each is decided by the tableau:
 //!
 //! 1. **Classification + realization** of the data's named vocabulary — every entailed
 //!    `C rdfs:subClassOf D` between named classes (reflexive and `owl:Nothing`/`owl:Thing`
@@ -26,10 +55,20 @@
 //! 3. **`owl:sameAs`** equality closure over individuals (reflexive, and every asserted
 //!    triple re-stated over equal individuals), plus `rdfs:domain`/`rdfs:range` answers
 //!    for a queried property.
+//! 4. **Entailed ROLE assertions** over the properties the query actually names: for each
+//!    ordered pair of named individuals `(a, b)` and each queried property `p`, the tableau
+//!    decides `KB ⊨ p(a, b)` and the answer is injected when it holds. Without this a
+//!    pattern `?x :q ?y` missed every answer the property hierarchy, an inverse, a symmetry
+//!    or a transitivity axiom entails but no triple states — the largest hole in the old
+//!    construction, and the reason the old claim was not merely unproven but false. It is
+//!    query-DIRECTED, so an ontology whose properties the query never mentions pays nothing
+//!    for it.
 //!
-//! Determinism: named classes and individuals are visited in interned-id order, tasks in
-//! query order, and every fresh blank is numbered from a single counter, so the augmented
-//! dataset is byte-for-byte reproducible.
+//! # Determinism
+//!
+//! Named classes and individuals are visited in interned-id order, tasks in query order,
+//! queried properties in interned-id order, and every fresh blank is numbered from a single
+//! counter, so the augmented dataset is byte-for-byte reproducible.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -38,9 +77,9 @@ use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermId, TermValue};
 
 use crate::EntailError;
 use crate::interner::{Interner, intern_into};
-use crate::owl_dl::Kb;
 use crate::owl_dl::concept::{Concept, Role};
 use crate::owl_dl::parser::{CeExtractor, TripleIndex, Vocab, index_insert};
+use crate::owl_dl::{Kb, class_concept, tableau};
 use crate::report::{Construct, ReasoningReport};
 use crate::vocab::{OWL_SAMEAS, RDF_TYPE, RDFS_DOMAIN, RDFS_RANGE, RDFS_SUBCLASSOF};
 
@@ -181,6 +220,9 @@ pub fn materialize_dl_reported(
     let (raw_tasks, query_boundaries) = extract_tasks(&kb.interner, &q_index, &v, &resolved)?;
     let mut boundaries = kb.boundaries().clone();
     boundaries.extend(query_boundaries);
+    if has_non_distinguished_variable(&kb.interner, &q_index, &raw_tasks, &resolved) {
+        boundaries.insert(Construct::NonDistinguishedVariable);
+    }
 
     // Intern all concepts we must reason about, then finalize the negation cache once.
     // `owl:Thing`/`owl:Nothing` reason as `⊤`/`⊥`, never as opaque atomic classes.
@@ -188,6 +230,7 @@ pub fn materialize_dl_reported(
         .iter()
         .map(|&c| (c, kb.table.intern(class_concept(&v, c))))
         .collect();
+    let roles = intern_queried_roles(&mut kb, &v, &resolved);
     let tasks = intern_tasks(&mut kb.table, &v, &named_classes, raw_tasks);
     kb.finalize();
 
@@ -198,6 +241,7 @@ pub fn materialize_dl_reported(
 
     inject_classification(&mut b, &kb, &named_cid)?;
     inject_realization(&mut b, &kb, &named_cid)?;
+    inject_roles(&mut b, &kb, &roles, &data_index)?;
     inject_same_as(&mut b, &kb, &data_index);
     inject_tasks(&mut b, &kb, &q_index, &named_cid, &tasks, &mut fresh)?;
 
@@ -216,7 +260,7 @@ fn resolve_node(interner: &mut Interner, node: &QNode) -> Option<u32> {
 }
 
 /// Index the data's default-graph triples over the (already-populated) interner.
-fn build_data_index(ds: &RdfDataset, interner: &mut Interner) -> TripleIndex {
+pub(crate) fn build_data_index(ds: &RdfDataset, interner: &mut Interner) -> TripleIndex {
     let mut index: TripleIndex = BTreeMap::new();
     for q in ds.quads() {
         if q.g.is_some() {
@@ -232,7 +276,11 @@ fn build_data_index(ds: &RdfDataset, interner: &mut Interner) -> TripleIndex {
 
 /// The set of named (IRI) classes in the data — every IRI that appears in a
 /// class-denoting position — plus `owl:Thing` and `owl:Nothing`, in id order.
-fn collect_named_classes(interner: &Interner, index: &TripleIndex, v: &Vocab) -> BTreeSet<u32> {
+pub(crate) fn collect_named_classes(
+    interner: &Interner,
+    index: &TripleIndex,
+    v: &Vocab,
+) -> BTreeSet<u32> {
     let mut out = BTreeSet::new();
     out.insert(v.thing);
     out.insert(v.nothing);
@@ -273,6 +321,197 @@ enum RawTask {
     SuperOfCe { ce_node: u32, concept: Concept },
     Domain { prop: u32 },
     Range { prop: u32 },
+}
+
+impl RawTask {
+    /// The class-expression node this task is rooted at, for the tasks that have one.
+    ///
+    /// Read by the non-distinguished-variable check: a query blank node reachable from one
+    /// of these roots is GROUND SYNTAX the reverse mapping consumes, not an existential
+    /// variable, and must not raise the boundary.
+    const fn ce_node(&self) -> Option<u32> {
+        match *self {
+            Self::TypeCe { ce_node, .. }
+            | Self::SubOfCe { ce_node, .. }
+            | Self::SuperOfCe { ce_node, .. } => Some(ce_node),
+            Self::Domain { .. } | Self::Range { .. } => None,
+        }
+    }
+}
+
+/// Whether the query BGP holds a blank node that is not part of a class expression.
+///
+/// SPARQL reads a query blank node as an existential — a NON-DISTINGUISHED variable — and
+/// the certain answers of a BGP with one do not decompose into per-atom entailment checks;
+/// see [`Construct::NonDistinguishedVariable`]'s reason. A blank node that is a class
+/// expression's scaffold is a different thing entirely: it is syntax for a class, the
+/// reverse mapping reads it as such, and it carries no existential force of its own.
+fn has_non_distinguished_variable(
+    interner: &Interner,
+    q_index: &TripleIndex,
+    raw_tasks: &[RawTask],
+    resolved: &[(Option<u32>, Option<u32>, Option<u32>)],
+) -> bool {
+    let mut blanks: BTreeSet<u32> = BTreeSet::new();
+    for (s, p, o) in resolved {
+        for id in s.iter().chain(p).chain(o) {
+            if matches!(interner.value(*id), TermValue::Blank { .. }) {
+                blanks.insert(*id);
+            }
+        }
+    }
+    if blanks.is_empty() {
+        return false;
+    }
+    let mut scaffold: BTreeSet<u32> = BTreeSet::new();
+    for root in raw_tasks.iter().filter_map(RawTask::ce_node) {
+        collect_scaffold(interner, q_index, root, &mut scaffold);
+    }
+    blanks.iter().any(|blank| !scaffold.contains(blank))
+}
+
+/// The blank query nodes reachable from `root` through the query index.
+///
+/// Shared by the non-distinguished-variable check and by [`reconstruct`], which renames
+/// exactly this set — so the two can never disagree about what "part of a class
+/// expression" means.
+fn collect_scaffold(
+    interner: &Interner,
+    q_index: &TripleIndex,
+    root: u32,
+    out: &mut BTreeSet<u32>,
+) {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if !matches!(interner.value(node), TermValue::Blank { .. }) {
+            continue;
+        }
+        if !out.insert(node) {
+            continue;
+        }
+        if let Some(preds) = q_index.get(&node) {
+            for objs in preds.values() {
+                stack.extend(objs.iter().copied());
+            }
+        }
+    }
+}
+
+/// One queried object property, with the interned `∃p.{t}` for every candidate target `t`.
+///
+/// Interned BEFORE [`Kb::finalize`] so the negation cache covers all of them, which is why
+/// this is a value assembled up front rather than a concept built inside the injection
+/// loop.
+struct QueriedRole {
+    /// The property's term id.
+    property: u32,
+    /// `(target term id, concept id of ∃property.{target})`, ascending by target.
+    reaches: Vec<(u32, u32)>,
+}
+
+/// The properties the QUERY names, with a `∃p.{t}` interned for every candidate target.
+///
+/// Query-directed on purpose: deciding `KB ⊨ p(a, b)` costs one tableau run per ordered
+/// pair, so ranging over every property of the ontology would make the augmentation
+/// quadratic in data the caller never asked about. The properties here are the ones the
+/// BGP actually mentions, minus the reserved vocabulary (`rdf:type`, `rdfs:subClassOf`,
+/// `owl:sameAs`, `rdfs:domain` and `rdfs:range` have their own injections, and no other
+/// reserved term denotes a DL role).
+///
+/// Targets are the named individuals PLUS the objects of asserted role assertions, which
+/// is what brings a data property's LITERAL values into range: `p ⊑ q` with `a p "cat"`
+/// entails `a q "cat"`, and a literal is a term of the completion graph even though it is
+/// not a realization candidate.
+fn intern_queried_roles(
+    kb: &mut Kb,
+    v: &Vocab,
+    resolved: &[(Option<u32>, Option<u32>, Option<u32>)],
+) -> Vec<QueriedRole> {
+    let mut targets: BTreeSet<u32> = kb.individuals.iter().copied().collect();
+    targets.extend(kb.abox_roles.iter().map(|&(_, _, object)| object));
+    if targets.is_empty() {
+        return Vec::new();
+    }
+    let mut properties: BTreeSet<u32> = BTreeSet::new();
+    for &(_, predicate, _) in resolved {
+        let Some(predicate) = predicate else {
+            continue;
+        };
+        if predicate == v.ty
+            || predicate == v.sub_class
+            || predicate == v.same_as
+            || predicate == v.domain
+            || predicate == v.range
+        {
+            continue;
+        }
+        if let TermValue::Iri(iri) = kb.interner.value(predicate)
+            && !crate::owl_dl::constructs::is_reserved(iri)
+        {
+            properties.insert(predicate);
+        }
+    }
+    let targets: Vec<u32> = targets.into_iter().collect();
+    let mut out = Vec::with_capacity(properties.len());
+    for property in properties {
+        let mut reaches = Vec::with_capacity(targets.len());
+        for &target in &targets {
+            let concept = kb.table.intern(Concept::Some(
+                Role::Named(property),
+                Box::new(Concept::nominal(vec![target])),
+            ));
+            reaches.push((target, concept));
+        }
+        out.push(QueriedRole { property, reaches });
+    }
+    out
+}
+
+/// Inject every entailed `a p b` for a queried property `p`.
+///
+/// Decided by refutation — `KB ⊨ p(a, b)` exactly when `KB ∪ {a : ¬∃p.{b}}` is
+/// inconsistent — so the property hierarchy, inverses, symmetry, transitivity and the
+/// nominal machinery are all consulted by the one procedure that already knows them,
+/// rather than by a second, partial closure written beside the tableau.
+///
+/// A pair the data already asserts is skipped: the assertion is in the output verbatim, so
+/// the tableau run would buy nothing.
+fn inject_roles(
+    b: &mut RdfDatasetBuilder,
+    kb: &Kb,
+    roles: &[QueriedRole],
+    data_index: &TripleIndex,
+) -> Result<(), EntailError> {
+    for role in roles {
+        let asserted = data_index
+            .iter()
+            .filter_map(|(&s, preds)| preds.get(&role.property).map(|objs| (s, objs)));
+        let asserted: BTreeSet<(u32, u32)> = asserted
+            .flat_map(|(s, objs)| objs.iter().map(move |&o| (s, o)))
+            .collect();
+        let property = intern_into(b, kb.interner.value(role.property));
+        for &subject in &kb.individuals {
+            for &(target, reach) in &role.reaches {
+                if asserted.contains(&(subject, target)) {
+                    continue;
+                }
+                let negated = kb.table.negate(reach);
+                if tableau::consistent(
+                    kb,
+                    &tableau::Assumptions {
+                        types: &[(subject, negated)],
+                        ..tableau::Assumptions::of_kb()
+                    },
+                )? {
+                    continue;
+                }
+                let s = intern_into(b, kb.interner.value(subject));
+                let o = intern_into(b, kb.interner.value(target));
+                b.push_quad(s, property, o, None);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Scan the resolved query triples for class-expression / domain / range patterns,
@@ -332,18 +571,6 @@ fn extract_tasks(
     }
     let boundaries = ce.boundaries().clone();
     Ok((tasks, boundaries))
-}
-
-/// The concept a named class IRI denotes: `⊤` for `owl:Thing`, `⊥` for `owl:Nothing`,
-/// else the atomic named class.
-fn class_concept(v: &Vocab, c: u32) -> Concept {
-    if c == v.thing {
-        Concept::Top
-    } else if c == v.nothing {
-        Concept::Bottom
-    } else {
-        Concept::Named(c)
-    }
 }
 
 /// Intern each raw task's concepts into the concept table, yielding concept-id tasks.
@@ -581,22 +808,7 @@ fn reconstruct(
 ) -> TermId {
     // The blank scaffold nodes reachable from `root` (only blanks are renamed).
     let mut scaffold: BTreeSet<u32> = BTreeSet::new();
-    let mut stack = vec![root];
-    while let Some(n) = stack.pop() {
-        if !matches!(interner.value(n), TermValue::Blank { .. }) {
-            continue;
-        }
-        if !scaffold.insert(n) {
-            continue;
-        }
-        if let Some(preds) = q_index.get(&n) {
-            for objs in preds.values() {
-                for &o in objs {
-                    stack.push(o);
-                }
-            }
-        }
-    }
+    collect_scaffold(interner, q_index, root, &mut scaffold);
     // Assign fresh blanks in id order (deterministic labelling).
     let mut rename: BTreeMap<u32, TermId> = BTreeMap::new();
     for &n in &scaffold {

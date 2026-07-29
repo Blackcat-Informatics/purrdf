@@ -39,6 +39,19 @@
 //! all coincide. Nominal/root nodes (one per named individual) are never blocked. A
 //! generous per-run step cap is a hard backstop: a termination bug surfaces as an
 //! [`EntailError::Build`] rather than a hang.
+//!
+//! ## Two ways to ask
+//!
+//! [`consistent`] answers `bool` and turns an exhausted cap into [`EntailError::Build`] —
+//! the shape the query-directed materialization layer wants, where a truncated search has
+//! no honest answer to return. [`decide`] answers a [`Decision`], which carries the step
+//! count and an `exhausted` flag instead of throwing one; that is what the reasoner
+//! services need, because a service that ran a thousand sub-questions must be able to
+//! report "these are decided, that one ran out" rather than lose the whole run to one
+//! hard instance. Both are one code path: `consistent` is `decide` plus a conversion.
+//!
+//! The cap itself is [`step_cap`], a pure function of the knowledge base's size. A caller
+//! may narrow it (which is how the exhausted path is tested) and may never widen it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -108,25 +121,109 @@ struct Tableau<'a> {
     cap: u64,
 }
 
-/// Decide whether the knowledge base (optionally with `extra` typed individuals and a
-/// single `fresh` root carrying `fresh_types`) has a consistent completion.
+/// What a decision is made *on top of* the knowledge base.
 ///
-/// `include_abox` pulls in the ABox (individual roots, role edges, `owl:sameAs`
-/// merges); subsumption checks pass `false` to reason purely over the TBox.
+/// A refutation adds premises — the negated conclusion, and for a role axiom a pair of
+/// fresh individuals joined by the antecedent role — so every entry here is an assumption
+/// the caller injected, never something the ontology said. Gathering them into one struct
+/// rather than passing four positional slices is what keeps a fifth kind of assumption
+/// from being appended to a signature nobody can read.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Assumptions<'a> {
+    /// Whether to pull in the ABox (individual roots, role edges, `owl:sameAs` merges).
+    /// A pure subsumption check passes `false` and reasons over the TBox alone.
+    pub(crate) include_abox: bool,
+    /// Extra concept assertions `a : C`, as `(individual term id, concept id)`.
+    pub(crate) types: &'a [(u32, u32)],
+    /// Extra role assertions `a r b`, as `(subject, property, object)` term ids. The
+    /// endpoints need not be knowledge-base individuals: a fresh one gets a root node of
+    /// its own, which is exactly what a role-inclusion refutation needs.
+    pub(crate) roles: &'a [(u32, u32, u32)],
+    /// Concept ids placed on ONE fresh, anonymous, unnamed root — the witness a
+    /// satisfiability or subsumption question asks about.
+    pub(crate) fresh_types: &'a [u32],
+}
+
+impl Assumptions<'_> {
+    /// The bare "is this knowledge base consistent?" question: the whole ABox, nothing
+    /// added.
+    pub(crate) const fn of_kb() -> Self {
+        Self {
+            include_abox: true,
+            types: &[],
+            roles: &[],
+            fresh_types: &[],
+        }
+    }
+}
+
+/// What one tableau run decided, and what it consumed deciding it.
+///
+/// `consistent` is meaningful only when `exhausted` is false: a run that stopped at its
+/// cap has closed some branches and not others, and reporting the "no branch succeeded
+/// *yet*" state as `false` would turn a resource limit into an entailment. Every consumer
+/// in this crate reads `exhausted` first.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Decision {
+    /// Whether a clash-free completion was found. Only meaningful when `!exhausted`.
+    pub(crate) consistent: bool,
+    /// Saturation rounds consumed, summed over every branch the search explored.
+    pub(crate) steps: u64,
+    /// Whether the search stopped because it reached its step cap.
+    pub(crate) exhausted: bool,
+}
+
+/// The step cap for a knowledge base: generous and size-proportional.
+///
+/// Pairwise blocking bounds the real work far below this, so reaching it means a
+/// termination bug or an adversarial instance rather than an ordinary ontology. It is a
+/// pure function of the knowledge base — same input, same cap — so a `Decision` is
+/// reproducible run to run, and it is a STEP count rather than a clock reading, which is
+/// what keeps it reproducible on wasm32 (where there is no clock to read).
+pub(crate) fn step_cap(kb: &Kb) -> u64 {
+    let base =
+        (kb.abox_types.len() + kb.abox_roles.len() + kb.tbox.len() + kb.individuals.len() + 16)
+            as u64;
+    100_000 + base.saturating_mul(base).saturating_mul(64)
+}
+
+/// Decide whether the knowledge base plus `assumptions` has a consistent completion,
+/// spending at most `cap` steps.
+pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, cap: u64) -> Decision {
+    let mut t = Tableau::new(kb, cap);
+    let st = t.init_state(assumptions);
+    match t.solve(st) {
+        Ok(consistent) => Decision {
+            consistent,
+            steps: t.steps,
+            exhausted: false,
+        },
+        Err(Exhausted) => Decision {
+            consistent: false,
+            steps: t.steps,
+            exhausted: true,
+        },
+    }
+}
+
+/// Decide whether the knowledge base plus `assumptions` has a consistent completion.
 ///
 /// # Errors
 ///
 /// [`EntailError::Build`] if the step cap is exceeded (a termination-bug backstop).
-pub(crate) fn consistent(
-    kb: &Kb,
-    include_abox: bool,
-    extra: &[(u32, u32)],
-    fresh_types: &[u32],
-) -> Result<bool, EntailError> {
-    let mut t = Tableau::new(kb);
-    let st = t.init_state(include_abox, extra, fresh_types);
-    t.solve(st)
+pub(crate) fn consistent(kb: &Kb, assumptions: &Assumptions<'_>) -> Result<bool, EntailError> {
+    let decision = decide(kb, assumptions, step_cap(kb));
+    if decision.exhausted {
+        return Err(EntailError::Build(
+            "OWL-Direct tableau exceeded its step cap (possible non-termination)".to_owned(),
+        ));
+    }
+    Ok(decision.consistent)
 }
+
+/// The search reached its step cap. A private marker rather than an [`EntailError`]: it is
+/// not a failure at this layer, it is one of the three things [`decide`] reports.
+struct Exhausted;
 
 /// Resolve a node index to its union-find representative.
 fn find(st: &State, mut x: usize) -> usize {
@@ -206,19 +303,14 @@ fn merge(st: &mut State, keep: usize, discard: usize) {
 }
 
 impl<'a> Tableau<'a> {
-    /// Build a driver over `kb`, snapshotting the internalized TBox.
-    fn new(kb: &'a Kb) -> Self {
+    /// Build a driver over `kb` bounded by `cap` steps, snapshotting the internalized TBox.
+    fn new(kb: &'a Kb, cap: u64) -> Self {
         let meta: BTreeSet<u32> = kb.meta.iter().copied().collect();
-        // A generous, size-proportional cap: pairwise blocking bounds the real work
-        // far below this, so hitting it means a bug, not a hard instance.
-        let base =
-            (kb.abox_types.len() + kb.abox_roles.len() + kb.tbox.len() + kb.individuals.len() + 16)
-                as u64;
         Self {
             kb,
             meta,
             steps: 0,
-            cap: 100_000 + base.saturating_mul(base).saturating_mul(64),
+            cap,
         }
     }
 
@@ -228,7 +320,13 @@ impl<'a> Tableau<'a> {
     }
 
     /// Build the initial completion graph.
-    fn init_state(&self, include_abox: bool, extra: &[(u32, u32)], fresh_types: &[u32]) -> State {
+    fn init_state(&self, assumptions: &Assumptions<'_>) -> State {
+        let Assumptions {
+            include_abox,
+            types: extra,
+            roles: extra_roles,
+            fresh_types,
+        } = *assumptions;
         let mut st = State {
             nodes: Vec::new(),
             edges: Vec::new(),
@@ -266,6 +364,14 @@ impl<'a> Tableau<'a> {
             let ra = self.root(&mut st, a);
             st.nodes[ra].label.insert(c);
         }
+        // An assumed role edge, whose endpoints may be individuals the ontology never
+        // mentions: `root` mints a node for one on demand, which is what lets a role-axiom
+        // refutation run over a pair of fresh symbols.
+        for &(a, p, b) in extra_roles {
+            let ra = self.root(&mut st, a);
+            let rb = self.root(&mut st, b);
+            st.edges.push((ra, rb, p));
+        }
         if !fresh_types.is_empty() {
             let mut label = self.seed_label();
             label.extend(fresh_types.iter().copied());
@@ -302,7 +408,7 @@ impl<'a> Tableau<'a> {
     }
 
     /// The depth-first, deterministic search: saturate, then branch.
-    fn solve(&mut self, mut st: State) -> Result<bool, EntailError> {
+    fn solve(&mut self, mut st: State) -> Result<bool, Exhausted> {
         if !self.saturate(&mut st)? {
             return Ok(false);
         }
@@ -321,7 +427,7 @@ impl<'a> Tableau<'a> {
     /// Apply the deterministic completion rules to a fixpoint.
     ///
     /// Returns `Ok(false)` on a clash, `Ok(true)` at a clash-free fixpoint.
-    fn saturate(&mut self, st: &mut State) -> Result<bool, EntailError> {
+    fn saturate(&mut self, st: &mut State) -> Result<bool, Exhausted> {
         loop {
             self.tick()?;
             self.detect_clash(st);
@@ -339,13 +445,11 @@ impl<'a> Tableau<'a> {
     }
 
     /// Consume one step against the cap.
-    fn tick(&mut self) -> Result<(), EntailError> {
-        self.steps += 1;
-        if self.steps > self.cap {
-            return Err(EntailError::Build(
-                "OWL-Direct tableau exceeded its step cap (possible non-termination)".to_owned(),
-            ));
+    fn tick(&mut self) -> Result<(), Exhausted> {
+        if self.steps >= self.cap {
+            return Err(Exhausted);
         }
+        self.steps += 1;
         Ok(())
     }
 

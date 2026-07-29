@@ -27,6 +27,16 @@
 //! regimes need inputs the plain [`materialize`] façade does not have (the query's
 //! class expressions; a parsed rule set) and are served by dedicated entry points.
 //!
+//! # The Description-Logic services
+//!
+//! [`Reasoner`] is the tableau's own surface: consistency, class satisfiability,
+//! classification, realization, instance retrieval and axiom entailment, each answering a
+//! [`Certified<T>`](Certified) whose [`DlCertificate`] says how complete the answer is.
+//! Beside it sit two services that need no reasoning at all — [`extract_module`], which
+//! computes a syntactic-locality module for a signature, and [`profile()`], which certifies
+//! an ontology against the OWL 2 profiles. See [`reasoner`] for why a tableau needs a
+//! completeness notion of its own rather than the chase's [`Completeness`].
+//!
 //! It mints **no** vocabulary IRIs: every constant in `vocab` is a standard
 //! `rdf:`/`rdfs:`/`owl:` IRI from the entailment spec itself. `D` (datatype)
 //! entailment IS materializable: this crate realizes it as Simple entailment plus the
@@ -63,6 +73,7 @@ pub(crate) mod engine;
 pub(crate) mod interner;
 pub(crate) mod lists;
 pub(crate) mod owl_dl;
+pub mod reasoner;
 pub mod report;
 pub mod rif;
 mod rif_xml;
@@ -72,6 +83,11 @@ pub(crate) mod vocab;
 
 pub use calculus::calculus_program;
 pub use owl_dl::query::{QNode, QTriple, materialize_dl, materialize_dl_reported};
+pub use reasoner::{
+    Certified, ClassHierarchy, ConservativeKeep, DlAxiom, DlCertificate, DlCompleteness,
+    ModuleExtraction, ModuleMethod, OwlProfile, ProfileCertificate, ProfileViolation, Realization,
+    Reasoner, Verdict, extract_module, profile,
+};
 pub use report::{
     Boundary, Completeness, Construct, InconsistencyWitness, ReasoningReport, WitnessTriple,
 };

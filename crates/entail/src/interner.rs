@@ -62,6 +62,20 @@ impl Interner {
             .copied()
     }
 
+    /// Every interned blank node's label, in interning order.
+    ///
+    /// Read by the DL reasoner's refutation-symbol generator, which must pick a label
+    /// prefix no data blank node begins with: a colliding label would alias a scaffolding
+    /// witness with a blank node the ontology already constrains, which is an unsoundness
+    /// rather than a cosmetic clash. Deciding freshness against the actual term table is
+    /// what turns that from a hope about naming conventions into a checked property.
+    pub(crate) fn blank_labels(&self) -> impl Iterator<Item = &str> {
+        self.values.iter().filter_map(|value| match value {
+            TermValue::Blank { label, .. } => Some(label.as_str()),
+            _ => None,
+        })
+    }
+
     /// Whether `id` may occupy a triple *subject* position (an IRI or blank node —
     /// never a literal or triple term reached by an inverse/range rule).
     pub(crate) fn is_subject(&self, id: u32) -> bool {

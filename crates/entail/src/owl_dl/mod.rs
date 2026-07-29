@@ -25,7 +25,6 @@ use purrdf_core::RdfDataset;
 
 use crate::EntailError;
 use crate::interner::Interner;
-#[cfg(test)]
 use crate::owl_dl::concept::Concept;
 use crate::owl_dl::concept::ConceptTable;
 use crate::report::Construct;
@@ -35,6 +34,23 @@ pub(crate) mod constructs;
 pub(crate) mod parser;
 pub(crate) mod query;
 pub(crate) mod tableau;
+
+/// The concept a named class IRI denotes: `⊤` for `owl:Thing`, `⊥` for `owl:Nothing`, else
+/// the atomic named class.
+///
+/// Shared by every layer that turns a class NAME into something the tableau can reason
+/// over — the query-directed materialization and each reasoner service — because reading
+/// `owl:Thing` as an opaque atomic class instead of `⊤` would make `C ⊑ owl:Thing`
+/// undecidable-looking and `owl:Nothing`'s emptiness a fact nobody stated.
+pub(crate) fn class_concept(v: &parser::Vocab, class: u32) -> Concept {
+    if class == v.thing {
+        Concept::Top
+    } else if class == v.nothing {
+        Concept::Bottom
+    } else {
+        Concept::Named(class)
+    }
+}
 
 /// A Description-Logic knowledge base: the interned TBox/RBox/ABox plus the concept
 /// table needed to reason over it.
@@ -254,7 +270,7 @@ impl Kb {
     ///
     /// [`EntailError::Build`] if the tableau exceeds its step cap.
     pub(crate) fn is_consistent(&self) -> Result<bool, EntailError> {
-        tableau::consistent(self, true, &[], &[])
+        tableau::consistent(self, &tableau::Assumptions::of_kb())
     }
 
     /// Whether `individual : concept_id` is entailed — i.e. the knowledge base with
@@ -273,12 +289,28 @@ impl Kb {
             return Err(EntailError::Unsatisfiable);
         }
         let neg = self.table.negate(concept_id);
-        let consistent = tableau::consistent(self, true, &[(individual, neg)], &[])?;
+        let consistent = tableau::consistent(
+            self,
+            &tableau::Assumptions {
+                types: &[(individual, neg)],
+                ..tableau::Assumptions::of_kb()
+            },
+        )?;
         Ok(!consistent)
     }
 
-    /// Whether `sub_id ⊑ sup_id` holds w.r.t. the TBox — i.e. `sub ⊓ ¬sup` is
-    /// unsatisfiable. Yields `⊥ ⊑ X` and reflexive `X ⊑ X`.
+    /// Whether `sub_id ⊑ sup_id` is entailed — i.e. a fresh witness in `sub ⊓ ¬sup` has no
+    /// model. Yields `⊥ ⊑ X` and reflexive `X ⊑ X`.
+    ///
+    /// # The ABox is loaded, and that is not an optimization to undo
+    ///
+    /// Subsumption is decided against the WHOLE knowledge base, assertions included,
+    /// because with nominals an assertion changes the class hierarchy: `Only ≡ {alice}`
+    /// together with `alice : Female` entails `Only ⊑ Female`, and a TBox-only test — which
+    /// this used to be — cannot see it. Reasoning over the TBox alone is cheaper and
+    /// answers a different question, and the query-directed materialization that consumes
+    /// this is claiming to hold every entailed ground atom over the query's vocabulary, so
+    /// the different question is the wrong one.
     ///
     /// # Errors
     ///
@@ -289,7 +321,13 @@ impl Kb {
             return Err(EntailError::Unsatisfiable);
         }
         let neg_sup = self.table.negate(sup_id);
-        let consistent = tableau::consistent(self, false, &[], &[sub_id, neg_sup])?;
+        let consistent = tableau::consistent(
+            self,
+            &tableau::Assumptions {
+                fresh_types: &[sub_id, neg_sup],
+                ..tableau::Assumptions::of_kb()
+            },
+        )?;
         Ok(!consistent)
     }
 

@@ -141,8 +141,9 @@ impl Completeness {
 /// Variants are declared in the order a report lists them: the three the CHASE observes
 /// first (the input held the construct, or a conclusion was actually abandoned because of
 /// it), then the two that are INHERENT to a chase lane and hold for every input, then the
-/// six the OWL-Direct reverse mapping raises when an axiom it cannot fully handle is read.
-/// The derived [`Ord`] follows that declaration order.
+/// six the OWL-Direct reverse mapping raises when an axiom it cannot fully handle is read,
+/// and last the one the OWL-Direct QUERY layer raises — about the shape of the question
+/// rather than about the ontology. The derived [`Ord`] follows that declaration order.
 ///
 /// # The OWL-Direct block exists so an axiom is never SILENTLY dropped
 ///
@@ -183,11 +184,14 @@ pub enum Construct {
     /// A term of the reserved `owl:`/`rdf:`/`rdfs:` vocabulary the reverse mapping does not
     /// recognize.
     UnrecognizedTerm,
+    /// A NON-DISTINGUISHED variable in a query basic graph pattern — a blank node the
+    /// `OWL-Direct` layer was handed that is not part of a class expression.
+    NonDistinguishedVariable,
 }
 
 impl Construct {
     /// Every construct, in declaration order — the order a report lists boundaries in.
-    pub(crate) const ALL: [Self; 12] = [
+    pub(crate) const ALL: [Self; 13] = [
         Self::NamedGraph,
         Self::TripleTerm,
         Self::GeneralizedRdf,
@@ -200,6 +204,7 @@ impl Construct {
         Self::BuiltinRole,
         Self::OntologyImport,
         Self::UnrecognizedTerm,
+        Self::NonDistinguishedVariable,
     ];
 
     /// A short, stable name for the construct.
@@ -218,6 +223,7 @@ impl Construct {
             Self::BuiltinRole => "builtin-role",
             Self::OntologyImport => "ontology-import",
             Self::UnrecognizedTerm => "unrecognized-term",
+            Self::NonDistinguishedVariable => "non-distinguished-variable",
         }
     }
 
@@ -372,6 +378,20 @@ impl Construct {
                  therefore neither read nor discarded in silence: it raises this boundary, \
                  which is also what a mistyped or newer-than-this-release OWL term looks \
                  like from inside"
+            }
+            Self::NonDistinguishedVariable => {
+                "SPARQL reads a blank node in a query as an EXISTENTIAL variable, and the \
+                 OWL-Direct layer answers a basic graph pattern by injecting the entailed \
+                 GROUND atoms over the query's vocabulary and letting simple entailment \
+                 join them. That decomposition is exact for a substitution into the scoping \
+                 graph — `KB ⊨ (t₁ ∧ … ∧ tₙ)σ` iff `KB ⊨ tᵢσ` for each i, because each \
+                 conjunct is then ground — and it does NOT hold for a non-distinguished \
+                 variable: an open-world model may satisfy `∃x. A(x) ∧ B(x)` through an \
+                 ANONYMOUS element, and no finite augmentation can name one. This is a \
+                 property of the problem rather than a shortfall of the construction, so \
+                 the run reports the residue instead of claiming to have closed it. A query \
+                 blank node that IS the scaffold of a class expression is not this: it is \
+                 ground syntax the reverse mapping reads, and it raises nothing"
             }
         }
     }
@@ -917,7 +937,8 @@ fn boundaries(ds: &RdfDataset, regime: Regime, stats: &RunStats) -> Vec<Boundary
             | Construct::DataRange
             | Construct::BuiltinRole
             | Construct::OntologyImport
-            | Construct::UnrecognizedTerm => false,
+            | Construct::UnrecognizedTerm
+            | Construct::NonDistinguishedVariable => false,
         })
         .map(Boundary::of)
         .collect()
