@@ -95,7 +95,12 @@ Where the numbers stop:
 - **A complete rule table is not a complete closure.** `OWL-RL` fires all 78
   rules, and a run that met a boundary still reports
   `Completeness::ExactWithinBoundaries` rather than `Exact`. The two claims are
-  reported separately on purpose.
+  reported separately on purpose. Nor is a complete rule table entailment
+  conformance: on W3C's own OWL 2 RL entailment tests the chase reaches 10 of
+  27 published positive entailments and correctly withholds on 23 of 23
+  negative ones (see [Conformance](#conformance) below). 78 / 78 says every
+  rule of Tables 4–9 is implemented — and one W3C-published entailment is
+  reachable by a sound rule that simply is not in those tables.
 - **Seventeen OWL 2 RL rules conclude `false`.** "Implemented" for those means
   *decided*: a body match becomes `EntailError::Inconsistent` carrying a witness
   that names the rule and the asserted triples that satisfied it. That is the
@@ -207,13 +212,49 @@ Two corpora measure two different things, and the distinction matters:
   SPARQL conformance harness.
 - **W3C OWL 2 test suite — 256 of 261 cases agree, 5 ledgered**, zero
   unledgered. This corpus is *consistency*-shaped: all 261 vendored cases are
-  `otest:ConsistencyTest` (226) or `otest:InconsistencyTest` (35), because the
-  upstream material contains no entailment tests. It therefore grades the
-  DL/tableau lane's satisfiability verdicts and says nothing about the OWL 2 RL
-  rule table, which is a forward chase covered by authored per-rule fixtures.
-  Every one of the 5 divergences is named in a typed ledger; an unledgered
-  divergence, and a ledgered case that has started agreeing, are both hard
-  failures.
+  `otest:ConsistencyTest` (226) or `otest:InconsistencyTest` (35). It therefore
+  grades the DL/tableau lane's satisfiability verdicts and says nothing about
+  the OWL 2 RL rule table. Every one of the 5 divergences is named in a typed
+  ledger; an unledgered divergence, and a ledgered case that has started
+  agreeing, are both hard failures.
+
+  Two things this row does **not** say. First, the upstream material is not
+  free of entailment tests — the W3C manifest holds **206 positive and 23
+  negative entailment tests**; this corpus lacks them because the flattening it
+  was taken from extracted the premise literal and discarded the conclusion
+  literal, which is exactly the half an entailment grade needs. They are
+  vendored and graded by the next bullet. Second, the corpus is a **subset**:
+  261 of the 482 consistency-shaped cases upstream. Of the 221 it leaves out,
+  **156 the tableau decides today** (93 consistent, 63 inconsistent), 30 do not
+  terminate under a 40 s ceiling, 12 are withheld (7 reasoner, 5 parse), and 23
+  carry no RDF/XML premise — so the exclusion was payload triage, not a
+  capability limit, and "256 of 261" is a number over a corpus rather than over
+  what W3C published. The harness measures and prints all of it on every run.
+- **W3C OWL 2 RL entailment tests — 33 of 50 cases agree, 17 ledgered**, zero
+  unledgered. This is the independent oracle for the rule table: W3C's own
+  entailment tests, forward-materialized under `Regime::OwlRl` and checked for
+  whether the published conclusion maps into the closure. The two lanes prove
+  different things and are reported separately.
+
+  **The negative lane is 23 of 23: no unsoundness.** The chase never derived a
+  triple W3C publishes as *not* entailed. That is the safety result, and it
+  holds over *all* 23 negative cases — soundness is owed on every case, so none
+  were filtered by profile.
+
+  The positive lane is **10 of 27** — the 27 positive entailments W3C itself
+  places inside the RL profile under RDF-Based semantics. 16 of the 17
+  divergences are structural limits of OWL 2 RL rather than of this
+  implementation: every head in Profiles §4.3 Tables 4–9 is an assertional
+  triple over named terms or `false`, so no conforming RL rule set derives a
+  schema axiom (8 `schema-conclusion`) or a negative fact (6
+  `negative-conclusion`), and the profile states no rule at all for constructs
+  outside its syntax (1 `construct-outside-rl`); one more premise is incomplete
+  as exported (1 `imports-unresolved`). **Exactly one is actionable** (1
+  `missing-rule`): `a owl:differentFrom b` entails `b owl:differentFrom a`,
+  which is sound and shaped exactly like `prp-symp`, yet is not among the 78
+  rules — Table 4's `owl:differentFrom` rules only ever conclude `false`.
+  Closing it means adding a rule *beyond* the normative table, so it is counted
+  apart from the profile's structural limits rather than buried among them.
 
 The live scoreboard is
 [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md).

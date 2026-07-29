@@ -287,9 +287,15 @@ def _suite_entailment() -> SuiteResult:
     This row is CONSISTENCY-shaped and says so: all 261 vendored cases are
     `otest:ConsistencyTest` / `otest:InconsistencyTest`, so it measures the
     DL/tableau lane's satisfiability verdicts. It does NOT measure the OWL 2 RL
-    rule table (a forward-materialization chase, covered by authored per-rule
-    fixtures in `purrdf-entail`). Entailment used to fold silently into the
+    rule table; that lane has its own row (`_suite_entailment_rl`), graded
+    against W3C's own entailment tests. Entailment used to fold silently into the
     SPARQL row, where a regression in it was invisible.
+
+    The corpus is also a SUBSET of what W3C published — 261 of the 482
+    consistency-shaped upstream cases — so the harness emits a second line,
+    `OWL2-DL-EXCLUDED`, tallying what the other 221 would do. It is scraped into
+    this row's note so the pass count is never read as the whole upstream
+    material: most of the exclusions are cases the tableau decides today.
     """
     cmd = [
         "cargo", "test", "-p", "purrdf-sparql-conformance", "--locked",
@@ -305,6 +311,31 @@ def _suite_entailment() -> SuiteResult:
     if m:
         agreed, ledgered, unledgered, stale, total = (int(m.group(i)) for i in range(1, 6))
         detail = f"{agreed}/{total} DL consistency verdicts · {ledgered} ledgered"
+        excluded = re.search(
+            r"OWL2-DL-EXCLUDED: total (\d+) non-terminating (\d+) decides (\d+) "
+            r"withholds (\d+) no-premise (\d+)",
+            out,
+        )
+        if excluded:
+            ex_total, non_term, decides, withholds, no_premise = (
+                int(excluded.group(i)) for i in range(1, 6)
+            )
+            detail = _augment(
+                detail,
+                f"corpus is a subset: {ex_total} more consistency-shaped cases "
+                f"upstream are NOT vendored ({decides} the tableau decides today, "
+                f"{non_term} non-terminating, {withholds} withheld, "
+                f"{no_premise} with no RDF/XML premise)",
+            )
+        else:
+            # The exclusion line is part of this harness's contract; losing it
+            # would silently restore "256 of 261" as an unqualified headline.
+            detail = _augment(detail, "NO OWL2-DL-EXCLUDED LINE: the exclusion tally went missing")
+            return SuiteResult(
+                "Entailment (OWL 2 DL consistency)", "W3C OWL 2 test suite",
+                passed=agreed, xskip=ledgered, failed=unledgered + stale,
+                detail=detail, ok=False, log=out,
+            )
         return SuiteResult(
             "Entailment (OWL 2 DL consistency)", "W3C OWL 2 test suite",
             passed=agreed, xskip=ledgered, failed=unledgered + stale,
@@ -314,6 +345,61 @@ def _suite_entailment() -> SuiteResult:
         )
     return _suite_cargo(
         "Entailment (OWL 2 DL consistency)", "W3C OWL 2 test suite", cmd
+    )
+
+
+def _suite_entailment_rl() -> SuiteResult:
+    """W3C's own OWL 2 **entailment** tests, graded through the OWL 2 RL chase.
+
+    The independent oracle for the RL rule table. Until it existed, the table was
+    scored only by fixtures authored alongside the rules themselves, and the
+    `OWL-RL 78 / 78` rule-table headline stood in for entailment conformance.
+    They are different claims: this row measures the second one.
+
+    `Pass` is the agreeing verdicts across both lanes (positive: the closure
+    contains the published conclusion; negative: it does not), and `XFail/Skip`
+    is the typed divergence ledger in
+    `crates/sparql-conformance/src/owl2_rl.rs::LEDGER`. The scoreboard's
+    `actionable` count — divergences naming a sound rule of RL's own shape, as
+    opposed to a structural limit of the profile — is carried into the note so
+    the ledger's size is never mistaken for a defect count.
+    """
+    cmd = [
+        "cargo", "test", "-p", "purrdf-sparql-conformance", "--locked",
+        "--test", "owl2_rl_conformance", "--", "--nocapture",
+    ]
+    rc, out = _run(cmd, _REPO_ROOT)
+    _, _, cargo_failed = _cargo_tally(out)
+    name = "Entailment (OWL 2 RL, W3C entailment tests)"
+    source = "W3C OWL 2 entailment tests"
+    m = re.search(
+        r"OWL2-RL-ENTAILMENT: agreed (\d+) ledgered (\d+) unledgered (\d+) "
+        r"stale (\d+) total (\d+) actionable (\d+)",
+        out,
+    )
+    if not m:
+        return _suite_cargo(name, source, cmd)
+    agreed, ledgered, unledgered, stale, total, actionable = (
+        int(m.group(i)) for i in range(1, 7)
+    )
+    detail = f"{agreed}/{total} agreeing · {ledgered} ledgered · {actionable} actionable"
+    split = re.search(
+        r"\[w3c-owl2-rl\] (\d+) positive \+ (\d+) negative entailment cases", out
+    )
+    if split:
+        # The corpus composition only — NOT a per-lane agreement split, which
+        # this line does not report and which is therefore not invented here.
+        # The lane split is derived from the LEDGER and the census, and gated,
+        # in scripts/check-doc-claims.py.
+        detail = _augment(
+            detail, f"corpus: {split.group(1)} positive + {split.group(2)} negative"
+        )
+    return SuiteResult(
+        name, source,
+        passed=agreed, xskip=ledgered, failed=unledgered + stale,
+        detail=detail,
+        ok=(rc == 0 and cargo_failed == 0 and unledgered == 0 and stale == 0),
+        log=out,
     )
 
 
@@ -471,6 +557,7 @@ def native_suites() -> list[SuiteResult]:
         _suite_codec(),
         _suite_sparql(),
         _suite_entailment(),
+        _suite_entailment_rl(),
         _suite_shacl_w3c(),
         _suite_shapes_corpus(),
         _suite_shacl_rules(),
@@ -630,7 +717,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.write_doc and args.no_python:
-        # The committed doc block reflects the full 12-row matrix (10 native Rust
+        # The committed doc block reflects the full 13-row matrix (11 native Rust
         # suites + the 2 Python gates); a native-only run cannot reproduce it.
         parser.error("--write-doc requires the full suite (do not pass --no-python)")
 

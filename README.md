@@ -83,9 +83,12 @@ but it assumes nothing about your ontology or application.
   syntax, 14/14 negative structure. See [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md).
 - **Entailment** — Simple/RDF/RDFS/OWL-RL/D forward materialization over a
   deterministic semi-naive fixpoint (**all 78 OWL 2 RL rules** of OWL 2 Profiles
-  §4.3 Tables 4–9; 14 of the 18 RDF + RDFS patterns, the four residuals being
-  those that conclude about a fresh blank node), an open-world OWL-Direct ALCOIQ
-  tableau, and RIF-Core rules. **Every closure comes back with a reasoning
+  §4.3 Tables 4–9 — *rule-table coverage*, which is not the same claim as
+  entailment conformance: on W3C's own OWL 2 RL entailment tests the chase
+  scores **10 of 27 positive and 23 of 23 negative**, the latter meaning no
+  unsoundness was found; 14 of the 18 RDF + RDFS patterns, the four residuals
+  being those that conclude about a fresh blank node), an open-world OWL-Direct
+  ALCOIQ tableau, and RIF-Core rules. **Every closure comes back with a reasoning
   report** naming what fired, what did not, the boundaries met, the budget
   consumed, and the contract hash of the calculus that ran — so an incomplete
   answer can never be delivered as a complete one. Per-rule inventory:
@@ -280,6 +283,7 @@ full scoreboard and how-to-run in [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md)
 | SPARQL 1.1 | W3C suite via `purrdf-sparql-conformance` | green, xfail-ledgered |
 | Entailment (SPARQL regimes) | W3C sparql11 `entailment/` group | **70 / 70**, 0 ledgered |
 | Entailment (OWL 2 DL consistency) | vendored W3C OWL 2 suite | **256 / 261** agreeing, 5 ledgered, 0 unledgered |
+| Entailment (OWL 2 RL, W3C entailment tests) | vendored W3C OWL 2 entailment suite | **33 / 50** agreeing, 17 ledgered, 0 unledgered — negative lane **23 / 23** (no unsoundness), positive lane **10 / 27** |
 | RDFC-1.0 | W3C canonicalization fixtures | green |
 | GTS | frozen cross-language vectors (`vectors/`) | byte-exact |
 

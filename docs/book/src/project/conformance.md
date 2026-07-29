@@ -40,7 +40,7 @@ committed block is stale).
 | SPARQL 1.1/1.2 | full W3C sparql11 + sparql12 + entailment suites |
 | SHACL | W3C data-shapes + DASH SHACL-AF/rules + a first-party frozen corpus |
 | ShEx 2.1 | shexTest v2.1.0 (validation, schemas, negative syntax/structure) |
-| Entailment | the W3C SPARQL entailment-regime cases (via the SPARQL harness) plus the vendored W3C OWL 2 suite (DL consistency, ledgered) |
+| Entailment | the W3C SPARQL entailment-regime cases (via the SPARQL harness), the vendored W3C OWL 2 suite (DL consistency, ledgered), and W3C's own OWL 2 RL entailment tests (the independent oracle for the rule table, ledgered) |
 | GTS | frozen cross-language vectors, byte-exact |
 | rdflib drop-in | rdflib 7.6's own vendored tests + first-party parity |
 
@@ -49,7 +49,12 @@ attempted shexTest validation cases, 126/126 W3C SHACL, 250/250 codec
 round-trips, 70/70 W3C SPARQL entailment-regime cases, and 256/261 agreeing
 verdicts on the vendored W3C OWL 2 DL-consistency corpus — with the remaining
 non-passes strictly ledgered (five SPARQL fixtures with upstream-errata
-non-canonical XSD lexicals; 5 typed OWL 2 divergences). Always read the current
+non-canonical XSD lexicals; 5 typed OWL 2 divergences). Two of those numbers
+need their scope stated: the OWL 2 DL corpus is a *subset*, 261 of the 482
+consistency-shaped cases W3C published, and rule-table coverage is not
+entailment conformance — on W3C's own OWL 2 RL entailment tests the chase
+scores 33/50, being 10 of 27 positive and 23 of 23 negative, the latter meaning
+no unsoundness was found. Always read the current
 numbers from
 [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md)
 rather than this snapshot.

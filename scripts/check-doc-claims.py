@@ -49,8 +49,17 @@ _README = _REPO / "README.md"
 _RELEASE = _REPO / "docs" / "RELEASE.md"
 _RELEASE_CRATES = _REPO / "scripts" / "release-crates.sh"
 
+_INTRODUCTION = _REPO / "docs" / "book" / "src" / "introduction.md"
+_RL_SUITE = _REPO / "crates" / "sparql-conformance" / "entailment-suite" / "w3c-owl2-rl"
+_CENSUS = _RL_SUITE / "census.tsv"
+_RL_LEDGER = _REPO / "crates" / "sparql-conformance" / "src" / "owl2_rl.rs"
+
 _MATRIX_BEGIN = "<!-- BEGIN GENERATED: conformance-matrix -->"
 _MATRIX_END = "<!-- END GENERATED: conformance-matrix -->"
+
+# The matrix row name emitted by scripts/conformance-matrix.py for the OWL 2 RL
+# entailment lane. Kept as a constant because several claims key off it.
+_RL_SUITE_ROW = "Entailment (OWL 2 RL, W3C entailment tests)"
 
 
 def _read(path: Path) -> str:
@@ -132,7 +141,171 @@ def load_matrix() -> dict[str, tuple[int, int]]:
 
 
 # ---------------------------------------------------------------------------
-# Source 3 — the release crate set
+# Source 3 — the frozen upstream OWL 2 census
+# ---------------------------------------------------------------------------
+
+
+def load_census() -> list[dict[str, str]]:
+    """Every upstream ``otest:TestCase``, one row each, from ``census.tsv``.
+
+    The census is *derived* from the W3C manifest
+    (<https://www.w3.org/2009/11/owl-test/all.rdf>), byte-frozen by
+    ``scripts/check-corpus-frozen.py``, and cross-checked against both vendored
+    corpora's directory listings by
+    ``owl2_rl_conformance.rs::census_accounts_for_every_upstream_case`` — so a
+    row cannot claim a case is graded while the payload is absent, nor the
+    reverse. That makes it a legitimate generated source for every count the
+    prose makes about *what W3C published* as opposed to what PurRDF scored.
+    """
+    lines = _read(_CENSUS).splitlines()
+    header = lines[0].split("\t")
+    rows = [dict(zip(header, line.split("\t"), strict=True)) for line in lines[1:] if line]
+    if not rows:
+        raise SystemExit(f"check-doc-claims: no rows in {_CENSUS.relative_to(_REPO)}")
+    return rows
+
+
+def census_counts() -> dict[str, int]:
+    """The upstream tallies the documentation restates, all from the census."""
+    rows = load_census()
+    types: dict[str, int] = {}
+    for row in rows:
+        for kind in row["otest_types"].split(";"):
+            types[kind] = types.get(kind, 0) + 1
+    probe: dict[str, int] = {}
+    for row in rows:
+        probe[row["dl_probe"]] = probe.get(row["dl_probe"], 0) + 1
+    rl: dict[str, int] = {}
+    for row in rows:
+        rl[row["rl_corpus"]] = rl.get(row["rl_corpus"], 0) + 1
+
+    consistency_shaped = types.get("ConsistencyTest", 0) + types.get(
+        "InconsistencyTest", 0
+    )
+    dl_graded = sum(1 for r in rows if r["dl_corpus"] == "graded")
+    decides = probe.get("decides-consistent", 0) + probe.get("decides-inconsistent", 0)
+    withholds = probe.get("withholds-reasoner", 0) + probe.get("withholds-parse", 0)
+    return {
+        "upstream_cases": len(rows),
+        "positive_entailment": types.get("PositiveEntailmentTest", 0),
+        "negative_entailment": types.get("NegativeEntailmentTest", 0),
+        "consistency_shaped": consistency_shaped,
+        "dl_graded": dl_graded,
+        "dl_excluded": consistency_shaped - dl_graded,
+        "dl_decides": decides,
+        "dl_decides_consistent": probe.get("decides-consistent", 0),
+        "dl_decides_inconsistent": probe.get("decides-inconsistent", 0),
+        "dl_non_terminating": probe.get("non-terminating", 0),
+        "dl_withholds": withholds,
+        "dl_withholds_reasoner": probe.get("withholds-reasoner", 0),
+        "dl_withholds_parse": probe.get("withholds-parse", 0),
+        "dl_no_premise": probe.get("no-rdfxml-premise", 0),
+        "rl_positive": rl.get("graded-positive", 0),
+        "rl_negative": rl.get("graded-negative", 0),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Source 4 — the OWL 2 RL divergence ledger
+# ---------------------------------------------------------------------------
+
+# `RlGap` variant -> (census token it must be a divergence of, actionable?).
+# Mirrors `RlGap::is_actionable` in crates/sparql-conformance/src/owl2_rl.rs;
+# a variant added there without a row here is a hard failure below, so the two
+# cannot drift apart silently.
+_RL_GAP_ACTIONABLE: dict[str, bool] = {
+    "MissingRule": True,
+    "UnsoundDerivation": True,
+    "SchemaConclusion": False,
+    "NegativeConclusion": False,
+    "ConstructOutsideRl": False,
+    "ImportsUnresolved": False,
+    "Refused": False,
+}
+
+
+def load_rl_ledger() -> list[tuple[str, str]]:
+    """``(case, RlGap variant)`` for every entry of ``owl2_rl::LEDGER``.
+
+    The harness asserts ``unledgered == 0`` and ``stale == 0``, so this table is
+    *exactly* the set of vendored entailment cases whose verdict diverges from
+    W3C's. That is what lets the per-lane split below be derived rather than
+    asserted.
+    """
+    text = _read(_RL_LEDGER)
+    body = re.search(
+        r"pub const LEDGER: &\[LedgerEntry\] = &\[(.*?)\n\];", text, re.DOTALL
+    )
+    if not body:
+        raise SystemExit(
+            f"check-doc-claims: no `LEDGER` table in {_RL_LEDGER.relative_to(_REPO)}"
+        )
+    entries = re.findall(
+        r"case:\s*\"([^\"]+)\",\s*\n?\s*gap:\s*RlGap::(\w+)", body.group(1)
+    )
+    if not entries:
+        raise SystemExit(
+            f"check-doc-claims: could not parse any LEDGER entry out of "
+            f"{_RL_LEDGER.relative_to(_REPO)}"
+        )
+    return entries
+
+
+def rl_lane_counts() -> dict[str, int]:
+    """Per-lane agreement and the typed-gap tally, derived from ledger × census.
+
+    Every divergence is a ledger entry and every ledger entry is a divergence
+    (the harness fails otherwise), and the census says which lane each case is
+    in — so ``agreeing = graded - ledgered`` per lane is a derivation from two
+    gate-verified artifacts, not an assumption that the negative lane is clean.
+    """
+    ledger = load_rl_ledger()
+    lane = {r["case"]: r["rl_corpus"] for r in load_census()}
+    counts = census_counts()
+
+    unknown = sorted({gap for _, gap in ledger} - set(_RL_GAP_ACTIONABLE))
+    if unknown:
+        raise SystemExit(
+            f"check-doc-claims: LEDGER uses RlGap variant(s) {unknown} that "
+            f"scripts/check-doc-claims.py does not classify; add them to "
+            f"_RL_GAP_ACTIONABLE (mirroring RlGap::is_actionable)"
+        )
+
+    gaps: dict[str, int] = {}
+    ledgered_positive = ledgered_negative = 0
+    for case, gap in ledger:
+        gaps[gap] = gaps.get(gap, 0) + 1
+        where = lane.get(case)
+        if where == "graded-positive":
+            ledgered_positive += 1
+        elif where == "graded-negative":
+            ledgered_negative += 1
+        else:
+            raise SystemExit(
+                f"check-doc-claims: LEDGER names {case!r}, which the census "
+                f"records as {where!r} rather than a graded entailment case"
+            )
+
+    positive_agree = counts["rl_positive"] - ledgered_positive
+    negative_agree = counts["rl_negative"] - ledgered_negative
+    return {
+        "positive_total": counts["rl_positive"],
+        "negative_total": counts["rl_negative"],
+        "positive_agree": positive_agree,
+        "negative_agree": negative_agree,
+        "ledgered": len(ledger),
+        "actionable": sum(n for g, n in gaps.items() if _RL_GAP_ACTIONABLE[g]),
+        "structural": sum(n for g, n in gaps.items() if not _RL_GAP_ACTIONABLE[g]),
+        "missing_rule": gaps.get("MissingRule", 0),
+        "schema_conclusion": gaps.get("SchemaConclusion", 0),
+        "negative_conclusion": gaps.get("NegativeConclusion", 0),
+        "construct_outside_rl": gaps.get("ConstructOutsideRl", 0),
+        "imports_unresolved": gaps.get("ImportsUnresolved", 0),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Source 5 — the release crate set
 # ---------------------------------------------------------------------------
 
 
@@ -168,6 +341,17 @@ class Claim:
         text = _read(self.path)
         matches = list(re.finditer(self.pattern, text))
         rel = self.path.relative_to(_REPO)
+        # A capture group with no expected value is a number that LOOKS gated
+        # and is not — the precise failure mode this whole script exists to
+        # prevent. An expected key with no group is a claim checking nothing.
+        groups = set(re.compile(self.pattern).groupindex)
+        if groups != set(self.expected):
+            self.failures.append(
+                f"{rel}: {self.what} — the pattern captures {sorted(groups)} but "
+                f"expects {sorted(self.expected)}; every captured number must "
+                f"have a measured value and vice versa"
+            )
+            return False
         if len(matches) != 1:
             self.failures.append(
                 f"{rel}: {self.what} — expected exactly one match for the "
@@ -258,8 +442,62 @@ def release_crate_list_claim(crates: list[str]) -> list[str]:
     return []
 
 
+def _flow(pattern: str) -> str:
+    """Make a claim pattern independent of how the prose happens to be wrapped.
+
+    Every literal space becomes ``\\s+``, so re-flowing a paragraph (which a
+    documentation edit does constantly) does not silently drop a claim from this
+    gate by making its pattern unmatchable. The numbers stay exact; only the
+    whitespace between them is elastic. Use ``ANY`` for a gap that spans
+    sentences, since ``.`` does not cross a newline without ``re.DOTALL``.
+    """
+    return pattern.replace(" ", r"\s+")
+
+
+# A run of arbitrary text, newlines included, between two anchored fragments.
+ANY = r"[\s\S]*?"
+
+
+def rl_matrix_agreement_claim(
+    matrix: dict[str, tuple[int, int]], lanes: dict[str, int]
+) -> list[str]:
+    """The RL row of the generated matrix must equal the ledger×census derivation.
+
+    Two independent artifacts measure the same run: the matrix block (scraped
+    from the harness's `OWL2-RL-ENTAILMENT` scoreboard line) and the LEDGER
+    cross-referenced against the census. If they disagree, one of them is stale
+    and every per-lane number in the prose below is unsourced — so this is
+    checked before any of those claims are.
+    """
+    row = matrix.get(_RL_SUITE_ROW)
+    if row is None:
+        return [
+            f"docs/CONFORMANCE.md: the generated matrix block has no "
+            f"{_RL_SUITE_ROW!r} row; regenerate with "
+            f"`python3 scripts/conformance-matrix.py --write-doc`"
+        ]
+    passed, ledgered = row
+    derived_pass = lanes["positive_agree"] + lanes["negative_agree"]
+    problems: list[str] = []
+    if passed != derived_pass:
+        problems.append(
+            f"the matrix block's {_RL_SUITE_ROW!r} row reports {passed} passing, "
+            f"but LEDGER × census.tsv derive {derived_pass} "
+            f"({lanes['positive_agree']} positive + {lanes['negative_agree']} negative)"
+        )
+    if ledgered != lanes["ledgered"]:
+        problems.append(
+            f"the matrix block's {_RL_SUITE_ROW!r} row reports {ledgered} ledgered, "
+            f"but owl2_rl.rs::LEDGER holds {lanes['ledgered']} entries"
+        )
+    return problems
+
+
 def build_claims(
-    inventory: dict[str, tuple[int, int]], matrix: dict[str, tuple[int, int]]
+    inventory: dict[str, tuple[int, int]],
+    matrix: dict[str, tuple[int, int]],
+    census: dict[str, int],
+    lanes: dict[str, int],
 ) -> list[Claim]:
     owl2_pass, owl2_ledger = matrix["Entailment (OWL 2 DL consistency)"]
     owl2_total = owl2_pass + owl2_ledger
@@ -271,10 +509,372 @@ def build_claims(
     rdflib_pass, rdflib_x = matrix["rdflib LSP drop-in gate"]
     compat_pass, compat_x = matrix["purrdf.compat parity"]
 
+    rl_pass, rl_ledger = matrix[_RL_SUITE_ROW]
+    rl_total = rl_pass + rl_ledger
+
     inv = "docs/book/src/entailment-rules.md, generated from rules()/implemented()"
     mat = "the generated conformance-matrix block in docs/CONFORMANCE.md"
+    cen = (
+        "crates/sparql-conformance/entailment-suite/w3c-owl2-rl/census.tsv, derived "
+        "from the W3C manifest and byte-frozen"
+    )
+    led = (
+        "crates/sparql-conformance/src/owl2_rl.rs::LEDGER cross-referenced against "
+        "census.tsv (the harness asserts 0 unledgered and 0 stale)"
+    )
 
-    return [
+    # Every prose site that states the RL lane split, in the exact words it uses.
+    # Sourced from `led`: the split is derived, not scraped, because the
+    # scoreboard line reports only the combined agreement count.
+    lane_sites: list[tuple[str, Path, str]] = [
+        (
+            "the OWL 2 RL lane split in the CONFORMANCE scoreboard row",
+            _CONFORMANCE,
+            _flow(r"Negative lane \*\*(?P<neg_a>\d+) / (?P<neg_t>\d+)\*\*")
+            + ANY
+            + _flow(r"Positive lane \*\*(?P<pos_a>\d+) / (?P<pos_t>\d+)\*\*"),
+        ),
+        (
+            "the OWL 2 RL lane split in the CONFORMANCE rule-table row",
+            _CONFORMANCE,
+            _flow(
+                r"entailment tests score (?P<pos_a>\d+) of (?P<pos_t>\d+) positive "
+                r"and (?P<neg_a>\d+) of (?P<neg_t>\d+) negative"
+            ),
+        ),
+        (
+            "the OWL 2 RL lane split in the CONFORMANCE known-gaps item",
+            _CONFORMANCE,
+            _flow(r"negative lane is (?P<neg_a>\d+) / (?P<neg_t>\d+): no unsoundness")
+            + ANY
+            + _flow(r"positive lane is \*\*(?P<pos_a>\d+) of (?P<pos_t>\d+)\*\*"),
+        ),
+        (
+            "the OWL 2 RL lane split in the entailment chapter's rule-table bullet",
+            _ENTAILMENT,
+            _flow(
+                r"reaches (?P<pos_a>\d+) of (?P<pos_t>\d+) published positive "
+                r"entailments and correctly withholds on (?P<neg_a>\d+) of "
+                r"(?P<neg_t>\d+) negative ones"
+            ),
+        ),
+        (
+            "the OWL 2 RL lane split in the entailment chapter's conformance bullet",
+            _ENTAILMENT,
+            _flow(
+                r"negative lane is (?P<neg_a>\d+) of (?P<neg_t>\d+): no unsoundness\.\*\*"
+            )
+            + ANY
+            + _flow(r"positive lane is \*\*(?P<pos_a>\d+) of (?P<pos_t>\d+)\*\*"),
+        ),
+        (
+            "the OWL 2 RL lane split in the README feature bullet",
+            _README,
+            _flow(
+                r"scores \*\*(?P<pos_a>\d+) of (?P<pos_t>\d+) positive and "
+                r"(?P<neg_a>\d+) of (?P<neg_t>\d+) negative\*\*"
+            ),
+        ),
+        (
+            "the OWL 2 RL lane split in the README conformance table",
+            _README,
+            _flow(
+                r"negative lane \*\*(?P<neg_a>\d+) / (?P<neg_t>\d+)\*\* "
+                r"\(no unsoundness\), positive lane "
+                r"\*\*(?P<pos_a>\d+) / (?P<pos_t>\d+)\*\*"
+            ),
+        ),
+        (
+            "the OWL 2 RL lane split in the book's introduction",
+            _INTRODUCTION,
+            _flow(
+                r"tests score (?P<pos_a>\d+) of (?P<pos_t>\d+) positive and "
+                r"(?P<neg_a>\d+) of (?P<neg_t>\d+) negative"
+            ),
+        ),
+        (
+            "the OWL 2 RL lane split in the book's conformance chapter",
+            _BOOK_CONFORMANCE,
+            _flow(
+                r"being (?P<pos_a>\d+) of (?P<pos_t>\d+) positive and (?P<neg_a>\d+) "
+                r"of (?P<neg_t>\d+) negative"
+            ),
+        ),
+    ]
+    lane_expected = {
+        "pos_a": lanes["positive_agree"],
+        "pos_t": lanes["positive_total"],
+        "neg_a": lanes["negative_agree"],
+        "neg_t": lanes["negative_total"],
+    }
+
+    # Every prose site that states the DL corpus's subset/exclusion tallies.
+    exclusion_sites: list[tuple[str, Path, str]] = [
+        (
+            "the DL subset/exclusion tally in the CONFORMANCE scoreboard row",
+            _CONFORMANCE,
+            r"(?P<graded>\d+) of the (?P<shaped>\d+) consistency-shaped cases upstream — "
+            r"and of the (?P<excluded>\d+) it leaves out, \*\*(?P<decides>\d+) the tableau "
+            r"decides today\*\* \((?P<dc>\d+) consistent \+ (?P<di>\d+) inconsistent\), "
+            r"(?P<nonterm>\d+) do not terminate under a 40 s ceiling, (?P<withheld>\d+) are "
+            r"withheld \((?P<wr>\d+) reasoner, (?P<wp>\d+) parse\) and (?P<nopremise>\d+) "
+            r"carry no RDF/XML premise",
+        ),
+        (
+            "the DL subset/exclusion tally in the CONFORMANCE known-gaps item",
+            _CONFORMANCE,
+            _flow(
+                r"vendors (?P<graded>\d+) of the \*\*(?P<shaped>\d+)\*\* "
+                r"consistency-shaped cases upstream"
+            )
+            + ANY
+            + _flow(
+                r"reports what the other \*\*(?P<excluded>\d+)\*\* do — "
+                r"\*\*(?P<decides>\d+) the tableau decides today\*\* "
+                r"\((?P<dc>\d+) consistent, (?P<di>\d+) inconsistent\), "
+                r"(?P<nonterm>\d+) that do not terminate under a 40 s ceiling"
+            )
+            + ANY
+            + _flow(
+                r"(?P<withheld>\d+) withheld \((?P<wr>\d+) reasoner, "
+                r"(?P<wp>\d+) parse\), and (?P<nopremise>\d+) with no RDF/XML premise"
+            ),
+        ),
+        (
+            "the DL subset/exclusion tally in the entailment chapter",
+            _ENTAILMENT,
+            _flow(
+                r"(?P<graded>\d+) of the (?P<shaped>\d+) consistency-shaped cases "
+                r"upstream\. Of the (?P<excluded>\d+) it leaves out, "
+                r"\*\*(?P<decides>\d+) the tableau decides today\*\* "
+                r"\((?P<dc>\d+) consistent, (?P<di>\d+) inconsistent\), "
+                r"(?P<nonterm>\d+) do not terminate under a 40 s ceiling, "
+                r"(?P<withheld>\d+) are withheld \((?P<wr>\d+) reasoner, "
+                r"(?P<wp>\d+) parse\), and (?P<nopremise>\d+) carry no RDF/XML premise"
+            ),
+        ),
+    ]
+    exclusion_expected = {
+        "graded": census["dl_graded"],
+        "shaped": census["consistency_shaped"],
+        "excluded": census["dl_excluded"],
+        "decides": census["dl_decides"],
+        "dc": census["dl_decides_consistent"],
+        "di": census["dl_decides_inconsistent"],
+        "nonterm": census["dl_non_terminating"],
+        "withheld": census["dl_withholds"],
+        "wr": census["dl_withholds_reasoner"],
+        "wp": census["dl_withholds_parse"],
+        "nopremise": census["dl_no_premise"],
+    }
+
+    # Every prose site that tallies the typed RL divergence ledger.
+    gap_sites: list[tuple[str, Path, str]] = [
+        (
+            "the OWL 2 RL gap tally in the CONFORMANCE scoreboard row",
+            _CONFORMANCE,
+            r"(?P<structural>\d+) of the (?P<ledgered>\d+) divergences are structural limits "
+            r"of OWL 2 RL itself \((?P<schema>\d+) schema-conclusion, (?P<neg>\d+) "
+            r"negative-conclusion, (?P<outside>\d+) construct-outside-rl, (?P<imports>\d+) "
+            r"imports-unresolved\); exactly \*\*(?P<actionable>\d+) is actionable\*\* "
+            r"\((?P<missing>\d+) missing-rule\)",
+        ),
+        (
+            "the OWL 2 RL gap tally in the CONFORMANCE known-gaps item",
+            _CONFORMANCE,
+            _flow(r"(?P<structural>\d+) are structural limits of OWL 2 RL")
+            + ANY
+            + _flow(
+                r"schema axiom \((?P<schema>\d+) `schema-conclusion`\) or a negative "
+                r"fact \((?P<neg>\d+) `negative-conclusion`\)"
+            )
+            + ANY
+            + _flow(
+                r"its syntax \((?P<outside>\d+) `construct-outside-rl`\), and one "
+                r"upstream premise is incomplete as exported "
+                r"\((?P<imports>\d+) `imports-unresolved`\)\. "
+                r"\*\*Exactly one is actionable\*\* \((?P<missing>\d+) `missing-rule`\)"
+            ),
+        ),
+        (
+            "the OWL 2 RL gap tally in the entailment chapter",
+            _ENTAILMENT,
+            _flow(
+                r"(?P<structural>\d+) of the (?P<ledgered>\d+) divergences are "
+                r"structural limits of OWL 2 RL"
+            )
+            + ANY
+            + _flow(
+                r"schema axiom \((?P<schema>\d+) `schema-conclusion`\) or a negative "
+                r"fact \((?P<neg>\d+) `negative-conclusion`\)"
+            )
+            + ANY
+            + _flow(
+                r"outside its syntax \((?P<outside>\d+) `construct-outside-rl`\); one "
+                r"more premise is incomplete as exported "
+                r"\((?P<imports>\d+) `imports-unresolved`\)\. "
+                r"\*\*Exactly one is actionable\*\* \((?P<actionable>\d+) `missing-rule`\)"
+            ),
+        ),
+    ]
+    gap_expected = {
+        "structural": lanes["structural"],
+        "ledgered": lanes["ledgered"],
+        "schema": lanes["schema_conclusion"],
+        "neg": lanes["negative_conclusion"],
+        "outside": lanes["construct_outside_rl"],
+        "imports": lanes["imports_unresolved"],
+        "actionable": lanes["actionable"],
+        "missing": lanes["missing_rule"],
+    }
+
+    claims = [
+        Claim(
+            what,
+            path,
+            pattern,
+            {k: v for k, v in lane_expected.items() if f"?P<{k}>" in pattern},
+            led,
+        )
+        for what, path, pattern in lane_sites
+    ]
+    claims += [
+        Claim(
+            what,
+            path,
+            pattern,
+            {k: v for k, v in exclusion_expected.items() if f"?P<{k}>" in pattern},
+            cen,
+        )
+        for what, path, pattern in exclusion_sites
+    ]
+    claims += [
+        Claim(
+            what,
+            path,
+            pattern,
+            {k: v for k, v in gap_expected.items() if f"?P<{k}>" in pattern},
+            led,
+        )
+        for what, path, pattern in gap_sites
+    ]
+
+    return claims + [
+        # --- the OWL 2 RL entailment lane, sourced from the matrix block ------
+        Claim(
+            "the OWL 2 RL scoreboard row",
+            _CONFORMANCE,
+            _flow(
+                r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* agreeing · "
+                r"(?P<ledgered>\d+) typed-ledger divergences"
+            ),
+            {"passed": rl_pass, "total": rl_total, "ledgered": rl_ledger},
+            mat,
+        ),
+        Claim(
+            "the OWL 2 RL row in the README conformance table",
+            _README,
+            _flow(
+                r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* agreeing, "
+                r"(?P<ledgered>\d+) ledgered, 0 unledgered — negative lane"
+            ),
+            {"passed": rl_pass, "total": rl_total, "ledgered": rl_ledger},
+            mat,
+        ),
+        Claim(
+            "the OWL 2 RL conformance paragraph in the entailment chapter",
+            _ENTAILMENT,
+            _flow(
+                r"W3C OWL 2 RL entailment tests — (?P<passed>\d+) of (?P<total>\d+) "
+                r"cases agree, (?P<ledgered>\d+) ledgered"
+            ),
+            {"passed": rl_pass, "total": rl_total, "ledgered": rl_ledger},
+            mat,
+        ),
+        Claim(
+            "the OWL 2 RL snapshot in the book's conformance chapter",
+            _BOOK_CONFORMANCE,
+            _flow(r"scores (?P<passed>\d+)/(?P<total>\d+), being"),
+            {"passed": rl_pass, "total": rl_total},
+            mat,
+        ),
+        # --- what W3C published, sourced from the frozen census ---------------
+        Claim(
+            "the upstream entailment-test counts in the CONFORMANCE known-gaps item",
+            _CONFORMANCE,
+            _flow(
+                r"nodes\) holds \*\*(?P<positive>\d+) `otest:PositiveEntailmentTest` "
+                r"and (?P<negative>\d+) `otest:NegativeEntailmentTest`\*\* cases"
+            ),
+            {
+                "positive": census["positive_entailment"],
+                "negative": census["negative_entailment"],
+            },
+            cen,
+        ),
+        Claim(
+            "the upstream manifest size in the CONFORMANCE known-gaps item",
+            _CONFORMANCE,
+            _flow(r"(?P<cases>\d+) `otest:TestCase` nodes\)"),
+            {"cases": census["upstream_cases"]},
+            cen,
+        ),
+        Claim(
+            "the upstream entailment-test counts in the entailment chapter",
+            _ENTAILMENT,
+            _flow(
+                r"manifest holds \*\*(?P<positive>\d+) positive and "
+                r"(?P<negative>\d+) negative entailment tests\*\*"
+            ),
+            {
+                "positive": census["positive_entailment"],
+                "negative": census["negative_entailment"],
+            },
+            cen,
+        ),
+        Claim(
+            "the RL corpus composition in the CONFORMANCE suite inventory",
+            _CONFORMANCE,
+            _flow(
+                r"(?P<total>\d+) cases \((?P<positive>\d+) positive RL-profile "
+                r"RDF-Based entailments plus all (?P<negative>\d+) negative "
+                r"entailments\)"
+            ),
+            {
+                "total": census["rl_positive"] + census["rl_negative"],
+                "positive": census["rl_positive"],
+                "negative": census["rl_negative"],
+            },
+            cen,
+        ),
+        Claim(
+            "the upstream census size in the CONFORMANCE suite inventory",
+            _CONFORMANCE,
+            _flow(r"one row per upstream `otest:TestCase` \((?P<cases>\d+) rows\)"),
+            {"cases": census["upstream_cases"]},
+            cen,
+        ),
+        Claim(
+            "the DL subset restatement in the book's conformance chapter",
+            _BOOK_CONFORMANCE,
+            _flow(
+                r"(?P<graded>\d+) of the (?P<shaped>\d+) consistency-shaped cases "
+                r"W3C published"
+            ),
+            {"graded": census["dl_graded"], "shaped": census["consistency_shaped"]},
+            cen,
+        ),
+        Claim(
+            "the RL corpus composition in the CONFORMANCE known-gaps item",
+            _CONFORMANCE,
+            _flow(
+                r"(?P<positive>\d+) positive cases W3C places inside the RL profile "
+                r"under RDF-Based semantics, plus \*\*all\*\* (?P<negative>\d+) "
+                r"negative cases"
+            ),
+            {"positive": census["rl_positive"], "negative": census["rl_negative"]},
+            cen,
+        ),
         # --- rule tables, sourced from the generated inventory ----------------
         Claim(
             "the 'Entailment rule tables' scoreboard row",
@@ -337,16 +937,20 @@ def build_claims(
         Claim(
             "the OWL 2 divergence count in the entailment chapter",
             _ENTAILMENT,
-            r"Every one of the (?P<ledgered>\d+) divergences is named in a typed "
-            r"ledger",
+            _flow(
+                r"Every one of the (?P<ledgered>\d+) divergences is named in a typed "
+                r"ledger"
+            ),
             {"ledgered": owl2_ledger},
             mat,
         ),
         Claim(
             "the OWL 2 row in the README conformance table",
             _README,
+            # Anchored to the end of the table cell: the OWL 2 RL row directly
+            # below has the same shape and would otherwise match too.
             r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* agreeing, "
-            r"(?P<ledgered>\d+) ledgered, 0 unledgered",
+            r"(?P<ledgered>\d+) ledgered, 0 unledgered \|",
             {"passed": owl2_pass, "total": owl2_total, "ledgered": owl2_ledger},
             mat,
         ),
@@ -438,6 +1042,8 @@ def main() -> int:
     inventory = load_rule_inventory()
     matrix = load_matrix()
     crates = load_release_crates()
+    census = census_counts()
+    lanes = rl_lane_counts()
 
     problems: list[str] = []
     checked = 0
@@ -446,8 +1052,10 @@ def main() -> int:
     checked += 1
     problems.extend(release_crate_list_claim(crates))
     checked += 1
+    problems.extend(rl_matrix_agreement_claim(matrix, lanes))
+    checked += 1
 
-    for claim in build_claims(inventory, matrix):
+    for claim in build_claims(inventory, matrix, census, lanes):
         claim.check()
         problems.extend(claim.failures)
         checked += 1

@@ -31,9 +31,11 @@ from pathlib import Path
 
 # Each guarded root -> its manifest file (repo-relative). A root is frozen whole:
 # every payload file beneath it is hashed. These are the corpora the SHACL/shexTest
-# conformance runners consume, the first-party frozen SHACL corpus, and the
-# vendored W3C OWL 2 suite the entailment (DL-consistency) row grades against —
-# all declared byte-frozen. (The GTS `vectors/*.gts` corpus is governed separately
+# conformance runners consume, the first-party frozen SHACL corpus, the vendored
+# W3C OWL 2 suite the entailment (DL-consistency) row grades against, and the
+# vendored W3C OWL 2 *entailment* suite (premise + conclusion pairs, plus the
+# 489-row upstream `census.tsv`) the OWL 2 RL row grades against — all declared
+# byte-frozen. (The GTS `vectors/*.gts` corpus is governed separately
 # in gmeow-gts and is intentionally not policed here; adding a new root is a
 # deliberate edit to this map followed by `--update` — a corpus is NEVER guarded
 # until it appears here.)
@@ -43,6 +45,9 @@ GUARDED_ROOTS: dict[str, str] = {
     "crates/shapes/corpus": "scripts/conformance-frozen/shapes-corpus.sha256",
     "crates/sparql-conformance/entailment-suite/w3c-owl2": (
         "scripts/conformance-frozen/sparql-conformance-w3c-owl2.sha256"
+    ),
+    "crates/sparql-conformance/entailment-suite/w3c-owl2-rl": (
+        "scripts/conformance-frozen/sparql-conformance-w3c-owl2-rl.sha256"
     ),
 }
 
