@@ -59,6 +59,17 @@
 //! - [`cursor`] — the zero-allocation lending cursor over one arrangement, and the
 //!   globally value-ordered trie cursor the leapfrog join seeks over.
 //!
+//! # The rule IR
+//!
+//! - [`clause`] — the **DL-clause** `U₁ ∧ … ∧ Uₙ → ∃ȳ. (C₁ ∨ … ∨ Cₘ)`, the crate's one
+//!   rule representation, where each `Cᵢ` is itself a conjunction of head atoms — so
+//!   `A ⊑ ∃r.C`, which lowers to `∃y. (r(x, y) ∧ C(y))` with ONE shared witness, is one
+//!   rule. That shape covers all five head forms — atomic (a Datalog rule), existential,
+//!   disjunctive, conjunctive and empty (`false`) — so the chase and the hypertableau that
+//!   will consume the last four need no second IR and no redesign of this one. Only the
+//!   atomic form has evaluation semantics here; the other four are refused by name at the
+//!   plan pipeline's entrance, never silently accepted and never silently dropped.
+//!
 //! # Planning
 //!
 //! - [`plan`] — the consuming type-state pipeline
@@ -80,6 +91,14 @@
 //!   relations by a differential test. Rounds are rule-parallel through rayon's indexed
 //!   `par_iter`, merged strictly in program order.
 //!
+//! # Reuse
+//!
+//! - [`cache`] — the caller-owned, content-addressed plan cache. A compiled program is
+//!   keyed by a BLAKE3 digest over the planner version, the caller's contract hash and a
+//!   canonical digest of the clause program, so an identical program is compiled once. The
+//!   cache is owned by the caller's planner and is never a process global: a hidden global
+//!   would make a result depend on evaluation history.
+//!
 //! # The correctness oracle
 //!
 //! Reproducibility and correctness are different properties, and only one of them is
@@ -92,6 +111,8 @@
 pub mod arena;
 pub mod binding_pattern;
 pub mod bitset;
+pub mod cache;
+pub mod clause;
 pub mod cursor;
 pub mod id;
 pub mod plan;

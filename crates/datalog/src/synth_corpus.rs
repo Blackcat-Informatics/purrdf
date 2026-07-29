@@ -34,7 +34,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::plan::{PlanAtom, PlanRule, PlanTerm};
+use crate::clause::{ClauseAtom, ClauseTerm, DlClause};
 use crate::store::{Fact, RelationStore};
 
 /// The IRI namespace root for synthetic nodes, predicates and rule names.
@@ -46,7 +46,7 @@ pub(crate) struct SynthWorkload {
     /// A short name, used in assertion messages.
     pub(crate) name: &'static str,
     /// The rule program, in authored order.
-    pub(crate) rules: Vec<PlanRule>,
+    pub(crate) rules: Vec<DlClause>,
     /// The EDB triples as `(subject, predicate, object)` LEXICAL SURFACES — the exact
     /// bytes a [`RelationStore`] interns, and the bytes a plan constant renders to.
     pub(crate) triples: Vec<(String, String, String)>,
@@ -81,25 +81,25 @@ fn node(i: usize) -> String {
 }
 
 /// A variable term.
-fn v(name: &str) -> PlanTerm {
-    PlanTerm::var(name)
+fn v(name: &str) -> ClauseTerm {
+    ClauseTerm::var(name)
 }
 
 /// A rule `head :- body`, over binary atoms named by unbracketed predicate IRIs.
-fn rule(head: (&str, &str, &str), body: &[(&str, &str, &str)]) -> PlanRule {
+fn rule(head: (&str, &str, &str), body: &[(&str, &str, &str)]) -> DlClause {
     /// One atom, treating a `?`-prefixed argument as a variable and anything else as an
     /// IRI constant.
-    fn atom(spec: (&str, &str, &str)) -> PlanAtom {
+    fn atom(spec: (&str, &str, &str)) -> ClauseAtom {
         let term = |value: &str| {
             if value.starts_with('?') {
                 v(value)
             } else {
-                PlanTerm::iri(value)
+                ClauseTerm::iri(value)
             }
         };
-        PlanAtom::positive(term(spec.0), spec.1, term(spec.2))
+        ClauseAtom::positive(term(spec.0), spec.1, term(spec.2))
     }
-    PlanRule::new(atom(head), body.iter().copied().map(atom).collect())
+    DlClause::datalog(atom(head), body.iter().copied().map(atom).collect())
 }
 
 /// A derived fact over IRI terms.

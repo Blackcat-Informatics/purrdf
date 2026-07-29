@@ -59,11 +59,12 @@ use std::fmt;
 
 use rayon::prelude::*;
 
+use crate::clause::{ClauseAtom, ClauseTerm, DlClause, HeadForm};
 use crate::cursor::{LendingIterator, VALUE_OBJECT, VALUE_SUBJECT, ValueCursor};
 use crate::id::{RowId, TermId};
 use crate::plan::{
-    AtomKernel, AtomOperator, CyclicPlan, Executable, IndexChoice, JoinGroup, Parsed, PlanAtom,
-    PlanRule, PlanTerm, RulePlan,
+    AtomKernel, AtomOperator, CyclicPlan, Executable, IndexChoice, JoinGroup, Parsed, RulePlan,
+    datalog_head,
 };
 use crate::store::{Bound, Fact, RelationStore};
 
@@ -223,6 +224,30 @@ impl StepGovernor {
 /// an answer this crate returns is the complete least model of the program it was given.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EvalError {
+    /// A clause's head is existential, disjunctive, conjunctive or `false`, so it is not a
+    /// Datalog rule and this evaluator has no semantics for it.
+    ///
+    /// The DL-clause IR ([`crate::clause`]) represents all five head forms because the
+    /// chase and the hypertableau that will consume the other four must not require the
+    /// IR to be redesigned. A semi-naive least-fixpoint evaluator, however, computes the
+    /// least model of a set of DEFINITE clauses — exactly one head atom, no quantifier: an
+    /// existential mints witnesses, a disjunction has no single least model, a conjunction
+    /// abbreviates several clauses at once, and `false` derives nothing while asserting
+    /// its body is unsatisfiable. None of the four is a definite clause, so each is
+    /// refused by its OWN name here rather than silently ignored, silently treated as
+    /// atomic, or reported under a neighbouring form's name.
+    ///
+    /// The conjunctive case deserves the emphasis: `→ p(x) ∧ q(x)` *is* equivalent to two
+    /// Datalog rules over one body, and this evaluator could have split it. It does not,
+    /// because a [`Derivation`] names its producing clause by authored index, so splitting
+    /// one clause into two would renumber the program and move an observable. A caller who
+    /// wants the split performs it before compiling.
+    NonDatalogHead {
+        /// The clause's index in authored program order.
+        rule: usize,
+        /// The head form that has no Datalog semantics.
+        form: HeadForm,
+    },
     /// A negative dependency edge lies inside a cycle, so no stratification exists.
     ///
     /// The payload names the offending edge and one concrete cycle through it, in
@@ -261,6 +286,12 @@ pub enum EvalError {
 impl fmt::Display for EvalError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::NonDatalogHead { rule, form } => write!(
+                f,
+                "clause {rule} has {} {form} head: the semi-naive evaluator runs Datalog \
+                 clauses (one head atom, no existential) only",
+                form.article()
+            ),
             Self::NonStratifiable {
                 head,
                 negated,
@@ -367,20 +398,35 @@ impl Evaluation {
 
 /// Compile a rule program into the executor's [`Executable`], or refuse it.
 ///
-/// This is [`crate::plan`]'s pipeline with two refusals attached: a non-stratifiable
-/// program is reported with the concrete cycle its negative edge sits in, and a rule whose
-/// head carries a variable no positive body atom can bind is reported as not
-/// range-restricted. Both are hard errors; neither has a best-effort fallback.
+/// This is [`crate::plan`]'s pipeline with three refusals attached: a clause whose head is
+/// not a single unquantified atom is reported by head form, a non-stratifiable program is
+/// reported with the concrete cycle its negative edge sits in, and a clause whose head
+/// carries a variable no positive body atom can bind is reported as not range-restricted.
+/// All three are hard errors; none has a best-effort fallback.
 ///
 /// # Errors
 ///
-/// [`EvalError::NonStratifiable`] or [`EvalError::UnboundHeadVariable`].
-pub fn compile(rules: Vec<PlanRule>) -> Result<Executable, EvalError> {
-    // Stratifiability is decided FIRST, and against the BORROWED program so the failing
+/// [`EvalError::NonDatalogHead`], [`EvalError::NonStratifiable`] or
+/// [`EvalError::UnboundHeadVariable`].
+pub fn compile(rules: Vec<DlClause>) -> Result<Executable, EvalError> {
+    // The head form is decided FIRST, because the other two checks are both defined in
+    // terms of a single head atom: an existential, a disjunctive or an empty head has no
+    // "the head predicate" to stratify on and no "the head variables" to range-restrict.
+    // Reporting either of those instead would be reporting a consequence of the real
+    // defect. This is the same gate `Parsed::new` enforces below; it runs here so the
+    // diagnostic is an `EvalError` alongside the other two.
+    for (index, rule) in rules.iter().enumerate() {
+        let form = rule.head_form();
+        if !form.is_datalog() {
+            return Err(EvalError::NonDatalogHead { rule: index, form });
+        }
+    }
+
+    // Stratifiability is decided next, and against the BORROWED program so the failing
     // branch can still walk the rules to name the offending cycle. It is the more
-    // fundamental defect: an unstratifiable program has no least model to be safe with
-    // respect to, so reporting a per-rule safety violation instead would point at a
-    // symptom.
+    // fundamental of the remaining two defects: an unstratifiable program has no least
+    // model to be safe with respect to, so reporting a per-rule safety violation instead
+    // would point at a symptom.
     if crate::plan::stratify(&rules).is_none() {
         return Err(negative_cycle(&rules));
     }
@@ -394,19 +440,22 @@ pub fn compile(rules: Vec<PlanRule>) -> Result<Executable, EvalError> {
                 }
             }
         }
-        for term in [rule.head().subject(), rule.head().object()] {
-            if let Some(name) = term.variable()
-                && !bound.contains(name)
-            {
-                return Err(EvalError::UnboundHeadVariable {
-                    rule: index,
-                    variable: name.to_owned(),
-                });
+        for head in rule.head_atoms() {
+            for term in [head.subject(), head.object()] {
+                if let Some(name) = term.variable()
+                    && !bound.contains(name)
+                {
+                    return Err(EvalError::UnboundHeadVariable {
+                        rule: index,
+                        variable: name.to_owned(),
+                    });
+                }
             }
         }
     }
 
     Ok(Parsed::new(rules)
+        .expect("every head form was just established to be atomic on the same rules")
         .stratify()
         .expect("stratifiability was just established on the same rules")
         .plan()
@@ -426,29 +475,35 @@ pub fn compile(rules: Vec<PlanRule>) -> Result<Executable, EvalError> {
 /// Panics if no negative edge lies in a cycle. This is called only after
 /// [`crate::plan::stratify`] has already proven the program non-stratifiable, and that is
 /// exactly the condition, so reaching it would be a contradiction in the stratifier.
-fn negative_cycle(rules: &[PlanRule]) -> EvalError {
-    // head -> {body}: "head depends on body", in a fixed lexical order.
+fn negative_cycle(rules: &[DlClause]) -> EvalError {
+    // head -> {body}: "head depends on body", in a fixed lexical order. Written over every
+    // head ATOM — every conjunct of every disjunct — so it agrees exactly with
+    // `crate::plan::stratify`'s edge set, which is total over the whole clause IR rather
+    // than only over its Datalog fragment.
     let mut depends: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for rule in rules {
-        let entry = depends.entry(rule.head().predicate()).or_default();
-        for atom in rule.body() {
-            entry.insert(atom.predicate());
+        for head in rule.head_atoms() {
+            let entry = depends.entry(head.predicate()).or_default();
+            for atom in rule.body() {
+                entry.insert(atom.predicate());
+            }
         }
     }
 
     for rule in rules {
-        let head = rule.head().predicate();
-        for atom in rule.body().iter().filter(|atom| atom.is_negated()) {
-            let Some(path) = shortest_dependency_path(&depends, atom.predicate(), head) else {
-                continue;
-            };
-            let mut cycle = vec![head.to_owned()];
-            cycle.extend(path.into_iter().map(str::to_owned));
-            return EvalError::NonStratifiable {
-                head: head.to_owned(),
-                negated: atom.predicate().to_owned(),
-                cycle,
-            };
+        for head in rule.head_atoms().map(ClauseAtom::predicate) {
+            for atom in rule.body().iter().filter(|atom| atom.is_negated()) {
+                let Some(path) = shortest_dependency_path(&depends, atom.predicate(), head) else {
+                    continue;
+                };
+                let mut cycle = vec![head.to_owned()];
+                cycle.extend(path.into_iter().map(str::to_owned));
+                return EvalError::NonStratifiable {
+                    head: head.to_owned(),
+                    negated: atom.predicate().to_owned(),
+                    cycle,
+                };
+            }
         }
     }
     unreachable!("a non-stratifiable program has a negative edge inside a dependency cycle")
@@ -639,7 +694,7 @@ impl SlotSolution {
 /// delta filter has no runtime branch.
 fn extend_slot_solutions(
     operator: &AtomOperator,
-    atom: &PlanAtom,
+    atom: &ClauseAtom,
     rel: &RelationStore,
     delta: Delta,
     scan: Scan,
@@ -665,7 +720,7 @@ fn extend_slot_solutions(
 /// admissible `(kernel, index)` pairs are exactly the arms below.
 fn extend_slot_operator<const SCAN: u8>(
     operator: &AtomOperator,
-    atom: &PlanAtom,
+    atom: &ClauseAtom,
     rel: &RelationStore,
     delta: Delta,
     solutions: &[SlotSolution],
@@ -1213,7 +1268,7 @@ fn cycle_atom_cursor<'a>(
 #[derive(Debug, Clone, Copy)]
 struct LeapfrogRun<'a> {
     /// The rule whose body the component's atoms index into.
-    rule: &'a PlanRule,
+    rule: &'a DlClause,
     /// The rule's plan, for the per-atom operators.
     plan: &'a RulePlan,
     /// The certified component being descended.
@@ -1393,7 +1448,7 @@ enum JoinStrategy {
 /// AFTER it, against the accumulated store, which stratification guarantees holds the
 /// negated predicate's final extension.
 fn join_body(
-    rule: &PlanRule,
+    rule: &DlClause,
     plan: &RulePlan,
     runtime: &RuleRuntime<'_>,
     snapshot: RoundSnapshot<'_>,
@@ -1426,7 +1481,7 @@ fn join_body(
 /// The indexed binary positive join: every planned operator in execution order, for every
 /// semi-naive delta position.
 fn join_positive_binary(
-    rule: &PlanRule,
+    rule: &DlClause,
     plan: &RulePlan,
     snapshot: RoundSnapshot<'_>,
     governor: &mut StepGovernor,
@@ -1465,7 +1520,7 @@ fn join_positive_binary(
 /// The hybrid positive join for a rule with at least one certified cyclic subplan: each
 /// physical group in execution order, for every semi-naive delta position.
 fn join_positive_leapfrog(
-    rule: &PlanRule,
+    rule: &DlClause,
     plan: &RulePlan,
     snapshot: RoundSnapshot<'_>,
     governor: &mut StepGovernor,
@@ -1535,7 +1590,7 @@ impl ArgShape {
     ///
     /// Panics on a variable the plan has no slot for. [`RulePlan`] assigns a slot to every
     /// variable of the body AND the head, so that is a planner contradiction.
-    fn of(term: &PlanTerm, variables: &[String]) -> Self {
+    fn of(term: &ClauseTerm, variables: &[String]) -> Self {
         match term.variable() {
             Some(name) => Self::Slot(
                 variables
@@ -1624,12 +1679,15 @@ struct RuleRuntime<'r> {
 
 impl<'r> RuleRuntime<'r> {
     /// Lower one rule's static shapes.
-    fn new(rule: &'r PlanRule, plan: &RulePlan) -> Self {
+    fn new(rule: &'r DlClause, plan: &RulePlan) -> Self {
         let variables = plan.variables();
+        // Every clause inside an `Executable` came through `Parsed::new`, which admits
+        // only the atomic head form, so "the head" exists here by construction.
+        let head = datalog_head(rule);
         Self {
-            head_predicate: rule.head().predicate(),
-            head_subject: ArgShape::of(rule.head().subject(), variables),
-            head_object: ArgShape::of(rule.head().object(), variables),
+            head_predicate: head.predicate(),
+            head_subject: ArgShape::of(head.subject(), variables),
+            head_object: ArgShape::of(head.object(), variables),
             negated: plan
                 .negated()
                 .iter()
@@ -2193,6 +2251,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
+    use crate::clause::HeadDisjunct;
     use crate::synth_corpus::{self, SynthWorkload};
     use crate::test_support::permute;
 
@@ -2200,16 +2259,16 @@ mod tests {
     const Q: &str = "https://example.org/q";
     const R: &str = "https://example.org/r";
 
-    fn v(name: &str) -> PlanTerm {
-        PlanTerm::var(name)
+    fn v(name: &str) -> ClauseTerm {
+        ClauseTerm::var(name)
     }
 
-    fn iri(name: &str) -> PlanTerm {
-        PlanTerm::iri(name)
+    fn iri(name: &str) -> ClauseTerm {
+        ClauseTerm::iri(name)
     }
 
-    fn atom(subject: &str, predicate: &str, object: &str) -> PlanAtom {
-        PlanAtom::positive(v(subject), predicate, v(object))
+    fn atom(subject: &str, predicate: &str, object: &str) -> ClauseAtom {
+        ClauseAtom::positive(v(subject), predicate, v(object))
     }
 
     /// The lexical surface an IRI is stored under.
@@ -2236,7 +2295,7 @@ mod tests {
             .collect()
     }
 
-    fn run(rules: Vec<PlanRule>, edb: RelationStore) -> Evaluation {
+    fn run(rules: Vec<DlClause>, edb: RelationStore) -> Evaluation {
         let exe = compile(rules).expect("the fixture program compiles");
         evaluate(&exe, edb).expect("the fixture program stays inside every ceiling")
     }
@@ -2247,8 +2306,8 @@ mod tests {
     #[test]
     fn fixpoint_closes_a_recursive_rule() {
         let rules = vec![
-            PlanRule::new(atom("?s", Q, "?o"), vec![atom("?s", P, "?o")]),
-            PlanRule::new(
+            DlClause::datalog(atom("?s", Q, "?o"), vec![atom("?s", P, "?o")]),
+            DlClause::datalog(
                 atom("?s", Q, "?o"),
                 vec![atom("?s", P, "?m"), atom("?m", Q, "?o")],
             ),
@@ -2273,7 +2332,7 @@ mod tests {
     /// are recorded in AUTHORED body order even when the planner reorders execution.
     #[test]
     fn derivations_carry_authored_order_provenance_and_proof_height() {
-        let rules = vec![PlanRule::new(
+        let rules = vec![DlClause::datalog(
             atom("?s", R, "?o"),
             vec![atom("?m", Q, "?o"), atom("?s", P, "?m")],
         )];
@@ -2301,12 +2360,12 @@ mod tests {
     #[test]
     fn stratified_negation_reads_a_completed_lower_stratum() {
         let rules = vec![
-            PlanRule::new(atom("?s", Q, "?o"), vec![atom("?s", P, "?o")]),
-            PlanRule::new(
+            DlClause::datalog(atom("?s", Q, "?o"), vec![atom("?s", P, "?o")]),
+            DlClause::datalog(
                 atom("?s", R, "?o"),
                 vec![
-                    PlanAtom::positive(v("?s"), "https://example.org/base", v("?o")),
-                    PlanAtom::negated(v("?s"), Q, v("?o")),
+                    ClauseAtom::positive(v("?s"), "https://example.org/base", v("?o")),
+                    ClauseAtom::negated(v("?s"), Q, v("?o")),
                 ],
             ),
         ];
@@ -2327,11 +2386,11 @@ mod tests {
     /// reads "this subject has NO fact under the predicate at all".
     #[test]
     fn existential_negation_probes_the_ground_positions_only() {
-        let rules = vec![PlanRule::new(
+        let rules = vec![DlClause::datalog(
             atom("?s", R, "?o"),
             vec![
-                PlanAtom::positive(v("?s"), "https://example.org/base", v("?o")),
-                PlanAtom::negated(v("?s"), Q, v("?free")),
+                ClauseAtom::positive(v("?s"), "https://example.org/base", v("?o")),
+                ClauseAtom::negated(v("?s"), Q, v("?free")),
             ],
         )];
         let edb = store_of(&[
@@ -2351,8 +2410,8 @@ mod tests {
     /// candidate key handles it and the fact commits exactly once.
     #[test]
     fn a_fresh_head_constant_commits_once() {
-        let rules = vec![PlanRule::new(
-            PlanAtom::positive(iri("https://example.org/new"), R, v("?o")),
+        let rules = vec![DlClause::datalog(
+            ClauseAtom::positive(iri("https://example.org/new"), R, v("?o")),
             vec![atom("?s", P, "?o")],
         )];
         let edb = store_of(&[("a", P, "b"), ("c", P, "b")]);
@@ -2368,8 +2427,8 @@ mod tests {
     /// suppressed on the next round by the store's own membership test.
     #[test]
     fn an_unconditional_rule_fires_exactly_once() {
-        let rules = vec![PlanRule::new(
-            PlanAtom::positive(
+        let rules = vec![DlClause::datalog(
+            ClauseAtom::positive(
                 iri("https://example.org/a"),
                 R,
                 iri("https://example.org/b"),
@@ -2387,8 +2446,8 @@ mod tests {
     fn a_round_collision_is_decided_by_the_provenance_order() {
         // Both rules derive r(a, b): rule 0 from one source, rule 1 from another.
         let rules = vec![
-            PlanRule::new(atom("?s", R, "?o"), vec![atom("?s", P, "?o")]),
-            PlanRule::new(atom("?s", R, "?o"), vec![atom("?s", Q, "?o")]),
+            DlClause::datalog(atom("?s", R, "?o"), vec![atom("?s", P, "?o")]),
+            DlClause::datalog(atom("?s", R, "?o"), vec![atom("?s", Q, "?o")]),
         ];
         let edb = store_of(&[("a", P, "b"), ("a", Q, "b")]);
         let evaluation = run(rules, edb);
@@ -2537,7 +2596,7 @@ mod tests {
             triples.push((n(i), R.to_owned(), n((i + 2) % N)));
         }
         let sink = "https://example.org/s";
-        let rules = vec![PlanRule::new(
+        let rules = vec![DlClause::datalog(
             atom("?X", sink, "?Z"),
             vec![
                 atom("?X", P, "?Y"),
@@ -2619,6 +2678,169 @@ mod tests {
 
     // ── The required refusal tests ──────────────────────────────────────────────
 
+    /// An EXISTENTIAL head is refused by name.
+    ///
+    /// `∃?y. q(?x, ?y) :- p(?x, ?z)` asks for a witness this evaluator cannot mint: a
+    /// least-fixpoint Datalog evaluator derives only ground atoms over the terms it was
+    /// given. The refusal names the clause and the form, and it is the permanent, correct
+    /// answer this evaluator owes a caller who hands it a non-Datalog clause.
+    #[test]
+    fn an_existential_head_is_refused_by_name() {
+        let rules = vec![DlClause::new(
+            vec![HeadDisjunct::atom(atom("?x", Q, "?y"))],
+            vec!["?y".to_owned()],
+            vec![atom("?x", P, "?z")],
+        )];
+        let error = compile(rules).expect_err("an existential head is not a Datalog rule");
+        assert_eq!(
+            error,
+            EvalError::NonDatalogHead {
+                rule: 0,
+                form: HeadForm::Existential,
+            }
+        );
+        let rendered = error.to_string();
+        assert!(rendered.contains("existential"), "{rendered}");
+        assert!(rendered.contains("clause 0"), "{rendered}");
+    }
+
+    /// A DISJUNCTIVE head is refused by name.
+    ///
+    /// `q(?x, ?y) ∨ r(?x, ?y) :- p(?x, ?y)` has no single least model — a case split has
+    /// to choose — so there is nothing for a least-fixpoint evaluator to compute. Deriving
+    /// the first disjunct, or all of them, would both be wrong answers.
+    #[test]
+    fn a_disjunctive_head_is_refused_by_name() {
+        let rules = vec![DlClause::new(
+            vec![
+                HeadDisjunct::atom(atom("?x", Q, "?y")),
+                HeadDisjunct::atom(atom("?x", R, "?y")),
+            ],
+            Vec::new(),
+            vec![atom("?x", P, "?y")],
+        )];
+        let error = compile(rules).expect_err("a disjunctive head is not a Datalog rule");
+        assert_eq!(
+            error,
+            EvalError::NonDatalogHead {
+                rule: 0,
+                form: HeadForm::Disjunctive,
+            }
+        );
+        assert!(error.to_string().contains("a disjunctive head"));
+    }
+
+    /// A CONJUNCTIVE head is refused by a name that is TRUE.
+    ///
+    /// `q(?x, ?y) ∧ r(?x, ?y) :- p(?x, ?y)` is not a Datalog rule — a definite clause has
+    /// exactly one head atom — but it is not a disjunction either, and there is no witness
+    /// to mint. Reporting it as "disjunctive" or "existential" would name a property the
+    /// clause does not have, so the refusal carries its own form. The clause IS equivalent
+    /// to two Datalog rules, and the evaluator still refuses it rather than splitting it:
+    /// the split would renumber the program that a derivation's clause index names.
+    #[test]
+    fn a_conjunctive_head_is_refused_by_its_own_name() {
+        let rules = vec![DlClause::new(
+            vec![HeadDisjunct::new(vec![
+                atom("?x", Q, "?y"),
+                atom("?x", R, "?y"),
+            ])],
+            Vec::new(),
+            vec![atom("?x", P, "?y")],
+        )];
+        let error = compile(rules).expect_err("a conjunctive head is not a Datalog rule");
+        assert_eq!(
+            error,
+            EvalError::NonDatalogHead {
+                rule: 0,
+                form: HeadForm::Conjunctive,
+            }
+        );
+        let rendered = error.to_string();
+        assert!(rendered.contains("a conjunctive head"), "{rendered}");
+        assert!(
+            !rendered.contains("disjunctive"),
+            "the refusal must not name a property the clause lacks: {rendered}"
+        );
+        // The trailing "(one head atom, no existential)" states what a Datalog clause IS,
+        // so only the phrase that NAMES this clause's form is asserted against.
+        assert!(
+            !rendered.contains("an existential head"),
+            "the refusal must not name a property the clause lacks: {rendered}"
+        );
+    }
+
+    /// The `A ⊑ ∃r.C` lowering — one disjunct, two conjuncts, one shared witness — is
+    /// refused as EXISTENTIAL, because the quantifier outranks the conjunction in the
+    /// documented precedence and it is the quantifier that a chase, not this evaluator,
+    /// must consume.
+    #[test]
+    fn a_conjunctive_existential_head_is_refused_as_existential() {
+        let rules = vec![DlClause::new(
+            vec![HeadDisjunct::new(vec![
+                atom("?x", R, "?y"),
+                ClauseAtom::positive(
+                    v("?y"),
+                    "https://example.org/type",
+                    ClauseTerm::iri("https://example.org/C"),
+                ),
+            ])],
+            vec!["?y".to_owned()],
+            vec![atom("?x", P, "?z")],
+        )];
+        let error = compile(rules).expect_err("an existential head is not a Datalog rule");
+        assert_eq!(
+            error,
+            EvalError::NonDatalogHead {
+                rule: 0,
+                form: HeadForm::Existential,
+            }
+        );
+    }
+
+    /// An EMPTY head — the inconsistency clause `body → false` — is refused by name.
+    ///
+    /// It derives nothing and instead asserts its body is unsatisfiable, so silently
+    /// admitting it would turn a claim about the model into a rule that does nothing at
+    /// all: the caller would be told the program is consistent because the evaluator never
+    /// checked.
+    #[test]
+    fn an_empty_head_is_refused_by_name() {
+        let rules = vec![
+            DlClause::datalog(atom("?s", Q, "?o"), vec![atom("?s", P, "?o")]),
+            DlClause::inconsistency(vec![atom("?s", Q, "?o")]),
+        ];
+        let error = compile(rules).expect_err("an inconsistency clause is not a Datalog rule");
+        assert_eq!(
+            error,
+            EvalError::NonDatalogHead {
+                rule: 1,
+                form: HeadForm::Inconsistency,
+            }
+        );
+        assert!(error.to_string().contains("empty (false)"));
+        let _: &dyn std::error::Error = &error;
+    }
+
+    /// The head-form refusal is decided BEFORE stratification and range restriction,
+    /// because both of those are defined in terms of a single head atom. A clause that is
+    /// non-Datalog AND not range-restricted is reported as non-Datalog: the other
+    /// diagnostic would be a consequence of the real defect.
+    #[test]
+    fn the_head_form_refusal_precedes_the_other_two() {
+        // `∃?y. q(?free, ?y) :- p(?x, ?z)` is also not range-restricted (`?free` is
+        // unbindable) and its predicates form no cycle, so only the ordering decides.
+        let rules = vec![DlClause::new(
+            vec![HeadDisjunct::atom(atom("?free", Q, "?y"))],
+            vec!["?y".to_owned()],
+            vec![atom("?x", P, "?z")],
+        )];
+        assert!(matches!(
+            compile(rules),
+            Err(EvalError::NonDatalogHead { rule: 0, .. })
+        ));
+    }
+
     /// A negative edge inside a dependency cycle is a hard error naming the cycle — never
     /// a silent accept and never a best-effort evaluation.
     #[test]
@@ -2626,14 +2848,14 @@ mod tests {
         // p :- base, not q.   q :- p.  — every variable is range-restricted, so the ONLY
         // defect is the negative edge inside the p -> q -> p cycle.
         let rules = vec![
-            PlanRule::new(
+            DlClause::datalog(
                 atom("?s", P, "?o"),
                 vec![
-                    PlanAtom::positive(v("?s"), "https://example.org/base", v("?o")),
-                    PlanAtom::negated(v("?s"), Q, v("?o")),
+                    ClauseAtom::positive(v("?s"), "https://example.org/base", v("?o")),
+                    ClauseAtom::negated(v("?s"), Q, v("?o")),
                 ],
             ),
-            PlanRule::new(atom("?s", Q, "?o"), vec![atom("?s", P, "?o")]),
+            DlClause::datalog(atom("?s", Q, "?o"), vec![atom("?s", P, "?o")]),
         ];
         let error = compile(rules).expect_err("a negative edge in a cycle has no stratification");
         let EvalError::NonStratifiable {
@@ -2658,15 +2880,15 @@ mod tests {
     fn a_longer_negative_cycle_is_named_through_its_path() {
         // p :- base, not q.   q :- r.   r :- p.
         let rules = vec![
-            PlanRule::new(
+            DlClause::datalog(
                 atom("?s", P, "?o"),
                 vec![
-                    PlanAtom::positive(v("?s"), "https://example.org/base", v("?o")),
-                    PlanAtom::negated(v("?s"), Q, v("?o")),
+                    ClauseAtom::positive(v("?s"), "https://example.org/base", v("?o")),
+                    ClauseAtom::negated(v("?s"), Q, v("?o")),
                 ],
             ),
-            PlanRule::new(atom("?s", Q, "?o"), vec![atom("?s", R, "?o")]),
-            PlanRule::new(atom("?s", R, "?o"), vec![atom("?s", P, "?o")]),
+            DlClause::datalog(atom("?s", Q, "?o"), vec![atom("?s", R, "?o")]),
+            DlClause::datalog(atom("?s", R, "?o"), vec![atom("?s", P, "?o")]),
         ];
         let error = compile(rules).expect_err("the negative edge sits in a three-predicate cycle");
         let EvalError::NonStratifiable { cycle, .. } = &error else {
@@ -2682,10 +2904,13 @@ mod tests {
     #[test]
     fn acyclic_negation_compiles() {
         let rules = vec![
-            PlanRule::new(atom("?s", Q, "?o"), vec![atom("?s", P, "?o")]),
-            PlanRule::new(
+            DlClause::datalog(atom("?s", Q, "?o"), vec![atom("?s", P, "?o")]),
+            DlClause::datalog(
                 atom("?s", R, "?o"),
-                vec![atom("?s", P, "?o"), PlanAtom::negated(v("?s"), Q, v("?o"))],
+                vec![
+                    atom("?s", P, "?o"),
+                    ClauseAtom::negated(v("?s"), Q, v("?o")),
+                ],
             ),
         ];
         assert!(compile(rules).is_ok());
@@ -2694,7 +2919,7 @@ mod tests {
     /// A head variable no positive body atom can bind is refused at compile time.
     #[test]
     fn an_unbindable_head_variable_is_refused() {
-        let rules = vec![PlanRule::new(
+        let rules = vec![DlClause::datalog(
             atom("?s", R, "?free"),
             vec![atom("?s", P, "?o")],
         )];
@@ -2719,8 +2944,8 @@ mod tests {
         // sink(?c, ?c) :- src(?x, ?c), src(?y, ?c). One head fact, n^2 candidates.
         let src = "https://example.org/src";
         let sink = "https://example.org/sink";
-        let rules = vec![PlanRule::new(
-            PlanAtom::positive(v("?c"), sink, v("?c")),
+        let rules = vec![DlClause::datalog(
+            ClauseAtom::positive(v("?c"), sink, v("?c")),
             vec![atom("?x", src, "?c"), atom("?y", src, "?c")],
         )];
         let n = 1100usize; // 1_210_000 candidate solutions > MAX_JOIN_STEPS
@@ -2753,7 +2978,7 @@ mod tests {
         // pair(?x, ?y) :- src(?x, ?c), src(?y, ?c). n^2 derived facts.
         let src = "https://example.org/src";
         let pair = "https://example.org/pair";
-        let rules = vec![PlanRule::new(
+        let rules = vec![DlClause::datalog(
             atom("?x", pair, "?y"),
             vec![atom("?x", src, "?c"), atom("?y", src, "?c")],
         )];
@@ -2784,7 +3009,7 @@ mod tests {
     /// reports the byte count that tripped it.
     #[test]
     fn the_term_arena_ceiling_is_a_distinguishable_error() {
-        let rules = vec![PlanRule::new(
+        let rules = vec![DlClause::datalog(
             atom("?s", Q, "?o"),
             vec![atom("?s", P, "?o")],
         )];
@@ -2878,9 +3103,9 @@ mod tests {
     #[test]
     fn rule_order_within_a_stratum_does_not_move_the_answer() {
         let base = "https://example.org/base";
-        let rules: Vec<PlanRule> = (0..4)
+        let rules: Vec<DlClause> = (0..4)
             .map(|i| {
-                PlanRule::new(
+                DlClause::datalog(
                     atom("?s", R, "?o"),
                     vec![atom("?s", &format!("{base}{i}"), "?o")],
                 )
@@ -2967,7 +3192,7 @@ mod tests {
     /// columns agree survive.
     #[test]
     fn a_repeated_variable_filters_to_the_diagonal() {
-        let rules = vec![PlanRule::new(
+        let rules = vec![DlClause::datalog(
             atom("?s", R, "?s"),
             vec![atom("?s", P, "?s")],
         )];
@@ -2985,9 +3210,9 @@ mod tests {
     /// that is a normal empty answer rather than an error.
     #[test]
     fn an_unknown_body_constant_matches_nothing() {
-        let rules = vec![PlanRule::new(
+        let rules = vec![DlClause::datalog(
             atom("?s", R, "?s"),
-            vec![PlanAtom::positive(
+            vec![ClauseAtom::positive(
                 v("?s"),
                 P,
                 iri("https://example.org/absent"),
@@ -3001,13 +3226,13 @@ mod tests {
     /// A fully ground body atom is a membership probe.
     #[test]
     fn a_ground_body_atom_is_a_membership_probe() {
-        let present = PlanRule::new(
-            PlanAtom::positive(
+        let present = DlClause::datalog(
+            ClauseAtom::positive(
                 iri("https://example.org/yes"),
                 R,
                 iri("https://example.org/yes"),
             ),
-            vec![PlanAtom::positive(
+            vec![ClauseAtom::positive(
                 iri("https://example.org/a"),
                 P,
                 iri("https://example.org/b"),
@@ -3034,7 +3259,7 @@ mod tests {
     /// `into_facts` hands the saturated store back to the caller.
     #[test]
     fn into_facts_yields_the_saturated_store() {
-        let rules = vec![PlanRule::new(
+        let rules = vec![DlClause::datalog(
             atom("?s", Q, "?o"),
             vec![atom("?s", P, "?o")],
         )];

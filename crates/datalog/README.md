@@ -17,6 +17,20 @@ fixpoints.
 
 ## Design commitments
 
+* **One rule IR: the DL-clause.** Every rule is
+  `U₁ ∧ … ∧ Uₙ → ∃ȳ. (C₁ ∨ … ∨ Cₘ)`, where each disjunct `Cᵢ` is itself a
+  conjunction of head atoms — so `A ⊑ ∃r.C`, which lowers to
+  `∃y. (r(x, y) ∧ C(y))` with one *shared* witness, is a single rule rather
+  than two unrelated ones. That single shape holds all five head forms —
+  atomic (a Datalog rule), existential, disjunctive, conjunctive and empty
+  (`false`) — so the chase and the hypertableau that consume the last four
+  need no second representation. The semi-naive evaluator runs the atomic form
+  and refuses the other four **by name**: never silently accepted, never
+  silently dropped.
+* **Plans are content-addressed.** A compiled program is keyed by a BLAKE3
+  digest over the planner version, the caller's contract hash and a canonical
+  digest of the clause program. The cache is owned by the caller, never a
+  process global — a global would make an answer depend on evaluation history.
 * **Deterministic by construction.** Per-key rows keep insertion order, the
   arrangement is sorted, and no map iteration order reaches an output path.
   Identical input yields byte-identical output, on every target.

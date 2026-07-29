@@ -4,16 +4,21 @@
 //! Index selection and plan construction: the consuming type-state pipeline
 //! `Parsed → Stratified → Planned → Executable`.
 //!
+//! The program this pipeline consumes is a [`DlClause`] slice —
+//! the crate's one rule representation. Only its [`Atomic`](crate::clause::HeadForm::Atomic)
+//! head form is a Datalog rule, and [`Parsed::new`] refuses the other four by name.
+//!
 //! # Why a type-state pipeline
 //!
-//! A semi-naive executor may run ONLY a program that has been (a) proven stratifiable
-//! and (b) join-planned. Encoding that as a doc contract ("call `stratify` first") is
-//! fragile: a caller can forget it, or redo it on every call. This module makes an
-//! unstratified / unplanned program **unrepresentable at the executor boundary** — the
-//! executor's only input is an [`Executable`], whose sole constructor chain is
-//! `Parsed::new(..).stratify()?.plan().into_executable()`. There is no other way to
-//! obtain one, so the compiler — not a comment — enforces "stratify, then plan, then
-//! execute".
+//! A semi-naive executor may run ONLY a program that has been (a) proven to consist of
+//! Datalog clauses, (b) proven stratifiable and (c) join-planned. Encoding that as a doc
+//! contract ("call `stratify` first") is fragile: a caller can forget it, or redo it on
+//! every call. This module makes an unchecked / unstratified / unplanned program
+//! **unrepresentable at the executor boundary** — the executor's only input is an
+//! [`Executable`], whose sole constructor chain is
+//! `Parsed::new(..)?.stratify()?.plan().into_executable()`. There is no other way to
+//! obtain one, so the compiler — not a comment — enforces "check the head form, stratify,
+//! plan, then execute".
 //!
 //! # Consuming transitions, not marker generics
 //!
@@ -52,178 +57,26 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use crate::binding_pattern::BindingPattern;
+use crate::clause::{ClauseAtom, ClauseTerm, DlClause, NonDatalogClause};
 use crate::id::TermId;
 use crate::store::Bound;
-
-// ── The rule IR the planner consumes ────────────────────────────────────────────
-
-/// One argument position of a rule atom.
-///
-/// A constant carries the term's **lexical surface**, the same identity the relation
-/// store interns on ([`crate::store::TermInterner`]), so a planned constant is compared
-/// against stored data without a second rendering convention. An IRI is kept distinct
-/// from a literal because only an IRI is bracketed when rendered.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum PlanTerm {
-    /// A rule variable, named as authored (the name is a plan-time key only).
-    Var(String),
-    /// A constant IRI, held UNBRACKETED; its surface is `<iri>`.
-    Iri(String),
-    /// A constant literal, held as its already-rendered lexical surface.
-    Literal(String),
-}
-
-impl PlanTerm {
-    /// A variable term.
-    pub fn var(name: impl Into<String>) -> Self {
-        Self::Var(name.into())
-    }
-
-    /// A constant IRI term, from the unbracketed IRI.
-    pub fn iri(iri: impl Into<String>) -> Self {
-        Self::Iri(iri.into())
-    }
-
-    /// A constant literal term, from its already-rendered lexical surface.
-    pub fn literal(surface: impl Into<String>) -> Self {
-        Self::Literal(surface.into())
-    }
-
-    /// The variable name, if this is a variable.
-    pub fn variable(&self) -> Option<&str> {
-        match self {
-            Self::Var(name) => Some(name),
-            Self::Iri(_) | Self::Literal(_) => None,
-        }
-    }
-
-    /// Whether this term is a variable.
-    pub fn is_var(&self) -> bool {
-        matches!(self, Self::Var(_))
-    }
-
-    /// The lexical surface of a CONSTANT term — the exact bytes the store interns — or
-    /// `None` for a variable, whose surface is a runtime binding rather than a plan-time
-    /// property.
-    ///
-    /// This is the single rendering convention: an IRI is bracketed, a literal is already
-    /// its own surface. An executor grounding a head or a negated atom renders through
-    /// here, so plan constants and stored data are always compared as the same bytes.
-    pub fn surface(&self) -> Option<String> {
-        match self {
-            Self::Iri(iri) => Some(format!("<{iri}>")),
-            Self::Literal(surface) => Some(surface.clone()),
-            Self::Var(_) => None,
-        }
-    }
-}
-
-/// The lexical surface of a CONSTANT term — the exact bytes the store interns.
-///
-/// # Panics
-///
-/// Panics on a variable: every caller reaches this only after matching a constant, so a
-/// variable here is a planner bug, never a data state.
-fn constant_surface(term: &PlanTerm) -> String {
-    term.surface().unwrap_or_else(|| {
-        unreachable!("constant_surface is called only for a constant term, not {term:?}")
-    })
-}
-
-/// One binary body or head atom: `predicate(subject, object)`, optionally negated.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlanAtom {
-    /// The subject argument.
-    subject: PlanTerm,
-    /// The predicate IRI, UNBRACKETED — the key a relation is addressed by.
-    predicate: String,
-    /// The object argument.
-    object: PlanTerm,
-    /// Whether the atom is negated (a negation-as-failure filter, never a join driver).
-    negated: bool,
-}
-
-impl PlanAtom {
-    /// A positive atom (a join driver).
-    pub fn positive(subject: PlanTerm, predicate: impl Into<String>, object: PlanTerm) -> Self {
-        Self {
-            subject,
-            predicate: predicate.into(),
-            object,
-            negated: false,
-        }
-    }
-
-    /// A negated atom (a negation-as-failure filter).
-    pub fn negated(subject: PlanTerm, predicate: impl Into<String>, object: PlanTerm) -> Self {
-        Self {
-            negated: true,
-            ..Self::positive(subject, predicate, object)
-        }
-    }
-
-    /// The subject argument.
-    pub fn subject(&self) -> &PlanTerm {
-        &self.subject
-    }
-
-    /// The object argument.
-    pub fn object(&self) -> &PlanTerm {
-        &self.object
-    }
-
-    /// The predicate IRI, unbracketed.
-    pub fn predicate(&self) -> &str {
-        &self.predicate
-    }
-
-    /// Whether the atom is negated.
-    pub fn is_negated(&self) -> bool {
-        self.negated
-    }
-}
-
-/// One rule: a head atom implied by the conjunction of its body atoms.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlanRule {
-    /// The derived atom.
-    head: PlanAtom,
-    /// The body conjunction, in authored order — the order every plan coordinate and
-    /// every provenance restoration is expressed against.
-    body: Vec<PlanAtom>,
-}
-
-impl PlanRule {
-    /// A rule deriving `head` from `body`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `head` is negated: a negated head is not a rule, and admitting one here
-    /// would silently produce an unsound program.
-    pub fn new(head: PlanAtom, body: Vec<PlanAtom>) -> Self {
-        assert!(!head.negated, "a rule head may not be negated");
-        Self { head, body }
-    }
-
-    /// The derived atom.
-    pub fn head(&self) -> &PlanAtom {
-        &self.head
-    }
-
-    /// The body conjunction, in authored order.
-    pub fn body(&self) -> &[PlanAtom] {
-        &self.body
-    }
-}
 
 // ── Stratification ──────────────────────────────────────────────────────────────
 
 /// Assign every predicate of `rules` a stratum, or report the program non-stratifiable.
 ///
-/// A rule's head predicate must sit at or above the stratum of every predicate its body
+/// A clause's head predicate must sit at or above the stratum of every predicate its body
 /// reads, and STRICTLY above every predicate it reads NEGATIVELY. That is what makes
 /// negation-as-failure well defined: a negated atom is only ever evaluated against a
 /// relation that has already reached its fixpoint.
+///
+/// This is total over the whole [`DlClause`] IR, not just over its Datalog fragment: a
+/// clause contributes one dependency edge per head ATOM — over every conjunct of every
+/// disjunct — because a disjunctive head may derive any of its disjuncts and deriving one
+/// derives every conjunct in it. An inconsistency clause (whose head is `false`) has no
+/// head atom, derives nothing, and so contributes no edge at all. For the atomic form —
+/// the only one this crate evaluates — that is exactly the one head predicate, so the edge
+/// set is unchanged by the head's nesting.
 ///
 /// The assignment is a Bellman-Ford-style relaxation over the dependency edges: `n`
 /// passes suffice for a stratifiable program over `n` predicates, and one further pass
@@ -233,25 +86,25 @@ impl PlanRule {
 /// The predicate set is gathered through a `BTreeSet` and the edges are a `Vec` in
 /// program order, so the relaxation sequence — and therefore the result — is a pure
 /// function of the rule program.
-pub fn stratify(rules: &[PlanRule]) -> Option<BTreeMap<String, usize>> {
+pub fn stratify(rules: &[DlClause]) -> Option<BTreeMap<String, usize>> {
     // Every predicate, heads and body atoms alike.
     let mut preds: BTreeSet<&str> = BTreeSet::new();
     for rule in rules {
-        preds.insert(rule.head.predicate.as_str());
-        for atom in &rule.body {
-            preds.insert(atom.predicate.as_str());
+        for head in rule.head_atoms() {
+            preds.insert(head.predicate());
+        }
+        for atom in rule.body() {
+            preds.insert(atom.predicate());
         }
     }
 
     // Edges: (head predicate, body predicate, negative?).
     let mut edges: Vec<(&str, &str, bool)> = Vec::new();
     for rule in rules {
-        for atom in &rule.body {
-            edges.push((
-                rule.head.predicate.as_str(),
-                atom.predicate.as_str(),
-                atom.negated,
-            ));
+        for head in rule.head_atoms() {
+            for atom in rule.body() {
+                edges.push((head.predicate(), atom.predicate(), atom.is_negated()));
+            }
         }
     }
 
@@ -364,28 +217,28 @@ impl IndexChoice {
 
 /// Whether a term's value is already known at this point in the execution order: a
 /// constant always is, a variable only once something has bound it.
-fn term_is_known(term: &PlanTerm, bound: &BTreeSet<String>) -> bool {
+fn term_is_known(term: &ClauseTerm, bound: &BTreeSet<String>) -> bool {
     match term {
-        PlanTerm::Var(variable) => bound.contains(variable),
-        PlanTerm::Iri(_) | PlanTerm::Literal(_) => true,
+        ClauseTerm::Var(variable) => bound.contains(variable),
+        ClauseTerm::Iri(_) | ClauseTerm::Literal(_) => true,
     }
 }
 
 /// Record every variable of `atom` as bound: the atom has been scanned, so its columns
 /// carry values from here on.
-fn bind_atom_variables(atom: &PlanAtom, bound: &mut BTreeSet<String>) {
-    for term in [&atom.subject, &atom.object] {
-        if let PlanTerm::Var(variable) = term {
+fn bind_atom_variables(atom: &ClauseAtom, bound: &mut BTreeSet<String>) {
+    for term in [atom.subject(), atom.object()] {
+        if let ClauseTerm::Var(variable) = term {
             bound.insert(variable.clone());
         }
     }
 }
 
 /// The guaranteed index shape for `atom`, given the variables already bound.
-fn index_choice(atom: &PlanAtom, bound: &BTreeSet<String>) -> IndexChoice {
+fn index_choice(atom: &ClauseAtom, bound: &BTreeSet<String>) -> IndexChoice {
     IndexChoice::from_pattern(BindingPattern::from_bools([
-        term_is_known(&atom.subject, bound),
-        term_is_known(&atom.object, bound),
+        term_is_known(atom.subject(), bound),
+        term_is_known(atom.object(), bound),
     ]))
 }
 
@@ -399,7 +252,7 @@ fn index_choice(atom: &PlanAtom, bound: &BTreeSet<String>) -> IndexChoice {
 ///
 /// Every component of the key is a plan-time integer and the last component is the
 /// authored position, which is unique — so the maximum is unique and the order is stable.
-fn sips_order(rule: &PlanRule, positive: &[usize]) -> Vec<usize> {
+fn sips_order(rule: &DlClause, positive: &[usize]) -> Vec<usize> {
     let mut remaining: Vec<usize> = (0..positive.len()).collect();
     let mut bound = BTreeSet::new();
     let mut order = Vec::with_capacity(positive.len());
@@ -408,21 +261,21 @@ fn sips_order(rule: &PlanRule, positive: &[usize]) -> Vec<usize> {
             .iter()
             .enumerate()
             .max_by_key(|&(_, &positive_position)| {
-                let atom = &rule.body[positive[positive_position]];
-                let known = usize::from(term_is_known(&atom.subject, &bound))
-                    + usize::from(term_is_known(&atom.object, &bound));
+                let atom = &rule.body()[positive[positive_position]];
+                let known = usize::from(term_is_known(atom.subject(), &bound))
+                    + usize::from(term_is_known(atom.object(), &bound));
                 let constants =
-                    usize::from(!atom.subject.is_var()) + usize::from(!atom.object.is_var());
+                    usize::from(!atom.subject().is_var()) + usize::from(!atom.object().is_var());
                 let repeated = usize::from(matches!(
-                    (&atom.subject, &atom.object),
-                    (PlanTerm::Var(left), PlanTerm::Var(right)) if left == right
+                    (atom.subject(), atom.object()),
+                    (ClauseTerm::Var(left), ClauseTerm::Var(right)) if left == right
                 ));
                 (known, constants, repeated, usize::MAX - positive_position)
             })
             .expect("a non-empty remaining set has a best atom");
         remaining.remove(slot);
         order.push(positive_position);
-        bind_atom_variables(&rule.body[positive[positive_position]], &mut bound);
+        bind_atom_variables(&rule.body()[positive[positive_position]], &mut bound);
     }
     order
 }
@@ -465,19 +318,31 @@ pub enum AtomKernel {
     },
 }
 
+/// The lexical surface of a CONSTANT term — the exact bytes the store interns.
+///
+/// # Panics
+///
+/// Panics on a variable: every caller reaches this only after matching a constant, so a
+/// variable here is a planner bug, never a data state.
+fn constant_surface(term: &ClauseTerm) -> String {
+    term.surface().unwrap_or_else(|| {
+        unreachable!("constant_surface is called only for a constant term, not {term:?}")
+    })
+}
+
 /// The kernel for `atom`, resolving each variable to its flat binding slot and each
 /// constant to its lexical surface.
-fn atom_kernel(atom: &PlanAtom, slots: &BTreeMap<String, usize>) -> AtomKernel {
-    match (&atom.subject, &atom.object) {
-        (PlanTerm::Var(subject), PlanTerm::Var(object)) => AtomKernel::Vars {
+fn atom_kernel(atom: &ClauseAtom, slots: &BTreeMap<String, usize>) -> AtomKernel {
+    match (atom.subject(), atom.object()) {
+        (ClauseTerm::Var(subject), ClauseTerm::Var(object)) => AtomKernel::Vars {
             subject_slot: slots[subject],
             object_slot: slots[object],
         },
-        (PlanTerm::Var(subject), object) => AtomKernel::VarConst {
+        (ClauseTerm::Var(subject), object) => AtomKernel::VarConst {
             subject_slot: slots[subject],
             object: constant_surface(object),
         },
-        (subject, PlanTerm::Var(object)) => AtomKernel::ConstVar {
+        (subject, ClauseTerm::Var(object)) => AtomKernel::ConstVar {
             subject: constant_surface(subject),
             object_slot: slots[object],
         },
@@ -530,7 +395,7 @@ impl AtomOperator {
 /// Lower every positive atom, in execution order, to its operator — computing each
 /// atom's index shape against exactly the variables bound before it runs.
 fn lower_operators(
-    rule: &PlanRule,
+    rule: &DlClause,
     positive: &[usize],
     execution_order: &[usize],
     slots: &BTreeMap<String, usize>,
@@ -539,7 +404,7 @@ fn lower_operators(
     let mut operators = Vec::with_capacity(execution_order.len());
     for &positive_position in execution_order {
         let body_index = positive[positive_position];
-        let atom = &rule.body[body_index];
+        let atom = &rule.body()[body_index];
         operators.push(AtomOperator {
             body_index,
             positive_position,
@@ -755,7 +620,7 @@ fn bridge_edges(node_count: usize, edges: &[(usize, usize)]) -> BTreeSet<usize> 
 /// the (lexically ordered) variable numbering alone and never on a disjoint-set forest's
 /// internal choice of representative.
 fn certified_cyclic_components(
-    rule: &PlanRule,
+    rule: &DlClause,
     positive: &[usize],
     slots: &BTreeMap<String, usize>,
 ) -> Vec<CyclicPlan> {
@@ -768,14 +633,15 @@ fn certified_cyclic_components(
             body_index,
             positive_position,
         };
-        let atom = &rule.body[body_index];
-        for term in [&atom.subject, &atom.object] {
-            if let PlanTerm::Var(var) = term {
+        let atom = &rule.body()[body_index];
+        for term in [atom.subject(), atom.object()] {
+            if let ClauseTerm::Var(var) = term {
                 first_occurrence.entry(var.clone()).or_insert(occurrence);
                 occurrence += 1;
             }
         }
-        let (PlanTerm::Var(left), PlanTerm::Var(right)) = (&atom.subject, &atom.object) else {
+        let (ClauseTerm::Var(left), ClauseTerm::Var(right)) = (atom.subject(), atom.object())
+        else {
             continue;
         };
         if left == right {
@@ -923,14 +789,16 @@ impl RulePlan {
     ///
     /// The body is partitioned into positive (join) and negated (filter) atoms,
     /// preserving body order; variables are assigned flat slots in authored
-    /// first-occurrence order across the body and then the head. Body-first preserves the
-    /// join's natural binding order, and including the head gives diagnostics a complete
-    /// rule layout without changing the positive operators.
-    pub(crate) fn for_rule(rule: &PlanRule) -> Self {
+    /// first-occurrence order across the body and then every head ATOM, disjunct by
+    /// disjunct and conjunct by conjunct. Body-first preserves the join's natural binding
+    /// order, and including the head gives diagnostics a complete rule layout without
+    /// changing the positive operators. For the atomic head this crate evaluates, "the
+    /// head atoms" is the one head atom.
+    pub(crate) fn for_rule(rule: &DlClause) -> Self {
         let mut positive = Vec::new();
         let mut negated = Vec::new();
-        for (i, atom) in rule.body.iter().enumerate() {
-            if atom.negated {
+        for (i, atom) in rule.body().iter().enumerate() {
+            if atom.is_negated() {
                 negated.push(i);
             } else {
                 positive.push(i);
@@ -939,9 +807,9 @@ impl RulePlan {
 
         let mut variables = Vec::new();
         let mut slots = BTreeMap::new();
-        for atom in rule.body.iter().chain(core::iter::once(&rule.head)) {
-            for term in [&atom.subject, &atom.object] {
-                if let PlanTerm::Var(name) = term
+        for atom in rule.body().iter().chain(rule.head_atoms()) {
+            for term in [atom.subject(), atom.object()] {
+                if let ClauseTerm::Var(name) = term
                     && !slots.contains_key(name)
                 {
                     let slot = variables.len();
@@ -975,7 +843,7 @@ impl RulePlan {
 
         // Map every promoted atom to its owning component. Components are edge-disjoint
         // after bridge removal, so one atom belongs to at most one of them.
-        let mut component_of: Vec<Option<usize>> = vec![None; rule.body.len()];
+        let mut component_of: Vec<Option<usize>> = vec![None; rule.body().len()];
         for (component, plan) in cyclic.iter().enumerate() {
             for atom in &plan.atoms {
                 component_of[atom.body_index] = Some(component);
@@ -1103,15 +971,37 @@ impl RulePlan {
 #[derive(Debug, Clone)]
 pub struct Parsed {
     /// The program, in authored order.
-    rules: Arc<[PlanRule]>,
+    rules: Arc<[DlClause]>,
 }
 
 impl Parsed {
-    /// Enter the pipeline with a parsed rule program.
-    pub fn new(rules: Vec<PlanRule>) -> Self {
-        Self {
-            rules: Arc::from(rules),
+    /// Enter the pipeline with a parsed rule program, or refuse a clause the semi-naive
+    /// evaluator has no semantics for.
+    ///
+    /// This is the head-form gate, and it sits here — at the pipeline's ONLY entrance —
+    /// rather than at the executor, because that is what makes the refusal unbypassable:
+    /// an [`Executable`] is reachable only through this constructor, so a value of that
+    /// type is a proof that every clause in it is
+    /// [`HeadForm::Atomic`](crate::clause::HeadForm::Atomic), on top of the
+    /// stratification and planning proofs the later stages add.
+    ///
+    /// # Errors
+    ///
+    /// [`NonDatalogClause`], naming the first clause in authored order whose head is
+    /// existential, disjunctive, conjunctive or `false`. That is a refusal, not a gap:
+    /// those four forms are outside the class of definite clauses a least-fixpoint
+    /// evaluator computes over, and accepting one as if it were atomic — or dropping
+    /// it — would return an answer that is not the model of the program supplied.
+    pub fn new(rules: Vec<DlClause>) -> Result<Self, NonDatalogClause> {
+        for (index, rule) in rules.iter().enumerate() {
+            let form = rule.head_form();
+            if !form.is_datalog() {
+                return Err(NonDatalogClause::new(index, form));
+            }
         }
+        Ok(Self {
+            rules: Arc::from(rules),
+        })
     }
 
     /// Compute the stratification ONCE and lower it into the per-stratum rule grouping.
@@ -1128,12 +1018,12 @@ impl Parsed {
         let max_stratum = self
             .rules
             .iter()
-            .map(|r| stratum_of[r.head.predicate.as_str()])
+            .map(|r| stratum_of[datalog_head(r).predicate()])
             .max()
             .unwrap_or(0);
         let mut strata: Vec<Vec<usize>> = vec![Vec::new(); max_stratum + 1];
         for (i, rule) in self.rules.iter().enumerate() {
-            strata[stratum_of[rule.head.predicate.as_str()]].push(i);
+            strata[stratum_of[datalog_head(rule).predicate()]].push(i);
         }
 
         Some(Stratified {
@@ -1143,11 +1033,25 @@ impl Parsed {
     }
 }
 
+/// The single head atom of a clause that has already passed the [`Parsed::new`] gate.
+///
+/// # Panics
+///
+/// Panics on any non-atomic head. Every clause inside the pipeline came through
+/// [`Parsed::new`], which admits only
+/// [`HeadForm::Atomic`](crate::clause::HeadForm::Atomic), so reaching this would be a
+/// contradiction in that gate rather than a caller error.
+pub(crate) fn datalog_head(rule: &DlClause) -> &ClauseAtom {
+    rule.datalog_head().unwrap_or_else(|| {
+        unreachable!("the plan pipeline admits only atomic-head clauses (Parsed::new)")
+    })
+}
+
 /// Stage 2: a stratifiable program with its per-stratum rule grouping memoized.
 #[derive(Debug, Clone)]
 pub struct Stratified {
     /// The program, in authored order.
-    rules: Arc<[PlanRule]>,
+    rules: Arc<[DlClause]>,
     /// `strata[k]` = the program-order indices of stratum `k`'s rules.
     strata: Vec<Vec<usize>>,
 }
@@ -1168,7 +1072,7 @@ impl Stratified {
 #[derive(Debug, Clone)]
 pub struct Planned {
     /// The program, in authored order.
-    rules: Arc<[PlanRule]>,
+    rules: Arc<[DlClause]>,
     /// `strata[k]` = the program-order indices of stratum `k`'s rules.
     strata: Vec<Vec<usize>>,
     /// One entry per rule, parallel to `rules` by index.
@@ -1182,7 +1086,7 @@ impl Planned {
         let head_predicates: BTreeSet<String> = self
             .rules
             .iter()
-            .map(|r| r.head.predicate.clone())
+            .map(|r| datalog_head(r).predicate().to_owned())
             .collect();
         Executable {
             rules: self.rules,
@@ -1201,7 +1105,7 @@ impl Planned {
 #[derive(Debug, Clone)]
 pub struct Executable {
     /// The program, in authored order.
-    rules: Arc<[PlanRule]>,
+    rules: Arc<[DlClause]>,
     /// `strata[k]` = the program-order indices of stratum `k`'s rules.
     strata: Vec<Vec<usize>>,
     /// One entry per rule, parallel to `rules` by index.
@@ -1254,7 +1158,7 @@ impl Executable {
     /// # Panics
     ///
     /// Panics if `index` is not a rule of this program.
-    pub fn rule_entry(&self, index: usize) -> (&PlanRule, &RulePlan) {
+    pub fn rule_entry(&self, index: usize) -> (&DlClause, &RulePlan) {
         (&self.rules[index], &self.plans[index])
     }
 
@@ -1267,13 +1171,14 @@ impl Executable {
     pub fn stratum_head_predicates(&self, k: usize) -> impl Iterator<Item = &str> {
         self.strata[k]
             .iter()
-            .map(move |&i| self.rules[i].head.predicate.as_str())
+            .map(move |&i| datalog_head(&self.rules[i]).predicate())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clause::{HeadDisjunct, HeadForm};
     use crate::test_support::permute;
 
     const P: &str = "https://example.org/p";
@@ -1281,16 +1186,16 @@ mod tests {
     const R: &str = "https://example.org/r";
     const S: &str = "https://example.org/s";
 
-    fn v(name: &str) -> PlanTerm {
-        PlanTerm::var(name)
+    fn v(name: &str) -> ClauseTerm {
+        ClauseTerm::var(name)
     }
 
-    fn atom(subject: &str, predicate: &str, object: &str) -> PlanAtom {
-        PlanAtom::positive(v(subject), predicate, v(object))
+    fn atom(subject: &str, predicate: &str, object: &str) -> ClauseAtom {
+        ClauseAtom::positive(v(subject), predicate, v(object))
     }
 
     /// The three-atom triangle `p(X,Y), q(Y,Z), r(Z,X)` — the canonical cyclic body.
-    fn triangle_body() -> Vec<PlanAtom> {
+    fn triangle_body() -> Vec<ClauseAtom> {
         vec![
             atom("?X", P, "?Y"),
             atom("?Y", Q, "?Z"),
@@ -1298,17 +1203,17 @@ mod tests {
         ]
     }
 
-    fn triangle_rule(body: Vec<PlanAtom>) -> PlanRule {
-        PlanRule::new(atom("?X", S, "?Z"), body)
+    fn triangle_rule(body: Vec<ClauseAtom>) -> DlClause {
+        DlClause::datalog(atom("?X", S, "?Z"), body)
     }
 
     #[test]
     fn plan_partitions_the_body_preserving_authored_order() {
-        let rule = PlanRule::new(
+        let rule = DlClause::datalog(
             atom("?X", S, "?Z"),
             vec![
                 atom("?X", P, "?Y"),
-                PlanAtom::negated(v("?Y"), Q, v("?Z")),
+                ClauseAtom::negated(v("?Y"), Q, v("?Z")),
                 atom("?Y", R, "?Z"),
             ],
         );
@@ -1317,15 +1222,15 @@ mod tests {
         assert_eq!(plan.negated(), [1]);
         assert!(!plan.has_cyclic_subplan());
         assert_eq!(rule.body()[1].subject().variable(), Some("?Y"));
-        assert!(!rule.head().is_negated());
+        assert!(!datalog_head(&rule).is_negated());
     }
 
     /// Variable slots are authored first-occurrence order across the body, then the head
     /// — a head-only variable still gets a slot, at the end.
     #[test]
     fn plan_assigns_slots_in_authored_first_occurrence_order() {
-        let rule = PlanRule::new(
-            PlanAtom::positive(v("?W"), S, v("?X")),
+        let rule = DlClause::datalog(
+            ClauseAtom::positive(v("?W"), S, v("?X")),
             vec![atom("?X", P, "?Y"), atom("?Y", Q, "?X")],
         );
         let plan = RulePlan::for_rule(&rule);
@@ -1337,11 +1242,11 @@ mod tests {
     /// sideways-information-passing order.
     #[test]
     fn plan_sips_runs_the_most_bound_atom_first() {
-        let rule = PlanRule::new(
+        let rule = DlClause::datalog(
             atom("?X", S, "?Z"),
             vec![
                 atom("?Y", Q, "?Z"),
-                PlanAtom::positive(PlanTerm::iri("https://example.org/a"), P, v("?Y")),
+                ClauseAtom::positive(ClauseTerm::iri("https://example.org/a"), P, v("?Y")),
             ],
         );
         let plan = RulePlan::for_rule(&rule);
@@ -1373,15 +1278,15 @@ mod tests {
     /// membership probe with both surfaces rendered once.
     #[test]
     fn plan_lowers_every_kernel_shape() {
-        let a = PlanTerm::iri("https://example.org/a");
-        let lit = PlanTerm::literal("\"7\"^^<http://www.w3.org/2001/XMLSchema#integer>");
-        let rule = PlanRule::new(
+        let a = ClauseTerm::iri("https://example.org/a");
+        let lit = ClauseTerm::literal("\"7\"^^<http://www.w3.org/2001/XMLSchema#integer>");
+        let rule = DlClause::datalog(
             atom("?X", S, "?Y"),
             vec![
                 atom("?X", P, "?Y"),
-                PlanAtom::positive(v("?X"), Q, lit.clone()),
-                PlanAtom::positive(a.clone(), R, v("?Y")),
-                PlanAtom::positive(a, R, lit),
+                ClauseAtom::positive(v("?X"), Q, lit.clone()),
+                ClauseAtom::positive(a.clone(), R, v("?Y")),
+                ClauseAtom::positive(a, R, lit),
             ],
         );
         let plan = RulePlan::for_rule(&rule);
@@ -1402,7 +1307,7 @@ mod tests {
     /// one-column probe; two bound columns is the unique-key probe.
     #[test]
     fn index_choice_tracks_the_binding_frontier() {
-        let rule = PlanRule::new(
+        let rule = DlClause::datalog(
             atom("?X", S, "?Z"),
             vec![
                 atom("?X", P, "?Y"),
@@ -1542,7 +1447,7 @@ mod tests {
     /// repeated edge is a duplicate variable pair.
     #[test]
     fn cyclic_certification_leaves_acyclic_bodies_binary() {
-        let path = PlanRule::new(
+        let path = DlClause::datalog(
             atom("?X", S, "?W"),
             vec![
                 atom("?X", P, "?Y"),
@@ -1553,7 +1458,7 @@ mod tests {
         assert!(!RulePlan::for_rule(&path).has_cyclic_subplan());
 
         // Three atoms but only two distinct variable edges: an intersection, not a cycle.
-        let duplicated = PlanRule::new(
+        let duplicated = DlClause::datalog(
             atom("?X", S, "?Z"),
             vec![
                 atom("?X", P, "?Y"),
@@ -1564,7 +1469,7 @@ mod tests {
         assert!(!RulePlan::for_rule(&duplicated).has_cyclic_subplan());
 
         // A self-edge (repeated variable) contributes no graph edge at all.
-        let self_edge = PlanRule::new(
+        let self_edge = DlClause::datalog(
             atom("?X", S, "?Z"),
             vec![
                 atom("?X", P, "?X"),
@@ -1581,7 +1486,7 @@ mod tests {
     fn cyclic_certification_keeps_bridge_atoms_binary() {
         let mut body = triangle_body();
         body.push(atom("?Z", S, "?W"));
-        let rule = PlanRule::new(atom("?X", S, "?W"), body);
+        let rule = DlClause::datalog(atom("?X", S, "?W"), body);
         let plan = RulePlan::for_rule(&rule);
         assert!(plan.has_cyclic_subplan());
         let groups = plan.join_groups();
@@ -1600,7 +1505,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "join groups exist only for a certified cyclic plan")]
     fn acyclic_plan_has_no_join_groups() {
-        let rule = PlanRule::new(atom("?X", S, "?Y"), vec![atom("?X", P, "?Y")]);
+        let rule = DlClause::datalog(atom("?X", S, "?Y"), vec![atom("?X", P, "?Y")]);
         let _ = RulePlan::for_rule(&rule).join_groups();
     }
 
@@ -1646,9 +1551,12 @@ mod tests {
     fn planning_is_reproducible() {
         let rules = [
             triangle_rule(triangle_body()),
-            PlanRule::new(
+            DlClause::datalog(
                 atom("?X", Q, "?Y"),
-                vec![atom("?X", P, "?Y"), PlanAtom::negated(v("?Y"), R, v("?X"))],
+                vec![
+                    atom("?X", P, "?Y"),
+                    ClauseAtom::negated(v("?Y"), R, v("?X")),
+                ],
             ),
         ];
         let reference: Vec<RulePlan> = rules.iter().map(RulePlan::for_rule).collect();
@@ -1660,31 +1568,17 @@ mod tests {
 
     // ── Stratification and the type-state pipeline ──────────────────────────────
 
-    /// A constant term renders to the exact bytes the store interns; a variable has no
-    /// plan-time surface at all, because its surface is a runtime binding.
-    #[test]
-    fn plan_term_surface_is_the_stored_bytes_of_a_constant_only() {
-        assert_eq!(
-            PlanTerm::iri("https://example.org/a").surface().as_deref(),
-            Some("<https://example.org/a>")
-        );
-        assert_eq!(
-            PlanTerm::literal("\"7\"^^<http://www.w3.org/2001/XMLSchema#integer>")
-                .surface()
-                .as_deref(),
-            Some("\"7\"^^<http://www.w3.org/2001/XMLSchema#integer>")
-        );
-        assert_eq!(PlanTerm::var("?x").surface(), None);
-    }
-
     #[test]
     fn stratify_lifts_a_negated_dependency_one_stratum() {
         // q :- p.   r :- q, not p.
         let rules = vec![
-            PlanRule::new(atom("?X", Q, "?Y"), vec![atom("?X", P, "?Y")]),
-            PlanRule::new(
+            DlClause::datalog(atom("?X", Q, "?Y"), vec![atom("?X", P, "?Y")]),
+            DlClause::datalog(
                 atom("?X", R, "?Y"),
-                vec![atom("?X", Q, "?Y"), PlanAtom::negated(v("?X"), P, v("?Y"))],
+                vec![
+                    atom("?X", Q, "?Y"),
+                    ClauseAtom::negated(v("?X"), P, v("?Y")),
+                ],
             ),
         ];
         let strata = stratify(&rules).expect("the program is stratifiable");
@@ -1700,11 +1594,11 @@ mod tests {
     fn stratify_rejects_negation_inside_a_cycle() {
         // p :- not q.   q :- p.  — the negative edge is inside a cycle.
         let rules = vec![
-            PlanRule::new(
+            DlClause::datalog(
                 atom("?X", P, "?Y"),
-                vec![PlanAtom::negated(v("?X"), Q, v("?Y"))],
+                vec![ClauseAtom::negated(v("?X"), Q, v("?Y"))],
             ),
-            PlanRule::new(atom("?X", Q, "?Y"), vec![atom("?X", P, "?Y")]),
+            DlClause::datalog(atom("?X", Q, "?Y"), vec![atom("?X", P, "?Y")]),
         ];
         assert_eq!(stratify(&rules), None);
     }
@@ -1712,7 +1606,7 @@ mod tests {
     #[test]
     fn stratify_admits_positive_recursion() {
         // Transitive closure: p :- p, p. A positive cycle is one stratum.
-        let rules = vec![PlanRule::new(
+        let rules = vec![DlClause::datalog(
             atom("?X", P, "?Z"),
             vec![atom("?X", P, "?Y"), atom("?Y", P, "?Z")],
         )];
@@ -1730,13 +1624,17 @@ mod tests {
     #[test]
     fn pipeline_seals_a_stratified_planned_program() {
         let rules = vec![
-            PlanRule::new(atom("?X", Q, "?Y"), vec![atom("?X", P, "?Y")]),
-            PlanRule::new(
+            DlClause::datalog(atom("?X", Q, "?Y"), vec![atom("?X", P, "?Y")]),
+            DlClause::datalog(
                 atom("?X", R, "?Y"),
-                vec![atom("?X", Q, "?Y"), PlanAtom::negated(v("?X"), P, v("?Y"))],
+                vec![
+                    atom("?X", Q, "?Y"),
+                    ClauseAtom::negated(v("?X"), P, v("?Y")),
+                ],
             ),
         ];
         let exe = Parsed::new(rules)
+            .expect("every fixture clause has an atomic head")
             .stratify()
             .expect("stratifiable")
             .plan()
@@ -1761,7 +1659,7 @@ mod tests {
             "stratum 1 derives exactly r"
         );
         let (rule, plan) = exe.rule_entry(1);
-        assert_eq!(rule.head().predicate(), R);
+        assert_eq!(datalog_head(rule).predicate(), R);
         assert_eq!(rule.body().len(), 2);
         assert!(rule.body()[1].is_negated());
         assert_eq!(rule.body()[1].object(), &v("?Y"));
@@ -1774,28 +1672,34 @@ mod tests {
     #[test]
     fn pipeline_refuses_a_non_stratifiable_program() {
         let rules = vec![
-            PlanRule::new(
+            DlClause::datalog(
                 atom("?X", P, "?Y"),
-                vec![PlanAtom::negated(v("?X"), Q, v("?Y"))],
+                vec![ClauseAtom::negated(v("?X"), Q, v("?Y"))],
             ),
-            PlanRule::new(atom("?X", Q, "?Y"), vec![atom("?X", P, "?Y")]),
+            DlClause::datalog(atom("?X", Q, "?Y"), vec![atom("?X", P, "?Y")]),
         ];
-        assert!(Parsed::new(rules).stratify().is_none());
+        assert!(
+            Parsed::new(rules)
+                .expect("every fixture clause has an atomic head")
+                .stratify()
+                .is_none()
+        );
     }
 
     /// Rules that all land in one stratum keep authored program order within it — the
     /// executor's stable firing order.
     #[test]
     fn pipeline_preserves_program_order_within_a_stratum() {
-        let rules: Vec<PlanRule> = (0..5)
+        let rules: Vec<DlClause> = (0..5)
             .map(|i| {
-                PlanRule::new(
+                DlClause::datalog(
                     atom("?X", P, "?Y"),
                     vec![atom("?X", &format!("https://example.org/b{i}"), "?Y")],
                 )
             })
             .collect();
         let exe = Parsed::new(rules)
+            .expect("every fixture clause has an atomic head")
             .stratify()
             .expect("stratifiable")
             .plan()
@@ -1804,10 +1708,56 @@ mod tests {
         assert_eq!(exe.stratum_rule_indices(0), [0, 1, 2, 3, 4]);
     }
 
+    /// The pipeline's entrance is the head-form gate: an existential, a disjunctive, a
+    /// conjunctive and an empty head are each refused by name, so a non-Datalog clause can
+    /// never reach an [`Executable`] — and therefore never reach the evaluator.
     #[test]
-    #[should_panic(expected = "a rule head may not be negated")]
-    fn a_negated_head_is_not_a_rule() {
-        let _ = PlanRule::new(PlanAtom::negated(v("?X"), P, v("?Y")), Vec::new());
+    fn pipeline_refuses_every_non_datalog_head_form() {
+        let cases = [
+            (
+                HeadForm::Existential,
+                DlClause::new(
+                    vec![HeadDisjunct::atom(atom("?X", Q, "?Y"))],
+                    vec!["?Y".to_owned()],
+                    vec![atom("?X", P, "?Z")],
+                ),
+            ),
+            (
+                HeadForm::Disjunctive,
+                DlClause::new(
+                    vec![
+                        HeadDisjunct::atom(atom("?X", Q, "?Y")),
+                        HeadDisjunct::atom(atom("?X", R, "?Y")),
+                    ],
+                    Vec::new(),
+                    vec![atom("?X", P, "?Y")],
+                ),
+            ),
+            (
+                HeadForm::Conjunctive,
+                DlClause::new(
+                    vec![HeadDisjunct::new(vec![
+                        atom("?X", Q, "?Y"),
+                        atom("?X", R, "?Y"),
+                    ])],
+                    Vec::new(),
+                    vec![atom("?X", P, "?Y")],
+                ),
+            ),
+            (
+                HeadForm::Inconsistency,
+                DlClause::inconsistency(vec![atom("?X", P, "?Y")]),
+            ),
+        ];
+        for (form, clause) in cases {
+            let refusal = Parsed::new(vec![
+                DlClause::datalog(atom("?X", S, "?Y"), vec![atom("?X", P, "?Y")]),
+                clause,
+            ])
+            .expect_err("a non-Datalog head form must be refused, never planned");
+            assert_eq!(refusal.clause(), 1, "{form}");
+            assert_eq!(refusal.form(), form);
+        }
     }
 
     /// The bridge finder is exact on the shapes certification depends on: a path is all
