@@ -32,152 +32,48 @@
 //!
 //! Because the declaration is data, adding a rule to the chase changes the digest, which
 //! is the property a cache consumer actually needs: no false negatives.
+//!
+//! # One module per rule family
+//!
+//! The rules themselves are NOT written here. Each specification rule family owns a module
+//! and states its own rules — the variant, its documentation, the name a firing is reported
+//! under, the lanes that fire it, and the DL clauses that say what it concludes:
+//!
+//! * [`rdfs`] — the RDF pattern of RDF 1.2 Semantics §8.1.1 and the RDFS patterns of
+//!   §9.2.1, including the nine the OWL 2 RL tables rename;
+//! * [`prp`] — OWL 2 Profiles §4.3 Table 5, the property-axiom rules with no RDFS
+//!   counterpart;
+//! * [`cls`] — Table 6, the class-expression rules;
+//! * [`cax`] — Table 7, the class-axiom rules with no RDFS counterpart;
+//! * [`scm`] — Table 9, the schema-vocabulary rules with no RDFS counterpart.
+//!
+//! This module concatenates whatever those five export, in the fixed family order `rdfs`,
+//! `prp`, `cls`, `cax`, `scm` — RDF/RDFS first, then the OWL 2 RL tables in table order —
+//! and turns the result into [`ChaseRule`], its inventory bindings and the clause program.
+//! Adding a rule is therefore an edit to ONE family module: nothing here names an
+//! individual rule, so two families can grow at once without touching the same lines.
+//!
+//! An empty family table is a statement, not an omission: it says this crate's chase
+//! implements none of that table yet, and the family module's documentation names the
+//! rules it will hold when it does.
 
 use purrdf_datalog::cache::{ContractHash, contract_hash};
 use purrdf_datalog::clause::{ClauseAtom, ClauseTerm, DlClause};
 
 use crate::Regime;
 use crate::rules::RuleId;
-use crate::vocab::{
-    OWL_EQUIVALENTCLASS, OWL_EQUIVALENTPROPERTY, OWL_INVERSEOF, OWL_SYMMETRICPROPERTY,
-    OWL_TRANSITIVEPROPERTY, RDF_PROPERTY, RDF_TYPE, RDFS_CLASS, RDFS_DOMAIN, RDFS_RANGE,
-    RDFS_RESOURCE, RDFS_SUBCLASSOF, RDFS_SUBPROPERTYOF,
-};
 
-/// One rule of the forward chase, named once for the whole crate.
-///
-/// Variants are declared in specification order — the RDF pattern of RDF 1.2 Semantics
-/// §8.1.1, then the RDFS patterns of §9.2.1 in numeric order, then the OWL 2 RL rules of
-/// Tables 4–9 that only the `OWL-RL` lane fires, in table order. [`ChaseRule::ALL`] and
-/// hence [`calculus_program`] follow that order, so both are byte-for-byte reproducible.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum ChaseRule {
-    /// `rdfD2` — every predicate is an `rdf:Property`. The bare-`RDF` lane only.
-    PredicateProperty,
-    /// `rdfs2` / `prp-dom` — a domain declaration types the subject.
-    Domain,
-    /// `rdfs3` / `prp-rng` — a range declaration types the object.
-    Range,
-    /// `rdfs5` / `scm-spo` — `rdfs:subPropertyOf` is transitive.
-    SubPropertyTransitive,
-    /// `rdfs6` — a property is a sub-property of itself.
-    SubPropertyReflexive,
-    /// `rdfs7` / `prp-spo1` — a sub-property assertion re-predicates a triple.
-    SubPropertyRewrite,
-    /// `rdfs8` — a class is a sub-class of `rdfs:Resource`.
-    ClassResource,
-    /// `rdfs9` / `cax-sco` — a sub-class assertion re-types an instance.
-    SubClassInstance,
-    /// `rdfs10` — a class is a sub-class of itself.
-    SubClassReflexive,
-    /// `rdfs11` / `scm-sco` — `rdfs:subClassOf` is transitive.
-    SubClassTransitive,
-    /// `prp-symp` — a symmetric property mirrors its triples. `OWL-RL` only.
-    Symmetric,
-    /// `prp-trp` — a transitive property composes its triples. `OWL-RL` only.
-    Transitive,
-    /// `prp-inv1` — an `owl:inverseOf` assertion, read left to right. `OWL-RL` only.
-    Inverse1,
-    /// `prp-inv2` — an `owl:inverseOf` assertion, read right to left. `OWL-RL` only.
-    Inverse2,
-    /// `scm-eqc1` — `owl:equivalentClass` is mutual `rdfs:subClassOf`. `OWL-RL` only.
-    EquivalentClass,
-    /// `scm-eqp1` — `owl:equivalentProperty` is mutual `rdfs:subPropertyOf`. `OWL-RL`
-    /// only.
-    EquivalentProperty,
-}
+pub(crate) mod cax;
+pub(crate) mod cls;
+pub(crate) mod prp;
+pub(crate) mod rdfs;
+pub(crate) mod scm;
 
-impl ChaseRule {
-    /// Every chase rule, in the declaration order documented on the enum.
-    pub(crate) const ALL: [Self; 16] = [
-        Self::PredicateProperty,
-        Self::Domain,
-        Self::Range,
-        Self::SubPropertyTransitive,
-        Self::SubPropertyReflexive,
-        Self::SubPropertyRewrite,
-        Self::ClassResource,
-        Self::SubClassInstance,
-        Self::SubClassReflexive,
-        Self::SubClassTransitive,
-        Self::Symmetric,
-        Self::Transitive,
-        Self::Inverse1,
-        Self::Inverse2,
-        Self::EquivalentClass,
-        Self::EquivalentProperty,
-    ];
-
-    /// How many chase rules there are — the width of a per-rule firing tally.
-    pub(crate) const COUNT: usize = Self::ALL.len();
-
-    /// This rule's index into a [`Self::COUNT`]-wide tally.
-    pub(crate) const fn index(self) -> usize {
-        self as usize
-    }
-
-    /// The specification rule id a firing is REPORTED under.
-    ///
-    /// `owl` selects the lane, exactly as it does in the chase: the OWL 2 RL tables give
-    /// nine of these rules a different name from the RDFS tables (`rdfs2` is `prp-dom`,
-    /// `rdfs11` is `scm-sco`, …), and a report must use the name of the calculus it ran.
-    ///
-    /// Three rules — `rdfs6`, `rdfs8` and `rdfs10` — have NO OWL 2 RL rule id, because
-    /// OWL 2 RL/RDF omits them from its tables. The `OWL-RL` lane fires them all the same,
-    /// so they are reported under their RDFS name rather than renamed to a neighbouring
-    /// OWL rule that would not have licensed the conclusion. A consequence worth stating
-    /// plainly: an `OWL-RL` report's `rules_fired` is NOT a subset of `rules(OwlRl)`.
-    pub(crate) const fn rule_id(self, owl: bool) -> RuleId {
-        match self {
-            Self::PredicateProperty => RuleId::RdfD2,
-            Self::Domain if owl => RuleId::PrpDom,
-            Self::Domain => RuleId::Rdfs2,
-            Self::Range if owl => RuleId::PrpRng,
-            Self::Range => RuleId::Rdfs3,
-            Self::SubPropertyTransitive if owl => RuleId::ScmSpo,
-            Self::SubPropertyTransitive => RuleId::Rdfs5,
-            Self::SubPropertyReflexive => RuleId::Rdfs6,
-            Self::SubPropertyRewrite if owl => RuleId::PrpSpo1,
-            Self::SubPropertyRewrite => RuleId::Rdfs7,
-            Self::ClassResource => RuleId::Rdfs8,
-            Self::SubClassInstance if owl => RuleId::CaxSco,
-            Self::SubClassInstance => RuleId::Rdfs9,
-            Self::SubClassReflexive => RuleId::Rdfs10,
-            Self::SubClassTransitive if owl => RuleId::ScmSco,
-            Self::SubClassTransitive => RuleId::Rdfs11,
-            Self::Symmetric => RuleId::PrpSymp,
-            Self::Transitive => RuleId::PrpTrp,
-            Self::Inverse1 => RuleId::PrpInv1,
-            Self::Inverse2 => RuleId::PrpInv2,
-            Self::EquivalentClass => RuleId::ScmEqc1,
-            Self::EquivalentProperty => RuleId::ScmEqp1,
-        }
-    }
-
-    /// Whether `regime`'s lane fires this rule.
-    ///
-    /// `Simple` fires nothing (it is the identity closure); `RDF` fires the single
-    /// predicate-typing rule; `RDFS` fires the nine RDFS patterns; `OWL-RL` fires those
-    /// nine plus six OWL rules. `OWL-Direct`, `RIF` and `D` are not this chase's lanes at
-    /// all.
-    pub(crate) const fn fires_under(self, regime: Regime) -> bool {
-        match regime {
-            Regime::Rdf => matches!(self, Self::PredicateProperty),
-            Regime::Rdfs => !matches!(
-                self,
-                Self::PredicateProperty
-                    | Self::Symmetric
-                    | Self::Transitive
-                    | Self::Inverse1
-                    | Self::Inverse2
-                    | Self::EquivalentClass
-                    | Self::EquivalentProperty
-            ),
-            Regime::OwlRl => !matches!(self, Self::PredicateProperty),
-            Regime::Simple | Regime::OwlDirect | Regime::Rif | Regime::D => false,
-        }
-    }
-}
+use cax::cax_rules;
+use cls::cls_rules;
+use prp::prp_rules;
+use rdfs::rdfs_rules;
+use scm::scm_rules;
 
 /// A variable clause term.
 fn var(name: &str) -> ClauseTerm {
@@ -199,144 +95,159 @@ fn atom(subject: ClauseTerm, predicate: &str, object: ClauseTerm) -> ClauseAtom 
     ClauseAtom::positive(subject, predicate, object)
 }
 
-/// The DL clauses that state — and, through [`crate::engine`], run — `rule`.
-///
-/// Most rules are one clause. `scm-eqc1` and `scm-eqp1` are two each: their specification
-/// conclusion is a conjunction of two triples, and a conjunctive head is not a Datalog
-/// clause, so each direction is stated separately rather than encoded in a head form the
-/// evaluator refuses.
-///
-/// The lane is not a parameter. Nine of these rules carry two specification NAMES — one
-/// RDFS, one OWL 2 RL — but the clause each names is the same clause, so the lane is read
-/// by [`ChaseRule::rule_id`] and by [`ChaseRule::fires_under`] and by nothing else.
-fn clauses_for(rule: ChaseRule) -> Vec<DlClause> {
-    let (s, p, o) = (var("?s"), var("?p"), var("?o"));
-    match rule {
-        // rdfD2: T(?s, ?p, ?o) ⇒ ?p rdf:type rdf:Property.
-        ChaseRule::PredicateProperty => vec![DlClause::datalog(
-            atom(p, RDF_TYPE, iri(RDF_PROPERTY)),
-            vec![quad(s, var("?p"), o)],
-        )],
-        // rdfs2 / prp-dom: ?p rdfs:domain ?c, T(?x, ?p, ?y) ⇒ ?x rdf:type ?c.
-        ChaseRule::Domain => vec![DlClause::datalog(
-            atom(var("?x"), RDF_TYPE, var("?c")),
-            vec![
-                atom(var("?p"), RDFS_DOMAIN, var("?c")),
-                quad(var("?x"), var("?p"), var("?y")),
-            ],
-        )],
-        // rdfs3 / prp-rng: ?p rdfs:range ?c, T(?x, ?p, ?y) ⇒ ?y rdf:type ?c.
-        ChaseRule::Range => vec![DlClause::datalog(
-            atom(var("?y"), RDF_TYPE, var("?c")),
-            vec![
-                atom(var("?p"), RDFS_RANGE, var("?c")),
-                quad(var("?x"), var("?p"), var("?y")),
-            ],
-        )],
-        // rdfs5 / scm-spo: subPropertyOf is transitive.
-        ChaseRule::SubPropertyTransitive => vec![DlClause::datalog(
-            atom(var("?p1"), RDFS_SUBPROPERTYOF, var("?p3")),
-            vec![
-                atom(var("?p1"), RDFS_SUBPROPERTYOF, var("?p2")),
-                atom(var("?p2"), RDFS_SUBPROPERTYOF, var("?p3")),
-            ],
-        )],
-        // rdfs6: ?p rdf:type rdf:Property ⇒ ?p rdfs:subPropertyOf ?p.
-        ChaseRule::SubPropertyReflexive => vec![DlClause::datalog(
-            atom(var("?p"), RDFS_SUBPROPERTYOF, var("?p")),
-            vec![atom(var("?p"), RDF_TYPE, iri(RDF_PROPERTY))],
-        )],
-        // rdfs7 / prp-spo1: ?p1 subPropertyOf ?p2, T(?x, ?p1, ?y) ⇒ T(?x, ?p2, ?y).
-        ChaseRule::SubPropertyRewrite => vec![DlClause::datalog(
-            quad(var("?x"), var("?p2"), var("?y")),
-            vec![
-                atom(var("?p1"), RDFS_SUBPROPERTYOF, var("?p2")),
-                quad(var("?x"), var("?p1"), var("?y")),
-            ],
-        )],
-        // rdfs8: ?c rdf:type rdfs:Class ⇒ ?c rdfs:subClassOf rdfs:Resource.
-        ChaseRule::ClassResource => vec![DlClause::datalog(
-            atom(var("?c"), RDFS_SUBCLASSOF, iri(RDFS_RESOURCE)),
-            vec![atom(var("?c"), RDF_TYPE, iri(RDFS_CLASS))],
-        )],
-        // rdfs9 / cax-sco: ?c1 subClassOf ?c2, ?x rdf:type ?c1 ⇒ ?x rdf:type ?c2.
-        ChaseRule::SubClassInstance => vec![DlClause::datalog(
-            atom(var("?x"), RDF_TYPE, var("?c2")),
-            vec![
-                atom(var("?c1"), RDFS_SUBCLASSOF, var("?c2")),
-                atom(var("?x"), RDF_TYPE, var("?c1")),
-            ],
-        )],
-        // rdfs10: ?c rdf:type rdfs:Class ⇒ ?c rdfs:subClassOf ?c.
-        ChaseRule::SubClassReflexive => vec![DlClause::datalog(
-            atom(var("?c"), RDFS_SUBCLASSOF, var("?c")),
-            vec![atom(var("?c"), RDF_TYPE, iri(RDFS_CLASS))],
-        )],
-        // rdfs11 / scm-sco: subClassOf is transitive.
-        ChaseRule::SubClassTransitive => vec![DlClause::datalog(
-            atom(var("?c1"), RDFS_SUBCLASSOF, var("?c3")),
-            vec![
-                atom(var("?c1"), RDFS_SUBCLASSOF, var("?c2")),
-                atom(var("?c2"), RDFS_SUBCLASSOF, var("?c3")),
-            ],
-        )],
-        // prp-symp: ?p a owl:SymmetricProperty, T(?x, ?p, ?y) ⇒ T(?y, ?p, ?x).
-        ChaseRule::Symmetric => vec![DlClause::datalog(
-            quad(var("?y"), var("?p"), var("?x")),
-            vec![
-                atom(var("?p"), RDF_TYPE, iri(OWL_SYMMETRICPROPERTY)),
-                quad(var("?x"), var("?p"), var("?y")),
-            ],
-        )],
-        // prp-trp: ?p a owl:TransitiveProperty, T(?x,?p,?y), T(?y,?p,?z) ⇒ T(?x,?p,?z).
-        ChaseRule::Transitive => vec![DlClause::datalog(
-            quad(var("?x"), var("?p"), var("?z")),
-            vec![
-                atom(var("?p"), RDF_TYPE, iri(OWL_TRANSITIVEPROPERTY)),
-                quad(var("?x"), var("?p"), var("?y")),
-                quad(var("?y"), var("?p"), var("?z")),
-            ],
-        )],
-        // prp-inv1: ?p1 owl:inverseOf ?p2, T(?x, ?p1, ?y) ⇒ T(?y, ?p2, ?x).
-        ChaseRule::Inverse1 => vec![DlClause::datalog(
-            quad(var("?y"), var("?p2"), var("?x")),
-            vec![
-                atom(var("?p1"), OWL_INVERSEOF, var("?p2")),
-                quad(var("?x"), var("?p1"), var("?y")),
-            ],
-        )],
-        // prp-inv2: ?p1 owl:inverseOf ?p2, T(?x, ?p2, ?y) ⇒ T(?y, ?p1, ?x).
-        ChaseRule::Inverse2 => vec![DlClause::datalog(
-            quad(var("?y"), var("?p1"), var("?x")),
-            vec![
-                atom(var("?p1"), OWL_INVERSEOF, var("?p2")),
-                quad(var("?x"), var("?p2"), var("?y")),
-            ],
-        )],
-        // scm-eqc1: equivalentClass ⇒ subClassOf, both directions.
-        ChaseRule::EquivalentClass => vec![
-            DlClause::datalog(
-                atom(var("?c1"), RDFS_SUBCLASSOF, var("?c2")),
-                vec![atom(var("?c1"), OWL_EQUIVALENTCLASS, var("?c2"))],
-            ),
-            DlClause::datalog(
-                atom(var("?c2"), RDFS_SUBCLASSOF, var("?c1")),
-                vec![atom(var("?c1"), OWL_EQUIVALENTCLASS, var("?c2"))],
-            ),
-        ],
-        // scm-eqp1: equivalentProperty ⇒ subPropertyOf, both directions.
-        ChaseRule::EquivalentProperty => vec![
-            DlClause::datalog(
-                atom(var("?p1"), RDFS_SUBPROPERTYOF, var("?p2")),
-                vec![atom(var("?p1"), OWL_EQUIVALENTPROPERTY, var("?p2"))],
-            ),
-            DlClause::datalog(
-                atom(var("?p2"), RDFS_SUBPROPERTYOF, var("?p1")),
-                vec![atom(var("?p1"), OWL_EQUIVALENTPROPERTY, var("?p2"))],
-            ),
-        ],
-    }
+/// One entry of the accumulated rule table, counted as `1`, so the table sizes itself and
+/// no family can get the width of a firing tally wrong.
+macro_rules! one_rule {
+    ($variant:ident) => {
+        1
+    };
 }
+
+/// The rule id a firing of one rule is REPORTED under, given the lane.
+///
+/// Two forms, because the specifications name these rules twice or once.
+/// `reported_id!(owl, Rdfs2, PrpDom)` is a rule the OWL 2 RL tables RENAME: the
+/// digit-numbered RDFS name outside the `OWL-RL` lane, the OWL name inside it.
+/// `reported_id!(owl, PrpSymp)` is a rule with a single name in every lane that fires it —
+/// either an OWL 2 RL rule the RDFS tables never had, or an RDFS pattern OWL 2 RL/RDF omits
+/// from its own tables and which is therefore reported under its RDFS name even when the
+/// `OWL-RL` lane fires it.
+macro_rules! reported_id {
+    ($owl:ident, $id:ident) => {
+        RuleId::$id
+    };
+    ($owl:ident, $id:ident, $renamed:ident) => {
+        if $owl { RuleId::$renamed } else { RuleId::$id }
+    };
+}
+
+/// State the calculus from the concatenated family tables.
+///
+/// Every per-rule fact the crate needs is derived here from ONE declaration of that rule,
+/// so a variant, the tag its firings are counted under, the lanes that fire it and the
+/// clauses that state it cannot drift apart. Each entry reads
+///
+/// ```text
+/// /// `prp-symp` — what the rule says, in one line.
+/// Symmetric {
+///     id: PrpSymp,             // the RuleId a firing is reported under
+///     owl: PrpSymp,            // OPTIONAL: the OWL 2 RL tables' different name for it
+///     lanes: [OwlRl],          // the Regimes whose lane fires it
+///     clauses: prp::symmetric, // the fn stating it as DL clauses
+/// }
+/// ```
+///
+/// and the entries arrive in the order the families are concatenated, which is the order
+/// the program is authored in and therefore the order its digest is taken over.
+macro_rules! declare_chase_rules {
+    (
+        $(
+            $(#[$attr:meta])*
+            $variant:ident {
+                id: $id:ident,
+                $( owl: $owl:ident, )?
+                lanes: [ $( $lane:ident ),+ ],
+                clauses: $clauses:path,
+            }
+        ),* $(,)?
+    ) => {
+        /// One rule of the forward chase, named once for the whole crate.
+        ///
+        /// Variants are declared in specification order — the RDF pattern of RDF 1.2
+        /// Semantics §8.1.1, then the RDFS patterns of §9.2.1 in numeric order, then the
+        /// OWL 2 RL rules of Tables 4–9 that only the `OWL-RL` lane fires, in table order.
+        /// [`ChaseRule::ALL`] and hence [`calculus_program`] follow that order, so both are
+        /// byte-for-byte reproducible.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        pub(crate) enum ChaseRule {
+            $( $(#[$attr])* $variant, )*
+        }
+
+        impl ChaseRule {
+            /// How many chase rules there are — the width of a per-rule firing tally.
+            pub(crate) const COUNT: usize = 0 $( + one_rule!($variant) )*;
+
+            /// Every chase rule, in the declaration order documented on the enum.
+            pub(crate) const ALL: [Self; Self::COUNT] = [ $( Self::$variant, )* ];
+
+            /// This rule's index into a [`Self::COUNT`]-wide tally.
+            pub(crate) const fn index(self) -> usize {
+                self as usize
+            }
+
+            /// The specification rule id a firing is REPORTED under.
+            ///
+            /// `owl` selects the lane, exactly as it does in the chase: the OWL 2 RL tables
+            /// give nine of these rules a different name from the RDFS tables (`rdfs2` is
+            /// `prp-dom`, `rdfs11` is `scm-sco`, …), and a report must use the name of the
+            /// calculus it ran.
+            ///
+            /// Three rules — `rdfs6`, `rdfs8` and `rdfs10` — have NO OWL 2 RL rule id,
+            /// because OWL 2 RL/RDF omits them from its tables. The `OWL-RL` lane fires them
+            /// all the same, so they are reported under their RDFS name rather than renamed
+            /// to a neighbouring OWL rule that would not have licensed the conclusion. A
+            /// consequence worth stating plainly: an `OWL-RL` report's `rules_fired` is NOT
+            /// a subset of `rules(OwlRl)`.
+            pub(crate) const fn rule_id(self, owl: bool) -> RuleId {
+                match self {
+                    $( Self::$variant => reported_id!(owl, $id $(, $owl)?), )*
+                }
+            }
+
+            /// Whether `regime`'s lane fires this rule.
+            ///
+            /// `Simple` fires nothing (it is the identity closure); `RDF` fires the single
+            /// predicate-typing rule; `RDFS` fires the nine RDFS patterns; `OWL-RL` fires
+            /// those nine plus six OWL rules. `OWL-Direct`, `RIF` and `D` are not this
+            /// chase's lanes at all, and no rule names them.
+            pub(crate) const fn fires_under(self, regime: Regime) -> bool {
+                match self {
+                    $( Self::$variant => matches!(regime, $( Regime::$lane )|+), )*
+                }
+            }
+        }
+
+        /// The DL clauses that state — and, through [`crate::engine`], run — `rule`.
+        ///
+        /// Most rules are one clause. `scm-eqc1` and `scm-eqp1` are two each: their
+        /// specification conclusion is a conjunction of two triples, and a conjunctive head
+        /// is not a Datalog clause, so each direction is stated separately rather than
+        /// encoded in a head form the evaluator refuses.
+        ///
+        /// The lane is not a parameter. Nine of these rules carry two specification NAMES —
+        /// one RDFS, one OWL 2 RL — but the clause each names is the same clause, so the
+        /// lane is read by [`ChaseRule::rule_id`] and by [`ChaseRule::fires_under`] and by
+        /// nothing else.
+        fn clauses_for(rule: ChaseRule) -> Vec<DlClause> {
+            match rule {
+                $( ChaseRule::$variant => $clauses(), )*
+            }
+        }
+    };
+}
+
+/// Ask each family in turn for its rules, then state the calculus from all of them.
+///
+/// A family module cannot splice variants into an enum declared here, so it hands its table
+/// over instead: this macro walks the family list, invokes each family's own macro with
+/// itself as the continuation, and accumulates what comes back. When the list is empty every
+/// family has contributed, and the accumulated table is declared, in family order, exactly
+/// once.
+///
+/// The consequence is the point of the split: the family list below is the only thing this
+/// module knows about which rules exist, and it names families, not rules.
+macro_rules! collect_families {
+    // Every family has contributed: state the calculus.
+    ({} $($rules:tt)*) => {
+        declare_chase_rules! { $($rules)* }
+    };
+    // Ask the next family for its rules, then carry on with the rest.
+    ({ $family:ident $(, $rest:ident)* } $($rules:tt)*) => {
+        $family! { collect_families, { $($rest),* }, $($rules)* }
+    };
+}
+
+collect_families! { { rdfs_rules, prp_rules, cls_rules, cax_rules, scm_rules } }
 
 /// The DL-clause program that STATES — and RUNS — `regime`'s calculus, in a fixed order.
 ///
@@ -568,6 +479,45 @@ mod tests {
         }
     }
 
+    /// Each lane's calculus identity, pinned byte for byte.
+    ///
+    /// The contract hash is a PUBLISHED identity: a consumer stores it beside a cached
+    /// closure and refuses the closure when it moves. So it may only move when the rules
+    /// move. Splitting the declaration across family modules, reordering a family's
+    /// internals, or rewording a clause without changing what it concludes are all edits
+    /// that must leave these digests exactly where they are — only adding, removing or
+    /// restating a RULE may move one, deliberately, with this table updated in the same
+    /// commit.
+    #[test]
+    fn the_contract_hashes_are_pinned() {
+        let empty = "4151090ce6c2ecdae843e351420ddcf10f79e525c60b4c6d07bebeabaa07fbd5";
+        let pinned = [
+            (Regime::Simple, empty),
+            (
+                Regime::Rdf,
+                "e3dfc92e2575713a6a555ef1dc5688d9086fe0a41c8eb0dd27aff5579db33158",
+            ),
+            (
+                Regime::Rdfs,
+                "cefc117c539b1191953fd5ad560ef4e275b59e9b6089040894f71113ea33674b",
+            ),
+            (
+                Regime::OwlRl,
+                "369fa3fbbe648a4b2c381015990cc3a2f78e606a40102d5feb3f9fabba07ce45",
+            ),
+            (Regime::OwlDirect, empty),
+            (Regime::Rif, empty),
+            (Regime::D, empty),
+        ];
+        for (regime, digest) in pinned {
+            assert_eq!(
+                calculus_contract_hash(regime).to_hex(),
+                digest,
+                "{regime:?}"
+            );
+        }
+    }
+
     /// Two lanes with different rule sets have different calculus identities, and the
     /// three rule-free regimes share the empty program's identity.
     #[test]
@@ -644,5 +594,27 @@ mod tests {
     fn indices_are_dense_and_unique() {
         let indices: Vec<usize> = ChaseRule::ALL.iter().map(|r| r.index()).collect();
         assert_eq!(indices, (0..ChaseRule::COUNT).collect::<Vec<_>>());
+    }
+
+    /// The RDF/RDFS family is concatenated ahead of the OWL 2 RL families.
+    ///
+    /// The program's order is the concatenation of the family tables, and the digest is a
+    /// function of that order, so the family order is part of the calculus's identity
+    /// rather than a filing convention. A rule the RDF or RDFS lane fires comes from
+    /// [`rdfs`](super::rdfs) and a rule only `OWL-RL` fires comes from one of the OWL
+    /// tables, so the two blocks must not interleave — which is a property of the family
+    /// list, not of any rule, and stays true however far a family grows.
+    #[test]
+    fn the_rdfs_family_is_concatenated_first() {
+        let rdf_or_rdfs: Vec<usize> = ChaseRule::ALL
+            .into_iter()
+            .filter(|rule| rule.fires_under(Regime::Rdf) || rule.fires_under(Regime::Rdfs))
+            .map(ChaseRule::index)
+            .collect();
+        assert_eq!(
+            rdf_or_rdfs,
+            (0..rdf_or_rdfs.len()).collect::<Vec<_>>(),
+            "the RDF/RDFS family occupies a prefix of the program, uninterrupted"
+        );
     }
 }
