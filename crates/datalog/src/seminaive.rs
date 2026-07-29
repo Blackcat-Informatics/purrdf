@@ -136,6 +136,27 @@ pub struct BudgetReport {
 }
 
 impl BudgetReport {
+    /// A report over three already-measured coordinates.
+    ///
+    /// This crate's own evaluator fills the fields directly; the constructor exists for the
+    /// OTHER forward-chaining engines in the workspace — `purrdf-entail`'s hand-written
+    /// RDFS / OWL-RL chase above all — so that one type says "what did this evaluation
+    /// consume" for every engine rather than each growing its own near-miss. It takes
+    /// MEASUREMENTS, never limits: the three ceilings stay `const` and stay this crate's,
+    /// so nothing here re-opens the caller-supplied-budget door the crate docs close.
+    ///
+    /// The coordinates mean exactly what they mean for [`evaluate`]: candidate solutions
+    /// enumerated, facts held when evaluation stopped, and interned term surface bytes. An
+    /// engine that reports numbers under a different definition is misreporting, not
+    /// extending.
+    pub fn new(join_steps: u64, stored_facts: usize, term_arena_bytes: usize) -> Self {
+        Self {
+            join_steps,
+            stored_facts,
+            term_arena_bytes,
+        }
+    }
+
     /// Candidate solutions enumerated across every round of every stratum.
     pub fn join_steps(self) -> u64 {
         self.join_steps

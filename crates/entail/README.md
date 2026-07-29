@@ -26,11 +26,13 @@ external reasoner, no `tokio`, and no string round-trip.
 
 | Entry point | Regime(s) | Engine |
 | --- | --- | --- |
-| `materialize(ds, regime)` | `Simple`, `RDF`, `RDFS`, `OWL-RL` | Forward-materialization ("chase") over a fixed rule set via a native semi-naive fixpoint. |
+| `materialize(ds, regime)` | `Simple`, `RDF`, `RDFS`, `OWL-RL` | Forward-materialization ("chase") over a fixed rule set via a native semi-naive fixpoint. Returns `(closure, ReasoningReport)` — the report is not optional. |
 | `materialize_dl(...)` | `OWL-Direct` | Open-world OWL DL over an ALCOIQ tableau — needs the query's class expressions, so it is not reachable through the plain `materialize` façade. |
 | `materialize_rif(...)` | `RIF` | RIF-Core rule entailment over a parsed `RuleSet`. |
 | `parse_rif_xml(...)` / `resolve_rif_imports(...)` | `RIF` | Normative RIF-XML parsing with caller-owned, I/O-free import resolution. |
 | `Regime::from_iri(iri)` | — | Parse a `sparql:entailmentRegime` IRI to its enum. |
+| `rules(regime)` / `implemented(regime)` | — | The rule table a regime is *defined by*, and the subset this crate fires. Their difference is the measurable gap. |
+| `calculus_program(regime)` | — | The regime's calculus as DL-clause data, so its `purrdf-datalog` contract hash is recomputable by a consumer. |
 
 `D` (datatype) entailment is a typed, spec-inherent boundary
 (`EntailError::Unsupported`) rather than a silent default.
@@ -40,11 +42,20 @@ external reasoner, no `tokio`, and no string round-trip.
 * **No minted vocabulary.** Every constant in `vocab` is a standard
   `rdf:`/`rdfs:`/`owl:` IRI drawn from the entailment spec itself — this crate
   fabricates none.
-* **wasm-clean and dependency-lean.** Dependencies are `purrdf-core` and
-  `roxmltree` (both `wasm32-unknown-unknown`-clean), so this crate carries into
-  Rust, WebAssembly, and C without a threads/filesystem/RNG dependency.
+* **Every run states what it did.** `materialize` returns a `ReasoningReport`
+  with every closure. It carries the regime's `Completeness` — *derived* from
+  `rules(regime)` minus `implemented(regime)`, so it improves by itself as rules
+  are added — which rules fired and how many conclusions each contributed, the
+  `Boundary`s the run met and why, what it consumed of the evaluation ceilings,
+  and the contract hash of the calculus it ran, so a cached closure minted under
+  a different rule set can be refused rather than trusted. A report that claims
+  `Exact` while naming a boundary is a test failure.
+* **wasm-clean and dependency-lean.** Dependencies are `purrdf-core`,
+  `purrdf-datalog`, `roxmltree` and two fixed-key hashers (all
+  `wasm32-unknown-unknown`-clean), so this crate carries into Rust, WebAssembly,
+  and C without a threads/filesystem/RNG dependency.
 * **Determinism.** The chase is a fixpoint over the frozen IR; a given input and
-  regime always yields the same closure.
+  regime always yields the same closure — and the same report, byte for byte.
 
 ## Local Checks
 

@@ -19,14 +19,30 @@
 //! empty. The reflexive rules (`p subPropertyOf p`, `c subClassOf c`) fire once per
 //! *newly-seen* predicate/class/property vertex. The materialized closure is the
 //! least fixpoint, identical to a naive evaluation of the same rule set.
+//!
+//! # Every candidate carries the rule that proposed it
+//!
+//! A candidate conclusion is pushed as `(triple, ChaseRule)`, and the tag is credited
+//! when — and only when — that candidate turns out to be a genuinely new fact. So the
+//! per-rule tally in [`ChaseStats`] is a count of triples the rule was the FIRST to add,
+//! summing to exactly the number of inferred triples in the result, rather than a count of
+//! how often the rule was tried. A fact two rules both conclude is credited to whichever
+//! reached it first in the chase's deterministic firing order; nothing about that order
+//! depends on hashing, so the tally is reproducible.
+//!
+//! The derivation ORDER is not observable in the closure: the emitted triples are sorted
+//! by interned term id, and the chase mints no terms, so the result is a function of the
+//! fact SET alone.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
+use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermRef, TermValue};
 
 use crate::EntailError;
-use crate::interner::{Interner, intern_into};
+use crate::calculus::ChaseRule;
+use crate::interner::{Interner, intern_into, term_bytes};
+use crate::report::ChaseStats;
 use crate::vocab::{
     OWL_EQUIVALENTCLASS, OWL_EQUIVALENTPROPERTY, OWL_INVERSEOF, OWL_SYMMETRICPROPERTY,
     OWL_TRANSITIVEPROPERTY, RDF_PROPERTY, RDF_TYPE, RDFS_CLASS, RDFS_DOMAIN, RDFS_RANGE,
@@ -48,29 +64,61 @@ pub(crate) fn copy_of(ds: &RdfDataset) -> Result<Arc<RdfDataset>, EntailError> {
 /// rdf:type rdf:Property`). The full RDF axiomatic-triple schema is infinite and is *not*
 /// materialized; only this single, decidable rule is applied, which is all the bare
 /// RDF entailment regime requires for BGP query answering over a finite graph.
-pub(crate) fn close_rdf(ds: &RdfDataset) -> Result<Arc<RdfDataset>, EntailError> {
+pub(crate) fn close_rdf(ds: &RdfDataset) -> Result<(Arc<RdfDataset>, ChaseStats), EntailError> {
     let mut b = RdfDatasetBuilder::new();
     b.push_dataset(ds);
+    let mut stats = ChaseStats::none();
+
+    // Seed the store with the typings the graph ALREADY asserts. A conclusion the graph
+    // already holds is not a contribution, and crediting it would break the property that
+    // makes the per-rule tally checkable: that the counts sum to the inferred triples. The
+    // emitted dataset is unchanged either way — the builder folds a duplicate quad — so
+    // this buys honesty in the tally at no cost to the output.
+    let mut seen: HashSet<TermValue> = HashSet::new();
+    for q in ds.quad_refs() {
+        if q.g.is_some() {
+            continue;
+        }
+        if let (TermRef::Iri(subject), TermRef::Iri(predicate), TermRef::Iri(object)) =
+            (q.s, q.p, q.o)
+            && predicate == RDF_TYPE
+            && object == RDF_PROPERTY
+        {
+            seen.insert(TermValue::Iri(subject.to_owned()));
+        }
+    }
+
     // Emit `p rdf:type rdf:Property` once per distinct default-graph predicate, in
     // first-seen order for deterministic output.
-    let mut seen: HashSet<TermValue> = HashSet::new();
     for q in ds.quads() {
         if q.g.is_some() {
             continue; // entailment operates over the default graph
         }
+        // Every default-graph quad enumerates exactly one candidate conclusion.
+        stats.join_steps += 1;
         let pred = ds.term_value(q.p);
         if seen.insert(pred.clone()) {
+            stats.commit(ChaseRule::PredicateProperty);
             let pid = intern_into(&mut b, &pred);
             let ty = b.intern_iri(RDF_TYPE);
             let prop = b.intern_iri(RDF_PROPERTY);
             b.push_quad(pid, ty, prop, None);
         }
     }
-    b.freeze().map_err(|e| EntailError::Build(e.to_string()))
+    // The store this lane maintains is exactly the typed predicates: the ones the graph
+    // asserted plus the ones the rule concluded.
+    stats.stored_facts = seen.len();
+    stats.term_arena_bytes = seen.iter().map(term_bytes).sum();
+
+    let dataset = b.freeze().map_err(|e| EntailError::Build(e.to_string()))?;
+    Ok((dataset, stats))
 }
 
 /// Run the forward chase and emit `original + inferred`.
-pub(crate) fn close(ds: &RdfDataset, owl: bool) -> Result<Arc<RdfDataset>, EntailError> {
+pub(crate) fn close(
+    ds: &RdfDataset,
+    owl: bool,
+) -> Result<(Arc<RdfDataset>, ChaseStats), EntailError> {
     let mut interner = Interner::default();
 
     // Intern the default-graph triples as the seed fact set. `base` keeps them in
@@ -93,7 +141,9 @@ pub(crate) fn close(ds: &RdfDataset, owl: bool) -> Result<Arc<RdfDataset>, Entai
     let original = facts.clone();
 
     let c = Consts::intern(&mut interner);
-    chase(&mut facts, &base, &c, &interner, owl);
+    let mut stats = chase(&mut facts, &base, &c, &interner, owl);
+    stats.stored_facts = facts.len();
+    stats.term_arena_bytes = interner.term_bytes();
 
     // Emit: original quads (all graphs) + newly inferred default-graph triples.
     let mut b = RdfDatasetBuilder::new();
@@ -112,7 +162,8 @@ pub(crate) fn close(ds: &RdfDataset, owl: bool) -> Result<Arc<RdfDataset>, Entai
         let o = intern_into(&mut b, interner.value(t[2]));
         b.push_quad(s, p, o, None);
     }
-    b.freeze().map_err(|e| EntailError::Build(e.to_string()))
+    let dataset = b.freeze().map_err(|e| EntailError::Build(e.to_string()))?;
+    Ok((dataset, stats))
 }
 
 /// Pre-interned vocabulary constant ids.
@@ -185,8 +236,14 @@ struct Indexes {
     sym_props: HashSet<u32>,
     /// Properties typed `owl:TransitiveProperty`.
     trans_props: HashSet<u32>,
-    /// `owl:inverseOf` partners, both directions: `p → [q]` and `q → [p]`.
-    inv_map: HashMap<u32, Vec<u32>>,
+    /// `owl:inverseOf` read left to right: `p1 → [p2]`, the premise of `prp-inv1`.
+    inv_forward: HashMap<u32, Vec<u32>>,
+    /// `owl:inverseOf` read right to left: `p2 → [p1]`, the premise of `prp-inv2`.
+    ///
+    /// Kept apart from [`Indexes::inv_forward`] rather than merged into one symmetric map
+    /// because `prp-inv1` and `prp-inv2` are two rules with two ids, and a merged map
+    /// loses which of them licensed a given conclusion.
+    inv_backward: HashMap<u32, Vec<u32>>,
 }
 
 impl Indexes {
@@ -225,11 +282,14 @@ impl Indexes {
         } else if p == c.rng {
             self.rng_by_prop.entry(s).or_default().push(o);
         } else if p == c.inverse_of {
-            self.inv_map.entry(s).or_default().push(o);
-            self.inv_map.entry(o).or_default().push(s);
+            self.inv_forward.entry(s).or_default().push(o);
+            self.inv_backward.entry(o).or_default().push(s);
         }
     }
 }
+
+/// One candidate conclusion: the triple, and the rule that proposed it.
+type Candidate = ([u32; 3], ChaseRule);
 
 /// Semi-naive chase state: the incremental indices plus the vocabulary constants,
 /// the term interner, the regime flag, and the reflexive "already-emitted" sets.
@@ -242,6 +302,35 @@ struct Chaser<'a> {
     seen_spo_refl: HashSet<u32>,
     /// Vertices for which `v subClassOf v` has already been emitted.
     seen_sco_refl: HashSet<u32>,
+    /// Conclusions abandoned because their subject would not be a legal RDF 1.2
+    /// subject — the observation behind the generalized-RDF boundary.
+    drops: u64,
+}
+
+/// Propose `[subject, predicate, object]` if RDF 1.2 can hold it, counting the abandoned
+/// conclusion otherwise.
+///
+/// A rule that concludes into subject position (`rdfs3` / `prp-rng`, `prp-symp`,
+/// `prp-inv1`, `prp-inv2`) can reach a literal or a triple term there. That triple is a
+/// *generalized*-RDF triple, which the [`RdfDataset`] IR cannot represent — so the
+/// conclusion is dropped rather than a term being fabricated for it, and the drop is
+/// counted so the report can name the boundary instead of silently narrowing.
+///
+/// A free function over the two fields it needs rather than a `&mut self` method, so a
+/// caller may hold a borrow of the indices across the call and no lookup has to be cloned
+/// out of them to satisfy the borrow checker.
+fn propose_into_subject(
+    interner: &Interner,
+    drops: &mut u64,
+    triple: [u32; 3],
+    rule: ChaseRule,
+    derived: &mut Vec<Candidate>,
+) {
+    if interner.is_subject(triple[0]) {
+        derived.push((triple, rule));
+    } else {
+        *drops += 1;
+    }
 }
 
 impl<'a> Chaser<'a> {
@@ -253,23 +342,24 @@ impl<'a> Chaser<'a> {
             owl,
             seen_spo_refl: HashSet::new(),
             seen_sco_refl: HashSet::new(),
+            drops: 0,
         }
     }
 
     /// Emit `v subPropertyOf v` the first time `v` is discovered as a property
     /// vertex (predicate key, `rdf:Property` instance, or `subPropertyOf`
     /// endpoint) — the new-vertex-only form of the reflexive rule.
-    fn emit_spo_refl(&mut self, v: u32, derived: &mut Vec<[u32; 3]>) {
+    fn emit_spo_refl(&mut self, v: u32, derived: &mut Vec<Candidate>) {
         if self.seen_spo_refl.insert(v) {
-            derived.push([v, self.c.spo, v]);
+            derived.push(([v, self.c.spo, v], ChaseRule::SubPropertyReflexive));
         }
     }
 
     /// Emit `v subClassOf v` the first time `v` is discovered as a class vertex
     /// (`rdfs:Class` instance or `subClassOf` endpoint).
-    fn emit_sco_refl(&mut self, v: u32, derived: &mut Vec<[u32; 3]>) {
+    fn emit_sco_refl(&mut self, v: u32, derived: &mut Vec<Candidate>) {
         if self.seen_sco_refl.insert(v) {
-            derived.push([v, self.c.sco, v]);
+            derived.push(([v, self.c.sco, v], ChaseRule::SubClassReflexive));
         }
     }
 
@@ -279,7 +369,7 @@ impl<'a> Chaser<'a> {
     /// positions (via forward and reverse indices) so that a new fact in either
     /// position is caught — the standard semi-naive expansion.
     #[allow(clippy::cognitive_complexity)]
-    fn fire(&mut self, s: u32, p: u32, o: u32, derived: &mut Vec<[u32; 3]>) {
+    fn fire(&mut self, s: u32, p: u32, o: u32, derived: &mut Vec<Candidate>) {
         let c = self.c;
         let interner = self.interner;
 
@@ -288,19 +378,19 @@ impl<'a> Chaser<'a> {
             // rdfs11 / scm-sco, first premise sco(s, o): (s ⊑ o),(o ⊑ e) ⇒ (s ⊑ e).
             if let Some(es) = self.idx.sco_by_left.get(&o) {
                 for &e in es {
-                    derived.push([s, c.sco, e]);
+                    derived.push(([s, c.sco, e], ChaseRule::SubClassTransitive));
                 }
             }
             // rdfs11 / scm-sco, second premise sco(s, o): (d ⊑ s),(s ⊑ o) ⇒ (d ⊑ o).
             if let Some(ds) = self.idx.sco_by_right.get(&s) {
                 for &d in ds {
-                    derived.push([d, c.sco, o]);
+                    derived.push(([d, c.sco, o], ChaseRule::SubClassTransitive));
                 }
             }
             // rdfs9 / cax-sco, first premise sco(s, o): instances of s become o.
             if let Some(insts) = self.idx.type_by_class.get(&s) {
                 for &inst in insts {
-                    derived.push([inst, c.ty, o]);
+                    derived.push(([inst, c.ty, o], ChaseRule::SubClassInstance));
                 }
             }
             self.emit_sco_refl(s, derived);
@@ -309,18 +399,18 @@ impl<'a> Chaser<'a> {
             // rdfs5 / scm-spo, both premise positions.
             if let Some(rs) = self.idx.spo_by_left.get(&o) {
                 for &r in rs {
-                    derived.push([s, c.spo, r]);
+                    derived.push(([s, c.spo, r], ChaseRule::SubPropertyTransitive));
                 }
             }
             if let Some(ps) = self.idx.spo_by_right.get(&s) {
                 for &pp in ps {
-                    derived.push([pp, c.spo, o]);
+                    derived.push(([pp, c.spo, o], ChaseRule::SubPropertyTransitive));
                 }
             }
             // rdfs7 / prp-spo1, first premise spo(s, o): rewrite every s-triple to o.
             if let Some(pairs) = self.idx.by_pred.get(&s) {
                 for &(ss, oo) in pairs {
-                    derived.push([ss, o, oo]);
+                    derived.push(([ss, o, oo], ChaseRule::SubPropertyRewrite));
                 }
             }
             self.emit_spo_refl(s, derived);
@@ -329,7 +419,7 @@ impl<'a> Chaser<'a> {
             // rdfs9 / cax-sco, second premise type(s, o): (s a o),(o ⊑ d) ⇒ (s a d).
             if let Some(ds) = self.idx.sco_by_left.get(&o) {
                 for &d in ds {
-                    derived.push([s, c.ty, d]);
+                    derived.push(([s, c.ty, d], ChaseRule::SubClassInstance));
                 }
             }
             // rdfs6: (s a rdf:Property) ⇒ (s subPropertyOf s).
@@ -339,7 +429,7 @@ impl<'a> Chaser<'a> {
             // rdfs10 + rdfs8: (s a rdfs:Class) ⇒ (s ⊑ s) and (s ⊑ rdfs:Resource).
             if o == c.class {
                 self.emit_sco_refl(s, derived);
-                derived.push([s, c.sco, c.resource]);
+                derived.push(([s, c.sco, c.resource], ChaseRule::ClassResource));
             }
             if self.owl {
                 // prp-symp, first premise type(s, Symmetric): mirror every s-triple.
@@ -347,9 +437,13 @@ impl<'a> Chaser<'a> {
                     && let Some(pairs) = self.idx.by_pred.get(&s)
                 {
                     for &(x, y) in pairs {
-                        if interner.is_subject(y) {
-                            derived.push([y, s, x]);
-                        }
+                        propose_into_subject(
+                            interner,
+                            &mut self.drops,
+                            [y, s, x],
+                            ChaseRule::Symmetric,
+                            derived,
+                        );
                     }
                 }
                 // prp-trp, first premise type(s, Transitive): one-step join over all
@@ -360,7 +454,7 @@ impl<'a> Chaser<'a> {
                     for &(x, y) in pairs {
                         if let Some(zs) = self.idx.by_pred_so.get(&s).and_then(|m| m.get(&y)) {
                             for &z in zs {
-                                derived.push([x, s, z]);
+                                derived.push(([x, s, z], ChaseRule::Transitive));
                             }
                         }
                     }
@@ -371,42 +465,55 @@ impl<'a> Chaser<'a> {
             // rdfs2 / prp-dom, first premise dom(s, o): every s-subject gets type o.
             if let Some(pairs) = self.idx.by_pred.get(&s) {
                 for &(ss, _oo) in pairs {
-                    derived.push([ss, c.ty, o]);
+                    derived.push(([ss, c.ty, o], ChaseRule::Domain));
                 }
             }
         } else if p == c.rng {
             // rdfs3 / prp-rng, first premise rng(s, o): every s-object gets type o.
             if let Some(pairs) = self.idx.by_pred.get(&s) {
                 for &(_ss, oo) in pairs {
-                    if interner.is_subject(oo) {
-                        derived.push([oo, c.ty, o]);
-                    }
+                    propose_into_subject(
+                        interner,
+                        &mut self.drops,
+                        [oo, c.ty, o],
+                        ChaseRule::Range,
+                        derived,
+                    );
                 }
             }
         }
         if self.owl {
             if p == c.eq_class {
-                // scm-eqc: equivalentClass ⇒ mutual subClassOf.
-                derived.push([s, c.sco, o]);
-                derived.push([o, c.sco, s]);
+                // scm-eqc1: equivalentClass ⇒ mutual subClassOf.
+                derived.push(([s, c.sco, o], ChaseRule::EquivalentClass));
+                derived.push(([o, c.sco, s], ChaseRule::EquivalentClass));
             } else if p == c.eq_prop {
-                // scm-eqp: equivalentProperty ⇒ mutual subPropertyOf.
-                derived.push([s, c.spo, o]);
-                derived.push([o, c.spo, s]);
+                // scm-eqp1: equivalentProperty ⇒ mutual subPropertyOf.
+                derived.push(([s, c.spo, o], ChaseRule::EquivalentProperty));
+                derived.push(([o, c.spo, s], ChaseRule::EquivalentProperty));
             } else if p == c.inverse_of {
-                // prp-inv, first premise inverseOf(s, o): join with full s/o triples.
+                // prp-inv1, first premise inverseOf(s, o): (x s y) ⇒ (y o x).
                 if let Some(pairs) = self.idx.by_pred.get(&s) {
                     for &(x, y) in pairs {
-                        if interner.is_subject(y) {
-                            derived.push([y, o, x]);
-                        }
+                        propose_into_subject(
+                            interner,
+                            &mut self.drops,
+                            [y, o, x],
+                            ChaseRule::Inverse1,
+                            derived,
+                        );
                     }
                 }
+                // prp-inv2, first premise inverseOf(s, o): (x o y) ⇒ (y s x).
                 if let Some(pairs) = self.idx.by_pred.get(&o) {
                     for &(x, y) in pairs {
-                        if interner.is_subject(y) {
-                            derived.push([y, s, x]);
-                        }
+                        propose_into_subject(
+                            interner,
+                            &mut self.drops,
+                            [y, s, x],
+                            ChaseRule::Inverse2,
+                            derived,
+                        );
                     }
                 }
             }
@@ -416,50 +523,76 @@ impl<'a> Chaser<'a> {
         // rdfs7 / prp-spo1, second premise (s p o): (p ⊑ q) ⇒ (s q o).
         if let Some(qs) = self.idx.spo_by_left.get(&p) {
             for &q in qs {
-                derived.push([s, q, o]);
+                derived.push(([s, q, o], ChaseRule::SubPropertyRewrite));
             }
         }
         // rdfs2 / prp-dom, second premise (s p o): (p domain cc) ⇒ (s a cc).
         if let Some(cs) = self.idx.dom_by_prop.get(&p) {
             for &cc in cs {
-                derived.push([s, c.ty, cc]);
+                derived.push(([s, c.ty, cc], ChaseRule::Domain));
             }
         }
         // rdfs3 / prp-rng, second premise (s p o): (p range cc) ⇒ (o a cc).
-        if interner.is_subject(o)
-            && let Some(cs) = self.idx.rng_by_prop.get(&p)
-        {
+        if let Some(cs) = self.idx.rng_by_prop.get(&p) {
             for &cc in cs {
-                derived.push([o, c.ty, cc]);
+                propose_into_subject(
+                    interner,
+                    &mut self.drops,
+                    [o, c.ty, cc],
+                    ChaseRule::Range,
+                    derived,
+                );
             }
         }
         // Every predicate is reflexively a subProperty of itself (new-vertex only).
         self.emit_spo_refl(p, derived);
         if self.owl {
             // prp-symp, second premise (s p o) with p symmetric ⇒ (o p s).
-            if interner.is_subject(o) && self.idx.sym_props.contains(&p) {
-                derived.push([o, p, s]);
+            if self.idx.sym_props.contains(&p) {
+                propose_into_subject(
+                    interner,
+                    &mut self.drops,
+                    [o, p, s],
+                    ChaseRule::Symmetric,
+                    derived,
+                );
             }
             // prp-trp, second premise (s p o) with p transitive: compose with the
             // full predecessor/successor adjacency of p.
             if self.idx.trans_props.contains(&p) {
                 if let Some(zs) = self.idx.by_pred_so.get(&p).and_then(|m| m.get(&o)) {
                     for &z in zs {
-                        derived.push([s, p, z]);
+                        derived.push(([s, p, z], ChaseRule::Transitive));
                     }
                 }
                 if let Some(ws) = self.idx.by_pred_os.get(&p).and_then(|m| m.get(&s)) {
                     for &w in ws {
-                        derived.push([w, p, o]);
+                        derived.push(([w, p, o], ChaseRule::Transitive));
                     }
                 }
             }
-            // prp-inv, data side (s p o) with (p inverseOf q) ⇒ (o q s).
-            if interner.is_subject(o)
-                && let Some(partners) = self.idx.inv_map.get(&p)
-            {
+            // prp-inv1, data side (s p o) with (p inverseOf q) ⇒ (o q s).
+            if let Some(partners) = self.idx.inv_forward.get(&p) {
                 for &q in partners {
-                    derived.push([o, q, s]);
+                    propose_into_subject(
+                        interner,
+                        &mut self.drops,
+                        [o, q, s],
+                        ChaseRule::Inverse1,
+                        derived,
+                    );
+                }
+            }
+            // prp-inv2, data side (s p o) with (q inverseOf p) ⇒ (o q s).
+            if let Some(partners) = self.idx.inv_backward.get(&p) {
+                for &q in partners {
+                    propose_into_subject(
+                        interner,
+                        &mut self.drops,
+                        [o, q, s],
+                        ChaseRule::Inverse2,
+                        derived,
+                    );
                 }
             }
         }
@@ -474,19 +607,25 @@ impl<'a> Chaser<'a> {
 /// positions (forward and reverse indices) so a new fact in either slot is caught.
 /// Newly-derived triples (deduplicated against the accumulated `facts`) become the
 /// next round's frontier; the chase stops when the frontier is empty.
+///
+/// Returns the run's measurements: the per-rule tally of COMMITTED conclusions, the total
+/// candidates enumerated, and the generalized-RDF conclusions abandoned. The caller fills
+/// in the two store-shaped coordinates (`stored_facts`, `term_arena_bytes`), which it
+/// alone can see.
 fn chase(
     facts: &mut HashSet<[u32; 3]>,
     base: &[[u32; 3]],
     c: &Consts,
     interner: &Interner,
     owl: bool,
-) {
+) -> ChaseStats {
+    let mut stats = ChaseStats::none();
     let mut chaser = Chaser::new(c, interner, owl);
     for &t in base {
         chaser.idx.insert(t, c);
     }
     let mut delta: Vec<[u32; 3]> = base.to_vec();
-    let mut derived: Vec<[u32; 3]> = Vec::new();
+    let mut derived: Vec<Candidate> = Vec::new();
     let mut next: Vec<[u32; 3]> = Vec::new();
     while !delta.is_empty() {
         derived.clear();
@@ -494,12 +633,21 @@ fn chase(
         for &[s, p, o] in &delta {
             chaser.fire(s, p, o, &mut derived);
         }
-        for &t in &derived {
+        stats.join_steps = stats.join_steps.saturating_add(derived.len() as u64);
+        for &(t, rule) in &derived {
             if facts.insert(t) {
+                // The FIRST rule to reach a fact is the one credited; a later
+                // re-derivation of the same triple commits nothing and counts nothing.
+                stats.commit(rule);
                 chaser.idx.insert(t, c);
                 next.push(t);
             }
         }
         std::mem::swap(&mut delta, &mut next);
     }
+    stats.generalized_rdf_drops = chaser.drops;
+    // An abandoned conclusion was still enumerated, so it is still a join step; it just
+    // never reached `derived`.
+    stats.join_steps = stats.join_steps.saturating_add(chaser.drops);
+    stats
 }

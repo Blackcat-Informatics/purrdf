@@ -311,8 +311,12 @@ fn load_import(dir: &Path, import: &Import) -> Result<Vec<purrdf_entail::Fact>, 
     };
     let ds = purrdf::parse_dataset(&bytes, media_type, Some(location))
         .map_err(|e| format!("parse import {}: {e}", path.display()))?;
-    let closed = purrdf_entail::materialize(&ds, import_regime(import.profile.as_deref()))
-        .map_err(|e| format!("close import {}: {e}", path.display()))?;
+    // The import contributes FACTS to a RIF rule set; the closure's reasoning report
+    // describes the RDFS / OWL-RL run that produced them and is bound and dropped here
+    // rather than being folded into a claim about the rule set.
+    let (closed, _report) =
+        purrdf_entail::materialize(&ds, import_regime(import.profile.as_deref()))
+            .map_err(|e| format!("close import {}: {e}", path.display()))?;
     Ok(dataset_facts(&closed))
 }
 

@@ -78,11 +78,16 @@ pub fn query_with_entailment(
     // Parse first so invalid queries fail before potentially expensive closure work.
     // OWL Direct also inspects this same cached plan, avoiding a second parse/cache lookup.
     let prepared_query = engine.prepare_query(request.query, request.base_iri)?;
+    // Every materialize-and-match regime hands back a `ReasoningReport` alongside the
+    // closure. This entry point answers a SPARQL query, whose result type has nowhere to
+    // carry one, so the report is bound and dropped HERE — explicitly, at the call site,
+    // where it is visible that evidence is being discarded. There is deliberately no
+    // report-free `materialize` to call instead.
     let prepared = match entailment {
         QueryEntailment::Simple => Arc::clone(dataset),
-        QueryEntailment::Rdf => purrdf_entail::materialize(dataset, Regime::Rdf)?,
-        QueryEntailment::Rdfs => purrdf_entail::materialize(dataset, Regime::Rdfs)?,
-        QueryEntailment::OwlRl => purrdf_entail::materialize(dataset, Regime::OwlRl)?,
+        QueryEntailment::Rdf => purrdf_entail::materialize(dataset, Regime::Rdf)?.0,
+        QueryEntailment::Rdfs => purrdf_entail::materialize(dataset, Regime::Rdfs)?.0,
+        QueryEntailment::OwlRl => purrdf_entail::materialize(dataset, Regime::OwlRl)?.0,
         QueryEntailment::OwlDirect => {
             let pattern = collect_query_bgp(&prepared_query.query);
             purrdf_entail::materialize_dl(dataset, &pattern)?

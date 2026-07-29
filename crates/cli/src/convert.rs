@@ -159,7 +159,10 @@ fn run_with_transforms(
     let dataset: Arc<RdfDataset> = match options.entailment {
         Some(regime) => {
             let regime = reason::resolve_materializable_regime(regime)?;
-            materialize(&dataset, regime)?
+            // The closure is what gets serialized; the report is bound and dropped
+            // because `convert` writes a document, not a reasoning verdict.
+            let (closure, _report) = materialize(&dataset, regime)?;
+            closure
         }
         None => dataset,
     };

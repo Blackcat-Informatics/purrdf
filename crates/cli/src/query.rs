@@ -148,7 +148,9 @@ pub(crate) fn run(
             // materialize the closure in memory, and query THAT.
             let regime = reason::resolve_materializable_regime(regime)?;
             let dataset = source::load_dataset(data, data_format, base)?;
-            let closure = materialize(&dataset, regime)?;
+            // Bound and dropped: the query's result set has nowhere to carry a
+            // reasoning report.
+            let (closure, _report) = materialize(&dataset, regime)?;
             engine.query_prepared(&closure, &prepared, &[])?
         }
         None => source::run_over_input(

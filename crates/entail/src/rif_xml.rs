@@ -61,7 +61,10 @@ where
     let mut imported_facts = Vec::new();
     for import in &parsed.imports {
         let source = resolver(import)?;
-        let closed = materialize(&source, import_regime(import.profile.as_deref()))?;
+        // The import lane consumes the closure's FACTS; its report belongs to the RDFS /
+        // OWL-RL run that produced them, not to the RIF rule set being assembled here, so
+        // it is bound and dropped rather than folded into a claim about the rule set.
+        let (closed, _report) = materialize(&source, import_regime(import.profile.as_deref()))?;
         imported_facts.clear();
         fill_dataset_facts(&closed, &mut imported_facts);
         ruleset.facts.append(&mut imported_facts);

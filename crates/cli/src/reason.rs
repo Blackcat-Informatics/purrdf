@@ -77,7 +77,10 @@ pub(crate) fn run(
 
     let dataset = source::load_dataset(input, source_format, base)?;
 
-    let closure = materialize(&dataset, regime)?;
+    // The report is bound and dropped: `reason` writes RDF to a sink, and the CLI has no
+    // surface for a reasoning report yet. Binding it is the point — there is no report-free
+    // materialize to reach for instead.
+    let (closure, _report) = materialize(&dataset, regime)?;
 
     let src_codec = source_format.loss_codec_name();
     let ledger = sink::write_rdf(

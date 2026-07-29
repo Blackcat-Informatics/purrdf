@@ -31,6 +31,12 @@ path = "src/lib.rs"
 # string round-trip. purrdf-core is wasm32-unknown-unknown-clean, keeping this
 # crate wasm-clean (MAXIMAL PORTABILITY).
 purrdf-core = { workspace = true }
+# The DL-clause IR, the contract hash and the budget report. The reasoning report
+# names the calculus a closure was minted under with purrdf-datalog's own
+# `contract_hash`, so a consumer can refuse a cached verdict from another calculus
+# instead of comparing two prose claims. wasm32-unknown-unknown-clean, so this
+# crate stays in the workspace wasm gate.
+purrdf-datalog = { workspace = true }
 roxmltree = { workspace = true }
 # Fixed-key store-once interners and RIF posting-list indexes.
 ahash = { workspace = true }
