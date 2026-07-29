@@ -87,6 +87,15 @@ const RDFS_RANGE: &str = "http://www.w3.org/2000/01/rdf-schema#range";
 const RDFS_CLASS: &str = "http://www.w3.org/2000/01/rdf-schema#Class";
 /// `rdfs:Resource`.
 const RDFS_RESOURCE: &str = "http://www.w3.org/2000/01/rdf-schema#Resource";
+/// `rdfs:Literal`.
+const RDFS_LITERAL: &str = "http://www.w3.org/2000/01/rdf-schema#Literal";
+/// `rdfs:Datatype`.
+const RDFS_DATATYPE: &str = "http://www.w3.org/2000/01/rdf-schema#Datatype";
+/// `rdfs:ContainerMembershipProperty`.
+const RDFS_CONTAINERMEMBERSHIPPROPERTY: &str =
+    "http://www.w3.org/2000/01/rdf-schema#ContainerMembershipProperty";
+/// `rdfs:member`.
+const RDFS_MEMBER: &str = "http://www.w3.org/2000/01/rdf-schema#member";
 /// `owl:SymmetricProperty`.
 const OWL_SYMMETRIC: &str = "http://www.w3.org/2002/07/owl#SymmetricProperty";
 /// `owl:TransitiveProperty`.
@@ -114,6 +123,10 @@ const EX_E: &str = "http://example.org/E";
 const EX_F: &str = "http://example.org/F";
 /// A fixture class that is deliberately NOT typed `rdfs:Class`.
 const EX_NOT_A_CLASS: &str = "http://example.org/NotAClass";
+/// A fixture datatype IRI. It is `example.org`, so it is NOT one of the datatypes
+/// RDF 1.2 Semantics §8 makes every interpretation recognize — which is what makes it a
+/// usable control for `rdfs1`.
+const EX_DT: &str = "http://example.org/dt";
 /// Fixture property `example.org/p`.
 const EX_P: &str = "http://example.org/p";
 /// Fixture property `example.org/q`.
@@ -289,6 +302,54 @@ const ENGINE_SWAP: &[&str] = &[
     "     than a vocabulary table interned whether or not the data mentioned it.",
 ];
 
+/// The four causes of every byte that moved when the `RDFS` lane started asserting the
+/// axiomatic triples and firing five more rules.
+///
+/// Written into every golden's header beneath [`ENGINE_SWAP`], for the same reason that
+/// one is: the general cause once, the fixture's own triples in its own
+/// [`Fixture::changed`].
+///
+/// The single strongest fact about this diff is stated first, because it makes the other
+/// thirty-two goldens checkable at a glance: EVERY changed golden changed in the `RDFS`
+/// section and in no other. `Simple`, `RDF` and `OWL-RL` are byte-identical across all
+/// twenty-nine goldens that already existed.
+const AXIOMATIC_PATH: &[&str] = &[
+    "AND EVERY GOLDEN MOVED AGAIN, IN THE RDFS SECTION AND NOWHERE ELSE — the RDFS lane",
+    "now asserts the axiomatic triples and fires five more rules. `Simple`, `RDF` and",
+    "`OWL-RL` are byte-identical to the previous golden in all twenty-nine files that",
+    "already existed. Four causes account for the new bytes.",
+    "",
+    "  A. THE FINITE AXIOMATIC TRIPLES ARE ASSERTED, AS PREMISES — a SPEC-CONFORMANCE",
+    "     FIX, and the one that motivated this change. RDF 1.2 Semantics §8 (table `RDF",
+    "     axioms`, 9 triples) and §9 (table `RDFS axiomatic triples`, 40) are seeded into",
+    "     the fact store beside the input, because `S RDFS entails E` is defined over the",
+    "     interpretations satisfying S AND those axioms. They are premises, so they are",
+    "     NOT in the closure; everything they license is. Above all `rdfs:subClassOf` has",
+    "     an axiomatic domain and range of `rdfs:Class`, so a subClassOf edge now types",
+    "     BOTH its endpoints and `c rdfs:subClassOf c` comes back — from the premise the",
+    "     specification names, not from the endpoint shortcut the engine swap removed.",
+    "     Three W3C SPARQL entailment cases (rdfs05, rdfs11, paper-sparqldl-Q1-rdfs) were",
+    "     failing for exactly the missing half of that path and now pass.",
+    "",
+    "  B. FIVE MORE RULES FIRE IN THE RDFS LANE: `rdfD2` (RDFS entailment subsumes RDF",
+    "     entailment, and `rules(Rdfs)` always said so), `rdfs1`, `rdfs4`, `rdfs12` and",
+    "     `rdfs13`. `implemented(Rdfs)` is 14 of 18 where it was 9, and the four still",
+    "     missing — `rdfD1`, `rdfD1a`, `rdfs14`, `rdfs14a` — are missing for one reason:",
+    "     each concludes about a FRESH blank node, which is an existential head this",
+    "     crate's Datalog evaluator refuses.",
+    "",
+    "  C. EVERY RDFS CLOSURE CARRIES THE SAME 113-LINE VOCABULARY SATURATION. `rdfs4`",
+    "     types every term of every triple an `rdfs:Resource`, and the axioms are triples,",
+    "     so the axioms' own vocabulary saturates in every run. That block is INPUT-",
+    "     INDEPENDENT: it is exactly `empty.golden`'s RDFS closure, it is a subset of every",
+    "     other fixture's, and `the_rdfs_closure_of_every_fixture_contains_the_empty_one`",
+    "     asserts so. Each golden below therefore accounts only for the lines BEYOND it.",
+    "",
+    "  D. THE BUDGET ROSE, AND IS STILL NEGLIGIBLE. An RDFS run now costs about 2,000",
+    "     join steps and 165-210 stored facts against ceilings of 1,048,576 and 131,072 —",
+    "     0.25% and 0.16% at this corpus's worst case (`subclass_chain`, 2,577 steps).",
+];
+
 // ── The corpus ──────────────────────────────────────────────────────────────────
 //
 // Every fixture is minimal on purpose: the smallest input that reaches the rule, so a
@@ -311,6 +372,20 @@ const CORPUS: &[Fixture] = &[
             "Cause 3 only — RDFS and OWL-RL report term-arena-bytes=0 where they reported 594.",
             "The chase pre-interned its thirteen vocabulary constants before looking at the",
             "data; a store interns a term when a term enters it, and none does here.",
+            "",
+            "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
+            "RDFS closure 0 -> 113 lines.",
+            "THE 113 LINES ARE THE WHOLE OF CAUSE C, AND THIS GOLDEN IS WHERE THEY ARE PINNED.",
+            "Nothing here is about data — there is none. The closure is what the axiomatic",
+            "triples entail about the RDF and RDFS vocabulary itself: rdfs4 types all 32",
+            "vocabulary terms rdfs:Resource, rdfs2/rdfs3 type the axioms' subjects and objects",
+            "(13 + 8), rdfD2 types the three axiom predicates rdf:Property, rdfs1 types the",
+            "three mandatory datatypes rdfs:Datatype, rdfs13 makes each a sub-class of",
+            "rdfs:Literal, and rdfs6/rdfs8/rdfs10 close the reflexives. It is a fixpoint of the",
+            "vocabulary and cannot depend on the input, which is what makes it a subset of",
+            "every other RDFS closure in the corpus.",
+            "The two INHERENT boundaries still hold and the report still says sound-incomplete,",
+            "so this fixture still pins what it was written to pin.",
         ],
         quads: &[],
     },
@@ -327,6 +402,22 @@ const CORPUS: &[Fixture] = &[
             "`rdfs:subPropertyOf rdfs:subPropertyOf rdfs:subPropertyOf` (rdfs6 2 -> 0). Nothing",
             "in this input is typed rdf:Property, so rdfs6 has no premise: the RDFS closure is",
             "now the input alone, which is what one untyped triple entails under RDFS.",
+            "",
+            "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
+            "RDFS closure 1 -> 119 lines: the 113-line input-independent block cause C",
+            "describes, plus 6 about this fixture's own terms —",
+            "",
+            "  ex:p rdf:type rdf:Property",
+            "  ex:p rdf:type rdfs:Resource",
+            "  ex:p rdfs:subPropertyOf ex:p",
+            "  ex:x ex:p ex:y",
+            "  ex:x rdf:type rdfs:Resource",
+            "  ex:y rdf:type rdfs:Resource",
+            "",
+            "`x p y` puts three terms in the graph, so rdfs4 types all three, rdfD2 types p an",
+            "rdf:Property, and rdfs6 draws the reflexive sub-property from THAT premise — the",
+            "triple the engine swap removed as unlicensed is back, now with `p rdf:type",
+            "rdf:Property` present in the same closure to license it.",
         ],
         quads: &[t(EX_X, EX_P, EX_Y)],
     },
@@ -350,6 +441,28 @@ const CORPUS: &[Fixture] = &[
             "rather than on rdf:Property instances.",
             "What this fixture is FOR is untouched: the named-graph quad is still carried",
             "through unchanged, still supplies no premise, and the boundary is still reported.",
+            "",
+            "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
+            "RDFS closure 2 -> 123 lines: the 113-line input-independent block cause C",
+            "describes, plus 10 about this fixture's own terms —",
+            "",
+            "  ex:A rdf:type rdfs:Class",
+            "  ex:A rdf:type rdfs:Resource",
+            "  ex:A rdfs:subClassOf ex:A",
+            "  ex:A rdfs:subClassOf ex:B",
+            "  ex:A rdfs:subClassOf rdfs:Resource",
+            "  ex:B rdf:type rdfs:Class",
+            "  ex:B rdf:type rdfs:Resource",
+            "  ex:B rdfs:subClassOf ex:B",
+            "  ex:B rdfs:subClassOf rdfs:Resource",
+            "  ex:x ex:p ex:y ex:g",
+            "",
+            "What this fixture is FOR is untouched: the named-graph quad is still carried",
+            "through, still supplies no premise, and the boundary is still reported — which",
+            "is now a sharper claim, because rdfs4 would type x, p and y rdfs:Resource if",
+            "the chase read that graph, and it does not. The default-graph subClassOf edge",
+            "gets the full axiomatic treatment: both endpoints typed rdfs:Class and both",
+            "reflexives drawn.",
         ],
         quads: &[t_in(EX_X, EX_P, EX_Y, EX_G), t(EX_A, RDFS_SUBCLASSOF, EX_B)],
     },
@@ -365,6 +478,27 @@ const CORPUS: &[Fixture] = &[
             "Cause 1 — RDFS and OWL-RL lose the four reflexive subPropertyOf triples on the",
             "predicates p, rdf:type, rdfs:domain and rdfs:subPropertyOf (rdfs6 4 -> 0).",
             "rdfs2 / prp-dom is untouched: `x rdf:type A` is still concluded and still credited.",
+            "",
+            "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
+            "RDFS closure 3 -> 125 lines: the 113-line input-independent block cause C",
+            "describes, plus 12 about this fixture's own terms —",
+            "",
+            "  ex:A rdf:type rdfs:Class",
+            "  ex:A rdf:type rdfs:Resource",
+            "  ex:A rdfs:subClassOf ex:A",
+            "  ex:A rdfs:subClassOf rdfs:Resource",
+            "  ex:p rdf:type rdf:Property",
+            "  ex:p rdf:type rdfs:Resource",
+            "  ex:p rdfs:domain ex:A",
+            "  ex:p rdfs:subPropertyOf ex:p",
+            "  ex:x ex:p ex:y",
+            "  ex:x rdf:type ex:A",
+            "  ex:x rdf:type rdfs:Resource",
+            "  ex:y rdf:type rdfs:Resource",
+            "",
+            "rdfs2 / prp-dom is untouched — `x rdf:type A` is still concluded and still credited.",
+            "Around it, A is now an rdfs:Class (rdfs3 over the axiomatic range of rdfs:domain)",
+            "and p an rdf:Property (rdfs2 over its axiomatic domain), so both reflexives follow.",
         ],
         quads: &[t(EX_P, RDFS_DOMAIN, EX_A), t(EX_X, EX_P, EX_Y)],
     },
@@ -380,6 +514,30 @@ const CORPUS: &[Fixture] = &[
             "Cause 1 — RDFS and OWL-RL lose the three reflexive subPropertyOf triples on the",
             "predicates p, rdfs:domain and rdfs:subPropertyOf (rdfs6 3 -> 0). The near miss",
             "still holds: `x rdf:type A` is absent, because the domain is declared on q.",
+            "",
+            "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
+            "RDFS closure 2 -> 127 lines: the 113-line input-independent block cause C",
+            "describes, plus 14 about this fixture's own terms —",
+            "",
+            "  ex:A rdf:type rdfs:Class",
+            "  ex:A rdf:type rdfs:Resource",
+            "  ex:A rdfs:subClassOf ex:A",
+            "  ex:A rdfs:subClassOf rdfs:Resource",
+            "  ex:p rdf:type rdf:Property",
+            "  ex:p rdf:type rdfs:Resource",
+            "  ex:p rdfs:subPropertyOf ex:p",
+            "  ex:q rdf:type rdf:Property",
+            "  ex:q rdf:type rdfs:Resource",
+            "  ex:q rdfs:domain ex:A",
+            "  ex:q rdfs:subPropertyOf ex:q",
+            "  ex:x ex:p ex:y",
+            "  ex:x rdf:type rdfs:Resource",
+            "  ex:y rdf:type rdfs:Resource",
+            "",
+            "The near miss still holds: `x rdf:type A` is absent, because the domain is declared",
+            "on q. Note it is now a STRONGER near miss — q is typed rdf:Property and A an",
+            "rdfs:Class exactly as in the positive, so the only difference left between the two",
+            "closures is the one triple the rule is about.",
         ],
         quads: &[t(EX_Q, RDFS_DOMAIN, EX_A), t(EX_X, EX_P, EX_Y)],
     },
@@ -395,6 +553,25 @@ const CORPUS: &[Fixture] = &[
             "Cause 1 — RDFS and OWL-RL lose the four reflexive subPropertyOf triples on the",
             "predicates p, rdf:type, rdfs:range and rdfs:subPropertyOf (rdfs6 4 -> 0).",
             "rdfs3 / prp-rng is untouched: `y rdf:type B` is still concluded and still credited.",
+            "",
+            "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
+            "RDFS closure 3 -> 125 lines: the 113-line input-independent block cause C",
+            "describes, plus 12 about this fixture's own terms —",
+            "",
+            "  ex:B rdf:type rdfs:Class",
+            "  ex:B rdf:type rdfs:Resource",
+            "  ex:B rdfs:subClassOf ex:B",
+            "  ex:B rdfs:subClassOf rdfs:Resource",
+            "  ex:p rdf:type rdf:Property",
+            "  ex:p rdf:type rdfs:Resource",
+            "  ex:p rdfs:range ex:B",
+            "  ex:p rdfs:subPropertyOf ex:p",
+            "  ex:x ex:p ex:y",
+            "  ex:x rdf:type rdfs:Resource",
+            "  ex:y rdf:type ex:B",
+            "  ex:y rdf:type rdfs:Resource",
+            "",
+            "rdfs3 / prp-rng is untouched — `y rdf:type B` is still concluded and still credited.",
         ],
         quads: &[t(EX_P, RDFS_RANGE, EX_B), t(EX_X, EX_P, EX_Y)],
     },
@@ -410,6 +587,27 @@ const CORPUS: &[Fixture] = &[
             "Cause 1 — RDFS and OWL-RL lose the three reflexive subPropertyOf triples on the",
             "predicates p, rdfs:range and rdfs:subPropertyOf (rdfs6 3 -> 0). The near miss",
             "still holds: `y rdf:type B` is absent, because the range is declared on q.",
+            "",
+            "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
+            "RDFS closure 2 -> 127 lines: the 113-line input-independent block cause C",
+            "describes, plus 14 about this fixture's own terms —",
+            "",
+            "  ex:B rdf:type rdfs:Class",
+            "  ex:B rdf:type rdfs:Resource",
+            "  ex:B rdfs:subClassOf ex:B",
+            "  ex:B rdfs:subClassOf rdfs:Resource",
+            "  ex:p rdf:type rdf:Property",
+            "  ex:p rdf:type rdfs:Resource",
+            "  ex:p rdfs:subPropertyOf ex:p",
+            "  ex:q rdf:type rdf:Property",
+            "  ex:q rdf:type rdfs:Resource",
+            "  ex:q rdfs:range ex:B",
+            "  ex:q rdfs:subPropertyOf ex:q",
+            "  ex:x ex:p ex:y",
+            "  ex:x rdf:type rdfs:Resource",
+            "  ex:y rdf:type rdfs:Resource",
+            "",
+            "The near miss still holds: `y rdf:type B` is absent, because the range is on q.",
         ],
         quads: &[t(EX_Q, RDFS_RANGE, EX_B), t(EX_X, EX_P, EX_Y)],
     },
@@ -424,6 +622,28 @@ const CORPUS: &[Fixture] = &[
             "(rdfs6 4 -> 0): p, q and r appear only as subPropertyOf ENDPOINTS here, and an",
             "endpoint is not an rdf:Property instance. rdfs5 / scm-spo is untouched — the",
             "transitive `p subPropertyOf r` is still concluded and still credited.",
+            "",
+            "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
+            "RDFS closure 3 -> 125 lines: the 113-line input-independent block cause C",
+            "describes, plus 12 about this fixture's own terms —",
+            "",
+            "  ex:p rdf:type rdf:Property",
+            "  ex:p rdf:type rdfs:Resource",
+            "  ex:p rdfs:subPropertyOf ex:p",
+            "  ex:p rdfs:subPropertyOf ex:q",
+            "  ex:p rdfs:subPropertyOf ex:r",
+            "  ex:q rdf:type rdf:Property",
+            "  ex:q rdf:type rdfs:Resource",
+            "  ex:q rdfs:subPropertyOf ex:q",
+            "  ex:q rdfs:subPropertyOf ex:r",
+            "  ex:r rdf:type rdf:Property",
+            "  ex:r rdf:type rdfs:Resource",
+            "  ex:r rdfs:subPropertyOf ex:r",
+            "",
+            "rdfs5 / scm-spo is untouched — the transitive `p subPropertyOf r` is still",
+            "concluded and still credited (rdfs5=1). The three reflexives are back, but from",
+            "the licensed premise this time: rdfs:subPropertyOf has an axiomatic domain AND",
+            "range of rdf:Property, so p, q and r are all typed rdf:Property first.",
         ],
         quads: &[
             t(EX_P, RDFS_SUBPROPERTYOF, EX_Q),
@@ -442,6 +662,28 @@ const CORPUS: &[Fixture] = &[
             "Cause 1 — RDFS and OWL-RL lose the five reflexive subPropertyOf triples on D, p,",
             "q, r and rdfs:subPropertyOf (rdfs6 5 -> 0). The near miss still holds: the broken",
             "chain concludes nothing, and now the closure says exactly that.",
+            "",
+            "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
+            "RDFS closure 2 -> 127 lines: the 113-line input-independent block cause C",
+            "describes, plus 14 about this fixture's own terms —",
+            "",
+            "  ex:D rdf:type rdf:Property",
+            "  ex:D rdf:type rdfs:Resource",
+            "  ex:D rdfs:subPropertyOf ex:D",
+            "  ex:D rdfs:subPropertyOf ex:r",
+            "  ex:p rdf:type rdf:Property",
+            "  ex:p rdf:type rdfs:Resource",
+            "  ex:p rdfs:subPropertyOf ex:p",
+            "  ex:p rdfs:subPropertyOf ex:q",
+            "  ex:q rdf:type rdf:Property",
+            "  ex:q rdf:type rdfs:Resource",
+            "  ex:q rdfs:subPropertyOf ex:q",
+            "  ex:r rdf:type rdf:Property",
+            "  ex:r rdf:type rdfs:Resource",
+            "  ex:r rdfs:subPropertyOf ex:r",
+            "",
+            "The near miss still holds: the chain is broken at the join point, so `p",
+            "subPropertyOf r` is absent while every reflexive is present.",
         ],
         quads: &[
             t(EX_P, RDFS_SUBPROPERTYOF, EX_Q),
@@ -460,6 +702,24 @@ const CORPUS: &[Fixture] = &[
             "Cause 1 — RDFS and OWL-RL lose `p subPropertyOf p`, `q subPropertyOf q` and",
             "`rdfs:subPropertyOf subPropertyOf rdfs:subPropertyOf` (rdfs6 3 -> 0).",
             "rdfs7 / prp-spo1 is untouched: `x q y` is still concluded and still credited.",
+            "",
+            "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
+            "RDFS closure 3 -> 124 lines: the 113-line input-independent block cause C",
+            "describes, plus 11 about this fixture's own terms —",
+            "",
+            "  ex:p rdf:type rdf:Property",
+            "  ex:p rdf:type rdfs:Resource",
+            "  ex:p rdfs:subPropertyOf ex:p",
+            "  ex:p rdfs:subPropertyOf ex:q",
+            "  ex:q rdf:type rdf:Property",
+            "  ex:q rdf:type rdfs:Resource",
+            "  ex:q rdfs:subPropertyOf ex:q",
+            "  ex:x ex:p ex:y",
+            "  ex:x ex:q ex:y",
+            "  ex:x rdf:type rdfs:Resource",
+            "  ex:y rdf:type rdfs:Resource",
+            "",
+            "rdfs7 / prp-spo1 is untouched: `x q y` is still concluded and still credited.",
         ],
         quads: &[t(EX_P, RDFS_SUBPROPERTYOF, EX_Q), t(EX_X, EX_P, EX_Y)],
     },
@@ -475,6 +735,26 @@ const CORPUS: &[Fixture] = &[
             "Cause 1 — RDFS and OWL-RL lose the four reflexive subPropertyOf triples on p, q,",
             "r and rdfs:subPropertyOf (rdfs6 4 -> 0). The near miss still holds: `x q y` is",
             "absent, because the data triple uses r.",
+            "",
+            "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
+            "RDFS closure 2 -> 126 lines: the 113-line input-independent block cause C",
+            "describes, plus 13 about this fixture's own terms —",
+            "",
+            "  ex:p rdf:type rdf:Property",
+            "  ex:p rdf:type rdfs:Resource",
+            "  ex:p rdfs:subPropertyOf ex:p",
+            "  ex:p rdfs:subPropertyOf ex:q",
+            "  ex:q rdf:type rdf:Property",
+            "  ex:q rdf:type rdfs:Resource",
+            "  ex:q rdfs:subPropertyOf ex:q",
+            "  ex:r rdf:type rdf:Property",
+            "  ex:r rdf:type rdfs:Resource",
+            "  ex:r rdfs:subPropertyOf ex:r",
+            "  ex:x ex:r ex:y",
+            "  ex:x rdf:type rdfs:Resource",
+            "  ex:y rdf:type rdfs:Resource",
+            "",
+            "The near miss still holds: `x q y` is absent, because the data triple uses r.",
         ],
         quads: &[t(EX_P, RDFS_SUBPROPERTYOF, EX_Q), t(EX_X, EX_R, EX_Y)],
     },
@@ -494,6 +774,18 @@ const CORPUS: &[Fixture] = &[
             "LICENSED conclusion stays: `p rdfs:subPropertyOf p`, from the premise",
             "`p rdf:type rdf:Property` this fixture asserts. That is the whole point — rdfs6",
             "was narrowed to its specification premise, not switched off.",
+            "",
+            "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
+            "RDFS closure 2 -> 116 lines: the 113-line input-independent block cause C",
+            "describes, plus 3 about this fixture's own terms —",
+            "",
+            "  ex:p rdf:type rdf:Property",
+            "  ex:p rdf:type rdfs:Resource",
+            "  ex:p rdfs:subPropertyOf ex:p",
+            "",
+            "The smallest diff in the corpus, and the most direct: p is typed rdf:Property by",
+            "the input itself, so rdfs6's premise never needed the axioms. Only rdfs4's",
+            "rdfs:Resource typing is new.",
         ],
         quads: &[t(EX_P, RDF_TYPE, RDF_PROPERTY)],
     },
@@ -518,6 +810,16 @@ const CORPUS: &[Fixture] = &[
             "`rdfs:subPropertyOf subPropertyOf rdfs:subPropertyOf` (rdfs6 3 -> 1); the licensed",
             "`q rdfs:subPropertyOf q` stays. The near miss still holds: `p subPropertyOf p` is",
             "absent, and now it is absent because p is absent rather than in spite of it.",
+            "",
+            "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
+            "RDFS closure 2 -> 116 lines: the 113-line input-independent block cause C",
+            "describes, plus 3 about this fixture's own terms —",
+            "",
+            "  ex:q rdf:type rdf:Property",
+            "  ex:q rdf:type rdfs:Resource",
+            "  ex:q rdfs:subPropertyOf ex:q",
+            "",
+            "The near miss still holds: `p subPropertyOf p` is absent because p is absent.",
         ],
         quads: &[t(EX_Q, RDF_TYPE, RDF_PROPERTY)],
     },
@@ -537,6 +839,18 @@ const CORPUS: &[Fixture] = &[
             "rdfs:subClassOf and rdfs:subPropertyOf (rdfs6 3 -> 0). Both licensed conclusions",
             "stay: `C rdfs:subClassOf rdfs:Resource` (rdfs8) and `C rdfs:subClassOf C`",
             "(rdfs10, on the premise `C rdf:type rdfs:Class` this fixture asserts).",
+            "",
+            "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
+            "RDFS closure 3 -> 117 lines: the 113-line input-independent block cause C",
+            "describes, plus 4 about this fixture's own terms —",
+            "",
+            "  ex:C rdf:type rdfs:Class",
+            "  ex:C rdf:type rdfs:Resource",
+            "  ex:C rdfs:subClassOf ex:C",
+            "  ex:C rdfs:subClassOf rdfs:Resource",
+            "",
+            "rdfs8 and rdfs10 are untouched: `C rdfs:subClassOf rdfs:Resource` and `C",
+            "rdfs:subClassOf C` are still concluded from the input's own rdfs:Class typing.",
         ],
         quads: &[t(EX_C, RDF_TYPE, RDFS_CLASS)],
     },
@@ -555,8 +869,69 @@ const CORPUS: &[Fixture] = &[
             "`rdfs:subPropertyOf subPropertyOf rdfs:subPropertyOf` (rdfs6 2 -> 0). The near",
             "miss still holds: neither `C rdfs:subClassOf rdfs:Resource` nor",
             "`C rdfs:subClassOf C` is concluded, because C is not typed rdfs:Class.",
+            "",
+            "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
+            "RDFS closure 1 -> 119 lines: the 113-line input-independent block cause C",
+            "describes, plus 6 about this fixture's own terms —",
+            "",
+            "  ex:C rdf:type ex:NotAClass",
+            "  ex:C rdf:type rdfs:Resource",
+            "  ex:NotAClass rdf:type rdfs:Class",
+            "  ex:NotAClass rdf:type rdfs:Resource",
+            "  ex:NotAClass rdfs:subClassOf ex:NotAClass",
+            "  ex:NotAClass rdfs:subClassOf rdfs:Resource",
+            "",
+            "The near miss still holds for C: it is not typed rdfs:Class, so neither `C ⊑",
+            "rdfs:Resource` nor `C ⊑ C` appears. NotAClass itself now IS an rdfs:Class — it",
+            "is the object of an rdf:type triple, whose axiomatic range is rdfs:Class — which",
+            "is a conclusion about NotAClass and not about C, and leaves the control intact.",
         ],
         quads: &[t(EX_C, RDF_TYPE, EX_NOT_A_CLASS)],
+    },
+    Fixture {
+        name: "container_membership",
+        doc: &[
+            "rdfs12: a resource typed rdfs:ContainerMembershipProperty is a sub-property",
+            "of rdfs:member. The typing is the graph's own — the axiomatic typings of",
+            "rdf:_1, rdf:_2, … are members of the one family this chase cannot assert, so",
+            "this is the only way the rule reaches a premise.",
+        ],
+        exercises: &["rdfs12"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[t(EX_P, RDF_TYPE, RDFS_CONTAINERMEMBERSHIPPROPERTY)],
+    },
+    Fixture {
+        name: "container_membership_near_miss",
+        doc: &[
+            "NEAR MISS for rdfs12: the container-membership typing names q instead of p,",
+            "and p is absent from the graph entirely, so `p rdfs:subPropertyOf rdfs:member`",
+            "is not concluded.",
+        ],
+        exercises: &["rdfs12"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[t(EX_Q, RDF_TYPE, RDFS_CONTAINERMEMBERSHIPPROPERTY)],
+    },
+    Fixture {
+        name: "datatype_declared",
+        doc: &[
+            "rdfs13: a resource typed rdfs:Datatype is a sub-class of rdfs:Literal. The",
+            "datatype is an example.org IRI rather than one of the three RDF 1.2 makes",
+            "mandatory, so the conclusion is attributable to the graph's own typing and",
+            "not to rdfs1's premise-free one.",
+        ],
+        exercises: &["rdfs13"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[t(EX_DT, RDF_TYPE, RDFS_DATATYPE)],
+    },
+    Fixture {
+        name: "datatype_declared_near_miss",
+        doc: &[
+            "NEAR MISS for rdfs13: the datatype IRI is typed, but not as rdfs:Datatype, so",
+            "`dt rdfs:subClassOf rdfs:Literal` is not concluded.",
+        ],
+        exercises: &["rdfs13"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[t(EX_DT, RDF_TYPE, EX_NOT_A_CLASS)],
     },
     Fixture {
         name: "subclass_instance",
@@ -569,6 +944,78 @@ const CORPUS: &[Fixture] = &[
             "(rdfs10 2 -> 0, fired on subClassOf endpoints) and the three reflexive",
             "subPropertyOf triples on rdf:type, rdfs:subClassOf and rdfs:subPropertyOf",
             "(rdfs6 3 -> 0). rdfs9 / cax-sco is untouched: `x rdf:type B` is still concluded.",
+            "",
+            "AT THE AXIOMATIC PATH — NEW FIXTURE, so nothing moved: this golden did not exist.",
+            "Its RDFS closure is 118 lines: the 113-line input-independent block cause C",
+            "describes, plus 5 about this fixture:",
+            "",
+            "  ex:p rdf:type rdf:Property",
+            "  ex:p rdf:type rdfs:ContainerMembershipProperty",
+            "  ex:p rdf:type rdfs:Resource",
+            "  ex:p rdfs:subPropertyOf ex:p",
+            "  ex:p rdfs:subPropertyOf rdfs:member",
+            "",
+            "NEW FIXTURE. rdfs12's only premise is a typing the graph asserts: the axiomatic",
+            "typings of rdf:_1, rdf:_2, … are in the one family this chase cannot assert.",
+            "",
+            "AT THE AXIOMATIC PATH — NEW FIXTURE, so nothing moved: this golden did not exist.",
+            "Its RDFS closure is 118 lines: the 113-line input-independent block cause C",
+            "describes, plus 5 about this fixture:",
+            "",
+            "  ex:q rdf:type rdf:Property",
+            "  ex:q rdf:type rdfs:ContainerMembershipProperty",
+            "  ex:q rdf:type rdfs:Resource",
+            "  ex:q rdfs:subPropertyOf ex:q",
+            "  ex:q rdfs:subPropertyOf rdfs:member",
+            "",
+            "NEW FIXTURE.",
+            "",
+            "AT THE AXIOMATIC PATH — NEW FIXTURE, so nothing moved: this golden did not exist.",
+            "Its RDFS closure is 119 lines: the 113-line input-independent block cause C",
+            "describes, plus 6 about this fixture:",
+            "",
+            "  ex:dt rdf:type rdfs:Class",
+            "  ex:dt rdf:type rdfs:Datatype",
+            "  ex:dt rdf:type rdfs:Resource",
+            "  ex:dt rdfs:subClassOf ex:dt",
+            "  ex:dt rdfs:subClassOf rdfs:Literal",
+            "  ex:dt rdfs:subClassOf rdfs:Resource",
+            "",
+            "NEW FIXTURE. rdfs13 fires four times: once for ex:dt, and once each for the three",
+            "datatypes rdfs1 types premise-free — which is why the positive uses an",
+            "example.org IRI, so its conclusion is attributable to the graph's own typing.",
+            "",
+            "AT THE AXIOMATIC PATH — NEW FIXTURE, so nothing moved: this golden did not exist.",
+            "Its RDFS closure is 119 lines: the 113-line input-independent block cause C",
+            "describes, plus 6 about this fixture:",
+            "",
+            "  ex:NotAClass rdf:type rdfs:Class",
+            "  ex:NotAClass rdf:type rdfs:Resource",
+            "  ex:NotAClass rdfs:subClassOf ex:NotAClass",
+            "  ex:NotAClass rdfs:subClassOf rdfs:Resource",
+            "  ex:dt rdf:type ex:NotAClass",
+            "  ex:dt rdf:type rdfs:Resource",
+            "",
+            "NEW FIXTURE.",
+            "",
+            "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
+            "RDFS closure 3 -> 125 lines: the 113-line input-independent block cause C",
+            "describes, plus 12 about this fixture's own terms —",
+            "",
+            "  ex:A rdf:type rdfs:Class",
+            "  ex:A rdf:type rdfs:Resource",
+            "  ex:A rdfs:subClassOf ex:A",
+            "  ex:A rdfs:subClassOf ex:B",
+            "  ex:A rdfs:subClassOf rdfs:Resource",
+            "  ex:B rdf:type rdfs:Class",
+            "  ex:B rdf:type rdfs:Resource",
+            "  ex:B rdfs:subClassOf ex:B",
+            "  ex:B rdfs:subClassOf rdfs:Resource",
+            "  ex:x rdf:type ex:A",
+            "  ex:x rdf:type ex:B",
+            "  ex:x rdf:type rdfs:Resource",
+            "",
+            "rdfs9 / cax-sco is untouched: `x rdf:type B` is still concluded.",
         ],
         quads: &[t(EX_A, RDFS_SUBCLASSOF, EX_B), t(EX_X, RDF_TYPE, EX_A)],
     },
@@ -586,6 +1033,28 @@ const CORPUS: &[Fixture] = &[
             "`A rdfs:subClassOf A`, `B rdfs:subClassOf B` (rdfs10 2 -> 0) and the reflexive",
             "subPropertyOf triples on rdf:type, rdfs:subClassOf and rdfs:subPropertyOf",
             "(rdfs6 3 -> 0). The near miss still holds: `x rdf:type B` is absent.",
+            "",
+            "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
+            "RDFS closure 2 -> 128 lines: the 113-line input-independent block cause C",
+            "describes, plus 15 about this fixture's own terms —",
+            "",
+            "  ex:A rdf:type rdfs:Class",
+            "  ex:A rdf:type rdfs:Resource",
+            "  ex:A rdfs:subClassOf ex:A",
+            "  ex:A rdfs:subClassOf ex:B",
+            "  ex:A rdfs:subClassOf rdfs:Resource",
+            "  ex:B rdf:type rdfs:Class",
+            "  ex:B rdf:type rdfs:Resource",
+            "  ex:B rdfs:subClassOf ex:B",
+            "  ex:B rdfs:subClassOf rdfs:Resource",
+            "  ex:D rdf:type rdfs:Class",
+            "  ex:D rdf:type rdfs:Resource",
+            "  ex:D rdfs:subClassOf ex:D",
+            "  ex:D rdfs:subClassOf rdfs:Resource",
+            "  ex:x rdf:type ex:D",
+            "  ex:x rdf:type rdfs:Resource",
+            "",
+            "The near miss still holds: `x rdf:type B` is absent.",
         ],
         quads: &[t(EX_A, RDFS_SUBCLASSOF, EX_B), t(EX_X, RDF_TYPE, EX_D)],
     },
@@ -608,6 +1077,63 @@ const CORPUS: &[Fixture] = &[
             "What this fixture is FOR is untouched: rdfs11 / scm-sco still contributes 10",
             "triples and rdfs9 / cax-sco still contributes 5, so `A rdfs:subClassOf F` and",
             "`x rdf:type F` are still reached — the multi-round fixpoint still closes.",
+            "",
+            "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
+            "RDFS closure 21 -> 159 lines: the 113-line input-independent block cause C",
+            "describes, plus 46 about this fixture's own terms —",
+            "",
+            "  ex:A rdf:type rdfs:Class",
+            "  ex:A rdf:type rdfs:Resource",
+            "  ex:A rdfs:subClassOf ex:A",
+            "  ex:A rdfs:subClassOf ex:B",
+            "  ex:A rdfs:subClassOf ex:C",
+            "  ex:A rdfs:subClassOf ex:D",
+            "  ex:A rdfs:subClassOf ex:E",
+            "  ex:A rdfs:subClassOf ex:F",
+            "  ex:A rdfs:subClassOf rdfs:Resource",
+            "  ex:B rdf:type rdfs:Class",
+            "  ex:B rdf:type rdfs:Resource",
+            "  ex:B rdfs:subClassOf ex:B",
+            "  ex:B rdfs:subClassOf ex:C",
+            "  ex:B rdfs:subClassOf ex:D",
+            "  ex:B rdfs:subClassOf ex:E",
+            "  ex:B rdfs:subClassOf ex:F",
+            "  ex:B rdfs:subClassOf rdfs:Resource",
+            "  ex:C rdf:type rdfs:Class",
+            "  ex:C rdf:type rdfs:Resource",
+            "  ex:C rdfs:subClassOf ex:C",
+            "  ex:C rdfs:subClassOf ex:D",
+            "  ex:C rdfs:subClassOf ex:E",
+            "  ex:C rdfs:subClassOf ex:F",
+            "  ex:C rdfs:subClassOf rdfs:Resource",
+            "  ex:D rdf:type rdfs:Class",
+            "  ex:D rdf:type rdfs:Resource",
+            "  ex:D rdfs:subClassOf ex:D",
+            "  ex:D rdfs:subClassOf ex:E",
+            "  ex:D rdfs:subClassOf ex:F",
+            "  ex:D rdfs:subClassOf rdfs:Resource",
+            "  ex:E rdf:type rdfs:Class",
+            "  ex:E rdf:type rdfs:Resource",
+            "  ex:E rdfs:subClassOf ex:E",
+            "  ex:E rdfs:subClassOf ex:F",
+            "  ex:E rdfs:subClassOf rdfs:Resource",
+            "  ex:F rdf:type rdfs:Class",
+            "  ex:F rdf:type rdfs:Resource",
+            "  ex:F rdfs:subClassOf ex:F",
+            "  ex:F rdfs:subClassOf rdfs:Resource",
+            "  ex:x rdf:type ex:A",
+            "  ex:x rdf:type ex:B",
+            "  ex:x rdf:type ex:C",
+            "  ex:x rdf:type ex:D",
+            "  ex:x rdf:type ex:E",
+            "  ex:x rdf:type ex:F",
+            "  ex:x rdf:type rdfs:Resource",
+            "",
+            "The largest closure in the corpus, and what it is FOR is untouched: rdfs11 /",
+            "scm-sco still contributes 10 triples, rdfs9 still reaches `x rdf:type F`, and the",
+            "multi-round fixpoint still closes. The six reflexive `Ci ⊑ Ci` are back — every",
+            "Ci is now typed rdfs:Class from the axiomatic domain and range of rdfs:subClassOf",
+            "— and this is the corpus's budget worst case at 2,577 join steps.",
         ],
         quads: &[
             t(EX_A, RDFS_SUBCLASSOF, EX_B),
@@ -631,6 +1157,31 @@ const CORPUS: &[Fixture] = &[
             "`E rdfs:subClassOf E` and `F rdfs:subClassOf F` (rdfs10 4 -> 0) and the reflexive",
             "subPropertyOf triples on rdfs:subClassOf and rdfs:subPropertyOf (rdfs6 2 -> 0).",
             "The near miss still holds: `A rdfs:subClassOf F` is absent at every depth.",
+            "",
+            "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
+            "RDFS closure 2 -> 131 lines: the 113-line input-independent block cause C",
+            "describes, plus 18 about this fixture's own terms —",
+            "",
+            "  ex:A rdf:type rdfs:Class",
+            "  ex:A rdf:type rdfs:Resource",
+            "  ex:A rdfs:subClassOf ex:A",
+            "  ex:A rdfs:subClassOf ex:B",
+            "  ex:A rdfs:subClassOf rdfs:Resource",
+            "  ex:B rdf:type rdfs:Class",
+            "  ex:B rdf:type rdfs:Resource",
+            "  ex:B rdfs:subClassOf ex:B",
+            "  ex:B rdfs:subClassOf rdfs:Resource",
+            "  ex:E rdf:type rdfs:Class",
+            "  ex:E rdf:type rdfs:Resource",
+            "  ex:E rdfs:subClassOf ex:E",
+            "  ex:E rdfs:subClassOf ex:F",
+            "  ex:E rdfs:subClassOf rdfs:Resource",
+            "  ex:F rdf:type rdfs:Class",
+            "  ex:F rdf:type rdfs:Resource",
+            "  ex:F rdfs:subClassOf ex:F",
+            "  ex:F rdfs:subClassOf rdfs:Resource",
+            "",
+            "The near miss still holds: `A rdfs:subClassOf F` is absent at every depth.",
         ],
         quads: &[
             t(EX_A, RDFS_SUBCLASSOF, EX_B),
@@ -652,6 +1203,29 @@ const CORPUS: &[Fixture] = &[
             "rdf:type and rdfs:subPropertyOf (rdfs6 3 -> 0). Under RDFS the closure is now the",
             "input alone, which is correct: RDFS has no rule for owl:SymmetricProperty.",
             "prp-symp is untouched — OWL-RL still mirrors both triples.",
+            "",
+            "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
+            "RDFS closure 3 -> 126 lines: the 113-line input-independent block cause C",
+            "describes, plus 13 about this fixture's own terms —",
+            "",
+            "  ex:p rdf:type rdf:Property",
+            "  ex:p rdf:type rdfs:Resource",
+            "  ex:p rdf:type owl:SymmetricProperty",
+            "  ex:p rdfs:subPropertyOf ex:p",
+            "  ex:x ex:p ex:y",
+            "  ex:x rdf:type rdfs:Resource",
+            "  ex:y ex:p ex:z",
+            "  ex:y rdf:type rdfs:Resource",
+            "  ex:z rdf:type rdfs:Resource",
+            "  owl:SymmetricProperty rdf:type rdfs:Class",
+            "  owl:SymmetricProperty rdf:type rdfs:Resource",
+            "  owl:SymmetricProperty rdfs:subClassOf rdfs:Resource",
+            "  owl:SymmetricProperty rdfs:subClassOf owl:SymmetricProperty",
+            "",
+            "Under RDFS the closure is no longer the input alone, but RDFS still has no rule",
+            "for owl:SymmetricProperty: owl:SymmetricProperty appears only as an rdf:type",
+            "object, so the axiomatic range of rdf:type makes it an rdfs:Class and nothing",
+            "more is said about it. prp-symp is untouched — the OWL-RL section is identical.",
         ],
         quads: &[
             t(EX_P, RDF_TYPE, OWL_SYMMETRIC),
@@ -673,6 +1247,28 @@ const CORPUS: &[Fixture] = &[
             "rdf:type and rdfs:subPropertyOf (rdfs6 3 -> 0). Under RDFS the closure is now the",
             "input alone, which is correct: RDFS has no rule for owl:TransitiveProperty.",
             "prp-trp is untouched — OWL-RL still composes `x p z`.",
+            "",
+            "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
+            "RDFS closure 3 -> 126 lines: the 113-line input-independent block cause C",
+            "describes, plus 13 about this fixture's own terms —",
+            "",
+            "  ex:p rdf:type rdf:Property",
+            "  ex:p rdf:type rdfs:Resource",
+            "  ex:p rdf:type owl:TransitiveProperty",
+            "  ex:p rdfs:subPropertyOf ex:p",
+            "  ex:x ex:p ex:y",
+            "  ex:x rdf:type rdfs:Resource",
+            "  ex:y ex:p ex:z",
+            "  ex:y rdf:type rdfs:Resource",
+            "  ex:z rdf:type rdfs:Resource",
+            "  owl:TransitiveProperty rdf:type rdfs:Class",
+            "  owl:TransitiveProperty rdf:type rdfs:Resource",
+            "  owl:TransitiveProperty rdfs:subClassOf rdfs:Resource",
+            "  owl:TransitiveProperty rdfs:subClassOf owl:TransitiveProperty",
+            "",
+            "As `symmetric`: RDFS says nothing about owl:TransitiveProperty beyond its being",
+            "the object of an rdf:type triple and therefore an rdfs:Class. prp-trp is",
+            "untouched — the OWL-RL section is identical.",
         ],
         quads: &[
             t(EX_P, RDF_TYPE, OWL_TRANSITIVE),
@@ -695,6 +1291,31 @@ const CORPUS: &[Fixture] = &[
             "rdfs:subPropertyOf and owl:inverseOf (rdfs6 4 -> 0). Both halves of the axiom are",
             "untouched: prp-inv1 still mirrors `x p y` into q and prp-inv2 still mirrors",
             "`u q v` into p, each still credited under its own id.",
+            "",
+            "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
+            "RDFS closure 3 -> 129 lines: the 113-line input-independent block cause C",
+            "describes, plus 16 about this fixture's own terms —",
+            "",
+            "  ex:p rdf:type rdf:Property",
+            "  ex:p rdf:type rdfs:Resource",
+            "  ex:p rdfs:subPropertyOf ex:p",
+            "  ex:p owl:inverseOf ex:q",
+            "  ex:q rdf:type rdf:Property",
+            "  ex:q rdf:type rdfs:Resource",
+            "  ex:q rdfs:subPropertyOf ex:q",
+            "  ex:u ex:q ex:v",
+            "  ex:u rdf:type rdfs:Resource",
+            "  ex:v rdf:type rdfs:Resource",
+            "  ex:x ex:p ex:y",
+            "  ex:x rdf:type rdfs:Resource",
+            "  ex:y rdf:type rdfs:Resource",
+            "  owl:inverseOf rdf:type rdf:Property",
+            "  owl:inverseOf rdf:type rdfs:Resource",
+            "  owl:inverseOf rdfs:subPropertyOf owl:inverseOf",
+            "",
+            "Both halves of the axiom are untouched — the OWL-RL section is identical.",
+            "owl:inverseOf is now typed rdf:Property because it is a PREDICATE (rdfD2), which",
+            "is the one place this fixture shows rdfD2 reaching something the axioms do not.",
         ],
         quads: &[
             t(EX_P, OWL_INVERSEOF, EX_Q),
@@ -716,6 +1337,30 @@ const CORPUS: &[Fixture] = &[
             "`r subPropertyOf r` as well (rdfs6 5 -> 0), r being a predicate only because",
             "prp-inv1's own conclusion uses it. The near miss still holds: neither mirror",
             "between p and q appears.",
+            "",
+            "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
+            "RDFS closure 3 -> 130 lines: the 113-line input-independent block cause C",
+            "describes, plus 17 about this fixture's own terms —",
+            "",
+            "  ex:p rdf:type rdf:Property",
+            "  ex:p rdf:type rdfs:Resource",
+            "  ex:p rdfs:subPropertyOf ex:p",
+            "  ex:p owl:inverseOf ex:r",
+            "  ex:q rdf:type rdf:Property",
+            "  ex:q rdf:type rdfs:Resource",
+            "  ex:q rdfs:subPropertyOf ex:q",
+            "  ex:r rdf:type rdfs:Resource",
+            "  ex:u ex:q ex:v",
+            "  ex:u rdf:type rdfs:Resource",
+            "  ex:v rdf:type rdfs:Resource",
+            "  ex:x ex:p ex:y",
+            "  ex:x rdf:type rdfs:Resource",
+            "  ex:y rdf:type rdfs:Resource",
+            "  owl:inverseOf rdf:type rdf:Property",
+            "  owl:inverseOf rdf:type rdfs:Resource",
+            "  owl:inverseOf rdfs:subPropertyOf owl:inverseOf",
+            "",
+            "The near miss still holds: neither mirror between p and q appears.",
         ],
         quads: &[
             t(EX_P, OWL_INVERSEOF, EX_R),
@@ -740,6 +1385,23 @@ const CORPUS: &[Fixture] = &[
             "`A rdfs:subClassOf A` and `B rdfs:subClassOf B` STAY, and are not reflexive-rule",
             "survivors: scm-eqc1 gives both `A subClassOf B` and `B subClassOf A`, and",
             "rdfs11 / scm-sco composes each pair — the tally still reads scm-sco=2.",
+            "",
+            "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
+            "RDFS closure 1 -> 119 lines: the 113-line input-independent block cause C",
+            "describes, plus 6 about this fixture's own terms —",
+            "",
+            "  ex:A rdf:type rdfs:Resource",
+            "  ex:A owl:equivalentClass ex:B",
+            "  ex:B rdf:type rdfs:Resource",
+            "  owl:equivalentClass rdf:type rdf:Property",
+            "  owl:equivalentClass rdf:type rdfs:Resource",
+            "  owl:equivalentClass rdfs:subPropertyOf owl:equivalentClass",
+            "",
+            "RDFS still has no rule for owl:equivalentClass — it is typed rdf:Property because",
+            "it is a predicate, and that is all. `A ⊑ A` and `B ⊑ B` are NOT here: nothing",
+            "types A or B an rdfs:Class under RDFS, since owl:equivalentClass has no",
+            "axiomatic range. The OWL-RL section, where scm-eqc1 does license them, is",
+            "identical to before.",
         ],
         quads: &[t(EX_A, OWL_EQUIVALENTCLASS, EX_B)],
     },
@@ -759,6 +1421,20 @@ const CORPUS: &[Fixture] = &[
             "owl:equivalentProperty. `A subPropertyOf A` and `B subPropertyOf B` STAY under",
             "OWL-RL, licensed by rdfs5 / scm-spo over scm-eqp1's two edges (scm-spo=2), not by",
             "the reflexive rule.",
+            "",
+            "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
+            "RDFS closure 1 -> 119 lines: the 113-line input-independent block cause C",
+            "describes, plus 6 about this fixture's own terms —",
+            "",
+            "  ex:A rdf:type rdfs:Resource",
+            "  ex:A owl:equivalentProperty ex:B",
+            "  ex:B rdf:type rdfs:Resource",
+            "  owl:equivalentProperty rdf:type rdf:Property",
+            "  owl:equivalentProperty rdf:type rdfs:Resource",
+            "  owl:equivalentProperty rdfs:subPropertyOf owl:equivalentProperty",
+            "",
+            "As `equivalent_class`, with owl:equivalentProperty. The OWL-RL section is",
+            "identical.",
         ],
         quads: &[t(EX_A, OWL_EQUIVALENTPROPERTY, EX_B)],
     },
@@ -785,6 +1461,35 @@ const CORPUS: &[Fixture] = &[
             "stated reason now rather than by firing order: the evaluator picks a round's",
             "winner by a total order over observable provenance, and rdfs9's sources",
             "(`A subClassOf C`, `x a A`) sort before rdfs2's (`p domain C`, `x p y`).",
+            "",
+            "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
+            "RDFS closure 5 -> 131 lines: the 113-line input-independent block cause C",
+            "describes, plus 18 about this fixture's own terms —",
+            "",
+            "  ex:A rdf:type rdfs:Class",
+            "  ex:A rdf:type rdfs:Resource",
+            "  ex:A rdfs:subClassOf ex:A",
+            "  ex:A rdfs:subClassOf ex:C",
+            "  ex:A rdfs:subClassOf rdfs:Resource",
+            "  ex:C rdf:type rdfs:Class",
+            "  ex:C rdf:type rdfs:Resource",
+            "  ex:C rdfs:subClassOf ex:C",
+            "  ex:C rdfs:subClassOf rdfs:Resource",
+            "  ex:p rdf:type rdf:Property",
+            "  ex:p rdf:type rdfs:Resource",
+            "  ex:p rdfs:domain ex:C",
+            "  ex:p rdfs:subPropertyOf ex:p",
+            "  ex:x ex:p ex:y",
+            "  ex:x rdf:type ex:A",
+            "  ex:x rdf:type ex:C",
+            "  ex:x rdf:type rdfs:Resource",
+            "  ex:y rdf:type rdfs:Resource",
+            "",
+            "THE SHARED CONCLUSION ITSELF DID NOT MOVE: `x rdf:type C` is still concluded and",
+            "still credited to rdfs9 rather than to rdfs2, on the same provenance ordering as",
+            "before. rdfs9's tally rose from 1 to 4 because the axioms give it three more",
+            "conclusions (through `⊑ rdfs:Resource`), and the sum of the tally is still",
+            "exactly the inferred-triple count, which is the invariant this fixture guards.",
         ],
         quads: &[
             t(EX_A, RDFS_SUBCLASSOF, EX_C),
@@ -799,8 +1504,10 @@ const CORPUS: &[Fixture] = &[
             "AWKWARD CASE — an RDF 1.2 triple term in object position, under a",
             "sub-property axiom that forces a conclusion to be built AROUND it.",
             "",
-            "The chase interns a triple term as one atomic term and never looks inside it,",
-            "so rdfs14 / rdfs14a do not fire and a triple-term boundary is reported. The",
+            "rdfs14 and rdfs14a conclude about a FRESH blank node standing for the triple",
+            "term, which is an existential head this crate's Datalog evaluator refuses, so",
+            "neither fires and a triple-term boundary is reported; the chase therefore",
+            "interns the term as one atomic term and never looks inside it. The",
             "second quad makes the harder thing happen: rdfs7 re-predicates",
             "`x says <<( A ⊑ B )>>` into a `mentions` triple, and the object of that",
             "conclusion has to be re-interned.",
@@ -824,6 +1531,39 @@ const CORPUS: &[Fixture] = &[
             "itself. The engine now interns a triple term as one lexical surface rather than as",
             "one interner id, which is the same opacity by a different mechanism — rdfs14 /",
             "rdfs14a still do not fire, and the triple-term boundary is still reported.",
+            "",
+            "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
+            "RDFS closure 4 -> 132 lines: the 113-line input-independent block cause C",
+            "describes, plus 19 about this fixture's own terms —",
+            "",
+            "  ex:A rdf:type rdfs:Class",
+            "  ex:A rdf:type rdfs:Resource",
+            "  ex:A rdfs:subClassOf ex:A",
+            "  ex:A rdfs:subClassOf ex:B",
+            "  ex:A rdfs:subClassOf rdfs:Resource",
+            "  ex:B rdf:type rdfs:Class",
+            "  ex:B rdf:type rdfs:Resource",
+            "  ex:B rdfs:subClassOf ex:B",
+            "  ex:B rdfs:subClassOf rdfs:Resource",
+            "  ex:mentions rdf:type rdf:Property",
+            "  ex:mentions rdf:type rdfs:Resource",
+            "  ex:mentions rdfs:subPropertyOf ex:mentions",
+            "  ex:says rdf:type rdf:Property",
+            "  ex:says rdf:type rdfs:Resource",
+            "  ex:says rdfs:subPropertyOf ex:mentions",
+            "  ex:says rdfs:subPropertyOf ex:says",
+            "  ex:x ex:mentions ( ex:A rdfs:subClassOf ex:B )",
+            "  ex:x ex:says ( ex:A rdfs:subClassOf ex:B )",
+            "  ex:x rdf:type rdfs:Resource",
+            "",
+            "The line this fixture exists for is untouched: rdfs7 still concludes `x mentions",
+            "<<( A rdfs:subClassOf B )>>` with the triple term carried through as itself, and",
+            "there is still exactly one `x mentions` triple. rdfs14 / rdfs14a still do not",
+            "fire and the triple-term boundary is still reported — and the boundary's REASON",
+            "is now the accurate one: not that the term is opaque, but that both rules",
+            "conclude about a fresh blank node the evaluator may not mint. Note that rdfs4",
+            "does NOT type the triple term rdfs:Resource: that conclusion has a triple term",
+            "in subject position, so it is generalized RDF and is dropped at the boundary.",
         ],
         quads: &[
             t(EX_SAYS, RDFS_SUBPROPERTYOF, EX_MENTIONS),
@@ -844,6 +1584,11 @@ const CORPUS: &[Fixture] = &[
             "abandoned when the answer is materialized, the drop is counted, and a",
             "generalized-rdf boundary is reported. The golden captures that answer.",
             "",
+            "rdfs4 reaches the same wall from the other side — its object clause concludes",
+            "`\"cat\" rdf:type rdfs:Resource`, which is a literal subject for the same",
+            "reason — so the boundary now has two independent producers here rather than",
+            "one, and the literal still never starts a line of the closure.",
+            "",
             "The generalized fact is NOT withheld from the calculus — it stays in the",
             "evaluator's own term space and may still serve as a premise. Nothing here",
             "gives it one, so this closure is the input alone either way; what the",
@@ -862,26 +1607,54 @@ const CORPUS: &[Fixture] = &[
             "conclusion in its own term space and abandons it when the answer is materialized",
             "back into the RDF 1.2 IR, so the boundary had to survive a mechanism change, not",
             "merely a rule change.",
+            "",
+            "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
+            "RDFS closure 2 -> 123 lines: the 113-line input-independent block cause C",
+            "describes, plus 10 about this fixture's own terms —",
+            "",
+            "  ex:A rdf:type rdfs:Class",
+            "  ex:A rdf:type rdfs:Resource",
+            "  ex:A rdfs:subClassOf ex:A",
+            "  ex:A rdfs:subClassOf rdfs:Resource",
+            "  ex:p rdf:type rdf:Property",
+            "  ex:p rdf:type rdfs:Resource",
+            "  ex:p rdfs:range ex:A",
+            "  ex:p rdfs:subPropertyOf ex:p",
+            "  ex:x ex:p \"cat\"",
+            "  ex:x rdf:type rdfs:Resource",
+            "",
+            "THE DIVERGENCE THIS FIXTURE ISOLATES DID NOT MOVE: `\"cat\" rdf:type A` is still",
+            "absent and the generalized-rdf boundary is still REPORTED. The claim that the",
+            "closure equals the input is gone, and had to go — it was never the divergence,",
+            "and rdfs4 now types x, p and A rdfs:Resource. rdfs4 also strengthens the",
+            "boundary: its object clause concludes into subject position too, so the literal",
+            "is now dropped twice over rather than once.",
         ],
         quads: &[t(EX_P, RDFS_RANGE, EX_A), t_lit(EX_X, EX_P, "cat")],
     },
     Fixture {
         name: "divergence_broad_triggers",
         doc: &[
-            "DOCUMENTED DIVERGENCE 2 of 2 — BROADER TRIGGERS. RESOLVED, in the",
-            "specification's favour, by the engine swap; this fixture is now the guard.",
+            "DOCUMENTED DIVERGENCE 2 of 2 — BROADER TRIGGERS. This fixture has now been",
+            "the control for two different questions, and holding both is what it is for.",
             "",
-            "Nothing here is typed rdfs:Class or rdf:Property. The spec-correct rules",
-            "rdfs10 (`?c rdf:type rdfs:Class ⇒ ?c ⊑ ?c`) and rdfs6 (`?p rdf:type",
-            "rdf:Property ⇒ ?p subPropertyOf ?p`) therefore have no premise to fire on,",
-            "and the closure is the input alone.",
+            "Nothing here is ASSERTED to be an rdfs:Class or an rdf:Property. The",
+            "hand-written chase nevertheless emitted reflexive subClassOf on every",
+            "subClassOf ENDPOINT and reflexive subPropertyOf on every PREDICATE; narrowing",
+            "rdfs10 and rdfs6 to their specification premises removed those, correctly.",
             "",
-            "The hand-written chase fired them anyway: reflexive subClassOf on every",
-            "subClassOf ENDPOINT, and reflexive subPropertyOf on every PREDICATE. Each was",
-            "sound — the first is rdfs10 composed with the domain and range axioms of",
-            "rdfs:subClassOf, the second is rdfs6 composed with rdfD2 — but neither was the",
-            "declared rule, and the declared rule is what the report's contract hash names.",
-            "The five triples that went are listed under WHAT MOVED below.",
+            "But the triples were RDFS-entailed all along, by the longer path that",
+            "narrowing left unwalked: rdfs:subClassOf has an AXIOMATIC rdfs:domain and",
+            "rdfs:range of rdfs:Class, so rdfs2 and rdfs3 type both endpoints and only",
+            "THEN does rdfs10 apply; rdfD2 types the predicate and only then does rdfs6.",
+            "With the axiomatic triples asserted, the RDFS closure contains all five",
+            "conclusions AND the premises that license each of them — while OWL-RL, which",
+            "omits the axiomatic triples, still closes to the input alone.",
+            "",
+            "The property that tells the path from the shortcut is x and y: ex:p declares",
+            "no domain and no range, so nothing types them rdfs:Class, and `x ⊑ x` and",
+            "`y ⊑ y` are absent under BOTH lanes. A chase that had merely restored the",
+            "endpoint shortcut would emit them.",
         ],
         exercises: &["rdfs6", "rdfs10"],
         changed: &[
@@ -898,6 +1671,40 @@ const CORPUS: &[Fixture] = &[
             "Nothing here is typed rdfs:Class or rdf:Property, so the specification licenses",
             "neither rule, and the closure is now the input alone. The direction is the one",
             "predicted: FEWER triples.",
+            "",
+            "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
+            "RDFS closure 2 -> 128 lines: the 113-line input-independent block cause C",
+            "describes, plus 15 about this fixture's own terms —",
+            "",
+            "  ex:A rdf:type rdfs:Class",
+            "  ex:A rdf:type rdfs:Resource",
+            "  ex:A rdfs:subClassOf ex:A",
+            "  ex:A rdfs:subClassOf ex:B",
+            "  ex:A rdfs:subClassOf rdfs:Resource",
+            "  ex:B rdf:type rdfs:Class",
+            "  ex:B rdf:type rdfs:Resource",
+            "  ex:B rdfs:subClassOf ex:B",
+            "  ex:B rdfs:subClassOf rdfs:Resource",
+            "  ex:p rdf:type rdf:Property",
+            "  ex:p rdf:type rdfs:Resource",
+            "  ex:p rdfs:subPropertyOf ex:p",
+            "  ex:x ex:p ex:y",
+            "  ex:x rdf:type rdfs:Resource",
+            "  ex:y rdf:type rdfs:Resource",
+            "",
+            "THIS IS THE FIXTURE THE WHOLE CHANGE IS ABOUT, AND IT HAS CHANGED SIDES UNDER",
+            "RDFS. All five conclusions the engine swap removed are back — but each is now",
+            "accompanied, in this same closure, by the premise the specification requires:",
+            "`A rdf:type rdfs:Class` and `B rdf:type rdfs:Class` (rdfs2 / rdfs3 over the",
+            "axiomatic domain and range of rdfs:subClassOf) before `A ⊑ A` and `B ⊑ B`, and",
+            "`p rdf:type rdf:Property` (rdfD2) before `p ⊑ p`. The two rdfs:subClassOf /",
+            "rdfs:subPropertyOf self-edges are in the 113-line block, from the same path.",
+            "THE CONTROL SURVIVES AND IS WHAT THE TEST NOW CHECKS: x and y are typed",
+            "rdfs:Resource by rdfs4 and NOTHING ELSE — ex:p declares no domain and no range,",
+            "so neither is an rdfs:Class and neither `x ⊑ x` nor `y ⊑ y` appears. A chase",
+            "that had simply restored the endpoint shortcut would emit them.",
+            "UNDER OWL-RL NOTHING CHANGED AT ALL: that lane asserts no axiomatic triples,",
+            "its closure is still the input alone, and the shortcut is still gone.",
         ],
         quads: &[t(EX_A, RDFS_SUBCLASSOF, EX_B), t(EX_X, EX_P, EX_Y)],
     },
@@ -1079,6 +1886,8 @@ fn render_golden(fixture: &Fixture) -> String {
     write_comment_block(&mut out, fixture.doc);
     out.push_str("#\n");
     write_comment_block(&mut out, ENGINE_SWAP);
+    out.push_str("#\n");
+    write_comment_block(&mut out, AXIOMATIC_PATH);
     out.push_str("#\n# WHAT MOVED IN THIS GOLDEN:\n#\n");
     write_comment_block(&mut out, fixture.changed);
     let _ = writeln!(out, "# exercises: {}", fixture.exercises.join(" "));
@@ -1246,7 +2055,7 @@ struct Case {
 
 /// What the corpus can say about one rule of one regime.
 ///
-/// Exactly two states, and the gap between them is the point. `NotYetImplemented` is a
+/// Three states, and the gaps between them are the point. `NotYetImplemented` is a
 /// COMPLETE entry: it is a true, checked statement that the chase does not fire this rule,
 /// asserted against the inventory rather than assumed. A rule with no entry at all is not
 /// a state this type can express, which is what makes "one fixture per rule" hold for the
@@ -1260,6 +2069,22 @@ enum RuleFixtures {
         /// The same input, changed in exactly the way that removes the rule's premise:
         /// the same conclusion must be ABSENT.
         near_miss: Case,
+    },
+    /// The chase fires this rule with NO premise, so the two-fixture control above is
+    /// not merely unwritten, it is impossible: the conclusion holds for EVERY input, and
+    /// an input that denied it would be a bug in the rule rather than a near miss.
+    ///
+    /// The evidence is therefore rearranged rather than weakened. The presence side is
+    /// asserted over the EMPTY dataset, which is the strongest witness available — a
+    /// premise-free rule that fires on nothing at all is fired on everything — and the
+    /// absence side moves inside that same input: a conclusion of the same SHAPE, over a
+    /// term the rule must NOT range over, which is what keeps "the rule fires" from
+    /// degenerating into "something types everything".
+    Axiomatic {
+        /// The empty dataset, and the conclusion that must be PRESENT in its closure.
+        holds: Case,
+        /// The same dataset, and a same-shaped conclusion that must be ABSENT from it.
+        denied: Case,
     },
     /// The chase does not fire this rule, so the corpus has nothing to show.
     NotYetImplemented,
@@ -1283,8 +2108,57 @@ const RDF_ROWS: &[Row] = &[(
     "named_graph",
 )];
 
+/// A premise-free rule's registry row: the rule, the fixture (always the empty dataset),
+/// the conclusion that must be PRESENT in its closure, and a same-shaped conclusion that
+/// must be ABSENT from it. See [`RuleFixtures::Axiomatic`] for why the control moves
+/// inside one fixture instead of across two.
+type AxiomaticRow = (
+    RuleId,
+    &'static str,
+    (&'static str, &'static str, &'static str),
+    (&'static str, &'static str, &'static str),
+);
+
+/// The premise-free rules the `RDFS` lane fires.
+///
+/// `rdfs1` types every IRI of the recognized datatype set `D` an `rdfs:Datatype`, and
+/// RDF 1.2 Semantics §8 fixes `D` — for the unqualified phrase "RDFS entails" — at
+/// `{rdf:langString, rdf:dirLangString, xsd:string}`. `xsd:string` is therefore typed in
+/// EVERY closure, including the empty graph's, and `example.org/dt` is typed in none:
+/// that pair is the whole content of the rule, stated as one presence and one absence.
+const RDFS_AXIOMATIC_ROWS: &[AxiomaticRow] = &[(
+    RuleId::Rdfs1,
+    "empty",
+    (XSD_STRING, RDF_TYPE, RDFS_DATATYPE),
+    (EX_DT, RDF_TYPE, RDFS_DATATYPE),
+)];
+
+/// The premise-free rules `regime` registers.
+fn axiomatic_rows(regime: Regime) -> &'static [AxiomaticRow] {
+    match regime {
+        Regime::Rdfs => RDFS_AXIOMATIC_ROWS,
+        Regime::Simple
+        | Regime::Rdf
+        | Regime::OwlRl
+        | Regime::OwlDirect
+        | Regime::Rif
+        | Regime::D => &[],
+    }
+}
+
 /// `Regime::Rdfs`'s registered rules, in specification table order.
+///
+/// `rdfD2` heads the list because RDFS entailment subsumes RDF entailment: the lane fires
+/// the §8.1.1 pattern as well as the §9.2.1 ones, and `rules(Regime::Rdfs)` has always
+/// listed it. `rdfs1` is not here — it is premise-free, so it is in
+/// [`RDFS_AXIOMATIC_ROWS`] instead.
 const RDFS_ROWS: &[Row] = &[
+    (
+        RuleId::RdfD2,
+        "plain_triple",
+        (EX_P, RDF_TYPE, RDF_PROPERTY),
+        "named_graph",
+    ),
     (
         RuleId::Rdfs2,
         "domain",
@@ -1296,6 +2170,12 @@ const RDFS_ROWS: &[Row] = &[
         "range",
         (EX_Y, RDF_TYPE, EX_B),
         "range_near_miss",
+    ),
+    (
+        RuleId::Rdfs4,
+        "plain_triple",
+        (EX_X, RDF_TYPE, RDFS_RESOURCE),
+        "named_graph",
     ),
     (
         RuleId::Rdfs5,
@@ -1338,6 +2218,18 @@ const RDFS_ROWS: &[Row] = &[
         "subclass_chain",
         (EX_A, RDFS_SUBCLASSOF, EX_F),
         "subclass_chain_near_miss",
+    ),
+    (
+        RuleId::Rdfs12,
+        "container_membership",
+        (EX_P, RDFS_SUBPROPERTYOF, RDFS_MEMBER),
+        "container_membership_near_miss",
+    ),
+    (
+        RuleId::Rdfs13,
+        "datatype_declared",
+        (EX_DT, RDFS_SUBCLASSOF, RDFS_LITERAL),
+        "datatype_declared_near_miss",
     ),
 ];
 
@@ -1432,9 +2324,9 @@ fn rows(regime: Regime) -> &'static [Row] {
 
 /// What the corpus says about `id` under `regime`.
 fn registration(regime: Regime, id: RuleId) -> RuleFixtures {
-    rows(regime).iter().find(|row| row.0 == id).map_or(
-        RuleFixtures::NotYetImplemented,
-        |&(_, positive, conclusion, near_miss)| RuleFixtures::Registered {
+    if let Some(&(_, positive, conclusion, near_miss)) = rows(regime).iter().find(|row| row.0 == id)
+    {
+        return RuleFixtures::Registered {
             positive: Case {
                 fixture: positive,
                 conclusion,
@@ -1443,8 +2335,23 @@ fn registration(regime: Regime, id: RuleId) -> RuleFixtures {
                 fixture: near_miss,
                 conclusion,
             },
-        },
-    )
+        };
+    }
+    if let Some(&(_, fixture, holds, denied)) =
+        axiomatic_rows(regime).iter().find(|row| row.0 == id)
+    {
+        return RuleFixtures::Axiomatic {
+            holds: Case {
+                fixture,
+                conclusion: holds,
+            },
+            denied: Case {
+                fixture,
+                conclusion: denied,
+            },
+        };
+    }
+    RuleFixtures::NotYetImplemented
 }
 
 /// The four regimes the registry ranges over — the ones `materialize` can run.
@@ -1499,6 +2406,37 @@ fn every_rule_is_registered_or_declared_unimplemented() {
                         near_miss.fixture
                     );
                 }
+                RuleFixtures::Axiomatic { holds, denied } => {
+                    assert!(registered.insert(id), "{regime:?} registers {id} twice");
+                    assert_eq!(
+                        holds.fixture, denied.fixture,
+                        "{regime:?} / {id}: a premise-free rule's control is the SAME input"
+                    );
+                    assert_eq!(
+                        holds.fixture, "empty",
+                        "{regime:?} / {id}: a premise-free rule must be witnessed on the \
+                         EMPTY dataset, which is what makes it premise-free"
+                    );
+                    assert_ne!(
+                        holds.conclusion, denied.conclusion,
+                        "{regime:?} / {id}: the denied conclusion must differ from the one \
+                         that holds"
+                    );
+                    let lines = closure_lines(holds.fixture, regime);
+                    let (s, p, o) = holds.conclusion;
+                    assert!(
+                        lines.contains(&nquads_line(s, p, o)),
+                        "{regime:?} / {id}: the empty dataset did not conclude {}",
+                        nquads_line(s, p, o)
+                    );
+                    let (s, p, o) = denied.conclusion;
+                    assert!(
+                        !lines.contains(&nquads_line(s, p, o)),
+                        "{regime:?} / {id}: the rule ranged over a term it must not, \
+                         concluding {}",
+                        nquads_line(s, p, o)
+                    );
+                }
                 RuleFixtures::NotYetImplemented => {
                     not_yet.insert(id);
                 }
@@ -1536,7 +2474,7 @@ fn the_registry_shape_is_pinned() {
         .iter()
         .map(|&regime| {
             let total = rules(regime).len();
-            let registered = rows(regime).len();
+            let registered = rows(regime).len() + axiomatic_rows(regime).len();
             (regime_label(regime), total, registered, total - registered)
         })
         .collect();
@@ -1545,7 +2483,7 @@ fn the_registry_shape_is_pinned() {
         vec![
             ("Simple", 0, 0, 0),
             ("RDF", 3, 1, 2),
-            ("RDFS", 18, 9, 9),
+            ("RDFS", 18, 14, 4),
             ("OWL-RL", 78, 12, 66),
         ],
         "(regime, rules the spec defines, rules with fixtures, rules not yet implemented)"
@@ -1579,6 +2517,10 @@ fn the_registry_and_the_corpus_agree() {
                 *used.entry(name).or_default() += 1;
             }
         }
+        for &(_, fixture, _, _) in axiomatic_rows(regime) {
+            assert!(corpus.contains(fixture), "{fixture} is not in the corpus");
+            *used.entry(fixture).or_default() += 1;
+        }
     }
     // The fixtures the registry does NOT reach, named explicitly. Each one exists for a
     // reason the registry cannot express — a boundary, a fixpoint depth, a shared
@@ -1593,7 +2535,6 @@ fn the_registry_and_the_corpus_agree() {
         [
             "divergence_broad_triggers",
             "divergence_literal_subject",
-            "empty",
             "shared_conclusion",
             "triple_term",
         ]
@@ -1735,7 +2676,7 @@ fn a_shared_conclusion_is_credited_once() {
 }
 
 /// DOCUMENTED DIVERGENCE 1 — NARROWER CONCLUSIONS. A would-be literal subject is
-/// abandoned, counted, and reported; the closure gains nothing.
+/// abandoned, counted, and reported.
 ///
 /// THE OBSERVABLE AT RISK IS THE BOUNDARY, NOT THE TRIPLES. No engine may put a literal in
 /// subject position, so `"cat" rdf:type A` stays absent whatever runs — the closure could
@@ -1752,13 +2693,6 @@ fn a_would_be_literal_subject_is_abandoned_and_reported() {
     for regime in [Regime::Rdfs, Regime::OwlRl] {
         let (closed, report) = materialize(&ds, regime).expect("runnable regime");
         let nquads = canonicalize(&closed).nquads;
-        // The closure is the input, exactly: rdfs3's only candidate was abandoned, and
-        // nothing else here has a premise.
-        assert_eq!(
-            nquads,
-            canonicalize(&ds).nquads,
-            "{regime:?}: the closure must be the input alone"
-        );
         // The literal is still in the closure — it is an input OBJECT. What may never
         // appear is a line that STARTS with it.
         assert!(
@@ -1784,57 +2718,85 @@ fn a_would_be_literal_subject_is_abandoned_and_reported() {
     }
 }
 
-/// DOCUMENTED DIVERGENCE 2 — BROADER TRIGGERS, RESOLVED. The two reflexive rules fire on
-/// their specification premises and on nothing else.
+/// DOCUMENTED DIVERGENCE 2 — BROADER TRIGGERS, RESOLVED, AND THE LONGER PATH WALKED.
 ///
-/// This replaces a test that asserted the opposite. That one was written to FAIL at the
-/// moment the engine swap landed, so that the output change had to be acknowledged rather
-/// than absorbed; this is the acknowledgement, and it states the new contract in both
-/// directions, because "the rule was narrowed" and "the rule was switched off" produce the
-/// same empty answer on the negative fixture alone.
+/// `divergence_broad_triggers` is `A rdfs:subClassOf B` and `x p y`, and nothing in it is
+/// ASSERTED to be an `rdfs:Class` or an `rdf:Property`. It has now been the control for
+/// two different questions, and the difference between them is the whole point of this
+/// test.
 ///
-/// * NEGATIVE — `divergence_broad_triggers` types nothing as `rdfs:Class` or
-///   `rdf:Property`, so neither rule has a premise, and none of the five conclusions the
-///   chase used to emit appears. Each was SOUND as a composition — rdfs10 with the
-///   domain/range axioms of `rdfs:subClassOf`, rdfs6 with rdfD2 — but neither composition
-///   is the declared rule, and the declared rule is what the report's contract hash names.
-/// * POSITIVE — `class_typed` and `property_typed` assert the premise the specification
-///   requires, and both rules still fire there.
+/// The hand-written chase emitted `A ⊑ A`, `B ⊑ B` for every subClassOf ENDPOINT and
+/// `p ⊑ p` for every PREDICATE. Narrowing `rdfs6` and `rdfs10` to their specification
+/// premises removed those, correctly — but it removed real entailments with them, because
+/// the triples are RDFS-entailed by a LONGER path the chase did not walk. `rdfs:subClassOf`
+/// has an axiomatic `rdfs:domain` and `rdfs:range` of `rdfs:Class`, so `rdfs2` and `rdfs3`
+/// type both endpoints, and only THEN does `rdfs10` license the reflexive triple; `rdfD2`
+/// types the predicate, and only then does `rdfs6`.
+///
+/// So the contract this test states is neither "the shortcut" nor "nothing". It is:
+///
+/// * `OWL-RL` — still nothing. OWL 2 Profiles §4.3 omits the RDF and RDFS axiomatic
+///   triples, so that lane has no premise to reach and the closure is the input alone.
+///   The shortcut must not come back.
+/// * `RDFS` — the reflexive triples are back, each with its premise DERIVED and present
+///   in the same closure, so the path is checkable rather than asserted.
+/// * And the property that separates "walked the path" from "went back to the shortcut":
+///   `x` and `y` are the subject and object of an `ex:p` triple whose predicate declares
+///   no domain and no range, so nothing types them `rdfs:Class` — and `x ⊑ x` and
+///   `y ⊑ y` must therefore still be absent, under BOTH lanes.
 #[test]
-fn the_reflexive_rules_fire_only_on_their_licensed_premises() {
+fn the_reflexive_rules_fire_on_their_licensed_premises_and_the_axioms_supply_them() {
+    // OWL-RL asserts no axiomatic triples, so its lane has no path to the premises and
+    // this input still entails nothing at all.
+    let owl = closure_lines("divergence_broad_triggers", Regime::OwlRl);
+    assert_eq!(
+        owl,
+        [
+            nquads_line(EX_A, RDFS_SUBCLASSOF, EX_B),
+            nquads_line(EX_X, EX_P, EX_Y),
+        ]
+        .into_iter()
+        .collect::<BTreeSet<String>>(),
+        "OWL-RL: this input entails nothing under a lane that omits the axiomatic triples"
+    );
+
+    // RDFS reaches the premises through the axioms, and only then draws the conclusions.
+    let rdfs = closure_lines("divergence_broad_triggers", Regime::Rdfs);
+    for (s, p, o) in [
+        // The PREMISES, derived: `rdfs:subClassOf` has an axiomatic domain and range of
+        // `rdfs:Class` (rdfs2, rdfs3), and `p` is a predicate (rdfD2).
+        (EX_A, RDF_TYPE, RDFS_CLASS),
+        (EX_B, RDF_TYPE, RDFS_CLASS),
+        (EX_P, RDF_TYPE, RDF_PROPERTY),
+        // …and only then the CONCLUSIONS the reflexive rules license from them.
+        (EX_A, RDFS_SUBCLASSOF, EX_A),
+        (EX_B, RDFS_SUBCLASSOF, EX_B),
+        (EX_P, RDFS_SUBPROPERTYOF, EX_P),
+    ] {
+        assert!(
+            rdfs.contains(&nquads_line(s, p, o)),
+            "RDFS: <{s}> <{p}> <{o}> is entailed through the axiomatic triples and is missing"
+        );
+    }
+
+    // THE CONTROL. `x` and `y` are an ordinary subject and object; `ex:p` declares no
+    // domain and no range, so nothing types them `rdfs:Class` and the reflexive rule has
+    // no premise about them. A chase that had merely restored the endpoint shortcut would
+    // fail here — under RDFS as well as under OWL-RL.
     for regime in [Regime::Rdfs, Regime::OwlRl] {
         let lines = closure_lines("divergence_broad_triggers", regime);
-        for (s, p, o) in [
-            // rdfs10 used to fire on subClassOf ENDPOINTS, not on rdfs:Class instances.
-            (EX_A, RDFS_SUBCLASSOF, EX_A),
-            (EX_B, RDFS_SUBCLASSOF, EX_B),
-            // rdfs6 used to fire on every PREDICATE, not on rdf:Property instances.
-            (EX_P, RDFS_SUBPROPERTYOF, EX_P),
-            (RDFS_SUBCLASSOF, RDFS_SUBPROPERTYOF, RDFS_SUBCLASSOF),
-            (RDFS_SUBPROPERTYOF, RDFS_SUBPROPERTYOF, RDFS_SUBPROPERTYOF),
-        ] {
+        for term in [EX_X, EX_Y] {
             assert!(
-                !lines.contains(&nquads_line(s, p, o)),
-                "{regime:?}: <{s}> <{p}> <{o}> is emitted on an unlicensed premise"
+                !lines.contains(&nquads_line(term, RDF_TYPE, RDFS_CLASS)),
+                "{regime:?}: <{term}> is typed rdfs:Class on no premise"
+            );
+            assert!(
+                !lines.contains(&nquads_line(term, RDFS_SUBCLASSOF, term)),
+                "{regime:?}: <{term}> rdfs:subClassOf itself is emitted on no premise"
             );
         }
-        // The premises the SPECIFICATION requires are genuinely absent, which is what
-        // makes the absence above the licensed answer rather than an accident.
-        assert!(!lines.contains(&nquads_line(EX_A, RDF_TYPE, RDFS_CLASS)));
-        assert!(!lines.contains(&nquads_line(EX_P, RDF_TYPE, RDF_PROPERTY)));
-        // Nothing at all is entailed here beyond the two input triples.
-        assert_eq!(
-            lines,
-            [
-                nquads_line(EX_A, RDFS_SUBCLASSOF, EX_B),
-                nquads_line(EX_X, EX_P, EX_Y),
-            ]
-            .into_iter()
-            .collect::<BTreeSet<String>>(),
-            "{regime:?}: this input entails nothing"
-        );
 
-        // NARROWED, NOT SWITCHED OFF: given the premise, each rule still concludes.
+        // NARROWED, NOT SWITCHED OFF: given the premise outright, each rule still fires.
         assert!(
             closure_lines("class_typed", regime).contains(&nquads_line(
                 EX_C,
@@ -1850,6 +2812,47 @@ fn the_reflexive_rules_fire_only_on_their_licensed_premises() {
                 EX_P
             )),
             "{regime:?}: rdfs6 no longer fires on an rdf:Property instance"
+        );
+    }
+}
+
+/// EVERY fixture's RDFS closure contains the empty graph's RDFS closure, exactly.
+///
+/// The `RDFS` lane asserts the axiomatic triples as premises, and what they entail about
+/// the RDF and RDFS vocabulary itself does not depend on the input at all: `rdfs4` types
+/// the axioms' own terms, `rdfs2` / `rdfs3` type their subjects and objects, and the
+/// reflexive rules close over those. So `empty.golden`'s 113-line closure is a LOWER BOUND
+/// on every other, and that is the fact each golden's accounting leans on when it reports
+/// only the lines beyond it.
+///
+/// It is also the guard against the accounting going stale: a change that made any of
+/// those 113 lines input-dependent would leave thirty-two goldens claiming a shared block
+/// they no longer share, and it would fail here rather than being spread thinly across
+/// thirty-two diffs.
+#[test]
+fn the_rdfs_closure_of_every_fixture_contains_the_empty_one() {
+    let base = closure_lines("empty", Regime::Rdfs);
+    assert_eq!(
+        base.len(),
+        113,
+        "the input-independent block every golden's accounting names"
+    );
+    for fixture in CORPUS {
+        let lines = closure_lines(fixture.name, Regime::Rdfs);
+        let absent: Vec<&String> = base.difference(&lines).collect();
+        assert!(
+            absent.is_empty(),
+            "{}: the axiomatic block is not input-independent — {absent:?} is missing",
+            fixture.name
+        );
+    }
+    // And it really is the AXIOMS that put it there: no other lane asserts them, so no
+    // other lane has it. `Simple` copies the input, and `OWL-RL` omits the axiomatic
+    // triples by OWL 2 Profiles §4.3's own choice.
+    for regime in [Regime::Simple, Regime::Rdf, Regime::OwlRl] {
+        assert!(
+            closure_lines("empty", regime).is_empty(),
+            "{regime:?} closed the empty graph into something"
         );
     }
 }

@@ -48,6 +48,7 @@ use std::sync::Arc;
 
 use purrdf_core::RdfDataset;
 
+pub(crate) mod axioms;
 pub(crate) mod calculus;
 pub(crate) mod engine;
 pub(crate) mod interner;
@@ -177,7 +178,7 @@ impl std::error::Error for EntailError {}
 /// for a report to describe.
 ///
 /// ```
-/// use purrdf_entail::{Regime, materialize};
+/// use purrdf_entail::{Regime, RuleId, materialize};
 /// use purrdf_core::RdfDatasetBuilder;
 ///
 /// let mut builder = RdfDatasetBuilder::new();
@@ -190,12 +191,17 @@ impl std::error::Error for EntailError {}
 /// builder.push_quad(tom, ty, cat, None);
 /// let dataset = builder.freeze().expect("freeze");
 ///
-/// // rdfs9 re-types the instance: two input quads in, three out.
+/// // rdfs9 re-types the instance — `tom` is an `Animal` as well as a `Cat`.
 /// let (closure, report) = materialize(&dataset, Regime::Rdfs).expect("rdfs");
-/// assert_eq!(closure.quad_refs().count(), 3);
-/// assert_eq!(report.rules_fired(), [(purrdf_entail::RuleId::Rdfs9, 1)]);
-/// // RDFS defines 18 patterns; this crate fires 9, and the report says so.
-/// assert_eq!(report.completeness().missing().len(), 9);
+/// assert!(report.rules_fired().iter().any(|&(r, n)| r == RuleId::Rdfs9 && n >= 1));
+/// // …but it is far from the only conclusion: the RDFS lane asserts the axiomatic
+/// // triples, so `Cat` and `Animal` are `rdfs:Class`es (rdfs2 / rdfs3 over the
+/// // axiomatic domain and range of `rdfs:subClassOf`), each is therefore a sub-class of
+/// // itself and of `rdfs:Resource`, and rdfs4 types every term an `rdfs:Resource`.
+/// assert!(closure.quad_refs().count() > 3);
+/// // RDFS defines 18 patterns; this crate fires 14, and the report names the other four.
+/// assert_eq!(report.completeness().missing(),
+///            [RuleId::RdfD1, RuleId::RdfD1a, RuleId::Rdfs14, RuleId::Rdfs14a]);
 /// assert!(!report.overclaims());
 /// ```
 pub fn materialize(
@@ -493,7 +499,7 @@ mod tests {
             .collect();
         assert_eq!(
             gaps,
-            vec![("Simple", 0), ("RDF", 2), ("RDFS", 9), ("OWL-RL", 66)],
+            vec![("Simple", 0), ("RDF", 2), ("RDFS", 4), ("OWL-RL", 66)],
             "(regime, rules the regime defines that the chase does not fire)"
         );
 
@@ -893,8 +899,19 @@ mod tests {
         let ds = b.freeze().expect("freeze");
 
         let (closed, report) = materialize(&ds, Regime::Rdfs).expect("rdfs");
-        // rdfs9 re-types BOTH blank subjects, and credits itself twice — one per node.
-        assert_eq!(report.rules_fired(), [(RuleId::Rdfs9, 2)]);
+        // rdfs9 re-types BOTH blank subjects. The interesting evidence is WHICH subjects
+        // it produced, asserted below over the closure itself; the rule's tally is not
+        // pinned here because the RDFS lane also asserts the axiomatic triples, so rdfs9
+        // additionally re-types these nodes through `rdfs:Resource` and this fixture is
+        // not about that arithmetic.
+        assert!(
+            report
+                .rules_fired()
+                .iter()
+                .any(|&(rule, count)| rule == RuleId::Rdfs9 && count >= 2),
+            "rdfs9 must be credited for both re-typings: {:?}",
+            report.rules_fired()
+        );
         let typed: Vec<TermValue> = closed
             .quads()
             .filter(|q| {

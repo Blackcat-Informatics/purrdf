@@ -197,9 +197,9 @@ macro_rules! declare_chase_rules {
             /// Whether `regime`'s lane fires this rule.
             ///
             /// `Simple` fires nothing (it is the identity closure); `RDF` fires the single
-            /// predicate-typing rule; `RDFS` fires the nine RDFS patterns; `OWL-RL` fires
-            /// those nine plus six OWL rules. `OWL-Direct`, `RIF` and `D` are not this
-            /// chase's lanes at all, and no rule names them.
+            /// predicate-typing rule; `RDFS` fires that one plus thirteen RDFS patterns;
+            /// `OWL-RL` fires nine of those thirteen plus six OWL rules. `OWL-Direct`,
+            /// `RIF` and `D` are not this chase's lanes at all, and no rule names them.
             pub(crate) const fn fires_under(self, regime: Regime) -> bool {
                 match self {
                     $( Self::$variant => matches!(regime, $( Regime::$lane )|+), )*
@@ -293,9 +293,9 @@ collect_families! { { rdfs_rules, prp_rules, cls_rules, cax_rules, scm_rules } }
 /// use purrdf_entail::{Regime, calculus_program};
 ///
 /// assert!(calculus_program(Regime::Simple).is_empty());
-/// // Nine RDFS patterns, one clause each.
-/// assert_eq!(calculus_program(Regime::Rdfs).len(), 9);
-/// // Those nine plus six OWL rules, two of which take two clauses.
+/// // Fourteen RDF/RDFS patterns; `rdfs1` and `rdfs4` take three clauses each.
+/// assert_eq!(calculus_program(Regime::Rdfs).len(), 18);
+/// // Nine of those RDFS patterns plus six OWL rules, two of which take two clauses.
 /// assert_eq!(calculus_program(Regime::OwlRl).len(), 17);
 /// ```
 #[must_use]
@@ -457,7 +457,7 @@ mod tests {
             vec![
                 (Regime::Simple, 0),
                 (Regime::Rdf, 1),
-                (Regime::Rdfs, 9),
+                (Regime::Rdfs, 18),
                 (Regime::OwlRl, 17),
                 (Regime::OwlDirect, 0),
                 (Regime::Rif, 0),
@@ -499,7 +499,7 @@ mod tests {
             ),
             (
                 Regime::Rdfs,
-                "cefc117c539b1191953fd5ad560ef4e275b59e9b6089040894f71113ea33674b",
+                "3083bceef6ed2293040a176631681ad0ab5ae1d6a79c4f75327184f60972cc2c",
             ),
             (
                 Regime::OwlRl,
@@ -537,7 +537,13 @@ mod tests {
     }
 
     /// The lane membership is a partition the enum cannot silently widen: `RDFS` fires
-    /// nine rules, `OWL-RL` those nine plus six, `RDF` one, and nothing else fires at all.
+    /// fourteen rules, `OWL-RL` nine of them plus six of its own, `RDF` one, and nothing
+    /// else fires at all.
+    ///
+    /// `RDFS` is no longer a subset of `OWL-RL`, and that is deliberate: OWL 2 Profiles
+    /// §4.3 omits the RDF and RDFS axiomatic triples, so the five rules the `RDFS` lane
+    /// added on top of the shared nine (`rdfD2`, `rdfs1`, `rdfs4`, `rdfs12`, `rdfs13`)
+    /// belong to a calculus the `OWL-RL` lane does not run.
     #[test]
     fn lane_membership_is_pinned() {
         let count = |regime: Regime| {
@@ -547,18 +553,32 @@ mod tests {
                 .count()
         };
         assert_eq!(count(Regime::Rdf), 1);
-        assert_eq!(count(Regime::Rdfs), 9);
+        assert_eq!(count(Regime::Rdfs), 14);
         assert_eq!(count(Regime::OwlRl), 15);
         for regime in [Regime::Simple, Regime::OwlDirect, Regime::Rif, Regime::D] {
             assert_eq!(count(regime), 0, "{regime:?}");
         }
-        // Every RDFS rule is also an OWL-RL rule of this chase; the lane only adds.
-        for rule in ChaseRule::ALL {
-            assert!(
-                !rule.fires_under(Regime::Rdfs) || rule.fires_under(Regime::OwlRl),
-                "{rule:?} fires under RDFS but not OWL-RL"
-            );
-        }
+        // The nine rules the two lanes SHARE are named, so a rule silently joining or
+        // leaving the overlap fails here rather than in a golden.
+        let shared: Vec<RuleId> = ChaseRule::ALL
+            .into_iter()
+            .filter(|rule| rule.fires_under(Regime::Rdfs) && rule.fires_under(Regime::OwlRl))
+            .map(|rule| rule.rule_id(false))
+            .collect();
+        assert_eq!(
+            shared,
+            vec![
+                RuleId::Rdfs2,
+                RuleId::Rdfs3,
+                RuleId::Rdfs5,
+                RuleId::Rdfs6,
+                RuleId::Rdfs7,
+                RuleId::Rdfs8,
+                RuleId::Rdfs9,
+                RuleId::Rdfs10,
+                RuleId::Rdfs11,
+            ]
+        );
     }
 
     /// The attribution is exactly as long as the program, is the published program's own

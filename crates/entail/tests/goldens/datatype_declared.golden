@@ -5,10 +5,11 @@
 # Regenerate deliberately with:
 #   cargo test -p purrdf-entail --test oracle -- --ignored --exact regenerate_goldens
 #
-# fixture: property_typed
-# rdfs6: a resource typed rdf:Property is a sub-property of itself. p appears
-# ONLY as the subject of that typing, never as a predicate, so the conclusion
-# `p subPropertyOf p` is licensed by rdfs6 and by nothing else here.
+# fixture: datatype_declared
+# rdfs13: a resource typed rdfs:Datatype is a sub-class of rdfs:Literal. The
+# datatype is an example.org IRI rather than one of the three RDF 1.2 makes
+# mandatory, so the conclusion is attributable to the graph's own typing and
+# not to rdfs1's premise-free one.
 #
 # EVERY GOLDEN IN THIS CORPUS MOVED AT THE ENGINE SWAP — `materialize` stopped
 # running a hand-written chase and started evaluating the DL-clause program
@@ -76,33 +77,15 @@
 #
 # WHAT MOVED IN THIS GOLDEN:
 #
-# Cause 2 does NOT apply: the input already uses rdf:type as a predicate, so the RDF
-# closure is unchanged and only its budget moves.
-# Cause 1 — RDFS and OWL-RL lose `rdf:type subPropertyOf rdf:type` and
-# `rdfs:subPropertyOf subPropertyOf rdfs:subPropertyOf` (rdfs6 3 -> 1). The one
-# LICENSED conclusion stays: `p rdfs:subPropertyOf p`, from the premise
-# `p rdf:type rdf:Property` this fixture asserts. That is the whole point — rdfs6
-# was narrowed to its specification premise, not switched off.
-#
-# AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.
-# RDFS closure 2 -> 116 lines: the 113-line input-independent block cause C
-# describes, plus 3 about this fixture's own terms —
-#
-#   ex:p rdf:type rdf:Property
-#   ex:p rdf:type rdfs:Resource
-#   ex:p rdfs:subPropertyOf ex:p
-#
-# The smallest diff in the corpus, and the most direct: p is typed rdf:Property by
-# the input itself, so rdfs6's premise never needed the axioms. Only rdfs4's
-# rdfs:Resource typing is new.
-# exercises: rdfs6
+# NEW FIXTURE — no committed golden moved; this one did not exist.
+# exercises: rdfs13
 
 --- input (1 lines) ---
-<http://example.org/p> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://example.org/dt> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
 
 === regime Simple ===
 --- closure (1 lines) ---
-<http://example.org/p> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://example.org/dt> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
 --- report ---
   completeness: exact
   missing: (0)
@@ -115,7 +98,7 @@
 
 === regime RDF ===
 --- closure (2 lines) ---
-<http://example.org/p> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://example.org/dt> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
 --- report ---
   completeness: sound-incomplete
@@ -125,16 +108,19 @@
       rdfD2=1
   boundaries: (2)
       axiomatic-triples datatype-value-space
-  budget: join-steps=2 stored-facts=2 term-arena-bytes=124
+  budget: join-steps=2 stored-facts=2 term-arena-bytes=172
   contract-hash: e3dfc92e2575713a6a555ef1dc5688d9086fe0a41c8eb0dd27aff5579db33158
   inconsistency: none
   overclaims: false
 
 === regime RDFS ===
---- closure (116 lines) ---
-<http://example.org/p> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
-<http://example.org/p> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
-<http://example.org/p> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://example.org/p> .
+--- closure (119 lines) ---
+<http://example.org/dt> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://example.org/dt> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://example.org/dt> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://example.org/dt> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/dt> .
+<http://example.org/dt> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Literal> .
+<http://example.org/dt> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#Alt> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#Alt> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#Alt> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Alt> .
@@ -253,19 +239,18 @@
   missing: (4)
       rdfD1 rdfD1a rdfs14 rdfs14a
   rules-fired: (10)
-      rdfD2=3 rdfs1=3 rdfs2=13 rdfs3=8 rdfs4=33 rdfs6=18 rdfs8=16 rdfs9=3
-      rdfs10=15 rdfs13=3
+      rdfD2=3 rdfs1=3 rdfs2=12 rdfs3=9 rdfs4=33 rdfs6=17 rdfs8=17 rdfs9=4
+      rdfs10=16 rdfs13=4
   boundaries: (2)
       axiomatic-triples datatype-value-space
-  budget: join-steps=1960 stored-facts=165 term-arena-bytes=1700
+  budget: join-steps=2003 stored-facts=168 term-arena-bytes=1701
   contract-hash: 3083bceef6ed2293040a176631681ad0ab5ae1d6a79c4f75327184f60972cc2c
   inconsistency: none
   overclaims: false
 
 === regime OWL-RL ===
---- closure (2 lines) ---
-<http://example.org/p> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
-<http://example.org/p> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://example.org/p> .
+--- closure (1 lines) ---
+<http://example.org/dt> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
 --- report ---
   completeness: sound-incomplete
   missing: (66)
@@ -278,11 +263,10 @@
       dt-diff dt-not-type scm-cls scm-eqc2 scm-op scm-dp scm-eqp2 scm-dom1
       scm-dom2 scm-rng1 scm-rng2 scm-hv scm-svf1 scm-svf2 scm-avf1 scm-avf2
       scm-int scm-uni
-  rules-fired: (1)
-      rdfs6=1
+  rules-fired: (0)
   boundaries: (1)
       datatype-value-space
-  budget: join-steps=6 stored-facts=2 term-arena-bytes=176
+  budget: join-steps=0 stored-facts=1 term-arena-bytes=119
   contract-hash: 369fa3fbbe648a4b2c381015990cc3a2f78e606a40102d5feb3f9fabba07ce45
   inconsistency: none
   overclaims: false

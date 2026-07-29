@@ -66,6 +66,7 @@ use purrdf_datalog::clause::{ClauseTerm, DlClause};
 use purrdf_datalog::seminaive::{compile, evaluate};
 use purrdf_datalog::store::RelationStore;
 
+use crate::axioms::axioms_for;
 use crate::calculus::program_with_attribution;
 use crate::interner::intern_into;
 use crate::report::RunStats;
@@ -80,6 +81,22 @@ pub(crate) fn copy_of(ds: &RdfDataset) -> Result<Arc<RdfDataset>, EntailError> {
 }
 
 /// Close `ds` under `regime`'s declared calculus and emit `original + inferred`.
+///
+/// # The axiomatic triples are seeded, not concluded
+///
+/// [`crate::axioms`]'s finite table is inserted into the fact store beside `ds`'s own
+/// quads, because that is what the definition of RDFS entailment says it is: a premise
+/// every interpretation satisfies, not something a rule derives. Its CONSEQUENCES are
+/// derivations like any other and are credited to the rule that drew them —
+/// `:a rdfs:subClassOf :b` reaches `:a rdfs:subClassOf :a` through `rdfs3` and then
+/// `rdfs10`, and both firings appear in the report.
+///
+/// The axioms themselves are therefore NOT emitted: they are neither in `ds` nor
+/// derivations, and inventing a rule id to credit them to would put a firing in the tally
+/// that no rule of the specification's tables licenses. A closure that omits an entailed
+/// triple is an incompleteness, so it is reported —
+/// [`Construct::AxiomaticTriples`](crate::Construct::AxiomaticTriples) says both this and
+/// the unbounded `rdf:_n` family in one boundary.
 ///
 /// The default graph alone supplies premises and receives conclusions — every atom of
 /// every declared clause names
@@ -96,6 +113,16 @@ pub(crate) fn close(
     let mut terms = Terms::default();
     terms.record_program(&program);
     let mut edb = RelationStore::new();
+    // The axiomatic triples are PREMISES, not conclusions: `S RDFS entails E` is defined
+    // over the interpretations satisfying S *and* the axioms, and no rule of §9.2.1
+    // concludes one. Seeding them beside the dataset's own quads is that definition,
+    // written down. See `crate::axioms` for the table and for which lanes assert it.
+    for &(subject, predicate, object) in axioms_for(regime) {
+        let subject = terms.record(&TermValue::iri(subject));
+        let predicate = terms.record(&TermValue::iri(predicate));
+        let object = terms.record(&TermValue::iri(object));
+        let _ = edb.insert(&subject, &predicate, &object, RelationStore::DEFAULT_GRAPH);
+    }
     for quad in ds.quads() {
         if quad.g.is_some() {
             continue; // entailment operates over the default graph

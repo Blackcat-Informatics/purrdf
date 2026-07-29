@@ -624,10 +624,20 @@ static NO_RULES: [RuleId; 0] = [];
 /// `rdf:Property`, which is exactly `rdfD2` (the rule RDF 1.0 spelled `rdf1`).
 static IMPLEMENTED_RDF: [RuleId; 1] = [RuleId::RdfD2];
 
-/// The RDFS patterns the chase evaluates, in specification order.
-static IMPLEMENTED_RDFS: [RuleId; 9] = [
+/// The RDF and RDFS patterns the `RDFS` lane evaluates, in specification order.
+///
+/// `rdfD2` heads the list because RDFS entailment subsumes RDF entailment and
+/// [`rules`] has always listed the §8.1.1 patterns first. The four that are absent —
+/// `rdfD1`, `rdfD1a`, `rdfs14`, `rdfs14a` — are absent for one structural reason: each
+/// concludes about a FRESH blank node, an existentially quantified head this crate's
+/// Datalog evaluator refuses by design. See [`crate::calculus::rdfs`] for why minting
+/// those surrogates would be wrong rather than merely expensive.
+static IMPLEMENTED_RDFS: [RuleId; 14] = [
+    RuleId::RdfD2,
+    RuleId::Rdfs1,
     RuleId::Rdfs2,
     RuleId::Rdfs3,
+    RuleId::Rdfs4,
     RuleId::Rdfs5,
     RuleId::Rdfs6,
     RuleId::Rdfs7,
@@ -635,6 +645,8 @@ static IMPLEMENTED_RDFS: [RuleId; 9] = [
     RuleId::Rdfs9,
     RuleId::Rdfs10,
     RuleId::Rdfs11,
+    RuleId::Rdfs12,
+    RuleId::Rdfs13,
 ];
 
 /// The OWL 2 RL rules the chase evaluates, in specification table order.
@@ -1084,7 +1096,7 @@ mod tests {
             vec![
                 ("Simple", 0, 0),
                 ("RDF", 3, 1),
-                ("RDFS", 18, 9),
+                ("RDFS", 18, 14),
                 ("OWL-RL", 78, 12),
                 ("OWL-Direct", 0, 0),
                 ("RIF", 0, 0),
@@ -1121,7 +1133,8 @@ mod tests {
         assert_eq!(
             rdfs,
             [
-                "rdfs2", "rdfs3", "rdfs5", "rdfs6", "rdfs7", "rdfs8", "rdfs9", "rdfs10", "rdfs11",
+                "rdfD2", "rdfs1", "rdfs2", "rdfs3", "rdfs4", "rdfs5", "rdfs6", "rdfs7", "rdfs8",
+                "rdfs9", "rdfs10", "rdfs11", "rdfs12", "rdfs13",
             ]
         );
         // The bare-RDF regime implements predicate typing only, under its current name.

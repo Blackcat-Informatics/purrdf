@@ -210,8 +210,8 @@ impl RegimeClosure {
 ///      <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> ."
 /// ));
 /// // …and the report says so, and says what it could not do.
-/// assert!(closed.report().contains("\nfired rdfs9 1\n"));
-/// assert!(closed.report().contains("\ncompleteness sound-incomplete 9\n"));
+/// assert!(closed.report().contains("\nfired rdfs9 "));
+/// assert!(closed.report().contains("\ncompleteness sound-incomplete 4\n"));
 /// ```
 pub fn materialize_to_nquads_string(regime: &str, document: &str) -> Result<RegimeClosure, String> {
     let parsed = parse_regime(regime)?;
@@ -270,7 +270,7 @@ pub fn rules_string(regime: &str) -> Result<String, String> {
 ///
 /// let defined = rules_string("rdfs").expect("known");
 /// let fired = implemented_rules_string("rdfs").expect("known");
-/// assert_eq!(defined.lines().count() - fired.lines().count(), 9);
+/// assert_eq!(defined.lines().count() - fired.lines().count(), 4);
 /// ```
 pub fn implemented_rules_string(regime: &str) -> Result<String, String> {
     Ok(rule_lines(implemented(parse_regime(regime)?)))

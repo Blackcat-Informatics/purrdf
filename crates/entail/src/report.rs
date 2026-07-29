@@ -163,11 +163,12 @@ impl Construct {
                  through the closure unchanged"
             }
             Self::TripleTerm => {
-                "an RDF 1.2 triple term is interned as one atomic term, so the chase never \
-                 looks inside it: rdfs14 and rdfs14a (which replace a triple term with a \
-                 fresh blank node typed rdfs:Proposition) do not fire, and the closure \
-                 states nothing about the triple the term quotes; a conclusion built \
-                 AROUND such a term carries it through unchanged"
+                "rdfs14 and rdfs14a replace a triple term with a FRESH blank node typed \
+                 rdfs:Proposition, and an existentially quantified head is not a Datalog \
+                 clause: the evaluator mints no terms, so neither rule fires. A triple \
+                 term is therefore interned as one atomic term the chase never looks \
+                 inside, the closure states nothing about the triple the term quotes, \
+                 and a conclusion built AROUND such a term carries it through unchanged"
             }
             Self::GeneralizedRdf => {
                 "a conclusion whose subject position would hold a literal or a triple term, \
@@ -180,16 +181,26 @@ impl Construct {
                  literal objects"
             }
             Self::AxiomaticTriples => {
-                "RDF and RDFS Semantics fix infinite sets of axiomatic triples — the \
-                 container-membership family rdf:_1, rdf:_2, … above all — and no forward \
-                 chase can materialize an infinite set; none is asserted, so rdfs1 and \
-                 rdfs12, whose premises those axioms supply, have nothing to fire on"
+                "the FINITE part of the RDF and RDFS axiomatic triples — the fixed \
+                 domain, range, type and sub-class statements about the RDF and RDFS \
+                 vocabulary itself — is asserted as a premise, so every conclusion it \
+                 licenses is drawn; two things are not. The container-membership family \
+                 rdf:_1, rdf:_2, … is unbounded and no forward chase can materialize an \
+                 infinite set, so rdfs12 fires only on a container property the graph \
+                 itself types. And the asserted axioms are premises rather than \
+                 conclusions, so the closure does not restate them: they are entailed but \
+                 not emitted"
             }
             Self::DatatypeValueSpace => {
-                "datatype value spaces are infinite, so the rules quantified over them \
-                 (rdfD1 and rdfD1a for RDF and RDFS; dt-type2, dt-eq and dt-diff for \
-                 OWL 2 RL) have no finite materialization; literals are compared by their \
-                 lexical form and datatype IRI, never by their data value"
+                "rdfD1 and rdfD1a conclude about a FRESH blank node standing for a \
+                 datatyped literal, or for an inhabited value space, and an \
+                 existentially quantified head is not a Datalog clause: the evaluator \
+                 mints no terms, so neither rule fires. rdfs1 recognizes the datatypes \
+                 RDF 1.2 Semantics §8 makes mandatory (rdf:langString, \
+                 rdf:dirLangString, xsd:string) and no others, and the OWL 2 RL rules \
+                 quantified over value spaces (dt-type2, dt-eq, dt-diff) are not fired \
+                 at all; literals are compared by their lexical form and datatype IRI, \
+                 never by their data value"
             }
         }
     }
