@@ -511,10 +511,18 @@ def enforce_ratchet(results: list[SuiteResult], budget: dict[str, int]) -> None:
         the gap, do not raise the budget;
       * a count BELOW budget (a fixed gap) also fails RED until the budget is
         lowered here, which locks the gain in — this is the ratchet, by design;
-      * a run suite with no budget entry fails RED.
+      * a run suite with no budget entry fails RED;
+      * a budget entry NO SUITE PRODUCES fails RED — the reverse direction. The
+        loop below is over ``results``, so an orphan key is simply never read: it
+        would sit in the baseline forever, silently guarding nothing, and a suite
+        later renamed INTO that spelling would inherit a stale ceiling. Renaming a
+        suite is exactly when this happens, which is why it is checked rather than
+        trusted.
 
     Suites that could not emit a scoreboard (``failed < 0`` — a compile error or
-    aborted harness) keep their own failure and are not re-diagnosed here.
+    aborted harness) keep their own failure and are not re-diagnosed here; their
+    names still count as produced, so an aborted harness does not also read as an
+    orphan key.
     """
     for r in results:
         r.budget = budget.get(r.name)
@@ -540,6 +548,16 @@ def enforce_ratchet(results: list[SuiteResult], budget: dict[str, int]) -> None:
                 f"LEDGER SHRANK: {r.xskip} < budget {r.budget} — lower it in "
                 "scripts/conformance-baseline.json to lock the gain",
             )
+
+    orphans = sorted(set(budget) - {r.name for r in results})
+    if orphans:
+        raise SystemExit(
+            "conformance-matrix: scripts/conformance-baseline.json budgets a suite "
+            f"no run produced: {', '.join(orphans)}. A key nothing reads guards "
+            "nothing — either the suite was renamed and the key was not, or the "
+            "suite was removed and its budget outlived it. Fix the spelling or "
+            "delete the entry; do not leave a ceiling with no suite under it."
+        )
 
 
 # ---------------------------------------------------------------------------

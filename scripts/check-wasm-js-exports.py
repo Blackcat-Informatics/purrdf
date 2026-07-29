@@ -50,6 +50,7 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parent.parent
 _WASM_SRC = _REPO / "crates" / "rdf-wasm" / "src"
 _INDEX_MJS = _REPO / "crates" / "rdf-wasm" / "js" / "index.mjs"
+_INDEX_DTS = _REPO / "crates" / "rdf-wasm" / "js" / "index.d.ts"
 
 # A module-scope (column-0) `#[wasm_bindgen]` attribute, bare or with arguments
 # (`#[wasm_bindgen(js_name = entailMaterialize)]`). Column 0 is what excludes every
@@ -140,6 +141,80 @@ def index_mjs_export_names() -> set[str]:
     return names
 
 
+def class_exports() -> set[str]:
+    """Every `#[wasm_bindgen] pub struct` name — a CLASS, reached through an instance.
+
+    Needed by the reverse-drift check rather than the forward one: a class is a
+    legitimate package-root export that is not a free function, so without this the
+    reverse check would flag `Dataset` and `ReasoningAnswer` as stale.
+    """
+    names: set[str] = set()
+    for path in sorted(_WASM_SRC.rglob("*.rs")):
+        lines = _read(path).splitlines()
+        for index, line in enumerate(lines):
+            if not _ATTR_RE.match(line.strip()):
+                continue
+            for follower in lines[index + 1 :]:
+                stripped = follower.strip()
+                if not stripped or stripped.startswith(("#[", "//", "///")):
+                    continue
+                match = re.match(r"pub struct (\w+)", stripped)
+                if match:
+                    names.add(match.group(1))
+                break
+    return names
+
+
+def index_mjs_local_names() -> set[str]:
+    """Names `index.mjs` DEFINES itself, so exporting them is not stale drift.
+
+    The wrapper authors real glue — `ready`, `datasetToStream`, `streamToDataset`,
+    the polymorphic `DataFactory` subclass — and those have no Rust counterpart by
+    design. Derived from the file rather than hand-listed, so adding glue does not
+    require editing this script.
+    """
+    text = _read(_INDEX_MJS)
+    names = set(
+        re.findall(r"^(?:export\s+)?(?:async\s+)?function\s+(\w+)", text, re.MULTILINE)
+    )
+    names |= set(re.findall(r"^(?:export\s+)?class\s+(\w+)", text, re.MULTILINE))
+    names |= set(
+        re.findall(r"^(?:export\s+)?const\s+(\w+)\s*=", text, re.MULTILINE)
+    )
+    return names
+
+
+def index_dts_declared_names() -> set[str]:
+    """Every name the TypeScript declaration file declares.
+
+    A JS re-export with no `.d.ts` declaration is reachable from JavaScript and
+    invisible to TypeScript, which is the same dark-feature shape one type system
+    down: the bytes ship, the export exists, and a TS consumer cannot call it
+    without an error.
+    """
+    text = _read(_INDEX_DTS)
+    names = set(
+        re.findall(
+            r"^export\s+(?:declare\s+)?(?:async\s+)?function\s+(\w+)",
+            text,
+            re.MULTILINE,
+        )
+    )
+    names |= set(re.findall(r"^export\s+(?:declare\s+)?class\s+(\w+)", text, re.MULTILINE))
+    names |= set(re.findall(r"^export\s+(?:declare\s+)?const\s+(\w+)", text, re.MULTILINE))
+    for block in re.findall(r"export\s*\{([\s\S]*?)\}\s*;", text):
+        for item in block.split(","):
+            if item.strip():
+                names.add(item.strip().split(" as ")[-1].strip())
+    if not names:
+        raise SystemExit(
+            f"check-wasm-js-exports: found no declaration in "
+            f"{_INDEX_DTS.relative_to(_REPO)} — the parser or the file moved; update "
+            f"this script rather than leaving the TypeScript surface ungated"
+        )
+    return names
+
+
 def main() -> int:
     rust_exports = free_function_exports()
     js_exports = index_mjs_export_names()
@@ -156,6 +231,33 @@ def main() -> int:
             f"the package root — it ships bytes no consumer of the published "
             f"package can reach (the npm `exports` map refuses a deep `./pkg/` "
             f"import)"
+        )
+
+    # The REVERSE direction. A name the package root exports whose Rust function no
+    # longer exists throws `ReferenceError` at import time and takes the whole module
+    # down with it, so it is the more severe of the two drifts, not the lesser.
+    # Everything legitimately exported that is not a free function is DERIVED — the
+    # wasm-bindgen classes and the wrapper's own glue — so this needs no allowlist to
+    # keep in sync.
+    legitimate = set(rust_exports) | class_exports() | index_mjs_local_names()
+    for name in sorted(js_exports - legitimate):
+        problems.append(
+            f"{rel_index}: re-exports `{name}` from the package root, but no "
+            f"`#[wasm_bindgen]` free function, no `#[wasm_bindgen] pub struct` and no "
+            f"local definition in the wrapper provides it — importing the package "
+            f"root throws `ReferenceError` on a stale name, taking the whole module "
+            f"with it. Either the Rust export was renamed or removed without updating "
+            f"the wrapper, or the name is a leftover"
+        )
+
+    # And the TypeScript surface, which the remediation text below already promises.
+    dts_declared = index_dts_declared_names()
+    rel_dts = _INDEX_DTS.relative_to(_REPO)
+    for name in sorted(set(rust_exports) & js_exports - dts_declared):
+        problems.append(
+            f"{rel_dts}: `{name}` is re-exported from the package root but has no "
+            f"TypeScript declaration, so a TS consumer cannot call it without an "
+            f"error — reachable from JavaScript and dark to TypeScript"
         )
 
     if problems:

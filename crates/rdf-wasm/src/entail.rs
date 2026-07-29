@@ -133,8 +133,9 @@ pub(crate) fn rules_impl(regime: &str) -> Result<Vec<String>, String> {
 /// `entailRules(regime)` → the rule table the specification *defines* the regime
 /// by, one canonical rule name per array entry, in specification table order.
 ///
-/// `[]` for a regime with no rule table (`simple`, and the two that are not
-/// forward-materializable). `owl-rl` returns all 78 rules of OWL 2 Profiles §4.3
+/// `[]` for a regime with no rule table of its own (`simple`, plus `owl-direct`, which
+/// decides through the tableau, and `rif`, which entails under the caller's rules —
+/// all three still MATERIALIZE). `owl-rl` returns all 78 rules of OWL 2 Profiles §4.3
 /// Tables 4–9 whether or not this build fires them — that is the point: compare
 /// it with [`entail_implemented_rules`] to measure the gap.
 ///
@@ -731,8 +732,8 @@ mod tests {
                 assert!(
                     matches!(
                         gate,
-                        "overclaims false"
-                            | "overclaims true"
+                        "minimal true"
+                            | "minimal false"
                             | "one-directional true"
                             | "conservative false"
                             | "conservative true"

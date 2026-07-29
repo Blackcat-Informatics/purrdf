@@ -163,8 +163,9 @@ fn rules_bytes(regime: &str) -> Result<Vec<u8>, String> {
 /// rule name per newline-terminated line, in specification table order — to
 /// `*out_buffer` (free with `purrdf_buffer_free`).
 ///
-/// An empty buffer for a regime with no rule table (`simple`, and the two that
-/// are not forward-materializable). `owl-rl` yields all 78 rules of OWL 2
+/// An empty buffer for a regime with no rule table of its own (`simple`, plus
+/// `owl-direct`, which decides through the tableau, and `rif`, which entails under the
+/// caller's rules — all three still MATERIALIZE). `owl-rl` yields all 78 rules of OWL 2
 /// Profiles §4.3 Tables 4–9 whether or not this build fires them — that is the
 /// point: diff it against `purrdf_entail_implemented_rules` to measure the gap.
 ///
@@ -1159,8 +1160,8 @@ mod tests {
                 assert!(
                     matches!(
                         gate,
-                        "overclaims false"
-                            | "overclaims true"
+                        "minimal true"
+                            | "minimal false"
                             | "one-directional true"
                             | "conservative false"
                             | "conservative true"

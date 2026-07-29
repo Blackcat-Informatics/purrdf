@@ -789,15 +789,20 @@ class entail:
     # report is never optional: it names which rules fired, which specification
     # rules did not, and the calculus's contract hash. Read the closure with
     # `closure.to_nquads()`. Raises ValueError for an unknown regime spelling
-    # and for a regime that cannot be forward-materialized (owl-direct, rif).
-    # `d` is NOT one of them: datatype entailment materializes as the five
-    # `dt-*` rules of OWL 2 Profiles §4.3 Table 8.
+    # and for a `program` that is wrong for the regime. EVERY regime
+    # materializes, including `owl-direct` and `rif`; `program` is the rule
+    # document `rif` entails under and must be `""` for every other regime,
+    # because a caller who passed rules to `rdfs` believes they ran.
     @staticmethod
-    def materialize(dataset: RdfDataset, regime: RegimeLike) -> tuple[RdfDataset, str]: ...
+    def materialize(
+        dataset: RdfDataset, regime: RegimeLike, program: str
+    ) -> tuple[RdfDataset, str]: ...
     # The text-in/text-out twin of `materialize`: an N-Quads (or N-Triples)
     # document in, canonical (RDFC-1.0) N-Quads plus the rendered report out.
     @staticmethod
-    def materialize_nt(data: str, regime: RegimeLike) -> tuple[str, str]: ...
+    def materialize_nt(
+        data: str, regime: RegimeLike, program: str
+    ) -> tuple[str, str]: ...
     # The rule table the specification DEFINES the regime by, in table order
     # (78 rules for OWL-RL, 18 for RDFS, 3 for RDF, none for the rest).
     @staticmethod

@@ -266,8 +266,9 @@ fn materialize_nt(
 /// The rule table `regime` is *defined by*, one specification rule name per
 /// entry, in specification table order.
 ///
-/// `[]` for a regime with no rule table (`simple`, and the two that are not
-/// forward-materializable). `OWL-RL` returns all 78 rules of OWL 2 Profiles
+/// `[]` for a regime with no rule table of its own (`simple`, plus `OWL_DIRECT`, which
+/// decides through the tableau, and `RIF`, which entails under the caller's rules — all
+/// three still MATERIALIZE). `OWL-RL` returns all 78 rules of OWL 2 Profiles
 /// §4.3 Tables 4–9 whether or not this workspace fires them — that is the point:
 /// compare it with [`implemented_rules`] to measure the gap.
 ///

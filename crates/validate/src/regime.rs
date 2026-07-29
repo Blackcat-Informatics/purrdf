@@ -393,8 +393,10 @@ pub fn regime_rule_set(regime: Regime, spelling: &str, program: &str) -> Result<
 
 /// The rule table `regime` is *defined by*, one specification rule name per line.
 ///
-/// The empty string for a regime with no rule table (`simple`, and the two that
-/// are not forward-materializable). Lines are in specification table order — the
+/// The empty string for a regime with no rule table of its own (`simple`, plus
+/// `owl-direct`, which decides through the tableau, and `rif`, which entails under the
+/// caller's rules — all three still MATERIALIZE). Lines are in specification table
+/// order — the
 /// order `purrdf-entail` returns them in — and the string always ends with a
 /// newline when it is non-empty.
 ///
@@ -1112,14 +1114,15 @@ impl ReasoningAnswer {
 
     /// The certificate of the run that produced [`Self::answer`].
     ///
-    /// Never empty. Most services terminate their certificate with an explicit honesty
-    /// gate literal — `overclaims` for a justification, `checked` for a re-derived chase
-    /// proof, `one-directional` for profile certification, `conservative` for a module
-    /// extraction — so a consumer can read the gate without re-deriving it. The DL lane's
-    /// own certificate (see [`render_dl_certificate`]) has no such trailing literal: its
-    /// honesty is that `completeness` cannot read `decided` beside a non-empty `boundary`
-    /// list, which is guaranteed by construction rather than declared on a last line that
-    /// could only ever say `false`.
+    /// Never empty. Some services terminate their certificate with an explicit honesty
+    /// gate literal — `checked` for a re-derived chase proof, `one-directional` for
+    /// profile certification, `conservative` for a module extraction — so a consumer can
+    /// read the gate without re-deriving it. Each of those reports something its own
+    /// lines do not already contain. Where a would-be gate is a boolean function of
+    /// lines already rendered it is ABSENT rather than restated: a justification ends on
+    /// `minimal`, because `!(sufficient && minimal)` adds no bit, and the DL certificate
+    /// (see [`render_dl_certificate`]) ends on its measurements, because `completeness`
+    /// cannot read `decided` beside a non-empty `boundary` list by construction.
     #[must_use]
     pub fn certificate(&self) -> &str {
         &self.certificate
@@ -1906,15 +1909,18 @@ fn parse_module_method(name: &str) -> Result<ModuleMethod, String> {
 /// digest <64 lowercase hex>
 /// sufficient true | false
 /// minimal true | false
-/// overclaims false | overclaims true
 /// ```
 ///
 /// `sufficient` and `minimal` are **re-decided here**, over the justification alone
 /// and over each of its one-axiom-smaller subsets. They do not consult the search
 /// that found the justification and cannot be misled by it, which is what makes them
-/// a check rather than a restatement. `overclaims` is `true` unless both hold: a
-/// subset that does not entail, or that carries an axiom the entailment does not
-/// need, is a weaker answer than "a justification" and says so.
+/// a check rather than a restatement. Both must hold for the answer to be a
+/// justification rather than something weaker: a subset that does not entail, or an
+/// axiom the entailment does not need, is reported by whichever of the two is `false`.
+/// There is deliberately no trailing line combining them. `!(sufficient && minimal)`
+/// is a function of the two lines immediately above it, so rendering it would restate
+/// bits a reader already has under a name that reads like independent evidence — the
+/// same reason `explain_conclusion` renders `checked` and nothing after it.
 ///
 /// `digest` is BLAKE3 over the canonical N-Quads of the justification — a CONTENT
 /// digest, never an IRI, because PurRDF mints no vocabulary.
@@ -1941,8 +1947,7 @@ fn parse_module_method(name: &str) -> Result<ModuleMethod, String> {
 /// // The chain, and NOT the sibling.
 /// assert_eq!(why.answer().lines().count(), 2);
 /// assert!(why.certificate().contains("\nsufficient true\n"));
-/// assert!(why.certificate().contains("\nminimal true\n"));
-/// assert!(why.certificate().ends_with("overclaims false\n"));
+/// assert!(why.certificate().ends_with("minimal true\n"));
 /// ```
 pub fn justify_to_string(document: &str, axiom: &str) -> Result<ReasoningAnswer, String> {
     let parsed = parse_axiom(axiom)?;
@@ -1973,7 +1978,6 @@ fn render_justification(justification: &Justification) -> Result<String, String>
     let _ = writeln!(out, "digest {}", justification.digest_hex());
     let _ = writeln!(out, "sufficient {sufficient}");
     let _ = writeln!(out, "minimal {minimal}");
-    let _ = writeln!(out, "overclaims {}", !(sufficient && minimal));
     Ok(out)
 }
 
@@ -2814,8 +2818,8 @@ mod tests {
                 assert!(
                     matches!(
                         gate,
-                        "overclaims false"
-                            | "overclaims true"
+                        "minimal true"
+                            | "minimal false"
                             | "one-directional true"
                             | "conservative false"
                             | "conservative true"
@@ -3151,7 +3155,7 @@ mod tests {
         assert!(!why.answer().contains("<http://example.org/D>"));
         assert!(why.certificate().contains("\nsufficient true\n"));
         assert!(why.certificate().contains("\nminimal true\n"));
-        assert!(why.certificate().ends_with("overclaims false\n"));
+        assert!(why.certificate().ends_with("minimal true\n"));
         // The identity is a CONTENT digest, never an IRI.
         let digest = why
             .certificate()

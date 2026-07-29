@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import re
 import sys
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -133,6 +134,33 @@ def load_rule_inventory() -> dict[str, tuple[int, int]]:
     return {name: (int(defined), int(impl)) for name, defined, impl in rows}
 
 
+_COMPAT_LEDGER = _REPO / "bindings" / "python" / "tests" / "xfail_ledger.toml"
+_RDFLIB_LEDGER = (
+    _REPO / "bindings" / "python" / "tests" / "rdflib_suite" / "xfail_ledger.toml"
+)
+
+
+def load_xfail_ledger_sizes() -> dict[str, int]:
+    """How many strict xfails each Python ledger actually holds.
+
+    The scoreboard rows carrying these numbers were already gated; the PROSE naming
+    the ledger files was not, and drifted to 5 and 24 against real values of 4 and 1
+    — inside the same document, a few lines from the correct figures. Deriving both
+    from the TOML makes the two statements one measurement.
+    """
+    sizes: dict[str, int] = {}
+    for key, path in (("compat", _COMPAT_LEDGER), ("rdflib", _RDFLIB_LEDGER)):
+        if not path.is_file():
+            raise SystemExit(
+                f"check-doc-claims: {path.relative_to(_REPO)} is missing; the ledger "
+                f"prose claim cannot be checked, so do not leave it unchecked"
+            )
+        with path.open("rb") as handle:
+            entries = tomllib.load(handle).get("xfail", {})
+        sizes[key] = len(entries)
+    return sizes
+
+
 def load_rule_extensions() -> list[str]:
     """Every rule this workspace fires that no specification table states.
 
@@ -155,6 +183,47 @@ def load_rule_extensions() -> list[str]:
         section.group(1),
         re.MULTILINE,
     )
+
+
+def xfail_ledger_prose_claim(sizes: dict[str, int]) -> list[str]:
+    """The prose naming each Python xfail ledger must state its real size.
+
+    The scoreboard ROWS carrying these counts were already gated, so the document
+    held the correct numbers and, a hundred lines later, two wrong ones describing
+    the same ledgers. A reader has no way to know which of the two the gate covers.
+    Both are now derived from `len(ledger["xfail"])`.
+    """
+    problems: list[str] = []
+    text = _read(_CONFORMANCE)
+    rel = _CONFORMANCE.relative_to(_REPO)
+    expectations = (
+        (
+            "compat",
+            r"`purrdf\.compat` parity ledger \(\*\*(?P<n>\d+)\*\* strict xfails?\)",
+            _COMPAT_LEDGER,
+        ),
+        (
+            "rdflib",
+            r"vendored tests \(\*\*(?P<n>\d+)\*\* strict\s+xfails?\)",
+            _RDFLIB_LEDGER,
+        ),
+    )
+    for key, pattern, ledger in expectations:
+        found = re.findall(pattern, text)
+        if len(found) != 1:
+            problems.append(
+                f"{rel}: the {key} xfail-ledger prose — expected exactly one match, "
+                f"found {len(found)}. The sentence was reworded or removed; update "
+                f"the pattern in scripts/check-doc-claims.py so the claim stays "
+                f"checked (pattern: {pattern})"
+            )
+            continue
+        if _int(found[0]) != sizes[key]:
+            problems.append(
+                f"{rel}: the {key} xfail-ledger prose says {found[0]} strict xfail(s) "
+                f"but {ledger.relative_to(_REPO)} holds {sizes[key]}"
+            )
+    return problems
 
 
 def extension_disclosure_claim(extensions: list[str]) -> list[str]:
@@ -1395,6 +1464,8 @@ def main() -> int:
     checked += 1
     problems.extend(extension_disclosure_claim(load_rule_extensions()))
     checked += 1
+    problems.extend(xfail_ledger_prose_claim(load_xfail_ledger_sizes()))
+    checked += 2
 
     for claim in build_claims(inventory, matrix, census, lanes):
         claim.check()

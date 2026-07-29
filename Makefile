@@ -37,8 +37,13 @@ BINARYEN_VERSION := 130
 # dataset-description/research-object projection profiles, the compiled JSON-LD
 # context/options/registry engine, validation-scoped asserted-subclass
 # membership shared by native SHACL and SHACL-SPARQL, and now the entailment
-# engine AND the nine OWL reasoner services — measures 9_148_895 bytes;
-# 9_430_000 keeps 3.07% headroom.
+# engine AND the nine OWL reasoner services — measures 9_288_106 bytes against
+# the 9_430_000 ceiling, which is 1.53% headroom. That figure is RECORDED AS A
+# GATED CONSTANT below (WASM_SIZE_MEASURED_BYTES), not as prose: it had already
+# drifted 139_211 bytes behind the build once, because a comment is the one part
+# of this file nothing checks. Headroom is now thin by the standard this
+# procedure sets, so the next capability that reaches wasm must either fit or
+# raise the ceiling deliberately, with its own justification.
 #
 # Two reviewed increases, in order. First, crates/rdf-wasm/src/entail.rs began
 # exporting regimes, rule inventories and materialization, so purrdf-entail and
@@ -60,6 +65,12 @@ BINARYEN_VERSION := 130
 #   + profile, extract_module                     9_075_983   (+64_864)
 #   + explain_conclusion                          9_148_895   (+72_912)
 #
+# Those four rows are the ATTRIBUTION measured when the services landed; the
+# deltas are what they cost, and the last row is not the current artifact. The
+# 139_211 bytes between it and 9_288_106 are the extension rule family, the
+# call-scoped plan cache, the surfaced termination certificate and the
+# extension inventory binding, all of which reached wasm afterwards.
+#
 # The largest single item is explain_conclusion: it is the only reachable
 # consumer of purrdf-datalog's proof terms, so the proof arena, its canonical
 # encoding and its re-deriving checker link in for the first time. The
@@ -74,6 +85,14 @@ BINARYEN_VERSION := 130
 # binaryen bump (a valid, must-be-explained reason). Never raise it merely to
 # turn a red gate green.
 WASM_SIZE_BUDGET_BYTES := 9430000
+
+# The size the artifact ACTUALLY measures on the pinned toolchain, gated by
+# `wasm-pkg-size` so it cannot fall behind the build the way the comment above
+# once did. Unlike the ceiling this is not a limit: any change moves it, and the
+# gate fails until it is updated in the same commit that moved it. That is the
+# point — it converts "someone will notice the artifact grew" into a red gate,
+# and it is why the growth attribution above can be trusted.
+WASM_SIZE_MEASURED_BYTES := 9288106
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -315,6 +334,15 @@ wasm-pkg-size: wasm-pkg ## Gate the optimized wasm artifact byte size against WA
 	 size=$$(wc -c < "$$art" | awk '{print $$1}'); \
 	 gz=$$(gzip -9nc < "$$art" | wc -c | awk '{print $$1}'); \
 	 pct=$$(( size * 100 / budget )); \
+	 recorded=$(WASM_SIZE_MEASURED_BYTES); \
+	 if [ "$$size" != "$$recorded" ]; then \
+	   echo "ERROR: the artifact measures $$size bytes but WASM_SIZE_MEASURED_BYTES records $$recorded."; \
+	   echo "  The recorded size is not a ceiling — it is the measurement this repository publishes."; \
+	   echo "  Set WASM_SIZE_MEASURED_BYTES to $$size in the same commit that moved the artifact, and"; \
+	   echo "  say in that commit WHY it moved. If the move also crosses WASM_SIZE_BUDGET_BYTES, follow"; \
+	   echo "  the ceiling-raise procedure in the comment above rather than raising it to go green."; \
+	   exit 1; \
+	 fi; \
 	 raw="$(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/purrdf_wasm.wasm"; \
 	 if [ -s "$$raw" ]; then rawsz=$$(wc -c < "$$raw" | awk '{print $$1}'); reduc=$$(( (rawsz - size) * 100 / rawsz )); \
 	   ratio="cargo release wasm $$rawsz B -> optimized $$size B (-$$reduc%)"; \

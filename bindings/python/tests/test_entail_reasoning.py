@@ -23,10 +23,12 @@ What is asserted, and why:
   1` block (`consistency`, `classify`, `realize`, `instances`, `entails`) can never read
   `completeness decided` beside a non-empty `boundary` list — the value is derived from
   the boundary list on every render, so there is nothing stored for the two to
-  disagree with. The services that carry their own independent gate literal still do:
-  `overclaims` for `justify`, `checked` for `explain-conclusion`, `one-directional
-  true` for the purely syntactic profile certification, `conservative` for a module
-  extraction.
+  disagree with. The services whose gate literal reports something their other lines do
+  not already contain still carry it: `checked` for `explain-conclusion`,
+  `one-directional true` for the purely syntactic profile certification, `conservative`
+  for a module extraction. `justify` ends on `minimal` instead, because a combined
+  literal would be `!(sufficient && minimal)` — a function of the two lines above it,
+  which reads like independent evidence and is not.
 * **`unknown` is never collapsed to `false`.** A narrowed step cap drives the
   third completeness state, and the answer says `unknown` — reporting a resource
   limit as an entailment is the defect the third value exists to prevent.
@@ -120,8 +122,8 @@ def _every_service(data: str = TAXONOMY) -> list[tuple[str, tuple[str, str]]]:
 # checked instead.
 GATES = frozenset(
     {
-        "overclaims false",
-        "overclaims true",
+        "minimal true",
+        "minimal false",
         "checked true",
         "checked false",
         "one-directional true",
@@ -409,7 +411,7 @@ def test_justify_re_decides_both_halves_of_its_claim() -> None:
     assert "<https://example.org/Fish>" not in answer
     assert "\nsufficient true\n" in certificate
     assert "\nminimal true\n" in certificate
-    assert certificate.endswith("overclaims false\n")
+    assert certificate.endswith("minimal true\n")
     # The identity is a CONTENT digest, never an IRI: PurRDF mints no vocabulary.
     digest = next(
         line.removeprefix("digest ")

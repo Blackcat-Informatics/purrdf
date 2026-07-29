@@ -419,8 +419,7 @@ test("entailJustify finds a minimal entailing subset ON WASM", () => {
   assert.ok(why.certificate.includes("\nservice justify\n"));
   assert.ok(why.certificate.includes("\naxiom SubClassOf\n"));
   assert.ok(why.certificate.includes("\nsufficient true\n"));
-  assert.ok(why.certificate.includes("\nminimal true\n"));
-  assert.ok(why.certificate.endsWith("overclaims false\n"));
+  assert.ok(why.certificate.endsWith("minimal true\n"));
 });
 
 test("entailExplainConclusion derives a chase conclusion never asserted ON WASM", () => {
