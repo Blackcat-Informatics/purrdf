@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import builtins
-from typing import IO, Any, Callable, Literal, TypedDict, overload
+from typing import IO, Any, Callable, Literal, TypeAlias, TypedDict, overload
 
 # ── Statement codec (bindings/python/src/rdf.rs) ────────────────────────────────
 
@@ -635,6 +635,12 @@ class RdfDataset:
     def quad_count(self) -> int: ...
     def term_count(self) -> int: ...
     def __len__(self) -> int: ...
+    # Canonical (RDFC-1.0) flat N-Quads — the readable surface of a frozen
+    # dataset, and the same serializer the shared string boundary uses. N-Triples
+    # is a syntactic subset, so a default-graph-only dataset serializes to a valid
+    # N-Triples document; one that names graphs keeps the graph term. There is
+    # deliberately no `to_ntriples` alias: one serializer, one name.
+    def to_nquads(self) -> str: ...
     def serialize_jsonld(
         self,
         output_format: str,
@@ -744,6 +750,54 @@ class shapes:
 
 # Back-compat alias for the native submodule's own name.
 shacl = shapes
+
+# ── Entailment regimes (bindings/python/src/py_entail.rs, purrdf_native.entail) ──
+# SPARQL entailment-regime materialization, surfaced as `purrdf.entail`. NOT the
+# same mechanism as `shapes.entail` above: that one applies the SHACL-AF sh:rules
+# a shapes graph declares, this one closes a document under a regime's own
+# specification rule table (no shapes involved).
+
+class _Regime:
+    """A SPARQL entailment regime (`purrdf.entail.Regime.OWL_RL`)."""
+
+    SIMPLE: _Regime
+    RDF: _Regime
+    RDFS: _Regime
+    OWL_RL: _Regime
+    OWL_DIRECT: _Regime
+    RIF: _Regime
+    D: _Regime
+
+# Every entry point accepts either a `Regime` member or the regime's CLI spelling
+# ("simple", "rdf", "rdfs", "owl-rl", "owl-direct", "rif", "d"); anything else
+# raises ValueError naming the accepted set.
+type RegimeLike = _Regime | str
+
+class entail:
+    # Spelled with an explicit `TypeAlias` (rather than the bare `X = _X` the
+    # namespaces above use) because `purrdf.entail.Regime` is a *type* every call
+    # site annotates with; a plain assignment reads to mypy as a variable and is
+    # then rejected in annotation position.
+    Regime: TypeAlias = _Regime
+    # Close a frozen RdfDataset under `regime`, returning (closure, report). The
+    # report is never optional: it names which rules fired, which specification
+    # rules did not, and the calculus's contract hash. Read the closure with
+    # `closure.to_nquads()`. Raises ValueError for an unknown regime spelling
+    # and for a regime that cannot be forward-materialized (owl-direct, rif, d).
+    @staticmethod
+    def materialize(dataset: RdfDataset, regime: RegimeLike) -> tuple[RdfDataset, str]: ...
+    # The text-in/text-out twin of `materialize`: an N-Quads (or N-Triples)
+    # document in, canonical (RDFC-1.0) N-Quads plus the rendered report out.
+    @staticmethod
+    def materialize_nt(data: str, regime: RegimeLike) -> tuple[str, str]: ...
+    # The rule table the specification DEFINES the regime by, in table order
+    # (78 rules for OWL-RL, 18 for RDFS, 3 for RDF, none for the rest).
+    @staticmethod
+    def rules(regime: RegimeLike) -> list[str]: ...
+    # The subset of `rules(regime)` this workspace's chase actually fires. The
+    # difference between the two is the regime's measurable gap.
+    @staticmethod
+    def implemented_rules(regime: RegimeLike) -> list[str]: ...
 
 # ── GTS surface grouping (purrdf.gts) ────────────────────────────────────────────
 # The GTS entry points are also present at the purrdf root (declared above); the

@@ -22,7 +22,9 @@ use pyo3::types::{PyBytes, PyString};
 
 use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs, serialize_frozen};
 use crate::py_store::PyRdfFormat;
-use crate::{NativeRdfFormat, RdfDataset, RdfLookaside, dataset_from_bytes, gts_write};
+use crate::{
+    NativeRdfFormat, RdfDataset, RdfLookaside, canonical_flat_nquads, dataset_from_bytes, gts_write,
+};
 
 /// A Python handle to a frozen [`RdfDataset`].
 #[pyclass(name = "RdfDataset", frozen)]
@@ -35,6 +37,16 @@ impl PyRdfDataset {
     /// Wrap an already-validated native dataset without reparsing bytes.
     pub(crate) fn from_arc(inner: Arc<RdfDataset>) -> Self {
         Self { inner }
+    }
+
+    /// An owned handle on the frozen dataset.
+    ///
+    /// An `Arc` clone rather than a borrow so callers (the entailment surface in
+    /// [`crate::py_entail`]) can carry the dataset across a `Python::detach`
+    /// boundary without holding a reference to this Python-owned object while the
+    /// GIL is released.
+    pub(crate) fn dataset(&self) -> Arc<RdfDataset> {
+        Arc::clone(&self.inner)
     }
 }
 
@@ -63,6 +75,27 @@ impl PyRdfDataset {
 
     fn __len__(&self) -> usize {
         self.inner.quad_count()
+    }
+
+    /// Serialize this immutable dataset to canonical (RDFC-1.0) flat N-Quads.
+    ///
+    /// The readable surface of a frozen dataset: without it a handle returned by
+    /// `purrdf.entail.materialize` can be counted but never inspected. The output
+    /// is the same serializer the shared string boundary uses, so a closure
+    /// obtained through the dataset path and the same closure obtained through
+    /// `purrdf.entail.materialize_nt` are byte-identical.
+    ///
+    /// N-Quads, and named `to_nquads` for that reason. N-Triples is a syntactic
+    /// subset, so a dataset whose quads all sit in the default graph serializes
+    /// to a valid N-Triples document — but a dataset that names graphs keeps the
+    /// graph term rather than silently dropping it, which is exactly the case a
+    /// `to_ntriples` spelling would misdescribe. There is deliberately no alias:
+    /// one serializer, one name.
+    fn to_nquads(&self, py: Python<'_>) -> PyResult<String> {
+        let dataset = Arc::clone(&self.inner);
+        // Canonicalization + serialization run detached (GIL released).
+        py.detach(|| canonical_flat_nquads(dataset.as_ref()))
+            .map_err(PyValueError::new_err)
     }
 
     /// Serialize this immutable dataset as configured JSON-LD or YAML-LD.

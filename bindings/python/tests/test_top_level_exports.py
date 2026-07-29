@@ -3,10 +3,10 @@
 """Top-level module exports mirror the Rust umbrella crate.
 
 `purrdf` must present the RDF surface at its root and every other engine as a
-top-level submodule (`purrdf.shapes`, `purrdf.shex`, `purrdf.slice`, `purrdf.gts`)
-so no caller ever reaches into `purrdf_native`. Both `import purrdf.<engine>` and
-attribute access must resolve, and the public compat/shadow code must never name
-`purrdf_native`.
+top-level submodule (`purrdf.shapes`, `purrdf.shex`, `purrdf.entail`,
+`purrdf.slice`, `purrdf.gts`) so no caller ever reaches into `purrdf_native`.
+Both `import purrdf.<engine>` and attribute access must resolve, and the public
+compat/shadow code must never name `purrdf_native`.
 """
 
 from __future__ import annotations
@@ -16,7 +16,13 @@ from pathlib import Path
 
 import pytest
 
-_ENGINES = ["purrdf.shapes", "purrdf.shex", "purrdf.slice", "purrdf.gts"]
+_ENGINES = [
+    "purrdf.shapes",
+    "purrdf.shex",
+    "purrdf.entail",
+    "purrdf.slice",
+    "purrdf.gts",
+]
 
 
 @pytest.mark.parametrize("dotted", _ENGINES)
@@ -32,6 +38,7 @@ def test_attribute_access_matches_import() -> None:
 
     assert importlib.import_module("purrdf.shapes") is purrdf.shapes
     assert importlib.import_module("purrdf.shex") is purrdf.shex
+    assert importlib.import_module("purrdf.entail") is purrdf.entail
     assert importlib.import_module("purrdf.slice") is purrdf.slice
     assert importlib.import_module("purrdf.gts") is purrdf.gts
 
@@ -44,6 +51,21 @@ def test_shapes_is_canonical_name_shacl_is_alias() -> None:
     assert callable(purrdf.shapes.validate)
 
 
+def test_regime_entailment_is_not_shacl_rule_entailment() -> None:
+    """`purrdf.entail` and `purrdf.shapes.entail` are different mechanisms.
+
+    The names collide by one namespace level and the distinction is load-bearing:
+    `purrdf.entail` closes a document under a SPARQL entailment regime's own rule
+    table, while `purrdf.shapes.entail` applies the SHACL-AF `sh:rule`s a shapes
+    graph declares. Neither may quietly become the other.
+    """
+    import purrdf
+
+    assert purrdf.entail is not purrdf.shapes.entail
+    assert callable(purrdf.shapes.entail)
+    assert not callable(purrdf.entail)
+
+
 def test_engines_expose_expected_surface() -> None:
     """Each engine surfaces its primary entry points off the top-level name."""
     import purrdf
@@ -51,6 +73,11 @@ def test_engines_expose_expected_surface() -> None:
     assert hasattr(purrdf.shapes, "validate")
     assert hasattr(purrdf.shapes, "Shapes")
     assert hasattr(purrdf.shex, "validate")
+    assert hasattr(purrdf.entail, "materialize")
+    assert hasattr(purrdf.entail, "materialize_nt")
+    assert hasattr(purrdf.entail, "rules")
+    assert hasattr(purrdf.entail, "implemented_rules")
+    assert hasattr(purrdf.entail, "Regime")
     assert hasattr(purrdf.slice, "SliceCatalog")
     assert hasattr(purrdf.gts, "gts_from_quads")
     assert callable(purrdf.project)
