@@ -114,15 +114,6 @@ pub enum Owl2Gap {
     /// The class-expression graph is cyclic, which the parser refuses rather than
     /// unfolding, so the run withholds.
     CyclicClassExpression,
-    /// **PurRDF over-commits here.** The tableau clashes a named individual whose
-    /// label carries an `owl:oneOf` enumeration it is not itself a member of —
-    /// an implicit unique-name assumption. OWL 2 makes no such assumption: the
-    /// individual may be `owl:sameAs` an enumeration member, so the ontology is
-    /// satisfiable. This is the one ledgered case where PurRDF reports
-    /// `inconsistent` against a published `consistent`, i.e. an unsoundness
-    /// rather than an incompleteness, and it is called out separately in the
-    /// harness log for that reason.
-    NominalUniqueName,
 }
 
 impl Owl2Gap {
@@ -142,17 +133,37 @@ impl Owl2Gap {
             Self::SelfRestriction => "self-restriction",
             Self::LiteralSubjectInjection => "literal-subject-injection",
             Self::CyclicClassExpression => "cyclic-class-expression",
-            Self::NominalUniqueName => "nominal-unique-name",
         }
     }
 
     /// Whether this gap is an **unsoundness** — PurRDF committing to a verdict the
     /// W3C contradicts in the direction that matters (claiming `inconsistent`
-    /// where the ontology is satisfiable). Every other variant is an
-    /// incompleteness: an axiom that goes unread, so a real clash is missed.
+    /// where the ontology is satisfiable).
+    ///
+    /// **No variant is one today.** Every gap left in this enum is an
+    /// incompleteness: an axiom that goes unread, so a real clash is missed, or a
+    /// graph the run refuses outright. The predicate stays — pinned by a test
+    /// asserting the unsound set is empty, and surfaced as `[UNSOUND]` in the
+    /// harness log — because that is the ledger's most consequential distinction:
+    /// an incompleteness withholds an answer PurRDF is entitled to, whereas an
+    /// unsoundness asserts one it is not. The match below is exhaustive on
+    /// purpose, so a new gap cannot be added without classifying itself here.
     #[must_use]
     pub const fn is_unsound(self) -> bool {
-        matches!(self, Self::NominalUniqueName)
+        match self {
+            Self::AsymmetricProperty
+            | Self::IrreflexiveProperty
+            | Self::PropertyDisjointness
+            | Self::NegativePropertyAssertion
+            | Self::HasKey
+            | Self::BottomProperty
+            | Self::DifferentIndividuals
+            | Self::AllDisjointClasses
+            | Self::EmptyDomain
+            | Self::SelfRestriction
+            | Self::LiteralSubjectInjection
+            | Self::CyclicClassExpression => false,
+        }
     }
 }
 
@@ -317,18 +328,15 @@ pub const LEDGER: &[LedgerEntry] = &[
         gap: Owl2Gap::CyclicClassExpression,
     },
     // --- Unsound: PurRDF commits to the wrong verdict -------------------------
-    //     The ONLY entry here whose direction is `inconsistent` against a
-    //     published `consistent`. `webont-oneof-003` declares two `owl:oneOf`
-    //     enumerations over the same three individuals and types a fourth,
-    //     `myT`, into one of them. The tableau clashes because `myT` is a named
-    //     individual outside the enumeration; OWL 2 makes no unique-name
-    //     assumption, so `myT` may be `owl:sameAs` a member and the ontology is
-    //     satisfiable. Every other ledger entry above is an incompleteness (a
-    //     missed clash); this one is an unsoundness (an invented clash).
-    LedgerEntry {
-        case: "webont-oneof-003",
-        gap: Owl2Gap::NominalUniqueName,
-    },
+    //     Empty, and it must stay empty. `webont-oneof-003` — which types a
+    //     fourth individual `myT` into an `owl:oneOf` enumeration of three
+    //     others — used to sit here: the tableau clashed because `myT` was a
+    //     named individual outside the enumeration, an implicit unique-name
+    //     assumption OWL 2 does not make. The `o`-rule now *identifies* `myT`
+    //     with a member instead of clashing, and clashes only when every such
+    //     identification is blocked by a recorded `≠`, so the case agrees. Every
+    //     entry above is an incompleteness (a missed clash) or a refusal to
+    //     decide; none is an invented clash.
 ];
 
 /// Look a case up in [`LEDGER`].
@@ -756,17 +764,18 @@ mod tests {
     }
 
     #[test]
-    fn exactly_one_ledgered_gap_is_an_unsoundness() {
+    fn no_ledgered_gap_is_an_unsoundness() {
         let unsound: Vec<&str> = LEDGER
             .iter()
             .filter(|e| e.gap.is_unsound())
             .map(|e| e.case)
             .collect();
-        assert_eq!(
-            unsound,
-            vec!["webont-oneof-003"],
-            "the set of unsound divergences changed; this is the ledger's most \
-             consequential class and must be reviewed by hand"
+        assert!(
+            unsound.is_empty(),
+            "the set of unsound divergences must be EMPTY — every ledgered gap is an \
+             incompleteness (an unread axiom, so a real clash is missed) or a refusal to \
+             decide, never a verdict PurRDF is not entitled to. These claim otherwise and \
+             must be reviewed by hand: {unsound:?}"
         );
     }
 }

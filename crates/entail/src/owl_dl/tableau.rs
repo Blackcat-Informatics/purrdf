@@ -18,9 +18,18 @@
 //! becomes the meta-concept `nnf(¬C ⊔ D)`, and the union of all such meta-concepts is
 //! placed in every node's label at creation. [`Tableau::solve`] runs the deterministic
 //! completion rules to a fixpoint, then branches (depth-first, in a fully deterministic
-//! order) on the non-deterministic rules (`⊔`, the `≤`-choose rule, and `≤`-merges),
-//! cloning the state per branch. A branch that reaches a clash-free fixpoint witnesses
-//! consistency.
+//! order) on the non-deterministic rules (`⊔`, the `≤`-choose rule, `≤`-merges, and the
+//! multi-member `o`-rule), cloning the state per branch. A branch that reaches a
+//! clash-free fixpoint witnesses consistency.
+//!
+//! ## No unique name assumption
+//!
+//! OWL 2 does not assume distinct names denote distinct elements. Nominals are
+//! therefore handled by *identification*, never by name comparison: `{a} ∈ L(x)` merges
+//! `x` with `a`'s root whatever `x` is already called, and a nominal set with more than
+//! one member branches over the members. Two named individuals become distinct only
+//! when something forces it — an explicit `≠` recorded by the `≥`-rule, or a `¬{a}` in
+//! a label — and only then can a nominal constraint clash.
 //!
 //! ## Termination
 //!
@@ -48,8 +57,14 @@ struct Node {
     incoming: Option<(u32, bool)>,
     /// Whether this is a root (named-individual / nominal) node — never blocked.
     root: bool,
-    /// The individual term id this root stands for, if any.
-    nominal: Option<u32>,
+    /// The individual term ids this node denotes.
+    ///
+    /// A root starts out denoting exactly the one individual it was created for, but
+    /// OWL 2 makes **no unique name assumption**: two names may denote the same
+    /// element, and the `o`-rule identifies them by merging the two nodes. A merge
+    /// therefore *unions* the two sets, so a node can end up denoting several names.
+    /// Empty for anonymous tree nodes.
+    nominals: BTreeSet<u32>,
     /// Nodes this node is forced to be distinct from (`≠`), by node index.
     neq: BTreeSet<usize>,
     /// Union-find forward pointer once merged away (`None` while a representative).
@@ -76,6 +91,9 @@ enum Branch {
     AddConcept(usize, u32),
     /// Merge two nodes (identify them).
     Merge(usize, usize),
+    /// Identify a node with the root of the named individual with this term id — the
+    /// `o`-rule's choice for a nominal set with more than one member.
+    MergeNominal(usize, u32),
 }
 
 /// The tableau driver: read-only knowledge base, the internalized TBox, a step cap.
@@ -173,13 +191,14 @@ fn merge(st: &mut State, keep: usize, discard: usize) {
         st.nodes[keep].neq.insert(w);
         st.nodes[w].neq.insert(keep);
     }
-    // Carry the nominal identity onto the keeper; repoint the root map.
-    if let Some(a) = st.nodes[discard].nominal {
-        if st.nodes[keep].nominal.is_none() {
-            st.nodes[keep].nominal = Some(a);
-        }
+    // Carry every nominal identity onto the keeper; repoint the root map. The keeper
+    // now denotes *both* names, which is exactly what the absence of a unique name
+    // assumption permits.
+    let disc_nominals = st.nodes[discard].nominals.clone();
+    for &a in &disc_nominals {
         st.root_of.insert(a, keep);
     }
+    st.nodes[keep].nominals.extend(disc_nominals);
     if st.nodes[discard].root {
         st.nodes[keep].root = true;
     }
@@ -247,7 +266,7 @@ impl<'a> Tableau<'a> {
                 parent: None,
                 incoming: None,
                 root: true,
-                nominal: None,
+                nominals: BTreeSet::new(),
                 neq: BTreeSet::new(),
                 merged: None,
             });
@@ -266,7 +285,7 @@ impl<'a> Tableau<'a> {
             parent: None,
             incoming: None,
             root: true,
-            nominal: Some(a),
+            nominals: std::iter::once(a).collect(),
             neq: BTreeSet::new(),
             merged: None,
         });
@@ -324,50 +343,47 @@ impl<'a> Tableau<'a> {
 
     /// Structural clash detection over the current representatives.
     fn detect_clash(&self, st: &mut State) {
-        let bottom = self.kb.bottom;
         let n = st.nodes.len();
         for i in 0..n {
             if find(st, i) != i {
                 continue;
             }
-            let nominal = st.nodes[i].nominal;
-            // Immutable scan of the label for atomic / nominal clashes.
-            let label = &st.nodes[i].label;
-            if label.contains(&bottom) {
-                st.clash = true;
-                return;
-            }
-            for &cid in label {
-                if label.contains(&self.kb.table.negate(cid)) {
-                    st.clash = true;
-                    return;
-                }
-                match self.kb.table.decomp(cid) {
-                    Decomp::NegNominal(w) => {
-                        if let Some(a) = nominal
-                            && w.binary_search(&a).is_ok()
-                        {
-                            st.clash = true;
-                            return;
-                        }
-                    }
-                    Decomp::Nominal(v) => {
-                        if let Some(a) = nominal
-                            && v.binary_search(&a).is_err()
-                        {
-                            st.clash = true;
-                            return;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            // A `≤n r.C` violated by more than `n` pairwise-distinct C-neighbours.
-            if self.max_clash(st, i) {
+            if self.node_clashes(st, i) {
                 st.clash = true;
                 return;
             }
         }
+    }
+
+    /// Whether representative node `x` carries a clash.
+    ///
+    /// The clash triggers are `⊥`, a complementary concept pair `C, ¬C`, a negated
+    /// nominal `¬{…}` naming one of the node's *own* individuals, and a `≤n r.C`
+    /// violated by more than `n` pairwise-distinct `C`-neighbours.
+    ///
+    /// A **positive** nominal set `{a₁,…,aₙ} ∈ L(x)` is deliberately *not* a clash
+    /// trigger, even when `x` already denotes some other name. OWL 2 makes no unique
+    /// name assumption, so `x` may simply *be* one of the `aᵢ` under a second name;
+    /// the sound response is the identification performed by [`Tableau::rule_nominal`]
+    /// (and, for a set with more than one member, the `o`-branch produced by
+    /// [`Tableau::find_branch`]), which clashes only when every such identification is
+    /// blocked by a recorded `≠`.
+    fn node_clashes(&self, st: &State, x: usize) -> bool {
+        let node = &st.nodes[x];
+        if node.label.contains(&self.kb.bottom) {
+            return true;
+        }
+        for &cid in &node.label {
+            if node.label.contains(&self.kb.table.negate(cid)) {
+                return true;
+            }
+            if let Decomp::NegNominal(w) = self.kb.table.decomp(cid)
+                && w.iter().any(|a| node.nominals.contains(a))
+            {
+                return true;
+            }
+        }
+        self.max_clash(st, x)
     }
 
     /// Whether some `≤n r.C` on node `x` is violated by `> n` pairwise-`≠` neighbours.
@@ -532,7 +548,14 @@ impl<'a> Tableau<'a> {
         changed
     }
 
-    /// `o`-rule (singleton nominal): merge `x` with the root of its individual.
+    /// `o`-rule (singleton nominal): identify `x` with the root of its individual.
+    ///
+    /// `{a} ∈ L(x)` says `x` **is** `a`. Since OWL 2 makes no unique name assumption,
+    /// this holds however `x` was named: the rule merges the two nodes rather than
+    /// asking whether the names agree. The merge is what turns a genuine
+    /// non-membership into a clash — [`merge`] refuses to identify a pair already
+    /// recorded as `≠` and sets [`State::clash`] instead — so no separate "not a
+    /// member" test is needed, and none may be added without assuming unique names.
     fn rule_nominal(&self, st: &mut State, x: usize) -> bool {
         let singletons: Vec<u32> = st.nodes[x]
             .label
@@ -544,11 +567,14 @@ impl<'a> Tableau<'a> {
             .collect();
         let mut changed = false;
         for a in singletons {
-            if st.nodes[find(st, x)].nominal == Some(a) {
+            let rx = find(st, x);
+            // Already denotes `a`: nothing to identify, and reporting a change here
+            // would spin `saturate` forever.
+            if st.nodes[rx].nominals.contains(&a) {
                 continue;
             }
             let ra = self.root(st, a);
-            merge(st, ra, x);
+            merge(st, ra, rx);
             changed = true;
             if st.clash {
                 return changed;
@@ -590,7 +616,7 @@ impl<'a> Tableau<'a> {
             parent: Some(x),
             incoming: Some((prop, inverted)),
             root: false,
-            nominal: None,
+            nominals: BTreeSet::new(),
             neq: BTreeSet::new(),
             merged: None,
         });
@@ -711,6 +737,18 @@ impl<'a> Tableau<'a> {
                             return Some(cs.iter().map(|&c| Branch::AddConcept(i, c)).collect());
                         }
                     }
+                    // `o`-rule, non-deterministic form: `{a₁,…,aₙ} ∈ L(x)` with `n > 1`
+                    // and `x` denoting none of the `aᵢ` yet. `x` must be *one* of
+                    // them, so each identification is an alternative; the whole set
+                    // failing is what makes non-membership a clash. (The RDF reverse
+                    // mapping pre-splits `owl:oneOf` into a disjunction of singletons,
+                    // so this fires only on a directly built multi-member nominal —
+                    // but soundness here must not rest on that parser convention.)
+                    Decomp::Nominal(ref v) if v.len() > 1 => {
+                        if !v.iter().any(|a| st.nodes[i].nominals.contains(a)) {
+                            return Some(v.iter().map(|&a| Branch::MergeNominal(i, a)).collect());
+                        }
+                    }
                     Decomp::Max(nmax, role, filler) => {
                         let neigh = self.neighbors(st, i, role);
                         // `≤`-choose rule: some neighbour lacks both `C` and `¬C`.
@@ -762,6 +800,12 @@ impl<'a> Tableau<'a> {
                 merge(st, a, b);
                 !st.clash
             }
+            Branch::MergeNominal(x, a) => {
+                let x = find(st, x);
+                let ra = self.root(st, a);
+                merge(st, ra, x);
+                !st.clash
+            }
         }
     }
 }
@@ -800,6 +844,8 @@ fn rec_clique(
 
 #[cfg(test)]
 mod tests {
+    use purrdf_core::{BlankScope, RdfDatasetBuilder, TermId};
+
     use super::*;
     use crate::owl_dl::concept::{Concept, Role};
 
@@ -946,6 +992,127 @@ mod tests {
         );
         let kb = b.finish();
         assert!(kb.is_consistent().unwrap(), "≥1 r.{{a}} is satisfiable");
+    }
+
+    /// The `example.org` fixture namespace for the `owl:oneOf` regression pair below.
+    const NS: &str = "http://example.org/oneof#";
+
+    /// An `owl:oneOf` enumeration builder over `example.org` terms.
+    ///
+    /// Emits `ex:Enum owl:oneOf (ex:small ex:medium ex:large)` plus
+    /// `ex:myT rdf:type ex:Enum`, and then, for each name in `apart_from`, an
+    /// `ex:myT rdf:type [ owl:complementOf [ owl:oneOf (ex:<name>) ] ]` — the class
+    /// expression whose DL reading is `¬{name}`, i.e. exactly the content of
+    /// `ex:myT owl:differentFrom ex:<name>`. (The `owl:differentFrom` *spelling* is a
+    /// separate, still-ledgered gap in the reverse mapping's vocabulary; this fixture
+    /// states the distinctness the tableau is meant to act on, not the syntax the
+    /// parser is meant to recognize.)
+    fn one_of_kb(apart_from: &[&str]) -> Kb {
+        const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+        const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
+        const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
+        const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
+        const OWL_ONEOF: &str = "http://www.w3.org/2002/07/owl#oneOf";
+        const OWL_COMPLEMENTOF: &str = "http://www.w3.org/2002/07/owl#complementOf";
+
+        let mut b = RdfDatasetBuilder::new();
+        let ty = b.intern_iri(RDF_TYPE);
+        let first = b.intern_iri(RDF_FIRST);
+        let rest = b.intern_iri(RDF_REST);
+        let nil = b.intern_iri(RDF_NIL);
+        let one_of = b.intern_iri(OWL_ONEOF);
+        let complement_of = b.intern_iri(OWL_COMPLEMENTOF);
+        let mut cell = 0usize;
+        // Write `members` as an RDF list, returning its head.
+        let mut list = |b: &mut RdfDatasetBuilder, members: &[TermId]| -> TermId {
+            let mut head = nil;
+            for &m in members.iter().rev() {
+                cell += 1;
+                let node = b.intern_blank(&format!("cell{cell}"), BlankScope::DEFAULT);
+                b.push_quad(node, first, m, None);
+                b.push_quad(node, rest, head, None);
+                head = node;
+            }
+            head
+        };
+
+        let members: Vec<TermId> = ["small", "medium", "large"]
+            .iter()
+            .map(|n| b.intern_iri(&format!("{NS}{n}")))
+            .collect();
+        let enum_class = b.intern_iri(&format!("{NS}Enum"));
+        let head = list(&mut b, &members);
+        b.push_quad(enum_class, one_of, head, None);
+        let my_t = b.intern_iri(&format!("{NS}myT"));
+        b.push_quad(my_t, ty, enum_class, None);
+
+        for (i, name) in apart_from.iter().enumerate() {
+            let member = b.intern_iri(&format!("{NS}{name}"));
+            let singleton = b.intern_blank(&format!("only{i}"), BlankScope::DEFAULT);
+            let head = list(&mut b, &[member]);
+            b.push_quad(singleton, one_of, head, None);
+            let not_member = b.intern_blank(&format!("not{i}"), BlankScope::DEFAULT);
+            b.push_quad(not_member, complement_of, singleton, None);
+            b.push_quad(my_t, ty, not_member, None);
+        }
+
+        let ds = b.freeze().expect("freeze");
+        Kb::from_dataset(&ds).expect("parse")
+    }
+
+    #[test]
+    fn oneof_membership_makes_no_unique_name_assumption() {
+        // `myT : {small, medium, large}` with nothing saying `myT` differs from any of
+        // them. OWL 2 has no unique name assumption, so `myT` may simply BE one of the
+        // three under a second name — the ontology is satisfiable. Reporting a clash
+        // here (as the tableau once did, purely because `myT` is not syntactically in
+        // the enumeration) is an unsoundness, not a missing feature.
+        let kb = one_of_kb(&[]);
+        assert!(
+            kb.is_consistent().unwrap(),
+            "an individual typed into an owl:oneOf it is not syntactically a member of \
+             is satisfiable: it may denote a member under another name"
+        );
+    }
+
+    #[test]
+    fn oneof_membership_clashes_when_apart_from_every_member() {
+        // The dual. Add `myT ≠ small`, `myT ≠ medium`, `myT ≠ large`; now every
+        // identification the `o`-rule could make is blocked, so `myT` is provably
+        // outside an enumeration it is typed into and the ontology IS unsatisfiable.
+        // This is what separates the fix from simply deleting the rule.
+        let kb = one_of_kb(&["small", "medium", "large"]);
+        assert!(
+            !kb.is_consistent().unwrap(),
+            "an individual known distinct from every enumeration member cannot be typed \
+             into that enumeration"
+        );
+    }
+
+    #[test]
+    fn multi_member_nominal_branches_over_its_members() {
+        // A nominal set built directly (not via the parser's disjunction pre-split), so
+        // the `o`-rule's non-deterministic form is what has to decide it. `x : {a, b}`
+        // with `x ≠ a` still has the `x = b` alternative...
+        let mut b = Builder::new();
+        b.ty(1, Concept::Nominal(vec![98, 99]));
+        b.ty(1, Concept::Not(Box::new(Concept::Nominal(vec![98]))));
+        let kb = b.finish();
+        assert!(
+            kb.is_consistent().unwrap(),
+            "x : {{a,b}} with x ≠ a is satisfiable by identifying x with b"
+        );
+
+        // ...and ruling that out too leaves nothing to identify `x` with.
+        let mut b = Builder::new();
+        b.ty(1, Concept::Nominal(vec![98, 99]));
+        b.ty(1, Concept::Not(Box::new(Concept::Nominal(vec![98]))));
+        b.ty(1, Concept::Not(Box::new(Concept::Nominal(vec![99]))));
+        let kb = b.finish();
+        assert!(
+            !kb.is_consistent().unwrap(),
+            "x : {{a,b}} with x ≠ a and x ≠ b is unsatisfiable"
+        );
     }
 
     #[test]
