@@ -35,3 +35,58 @@
 //!
 //! No filesystem, no clock, no RNG, no ambient I/O. The crate builds for
 //! `wasm32-unknown-unknown` and is part of the workspace wasm gate.
+//!
+//! # Physical primitives
+//!
+//! The modules below are the substrate the store, the cursors and the fixpoint
+//! are built from:
+//!
+//! - [`id`] — branded niche IDs, so a term handle can never be passed where a
+//!   predicate handle is expected.
+//! - [`arena`] — the phase-scoped row/tuple bump arena, reset at every round
+//!   boundary.
+//! - [`bitset`] — the dense round-delta membership bitset over row ids.
+//! - [`binding_pattern`] — the arity-generic adornment lattice shared by demand
+//!   keying and index selection.
+
+pub mod arena;
+pub mod binding_pattern;
+pub mod bitset;
+pub mod id;
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    //! Deterministic helpers shared by the crate's unit tests.
+    //!
+    //! The determinism contract is asserted by feeding the same inputs in many
+    //! different orders and demanding identical observable state. That needs a
+    //! shuffle, and the crate has no RNG (and must not acquire one — no ambient
+    //! entropy on `wasm32-unknown-unknown`), so the permutation is generated from
+    //! an explicit seed by a pure integer mix. Every "random" order in the test
+    //! suite is therefore reproducible on every target: a failure names the seed
+    //! that produced it.
+
+    /// One step of the SplitMix64 mixing function — a pure, seed-driven integer
+    /// hash with no ambient state.
+    fn mix(state: &mut u64) -> u64 {
+        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = *state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    /// A deterministic permutation of `items` selected by `seed`.
+    ///
+    /// A Fisher-Yates shuffle driven by [`mix`]; the same `seed` always yields the
+    /// same order, on every target.
+    pub(crate) fn permute<T: Clone>(items: &[T], seed: u64) -> Vec<T> {
+        let mut out = items.to_vec();
+        let mut state = seed;
+        for i in (1..out.len()).rev() {
+            let j = (mix(&mut state) % (i as u64 + 1)) as usize;
+            out.swap(i, j);
+        }
+        out
+    }
+}
