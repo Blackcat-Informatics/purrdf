@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# REUSE.toml (REUSE spec 3.3): declares licensing for the vendored W3C OWL 2
+# entailment payload in this tree. The payload is 100 RDF/XML documents across 50
+# cases plus the upstream census, so it is annotated by ONE glob block rather
+# than 101 per-file `.license` sidecars — the same declaration, one place to keep
+# true on a re-vendor.
+#
+# The glob names `LicenseRef-W3C-Test-Suite`, NOT the bare SPDX id `W3C`. The bare
+# `W3C` id denotes the W3C Software Notice and License, which is a different
+# document from the W3C Test Suite License these files are published under; see
+# LICENSES/LicenseRef-W3C-Test-Suite.txt and PROVENANCE.md.
+#
+# `census.tsv` is covered by the same declaration because it is not first-party
+# configuration: every field in it is a fact copied out of the W3C manifest (the
+# `otest:identifier`, `otest:` test types, `otest:semantics`, `otest:profile`,
+# `otest:status`, `otest:normativeSyntax` of each case). Only the two disposition
+# columns are PurRDF's, and they are not separable from the W3C rows they annotate.
+
+version = 1
+
+[[annotations]]
+path = ["cases/*/*.rdf", "census.tsv"]
+SPDX-FileCopyrightText = "2009 W3C (Massachusetts Institute of Technology, ERCIM, Keio, Beihang)"
+SPDX-License-Identifier = "LicenseRef-W3C-Test-Suite"

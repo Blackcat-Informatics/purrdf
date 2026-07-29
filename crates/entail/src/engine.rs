@@ -101,7 +101,7 @@ use crate::datatypes::LiteralIndex;
 use crate::interner::intern_into;
 use crate::lists::{CLASH_RELATION, ListIndex, is_internal};
 use crate::report::RunStats;
-use crate::report::{InconsistencyWitness, WitnessTriple};
+use crate::report::{InconsistencyWitness, InconsistentRun, ReasoningReport, WitnessTriple};
 use crate::surrogates::SurrogateIndex;
 use crate::vocab::{XSD_NONNEGATIVEINTEGER, XSD_STRING};
 use crate::{EntailError, Regime};
@@ -249,6 +249,9 @@ pub(crate) fn close(
     stats.absorb(default_run.budget);
     stats.drop_generalized(default_run.generalized_rdf_drops);
     stats.drop_surrogate(default_run.surrogate_drops);
+    if let Some(witness) = default_run.clash {
+        return Err(refuse(ds, regime, &stats, witness));
+    }
 
     let mut b = RdfDatasetBuilder::new();
     copy_into(&mut b, ds);
@@ -266,6 +269,9 @@ pub(crate) fn close(
         stats.absorb(run.budget);
         stats.drop_generalized(run.generalized_rdf_drops);
         stats.drop_surrogate(run.surrogate_drops);
+        if let Some(witness) = run.clash {
+            return Err(refuse(ds, regime, &stats, witness));
+        }
         let g = intern_into(&mut b, graph);
         for conclusion in &run.conclusions {
             if default_conclusions.contains(&conclusion.key()) {
@@ -277,6 +283,23 @@ pub(crate) fn close(
     }
     let dataset = b.freeze().map_err(|e| EntailError::Build(e.to_string()))?;
     Ok((dataset, stats))
+}
+
+/// The refusal an inconsistent run owes its caller: the witness AND the run's report.
+///
+/// `stats` is everything the run had measured when it stopped — the graphs already closed
+/// plus the budget of the one that clashed — so the report is a description of work that
+/// actually happened rather than a placeholder shaped like one. A dataset is closed graph by
+/// graph, so a clash in the second named graph leaves the default graph's conclusions
+/// tallied in `rules_fired` and both evaluations' join steps summed into the budget.
+fn refuse(
+    ds: &RdfDataset,
+    regime: Regime,
+    stats: &RunStats,
+    witness: InconsistencyWitness,
+) -> EntailError {
+    let report = ReasoningReport::of_inconsistent_run(ds, regime, stats, witness.clone());
+    EntailError::Inconsistent(Box::new(InconsistentRun::new(witness, report)))
 }
 
 /// One conclusion a graph's run drew, already known representable in RDF 1.2.
@@ -318,6 +341,15 @@ struct GraphRun {
     generalized_rdf_drops: u64,
     /// Conclusions this run withheld because they mention a surrogate blank node.
     surrogate_drops: u64,
+    /// The clash this graph's evaluation witnessed, if it witnessed one.
+    ///
+    /// A refusal carried as a VALUE rather than raised on the spot, because the report the
+    /// caller is owed is assembled by [`close`] out of every graph's measurements and this
+    /// graph's budget is one of them. Raising from here would hand the one caller who most
+    /// needs the certificate — the one whose data is inconsistent — a bare witness and no
+    /// run. `conclusions` is empty when this is `Some`: an inconsistent knowledge base
+    /// entails every triple, so nothing the evaluation derived is an answer.
+    clash: Option<InconsistencyWitness>,
 }
 
 /// Push `conclusion` into `b`, in `graph`.
@@ -378,9 +410,16 @@ fn close_graph(
     // everything — so there is no closure to hand back, only evidence. The first clash in
     // the evaluation's own total derivation order is the witness, which makes the choice a
     // function of the program and the data rather than of the round a rule happened to
-    // fire in.
+    // fire in. The budget is still carried out, because the report the refusal owes its
+    // caller is measured rather than stubbed.
     if let Some(witness) = first_clash(&evaluation, attribution, &terms, regime, graph) {
-        return Err(EntailError::Inconsistent(Box::new(witness)));
+        return Ok(GraphRun {
+            conclusions: Vec::new(),
+            budget: evaluation.budget(),
+            generalized_rdf_drops: 0,
+            surrogate_drops: 0,
+            clash: Some(witness),
+        });
     }
 
     // The budget is the evaluator's own measurement, not a second tally kept alongside it.
@@ -389,6 +428,7 @@ fn close_graph(
         budget: evaluation.budget(),
         generalized_rdf_drops: 0,
         surrogate_drops: 0,
+        clash: None,
     };
     for derivation in evaluation.derivations() {
         let fact = derivation.fact();
@@ -583,6 +623,10 @@ fn chase_graph(
         budget: outcome.budget(),
         generalized_rdf_drops: 0,
         surrogate_drops: 0,
+        // The two chased lanes (`RDF`, `RDFS`) state no rule whose conclusion is `false`,
+        // so a chase evaluation has nothing to clash on. That is a property of their rule
+        // tables, not an omission here.
+        clash: None,
     };
     for derivation in outcome.derivations() {
         let fact = derivation.fact();

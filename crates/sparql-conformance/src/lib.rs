@@ -15,18 +15,28 @@
 //! failed`). An xfail that unexpectedly PASSES is a hard error so the registry
 //! cannot rot.
 //!
-//! The crate also hosts a second, unrelated corpus: [`owl2`] grades the vendored
-//! W3C OWL 2 suite (`entailment-suite/w3c-owl2/`) against PurRDF's `OWL-Direct`
-//! ALCOIQ tableau. That corpus is *consistency*-shaped — it validates the DL
-//! lane's satisfiability verdicts and says nothing about the OWL 2 RL rule table
-//! — and it feeds the conformance matrix's own `Entailment` row rather than
-//! folding into the SPARQL row. It lives here because this is the workspace's
-//! `publish = false` conformance crate, so its corpus never enters a published
-//! `.crate`.
+//! The crate also hosts two further, unrelated corpora, both cut from the same
+//! upstream W3C OWL 2 manifest and each grading a different reasoning lane:
+//!
+//! * [`owl2`] grades `entailment-suite/w3c-owl2/` — 261 *consistency*-shaped
+//!   cases — against PurRDF's `OWL-Direct` ALCOIQ tableau. It validates the DL
+//!   lane's satisfiability verdicts and says nothing about the OWL 2 RL rule
+//!   table.
+//! * [`owl2_rl`] grades `entailment-suite/w3c-owl2-rl/` — 27 positive and 23
+//!   negative W3C *entailment* tests — against the OWL 2 RL forward chase. This
+//!   is the rule table's first third-party oracle.
+//!
+//! Both feed the conformance matrix's own `Entailment` row rather than folding
+//! into the SPARQL row, and both report what they leave out: `owl2_rl`'s
+//! `census.tsv` accounts for all 489 upstream cases, and the harnesses print the
+//! exclusion tallies next to their scoreboards. They live here because this is
+//! the workspace's `publish = false` conformance crate, so their corpora never
+//! enter a published `.crate`.
 
 pub mod compare;
 pub mod manifest;
 pub mod owl2;
+pub mod owl2_rl;
 pub mod paths;
 pub mod rif_xml;
 pub mod rs_resultset;

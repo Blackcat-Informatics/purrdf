@@ -21,9 +21,26 @@
 //!
 //! [`ReasoningReport::overclaims`] is the invariant a report must never violate:
 //! [`Completeness::Exact`] while [`ReasoningReport::boundaries`] is non-empty is a claim
-//! of completeness contradicted by the report's own evidence. It is a method rather than a
-//! comment so a consumer can check it too; the crate's tests assert it for every run they
-//! make.
+//! of completeness contradicted by the report's own evidence.
+//!
+//! The gate is only worth having if it can FAIL, so the contradiction is a REPRESENTABLE
+//! state: [`ReasoningReport::new`] stores the completeness it is handed beside the
+//! boundaries it is handed and repairs neither, and
+//! `overclaims_is_representable_and_detected` builds one and watches the gate return
+//! `true`. What the crate's own emission path does with that state is REFUSE it —
+//! [`materialize`](crate::materialize) and [`materialize_dl_reported`](crate::materialize_dl_reported) check
+//! the assembled report and return
+//! [`EntailError::Overclaim`](crate::EntailError::Overclaim) rather than hand back a
+//! closure described by a self-contradicting certificate. A run that would overclaim fails;
+//! it does not merely say so.
+//!
+//! An earlier revision instead REPAIRED the state inside the constructor, narrowing
+//! `Exact` to [`Completeness::ExactWithinBoundaries`] before the field was assigned. That
+//! made the rendered `overclaims false` a compile-time constant and every
+//! `assert!(!report.overclaims())` in the workspace a tautology. The narrowing itself is
+//! sound and is still done — it is what [`Completeness::for_run`] is — but it happens in
+//! one named, tested function whose result the gate then CHECKS, rather than in a silent
+//! fix-up the gate could never see past.
 //!
 //! # Determinism
 //!
@@ -65,9 +82,8 @@ pub enum Completeness {
     /// SUBJECTS the RDF 1.2 IR cannot hold — the [`Construct::GeneralizedRdf`] boundary.
     ///
     /// [`Self::for_regime`] never returns this: it is a function of the INVENTORY alone
-    /// and knows nothing about a run. The report assembled for a RUN narrows
-    /// [`Self::Exact`] to it when that run actually met a boundary, which is the only
-    /// place both facts are in scope.
+    /// and knows nothing about a run. [`Self::for_run`] is the function that has both facts
+    /// in scope, and it is the only place [`Self::Exact`] is narrowed to this.
     ExactWithinBoundaries,
     /// Some rule the regime is defined by was not available.
     ///
@@ -109,6 +125,39 @@ impl Completeness {
         }
     }
 
+    /// `regime`'s completeness for a RUN that met `boundaries`.
+    ///
+    /// [`Self::for_regime`] is a function of the inventory and cannot see a run;
+    /// [`ReasoningReport::boundaries`] is a function of a run and cannot see the inventory.
+    /// This is the one function both facts are in scope for, and it is where a complete
+    /// rule table that still met a construct becomes [`Self::ExactWithinBoundaries`] —
+    /// the honest way to say "every rule was available AND something got in the way".
+    ///
+    /// It is a NAMED derivation rather than a fix-up buried in a struct literal on
+    /// purpose. [`ReasoningReport::new`] stores whatever completeness it is handed, so a
+    /// report whose completeness contradicts its boundaries is a value that exists and
+    /// [`ReasoningReport::overclaims`] is a check that can fail. This function is what the
+    /// crate's own emission path uses to make sure it never does.
+    ///
+    /// ```
+    /// use purrdf_entail::{Boundary, Completeness, Construct, Regime};
+    ///
+    /// // No boundary met: the inventory's answer stands.
+    /// assert_eq!(Completeness::for_run(Regime::Rdfs, &[]), Completeness::Exact);
+    /// // A boundary met: the same complete rule table, said honestly.
+    /// assert_eq!(
+    ///     Completeness::for_run(Regime::Rdfs, &[Boundary::of(Construct::Surrogate)]),
+    ///     Completeness::ExactWithinBoundaries
+    /// );
+    /// ```
+    #[must_use]
+    pub fn for_run(regime: Regime, boundaries: &[Boundary]) -> Self {
+        match Self::for_regime(regime) {
+            Self::Exact if !boundaries.is_empty() => Self::ExactWithinBoundaries,
+            other => other,
+        }
+    }
+
     /// Whether every rule the regime defines was available.
     ///
     /// True for [`Self::Exact`] AND for [`Self::ExactWithinBoundaries`]: both say the rule
@@ -147,7 +196,7 @@ impl Completeness {
 ///
 /// # The OWL-Direct block exists so an axiom is never SILENTLY dropped
 ///
-/// The reverse mapping ([`materialize_dl`](crate::materialize_dl)) once answered `Ok(())`
+/// The reverse mapping ([`materialize_dl_reported`](crate::materialize_dl_reported)) once answered `Ok(())`
 /// for any structural triple it did not recognize, so `owl:propertyChainAxiom`,
 /// `owl:imports`, a datatype restriction and a mistyped `owl:` term all vanished without a
 /// word — and one of them was worse than vanishing, because a chain axiom fell into the
@@ -254,10 +303,18 @@ impl Construct {
             }
             Self::TripleTerm => {
                 "rdfs14 and rdfs14a replace a triple term with a FRESH blank node typed \
-                 rdfs:Proposition, and an existentially quantified head is not a Datalog \
-                 clause: the evaluator mints no terms, so neither rule fires. A triple \
-                 term is therefore interned as one atomic term the chase never looks \
-                 inside, the closure states nothing about the triple the term quotes, \
+                 rdfs:Proposition, and both FIRE: the restricted chase evaluates their \
+                 existentially quantified heads, minting each surrogate as a \
+                 frontier-addressed Skolem witness. What is withheld is the SURROGATE \
+                 itself — a SPARQL entailment regime draws its answers from the scoping \
+                 graph and a minted blank node is not in it — so the rdfs:Proposition node \
+                 is not a term any answer can bind, and every conclusion mentioning one is \
+                 dropped at the materialization boundary and counted by \
+                 ReasoningReport::withheld_surrogates. See the surrogate boundary for why \
+                 that exclusion is REQUIRED rather than convenient. \
+                 \
+                 The triple term itself is interned as one atomic term the chase never \
+                 looks inside, the closure states nothing about the triple the term quotes, \
                  and a conclusion built AROUND such a term carries it through unchanged. \
                  owl:sameAs does NOT substitute inside one either: eq-rep-s, eq-rep-p and \
                  eq-rep-o rewrite a triple's own positions, so <<( :a :p :b )>> and \
@@ -290,9 +347,12 @@ impl Construct {
             }
             Self::DatatypeValueSpace => {
                 "rdfD1 and rdfD1a conclude about a FRESH blank node standing for a \
-                 datatyped literal, or for an inhabited value space, and an \
-                 existentially quantified head is not a Datalog clause: the evaluator \
-                 mints no terms, so neither rule fires. rdfs1 recognizes the datatypes \
+                 datatyped literal, or for an inhabited value space, and both FIRE: the \
+                 restricted chase evaluates their existentially quantified heads. What is \
+                 withheld is the SURROGATE itself — a SPARQL entailment regime draws its \
+                 answers from the scoping graph, which no minted blank node is in — and \
+                 the surrogate boundary is where those withheld conclusions are counted. \
+                 rdfs1 recognizes the datatypes \
                  RDF 1.2 Semantics §8 makes mandatory (rdf:langString, \
                  rdf:dirLangString, xsd:string) and no others. The OWL 2 RL rules \
                  quantified over value spaces (dt-type2, dt-eq, dt-diff) DO fire, over \
@@ -502,20 +562,27 @@ impl WitnessTriple {
 
 /// Evidence that a knowledge base is inconsistent: which rule, which facts, which graph.
 ///
-/// # It reaches the caller on the ERROR, not in a report
+/// # It reaches the caller on the ERROR, and it reaches it IN A REPORT
 ///
 /// OWL 2 RL derives an inconsistency through the seventeen rules whose conclusion is
 /// `false` — `eq-diff1`, `eq-diff2`, `eq-diff3`, `prp-irp`, `prp-asyp`, `prp-pdw`,
 /// `prp-adp`, `prp-npa1`, `prp-npa2`, `cls-nothing2`, `cls-com`, `cls-maxc1`, `cls-maxqc1`,
 /// `cls-maxqc2`, `cax-dw`, `cax-adc`, `dt-not-type` — and the `OWL-RL` and `D` lanes
 /// evaluate all of them. A body match on one is
-/// [`EntailError::Inconsistent`](crate::EntailError) carrying this value: an inconsistent
-/// knowledge base entails every triple, so there is no closure to hand back and no report
-/// to attach it to.
+/// [`EntailError::Inconsistent`](crate::EntailError): an inconsistent knowledge base
+/// entails every triple, so there is no closure to hand back.
 ///
-/// [`ReasoningReport::inconsistency`] is therefore `None` on every report that exists, and
-/// that is now a CHECKED fact rather than a vacuous one — "seventeen rules looked and
-/// found nothing", where before it meant "nothing looked". The RDF and RDFS lanes have no
+/// There is still a RUN to describe, though, and losing it was a real hole: the refusal
+/// used to carry this witness alone, so the one caller who most needed to know which rules
+/// had fired, what the evaluation had cost and which calculus refused was the only caller
+/// who got none of it — the report-free variant this crate says it does not have.
+/// [`EntailError::Inconsistent`](crate::EntailError) therefore carries an
+/// [`InconsistentRun`]: this witness AND the run's
+/// [`ReasoningReport`], whose [`ReasoningReport::inconsistency`] is this same witness.
+///
+/// [`ReasoningReport::inconsistency`] is `None` on a report that accompanies a closure —
+/// "seventeen rules looked and found nothing", a CHECKED fact rather than a vacuous one —
+/// and `Some` on the report that accompanies a refusal. The RDF and RDFS lanes have no
 /// inconsistency rule at all, so their `None` is a statement about the calculus.
 ///
 /// # Which rule, which facts, which graph
@@ -574,6 +641,58 @@ impl InconsistencyWitness {
     #[must_use]
     pub fn graph(&self) -> Option<&TermValue> {
         self.graph.as_ref()
+    }
+}
+
+/// An inconsistent run's two halves: the evidence, and the certificate.
+///
+/// The payload of [`EntailError::Inconsistent`](crate::EntailError), and the reason that
+/// error is not the exception to "the report is not optional". A caller whose data is
+/// inconsistent gets no closure — an inconsistent knowledge base entails every triple —
+/// but the run still happened, still cost a budget, still fired rules and still ran under a
+/// named calculus, and all four are things the caller needs in order to act on the refusal:
+/// which rules had already produced conclusions, how far the evaluation got, and which
+/// contract hash the verdict was minted under.
+///
+/// The witness is reachable twice — [`Self::witness`] and
+/// [`ReasoningReport::inconsistency`] on [`Self::report`] — and that is deliberate rather
+/// than redundant. The first is where a caller matching on the error looks; the second is
+/// what makes `inconsistency` an observable field on the report surface every host renders,
+/// instead of a constant `none` no input could ever move.
+#[derive(Debug, Clone)]
+pub struct InconsistentRun {
+    /// The rule that refused, and the asserted triples that satisfied it.
+    witness: InconsistencyWitness,
+    /// What the run had done when it stopped.
+    report: ReasoningReport,
+}
+
+impl InconsistentRun {
+    /// The run `witness` refused, described by `report`.
+    ///
+    /// `report`'s [`ReasoningReport::inconsistency`] is expected to be that same witness;
+    /// `ReasoningReport::of_inconsistent_run` is how this crate builds the pair.
+    #[must_use]
+    pub const fn new(witness: InconsistencyWitness, report: ReasoningReport) -> Self {
+        Self { witness, report }
+    }
+
+    /// The rule whose premises were all satisfied, and the triples that satisfied them.
+    #[must_use]
+    pub const fn witness(&self) -> &InconsistencyWitness {
+        &self.witness
+    }
+
+    /// What the run had done when it stopped — budget, fired rules, boundaries, calculus.
+    #[must_use]
+    pub const fn report(&self) -> &ReasoningReport {
+        &self.report
+    }
+
+    /// Take the two halves apart.
+    #[must_use]
+    pub fn into_parts(self) -> (InconsistencyWitness, ReasoningReport) {
+        (self.witness, self.report)
     }
 }
 
@@ -729,44 +848,128 @@ pub struct ReasoningReport {
 }
 
 impl ReasoningReport {
-    /// Assemble the report for a run of `regime` over `ds` that measured `stats`.
+    /// A report holding exactly these facts, deriving nothing and REPAIRING nothing.
     ///
-    /// The completeness is the INVENTORY's answer, narrowed by this run's evidence: a
-    /// complete rule table that still met a boundary is
-    /// [`Completeness::ExactWithinBoundaries`], because saying `Exact` beside a boundary
-    /// list is the overclaim [`Self::overclaims`] exists to forbid. Narrowing here rather
-    /// than in [`Completeness::for_regime`] is deliberate — that function is a pure
-    /// function of the inventory and has no run to look at.
-    pub(crate) fn of_run(ds: &RdfDataset, regime: Regime, stats: &RunStats) -> Self {
-        let boundaries = boundaries(ds, regime, stats);
-        let completeness = match Completeness::for_regime(regime) {
-            Completeness::Exact if !boundaries.is_empty() => Completeness::ExactWithinBoundaries,
-            other => other,
-        };
+    /// The one constructor every other one goes through, and the reason
+    /// [`Self::overclaims`] is a check rather than a tautology: the completeness and the
+    /// boundaries are stored as given, so a report claiming [`Completeness::Exact`] beside
+    /// a non-empty boundary list is a value that EXISTS. An earlier revision narrowed the
+    /// two into agreement inside the constructor, which made the gate unfalsifiable and
+    /// every assertion of it vacuous. [`Completeness::for_run`] is the derivation this
+    /// crate's own emission path uses to get the completeness right; the gate then checks
+    /// it, and [`materialize`](crate::materialize) REFUSES a run whose report trips it.
+    ///
+    /// The contract hash is not a parameter: it is
+    /// `calculus_contract_hash(regime)` by definition, and a report naming a calculus other
+    /// than the one its regime declares would be a second contradiction with no honest
+    /// reading.
+    ///
+    /// `rules_fired` and `boundaries` are stored in the order given; this crate supplies
+    /// specification table order and [`Construct`] declaration order respectively, which is
+    /// what makes two identical runs byte-identical.
+    ///
+    /// ```
+    /// use purrdf_datalog::seminaive::BudgetReport;
+    /// use purrdf_entail::{Boundary, Completeness, Construct, ReasoningReport, Regime};
+    ///
+    /// // A report a consumer assembled badly: a complete rule table AND a boundary,
+    /// // reported as plain `Exact`. The gate exists to catch exactly this.
+    /// let bad = ReasoningReport::new(
+    ///     Regime::Rdfs,
+    ///     Completeness::Exact,
+    ///     Vec::new(),
+    ///     vec![Boundary::of(Construct::Surrogate)],
+    ///     BudgetReport::new(0, 0, 0),
+    ///     None,
+    ///     0,
+    /// );
+    /// assert!(bad.overclaims());
+    /// ```
+    #[must_use]
+    pub fn new(
+        regime: Regime,
+        completeness: Completeness,
+        rules_fired: Vec<(RuleId, u64)>,
+        boundaries: Vec<Boundary>,
+        budget: BudgetReport,
+        inconsistency: Option<InconsistencyWitness>,
+        withheld_surrogates: u64,
+    ) -> Self {
         Self {
             regime,
             completeness,
-            rules_fired: fired_rules(regime, stats),
+            rules_fired,
             boundaries,
-            budget: stats.budget,
+            budget,
             contract_hash: calculus_contract_hash(regime),
-            // A run that WITNESSES an inconsistency is refused, so a report that exists at
-            // all is a report of a run that found none; see [`InconsistencyWitness`].
-            inconsistency: None,
-            withheld_surrogates: stats.surrogate_drops,
+            inconsistency,
+            withheld_surrogates,
         }
+    }
+
+    /// Assemble the report for a run of `regime` over `ds` that measured `stats`.
+    ///
+    /// The completeness is [`Completeness::for_run`]'s answer over this run's boundary
+    /// evidence, and it is handed to [`Self::new`] rather than repaired there — see that
+    /// constructor for why the difference is the whole value of [`Self::overclaims`].
+    pub(crate) fn of_run(ds: &RdfDataset, regime: Regime, stats: &RunStats) -> Self {
+        Self::of_chase_run(ds, regime, stats, None)
+    }
+
+    /// Assemble the report for a run of `regime` over `ds` that `witness` REFUSED.
+    ///
+    /// The certificate an inconsistent input gets. Everything in it describes the run up
+    /// to the clash and is measured, not stubbed: the budget is what the evaluation had
+    /// consumed, `rules_fired` is what had already been committed (a dataset is closed
+    /// graph by graph, so a clash in the third graph leaves the first two's conclusions
+    /// tallied), the boundaries are the ones that run met, and the contract hash names the
+    /// calculus that refused. [`Self::inconsistency`] is `Some(witness)`, which is the
+    /// state that makes that accessor a report of a fact rather than a constant.
+    ///
+    /// There is no closure to accompany it — an inconsistent knowledge base entails every
+    /// triple — so this report reaches the caller on
+    /// [`EntailError::Inconsistent`](crate::EntailError), inside the
+    /// [`InconsistentRun`] that also carries the witness.
+    pub(crate) fn of_inconsistent_run(
+        ds: &RdfDataset,
+        regime: Regime,
+        stats: &RunStats,
+        witness: InconsistencyWitness,
+    ) -> Self {
+        Self::of_chase_run(ds, regime, stats, Some(witness))
+    }
+
+    /// The shared body of [`Self::of_run`] and [`Self::of_inconsistent_run`].
+    fn of_chase_run(
+        ds: &RdfDataset,
+        regime: Regime,
+        stats: &RunStats,
+        inconsistency: Option<InconsistencyWitness>,
+    ) -> Self {
+        let boundaries = boundaries(ds, regime, stats);
+        Self::new(
+            regime,
+            Completeness::for_run(regime, &boundaries),
+            fired_rules(regime, stats),
+            boundaries,
+            stats.budget,
+            inconsistency,
+            stats.surrogate_drops,
+        )
     }
 
     /// Assemble the report for an `OWL-Direct` run that met `boundaries`.
     ///
     /// The DL lane has no rule TABLE — it is a tableau, so [`rules`] and [`implemented`]
     /// are both empty for it and [`Completeness::for_regime`] answers
-    /// [`Completeness::Exact`] vacuously. What it does have is CONSTRUCTS, and this
-    /// constructor is where they narrow that vacuous `Exact` to
+    /// [`Completeness::Exact`] vacuously. What it does have is CONSTRUCTS, and
+    /// [`Completeness::for_run`] is where they narrow that vacuous `Exact` to
     /// [`Completeness::ExactWithinBoundaries`]: a run over an ontology carrying an
     /// `owl:propertyChainAxiom` has no missing rule to report and is still not a complete
     /// answer, and saying `Exact` beside a non-empty boundary list is precisely the
-    /// overclaim [`Self::overclaims`] forbids.
+    /// overclaim [`Self::overclaims`] forbids. As on the chase path the derivation is
+    /// handed to [`Self::new`] rather than performed inside it, so the gate still has
+    /// something to check.
     ///
     /// `boundaries` arrives as a set, so it is already deduplicated; it is re-ordered here
     /// into [`Construct`] declaration order, which is the order every report lists
@@ -782,26 +985,22 @@ impl ReasoningReport {
             .filter(|construct| boundaries.contains(construct))
             .map(Boundary::of)
             .collect();
-        let completeness = match Completeness::for_regime(Regime::OwlDirect) {
-            Completeness::Exact if !boundaries.is_empty() => Completeness::ExactWithinBoundaries,
-            other => other,
-        };
-        Self {
-            regime: Regime::OwlDirect,
+        let completeness = Completeness::for_run(Regime::OwlDirect, &boundaries);
+        Self::new(
+            Regime::OwlDirect,
             completeness,
-            rules_fired: Vec::new(),
+            Vec::new(),
             boundaries,
-            budget: BudgetReport::new(0, 0, 0),
-            contract_hash: calculus_contract_hash(Regime::OwlDirect),
+            BudgetReport::new(0, 0, 0),
             // The tableau reports an unsatisfiable knowledge base as
             // `EntailError::Unsatisfiable`, which carries no rule and no premise set, so
             // there is no `InconsistencyWitness` to attach and a report that exists is a
             // report of a satisfiable knowledge base.
-            inconsistency: None,
+            None,
             // The tableau invents no surrogate: it decides satisfiability rather than
             // materializing a closure, so there is nothing to withhold.
-            withheld_surrogates: 0,
-        }
+            0,
+        )
     }
 
     /// The regime the caller asked for.
@@ -882,10 +1081,16 @@ impl ReasoningReport {
 
     /// Evidence that the knowledge base is inconsistent, if any was found.
     ///
-    /// Always `None`, and that is a CHECKED consistency claim rather than an unfilled
-    /// field: a run that witnesses an inconsistency is REFUSED, so the witness reaches the
-    /// caller on [`EntailError::Inconsistent`](crate::EntailError) and a report exists only
-    /// for a run that found none. See [`InconsistencyWitness`].
+    /// `None` on the report that accompanies a CLOSURE — that run's seventeen `false`-headed
+    /// rules looked and found nothing, which is a checked consistency claim rather than an
+    /// unfilled field. `Some` on the report that accompanies a REFUSAL: an inconsistent
+    /// input has no closure, but it still gets its certificate, carried inside
+    /// [`EntailError::Inconsistent`](crate::EntailError)'s
+    /// [`InconsistentRun`] beside the witness itself.
+    ///
+    /// So the two states are both reachable and both observable, and a caller can tell
+    /// which one it is holding without matching on an error: see [`InconsistencyWitness`]
+    /// for what the witness names.
     #[must_use]
     pub fn inconsistency(&self) -> Option<&InconsistencyWitness> {
         self.inconsistency.as_ref()
@@ -918,9 +1123,18 @@ impl ReasoningReport {
     /// not handle. [`Completeness::ExactWithinBoundaries`] is the honest way to say the
     /// first half of that, and it does not trip the gate.
     ///
-    /// No report this crate produces may return `true`, and the crate's tests assert it
-    /// for every run they make; the method is public so a consumer assembling reports from
-    /// several runs can apply the same gate.
+    /// # It can return `true`, which is the only reason it is worth calling
+    ///
+    /// The two fields it compares are stored verbatim by [`Self::new`], so the
+    /// contradiction is a representable value and this is a real predicate over it — see
+    /// that constructor's example, which builds one and watches this return `true`. No
+    /// report this crate PRODUCES may return `true`: [`Completeness::for_run`] derives the
+    /// completeness from the same boundary list the report will carry, and
+    /// [`materialize`](crate::materialize) and [`materialize_dl_reported`](crate::materialize_dl_reported)
+    /// check the assembled report and return
+    /// [`EntailError::Overclaim`](crate::EntailError::Overclaim) instead of a closure if it
+    /// ever trips. The method is public so a consumer assembling reports from several runs
+    /// — or reading one across an FFI boundary — can apply the same gate.
     #[must_use]
     pub fn overclaims(&self) -> bool {
         matches!(self.completeness, Completeness::Exact) && !self.boundaries.is_empty()

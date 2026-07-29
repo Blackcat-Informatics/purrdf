@@ -590,3 +590,193 @@ fn configured_jsonld_options_reach_reason_output() {
     assert!(text.contains("ex:a"));
     assert!(text.contains("ex:knows"));
 }
+
+// ── `--report`: the reasoning certificate an operator can read ──────────────────
+
+/// `reason --report` WRITES THE CERTIFICATE, and it is not a stub.
+///
+/// The closure still goes to the sink; the report goes to stderr, so the two never mix
+/// even when `OUT` is `-`. Every line asserted here is evidence the operator could not
+/// obtain before: which regime ran, which rules fired and how many conclusions each
+/// contributed, which constructs the run could not fully handle and WHY, what it cost, the
+/// contract hash of the calculus, and the overclaim verdict.
+#[test]
+fn report_bare_writes_the_certificate_to_stderr() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "rdfs.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+            "ex:Dog rdfs:subClassOf ex:Animal .\n",
+            "ex:rex a ex:Dog .\n",
+        ),
+    );
+    let out = path(dir, "out.nt");
+
+    let o = run(&["reason", "--regime", "rdfs", "--report", &seed, &out]);
+    assert!(o.status.success(), "reason --report failed: {}", stderr(&o));
+    let err = stderr(&o);
+
+    assert!(err.contains("regime rdfs\n"), "{err}");
+    assert!(err.contains("completeness "), "{err}");
+    // rdfs9 is the rule that re-typed the instance, and the count is a real one.
+    assert!(err.contains("\nfired rdfs9 "), "{err}");
+    // A boundary line carries the construct AND the technical reason it is a boundary.
+    assert!(err.contains("\nboundary datatype-value-space "), "{err}");
+    assert!(err.contains("\nbudget join-steps "), "{err}");
+    assert!(err.contains("\ncontract-hash "), "{err}");
+    assert!(err.contains("\nwithheld-surrogates "), "{err}");
+    assert!(err.contains("\ninconsistency none\n"), "{err}");
+    assert!(err.ends_with("overclaims false\n"), "{err}");
+
+    // stdout carried no report: the data channel is untouched.
+    assert!(String::from_utf8_lossy(&o.stdout).is_empty());
+    // …and the closure itself was still written.
+    let text = std::fs::read_to_string(&out).expect("read output");
+    assert!(text.contains("<http://example.org/rex>"), "{text}");
+}
+
+/// `--report=PATH` writes the SAME bytes to a file, and two runs agree byte for byte.
+#[test]
+fn report_to_a_path_is_byte_identical_across_runs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "rdfs.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+            "ex:Dog rdfs:subClassOf ex:Animal .\n",
+            "ex:rex a ex:Dog .\n",
+        ),
+    );
+    let out = path(dir, "out.nt");
+    let first = path(dir, "first.report");
+    let second = path(dir, "second.report");
+
+    for target in [&first, &second] {
+        let flag = format!("--report={target}");
+        let o = run(&["reason", "--regime", "rdfs", &flag, &seed, &out]);
+        assert!(o.status.success(), "reason --report=PATH: {}", stderr(&o));
+        // The file target puts NOTHING on stderr.
+        assert!(stderr(&o).is_empty(), "{}", stderr(&o));
+    }
+    let a = std::fs::read(&first).expect("read first report");
+    assert_eq!(a, std::fs::read(&second).expect("read second report"));
+    assert!(String::from_utf8_lossy(&a).starts_with("regime rdfs\n"));
+}
+
+/// A NAMED GRAPH IS NAMED IN THE REPORT, not silently reasoned around.
+///
+/// The dataset semantics is a defined choice rather than a derived one, and `--report` is
+/// where the CLI states which choice a run made.
+#[test]
+fn the_report_names_the_named_graph_boundary() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "graphs.trig",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+            "ex:Dog rdfs:subClassOf ex:Animal .\n",
+            "ex:g { ex:rex a ex:Dog . }\n",
+        ),
+    );
+    let out = path(dir, "out.nq");
+
+    let o = run(&["reason", "--regime", "rdfs", "--report", &seed, &out]);
+    assert!(o.status.success(), "reason --report failed: {}", stderr(&o));
+    let err = stderr(&o);
+    assert!(err.contains("\nboundary named-graph "), "{err}");
+    // The boundary is not a bare label: it carries the reason, which states the choice.
+    assert!(err.contains("DEFINED CHOICE"), "{err}");
+    // A complete rule table beside a boundary is `exact-within-boundaries`, never `exact`.
+    assert!(
+        err.contains("completeness exact-within-boundaries\n"),
+        "{err}"
+    );
+}
+
+/// `convert --entailment … --report` and `query --entailment … --report` carry the same
+/// certificate, so the flag is not a `reason`-only afterthought.
+#[test]
+fn convert_and_query_surface_the_report_too() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "rdfs.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+            "ex:Dog rdfs:subClassOf ex:Animal .\n",
+            "ex:rex a ex:Dog .\n",
+        ),
+    );
+    let out = path(dir, "out.nt");
+
+    let o = run(&[
+        "convert",
+        "--entailment",
+        "rdfs",
+        "--report",
+        "--to",
+        "ntriples",
+        &seed,
+        &out,
+    ]);
+    assert!(o.status.success(), "convert --report: {}", stderr(&o));
+    assert!(stderr(&o).contains("regime rdfs\n"), "{}", stderr(&o));
+
+    let o = run(&[
+        "query",
+        "--data",
+        &seed,
+        "--entailment",
+        "rdfs",
+        "--report",
+        "ASK { <http://example.org/rex> a <http://example.org/Animal> }",
+    ]);
+    assert!(o.status.success(), "query --report: {}", stderr(&o));
+    assert!(stderr(&o).contains("regime rdfs\n"), "{}", stderr(&o));
+    // The answer still went to stdout, and it is the entailed one.
+    assert!(String::from_utf8_lossy(&o.stdout).contains("true"));
+}
+
+/// `--report` WITHOUT `--entailment` is a usage error (exit 2), not an empty file and not
+/// a flag that quietly does nothing.
+#[test]
+fn report_without_entailment_is_a_usage_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "plain.nt",
+        "<http://example.org/a> <http://example.org/knows> <http://example.org/b> .\n",
+    );
+    let out = path(dir, "out.nt");
+
+    for args in [
+        vec!["convert", "--report", "--to", "ntriples", &seed, &out],
+        vec!["query", "--data", &seed, "--report", "ASK { ?s ?p ?o }"],
+    ] {
+        let o = run(&args);
+        assert_eq!(
+            o.status.code(),
+            Some(2),
+            "{args:?} must be a usage error; stderr: {}",
+            stderr(&o)
+        );
+        assert!(
+            stderr(&o).contains("--entailment"),
+            "the refusal must name the missing flag; got: {}",
+            stderr(&o)
+        );
+    }
+}

@@ -5,7 +5,8 @@
 
 use std::sync::Arc;
 
-use purrdf_entail::{EntailError, QNode, QTriple, Regime, RuleSet};
+use purrdf_datalog::seminaive::BudgetReport;
+use purrdf_entail::{Completeness, EntailError, QNode, QTriple, ReasoningReport, Regime, RuleSet};
 use purrdf_rdf::{
     RdfDataset, RdfDiagnostic, RdfTextDirection, SparqlRequest, SparqlResult, TermValue,
 };
@@ -15,6 +16,12 @@ use purrdf_sparql_algebra::{
 use purrdf_sparql_eval::NativeSparqlEngine;
 
 /// Entailment behavior applied before evaluating one SPARQL query.
+///
+/// Every W3C `sparql:entailmentRegime` this repository implements is here, because a
+/// regime that is materializable everywhere else and unreachable from the query surface is
+/// a capability the caller cannot use: `entailment/D` is a regime of the SPARQL 1.1
+/// Entailment Regimes recommendation exactly as `entailment/RDFS` is, and
+/// [`purrdf_entail::materialize`] serves it like any other rule table.
 #[derive(Debug, Clone, Copy)]
 pub enum QueryEntailment<'a> {
     /// Query asserted data directly.
@@ -25,6 +32,9 @@ pub enum QueryEntailment<'a> {
     Rdfs,
     /// Materialize OWL 2 RL entailment.
     OwlRl,
+    /// Materialize `entailment/D` — Simple entailment plus the five `dt-*` rules of
+    /// OWL 2 Profiles §4.3 Table 8.
+    D,
     /// Perform query-directed OWL Direct-Semantics augmentation.
     OwlDirect,
     /// Materialize the supplied RIF-Core rule set.
@@ -63,7 +73,28 @@ impl From<EntailError> for ReasoningError {
     }
 }
 
-/// Evaluate SPARQL under an explicit native entailment regime.
+/// Evaluate SPARQL under an explicit native entailment regime, and say what the reasoner
+/// did.
+///
+/// Returns the query's answer AND the [`ReasoningReport`] of the run that produced the
+/// dataset it was answered over.
+///
+/// # The certificate travels with the answer
+///
+/// A SPARQL result set carries no reasoning metadata, and this function used to take that
+/// as permission to drop the report: the closure was computed, the evidence was bound to
+/// `_`, and the caller received rows with no way to learn that "OWL Direct-Semantics
+/// answers" had been computed over an ontology holding an `owl:propertyChainAxiom` the
+/// reverse mapping could not read, or that most of their input sat in named graphs the lane
+/// never opened. That is not a constraint of [`SparqlResult`]; it is a missing return
+/// value, and a pair is the smallest honest fix. A caller who does not want it binds
+/// `(result, _)`.
+///
+/// [`QueryEntailment::Simple`] asks no reasoner to run, so its report is the one
+/// [`purrdf_entail::materialize`] returns for [`Regime::Simple`] — an identity closure has
+/// no rule table, meets no boundary and consumes no ceiling — assembled directly rather
+/// than by copying the dataset to obtain it. The equality is asserted in this module's
+/// tests rather than asserted in prose.
 ///
 /// # Errors
 ///
@@ -74,29 +105,46 @@ pub fn query_with_entailment(
     dataset: &Arc<RdfDataset>,
     request: SparqlRequest<'_>,
     entailment: QueryEntailment<'_>,
-) -> Result<SparqlResult, ReasoningError> {
+) -> Result<(SparqlResult, ReasoningReport), ReasoningError> {
     // Parse first so invalid queries fail before potentially expensive closure work.
     // OWL Direct also inspects this same cached plan, avoiding a second parse/cache lookup.
     let prepared_query = engine.prepare_query(request.query, request.base_iri)?;
-    // Every materialize-and-match regime hands back a `ReasoningReport` alongside the
-    // closure. This entry point answers a SPARQL query, whose result type has nowhere to
-    // carry one, so the report is bound and dropped HERE — explicitly, at the call site,
-    // where it is visible that evidence is being discarded. There is deliberately no
-    // report-free `materialize` to call instead.
-    let prepared = match entailment {
-        QueryEntailment::Simple => Arc::clone(dataset),
-        QueryEntailment::Rdf => purrdf_entail::materialize(dataset, Regime::Rdf)?.0,
-        QueryEntailment::Rdfs => purrdf_entail::materialize(dataset, Regime::Rdfs)?.0,
-        QueryEntailment::OwlRl => purrdf_entail::materialize(dataset, Regime::OwlRl)?.0,
+    // Every lane hands back a `ReasoningReport` alongside the closure, and every one of
+    // them is carried out of this function rather than dropped at this call site.
+    let (prepared, report) = match entailment {
+        QueryEntailment::Simple => (Arc::clone(dataset), simple_report()),
+        QueryEntailment::Rdf => purrdf_entail::materialize(dataset, Regime::Rdf)?,
+        QueryEntailment::Rdfs => purrdf_entail::materialize(dataset, Regime::Rdfs)?,
+        QueryEntailment::OwlRl => purrdf_entail::materialize(dataset, Regime::OwlRl)?,
+        QueryEntailment::D => purrdf_entail::materialize(dataset, Regime::D)?,
         QueryEntailment::OwlDirect => {
             let pattern = collect_query_bgp(&prepared_query.query);
-            purrdf_entail::materialize_dl(dataset, &pattern)?
+            purrdf_entail::materialize_dl_reported(dataset, &pattern)?
         }
         QueryEntailment::Rif(ruleset) => purrdf_entail::materialize_rif(dataset, ruleset)?,
     };
-    engine
-        .query_prepared(&prepared, &prepared_query, request.substitutions)
-        .map_err(Into::into)
+    let result = engine.query_prepared(&prepared, &prepared_query, request.substitutions)?;
+    Ok((result, report))
+}
+
+/// The report for the identity closure — what `materialize(ds, Regime::Simple)` returns.
+///
+/// Assembled rather than obtained by calling it, because that call COPIES the dataset to
+/// produce a closure this lane already has as an `Arc`. Every field is a property of the
+/// regime and not of the data: `Simple` has no rule table (so nothing can be missing), it
+/// copies every quad of every graph faithfully (so it meets no boundary), and it evaluates
+/// no program (so it consumes none of the three ceilings). The contract hash is derived
+/// inside [`ReasoningReport::new`] from the regime itself.
+fn simple_report() -> ReasoningReport {
+    ReasoningReport::new(
+        Regime::Simple,
+        Completeness::for_run(Regime::Simple, &[]),
+        Vec::new(),
+        Vec::new(),
+        BudgetReport::new(0, 0, 0),
+        None,
+        0,
+    )
 }
 
 fn collect_query_bgp(query: &Query) -> Vec<QTriple> {
@@ -196,7 +244,8 @@ mod tests {
         builder.freeze().unwrap()
     }
 
-    fn ask(mode: QueryEntailment<'_>) -> SparqlResult {
+    /// Run the fixture ASK under `mode`, returning both halves of the answer.
+    fn ask_reported(mode: QueryEntailment<'_>) -> (SparqlResult, ReasoningReport) {
         let query = "ASK { <https://example.org/lillith> a <https://example.org/Animal> }";
         query_with_entailment(
             &NativeSparqlEngine::new(),
@@ -209,6 +258,10 @@ mod tests {
             mode,
         )
         .unwrap()
+    }
+
+    fn ask(mode: QueryEntailment<'_>) -> SparqlResult {
+        ask_reported(mode).0
     }
 
     #[test]
@@ -235,12 +288,85 @@ mod tests {
         ));
     }
 
+    /// `entailment/D` IS SELECTABLE, and it is the regime it says it is.
+    ///
+    /// It is a W3C SPARQL entailment regime and `materialize` serves it like any other rule
+    /// table; a query surface that could not name it was withholding a capability the
+    /// library has.
+    #[test]
+    fn the_d_regime_is_reachable_from_the_query_surface() {
+        let query = "ASK { <http://www.w3.org/2001/XMLSchema#integer> a \
+                     <http://www.w3.org/2000/01/rdf-schema#Datatype> }";
+        let (result, report) = query_with_entailment(
+            &NativeSparqlEngine::new(),
+            &hierarchy(),
+            SparqlRequest {
+                query,
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryEntailment::D,
+        )
+        .unwrap();
+        // `dt-type1` is premise-free, so every supported datatype is typed in every closure.
+        assert!(matches!(result, SparqlResult::Boolean(true)));
+        assert_eq!(report.regime(), Regime::D);
+        assert!(!report.overclaims());
+        // Simple entailment does NOT derive it, so the answer is the regime's and not the
+        // data's.
+        assert!(matches!(
+            query_with_entailment(
+                &NativeSparqlEngine::new(),
+                &hierarchy(),
+                SparqlRequest {
+                    query,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                QueryEntailment::Simple,
+            )
+            .unwrap()
+            .0,
+            SparqlResult::Boolean(false)
+        ));
+    }
+
+    /// EVERY MODE CARRIES ITS CERTIFICATE OUT, and each names its own regime.
+    #[test]
+    fn every_mode_returns_the_report_of_the_run_it_made() {
+        let rules = RuleSet::new();
+        for (mode, regime) in [
+            (QueryEntailment::Simple, Regime::Simple),
+            (QueryEntailment::Rdf, Regime::Rdf),
+            (QueryEntailment::Rdfs, Regime::Rdfs),
+            (QueryEntailment::OwlRl, Regime::OwlRl),
+            (QueryEntailment::D, Regime::D),
+            (QueryEntailment::OwlDirect, Regime::OwlDirect),
+            (QueryEntailment::Rif(&rules), Regime::Rif),
+        ] {
+            let (_, report) = ask_reported(mode);
+            assert_eq!(report.regime(), regime, "{regime:?}");
+            assert!(!report.overclaims(), "{regime:?}");
+        }
+    }
+
+    /// The `Simple` report is EXACTLY the one `materialize` returns for that regime —
+    /// assembled without paying for the copy, and checked rather than claimed.
+    #[test]
+    fn the_simple_report_equals_the_materialized_one() {
+        let dataset = hierarchy();
+        let (_, from_materialize) =
+            purrdf_entail::materialize(&dataset, Regime::Simple).expect("simple");
+        let (_, from_query) = ask_reported(QueryEntailment::Simple);
+        assert_eq!(format!("{from_query:?}"), format!("{from_materialize:?}"));
+    }
+
     #[test]
     fn rdf_query_types_predicates_as_properties() {
         let query = format!(
             "ASK {{ <{RDFS_SUBCLASS}> a <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> }}"
         );
-        let result = query_with_entailment(
+        let (result, report) = query_with_entailment(
             &NativeSparqlEngine::new(),
             &hierarchy(),
             SparqlRequest {
@@ -252,6 +378,7 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(result, SparqlResult::Boolean(true)));
+        assert_eq!(report.regime(), Regime::Rdf);
     }
 
     #[test]

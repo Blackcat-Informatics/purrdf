@@ -12,15 +12,17 @@
 //! REQUIRES the explicit override. Resolving both before `load_dataset`/
 //! `materialize` runs means an unresolvable output format fails fast, not after
 //! the source has already been loaded and closed over. The resulting loss ledger
-//! is surfaced under `--loss-ledger`.
+//! is surfaced under `--loss-ledger`, and the run's reasoning report under
+//! `--report`.
 
 use purrdf_entail::{Regime, materialize};
 use purrdf_rdf::JsonLdSerializeOptions;
 
-use crate::cli::{CliRdfFormat, CliRegime, LedgerTarget};
+use crate::cli::{CliRdfFormat, CliRegime, LedgerTarget, ReportTarget};
 use crate::error::CliError;
 use crate::format;
 use crate::ledger;
+use crate::report;
 use crate::sink;
 use crate::source;
 
@@ -66,6 +68,7 @@ pub(crate) fn run(
     output: &str,
     jsonld_options: Option<&JsonLdSerializeOptions>,
     ledger_target: &LedgerTarget,
+    report_target: &ReportTarget,
 ) -> Result<(), CliError> {
     let regime = resolve_materializable_regime(regime)?;
 
@@ -78,10 +81,10 @@ pub(crate) fn run(
 
     let dataset = source::load_dataset(input, source_format, base)?;
 
-    // The report is bound and dropped: `reason` writes RDF to a sink, and the CLI has no
-    // surface for a reasoning report yet. Binding it is the point — there is no report-free
-    // materialize to reach for instead.
-    let (closure, _report) = materialize(&dataset, regime)?;
+    // The closure goes to the sink and the report goes to `--report`: `reason` writes RDF,
+    // and the evidence of what produced it is a second output rather than a discarded one.
+    let (closure, reasoning) = materialize(&dataset, regime)?;
+    report::surface(report_target, &reasoning)?;
 
     let src_codec = source_format.loss_codec_name();
     let ledger = sink::write_rdf(

@@ -61,9 +61,10 @@ use std::path::PathBuf;
 use std::str::FromStr as _;
 use std::sync::Arc;
 
-use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId, canonicalize};
+use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId, TermValue, canonicalize};
 use purrdf_entail::{
-    Completeness, EntailError, ReasoningReport, Regime, RuleId, implemented, materialize, rules,
+    Completeness, EntailError, InconsistencyWitness, ReasoningReport, Regime, RuleId, implemented,
+    materialize, rules,
 };
 
 // ── Vocabulary ──────────────────────────────────────────────────────────────────
@@ -402,7 +403,7 @@ struct Fixture {
     /// the field is not `Option` and an empty slice is a claim — "this golden did not
     /// move" — rather than an omission. A fixture that did not exist before a change says
     /// so instead, which is a different claim and is checked as one; see
-    /// [`CLASH_CORPUS`]'s [`NO_GOLDEN`] for the third case, a fixture that has no golden
+    /// [`CLASH_CORPUS`]'s [`REFUSAL_GOLDEN`] for the third case, a fixture that has no golden
     /// at all.
     changed: &'static [&'static str],
     /// The input quads.
@@ -703,6 +704,38 @@ const OWL_RL_COMPLETE: &[&str] = &[
     "  to 170 stored facts (datatype_value_equality), against ceilings of 1,048,576 and",
     "  131,072 — 0.23% and 0.13%. The corpus worst case is still the RDFS lane's, unchanged",
     "  at 2,577 join steps and 208 stored facts in subclass_chain: 0.25% and 0.16%.",
+];
+
+/// Why every golden gained a line, and why thirty-six goldens exist that did not.
+///
+/// Written into every golden's header for the same reason as the five blocks above it: a
+/// reader of one file should be able to see why its bytes moved without reading the commit.
+const REPORT_SURFACE: &[&str] = &[
+    "AND EVERY GOLDEN MOVED A SIXTH TIME — the REPORT surface changed, and no closure did.",
+    "Every closure in this corpus is byte-identical to the previous golden. Two causes.",
+    "",
+    "  a. EVERY REPORT GAINED A `withheld-surrogates` LINE. rdfD1, rdfD1a, rdfs14 and",
+    "     rdfs14a fire — cause I of the previous change is what made them — and every",
+    "     conclusion they reach mentions a surrogate blank node, which a SPARQL entailment",
+    "     regime may not answer with. So none of the four can EVER appear in `rules-fired`,",
+    "     which counts triples that entered the closure, and until now the goldens showed",
+    "     nothing at all about them: a reader could not tell the RDF and RDFS lanes, which",
+    "     fire all four, from Simple, OWL-RL and D, which state none of them. The count is",
+    "     the one observable trace they leave, so it is now rendered. It is a MEASUREMENT of",
+    "     the run — non-zero exactly where a lane that mints surrogates met a term that",
+    "     obliges one, zero elsewhere — and it is what raises the `surrogate` boundary, so",
+    "     the two lines agree in every golden below.",
+    "",
+    "  b. CLASH_CORPUS HAS GOLDENS, WHERE IT HAD NONE. A refused run used to hand back an",
+    "     inconsistency witness and nothing else, so those thirty-six fixtures had no report",
+    "     to write a golden from and `inconsistency:` was a line no input in this corpus",
+    "     could move off `none`. EntailError::Inconsistent now carries an InconsistentRun —",
+    "     the witness AND the run's ReasoningReport — because the caller whose data is",
+    "     inconsistent is exactly the caller who needs to know which rules had already fired,",
+    "     what the evaluation cost and which contract hash refused. Their goldens show four",
+    "     regimes closing normally and the refusing one rendering `--- refused:",
+    "     inconsistent ---`, the witness's premises, and a report whose `inconsistency:`",
+    "     names the rule.",
 ];
 
 // ── The corpus ──────────────────────────────────────────────────────────────────
@@ -3043,8 +3076,10 @@ const CORPUS: &[Fixture] = &[
             "The line this fixture exists for is untouched: rdfs7 / prp-spo1 still concludes",
             "`x mentions <<( A rdfs:subClassOf B )>>`, with the triple term carried through as",
             "itself. The engine now interns a triple term as one lexical surface rather than as",
-            "one interner id, which is the same opacity by a different mechanism — rdfs14 /",
-            "rdfs14a still do not fire, and the triple-term boundary is still reported.",
+            "one interner id, which is the same opacity by a different mechanism — rdfs14 and",
+            "rdfs14a did not fire AT THAT POINT (they do now; see the fifth change above, which",
+            "is where they started to, and note that everything they conclude is still withheld",
+            "because it mentions a surrogate), and the triple-term boundary is still reported.",
             "",
             "AT THE AXIOMATIC PATH — RDFS ONLY. Simple, RDF and OWL-RL are byte-identical.",
             "RDFS closure 4 -> 132 lines: the 113-line input-independent block cause C",
@@ -4897,13 +4932,23 @@ const CORPUS: &[Fixture] = &[
 /// A `changed` entry is a claim about a golden, and these fixtures have none, so the claim
 /// they make is that there is nothing to claim — stated once, shared, and asserted by
 /// `the_goldens_directory_is_exactly_the_corpus` rather than left as a convention.
-const NO_GOLDEN: &[&str] = &[
-    "NO GOLDEN, BY CONSTRUCTION. This fixture belongs to CLASH_CORPUS, whose evidence is",
-    "the OUTCOME OF A RUN rather than a closure: the `clashes` half must refuse with a",
-    "named inconsistency witness, and the refusing half has no closure to write a golden",
-    "from. Its control is kept beside it for the same reason — a pair of runs is the unit",
-    "of evidence here, and splitting it across two tables would put half of a control in a",
-    "corpus that cannot hold the other half.",
+const REFUSAL_GOLDEN: &[&str] = &[
+    "A REFUSAL GOLDEN. This fixture belongs to CLASH_CORPUS, whose evidence is the OUTCOME",
+    "OF A RUN rather than a closure: the `clashes` half must refuse with a named",
+    "inconsistency witness, and the refusing half has no closure. Its control is kept beside",
+    "it for the same reason — a pair of runs is the unit of evidence here, and splitting it",
+    "across two tables would put half of a control in a corpus that cannot hold the other",
+    "half.",
+    "",
+    "These fixtures had NO golden until the refusal started carrying a report. It used to",
+    "carry an InconsistencyWitness and nothing else, so the caller whose data was",
+    "inconsistent — the one caller who most needed to know which rules had fired, what the",
+    "evaluation had cost and which calculus hash refused — was the only caller who got none",
+    "of it, and `inconsistency` was a report field no input could move off `none`. It now",
+    "carries an InconsistentRun: the witness AND the run's ReasoningReport. So a refusing",
+    "regime's section below renders the witness's premises and then that report, whose",
+    "`inconsistency:` line names the rule instead of reading `none` — the only place in this",
+    "corpus where it does.",
 ];
 
 /// The fixtures whose evidence is that a run over them is REFUSED, and their controls.
@@ -4922,7 +4967,7 @@ const CLASH_CORPUS: &[Fixture] = &[
         name: "eq_diff1_clash",
         doc: &["eq-diff1: two individuals asserted both owl:sameAs and owl:differentFrom."],
         exercises: &["eq-diff1"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[t(EX_X, OWL_SAMEAS, EX_Y), t(EX_X, OWL_DIFFERENTFROM, EX_Y)],
     },
     Fixture {
@@ -4932,7 +4977,7 @@ const CLASH_CORPUS: &[Fixture] = &[
             "two assertions are about different pairs and the run closes.",
         ],
         exercises: &["eq-diff1"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[t(EX_X, OWL_SAMEAS, EX_Y), t(EX_X, OWL_DIFFERENTFROM, EX_Z)],
     },
     Fixture {
@@ -4943,7 +4988,7 @@ const CLASH_CORPUS: &[Fixture] = &[
             "condition can hold at all.",
         ],
         exercises: &["eq-diff2"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t(EX_W, RDF_TYPE, OWL_ALLDIFFERENT),
             t(EX_W, OWL_MEMBERS, EX_L0),
@@ -4961,7 +5006,7 @@ const CLASH_CORPUS: &[Fixture] = &[
             "so no two members of the owl:AllDifferent are identified.",
         ],
         exercises: &["eq-diff2"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t(EX_W, RDF_TYPE, OWL_ALLDIFFERENT),
             t(EX_W, OWL_MEMBERS, EX_L0),
@@ -4980,7 +5025,7 @@ const CLASH_CORPUS: &[Fixture] = &[
             "graph may carry the OWL 1 spelling.",
         ],
         exercises: &["eq-diff3"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t(EX_W, RDF_TYPE, OWL_ALLDIFFERENT),
             t(EX_W, OWL_DISTINCTMEMBERS, EX_L0),
@@ -4998,7 +5043,7 @@ const CLASH_CORPUS: &[Fixture] = &[
             "owl:distinctMembers list.",
         ],
         exercises: &["eq-diff3"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t(EX_W, RDF_TYPE, OWL_ALLDIFFERENT),
             t(EX_W, OWL_DISTINCTMEMBERS, EX_L0),
@@ -5013,7 +5058,7 @@ const CLASH_CORPUS: &[Fixture] = &[
         name: "prp_irp_clash",
         doc: &["prp-irp: an irreflexive property relating something to itself."],
         exercises: &["prp-irp"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t(EX_P, RDF_TYPE, OWL_IRREFLEXIVEPROPERTY),
             t(EX_X, EX_P, EX_X),
@@ -5026,7 +5071,7 @@ const CLASH_CORPUS: &[Fixture] = &[
             "not used reflexively.",
         ],
         exercises: &["prp-irp"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t(EX_P, RDF_TYPE, OWL_IRREFLEXIVEPROPERTY),
             t(EX_X, EX_P, EX_Y),
@@ -5036,7 +5081,7 @@ const CLASH_CORPUS: &[Fixture] = &[
         name: "prp_asyp_clash",
         doc: &["prp-asyp: an asymmetric property asserted in both directions."],
         exercises: &["prp-asyp"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t(EX_P, RDF_TYPE, OWL_ASYMMETRICPROPERTY),
             t(EX_X, EX_P, EX_Y),
@@ -5050,7 +5095,7 @@ const CLASH_CORPUS: &[Fixture] = &[
             "both ways.",
         ],
         exercises: &["prp-asyp"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t(EX_P, RDF_TYPE, OWL_ASYMMETRICPROPERTY),
             t(EX_X, EX_P, EX_Y),
@@ -5061,7 +5106,7 @@ const CLASH_CORPUS: &[Fixture] = &[
         name: "prp_pdw_clash",
         doc: &["prp-pdw: two disjoint properties sharing a subject/object pair."],
         exercises: &["prp-pdw"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t(EX_P, OWL_PROPERTYDISJOINTWITH, EX_Q),
             t(EX_X, EX_P, EX_Y),
@@ -5075,7 +5120,7 @@ const CLASH_CORPUS: &[Fixture] = &[
             "both used and share no pair.",
         ],
         exercises: &["prp-pdw"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t(EX_P, OWL_PROPERTYDISJOINTWITH, EX_Q),
             t(EX_X, EX_P, EX_Y),
@@ -5089,7 +5134,7 @@ const CLASH_CORPUS: &[Fixture] = &[
             "properties sharing a subject/object pair.",
         ],
         exercises: &["prp-adp"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t(EX_W, RDF_TYPE, OWL_ALLDISJOINTPROPERTIES),
             t(EX_W, OWL_MEMBERS, EX_L0),
@@ -5105,7 +5150,7 @@ const CLASH_CORPUS: &[Fixture] = &[
         name: "prp_adp_consistent",
         doc: &["CONTROL for prp-adp: the q-triple's object is z, so no pair is shared."],
         exercises: &["prp-adp"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t(EX_W, RDF_TYPE, OWL_ALLDISJOINTPROPERTIES),
             t(EX_W, OWL_MEMBERS, EX_L0),
@@ -5124,7 +5169,7 @@ const CLASH_CORPUS: &[Fixture] = &[
             "asserted.",
         ],
         exercises: &["prp-npa1"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t(EX_W, OWL_SOURCEINDIVIDUAL, EX_X),
             t(EX_W, OWL_ASSERTIONPROPERTY, EX_P),
@@ -5139,7 +5184,7 @@ const CLASH_CORPUS: &[Fixture] = &[
             "axiom denies is not made.",
         ],
         exercises: &["prp-npa1"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t(EX_W, OWL_SOURCEINDIVIDUAL, EX_X),
             t(EX_W, OWL_ASSERTIONPROPERTY, EX_P),
@@ -5155,7 +5200,7 @@ const CLASH_CORPUS: &[Fixture] = &[
             "prp-npa1.",
         ],
         exercises: &["prp-npa2"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t(EX_W, OWL_SOURCEINDIVIDUAL, EX_X),
             t(EX_W, OWL_ASSERTIONPROPERTY, EX_P),
@@ -5171,7 +5216,7 @@ const CLASH_CORPUS: &[Fixture] = &[
             "and the run closes.",
         ],
         exercises: &["prp-npa2"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t(EX_W, OWL_SOURCEINDIVIDUAL, EX_X),
             t(EX_W, OWL_ASSERTIONPROPERTY, EX_P),
@@ -5183,7 +5228,7 @@ const CLASH_CORPUS: &[Fixture] = &[
         name: "cls_nothing2_clash",
         doc: &["cls-nothing2: an instance of owl:Nothing, the empty class."],
         exercises: &["cls-nothing2"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[t(EX_X, RDF_TYPE, OWL_NOTHING)],
     },
     Fixture {
@@ -5193,14 +5238,14 @@ const CLASH_CORPUS: &[Fixture] = &[
             "the one term the rule reads.",
         ],
         exercises: &["cls-nothing2"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[t(EX_X, RDF_TYPE, OWL_THING)],
     },
     Fixture {
         name: "cls_com_clash",
         doc: &["cls-com: something typed by a class and by its complement."],
         exercises: &["cls-com"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t(EX_A, OWL_COMPLEMENTOF, EX_B),
             t(EX_X, RDF_TYPE, EX_A),
@@ -5214,7 +5259,7 @@ const CLASH_CORPUS: &[Fixture] = &[
             "inhabited and neither instance is in both.",
         ],
         exercises: &["cls-com"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t(EX_A, OWL_COMPLEMENTOF, EX_B),
             t(EX_X, RDF_TYPE, EX_A),
@@ -5229,7 +5274,7 @@ const CLASH_CORPUS: &[Fixture] = &[
             "Profiles Table 6 writes it.",
         ],
         exercises: &["cls-maxc1"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t_lit_dt(EX_E, OWL_MAXCARDINALITY, "0", XSD_NONNEGATIVEINTEGER),
             t(EX_E, OWL_ONPROPERTY, EX_P),
@@ -5245,7 +5290,7 @@ const CLASH_CORPUS: &[Fixture] = &[
             "clearest evidence that the literal is matched rather than parsed loosely.",
         ],
         exercises: &["cls-maxc1"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t_lit_dt(EX_E, OWL_MAXCARDINALITY, "1", XSD_NONNEGATIVEINTEGER),
             t(EX_E, OWL_ONPROPERTY, EX_P),
@@ -5260,7 +5305,7 @@ const CLASH_CORPUS: &[Fixture] = &[
             "owl:maxQualifiedCardinality 0 restriction.",
         ],
         exercises: &["cls-maxqc1"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t_lit_dt(
                 EX_E,
@@ -5282,7 +5327,7 @@ const CLASH_CORPUS: &[Fixture] = &[
             "p-value y, so the restriction counts no qualifying value.",
         ],
         exercises: &["cls-maxqc1"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t_lit_dt(
                 EX_E,
@@ -5304,7 +5349,7 @@ const CLASH_CORPUS: &[Fixture] = &[
             "instance clashes because no typing of the value is required.",
         ],
         exercises: &["cls-maxqc2"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t_lit_dt(
                 EX_E,
@@ -5326,7 +5371,7 @@ const CLASH_CORPUS: &[Fixture] = &[
             "owl:Thing constant) nor cls-maxqc1 (which requires the typing) has a premise.",
         ],
         exercises: &["cls-maxqc2"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t_lit_dt(
                 EX_E,
@@ -5344,7 +5389,7 @@ const CLASH_CORPUS: &[Fixture] = &[
         name: "cax_dw_clash",
         doc: &["cax-dw: two classes declared owl:disjointWith sharing an instance."],
         exercises: &["cax-dw"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t(EX_A, OWL_DISJOINTWITH, EX_B),
             t(EX_X, RDF_TYPE, EX_A),
@@ -5358,7 +5403,7 @@ const CLASH_CORPUS: &[Fixture] = &[
             "both inhabited and share nothing.",
         ],
         exercises: &["cax-dw"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t(EX_A, OWL_DISJOINTWITH, EX_B),
             t(EX_X, RDF_TYPE, EX_A),
@@ -5372,7 +5417,7 @@ const CLASH_CORPUS: &[Fixture] = &[
             "sharing an instance.",
         ],
         exercises: &["cax-adc"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t(EX_W, RDF_TYPE, OWL_ALLDISJOINTCLASSES),
             t(EX_W, OWL_MEMBERS, EX_L0),
@@ -5388,7 +5433,7 @@ const CLASH_CORPUS: &[Fixture] = &[
         name: "cax_adc_consistent",
         doc: &["CONTROL for cax-adc: the second typing is about y, so no instance is shared."],
         exercises: &["cax-adc"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t(EX_W, RDF_TYPE, OWL_ALLDISJOINTCLASSES),
             t(EX_W, OWL_MEMBERS, EX_L0),
@@ -5410,7 +5455,7 @@ const CLASH_CORPUS: &[Fixture] = &[
             "is the literal's own.",
         ],
         exercises: &["dt-not-type"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[t_lit_dt(EX_X, EX_P, "cat", XSD_INTEGER)],
     },
     Fixture {
@@ -5420,7 +5465,7 @@ const CLASH_CORPUS: &[Fixture] = &[
             "xsd:integer's value space.",
         ],
         exercises: &["dt-not-type"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[t_lit_dt(EX_X, EX_P, "1", XSD_INTEGER)],
     },
     Fixture {
@@ -5438,7 +5483,7 @@ const CLASH_CORPUS: &[Fixture] = &[
             "needs a refusal to be observable at all.",
         ],
         exercises: &["dt-diff", "prp-fp", "eq-diff1"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t(EX_P, RDF_TYPE, OWL_FUNCTIONALPROPERTY),
             t_lit_dt(EX_X, EX_P, "1", XSD_INTEGER),
@@ -5453,7 +5498,7 @@ const CLASH_CORPUS: &[Fixture] = &[
             "dt-diff has nothing to conclude. The one term that changed is the lexical form.",
         ],
         exercises: &["dt-diff", "prp-fp", "eq-diff1"],
-        changed: NO_GOLDEN,
+        changed: REFUSAL_GOLDEN,
         quads: &[
             t(EX_P, RDF_TYPE, OWL_FUNCTIONALPROPERTY),
             t_lit_dt(EX_X, EX_P, "1", XSD_INTEGER),
@@ -5602,6 +5647,17 @@ fn render_report(out: &mut String, report: &ReasoningReport) {
         .map(|boundary| boundary.construct().as_str().to_owned())
         .collect();
     write_wrapped(out, indent, "boundaries:", &boundaries);
+    // The ONLY observable trace of `rdfD1`, `rdfD1a`, `rdfs14` and `rdfs14a`. All four
+    // fire, and every conclusion they reach mentions a surrogate blank node, which a SPARQL
+    // entailment regime may not answer with — so none of them can ever appear in
+    // `rules-fired`, and without this line a reader of the golden could not tell a lane
+    // that fires them from one that does not. It is a measurement of the run, so it is zero
+    // for the three lanes that state none of the four.
+    let _ = writeln!(
+        out,
+        "{indent}withheld-surrogates: {}",
+        report.withheld_surrogates()
+    );
     let budget = report.budget();
     let _ = writeln!(
         out,
@@ -5666,6 +5722,8 @@ fn render_golden(fixture: &Fixture) -> String {
     write_comment_block(&mut out, OWL_RL_COMPLETE);
     out.push_str("#\n");
     write_comment_block(&mut out, EXISTENTIAL_CHASE);
+    out.push_str("#\n");
+    write_comment_block(&mut out, REPORT_SURFACE);
     out.push_str("#\n# WHAT MOVED IN THIS GOLDEN:\n#\n");
     write_comment_block(&mut out, fixture.changed);
     let _ = writeln!(out, "# exercises: {}", fixture.exercises.join(" "));
@@ -5675,13 +5733,80 @@ fn render_golden(fixture: &Fixture) -> String {
     write_nquads(&mut out, "input", &canonicalize(&ds).nquads);
 
     for (regime, name) in ORACLE_REGIMES {
-        let (closed, report) = materialize(&ds, regime).expect("the five oracle regimes run");
         let _ = writeln!(out, "\n=== regime {name} ===");
-        write_nquads(&mut out, "closure", &canonicalize(&closed).nquads);
-        out.push_str("--- report ---\n");
-        render_report(&mut out, &report);
+        match materialize(&ds, regime) {
+            Ok((closed, report)) => {
+                write_nquads(&mut out, "closure", &canonicalize(&closed).nquads);
+                out.push_str("--- report ---\n");
+                render_report(&mut out, &report);
+            }
+            // A REFUSAL IS A RESULT, AND IT HAS A REPORT. An inconsistent knowledge base
+            // entails every triple, so there is no closure to render — but the run happened,
+            // and `EntailError::Inconsistent` carries what it did. Rendering it is what lets
+            // the clash corpus have goldens at all, and it is the only place the oracle can
+            // show `inconsistency:` naming a rule instead of reading `none`.
+            Err(EntailError::Inconsistent(run)) => {
+                let _ = writeln!(
+                    out,
+                    "--- refused: inconsistent ({} premises, graph {}) ---",
+                    run.witness().premises().len(),
+                    run.witness()
+                        .graph()
+                        .map_or_else(|| "default".to_owned(), surface_of)
+                );
+                for premise in run.witness().premises() {
+                    let _ = writeln!(
+                        out,
+                        "  premise: {} {} {}",
+                        surface_of(premise.subject()),
+                        surface_of(premise.predicate()),
+                        surface_of(premise.object())
+                    );
+                }
+                out.push_str("--- report ---\n");
+                render_report(&mut out, run.report());
+            }
+            Err(other) => panic!("{name}: unexpected refusal: {other}"),
+        }
     }
     out
+}
+
+/// A witness term's N-Triples-shaped surface, for the refusal block above.
+///
+/// The premises are [`TermValue`]s rather than dataset ids — a witness outlives the dataset
+/// it was drawn from — so the golden renders them itself rather than reaching for the
+/// canonical serializer, which needs a dataset. Exhaustive on the four variants, so a fifth
+/// term kind fails to compile here rather than rendering as a debug blob.
+fn surface_of(term: &TermValue) -> String {
+    match term {
+        TermValue::Iri(iri) => format!("<{iri}>"),
+        TermValue::Blank { label, .. } => format!("_:{label}"),
+        TermValue::Literal {
+            lexical_form,
+            datatype,
+            language,
+            direction,
+        } => {
+            let mut out = format!("{lexical_form:?}");
+            if let Some(tag) = language {
+                out.push('@');
+                out.push_str(tag);
+                if let Some(dir) = direction {
+                    let _ = write!(out, "--{dir:?}");
+                }
+            } else {
+                let _ = write!(out, "^^<{datatype}>");
+            }
+            out
+        }
+        TermValue::Triple { s, p, o } => format!(
+            "<<( {} {} {} )>>",
+            surface_of(s),
+            surface_of(p),
+            surface_of(o)
+        ),
+    }
 }
 
 /// The directory the goldens live in.
@@ -5698,6 +5823,15 @@ fn golden_path(name: &str) -> PathBuf {
 
 // ── The oracle gate ─────────────────────────────────────────────────────────────
 
+/// Every fixture of BOTH tables, in one order, for the golden gate to walk.
+///
+/// [`CLASH_CORPUS`] joined [`CORPUS`] here when the refusal started carrying a report:
+/// [`render_golden`] can render a refused run now, so the reason those fixtures had no
+/// golden — "there is no closure and no report to write one from" — stopped being true.
+fn golden_fixtures() -> impl Iterator<Item = &'static Fixture> {
+    CORPUS.iter().chain(CLASH_CORPUS)
+}
+
 /// THE ORACLE. Every fixture's committed golden equals what the engine produces now.
 ///
 /// This is the test the engine swap has to survive. A failure here is not a flaky
@@ -5707,7 +5841,7 @@ fn golden_path(name: &str) -> PathBuf {
 #[test]
 fn goldens_match_the_current_engine() {
     let mut mismatched = Vec::new();
-    for fixture in CORPUS {
+    for fixture in golden_fixtures() {
         let path = golden_path(fixture.name);
         let Ok(committed) = std::fs::read_to_string(&path) else {
             mismatched.push(format!("{}: no committed golden", fixture.name));
@@ -5750,7 +5884,7 @@ fn goldens_match_the_current_engine() {
 #[ignore = "maintainer-only: rewrites the committed goldens; run deliberately"]
 fn regenerate_goldens() {
     std::fs::create_dir_all(goldens_dir()).expect("create the goldens directory");
-    for fixture in CORPUS {
+    for fixture in golden_fixtures() {
         std::fs::write(golden_path(fixture.name), render_golden(fixture))
             .expect("write the golden");
     }
@@ -5764,7 +5898,7 @@ fn regenerate_goldens() {
 /// strings from the same input.
 #[test]
 fn rendering_is_byte_stable_within_a_run() {
-    for fixture in CORPUS {
+    for fixture in golden_fixtures() {
         assert_eq!(
             render_golden(fixture),
             render_golden(fixture),
@@ -5774,20 +5908,27 @@ fn rendering_is_byte_stable_within_a_run() {
     }
 }
 
-/// The goldens directory holds exactly [`CORPUS`], and exactly nothing of [`CLASH_CORPUS`].
+/// The goldens directory holds exactly [`CORPUS`] plus [`CLASH_CORPUS`], and nothing else.
 ///
-/// Without the first half, deleting a fixture would leave a golden nobody compares — an
-/// oracle that looks larger than it is. The second half is the other direction and is why
-/// the two tables exist: a `CLASH_CORPUS` fixture's `OWL-RL` run is REFUSED, so
-/// [`render_golden`] cannot render one, and a golden for it could only have been produced
-/// by moving the fixture into the wrong table.
+/// Without this, deleting a fixture would leave a golden nobody compares — an oracle that
+/// looks larger than it is.
+///
+/// [`CLASH_CORPUS`] used to be excluded, on the ground that a refused run has no closure
+/// and therefore nothing to write a golden from. Half of that was always true and the
+/// other half stopped being true: the refusal now carries the run's
+/// [`purrdf_entail::ReasoningReport`], so those thirty-six fixtures have goldens showing
+/// the four regimes that close normally AND the refusal — its witness, its premises, and
+/// the only reports in this corpus whose `inconsistency:` line names a rule.
 #[test]
 fn the_goldens_directory_is_exactly_the_corpus() {
-    let expected: BTreeSet<String> = CORPUS
-        .iter()
+    let expected: BTreeSet<String> = golden_fixtures()
         .map(|fixture| format!("{}.golden", fixture.name))
         .collect();
-    assert_eq!(expected.len(), CORPUS.len(), "two fixtures share a name");
+    assert_eq!(
+        expected.len(),
+        CORPUS.len() + CLASH_CORPUS.len(),
+        "two fixtures share a name"
+    );
     let found: BTreeSet<String> = std::fs::read_dir(goldens_dir())
         .expect("read the goldens directory")
         .map(|entry| {
@@ -5799,27 +5940,67 @@ fn the_goldens_directory_is_exactly_the_corpus() {
         })
         .collect();
     assert_eq!(found, expected);
-    // The two tables are one namespace, and no fixture may be in both.
-    let clash: BTreeSet<&str> = CLASH_CORPUS.iter().map(|fixture| fixture.name).collect();
-    assert_eq!(clash.len(), CLASH_CORPUS.len(), "two fixtures share a name");
     for fixture in CLASH_CORPUS {
-        assert!(
-            !expected.contains(&format!("{}.golden", fixture.name)),
-            "{}: a refusing fixture cannot also be a golden's",
-            fixture.name
-        );
-        assert!(
-            !golden_path(fixture.name).exists(),
-            "{}: a refusing fixture has a golden, which cannot have been generated",
-            fixture.name
-        );
-        // A `changed` field is a claim about a golden; these have none, and they all say so
-        // in the same words rather than each inventing a way to say nothing moved.
+        // A `changed` field is a claim about a golden, and every clash fixture makes the
+        // same one — that its golden is a REFUSAL golden — in the same words, rather than
+        // each inventing a way to say it.
         assert_eq!(
-            fixture.changed, NO_GOLDEN,
-            "{}: a CLASH_CORPUS fixture states why it has no golden, verbatim",
+            fixture.changed, REFUSAL_GOLDEN,
+            "{}: a CLASH_CORPUS fixture states what its golden shows, verbatim",
             fixture.name
         );
+    }
+}
+
+/// A refusal golden is a refusal: at least one regime's section is the refused shape, and
+/// its report names the rule that refused.
+///
+/// The half of the oracle a byte-comparison cannot state. Without it a change that made
+/// every clash fixture close normally would regenerate thirty-six goldens full of closures
+/// and pass, because the goldens would still equal what the engine produces.
+#[test]
+fn every_clash_golden_shows_a_refusal_with_a_named_witness() {
+    // `CLASH_CORPUS` holds both halves of every refuting control, so the split is read from
+    // the registry rather than guessed from the table: a `clashes` fixture must refuse, and
+    // its `consistent` twin must not. Asserting only the first half would pass a corpus in
+    // which every input had become inconsistent.
+    let mut clashing: BTreeSet<&str> = BTreeSet::new();
+    let mut controls: BTreeSet<&str> = BTreeSet::new();
+    for regime in REGISTRY_REGIMES {
+        for &(_, clashes, _, consistent) in refuting_rows(regime) {
+            clashing.insert(clashes);
+            controls.insert(consistent);
+        }
+    }
+    for fixture in CLASH_CORPUS {
+        let rendered = render_golden(fixture);
+        let refused = rendered.contains("--- refused: inconsistent (");
+        if clashing.contains(fixture.name) {
+            assert!(refused, "{}: no regime refused", fixture.name);
+            assert!(
+                rendered.lines().any(|line| {
+                    line.starts_with("  inconsistency: ") && line != "  inconsistency: none"
+                }),
+                "{}: a refused run's report must name the rule that refused",
+                fixture.name
+            );
+            assert!(
+                rendered.contains("  premise: "),
+                "{}: a witness names the asserted triples that satisfied the rule",
+                fixture.name
+            );
+        } else {
+            assert!(
+                controls.contains(fixture.name),
+                "{}: a CLASH_CORPUS fixture is either a clash or its control",
+                fixture.name
+            );
+            assert!(
+                !refused,
+                "{}: the control of a refusing fixture must close",
+                fixture.name
+            );
+        }
     }
 }
 
@@ -6974,12 +7155,23 @@ fn every_rule_is_registered_or_declared_unimplemented() {
                         panic!("{regime:?} / {id}: {clashes} failed with {error}, not a clash");
                     };
                     assert_eq!(
-                        found.rule(),
+                        found.witness().rule(),
                         witness,
                         "{regime:?} / {id}: {clashes} was refused by the wrong rule"
                     );
+                    // The refusal carries the RUN, so the report is checkable too: its
+                    // `inconsistency` is the same witness, which is the state that makes
+                    // that field observable at all.
+                    assert_eq!(
+                        found
+                            .report()
+                            .inconsistency()
+                            .map(InconsistencyWitness::rule),
+                        Some(witness),
+                        "{regime:?} / {id}: the report must name the rule that refused"
+                    );
                     assert!(
-                        !found.premises().is_empty(),
+                        !found.witness().premises().is_empty(),
                         "{regime:?} / {id}: a witness must name the triples that satisfied it"
                     );
                     assert!(
@@ -7087,29 +7279,63 @@ fn every_rule_is_registered_or_declared_unimplemented() {
 /// A ratchet, not a drift guard: when a later change teaches the chase a rule these
 /// numbers MUST move, in the same commit that adds the rule and its fixtures. Never widen
 /// it to an inequality.
+///
+/// # The last column is DERIVED, because pinning it is how it came to lie
+///
+/// This ratchet used to pin four independent numbers per regime and label the last one
+/// "rules not yet implemented", where it read `("RDFS", 18, 14, 4)` and `("RDF", 3, 1, 2)`.
+/// The 4 and the 2 were `rdfD1`, `rdfD1a`, `rdfs14` and `rdfs14a` — rules the chase DOES
+/// fire — and the only thing the arithmetic had actually noticed was that
+/// [`withheld_rows`] was missing from the sum, because a rule whose every conclusion is
+/// withheld carries its evidence in that fifth table rather than in a positive/near-miss
+/// pair. So the ratchet asserted the opposite of [`implemented`], and did it in a
+/// hand-written constant that no amount of implementing rules could move.
+///
+/// It is now two facts, each read from its own source: the EVIDENCE count sums all five
+/// registry tables, and the unimplemented count is `rules(r)` minus `implemented(r)` — the
+/// inventory itself, not a subtraction that happens to land there. A rule that gains an
+/// implementation without gaining evidence moves the second column; a rule that gains
+/// neither moves the third. Neither can be satisfied by the other going wrong.
 #[test]
 fn the_registry_shape_is_pinned() {
     let shape: Vec<(&str, usize, usize, usize)> = REGISTRY_REGIMES
         .iter()
         .map(|&regime| {
-            let total = rules(regime).len();
-            let registered = rows(regime).len()
+            let evidenced = rows(regime).len()
                 + axiomatic_rows(regime).len()
                 + refuting_rows(regime).len()
-                + generalized_rows(regime).len();
-            (regime_label(regime), total, registered, total - registered)
+                + generalized_rows(regime).len()
+                + withheld_rows(regime).len();
+            let unimplemented = rules(regime)
+                .iter()
+                .filter(|rule| !implemented(regime).contains(rule))
+                .count();
+            (
+                regime_label(regime),
+                rules(regime).len(),
+                evidenced,
+                unimplemented,
+            )
         })
         .collect();
     assert_eq!(
         shape,
         vec![
             ("Simple", 0, 0, 0),
-            ("RDF", 3, 1, 2),
-            ("RDFS", 18, 14, 4),
+            ("RDF", 3, 3, 0),
+            ("RDFS", 18, 18, 0),
             ("OWL-RL", 78, 78, 0),
         ],
-        "(regime, rules the spec defines, rules with fixtures, rules not yet implemented)"
+        "(regime, rules the spec defines, rules the registry carries evidence for, \
+         rules NOT implemented)"
     );
+    // The relationship the three columns are in, stated once rather than pinned three
+    // times: every rule the specification defines carries evidence, and no rule the chase
+    // fires is missing from the registry.
+    for &(_, total, evidenced, unimplemented) in &shape {
+        assert_eq!(evidenced, total, "every defined rule must carry evidence");
+        assert_eq!(unimplemented, 0, "no defined rule is unimplemented today");
+    }
 }
 
 /// A regime's name, for messages and the shape ratchet. Exhaustive on purpose: a new
@@ -7657,8 +7883,10 @@ fn a_reifier_side_table_round_trips_through_materialize() {
 /// so a regression in either direction fails here and not only in the golden.
 ///
 /// Opacity itself is NOT the bug and is not repaired: the chase still never reasons INTO
-/// the quoted triple (rdfs14 / rdfs14a do not fire), which withholds conclusions rather
-/// than inventing them, and the triple-term boundary is what tells a caller so.
+/// the quoted triple. rdfs14 / rdfs14a do fire over it — each concludes about a fresh
+/// surrogate blank node the answer may not bind, so the conclusion is withheld and counted
+/// rather than materialized — which withholds conclusions rather than inventing them, and
+/// the triple-term boundary is what tells a caller so.
 #[test]
 fn a_derived_triple_term_object_is_carried_through_not_folded() {
     let ds = build(fixture("triple_term"));

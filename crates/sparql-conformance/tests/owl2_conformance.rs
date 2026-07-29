@@ -9,13 +9,20 @@
 //! This corpus is **consistency**-shaped. All 261 vendored cases are
 //! `otest:ConsistencyTest` (226) or `otest:InconsistencyTest` (35); there is not
 //! one `otest:PositiveEntailmentTest` or `otest:NegativeEntailmentTest` in it,
-//! because the upstream W3C material it was flattened from contains none.
+//! because none was vendored into it. The upstream W3C material has 206 positive
+//! and 23 negative entailment tests — they are vendored and graded by
+//! `owl2_rl_conformance.rs`.
 //!
 //! So it validates **the DL / tableau lane's verdicts** and nothing else. It does
 //! **not** validate the OWL 2 RL rule table — that lane is a forward
-//! materialization chase and is covered by authored per-rule fixtures in
-//! `purrdf-entail`. The conformance matrix's `Entailment` row is fed from here
-//! and must be read as "open-world DL consistency", not "rule coverage".
+//! materialization chase, graded against W3C's entailment tests by
+//! `owl2_rl_conformance.rs`. The conformance matrix's `Entailment` row is fed from
+//! here and must be read as "open-world DL consistency", not "rule coverage".
+//!
+//! It is also a **subset**: 261 of the 482 consistency-shaped cases upstream. The
+//! harness prints the exclusion tally next to the scoreboard and pins it with
+//! `EXPECTED_*_EXCLUDED` constants below, so the 221 left out — and in particular
+//! the ones the tableau cannot decide — cannot become invisible.
 //!
 //! # What fails this harness
 //!
@@ -37,6 +44,7 @@
 //! ```
 
 use purrdf_sparql_conformance::owl2::{self, Verdict};
+use purrdf_sparql_conformance::owl2_rl;
 
 /// Exactly what was vendored. A case directory silently dropped or added on a
 /// re-vendor would otherwise change the measured totals with nothing failing.
@@ -46,6 +54,13 @@ const EXPECTED_CASES: usize = 261;
 const EXPECTED_CONSISTENT: usize = 226;
 /// See [`EXPECTED_CONSISTENT`].
 const EXPECTED_INCONSISTENT: usize = 35;
+
+/// Consistency-shaped upstream cases this corpus does NOT vendor.
+const EXPECTED_EXCLUDED: usize = 221;
+/// …of which PurRDF's tableau does not terminate on. These are the cases the
+/// reasoner genuinely cannot decide; they are pinned here so their number is a
+/// checked fact on the scoreboard rather than a claim in a document.
+const EXPECTED_EXCLUDED_NON_TERMINATING: usize = 30;
 
 /// Grade the whole vendored corpus and emit the matrix scoreboard line.
 #[test]
@@ -62,6 +77,37 @@ fn owl2_dl_consistency_conformance() {
         summary.ledger_tally()
     );
     eprintln!("{}", summary.scoreboard_line());
+
+    // The exclusions, next to the score, so the denominator is never read as
+    // "what W3C published".
+    let (excluded, non_terminating) =
+        owl2::exclusions(&owl2_rl::suite_root()).expect("tally the DL corpus's exclusions");
+    eprintln!(
+        "[w3c-owl2] this corpus vendors {} of the {} consistency-shaped cases upstream; the other \
+         {} are NOT graded here",
+        summary.cases.len(),
+        summary.cases.len() + excluded.total,
+        excluded.total
+    );
+    eprintln!(
+        "[w3c-owl2] of those {}: {} the tableau CANNOT DECIDE (it does not terminate), {} it \
+         decides today, {} it withholds on, {} carry no RDF/XML premise",
+        excluded.total,
+        excluded.non_terminating,
+        excluded.decides,
+        excluded.withholds,
+        excluded.no_rdfxml_premise
+    );
+    for case in &non_terminating {
+        eprintln!("[w3c-owl2]   non-terminating: {case}");
+    }
+    eprintln!("{}", excluded.scoreboard_line());
+    assert_eq!(
+        (excluded.total, excluded.non_terminating),
+        (EXPECTED_EXCLUDED, EXPECTED_EXCLUDED_NON_TERMINATING),
+        "the DL corpus's exclusion set changed; a case may not leave or enter it without the \
+         census, this constant and the corpus PROVENANCE.md moving together"
+    );
 
     assert!(
         summary.unledgered().is_empty() && summary.stale().is_empty(),

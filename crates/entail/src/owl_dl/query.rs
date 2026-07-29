@@ -145,34 +145,31 @@ enum Task {
 
 /// Compute the query-directed OWL-Direct augmentation of `ds` for the basic graph
 /// pattern `query_bgp`, returning a dataset whose simple-entailment answers to that
-/// query are the OWL Direct-Semantics certain answers.
+/// query are the OWL Direct-Semantics certain answers — AND the [`ReasoningReport`] for
+/// the run.
 ///
-/// # Errors
+/// # There is one entry point, and it carries the evidence
 ///
-/// [`EntailError::Unsatisfiable`] if the data is unsatisfiable (every query would then be
-/// entailed, so there is no meaningful answer set); [`EntailError::Parse`] on a
-/// malformed class-expression graph; [`EntailError::Build`] on tableau step-cap
-/// exhaustion.
-pub fn materialize_dl(
-    ds: &RdfDataset,
-    query_bgp: &[QTriple],
-) -> Result<Arc<RdfDataset>, EntailError> {
-    materialize_dl_reported(ds, query_bgp).map(|(dataset, _)| dataset)
-}
-
-/// [`materialize_dl`], plus the [`ReasoningReport`] for the run.
+/// A report-free twin of this function used to sit beside it, delegating here and throwing
+/// the report away. That is the shape this crate forbids everywhere else: two entry points
+/// where one discards the evidence means the cheap call wins, and nothing downstream can
+/// tell that "OWL Direct-Semantics answers" was computed over an ontology holding an
+/// `owl:propertyChainAxiom` the reverse mapping could not read. The twin is gone; a caller
+/// who wants only the dataset binds `(dataset, _report)`, which costs one `_`.
 ///
-/// # Why this exists beside the plain seam
+/// # What the boundaries are
 ///
 /// The reverse mapping meets constructs it cannot fully handle — an
 /// `owl:propertyChainAxiom`, an `owl:imports`, a datatype restriction, a term of the
 /// reserved vocabulary this release does not know — and every one of them used to vanish
-/// without a word. They are now [`Boundary`](crate::Boundary)s, and a boundary that no
-/// caller can read is only a slower kind of silence, so this is the entry point that hands
-/// them over. [`materialize_dl`] delegates here and discards the report, exactly as
-/// [`materialize`](crate::materialize) does NOT: the augmented dataset is a value a caller
-/// may legitimately want on its own, and the boundary list is one call away rather than a
-/// second engine.
+/// without a word. They are [`Boundary`](crate::Boundary)s now, joined by the two this
+/// layer's own SHAPE raises: [`Construct::NonDistinguishedVariable`] for a query blank node
+/// that is not a class expression's scaffold, and [`Construct::NamedGraph`] for an input
+/// whose quads do not all sit in the default graph. The knowledge base is read from the
+/// DEFAULT graph alone (the reverse mapping indexes that graph and no other), so a
+/// quad outside it constrains nothing the tableau decides — and a certificate that did not
+/// say so would look complete while most of the input had been ignored, which is worse than
+/// a wrong answer because nothing signals it.
 ///
 /// The report's [`Completeness`](crate::Completeness) is
 /// [`Exact`](crate::Completeness::Exact) when the ontology held nothing this layer could
@@ -182,7 +179,11 @@ pub fn materialize_dl(
 ///
 /// # Errors
 ///
-/// The same as [`materialize_dl`].
+/// [`EntailError::Unsatisfiable`] if the data is unsatisfiable (every query would then be
+/// entailed, so there is no meaningful answer set); [`EntailError::Parse`] on a
+/// malformed class-expression graph; [`EntailError::Build`] on tableau step-cap
+/// exhaustion; [`EntailError::Overclaim`] if the assembled report contradicts its own
+/// evidence (the same gate [`materialize`](crate::materialize) applies).
 pub fn materialize_dl_reported(
     ds: &RdfDataset,
     query_bgp: &[QTriple],
@@ -223,6 +224,12 @@ pub fn materialize_dl_reported(
     if has_non_distinguished_variable(&kb.interner, &q_index, &raw_tasks, &resolved) {
         boundaries.insert(Construct::NonDistinguishedVariable);
     }
+    // The knowledge base was read from the DEFAULT graph alone, so a quad outside it is an
+    // axiom this run did not have. Raising the boundary is what stops the certificate
+    // describing a complete run over an input most of which was never read.
+    if ds.quads().any(|q| q.g.is_some()) {
+        boundaries.insert(Construct::NamedGraph);
+    }
 
     // Intern all concepts we must reason about, then finalize the negation cache once.
     // `owl:Thing`/`owl:Nothing` reason as `⊤`/`⊥`, never as opaque atomic classes.
@@ -248,7 +255,14 @@ pub fn materialize_dl_reported(
     let dataset = b
         .freeze()
         .map_err(|e| EntailError::Build(format!("freeze augmented dataset: {e}")))?;
-    Ok((dataset, ReasoningReport::of_dl_run(&boundaries)))
+    let report = ReasoningReport::of_dl_run(&boundaries);
+    // THE GATE, on the DL lane's emission path — the same check `materialize` applies to a
+    // chase run, for the same reason: a certificate that contradicts its own boundary list
+    // is refused rather than returned beside an answer.
+    if report.overclaims() {
+        return Err(EntailError::Overclaim(Box::new(report)));
+    }
+    Ok((dataset, report))
 }
 
 /// Resolve a query node to an interned id (a variable yields `None`).
@@ -898,5 +912,71 @@ impl EqClasses {
     /// recorded individual (e.g. a class IRI or literal endpoint).
     fn members(&self, i: u32) -> Vec<u32> {
         self.classes.get(&i).cloned().unwrap_or_else(|| vec![i])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use purrdf_core::RdfDatasetBuilder;
+
+    const NS: &str = "http://example.org/dl#";
+    const RDF_TYPE_IRI: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+    const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
+
+    /// The constructs a run raised, in the report's own order.
+    fn constructs(report: &ReasoningReport) -> Vec<Construct> {
+        report
+            .boundaries()
+            .iter()
+            .map(|boundary| boundary.construct())
+            .collect()
+    }
+
+    /// A minimal ontology: one declared class and one instance of it. `graph` decides
+    /// whether the instance assertion sits in the default graph or outside it.
+    fn ontology(graph: Option<&str>) -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let ty = b.intern_iri(RDF_TYPE_IRI);
+        let class = b.intern_iri(OWL_CLASS);
+        let a = b.intern_iri(&format!("{NS}A"));
+        let x = b.intern_iri(&format!("{NS}x"));
+        let g = graph.map(|g| b.intern_iri(g));
+        b.push_quad(a, ty, class, None);
+        b.push_quad(x, ty, a, g);
+        b.freeze().expect("freeze")
+    }
+
+    /// A QUAD THE TABLEAU NEVER READ IS NAMED, NOT ASSUMED AWAY.
+    ///
+    /// The reverse mapping indexes the DEFAULT graph, so an assertion in a named graph
+    /// constrains nothing it decides. Before this boundary the run answered with a
+    /// certificate that looked complete while most of an input could have been ignored —
+    /// the failure mode a report exists to make impossible, and the one that is worse than
+    /// a wrong answer because nothing signals it.
+    #[test]
+    fn a_named_graph_quad_raises_the_boundary_on_the_dl_lane() {
+        let (_, report) =
+            materialize_dl_reported(&ontology(Some("http://example.org/g")), &[]).expect("dl run");
+        assert!(
+            constructs(&report).contains(&Construct::NamedGraph),
+            "{:?}",
+            constructs(&report)
+        );
+        // And the certificate stops claiming a flatly-exact run.
+        assert_eq!(
+            report.completeness(),
+            &crate::Completeness::ExactWithinBoundaries
+        );
+        assert!(!report.overclaims());
+    }
+
+    /// …and a default-graph-only ontology raises nothing, so the boundary is EVIDENCE
+    /// about an input rather than a standing disclaimer.
+    #[test]
+    fn a_default_graph_ontology_raises_no_named_graph_boundary() {
+        let (_, report) = materialize_dl_reported(&ontology(None), &[]).expect("dl run");
+        assert!(!constructs(&report).contains(&Construct::NamedGraph));
+        assert!(!report.overclaims());
     }
 }

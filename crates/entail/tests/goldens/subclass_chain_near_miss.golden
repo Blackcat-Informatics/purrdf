@@ -244,6 +244,32 @@
 #      direction: refusing a cached closure that could have been kept is a cost, trusting
 #      one minted under a different rule set is a defect.
 #
+# AND EVERY GOLDEN MOVED A SIXTH TIME — the REPORT surface changed, and no closure did.
+# Every closure in this corpus is byte-identical to the previous golden. Two causes.
+#
+#   a. EVERY REPORT GAINED A `withheld-surrogates` LINE. rdfD1, rdfD1a, rdfs14 and
+#      rdfs14a fire — cause I of the previous change is what made them — and every
+#      conclusion they reach mentions a surrogate blank node, which a SPARQL entailment
+#      regime may not answer with. So none of the four can EVER appear in `rules-fired`,
+#      which counts triples that entered the closure, and until now the goldens showed
+#      nothing at all about them: a reader could not tell the RDF and RDFS lanes, which
+#      fire all four, from Simple, OWL-RL and D, which state none of them. The count is
+#      the one observable trace they leave, so it is now rendered. It is a MEASUREMENT of
+#      the run — non-zero exactly where a lane that mints surrogates met a term that
+#      obliges one, zero elsewhere — and it is what raises the `surrogate` boundary, so
+#      the two lines agree in every golden below.
+#
+#   b. CLASH_CORPUS HAS GOLDENS, WHERE IT HAD NONE. A refused run used to hand back an
+#      inconsistency witness and nothing else, so those thirty-six fixtures had no report
+#      to write a golden from and `inconsistency:` was a line no input in this corpus
+#      could move off `none`. EntailError::Inconsistent now carries an InconsistentRun —
+#      the witness AND the run's ReasoningReport — because the caller whose data is
+#      inconsistent is exactly the caller who needs to know which rules had already fired,
+#      what the evaluation cost and which contract hash refused. Their goldens show four
+#      regimes closing normally and the refusing one rendering `--- refused:
+#      inconsistent ---`, the witness's premises, and a report whose `inconsistency:`
+#      names the rule.
+#
 # WHAT MOVED IN THIS GOLDEN:
 #
 # Cause 2 — RDF gains `rdf:type rdf:type rdf:Property` (rdfD2 1 -> 2).
@@ -317,6 +343,7 @@
   missing: (0)
   rules-fired: (0)
   boundaries: (0)
+  withheld-surrogates: 0
   budget: join-steps=0 stored-facts=0 term-arena-bytes=0
   contract-hash: 4151090ce6c2ecdae843e351420ddcf10f79e525c60b4c6d07bebeabaa07fbd5
   inconsistency: none
@@ -335,6 +362,7 @@
       rdfD2=2
   boundaries: (3)
       axiomatic-triples datatype-value-space surrogate
+  withheld-surrogates: 3
   budget: join-steps=30 stored-facts=7 term-arena-bytes=504
   contract-hash: 9724540a02daf06f349ba8aecf52f9e3e21abf7042d1bfcc630172baa7f23ee3
   inconsistency: none
@@ -481,6 +509,7 @@
       rdfs13=3
   boundaries: (3)
       axiomatic-triples datatype-value-space surrogate
+  withheld-surrogates: 11
   budget: join-steps=8945 stored-facts=191 term-arena-bytes=1914
   contract-hash: f6a5eff90528f49ba8d3b83ae7feac8e3b71586f320fb478c6ddb60ca6dc979e
   inconsistency: none
@@ -599,6 +628,7 @@
       eq-ref=54 prp-ap=9 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5
   boundaries: (1)
       datatype-value-space
+  withheld-surrogates: 0
   budget: join-steps=1815 stored-facts=104 term-arena-bytes=2333
   contract-hash: 61a9a84001b40b06a8dfe4b38e331ca1943893cbd191b272d6ffead048fa2de0
   inconsistency: none
@@ -647,6 +677,7 @@
       dt-type1=32
   boundaries: (1)
       datatype-value-space
+  withheld-surrogates: 0
   budget: join-steps=0 stored-facts=34 term-arena-bytes=1668
   contract-hash: 20ac9aa48ce8dd9b25bc7239798566da2d1559458c6ed12befa520c3fdb16cb7
   inconsistency: none

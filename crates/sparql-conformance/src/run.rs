@@ -260,8 +260,9 @@ pub fn run(
             // coincide with the OWL Direct-Semantics certain answers).
             if case.regime == Some(purrdf_entail::Regime::OwlDirect) {
                 let bgp = collect_query_bgp(&query_text);
-                dataset = purrdf_entail::materialize_dl(&dataset, &bgp)
-                    .map_err(|e| format!("OWL-Direct entailment for {}: {e}", case.iri))?;
+                dataset = purrdf_entail::materialize_dl_reported(&dataset, &bgp)
+                    .map_err(|e| format!("OWL-Direct entailment for {}: {e}", case.iri))?
+                    .0;
             }
             // RIF entailment: the qt:data graph references one or more `.rif`
             // documents via `rif:usedWithProfile`; parse each (plus its RDF
@@ -270,7 +271,8 @@ pub fn run(
             if case.regime == Some(purrdf_entail::Regime::Rif) {
                 let ruleset = build_rif_ruleset(case, &dataset)?;
                 dataset = purrdf_entail::materialize_rif(&dataset, &ruleset)
-                    .map_err(|e| format!("RIF entailment for {}: {e}", case.iri))?;
+                    .map_err(|e| format!("RIF entailment for {}: {e}", case.iri))?
+                    .0;
             }
             // Both the extension-function namespace and the standpoint predicate
             // table are CALLER configuration (the engine has no defaults): the

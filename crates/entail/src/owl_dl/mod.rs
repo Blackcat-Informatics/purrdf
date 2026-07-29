@@ -8,8 +8,11 @@
 //! ABox, plus anonymous class expressions); [`tableau`] is the `ALCOIQ` completion
 //! procedure that decides consistency. [`Kb`] ties them together and exposes the
 //! internal reasoning seams — [`Kb::is_consistent`], [`Kb::entails_instance`],
-//! [`Kb::entails_subclass`], and [`Kb::instances_of`] — used by the query-answering
-//! layer wired up in a subsequent task. There is no public `materialize` seam yet.
+//! [`Kb::entails_subclass`], and [`Kb::instances_of`] — which the query-answering layer
+//! ([`crate::owl_dl::query`]) drives. Those seams are internal: the public one is
+//! [`crate::materialize_dl_reported`], which is where an answer acquires the
+//! [`ReasoningReport`](crate::ReasoningReport) naming the constructs this layer could not
+//! fully handle.
 //!
 //! Every derived answer is deterministic: concept ids are assigned in parse order,
 //! all working sets are `BTreeSet`/`BTreeMap` or insertion-ordered `Vec`s, and the
@@ -17,7 +20,7 @@
 //!
 //! The reasoning entry points are exercised by the module's own tests and by the
 //! query-answering layer ([`crate::owl_dl::query`]), which wires them into the public
-//! [`crate::materialize_dl`] seam.
+//! [`crate::materialize_dl_reported`] seam.
 
 use std::collections::{BTreeMap, BTreeSet};
 

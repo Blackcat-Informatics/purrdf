@@ -108,7 +108,10 @@ impl Interner {
 ///   triple nothing entails — unsound, and strictly worse than deriving nothing.
 ///
 /// Triple terms stay **opaque to the rules**: the chase interns one as a single atomic
-/// term and never reasons into it (`rdfs14` / `rdfs14a` do not fire). Opacity only ever
+/// term and never reasons into it. `rdfs14` / `rdfs14a` DO fire over it — they conclude
+/// about a fresh surrogate blank node typed `rdfs:Proposition` — but that surrogate is not
+/// an answer a SPARQL entailment regime admits, so it is withheld at the materialization
+/// boundary and the quoted triple's own content is still never looked at. Opacity only ever
 /// withholds conclusions, and it is reported as a
 /// [`Construct::TripleTerm`](crate::Construct::TripleTerm) boundary so a caller is told
 /// the closure is incomplete rather than left to assume it is exact. Re-materializing the

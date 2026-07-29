@@ -9,19 +9,31 @@
 //! W3C published either `otest:ConsistencyTest` or `otest:InconsistencyTest` for
 //! it, and nothing else. The grader loads the case's verbatim RDF/XML premise
 //! ontology and asks PurRDF's open-world `OWL-Direct` ALCOIQ tableau (through
-//! [`purrdf_entail::materialize_dl`]) whether it is consistent, then compares that
+//! [`purrdf_entail::materialize_dl_reported`]) whether it is consistent, then compares that
 //! answer with the published one.
 //!
 //! So this corpus validates **the DL / tableau lane's verdicts**. It does **not**
 //! validate the OWL 2 RL rule table: that lane is a forward-materialization chase
-//! over a declared rule program and is covered by authored per-rule fixtures in
-//! `purrdf-entail`, not here. The `Entailment` row of the conformance matrix that
-//! this module feeds must be read as "open-world DL consistency", never as "OWL 2
-//! RL rule coverage".
+//! over a declared rule program, graded by [`crate::owl2_rl`] against W3C's own
+//! entailment tests. The `Entailment` row of the conformance matrix that this
+//! module feeds must be read as "open-world DL consistency", never as "OWL 2 RL
+//! rule coverage".
 //!
-//! There is likewise not one `otest:PositiveEntailmentTest` or
-//! `otest:NegativeEntailmentTest` in the tree — the upstream W3C material this
-//! corpus was flattened from contains none. See the tree's `PROVENANCE.md`.
+//! There is not one `otest:PositiveEntailmentTest` or
+//! `otest:NegativeEntailmentTest` **in this tree**, because none was vendored into
+//! it. That is a fact about this tree and NOT about the upstream W3C material,
+//! which holds 206 positive and 23 negative entailment tests; the flattening this
+//! corpus came from extracted `otest:rdfXmlPremiseOntology` and discarded
+//! `otest:rdfXmlConclusionOntology`, so the half needed to grade an entailment was
+//! not carried. Those tests are vendored and graded in
+//! `entailment-suite/w3c-owl2-rl/`. See both trees' `PROVENANCE.md`.
+//!
+//! # What this corpus leaves out
+//!
+//! The 261 vendored cases are a subset of the 482 consistency-shaped cases
+//! upstream. [`exclusions`] tallies the other 221 by what the tableau actually
+//! does with them, and the harness emits that tally next to the scoreboard, so
+//! "256 agreed of 261" is never read as "256 agreed of what W3C published".
 //!
 //! # Three outcomes, never two
 //!
@@ -338,7 +350,7 @@ pub fn discover(root: &Path) -> Result<Vec<Owl2Case>, String> {
 /// RDF/XML reference without also declaring its own `xml:base`, so that base is
 /// never consulted and no verdict depends on it — see the tree's `PROVENANCE.md`.
 ///
-/// [`purrdf_entail::materialize_dl`] with an empty query pattern is the public
+/// [`purrdf_entail::materialize_dl_reported`] with an empty query pattern is the public
 /// consistency seam: it runs the tableau over the whole knowledge base and
 /// short-circuits to [`EntailError::Inconsistent`] before doing any
 /// query-directed work, so the classification and realization passes it would
@@ -354,7 +366,7 @@ pub fn decide(case: &Owl2Case) -> Answer {
         Ok(dataset) => dataset,
         Err(e) => return Answer::Withheld(format!("RDF/XML parse: {e}")),
     };
-    match purrdf_entail::materialize_dl(&dataset, &[]) {
+    match purrdf_entail::materialize_dl_reported(&dataset, &[]) {
         Ok(_) => Answer::Decided(Verdict::Consistent),
         Err(EntailError::Inconsistent(_) | EntailError::Unsatisfiable) => {
             Answer::Decided(Verdict::Inconsistent)
@@ -545,6 +557,84 @@ pub fn run(root: &Path) -> Result<Owl2Summary, String> {
         });
     }
     Ok(summary)
+}
+
+// -------------------------------------------------------------------------
+// What this corpus leaves out
+// -------------------------------------------------------------------------
+
+/// The upstream cases this corpus does **not** vendor, tallied by what PurRDF's
+/// tableau actually does with them.
+///
+/// The vendored 261 are a subset of the 482 consistency-shaped cases in
+/// `all.rdf`. Reporting `agreed 256 / total 261` without saying so would be
+/// reporting green over a set the hard cases were removed from, so the harness
+/// emits this alongside the scoreboard and the census names every excluded case
+/// individually.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Exclusions {
+    /// Consistency-shaped upstream cases not vendored here.
+    pub total: usize,
+    /// …of which the tableau does not terminate on (measured; see the corpus
+    /// `PROVENANCE.md` for the date and the per-case budget).
+    pub non_terminating: usize,
+    /// …of which the tableau decides, and would therefore grade today.
+    pub decides: usize,
+    /// …of which the run withholds with an honest error (a parse refusal, a step
+    /// cap, an unread construct).
+    pub withholds: usize,
+    /// …of which carry no RDF/XML premise at all, so this harness could not load
+    /// them whatever the reasoner did.
+    pub no_rdfxml_premise: usize,
+}
+
+/// Tally the DL corpus's exclusions from the upstream census.
+///
+/// # Errors
+///
+/// Returns a message if the census cannot be read, or if it carries a `dl_probe`
+/// value this tally does not know — a new disposition must be classified here
+/// rather than silently dropped from the totals.
+pub fn exclusions(census_root: &Path) -> Result<(Exclusions, Vec<String>), String> {
+    let rows = crate::owl2_rl::read_census(census_root)?;
+    let mut tally = Exclusions::default();
+    let mut non_terminating = Vec::new();
+    for row in &rows {
+        if row.dl_corpus != "not-vendored" {
+            continue;
+        }
+        tally.total += 1;
+        match row.dl_probe.as_str() {
+            "non-terminating" => {
+                tally.non_terminating += 1;
+                non_terminating.push(row.case.clone());
+            }
+            "decides-consistent" | "decides-inconsistent" => tally.decides += 1,
+            "withholds-parse" | "withholds-reasoner" => tally.withholds += 1,
+            "no-rdfxml-premise" => tally.no_rdfxml_premise += 1,
+            other => {
+                return Err(format!(
+                    "census row {}: unknown dl_probe {other:?}; classify it in owl2::exclusions \
+                     rather than letting it vanish from the exclusion tally",
+                    row.case
+                ));
+            }
+        }
+    }
+    non_terminating.sort();
+    Ok((tally, non_terminating))
+}
+
+impl Exclusions {
+    /// The machine-readable exclusion line, emitted next to
+    /// [`Owl2Summary::scoreboard_line`].
+    #[must_use]
+    pub fn scoreboard_line(&self) -> String {
+        format!(
+            "OWL2-DL-EXCLUDED: total {} non-terminating {} decides {} withholds {} no-premise {}",
+            self.total, self.non_terminating, self.decides, self.withholds, self.no_rdfxml_premise,
+        )
+    }
 }
 
 /// Render the measured divergences as a paste-ready [`LEDGER`] skeleton.

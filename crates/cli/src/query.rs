@@ -13,7 +13,9 @@
 //! zero-copy `PackView`). With `--entailment REGIME` the pipeline reconstructs an
 //! owned `Arc<RdfDataset>` up front (a pack is rebuilt via [`source::load_dataset`]),
 //! materializes the regime's closure IN MEMORY (rejecting the non-materializable
-//! regimes on the same exit-3 path as `reason`), and queries the closure.
+//! regimes on the same exit-3 path as `reason`), and queries the closure. The run's
+//! reasoning report is surfaced under `--report`, so a solution set drawn from a
+//! closure can be read beside the evidence of what closed it.
 //!
 //! ## The result-shape × format-kind dispatch
 //!
@@ -38,11 +40,12 @@ use purrdf_rdf::JsonLdSerializeOptions;
 use purrdf_sparql_eval::{NativeSparqlEngine, PreparedQuery};
 use purrdf_sparql_results::{ResultProvenance, serialize};
 
-use crate::cli::{CliRegime, LedgerTarget, QueryFormat};
+use crate::cli::{CliRegime, LedgerTarget, QueryFormat, ReportTarget};
 use crate::error::CliError;
 use crate::format::{self, CliFormat};
 use crate::ledger;
 use crate::reason;
+use crate::report;
 use crate::sink;
 use crate::source::{self, ViewOp};
 
@@ -128,6 +131,10 @@ fn emit_result(
 }
 
 /// Run the `query` subcommand.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the CLI dispatcher passes the command fields and both surfacing targets explicitly"
+)]
 pub(crate) fn run(
     data: &str,
     base: Option<&str>,
@@ -136,8 +143,14 @@ pub(crate) fn run(
     query: &str,
     jsonld_options: Option<&JsonLdSerializeOptions>,
     ledger_target: &LedgerTarget,
+    report_target: &ReportTarget,
 ) -> Result<(), CliError> {
     let data_format = format::resolve(None, data)?;
+    // A report of a run that will not happen is a request the flag cannot honor, and
+    // honoring it with silence is what this pipeline refuses.
+    if report_target.is_requested() && entailment.is_none() {
+        return Err(report::requires_entailment("query"));
+    }
 
     let engine = NativeSparqlEngine::new();
     let prepared = engine.prepare_query(query, base)?;
@@ -148,9 +161,10 @@ pub(crate) fn run(
             // materialize the closure in memory, and query THAT.
             let regime = reason::resolve_materializable_regime(regime)?;
             let dataset = source::load_dataset(data, data_format, base)?;
-            // Bound and dropped: the query's result set has nowhere to carry a
-            // reasoning report.
-            let (closure, _report) = materialize(&dataset, regime)?;
+            // The rows go to stdout and the certificate to `--report`: a solution set that
+            // depends on a closure is not readable without knowing what closed it.
+            let (closure, reasoning) = materialize(&dataset, regime)?;
+            report::surface(report_target, &reasoning)?;
             engine.query_prepared(&closure, &prepared, &[])?
         }
         None => source::run_over_input(

@@ -25,7 +25,13 @@
 //!
 //! The open-world `OWL-Direct` (Description-Logic tableau) and `RIF` (rule engine)
 //! regimes need inputs the plain [`materialize`] façade does not have (the query's
-//! class expressions; a parsed rule set) and are served by dedicated entry points.
+//! class expressions; a parsed rule set), and each is served by a TOTAL entry point that
+//! takes that input as a non-optional parameter — [`materialize_dl_reported`] and
+//! [`materialize_rif`]. Neither is a second-best surface: each returns the same
+//! <code>(closure, [ReasoningReport])</code> pair [`materialize`] returns, applies the same
+//! overclaim gate, and has no report-free twin to reach for instead. There is therefore no
+//! regime this crate cannot materialize; what [`materialize`] alone cannot do is materialize
+//! one from a [`Regime`] VALUE, because a regime value does not carry a rule set.
 //!
 //! # The Description-Logic services
 //!
@@ -43,7 +49,10 @@
 //! five `dt-*` rules of OWL 2 Profiles §4.3 Table 8, which is the part of D-entailment a
 //! forward chase can produce, and reports the value-space boundary the rest of it lives
 //! behind. Only `OWL-Direct` and `RIF` remain [`EntailError::Unsupported`] through this
-//! façade, and both because they need an input it does not have.
+//! façade, and both because they need an input it does not have — not because this crate
+//! cannot serve them. [`materialize_dl_reported`] and [`materialize_rif`] serve them
+//! totally, and the refusal here is what a signature that takes a bare [`Regime`] can say
+//! about a regime whose input is missing from the call.
 //!
 //! What each regime *is* and what this crate currently *does* are both data, not
 //! prose: [`rules`] returns the specification rule table a [`Regime`] is defined by
@@ -103,14 +112,15 @@ pub(crate) mod vocab;
 
 pub use calculus::calculus_program;
 pub use explain::{ChaseProof, ExplainError, Justification, explain_conclusion, justify};
-pub use owl_dl::query::{QNode, QTriple, materialize_dl, materialize_dl_reported};
+pub use owl_dl::query::{QNode, QTriple, materialize_dl_reported};
 pub use reasoner::{
     Certified, ClassHierarchy, ConservativeKeep, DlAxiom, DlCertificate, DlCompleteness,
     ModuleExtraction, ModuleMethod, OwlProfile, ProfileCertificate, ProfileViolation, Realization,
     Reasoner, Verdict, extract_module, profile,
 };
 pub use report::{
-    Boundary, Completeness, Construct, InconsistencyWitness, ReasoningReport, WitnessTriple,
+    Boundary, Completeness, Construct, InconsistencyWitness, InconsistentRun, ReasoningReport,
+    WitnessTriple,
 };
 pub use rif::{Atom, Fact, RifTerm, Rule, RuleSet, materialize_rif};
 pub use rif_xml::{ParsedRifDocument, RifImport, parse_rif_xml, resolve_rif_imports};
@@ -214,7 +224,7 @@ pub enum EntailError {
     /// The knowledge base is inconsistent: every query would be entailed, so no
     /// meaningful answer set exists. A hard failure rather than a silent default.
     ///
-    /// # The witness is not optional
+    /// # The witness is not optional, and neither is the report
     ///
     /// Seventeen OWL 2 RL rules conclude `false`, and turning a body match on one of them
     /// into an error is a real behaviour change for a caller: ordinary dirty data — ONE
@@ -226,9 +236,33 @@ pub enum EntailError {
     /// were all satisfied, the asserted triples that satisfied them in that rule's own
     /// premise order, and the graph they were read from.
     ///
-    /// Boxed because it is the one variant with a non-trivial payload and an error type is
-    /// returned by value from every entailment entry point.
-    Inconsistent(Box<InconsistencyWitness>),
+    /// The [`ReasoningReport`] is carried for the same reason. This crate says it has no
+    /// report-free variant of [`materialize`], and a refusal that handed back a witness
+    /// alone was one: the caller whose data is inconsistent learned nothing about which
+    /// rules had already fired, what the evaluation had cost, which constructs the run had
+    /// met, or which calculus hash refused. [`InconsistentRun`] carries both halves, and the
+    /// report's [`ReasoningReport::inconsistency`] is the same witness — which is what makes
+    /// that field an observable fact on every host's report surface rather than a constant
+    /// `none`.
+    ///
+    /// Boxed because an error type is returned by value from every entailment entry point.
+    Inconsistent(Box<InconsistentRun>),
+    /// The report assembled for a run contradicts its own evidence, so the run is refused.
+    ///
+    /// [`ReasoningReport::overclaims`] — [`Completeness::Exact`] beside a non-empty
+    /// boundary list — is an invariant no report this crate emits may violate, and this
+    /// variant is what "may not" means. A closure whose certificate says it answered
+    /// everything while naming a construct it could not handle is worse than no closure:
+    /// the caller cannot tell which half to believe, and the report exists precisely so
+    /// they never have to. The offending report is carried so the bug is diagnosable rather
+    /// than merely announced.
+    ///
+    /// Unreachable through [`materialize`] today — [`Completeness::for_run`] derives the
+    /// completeness from the very boundary list the report will carry — and the check runs
+    /// anyway, because that derivation is code and code changes. The state it looks for is
+    /// representable ([`ReasoningReport::new`] repairs nothing), so this is a guard against
+    /// a real value rather than an assertion about an impossible one.
+    Overclaim(Box<ReasoningReport>),
     /// The `OWL-Direct` knowledge base is unsatisfiable, as the tableau found it.
     ///
     /// Distinct from [`Self::Inconsistent`] because the evidence is of a different kind: a
@@ -248,16 +282,25 @@ impl std::fmt::Display for EntailError {
             Self::Evaluate(error) => write!(f, "entailment evaluation error: {error}"),
             Self::Chase(error) => write!(f, "entailment chase error: {error}"),
             Self::MalformedList(msg) => write!(f, "entailment collection error: {msg}"),
-            Self::Inconsistent(witness) => write!(
+            Self::Inconsistent(run) => write!(
                 f,
                 "knowledge base is inconsistent: {} was satisfied by {} asserted {}",
-                witness.rule(),
-                witness.premises().len(),
-                if witness.premises().len() == 1 {
+                run.witness().rule(),
+                run.witness().premises().len(),
+                if run.witness().premises().len() == 1 {
                     "triple"
                 } else {
                     "triples"
                 }
+            ),
+            Self::Overclaim(report) => write!(
+                f,
+                "the reasoning report for this {:?} run claims {:?} while naming {} \
+                 boundary/boundaries it could not handle; the closure is refused rather \
+                 than described by a self-contradicting certificate",
+                report.regime(),
+                report.completeness(),
+                report.boundaries().len()
             ),
             Self::Unsatisfiable => {
                 write!(f, "the OWL-Direct knowledge base is unsatisfiable")
@@ -301,19 +344,32 @@ impl std::error::Error for EntailError {}
 /// entailment" meant twelve of seventy-eight rules. Binding it costs one `_`; not having
 /// it cost this repository a documented overclaim.
 ///
-/// `OWL-Direct` is not reachable here — it requires the query's class expressions.
-/// `RIF` requires a parsed rule set. Both are served by dedicated entry points.
+/// `OWL-Direct` is not reachable here — it requires the query's class expressions. `RIF`
+/// requires a parsed rule set. Each is served by a TOTAL entry point that takes its
+/// required input as a non-optional parameter and returns the same
+/// <code>(closure, [ReasoningReport])</code> pair under the same overclaim gate:
+/// [`materialize_dl_reported`] and [`materialize_rif`]. The refusal below is therefore a
+/// statement about THIS SIGNATURE — a [`Regime`] value carries no rule set and no basic
+/// graph pattern, so two of its seven inhabitants name a run this call has no input for —
+/// and not a statement about a regime the crate cannot close.
 ///
 /// # Errors
 ///
 /// [`EntailError::Unsupported`] for `OWL-Direct`/`RIF` (the two regimes that need an
 /// input this façade does not have); [`EntailError::Inconsistent`] if a rule that
-/// concludes `false` matched, carrying the witness; [`EntailError::Evaluate`] if the run passes
-/// one of `purrdf-datalog`'s three fixed evaluation ceilings; [`EntailError::Build`] if
-/// the derived dataset cannot be frozen. An error is the absence of a run, so it carries
-/// no report: [`EntailError::Unsupported`] already names the regime it refused, an
-/// exhausted budget carries its own accurate consumption figures, and nothing was closed
-/// for a report to describe.
+/// concludes `false` matched; [`EntailError::Evaluate`] if the run passes one of
+/// `purrdf-datalog`'s three fixed evaluation ceilings; [`EntailError::Build`] if the
+/// derived dataset cannot be frozen; [`EntailError::Overclaim`] if the assembled report
+/// contradicts its own boundary evidence.
+///
+/// Two of those errors describe a RUN, and both carry it. [`EntailError::Inconsistent`]
+/// carries an [`InconsistentRun`] — the witness AND the [`ReasoningReport`] for everything
+/// the run had done when it stopped — because "there is no report-free variant of this
+/// function" has to hold for the caller whose data is bad, or it is not a rule. And
+/// [`EntailError::Overclaim`] carries the offending report, so the contradiction is
+/// diagnosable. The rest are the absence of a run: [`EntailError::Unsupported`] already
+/// names the regime it refused, an exhausted budget carries its own accurate consumption
+/// figures, and nothing was closed for a report to describe.
 ///
 /// ```
 /// use purrdf_entail::{Regime, RuleId, materialize};
@@ -356,7 +412,15 @@ pub fn materialize(
             return Err(EntailError::Unsupported(regime));
         }
     };
-    Ok((closure, ReasoningReport::of_run(ds, regime, &stats)))
+    let report = ReasoningReport::of_run(ds, regime, &stats);
+    // THE GATE, on the emission path. A report that contradicts its own evidence is not
+    // handed to a caller with a note attached — the run fails. The state is representable
+    // (`ReasoningReport::new` repairs nothing), so this is a check over a value rather than
+    // an assertion about an unreachable one.
+    if report.overclaims() {
+        return Err(EntailError::Overclaim(Box::new(report)));
+    }
+    Ok((closure, report))
 }
 
 #[cfg(test)]
@@ -753,6 +817,145 @@ mod tests {
         }
     }
 
+    /// THE GATE CAN FIRE. The contradiction it looks for is a value that exists.
+    ///
+    /// `no_report_ever_overclaims` is only worth running if a report CAN overclaim, and
+    /// for one revision of this crate none could: both constructors narrowed
+    /// [`Completeness::Exact`] to [`Completeness::ExactWithinBoundaries`] before assigning
+    /// the field, so `overclaims()` tested a state construction had made unreachable and
+    /// every assertion of it — twenty-odd of them across this crate's tests — was a
+    /// tautology dressed as a safety property.
+    ///
+    /// [`ReasoningReport::new`] repairs nothing, so this test builds the bad report and
+    /// watches the gate return `true`. The narrowing still happens, in
+    /// [`Completeness::for_run`], where the gate can check it.
+    #[test]
+    fn overclaims_is_representable_and_detected() {
+        let boundary = vec![Boundary::of(Construct::Surrogate)];
+        let overclaiming = ReasoningReport::new(
+            Regime::Rdfs,
+            Completeness::Exact,
+            Vec::new(),
+            boundary.clone(),
+            purrdf_datalog::seminaive::BudgetReport::new(0, 0, 0),
+            None,
+            0,
+        );
+        assert!(
+            overclaiming.overclaims(),
+            "`Exact` beside a boundary must trip the gate"
+        );
+
+        // The two honest neighbours of that state do not trip it, so the gate is a
+        // predicate about the contradiction rather than about boundaries in general.
+        let bounded = ReasoningReport::new(
+            Regime::Rdfs,
+            Completeness::ExactWithinBoundaries,
+            Vec::new(),
+            boundary,
+            purrdf_datalog::seminaive::BudgetReport::new(0, 0, 0),
+            None,
+            0,
+        );
+        assert!(!bounded.overclaims());
+        let unbounded = ReasoningReport::new(
+            Regime::Rdfs,
+            Completeness::Exact,
+            Vec::new(),
+            Vec::new(),
+            purrdf_datalog::seminaive::BudgetReport::new(0, 0, 0),
+            None,
+            0,
+        );
+        assert!(!unbounded.overclaims());
+
+        // And `for_run` — the derivation the emission path uses — never produces the bad
+        // state for any regime, whether or not the run met a boundary.
+        for regime in RUNNABLE {
+            assert!(
+                !ReasoningReport::new(
+                    regime,
+                    Completeness::for_run(regime, &[Boundary::of(Construct::Surrogate)]),
+                    Vec::new(),
+                    vec![Boundary::of(Construct::Surrogate)],
+                    purrdf_datalog::seminaive::BudgetReport::new(0, 0, 0),
+                    None,
+                    0,
+                )
+                .overclaims(),
+                "{regime:?}"
+            );
+        }
+    }
+
+    /// An inconsistent input gets its CERTIFICATE, not just its witness.
+    ///
+    /// The refusal used to carry an [`InconsistencyWitness`] alone, which made
+    /// [`ReasoningReport::inconsistency`] a field nothing could ever populate — `none` on
+    /// every report on every host — and made the inconsistent run the one report-free call
+    /// this crate says it does not have. Both halves are checked here: the report exists,
+    /// and its `inconsistency` is the witness.
+    #[test]
+    fn an_inconsistent_run_still_returns_its_report() {
+        let disjoint = "http://www.w3.org/2002/07/owl#disjointWith";
+        let ds = dataset(&[(A, disjoint, B), (X, RDF_TYPE, A), (X, RDF_TYPE, B)]);
+        let Err(EntailError::Inconsistent(run)) = materialize(&ds, Regime::OwlRl) else {
+            panic!("two disjoint classes with a shared instance is `cax-dw`");
+        };
+        let report = run.report();
+
+        // The field that was previously a constant.
+        assert_eq!(
+            report.inconsistency().map(InconsistencyWitness::rule),
+            Some(RuleId::CaxDw)
+        );
+        // Everything else a caller needs to act on the refusal, measured rather than
+        // stubbed: the calculus that refused, the constructs the run met, and the cost.
+        assert_eq!(report.regime(), Regime::OwlRl);
+        assert!(!report.boundaries().is_empty());
+        assert!(report.budget().join_steps() > 0, "the evaluation did work");
+        assert!(!report.overclaims());
+        // A consistent run over the same shape reports the absence, so `None` is a
+        // finding rather than the only state the field has.
+        let (_, consistent) = materialize(&dataset(&[(X, RDF_TYPE, A)]), Regime::OwlRl)
+            .expect("a consistent knowledge base");
+        assert_eq!(consistent.inconsistency(), None);
+    }
+
+    /// The four surrogate rules are OBSERVABLE: a datatyped literal makes the count move.
+    ///
+    /// `rdfD1`, `rdfD1a`, `rdfs14` and `rdfs14a` fire, and their conclusions are withheld
+    /// because a SPARQL entailment regime draws its answers from the scoping graph — so
+    /// they can never appear in `rules_fired`, and this counter is the only evidence a
+    /// caller has that they ran at all. A constant zero here would make six "implemented"
+    /// rules unobservable from outside Rust.
+    #[test]
+    fn a_datatyped_literal_makes_the_withheld_surrogate_count_move() {
+        let ds = literal_object_fixture();
+        for regime in [Regime::Rdf, Regime::Rdfs] {
+            let (_, report) = materialize(&ds, regime).expect("a surrogate-minting lane");
+            assert!(
+                report.withheld_surrogates() > 0,
+                "{regime:?}: rdfD1/rdfD1a fired over the datatyped literal, so their \
+                 withheld conclusions must be counted"
+            );
+            // And the count is what raises the boundary, so the two agree.
+            assert!(
+                report
+                    .boundaries()
+                    .iter()
+                    .any(|b| b.construct() == Construct::Surrogate),
+                "{regime:?}"
+            );
+        }
+        // The lanes that state none of the four withhold nothing — the count is a
+        // measurement of THIS run, not a standing disclaimer.
+        for regime in [Regime::Simple, Regime::OwlRl, Regime::D] {
+            let (_, report) = materialize(&ds, regime).expect("a lane that mints no surrogate");
+            assert_eq!(report.withheld_surrogates(), 0, "{regime:?}");
+        }
+    }
+
     /// A dataset whose object position holds an RDF 1.2 triple term.
     fn triple_term_fixture() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
@@ -1028,9 +1231,18 @@ mod tests {
         let disjoint = "http://www.w3.org/2002/07/owl#disjointWith";
         let ds = dataset(&[(A, disjoint, B), (X, RDF_TYPE, A), (X, RDF_TYPE, B)]);
 
-        let Err(EntailError::Inconsistent(witness)) = materialize(&ds, Regime::OwlRl) else {
+        let Err(EntailError::Inconsistent(run)) = materialize(&ds, Regime::OwlRl) else {
             panic!("two disjoint classes with a shared instance is `cax-dw`");
         };
+        let witness = run.witness();
+        // The refusal carries the RUN, not the witness alone: the report describes what the
+        // evaluation had done when it stopped, and its `inconsistency` IS this witness.
+        assert_eq!(run.report().regime(), Regime::OwlRl);
+        assert_eq!(run.report().inconsistency(), Some(witness));
+        assert_eq!(
+            run.report().contract_hash(),
+            purrdf_datalog::cache::contract_hash(&calculus_program(Regime::OwlRl))
+        );
         assert_eq!(witness.rule(), RuleId::CaxDw);
         // The premises are the specification's own, in the specification's own order.
         let premises: Vec<(TermValue, TermValue, TermValue)> = witness
@@ -1069,7 +1281,7 @@ mod tests {
         assert!(witness.graph().is_none());
         // The message names the rule, so a caller who only logs the error still learns
         // which axiom their data broke.
-        let rendered = EntailError::Inconsistent(witness).to_string();
+        let rendered = EntailError::Inconsistent(run).to_string();
         assert!(rendered.contains("cax-dw"), "{rendered}");
 
         // The RDFS lane says nothing about `owl:disjointWith`, so the same graph is
@@ -1091,15 +1303,18 @@ mod tests {
             (X, "http://example.org/irreflexive", X),
         ]);
         let render = || {
-            let Err(EntailError::Inconsistent(witness)) = materialize(&ds, Regime::OwlRl) else {
+            let Err(EntailError::Inconsistent(run)) = materialize(&ds, Regime::OwlRl) else {
                 panic!("an irreflexive property relating something to itself is `prp-irp`");
             };
-            format!("{witness:?}")
+            // The whole refusal, report included: a budget or a fired-rule tally that
+            // wobbled between runs would show up here as two different strings.
+            format!("{run:?}")
         };
         assert_eq!(render(), render());
-        let Err(EntailError::Inconsistent(witness)) = materialize(&ds, Regime::OwlRl) else {
+        let Err(EntailError::Inconsistent(run)) = materialize(&ds, Regime::OwlRl) else {
             unreachable!("just asserted")
         };
+        let witness = run.witness();
         assert_eq!(witness.rule(), RuleId::PrpIrp);
         assert_eq!(witness.premises().len(), 2);
     }
@@ -1261,9 +1476,10 @@ mod tests {
             (X, RDF_TYPE, A, Some(G)),
             (X, RDF_TYPE, B, Some(G)),
         ]);
-        let Err(EntailError::Inconsistent(witness)) = materialize(&ds, Regime::OwlRl) else {
+        let Err(EntailError::Inconsistent(run)) = materialize(&ds, Regime::OwlRl) else {
             panic!("the union of the default graph and g is inconsistent under cax-dw");
         };
+        let witness = run.witness();
         assert_eq!(witness.rule(), RuleId::CaxDw);
         assert_eq!(witness.graph(), Some(&TermValue::iri(G)));
 
@@ -1295,9 +1511,10 @@ mod tests {
         let ds = b.freeze().expect("freeze");
 
         for regime in [Regime::OwlRl, Regime::D] {
-            let Err(EntailError::Inconsistent(witness)) = materialize(&ds, regime) else {
+            let Err(EntailError::Inconsistent(run)) = materialize(&ds, regime) else {
                 panic!("{regime:?}: an ill-typed literal is `dt-not-type`");
             };
+            let witness = run.witness();
             assert_eq!(witness.rule(), RuleId::DtNotType, "{regime:?}");
             // The witness names a TRIPLE that carries the bad literal, not merely the
             // literal: the internal `DT_ILL_TYPED` premise is bookkeeping, not an
@@ -1360,10 +1577,11 @@ mod tests {
         };
 
         // Two DIFFERENT values: `prp-fp` then `dt-diff` then `eq-diff1`.
-        let Err(EntailError::Inconsistent(witness)) = materialize(&build("1", "2"), Regime::OwlRl)
+        let Err(EntailError::Inconsistent(run)) = materialize(&build("1", "2"), Regime::OwlRl)
         else {
             panic!("a functional property with two value-different values must clash");
         };
+        let witness = run.witness();
         assert_eq!(witness.rule(), RuleId::EqDiff1);
         assert_eq!(witness.premises().len(), 2, "{:?}", witness.premises());
 
@@ -1712,8 +1930,9 @@ mod tests {
                 "{regime:?}: a term was fabricated for the triple term"
             );
             // Opacity is the licensed part, and it is REPORTED: the chase never reasons
-            // into the quoted triple (rdfs14 / rdfs14a do not fire), so the closure is
-            // sound-incomplete and says so.
+            // into the quoted triple. rdfs14 / rdfs14a do fire over it, but each concludes
+            // about a fresh surrogate the answer may not bind, so nothing they draw reaches
+            // the closure and the run says so with the triple-term boundary.
             assert!(
                 report
                     .boundaries()

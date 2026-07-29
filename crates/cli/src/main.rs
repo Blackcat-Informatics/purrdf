@@ -12,7 +12,10 @@
 //! * `lift` — reconstruct RDF from a strict bidirectional carrier.
 //!
 //! plus the global `--loss-ledger` flag, which surfaces the machine-readable
-//! loss ledger for a conversion, projection, or lift.
+//! loss ledger for a conversion, projection, or lift, and the `--report` flag the
+//! three reasoning subcommands carry, which surfaces the reasoning certificate:
+//! which rules fired, which constructs the run could not fully handle, what it
+//! cost, and the contract hash of the calculus that produced the closure.
 //!
 //! Exit codes: clap rejects a malformed command line with **2**; the pipeline maps
 //! its own failures the same way — usage errors → **2**, an unsupported entailment
@@ -28,6 +31,7 @@ mod ledger;
 mod projection;
 mod query;
 mod reason;
+mod report;
 mod sink;
 mod source;
 
@@ -37,7 +41,7 @@ use std::io::Read as _;
 use clap::Parser;
 use purrdf_rdf::{JsonLdContextLimits, JsonLdSerializeOptions};
 
-use crate::cli::{Cli, Command};
+use crate::cli::{Cli, Command, ReportTarget};
 use crate::error::CliError;
 
 fn main() {
@@ -75,6 +79,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             to,
             base,
             entailment,
+            report,
             canonical,
             input,
             output,
@@ -90,11 +95,13 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             input,
             output,
             &ledger_target,
+            &ReportTarget::decode(report.as_ref()),
         ),
         Command::Query {
             data,
             base,
             entailment,
+            report,
             results_format,
             query,
         } => query::run(
@@ -105,9 +112,11 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             query,
             jsonld_options.as_ref(),
             &ledger_target,
+            &ReportTarget::decode(report.as_ref()),
         ),
         Command::Reason {
             regime,
+            report,
             from,
             to,
             base,
@@ -122,6 +131,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             output,
             jsonld_options.as_ref(),
             &ledger_target,
+            &ReportTarget::decode(report.as_ref()),
         ),
         Command::Project {
             profile,

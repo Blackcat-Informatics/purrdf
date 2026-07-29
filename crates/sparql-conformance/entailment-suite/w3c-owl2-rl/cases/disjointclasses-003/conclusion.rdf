@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<rdf:RDF
+  xml:base  = "http://example.org/"
+  xmlns     = "http://example.org/"
+  xmlns:owl = "http://www.w3.org/2002/07/owl#"
+  xmlns:rdf = "http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+
+<owl:Ontology/>
+
+<owl:Class rdf:about="Girl" />
+<owl:Class rdf:about="Dog" />
+
+<rdf:Description rdf:about="Stewie">
+  <rdf:type>
+    <owl:Class>
+      <owl:complementOf rdf:resource="Girl" />
+    </owl:Class>
+  </rdf:type>
+</rdf:Description>
+
+<rdf:Description rdf:about="Stewie">
+  <rdf:type>
+    <owl:Class>
+      <owl:complementOf rdf:resource="Dog" />
+    </owl:Class>
+  </rdf:type>
+</rdf:Description>
+
+</rdf:RDF>

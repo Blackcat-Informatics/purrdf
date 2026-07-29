@@ -1,0 +1,9 @@
+<rdf:RDF
+    xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+    xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:Ontology />
+  <owl:NamedIndividual rdf:about="http://owl2.test/rules/Y2"/>
+  <owl:NamedIndividual rdf:about="http://owl2.test/rules/Y1">
+    <owl:differentFrom rdf:resource="http://owl2.test/rules/Y2"/>
+  </owl:NamedIndividual>
+</rdf:RDF>
