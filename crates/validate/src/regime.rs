@@ -85,8 +85,9 @@ use core::fmt::Write as _;
 use purrdf_core::{RdfLiteral, RdfTerm, RdfTriple, TermValue, emit_term};
 use purrdf_entail::{
     ChaseProof, Completeness, DlAxiom, DlCertificate, DlCompleteness, EntailError, Justification,
-    ModuleMethod, OwlProfile, ProfileCertificate, Reasoner, ReasoningReport, Regime, Verdict,
-    explain_conclusion, extract_module, implemented, justify, materialize, profile, rules,
+    Materialization, ModuleMethod, OwlProfile, ProfileCertificate, Reasoner, ReasoningReport,
+    Regime, RuleSet, Verdict, explain_conclusion, extract_module, implemented, justify,
+    materialize, parse_rif_xml, profile, rules,
 };
 
 /// The accepted regime spellings, in the order an error message lists them.
@@ -96,18 +97,29 @@ use purrdf_entail::{
 /// WASM and from Python.
 pub const REGIME_NAMES: [&str; 7] = ["simple", "rdf", "rdfs", "owl-rl", "owl-direct", "rif", "d"];
 
-/// The subset of [`REGIME_NAMES`] that [`materialize_to_nquads_string`] can close.
+/// The regimes whose `program` argument to [`materialize_to_nquads_string`] is a
+/// document rather than the empty string.
 ///
-/// The other two are refused with a message that names these: `owl-direct` needs
-/// the query's class expressions and `rif` needs a parsed rule set. Neither is an
-/// input a document-in/document-out boundary has any way to supply, which is what
-/// makes those two — and only those two — spec-inherent here.
+/// This constant replaces the refusal set this module used to publish. That list
+/// named the two regimes the boundary would not close — and it no longer refuses
+/// any, because the input those two were missing is now a PARAMETER rather than an
+/// absence: `rif` entails under the caller's rule document, which is what this
+/// names.
 ///
-/// `d` is deliberately in this list. Datatype entailment is realized as the five
-/// `dt-*` rules of OWL 2 Profiles §4.3 Table 8, so it chases like any other rule
-/// table; what Table 8 does not cover — the infinite value spaces themselves — is
-/// reported as a `boundary` line, not withheld as a refusal.
-pub const MATERIALIZABLE_REGIME_NAMES: [&str; 5] = ["simple", "rdf", "rdfs", "owl-rl", "d"];
+/// `owl-direct` is deliberately NOT here, and that is a statement rather than an
+/// omission. Its extra input is the QUERY's class expressions, and a
+/// document-in/document-out boundary has no query at all — so there is nothing
+/// withheld. What it closes is the query-independent OWL Direct-Semantics
+/// augmentation (the classification, the realization, the entailed role assertions
+/// and the `owl:sameAs` identifications the tableau decides about the ontology's
+/// own named terms), which is the whole answer when there is no query to direct.
+/// A caller who HAS a query reaches the query-directed lane through
+/// `purrdf::query_with_entailment`, which has one.
+///
+/// Every other regime is defined by a rule table this workspace states, so its
+/// `program` is empty — and a non-empty one is an ERROR rather than a silently
+/// discarded argument.
+pub const PROGRAM_REGIME_NAMES: [&str; 1] = ["rif"];
 
 /// The version banner every rendered report opens with.
 pub const REPORT_FORMAT_BANNER: &str = "purrdf-reasoning-report 1";
@@ -208,6 +220,25 @@ impl RegimeClosure {
 /// implemented rules infer, serialized through the native RDFC-1.0 flat
 /// serializer (deterministic, blank-node-canonical).
 ///
+/// # `program` — the regime's own input, not an option
+///
+/// Five of the seven regimes are defined by a rule table this workspace states and
+/// `owl-direct` is directed by a query this boundary does not have, so for six of
+/// them the whole input is the document and `program` must be EMPTY; a non-empty
+/// one is refused rather than ignored, because an argument silently discarded is
+/// how a caller comes to believe their rules ran.
+///
+/// `rif` is the exception named by [`PROGRAM_REGIME_NAMES`]: RIF entails under the
+/// CALLER's rules, this workspace declares none of its own, and so `program` is
+/// that rule set as a normative RIF-in-XML document (parsed by
+/// [`purrdf_entail::parse_rif_xml`]). An `Import` directive is refused: resolving
+/// one is I/O, and this boundary performs none — a caller who needs imports
+/// resolves them itself through [`purrdf_entail::resolve_rif_imports`] and reaches
+/// [`purrdf_entail::materialize`] directly.
+///
+/// This is what makes the boundary TOTAL: every one of [`REGIME_NAMES`] closes, and
+/// none of them is refused for being the regime it is.
+///
 /// The report is never optional and never separately requested — the same
 /// discipline [`purrdf_entail::materialize`] enforces in Rust, carried across the
 /// string boundary. A binding that renders "RDFS entailment" without saying which
@@ -219,8 +250,9 @@ impl RegimeClosure {
 /// # Errors
 ///
 /// * An unknown `regime` spelling — the message names the accepted set.
-/// * A regime that cannot be forward-materialized (`owl-direct`, `rif`) —
-///   the message names [`MATERIALIZABLE_REGIME_NAMES`].
+/// * A non-empty `program` for a regime that takes none — the message names
+///   [`PROGRAM_REGIME_NAMES`].
+/// * A malformed RIF-in-XML `program`, or one carrying an `Import`.
 /// * A malformed input document (the native codec's own diagnostic).
 /// * An exhausted evaluation ceiling or a dataset that cannot be frozen (the
 ///   `purrdf-entail` error).
@@ -235,7 +267,7 @@ impl RegimeClosure {
 ///     <http://example.org/x> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .\n";
 ///
-/// let closed = materialize_to_nquads_string("rdfs", data).expect("rdfs closure");
+/// let closed = materialize_to_nquads_string("rdfs", data, "").expect("rdfs closure");
 /// // rdfs9 re-types the instance.
 /// assert!(closed.nquads().contains(
 ///     "<http://example.org/x> \
@@ -249,23 +281,87 @@ impl RegimeClosure {
 /// // The invariant no report may violate, whatever the rule table's state.
 /// assert!(closed.report().ends_with("overclaims false\n"));
 /// ```
-pub fn materialize_to_nquads_string(regime: &str, document: &str) -> Result<RegimeClosure, String> {
+pub fn materialize_to_nquads_string(
+    regime: &str,
+    document: &str,
+    program: &str,
+) -> Result<RegimeClosure, String> {
     let parsed = parse_regime(regime)?;
     let dataset = purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
         .map_err(|diagnostic| diagnostic.to_string())?;
-    let (closure, report) = materialize(&dataset, parsed).map_err(|error| match error {
-        EntailError::Unsupported(_) => format!(
-            "entailment regime \"{regime}\" cannot be forward-materialized \
-             (owl-direct needs the query's class expressions, \
-             rif needs a parsed rule set); materializable regimes: {}",
-            MATERIALIZABLE_REGIME_NAMES.join(", ")
-        ),
-        other => format!("entailment regime \"{regime}\": {other}"),
-    })?;
+    // Bound here, outside the call below, because the plan BORROWS it: a rule set
+    // built inline would not outlive the value that names it.
+    let rules = regime_rule_set(parsed, regime, program)?;
+    let (closure, report) = materialize(&dataset, regime_plan(parsed, &rules))
+        .map_err(|error| format!("entailment regime \"{regime}\": {error}"))?;
     Ok(RegimeClosure {
         nquads: purrdf_rdf::canonical_flat_nquads(closure.as_ref())?,
         report: render_reasoning_report(&report),
     })
+}
+
+/// The plan that closes `regime` under `rules` — the ONE map from a regime spelling
+/// to a [`Materialization`], shared by every host.
+///
+/// It lives here rather than in each binding for the reason this whole module does: the
+/// C ABI, WASM and PyO3 hosts must not each decide what `owl-direct` means at a document
+/// boundary. `rules` is the value [`regime_rule_set`] returned for the same regime, and is
+/// ignored by the six regimes whose rule table is the specification's.
+///
+/// `owl-direct` gets the EMPTY basic graph pattern: a document boundary has no query, so
+/// what runs is the query-independent augmentation — see [`PROGRAM_REGIME_NAMES`].
+#[must_use]
+pub fn regime_plan(regime: Regime, rules: &RuleSet) -> Materialization<'_> {
+    match regime {
+        Regime::Simple => Materialization::Simple,
+        Regime::Rdf => Materialization::Rdf,
+        Regime::Rdfs => Materialization::Rdfs,
+        Regime::OwlRl => Materialization::OwlRl,
+        Regime::D => Materialization::D,
+        Regime::OwlDirect => Materialization::OwlDirect(&[]),
+        Regime::Rif => Materialization::Rif(rules),
+    }
+}
+
+/// The rule set `program` carries for `regime`, or the empty one for a regime that
+/// takes no program.
+///
+/// A non-empty `program` for a regime with a specification rule table is an error
+/// and not a discarded argument: a caller who passed rules to `rdfs` believes they
+/// ran, and returning a closure that ignored them is the failure this whole module
+/// exists to prevent.
+///
+/// `spelling` is the regime's CLI name, carried separately so every host's message
+/// names the regime the CALLER wrote rather than a `Debug` rendering of the enum.
+///
+/// # Errors
+///
+/// A non-empty `program` for a regime that takes none; a malformed RIF-in-XML
+/// document; or a rule document carrying an `Import` (resolving one is I/O this
+/// boundary does not perform).
+pub fn regime_rule_set(regime: Regime, spelling: &str, program: &str) -> Result<RuleSet, String> {
+    if regime != Regime::Rif {
+        return if program.trim().is_empty() {
+            Ok(RuleSet::new())
+        } else {
+            Err(format!(
+                "entailment regime \"{spelling}\" takes no rule document, and one was \
+                 supplied; its rule table is the specification's. Regimes that take one: {}",
+                PROGRAM_REGIME_NAMES.join(", ")
+            ))
+        };
+    }
+    let parsed = parse_rif_xml(program)
+        .map_err(|error| format!("entailment regime \"{spelling}\": rule document: {error}"))?;
+    if let Some(import) = parsed.imports.first() {
+        return Err(format!(
+            "entailment regime \"{spelling}\": the rule document imports \
+             \"{}\", and resolving an import is I/O this boundary does not perform; \
+             resolve it in the caller and use purrdf_entail::materialize",
+            import.location
+        ));
+    }
+    Ok(parsed.ruleset)
 }
 
 /// The rule table `regime` is *defined by*, one specification rule name per line.
@@ -452,6 +548,8 @@ pub struct RegimeVector {
     regime: String,
     /// The input document (N-Quads).
     input: String,
+    /// The regime's own rule document, empty for every regime that takes none.
+    program: String,
     /// The canonical N-Quads the closure must serialize to.
     closure: String,
     /// The report rendering the run must produce.
@@ -475,6 +573,13 @@ impl RegimeVector {
     #[must_use]
     pub fn input(&self) -> &str {
         &self.input
+    }
+
+    /// The `program` argument the case is materialized with — a RIF-in-XML rule
+    /// document for `rif`, and the empty string for every other regime.
+    #[must_use]
+    pub fn program(&self) -> &str {
+        &self.program
     }
 
     /// The canonical N-Quads [`materialize_to_nquads_string`] must return.
@@ -510,20 +615,20 @@ pub fn regime_golden_vectors() -> Result<Vec<RegimeVector>, String> {
 /// agreeing.
 ///
 /// It also checks that the artifact still covers every regime in
-/// [`MATERIALIZABLE_REGIME_NAMES`], so a truncated artifact fails loudly instead
-/// of passing vacuously.
+/// [`REGIME_NAMES`] — all seven, since the boundary refuses none — so a truncated
+/// artifact fails loudly instead of passing vacuously.
 ///
 /// # Errors
 ///
 /// A malformed artifact, a case that fails to materialize, a byte difference in
-/// either output, or a materializable regime the artifact no longer covers.
+/// either output, or a regime the artifact no longer covers.
 pub fn check_regime_golden_vectors() -> Result<(), String> {
     let cases = regime_golden_vectors()?;
     if cases.is_empty() {
         return Err("the regime golden vector artifact holds no cases".to_owned());
     }
     for case in &cases {
-        let produced = materialize_to_nquads_string(case.regime(), case.input())
+        let produced = materialize_to_nquads_string(case.regime(), case.input(), case.program())
             .map_err(|error| format!("case \"{}\": {error}", case.name()))?;
         if produced.nquads() != case.closure() {
             return Err(format!(
@@ -542,7 +647,7 @@ pub fn check_regime_golden_vectors() -> Result<(), String> {
             ));
         }
     }
-    for regime in MATERIALIZABLE_REGIME_NAMES {
+    for regime in REGIME_NAMES {
         if !cases.iter().any(|case| case.regime() == regime) {
             return Err(format!(
                 "the regime golden vector artifact no longer covers regime \"{regime}\""
@@ -557,6 +662,8 @@ pub fn check_regime_golden_vectors() -> Result<(), String> {
 enum Section {
     /// The input document.
     Input,
+    /// The regime's rule document.
+    Program,
     /// The expected canonical N-Quads.
     Closure,
     /// The expected rendered report.
@@ -572,6 +679,8 @@ struct CaseBuilder {
     regime: Option<String>,
     /// `@input`.
     input: Option<String>,
+    /// `@program`; absent is the empty program, which is what six regimes take.
+    program: Option<String>,
     /// `@closure`.
     closure: Option<String>,
     /// `@report`.
@@ -586,6 +695,7 @@ impl CaseBuilder {
             name: self.name.ok_or_else(|| missing("case"))?,
             regime: self.regime.ok_or_else(|| missing("regime"))?,
             input: self.input.ok_or_else(|| missing("input"))?,
+            program: self.program.unwrap_or_default(),
             closure: self.closure.ok_or_else(|| missing("closure"))?,
             report: self.report.ok_or_else(|| missing("report"))?,
         })
@@ -595,6 +705,7 @@ impl CaseBuilder {
     fn slot(&mut self, section: Section) -> &mut Option<String> {
         match section {
             Section::Input => &mut self.input,
+            Section::Program => &mut self.program,
             Section::Closure => &mut self.closure,
             Section::Report => &mut self.report,
         }
@@ -607,7 +718,9 @@ impl CaseBuilder {
 /// hosts can read it with this one parser:
 ///
 /// * A line starting with `@` is a directive: `@case <name>`, `@regime <name>`,
-///   `@input`, `@closure`, `@report`, `@end`.
+///   `@input`, `@program`, `@closure`, `@report`, `@end`.
+/// * `@program` is the only optional one: omitting it is the empty program, which
+///   is what every regime but `rif` takes.
 /// * Every other line belongs to the body the last body-directive opened.
 /// * Outside a body only blank lines and `#` comments are allowed, which is where
 ///   the artifact's SPDX header and its prose live.
@@ -656,9 +769,10 @@ fn parse_regime_vectors(text: &str) -> Result<Vec<RegimeVector>, String> {
                 }
                 builder.regime = Some(argument.to_owned());
             }
-            "input" | "closure" | "report" => {
+            "input" | "program" | "closure" | "report" => {
                 let section = match keyword {
                     "input" => Section::Input,
+                    "program" => Section::Program,
                     "closure" => Section::Closure,
                     _ => Section::Report,
                 };
@@ -1285,7 +1399,7 @@ pub fn instances_to_string(
 
 /// Does the ontology entail `axiom`?
 ///
-/// `axiom` is ONE triple of the OWL 2 RDF mapping — see [`parse_axiom`] for the
+/// `axiom` is ONE triple of the OWL 2 RDF mapping — see this module's `parse_axiom` for the
 /// seven reserved predicates and the object-property-assertion default.
 ///
 /// The answer's grammar, in emission order:
@@ -1770,6 +1884,44 @@ mod tests {
 <http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .
 ";
 
+    /// A minimal normative RIF-in-XML rule document: `?x a ex:A` ⟹ `?x a ex:B`.
+    ///
+    /// Written against [`SCHEMA`]'s own vocabulary so the conclusion is observable, and
+    /// deliberately a conclusion RDFS ALSO draws from `ex:A rdfs:subClassOf ex:B` — which
+    /// is what lets the `rif` test show the rule fired rather than the rule table.
+    const RIF_PROGRAM: &str = concat!(
+        "<Document xmlns=\"http://www.w3.org/2007/rif#\"><payload><Group><sentence><Forall>",
+        "<declare><Var>x</Var></declare><formula><Implies>",
+        "<if><Frame><object><Var>x</Var></object><slot>",
+        "<Const type=\"http://www.w3.org/2007/rif#iri\">",
+        "http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const>",
+        "<Const type=\"http://www.w3.org/2007/rif#iri\">http://example.org/A</Const>",
+        "</slot></Frame></if>",
+        "<then><Frame><object><Var>x</Var></object><slot>",
+        "<Const type=\"http://www.w3.org/2007/rif#iri\">",
+        "http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const>",
+        "<Const type=\"http://www.w3.org/2007/rif#iri\">http://example.org/B</Const>",
+        "</slot></Frame></then>",
+        "</Implies></formula></Forall></sentence></Group></payload></Document>"
+    );
+
+    /// Every accepted regime spelling with the `program` its boundary call takes.
+    ///
+    /// THE POINT OF THIS TABLE is that it has seven rows. The constant it replaces named
+    /// the five regimes this boundary would close and left two to a refusal test; every
+    /// cross-cutting invariant below therefore ranged over five sevenths of the surface.
+    /// They range over all of it now, which is what makes "this boundary refuses no
+    /// regime" a property the whole test module checks rather than one test's claim.
+    const REGIME_CALLS: [(&str, &str); 7] = [
+        ("simple", ""),
+        ("rdf", ""),
+        ("rdfs", ""),
+        ("owl-rl", ""),
+        ("owl-direct", ""),
+        ("rif", RIF_PROGRAM),
+        ("d", ""),
+    ];
+
     // ── The golden vector ───────────────────────────────────────────────────
 
     /// The committed artifact still describes what this boundary produces.
@@ -1833,10 +1985,15 @@ mod tests {
         }
         // …and the CLI's own enum has no eighth value this set is missing.
         assert_eq!(REGIME_NAMES.len(), 7);
-        assert_eq!(MATERIALIZABLE_REGIME_NAMES.len(), 5);
-        for name in MATERIALIZABLE_REGIME_NAMES {
+        for name in PROGRAM_REGIME_NAMES {
             assert!(REGIME_NAMES.contains(&name), "{name}");
         }
+        // The call table below covers the whole accepted set, in its order — so a regime
+        // added to `REGIME_NAMES` without a boundary call to exercise it fails here.
+        assert_eq!(
+            REGIME_CALLS.map(|(name, _)| name).to_vec(),
+            REGIME_NAMES.to_vec()
+        );
     }
 
     /// An unknown spelling is refused with the whole accepted set named.
@@ -1849,7 +2006,7 @@ mod tests {
         }
         // The same message reaches the two string entry points.
         for error in [
-            materialize_to_nquads_string("rdfs-plus", SCHEMA).expect_err("unknown"),
+            materialize_to_nquads_string("rdfs-plus", SCHEMA, "").expect_err("unknown"),
             rules_string("rdfs-plus").expect_err("unknown"),
             implemented_rules_string("rdfs-plus").expect_err("unknown"),
         ] {
@@ -1857,26 +2014,88 @@ mod tests {
         }
     }
 
-    /// The two regimes that need inputs this façade does not have are refused
-    /// by name, and the refusal says which regimes *do* materialize.
+    /// EVERY accepted spelling closes. This boundary refuses no regime.
     ///
-    /// `d` used to be a third. It is not any more: `entailment/D` is realized as
-    /// the five `dt-*` rules of OWL 2 Profiles §4.3 Table 8, so it materializes
-    /// like any other lane.
+    /// Falsifiable against the behaviour this replaced: `owl-direct` and `rif` were
+    /// refused here by name, against this same `SCHEMA`, with a message listing the five
+    /// that were not. The list is gone because the refusal is, and what replaced it is
+    /// this: seven spellings in, seven closures out, each report naming the regime asked
+    /// for.
     #[test]
-    fn a_non_materializable_regime_is_refused_by_name() {
-        assert!(materialize_to_nquads_string("d", SCHEMA).is_ok());
-        for name in ["owl-direct", "rif"] {
-            let error = materialize_to_nquads_string(name, SCHEMA).expect_err("unsupported");
-            assert!(error.contains(name), "{error}");
+    fn every_regime_spelling_materializes() {
+        for (name, program) in REGIME_CALLS {
+            let closed = materialize_to_nquads_string(name, SCHEMA, program)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
             assert!(
-                error.contains("materializable regimes: simple, rdf, rdfs, owl-rl, d"),
-                "{error}"
+                closed.report().contains(&format!("\nregime {name}\n")),
+                "{name}: {}",
+                closed.report()
             );
-            // …and the refusal names TWO reasons, not three: `d` is no longer one
-            // of them, so the string must not claim it as a boundary.
-            assert!(!error.contains("d is a spec-inherent boundary"), "{error}");
+            assert!(closed.report().ends_with("overclaims false\n"), "{name}");
+            // The asserted data is carried through by every lane, so none of them is an
+            // empty answer dressed as a closure.
+            assert!(
+                closed.nquads().contains("<http://example.org/A>"),
+                "{name}: {}",
+                closed.nquads()
+            );
         }
+    }
+
+    /// A rule document is an INPUT of exactly one regime, and passing one to any other
+    /// is an error rather than a silently discarded argument.
+    #[test]
+    fn a_rule_document_belongs_to_rif_and_is_refused_elsewhere() {
+        for (name, _) in REGIME_CALLS {
+            if name == "rif" {
+                continue;
+            }
+            let error = materialize_to_nquads_string(name, SCHEMA, RIF_PROGRAM)
+                .expect_err("a rule document for a rule-table regime");
+            assert!(error.contains(name), "{error}");
+            assert!(error.contains("takes no rule document"), "{error}");
+            assert!(error.contains("Regimes that take one: rif"), "{error}");
+        }
+        // …and `rif` without one is an error too: an empty string is not a rule document,
+        // so it fails as a malformed one rather than closing over no rules at all.
+        let error = materialize_to_nquads_string("rif", SCHEMA, "").expect_err("no rule document");
+        assert!(error.contains("rif"), "{error}");
+    }
+
+    /// An `Import` is I/O, and this boundary performs none — so it says so by name.
+    #[test]
+    fn a_rif_import_is_refused_with_its_location() {
+        let importing = RIF_PROGRAM.replace(
+            "<payload>",
+            "<directive><Import><location>http://example.org/facts.nt</location>\
+             </Import></directive><payload>",
+        );
+        let error = materialize_to_nquads_string("rif", SCHEMA, &importing).expect_err("an import");
+        assert!(error.contains("http://example.org/facts.nt"), "{error}");
+        assert!(error.contains("resolve it in the caller"), "{error}");
+    }
+
+    /// The `rif` lane really runs the caller's rules, and only the caller's.
+    #[test]
+    fn the_rif_lane_entails_under_the_supplied_rules() {
+        let closed = materialize_to_nquads_string("rif", SCHEMA, RIF_PROGRAM).expect("rif");
+        // The rule concludes `?x a ex:B` from `?x a ex:A`; the fixture asserts the premise.
+        assert!(
+            closed.nquads().contains(
+                "<http://example.org/x> \
+                 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> ."
+            ),
+            "{}",
+            closed.nquads()
+        );
+        // …and nothing the RDFS table would have added: the rule set is the whole calculus.
+        assert!(
+            !closed
+                .nquads()
+                .contains("<http://www.w3.org/2000/01/rdf-schema#Resource>"),
+            "{}",
+            closed.nquads()
+        );
     }
 
     // ── Materialization ─────────────────────────────────────────────────────
@@ -1886,14 +2105,14 @@ mod tests {
     fn the_closure_infers_under_rdfs_and_not_under_simple() {
         let typed = "<http://example.org/x> \
                      <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .";
-        let rdfs = materialize_to_nquads_string("rdfs", SCHEMA).expect("rdfs");
+        let rdfs = materialize_to_nquads_string("rdfs", SCHEMA, "").expect("rdfs");
         assert!(rdfs.nquads().contains(typed), "{}", rdfs.nquads());
-        let simple = materialize_to_nquads_string("simple", SCHEMA).expect("simple");
+        let simple = materialize_to_nquads_string("simple", SCHEMA, "").expect("simple");
         assert!(!simple.nquads().contains(typed), "{}", simple.nquads());
         // `simple` is the identity closure, so its canonical form is the input's.
         assert_eq!(
             simple.nquads(),
-            materialize_to_nquads_string("simple", simple.nquads())
+            materialize_to_nquads_string("simple", simple.nquads(), "")
                 .expect("simple")
                 .nquads()
         );
@@ -1905,35 +2124,35 @@ mod tests {
     fn a_named_graph_survives_the_boundary() {
         let quads = "<http://example.org/x> <http://example.org/p> <http://example.org/y> \
                      <http://example.org/g> .\n";
-        let closed = materialize_to_nquads_string("simple", quads).expect("simple");
+        let closed = materialize_to_nquads_string("simple", quads, "").expect("simple");
         assert!(closed.nquads().contains("<http://example.org/g>"));
         // …and the RDFS lane reports it as a boundary rather than reasoning over it.
-        let closed = materialize_to_nquads_string("rdfs", quads).expect("rdfs");
+        let closed = materialize_to_nquads_string("rdfs", quads, "").expect("rdfs");
         assert!(closed.report().contains("\nboundary named-graph "));
     }
 
     /// A malformed document is an error, not an empty closure.
     #[test]
     fn a_malformed_document_is_an_error() {
-        assert!(materialize_to_nquads_string("rdfs", "this is not n-quads\n").is_err());
+        assert!(materialize_to_nquads_string("rdfs", "this is not n-quads\n", "").is_err());
     }
 
     // ── The rendering ───────────────────────────────────────────────────────
 
-    /// The rendering is byte-stable across repeated calls, for every
-    /// materializable regime.
+    /// The rendering is byte-stable across repeated calls, for every regime.
     ///
     /// Each `materialize` seeds a freshly-hashed fact store, so a rendering that
     /// leaked any hash order — or any clock, path or address — would diverge here.
     #[test]
     fn the_rendering_is_byte_stable_across_calls() {
-        for regime in MATERIALIZABLE_REGIME_NAMES {
-            let first = materialize_to_nquads_string(regime, SCHEMA).expect("materializable");
-            let second = materialize_to_nquads_string(regime, SCHEMA).expect("materializable");
+        for (regime, program) in REGIME_CALLS {
+            let first = materialize_to_nquads_string(regime, SCHEMA, program).expect("a regime");
+            let second = materialize_to_nquads_string(regime, SCHEMA, program).expect("a regime");
             assert_eq!(first, second, "{regime}");
             // Ten more, so a one-in-two divergence cannot pass by luck.
             for _ in 0..10 {
-                let again = materialize_to_nquads_string(regime, SCHEMA).expect("materializable");
+                let again =
+                    materialize_to_nquads_string(regime, SCHEMA, program).expect("a regime");
                 assert_eq!(again.report(), first.report(), "{regime}");
                 assert_eq!(again.nquads(), first.nquads(), "{regime}");
             }
@@ -1944,9 +2163,9 @@ mod tests {
     /// order, and the derived `overclaims` gate never true.
     #[test]
     fn the_rendering_has_the_documented_shape() {
-        for regime in MATERIALIZABLE_REGIME_NAMES {
-            let report = materialize_to_nquads_string(regime, SCHEMA)
-                .expect("materializable")
+        for (regime, program) in REGIME_CALLS {
+            let report = materialize_to_nquads_string(regime, SCHEMA, program)
+                .expect("a regime")
                 .into_parts()
                 .1;
             let lines: Vec<&str> = report.lines().collect();
@@ -1976,7 +2195,7 @@ mod tests {
     /// drift apart.
     #[test]
     fn the_missing_lines_are_the_inventory_difference() {
-        for regime in MATERIALIZABLE_REGIME_NAMES {
+        for (regime, program) in REGIME_CALLS {
             let defined_set = rules_string(regime).expect("known");
             let defined: Vec<&str> = defined_set.lines().collect();
             let fired_set = implemented_rules_string(regime).expect("known");
@@ -1987,8 +2206,8 @@ mod tests {
                 .filter(|rule| !fired.contains(rule))
                 .collect();
 
-            let report = materialize_to_nquads_string(regime, SCHEMA)
-                .expect("materializable")
+            let report = materialize_to_nquads_string(regime, SCHEMA, program)
+                .expect("a regime")
                 .into_parts()
                 .1;
             let missing: Vec<&str> = report
@@ -2039,48 +2258,61 @@ mod tests {
             out.push_str(line);
             out.push('\n');
         }
-        // Re-run every case and splice its two bodies back in.
+        // Re-run every case and splice its two bodies back in. `@input` and `@program`
+        // are both carried through verbatim AND accumulated, because the second is an
+        // argument to the call that produces the two bodies being rewritten.
         let mut rendered = String::new();
         let mut case_regime: Option<&str> = None;
         let mut input = String::new();
-        let mut in_input = false;
+        let mut program = String::new();
+        let mut open: Option<Section> = None;
         for line in out.lines() {
             if let Some(name) = line.strip_prefix("@regime ") {
                 case_regime = Some(Box::leak(name.to_owned().into_boxed_str()));
             }
-            if line == "@input" {
-                in_input = true;
-                input.clear();
+            if line == "@input" || line == "@program" {
+                let section = if line == "@input" {
+                    input.clear();
+                    Section::Input
+                } else {
+                    program.clear();
+                    Section::Program
+                };
+                open = Some(section);
                 rendered.push_str(line);
                 rendered.push('\n');
                 continue;
             }
             if line == "@end" {
                 let regime = case_regime.expect("a case names its regime");
-                let closed =
-                    materialize_to_nquads_string(regime, &input).expect("a golden case runs");
+                let closed = materialize_to_nquads_string(regime, &input, &program)
+                    .expect("a golden case runs");
                 rendered.push_str("@closure\n");
                 rendered.push_str(closed.nquads());
                 rendered.push_str("@report\n");
                 rendered.push_str(closed.report());
                 rendered.push_str("@end\n");
-                in_input = false;
+                open = None;
+                program.clear();
                 continue;
             }
-            if in_input && !line.starts_with('@') {
-                input.push_str(line);
-                input.push('\n');
+            if open.is_some() && !line.starts_with('@') {
+                let body = if open == Some(Section::Input) {
+                    &mut input
+                } else {
+                    &mut program
+                };
+                body.push_str(line);
+                body.push('\n');
                 rendered.push_str(line);
                 rendered.push('\n');
                 continue;
             }
-            if in_input && line == "@report" {
-                in_input = false;
-                continue;
-            }
             if line.starts_with("@report") {
+                open = None;
                 continue;
             }
+            open = None;
             rendered.push_str(line);
             rendered.push('\n');
         }
@@ -2130,7 +2362,7 @@ mod tests {
     /// consumer three languages away is not left to re-derive the mapping.
     #[test]
     fn boundary_lines_carry_the_reason() {
-        let report = materialize_to_nquads_string("rdfs", SCHEMA)
+        let report = materialize_to_nquads_string("rdfs", SCHEMA, "")
             .expect("rdfs")
             .into_parts()
             .1;
@@ -2146,7 +2378,7 @@ mod tests {
         }
         // `simple` copies faithfully, so it names none — and is therefore the one
         // regime whose `exact` claim carries no contradiction.
-        let simple = materialize_to_nquads_string("simple", SCHEMA)
+        let simple = materialize_to_nquads_string("simple", SCHEMA, "")
             .expect("simple")
             .into_parts()
             .1;
@@ -2159,7 +2391,7 @@ mod tests {
     #[test]
     fn the_contract_hash_distinguishes_the_calculi() {
         let hash_of = |regime: &str| -> String {
-            materialize_to_nquads_string(regime, SCHEMA)
+            materialize_to_nquads_string(regime, SCHEMA, "")
                 .expect("materializable")
                 .into_parts()
                 .1
@@ -2178,7 +2410,7 @@ mod tests {
         // …and it is a property of the calculus, not of the data.
         assert_eq!(rdfs, {
             let other = "<http://example.org/u> <http://example.org/q> <http://example.org/v> .\n";
-            materialize_to_nquads_string("rdfs", other)
+            materialize_to_nquads_string("rdfs", other, "")
                 .expect("rdfs")
                 .into_parts()
                 .1
@@ -2278,7 +2510,7 @@ mod tests {
     /// expected `exact`.
     #[test]
     fn the_two_lanes_render_different_certificates() {
-        let chase = materialize_to_nquads_string("owl-rl", TAXONOMY).expect("owl-rl");
+        let chase = materialize_to_nquads_string("owl-rl", TAXONOMY, "").expect("owl-rl");
         assert!(chase.report().starts_with(REPORT_FORMAT_BANNER));
         let tableau = consistency_to_string(TAXONOMY, 0).expect("consistency");
         assert!(tableau.certificate().starts_with(DL_CERTIFICATE_BANNER));

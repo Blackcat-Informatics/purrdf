@@ -28,9 +28,15 @@ What is asserted here, and why:
   (`crates/validate/tests/fixtures/regime-boundary.vectors`) is walked through
   `materialize_nt` here, so Python checks the same bytes the Rust test, the C ABI
   and the WASM module do rather than a fixture of its own.
+* **Every regime materializes.** All seven close; none is refused for being the
+  regime it is. Two of them need an INPUT rather than permission — `rif` its rule
+  document and `owl-direct` a query's class expressions — and `program` is the
+  parameter that carries the first. `owl-direct` takes none here because this
+  surface closes a dataset rather than answering a query, so what runs is the
+  query-independent tableau augmentation.
 * **Refusals are typed and legible.** A malformed document, an unknown regime
-  spelling, and a regime that cannot be forward-materialized all raise
-  `ValueError`, and the spelling error names the whole accepted set.
+  spelling, and a `program` that is wrong for the regime all raise `ValueError`,
+  and the spelling error names the whole accepted set.
 """
 
 from __future__ import annotations
@@ -75,22 +81,45 @@ ALL_REGIMES = [
     entail.Regime.RIF,
     entail.Regime.D,
 ]
-# Every regime that closes. `D` belongs here: datatype entailment is realized as
-# the five `dt-*` rules of OWL 2 Profiles §4.3 Table 8, so it chases like any
-# other rule table. Omitting it would exempt the newly-materializable regime from
-# the byte-determinism and gap-versus-report coverage the other four get.
-MATERIALIZABLE = [
+# A normative RIF-in-XML rule document: `?x a ex:A` ⟹ `?x a ex:B`.
+#
+# `rif` is the one regime whose calculus is the CALLER's rather than a
+# specification's, so it is the one spelling whose `program` argument is a document.
+RIF_PROGRAM = (
+    '<Document xmlns="http://www.w3.org/2007/rif#"><payload><Group><sentence><Forall><declare><Var>x</Var></declare><formula><Implies><if><Frame><object><Var>x</Var></object><slot><Const type="http://www.w3.org/2007/rif#iri">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type="http://www.w3.org/2007/rif#iri">https://example.org/A</Const></slot></Frame></if><then><Frame><object><Var>x</Var></object><slot><Const type="http://www.w3.org/2007/rif#iri">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type="http://www.w3.org/2007/rif#iri">https://example.org/B</Const></slot></Frame></then></Implies></formula></Forall></sentence></Group></payload></Document>'
+)
+# The conclusion RIF_PROGRAM licenses over SCHEMA, which is also what cax-sco
+# licenses under OWL-RL — so the `rif` lane deriving it shows the RULE fired.
+RIF_INFERENCE = SUBCLASS_INFERENCE
+
+# Every regime, with the `program` its call takes.
+#
+# THE POINT OF THIS TABLE is that it has seven rows. It replaces a
+# `MATERIALIZABLE`/`NOT_MATERIALIZABLE` split in which two of the seven were
+# exempt from every cross-cutting assertion below and covered only by a refusal
+# test. `materialize` is total over its parameter now, so they are not exempt.
+REGIME_CALLS = [
+    (entail.Regime.SIMPLE, ""),
+    (entail.Regime.RDF, ""),
+    (entail.Regime.RDFS, ""),
+    (entail.Regime.OWL_RL, ""),
+    (entail.Regime.OWL_DIRECT, ""),
+    (entail.Regime.RIF, RIF_PROGRAM),
+    (entail.Regime.D, ""),
+]
+# The regimes whose whole input is a rule table this workspace states — the ones
+# `rules()` minus `implemented_rules()` is arithmetic about. The two
+# query-directed lanes have no such table (`rules()` is `[]` for both), so the
+# inventory assertions below range over these and say why.
+RULE_TABLE_REGIMES = [
     entail.Regime.SIMPLE,
     entail.Regime.RDF,
     entail.Regime.RDFS,
     entail.Regime.OWL_RL,
     entail.Regime.D,
 ]
-# Exactly two regimes are refused, both for spec-inherent reasons: OWL-Direct
-# needs the query's class expressions and RIF needs a parsed rule set. D was
-# once here; it is materializable now, and a test asserting otherwise would
-# pin a capability gap that has been closed.
-NOT_MATERIALIZABLE = [
+# The regimes with no rule table of their own.
+NO_RULE_TABLE = [
     entail.Regime.OWL_DIRECT,
     entail.Regime.RIF,
 ]
@@ -115,7 +144,7 @@ def _dataset(text: str = SCHEMA) -> RdfDataset:
 
 def test_owl_rl_derives_what_parsing_does_not() -> None:
     """OWL-RL infers triples that are in neither the input nor a Simple closure."""
-    closure, _report = entail.materialize(_dataset(), entail.Regime.OWL_RL)
+    closure, _report = entail.materialize(_dataset(), entail.Regime.OWL_RL, "")
     closed = closure.to_nquads()
 
     assert SUBCLASS_INFERENCE in closed, closed
@@ -124,21 +153,21 @@ def test_owl_rl_derives_what_parsing_does_not() -> None:
     assert SUBCLASS_INFERENCE not in SCHEMA
     assert SYMMETRY_INFERENCE not in SCHEMA
     # `simple` is the identity closure: the same input yields neither.
-    identity, _ = entail.materialize(_dataset(), entail.Regime.SIMPLE)
+    identity, _ = entail.materialize(_dataset(), entail.Regime.SIMPLE, "")
     assert SUBCLASS_INFERENCE not in identity.to_nquads()
     assert SYMMETRY_INFERENCE not in identity.to_nquads()
 
 
 def test_symmetry_is_owl_only_not_rdfs() -> None:
     """`prp-symp` is an OWL rule: RDFS must NOT license the symmetric triple."""
-    rdfs, _ = entail.materialize(_dataset(), entail.Regime.RDFS)
+    rdfs, _ = entail.materialize(_dataset(), entail.Regime.RDFS, "")
     assert SUBCLASS_INFERENCE in rdfs.to_nquads(), "rdfs9/cax-sco still fires"
     assert SYMMETRY_INFERENCE not in rdfs.to_nquads()
 
 
 def test_base_triples_survive_the_closure() -> None:
     """A closure adds; it never drops. Every input triple is still present."""
-    closure, _ = entail.materialize(_dataset(), entail.Regime.OWL_RL)
+    closure, _ = entail.materialize(_dataset(), entail.Regime.OWL_RL, "")
     closed = closure.to_nquads()
     for line in SCHEMA.splitlines():
         assert line in closed, f"input triple dropped by the closure: {line}"
@@ -147,7 +176,7 @@ def test_base_triples_survive_the_closure() -> None:
 
 def test_report_names_the_rules_that_fired() -> None:
     """The report is not optional and says what the run actually did."""
-    _closure, report = entail.materialize(_dataset(), entail.Regime.OWL_RL)
+    _closure, report = entail.materialize(_dataset(), entail.Regime.OWL_RL, "")
     assert report.startswith("purrdf-reasoning-report 1\n")
     assert "\nregime owl-rl\n" in report
     # The conclusion counts are the engine's to report, so only the fact that
@@ -164,9 +193,9 @@ def test_report_names_the_rules_that_fired() -> None:
 
 def test_materialize_nt_matches_the_dataset_path_byte_for_byte() -> None:
     """The string wrapper is the same boundary call, not a second engine path."""
-    text_closure, text_report = entail.materialize_nt(SCHEMA, entail.Regime.OWL_RL)
+    text_closure, text_report = entail.materialize_nt(SCHEMA, entail.Regime.OWL_RL, "")
     dataset_closure, dataset_report = entail.materialize(
-        _dataset(), entail.Regime.OWL_RL
+        _dataset(), entail.Regime.OWL_RL, ""
     )
     assert text_closure == dataset_closure.to_nquads()
     assert text_report == dataset_report
@@ -174,7 +203,7 @@ def test_materialize_nt_matches_the_dataset_path_byte_for_byte() -> None:
 
 def test_to_nquads_round_trips() -> None:
     """A serialized closure re-parses, and re-serializes to the same bytes."""
-    closure, _ = entail.materialize(_dataset(), entail.Regime.OWL_RL)
+    closure, _ = entail.materialize(_dataset(), entail.Regime.OWL_RL, "")
     serialized = closure.to_nquads()
     reparsed = RdfDataset(serialized, RdfFormat.N_QUADS)
     assert reparsed.to_nquads() == serialized
@@ -186,47 +215,83 @@ def test_to_nquads_round_trips() -> None:
 # ── Byte determinism ────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("regime", MATERIALIZABLE, ids=lambda r: str(r))
-def test_repeated_calls_are_byte_identical(regime: entail.Regime) -> None:
-    """Twelve runs of each materializable regime produce identical bytes.
+@pytest.mark.parametrize("regime,program", REGIME_CALLS, ids=lambda r: str(r))
+def test_repeated_calls_are_byte_identical(regime: entail.Regime, program: str) -> None:
+    """Twelve runs of EVERY regime produce identical bytes.
 
     A closure that leaked hash iteration order, a clock, a path or an address
     would diverge across these calls; a one-in-two divergence cannot pass by luck
     at this repetition count.
     """
-    first_closure, first_report = entail.materialize(_dataset(), regime)
+    first_closure, first_report = entail.materialize(_dataset(), regime, program)
     first = first_closure.to_nquads()
     for _ in range(11):
-        closure, report = entail.materialize(_dataset(), regime)
+        closure, report = entail.materialize(_dataset(), regime, program)
         assert closure.to_nquads() == first
         assert report == first_report
     # …and the text path is stable in the same way.
-    text = entail.materialize_nt(SCHEMA, regime)
-    assert entail.materialize_nt(SCHEMA, regime) == text
+    text = entail.materialize_nt(SCHEMA, regime, program)
+    assert entail.materialize_nt(SCHEMA, regime, program) == text
 
 
 # ── Every regime member is accepted ─────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("regime", ALL_REGIMES, ids=lambda r: str(r))
-def test_every_regime_member_is_accepted(regime: entail.Regime) -> None:
-    """No `Regime` member is rejected as an unknown value.
+@pytest.mark.parametrize("regime,program", REGIME_CALLS, ids=lambda r: str(r))
+def test_every_regime_member_materializes(regime: entail.Regime, program: str) -> None:
+    """EVERY `Regime` member closes. None is refused for being the regime it is.
 
-    The two that cannot be forward-materialized are refused for *that* reason —
-    the message names the regimes that can be — and never as a bad argument.
+    Falsifiable against the behaviour this replaced: `OWL_DIRECT` and `RIF` raised
+    `ValueError` here with a message listing the five regimes that "can be
+    forward-materialized". `materialize` is total over its parameter now — what
+    those two needed was an input, and `program` is where it goes.
     """
     assert isinstance(entail.rules(regime), list)
     assert isinstance(entail.implemented_rules(regime), list)
-    if regime in NOT_MATERIALIZABLE:
-        with pytest.raises(ValueError, match="materializable regimes:") as refusal:
-            entail.materialize(_dataset(), regime)
-        assert "cannot be forward-materialized" in str(refusal.value)
-        with pytest.raises(ValueError, match="materializable regimes:"):
-            entail.materialize_nt(SCHEMA, regime)
-    else:
-        closure, report = entail.materialize(_dataset(), regime)
-        assert closure.quad_count() >= 4
-        assert report.startswith("purrdf-reasoning-report 1\n")
+    closure, report = entail.materialize(_dataset(), regime, program)
+    assert closure.quad_count() >= 4
+    assert report.startswith("purrdf-reasoning-report 1\n")
+    assert report.endswith("overclaims false\n")
+    # …and the text path agrees, byte for byte, on the same regime and program.
+    text_closure, text_report = entail.materialize_nt(SCHEMA, regime, program)
+    assert text_closure == closure.to_nquads()
+    assert text_report == report
+
+
+def test_the_rif_lane_entails_under_the_supplied_rules() -> None:
+    """The `rif` lane runs the CALLER's rules, and nothing else's.
+
+    The rule set is the whole calculus for this regime: the conclusion appears
+    because the rule fired, and the RDFS axiomatic vocabulary does not, because
+    no rule table ran.
+    """
+    closure, report = entail.materialize(_dataset(), entail.Regime.RIF, RIF_PROGRAM)
+    closed = closure.to_nquads()
+    assert RIF_INFERENCE in closed, closed
+    assert "\nregime rif\n" in report
+    assert "http://www.w3.org/2000/01/rdf-schema#Resource" not in closed
+
+
+def test_owl_direct_materializes_the_query_independent_augmentation() -> None:
+    """`OWL_DIRECT` closes: the tableau states what it decides about named terms."""
+    closure, report = entail.materialize(_dataset(), entail.Regime.OWL_DIRECT, "")
+    assert SUBCLASS_INFERENCE in closure.to_nquads(), closure.to_nquads()
+    assert "\nregime owl-direct\n" in report
+
+
+@pytest.mark.parametrize("regime,program", REGIME_CALLS, ids=lambda r: str(r))
+def test_a_rule_document_belongs_to_rif_alone(
+    regime: entail.Regime, program: str
+) -> None:
+    """A `program` for a regime that takes none is refused, never discarded."""
+    if program:
+        return
+    for call in (
+        lambda: entail.materialize(_dataset(), regime, RIF_PROGRAM),
+        lambda: entail.materialize_nt(SCHEMA, regime, RIF_PROGRAM),
+    ):
+        with pytest.raises(ValueError, match="takes no rule document"):
+            call()
 
 
 @pytest.mark.parametrize("spelling", ACCEPTED_SPELLINGS)
@@ -250,9 +315,9 @@ def test_owl_rl_rule_inventory_is_the_specification_table() -> None:
     # RDFS is its own 18-rule table; RDF is 3; the rest have none.
     assert len(entail.rules(entail.Regime.RDFS)) == 18
     assert len(entail.rules(entail.Regime.RDF)) == 3
-    # D is the datatype table; Simple and the two refused regimes state no rules.
+    # D is the datatype table; Simple and the two query-directed lanes state none.
     assert len(entail.rules(entail.Regime.D)) == 5
-    for regime in [entail.Regime.SIMPLE, *NOT_MATERIALIZABLE]:
+    for regime in [entail.Regime.SIMPLE, *NO_RULE_TABLE]:
         assert entail.rules(regime) == []
         assert entail.implemented_rules(regime) == []
 
@@ -278,14 +343,14 @@ def test_implemented_rules_are_measurable_against_the_specification_table() -> N
     assert [rule for rule in spec if rule in fired] == fired
 
 
-@pytest.mark.parametrize("regime", MATERIALIZABLE, ids=lambda r: str(r))
+@pytest.mark.parametrize("regime", RULE_TABLE_REGIMES, ids=lambda r: str(r))
 def test_the_gap_is_exactly_the_reports_missing_lines(regime: entail.Regime) -> None:
     """The inventory and the report cannot drift apart."""
     spec = entail.rules(regime)
     fired = entail.implemented_rules(regime)
     gap = [rule for rule in spec if rule not in fired]
 
-    _closure, report = entail.materialize(_dataset(), regime)
+    _closure, report = entail.materialize(_dataset(), regime, "")
     missing = [
         line.removeprefix("missing ")
         for line in report.splitlines()
@@ -311,7 +376,7 @@ def test_the_gap_is_exactly_the_reports_missing_lines(regime: entail.Regime) -> 
 def test_malformed_input_raises_value_error() -> None:
     """A malformed document is an error, not an empty closure."""
     with pytest.raises(ValueError):
-        entail.materialize_nt("this is not n-quads\n", entail.Regime.RDFS)
+        entail.materialize_nt("this is not n-quads\n", entail.Regime.RDFS, "")
     with pytest.raises(ValueError):
         RdfDataset("this is not n-quads\n", RdfFormat.N_QUADS)
 
@@ -319,8 +384,8 @@ def test_malformed_input_raises_value_error() -> None:
 def test_unknown_regime_spelling_names_the_accepted_set() -> None:
     """The error a caller three language boundaries away has to act on."""
     for call in (
-        lambda: entail.materialize(_dataset(), "rdfs-plus"),
-        lambda: entail.materialize_nt(SCHEMA, "rdfs-plus"),
+        lambda: entail.materialize(_dataset(), "rdfs-plus", ""),
+        lambda: entail.materialize_nt(SCHEMA, "rdfs-plus", ""),
         lambda: entail.rules("rdfs-plus"),
         lambda: entail.implemented_rules("rdfs-plus"),
     ):
@@ -364,8 +429,15 @@ GOLDEN_VECTOR = (
     / "regime-boundary.vectors"
 )
 
-# The directives that open a body, mapped to the case field they fill.
-_BODY_DIRECTIVES = {"@input": "input", "@closure": "closure", "@report": "report"}
+# The directives that open a body, mapped to the case field they fill. `@program`
+# is the regime's own rule document; absent is the empty program, which is what
+# every regime but `rif` takes.
+_BODY_DIRECTIVES = {
+    "@input": "input",
+    "@program": "program",
+    "@closure": "closure",
+    "@report": "report",
+}
 
 
 def _golden_cases() -> list[dict[str, str]]:
@@ -401,11 +473,11 @@ def _golden_cases() -> list[dict[str, str]]:
 
 
 def test_the_golden_vector_artifact_is_readable() -> None:
-    """The artifact exists, parses, and covers every materializable regime."""
+    """The artifact exists, parses, and covers every regime — all seven."""
     cases = _golden_cases()
     assert cases, GOLDEN_VECTOR
     covered = {case["regime"] for case in cases}
-    for regime in MATERIALIZABLE:
+    for regime in ALL_REGIMES:
         spelling = str(regime).rsplit(".", 1)[-1].lower().replace("_", "-")
         assert spelling in covered, f"{spelling} is not covered by {GOLDEN_VECTOR}"
 
@@ -419,6 +491,8 @@ def test_the_golden_vector_matches_through_python(case: dict[str, str]) -> None:
     A divergence here is the same one failing artifact the other three hosts
     report, not a fourth fixture that quietly stopped agreeing with them.
     """
-    closure, report = entail.materialize_nt(case["input"], case["regime"])
+    closure, report = entail.materialize_nt(
+        case["input"], case["regime"], case.get("program", "")
+    )
     assert closure == case["closure"]
     assert report == case["report"]

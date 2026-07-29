@@ -531,11 +531,10 @@ export function liftProjection(
   configJson: string,
 ): ProjectionLift;
 /**
- * The CLI/C-ABI/Python/JS spellings of the SPARQL entailment regimes. Five of
- * them — `simple`, `rdf`, `rdfs`, `owl-rl` and `d` — can be forward-materialized
- * (`d` is realized as the five `dt-*` rules of OWL 2 Profiles §4.3 Table 8).
- * Exactly two cannot: `owl-direct` needs the query's class expressions and `rif`
- * needs a parsed rule set, neither of which `entailMaterialize` is given.
+ * The CLI/C-ABI/Python/JS spellings of the SPARQL entailment regimes. ALL SEVEN
+ * materialize through `entailMaterialize`; none is refused for being the regime
+ * it is. Two of them need an extra INPUT rather than permission, and the
+ * `program` argument is where it goes — see `entailMaterialize`.
  */
 export type EntailmentRegime =
   | "simple"
@@ -546,9 +545,23 @@ export type EntailmentRegime =
   | "rif"
   | "d";
 
+/**
+ * Close `document` (N-Quads, which accepts N-Triples) under `regime`.
+ *
+ * `program` is the regime's own rule document. `"rif"` entails under the
+ * *caller's* rules, which PurRDF does not declare, so its `program` is a
+ * normative RIF-in-XML document; every other regime's rule table is the
+ * specification's, so its `program` is `""` and a non-empty one throws rather
+ * than being silently discarded.
+ *
+ * `"owl-direct"` takes no program either: its extra input is a *query's* class
+ * expressions, and this is a document boundary with no query, so it runs the
+ * query-independent tableau augmentation.
+ */
 export function entailMaterialize(
   document: string,
   regime: EntailmentRegime | string,
+  program: string,
 ): RegimeClosure;
 export function entailRules(regime: EntailmentRegime | string): string[];
 export function entailImplementedRules(regime: EntailmentRegime | string): string[];

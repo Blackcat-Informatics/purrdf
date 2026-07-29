@@ -62,9 +62,13 @@ caller-supplied configuration.
 - **ShEx 2.1** — ShExC/ShExJ schemas and shape-map validation, gated against the
   official shexTest suite.
 - **Entailment** — Simple / RDF / RDFS / OWL 2 RL / D forward materialization
-  (all 78 OWL 2 RL rules of OWL 2 Profiles §4.3 Tables 4–9; 14 of the 18 RDF +
-  RDFS patterns, the four residuals being the ones that conclude about a fresh
-  blank node) plus query-directed OWL-Direct and RIF, entirely in interned
+  (all 78 OWL 2 RL rules of OWL 2 Profiles §4.3 Tables 4–9 — *rule-table
+  coverage*, which is not entailment conformance: on W3C's own OWL 2 RL
+  entailment tests this chase scores **10 of 27 positive and 23 of 23
+  negative**, the latter meaning no unsoundness was found; all 18 RDF + RDFS
+  patterns, the four existential ones firing through the restricted chase with
+  their surrogate blank nodes withheld at the materialization boundary) plus
+  query-directed OWL-Direct and RIF, entirely in interned
   `TermId` space. Every closure comes back with a `ReasoningReport` saying which
   rules fired, which did not, which boundaries the run met, and the contract hash
   of the calculus it ran. The umbrella `query_with_entailment` façade keeps query

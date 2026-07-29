@@ -18,9 +18,9 @@
 //! parsed, a pack source is rebuilt via [`source::load_dataset`]) instead of taking
 //! the zero-copy view path:
 //!
-//! * `--entailment REGIME` materializes the regime's closure in memory (rejecting
-//!   the non-materializable regimes on the same exit-3 path as `reason`), and its
-//!   reasoning report is surfaced under `--report`.
+//! * `--entailment REGIME` materializes the regime's closure in memory (through the
+//!   same `EntailmentPlan` `reason` resolves, so `--rules` means the same thing
+//!   here), and its reasoning report is surfaced under `--report`.
 //! * `--canonical` emits the RDFC-1.0 canonical N-Quads document
 //!   ([`canonical_flat_nquads`]) rather than the `--to` format. Canonical output is
 //!   always N-Quads, so `--canonical` OVERRIDES (and lets you omit) `--to`.
@@ -78,6 +78,8 @@ pub(crate) struct ConvertOptions<'a> {
     pub(crate) base: Option<&'a str>,
     /// The `--entailment` regime to materialize before serializing.
     pub(crate) entailment: Option<CliRegime>,
+    /// `--rules`: the RIF-in-XML rule document `--entailment rif` runs.
+    pub(crate) rules: Option<&'a std::path::Path>,
     /// Whether `--canonical` was set (emit RDFC-1.0 canonical N-Quads).
     pub(crate) canonical: bool,
     /// Explicit JSON-LD/YAML-LD serialization configuration.
@@ -171,14 +173,14 @@ fn run_with_transforms(
     };
     let dataset = source::load_dataset(input, source_format, options.base)?;
 
-    // Entail first: materialize the regime's closure (rejecting the
-    // non-materializable regimes on the same exit-3 path `reason` uses).
+    // Entail first: materialize the regime's closure, through the same
+    // `EntailmentPlan` `reason` resolves — so `--rules` means the same thing here.
     let dataset: Arc<RdfDataset> = match options.entailment {
         Some(regime) => {
-            let regime = reason::resolve_materializable_regime(regime)?;
+            let plan = reason::EntailmentPlan::resolve(regime, options.rules)?;
             // The closure is what gets serialized; the report is what `--report` carries,
             // so a converted document can be traced back to the run that derived it.
-            let (closure, reasoning) = materialize(&dataset, regime)?;
+            let (closure, reasoning) = materialize(&dataset, plan.materialization())?;
             report::surface(report_target, &reasoning)?;
             closure
         }

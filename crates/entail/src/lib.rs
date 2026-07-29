@@ -24,14 +24,24 @@
 //! and a closure over it would answer a question nobody asked.
 //!
 //! The open-world `OWL-Direct` (Description-Logic tableau) and `RIF` (rule engine)
-//! regimes need inputs the plain [`materialize`] façade does not have (the query's
-//! class expressions; a parsed rule set), and each is served by a TOTAL entry point that
-//! takes that input as a non-optional parameter — [`materialize_dl_reported`] and
-//! [`materialize_rif`]. Neither is a second-best surface: each returns the same
-//! <code>(closure, [ReasoningReport])</code> pair [`materialize`] returns, applies the same
-//! overclaim gate, and has no report-free twin to reach for instead. There is therefore no
-//! regime this crate cannot materialize; what [`materialize`] alone cannot do is materialize
-//! one from a [`Regime`] VALUE, because a regime value does not carry a rule set.
+//! regimes need inputs the other five do not: the query's class expressions, and a parsed
+//! rule set. That is a fact about the REGIMES, so it is stated in the type the caller
+//! selects one with. [`materialize`] takes a [`Materialization`], not a [`Regime`], and a
+//! `Materialization` carries each regime's own input as a non-optional field —
+//! [`Materialization::OwlDirect`] a basic graph pattern, [`Materialization::Rif`] a
+//! [`RuleSet`]. All seven inhabitants are served, so `materialize` is TOTAL over its
+//! parameter and there is no regime this crate refuses.
+//!
+//! [`Regime`] stays: it is the REPORTING and IDENTITY type — what
+//! [`ReasoningReport::regime`] names, what [`rules`] and [`implemented`] are indexed by,
+//! what [`Regime::from_iri`] parses a `sparql:entailmentRegime` IRI into.
+//! [`Materialization::regime`] is the map from the input to the identity. Splitting the two
+//! is what lets "which regime is this" stay a seven-way copyable value while "run this
+//! regime" carries the inputs that regime is defined by.
+//!
+//! The two lanes are still reachable directly, as [`materialize_dl_reported`] and
+//! [`materialize_rif`]: `materialize` DELEGATES to them rather than restating them, so
+//! there is one implementation of each lane and one overclaim gate on each emission path.
 //!
 //! # The Description-Logic services
 //!
@@ -48,11 +58,7 @@
 //! entailment IS materializable: this crate realizes it as Simple entailment plus the
 //! five `dt-*` rules of OWL 2 Profiles §4.3 Table 8, which is the part of D-entailment a
 //! forward chase can produce, and reports the value-space boundary the rest of it lives
-//! behind. Only `OWL-Direct` and `RIF` remain [`EntailError::Unsupported`] through this
-//! façade, and both because they need an input it does not have — not because this crate
-//! cannot serve them. [`materialize_dl_reported`] and [`materialize_rif`] serve them
-//! totally, and the refusal here is what a signature that takes a bare [`Regime`] can say
-//! about a regime whose input is missing from the call.
+//! behind.
 //!
 //! What each regime *is* and what this crate currently *does* are both data, not
 //! prose: [`rules`] returns the specification rule table a [`Regime`] is defined by
@@ -170,12 +176,90 @@ impl Regime {
     }
 }
 
+/// A regime TOGETHER WITH the input that regime is defined by — the parameter
+/// [`materialize`] is total over.
+///
+/// Five of the seven SPARQL entailment regimes are defined by a fixed rule table this
+/// crate states, so naming them is the whole input. Two are not: `OWL-Direct` is
+/// query-directed (the tableau augments the data for the class expressions the QUERY
+/// mentions) and `RIF` entails under a rule set the CALLER wrote. A parameter that could
+/// not express those two inputs would make `materialize` partial in its own signature —
+/// a caller could hand it a value it is documented to accept and get a refusal instead of
+/// an answer — so the parameter expresses them.
+///
+/// [`Regime`] remains the regime's IDENTITY: [`Self::regime`] maps this value onto it, and
+/// that is what [`ReasoningReport::regime`], [`rules`], [`implemented`] and
+/// [`calculus_program`] speak in. The two types answer different questions — "which regime
+/// is this" and "run this regime" — and only the second one needs a rule set.
+///
+/// `Copy`, because every payload is a shared borrow: passing a plan costs a pointer pair,
+/// never a clone of the rule set.
+///
+/// ```
+/// use purrdf_entail::{Materialization, Regime, RuleSet};
+///
+/// let rules = RuleSet::new();
+/// assert_eq!(Materialization::Rdfs.regime(), Regime::Rdfs);
+/// // The two query-directed lanes carry their input, so naming them is not enough —
+/// // and once it is supplied there is nothing left to refuse.
+/// assert_eq!(Materialization::OwlDirect(&[]).regime(), Regime::OwlDirect);
+/// assert_eq!(Materialization::Rif(&rules).regime(), Regime::Rif);
+/// ```
+#[derive(Debug, Clone, Copy)]
+pub enum Materialization<'a> {
+    /// `entailment/Simple` — the identity closure.
+    Simple,
+    /// `entailment/RDF` — the RDF rule table.
+    Rdf,
+    /// `entailment/RDFS` — the eighteen RDFS patterns.
+    Rdfs,
+    /// `entailment/OWL-RL` — the whole of OWL 2 Profiles §4.3 Tables 4–9.
+    OwlRl,
+    /// `entailment/D` — Simple entailment plus the five `dt-*` rules of Table 8.
+    D,
+    /// `entailment/OWL-Direct` — the ALCOIQ tableau, directed by the query's basic graph
+    /// pattern.
+    ///
+    /// The pattern is what makes this lane query-directed: a class expression written in
+    /// the query is re-materialized and its instances retrieved, so the augmented dataset's
+    /// SIMPLE-entailment answers to THAT query are the OWL Direct-Semantics certain
+    /// answers. An EMPTY pattern is a legitimate input and not a degenerate one: it asks
+    /// for the query-independent augmentation — the classification, the realization, the
+    /// entailed role assertions and the `owl:sameAs` identifications the tableau decides
+    /// about the ontology's own named terms — which is the whole answer when there is no
+    /// query to direct it. See [`materialize_dl_reported`].
+    OwlDirect(&'a [QTriple]),
+    /// `entailment/RIF` — the caller's RIF-Core rule set, forward-chained to a fixpoint.
+    ///
+    /// The rule set is the caller's document: this crate declares no RIF rules of its own,
+    /// mints no [`RuleId`] for a rule it did not author, and therefore cannot supply a
+    /// default. See [`materialize_rif`], and [`parse_rif_xml`] for building a [`RuleSet`]
+    /// from a normative RIF-in-XML document.
+    Rif(&'a RuleSet),
+}
+
+impl Materialization<'_> {
+    /// The [`Regime`] this plan runs — its reporting and inventory identity.
+    ///
+    /// The match is exhaustive with no wildcard arm, so the compiler is what forces this
+    /// map to be revisited if either enum grows.
+    #[must_use]
+    pub const fn regime(&self) -> Regime {
+        match self {
+            Self::Simple => Regime::Simple,
+            Self::Rdf => Regime::Rdf,
+            Self::Rdfs => Regime::Rdfs,
+            Self::OwlRl => Regime::OwlRl,
+            Self::D => Regime::D,
+            Self::OwlDirect(_) => Regime::OwlDirect,
+            Self::Rif(_) => Regime::Rif,
+        }
+    }
+}
+
 /// Why a closure could not be produced.
 #[derive(Debug, Clone)]
 pub enum EntailError {
-    /// The regime is a spec-inherent boundary for this crate (`D`-entailment, or
-    /// `OWL-Direct` reached without a query through the plain [`materialize`] façade).
-    Unsupported(Regime),
     /// Building the derived dataset failed.
     Build(String),
     /// A knowledge-base or rule document was malformed (e.g. an ill-formed OWL
@@ -276,7 +360,6 @@ pub enum EntailError {
 impl std::fmt::Display for EntailError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Unsupported(r) => write!(f, "entailment regime {r:?} is not materializable"),
             Self::Build(msg) => write!(f, "entailment build error: {msg}"),
             Self::Parse(msg) => write!(f, "entailment parse error: {msg}"),
             Self::Evaluate(error) => write!(f, "entailment evaluation error: {error}"),
@@ -311,11 +394,20 @@ impl std::fmt::Display for EntailError {
 
 impl std::error::Error for EntailError {}
 
-/// Compute the entailment closure of `ds` under `regime`, and say what was done.
+/// Compute the entailment closure of `ds` under `plan`, and say what was done.
 ///
 /// Returns the closure — a new dataset holding every original quad plus the inferred
 /// triples, each in the graph that produced it; `Simple` returns a faithful copy —
 /// together with the [`ReasoningReport`] for the run.
+///
+/// # It is TOTAL over its parameter
+///
+/// Every one of [`Materialization`]'s seven inhabitants is served. There is no regime this
+/// function refuses, because the parameter carries what each regime needs rather than
+/// naming a regime and hoping: [`Materialization::OwlDirect`] holds the query's basic
+/// graph pattern and [`Materialization::Rif`] holds the rule set. Those two lanes are
+/// DELEGATED to [`materialize_dl_reported`] and [`materialize_rif`] — one implementation
+/// each, one overclaim gate each — rather than restated here.
 ///
 /// # What a DATASET entails is a defined choice, and this is the choice
 ///
@@ -344,35 +436,25 @@ impl std::error::Error for EntailError {}
 /// entailment" meant twelve of seventy-eight rules. Binding it costs one `_`; not having
 /// it cost this repository a documented overclaim.
 ///
-/// `OWL-Direct` is not reachable here — it requires the query's class expressions. `RIF`
-/// requires a parsed rule set. Each is served by a TOTAL entry point that takes its
-/// required input as a non-optional parameter and returns the same
-/// <code>(closure, [ReasoningReport])</code> pair under the same overclaim gate:
-/// [`materialize_dl_reported`] and [`materialize_rif`]. The refusal below is therefore a
-/// statement about THIS SIGNATURE — a [`Regime`] value carries no rule set and no basic
-/// graph pattern, so two of its seven inhabitants name a run this call has no input for —
-/// and not a statement about a regime the crate cannot close.
-///
 /// # Errors
 ///
-/// [`EntailError::Unsupported`] for `OWL-Direct`/`RIF` (the two regimes that need an
-/// input this façade does not have); [`EntailError::Inconsistent`] if a rule that
-/// concludes `false` matched; [`EntailError::Evaluate`] if the run passes one of
-/// `purrdf-datalog`'s three fixed evaluation ceilings; [`EntailError::Build`] if the
-/// derived dataset cannot be frozen; [`EntailError::Overclaim`] if the assembled report
-/// contradicts its own boundary evidence.
+/// [`EntailError::Inconsistent`] if a rule that concludes `false` matched;
+/// [`EntailError::Evaluate`] if the run passes one of `purrdf-datalog`'s three fixed
+/// evaluation ceilings; [`EntailError::Build`] if the derived dataset cannot be frozen;
+/// [`EntailError::Overclaim`] if the assembled report contradicts its own boundary
+/// evidence. The two delegated lanes add their own: [`EntailError::Unsatisfiable`] and
+/// [`EntailError::Parse`].
 ///
 /// Two of those errors describe a RUN, and both carry it. [`EntailError::Inconsistent`]
 /// carries an [`InconsistentRun`] — the witness AND the [`ReasoningReport`] for everything
 /// the run had done when it stopped — because "there is no report-free variant of this
 /// function" has to hold for the caller whose data is bad, or it is not a rule. And
 /// [`EntailError::Overclaim`] carries the offending report, so the contradiction is
-/// diagnosable. The rest are the absence of a run: [`EntailError::Unsupported`] already
-/// names the regime it refused, an exhausted budget carries its own accurate consumption
-/// figures, and nothing was closed for a report to describe.
+/// diagnosable. The rest are the absence of a run: an exhausted budget carries its own
+/// accurate consumption figures, and nothing was closed for a report to describe.
 ///
 /// ```
-/// use purrdf_entail::{Regime, RuleId, materialize};
+/// use purrdf_entail::{Materialization, Regime, RuleId, materialize};
 /// use purrdf_core::RdfDatasetBuilder;
 ///
 /// let mut builder = RdfDatasetBuilder::new();
@@ -386,7 +468,7 @@ impl std::error::Error for EntailError {}
 /// let dataset = builder.freeze().expect("freeze");
 ///
 /// // rdfs9 re-types the instance — `tom` is an `Animal` as well as a `Cat`.
-/// let (closure, report) = materialize(&dataset, Regime::Rdfs).expect("rdfs");
+/// let (closure, report) = materialize(&dataset, Materialization::Rdfs).expect("rdfs");
 /// assert!(report.rules_fired().iter().any(|&(r, n)| r == RuleId::Rdfs9 && n >= 1));
 /// // …but it is far from the only conclusion: the RDFS lane asserts the axiomatic
 /// // triples, so `Cat` and `Animal` are `rdfs:Class`es (rdfs2 / rdfs3 over the
@@ -400,17 +482,28 @@ impl std::error::Error for EntailError {}
 /// // entailment regime admits, so every conclusion mentioning one is withheld.
 /// assert!(report.completeness().missing().is_empty());
 /// assert!(!report.overclaims());
+///
+/// // …and the two lanes that need an input are reached the same way, through the same
+/// // function, once that input is in the parameter.
+/// let (_, dl) = materialize(&dataset, Materialization::OwlDirect(&[])).expect("owl-direct");
+/// assert_eq!(dl.regime(), Regime::OwlDirect);
 /// ```
 pub fn materialize(
     ds: &RdfDataset,
-    regime: Regime,
+    plan: Materialization<'_>,
 ) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
-    let (closure, stats) = match regime {
-        Regime::Simple => (engine::copy_of(ds)?, report::RunStats::none()),
-        Regime::Rdf | Regime::Rdfs | Regime::OwlRl | Regime::D => engine::close(ds, regime)?,
-        Regime::OwlDirect | Regime::Rif => {
-            return Err(EntailError::Unsupported(regime));
-        }
+    let regime = plan.regime();
+    let (closure, stats) = match plan {
+        Materialization::Simple => (engine::copy_of(ds)?, report::RunStats::none()),
+        Materialization::Rdf
+        | Materialization::Rdfs
+        | Materialization::OwlRl
+        | Materialization::D => engine::close(ds, regime)?,
+        // The two query-directed lanes are DELEGATED, not restated: each already assembles
+        // its own report and applies the same overclaim gate on its own emission path, so
+        // returning here is what keeps one implementation per lane.
+        Materialization::OwlDirect(query_bgp) => return materialize_dl_reported(ds, query_bgp),
+        Materialization::Rif(rules) => return materialize_rif(ds, rules),
     };
     let report = ReasoningReport::of_run(ds, regime, &stats);
     // THE GATE, on the emission path. A report that contradicts its own evidence is not
@@ -471,7 +564,7 @@ mod tests {
             (B, RDFS_SUBCLASSOF, C),
             (X, RDF_TYPE, A),
         ]);
-        let (closed, _report) = materialize(&ds, Regime::Rdfs).expect("rdfs");
+        let (closed, _report) = materialize(&ds, Materialization::Rdfs).expect("rdfs");
         assert!(
             has(&closed, A, RDFS_SUBCLASSOF, C),
             "subClassOf transitivity"
@@ -486,7 +579,7 @@ mod tests {
         let p = "http://example.org/p";
         let y = "http://example.org/y";
         let ds = dataset(&[(p, RDFS_DOMAIN, A), (p, RDFS_RANGE, B), (X, p, y)]);
-        let (closed, _report) = materialize(&ds, Regime::Rdfs).expect("rdfs");
+        let (closed, _report) = materialize(&ds, Materialization::Rdfs).expect("rdfs");
         assert!(has(&closed, X, RDF_TYPE, A), "domain types subject");
         assert!(has(&closed, y, RDF_TYPE, B), "range types object");
     }
@@ -502,29 +595,50 @@ mod tests {
             (X, p, y),
             (y, p, z),
         ]);
-        let (closed, _report) = materialize(&ds, Regime::OwlRl).expect("owl-rl");
+        let (closed, _report) = materialize(&ds, Materialization::OwlRl).expect("owl-rl");
         assert!(has(&closed, X, p, z), "transitive closure");
         assert!(has(&closed, y, p, X), "symmetric mirror");
         // RDFS-only must NOT apply the OWL rules.
-        let (rdfs, _report) = materialize(&ds, Regime::Rdfs).expect("rdfs");
+        let (rdfs, _report) = materialize(&ds, Materialization::Rdfs).expect("rdfs");
         assert!(!has(&rdfs, X, p, z), "no transitive under RDFS regime");
     }
 
-    /// The two regimes this façade cannot serve are the two that need an input it does not
-    /// have — and `D`, which used to be a third, is now a lane like any other.
+    /// EVERY inhabitant of [`Materialization`] materializes — the function is total.
+    ///
+    /// Falsifiable against the behaviour this replaced: `OwlDirect` and `Rif` returned
+    /// `Err(Unsupported)` from this same call, on this same fixture. There is no longer an
+    /// error variant for them to return, and the check that says so is not "the variant is
+    /// gone" (which is a fact about the source) but "every plan answers with a closure
+    /// whose report names the regime asked for" (which is a fact about the function).
     #[test]
-    fn owl_direct_and_rif_are_unsupported_via_facade_but_d_is_not() {
+    fn every_materialization_plan_answers() {
         let ds = dataset(&[(X, RDF_TYPE, A)]);
-        assert!(matches!(
-            materialize(&ds, Regime::OwlDirect),
-            Err(EntailError::Unsupported(Regime::OwlDirect))
-        ));
-        assert!(matches!(
-            materialize(&ds, Regime::Rif),
-            Err(EntailError::Unsupported(Regime::Rif))
-        ));
+        let rules = RuleSet::new();
+        for (plan, regime) in [
+            (Materialization::Simple, Regime::Simple),
+            (Materialization::Rdf, Regime::Rdf),
+            (Materialization::Rdfs, Regime::Rdfs),
+            (Materialization::OwlRl, Regime::OwlRl),
+            (Materialization::D, Regime::D),
+            (Materialization::OwlDirect(&[]), Regime::OwlDirect),
+            (Materialization::Rif(&rules), Regime::Rif),
+        ] {
+            assert_eq!(plan.regime(), regime, "{regime:?}");
+            let (closure, report) = materialize(&ds, plan).expect("every plan materializes");
+            assert_eq!(report.regime(), regime, "{regime:?}");
+            assert!(!report.overclaims(), "{regime:?}");
+            // Every lane carries the asserted data through; nothing is a stub that drops it.
+            assert!(has(&closure, X, RDF_TYPE, A), "{regime:?}");
+        }
+    }
+
+    /// `D` used to be refused for the same kind of reason the other two were, and is not
+    /// any more: it is a rule table like any other.
+    #[test]
+    fn d_is_a_rule_table_lane_like_any_other() {
+        let ds = dataset(&[(X, RDF_TYPE, A)]);
         // `D` is Simple entailment plus OWL 2 Profiles §4.3 Table 8, and it runs.
-        let (closed, report) = materialize(&ds, Regime::D).expect("d is materializable");
+        let (closed, report) = materialize(&ds, Materialization::D).expect("d is materializable");
         assert_eq!(report.regime(), Regime::D);
         assert_eq!(rules(Regime::D).len(), 5);
         assert_eq!(implemented(Regime::D).len(), 5);
@@ -550,13 +664,13 @@ mod tests {
         let p = "http://example.org/ns#b";
         let y = "http://example.org/ns#c";
         let ds = dataset(&[(X, p, y)]);
-        let (closed, _report) = materialize(&ds, Regime::Rdf).expect("rdf");
+        let (closed, _report) = materialize(&ds, Materialization::Rdf).expect("rdf");
         assert!(
             has(&closed, p, RDF_TYPE, RDF_PROPERTY),
             "predicate typed rdf:Property"
         );
         // Simple entailment must NOT derive it.
-        let (simple, _report) = materialize(&ds, Regime::Simple).expect("simple");
+        let (simple, _report) = materialize(&ds, Materialization::Simple).expect("simple");
         assert!(
             !has(&simple, p, RDF_TYPE, RDF_PROPERTY),
             "no typing under Simple"
@@ -586,8 +700,8 @@ mod tests {
         let ds = dataset(input);
 
         // Two independently-seeded materializations of the SAME input.
-        let (first, first_report) = materialize(&ds, Regime::OwlRl).expect("owl-rl");
-        let (second, second_report) = materialize(&ds, Regime::OwlRl).expect("owl-rl");
+        let (first, first_report) = materialize(&ds, Materialization::OwlRl).expect("owl-rl");
+        let (second, second_report) = materialize(&ds, Materialization::OwlRl).expect("owl-rl");
 
         let fingerprint = |closed: &RdfDataset| -> Vec<String> {
             closed
@@ -635,7 +749,7 @@ mod tests {
             (X, p, y),
             (u, q, v),
         ]);
-        let (closed, report) = materialize(&ds, Regime::OwlRl).expect("owl-rl");
+        let (closed, report) = materialize(&ds, Materialization::OwlRl).expect("owl-rl");
         assert!(has(&closed, y, q, X), "prp-inv1 mirrors a p-triple into q");
         assert!(has(&closed, v, p, u), "prp-inv2 mirrors a q-triple into p");
         // Both halves are credited, under their own ids.
@@ -648,15 +762,25 @@ mod tests {
         assert!(fired.contains(&"prp-inv2"), "{fired:?}");
         // A self-inverse property still mirrors, and still terminates.
         let selfish = dataset(&[(p, "http://www.w3.org/2002/07/owl#inverseOf", p), (X, p, y)]);
-        let (closed, _) = materialize(&selfish, Regime::OwlRl).expect("owl-rl");
+        let (closed, _) = materialize(&selfish, Materialization::OwlRl).expect("owl-rl");
         assert!(has(&closed, y, p, X));
     }
 
     // ── The reasoning report ────────────────────────────────────────────────────
 
-    /// The four regimes `materialize` can actually run, for the cross-cutting report
-    /// invariants below.
-    const RUNNABLE: [Regime; 4] = [Regime::Simple, Regime::Rdf, Regime::Rdfs, Regime::OwlRl];
+    /// The four rule-table chase lanes, for the cross-cutting report invariants below.
+    ///
+    /// Not "the regimes `materialize` can run" — it runs all seven. These are the four
+    /// whose whole input is a rule table this crate states, which is what makes the
+    /// inventory arithmetic below (`rules(r)` minus `implemented(r)`) mean anything; the
+    /// two query-directed lanes are defined by a caller's document and have no such table,
+    /// and `D` is exercised on its own because it is the newest lane.
+    const RUNNABLE: [Materialization<'static>; 4] = [
+        Materialization::Simple,
+        Materialization::Rdf,
+        Materialization::Rdfs,
+        Materialization::OwlRl,
+    ];
 
     /// A fixture with enough schema to make every RDFS-lane rule fire at least once.
     fn schema_fixture() -> Arc<RdfDataset> {
@@ -681,8 +805,9 @@ mod tests {
     #[test]
     fn completeness_is_derived_from_the_inventory_and_pinned() {
         let ds = schema_fixture();
-        for regime in RUNNABLE {
-            let (_, report) = materialize(&ds, regime).expect("runnable regime");
+        for plan in RUNNABLE {
+            let regime = plan.regime();
+            let (_, report) = materialize(&ds, plan).expect("runnable regime");
             // Computed, not asserted: the expected value is the inventory difference.
             let expected: Vec<RuleId> = rules(regime)
                 .iter()
@@ -705,9 +830,9 @@ mod tests {
         let gaps: Vec<(&str, usize)> = RUNNABLE
             .iter()
             .map(|&r| {
-                let (_, report) = materialize(&ds, r).expect("runnable regime");
+                let (_, report) = materialize(&ds, r).expect("a rule-table lane");
                 (
-                    match r {
+                    match r.regime() {
                         Regime::Simple => "Simple",
                         Regime::Rdf => "RDF",
                         Regime::Rdfs => "RDFS",
@@ -728,10 +853,10 @@ mod tests {
         // BOUNDARIES, not flatly exact, because three of those rules quantify over all
         // literals and one concludes about literal subjects. The two are different claims
         // and the report makes both of them.
-        let (_, simple) = materialize(&ds, Regime::Simple).expect("simple");
+        let (_, simple) = materialize(&ds, Materialization::Simple).expect("simple");
         assert_eq!(simple.completeness(), &Completeness::Exact);
         assert!(rules(Regime::Simple).is_empty());
-        let (_, owl) = materialize(&ds, Regime::OwlRl).expect("owl-rl");
+        let (_, owl) = materialize(&ds, Materialization::OwlRl).expect("owl-rl");
         assert_eq!(
             owl.completeness(),
             &Completeness::ExactWithinBoundaries,
@@ -747,7 +872,7 @@ mod tests {
     #[test]
     fn the_missing_rules_are_named() {
         let ds = schema_fixture();
-        let (_, report) = materialize(&ds, Regime::OwlRl).expect("owl-rl");
+        let (_, report) = materialize(&ds, Materialization::OwlRl).expect("owl-rl");
         assert!(
             report.completeness().missing().is_empty(),
             "OWL 2 RL is complete: {:?}",
@@ -772,7 +897,7 @@ mod tests {
         // report makes the other claim separately — the surrogates those four invent do
         // not reach the answer, so the run is `ExactWithinBoundaries` and names the
         // `surrogate` boundary rather than saying `Exact`.
-        let (_, rdfs) = materialize(&ds, Regime::Rdfs).expect("rdfs");
+        let (_, rdfs) = materialize(&ds, Materialization::Rdfs).expect("rdfs");
         assert!(rdfs.completeness().missing().is_empty());
         assert_eq!(rdfs.completeness(), &Completeness::ExactWithinBoundaries);
         for rule in [
@@ -799,8 +924,9 @@ mod tests {
             literal_object_fixture(),
             dataset(&[]),
         ] {
-            for regime in RUNNABLE {
-                let (_, report) = materialize(&ds, regime).expect("runnable regime");
+            for plan in RUNNABLE {
+                let regime = plan.regime();
+                let (_, report) = materialize(&ds, plan).expect("runnable regime");
                 assert!(
                     !report.overclaims(),
                     "{regime:?} reported Exact alongside {:?}",
@@ -871,7 +997,8 @@ mod tests {
 
         // And `for_run` — the derivation the emission path uses — never produces the bad
         // state for any regime, whether or not the run met a boundary.
-        for regime in RUNNABLE {
+        for plan in RUNNABLE {
+            let regime = plan.regime();
             assert!(
                 !ReasoningReport::new(
                     regime,
@@ -899,7 +1026,7 @@ mod tests {
     fn an_inconsistent_run_still_returns_its_report() {
         let disjoint = "http://www.w3.org/2002/07/owl#disjointWith";
         let ds = dataset(&[(A, disjoint, B), (X, RDF_TYPE, A), (X, RDF_TYPE, B)]);
-        let Err(EntailError::Inconsistent(run)) = materialize(&ds, Regime::OwlRl) else {
+        let Err(EntailError::Inconsistent(run)) = materialize(&ds, Materialization::OwlRl) else {
             panic!("two disjoint classes with a shared instance is `cax-dw`");
         };
         let report = run.report();
@@ -917,7 +1044,7 @@ mod tests {
         assert!(!report.overclaims());
         // A consistent run over the same shape reports the absence, so `None` is a
         // finding rather than the only state the field has.
-        let (_, consistent) = materialize(&dataset(&[(X, RDF_TYPE, A)]), Regime::OwlRl)
+        let (_, consistent) = materialize(&dataset(&[(X, RDF_TYPE, A)]), Materialization::OwlRl)
             .expect("a consistent knowledge base");
         assert_eq!(consistent.inconsistency(), None);
     }
@@ -932,8 +1059,9 @@ mod tests {
     #[test]
     fn a_datatyped_literal_makes_the_withheld_surrogate_count_move() {
         let ds = literal_object_fixture();
-        for regime in [Regime::Rdf, Regime::Rdfs] {
-            let (_, report) = materialize(&ds, regime).expect("a surrogate-minting lane");
+        for plan in [Materialization::Rdf, Materialization::Rdfs] {
+            let regime = plan.regime();
+            let (_, report) = materialize(&ds, plan).expect("a surrogate-minting lane");
             assert!(
                 report.withheld_surrogates() > 0,
                 "{regime:?}: rdfD1/rdfD1a fired over the datatyped literal, so their \
@@ -950,8 +1078,13 @@ mod tests {
         }
         // The lanes that state none of the four withhold nothing — the count is a
         // measurement of THIS run, not a standing disclaimer.
-        for regime in [Regime::Simple, Regime::OwlRl, Regime::D] {
-            let (_, report) = materialize(&ds, regime).expect("a lane that mints no surrogate");
+        for plan in [
+            Materialization::Simple,
+            Materialization::OwlRl,
+            Materialization::D,
+        ] {
+            let regime = plan.regime();
+            let (_, report) = materialize(&ds, plan).expect("a lane that mints no surrogate");
             assert_eq!(report.withheld_surrogates(), 0, "{regime:?}");
         }
     }
@@ -1003,8 +1136,8 @@ mod tests {
     /// Boundaries are not decorative: a real RL-lane construct emits one, with a reason.
     #[test]
     fn boundaries_are_emitted_for_real_constructs() {
-        let has = |ds: &RdfDataset, regime: Regime, construct: Construct| {
-            let (_, report) = materialize(ds, regime).expect("runnable regime");
+        let has = |ds: &RdfDataset, plan: Materialization<'_>, construct: Construct| {
+            let (_, report) = materialize(ds, plan).expect("runnable regime");
             report
                 .boundaries()
                 .iter()
@@ -1014,64 +1147,64 @@ mod tests {
         // A triple term the chase cannot look inside — the RL lane's own boundary, not
         // the DL lane's.
         let quoted = triple_term_fixture();
-        assert!(has(&quoted, Regime::OwlRl, Construct::TripleTerm));
-        assert!(has(&quoted, Regime::Rdfs, Construct::TripleTerm));
+        assert!(has(&quoted, Materialization::OwlRl, Construct::TripleTerm));
+        assert!(has(&quoted, Materialization::Rdfs, Construct::TripleTerm));
         // …and the plain fixture, which has none, does not claim one.
         assert!(!has(
             &schema_fixture(),
-            Regime::OwlRl,
+            Materialization::OwlRl,
             Construct::TripleTerm
         ));
 
         // A quad outside the default graph.
         assert!(has(
             &named_graph_fixture(),
-            Regime::OwlRl,
+            Materialization::OwlRl,
             Construct::NamedGraph
         ));
         assert!(!has(
             &schema_fixture(),
-            Regime::OwlRl,
+            Materialization::OwlRl,
             Construct::NamedGraph
         ));
 
         // A conclusion that would need a literal in subject position.
         assert!(has(
             &literal_object_fixture(),
-            Regime::Rdfs,
+            Materialization::Rdfs,
             Construct::GeneralizedRdf
         ));
         assert!(!has(
             &schema_fixture(),
-            Regime::Rdfs,
+            Materialization::Rdfs,
             Construct::GeneralizedRdf
         ));
 
         // The two inherent boundaries hold for every input of their lane.
         assert!(has(
             &dataset(&[]),
-            Regime::Rdfs,
+            Materialization::Rdfs,
             Construct::DatatypeValueSpace
         ));
         assert!(has(
             &dataset(&[]),
-            Regime::Rdfs,
+            Materialization::Rdfs,
             Construct::AxiomaticTriples
         ));
         // OWL 2 RL/RDF omits the RDF/RDFS axiomatic triples, so its lane does not meet
         // that one.
         assert!(!has(
             &dataset(&[]),
-            Regime::OwlRl,
+            Materialization::OwlRl,
             Construct::AxiomaticTriples
         ));
         // `Simple` copies faithfully, so it meets none of them — which is what makes its
         // `Exact` honest.
-        let (_, simple) = materialize(&quoted, Regime::Simple).expect("simple");
+        let (_, simple) = materialize(&quoted, Materialization::Simple).expect("simple");
         assert!(simple.boundaries().is_empty());
 
         // Every boundary carries a technical reason naming what it blocks.
-        let (_, report) = materialize(&quoted, Regime::Rdfs).expect("rdfs");
+        let (_, report) = materialize(&quoted, Materialization::Rdfs).expect("rdfs");
         assert!(!report.boundaries().is_empty());
         for boundary in report.boundaries() {
             assert!(!boundary.reason().is_empty());
@@ -1094,8 +1227,9 @@ mod tests {
     #[test]
     fn rules_fired_is_ordered_attributed_and_adds_up() {
         let ds = schema_fixture();
-        for regime in RUNNABLE {
-            let (closed, report) = materialize(&ds, regime).expect("runnable regime");
+        for plan in RUNNABLE {
+            let regime = plan.regime();
+            let (closed, report) = materialize(&ds, plan).expect("runnable regime");
             let fired = report.rules_fired();
 
             // Specification table order, no repeats, no zero entries.
@@ -1129,12 +1263,12 @@ mod tests {
         }
 
         // `Simple` infers nothing, so nothing fired — an empty list, not a zeroed one.
-        let (_, simple) = materialize(&ds, Regime::Simple).expect("simple");
+        let (_, simple) = materialize(&ds, Materialization::Simple).expect("simple");
         assert!(simple.rules_fired().is_empty());
 
         // The OWL-RL lane really does credit the three RDFS-shaped rules by their RDFS
         // names, which is the honest reading of what it fires.
-        let (_, owl) = materialize(&ds, Regime::OwlRl).expect("owl-rl");
+        let (_, owl) = materialize(&ds, Materialization::OwlRl).expect("owl-rl");
         let names: Vec<&str> = owl.rules_fired().iter().map(|&(r, _)| r.as_str()).collect();
         assert!(names.contains(&"rdfs6"), "{names:?}");
         assert!(names.contains(&"cax-sco"), "{names:?}");
@@ -1147,8 +1281,9 @@ mod tests {
     fn the_contract_hash_names_the_calculus() {
         let ds = schema_fixture();
         let mut seen = Vec::new();
-        for regime in RUNNABLE {
-            let (_, report) = materialize(&ds, regime).expect("runnable regime");
+        for plan in RUNNABLE {
+            let regime = plan.regime();
+            let (_, report) = materialize(&ds, plan).expect("runnable regime");
             assert_eq!(
                 report.contract_hash(),
                 purrdf_datalog::cache::contract_hash(&calculus_program(regime)),
@@ -1161,7 +1296,7 @@ mod tests {
         assert_ne!(seen[2].1, seen[3].1);
         assert_ne!(seen[1].1, seen[3].1);
         // The hash is a property of the CALCULUS, not of the data it ran over.
-        let (_, other) = materialize(&triple_term_fixture(), Regime::Rdfs).expect("rdfs");
+        let (_, other) = materialize(&triple_term_fixture(), Materialization::Rdfs).expect("rdfs");
         assert_eq!(other.contract_hash(), seen[2].1);
     }
 
@@ -1170,12 +1305,12 @@ mod tests {
     #[test]
     fn the_budget_reports_what_the_run_consumed() {
         let ds = schema_fixture();
-        let (_, simple) = materialize(&ds, Regime::Simple).expect("simple");
+        let (_, simple) = materialize(&ds, Materialization::Simple).expect("simple");
         assert_eq!(simple.budget().join_steps(), 0);
         assert_eq!(simple.budget().stored_facts(), 0);
         assert_eq!(simple.budget().term_arena_bytes(), 0);
 
-        let (_, rdfs) = materialize(&ds, Regime::Rdfs).expect("rdfs");
+        let (_, rdfs) = materialize(&ds, Materialization::Rdfs).expect("rdfs");
         assert!(
             rdfs.budget().join_steps() > 0,
             "the chase enumerated nothing"
@@ -1200,8 +1335,9 @@ mod tests {
     #[test]
     fn a_consistent_run_reports_no_inconsistency() {
         let ds = schema_fixture();
-        for regime in RUNNABLE {
-            let (_, report) = materialize(&ds, regime).expect("runnable regime");
+        for plan in RUNNABLE {
+            let regime = plan.regime();
+            let (_, report) = materialize(&ds, plan).expect("runnable regime");
             assert!(report.inconsistency().is_none(), "{regime:?}");
         }
         // And every rule that could have found one really is in the lane's rule set.
@@ -1231,7 +1367,7 @@ mod tests {
         let disjoint = "http://www.w3.org/2002/07/owl#disjointWith";
         let ds = dataset(&[(A, disjoint, B), (X, RDF_TYPE, A), (X, RDF_TYPE, B)]);
 
-        let Err(EntailError::Inconsistent(run)) = materialize(&ds, Regime::OwlRl) else {
+        let Err(EntailError::Inconsistent(run)) = materialize(&ds, Materialization::OwlRl) else {
             panic!("two disjoint classes with a shared instance is `cax-dw`");
         };
         let witness = run.witness();
@@ -1287,7 +1423,7 @@ mod tests {
         // The RDFS lane says nothing about `owl:disjointWith`, so the same graph is
         // ordinary data there and closes without complaint. An inconsistency is a property
         // of a CALCULUS and a graph, never of a graph alone.
-        assert!(materialize(&ds, Regime::Rdfs).is_ok());
+        assert!(materialize(&ds, Materialization::Rdfs).is_ok());
     }
 
     /// The witness is DETERMINISTIC: the same input names the same rule and the same
@@ -1303,7 +1439,8 @@ mod tests {
             (X, "http://example.org/irreflexive", X),
         ]);
         let render = || {
-            let Err(EntailError::Inconsistent(run)) = materialize(&ds, Regime::OwlRl) else {
+            let Err(EntailError::Inconsistent(run)) = materialize(&ds, Materialization::OwlRl)
+            else {
                 panic!("an irreflexive property relating something to itself is `prp-irp`");
             };
             // The whole refusal, report included: a budget or a fired-rule tally that
@@ -1311,7 +1448,7 @@ mod tests {
             format!("{run:?}")
         };
         assert_eq!(render(), render());
-        let Err(EntailError::Inconsistent(run)) = materialize(&ds, Regime::OwlRl) else {
+        let Err(EntailError::Inconsistent(run)) = materialize(&ds, Materialization::OwlRl) else {
             unreachable!("just asserted")
         };
         let witness = run.witness();
@@ -1362,8 +1499,9 @@ mod tests {
     #[test]
     fn a_named_graph_is_closed_against_itself_and_the_default_graph() {
         let ds = quads(&[(A, RDFS_SUBCLASSOF, B, None), (X, RDF_TYPE, A, Some(G))]);
-        for regime in [Regime::Rdfs, Regime::OwlRl] {
-            let (closed, report) = materialize(&ds, regime).expect("runnable regime");
+        for plan in [Materialization::Rdfs, Materialization::OwlRl] {
+            let regime = plan.regime();
+            let (closed, report) = materialize(&ds, plan).expect("runnable regime");
             assert!(
                 has_in(&closed, X, RDF_TYPE, B, Some(G)),
                 "{regime:?}: the default graph's terminology did not reach the named \
@@ -1386,8 +1524,9 @@ mod tests {
         // THE CROSS-GRAPH JOIN THAT MUST NOT HAPPEN. One term moves — the terminology goes
         // into a sibling named graph — and the conclusion is drawn in no graph at all.
         let split = quads(&[(A, RDFS_SUBCLASSOF, B, Some(H)), (X, RDF_TYPE, A, Some(G))]);
-        for regime in [Regime::Rdfs, Regime::OwlRl] {
-            let (closed, _) = materialize(&split, regime).expect("runnable regime");
+        for plan in [Materialization::Rdfs, Materialization::OwlRl] {
+            let regime = plan.regime();
+            let (closed, _) = materialize(&split, plan).expect("runnable regime");
             for graph in [None, Some(G), Some(H)] {
                 assert!(
                     !has_in(&closed, X, RDF_TYPE, B, graph),
@@ -1413,7 +1552,7 @@ mod tests {
     #[test]
     fn a_default_graph_conclusion_is_not_restated_in_a_named_graph() {
         let ds = quads(&[(A, RDFS_SUBCLASSOF, B, None), (X, RDF_TYPE, A, Some(G))]);
-        let (closed, _) = materialize(&ds, Regime::D).expect("d");
+        let (closed, _) = materialize(&ds, Materialization::D).expect("d");
         let datatype = "http://www.w3.org/2000/01/rdf-schema#Datatype";
         let typings = closed
             .quad_refs()
@@ -1439,8 +1578,8 @@ mod tests {
     fn the_budget_sums_the_work_and_peaks_the_occupancy() {
         let one_graph = quads(&[(A, RDFS_SUBCLASSOF, B, None)]);
         let two_graphs = quads(&[(A, RDFS_SUBCLASSOF, B, None), (X, RDF_TYPE, A, Some(G))]);
-        let (_, single) = materialize(&one_graph, Regime::Rdfs).expect("rdfs");
-        let (_, dual) = materialize(&two_graphs, Regime::Rdfs).expect("rdfs");
+        let (_, single) = materialize(&one_graph, Materialization::Rdfs).expect("rdfs");
+        let (_, dual) = materialize(&two_graphs, Materialization::Rdfs).expect("rdfs");
 
         // Two evaluations of a program whose seed differs by one quad: the work roughly
         // doubles, and it is REPORTED as the total rather than as one lane's share.
@@ -1476,7 +1615,7 @@ mod tests {
             (X, RDF_TYPE, A, Some(G)),
             (X, RDF_TYPE, B, Some(G)),
         ]);
-        let Err(EntailError::Inconsistent(run)) = materialize(&ds, Regime::OwlRl) else {
+        let Err(EntailError::Inconsistent(run)) = materialize(&ds, Materialization::OwlRl) else {
             panic!("the union of the default graph and g is inconsistent under cax-dw");
         };
         let witness = run.witness();
@@ -1490,7 +1629,7 @@ mod tests {
             (X, RDF_TYPE, A, Some(G)),
             (X, RDF_TYPE, B, Some(H)),
         ]);
-        assert!(materialize(&split, Regime::OwlRl).is_ok());
+        assert!(materialize(&split, Materialization::OwlRl).is_ok());
     }
 
     /// An ILL-TYPED LITERAL is an inconsistency under `D` as well as under `OWL-RL`, and
@@ -1510,8 +1649,9 @@ mod tests {
         b.push_quad(s, p, bad, None);
         let ds = b.freeze().expect("freeze");
 
-        for regime in [Regime::OwlRl, Regime::D] {
-            let Err(EntailError::Inconsistent(run)) = materialize(&ds, regime) else {
+        for plan in [Materialization::OwlRl, Materialization::D] {
+            let regime = plan.regime();
+            let Err(EntailError::Inconsistent(run)) = materialize(&ds, plan) else {
                 panic!("{regime:?}: an ill-typed literal is `dt-not-type`");
             };
             let witness = run.witness();
@@ -1540,8 +1680,8 @@ mod tests {
         ));
         b.push_quad(s, p, good, None);
         let ds = b.freeze().expect("freeze");
-        assert!(materialize(&ds, Regime::D).is_ok());
-        assert!(materialize(&ds, Regime::OwlRl).is_ok());
+        assert!(materialize(&ds, Materialization::D).is_ok());
+        assert!(materialize(&ds, Materialization::OwlRl).is_ok());
     }
 
     /// A FUNCTIONAL DATA PROPERTY with two value-different values is an inconsistency, and
@@ -1577,7 +1717,8 @@ mod tests {
         };
 
         // Two DIFFERENT values: `prp-fp` then `dt-diff` then `eq-diff1`.
-        let Err(EntailError::Inconsistent(run)) = materialize(&build("1", "2"), Regime::OwlRl)
+        let Err(EntailError::Inconsistent(run)) =
+            materialize(&build("1", "2"), Materialization::OwlRl)
         else {
             panic!("a functional property with two value-different values must clash");
         };
@@ -1587,8 +1728,8 @@ mod tests {
 
         // Two SPELLINGS OF ONE value: `dt-eq` says they are the same thing, so there is
         // nothing to clash — and `eq-rep-o` carries the value across the spellings.
-        let (closed, report) =
-            materialize(&build("1", "01"), Regime::OwlRl).expect("one value, two spellings");
+        let (closed, report) = materialize(&build("1", "01"), Materialization::OwlRl)
+            .expect("one value, two spellings");
         assert!(report.inconsistency().is_none());
         assert!(
             closed.quads().any(|q| {
@@ -1625,7 +1766,7 @@ mod tests {
         let q = "http://example.org/q";
         let y = "http://example.org/y";
         let ds = dataset(&[(p, same_as, q), (X, p, y)]);
-        let (closed, report) = materialize(&ds, Regime::OwlRl).expect("owl-rl");
+        let (closed, report) = materialize(&ds, Materialization::OwlRl).expect("owl-rl");
         assert!(has(&closed, X, q, y), "eq-rep-p must rewrite the predicate");
         assert!(
             report
@@ -1667,7 +1808,7 @@ mod tests {
         b.push_quad(x, says, quoted, None);
         let ds = b.freeze().expect("freeze");
 
-        let (closed, report) = materialize(&ds, Regime::OwlRl).expect("owl-rl");
+        let (closed, report) = materialize(&ds, Materialization::OwlRl).expect("owl-rl");
         let substituted = quoted_value(X, p, TermValue::iri(z));
         assert!(
             !objects_of(&closed, X, SAYS).contains(&substituted),
@@ -1697,9 +1838,10 @@ mod tests {
             named_graph_fixture(),
             literal_object_fixture(),
         ] {
-            for regime in RUNNABLE {
-                let (_, first) = materialize(&ds, regime).expect("runnable regime");
-                let (_, second) = materialize(&ds, regime).expect("runnable regime");
+            for plan in RUNNABLE {
+                let regime = plan.regime();
+                let (_, first) = materialize(&ds, plan).expect("runnable regime");
+                let (_, second) = materialize(&ds, plan).expect("runnable regime");
                 assert_eq!(
                     format!("{first:?}"),
                     format!("{second:?}"),
@@ -1735,7 +1877,7 @@ mod tests {
         b.push_quad(second, ty, class, None);
         let ds = b.freeze().expect("freeze");
 
-        let (closed, report) = materialize(&ds, Regime::Rdfs).expect("rdfs");
+        let (closed, report) = materialize(&ds, Materialization::Rdfs).expect("rdfs");
         // rdfs9 re-types BOTH blank subjects. The interesting evidence is WHICH subjects
         // it produced, asserted below over the closure itself; the rule's tally is not
         // pinned here because the RDFS lane also asserts the axiomatic triples, so rdfs9
@@ -1819,7 +1961,7 @@ mod tests {
         // rules), so its ceiling refusal is the chase's — the SAME three fixed constants,
         // charged the same way, refused by name rather than truncated.
         let Err(EntailError::Chase(ChaseError::BudgetExhausted { resource, report })) =
-            materialize(&ds, Regime::Rdfs)
+            materialize(&ds, Materialization::Rdfs)
         else {
             panic!("a cross product past a fixed ceiling must be refused, not truncated");
         };
@@ -1831,7 +1973,7 @@ mod tests {
             report.stored_facts()
         );
         // The refusal is the EVALUATOR's, not the façade's: the same input copies fine.
-        let (copied, simple) = materialize(&ds, Regime::Simple).expect("simple");
+        let (copied, simple) = materialize(&ds, Materialization::Simple).expect("simple");
         assert_eq!(copied.quad_refs().count(), CLASSES + TRIPLES);
         assert_eq!(simple.budget().stored_facts(), 0);
     }
@@ -1839,7 +1981,7 @@ mod tests {
     #[test]
     fn simple_regime_is_identity() {
         let ds = dataset(&[(A, RDFS_SUBCLASSOF, B), (X, RDF_TYPE, A)]);
-        let (closed, _report) = materialize(&ds, Regime::Simple).expect("simple");
+        let (closed, _report) = materialize(&ds, Materialization::Simple).expect("simple");
         // No inference: x is not typed B.
         assert!(!has(&closed, X, RDF_TYPE, B));
         assert!(has(&closed, X, RDF_TYPE, A));
@@ -1918,8 +2060,9 @@ mod tests {
             b.intern_triple(s, p, o)
         });
         let expected = quoted_value(A, RDFS_SUBCLASSOF, TermValue::iri(B));
-        for regime in [Regime::Rdfs, Regime::OwlRl] {
-            let (closed, report) = materialize(&ds, regime).expect("runnable regime");
+        for plan in [Materialization::Rdfs, Materialization::OwlRl] {
+            let regime = plan.regime();
+            let (closed, report) = materialize(&ds, plan).expect("runnable regime");
             assert_eq!(
                 objects_of(&closed, X, MENTIONS),
                 vec![expected.clone()],
@@ -1961,8 +2104,9 @@ mod tests {
             "http://example.org/p",
             quoted_value(A, RDFS_SUBCLASSOF, TermValue::iri(B)),
         );
-        for regime in [Regime::Rdfs, Regime::OwlRl] {
-            let (closed, _report) = materialize(&ds, regime).expect("runnable regime");
+        for plan in [Materialization::Rdfs, Materialization::OwlRl] {
+            let regime = plan.regime();
+            let (closed, _report) = materialize(&ds, plan).expect("runnable regime");
             assert_eq!(
                 objects_of(&closed, X, MENTIONS),
                 vec![expected.clone()],
@@ -1992,8 +2136,9 @@ mod tests {
                 language: Some("en".to_owned()),
                 direction: Some(direction),
             };
-            for regime in [Regime::Rdfs, Regime::OwlRl] {
-                let (closed, _report) = materialize(&ds, regime).expect("runnable regime");
+            for plan in [Materialization::Rdfs, Materialization::OwlRl] {
+                let regime = plan.regime();
+                let (closed, _report) = materialize(&ds, plan).expect("runnable regime");
                 assert_eq!(
                     objects_of(&closed, X, MENTIONS),
                     vec![expected.clone()],
@@ -2024,8 +2169,9 @@ mod tests {
         b.push_quad(x, p, quoted, None);
         let ds = b.freeze().expect("freeze");
 
-        for regime in [Regime::Rdfs, Regime::OwlRl] {
-            let (closed, report) = materialize(&ds, regime).expect("runnable regime");
+        for plan in [Materialization::Rdfs, Materialization::OwlRl] {
+            let regime = plan.regime();
+            let (closed, report) = materialize(&ds, plan).expect("runnable regime");
             // Nothing was concluded ABOUT the triple term…
             assert!(
                 !closed

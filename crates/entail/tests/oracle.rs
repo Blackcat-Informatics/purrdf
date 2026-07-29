@@ -63,8 +63,8 @@ use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId, TermValue, canonicalize};
 use purrdf_entail::{
-    Completeness, EntailError, InconsistencyWitness, ReasoningReport, Regime, RuleId, implemented,
-    materialize, rules,
+    Completeness, EntailError, InconsistencyWitness, Materialization, ReasoningReport, Regime,
+    RuleId, implemented, materialize, rules,
 };
 
 // ── Vocabulary ──────────────────────────────────────────────────────────────────
@@ -4954,7 +4954,7 @@ const REFUSAL_GOLDEN: &[&str] = &[
 /// The fixtures whose evidence is that a run over them is REFUSED, and their controls.
 ///
 /// The seventeen OWL 2 RL rules that conclude `false`, plus `dt-diff`, are evidenced by
-/// [`RuleFixtures::Refuting`]: `materialize(.., Regime::OwlRl)` over the `clashes` fixture
+/// [`RuleFixtures::Refuting`]: `materialize(.., Materialization::OwlRl)` over the `clashes` fixture
 /// must return [`purrdf_entail::EntailError::Inconsistent`] naming the expected rule, and
 /// must succeed over the `consistent` one. Neither half can live in [`CORPUS`]: the golden
 /// writer materializes every fixture under all five regimes and would panic on the first.
@@ -5551,10 +5551,10 @@ fn fixture(name: &str) -> &'static Fixture {
         .unwrap_or_else(|| panic!("no fixture named {name} in the corpus"))
 }
 
-/// The canonical N-Quads lines of `regime`'s closure over the fixture named `name`.
-fn closure_lines(name: &str, regime: Regime) -> BTreeSet<String> {
+/// The canonical N-Quads lines of `plan`'s closure over the fixture named `name`.
+fn closure_lines(name: &str, plan: Materialization<'_>) -> BTreeSet<String> {
     let ds = build(fixture(name));
-    let (closed, _report) = materialize(&ds, regime).expect("the five oracle regimes run");
+    let (closed, _report) = materialize(&ds, plan).expect("the five oracle lanes run");
     canonicalize(&closed)
         .nquads
         .lines()
@@ -5580,12 +5580,12 @@ fn nquads_line(s: &str, p: &str, o: &str) -> String {
 /// plus the five `dt-*` rules, and `materialize` runs it. Leaving it out would make the
 /// module's own claim — that a golden holds every regime `materialize` can run — false, and
 /// would leave the newest lane in the crate the only one nothing pins.
-const ORACLE_REGIMES: [(Regime, &str); 5] = [
-    (Regime::Simple, "Simple"),
-    (Regime::Rdf, "RDF"),
-    (Regime::Rdfs, "RDFS"),
-    (Regime::OwlRl, "OWL-RL"),
-    (Regime::D, "D"),
+const ORACLE_REGIMES: [(Materialization<'static>, &str); 5] = [
+    (Materialization::Simple, "Simple"),
+    (Materialization::Rdf, "RDF"),
+    (Materialization::Rdfs, "RDFS"),
+    (Materialization::OwlRl, "OWL-RL"),
+    (Materialization::D, "D"),
 ];
 
 /// How many space-separated tokens a wrapped list puts on one line.
@@ -5732,9 +5732,9 @@ fn render_golden(fixture: &Fixture) -> String {
     let ds = build(fixture);
     write_nquads(&mut out, "input", &canonicalize(&ds).nquads);
 
-    for (regime, name) in ORACLE_REGIMES {
+    for (plan, name) in ORACLE_REGIMES {
         let _ = writeln!(out, "\n=== regime {name} ===");
-        match materialize(&ds, regime) {
+        match materialize(&ds, plan) {
             Ok((closed, report)) => {
                 write_nquads(&mut out, "closure", &canonicalize(&closed).nquads);
                 out.push_str("--- report ---\n");
@@ -5966,7 +5966,8 @@ fn every_clash_golden_shows_a_refusal_with_a_named_witness() {
     // which every input had become inconsistent.
     let mut clashing: BTreeSet<&str> = BTreeSet::new();
     let mut controls: BTreeSet<&str> = BTreeSet::new();
-    for regime in REGISTRY_REGIMES {
+    for plan in REGISTRY_REGIMES {
+        let regime = plan.regime();
         for &(_, clashes, _, consistent) in refuting_rows(regime) {
             clashing.insert(clashes);
             controls.insert(consistent);
@@ -6149,7 +6150,7 @@ enum RuleFixtures {
     /// The rule's conclusion is `false`, so a body match REFUSES the run rather than adding
     /// a triple, and the evidence is a pair of RUNS rather than a pair of closures.
     ///
-    /// `materialize(.., Regime::OwlRl)` over `clashes` must return
+    /// `materialize(.., Materialization::OwlRl)` over `clashes` must return
     /// [`purrdf_entail::EntailError::Inconsistent`] carrying a witness that names `witness`;
     /// over `consistent` it must return a closure. The `witness` id is normally the rule's
     /// own — the rule that refused is the rule the witness names — with exactly one
@@ -7052,7 +7053,12 @@ fn registration(regime: Regime, id: RuleId) -> RuleFixtures {
 /// the goldens, which hold its closure and its report for every fixture of the corpus: its
 /// rule table is Table 8 entire, and the `OWL-RL` rows below are what evidence each of
 /// those five rules.
-const REGISTRY_REGIMES: [Regime; 4] = [Regime::Simple, Regime::Rdf, Regime::Rdfs, Regime::OwlRl];
+const REGISTRY_REGIMES: [Materialization<'static>; 4] = [
+    Materialization::Simple,
+    Materialization::Rdf,
+    Materialization::Rdfs,
+    Materialization::OwlRl,
+];
 
 /// THE REGISTRY. Every rule of every runnable regime is in exactly one of five states, and
 /// the `NotYetImplemented` set is EXACTLY the inventory's gap.
@@ -7076,7 +7082,8 @@ const REGISTRY_REGIMES: [Regime; 4] = [Regime::Simple, Regime::Rdf, Regime::Rdfs
 /// OWL 2 RL rules at once.
 #[test]
 fn every_rule_is_registered_or_declared_unimplemented() {
-    for regime in REGISTRY_REGIMES {
+    for plan in REGISTRY_REGIMES {
+        let regime = plan.regime();
         let mut not_yet: BTreeSet<RuleId> = BTreeSet::new();
         let mut registered: BTreeSet<RuleId> = BTreeSet::new();
         for &id in rules(regime) {
@@ -7097,12 +7104,12 @@ fn every_rule_is_registered_or_declared_unimplemented() {
                     );
                     let line = positive.conclusion.line();
                     assert!(
-                        closure_lines(positive.fixture, regime).contains(&line),
+                        closure_lines(positive.fixture, plan).contains(&line),
                         "{regime:?} / {id}: positive fixture {} did not conclude {line}",
                         positive.fixture
                     );
                     assert!(
-                        !closure_lines(near_miss.fixture, regime).contains(&line),
+                        !closure_lines(near_miss.fixture, plan).contains(&line),
                         "{regime:?} / {id}: near-miss fixture {} concluded {line} anyway",
                         near_miss.fixture
                     );
@@ -7123,7 +7130,7 @@ fn every_rule_is_registered_or_declared_unimplemented() {
                         "{regime:?} / {id}: the denied conclusion must differ from the one \
                          that holds"
                     );
-                    let lines = closure_lines(holds.fixture, regime);
+                    let lines = closure_lines(holds.fixture, plan);
                     assert!(
                         lines.contains(&holds.conclusion.line()),
                         "{regime:?} / {id}: the empty dataset did not conclude {}",
@@ -7146,7 +7153,7 @@ fn every_rule_is_registered_or_declared_unimplemented() {
                         clashes, consistent,
                         "{regime:?} / {id}: a control must be a DIFFERENT input"
                     );
-                    let error = materialize(&build(fixture(clashes)), regime)
+                    let error = materialize(&build(fixture(clashes)), plan)
                         .err()
                         .unwrap_or_else(|| {
                             panic!("{regime:?} / {id}: {clashes} closed instead of refusing")
@@ -7175,7 +7182,7 @@ fn every_rule_is_registered_or_declared_unimplemented() {
                         "{regime:?} / {id}: a witness must name the triples that satisfied it"
                     );
                     assert!(
-                        materialize(&build(fixture(consistent)), regime).is_ok(),
+                        materialize(&build(fixture(consistent)), plan).is_ok(),
                         "{regime:?} / {id}: the control {consistent} was refused too, so the \
                          refusal is not attributable to the rule's premise"
                     );
@@ -7194,7 +7201,7 @@ fn every_rule_is_registered_or_declared_unimplemented() {
                         "{regime:?} / {id}: a near miss must deny the same conclusion the \
                          positive asserts"
                     );
-                    let (closed, report) = materialize(&build(fixture(positive.fixture)), regime)
+                    let (closed, report) = materialize(&build(fixture(positive.fixture)), plan)
                         .expect("the positive fixture of a generalized rule closes");
                     let line = positive.conclusion.line();
                     assert!(
@@ -7212,7 +7219,7 @@ fn every_rule_is_registered_or_declared_unimplemented() {
                          the downstream triple is evidence of nothing in particular"
                     );
                     assert!(
-                        !closure_lines(near_miss.fixture, regime).contains(&line),
+                        !closure_lines(near_miss.fixture, plan).contains(&line),
                         "{regime:?} / {id}: near-miss fixture {} reached {line} anyway",
                         near_miss.fixture
                     );
@@ -7221,7 +7228,7 @@ fn every_rule_is_registered_or_declared_unimplemented() {
                     registered.insert(id);
                     let withheld = |fixture: &str| -> u64 {
                         let ds = build(CORPUS.iter().find(|f| f.name == fixture).expect(fixture));
-                        materialize(&ds, regime)
+                        materialize(&ds, plan)
                             .expect("runnable regime")
                             .1
                             .withheld_surrogates()
@@ -7237,7 +7244,7 @@ fn every_rule_is_registered_or_declared_unimplemented() {
                     assert!(
                         materialize(
                             &build(CORPUS.iter().find(|f| f.name == positive).unwrap()),
-                            regime
+                            plan
                         )
                         .expect("runnable regime")
                         .1
@@ -7300,7 +7307,8 @@ fn every_rule_is_registered_or_declared_unimplemented() {
 fn the_registry_shape_is_pinned() {
     let shape: Vec<(&str, usize, usize, usize)> = REGISTRY_REGIMES
         .iter()
-        .map(|&regime| {
+        .map(|&plan| {
+            let regime = plan.regime();
             let evidenced = rows(regime).len()
                 + axiomatic_rows(regime).len()
                 + refuting_rows(regime).len()
@@ -7363,7 +7371,8 @@ fn the_registry_and_the_corpus_agree() {
         .map(|fixture| fixture.name)
         .collect();
     let mut used: BTreeMap<&str, usize> = BTreeMap::new();
-    for regime in REGISTRY_REGIMES {
+    for plan in REGISTRY_REGIMES {
+        let regime = plan.regime();
         for &(_, positive, _, near_miss) in rows(regime).iter().chain(generalized_rows(regime)) {
             for name in [positive, near_miss] {
                 assert!(corpus.contains(name), "{name} is not in the corpus");
@@ -7440,9 +7449,14 @@ fn the_registry_and_the_corpus_agree() {
 /// what a run does with one is a choice; this is the choice, asserted rather than described.
 #[test]
 fn a_named_graph_is_closed_and_its_conclusions_land_in_it() {
-    for regime in [Regime::Rdf, Regime::Rdfs, Regime::OwlRl] {
+    for plan in [
+        Materialization::Rdf,
+        Materialization::Rdfs,
+        Materialization::OwlRl,
+    ] {
+        let regime = plan.regime();
         let ds = build(fixture("named_graph"));
-        let (closed, report) = materialize(&ds, regime).expect("runnable regime");
+        let (closed, report) = materialize(&ds, plan).expect("runnable regime");
         assert!(
             report
                 .boundaries()
@@ -7493,9 +7507,10 @@ fn a_named_graph_is_closed_and_its_conclusions_land_in_it() {
 #[test]
 fn a_terminology_in_the_default_graph_types_instances_in_a_named_graph() {
     let derived = format!("<{EX_X}> <{RDF_TYPE}> <{EX_B}> <{EX_G}> .");
-    for regime in [Regime::Rdfs, Regime::OwlRl] {
+    for plan in [Materialization::Rdfs, Materialization::OwlRl] {
+        let regime = plan.regime();
         let positive = canonicalize(
-            &materialize(&build(fixture("named_graph_closure")), regime)
+            &materialize(&build(fixture("named_graph_closure")), plan)
                 .expect("runnable regime")
                 .0,
         )
@@ -7515,7 +7530,7 @@ fn a_terminology_in_the_default_graph_types_instances_in_a_named_graph() {
 
         // THE CROSS-GRAPH JOIN THAT MUST NOT HAPPEN.
         let near_miss = canonicalize(
-            &materialize(&build(fixture("named_graph_closure_near_miss")), regime)
+            &materialize(&build(fixture("named_graph_closure_near_miss")), plan)
                 .expect("runnable regime")
                 .0,
         )
@@ -7552,13 +7567,13 @@ fn a_terminology_in_the_default_graph_types_instances_in_a_named_graph() {
 struct ReifierInteraction {
     /// What this row pins, for a reader of a failure message.
     what: &'static str,
-    /// The regime the interaction is asserted under.
+    /// The lane the interaction is asserted under, as the plan that closes it.
     ///
     /// Not every lane: `prp-dom`, `prp-rng`, `prp-spo1`, `scm-dom1` and `scm-rng1` are OWL
     /// 2 RL's own, and the two positional rows are asserted under `RDFS`, where the
     /// corresponding `rdfs2`/`rdfs3` live. Naming the lane per row is what keeps each
     /// assertion about ONE rule table.
-    regime: Regime,
+    plan: Materialization<'static>,
     /// The fixture the conclusion must be PRESENT in.
     positive: &'static str,
     /// The conclusion, as the canonical N-Quads line it must be (or must not be).
@@ -7577,49 +7592,49 @@ struct ReifierInteraction {
 const REIFIER_INTERACTIONS: &[ReifierInteraction] = &[
     ReifierInteraction {
         what: "rdf:reifies in SUBJECT position is typed like any property (scm-op)",
-        regime: Regime::OwlRl,
+        plan: Materialization::OwlRl,
         positive: "reifies_subject_position",
         conclusion: Conclusion::Iris(RDF_REIFIES, OWL_EQUIVALENTPROPERTY, RDF_REIFIES),
         near_miss: "object_property",
     },
     ReifierInteraction {
         what: "rdf:reifies in OBJECT position is typed by the property's range (rdfs3)",
-        regime: Regime::Rdfs,
+        plan: Materialization::Rdfs,
         positive: "reifies_object_position",
         conclusion: Conclusion::Iris(RDF_REIFIES, RDF_TYPE, EX_B),
         near_miss: "range",
     },
     ReifierInteraction {
         what: "rdf:reifies as the OBJECT OF rdfs:domain is read as a class (rdfs2)",
-        regime: Regime::Rdfs,
+        plan: Materialization::Rdfs,
         positive: "reifies_as_domain_class",
         conclusion: Conclusion::Iris(EX_X, RDF_TYPE, RDF_REIFIES),
         near_miss: "domain",
     },
     ReifierInteraction {
         what: "rdf:reifies as the OBJECT OF rdfs:range is read as a class (rdfs3)",
-        regime: Regime::Rdfs,
+        plan: Materialization::Rdfs,
         positive: "reifies_as_range_class",
         conclusion: Conclusion::Iris(EX_Y, RDF_TYPE, RDF_REIFIES),
         near_miss: "range",
     },
     ReifierInteraction {
         what: "prp-dom over an annotation triple types the REIFIER",
-        regime: Regime::OwlRl,
+        plan: Materialization::OwlRl,
         positive: "reifies_domain",
         conclusion: Conclusion::Iris(EX_REIFIER, RDF_TYPE, EX_A),
         near_miss: "reifies_domain_near_miss",
     },
     ReifierInteraction {
         what: "prp-rng over an annotation triple types the REIFIED term",
-        regime: Regime::OwlRl,
+        plan: Materialization::OwlRl,
         positive: "reifies_range",
         conclusion: Conclusion::Iris(EX_T, RDF_TYPE, EX_B),
         near_miss: "reifies_range_near_miss",
     },
     ReifierInteraction {
         what: "prp-spo1 rewrites an annotation triple's predicate, triple term and all",
-        regime: Regime::OwlRl,
+        plan: Materialization::OwlRl,
         positive: "reifies_subproperty",
         conclusion: Conclusion::Quoted {
             subject: EX_REIFIER,
@@ -7632,21 +7647,21 @@ const REIFIER_INTERACTIONS: &[ReifierInteraction] = &[
     },
     ReifierInteraction {
         what: "scm-dom1 widens a domain declared ON rdf:reifies",
-        regime: Regime::OwlRl,
+        plan: Materialization::OwlRl,
         positive: "reifies_domain_widened",
         conclusion: Conclusion::Iris(RDF_REIFIES, RDFS_DOMAIN, EX_B),
         near_miss: "domain_widened",
     },
     ReifierInteraction {
         what: "scm-rng1 widens a range declared ON rdf:reifies",
-        regime: Regime::OwlRl,
+        plan: Materialization::OwlRl,
         positive: "reifies_range_widened",
         conclusion: Conclusion::Iris(RDF_REIFIES, RDFS_RANGE, EX_B),
         near_miss: "range_widened",
     },
     ReifierInteraction {
         what: "a REIFIER INSIDE A TRIPLE TERM is carried through as one opaque term",
-        regime: Regime::OwlRl,
+        plan: Materialization::OwlRl,
         positive: "reifies_inside_triple_term",
         conclusion: Conclusion::Quoted {
             subject: EX_X,
@@ -7665,7 +7680,7 @@ fn every_reifier_interaction_has_a_positive_and_a_near_miss() {
     for interaction in REIFIER_INTERACTIONS {
         let ReifierInteraction {
             what,
-            regime,
+            plan,
             positive,
             conclusion,
             near_miss,
@@ -7676,12 +7691,14 @@ fn every_reifier_interaction_has_a_positive_and_a_near_miss() {
         );
         let line = conclusion.line();
         assert!(
-            closure_lines(positive, regime).contains(&line),
-            "{what}: {positive} did not reach {line} under {regime:?}"
+            closure_lines(positive, plan).contains(&line),
+            "{what}: {positive} did not reach {line} under {:?}",
+            plan.regime()
         );
         assert!(
-            !closure_lines(near_miss, regime).contains(&line),
-            "{what}: near miss {near_miss} reached {line} anyway under {regime:?}"
+            !closure_lines(near_miss, plan).contains(&line),
+            "{what}: near miss {near_miss} reached {line} anyway under {:?}",
+            plan.regime()
         );
     }
     // The table really is an ENUMERATION and not a sample: ten distinct positives, ten
@@ -7705,7 +7722,7 @@ fn every_reifier_interaction_has_a_positive_and_a_near_miss() {
 /// say about it is three axiomatic PREMISES, and those are data too.
 #[test]
 fn no_clause_of_any_lane_mentions_the_reifier_property() {
-    for regime in ORACLE_REGIMES.map(|(regime, _)| regime) {
+    for regime in ORACLE_REGIMES.map(|(plan, _)| plan.regime()) {
         for clause in purrdf_entail::calculus_program(regime) {
             for atom in clause.body().iter().chain(clause.head_atoms()) {
                 for term in atom.terms() {
@@ -7730,8 +7747,9 @@ fn no_clause_of_any_lane_mentions_the_reifier_property() {
 /// would be asserting the ontology's own annotations as axioms.
 #[test]
 fn a_reified_triple_is_not_asserted_by_reifying_it() {
-    for (regime, _) in ORACLE_REGIMES {
-        let lines = closure_lines("reifies_domain", regime);
+    for (plan, _) in ORACLE_REGIMES {
+        let regime = plan.regime();
+        let lines = closure_lines("reifies_domain", plan);
         assert!(
             !lines.contains(&nquads_line(EX_A, RDFS_SUBCLASSOF, EX_B)),
             "{regime:?}: reifying a triple asserted it"
@@ -7760,7 +7778,7 @@ fn a_reified_triple_is_not_asserted_by_reifying_it() {
 #[test]
 fn a_reifier_range_conclusion_over_a_triple_term_is_abandoned_and_reported() {
     let ds = build(fixture("reifies_domain"));
-    let (closed, report) = materialize(&ds, Regime::Rdfs).expect("rdfs");
+    let (closed, report) = materialize(&ds, Materialization::Rdfs).expect("rdfs");
     assert!(
         report
             .boundaries()
@@ -7828,8 +7846,8 @@ fn a_reifier_side_table_round_trips_through_materialize() {
         "the fixture must exercise BOTH side tables"
     );
 
-    for (regime, name) in ORACLE_REGIMES {
-        let (closed, _) = materialize(&ds, regime).expect("the five oracle regimes run");
+    for (plan, name) in ORACLE_REGIMES {
+        let (closed, _) = materialize(&ds, plan).expect("the five oracle regimes run");
         assert_eq!(
             overlay(&canonicalize(&closed).nquads),
             before,
@@ -7854,8 +7872,8 @@ fn a_reifier_side_table_round_trips_through_materialize() {
     b.push_reifier(blank, triple);
     b.push_annotation(blank, says, x);
     let ds = b.freeze().expect("freeze");
-    for (regime, name) in ORACLE_REGIMES {
-        let (closed, _) = materialize(&ds, regime).expect("the five oracle regimes run");
+    for (plan, name) in ORACLE_REGIMES {
+        let (closed, _) = materialize(&ds, plan).expect("the five oracle regimes run");
         assert_eq!(closed.reifier_refs().count(), 1, "{name}");
         assert_eq!(closed.annotation_refs().count(), 1, "{name}");
         assert_eq!(
@@ -7890,8 +7908,9 @@ fn a_reifier_side_table_round_trips_through_materialize() {
 #[test]
 fn a_derived_triple_term_object_is_carried_through_not_folded() {
     let ds = build(fixture("triple_term"));
-    for regime in [Regime::Rdfs, Regime::OwlRl] {
-        let (closed, report) = materialize(&ds, regime).expect("runnable regime");
+    for plan in [Materialization::Rdfs, Materialization::OwlRl] {
+        let regime = plan.regime();
+        let (closed, report) = materialize(&ds, plan).expect("runnable regime");
         assert!(
             report
                 .boundaries()
@@ -7928,8 +7947,9 @@ fn a_derived_triple_term_object_is_carried_through_not_folded() {
 /// The deep chain closes: several rounds of the fixpoint are genuinely required.
 #[test]
 fn a_deep_subclass_chain_needs_several_rounds() {
-    for regime in [Regime::Rdfs, Regime::OwlRl] {
-        let lines = closure_lines("subclass_chain", regime);
+    for plan in [Materialization::Rdfs, Materialization::OwlRl] {
+        let regime = plan.regime();
+        let lines = closure_lines("subclass_chain", plan);
         // A ⊑ F is five edges away; x a F is that plus one type hop.
         assert!(
             lines.contains(&nquads_line(EX_A, RDFS_SUBCLASSOF, EX_F)),
@@ -7952,8 +7972,9 @@ fn a_deep_subclass_chain_needs_several_rounds() {
 #[test]
 fn a_shared_conclusion_is_credited_once() {
     let ds = build(fixture("shared_conclusion"));
-    for regime in [Regime::Rdfs, Regime::OwlRl] {
-        let (closed, report) = materialize(&ds, regime).expect("runnable regime");
+    for plan in [Materialization::Rdfs, Materialization::OwlRl] {
+        let regime = plan.regime();
+        let (closed, report) = materialize(&ds, plan).expect("runnable regime");
         assert!(
             canonicalize(&closed)
                 .nquads
@@ -7987,8 +8008,9 @@ fn a_shared_conclusion_is_credited_once() {
 #[test]
 fn a_would_be_literal_subject_is_abandoned_and_reported() {
     let ds = build(fixture("divergence_literal_subject"));
-    for regime in [Regime::Rdfs, Regime::OwlRl] {
-        let (closed, report) = materialize(&ds, regime).expect("runnable regime");
+    for plan in [Materialization::Rdfs, Materialization::OwlRl] {
+        let regime = plan.regime();
+        let (closed, report) = materialize(&ds, plan).expect("runnable regime");
         let nquads = canonicalize(&closed).nquads;
         // The literal is still in the closure — it is an input OBJECT. What may never
         // appear is a line that STARTS with it.
@@ -8065,8 +8087,8 @@ fn the_reflexive_rules_fire_on_their_licensed_premises_and_the_axioms_supply_the
     // assertions are licensed only through axiomatic triples this lane does not assert.
     // The two reflexivities are therefore separable, and the point of this fixture — that
     // OWL-RL says nothing about the hierarchies here — survives verbatim.
-    let premise_free = closure_lines("empty", Regime::OwlRl);
-    let owl: BTreeSet<String> = closure_lines("divergence_broad_triggers", Regime::OwlRl)
+    let premise_free = closure_lines("empty", Materialization::OwlRl);
+    let owl: BTreeSet<String> = closure_lines("divergence_broad_triggers", Materialization::OwlRl)
         .difference(&premise_free)
         .cloned()
         .collect();
@@ -8089,7 +8111,7 @@ fn the_reflexive_rules_fire_on_their_licensed_premises_and_the_axioms_supply_the
     );
 
     // RDFS reaches the premises through the axioms, and only then draws the conclusions.
-    let rdfs = closure_lines("divergence_broad_triggers", Regime::Rdfs);
+    let rdfs = closure_lines("divergence_broad_triggers", Materialization::Rdfs);
     for (s, p, o) in [
         // The PREMISES, derived: `rdfs:subClassOf` has an axiomatic domain and range of
         // `rdfs:Class` (rdfs2, rdfs3), and `p` is a predicate (rdfD2).
@@ -8111,8 +8133,9 @@ fn the_reflexive_rules_fire_on_their_licensed_premises_and_the_axioms_supply_the
     // domain and no range, so nothing types them `rdfs:Class` and the reflexive rule has
     // no premise about them. A chase that had merely restored the endpoint shortcut would
     // fail here — under RDFS as well as under OWL-RL.
-    for regime in [Regime::Rdfs, Regime::OwlRl] {
-        let lines = closure_lines("divergence_broad_triggers", regime);
+    for plan in [Materialization::Rdfs, Materialization::OwlRl] {
+        let regime = plan.regime();
+        let lines = closure_lines("divergence_broad_triggers", plan);
         for term in [EX_X, EX_Y] {
             assert!(
                 !lines.contains(&nquads_line(term, RDF_TYPE, RDFS_CLASS)),
@@ -8126,15 +8149,11 @@ fn the_reflexive_rules_fire_on_their_licensed_premises_and_the_axioms_supply_the
 
         // NARROWED, NOT SWITCHED OFF: given the premise outright, each rule still fires.
         assert!(
-            closure_lines("class_typed", regime).contains(&nquads_line(
-                EX_C,
-                RDFS_SUBCLASSOF,
-                EX_C
-            )),
+            closure_lines("class_typed", plan).contains(&nquads_line(EX_C, RDFS_SUBCLASSOF, EX_C)),
             "{regime:?}: rdfs10 no longer fires on an rdfs:Class instance"
         );
         assert!(
-            closure_lines("property_typed", regime).contains(&nquads_line(
+            closure_lines("property_typed", plan).contains(&nquads_line(
                 EX_P,
                 RDFS_SUBPROPERTYOF,
                 EX_P
@@ -8159,14 +8178,14 @@ fn the_reflexive_rules_fire_on_their_licensed_premises_and_the_axioms_supply_the
 /// thirty-two diffs.
 #[test]
 fn the_rdfs_closure_of_every_fixture_contains_the_empty_one() {
-    let base = closure_lines("empty", Regime::Rdfs);
+    let base = closure_lines("empty", Materialization::Rdfs);
     assert_eq!(
         base.len(),
         113,
         "the input-independent block every golden's accounting names"
     );
     for fixture in CORPUS {
-        let lines = closure_lines(fixture.name, Regime::Rdfs);
+        let lines = closure_lines(fixture.name, Materialization::Rdfs);
         let absent: Vec<&String> = base.difference(&lines).collect();
         assert!(
             absent.is_empty(),
@@ -8178,7 +8197,7 @@ fn the_rdfs_closure_of_every_fixture_contains_the_empty_one() {
     // them, so no other lane has them. `Simple` copies the input, so it closes the empty
     // graph into nothing at all.
     assert!(
-        closure_lines("empty", Regime::Simple).is_empty(),
+        closure_lines("empty", Materialization::Simple).is_empty(),
         "Simple closed the empty graph into something"
     );
     // `RDF` closes it into exactly ONE line, and that line is a genuine entailment of the
@@ -8187,7 +8206,7 @@ fn the_rdfs_closure_of_every_fixture_contains_the_empty_one() {
     // really does use `rdf:type` as a predicate, and `rdfD2` types every predicate an
     // `rdf:Property`. The surrogate ITSELF is withheld (a SPARQL entailment regime does
     // not answer with one), which is why this is one line and not four.
-    let rdf = closure_lines("empty", Regime::Rdf);
+    let rdf = closure_lines("empty", Materialization::Rdf);
     assert_eq!(
         rdf.iter().collect::<Vec<_>>(),
         vec![&format!("<{RDF_TYPE}> <{RDF_TYPE}> <{RDF_PROPERTY}> .")],
@@ -8277,7 +8296,7 @@ fn the_owl_rl_closure_of_every_fixture_contains_the_empty_one() {
         "http://www.w3.org/2001/XMLSchema#dateTimeStamp",
     ];
 
-    let owl_empty = closure_lines("empty", Regime::OwlRl);
+    let owl_empty = closure_lines("empty", Materialization::OwlRl);
 
     // LAYER 1 and 2 — the two specification lists, plus the two `owl:Class` typings, are
     // the whole of the closure's `rdf:type` lines. Equality, so nothing is typed that these
@@ -8354,7 +8373,7 @@ fn the_owl_rl_closure_of_every_fixture_contains_the_empty_one() {
 
     // …and, as with the RDFS block, it is a LOWER BOUND on every other OWL-RL closure.
     for fixture in CORPUS {
-        let lines = closure_lines(fixture.name, Regime::OwlRl);
+        let lines = closure_lines(fixture.name, Materialization::OwlRl);
         let absent: Vec<&String> = owl_empty.difference(&lines).collect();
         assert!(
             absent.is_empty(),
@@ -8458,11 +8477,12 @@ fn every_rule_the_chase_fires_is_credited_somewhere_in_the_corpus() {
          it"
     );
 
-    for (regime, label) in ORACLE_REGIMES {
+    for (plan, label) in ORACLE_REGIMES {
+        let regime = plan.regime();
         let mut credited: BTreeSet<RuleId> = BTreeSet::new();
         for fixture in CORPUS {
             let ds = build(fixture);
-            let (_, report) = materialize(&ds, regime).expect("runnable regime");
+            let (_, report) = materialize(&ds, plan).expect("runnable regime");
             credited.extend(report.rules_fired().iter().map(|&(rule, _)| rule));
         }
         let mut expected: BTreeSet<RuleId> = implemented(regime).iter().copied().collect();
@@ -8487,8 +8507,8 @@ fn every_rule_the_chase_fires_is_credited_somewhere_in_the_corpus() {
 fn no_report_over_the_corpus_overclaims() {
     for fixture in CORPUS {
         let ds = build(fixture);
-        for (regime, name) in ORACLE_REGIMES {
-            let (_, report) = materialize(&ds, regime).expect("runnable regime");
+        for (plan, name) in ORACLE_REGIMES {
+            let (_, report) = materialize(&ds, plan).expect("runnable regime");
             assert!(
                 !report.overclaims(),
                 "{}/{name}: Exact alongside {:?}",

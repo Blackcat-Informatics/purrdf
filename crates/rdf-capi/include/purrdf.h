@@ -473,9 +473,16 @@ void purrdf_cursor_free(PurrdfCursor *cursor);
  * `document` is parsed as N-Quads, which accepts an N-Triples document
  * unchanged, so a document that names a graph keeps naming it. `regime` is one
  * of `simple`, `rdf`, `rdfs`, `owl-rl`, `owl-direct`, `rif`, `d` — the same
- * spellings the CLI, WASM and the Python surface accept. Exactly two of them —
- * `owl-direct` and `rif` — cannot be forward-materialized, and are refused with a
- * message naming the five that can (`simple`, `rdf`, `rdfs`, `owl-rl`, `d`).
+ * spellings the CLI, WASM and the Python surface accept — and ALL SEVEN
+ * materialize; none is refused for being the regime it is.
+ *
+ * `program` is the regime's own rule document. `rif` entails under the CALLER's
+ * rules, so for that spelling `program` is a normative RIF-in-XML document (an
+ * `Import` is refused: resolving one is I/O this boundary does not perform).
+ * Every other regime's rule table is the specification's, so `program` must be
+ * the empty string `""` — a non-empty one is an ERROR rather than a silently
+ * discarded argument, because a caller who passed rules to `rdfs` believes they
+ * ran.
  *
  * On success `*out_nquads` receives the canonical (RDFC-1.0) N-Quads closure —
  * every input quad plus every triple the regime's implemented rules infer — and
@@ -491,12 +498,13 @@ void purrdf_cursor_free(PurrdfCursor *cursor);
  * On any error neither out-param is written, so there is nothing to free.
  *
  * # Safety
- * `document` and `regime` must be non-null, NUL-terminated C strings;
+ * `document`, `regime` and `program` must be non-null, NUL-terminated C strings;
  * `out_nquads` and `out_report` must be writable pointers; `out_error` must be
  * null or writable.
  */
 int32_t purrdf_entail_materialize_to_nquads(const char *document,
                                             const char *regime,
+                                            const char *program,
                                             PurrdfBuffer **out_nquads,
                                             PurrdfBuffer **out_report,
                                             PurrdfError **out_error);

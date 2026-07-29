@@ -86,8 +86,9 @@ but it assumes nothing about your ontology or application.
   §4.3 Tables 4–9 — *rule-table coverage*, which is not the same claim as
   entailment conformance: on W3C's own OWL 2 RL entailment tests the chase
   scores **10 of 27 positive and 23 of 23 negative**, the latter meaning no
-  unsoundness was found; 14 of the 18 RDF + RDFS patterns, the four residuals
-  being those that conclude about a fresh blank node), an open-world OWL-Direct
+  unsoundness was found; all 18 RDF + RDFS patterns, the four existential ones
+  firing through the restricted chase with their surrogate blank nodes withheld at
+  the materialization boundary), an open-world OWL-Direct
   ALCOIQ tableau, and RIF-Core rules. **Every closure comes back with a reasoning
   report** naming what fired, what did not, the boundaries met, the budget
   consumed, and the contract hash of the calculus that ran — so an incomplete

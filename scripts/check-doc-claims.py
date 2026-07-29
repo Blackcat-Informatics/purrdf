@@ -46,6 +46,14 @@ _CONFORMANCE = _REPO / "docs" / "CONFORMANCE.md"
 _ENTAILMENT = _REPO / "docs" / "book" / "src" / "entailment.md"
 _BOOK_CONFORMANCE = _REPO / "docs" / "book" / "src" / "project" / "conformance.md"
 _README = _REPO / "README.md"
+# The three CRATE READMEs that state the 78-rule table. They are published to
+# crates.io on their own, so a reader may meet the number there and nowhere else;
+# each therefore carries the qualifier, and each is gated here. This script did
+# not cover crate READMEs before, which is how all three came to state rule-table
+# coverage as though it were entailment conformance.
+_ENTAIL_README = _REPO / "crates" / "entail" / "README.md"
+_PURRDF_README = _REPO / "crates" / "purrdf" / "README.md"
+_CLI_README = _REPO / "crates" / "cli" / "README.md"
 _RELEASE = _REPO / "docs" / "RELEASE.md"
 _RELEASE_CRATES = _REPO / "scripts" / "release-crates.sh"
 
@@ -585,6 +593,33 @@ def build_claims(
             ),
         ),
         (
+            "the OWL 2 RL lane split in the purrdf-entail crate README",
+            _ENTAIL_README,
+            _flow(
+                r"entailment tests this chase scores \*\*(?P<pos_a>\d+) of "
+                r"(?P<pos_t>\d+)\s+positive and (?P<neg_a>\d+) of (?P<neg_t>\d+)\s*"
+                r"negative\*\*"
+            ),
+        ),
+        (
+            "the OWL 2 RL lane split in the purrdf umbrella crate README",
+            _PURRDF_README,
+            _flow(
+                r"entailment tests this chase scores \*\*(?P<pos_a>\d+) of "
+                r"(?P<pos_t>\d+)\s+positive and (?P<neg_a>\d+) of (?P<neg_t>\d+)\s*"
+                r"negative\*\*"
+            ),
+        ),
+        (
+            "the OWL 2 RL lane split in the purrdf-cli crate README",
+            _CLI_README,
+            _flow(
+                r"entailment tests this chase scores \*\*(?P<pos_a>\d+) of "
+                r"(?P<pos_t>\d+)\s+positive and (?P<neg_a>\d+) of (?P<neg_t>\d+)\s*"
+                r"negative\*\*"
+            ),
+        ),
+        (
             "the OWL 2 RL lane split in the book's introduction",
             _INTRODUCTION,
             _flow(
@@ -892,6 +927,40 @@ def build_claims(
                 "rdf_d": inventory["RDF"][0],
                 "d_i": inventory["D"][1],
                 "d_d": inventory["D"][0],
+            },
+            inv,
+        ),
+        # The bare rule count in each published crate README. It is the number a
+        # crates.io reader meets first, so it is gated against the same generated
+        # inventory the book's table is.
+        Claim(
+            "the OWL-RL rule count in the purrdf-entail crate README",
+            _ENTAIL_README,
+            _flow(r"`OWL-RL` fires all (?P<owlrl_d>\d+)\s+rules"),
+            {"owlrl_d": inventory["OWL-RL"][0]},
+            inv,
+        ),
+        Claim(
+            "the OWL-RL rule count in the purrdf umbrella crate README",
+            _PURRDF_README,
+            _flow(
+                r"all (?P<owlrl_d>\d+) OWL 2 RL rules of OWL 2 Profiles §4.3 "
+                r"Tables 4–9"
+            ),
+            {"owlrl_d": inventory["OWL-RL"][0]},
+            inv,
+        ),
+        Claim(
+            "the rule counts in the purrdf-cli crate README",
+            _CLI_README,
+            _flow(
+                r"`rdfs` fires (?P<rdfs_i>\d+) of the (?P<rdfs_d>\d+) RDF \+ RDFS "
+                r"patterns; `owl-rl` fires all (?P<owlrl_d>\d+) rules"
+            ),
+            {
+                "rdfs_i": inventory["RDFS"][1],
+                "rdfs_d": inventory["RDFS"][0],
+                "owlrl_d": inventory["OWL-RL"][0],
             },
             inv,
         ),

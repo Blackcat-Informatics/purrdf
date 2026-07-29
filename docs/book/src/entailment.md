@@ -45,16 +45,24 @@ everywhere.
 
 | Host | Materialize | Defined rule table | Implemented rules |
 | --- | --- | --- | --- |
-| Rust | `materialize(&ds, Regime::Rdfs)` | `rules(Regime::Rdfs)` | `implemented(Regime::Rdfs)` |
+| Rust | `materialize(&ds, Materialization::Rdfs)` | `rules(Regime::Rdfs)` | `implemented(Regime::Rdfs)` |
 | CLI | `purrdf reason --regime rdfs`, `purrdf convert --entailment rdfs`, `purrdf query --entailment rdfs` | — | — |
-| Python | `purrdf.entail.materialize(dataset, "rdfs")`, `purrdf.entail.materialize_nt(text, "rdfs")` | `purrdf.entail.rules("rdfs")` | `purrdf.entail.implemented_rules("rdfs")` |
-| JavaScript / WebAssembly | `entailMaterialize(doc, "rdfs")` | `entailRules("rdfs")` | `entailImplementedRules("rdfs")` |
+| Python | `purrdf.entail.materialize(dataset, "rdfs", "")`, `purrdf.entail.materialize_nt(text, "rdfs", "")` | `purrdf.entail.rules("rdfs")` | `purrdf.entail.implemented_rules("rdfs")` |
+| JavaScript / WebAssembly | `entailMaterialize(doc, "rdfs", "")` | `entailRules("rdfs")` | `entailImplementedRules("rdfs")` |
 | C | `purrdf_entail_materialize_to_nquads(...)` | `purrdf_entail_rules(...)` | `purrdf_entail_implemented_rules(...)` |
 
-Two host-specific bounds, stated rather than glossed:
+Every host materializes every regime; none refuses one. What two regimes need is an
+INPUT, and each host has a parameter for it: `--rules <FILE>` on the CLI, a
+`program` string on the Python, WebAssembly and C surfaces, and the
+`Materialization` value itself in Rust. `rif` takes a normative RIF-in-XML rule
+document there; every other regime takes none, and supplying one is an error rather
+than a discarded argument. `owl-direct`'s extra input is a *query's* class
+expressions, so a document-in/document-out call runs the query-independent
+augmentation and a query surface (`purrdf::query_with_entailment`,
+`purrdf query --entailment owl-direct`) is where the query-directed lane lives.
 
-- The **CLI** materializes `simple`, `rdf`, `rdfs`, and `owl-rl`. It refuses
-  `owl-direct`, `rif`, and `d` with exit code 3.
+One host-specific note:
+
 - The **WebAssembly** module also exports `entailCheckGoldenVectors()`, which
   replays the committed tri-host vector artifact inside the module a consumer
   actually loaded — so agreement with the reference implementation can be checked
@@ -179,14 +187,14 @@ reported as a `Construct::DatatypeValueSpace` boundary on the run rather than
 claimed. So a `D` closure is complete *within its stated boundary*, and the report
 is where the boundary is stated.
 
-The command-line tool is the one host that does not expose `d`: `purrdf reason
---regime d` and `purrdf convert --entailment d` exit 3. The Rust, Python,
-WebAssembly, and C surfaces all materialize it.
+Every host materializes `d`, the command-line tool included.
 
-`EntailError::Unsupported` is therefore reached by exactly two regimes,
-`OWL-Direct` and `RIF`, and in both cases because the plain `materialize` facade
-has no way to supply the input they need — not because the regime is
-unimplemented.
+There is **no unsupported-regime error**. `materialize` takes a `Materialization`,
+which carries each regime's own input — a basic graph pattern for `OWL-Direct`, a
+`RuleSet` for `RIF` — so all seven inhabitants of that type are served and a caller
+cannot hand the function a value it accepts and get a refusal instead of an answer.
+`Regime` stays as the reporting and identity type that `ReasoningReport::regime()`,
+`rules()`, `implemented()` and `Regime::from_iri` speak in.
 
 ## Invariants
 

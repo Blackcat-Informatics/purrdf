@@ -51,7 +51,7 @@ const VECTORS = fileURLToPath(
   new URL("../../../validate/tests/fixtures/regime-boundary.vectors", import.meta.url),
 );
 
-/** Parse the line-oriented `@case/@regime/@input/@closure/@report/@end` artifact. */
+/** Parse the line-oriented `@case/@regime/@input/@program/@closure/@report/@end` artifact. */
 function parseVectors(text) {
   const cases = [];
   let current = {};
@@ -65,7 +65,12 @@ function parseVectors(text) {
     open = null;
     if (keyword === "case") current.name = rest.join(" ").trim();
     else if (keyword === "regime") current.regime = rest.join(" ").trim();
-    else if (keyword === "input" || keyword === "closure" || keyword === "report") {
+    else if (
+      keyword === "input" ||
+      keyword === "program" ||
+      keyword === "closure" ||
+      keyword === "report"
+    ) {
       current[keyword] = "";
       open = keyword;
     } else if (keyword === "end") {
@@ -80,14 +85,14 @@ test("every golden case is byte-identical across the wasm/JS boundary", async ()
   const cases = parseVectors(await readFile(VECTORS, "utf8"));
   assert.ok(cases.length > 0, "the artifact must hold cases");
   for (const vector of cases) {
-    const closed = entailMaterialize(vector.input, vector.regime);
+    const closed = entailMaterialize(vector.input, vector.regime, vector.program ?? "");
     assert.equal(closed.nquads, vector.closure, `${vector.name}: closure`);
     assert.equal(closed.report, vector.report, `${vector.name}: report`);
   }
 });
 
 test("entailMaterialize closes under rdfs and always returns a report", () => {
-  const closed = entailMaterialize(SCHEMA, "rdfs");
+  const closed = entailMaterialize(SCHEMA, "rdfs", "");
   assert.match(
     closed.nquads,
     /<http:\/\/example\.org\/x> <http:\/\/www\.w3\.org\/1999\/02\/22-rdf-syntax-ns#type> <http:\/\/example\.org\/C> \./,
@@ -104,7 +109,7 @@ test("entailMaterialize closes under rdfs and always returns a report", () => {
 });
 
 test("entailMaterialize under simple is the identity closure", () => {
-  const closed = entailMaterialize(SCHEMA, "simple");
+  const closed = entailMaterialize(SCHEMA, "simple", "");
   assert.ok(
     !closed.nquads.includes(
       "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .",
@@ -114,34 +119,50 @@ test("entailMaterialize under simple is the identity closure", () => {
 });
 
 test("entailMaterialize is byte-stable across repeated calls", () => {
-  const first = entailMaterialize(SCHEMA, "owl-rl");
+  const first = entailMaterialize(SCHEMA, "owl-rl", "");
   for (let i = 0; i < 5; i += 1) {
-    const again = entailMaterialize(SCHEMA, "owl-rl");
+    const again = entailMaterialize(SCHEMA, "owl-rl", "");
     assert.equal(again.nquads, first.nquads);
     assert.equal(again.report, first.report);
   }
 });
 
 test("entailMaterialize rejects an unknown regime, naming the accepted set", () => {
-  assert.throws(() => entailMaterialize(SCHEMA, "rdfs-plus"), /accepted: simple, rdf, rdfs/);
+  assert.throws(() => entailMaterialize(SCHEMA, "rdfs-plus", ""), /accepted: simple, rdf, rdfs/);
   // The spellings are case-sensitive, exactly as the CLI writes them.
-  assert.throws(() => entailMaterialize(SCHEMA, "RDFS"), /accepted:/);
+  assert.throws(() => entailMaterialize(SCHEMA, "RDFS", ""), /accepted:/);
 });
 
-test("entailMaterialize refuses the two non-materializable regimes by name", () => {
-  for (const regime of ["owl-direct", "rif"]) {
-    assert.throws(
-      () => entailMaterialize(SCHEMA, regime),
-      /materializable regimes: simple, rdf, rdfs, owl-rl, d/,
-      regime,
-    );
+// A normative RIF-in-XML rule document: `?x a ex:A` => `?x a ex:B`. `rif` is the
+// one regime whose calculus is the CALLER's, so it is the one spelling whose
+// `program` argument is a document rather than the empty string.
+const RIF_PROGRAM =
+  '<Document xmlns="http://www.w3.org/2007/rif#"><payload><Group><sentence><Forall><declare><Var>x</Var></declare><formula><Implies><if><Frame><object><Var>x</Var></object><slot><Const type="http://www.w3.org/2007/rif#iri">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type="http://www.w3.org/2007/rif#iri">http://example.org/A</Const></slot></Frame></if><then><Frame><object><Var>x</Var></object><slot><Const type="http://www.w3.org/2007/rif#iri">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type="http://www.w3.org/2007/rif#iri">http://example.org/B</Const></slot></Frame></then></Implies></formula></Forall></sentence></Group></payload></Document>';
+
+test("entailMaterialize materializes every regime spelling", () => {
+  // Falsifiable against the old behavior: `owl-direct` and `rif` threw here with a
+  // message naming the five spellings that were not refused.
+  for (const [regime, program] of [
+    ["simple", ""],
+    ["rdf", ""],
+    ["rdfs", ""],
+    ["owl-rl", ""],
+    ["owl-direct", ""],
+    ["rif", RIF_PROGRAM],
+    ["d", ""],
+  ]) {
+    const closed = entailMaterialize(SCHEMA, regime, program);
+    assert.match(closed.report, /^purrdf-reasoning-report 1\n/);
+    assert.ok(closed.report.includes(`\nregime ${regime}\n`), regime);
+    assert.ok(closed.report.endsWith("overclaims false\n"), regime);
   }
-  // `d` is NOT one of them: datatype entailment is the five `dt-*` rules of
-  // OWL 2 Profiles §4.3 Table 8, and it materializes here as it does on the
-  // Rust, C-ABI and Python hosts.
-  const closed = entailMaterialize(SCHEMA, "d");
-  assert.match(closed.report, /^purrdf-reasoning-report 1\n/);
-  assert.match(closed.report, /\nregime d\n/);
+});
+
+test("a rule document belongs to rif alone and is refused elsewhere", () => {
+  assert.throws(
+    () => entailMaterialize(SCHEMA, "rdfs", RIF_PROGRAM),
+    /takes no rule document/,
+  );
 });
 
 test("entailMaterialize rejects a malformed document (never a silent empty closure)", () => {
@@ -167,7 +188,7 @@ test("the rule inventories are the specification tables, and the gap is measurab
   }
 
   // …and the difference is exactly what the report's `missing` lines name.
-  const missing = entailMaterialize(SCHEMA, "rdfs")
+  const missing = entailMaterialize(SCHEMA, "rdfs", "")
     .report.split("\n")
     .filter((line) => line.startsWith("missing "))
     .map((line) => line.slice("missing ".length));

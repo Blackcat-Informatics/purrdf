@@ -72,8 +72,12 @@ use crate::status::PurrdfStatus;
 ///
 /// The parse → close → canonicalize → render sequence lives in
 /// [`materialize_to_nquads_string`]; this only adds the C-ABI byte framing.
-fn materialize_to_nquads_bytes(document: &str, regime: &str) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let (nquads, report) = materialize_to_nquads_string(regime, document)?.into_parts();
+fn materialize_to_nquads_bytes(
+    document: &str,
+    regime: &str,
+    program: &str,
+) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let (nquads, report) = materialize_to_nquads_string(regime, document, program)?.into_parts();
     Ok((nquads.into_bytes(), report.into_bytes()))
 }
 
@@ -82,9 +86,16 @@ fn materialize_to_nquads_bytes(document: &str, regime: &str) -> Result<(Vec<u8>,
 /// `document` is parsed as N-Quads, which accepts an N-Triples document
 /// unchanged, so a document that names a graph keeps naming it. `regime` is one
 /// of `simple`, `rdf`, `rdfs`, `owl-rl`, `owl-direct`, `rif`, `d` — the same
-/// spellings the CLI, WASM and the Python surface accept. Exactly two of them —
-/// `owl-direct` and `rif` — cannot be forward-materialized, and are refused with a
-/// message naming the five that can (`simple`, `rdf`, `rdfs`, `owl-rl`, `d`).
+/// spellings the CLI, WASM and the Python surface accept — and ALL SEVEN
+/// materialize; none is refused for being the regime it is.
+///
+/// `program` is the regime's own rule document. `rif` entails under the CALLER's
+/// rules, so for that spelling `program` is a normative RIF-in-XML document (an
+/// `Import` is refused: resolving one is I/O this boundary does not perform).
+/// Every other regime's rule table is the specification's, so `program` must be
+/// the empty string `""` — a non-empty one is an ERROR rather than a silently
+/// discarded argument, because a caller who passed rules to `rdfs` believes they
+/// ran.
 ///
 /// On success `*out_nquads` receives the canonical (RDFC-1.0) N-Quads closure —
 /// every input quad plus every triple the regime's implemented rules infer — and
@@ -100,26 +111,28 @@ fn materialize_to_nquads_bytes(document: &str, regime: &str) -> Result<(Vec<u8>,
 /// On any error neither out-param is written, so there is nothing to free.
 ///
 /// # Safety
-/// `document` and `regime` must be non-null, NUL-terminated C strings;
+/// `document`, `regime` and `program` must be non-null, NUL-terminated C strings;
 /// `out_nquads` and `out_report` must be writable pointers; `out_error` must be
 /// null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_entail_materialize_to_nquads(
     document: *const c_char,
     regime: *const c_char,
+    program: *const c_char,
     out_nquads: *mut *mut PurrdfBuffer,
     out_report: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
-    // SAFETY: the caller's contract above — `document`/`regime` are NUL-terminated
-    // C strings (or null, checked here), and the three out-pointers are writable
-    // (or null, checked here). The two `*out_* =` writes happen only after every
+    // SAFETY: the caller's contract above — `document`/`regime`/`program` are
+    // NUL-terminated C strings (or null, checked here), and the three out-pointers are
+    // writable (or null, checked here). The two `*out_* =` writes happen only after every
     // fallible step has succeeded, so a failing call leaves both untouched and
     // hands out no buffer the caller would have to free.
     unsafe {
         ffi_try!(out_error, {
             if document.is_null()
                 || regime.is_null()
+                || program.is_null()
                 || out_nquads.is_null()
                 || out_report.is_null()
             {
@@ -130,7 +143,8 @@ pub unsafe extern "C" fn purrdf_entail_materialize_to_nquads(
             }
             let document = cstr_to_str(document)?;
             let regime = cstr_to_str(regime)?;
-            let (nquads, report) = materialize_to_nquads_bytes(document, regime)
+            let program = cstr_to_str(program)?;
+            let (nquads, report) = materialize_to_nquads_bytes(document, regime, program)
                 .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
             *out_nquads = PurrdfBuffer::into_raw(nquads);
             *out_report = PurrdfBuffer::into_raw(report);
@@ -688,6 +702,12 @@ mod tests {
 <http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .
 ";
 
+    /// A normative RIF-in-XML rule document: `?x a ex:A` ⟹ `?x a ex:B`.
+    ///
+    /// `rif` is the one regime whose calculus is the CALLER's, so it is the one
+    /// spelling whose `program` argument is a document rather than the empty string.
+    const RIF_PROGRAM: &str = "<Document xmlns=\"http://www.w3.org/2007/rif#\"><payload><Group><sentence><Forall><declare><Var>x</Var></declare><formula><Implies><if><Frame><object><Var>x</Var></object><slot><Const type=\"http://www.w3.org/2007/rif#iri\">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type=\"http://www.w3.org/2007/rif#iri\">http://example.org/A</Const></slot></Frame></if><then><Frame><object><Var>x</Var></object><slot><Const type=\"http://www.w3.org/2007/rif#iri\">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type=\"http://www.w3.org/2007/rif#iri\">http://example.org/B</Const></slot></Frame></then></Implies></formula></Forall></sentence></Group></payload></Document>";
+
     /// The C-ABI host's leg of the tri-host assertion.
     ///
     /// The `purrdf-validate` test and the WASM host's `entailCheckGoldenVectors`
@@ -700,7 +720,8 @@ mod tests {
 
     #[test]
     fn materialize_emits_closure_and_report() {
-        let (nquads, report) = materialize_to_nquads_bytes(SCHEMA, "rdfs").expect("rdfs closure");
+        let (nquads, report) =
+            materialize_to_nquads_bytes(SCHEMA, "rdfs", "").expect("rdfs closure");
         let nquads = String::from_utf8(nquads).expect("utf8");
         let report = String::from_utf8(report).expect("utf8");
         assert!(nquads.contains(
@@ -719,7 +740,7 @@ mod tests {
     #[test]
     fn an_unknown_regime_names_the_accepted_set() {
         for error in [
-            materialize_to_nquads_bytes(SCHEMA, "RDFS").expect_err("case-sensitive"),
+            materialize_to_nquads_bytes(SCHEMA, "RDFS", "").expect_err("case-sensitive"),
             rules_bytes("rdfs-plus").expect_err("unknown"),
             implemented_rules_bytes("rdfs-plus").expect_err("unknown"),
         ] {
@@ -727,22 +748,36 @@ mod tests {
         }
     }
 
+    /// EVERY accepted spelling materializes across the C ABI. None is refused.
+    ///
+    /// Falsifiable against the old behavior: `rif` and `owl-direct` were refused here
+    /// with a message naming the five that were not.
     #[test]
-    fn a_non_materializable_regime_is_refused_by_name() {
-        for regime in ["rif", "owl-direct"] {
-            let error = materialize_to_nquads_bytes(SCHEMA, regime).expect_err("unsupported");
-            assert!(
-                error.contains("materializable regimes: simple, rdf, rdfs, owl-rl, d"),
-                "{error}"
-            );
+    fn every_regime_spelling_materializes() {
+        for (regime, program) in [
+            ("simple", ""),
+            ("rdf", ""),
+            ("rdfs", ""),
+            ("owl-rl", ""),
+            ("owl-direct", ""),
+            ("rif", RIF_PROGRAM),
+            ("d", ""),
+        ] {
+            let (_, report) = materialize_to_nquads_bytes(SCHEMA, regime, program)
+                .unwrap_or_else(|error| panic!("{regime}: {error}"));
+            let report = String::from_utf8(report).expect("utf8");
+            assert!(report.contains(&format!("\nregime {regime}\n")), "{report}");
         }
-        // `d` is on the other side of that line: the C ABI materializes it too.
-        assert!(materialize_to_nquads_bytes(SCHEMA, "d").is_ok());
+        // A rule document belongs to exactly one regime; passing one anywhere else is
+        // refused rather than discarded.
+        let error = materialize_to_nquads_bytes(SCHEMA, "rdfs", RIF_PROGRAM)
+            .expect_err("a rule document for a rule-table regime");
+        assert!(error.contains("takes no rule document"), "{error}");
     }
 
     #[test]
     fn a_malformed_document_is_an_error() {
-        assert!(materialize_to_nquads_bytes("this is not n-quads\n", "rdfs").is_err());
+        assert!(materialize_to_nquads_bytes("this is not n-quads\n", "rdfs", "").is_err());
     }
 
     #[test]
@@ -792,16 +827,18 @@ mod tests {
     fn the_pointer_surface_hands_out_two_buffers() {
         let document = CString::new(SCHEMA).expect("no interior NUL");
         let regime = CString::new("rdfs").expect("no interior NUL");
+        let program = CString::new("").expect("no interior NUL");
         let mut nquads: *mut PurrdfBuffer = std::ptr::null_mut();
         let mut report: *mut PurrdfBuffer = std::ptr::null_mut();
         let mut error: *mut PurrdfError = std::ptr::null_mut();
-        // SAFETY: both C strings are live for the call, and the three out-pointers
+        // SAFETY: all three C strings are live for the call, and the three out-pointers
         // address live, writable locals.
         unsafe {
             assert_eq!(
                 purrdf_entail_materialize_to_nquads(
                     document.as_ptr(),
                     regime.as_ptr(),
+                    program.as_ptr(),
                     &raw mut nquads,
                     &raw mut report,
                     &raw mut error,
@@ -843,20 +880,26 @@ mod tests {
         }
     }
 
+    /// A failing call writes neither out-param, so there is nothing to free.
+    ///
+    /// The failure is now a MALFORMED DOCUMENT rather than a refused regime: every
+    /// spelling materializes, so the error path is reached with bad bytes.
     #[test]
     fn a_failing_call_writes_no_buffer_to_free() {
-        let document = CString::new(SCHEMA).expect("no interior NUL");
-        let regime = CString::new("owl-direct").expect("no interior NUL");
+        let document = CString::new("this is not n-quads\n").expect("no interior NUL");
+        let regime = CString::new("rdfs").expect("no interior NUL");
+        let program = CString::new("").expect("no interior NUL");
         let mut nquads: *mut PurrdfBuffer = std::ptr::null_mut();
         let mut report: *mut PurrdfBuffer = std::ptr::null_mut();
         let mut error: *mut PurrdfError = std::ptr::null_mut();
-        // SAFETY: both C strings are live for the call, and the three out-pointers
+        // SAFETY: all three C strings are live for the call, and the three out-pointers
         // address live, writable locals; the error handle is freed below.
         unsafe {
             assert_eq!(
                 purrdf_entail_materialize_to_nquads(
                     document.as_ptr(),
                     regime.as_ptr(),
+                    program.as_ptr(),
                     &raw mut nquads,
                     &raw mut report,
                     &raw mut error,
@@ -882,6 +925,7 @@ mod tests {
         unsafe {
             assert_eq!(
                 purrdf_entail_materialize_to_nquads(
+                    std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
                     &raw mut nquads,

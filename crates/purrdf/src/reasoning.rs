@@ -6,7 +6,9 @@
 use std::sync::Arc;
 
 use purrdf_datalog::seminaive::BudgetReport;
-use purrdf_entail::{Completeness, EntailError, QNode, QTriple, ReasoningReport, Regime, RuleSet};
+use purrdf_entail::{
+    Completeness, EntailError, Materialization, QNode, QTriple, ReasoningReport, Regime, RuleSet,
+};
 use purrdf_rdf::{
     RdfDataset, RdfDiagnostic, RdfTextDirection, SparqlRequest, SparqlResult, TermValue,
 };
@@ -111,23 +113,33 @@ pub fn query_with_entailment(
     let prepared_query = engine.prepare_query(request.query, request.base_iri)?;
     // Every lane hands back a `ReasoningReport` alongside the closure, and every one of
     // them is carried out of this function rather than dropped at this call site.
+    // `collect_query_bgp` is bound outside the match because the OWL-Direct plan BORROWS
+    // it; it is computed for that mode alone.
+    let pattern = match entailment {
+        QueryEntailment::OwlDirect => collect_query_bgp(&prepared_query.query),
+        _ => Vec::new(),
+    };
+    // ONE call, seven modes. `purrdf_entail::materialize` is total over
+    // `Materialization`, so this lane no longer splits into "the regimes that
+    // materialize" and "the two that need their own entry point".
     let (prepared, report) = match entailment {
         QueryEntailment::Simple => (Arc::clone(dataset), simple_report()),
-        QueryEntailment::Rdf => purrdf_entail::materialize(dataset, Regime::Rdf)?,
-        QueryEntailment::Rdfs => purrdf_entail::materialize(dataset, Regime::Rdfs)?,
-        QueryEntailment::OwlRl => purrdf_entail::materialize(dataset, Regime::OwlRl)?,
-        QueryEntailment::D => purrdf_entail::materialize(dataset, Regime::D)?,
+        QueryEntailment::Rdf => purrdf_entail::materialize(dataset, Materialization::Rdf)?,
+        QueryEntailment::Rdfs => purrdf_entail::materialize(dataset, Materialization::Rdfs)?,
+        QueryEntailment::OwlRl => purrdf_entail::materialize(dataset, Materialization::OwlRl)?,
+        QueryEntailment::D => purrdf_entail::materialize(dataset, Materialization::D)?,
         QueryEntailment::OwlDirect => {
-            let pattern = collect_query_bgp(&prepared_query.query);
-            purrdf_entail::materialize_dl_reported(dataset, &pattern)?
+            purrdf_entail::materialize(dataset, Materialization::OwlDirect(&pattern))?
         }
-        QueryEntailment::Rif(ruleset) => purrdf_entail::materialize_rif(dataset, ruleset)?,
+        QueryEntailment::Rif(ruleset) => {
+            purrdf_entail::materialize(dataset, Materialization::Rif(ruleset))?
+        }
     };
     let result = engine.query_prepared(&prepared, &prepared_query, request.substitutions)?;
     Ok((result, report))
 }
 
-/// The report for the identity closure — what `materialize(ds, Regime::Simple)` returns.
+/// The report for the identity closure — what `materialize(ds, Materialization::Simple)` returns.
 ///
 /// Assembled rather than obtained by calling it, because that call COPIES the dataset to
 /// produce a closure this lane already has as an `Arc`. Every field is a property of the
@@ -356,7 +368,7 @@ mod tests {
     fn the_simple_report_equals_the_materialized_one() {
         let dataset = hierarchy();
         let (_, from_materialize) =
-            purrdf_entail::materialize(&dataset, Regime::Simple).expect("simple");
+            purrdf_entail::materialize(&dataset, Materialization::Simple).expect("simple");
         let (_, from_query) = ask_reported(QueryEntailment::Simple);
         assert_eq!(format!("{from_query:?}"), format!("{from_materialize:?}"));
     }

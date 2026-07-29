@@ -200,15 +200,33 @@ import purrdf
 from purrdf import entail
 
 dataset = purrdf.RdfDataset(my_turtle, purrdf.RdfFormat.TURTLE)
-closure, report = entail.materialize(dataset, "rdfs")
+closure, report = entail.materialize(dataset, "rdfs", "")
 print(closure.to_nquads())
 print(report)
 ```
 
-For callers holding a document rather than a parsed dataset, `entail.materialize_nt(text, regime)`
-takes N-Triples/N-Quads and returns `(canonical_nquads, report)`. Both accept the
-regime as a plain string (`"simple"`, `"rdf"`, `"rdfs"`, `"owl-rl"`, `"d"`) or as
+For callers holding a document rather than a parsed dataset,
+`entail.materialize_nt(text, regime, program)` takes N-Triples/N-Quads and returns
+`(canonical_nquads, report)`. Both accept the regime as a plain string (`"simple"`,
+`"rdf"`, `"rdfs"`, `"owl-rl"`, `"owl-direct"`, `"rif"`, `"d"`) or as
 `entail.Regime.RDFS`.
+
+**All seven regimes close; none is refused.** The third argument is the regime's own
+rule document. Six regimes take none, so theirs is `""` — and a non-empty one raises
+rather than being silently discarded. `"rif"` is the exception: it entails under the
+*caller's* rules, which PurRDF does not declare, so its `program` is a normative
+RIF-in-XML document:
+
+```python
+closure, report = entail.materialize(dataset, "rif", my_rif_xml)
+```
+
+`"owl-direct"` takes no program either, and that is a statement rather than an
+omission: its extra input is a *query's* class expressions, and this surface closes a
+dataset rather than answering a query — so what it runs is the query-independent
+tableau augmentation (the classification, the realization, the entailed role
+assertions and the `owl:sameAs` identifications the tableau decides about the
+ontology's own named terms).
 
 **The report is the second return value and is never optional.** It is a
 byte-stable rendering naming which rules fired and how often, which specification

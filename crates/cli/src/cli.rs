@@ -164,6 +164,10 @@ pub(crate) enum Command {
         /// serializing (applied before `--canonical`).
         #[arg(long, value_enum, value_name = "REGIME")]
         entailment: Option<CliRegime>,
+        /// RIF-in-XML rule document for `rif`; required by that regime and
+        /// refused for every other (their rule table is the specification's).
+        #[arg(long, value_name = "FILE")]
+        rules: Option<PathBuf>,
         /// Surface the reasoning report for `--entailment`: bare writes it to
         /// stderr, `--report=PATH` writes it to PATH. Requires `--entailment`.
         #[allow(clippy::option_option)]
@@ -195,6 +199,10 @@ pub(crate) enum Command {
         /// (the query then runs over the closure, not the raw view).
         #[arg(long, value_enum, value_name = "REGIME")]
         entailment: Option<CliRegime>,
+        /// RIF-in-XML rule document for `rif`; required by that regime and
+        /// refused for every other (their rule table is the specification's).
+        #[arg(long, value_name = "FILE")]
+        rules: Option<PathBuf>,
         /// Surface the reasoning report for `--entailment`: bare writes it to
         /// stderr, `--report=PATH` writes it to PATH. Requires `--entailment`.
         #[allow(clippy::option_option)]
@@ -212,6 +220,10 @@ pub(crate) enum Command {
         /// The entailment regime to close under.
         #[arg(long, value_enum)]
         regime: CliRegime,
+        /// RIF-in-XML rule document for `rif`; required by that regime and
+        /// refused for every other (their rule table is the specification's).
+        #[arg(long, value_name = "FILE")]
+        rules: Option<PathBuf>,
         /// Surface the reasoning report: bare writes it to stderr,
         /// `--report=PATH` writes it to PATH.
         #[allow(clippy::option_option)]
@@ -623,11 +635,11 @@ pub(crate) enum CliRegime {
     /// OWL 2 RL entailment.
     #[value(name = "owl-rl")]
     OwlRl,
-    /// OWL Direct (DL) entailment — not materializable without query class
-    /// expressions.
+    /// OWL Direct (DL) entailment via the tableau. A document pipeline has no
+    /// query to direct it, so it runs the query-independent augmentation.
     #[value(name = "owl-direct")]
     OwlDirect,
-    /// RIF-Core entailment — not materializable without a rule set.
+    /// RIF-Core entailment under the rule set `--rules` names.
     #[value(name = "rif")]
     Rif,
     /// Datatype (D) entailment — Simple plus OWL 2 Profiles §4.3 Table 8.

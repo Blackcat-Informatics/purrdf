@@ -190,7 +190,7 @@ ownership, and all limits. Complete examples are in
   `Dataset.query(...)` remains as the compatibility raw-string helper.
 - `shaclValidateToSarif(shapesTtl, dataNt)` / `shaclEntail(shapesTtl, dataNt)` — SHACL
   validation to a SARIF 2.1.0 report and SHACL-AF `sh:rule` entailment to N-Triples.
-- `entailMaterialize(document, regime)` — SPARQL entailment-**regime**
+- `entailMaterialize(document, regime, program)` — SPARQL entailment-**regime**
   materialization (`"simple"` / `"rdf"` / `"rdfs"` / `"owl-rl"` / `"d"`), returning
   `{ nquads, report }`: the canonical N-Quads closure and a byte-stable reasoning
   report. Unlike `shaclEntail` it takes no shapes graph — it closes the document

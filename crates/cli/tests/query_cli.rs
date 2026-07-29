@@ -35,6 +35,9 @@ const PURRDF: &str = env!("CARGO_BIN_EXE_purrdf");
 
 /// A default-graph fixture with rich term shapes (an IRI object and a plain literal),
 /// enough to drive SELECT / ASK / CONSTRUCT / DESCRIBE over `example.org`.
+/// A normative RIF-in-XML rule document: `?x a ex:Cat` ⟹ `?x a ex:Animal`.
+const RIF_RULES: &str = "<Document xmlns=\"http://www.w3.org/2007/rif#\"><payload><Group><sentence><Forall><declare><Var>x</Var></declare><formula><Implies><if><Frame><object><Var>x</Var></object><slot><Const type=\"http://www.w3.org/2007/rif#iri\">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type=\"http://www.w3.org/2007/rif#iri\">http://example.org/Cat</Const></slot></Frame></if><then><Frame><object><Var>x</Var></object><slot><Const type=\"http://www.w3.org/2007/rif#iri\">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type=\"http://www.w3.org/2007/rif#iri\">http://example.org/Animal</Const></slot></Frame></then></Implies></formula></Forall></sentence></Group></payload></Document>";
+
 const DATA_TTL: &str = concat!(
     "@prefix ex: <http://example.org/> .\n",
     "ex:alice ex:knows ex:bob .\n",
@@ -448,52 +451,46 @@ fn corrupt_pack_fails_closed() {
     );
 }
 
-/// `--entailment` shares the exit-3 unsupported-regime boundary with `reason`
-/// (`crates/cli/src/reason.rs::resolve_materializable_regime`, wired into `query` via
-/// `crates/cli/src/query.rs`): `owl-direct` and `rif` each need inputs (query class
-/// expressions or a rule set) the CLI cannot supply, so `query --entailment` on either
-/// of them must exit code **3**, not merely fail.
+/// `query --entailment` answers under EVERY regime, sharing `reason`'s resolution
+/// (`crates/cli/src/reason.rs::EntailmentPlan`, wired into `query` via
+/// `crates/cli/src/query.rs`).
 ///
-/// `d` is not one of them — the library materializes it, so `query --entailment d`
-/// runs the closure and answers, which the tail of this test asserts.
+/// Falsifiable against the old behavior: `owl-direct` and `rif` exited code 3 here with
+/// "cannot be materialized". `rif` now names its rule document with `--rules`; the other
+/// six take none, and passing one is a usage error rather than a discarded argument.
 #[test]
-fn entailment_boundary_regimes_exit_three() {
+fn every_entailment_regime_answers() {
     let dir = tempfile::tempdir().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "data.ttl", DATA_TTL);
+    let rules = write_file(dir, "data.rif", RIF_RULES);
     let query = "SELECT ?o WHERE { ?s <http://example.org/knows> ?o }";
 
-    let ask = |regime: &str| {
-        run(&[
-            "query",
-            "--data",
-            &ttl,
-            "--entailment",
-            regime,
-            "--results-format",
-            "json",
-            query,
-        ])
+    let ask = |extra: &[&str]| {
+        let mut args = vec!["query", "--data", &ttl];
+        args.extend_from_slice(extra);
+        args.extend_from_slice(&["--results-format", "json", query]);
+        run(&args)
     };
-    for regime in ["owl-direct", "rif"] {
-        let out = ask(regime);
-        assert_eq!(
-            out.status.code(),
-            Some(3),
-            "query --entailment {regime} must exit code 3 (unsupported-regime boundary); stderr:\n{}",
-            stderr(&out)
-        );
+    for regime in ["simple", "rdf", "rdfs", "owl-rl", "owl-direct", "d"] {
+        let out = ask(&["--entailment", regime]);
         assert!(
-            stderr(&out).contains("cannot be materialized"),
-            "query --entailment {regime} must explain it cannot be materialized; got:\n{}",
+            out.status.success(),
+            "query --entailment {regime} must answer; stderr:\n{}",
             stderr(&out)
         );
     }
-    // `d` materializes (OWL 2 Profiles §4.3 Table 8), so it answers instead of exiting 3.
-    let out = ask("d");
+    let out = ask(&["--entailment", "rif", "--rules", &rules]);
     assert!(
         out.status.success(),
-        "query --entailment d must materialize and answer; stderr:\n{}",
+        "query --entailment rif must answer under --rules; stderr:\n{}",
+        stderr(&out)
+    );
+    let out = ask(&["--entailment", "rdfs", "--rules", &rules]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "--rules for rdfs must be refused, not ignored; stderr:\n{}",
         stderr(&out)
     );
 }

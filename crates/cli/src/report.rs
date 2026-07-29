@@ -147,7 +147,7 @@ fn regime_token(regime: purrdf_entail::Regime) -> &'static str {
 mod tests {
     use super::*;
     use purrdf_core::RdfDatasetBuilder;
-    use purrdf_entail::{Regime, materialize};
+    use purrdf_entail::{Materialization, Regime, materialize};
 
     /// A dataset with a schema, an instance, and a quad outside the default graph.
     fn fixture() -> std::sync::Arc<purrdf_core::RdfDataset> {
@@ -167,7 +167,7 @@ mod tests {
     /// THE RENDERING CARRIES THE EVIDENCE, and it is deterministic.
     #[test]
     fn the_rendering_names_every_field_and_repeats_byte_for_byte() {
-        let (_, report) = materialize(&fixture(), Regime::Rdfs).expect("rdfs");
+        let (_, report) = materialize(&fixture(), Materialization::Rdfs).expect("rdfs");
         let rendered = render(&report);
         assert!(rendered.starts_with("regime rdfs\n"), "{rendered}");
         assert!(rendered.contains("\nfired rdfs9 "), "{rendered}");

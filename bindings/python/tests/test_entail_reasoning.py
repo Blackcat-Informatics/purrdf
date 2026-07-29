@@ -136,7 +136,7 @@ def test_every_certificate_names_its_service_and_ends_with_its_gate() -> None:
 
 def test_the_dl_certificate_is_not_the_chase_report() -> None:
     """Two lanes, two completeness notions, two banners — never interchanged."""
-    _closure, report = entail.materialize_nt(TAXONOMY, entail.Regime.OWL_RL)
+    _closure, report = entail.materialize_nt(TAXONOMY, entail.Regime.OWL_RL, "")
     _answer, certificate = entail.consistency(TAXONOMY)
     assert report.startswith("purrdf-reasoning-report 1\n")
     assert certificate.startswith("purrdf-dl-certificate 1\n")

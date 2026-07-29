@@ -11,7 +11,7 @@
 //! * `query --results-format json` returns a row, and the SAME query over a pack
 //!   built via `convert --to pack` is byte-identical;
 //! * `reason --regime rdfs` materializes the inferred `rdf:type` triple;
-//! * `reason --regime owl-direct` exits with the unsupported-regime code 3.
+//! * `reason --regime owl-direct` materializes the tableau augmentation.
 
 use std::path::Path;
 use std::process::Command;
@@ -128,7 +128,7 @@ fn reason_rdfs_infers_rdf_type() {
 }
 
 #[test]
-fn reason_owl_direct_exits_with_unsupported_regime_code_3() {
+fn reason_owl_direct_materializes() {
     let dir = tempfile::tempdir().expect("temp dir");
     let input = write_fixture(
         dir.path(),
@@ -139,12 +139,10 @@ fn reason_owl_direct_exits_with_unsupported_regime_code_3() {
     let output = output.to_str().expect("utf-8 path");
 
     let (code, _, stderr) = run(&["reason", "--regime", "owl-direct", &input, output]);
-    assert_eq!(
-        code, 3,
-        "owl-direct is an unsupported-regime boundary (exit 3); stderr:\n{stderr}"
-    );
+    assert_eq!(code, 0, "owl-direct must materialize; stderr:\n{stderr}");
+    let text = std::fs::read_to_string(output).expect("read the closure");
     assert!(
-        !stderr.is_empty(),
-        "the unsupported-regime failure must print a diagnostic to stderr"
+        text.contains("<http://example.org/rex>"),
+        "the augmentation carries the asserted data through; got:\n{text}"
     );
 }

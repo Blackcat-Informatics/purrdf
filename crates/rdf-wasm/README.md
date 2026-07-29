@@ -72,7 +72,7 @@ const reparsed = Dataset.parse(nq, "nquads");
   graph against a Turtle shapes graph and returns a SARIF 2.1.0 report;
   `shaclEntail(shapesTtl, dataNt)` materializes the SHACL-AF `sh:rule` inferences as
   N-Triples.
-- **Entailment regimes** — `entailMaterialize(document, regime)` closes an N-Quads
+- **Entailment regimes** — `entailMaterialize(document, regime, program)` closes an N-Quads
   (or N-Triples) document under a SPARQL entailment regime (`simple` / `rdf` /
   `rdfs` / `owl-rl`) and returns both the canonical N-Quads closure and a
   byte-stable reasoning report; `entailRules(regime)` /

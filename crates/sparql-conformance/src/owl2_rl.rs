@@ -766,7 +766,8 @@ pub fn decide(case: &RlCase) -> Answer {
         Ok(dataset) => owned_triples(&dataset),
         Err(e) => return Answer::Withheld(e),
     };
-    let closure = match purrdf_entail::materialize(&premise, purrdf_entail::Regime::OwlRl) {
+    let closure = match purrdf_entail::materialize(&premise, purrdf_entail::Materialization::OwlRl)
+    {
         Ok((closure, _report)) => owned_triples(&closure),
         Err(e) => return Answer::Withheld(format!("OWL-RL chase: {e}")),
     };

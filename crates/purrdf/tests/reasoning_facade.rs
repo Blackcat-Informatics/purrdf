@@ -24,12 +24,23 @@
 
 use purrdf::datalog::cache::ContractHash;
 use purrdf::datalog::seminaive::{BudgetReport, BudgetResource, EvalError};
+use purrdf::entail::RuleSet;
 use purrdf::entail::{
-    Completeness, Construct, EntailError, ReasoningReport, Regime, RuleId, materialize,
+    Completeness, Construct, EntailError, Materialization, ReasoningReport, RuleId, materialize,
 };
 use purrdf::{RdfDataset, ReasoningError};
 
 use std::sync::Arc;
+
+/// One individual in two disjoint classes — enough for `cax-dw` to refuse.
+const INCONSISTENT: &str = concat!(
+    "<http://example.org/A> <http://www.w3.org/2002/07/owl#disjointWith> ",
+    "<http://example.org/B> .\n",
+    "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
+    "<http://example.org/A> .\n",
+    "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
+    "<http://example.org/B> .\n",
+);
 
 /// `ex:A ⊑ ex:B` with one typed instance — enough for `rdfs9` to fire.
 const SCHEMA: &str = concat!(
@@ -51,7 +62,7 @@ fn the_umbrella_names_every_type_the_reasoning_surface_carries() {
             .expect("N-Quads through the umbrella");
 
     let (closure, report): (Arc<RdfDataset>, ReasoningReport) =
-        materialize(&dataset, Regime::Rdfs).expect("the RDFS closure");
+        materialize(&dataset, Materialization::Rdfs).expect("the RDFS closure");
     assert!(closure.quad_count() >= dataset.quad_count());
 
     // ── the three `purrdf-datalog` types the report carries ────────────────
@@ -73,25 +84,42 @@ fn the_umbrella_names_every_type_the_reasoning_surface_carries() {
     }
 
     // ── the error side, including its datalog payload ──────────────────────
-    let refused: EntailError = materialize(&dataset, Regime::Rif).expect_err("RIF is refused");
+    //
+    // A disjointness violation, which is what an `EntailError` from a well-formed call
+    // now looks like: no regime is refused, so the error side of `materialize` is
+    // reached with BAD DATA rather than with an unserved regime.
+    let clashing: Arc<RdfDataset> =
+        purrdf::parse_dataset(INCONSISTENT.as_bytes(), "application/n-quads", None)
+            .expect("N-Quads through the umbrella");
+    let refused: EntailError =
+        materialize(&clashing, Materialization::OwlRl).expect_err("a disjointness clash");
     // A consumer matching on the carried `EvalError` must be able to write BOTH
     // names; the budget-exhaustion arm is the one that carries it.
     let ceiling: Option<(BudgetResource, BudgetReport)> =
-        if let EntailError::Evaluate(EvalError::BudgetExhausted { resource, report }) = refused {
-            Some((resource, report))
+        if let EntailError::Evaluate(EvalError::BudgetExhausted { resource, report }) = &refused {
+            Some((*resource, *report))
         } else {
             None
         };
     assert!(
         ceiling.is_none(),
-        "RIF is refused as Unsupported, not by a ceiling"
+        "the clash is Inconsistent, not a ceiling refusal"
     );
+    assert!(matches!(refused, EntailError::Inconsistent(_)));
 
     // The umbrella's own reasoning façade wraps the same error type.
-    let wrapped: ReasoningError = ReasoningError::from(
-        materialize(&dataset, Regime::OwlDirect).expect_err("OWL-Direct is refused"),
-    );
+    let wrapped: ReasoningError = ReasoningError::from(refused);
     assert!(matches!(wrapped, ReasoningError::Entailment(_)));
+
+    // …and the two lanes that used to be refused here now ANSWER through the same
+    // umbrella-visible entry point, each carrying its own input.
+    for plan in [
+        Materialization::OwlDirect(&[]),
+        Materialization::Rif(&RuleSet::new()),
+    ] {
+        let (_, report) = materialize(&dataset, plan).expect("a served regime");
+        assert_eq!(report.regime(), plan.regime());
+    }
 }
 
 /// The umbrella carries the datalog engine's own entry points too, not just the

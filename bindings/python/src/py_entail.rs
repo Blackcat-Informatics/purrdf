@@ -55,14 +55,14 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use purrdf_validate::regime::{
-    MATERIALIZABLE_REGIME_NAMES, REGIME_NAMES, classify_to_string, consistency_to_string,
-    entails_to_string, explain_conclusion_to_string, extract_module_to_string,
-    implemented_rules_string, instances_to_string, justify_to_string, materialize_to_nquads_string,
-    parse_regime, profile_to_string, realize_to_string, regime_name, render_reasoning_report,
-    rules_string,
+    REGIME_NAMES, classify_to_string, consistency_to_string, entails_to_string,
+    explain_conclusion_to_string, extract_module_to_string, implemented_rules_string,
+    instances_to_string, justify_to_string, materialize_to_nquads_string, parse_regime,
+    profile_to_string, realize_to_string, regime_name, regime_plan, regime_rule_set,
+    render_reasoning_report, rules_string,
 };
 
-use crate::entail::{EntailError, Regime, materialize as materialize_closure};
+use crate::entail::{Regime, materialize as materialize_closure};
 use crate::py_gts_dataset::PyRdfDataset;
 
 // ── The regime enum ─────────────────────────────────────────────────────────────
@@ -90,9 +90,10 @@ pub(crate) enum PyRegime {
     RDFS,
     /// `entailment/OWL-RL` — OWL 2 RL.
     OWL_RL,
-    /// `entailment/OWL-Direct` — OWL 2 DL; not forward-materializable.
+    /// `entailment/OWL-Direct` — OWL 2 DL via the tableau. A document surface has
+    /// no query to direct it, so it runs the query-independent augmentation.
     OWL_DIRECT,
-    /// `entailment/RIF` — needs a caller-supplied rule set; not materializable here.
+    /// `entailment/RIF` — entails under the caller's rule document (`program`).
     RIF,
     /// `entailment/D` — datatype entailment, realized as the five `dt-*` rules of
     /// OWL 2 Profiles §4.3 Table 8; forward-materializable.
@@ -135,21 +136,6 @@ fn native_regime(regime: &Bound<'_, PyAny>) -> PyResult<Regime> {
     parse_regime(&spelling).map_err(PyValueError::new_err)
 }
 
-/// The message a regime that cannot be forward-materialized is refused with.
-///
-/// The wording mirrors `purrdf_validate::regime`'s own refusal and the accepted
-/// set is read from [`MATERIALIZABLE_REGIME_NAMES`] rather than re-typed, so the
-/// dataset path and the string path can never come to list different regimes.
-fn refusal(regime: Regime) -> String {
-    format!(
-        "entailment regime \"{}\" cannot be forward-materialized \
-         (owl-direct needs the query's class expressions, \
-         rif needs a parsed rule set); materializable regimes: {}",
-        regime_name(regime),
-        MATERIALIZABLE_REGIME_NAMES.join(", ")
-    )
-}
-
 // ── Materialization ─────────────────────────────────────────────────────────────
 
 /// Close a frozen `RdfDataset` under `regime`, returning `(closure, report)`.
@@ -168,29 +154,46 @@ fn refusal(regime: Regime) -> String {
 /// boundary — a complete rule table is not a complete closure, and reporting the
 /// first as if it were the second is exactly the overclaim the report prevents.
 ///
-/// Raises `ValueError` for an unknown regime spelling (naming the accepted set),
-/// for a regime that cannot be forward-materialized (`owl-direct`, `rif`),
-/// and for an exhausted evaluation ceiling.
+/// # `program` — the regime's own input, and never optional
+///
+/// EVERY regime materializes; none is refused for being the regime it is. What two of
+/// them need is an INPUT, and `program` is where it goes. `rif` entails under the
+/// CALLER's rules, so its `program` is a normative RIF-in-XML rule document; every other
+/// regime's rule table is the specification's, so its `program` is `""`, and a non-empty
+/// one raises rather than being silently discarded — a caller who passed rules to `rdfs`
+/// believes they ran. `owl-direct` takes none either: its extra input is a QUERY's class
+/// expressions, and this surface closes a dataset rather than answering a query, so what
+/// runs is the query-independent augmentation.
+///
+/// The argument is required rather than defaulted, and required in the same position on
+/// all four hosts, so one call shape works from the command line, through the C ABI,
+/// through WASM and from Python.
+///
+/// Raises `ValueError` for an unknown regime spelling (naming the accepted set), for a
+/// `program` that is wrong for the regime, and for an exhausted evaluation ceiling.
 #[pyfunction]
-#[pyo3(signature = (dataset, regime))]
+#[pyo3(signature = (dataset, regime, program))]
 fn materialize(
     py: Python<'_>,
     dataset: &PyRdfDataset,
     regime: &Bound<'_, PyAny>,
+    program: &str,
 ) -> PyResult<(PyRdfDataset, String)> {
     // Arguments become plain Rust data (a native regime, an owned `Arc` handle)
     // BEFORE the GIL is released.
     let native = native_regime(regime)?;
+    let name = regime_name(native);
     let data = dataset.dataset();
     // Chase + report rendering run detached (GIL released); the Python objects
     // are built after the GIL is reacquired.
     let (closure, report) = py
         .detach(|| {
-            let (closure, report) =
-                materialize_closure(data.as_ref(), native).map_err(|error| match error {
-                    EntailError::Unsupported(_) => refusal(native),
-                    other => format!("entailment regime \"{}\": {other}", regime_name(native)),
-                })?;
+            // The SAME two helpers `materialize_nt` reaches through the string boundary,
+            // so the dataset path and the text path cannot come to mean different things
+            // by the same regime spelling.
+            let rules = regime_rule_set(native, name, program)?;
+            let (closure, report) = materialize_closure(data.as_ref(), regime_plan(native, &rules))
+                .map_err(|error| format!("entailment regime \"{name}\": {error}"))?;
             Ok::<_, String>((closure, render_reasoning_report(&report)))
         })
         .map_err(PyValueError::new_err)?;
@@ -210,20 +213,23 @@ fn materialize(
 /// The closure is serialized through the RDFC-1.0 canonical flat serializer, so
 /// repeated calls on equal input produce byte-identical output.
 ///
+/// `program` is the regime's own rule document, exactly as on [`materialize`].
+///
 /// Raises `ValueError` on a malformed document, an unknown regime spelling
-/// (naming the accepted set), or a regime that cannot be forward-materialized.
+/// (naming the accepted set), or a `program` that is wrong for the regime.
 #[pyfunction]
-#[pyo3(signature = (data, regime))]
+#[pyo3(signature = (data, regime, program))]
 fn materialize_nt(
     py: Python<'_>,
     data: &str,
     regime: &Bound<'_, PyAny>,
+    program: &str,
 ) -> PyResult<(String, String)> {
     let name = regime_name(native_regime(regime)?);
     // Parse + chase + canonical serialization + report rendering run detached
     // (GIL released).
     let closure = py
-        .detach(|| materialize_to_nquads_string(name, data))
+        .detach(|| materialize_to_nquads_string(name, data, program))
         .map_err(PyValueError::new_err)?;
     Ok(closure.into_parts())
 }
@@ -527,7 +533,15 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
 #[cfg(test)]
 mod tests {
+    use purrdf_validate::regime::PROGRAM_REGIME_NAMES;
+
     use super::*;
+
+    /// A normative RIF-in-XML rule document: `?x a ex:A` ⟹ `?x a ex:B`.
+    ///
+    /// `rif` is the one regime whose calculus is the CALLER's, so it is the one
+    /// spelling whose `program` argument is a document rather than the empty string.
+    const RIF_PROGRAM: &str = "<Document xmlns=\"http://www.w3.org/2007/rif#\"><payload><Group><sentence><Forall><declare><Var>x</Var></declare><formula><Implies><if><Frame><object><Var>x</Var></object><slot><Const type=\"http://www.w3.org/2007/rif#iri\">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type=\"http://www.w3.org/2007/rif#iri\">http://example.org/A</Const></slot></Frame></if><then><Frame><object><Var>x</Var></object><slot><Const type=\"http://www.w3.org/2007/rif#iri\">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type=\"http://www.w3.org/2007/rif#iri\">http://example.org/B</Const></slot></Frame></then></Implies></formula></Forall></sentence></Group></payload></Document>";
 
     /// Every Python-visible member maps onto a distinct native regime, and the
     /// seven together cover the whole `Regime` enum.
@@ -549,25 +563,30 @@ mod tests {
         assert_eq!(names, REGIME_NAMES.to_vec());
     }
 
-    /// The dataset path's refusal is byte-identical to the string boundary's, so
-    /// the two surfaces cannot describe the same limit in different words.
+    /// EVERY accepted spelling materializes through the string boundary this module
+    /// wraps, and the two surfaces agree on which one takes a rule document.
     ///
-    /// Exactly two regimes reach it. `d` used to be a third and is not any more:
-    /// it materializes, which the tail of this test pins so the two lists cannot
-    /// drift apart again.
+    /// Falsifiable against the behaviour this replaced: `owl-direct` and `rif` were
+    /// refused here, and this test asserted that the dataset path's refusal string was
+    /// byte-identical to the string boundary's. There is no refusal to compare now, so
+    /// what is compared instead is the ACCEPTANCE.
     #[test]
-    fn refusal_matches_the_string_boundary() {
-        for name in ["owl-direct", "rif"] {
+    fn every_regime_spelling_materializes_through_the_boundary() {
+        const SCHEMA: &str = "<http://example.org/x> \
+                              <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+                              <http://example.org/A> .\n";
+        for name in REGIME_NAMES {
             let native = parse_regime(name).expect("an accepted spelling");
-            let boundary = materialize_to_nquads_string(name, "").expect_err("not materializable");
-            assert_eq!(refusal(native), boundary);
+            let program = if name == "rif" { RIF_PROGRAM } else { "" };
+            let closed = materialize_to_nquads_string(name, SCHEMA, program)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert!(closed.report().contains(&format!("\nregime {name}\n")));
+            // …and the dataset path reaches the same plan for the same spelling.
+            let rules = regime_rule_set(native, name, program).expect("a legal program");
+            assert_eq!(regime_plan(native, &rules).regime(), native);
         }
-        assert!(materialize_to_nquads_string("d", "").is_ok());
-        for name in MATERIALIZABLE_REGIME_NAMES {
-            assert!(
-                materialize_to_nquads_string(name, "").is_ok(),
-                "{name} is listed as materializable"
-            );
-        }
+        // Exactly one regime takes a rule document, and both paths read that from the
+        // same constant rather than re-typing it.
+        assert_eq!(PROGRAM_REGIME_NAMES, ["rif"]);
     }
 }

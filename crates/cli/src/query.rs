@@ -12,10 +12,10 @@
 //! Without `--entailment` the query runs over the raw view (text `RdfDataset` or a
 //! zero-copy `PackView`). With `--entailment REGIME` the pipeline reconstructs an
 //! owned `Arc<RdfDataset>` up front (a pack is rebuilt via [`source::load_dataset`]),
-//! materializes the regime's closure IN MEMORY (rejecting the non-materializable
-//! regimes on the same exit-3 path as `reason`), and queries the closure. The run's
-//! reasoning report is surfaced under `--report`, so a solution set drawn from a
-//! closure can be read beside the evidence of what closed it.
+//! materializes the regime's closure IN MEMORY (through the same `EntailmentPlan`
+//! `reason` resolves, so `--rules` means the same thing here), and queries the
+//! closure. The run's reasoning report is surfaced under `--report`, so a solution
+//! set drawn from a closure can be read beside the evidence of what closed it.
 //!
 //! ## The result-shape × format-kind dispatch
 //!
@@ -139,6 +139,7 @@ pub(crate) fn run(
     data: &str,
     base: Option<&str>,
     entailment: Option<CliRegime>,
+    rules: Option<&std::path::Path>,
     results_format: QueryFormat,
     query: &str,
     jsonld_options: Option<&JsonLdSerializeOptions>,
@@ -159,11 +160,11 @@ pub(crate) fn run(
         Some(regime) => {
             // The `--entailment` lane: reconstruct an owned dataset (a pack is rebuilt),
             // materialize the closure in memory, and query THAT.
-            let regime = reason::resolve_materializable_regime(regime)?;
+            let plan = reason::EntailmentPlan::resolve(regime, rules)?;
             let dataset = source::load_dataset(data, data_format, base)?;
             // The rows go to stdout and the certificate to `--report`: a solution set that
             // depends on a closure is not readable without knowing what closed it.
-            let (closure, reasoning) = materialize(&dataset, regime)?;
+            let (closure, reasoning) = materialize(&dataset, plan.materialization())?;
             report::surface(report_target, &reasoning)?;
             engine.query_prepared(&closure, &prepared, &[])?
         }

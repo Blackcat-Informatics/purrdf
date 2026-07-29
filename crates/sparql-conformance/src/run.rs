@@ -71,26 +71,28 @@ pub enum RunOutcome {
 ///
 /// Returns a message on any read, parse, or serialize failure (never silent).
 pub fn load_dataset(case: &SparqlTestCase) -> Result<Arc<RdfDataset>, String> {
-    use purrdf_entail::Regime;
+    use purrdf_entail::{Materialization, Regime};
     let ds = build_dataset(&case.data, &case.graph_data)?;
-    // For a forward-materializable entailment regime, close the dataset before it is
-    // queried (the eval loop is untouched — it queries an already-reasoned dataset).
-    // `OWL-Direct` is NOT forward-materializable: it is query-directed and handled by
-    // the caller (the `QueryEval` arm) via `purrdf_entail::materialize_dl`, so the RAW
-    // dataset is returned here. `RIF` (unwired) and `D` likewise pass through raw.
-    match case.regime {
-        Some(regime @ (Regime::Simple | Regime::Rdf | Regime::Rdfs | Regime::OwlRl)) => {
-            // The reasoning report is bound and dropped: a conformance case's verdict is
-            // "did the engine return the manifest's expected result", which the report
-            // cannot change. It is bound rather than avoided because there is no
-            // report-free `materialize` — the evidence is always produced, and a caller
-            // that has no use for it says so at the call site.
-            purrdf_entail::materialize(&ds, regime)
-                .map(|(closure, _report)| closure)
-                .map_err(|e| format!("entailment ({regime:?}) for {}: {e}", case.iri))
-        }
-        _ => Ok(ds),
-    }
+    // For a rule-table lane, close the dataset before it is queried (the eval loop is
+    // untouched — it queries an already-reasoned dataset). `OWL-Direct` and `RIF` are
+    // handled by the CALLER (the `QueryEval` arm), which has the two inputs this
+    // function does not: the query's basic graph pattern and the manifest's `.rif`
+    // documents. They therefore pass through raw here, as does `D` (unwired).
+    let plan = match case.regime {
+        Some(Regime::Simple) => Materialization::Simple,
+        Some(Regime::Rdf) => Materialization::Rdf,
+        Some(Regime::Rdfs) => Materialization::Rdfs,
+        Some(Regime::OwlRl) => Materialization::OwlRl,
+        _ => return Ok(ds),
+    };
+    // The reasoning report is bound and dropped: a conformance case's verdict is
+    // "did the engine return the manifest's expected result", which the report
+    // cannot change. It is bound rather than avoided because there is no
+    // report-free `materialize` — the evidence is always produced, and a caller
+    // that has no use for it says so at the call site.
+    purrdf_entail::materialize(&ds, plan)
+        .map(|(closure, _report)| closure)
+        .map_err(|e| format!("entailment ({:?}) for {}: {e}", plan.regime(), case.iri))
 }
 
 /// The native media type for a data file, by extension. Most fixtures are Turtle,

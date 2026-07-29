@@ -16,6 +16,9 @@
 #   @case <name>      opens a case
 #   @regime <name>    the regime's CLI spelling
 #   @input            body: the N-Quads/N-Triples input document
+#   @program          body: the regime's own rule document; OPTIONAL, and absent
+#                     is the empty program, which is what every regime but `rif`
+#                     takes
 #   @closure          body: the canonical N-Quads the closure must serialize to
 #   @report           body: the report rendering the run must produce
 #   @end              closes the case
@@ -24,7 +27,22 @@
 # non-example.org IRIs below are the `rdf:`/`rdfs:`/`owl:` terms the entailment
 # specifications themselves define.
 #
-# WHY THIS ARTIFACT MOVED: TWO `boundary` REASONS SAID THE OPPOSITE OF A THIRD.
+# WHY THIS ARTIFACT MOVED: THE BOUNDARY STOPPED REFUSING TWO REGIMES.
+#
+# No existing case changed by one byte. Two were ADDED, and the `@program`
+# directive with them. `owl-direct` and `rif` used to be refused here by name,
+# with a message listing the five spellings that were not — so this artifact,
+# the one thing all four hosts check themselves against, covered five sevenths
+# of the surface and the other two sevenths were pinned by an error string.
+# `purrdf_entail::materialize` now takes a `Materialization` rather than a
+# `Regime`, which carries each regime's own input, and this boundary passes
+# them: `owl-direct` gets the empty basic graph pattern (a document boundary has
+# no query, so what runs is the query-independent augmentation the tableau
+# decides about the ontology's own named terms) and `rif` gets the rule set
+# parsed from `@program`. Both now have a case, and the coverage check below
+# ranges over all seven spellings.
+#
+# AN EARLIER MOVE: TWO `boundary` REASONS SAID THE OPPOSITE OF A THIRD.
 #
 # No closure changed and no case was added, removed or renamed. What changed is
 # the prose of two `Construct::reason()` strings, which this artifact carries
@@ -783,6 +801,59 @@ budget join-steps 2058
 budget stored-facts 115
 budget term-arena-bytes 2466
 contract-hash 61a9a84001b40b06a8dfe4b38e331ca1943893cbd191b272d6ffead048fa2de0
+inconsistency none
+overclaims false
+@end
+
+@case owl-direct-augments-with-what-the-tableau-decides
+@regime owl-direct
+@input
+<http://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
+<http://example.org/lillith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .
+@closure
+<http://example.org/Animal> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
+<http://example.org/Animal> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2002/07/owl#Thing> .
+<http://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
+<http://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Cat> .
+<http://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2002/07/owl#Thing> .
+<http://example.org/lillith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Animal> .
+<http://example.org/lillith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .
+<http://example.org/lillith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Thing> .
+<http://example.org/lillith> <http://www.w3.org/2002/07/owl#sameAs> <http://example.org/lillith> .
+<http://www.w3.org/2002/07/owl#Nothing> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
+<http://www.w3.org/2002/07/owl#Nothing> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Cat> .
+<http://www.w3.org/2002/07/owl#Nothing> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2002/07/owl#Nothing> .
+<http://www.w3.org/2002/07/owl#Nothing> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2002/07/owl#Thing> .
+<http://www.w3.org/2002/07/owl#Thing> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2002/07/owl#Thing> .
+@report
+purrdf-reasoning-report 1
+regime owl-direct
+completeness exact
+budget join-steps 0
+budget stored-facts 0
+budget term-arena-bytes 0
+contract-hash 4151090ce6c2ecdae843e351420ddcf10f79e525c60b4c6d07bebeabaa07fbd5
+inconsistency none
+overclaims false
+@end
+
+@case rif-entails-under-the-supplied-rule-set
+@regime rif
+@input
+<http://example.org/lillith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .
+@program
+<Document xmlns="http://www.w3.org/2007/rif#"><payload><Group><sentence><Forall><declare><Var>x</Var></declare><formula><Implies><if><Frame><object><Var>x</Var></object><slot><Const type="http://www.w3.org/2007/rif#iri">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type="http://www.w3.org/2007/rif#iri">http://example.org/Cat</Const></slot></Frame></if><then><Frame><object><Var>x</Var></object><slot><Const type="http://www.w3.org/2007/rif#iri">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type="http://www.w3.org/2007/rif#iri">http://example.org/Animal</Const></slot></Frame></then></Implies></formula></Forall></sentence></Group></payload></Document>
+@closure
+<http://example.org/lillith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Animal> .
+<http://example.org/lillith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .
+@report
+purrdf-reasoning-report 1
+regime rif
+completeness exact
+budget join-steps 1
+budget stored-facts 2
+budget term-arena-bytes 128
+contract-hash 4151090ce6c2ecdae843e351420ddcf10f79e525c60b4c6d07bebeabaa07fbd5
 inconsistency none
 overclaims false
 @end

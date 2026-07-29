@@ -23,16 +23,23 @@
 //! * **d** — datatype entailment as OWL 2 Profiles §4.3 Table 8: `dt-type1` types
 //!   every datatype of the OWL 2 RL datatype map an `rdfs:Datatype`.
 //!
-//! The two non-materializable regimes (`owl-direct`, `rif`) are the exit-3 boundary
-//! (they need query class expressions or a rule set the CLI cannot supply), and a
-//! `.purrpck` pack source exercises the pack→dataset reconstruction path inside
-//! `reason`.
+//! * **owl-direct** — the tableau augmentation: `reason` transforms a document and has
+//!   no query, so what runs is the query-independent augmentation (classification,
+//!   realization, entailed role assertions, `owl:sameAs`).
+//! * **rif** — the rule set `--rules` names, forward-chained to a fixpoint.
+//!
+//! No regime is refused. `--rules` is required by `rif` and refused for every other
+//! regime, and both of those are ordinary usage errors (exit 2). A `.purrpck` pack
+//! source exercises the pack→dataset reconstruction path inside `reason`.
 
 use std::path::Path;
 use std::process::{Command, Output};
 
 /// The rdf:type IRI, spelled out (the inferred-triple assertions key on it).
 const RDF_TYPE: &str = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>";
+
+/// A normative RIF-in-XML rule document: `?x a ex:Cat` ⟹ `?x a ex:Animal`.
+const RIF_RULES: &str = "<Document xmlns=\"http://www.w3.org/2007/rif#\"><payload><Group><sentence><Forall><declare><Var>x</Var></declare><formula><Implies><if><Frame><object><Var>x</Var></object><slot><Const type=\"http://www.w3.org/2007/rif#iri\">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type=\"http://www.w3.org/2007/rif#iri\">http://example.org/Cat</Const></slot></Frame></if><then><Frame><object><Var>x</Var></object><slot><Const type=\"http://www.w3.org/2007/rif#iri\">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type=\"http://www.w3.org/2007/rif#iri\">http://example.org/Animal</Const></slot></Frame></then></Implies></formula></Forall></sentence></Group></payload></Document>";
 
 /// A `Command` for the built `purrdf` binary.
 fn purrdf() -> Command {
@@ -281,13 +288,72 @@ fn d_materializes_the_datatype_map() {
     );
 }
 
-/// The two non-materializable regimes (`owl-direct`, `rif`) each exit with code 3
-/// and print a diagnostic to stderr naming why: they need query class expressions or a
-/// rule set the CLI has no way to supply.
+/// `reason --regime owl-direct` MATERIALIZES: the tableau states what it decides about
+/// the ontology's own named terms.
 ///
-/// `d` is deliberately NOT in this list — see [`d_materializes_the_datatype_map`].
+/// Falsifiable against the old behavior: this exited 3 with "cannot be materialized",
+/// on this same input.
 #[test]
-fn boundary_regimes_exit_three_with_diagnostic() {
+fn owl_direct_materializes_the_tableau_augmentation() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "dl.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+            "ex:Cat rdfs:subClassOf ex:Animal .\n",
+            "ex:lillith a ex:Cat .\n",
+        ),
+    );
+    let out = path(dir, "out.nt");
+
+    let o = run(&["reason", "--regime", "owl-direct", &seed, &out]);
+    assert!(
+        o.status.success(),
+        "owl-direct reason failed: {}",
+        stderr(&o)
+    );
+    let text = std::fs::read_to_string(&out).expect("read output");
+    assert!(
+        text.contains(&format!(
+            "<http://example.org/lillith> {RDF_TYPE} <http://example.org/Animal>"
+        )),
+        "the realization must state the entailed type; got: {text}"
+    );
+}
+
+/// `reason --regime rif` MATERIALIZES under the rule document `--rules` names.
+///
+/// Falsifiable against the old behavior: this exited 3 with "cannot be materialized".
+#[test]
+fn rif_materializes_under_the_supplied_rule_document() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "cats.ttl",
+        "@prefix ex: <http://example.org/> .\nex:lillith a ex:Cat .\n",
+    );
+    let rules = write_file(dir, "cats.rif", RIF_RULES);
+    let out = path(dir, "out.nt");
+
+    let o = run(&["reason", "--regime", "rif", "--rules", &rules, &seed, &out]);
+    assert!(o.status.success(), "rif reason failed: {}", stderr(&o));
+    let text = std::fs::read_to_string(&out).expect("read output");
+    assert!(
+        text.contains(&format!(
+            "<http://example.org/lillith> {RDF_TYPE} <http://example.org/Animal>"
+        )),
+        "the caller's rule must have fired; got: {text}"
+    );
+}
+
+/// `--regime` and `--rules` are ONE input, so an incomplete or contradictory pair is a
+/// usage error (exit 2) — never a silently-ignored argument and never a refused regime.
+#[test]
+fn a_rule_document_is_required_by_rif_and_refused_by_everything_else() {
     let dir = tempfile::tempdir().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(
@@ -295,26 +361,34 @@ fn boundary_regimes_exit_three_with_diagnostic() {
         "seed.nt",
         "<http://example.org/a> <http://example.org/knows> <http://example.org/b> .\n",
     );
+    let rules = write_file(dir, "cats.rif", RIF_RULES);
     let out = path(dir, "out.nt");
 
-    // Each boundary regime is unsupported for a DISTINCT spec-inherent reason; the
-    // diagnostic must name that specific reason, not a generic catch-all.
-    for (regime, expected_reason) in [("owl-direct", "class expressions"), ("rif", "rule set")] {
-        let o = run(&["reason", "--regime", regime, &seed, &out]);
+    let missing = run(&["reason", "--regime", "rif", &seed, &out]);
+    assert_eq!(
+        missing.status.code(),
+        Some(2),
+        "rif without --rules is an incomplete command line; stderr: {}",
+        stderr(&missing)
+    );
+    assert!(
+        stderr(&missing).contains("--rules"),
+        "the usage error must name the missing flag; got: {}",
+        stderr(&missing)
+    );
+
+    for regime in ["simple", "rdf", "rdfs", "owl-rl", "owl-direct", "d"] {
+        let o = run(&["reason", "--regime", regime, "--rules", &rules, &seed, &out]);
         assert_eq!(
             o.status.code(),
-            Some(3),
-            "regime {regime} must exit 3 (unsupported boundary); stderr: {}",
+            Some(2),
+            "--rules for {regime} must be refused, not ignored; stderr: {}",
             stderr(&o)
         );
-        let err = stderr(&o);
         assert!(
-            err.contains("cannot be materialized"),
-            "regime {regime} must explain it cannot be materialized; got: {err}"
-        );
-        assert!(
-            err.contains(expected_reason),
-            "regime {regime} must name its specific reason ({expected_reason:?}); got: {err}"
+            stderr(&o).contains("only `rif` takes a rule document"),
+            "regime {regime}: {}",
+            stderr(&o)
         );
     }
 }

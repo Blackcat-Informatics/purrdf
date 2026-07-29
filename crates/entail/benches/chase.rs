@@ -26,7 +26,7 @@ use std::sync::Arc;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder};
-use purrdf_entail::{Regime, materialize};
+use purrdf_entail::{Materialization, materialize};
 
 const SUBCLASSOF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
 const TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -81,7 +81,7 @@ fn bench_chase(c: &mut Criterion) {
     for &n in &[16usize, 64] {
         let ds = hierarchy(n);
         group.bench_with_input(BenchmarkId::from_parameter(n), &ds, |bch, ds| {
-            bch.iter(|| materialize(ds, Regime::Rdfs).expect("materialize"));
+            bch.iter(|| materialize(ds, Materialization::Rdfs).expect("materialize"));
         });
     }
     group.finish();
@@ -93,7 +93,7 @@ fn bench_dataset(c: &mut Criterion) {
     for &graphs in &[0usize, 1, 4, 16] {
         let ds = dataset_hierarchy(32, graphs);
         group.bench_with_input(BenchmarkId::from_parameter(graphs), &ds, |bch, ds| {
-            bch.iter(|| materialize(ds, Regime::Rdfs).expect("materialize"));
+            bch.iter(|| materialize(ds, Materialization::Rdfs).expect("materialize"));
         });
     }
     group.finish();

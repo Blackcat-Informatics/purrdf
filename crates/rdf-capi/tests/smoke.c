@@ -102,9 +102,10 @@ static void extend(Slice *body, const char *start, const char *end) {
 }
 
 /* Run one golden case through the C ABI. Returns 0 on a byte-for-byte match. */
-static int run_vector_case(const char *regime, Slice input, Slice closure,
-                           Slice report) {
+static int run_vector_case(const char *regime, Slice input, Slice program,
+                           Slice closure, Slice report) {
     char *input_s = dup_slice(input);
+    char *program_s = dup_slice(program);
     char *closure_s = dup_slice(closure);
     char *report_s = dup_slice(report);
     PurrdfBuffer *nquads = NULL;
@@ -112,10 +113,12 @@ static int run_vector_case(const char *regime, Slice input, Slice closure,
     PurrdfError *error = NULL;
     int failed = 1;
 
-    if (input_s == NULL || closure_s == NULL || report_s == NULL) {
+    if (input_s == NULL || program_s == NULL || closure_s == NULL ||
+        report_s == NULL) {
         goto done;
     }
-    if (purrdf_entail_materialize_to_nquads(input_s, regime, &nquads, &rendered,
+    if (purrdf_entail_materialize_to_nquads(input_s, regime, program_s, &nquads,
+                                            &rendered,
                                             &error) != PURRDF_STATUS_OK) {
         fprintf(stderr, "golden case (%s) did not materialize: %s\n", regime,
                 error == NULL ? "(no error)" : purrdf_error_message(error));
@@ -150,6 +153,7 @@ done:
     }
     free(report_s);
     free(closure_s);
+    free(program_s);
     free(input_s);
     return failed;
 }
@@ -168,9 +172,10 @@ static int check_golden_vector(const char *path) {
     char regime[128];
     regime[0] = '\0';
     Slice input = {NULL, 0};
+    Slice program = {NULL, 0};
     Slice closure = {NULL, 0};
     Slice report = {NULL, 0};
-    int section = 0; /* 0 none, 1 input, 2 closure, 3 report */
+    int section = 0; /* 0 none, 1 input, 2 closure, 3 report, 4 program */
     int cases = 0;
     int failed = 0;
 
@@ -184,6 +189,8 @@ static int check_golden_vector(const char *path) {
                 extend(&closure, line, stop);
             } else if (section == 3) {
                 extend(&report, line, stop);
+            } else if (section == 4) {
+                extend(&program, line, stop);
             }
             line = stop;
             continue;
@@ -203,12 +210,16 @@ static int check_golden_vector(const char *path) {
             section = 2;
         } else if (span == 7 && memcmp(line, "@report", 7) == 0) {
             section = 3;
+        } else if (span == 8 && memcmp(line, "@program", 8) == 0) {
+            section = 4;
         } else if (span == 4 && memcmp(line, "@end", 4) == 0) {
-            failed |= run_vector_case(regime, input, closure, report);
+            failed |= run_vector_case(regime, input, program, closure, report);
             cases += 1;
             regime[0] = '\0';
             input.ptr = NULL;
             input.len = 0;
+            program.ptr = NULL;
+            program.len = 0;
             closure.ptr = NULL;
             closure.len = 0;
             report.ptr = NULL;

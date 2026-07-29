@@ -92,26 +92,37 @@ impl From<BoundaryClosure> for RegimeClosure {
 /// Returns a plain `String` error (NOT a `JsError`) so it is unit-testable on the
 /// native build — constructing a `JsError` calls a wasm-only import that panics
 /// off wasm. The `#[wasm_bindgen]` wrapper maps the `String` to a `JsError`.
-pub(crate) fn materialize_impl(document: &str, regime: &str) -> Result<RegimeClosure, String> {
-    materialize_to_nquads_string(regime, document).map(RegimeClosure::from)
+pub(crate) fn materialize_impl(
+    document: &str,
+    regime: &str,
+    program: &str,
+) -> Result<RegimeClosure, String> {
+    materialize_to_nquads_string(regime, document, program).map(RegimeClosure::from)
 }
 
-/// `entailMaterialize(document, regime)` → a `RegimeClosure` carrying the
+/// `entailMaterialize(document, regime, program)` → a `RegimeClosure` carrying the
 /// canonical N-Quads closure and the rendered reasoning report.
 ///
 /// `document` is parsed as N-Quads, which accepts an N-Triples document
 /// unchanged, so a document that names a graph keeps naming it. `regime` is one
 /// of `simple`, `rdf`, `rdfs`, `owl-rl`, `owl-direct`, `rif`, `d` — the same
-/// spellings the CLI, the C ABI and the Python surface accept.
+/// spellings the CLI, the C ABI and the Python surface accept — and ALL SEVEN
+/// materialize.
 ///
-/// Throws if `document` fails to parse, if `regime` is not one of those
-/// spellings, or if `regime` is one of the two that cannot be forward
-/// materialized (`owl-direct`, `rif`); the message names the accepted set in
-/// every case. `d` is not one of them — datatype entailment materializes, as the
-/// five `dt-*` rules of OWL 2 Profiles §4.3 Table 8.
+/// `program` is the regime's own rule document. `rif` entails under the CALLER's
+/// rules, so for that spelling `program` is a normative RIF-in-XML document; every
+/// other regime's rule table is the specification's, so its `program` is `""`, and a
+/// non-empty one throws rather than being silently discarded.
+///
+/// Throws if `document` fails to parse, if `regime` is not one of those spellings
+/// (the message names the accepted set), or if `program` is wrong for the regime.
 #[wasm_bindgen(js_name = entailMaterialize)]
-pub fn entail_materialize(document: &str, regime: &str) -> Result<RegimeClosure, JsError> {
-    materialize_impl(document, regime).map_err(|e| JsError::new(&e))
+pub fn entail_materialize(
+    document: &str,
+    regime: &str,
+    program: &str,
+) -> Result<RegimeClosure, JsError> {
+    materialize_impl(document, regime, program).map_err(|e| JsError::new(&e))
 }
 
 /// The rule table `regime` is *defined by*. See [`entail_rules`].
@@ -477,6 +488,12 @@ mod tests {
 <http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .
 ";
 
+    /// A normative RIF-in-XML rule document: `?x a ex:A` ⟹ `?x a ex:B`.
+    ///
+    /// `rif` is the one regime whose calculus is the CALLER's, so it is the one
+    /// spelling whose `program` argument is a document rather than the empty string.
+    const RIF_PROGRAM: &str = "<Document xmlns=\"http://www.w3.org/2007/rif#\"><payload><Group><sentence><Forall><declare><Var>x</Var></declare><formula><Implies><if><Frame><object><Var>x</Var></object><slot><Const type=\"http://www.w3.org/2007/rif#iri\">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type=\"http://www.w3.org/2007/rif#iri\">http://example.org/A</Const></slot></Frame></if><then><Frame><object><Var>x</Var></object><slot><Const type=\"http://www.w3.org/2007/rif#iri\">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type=\"http://www.w3.org/2007/rif#iri\">http://example.org/B</Const></slot></Frame></then></Implies></formula></Forall></sentence></Group></payload></Document>";
+
     /// The native half of the tri-host assertion, made from THIS crate.
     ///
     /// The wasm half is `entailCheckGoldenVectors`, called as real wasm by
@@ -489,7 +506,7 @@ mod tests {
 
     #[test]
     fn materialize_infers_and_reports() {
-        let closed = materialize_impl(SCHEMA, "rdfs").expect("rdfs closure");
+        let closed = materialize_impl(SCHEMA, "rdfs", "").expect("rdfs closure");
         assert!(closed.nquads().contains(
             "<http://example.org/x> \
              <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> ."
@@ -513,7 +530,7 @@ mod tests {
     #[test]
     fn an_unknown_regime_names_the_accepted_set() {
         for error in [
-            materialize_impl(SCHEMA, "RDFS").expect_err("case-sensitive"),
+            materialize_impl(SCHEMA, "RDFS", "").expect_err("case-sensitive"),
             rules_impl("rdfs-plus").expect_err("unknown"),
             implemented_rules_impl("rdfs-plus").expect_err("unknown"),
         ] {
@@ -521,23 +538,39 @@ mod tests {
         }
     }
 
+    /// EVERY accepted spelling materializes on this host too. None is refused.
+    ///
+    /// Falsifiable against the old behavior: `owl-direct` and `rif` were refused here
+    /// with a message naming the five that were not.
     #[test]
-    fn a_non_materializable_regime_is_refused_by_name() {
-        for regime in ["owl-direct", "rif"] {
-            let error = materialize_impl(SCHEMA, regime).expect_err("unsupported");
+    fn every_regime_spelling_materializes() {
+        for (regime, program) in [
+            ("simple", ""),
+            ("rdf", ""),
+            ("rdfs", ""),
+            ("owl-rl", ""),
+            ("owl-direct", ""),
+            ("rif", RIF_PROGRAM),
+            ("d", ""),
+        ] {
+            let closed = materialize_impl(SCHEMA, regime, program)
+                .unwrap_or_else(|error| panic!("{regime}: {error}"));
             assert!(
-                error.contains("materializable regimes: simple, rdf, rdfs, owl-rl, d"),
-                "{error}"
+                closed.report().contains(&format!("\nregime {regime}\n")),
+                "{}",
+                closed.report()
             );
         }
-        // `d` is on the other side of that line: it materializes here as it does
-        // on the Rust, C-ABI and Python hosts.
-        assert!(materialize_impl(SCHEMA, "d").is_ok());
+        // A rule document belongs to exactly one regime; passing one anywhere else is
+        // refused rather than discarded.
+        let error = materialize_impl(SCHEMA, "rdfs", RIF_PROGRAM)
+            .expect_err("a rule document for a rule-table regime");
+        assert!(error.contains("takes no rule document"), "{error}");
     }
 
     #[test]
     fn a_malformed_document_is_an_error() {
-        assert!(materialize_impl("this is not n-quads\n", "rdfs").is_err());
+        assert!(materialize_impl("this is not n-quads\n", "rdfs", "").is_err());
     }
 
     #[test]
@@ -639,7 +672,7 @@ mod tests {
                 .starts_with("purrdf-dl-certificate 1\n")
         );
         assert!(tableau.certificate().contains("\ncompleteness decided\n"));
-        let chase = materialize_impl(TAXONOMY, "owl-rl").expect("owl-rl");
+        let chase = materialize_impl(TAXONOMY, "owl-rl", "").expect("owl-rl");
         assert!(chase.report().starts_with("purrdf-reasoning-report 1\n"));
         assert!(!chase.report().contains("completeness decided"));
     }
