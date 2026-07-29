@@ -34,9 +34,23 @@
 //!   [`DlCompleteness::BudgetExhausted`].
 //!
 //! There is deliberately no fourth state and no way to construct a certificate that omits
-//! both signals: the crate-internal session type is the only producer, it derives the verdict from what the
-//! tableau reported, and [`DlCertificate::overclaims`] is the gate a consumer can apply
-//! for itself.
+//! both signals: the crate-internal session type is the only producer, and it derives the
+//! verdict from what the tableau reported.
+//!
+//! # There is no overclaim, because there is no field to disagree with
+//!
+//! The failure this certificate is built against is one that states
+//! [`DlCompleteness::Decided`] — "the whole ontology was read, and every search finished" —
+//! beside a non-empty [`DlCertificate::boundaries`] naming a construct that was NOT read. A
+//! reader of such a certificate cannot tell which half to believe.
+//!
+//! That state is not detected here. It is UNREPRESENTABLE: [`DlCertificate`] stores no
+//! completeness field at all, only the exhausted flag and the boundary list
+//! [`Session`] actually measured. [`DlCertificate::completeness`] COMPUTES the verdict from
+//! those two on every call, so `Decided` beside a non-empty boundary list is a value no
+//! caller — inside this crate or outside it — has a constructor for. This crate's tests
+//! exercise the derivation over every reachable combination rather than gating a predicate
+//! that could only ever answer `false`.
 //!
 //! # Determinism
 //!
@@ -104,9 +118,9 @@ pub enum DlCompleteness {
     /// made saturated inside its step cap.
     ///
     /// The strongest thing the DL lane can say: the answer is the OWL 2 Direct-Semantics
-    /// answer for the ontology as supplied. A certificate reporting this beside a non-empty
-    /// [`DlCertificate::boundaries`] is contradicting its own evidence; see
-    /// [`DlCertificate::overclaims`].
+    /// answer for the ontology as supplied. [`DlCertificate::completeness`] returns this
+    /// variant only when [`DlCertificate::boundaries`] is empty, so a certificate reporting
+    /// it beside a non-empty boundary list is not a state anything can construct.
     Decided,
     /// Every tableau run saturated, and the ontology ALSO carried at least one construct
     /// the reverse mapping bounds.
@@ -158,8 +172,12 @@ impl std::fmt::Display for DlCompleteness {
 /// the interesting failure of a reasoner is a missing answer presented as a complete one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DlCertificate {
-    /// How complete the answer is.
-    completeness: DlCompleteness,
+    /// Whether any decision this run made reached its step cap.
+    ///
+    /// Together with [`Self::boundaries`], this is the minimal state
+    /// [`Self::completeness`] derives its verdict from — there is deliberately no
+    /// separately stored completeness for the two to disagree with.
+    exhausted: bool,
     /// The constructs the reverse mapping could not turn into DL clauses.
     boundaries: Vec<Boundary>,
     /// Saturation rounds consumed, summed over every tableau run the service made.
@@ -172,9 +190,24 @@ pub struct DlCertificate {
 
 impl DlCertificate {
     /// How complete the answer is.
+    ///
+    /// DERIVED on every call from [`Self::boundaries`] and the run's own exhausted flag,
+    /// never stored: an exhausted run is [`DlCompleteness::BudgetExhausted`] whatever else
+    /// happened; failing that, a non-empty boundary list is
+    /// [`DlCompleteness::DecidedWithinBoundaries`]; and only a run with neither is
+    /// [`DlCompleteness::Decided`]. That is what makes a `Decided` verdict beside a
+    /// non-empty boundary list a value nothing can construct — not [`Session::certificate`],
+    /// and not a consumer assembling one from parts, because there is no second field for
+    /// the two to disagree over.
     #[must_use]
-    pub const fn completeness(&self) -> &DlCompleteness {
-        &self.completeness
+    pub fn completeness(&self) -> DlCompleteness {
+        if self.exhausted {
+            DlCompleteness::BudgetExhausted
+        } else if self.boundaries.is_empty() {
+            DlCompleteness::Decided
+        } else {
+            DlCompleteness::DecidedWithinBoundaries
+        }
     }
 
     /// The constructs the reverse mapping could not turn into DL clauses, in
@@ -213,21 +246,6 @@ impl DlCertificate {
     #[must_use]
     pub const fn decisions(&self) -> u64 {
         self.decisions
-    }
-
-    /// Whether this certificate claims more than its own evidence supports.
-    ///
-    /// True when [`DlCompleteness::Decided`] — the variant that means "and the whole
-    /// ontology was read" — is reported alongside a non-empty [`Self::boundaries`].
-    /// [`DlCompleteness::DecidedWithinBoundaries`] is the honest way to say the first half
-    /// of that and does not trip the gate.
-    ///
-    /// No certificate this crate produces may return `true`; the crate's tests assert it
-    /// for every service call they make. It is public so a consumer combining certificates
-    /// from several calls can apply the same gate.
-    #[must_use]
-    pub fn overclaims(&self) -> bool {
-        matches!(self.completeness, DlCompleteness::Decided) && !self.boundaries.is_empty()
     }
 }
 
@@ -343,28 +361,19 @@ impl<'a> Session<'a> {
 
     /// Seal the session into a certificate over `boundaries`.
     ///
-    /// The completeness is derived, never passed in: an exhausted run is
-    /// [`DlCompleteness::BudgetExhausted`] whatever else happened, a non-empty boundary
-    /// list narrows [`DlCompleteness::Decided`] to
-    /// [`DlCompleteness::DecidedWithinBoundaries`], and only a run with neither is
-    /// `Decided`. That is why [`DlCertificate::overclaims`] cannot be true of anything
-    /// this function returns — and the crate's tests assert it anyway, because an
-    /// invariant nothing checks is a comment.
+    /// The exhausted flag and the boundary list are stored as this session measured them;
+    /// there is no completeness parameter here to pass in, because
+    /// [`DlCertificate::completeness`] computes that verdict from exactly these two on every
+    /// call rather than being told it. That is what makes a `Decided` verdict beside a
+    /// non-empty boundary list a value this function has no way to return.
     pub(crate) fn certificate(&self, boundaries: &BTreeSet<Construct>) -> DlCertificate {
         let boundaries: Vec<Boundary> = Construct::ALL
             .into_iter()
             .filter(|construct| boundaries.contains(construct))
             .map(Boundary::of)
             .collect();
-        let completeness = if self.exhausted {
-            DlCompleteness::BudgetExhausted
-        } else if boundaries.is_empty() {
-            DlCompleteness::Decided
-        } else {
-            DlCompleteness::DecidedWithinBoundaries
-        };
         DlCertificate {
-            completeness,
+            exhausted: self.exhausted,
             boundaries,
             steps: self.steps,
             budget: self.cap,

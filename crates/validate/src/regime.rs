@@ -1077,9 +1077,14 @@ impl ReasoningAnswer {
 
     /// The certificate of the run that produced [`Self::answer`].
     ///
-    /// Never empty, and always terminated by the service's own honesty gate — the
-    /// `overclaims` line for a tableau service, `conservative` for a module
-    /// extraction — so a consumer can apply the gate without re-deriving it.
+    /// Never empty. Most services terminate their certificate with an explicit honesty
+    /// gate literal — `overclaims` for a justification, `checked` for a re-derived chase
+    /// proof, `one-directional` for profile certification, `conservative` for a module
+    /// extraction — so a consumer can read the gate without re-deriving it. The DL lane's
+    /// own certificate (see [`render_dl_certificate`]) has no such trailing literal: its
+    /// honesty is that `completeness` cannot read `decided` beside a non-empty `boundary`
+    /// list, which is guaranteed by construction rather than declared on a last line that
+    /// could only ever say `false`.
     #[must_use]
     pub fn certificate(&self) -> &str {
         &self.certificate
@@ -1354,7 +1359,6 @@ fn write_axiom(axiom: &DlAxiom, out: &mut String) {
 /// steps <n>
 /// budget <n>
 /// decisions <n>
-/// overclaims false | overclaims true
 /// ```
 ///
 /// `completeness` is the DL lane's own notion and NOT the chase's: the middle value
@@ -1369,12 +1373,14 @@ fn write_axiom(axiom: &DlAxiom, out: &mut String) {
 /// `steps` may legitimately exceed `budget` when `decisions` is greater than one.
 /// Neither is a clock reading, so the rendering is identical on `wasm32`.
 ///
-/// `overclaims` is derivable from `completeness` and the `boundary` lines and is emitted
-/// anyway, so a consumer on the far side of an FFI boundary does not have to re-derive it.
-/// Note that the CHASE report has no such line: [`ReasoningReport`] stores no completeness
-/// field to contradict its boundary list, so there is nothing there to gate. A
-/// [`DlCertificate`] does store its verdict beside its boundaries, which is why this one
-/// stays.
+/// There is deliberately no trailing `overclaims` line. [`DlCertificate`] stores no
+/// completeness field beside its boundary list for one to contradict:
+/// [`DlCertificate::completeness`] derives `decided` / `decided-within-boundaries` /
+/// `budget-exhausted` from the boundary list on every call, so `decided` beside a
+/// non-empty `boundary` line is not a value this function — or any other caller — has a
+/// constructor for. A rendered constant is a disclosure, not a gate, so unlike the CHASE
+/// report's former line (see [`ReasoningReport`]), this one was never added in the first
+/// place.
 #[must_use]
 pub fn render_dl_certificate(service: &str, certificate: &DlCertificate) -> String {
     let mut out = String::new();
@@ -1398,7 +1404,6 @@ pub fn render_dl_certificate(service: &str, certificate: &DlCertificate) -> Stri
     let _ = writeln!(out, "steps {}", certificate.steps());
     let _ = writeln!(out, "budget {}", certificate.budget());
     let _ = writeln!(out, "decisions {}", certificate.decisions());
-    let _ = writeln!(out, "overclaims {}", certificate.overclaims());
     out
 }
 
@@ -1470,9 +1475,11 @@ fn service_error(service: &str, error: &EntailError) -> String {
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .\n";
 /// let decided = consistency_to_string(data, 0).expect("reverse-maps");
 /// assert_eq!(decided.answer(), "consistency true\n");
-/// // The certificate is never optional and never claims more than it decided.
+/// // The certificate is never optional and never claims more than it decided: `decided`
+/// // is reported here only because the boundary list beside it is, in fact, empty.
 /// assert!(decided.certificate().starts_with("purrdf-dl-certificate 1\n"));
-/// assert!(decided.certificate().ends_with("overclaims false\n"));
+/// assert!(decided.certificate().contains("\ncompleteness decided\n"));
+/// assert!(!decided.certificate().contains("\nboundary "));
 /// ```
 pub fn consistency_to_string(document: &str, step_cap: u32) -> Result<ReasoningAnswer, String> {
     let reasoner = open_reasoner(document, step_cap)?;
@@ -1977,7 +1984,6 @@ fn render_justification(justification: &Justification) -> Result<String, String>
 /// digest <64 lowercase hex>
 /// proof-term-bytes <n>
 /// checked true | checked false
-/// overclaims false | overclaims true
 /// ```
 ///
 /// The `derived-*` lines are what the CHECKER re-derived from the proof term and
@@ -2069,7 +2075,6 @@ fn render_chase_proof_certificate(proof: &ChaseProof) -> String {
     let _ = writeln!(out, "digest {}", proof.digest_hex());
     let _ = writeln!(out, "proof-term-bytes {}", proof.encode().len());
     let _ = writeln!(out, "checked {}", checked.is_ok());
-    let _ = writeln!(out, "overclaims {}", checked.is_err());
     out
 }
 
@@ -2732,6 +2737,14 @@ mod tests {
     ///
     /// The invariant this whole surface exists for: an answer without a statement
     /// of how completely it was decided is the defect, not the missing feature.
+    ///
+    /// The DL lane's own certificates (`consistency`, `classify`, `realize`,
+    /// `instances`, `entails`) have no trailing gate LITERAL to match against — see
+    /// [`ReasoningAnswer::certificate`] for why — so for those this test exercises
+    /// the derivation itself: `completeness` may read `decided` only when `boundary`
+    /// is absent, exactly what [`DlCertificate::completeness`] computes. Matching a
+    /// literal here would have caught nothing, because [`render_dl_certificate`]
+    /// used to render one that could only ever say `false`.
     #[test]
     fn every_service_carries_its_certificate() {
         for (service, produced) in every_service(TAXONOMY) {
@@ -2742,17 +2755,41 @@ mod tests {
                 certificate.contains(&format!("\nservice {service}\n")),
                 "{service}: {certificate}"
             );
-            // The gate is the LAST line, so a truncated certificate is visibly
-            // truncated rather than silently gate-free.
-            let gate = certificate.lines().last().unwrap_or_default();
-            assert!(
-                matches!(
-                    gate,
-                    "overclaims false" | "one-directional true" | "conservative false"
-                ),
-                "{service}: {gate}"
-            );
             assert!(certificate.ends_with('\n'), "{service}");
+            if certificate.starts_with(DL_CERTIFICATE_BANNER) {
+                let completeness = certificate
+                    .lines()
+                    .find_map(|line| line.strip_prefix("completeness "))
+                    .unwrap_or_else(|| panic!("{service}: no completeness line: {certificate}"));
+                let has_boundaries = certificate
+                    .lines()
+                    .any(|line| line.starts_with("boundary "));
+                match completeness {
+                    "decided" => assert!(!has_boundaries, "{service}: {certificate}"),
+                    "decided-within-boundaries" => {
+                        assert!(has_boundaries, "{service}: {certificate}");
+                    }
+                    "budget-exhausted" => {}
+                    other => panic!("{service}: unknown completeness {other}"),
+                }
+            } else {
+                // The gate is the LAST line, so a truncated certificate is visibly
+                // truncated rather than silently gate-free.
+                let gate = certificate.lines().last().unwrap_or_default();
+                assert!(
+                    matches!(
+                        gate,
+                        "overclaims false"
+                            | "overclaims true"
+                            | "one-directional true"
+                            | "conservative false"
+                            | "conservative true"
+                            | "checked true"
+                            | "checked false"
+                    ),
+                    "{service}: {gate}"
+                );
+            }
         }
     }
 
@@ -2865,7 +2902,9 @@ mod tests {
         let unknown = instances_to_string(TAXONOMY, "<http://example.org/Unmentioned>", 0)
             .expect("an unconstrained name is a real name");
         assert_eq!(unknown.answer(), "");
-        assert!(unknown.certificate().ends_with("overclaims false\n"));
+        // An empty answer is still a DECIDED one: no boundary was met deciding it.
+        assert!(unknown.certificate().contains("\ncompleteness decided\n"));
+        assert!(!unknown.certificate().contains("\nboundary "));
     }
 
     /// Every OWL 2 RDF-mapping predicate dispatches to the axiom kind it spells,
@@ -2926,8 +2965,11 @@ mod tests {
             starved.certificate()
         );
         assert!(starved.certificate().contains("\nbudget 1\n"));
-        // The gate still holds: an exhausted run claims nothing it cannot support.
-        assert!(starved.certificate().ends_with("overclaims false\n"));
+        // No boundary was met either — this is a plain RDFS taxonomy — and
+        // `completeness` STILL reads `budget-exhausted` rather than collapsing to
+        // `decided`: the exhausted flag takes precedence over an empty boundary list,
+        // exactly as `DlCertificate::completeness` derives it.
+        assert!(!starved.certificate().contains("\nboundary "));
         // …and the un-narrowed call decides the same question.
         assert!(
             entails_to_string(TAXONOMY, CHAIN_AXIOM, 0)
@@ -3116,7 +3158,10 @@ mod tests {
             why.answer()
         );
         assert!(why.certificate().contains("\nchecked true\n"));
-        assert!(why.certificate().ends_with("overclaims false\n"));
+        // `checked` is the certificate's own last line — see `render_chase_proof_certificate`,
+        // which no longer follows it with a redundant `overclaims !checked` restating the
+        // same bit under a different name.
+        assert!(why.certificate().ends_with("checked true\n"));
         // The re-derived fact and the stated conclusion agree, line for line.
         let field = |key: &str| {
             why.certificate()

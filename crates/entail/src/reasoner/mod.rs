@@ -152,9 +152,10 @@ pub(crate) fn term_key(term: &TermValue) -> (u8, String) {
 /// };
 /// let answer = reasoner.entails(&axiom).expect("consistent");
 /// assert_eq!(*answer.answer(), Verdict::True);
-/// // …and the certificate says the whole ontology was read.
+/// // …and the certificate says the whole ontology was read: `Decided` is a variant
+/// // `completeness` only returns when `boundaries` is empty.
 /// assert!(answer.certificate().completeness().is_decided());
-/// assert!(!answer.certificate().overclaims());
+/// assert!(answer.certificate().boundaries().is_empty());
 ///
 /// // The class assertion is not asserted, and IS entailed.
 /// let derived = DlAxiom::ClassAssertion {

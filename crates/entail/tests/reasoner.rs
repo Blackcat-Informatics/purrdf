@@ -7,8 +7,9 @@
 //! two a certificate exists to guarantee and neither is observable from a single happy-path
 //! assertion:
 //!
-//! * no certificate overclaims — [`DlCertificate::overclaims`] is false, so a `Decided`
-//!   verdict never sits beside a boundary list;
+//! * no certificate overclaims — a `Decided` verdict never sits beside a boundary list,
+//!   which [`DlCertificate::completeness`] guarantees by deriving the verdict from the
+//!   boundary list rather than storing it, so `honest` exercises that derivation directly;
 //! * the answer is reproducible — the same dataset reasoned over twice gives equal answers
 //!   and equal certificates, step counts included.
 //!
@@ -148,13 +149,26 @@ fn kittens() -> Arc<RdfDataset> {
 }
 
 /// Assert the certificate of one service call is honest, and return it for further checks.
+///
+/// "Honest" is exercised here rather than gated: `DlCertificate` has no `overclaims`
+/// predicate to call, because `completeness` derives its verdict from `boundaries` on every
+/// call and there is no second, independently-stored verdict for the two to disagree over.
+/// This match is that same derivation, checked against the boundary list this particular
+/// certificate actually carries.
 fn honest<T>(answer: &purrdf_entail::Certified<T>) -> &purrdf_entail::DlCertificate {
     let certificate = answer.certificate();
-    assert!(
-        !certificate.overclaims(),
-        "a certificate claiming `Decided` beside {} boundaries is an overclaim",
-        certificate.boundaries().len()
-    );
+    match certificate.completeness() {
+        DlCompleteness::Decided => assert!(
+            certificate.boundaries().is_empty(),
+            "`Decided` beside {} boundaries would be an overclaim",
+            certificate.boundaries().len()
+        ),
+        DlCompleteness::DecidedWithinBoundaries => assert!(
+            !certificate.boundaries().is_empty(),
+            "`DecidedWithinBoundaries` beside no boundaries should have derived `Decided`"
+        ),
+        DlCompleteness::BudgetExhausted => {}
+    }
     assert!(
         certificate.steps()
             <= certificate
@@ -176,7 +190,7 @@ fn a_consistent_ontology_is_reported_consistent_and_decided() {
     let answer = reasoner.consistency();
     assert_eq!(*answer.answer(), Verdict::True);
     let certificate = honest(&answer);
-    assert_eq!(certificate.completeness(), &DlCompleteness::Decided);
+    assert_eq!(certificate.completeness(), DlCompleteness::Decided);
     assert!(certificate.boundaries().is_empty());
     assert_eq!(certificate.decisions(), 1, "consistency is ONE decision");
     assert!(certificate.steps() > 0, "a decision consumes steps");
@@ -565,7 +579,7 @@ fn a_narrowed_budget_reports_unknown_rather_than_a_false_negative() {
         "an exhausted search is UNKNOWN, never `false`"
     );
     let certificate = honest(&answer);
-    assert_eq!(certificate.completeness(), &DlCompleteness::BudgetExhausted);
+    assert_eq!(certificate.completeness(), DlCompleteness::BudgetExhausted);
     assert!(!certificate.completeness().is_decided());
     assert_eq!(certificate.steps(), 1, "it spent exactly its cap");
 
@@ -575,7 +589,7 @@ fn a_narrowed_budget_reports_unknown_rather_than_a_false_negative() {
     assert!(hierarchy.answer().subsumptions().is_empty());
     assert_eq!(
         hierarchy.certificate().completeness(),
-        &DlCompleteness::BudgetExhausted
+        DlCompleteness::BudgetExhausted
     );
     honest(&hierarchy);
 }
@@ -610,7 +624,7 @@ fn an_ontology_carrying_a_bounded_construct_is_never_reported_decided() {
     let certificate = honest(&answer);
     assert_eq!(
         certificate.completeness(),
-        &DlCompleteness::DecidedWithinBoundaries,
+        DlCompleteness::DecidedWithinBoundaries,
         "a run that met a boundary has not decided the whole ontology"
     );
     assert!(certificate.completeness().is_decided());

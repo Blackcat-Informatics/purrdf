@@ -643,6 +643,12 @@ mod tests {
     /// exported without its certificate is the defect, and this test would pass
     /// vacuously only if the service were missing entirely — which the list makes
     /// a compile error rather than an omission.
+    ///
+    /// The tableau services (`consistency`, `classify`, `realize`, `instances`,
+    /// `entails`) have no trailing gate LITERAL: their `purrdf-dl-certificate 1`
+    /// block derives `completeness` from `boundary` on every render, so this test
+    /// exercises that derivation directly rather than matching a constant that
+    /// could only ever read `false`.
     #[test]
     fn every_dl_service_reaches_this_host_with_its_certificate() {
         let services = [
@@ -679,14 +685,38 @@ mod tests {
                 certificate.contains(&format!("\nservice {service}\n")),
                 "{service}: {certificate}"
             );
-            let gate = certificate.lines().last().unwrap_or_default();
-            assert!(
-                matches!(
-                    gate,
-                    "overclaims false" | "one-directional true" | "conservative false"
-                ),
-                "{service}: {gate}"
-            );
+            if certificate.starts_with("purrdf-dl-certificate 1\n") {
+                let completeness = certificate
+                    .lines()
+                    .find_map(|line| line.strip_prefix("completeness "))
+                    .unwrap_or_else(|| panic!("{service}: no completeness line: {certificate}"));
+                let has_boundaries = certificate
+                    .lines()
+                    .any(|line| line.starts_with("boundary "));
+                match completeness {
+                    "decided" => assert!(!has_boundaries, "{service}: {certificate}"),
+                    "decided-within-boundaries" => {
+                        assert!(has_boundaries, "{service}: {certificate}");
+                    }
+                    "budget-exhausted" => {}
+                    other => panic!("{service}: unknown completeness {other}"),
+                }
+            } else {
+                let gate = certificate.lines().last().unwrap_or_default();
+                assert!(
+                    matches!(
+                        gate,
+                        "overclaims false"
+                            | "overclaims true"
+                            | "one-directional true"
+                            | "conservative false"
+                            | "conservative true"
+                            | "checked true"
+                            | "checked false"
+                    ),
+                    "{service}: {gate}"
+                );
+            }
         }
     }
 

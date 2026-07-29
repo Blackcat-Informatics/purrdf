@@ -18,10 +18,15 @@ What is asserted, and why:
 
 * **Every service is reachable, and none of them can drop its certificate.**
   Each returns `(answer, certificate)`, so a caller must unpack the evidence.
-* **A certificate names its own service and ends with its own honesty gate** —
-  `overclaims false` for a tableau service, `one-directional true` for the
-  purely syntactic profile certification, `conservative false` for a module
-  extraction that decided every keep by the locality rules.
+* **A certificate names its own service, and a tableau service's names its own
+  honesty by construction rather than by a trailing literal.** A `purrdf-dl-certificate
+  1` block (`consistency`, `classify`, `realize`, `instances`, `entails`) can never read
+  `completeness decided` beside a non-empty `boundary` list — the value is derived from
+  the boundary list on every render, so there is nothing stored for the two to
+  disagree with. The services that carry their own independent gate literal still do:
+  `overclaims` for `justify`, `checked` for `explain-conclusion`, `one-directional
+  true` for the purely syntactic profile certification, `conservative` for a module
+  extraction.
 * **`unknown` is never collapsed to `false`.** A narrowed step cap drives the
   third completeness state, and the answer says `unknown` — reporting a resource
   limit as an entailment is the defect the third value exists to prevent.
@@ -102,10 +107,28 @@ def _every_service(data: str = TAXONOMY) -> list[tuple[str, tuple[str, str]]]:
     ]
 
 
-# The gate each certificate grammar ends with. A tableau service reports whether
-# it claimed more than its evidence supports; the two services that run no tableau
-# report their own honesty property instead of a fabricated completeness.
-GATES = frozenset({"overclaims false", "one-directional true", "conservative false"})
+# The gate each NON-tableau certificate grammar ends with. `justify` reports whether
+# its re-decided claim is sufficient and minimal, `explain-conclusion` whether its
+# proof re-derived, and the two services that run no tableau at all report their own
+# honesty property instead of a fabricated completeness.
+#
+# The five tableau services (`consistency`, `classify`, `realize`, `instances`,
+# `entails`) are NOT in this set: their `purrdf-dl-certificate 1` block has no
+# trailing gate literal, because `completeness` is derived from `boundary` on every
+# render rather than stored beside it — see
+# `test_every_certificate_names_its_service_and_ends_with_its_gate` for how those are
+# checked instead.
+GATES = frozenset(
+    {
+        "overclaims false",
+        "overclaims true",
+        "checked true",
+        "checked false",
+        "one-directional true",
+        "conservative false",
+        "conservative true",
+    }
+)
 
 
 # ── Every service is reachable, and carries its certificate ─────────────────────
@@ -127,11 +150,32 @@ def test_every_certificate_names_its_service_and_ends_with_its_gate() -> None:
     This is the invariant the whole surface exists for: an answer with no
     statement of how completely it was decided is the defect, not the missing
     feature.
+
+    The tableau services' certificates have no gate literal to look up in `GATES`:
+    for those this test exercises the derivation itself — `completeness` may read
+    `decided` only when no `boundary` line is present — which is what
+    `purrdf_entail::reasoner::certificate::DlCertificate::completeness` computes on
+    every call rather than a constant this test would otherwise just be repeating.
     """
     for name, (_answer, certificate) in _every_service():
         assert f"\nservice {name}\n" in certificate, f"{name}: {certificate}"
-        assert certificate.splitlines()[-1] in GATES, f"{name}: {certificate}"
         assert certificate.endswith("\n"), name
+        if certificate.startswith("purrdf-dl-certificate 1\n"):
+            lines = certificate.splitlines()
+            completeness = next(
+                line.removeprefix("completeness ")
+                for line in lines
+                if line.startswith("completeness ")
+            )
+            has_boundaries = any(line.startswith("boundary ") for line in lines)
+            if completeness == "decided":
+                assert not has_boundaries, f"{name}: {certificate}"
+            elif completeness == "decided-within-boundaries":
+                assert has_boundaries, f"{name}: {certificate}"
+            elif completeness != "budget-exhausted":
+                pytest.fail(f"{name}: unknown completeness {completeness}")
+        else:
+            assert certificate.splitlines()[-1] in GATES, f"{name}: {certificate}"
 
 
 def test_the_dl_certificate_is_not_the_chase_report() -> None:
@@ -172,7 +216,9 @@ def test_consistency_answers_both_ways() -> None:
 
     answer, certificate = entail.consistency(UNSATISFIABLE)
     assert answer == "consistency false\n"
-    assert certificate.endswith("overclaims false\n")
+    # A decided `false` met no boundary either: nothing here to overclaim.
+    assert "\ncompleteness decided\n" in certificate
+    assert "\nboundary " not in certificate
 
 
 def test_classify_emits_the_closure_and_its_reduction() -> None:
@@ -210,7 +256,9 @@ def test_instances_retrieves_through_the_hierarchy() -> None:
     # which is what the Direct Semantics says an unconstrained name is.
     answer, certificate = entail.instances(TAXONOMY, "<https://example.org/Unmentioned>")
     assert answer == ""
-    assert certificate.endswith("overclaims false\n")
+    # An empty answer is still a DECIDED one: no boundary was met deciding it.
+    assert "\ncompleteness decided\n" in certificate
+    assert "\nboundary " not in certificate
 
 
 @pytest.mark.parametrize(
@@ -258,8 +306,10 @@ def test_an_exhausted_budget_is_unknown_and_never_false() -> None:
     assert answer.splitlines()[0] == "entails unknown"
     assert "\ncompleteness budget-exhausted\n" in certificate
     assert "\nbudget 1\n" in certificate
-    # The gate still holds: an exhausted run claims nothing it cannot support.
-    assert certificate.endswith("overclaims false\n")
+    # No boundary was met either — this is a plain RDFS taxonomy — and
+    # `completeness` STILL reads `budget-exhausted` rather than collapsing to
+    # `decided`: the exhausted flag takes precedence over an empty boundary list.
+    assert "\nboundary " not in certificate
     # …and 0 means the knowledge base's own cap, not a cap of zero steps.
     answer, certificate = entail.entails(TAXONOMY, CHAIN_AXIOM, 0)
     assert answer.startswith("entails true\n")
@@ -385,7 +435,9 @@ def test_explain_conclusion_re_derives_rather_than_re_reads() -> None:
     assert answer.startswith("asserted false\n")
     assert "\nrule cax-sco\n" in answer, answer
     assert "\nchecked true\n" in certificate
-    assert certificate.endswith("overclaims false\n")
+    # `checked` is the certificate's own last line: no redundant `overclaims !checked`
+    # restating the same bit under a different name follows it.
+    assert certificate.endswith("checked true\n")
 
     def field(key: str) -> str:
         return next(
