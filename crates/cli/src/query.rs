@@ -35,7 +35,6 @@
 //!   a SPARQL-results format) is a hard runtime error (exit 1).
 
 use purrdf_core::{DatasetView, LossLedger, SparqlResult};
-use purrdf_entail::materialize;
 use purrdf_rdf::JsonLdSerializeOptions;
 use purrdf_sparql_eval::{NativeSparqlEngine, PreparedQuery};
 use purrdf_sparql_results::{ResultProvenance, serialize};
@@ -164,8 +163,8 @@ pub(crate) fn run(
             let dataset = source::load_dataset(data, data_format, base)?;
             // The rows go to stdout and the certificate to `--report`: a solution set that
             // depends on a closure is not readable without knowing what closed it.
-            let (closure, reasoning) = materialize(&dataset, plan.materialization())?;
-            report::surface(report_target, &reasoning)?;
+            let closure =
+                report::materialize_reported(&dataset, plan.materialization(), report_target)?;
             engine.query_prepared(&closure, &prepared, &[])?
         }
         None => source::run_over_input(

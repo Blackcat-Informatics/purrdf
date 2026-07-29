@@ -27,7 +27,36 @@
 # non-example.org IRIs below are the `rdf:`/`rdfs:`/`owl:` terms the entailment
 # specifications themselves define.
 #
-# WHY THIS ARTIFACT MOVED: THE BOUNDARY STOPPED REFUSING TWO REGIMES.
+# WHY THIS ARTIFACT MOVED: THE REPORT GRAMMAR IS AT 2, AND THE WITHHELD COUNT IS IN IT.
+#
+# No closure changed by one byte; every change below is in a `@report` body. Three
+# things moved, and the banner went from 1 to 2 so they are visible rather than
+# silent.
+#
+# `withheld-surrogates <n>` is NEW here. The shared renderer — the one Python, WASM
+# and the C ABI all go through — never emitted it, while the CLI's own private
+# renderer did. So `rdfD1`, `rdfD1a`, `rdfs14` and `rdfs14a` were invisible from
+# every host but the command line, even though the count is the ONLY observable
+# those four rules have: all four fire, every conclusion they reach mentions a
+# minted blank node a SPARQL entailment regime may not answer with, so none of them
+# can ever appear in a `fired` line. The rdfs case below now says 11 and the rdf case
+# says 3, where a reader previously had a `boundary surrogate` paragraph saying the
+# conclusions were "counted here" and no number anywhere.
+#
+# The trailing `overclaims false` line is GONE. It was a rendered constant: a report
+# carries no completeness field to contradict its boundary list, because
+# `ReasoningReport::completeness` derives the value from that list. A line that could
+# only ever say `false` is a disclosure, not a gate, so the gate — and the
+# `EntailError::Overclaim` it was supposed to raise, which no run could reach — was
+# deleted rather than dressed up.
+#
+# An `inconsistency` witness now renders its GRAPH and its PREMISE TRIPLES
+# (`inconsistency-graph`, `inconsistency-premise`). No case here shows them, because
+# an inconsistent input has no closure and this artifact pairs an input with one;
+# `purrdf_validate::regime::check_inconsistent_refusal` is the tri-host assertion
+# that covers that path.
+#
+# AN EARLIER MOVE: THE BOUNDARY STOPPED REFUSING TWO REGIMES.
 #
 # No existing case changed by one byte. Two were ADDED, and the `@program`
 # directive with them. `owl-direct` and `rif` used to be refused here by name,
@@ -71,15 +100,15 @@
 <http://example.org/x> <http://example.org/p> <http://example.org/y> <http://example.org/g> .
 <http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .
 @report
-purrdf-reasoning-report 1
+purrdf-reasoning-report 2
 regime simple
 completeness exact
 budget join-steps 0
 budget stored-facts 0
 budget term-arena-bytes 0
 contract-hash 4151090ce6c2ecdae843e351420ddcf10f79e525c60b4c6d07bebeabaa07fbd5
+withheld-surrogates 0
 inconsistency none
-overclaims false
 @end
 
 @case rdf-types-every-predicate
@@ -91,7 +120,7 @@ overclaims false
 <http://example.org/x> <http://example.org/p> <http://example.org/y> .
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
 @report
-purrdf-reasoning-report 1
+purrdf-reasoning-report 2
 regime rdf
 completeness exact-within-boundaries
 fired rdfD2 2
@@ -102,8 +131,8 @@ budget join-steps 25
 budget stored-facts 6
 budget term-arena-bytes 433
 contract-hash 9724540a02daf06f349ba8aecf52f9e3e21abf7042d1bfcc630172baa7f23ee3
+withheld-surrogates 3
 inconsistency none
-overclaims false
 @end
 
 @case rdfs-subclass-domain-and-range
@@ -258,7 +287,7 @@ overclaims false
 <http://www.w3.org/2001/XMLSchema#string> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
 <http://www.w3.org/2001/XMLSchema#string> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2001/XMLSchema#string> .
 @report
-purrdf-reasoning-report 1
+purrdf-reasoning-report 2
 regime rdfs
 completeness exact-within-boundaries
 fired rdfD2 5
@@ -279,8 +308,8 @@ budget join-steps 9455
 budget stored-facts 201
 budget term-arena-bytes 1958
 contract-hash f6a5eff90528f49ba8d3b83ae7feac8e3b71586f320fb478c6ddb60ca6dc979e
+withheld-surrogates 11
 inconsistency none
-overclaims false
 @end
 
 # WHAT MOVED IN THIS CASE, AND WHY: the OWL-RL lane now states the whole of OWL 2
@@ -429,7 +458,7 @@ overclaims false
 <http://www.w3.org/2002/07/owl#versionInfo> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
 <http://www.w3.org/2002/07/owl#versionInfo> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#versionInfo> .
 @report
-purrdf-reasoning-report 1
+purrdf-reasoning-report 2
 regime owl-rl
 completeness exact-within-boundaries
 fired eq-ref 58
@@ -446,8 +475,8 @@ budget join-steps 2133
 budget stored-facts 127
 budget term-arena-bytes 2500
 contract-hash 61a9a84001b40b06a8dfe4b38e331ca1943893cbd191b272d6ffead048fa2de0
+withheld-surrogates 0
 inconsistency none
-overclaims false
 @end
 
 @case rdfs-abandons-a-generalized-conclusion
@@ -580,7 +609,7 @@ overclaims false
 <http://www.w3.org/2001/XMLSchema#string> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
 <http://www.w3.org/2001/XMLSchema#string> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2001/XMLSchema#string> .
 @report
-purrdf-reasoning-report 1
+purrdf-reasoning-report 2
 regime rdfs
 completeness exact-within-boundaries
 fired rdfD2 5
@@ -600,8 +629,8 @@ budget join-steps 8827
 budget stored-facts 192
 budget term-arena-bytes 1966
 contract-hash f6a5eff90528f49ba8d3b83ae7feac8e3b71586f320fb478c6ddb60ca6dc979e
+withheld-surrogates 16
 inconsistency none
-overclaims false
 @end
 
 @case d-types-every-supported-datatype
@@ -645,7 +674,7 @@ overclaims false
 <http://www.w3.org/2001/XMLSchema#unsignedLong> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
 <http://www.w3.org/2001/XMLSchema#unsignedShort> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
 @report
-purrdf-reasoning-report 1
+purrdf-reasoning-report 2
 regime d
 completeness exact-within-boundaries
 fired dt-type1 32
@@ -655,8 +684,8 @@ budget join-steps 40
 budget stored-facts 98
 budget term-arena-bytes 1759
 contract-hash 20ac9aa48ce8dd9b25bc7239798566da2d1559458c6ed12befa520c3fdb16cb7
+withheld-surrogates 0
 inconsistency none
-overclaims false
 @end
 
 @case owl-rl-class-expressions-and-equality
@@ -784,7 +813,7 @@ overclaims false
 <http://www.w3.org/2002/07/owl#versionInfo> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
 <http://www.w3.org/2002/07/owl#versionInfo> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#versionInfo> .
 @report
-purrdf-reasoning-report 1
+purrdf-reasoning-report 2
 regime owl-rl
 completeness exact-within-boundaries
 fired eq-ref 58
@@ -801,8 +830,8 @@ budget join-steps 2058
 budget stored-facts 115
 budget term-arena-bytes 2466
 contract-hash 61a9a84001b40b06a8dfe4b38e331ca1943893cbd191b272d6ffead048fa2de0
+withheld-surrogates 0
 inconsistency none
-overclaims false
 @end
 
 @case owl-direct-augments-with-what-the-tableau-decides
@@ -826,15 +855,15 @@ overclaims false
 <http://www.w3.org/2002/07/owl#Nothing> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2002/07/owl#Thing> .
 <http://www.w3.org/2002/07/owl#Thing> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2002/07/owl#Thing> .
 @report
-purrdf-reasoning-report 1
+purrdf-reasoning-report 2
 regime owl-direct
 completeness exact
 budget join-steps 0
 budget stored-facts 0
 budget term-arena-bytes 0
 contract-hash 4151090ce6c2ecdae843e351420ddcf10f79e525c60b4c6d07bebeabaa07fbd5
+withheld-surrogates 0
 inconsistency none
-overclaims false
 @end
 
 @case rif-entails-under-the-supplied-rule-set
@@ -847,13 +876,13 @@ overclaims false
 <http://example.org/lillith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Animal> .
 <http://example.org/lillith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .
 @report
-purrdf-reasoning-report 1
+purrdf-reasoning-report 2
 regime rif
 completeness exact
 budget join-steps 1
 budget stored-facts 2
 budget term-arena-bytes 128
 contract-hash 4151090ce6c2ecdae843e351420ddcf10f79e525c60b4c6d07bebeabaa07fbd5
+withheld-surrogates 0
 inconsistency none
-overclaims false
 @end

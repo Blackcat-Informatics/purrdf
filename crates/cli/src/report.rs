@@ -3,10 +3,11 @@
 
 //! Surfacing the reasoning report under the `--report` flag.
 //!
-//! [`surface`] renders a [`ReasoningReport`] exactly where the flag's decoded
-//! [`ReportTarget`] directs: nowhere, stderr, or a file. The rendering is a line-oriented
-//! text block whose field order is fixed, so two identical runs produce byte-identical
-//! bytes and a diff over two runs is a diff over what the reasoner did.
+//! [`surface`] writes a [`ReasoningReport`] exactly where the flag's decoded
+//! [`ReportTarget`] directs: nowhere, stderr, or a file. The rendering is
+//! [`purrdf_validate::regime::render_reasoning_report`] — a line-oriented text block whose
+//! field order is fixed, so two identical runs produce byte-identical bytes and a diff
+//! over two runs is a diff over what the reasoner did.
 //!
 //! # What the operator gets, and why it is not optional
 //!
@@ -16,26 +17,70 @@
 //! unread or that a conclusion had been withheld. The report is where each of those is a
 //! LINE rather than an assumption — the rules that fired and their counts, the constructs
 //! the run could not fully handle WITH the technical reason, the evaluation cost, the
-//! contract hash of the calculus, the withheld-surrogate count, and the overclaim verdict
-//! the report may never fail.
+//! contract hash of the calculus, and the withheld-surrogate count.
 //!
-//! # Why this rendering rather than a shared one
+//! # There is ONE renderer, and this is not it
 //!
-//! `purrdf_validate::regime::render_reasoning_report` renders the same fields for the
-//! string-in/string-out boundary the Python, C-ABI and WASM hosts share, and the line
-//! grammar below is deliberately the same one (`regime`, `completeness`, `missing`,
-//! `fired`, `boundary`, `budget`, `contract-hash`, `inconsistency`, `overclaims`), so the
-//! two are read the same way. Calling it directly would mean a new `purrdf-validate`
-//! dependency edge for this crate — a Cargo.lock change under a `--locked` gate, and a
-//! dependency this binary otherwise does not need — so the grammar is shared and the code
-//! is not.
+//! This module used to carry a second, private renderer, whose own header claimed it
+//! "renders the same fields" as `purrdf_validate::regime::render_reasoning_report`. That
+//! was false in both directions: it omitted the format banner and it emitted a
+//! `withheld-surrogates` line the shared renderer did not, so the CLI and the three
+//! bindings disagreed about what a report even contains, and nothing compared them. The
+//! duplicate is gone. The shared renderer emits the withheld count now, and this module
+//! calls it.
+//!
+//! The reason the duplicate was tolerated was a dependency edge — reaching the shared
+//! renderer means `purrdf-cli` depending on `purrdf-validate`. It is a path dependency on
+//! a workspace member this repository already builds, adds no third-party crate, and is a
+//! smaller cost than two renderers with no gate between them.
+//!
+//! # A refusal is reported too
+//!
+//! [`materialize_reported`] is the only way this binary materializes. An INCONSISTENT
+//! knowledge base has no closure — it entails every triple — but it did have a RUN, and
+//! `purrdf_entail::EntailError::Inconsistent` carries that run's report. The `--report`
+//! target is therefore written on the refusal path as well, so `--report FILE` produces a
+//! file whichever way the command exits, and the operator learns which rule refused, on
+//! which triples, after how much work. Writing nothing was the previous behaviour and it
+//! left the one operator who most needed the certificate with only an exit code.
 
-use std::fmt::Write as _;
-
-use purrdf_entail::{Completeness, ReasoningReport};
+use purrdf_core::RdfDataset;
+use purrdf_entail::{EntailError, Materialization, ReasoningReport, materialize};
+use purrdf_validate::regime::render_reasoning_report;
+use std::sync::Arc;
 
 use crate::cli::ReportTarget;
 use crate::error::CliError;
+
+/// Materialize `plan` over `dataset`, surfacing the run's report to `target` either way.
+///
+/// The success path writes the report beside the closure. The INCONSISTENT path writes the
+/// report too and then returns the refusal: the run happened, cost a budget, fired rules
+/// and named a calculus, and every one of those is something the operator needs in order
+/// to act on the refusal.
+///
+/// Every other [`EntailError`] is the absence of a run — an exhausted ceiling, a malformed
+/// rule document, an unsatisfiable tableau — with no report to write, so nothing is
+/// surfaced and nothing is implied about a closure that was never assembled.
+pub(crate) fn materialize_reported(
+    dataset: &RdfDataset,
+    plan: Materialization<'_>,
+    target: &ReportTarget,
+) -> Result<Arc<RdfDataset>, CliError> {
+    match materialize(dataset, plan) {
+        Ok((closure, report)) => {
+            surface(target, &report)?;
+            Ok(closure)
+        }
+        Err(EntailError::Inconsistent(run)) => {
+            surface(target, run.report())?;
+            Err(CliError::Runtime(
+                EntailError::Inconsistent(run).to_string(),
+            ))
+        }
+        Err(other) => Err(other.into()),
+    }
+}
 
 /// Surface `report` per the decoded `--report` target.
 ///
@@ -43,15 +88,15 @@ use crate::error::CliError;
 /// * [`ReportTarget::Stderr`] — write the rendering to stderr, leaving stdout for the data
 ///   (so `purrdf reason … - --report` still pipes cleanly).
 /// * [`ReportTarget::File`] — write the rendering to the given path.
-pub(crate) fn surface(target: &ReportTarget, report: &ReasoningReport) -> Result<(), CliError> {
+fn surface(target: &ReportTarget, report: &ReasoningReport) -> Result<(), CliError> {
     match target {
         ReportTarget::Silent => Ok(()),
         ReportTarget::Stderr => {
-            eprint!("{}", render(report));
+            eprint!("{}", render_reasoning_report(report));
             Ok(())
         }
         ReportTarget::File(path) => {
-            std::fs::write(path, render(report))?;
+            std::fs::write(path, render_reasoning_report(report))?;
             Ok(())
         }
     }
@@ -69,88 +114,15 @@ pub(crate) fn requires_entailment(subcommand: &str) -> CliError {
     ))
 }
 
-/// Render `report` as a deterministic, line-oriented text block.
-///
-/// One line per fact, in a fixed field order, each line ending in `\n`; the block therefore
-/// ends with a newline. Every sequence the report hands out is already in a documented
-/// order (rules in specification table order, boundaries in construct declaration order),
-/// so nothing here sorts and nothing here iterates a map.
-fn render(report: &ReasoningReport) -> String {
-    let mut out = String::new();
-    // `write!` to a `String` cannot fail, so the results are discarded rather than
-    // propagated: there is no I/O here to have an error about.
-    let _ = writeln!(out, "regime {}", regime_token(report.regime()));
-    match report.completeness() {
-        Completeness::Exact => {
-            let _ = writeln!(out, "completeness exact");
-        }
-        Completeness::ExactWithinBoundaries => {
-            let _ = writeln!(out, "completeness exact-within-boundaries");
-        }
-        Completeness::SoundIncomplete { missing } => {
-            let _ = writeln!(out, "completeness sound-incomplete {}", missing.len());
-        }
-    }
-    for rule in report.completeness().missing() {
-        let _ = writeln!(out, "missing {}", rule.as_str());
-    }
-    for &(rule, count) in report.rules_fired() {
-        let _ = writeln!(out, "fired {} {count}", rule.as_str());
-    }
-    for boundary in report.boundaries() {
-        let _ = writeln!(
-            out,
-            "boundary {} {}",
-            boundary.construct().as_str(),
-            boundary.reason()
-        );
-    }
-    let budget = report.budget();
-    let _ = writeln!(out, "budget join-steps {}", budget.join_steps());
-    let _ = writeln!(out, "budget stored-facts {}", budget.stored_facts());
-    let _ = writeln!(out, "budget term-arena-bytes {}", budget.term_arena_bytes());
-    let _ = writeln!(out, "contract-hash {}", report.contract_hash().to_hex());
-    let _ = writeln!(out, "withheld-surrogates {}", report.withheld_surrogates());
-    match report.inconsistency() {
-        None => {
-            let _ = writeln!(out, "inconsistency none");
-        }
-        Some(witness) => {
-            let _ = writeln!(
-                out,
-                "inconsistency {} premises {}",
-                witness.rule().as_str(),
-                witness.premises().len()
-            );
-        }
-    }
-    let _ = writeln!(out, "overclaims {}", report.overclaims());
-    out
-}
-
-/// The CLI spelling of a regime — the same token `--regime` / `--entailment` accept, so a
-/// report names the regime the way the operator asked for it.
-fn regime_token(regime: purrdf_entail::Regime) -> &'static str {
-    use purrdf_entail::Regime;
-    match regime {
-        Regime::Simple => "simple",
-        Regime::Rdf => "rdf",
-        Regime::Rdfs => "rdfs",
-        Regime::OwlRl => "owl-rl",
-        Regime::OwlDirect => "owl-direct",
-        Regime::Rif => "rif",
-        Regime::D => "d",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use purrdf_core::RdfDatasetBuilder;
-    use purrdf_entail::{Materialization, Regime, materialize};
+    use purrdf_entail::Regime;
+    use purrdf_validate::regime::{REPORT_FORMAT_BANNER, regime_name};
 
     /// A dataset with a schema, an instance, and a quad outside the default graph.
-    fn fixture() -> std::sync::Arc<purrdf_core::RdfDataset> {
+    fn fixture() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         let cat = b.intern_iri("http://example.org/Cat");
         let animal = b.intern_iri("http://example.org/Animal");
@@ -164,22 +136,75 @@ mod tests {
         b.freeze().expect("freeze")
     }
 
-    /// THE RENDERING CARRIES THE EVIDENCE, and it is deterministic.
+    /// A dataset OWL 2 RL's `cax-dw` refuses: two disjoint classes, one shared instance.
+    fn inconsistent() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let a = b.intern_iri("http://example.org/A");
+        let c = b.intern_iri("http://example.org/B");
+        let x = b.intern_iri("http://example.org/x");
+        let disjoint = b.intern_iri("http://www.w3.org/2002/07/owl#disjointWith");
+        let ty = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
+        b.push_quad(a, disjoint, c, None);
+        b.push_quad(x, ty, a, None);
+        b.push_quad(x, ty, c, None);
+        b.freeze().expect("freeze")
+    }
+
+    /// THE RENDERING CARRIES THE EVIDENCE, and it is the SHARED one.
+    ///
+    /// The banner is the load-bearing assertion: the private renderer this replaced did
+    /// not emit it, so its presence is what proves the CLI and the bindings now read the
+    /// same bytes rather than two grammars described as the same one.
     #[test]
-    fn the_rendering_names_every_field_and_repeats_byte_for_byte() {
+    fn the_rendering_is_the_shared_one_and_names_every_field() {
         let (_, report) = materialize(&fixture(), Materialization::Rdfs).expect("rdfs");
-        let rendered = render(&report);
-        assert!(rendered.starts_with("regime rdfs\n"), "{rendered}");
+        let rendered = render_reasoning_report(&report);
+        assert!(
+            rendered.starts_with(&format!("{REPORT_FORMAT_BANNER}\nregime rdfs\n")),
+            "{rendered}"
+        );
         assert!(rendered.contains("\nfired rdfs9 "), "{rendered}");
         // The boundary line carries the construct AND its technical reason.
         assert!(rendered.contains("\nboundary named-graph "), "{rendered}");
         assert!(rendered.contains("\ncontract-hash "), "{rendered}");
         assert!(rendered.contains("\nwithheld-surrogates "), "{rendered}");
-        assert!(rendered.ends_with("overclaims false\n"), "{rendered}");
-        assert_eq!(rendered, render(&report));
+        assert!(rendered.ends_with("inconsistency none\n"), "{rendered}");
+        assert_eq!(rendered, render_reasoning_report(&report));
+    }
+
+    /// The `--report` file is written on the INCONSISTENT path, and carries the witness.
+    #[test]
+    fn an_inconsistent_run_still_writes_its_report() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("report.txt");
+        let error = materialize_reported(
+            &inconsistent(),
+            Materialization::OwlRl,
+            &ReportTarget::File(path.clone()),
+        )
+        .expect_err("cax-dw refuses");
+        assert!(error.to_string().contains("cax-dw"), "{error}");
+        let written = std::fs::read_to_string(&path).expect("the report was written");
+        assert!(written.starts_with(REPORT_FORMAT_BANNER), "{written}");
+        assert!(
+            written.contains("\ninconsistency cax-dw premises 3\n"),
+            "{written}"
+        );
+        assert!(
+            written.contains("\ninconsistency-graph default\n"),
+            "{written}"
+        );
+        assert_eq!(
+            written.matches("\ninconsistency-premise ").count(),
+            3,
+            "the three asserted triples that satisfied the rule: {written}"
+        );
     }
 
     /// Every regime renders under the token the command line uses for it.
+    ///
+    /// The CLI's `--regime` / `--entailment` spellings and the shared renderer's `regime`
+    /// line are one vocabulary, which is why this binary no longer keeps a private map.
     #[test]
     fn the_regime_token_is_the_command_line_spelling() {
         for (regime, token) in [
@@ -191,7 +216,7 @@ mod tests {
             (Regime::Rif, "rif"),
             (Regime::D, "d"),
         ] {
-            assert_eq!(regime_token(regime), token);
+            assert_eq!(regime_name(regime), token);
         }
     }
 }

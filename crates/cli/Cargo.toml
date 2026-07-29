@@ -36,6 +36,11 @@ purrdf-sparql-eval = { workspace = true }
 purrdf-sparql-results = { workspace = true }
 # The entailment regimes driving the `reason` subcommand's closure materialization.
 purrdf-entail = { workspace = true }
+# The ONE rendered form of a `ReasoningReport`. `--report` writes exactly what the
+# Python, WASM and C-ABI hosts read, because it is the same function rather than a
+# second renderer described as equivalent; `regime_name` is the same regime
+# vocabulary `--regime`/`--entailment` accept.
+purrdf-validate = { workspace = true }
 # Zero-copy memory-mapped reads of on-disk pack files: a pack source is mmap'd
 # and handed to `PackView::from_bytes` with no materialization. Native-only —
 # this crate is never built for wasm32 (it is absent from the `make wasm`

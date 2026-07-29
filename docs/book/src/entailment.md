@@ -25,12 +25,12 @@ no async runtime, and no string round-trip.
 | `Regime::from_iri(iri)` | — | Parse a `sparql:entailmentRegime` IRI to its enum. |
 
 ```rust,ignore
-use purrdf::entail::{materialize, Regime};
+use purrdf::entail::{materialize, Completeness, Materialization};
 
 // Close a frozen dataset to its RDFS fixpoint; the result is a new dataset
 // AND a report of what the run did.
-let (closed, report) = materialize(&ds, Regime::Rdfs).expect("materializes");
-assert!(!report.overclaims());
+let (closed, report) = materialize(&ds, Materialization::Rdfs).expect("materializes");
+assert_eq!(report.completeness(), Completeness::ExactWithinBoundaries);
 ```
 
 ## The same engine in four hosts
@@ -155,8 +155,12 @@ complete one. The report carries:
   rule id, the asserted triples that satisfied its premises in premise order, and
   the graph they were read from.
 
-A report that claims `Exact` while naming a boundary is a test failure, and
-`report.overclaims()` is the gate that says so.
+A report cannot claim `Exact` while naming a boundary. `ReasoningReport` stores
+no completeness field at all: `completeness()` derives the value from the
+boundary list itself, so the contradictory state is unrepresentable rather than
+merely checked. That is deliberate — an earlier design stored the field and
+compared it against a derivation of the same inputs, which is vacuous by
+construction and could never fail.
 
 The rendering is byte-stable, so the Python, WebAssembly, and C hosts hand back
 the same report text as Rust for the same input.

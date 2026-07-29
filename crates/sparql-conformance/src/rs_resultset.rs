@@ -8,9 +8,10 @@
 //! ship their expected SELECT result as a Turtle graph *describing* an
 //! `rs:ResultSet` — `rs:resultVariable` literals for the header and
 //! `rs:solution`/`rs:binding`/`rs:variable`/`rs:value` for each row — rather
-//! than SPARQL Results XML/JSON. The harness previously treated every `.ttl`
-//! result file as a CONSTRUCT graph, which made these SELECT cases
-//! uncomparable (and thus falsely ledgered as a gap rather than run for real).
+//! than SPARQL Results XML/JSON. A `.ttl` result file is therefore not always a
+//! CONSTRUCT graph, and the distinction is load-bearing: reading one that
+//! describes an `rs:ResultSet` as a graph leaves the SELECT case uncomparable,
+//! which is a gap in the ledger rather than a case that ran.
 //!
 //! This module decodes that Turtle encoding into the same [`ParsedSolutions`]
 //! shape [`crate::compare`] already compares SRX/SRJ results against, by

@@ -39,10 +39,10 @@
 
 use purrdf_validate::regime::{
     ReasoningAnswer as BoundaryAnswer, RegimeClosure as BoundaryClosure,
-    check_regime_golden_vectors, classify_to_string, consistency_to_string, entails_to_string,
-    explain_conclusion_to_string, extract_module_to_string, implemented_rules_string,
-    instances_to_string, justify_to_string, materialize_to_nquads_string, profile_to_string,
-    realize_to_string, rules_string,
+    check_inconsistent_refusal, check_regime_golden_vectors, classify_to_string,
+    consistency_to_string, entails_to_string, explain_conclusion_to_string,
+    extract_module_to_string, implemented_rules_string, instances_to_string, justify_to_string,
+    materialize_to_nquads_string, profile_to_string, realize_to_string, rules_string,
 };
 use wasm_bindgen::prelude::*;
 
@@ -185,6 +185,23 @@ pub fn entail_implemented_rules(regime: &str) -> Result<Vec<String>, JsError> {
 #[wasm_bindgen(js_name = entailCheckGoldenVectors)]
 pub fn entail_check_golden_vectors() -> Result<(), JsError> {
     check_regime_golden_vectors().map_err(|e| JsError::new(&e))
+}
+
+/// `entailCheckInconsistentRefusal()` — prove that an INCONSISTENT input is refused
+/// with its certificate and its witness triples, and throw if it is not.
+///
+/// The companion to [`entail_check_golden_vectors`], and the path that artifact cannot
+/// cover: an inconsistent knowledge base has no closure, so there is nothing to pair an
+/// input with, and the only channel the evidence has is the thrown error's message. That
+/// makes it exactly the path on which a host quietly drops the report — as every host but
+/// the command line once did, leaving `inconsistency` a constant `none`.
+///
+/// The C-ABI crate's Rust test and the `purrdf-validate` Rust test call the SAME checker.
+///
+/// Throws naming the fragment the refusal failed to carry, with the refusal verbatim.
+#[wasm_bindgen(js_name = entailCheckInconsistentRefusal)]
+pub fn entail_check_inconsistent_refusal() -> Result<(), JsError> {
+    check_inconsistent_refusal().map_err(|e| JsError::new(&e))
 }
 
 // ── The Description-Logic reasoning services ────────────────────────────────
@@ -504,6 +521,17 @@ mod tests {
         check_regime_golden_vectors().expect("the regime golden vector");
     }
 
+    /// The other tri-host assertion, made from THIS crate: an inconsistent input is
+    /// refused WITH its certificate and its witness triples.
+    ///
+    /// The wasm half is `entailCheckInconsistentRefusal`. A refusal has no closure, so it
+    /// cannot be a golden-vector case — and it is exactly the path on which a host is most
+    /// likely to drop the evidence, because the only channel it has is the error string.
+    #[test]
+    fn an_inconsistent_input_is_refused_with_its_report_natively() {
+        check_inconsistent_refusal().expect("the inconsistent refusal");
+    }
+
     #[test]
     fn materialize_infers_and_reports() {
         let closed = materialize_impl(SCHEMA, "rdfs", "").expect("rdfs closure");
@@ -520,11 +548,13 @@ mod tests {
         // Asserted as the invariant rather than as a `sound-incomplete <n>`
         // literal: the count moves every time a rule lands, the honesty gate does
         // not, and a `boundary` line outlives a rule table going complete.
-        assert!(closed.report().starts_with("purrdf-reasoning-report 1\n"));
+        assert!(closed.report().starts_with("purrdf-reasoning-report 2\n"));
         assert!(closed.report().contains("\nregime rdfs\n"));
         assert!(closed.report().contains("\ncompleteness "));
         assert!(closed.report().contains("\nboundary "));
-        assert!(closed.report().ends_with("overclaims false\n"));
+        // The four existential rules' only observable, and it reaches WASM now.
+        assert!(closed.report().contains("\nwithheld-surrogates "));
+        assert!(closed.report().ends_with("inconsistency none\n"));
     }
 
     #[test]
@@ -673,7 +703,7 @@ mod tests {
         );
         assert!(tableau.certificate().contains("\ncompleteness decided\n"));
         let chase = materialize_impl(TAXONOMY, "owl-rl", "").expect("owl-rl");
-        assert!(chase.report().starts_with("purrdf-reasoning-report 1\n"));
+        assert!(chase.report().starts_with("purrdf-reasoning-report 2\n"));
         assert!(!chase.report().contains("completeness decided"));
     }
 

@@ -5,7 +5,8 @@
 //
 // The wasm-bindgen-generated classes (DataFactory/Dataset/Quad/Sink/Term) and the
 // free functions (version, shaclValidateToSarif, shaclEntail, entailMaterialize,
-// entailRules, entailImplementedRules, entailCheckGoldenVectors) are re-exported as-is —
+// entailRules, entailImplementedRules, entailCheckGoldenVectors,
+// entailCheckInconsistentRefusal) are re-exported as-is —
 // the whole `#[wasm_bindgen]` surface is reachable from the package root, so
 // SHACL validation/entailment and Dataset.canonicalize()/isomorphic() need no deep
 // `./pkg/` import. This wrapper adds the isomorphic glue that the synchronous
@@ -24,6 +25,7 @@ import init, {
   DataFactory,
   Dataset,
   entailCheckGoldenVectors,
+  entailCheckInconsistentRefusal,
   entailImplementedRules,
   entailMaterialize,
   entailRules,
@@ -342,6 +344,7 @@ export {
   DataFactory,
   Dataset,
   entailCheckGoldenVectors,
+  entailCheckInconsistentRefusal,
   entailImplementedRules,
   entailMaterialize,
   entailRules,

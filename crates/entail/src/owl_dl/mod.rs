@@ -645,13 +645,9 @@ mod boundary_tests {
 
         // …and the boundary reaches the caller, with the completeness narrowed to match.
         let (_, report) = materialize_dl_reported(&ds, &[] as &[QTriple]).expect("consistent");
-        assert!(
-            !report.overclaims(),
-            "a boundary beside `exact` is an overclaim"
-        );
         assert_eq!(
             report.completeness(),
-            &Completeness::ExactWithinBoundaries,
+            Completeness::ExactWithinBoundaries,
             "a run that met a boundary is not exact"
         );
         let constructs: Vec<Construct> = report

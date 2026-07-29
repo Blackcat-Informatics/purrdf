@@ -177,7 +177,7 @@ def test_base_triples_survive_the_closure() -> None:
 def test_report_names_the_rules_that_fired() -> None:
     """The report is not optional and says what the run actually did."""
     _closure, report = entail.materialize(_dataset(), entail.Regime.OWL_RL, "")
-    assert report.startswith("purrdf-reasoning-report 1\n")
+    assert report.startswith("purrdf-reasoning-report 2\n")
     assert "\nregime owl-rl\n" in report
     # The conclusion counts are the engine's to report, so only the fact that
     # these two rules ran is asserted here — the counts live in the Rust golden
@@ -185,7 +185,7 @@ def test_report_names_the_rules_that_fired() -> None:
     assert "\nfired cax-sco " in report
     assert "\nfired prp-symp " in report
     assert "\ncontract-hash " in report
-    assert report.endswith("overclaims false\n")
+    assert report.endswith("inconsistency none\n")
 
 
 # ── The two entry points are one path ───────────────────────────────────────────
@@ -250,8 +250,8 @@ def test_every_regime_member_materializes(regime: entail.Regime, program: str) -
     assert isinstance(entail.implemented_rules(regime), list)
     closure, report = entail.materialize(_dataset(), regime, program)
     assert closure.quad_count() >= 4
-    assert report.startswith("purrdf-reasoning-report 1\n")
-    assert report.endswith("overclaims false\n")
+    assert report.startswith("purrdf-reasoning-report 2\n")
+    assert report.endswith("inconsistency none\n")
     # …and the text path agrees, byte for byte, on the same regime and program.
     text_closure, text_report = entail.materialize_nt(SCHEMA, regime, program)
     assert text_closure == closure.to_nquads()
@@ -496,3 +496,87 @@ def test_the_golden_vector_matches_through_python(case: dict[str, str]) -> None:
     )
     assert closure == case["closure"]
     assert report == case["report"]
+
+
+# ── The two things the report could not say from Python ─────────────────────────
+
+OWL_DISJOINT_WITH = "http://www.w3.org/2002/07/owl#disjointWith"
+
+# Two disjoint classes and one instance of both: OWL 2 RL's `cax-dw`, whose three
+# premises are exactly these three triples, in this order.
+INCONSISTENT = (
+    f"<https://example.org/A> <{OWL_DISJOINT_WITH}> <https://example.org/B> .\n"
+    f"<https://example.org/x> <{RDF_TYPE}> <https://example.org/A> .\n"
+    f"<https://example.org/x> <{RDF_TYPE}> <https://example.org/B> .\n"
+)
+
+
+def test_the_withheld_surrogate_count_is_visible_from_python() -> None:
+    """`rdfD1`, `rdfD1a`, `rdfs14` and `rdfs14a` have exactly one observable, and it
+    reaches Python.
+
+    All four fire, and every conclusion they reach mentions a blank node the chase
+    minted — which a SPARQL entailment regime may not answer with, because its
+    answers are drawn from the scoping graph. So none of them can ever appear in a
+    `fired` line, and this count is the only evidence they ran at all. It used to
+    be emitted by the CLI's own renderer alone, so from Python the four rules were
+    invisible: the `boundary surrogate` paragraph said its conclusions were
+    "counted here" and pointed at a number that was not in the string.
+    """
+    def withheld(regime: entail.Regime) -> int:
+        _closure, report = entail.materialize_nt(SCHEMA, regime, "")
+        for line in report.splitlines():
+            if line.startswith("withheld-surrogates "):
+                return int(line.removeprefix("withheld-surrogates "))
+        raise AssertionError(f"no withheld-surrogates line:\n{report}")
+
+    # RDFS states all four existential rules, and withholds what they conclude.
+    assert withheld(entail.Regime.RDFS) > 0
+    # OWL 2 RL states none of them, so there is nothing to withhold; the identity
+    # closure evaluates nothing at all. Both are facts about the LANE, which is what
+    # makes the RDFS number a measurement rather than a constant.
+    assert withheld(entail.Regime.OWL_RL) == 0
+    assert withheld(entail.Regime.SIMPLE) == 0
+
+
+def test_an_inconsistent_run_raises_with_its_report_and_witness_triples() -> None:
+    """An inconsistent knowledge base has no closure — and still has a run.
+
+    The refusal used to be a `Display` one-liner that read only the premise COUNT,
+    so the caller whose data was bad was the only caller who got no report at all
+    and `inconsistency` was the constant `none` on every host. The message now
+    carries the whole certificate: the rule that refused, the graph whose closure
+    refused, and the asserted triples that satisfied the rule in that rule's own
+    premise order.
+    """
+    with pytest.raises(ValueError) as raised:
+        entail.materialize_nt(INCONSISTENT, entail.Regime.OWL_RL, "")
+    message = str(raised.value)
+
+    assert "cax-dw was satisfied by 3 asserted triples" in message
+    # The certificate begins at the banner, so a caller splits there rather than
+    # parsing prose.
+    banner = "purrdf-reasoning-report 2\n"
+    assert banner in message
+    report = message[message.index(banner) :]
+    assert report.startswith(f"{banner}regime owl-rl\n")
+    assert "\ninconsistency cax-dw premises 3\n" in report
+    assert "\ninconsistency-graph default\n" in report
+    assert (
+        f"\ninconsistency-premise <https://example.org/A> <{OWL_DISJOINT_WITH}> "
+        "<https://example.org/B>\n"
+    ) in report
+    assert report.count("\ninconsistency-premise ") == 3
+    # The run is DESCRIBED, not merely refused: it cost a budget and named a calculus.
+    assert "\nbudget join-steps " in report
+    assert "\ncontract-hash " in report
+
+
+def test_the_dataset_path_refuses_an_inconsistent_run_the_same_way() -> None:
+    """The parsed-dataset entry point carries the same evidence as the text one."""
+    dataset = _dataset(INCONSISTENT)
+    with pytest.raises(ValueError) as raised:
+        entail.materialize(dataset, entail.Regime.OWL_RL, "")
+    message = str(raised.value)
+    assert "purrdf-reasoning-report 2\n" in message
+    assert message.count("\ninconsistency-premise ") == 3

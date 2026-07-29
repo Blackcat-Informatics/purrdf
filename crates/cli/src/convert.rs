@@ -28,7 +28,6 @@
 use std::sync::Arc;
 
 use purrdf_core::{DatasetView, LossLedger, RdfDataset, verify_pack};
-use purrdf_entail::materialize;
 use purrdf_rdf::JsonLdSerializeOptions;
 use purrdf_rdf::canonical_flat_nquads;
 
@@ -180,9 +179,7 @@ fn run_with_transforms(
             let plan = reason::EntailmentPlan::resolve(regime, options.rules)?;
             // The closure is what gets serialized; the report is what `--report` carries,
             // so a converted document can be traced back to the run that derived it.
-            let (closure, reasoning) = materialize(&dataset, plan.materialization())?;
-            report::surface(report_target, &reasoning)?;
-            closure
+            report::materialize_reported(&dataset, plan.materialization(), report_target)?
         }
         None => dataset,
     };

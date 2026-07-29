@@ -59,7 +59,7 @@ use purrdf_validate::regime::{
     explain_conclusion_to_string, extract_module_to_string, implemented_rules_string,
     instances_to_string, justify_to_string, materialize_to_nquads_string, parse_regime,
     profile_to_string, realize_to_string, regime_name, regime_plan, regime_rule_set,
-    render_reasoning_report, rules_string,
+    render_entail_error, render_reasoning_report, rules_string,
 };
 
 use crate::entail::{Regime, materialize as materialize_closure};
@@ -169,8 +169,25 @@ fn native_regime(regime: &Bound<'_, PyAny>) -> PyResult<Regime> {
 /// all four hosts, so one call shape works from the command line, through the C ABI,
 /// through WASM and from Python.
 ///
+/// # An INCONSISTENT knowledge base raises WITH its certificate
+///
+/// An inconsistent knowledge base entails every triple, so there is no closure to return
+/// — but there WAS a run, and it is described. The `ValueError` message carries the
+/// one-line refusal and then the full rendered report on the following lines, whose first
+/// line is `purrdf_validate`'s report banner: the rule that refused, the graph whose
+/// closure refused, the asserted triples that satisfied the rule in that rule's own
+/// premise order (`inconsistency-premise` lines), the rules that had already fired, the
+/// budget the evaluation had consumed and the calculus hash. Splitting the message at the
+/// banner line yields exactly the report a successful call returns.
+///
+/// It travels in the message because a raise is the only channel a refusal has, and the
+/// alternative was what this surface used to do: render `Display` alone, which reads only
+/// the premise COUNT, so the caller whose data was bad was the only caller who got no
+/// report at all.
+///
 /// Raises `ValueError` for an unknown regime spelling (naming the accepted set), for a
-/// `program` that is wrong for the regime, and for an exhausted evaluation ceiling.
+/// `program` that is wrong for the regime, for an inconsistent knowledge base, and for an
+/// exhausted evaluation ceiling.
 #[pyfunction]
 #[pyo3(signature = (dataset, regime, program))]
 fn materialize(
@@ -193,7 +210,7 @@ fn materialize(
             // by the same regime spelling.
             let rules = regime_rule_set(native, name, program)?;
             let (closure, report) = materialize_closure(data.as_ref(), regime_plan(native, &rules))
-                .map_err(|error| format!("entailment regime \"{name}\": {error}"))?;
+                .map_err(|error| render_entail_error(name, &error))?;
             Ok::<_, String>((closure, render_reasoning_report(&report)))
         })
         .map_err(PyValueError::new_err)?;
@@ -216,7 +233,9 @@ fn materialize(
 /// `program` is the regime's own rule document, exactly as on [`materialize`].
 ///
 /// Raises `ValueError` on a malformed document, an unknown regime spelling
-/// (naming the accepted set), or a `program` that is wrong for the regime.
+/// (naming the accepted set), or a `program` that is wrong for the regime — and on an
+/// INCONSISTENT knowledge base, whose raise carries the run's full rendered report,
+/// witness triples included, exactly as [`materialize`] documents.
 #[pyfunction]
 #[pyo3(signature = (data, regime, program))]
 fn materialize_nt(

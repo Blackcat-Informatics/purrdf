@@ -34,8 +34,8 @@
 //! # Fixture inputs are Rust, not data files
 //!
 //! There is no N-Quads *parser* in this crate's dependency set — parsers live in
-//! `purrdf-rdf`, which `purrdf-entail` does not depend on and, under this branch's
-//! constraints, may not — so a fixture is declared as a small table of [`Quad`] values and
+//! `purrdf-rdf`, which `purrdf-entail` does not depend on and, being the lower crate of the
+//! two, may not — so a fixture is declared as a small table of [`Quad`] values and
 //! built with `RdfDatasetBuilder`. The input's canonical N-Quads form is nevertheless
 //! written into the golden, so the fixture a golden was captured from is itself pinned and
 //! readable; editing a fixture table without regenerating fails the gate.
@@ -5674,7 +5674,18 @@ fn render_report(out: &mut String, report: &ReasoningReport) {
             .inconsistency()
             .map_or_else(|| "none".to_owned(), |w| w.rule().as_str().to_owned())
     );
-    let _ = writeln!(out, "{indent}overclaims: {}", report.overclaims());
+    // DERIVED HERE, not read off the report. `ReasoningReport` carries no completeness
+    // field to contradict its boundary list — `ReasoningReport::completeness` computes the
+    // value from that list — so the crate ships no `overclaims` predicate and no gate over
+    // one. What this line is worth is what a golden is always worth: it PINS the reading of
+    // the two lines above it across every fixture and every lane, so a change to
+    // `Completeness::for_run` that started calling a bounded run `exact` would move thirty
+    // artifacts rather than pass quietly.
+    let _ = writeln!(
+        out,
+        "{indent}overclaims: {}",
+        report.completeness() == Completeness::Exact && !report.boundaries().is_empty()
+    );
 }
 
 /// Append `lines` as `#`-prefixed header comment lines, with a bare `#` for a blank.
@@ -8033,7 +8044,6 @@ fn a_would_be_literal_subject_is_abandoned_and_reported() {
                 .any(|b| b.construct().as_str() == "generalized-rdf"),
             "{regime:?}: the abandoned conclusion must be reported, not silently dropped"
         );
-        assert!(!report.overclaims(), "{regime:?}");
     }
 }
 
@@ -8499,18 +8509,22 @@ fn every_rule_the_chase_fires_is_credited_somewhere_in_the_corpus() {
     }
 }
 
-/// No run over this corpus ever overclaims — `Exact` while naming a boundary.
+/// No run over this corpus says `Exact` while naming a boundary.
 ///
-/// The crate's unit tests make this claim over their own fixtures; making it again over
-/// every fixture here is cheap and widens the evidence to the awkward cases.
+/// A property of [`Completeness::for_run`], which is what
+/// `ReasoningReport::completeness` derives every report's completeness with — so this is
+/// a test of that derivation rather than of a stored field, and it stays worth running
+/// even though no constructor can produce the contradiction. The crate's unit tests make
+/// the claim over their own fixtures; making it again over every fixture here is cheap and
+/// widens the evidence to the awkward cases.
 #[test]
-fn no_report_over_the_corpus_overclaims() {
+fn no_report_over_the_corpus_says_exact_beside_a_boundary() {
     for fixture in CORPUS {
         let ds = build(fixture);
         for (plan, name) in ORACLE_REGIMES {
             let (_, report) = materialize(&ds, plan).expect("runnable regime");
             assert!(
-                !report.overclaims(),
+                report.completeness() != Completeness::Exact || report.boundaries().is_empty(),
                 "{}/{name}: Exact alongside {:?}",
                 fixture.name,
                 report.boundaries()

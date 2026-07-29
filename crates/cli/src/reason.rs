@@ -12,7 +12,8 @@
 //! `materialize` runs means an unresolvable output format fails fast, not after
 //! the source has already been loaded and closed over. The resulting loss ledger
 //! is surfaced under `--loss-ledger`, and the run's reasoning report under
-//! `--report`.
+//! `--report` — on the refusal path as well as the success path, because an
+//! inconsistent knowledge base has no closure and still had a run.
 //!
 //! # Every regime materializes here
 //!
@@ -24,7 +25,7 @@
 
 use std::path::Path;
 
-use purrdf_entail::{Materialization, Regime, RuleSet, materialize, parse_rif_xml};
+use purrdf_entail::{Materialization, Regime, RuleSet, parse_rif_xml};
 use purrdf_rdf::JsonLdSerializeOptions;
 
 use crate::cli::{CliRdfFormat, CliRegime, LedgerTarget, ReportTarget};
@@ -152,8 +153,9 @@ pub(crate) fn run(
 
     // The closure goes to the sink and the report goes to `--report`: `reason` writes RDF,
     // and the evidence of what produced it is a second output rather than a discarded one.
-    let (closure, reasoning) = materialize(&dataset, plan.materialization())?;
-    report::surface(report_target, &reasoning)?;
+    // An INCONSISTENT input has no closure and still gets its report written — see
+    // `report::materialize_reported`.
+    let closure = report::materialize_reported(&dataset, plan.materialization(), report_target)?;
 
     let src_codec = source_format.loss_codec_name();
     let ledger = sink::write_rdf(

@@ -72,7 +72,7 @@ fn the_umbrella_names_every_type_the_reasoning_surface_carries() {
     assert!(budget.join_steps() > 0);
 
     // ── the `purrdf-entail` types alongside them ───────────────────────────
-    let completeness: &Completeness = report.completeness();
+    let completeness: Completeness = report.completeness();
     let missing: &[RuleId] = completeness.missing();
     let fired: &[(RuleId, u64)] = report.rules_fired();
     assert!(!fired.is_empty(), "rdfs9 fires on this schema");

@@ -877,16 +877,16 @@ mod tests {
     /// The `RDFS` lane's, moved for the same reason with `rdfs14` and `rdfs14a` besides.
     const PINNED_RDFS_HASH: &str =
         "f6a5eff90528f49ba8d3b83ae7feac8e3b71586f320fb478c6ddb60ca6dc979e";
-    /// The `OWL-RL` lane's. It moved on this branch WITHOUT any OWL 2 RL rule changing,
-    /// and the reason is worth stating rather than hiding: a rule that concludes `false` is
-    /// lowered into a clause whose head names a clash marker built from the rule's
-    /// DECLARATION INDEX, and declaring `rdfD1` and `rdfD1a` ahead of `rdfD2` — which is
-    /// where RDF 1.2 Semantics §8.1.1 puts them — renumbers every rule after them. So the
-    /// seventeen markers moved, the clauses that carry them moved, and the digest moved
-    /// with them. Nothing this lane concludes changed, and that is exactly the case the
-    /// digest is allowed to be conservative about: a consumer refusing a cached closure it
-    /// could have kept is a cost, whereas trusting one minted under a different rule set is
-    /// a defect.
+    /// The `OWL-RL` lane's. This digest answers to the calculus's DECLARATION ORDER and
+    /// not only to what the lane concludes, which is worth stating rather than leaving to
+    /// be rediscovered: a rule whose conclusion is `false` is lowered into a clause whose
+    /// head names a clash marker built from the rule's DECLARATION INDEX (see
+    /// [`clash_marker`]), so inserting a rule anywhere — including in a family this lane
+    /// does not fire, such as an RDF pattern ahead of `rdfD2` — renumbers every rule after
+    /// it, rewrites the seventeen markers, and moves this digest even though the lane's
+    /// conclusions are unchanged. That is the direction the digest is allowed to be
+    /// conservative in: a consumer refusing a cached closure it could have kept is a cost,
+    /// whereas trusting one minted under a different rule set is a defect.
     const PINNED_OWL_RL_HASH: &str =
         "61a9a84001b40b06a8dfe4b38e331ca1943893cbd191b272d6ffead048fa2de0";
     /// The `D` lane's, moved by the same renumbering — `dt-not-type` is a constraint too.

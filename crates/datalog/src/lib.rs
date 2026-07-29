@@ -42,12 +42,18 @@
 //! are built from:
 //!
 //! - [`id`] — branded niche IDs, so a term handle can never be passed where a
-//!   predicate handle is expected.
-//! - [`arena`] — the phase-scoped row/tuple bump arena, reset at every round
-//!   boundary.
-//! - [`bitset`] — the dense round-delta membership bitset over row ids.
+//!   predicate handle is expected. A [`RowId`](id::RowId) is dense and minted in
+//!   store-wide insertion order, which is what lets the fixpoint address a round's
+//!   committed rows as a RANGE rather than as a set — see [`seminaive`] below.
 //! - [`binding_pattern`] — the arity-generic adornment lattice shared by demand
 //!   keying and index selection.
+//!
+//! There is no separate row arena and no delta membership set, because this
+//! evaluator's shapes need neither. A body row is the fixed arity-4 quad carried in
+//! a `Copy` struct and a rule's bindings are a flat frame indexed by plan slot, so
+//! no variable-arity tuple is ever allocated; and the round delta is a contiguous
+//! `[lo, hi)` span of row ids, so membership is one range compare rather than a
+//! word test over an allocated bitmap.
 //!
 //! # The relation store and its cursors
 //!
@@ -140,9 +146,7 @@
 //! reachability of a cycle, the same-generation pairs of a two-level tree — asserted by
 //! exact set equality against a golden built by construction rather than by an engine.
 
-pub mod arena;
 pub mod binding_pattern;
-pub mod bitset;
 pub mod cache;
 pub mod chase;
 pub mod clause;

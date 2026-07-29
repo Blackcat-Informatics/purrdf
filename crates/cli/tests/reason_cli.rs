@@ -673,7 +673,8 @@ fn configured_jsonld_options_reach_reason_output() {
 /// even when `OUT` is `-`. Every line asserted here is evidence the operator could not
 /// obtain before: which regime ran, which rules fired and how many conclusions each
 /// contributed, which constructs the run could not fully handle and WHY, what it cost, the
-/// contract hash of the calculus, and the overclaim verdict.
+/// contract hash of the calculus, the count of the conclusions it WITHHELD, and whether the
+/// seventeen `false`-headed rules found anything.
 #[test]
 fn report_bare_writes_the_certificate_to_stderr() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -703,8 +704,10 @@ fn report_bare_writes_the_certificate_to_stderr() {
     assert!(err.contains("\nbudget join-steps "), "{err}");
     assert!(err.contains("\ncontract-hash "), "{err}");
     assert!(err.contains("\nwithheld-surrogates "), "{err}");
-    assert!(err.contains("\ninconsistency none\n"), "{err}");
-    assert!(err.ends_with("overclaims false\n"), "{err}");
+    assert!(err.ends_with("inconsistency none\n"), "{err}");
+    // The SHARED renderer's banner. Its presence is what says the CLI stopped keeping a
+    // private renderer of its own, whose grammar nothing compared against this one.
+    assert!(err.starts_with("purrdf-reasoning-report 2\n"), "{err}");
 
     // stdout carried no report: the data channel is untouched.
     assert!(String::from_utf8_lossy(&o.stdout).is_empty());
@@ -741,7 +744,67 @@ fn report_to_a_path_is_byte_identical_across_runs() {
     }
     let a = std::fs::read(&first).expect("read first report");
     assert_eq!(a, std::fs::read(&second).expect("read second report"));
-    assert!(String::from_utf8_lossy(&a).starts_with("regime rdfs\n"));
+    assert!(String::from_utf8_lossy(&a).starts_with("purrdf-reasoning-report 2\nregime rdfs\n"));
+}
+
+/// AN INCONSISTENT INPUT STILL WRITES ITS REPORT, and the report names the witness.
+///
+/// The refusal used to produce an exit code and a one-line message: `--report` wrote
+/// nothing at all, so the one operator who most needed the certificate — which rule
+/// refused, on which triples, after how much work — was the only one who got none of it.
+#[test]
+fn an_inconsistent_run_writes_the_report_and_still_fails() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "clash.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+            "ex:A owl:disjointWith ex:B .\n",
+            "ex:x a ex:A .\n",
+            "ex:x a ex:B .\n",
+        ),
+    );
+    let out = path(dir, "out.nt");
+    let report = path(dir, "clash.report");
+    let flag = format!("--report={report}");
+
+    let o = run(&["reason", "--regime", "owl-rl", &flag, &seed, &out]);
+    assert!(!o.status.success(), "an inconsistent KB has no closure");
+    assert!(stderr(&o).contains("cax-dw"), "{}", stderr(&o));
+
+    let written = std::fs::read_to_string(&report).expect("--report was written anyway");
+    assert!(
+        written.starts_with("purrdf-reasoning-report 2\nregime owl-rl\n"),
+        "{written}"
+    );
+    assert!(
+        written.contains("\ninconsistency cax-dw premises 3\n"),
+        "{written}"
+    );
+    assert!(
+        written.contains("\ninconsistency-graph default\n"),
+        "{written}"
+    );
+    // The three asserted triples that satisfied the rule, in the rule's premise order.
+    assert!(
+        written.contains(
+            "\ninconsistency-premise <http://example.org/A> \
+             <http://www.w3.org/2002/07/owl#disjointWith> <http://example.org/B>\n"
+        ),
+        "{written}"
+    );
+    assert_eq!(
+        written.matches("\ninconsistency-premise ").count(),
+        3,
+        "{written}"
+    );
+    // The run is described rather than merely refused: it cost a budget and named a
+    // calculus before it stopped.
+    assert!(written.contains("\nbudget join-steps "), "{written}");
+    assert!(written.contains("\ncontract-hash "), "{written}");
 }
 
 /// A NAMED GRAPH IS NAMED IN THE REPORT, not silently reasoned around.

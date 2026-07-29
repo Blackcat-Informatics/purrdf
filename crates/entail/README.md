@@ -56,15 +56,17 @@ difference is the gap, and it is also what a `ReasoningReport` reports as
 | Regime | Rule table | Defined | Implemented |
 | --- | --- | ---: | ---: |
 | `Simple` | — (identity closure) | 0 | 0 |
-| `RDF` | RDF 1.2 Semantics §8.1.1 | 3 | 1 |
-| `RDFS` | RDF 1.2 Semantics §8.1.1 + §9.2.1 | 18 | 14 |
+| `RDF` | RDF 1.2 Semantics §8.1.1 | 3 | 3 |
+| `RDFS` | RDF 1.2 Semantics §8.1.1 + §9.2.1 | 18 | 18 |
 | `OWL-RL` | OWL 2 Profiles §4.3 Tables 4–9 | 78 | 78 |
 | `D` | OWL 2 Profiles §4.3 Table 8 | 5 | 5 |
+| `OWL-Direct` | — (ALCOIQ tableau, not a fixed table) | 0 | 0 |
+| `RIF` | — (caller-supplied rule set) | 0 | 0 |
 
 The per-rule table is generated from this crate's own API and drift-guarded:
 [`docs/book/src/entailment-rules.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/book/src/entailment-rules.md).
 
-Two bounds are stated rather than papered over:
+Three bounds are stated rather than papered over:
 
 * **The four existential rules fire, and their conclusions are withheld.**
   `rdfD1`, `rdfD1a`, `rdfs14` and `rdfs14a` each conclude about a *fresh* blank

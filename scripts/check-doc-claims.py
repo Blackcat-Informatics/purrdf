@@ -26,6 +26,18 @@ claim that no longer matches its source is a hard failure naming both values;
 a claim whose sentence can no longer be found is *also* a hard failure, so
 rewording a row silently drops nothing.
 
+Two of the checks DISCOVER what they cover instead of naming it, because a guard
+that names its own scope only guards what someone remembered to register:
+
+  * every rule-coverage table is found by the table's own header row
+    (``rule_coverage_table_claims``), wherever it is published;
+  * the Python reasoner service table is checked against the set of services the
+    type stub declares (``py_service_table_claim``), not against a count.
+
+Both generalizations are load-bearing: ``crates/entail/README.md`` published
+``RDF 3 | 1`` and ``RDFS 18 | 14`` while this script read only the book chapter
+and printed that every claim agreed.
+
 It is pure text-over-committed-files: no cargo, no network, no test run. The
 expensive gates prove the generated artifacts are current; this one proves the
 prose agrees with them. Run standalone, or as part of
@@ -50,10 +62,17 @@ _README = _REPO / "README.md"
 # crates.io on their own, so a reader may meet the number there and nowhere else;
 # each therefore carries the qualifier, and each is gated here. This script did
 # not cover crate READMEs before, which is how all three came to state rule-table
-# coverage as though it were entailment conformance.
+# coverage as though it were entailment conformance. Their rule-COVERAGE tables
+# need no entry: those are discovered by header row, not by path.
 _ENTAIL_README = _REPO / "crates" / "entail" / "README.md"
 _PURRDF_README = _REPO / "crates" / "purrdf" / "README.md"
 _CLI_README = _REPO / "crates" / "cli" / "README.md"
+# The PyPI front page. It is the highest-traffic non-Rust surface and states the
+# rule-table numbers, the OWL 2 RL lane split, and the reasoner's service set;
+# none of it was gated here, which is how it came to claim four missing RDFS
+# rules and a refusal for two regimes that both materialize.
+_PY_README = _REPO / "bindings" / "python" / "README.md"
+_PY_STUB = _REPO / "bindings" / "python" / "python" / "src" / "purrdf" / "__init__.pyi"
 _RELEASE = _REPO / "docs" / "RELEASE.md"
 _RELEASE_CRATES = _REPO / "scripts" / "release-crates.sh"
 
@@ -381,45 +400,181 @@ class Claim:
         return ok
 
 
-def rule_coverage_table_claim(inventory: dict[str, tuple[int, int]]) -> list[str]:
-    """The hand-written 'Rule coverage' table in the entailment chapter.
+# The header row of a hand-written rule-coverage table. Documents are found by
+# THIS, not by a heading and not by a hard-coded path list: a coverage table
+# cannot exist without its own header, so renaming the section above it (or
+# adding a table to a crate README nobody remembered to register here) cannot
+# drop the check. That generality is not decorative — `crates/entail/README.md`
+# stated `RDF 3 | 1` and `RDFS 18 | 14` for as long as this function read only
+# `docs/book/src/entailment.md`, while the script printed that every claim agreed.
+_COVERAGE_HEADER = "| Regime | Rule table | Defined | Implemented |"
+
+# Where a coverage table may live: the book, the published crate READMEs, the
+# binding READMEs, and the repository front page. Every `.md` under `docs/` is
+# swept, so a new chapter is covered without an edit here.
+def _coverage_candidates() -> list[Path]:
+    return sorted(
+        {
+            _REPO / "README.md",
+            *(_REPO / "crates").glob("*/README.md"),
+            *(_REPO / "bindings").glob("*/README.md"),
+            *(_REPO / "docs").rglob("*.md"),
+        }
+    )
+
+
+def rule_coverage_documents() -> list[Path]:
+    """Every in-tree document that restates the generated rule-coverage table."""
+    found = [
+        path
+        for path in _coverage_candidates()
+        if path.is_file() and _COVERAGE_HEADER in _read(path)
+    ]
+    if not found:
+        raise SystemExit(
+            f"check-doc-claims: no document carries the rule-coverage header "
+            f"{_COVERAGE_HEADER!r}. Either every coverage table was deleted or "
+            f"the header was reworded; update _COVERAGE_HEADER rather than "
+            f"leaving the tables ungated."
+        )
+    return found
+
+
+def _coverage_tables(text: str) -> list[dict[str, tuple[int, int]]]:
+    """Every ``regime -> (defined, implemented)`` table in one document.
+
+    A table starts at ``_COVERAGE_HEADER`` and runs to the first line that is not
+    a table row, so the alignment row is skipped and trailing prose ends it.
+    """
+    lines = text.splitlines()
+    tables: list[dict[str, tuple[int, int]]] = []
+    for index, line in enumerate(lines):
+        if line.strip() != _COVERAGE_HEADER:
+            continue
+        rows: dict[str, tuple[int, int]] = {}
+        for row in lines[index + 1 :]:
+            if not row.startswith("|"):
+                break
+            match = re.match(
+                r"^\| `([A-Za-z-]+)` \| [^|]* \| (\d+) \| (\d+) \|$", row
+            )
+            if match:
+                rows[match.group(1)] = (int(match.group(2)), int(match.group(3)))
+        tables.append(rows)
+    return tables
+
+
+def rule_coverage_table_claims(
+    inventory: dict[str, tuple[int, int]],
+) -> tuple[list[str], int]:
+    """Every hand-written 'Rule coverage' table, wherever it is published.
 
     Checked structurally rather than by regex: the SET of regimes must match the
-    inventory too, so a regime added to ``Regime`` cannot be quietly omitted
-    from the chapter, and one deleted cannot linger.
+    inventory too, so a regime added to ``Regime`` cannot be quietly omitted from
+    a table, and one deleted cannot linger. Returns the problems and the number
+    of tables checked, so the script's claim count reports what it really read.
     """
-    text = _read(_ENTAILMENT)
-    rel = _ENTAILMENT.relative_to(_REPO)
-    section = re.search(r"## Rule coverage\n(.*?)(?:\n## |\Z)", text, re.DOTALL)
-    if not section:
-        return [f"{rel}: no '## Rule coverage' section — the coverage table is gone"]
-    rows = re.findall(
-        r"^\| `([A-Za-z-]+)` \| [^|]* \| (\d+) \| (\d+) \|$",
-        section.group(1),
-        re.MULTILINE,
-    )
-    documented = {name: (int(d), int(i)) for name, d, i in rows}
     problems: list[str] = []
-    for name in sorted(set(inventory) - set(documented)):
-        problems.append(
-            f"{rel}: the Rule coverage table has no row for regime `{name}`, "
-            f"which docs/book/src/entailment-rules.md defines"
+    checked = 0
+    for path in rule_coverage_documents():
+        rel = path.relative_to(_REPO)
+        tables = _coverage_tables(_read(path))
+        for table in tables:
+            checked += 1
+            if not table:
+                problems.append(
+                    f"{rel}: a rule-coverage table's rows could not be parsed — "
+                    f"every row must read ``| `Regime` | table | defined | "
+                    f"implemented |``"
+                )
+                continue
+            for name in sorted(set(inventory) - set(table)):
+                problems.append(
+                    f"{rel}: the Rule coverage table has no row for regime "
+                    f"`{name}`, which docs/book/src/entailment-rules.md defines"
+                )
+            for name in sorted(set(table) - set(inventory)):
+                problems.append(
+                    f"{rel}: the Rule coverage table has a row for regime "
+                    f"`{name}`, which docs/book/src/entailment-rules.md does not "
+                    f"define"
+                )
+            for name in sorted(set(table) & set(inventory)):
+                if table[name] != inventory[name]:
+                    d_def, d_impl = table[name]
+                    g_def, g_impl = inventory[name]
+                    problems.append(
+                        f"{rel}: Rule coverage row `{name}` documents "
+                        f"{d_def} defined / {d_impl} implemented, but "
+                        f"rules()/implemented() report {g_def} / {g_impl} "
+                        f"(docs/book/src/entailment-rules.md)"
+                    )
+    return problems, checked
+
+
+# The `purrdf.entail` entry points that are the CHASE lane rather than the OWL 2
+# Direct-Semantics reasoner. Everything else the type stub declares on
+# `class entail` is a reasoning service, and the Python README documents each one
+# in its service table. Mirrors the stub's own two-block layout.
+_CHASE_ENTRY_POINTS = frozenset(
+    {"materialize", "materialize_nt", "rules", "implemented_rules"}
+)
+
+
+def load_py_entail_services() -> list[str]:
+    """Every Description-Logic service `purrdf.entail` declares, from the stub.
+
+    ``bindings/python/python/src/purrdf/__init__.pyi`` is the committed, typed
+    declaration of the Python surface — the artifact mypy checks call sites
+    against — so it is what "reachable from Python" means in-tree. Reading the
+    stub keeps this script text-over-committed-files: no import of a built wheel.
+    """
+    text = _read(_PY_STUB)
+    body = re.search(r"\nclass entail:\n(.*?)(?:\n\S|\Z)", text, re.DOTALL)
+    if not body:
+        raise SystemExit(
+            f"check-doc-claims: no `class entail:` block in "
+            f"{_PY_STUB.relative_to(_REPO)}"
         )
-    for name in sorted(set(documented) - set(inventory)):
-        problems.append(
-            f"{rel}: the Rule coverage table has a row for regime `{name}`, "
-            f"which docs/book/src/entailment-rules.md does not define"
+    declared = re.findall(r"^    def (\w+)\(", body.group(1), re.MULTILINE)
+    if not declared:
+        raise SystemExit(
+            f"check-doc-claims: `class entail:` in {_PY_STUB.relative_to(_REPO)} "
+            f"declares no methods"
         )
-    for name in sorted(set(documented) & set(inventory)):
-        if documented[name] != inventory[name]:
-            d_def, d_impl = documented[name]
-            g_def, g_impl = inventory[name]
-            problems.append(
-                f"{rel}: Rule coverage row `{name}` documents "
-                f"{d_def} defined / {d_impl} implemented, but "
-                f"rules()/implemented() report {g_def} / {g_impl} "
-                f"(docs/book/src/entailment-rules.md)"
-            )
+    unknown = _CHASE_ENTRY_POINTS - set(declared)
+    if unknown:
+        raise SystemExit(
+            f"check-doc-claims: _CHASE_ENTRY_POINTS names {sorted(unknown)}, "
+            f"which {_PY_STUB.relative_to(_REPO)} no longer declares; update the "
+            f"chase/reasoner split rather than leaving the service table ungated"
+        )
+    return [name for name in declared if name not in _CHASE_ENTRY_POINTS]
+
+
+def py_service_table_claim(services: list[str]) -> list[str]:
+    """The Python README must document every reasoning service, and no other.
+
+    Structural rather than numeric: the README carries no service COUNT to go
+    stale, and a service added to the binding fails this check on the day it is
+    added rather than the day someone notices the front page never mentioned it.
+    """
+    text = _read(_PY_README)
+    rel = _PY_README.relative_to(_REPO)
+    documented = set(re.findall(r"\| `entail\.(\w+)\(", text))
+    expected = set(services)
+    problems: list[str] = []
+    for name in sorted(expected - documented):
+        problems.append(
+            f"{rel}: the Description-Logic service table has no row for "
+            f"`entail.{name}(...)`, which {_PY_STUB.relative_to(_REPO)} declares"
+        )
+    for name in sorted(documented - expected):
+        problems.append(
+            f"{rel}: the Description-Logic service table has a row for "
+            f"`entail.{name}(...)`, which is not a reasoning service "
+            f"{_PY_STUB.relative_to(_REPO)} declares"
+        )
     return problems
 
 
@@ -617,6 +772,15 @@ def build_claims(
                 r"entailment tests this chase scores \*\*(?P<pos_a>\d+) of "
                 r"(?P<pos_t>\d+)\s+positive and (?P<neg_a>\d+) of (?P<neg_t>\d+)\s*"
                 r"negative\*\*"
+            ),
+        ),
+        (
+            "the OWL 2 RL lane split in the Python binding README",
+            _PY_README,
+            _flow(
+                r"reaches (?P<pos_a>\d+) of (?P<pos_t>\d+) published positive "
+                r"entailments and correctly withholds on (?P<neg_a>\d+) of "
+                r"(?P<neg_t>\d+) negative ones"
             ),
         ),
         (
@@ -950,6 +1114,41 @@ def build_claims(
             {"owlrl_d": inventory["OWL-RL"][0]},
             inv,
         ),
+        # The three rule-table numbers on the PyPI front page: the runnable
+        # snippet's two comments and the qualifier sentence beneath it. The
+        # snippet is executable, so a wrong comment is a wrong EXAMPLE — the
+        # readme claimed four RDFS rules were missing while the wheel returned
+        # none — and the qualifier is the only thing that stops 78 / 78 being
+        # read as entailment conformance.
+        Claim(
+            "the OWL-RL rule-table snippet in the Python binding README",
+            _PY_README,
+            _flow(
+                r'defined = entail\.rules\("owl-rl"\) # (?P<owlrl_d>\d+) — OWL 2 '
+                r"Profiles §4\.3 Tables 4–9\n"
+                r'fired = entail\.implemented_rules\("owl-rl"\) # (?P<owlrl_i>\d+)'
+            ),
+            {"owlrl_d": inventory["OWL-RL"][0], "owlrl_i": inventory["OWL-RL"][1]},
+            inv,
+        ),
+        Claim(
+            "the RDFS gap comment in the Python binding README",
+            _PY_README,
+            _flow(
+                r"# \[\] — RDFS fires (?P<rdfs_i>\d+) of its (?P<rdfs_d>\d+) rules"
+            ),
+            {"rdfs_i": inventory["RDFS"][1], "rdfs_d": inventory["RDFS"][0]},
+            inv,
+        ),
+        Claim(
+            "the rule-table-coverage qualifier in the Python binding README",
+            _PY_README,
+            _flow(
+                r"\*\*(?P<owlrl_i>\d+) / (?P<owlrl_d>\d+) is rule-table coverage"
+            ),
+            {"owlrl_i": inventory["OWL-RL"][1], "owlrl_d": inventory["OWL-RL"][0]},
+            inv,
+        ),
         Claim(
             "the rule counts in the purrdf-cli crate README",
             _CLI_README,
@@ -1117,11 +1316,14 @@ def main() -> int:
     problems: list[str] = []
     checked = 0
 
-    problems.extend(rule_coverage_table_claim(inventory))
-    checked += 1
+    coverage_problems, coverage_checked = rule_coverage_table_claims(inventory)
+    problems.extend(coverage_problems)
+    checked += coverage_checked
     problems.extend(release_crate_list_claim(crates))
     checked += 1
     problems.extend(rl_matrix_agreement_claim(matrix, lanes))
+    checked += 1
+    problems.extend(py_service_table_claim(load_py_entail_services()))
     checked += 1
 
     for claim in build_claims(inventory, matrix, census, lanes):

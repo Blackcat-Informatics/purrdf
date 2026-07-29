@@ -41,7 +41,7 @@
 //!
 //! The two lanes are still reachable directly, as [`materialize_dl_reported`] and
 //! [`materialize_rif`]: `materialize` DELEGATES to them rather than restating them, so
-//! there is one implementation of each lane and one overclaim gate on each emission path.
+//! there is one implementation of each lane and one report assembly on each emission path.
 //!
 //! # The Description-Logic services
 //!
@@ -93,8 +93,9 @@
 //! met, what it consumed of the evaluation ceilings, and the
 //! [`contract_hash`](ReasoningReport::contract_hash) of the calculus it ran — so a
 //! consumer can refuse a cached closure minted under a different rule set instead of
-//! trusting a sentence about it. See [`report`] for the whole shape and for the overclaim
-//! gate it must never trip.
+//! trusting a sentence about it. See [`report`] for the whole shape, and for why a report
+//! cannot claim [`Completeness::Exact`] beside a boundary it names — the completeness is
+//! DERIVED from the boundary list rather than stored beside it.
 
 use std::sync::Arc;
 
@@ -331,22 +332,6 @@ pub enum EntailError {
     ///
     /// Boxed because an error type is returned by value from every entailment entry point.
     Inconsistent(Box<InconsistentRun>),
-    /// The report assembled for a run contradicts its own evidence, so the run is refused.
-    ///
-    /// [`ReasoningReport::overclaims`] — [`Completeness::Exact`] beside a non-empty
-    /// boundary list — is an invariant no report this crate emits may violate, and this
-    /// variant is what "may not" means. A closure whose certificate says it answered
-    /// everything while naming a construct it could not handle is worse than no closure:
-    /// the caller cannot tell which half to believe, and the report exists precisely so
-    /// they never have to. The offending report is carried so the bug is diagnosable rather
-    /// than merely announced.
-    ///
-    /// Unreachable through [`materialize`] today — [`Completeness::for_run`] derives the
-    /// completeness from the very boundary list the report will carry — and the check runs
-    /// anyway, because that derivation is code and code changes. The state it looks for is
-    /// representable ([`ReasoningReport::new`] repairs nothing), so this is a guard against
-    /// a real value rather than an assertion about an impossible one.
-    Overclaim(Box<ReasoningReport>),
     /// The `OWL-Direct` knowledge base is unsatisfiable, as the tableau found it.
     ///
     /// Distinct from [`Self::Inconsistent`] because the evidence is of a different kind: a
@@ -376,15 +361,6 @@ impl std::fmt::Display for EntailError {
                     "triples"
                 }
             ),
-            Self::Overclaim(report) => write!(
-                f,
-                "the reasoning report for this {:?} run claims {:?} while naming {} \
-                 boundary/boundaries it could not handle; the closure is refused rather \
-                 than described by a self-contradicting certificate",
-                report.regime(),
-                report.completeness(),
-                report.boundaries().len()
-            ),
             Self::Unsatisfiable => {
                 write!(f, "the OWL-Direct knowledge base is unsatisfiable")
             }
@@ -407,7 +383,7 @@ impl std::error::Error for EntailError {}
 /// naming a regime and hoping: [`Materialization::OwlDirect`] holds the query's basic
 /// graph pattern and [`Materialization::Rif`] holds the rule set. Those two lanes are
 /// DELEGATED to [`materialize_dl_reported`] and [`materialize_rif`] — one implementation
-/// each, one overclaim gate each — rather than restated here.
+/// each, one report assembly each — rather than restated here.
 ///
 /// # What a DATASET entails is a defined choice, and this is the choice
 ///
@@ -440,18 +416,16 @@ impl std::error::Error for EntailError {}
 ///
 /// [`EntailError::Inconsistent`] if a rule that concludes `false` matched;
 /// [`EntailError::Evaluate`] if the run passes one of `purrdf-datalog`'s three fixed
-/// evaluation ceilings; [`EntailError::Build`] if the derived dataset cannot be frozen;
-/// [`EntailError::Overclaim`] if the assembled report contradicts its own boundary
-/// evidence. The two delegated lanes add their own: [`EntailError::Unsatisfiable`] and
+/// evaluation ceilings; [`EntailError::Build`] if the derived dataset cannot be frozen. The
+/// two delegated lanes add their own: [`EntailError::Unsatisfiable`] and
 /// [`EntailError::Parse`].
 ///
-/// Two of those errors describe a RUN, and both carry it. [`EntailError::Inconsistent`]
+/// One of those errors describes a RUN, and it carries it. [`EntailError::Inconsistent`]
 /// carries an [`InconsistentRun`] — the witness AND the [`ReasoningReport`] for everything
 /// the run had done when it stopped — because "there is no report-free variant of this
-/// function" has to hold for the caller whose data is bad, or it is not a rule. And
-/// [`EntailError::Overclaim`] carries the offending report, so the contradiction is
-/// diagnosable. The rest are the absence of a run: an exhausted budget carries its own
-/// accurate consumption figures, and nothing was closed for a report to describe.
+/// function" has to hold for the caller whose data is bad, or it is not a rule. The rest
+/// are the absence of a run: an exhausted budget carries its own accurate consumption
+/// figures, and nothing was closed for a report to describe.
 ///
 /// ```
 /// use purrdf_entail::{Materialization, Regime, RuleId, materialize};
@@ -481,7 +455,11 @@ impl std::error::Error for EntailError {}
 /// // than with a missing rule: a surrogate blank node is not an answer a SPARQL
 /// // entailment regime admits, so every conclusion mentioning one is withheld.
 /// assert!(report.completeness().missing().is_empty());
-/// assert!(!report.overclaims());
+/// // A complete rule table AND a construct in the way: the derived completeness says both
+/// // halves at once, because it is a function of the boundary list rather than a second
+/// // claim beside it.
+/// assert!(!report.boundaries().is_empty());
+/// assert_eq!(report.completeness(), purrdf_entail::Completeness::ExactWithinBoundaries);
 ///
 /// // …and the two lanes that need an input are reached the same way, through the same
 /// // function, once that input is in the parameter.
@@ -500,20 +478,11 @@ pub fn materialize(
         | Materialization::OwlRl
         | Materialization::D => engine::close(ds, regime)?,
         // The two query-directed lanes are DELEGATED, not restated: each already assembles
-        // its own report and applies the same overclaim gate on its own emission path, so
-        // returning here is what keeps one implementation per lane.
+        // its own report, so returning here is what keeps one implementation per lane.
         Materialization::OwlDirect(query_bgp) => return materialize_dl_reported(ds, query_bgp),
         Materialization::Rif(rules) => return materialize_rif(ds, rules),
     };
-    let report = ReasoningReport::of_run(ds, regime, &stats);
-    // THE GATE, on the emission path. A report that contradicts its own evidence is not
-    // handed to a caller with a note attached — the run fails. The state is representable
-    // (`ReasoningReport::new` repairs nothing), so this is a check over a value rather than
-    // an assertion about an unreachable one.
-    if report.overclaims() {
-        return Err(EntailError::Overclaim(Box::new(report)));
-    }
-    Ok((closure, report))
+    Ok((closure, ReasoningReport::of_run(ds, regime, &stats)))
 }
 
 #[cfg(test)]
@@ -626,7 +595,6 @@ mod tests {
             assert_eq!(plan.regime(), regime, "{regime:?}");
             let (closure, report) = materialize(&ds, plan).expect("every plan materializes");
             assert_eq!(report.regime(), regime, "{regime:?}");
-            assert!(!report.overclaims(), "{regime:?}");
             // Every lane carries the asserted data through; nothing is a stub that drops it.
             assert!(has(&closure, X, RDF_TYPE, A), "{regime:?}");
         }
@@ -653,7 +621,6 @@ mod tests {
             ),
             "dt-type1 must type every datatype supported in OWL 2 RL"
         );
-        assert!(!report.overclaims());
     }
 
     #[test]
@@ -854,12 +821,12 @@ mod tests {
         // literals and one concludes about literal subjects. The two are different claims
         // and the report makes both of them.
         let (_, simple) = materialize(&ds, Materialization::Simple).expect("simple");
-        assert_eq!(simple.completeness(), &Completeness::Exact);
+        assert_eq!(simple.completeness(), Completeness::Exact);
         assert!(rules(Regime::Simple).is_empty());
         let (_, owl) = materialize(&ds, Materialization::OwlRl).expect("owl-rl");
         assert_eq!(
             owl.completeness(),
-            &Completeness::ExactWithinBoundaries,
+            Completeness::ExactWithinBoundaries,
             "a complete rule table beside a boundary is not a contradiction, and it is \
              not `Exact` either"
         );
@@ -899,7 +866,7 @@ mod tests {
         // `surrogate` boundary rather than saying `Exact`.
         let (_, rdfs) = materialize(&ds, Materialization::Rdfs).expect("rdfs");
         assert!(rdfs.completeness().missing().is_empty());
-        assert_eq!(rdfs.completeness(), &Completeness::ExactWithinBoundaries);
+        assert_eq!(rdfs.completeness(), Completeness::ExactWithinBoundaries);
         for rule in [
             RuleId::RdfD1,
             RuleId::RdfD1a,
@@ -910,13 +877,15 @@ mod tests {
         }
     }
 
-    /// THE OVERCLAIM GATE: a report may never say `Exact` while naming a boundary.
+    /// `Exact` NEVER sits beside a boundary — on every regime, over inputs chosen to trip
+    /// every boundary the crate can emit.
     ///
-    /// The absence of this gate is what let plain "OWL 2 RL entailment" stand in the
-    /// documentation of a twelve-rule chase. It runs over every regime and over inputs
-    /// chosen to trip every boundary the crate can emit.
+    /// The absence of that property is what let plain "OWL 2 RL entailment" stand in the
+    /// documentation of a twelve-rule chase. It is asserted here over the emitted reports
+    /// rather than through a predicate the report carries about itself, so the check does
+    /// not depend on that predicate being right.
     #[test]
-    fn no_report_ever_overclaims() {
+    fn no_emitted_report_says_exact_beside_a_boundary() {
         for ds in [
             schema_fixture(),
             triple_term_fixture(),
@@ -928,90 +897,69 @@ mod tests {
                 let regime = plan.regime();
                 let (_, report) = materialize(&ds, plan).expect("runnable regime");
                 assert!(
-                    !report.overclaims(),
+                    report.completeness() != Completeness::Exact || report.boundaries().is_empty(),
                     "{regime:?} reported Exact alongside {:?}",
                     report.boundaries()
-                );
-                // Spelled out, so the gate does not depend on `overclaims` being right:
-                // the FLATLY-exact variant is the one that may not sit beside a boundary,
-                // and `ExactWithinBoundaries` is the honest way to say the other half.
-                assert!(
-                    *report.completeness() != Completeness::Exact || report.boundaries().is_empty(),
-                    "{regime:?}"
                 );
             }
         }
     }
 
-    /// THE GATE CAN FIRE. The contradiction it looks for is a value that exists.
+    /// THE CONTRADICTION HAS NO CONSTRUCTOR, which is why nothing checks for it.
     ///
-    /// `no_report_ever_overclaims` is only worth running if a report CAN overclaim, and
-    /// for one revision of this crate none could: both constructors narrowed
-    /// [`Completeness::Exact`] to [`Completeness::ExactWithinBoundaries`] before assigning
-    /// the field, so `overclaims()` tested a state construction had made unreachable and
-    /// every assertion of it — twenty-odd of them across this crate's tests — was a
-    /// tautology dressed as a safety property.
+    /// Two earlier revisions policed the state instead. The first narrowed
+    /// [`Completeness::Exact`] inside the constructor and kept a `ReasoningReport::overclaims`
+    /// predicate over the narrowed field, making every assertion of it a tautology. The
+    /// second moved the narrowing to [`Completeness::for_run`] and had the three emission
+    /// paths check the assembled report — but each of them called `for_run` with the very
+    /// boundary list it then stored, so the check could not fail, `EntailError::Overclaim`
+    /// was unreachable, and the only test that ever saw the contradiction hand-built it
+    /// with a constructor production never used that way.
     ///
-    /// [`ReasoningReport::new`] repairs nothing, so this test builds the bad report and
-    /// watches the gate return `true`. The narrowing still happens, in
-    /// [`Completeness::for_run`], where the gate can check it.
+    /// [`ReasoningReport`] now stores no completeness at all: [`ReasoningReport::completeness`]
+    /// derives it from the report's own regime and boundary list. This test is the proof
+    /// that the derivation leaves no bad case — it ranges over every regime and every
+    /// non-empty boundary set of size one and two, plus the empty one, and asks the
+    /// constructor for a report each time. `Exact` appears only where the boundary list is
+    /// empty, and there is no argument that could have made it appear anywhere else.
     #[test]
-    fn overclaims_is_representable_and_detected() {
-        let boundary = vec![Boundary::of(Construct::Surrogate)];
-        let overclaiming = ReasoningReport::new(
+    fn boundaries_beside_exact_is_unconstructible() {
+        let budget = purrdf_datalog::seminaive::BudgetReport::new(0, 0, 0);
+        let build = |regime: Regime, boundaries: Vec<Boundary>| {
+            ReasoningReport::new(regime, Vec::new(), boundaries, budget, None, 0)
+        };
+        for regime in [
+            Regime::Simple,
+            Regime::Rdf,
             Regime::Rdfs,
-            Completeness::Exact,
-            Vec::new(),
-            boundary.clone(),
-            purrdf_datalog::seminaive::BudgetReport::new(0, 0, 0),
-            None,
-            0,
-        );
-        assert!(
-            overclaiming.overclaims(),
-            "`Exact` beside a boundary must trip the gate"
-        );
-
-        // The two honest neighbours of that state do not trip it, so the gate is a
-        // predicate about the contradiction rather than about boundaries in general.
-        let bounded = ReasoningReport::new(
-            Regime::Rdfs,
-            Completeness::ExactWithinBoundaries,
-            Vec::new(),
-            boundary,
-            purrdf_datalog::seminaive::BudgetReport::new(0, 0, 0),
-            None,
-            0,
-        );
-        assert!(!bounded.overclaims());
-        let unbounded = ReasoningReport::new(
-            Regime::Rdfs,
-            Completeness::Exact,
-            Vec::new(),
-            Vec::new(),
-            purrdf_datalog::seminaive::BudgetReport::new(0, 0, 0),
-            None,
-            0,
-        );
-        assert!(!unbounded.overclaims());
-
-        // And `for_run` — the derivation the emission path uses — never produces the bad
-        // state for any regime, whether or not the run met a boundary.
-        for plan in RUNNABLE {
-            let regime = plan.regime();
+            Regime::OwlRl,
+            Regime::D,
+            Regime::OwlDirect,
+            Regime::Rif,
+        ] {
+            // The empty boundary list is the ONLY input under which `Exact` is reachable,
+            // and it is reachable there for every regime whose rule table is complete.
             assert!(
-                !ReasoningReport::new(
-                    regime,
-                    Completeness::for_run(regime, &[Boundary::of(Construct::Surrogate)]),
-                    Vec::new(),
-                    vec![Boundary::of(Construct::Surrogate)],
-                    purrdf_datalog::seminaive::BudgetReport::new(0, 0, 0),
-                    None,
-                    0,
-                )
-                .overclaims(),
+                build(regime, Vec::new()).boundaries().is_empty(),
                 "{regime:?}"
             );
+            for first in Construct::ALL {
+                let one = build(regime, vec![Boundary::of(first)]);
+                assert_ne!(
+                    one.completeness(),
+                    Completeness::Exact,
+                    "{regime:?} {first}"
+                );
+                assert!(!one.boundaries().is_empty(), "{regime:?} {first}");
+                for second in Construct::ALL {
+                    let two = build(regime, vec![Boundary::of(first), Boundary::of(second)]);
+                    assert_ne!(
+                        two.completeness(),
+                        Completeness::Exact,
+                        "{regime:?} {first} {second}"
+                    );
+                }
+            }
         }
     }
 
@@ -1041,7 +989,6 @@ mod tests {
         assert_eq!(report.regime(), Regime::OwlRl);
         assert!(!report.boundaries().is_empty());
         assert!(report.budget().join_steps() > 0, "the evaluation did work");
-        assert!(!report.overclaims());
         // A consistent run over the same shape reports the absence, so `None` is a
         // finding rather than the only state the field has.
         let (_, consistent) = materialize(&dataset(&[(X, RDF_TYPE, A)]), Materialization::OwlRl)
@@ -1749,7 +1696,6 @@ mod tests {
             "{:?}",
             report.boundaries()
         );
-        assert!(!report.overclaims());
     }
 
     /// `owl:sameAs` substitutes in the PREDICATE position, and it is `eq-rep-p` that does
@@ -1825,7 +1771,6 @@ mod tests {
             "{:?}",
             report.boundaries()
         );
-        assert!(!report.overclaims());
     }
 
     /// Two runs of the same input render byte-identically, across every regime and every
@@ -2083,7 +2028,6 @@ mod tests {
                     .any(|boundary| boundary.construct() == Construct::TripleTerm),
                 "{regime:?}: the triple-term boundary must be reported"
             );
-            assert!(!report.overclaims(), "{regime:?}");
         }
     }
 
@@ -2191,7 +2135,6 @@ mod tests {
                     .any(|boundary| boundary.construct() == Construct::GeneralizedRdf),
                 "{regime:?}: the abandoned conclusion must be reported"
             );
-            assert!(!report.overclaims(), "{regime:?}");
         }
     }
 }

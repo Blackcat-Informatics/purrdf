@@ -566,6 +566,7 @@ export function entailMaterialize(
 export function entailRules(regime: EntailmentRegime | string): string[];
 export function entailImplementedRules(regime: EntailmentRegime | string): string[];
 export function entailCheckGoldenVectors(): void;
+export function entailCheckInconsistentRefusal(): void;
 export function shaclEntail(shapesTtl: string, dataNt: string): string;
 export function shaclValidateToSarif(shapesTtl: string, dataNt: string): string;
 export function version(): string;

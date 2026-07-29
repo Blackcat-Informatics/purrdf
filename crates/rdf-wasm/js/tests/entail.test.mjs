@@ -25,6 +25,7 @@ import { fileURLToPath } from "node:url";
 import {
   ready,
   entailCheckGoldenVectors,
+  entailCheckInconsistentRefusal,
   entailImplementedRules,
   entailMaterialize,
   entailRules,
@@ -42,6 +43,29 @@ test("entailCheckGoldenVectors runs the committed tri-host artifact ON WASM", ()
   // Throws with the case name and a diff of the two strings on the first byte that
   // differs from what the native build produced.
   entailCheckGoldenVectors();
+});
+
+test("an inconsistent input is refused WITH its certificate ON WASM", () => {
+  // The path the golden artifact cannot cover: an inconsistent knowledge base has no
+  // closure, so the only channel the evidence has is the thrown message. Same checker
+  // as the C-ABI and `purrdf-validate` tests.
+  entailCheckInconsistentRefusal();
+  // …and a caller who reaches the boundary directly sees the same bytes: the witness
+  // rule, the graph whose closure refused, and the three asserted triples.
+  assert.throws(
+    () =>
+      entailMaterialize(
+        [
+          "<http://example.org/A> <http://www.w3.org/2002/07/owl#disjointWith> <http://example.org/B> .",
+          "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .",
+          "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> .",
+          "",
+        ].join("\n"),
+        "owl-rl",
+        "",
+      ),
+    /inconsistency-premise <http:\/\/example\.org\/A>/,
+  );
 });
 
 // The same artifact, parsed here and driven case by case through the JS boundary — so
@@ -97,7 +121,7 @@ test("entailMaterialize closes under rdfs and always returns a report", () => {
     closed.nquads,
     /<http:\/\/example\.org\/x> <http:\/\/www\.w3\.org\/1999\/02\/22-rdf-syntax-ns#type> <http:\/\/example\.org\/C> \./,
   );
-  assert.ok(closed.report.startsWith("purrdf-reasoning-report 1\n"));
+  assert.ok(closed.report.startsWith("purrdf-reasoning-report 2\n"));
   assert.ok(closed.report.includes("\nregime rdfs\n"));
   // The report says what the run could NOT do, rather than claiming completeness
   // it does not have. Asserted as the invariant, not as a `sound-incomplete <n>`
@@ -105,7 +129,11 @@ test("entailMaterialize closes under rdfs and always returns a report", () => {
   // table going complete.
   assert.ok(closed.report.includes("\ncompleteness "));
   assert.ok(closed.report.includes("\nboundary "));
-  assert.ok(closed.report.endsWith("overclaims false\n"));
+  // The only observable rdfD1 / rdfD1a / rdfs14 / rdfs14a have: all four fire and none
+  // of their conclusions can reach a `fired` line. It reached the command line only,
+  // which left them invisible from exactly the hosts the report exists for.
+  assert.ok(closed.report.includes("\nwithheld-surrogates "));
+  assert.ok(closed.report.endsWith("inconsistency none\n"));
 });
 
 test("entailMaterialize under simple is the identity closure", () => {
@@ -152,9 +180,10 @@ test("entailMaterialize materializes every regime spelling", () => {
     ["d", ""],
   ]) {
     const closed = entailMaterialize(SCHEMA, regime, program);
-    assert.match(closed.report, /^purrdf-reasoning-report 1\n/);
+    assert.match(closed.report, /^purrdf-reasoning-report 2\n/);
     assert.ok(closed.report.includes(`\nregime ${regime}\n`), regime);
-    assert.ok(closed.report.endsWith("overclaims false\n"), regime);
+    assert.ok(closed.report.includes("\nwithheld-surrogates "), regime);
+    assert.ok(closed.report.endsWith("inconsistency none\n"), regime);
   }
 });
 

@@ -8,7 +8,7 @@
 //! # Two lanes, two certificates
 //!
 //! [`purrdf_entail_materialize_to_nquads`] is the **chase**: it renders a
-//! `purrdf-reasoning-report 1` block whose completeness is `exact` /
+//! `purrdf-reasoning-report 2` block whose completeness is `exact` /
 //! `sound-incomplete <n>` — a difference of two rule tables.
 //!
 //! [`purrdf_entail_consistency`], [`purrdf_entail_classify`],
@@ -692,7 +692,7 @@ pub unsafe extern "C" fn purrdf_entail_explain_conclusion(
 mod tests {
     use std::ffi::CString;
 
-    use purrdf_validate::regime::check_regime_golden_vectors;
+    use purrdf_validate::regime::{check_inconsistent_refusal, check_regime_golden_vectors};
 
     use super::*;
 
@@ -718,6 +718,18 @@ mod tests {
         check_regime_golden_vectors().expect("the regime golden vector");
     }
 
+    /// The C-ABI host's leg of the OTHER tri-host assertion: an inconsistent input is
+    /// refused WITH its certificate and its witness triples.
+    ///
+    /// The `purrdf-validate` test and the WASM host call this same checker. It is separate
+    /// from the golden vector because a refusal has no closure to pair an input with, and
+    /// it is shared for the same reason the vector is: the message a C caller reads is the
+    /// only channel the evidence has.
+    #[test]
+    fn an_inconsistent_input_is_refused_with_its_report() {
+        check_inconsistent_refusal().expect("the inconsistent refusal");
+    }
+
     #[test]
     fn materialize_emits_closure_and_report() {
         let (nquads, report) =
@@ -728,13 +740,16 @@ mod tests {
             "<http://example.org/x> \
              <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> ."
         ));
-        assert!(report.starts_with("purrdf-reasoning-report 1\n"));
+        assert!(report.starts_with("purrdf-reasoning-report 2\n"));
         // The report says what the run could NOT do. Asserted as the invariant
         // rather than as a `sound-incomplete <n>` literal: the count moves every
         // time a rule lands, and the honesty gate does not.
         assert!(report.contains("\ncompleteness "));
         assert!(report.contains("\nboundary "));
-        assert!(report.ends_with("overclaims false\n"));
+        // The count of the conclusions the four existential rules reached and the answer
+        // may not bind. It reaches the C ABI, which it did not before.
+        assert!(report.contains("\nwithheld-surrogates "));
+        assert!(report.ends_with("inconsistency none\n"));
     }
 
     #[test]
@@ -850,7 +865,7 @@ mod tests {
                 "<http://example.org/x> \
                  <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> ."
             ));
-            assert!(take(report).starts_with("purrdf-reasoning-report 1\n"));
+            assert!(take(report).starts_with("purrdf-reasoning-report 2\n"));
         }
     }
 

@@ -32,7 +32,7 @@ use purrdf_datalog::seminaive::BudgetReport;
 
 use crate::engine::surface_of;
 use crate::interner::{Interner, intern_into};
-use crate::report::{Boundary, Completeness, Construct, ReasoningReport};
+use crate::report::{Boundary, Construct, ReasoningReport};
 use crate::rif::model::{Atom, RifTerm, RuleSet};
 use crate::{EntailError, Regime};
 
@@ -277,13 +277,7 @@ pub fn materialize_rif(
         b.push_quad(s, p, o, None);
     }
     let closure = b.freeze().map_err(|e| EntailError::Build(e.to_string()))?;
-    let report = rif_report(named_graph, &facts, &terms, &stats);
-    // THE GATE, on this lane's emission path too: a certificate that contradicts its own
-    // evidence is refused rather than handed over with a note attached.
-    if report.overclaims() {
-        return Err(EntailError::Overclaim(Box::new(report)));
-    }
-    Ok((closure, report))
+    Ok((closure, rif_report(named_graph, &facts, &terms, &stats)))
 }
 
 /// Assemble the report for a RIF run that held `facts` and consumed `stats`.
@@ -300,7 +294,6 @@ fn rif_report(
     };
     ReasoningReport::new(
         Regime::Rif,
-        Completeness::for_run(Regime::Rif, &boundaries),
         // The rules are the caller's and carry no `RuleId` this crate declares.
         Vec::new(),
         boundaries,
@@ -694,7 +687,6 @@ mod tests {
         assert!(report.budget().join_steps() > 0);
         assert!(report.budget().stored_facts() >= 3);
         assert!(report.budget().term_arena_bytes() > 0);
-        assert!(!report.overclaims());
     }
 
     #[test]
@@ -730,7 +722,7 @@ mod tests {
         );
         // A default-graph-only input met no construct this lane could not handle.
         assert!(report.boundaries().is_empty());
-        assert_eq!(report.completeness(), &Completeness::Exact);
+        assert_eq!(report.completeness(), crate::Completeness::Exact);
     }
 
     /// A QUAD OUTSIDE THE DEFAULT GRAPH IS NO LONGER DISCARDED IN SILENCE.
@@ -778,9 +770,12 @@ mod tests {
         assert_eq!(constructs, vec![Construct::NamedGraph]);
         assert!(!report.boundaries()[0].reason().is_empty());
         // A boundary beside a rule table that has nothing missing is
-        // `ExactWithinBoundaries`, never plain `Exact` — the overclaim gate's whole point.
-        assert_eq!(report.completeness(), &Completeness::ExactWithinBoundaries);
-        assert!(!report.overclaims());
+        // `ExactWithinBoundaries`, never plain `Exact`: the completeness is DERIVED from
+        // this very boundary list, so the two cannot come apart.
+        assert_eq!(
+            report.completeness(),
+            crate::Completeness::ExactWithinBoundaries
+        );
         // The quad itself is still in the answer: the boundary is about premises.
         assert!(
             out.quads()
@@ -802,7 +797,6 @@ mod tests {
         };
         let (_, report) = materialize_rif(&empty_ds(), &rules).expect("materialize");
         assert!(report.boundaries().is_empty());
-        assert!(!report.overclaims());
     }
 
     #[test]

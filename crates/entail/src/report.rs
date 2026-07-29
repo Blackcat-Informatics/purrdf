@@ -17,30 +17,28 @@
 //! * [`ReasoningReport::contract_hash`] names the calculus, so a cached verdict minted
 //!   under a different rule set can be refused rather than trusted.
 //!
-//! # The overclaim gate
+//! # There is no overclaim, because there is no field to disagree with
 //!
-//! [`ReasoningReport::overclaims`] is the invariant a report must never violate:
-//! [`Completeness::Exact`] while [`ReasoningReport::boundaries`] is non-empty is a claim
-//! of completeness contradicted by the report's own evidence.
+//! The failure this report is built against is a certificate that says
+//! [`Completeness::Exact`] — "every rule was available AND nothing got in the way" — while
+//! [`ReasoningReport::boundaries`] names a construct the run could not handle. A reader of
+//! such a report cannot tell which half to believe.
 //!
-//! The gate is only worth having if it can FAIL, so the contradiction is a REPRESENTABLE
-//! state: [`ReasoningReport::new`] stores the completeness it is handed beside the
-//! boundaries it is handed and repairs neither, and
-//! `overclaims_is_representable_and_detected` builds one and watches the gate return
-//! `true`. What the crate's own emission path does with that state is REFUSE it —
-//! [`materialize`](crate::materialize) and [`materialize_dl_reported`](crate::materialize_dl_reported) check
-//! the assembled report and return
-//! [`EntailError::Overclaim`](crate::EntailError::Overclaim) rather than hand back a
-//! closure described by a self-contradicting certificate. A run that would overclaim fails;
-//! it does not merely say so.
+//! That state is not detected here. It is UNREPRESENTABLE: completeness is not a field of
+//! [`ReasoningReport`] at all. [`ReasoningReport::completeness`] COMPUTES it, as
+//! [`Completeness::for_run`] over the report's own regime and its own boundary list, so
+//! `Exact` beside a non-empty boundary list is a value no caller — inside this crate or
+//! outside it — has a constructor for. `boundaries_beside_exact_is_unconstructible` is the
+//! test that ranges over every regime and every boundary set and finds none.
 //!
-//! An earlier revision instead REPAIRED the state inside the constructor, narrowing
-//! `Exact` to [`Completeness::ExactWithinBoundaries`] before the field was assigned. That
-//! made the rendered `overclaims false` a compile-time constant and every
-//! `assert!(!report.overclaims())` in the workspace a tautology. The narrowing itself is
-//! sound and is still done — it is what [`Completeness::for_run`] is — but it happens in
-//! one named, tested function whose result the gate then CHECKS, rather than in a silent
-//! fix-up the gate could never see past.
+//! Two earlier revisions tried to police this instead. The first REPAIRED the field inside
+//! the constructor and kept a `ReasoningReport::overclaims` predicate over it, which made
+//! the predicate a compile-time constant. The second moved the repair out to
+//! [`Completeness::for_run`] and had the emission paths CHECK the assembled report — but
+//! every one of them called `for_run` with the very list it then stored, so the check still
+//! could not fail, `EntailError::Overclaim` was unreachable, and the only test that saw the
+//! contradiction hand-built it. Deriving the value instead of storing it ends the question:
+//! there is nothing to check because there is nothing that can disagree.
 //!
 //! # Determinism
 //!
@@ -66,9 +64,9 @@ pub enum Completeness {
     /// Every rule the regime is defined by was available, and the run met NO boundary.
     ///
     /// The strongest thing this crate can say about a closure: the rule table was complete
-    /// and nothing outside the rule table got in the way either. A report that claims
-    /// `Exact` with a non-empty boundary list is contradicting itself; see
-    /// [`ReasoningReport::overclaims`].
+    /// and nothing outside the rule table got in the way either. `Exact` beside a non-empty
+    /// boundary list would contradict itself, which is why no report carries the two as
+    /// independent facts — see [`ReasoningReport::completeness`].
     Exact,
     /// Every rule the regime is defined by was available, and the run STILL met a
     /// construct it could not fully handle.
@@ -133,11 +131,11 @@ impl Completeness {
     /// rule table that still met a construct becomes [`Self::ExactWithinBoundaries`] —
     /// the honest way to say "every rule was available AND something got in the way".
     ///
-    /// It is a NAMED derivation rather than a fix-up buried in a struct literal on
-    /// purpose. [`ReasoningReport::new`] stores whatever completeness it is handed, so a
-    /// report whose completeness contradicts its boundaries is a value that exists and
-    /// [`ReasoningReport::overclaims`] is a check that can fail. This function is what the
-    /// crate's own emission path uses to make sure it never does.
+    /// It is the DEFINITION of a report's completeness rather than a fix-up applied on the
+    /// way in: [`ReasoningReport`] stores no completeness field, and
+    /// [`ReasoningReport::completeness`] is exactly this call over the report's own regime
+    /// and boundary list. So `Exact` beside a non-empty boundary list is not a state this
+    /// crate detects and refuses — it is a state nothing can build.
     ///
     /// ```
     /// use purrdf_entail::{Boundary, Completeness, Construct, Regime};
@@ -830,9 +828,13 @@ impl DatasetSurvey {
 #[derive(Debug, Clone)]
 pub struct ReasoningReport {
     /// The regime the caller asked for.
+    ///
+    /// There is deliberately no `completeness` field beside it: completeness is a function
+    /// of this regime and [`Self::boundaries`], and [`Self::completeness`] computes it. A
+    /// stored copy could disagree with the boundary list it summarizes, and that
+    /// disagreement — a certificate claiming a complete answer while naming a construct it
+    /// could not handle — is the one thing this whole type exists to make impossible.
     regime: Regime,
-    /// How much of that regime's rule table was available.
-    completeness: Completeness,
     /// The rules that produced conclusions, and how many each produced.
     rules_fired: Vec<(RuleId, u64)>,
     /// The constructs the run could not fully handle.
@@ -848,18 +850,17 @@ pub struct ReasoningReport {
 }
 
 impl ReasoningReport {
-    /// A report holding exactly these facts, deriving nothing and REPAIRING nothing.
+    /// A report holding exactly these facts.
     ///
-    /// The one constructor every other one goes through, and the reason
-    /// [`Self::overclaims`] is a check rather than a tautology: the completeness and the
-    /// boundaries are stored as given, so a report claiming [`Completeness::Exact`] beside
-    /// a non-empty boundary list is a value that EXISTS. An earlier revision narrowed the
-    /// two into agreement inside the constructor, which made the gate unfalsifiable and
-    /// every assertion of it vacuous. [`Completeness::for_run`] is the derivation this
-    /// crate's own emission path uses to get the completeness right; the gate then checks
-    /// it, and [`materialize`](crate::materialize) REFUSES a run whose report trips it.
+    /// The one constructor every other one goes through, and the reason a
+    /// self-contradicting certificate has no constructor anywhere: there is no
+    /// `completeness` parameter. A report's completeness is
+    /// `Completeness::for_run(regime, boundaries)` by definition and
+    /// [`Self::completeness`] computes it on demand, so [`Completeness::Exact`] beside a
+    /// non-empty `boundaries` is not a value a caller can pass in — not from this crate,
+    /// and not from a consumer assembling a report of its own.
     ///
-    /// The contract hash is not a parameter: it is
+    /// The contract hash is not a parameter either: it is
     /// `calculus_contract_hash(regime)` by definition, and a report naming a calculus other
     /// than the one its regime declares would be a second contradiction with no honest
     /// reading.
@@ -872,23 +873,32 @@ impl ReasoningReport {
     /// use purrdf_datalog::seminaive::BudgetReport;
     /// use purrdf_entail::{Boundary, Completeness, Construct, ReasoningReport, Regime};
     ///
-    /// // A report a consumer assembled badly: a complete rule table AND a boundary,
-    /// // reported as plain `Exact`. The gate exists to catch exactly this.
-    /// let bad = ReasoningReport::new(
+    /// // Name a boundary and the completeness follows it — there is no second argument
+    /// // that could have said `Exact` here.
+    /// let bounded = ReasoningReport::new(
     ///     Regime::Rdfs,
-    ///     Completeness::Exact,
     ///     Vec::new(),
     ///     vec![Boundary::of(Construct::Surrogate)],
     ///     BudgetReport::new(0, 0, 0),
     ///     None,
     ///     0,
     /// );
-    /// assert!(bad.overclaims());
+    /// assert_eq!(bounded.completeness(), Completeness::ExactWithinBoundaries);
+    ///
+    /// // Name none, and the same regime's complete rule table reads `Exact`.
+    /// let plain = ReasoningReport::new(
+    ///     Regime::Rdfs,
+    ///     Vec::new(),
+    ///     Vec::new(),
+    ///     BudgetReport::new(0, 0, 0),
+    ///     None,
+    ///     0,
+    /// );
+    /// assert_eq!(plain.completeness(), Completeness::Exact);
     /// ```
     #[must_use]
     pub fn new(
         regime: Regime,
-        completeness: Completeness,
         rules_fired: Vec<(RuleId, u64)>,
         boundaries: Vec<Boundary>,
         budget: BudgetReport,
@@ -897,7 +907,6 @@ impl ReasoningReport {
     ) -> Self {
         Self {
             regime,
-            completeness,
             rules_fired,
             boundaries,
             budget,
@@ -908,10 +917,6 @@ impl ReasoningReport {
     }
 
     /// Assemble the report for a run of `regime` over `ds` that measured `stats`.
-    ///
-    /// The completeness is [`Completeness::for_run`]'s answer over this run's boundary
-    /// evidence, and it is handed to [`Self::new`] rather than repaired there — see that
-    /// constructor for why the difference is the whole value of [`Self::overclaims`].
     pub(crate) fn of_run(ds: &RdfDataset, regime: Regime, stats: &RunStats) -> Self {
         Self::of_chase_run(ds, regime, stats, None)
     }
@@ -946,12 +951,10 @@ impl ReasoningReport {
         stats: &RunStats,
         inconsistency: Option<InconsistencyWitness>,
     ) -> Self {
-        let boundaries = boundaries(ds, regime, stats);
         Self::new(
             regime,
-            Completeness::for_run(regime, &boundaries),
             fired_rules(regime, stats),
-            boundaries,
+            boundaries(ds, regime, stats),
             stats.budget,
             inconsistency,
             stats.surrogate_drops,
@@ -963,13 +966,11 @@ impl ReasoningReport {
     /// The DL lane has no rule TABLE — it is a tableau, so [`rules`] and [`implemented`]
     /// are both empty for it and [`Completeness::for_regime`] answers
     /// [`Completeness::Exact`] vacuously. What it does have is CONSTRUCTS, and
-    /// [`Completeness::for_run`] is where they narrow that vacuous `Exact` to
-    /// [`Completeness::ExactWithinBoundaries`]: a run over an ontology carrying an
-    /// `owl:propertyChainAxiom` has no missing rule to report and is still not a complete
-    /// answer, and saying `Exact` beside a non-empty boundary list is precisely the
-    /// overclaim [`Self::overclaims`] forbids. As on the chase path the derivation is
-    /// handed to [`Self::new`] rather than performed inside it, so the gate still has
-    /// something to check.
+    /// [`Completeness::for_run`] — which [`Self::completeness`] applies to whatever
+    /// boundary list this report ends up carrying — is where they narrow that vacuous
+    /// `Exact` to [`Completeness::ExactWithinBoundaries`]: a run over an ontology carrying
+    /// an `owl:propertyChainAxiom` has no missing rule to report and is still not a
+    /// complete answer.
     ///
     /// `boundaries` arrives as a set, so it is already deduplicated; it is re-ordered here
     /// into [`Construct`] declaration order, which is the order every report lists
@@ -985,10 +986,8 @@ impl ReasoningReport {
             .filter(|construct| boundaries.contains(construct))
             .map(Boundary::of)
             .collect();
-        let completeness = Completeness::for_run(Regime::OwlDirect, &boundaries);
         Self::new(
             Regime::OwlDirect,
-            completeness,
             Vec::new(),
             boundaries,
             BudgetReport::new(0, 0, 0),
@@ -1009,10 +1008,21 @@ impl ReasoningReport {
         self.regime
     }
 
-    /// How much of the regime's specified rule table was available to the run.
+    /// How much of the regime's specified rule table was available to the run, and whether
+    /// the run met anything outside it.
+    ///
+    /// COMPUTED, not stored: exactly `Completeness::for_run(self.regime(), self.boundaries())`.
+    /// That is what makes [`Completeness::Exact`] beside a non-empty [`Self::boundaries`]
+    /// unconstructible rather than merely unwelcome — there is no field a bad assembly
+    /// could set, so the certificate cannot contradict its own evidence and no run-time
+    /// check has to look for the case.
+    ///
+    /// It returns by VALUE because it is a derivation. Callers that want the missing-rule
+    /// slice across statements bind it first — `let completeness = report.completeness();`
+    /// — rather than borrowing from a temporary.
     #[must_use]
-    pub const fn completeness(&self) -> &Completeness {
-        &self.completeness
+    pub fn completeness(&self) -> Completeness {
+        Completeness::for_run(self.regime, &self.boundaries)
     }
 
     /// The rules that produced conclusions, and how many conclusions each produced.
@@ -1113,31 +1123,6 @@ impl ReasoningReport {
     #[must_use]
     pub const fn withheld_surrogates(&self) -> u64 {
         self.withheld_surrogates
-    }
-
-    /// Whether this report claims more than its own evidence supports.
-    ///
-    /// True when [`Completeness::Exact`] — the variant that means "and nothing got in the
-    /// way" — is reported alongside a non-empty [`Self::boundaries`]: the run would be
-    /// saying it answered everything and, in the same breath, naming a construct it could
-    /// not handle. [`Completeness::ExactWithinBoundaries`] is the honest way to say the
-    /// first half of that, and it does not trip the gate.
-    ///
-    /// # It can return `true`, which is the only reason it is worth calling
-    ///
-    /// The two fields it compares are stored verbatim by [`Self::new`], so the
-    /// contradiction is a representable value and this is a real predicate over it — see
-    /// that constructor's example, which builds one and watches this return `true`. No
-    /// report this crate PRODUCES may return `true`: [`Completeness::for_run`] derives the
-    /// completeness from the same boundary list the report will carry, and
-    /// [`materialize`](crate::materialize) and [`materialize_dl_reported`](crate::materialize_dl_reported)
-    /// check the assembled report and return
-    /// [`EntailError::Overclaim`](crate::EntailError::Overclaim) instead of a closure if it
-    /// ever trips. The method is public so a consumer assembling reports from several runs
-    /// — or reading one across an FFI boundary — can apply the same gate.
-    #[must_use]
-    pub fn overclaims(&self) -> bool {
-        matches!(self.completeness, Completeness::Exact) && !self.boundaries.is_empty()
     }
 }
 

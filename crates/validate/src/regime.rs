@@ -122,7 +122,19 @@ pub const REGIME_NAMES: [&str; 7] = ["simple", "rdf", "rdfs", "owl-rl", "owl-dir
 pub const PROGRAM_REGIME_NAMES: [&str; 1] = ["rif"];
 
 /// The version banner every rendered report opens with.
-pub const REPORT_FORMAT_BANNER: &str = "purrdf-reasoning-report 1";
+///
+/// `2` because the grammar moved, which is the whole reason a banner is emitted at all.
+/// Against `1`: the `withheld-surrogates` count is now rendered (it was reachable only
+/// from the CLI's private renderer, so the four existential rules were unobservable from
+/// Python, WASM and the C ABI); an inconsistency now renders its GRAPH and its premise
+/// TRIPLES rather than a bare count; and the trailing `overclaims` line is gone, because
+/// `ReasoningReport` no longer carries a completeness field that could contradict its
+/// boundary list and a rendered constant is not a gate.
+///
+/// It is also the marker that lets a REFUSAL carry a report: an inconsistent run has no
+/// closure, so its certificate travels in the error message, beginning at the first line
+/// equal to this banner. See [`render_entail_error`].
+pub const REPORT_FORMAT_BANNER: &str = "purrdf-reasoning-report 2";
 
 /// The media type this boundary parses its input document as.
 ///
@@ -278,8 +290,13 @@ impl RegimeClosure {
 /// // which a `sound-incomplete <n>` assertion would not.
 /// assert!(closed.report().contains("\nfired rdfs9 "));
 /// assert!(closed.report().contains("\nboundary "));
-/// // The invariant no report may violate, whatever the rule table's state.
-/// assert!(closed.report().ends_with("overclaims false\n"));
+/// // …including the count of the conclusions it WITHHELD. `rdfD1`, `rdfD1a`, `rdfs14`
+/// // and `rdfs14a` all fire and none of them can ever appear in a `fired` line, so this
+/// // number is the only observable they have — and it reaches every host, not just the
+/// // command line.
+/// assert!(closed.report().contains("\nwithheld-surrogates "));
+/// // The knowledge base was consistent, and the report says so as a checked fact.
+/// assert!(closed.report().ends_with("inconsistency none\n"));
 /// ```
 pub fn materialize_to_nquads_string(
     regime: &str,
@@ -293,7 +310,7 @@ pub fn materialize_to_nquads_string(
     // built inline would not outlive the value that names it.
     let rules = regime_rule_set(parsed, regime, program)?;
     let (closure, report) = materialize(&dataset, regime_plan(parsed, &rules))
-        .map_err(|error| format!("entailment regime \"{regime}\": {error}"))?;
+        .map_err(|error| render_entail_error(regime, &error))?;
     Ok(RegimeClosure {
         nquads: purrdf_rdf::canonical_flat_nquads(closure.as_ref())?,
         report: render_reasoning_report(&report),
@@ -432,7 +449,7 @@ fn rule_lines(rules: &[purrdf_entail::RuleId]) -> String {
 /// The grammar, in emission order — one fact per line, `\n`-terminated:
 ///
 /// ```text
-/// purrdf-reasoning-report 1
+/// purrdf-reasoning-report 2
 /// regime <cli-spelling>
 /// completeness exact | completeness exact-within-boundaries | completeness sound-incomplete <count>
 /// missing <rule-id>                       (0..n, specification table order)
@@ -442,32 +459,81 @@ fn rule_lines(rules: &[purrdf_entail::RuleId]) -> String {
 /// budget stored-facts <n>
 /// budget term-arena-bytes <n>
 /// contract-hash <64 lowercase hex>
+/// withheld-surrogates <n>
 /// inconsistency none | inconsistency <rule-id> premises <n>
-/// overclaims false | overclaims true
+/// inconsistency-graph default | inconsistency-graph <term>   (only after a witness)
+/// inconsistency-premise <s> <p> <o>       (n of them, the rule's own premise order)
 /// ```
-///
-/// `overclaims` is derivable from `completeness` and the `boundary` lines, and is
-/// emitted anyway: it is the invariant no report may ever violate, and a consumer
-/// on the far side of an FFI boundary should not have to re-derive the gate to
-/// check it.
 ///
 /// `completeness` has three forms and the middle one is the interesting one:
 /// `exact-within-boundaries` says the rule TABLE was complete and the run still
 /// met a construct it could not fully handle, which is what an `owl-rl` closure
-/// is. Reporting that as plain `exact` would be the overclaim the last line
-/// exists to forbid.
+/// is. It is DERIVED from the `boundary` lines below it —
+/// [`ReasoningReport::completeness`] computes it rather than reading a field — so a
+/// consumer never has to reconcile the two, and a self-contradicting certificate has no
+/// constructor to come from. That is why there is no trailing `overclaims` line any more:
+/// a rendered constant is a disclosure, not a gate.
 ///
-/// The `inconsistency` line names the rule that detected a clash. It is `none`
-/// for every closure this boundary produces, and that is now a CHECKED fact
-/// rather than a vacuous one: the seventeen OWL 2 RL rules that conclude `false`
-/// all run, and a run that witnesses one is REFUSED — the witness reaches the
-/// caller on `purrdf_entail::EntailError::Inconsistent`, not in a report of a
-/// closure that does not exist. The witness's premise *triples* are not rendered
-/// here; a Rust caller that needs them reads them from
-/// [`purrdf_entail::materialize`] directly, where they are terms rather than text.
+/// `withheld-surrogates` is the only observable trace of `rdfD1`, `rdfD1a`, `rdfs14` and
+/// `rdfs14a`. All four fire, every conclusion they reach mentions a blank node a SPARQL
+/// entailment regime may not answer with, so none of them can ever appear in a `fired`
+/// line — and without this number a caller could not tell an RDFS run that evaluated them
+/// from one that did not. It reached only the CLI before, which left the four rules
+/// invisible from exactly the hosts the report exists for.
+///
+/// The `inconsistency` block names the rule that detected a clash, the graph whose closure
+/// refused, and the asserted triples that satisfied the rule, in that rule's own premise
+/// order — so a reader can line them up against the specification's rule-table entry. It
+/// is `none` for every closure this boundary produces, and that is a CHECKED fact rather
+/// than a vacuous one: the seventeen OWL 2 RL rules that conclude `false` all run, and a
+/// run that witnesses one is REFUSED. The refusal still carries this rendering; see
+/// [`render_entail_error`].
+///
+/// Premise terms are in N-Triples term syntax, which is self-delimiting, so a three-term
+/// line stays unambiguous even when a literal's lexical form holds a space.
 #[must_use]
 pub fn render_reasoning_report(report: &ReasoningReport) -> String {
     RenderedReport(report).to_string()
+}
+
+/// Render the boundary's refusal for `error`, under the regime spelling `regime`.
+///
+/// The one map from a [`purrdf_entail::EntailError`] to the string every host's error
+/// channel carries — the C ABI's message buffer, WASM's `JsError`, Python's `ValueError`.
+///
+/// # An inconsistent run is refused WITH its certificate
+///
+/// [`purrdf_entail::EntailError::Inconsistent`] carries an
+/// [`purrdf_entail::InconsistentRun`]: the witness AND the [`ReasoningReport`] for
+/// everything the run had done when it stopped. This boundary used to render that through
+/// `Display` alone — a one-line summary that read only the premise COUNT — so the caller
+/// whose data was bad was the one caller who got no report at all, on every host, and the
+/// witness's triples had no reader outside this workspace's own tests.
+///
+/// They travel in the message because a string-in/string-out boundary has exactly one
+/// error channel and it is a string. The message is the `Display` one-liner, then the full
+/// [`render_reasoning_report`] rendering on the following lines — whose
+/// `inconsistency-premise` lines are the witness triples and whose first line is
+/// [`REPORT_FORMAT_BANNER`], so a consumer that wants the certificate splits there rather
+/// than parsing prose.
+///
+/// Every other variant is the ABSENCE of a run — an exhausted ceiling, a malformed
+/// document, an unsatisfiable tableau — and has no report to carry, so it renders as its
+/// own diagnostic and nothing is implied about a closure that was never assembled.
+#[must_use]
+pub fn render_entail_error(regime: &str, error: &EntailError) -> String {
+    let head = format!("entailment regime \"{regime}\": {error}");
+    match error {
+        EntailError::Inconsistent(run) => {
+            format!("{head}\n{}", render_reasoning_report(run.report()))
+        }
+        EntailError::Build(_)
+        | EntailError::Parse(_)
+        | EntailError::Evaluate(_)
+        | EntailError::Chase(_)
+        | EntailError::MalformedList(_)
+        | EntailError::Unsatisfiable => head,
+    }
 }
 
 /// The [`fmt::Display`] carrier for [`render_reasoning_report`].
@@ -483,7 +549,10 @@ impl fmt::Display for RenderedReport<'_> {
         let report = self.0;
         writeln!(f, "{REPORT_FORMAT_BANNER}")?;
         writeln!(f, "regime {}", regime_name(report.regime()))?;
-        match report.completeness() {
+        // Bound once: the completeness is DERIVED from the boundary list on every call, so
+        // asking twice would recompute it — and the `missing` lines below borrow from it.
+        let completeness = report.completeness();
+        match &completeness {
             Completeness::Exact => writeln!(f, "completeness exact")?,
             Completeness::ExactWithinBoundaries => {
                 writeln!(f, "completeness exact-within-boundaries")?;
@@ -492,7 +561,6 @@ impl fmt::Display for RenderedReport<'_> {
                 writeln!(f, "completeness sound-incomplete {}", missing.len())?;
             }
         }
-        let completeness = report.completeness();
         for rule in completeness.missing() {
             writeln!(f, "missing {}", rule.as_str())?;
         }
@@ -512,16 +580,33 @@ impl fmt::Display for RenderedReport<'_> {
         writeln!(f, "budget stored-facts {}", budget.stored_facts())?;
         writeln!(f, "budget term-arena-bytes {}", budget.term_arena_bytes())?;
         writeln!(f, "contract-hash {}", report.contract_hash().to_hex())?;
-        match report.inconsistency() {
-            None => writeln!(f, "inconsistency none")?,
-            Some(witness) => writeln!(
-                f,
-                "inconsistency {} premises {}",
-                witness.rule().as_str(),
-                witness.premises().len()
-            )?,
+        writeln!(f, "withheld-surrogates {}", report.withheld_surrogates())?;
+        let Some(witness) = report.inconsistency() else {
+            return writeln!(f, "inconsistency none");
+        };
+        writeln!(
+            f,
+            "inconsistency {} premises {}",
+            witness.rule().as_str(),
+            witness.premises().len()
+        )?;
+        // The graph whose CLOSURE refused, which is not the same claim as "every premise
+        // is asserted here": a named graph is closed against the union of itself and the
+        // default graph, so a premise may be asserted in either.
+        match witness.graph() {
+            None => writeln!(f, "inconsistency-graph default")?,
+            Some(graph) => writeln!(f, "inconsistency-graph {}", emit(graph))?,
         }
-        writeln!(f, "overclaims {}", report.overclaims())
+        for premise in witness.premises() {
+            writeln!(
+                f,
+                "inconsistency-premise {} {} {}",
+                emit(premise.subject()),
+                emit(premise.predicate()),
+                emit(premise.object())
+            )?;
+        }
+        Ok(())
     }
 }
 
@@ -651,6 +736,71 @@ pub fn check_regime_golden_vectors() -> Result<(), String> {
         if !cases.iter().any(|case| case.regime() == regime) {
             return Err(format!(
                 "the regime golden vector artifact no longer covers regime \"{regime}\""
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The document [`check_inconsistent_refusal`] refuses.
+///
+/// Two disjoint classes and one instance of both — OWL 2 RL's `cax-dw`, whose three
+/// premises are exactly these three triples, in this order.
+pub const INCONSISTENT_DOCUMENT: &str = concat!(
+    "<http://example.org/A> <http://www.w3.org/2002/07/owl#disjointWith> ",
+    "<http://example.org/B> .\n",
+    "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
+    "<http://example.org/A> .\n",
+    "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
+    "<http://example.org/B> .\n",
+);
+
+/// Check that an INCONSISTENT input is refused WITH its certificate and its witness
+/// triples.
+///
+/// The twin of [`check_regime_golden_vectors`], and made shared for the same reason: the
+/// Rust test here, the C-ABI crate's test and the WASM crate's test all call it, so the
+/// one host that quietly stopped carrying the evidence fails against the same expectation
+/// as the other two.
+///
+/// It is a separate entry point rather than a tenth golden case because the golden artifact
+/// pairs an input with the two strings a SUCCESSFUL closure produces, and an inconsistent
+/// input has no closure. What it produces is a refusal, and the property under test is that
+/// the refusal is not evidence-free: before this, every host mapped
+/// [`purrdf_entail::EntailError::Inconsistent`] through `Display`, which reads only the
+/// premise COUNT — so `inconsistency` was the constant `none` on every host, and
+/// `WitnessTriple`'s three accessors had no caller outside this workspace's tests.
+///
+/// # Errors
+///
+/// A closure where a refusal was required, or a refusal that does not carry the report
+/// banner, the witness rule, the graph whose closure refused, or all three premise triples.
+pub fn check_inconsistent_refusal() -> Result<(), String> {
+    let Err(refusal) = materialize_to_nquads_string("owl-rl", INCONSISTENT_DOCUMENT, "") else {
+        return Err(
+            "two disjoint classes with a shared instance must be refused by cax-dw".to_owned(),
+        );
+    };
+    let required = [
+        "knowledge base is inconsistent: cax-dw was satisfied by 3 asserted triples",
+        REPORT_FORMAT_BANNER,
+        "\nregime owl-rl\n",
+        "\ninconsistency cax-dw premises 3\n",
+        "\ninconsistency-graph default\n",
+        "\ninconsistency-premise <http://example.org/A> \
+         <http://www.w3.org/2002/07/owl#disjointWith> <http://example.org/B>\n",
+        "\ninconsistency-premise <http://example.org/x> \
+         <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A>\n",
+        "\ninconsistency-premise <http://example.org/x> \
+         <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B>\n",
+        // The run is described, not merely refused: it cost a budget and named a calculus.
+        "\ncontract-hash ",
+        "\nwithheld-surrogates 0\n",
+    ];
+    for fragment in required {
+        if !refusal.contains(fragment) {
+            return Err(format!(
+                "the refusal must carry {fragment:?}\n--- refusal ---\n{refusal}"
             ));
         }
     }
@@ -1171,9 +1321,12 @@ fn write_axiom(axiom: &DlAxiom, out: &mut String) {
 /// `steps` may legitimately exceed `budget` when `decisions` is greater than one.
 /// Neither is a clock reading, so the rendering is identical on `wasm32`.
 ///
-/// `overclaims` is derivable and is emitted anyway, for the same reason
-/// [`render_reasoning_report`] emits its own: a consumer on the far side of an FFI
-/// boundary should not have to re-derive the gate to check it.
+/// `overclaims` is derivable from `completeness` and the `boundary` lines and is emitted
+/// anyway, so a consumer on the far side of an FFI boundary does not have to re-derive it.
+/// Note that the CHASE report has no such line: [`ReasoningReport`] stores no completeness
+/// field to contradict its boundary list, so there is nothing there to gate. A
+/// [`DlCertificate`] does store its verdict beside its boundaries, which is why this one
+/// stays.
 #[must_use]
 pub fn render_dl_certificate(service: &str, certificate: &DlCertificate) -> String {
     let mut out = String::new();
@@ -1996,6 +2149,52 @@ mod tests {
         );
     }
 
+    /// THE REFUSAL CARRIES THE CERTIFICATE, and the witness TRIPLES with it.
+    ///
+    /// The C-ABI and WASM hosts make this same call against this same checker.
+    #[test]
+    fn an_inconsistent_input_is_refused_with_its_report() {
+        check_inconsistent_refusal().expect("the inconsistent refusal");
+    }
+
+    /// The withheld-surrogate count is a MEASUREMENT of the run, not a constant.
+    ///
+    /// The four existential rules are unobservable any other way — they can never appear
+    /// in a `fired` line — so a renderer that omits this number leaves a caller with a
+    /// `boundary surrogate` paragraph saying conclusions are "counted here" beside no
+    /// count. It is asserted as a comparison between lanes rather than as a literal: the
+    /// RDFS lane states all four rules and withholds conclusions, `owl-rl` states none of
+    /// them and withholds nothing, and both numbers reach the same shared renderer.
+    #[test]
+    fn the_withheld_surrogate_count_moves_with_the_lane() {
+        let withheld = |regime: &str| -> u64 {
+            let report = materialize_to_nquads_string(regime, SCHEMA, "")
+                .expect("a regime")
+                .into_parts()
+                .1;
+            report
+                .lines()
+                .find_map(|line| line.strip_prefix("withheld-surrogates "))
+                .expect("every report states the count")
+                .parse()
+                .expect("a decimal count")
+        };
+        assert!(
+            withheld("rdfs") > 0,
+            "rdfs states rdfD1, rdfD1a, rdfs14 and rdfs14a, and withholds what they conclude"
+        );
+        assert_eq!(
+            withheld("owl-rl"),
+            0,
+            "OWL 2 RL states none of the four, so there is nothing to withhold"
+        );
+        assert_eq!(
+            withheld("simple"),
+            0,
+            "the identity closure evaluates nothing"
+        );
+    }
+
     /// An unknown spelling is refused with the whole accepted set named.
     #[test]
     fn an_unknown_regime_names_the_accepted_set() {
@@ -2031,7 +2230,8 @@ mod tests {
                 "{name}: {}",
                 closed.report()
             );
-            assert!(closed.report().ends_with("overclaims false\n"), "{name}");
+            assert!(closed.report().contains("\nwithheld-surrogates "), "{name}");
+            assert!(closed.report().ends_with("inconsistency none\n"), "{name}");
             // The asserted data is carried through by every lane, so none of them is an
             // empty answer dressed as a closure.
             assert!(
@@ -2159,8 +2359,9 @@ mod tests {
         }
     }
 
-    /// The rendering's shape: banner first, newline-terminated, fixed field
-    /// order, and the derived `overclaims` gate never true.
+    /// The rendering's shape: banner first, newline-terminated, fixed field order, the
+    /// withheld-surrogate count present on every host, and a checked `inconsistency none`
+    /// last.
     #[test]
     fn the_rendering_has_the_documented_shape() {
         for (regime, program) in REGIME_CALLS {
@@ -2172,8 +2373,12 @@ mod tests {
             assert_eq!(lines[0], REPORT_FORMAT_BANNER, "{regime}");
             assert_eq!(lines[1], format!("regime {regime}"), "{regime}");
             assert!(lines[2].starts_with("completeness "), "{regime}");
-            assert!(report.ends_with("overclaims false\n"), "{regime}");
-            assert!(report.contains("\ninconsistency none\n"), "{regime}");
+            assert!(report.ends_with("inconsistency none\n"), "{regime}");
+            assert_eq!(
+                report.matches("\nwithheld-surrogates ").count(),
+                1,
+                "{regime}: the withheld-surrogate count reaches every host"
+            );
             assert_eq!(
                 report.matches("\ncontract-hash ").count(),
                 1,

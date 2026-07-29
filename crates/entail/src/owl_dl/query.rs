@@ -174,16 +174,16 @@ enum Task {
 /// The report's [`Completeness`](crate::Completeness) is
 /// [`Exact`](crate::Completeness::Exact) when the ontology held nothing this layer could
 /// not read, and [`ExactWithinBoundaries`](crate::Completeness::ExactWithinBoundaries) when
-/// it did — never `Exact` beside a non-empty boundary list, which is the overclaim
-/// [`ReasoningReport::overclaims`] forbids.
+/// it did — never `Exact` beside a non-empty boundary list, because
+/// [`ReasoningReport::completeness`] DERIVES the value from that very list rather than
+/// carrying a second claim beside it.
 ///
 /// # Errors
 ///
 /// [`EntailError::Unsatisfiable`] if the data is unsatisfiable (every query would then be
 /// entailed, so there is no meaningful answer set); [`EntailError::Parse`] on a
 /// malformed class-expression graph; [`EntailError::Build`] on tableau step-cap
-/// exhaustion; [`EntailError::Overclaim`] if the assembled report contradicts its own
-/// evidence (the same gate [`materialize`](crate::materialize) applies).
+/// exhaustion.
 pub fn materialize_dl_reported(
     ds: &RdfDataset,
     query_bgp: &[QTriple],
@@ -255,14 +255,7 @@ pub fn materialize_dl_reported(
     let dataset = b
         .freeze()
         .map_err(|e| EntailError::Build(format!("freeze augmented dataset: {e}")))?;
-    let report = ReasoningReport::of_dl_run(&boundaries);
-    // THE GATE, on the DL lane's emission path — the same check `materialize` applies to a
-    // chase run, for the same reason: a certificate that contradicts its own boundary list
-    // is refused rather than returned beside an answer.
-    if report.overclaims() {
-        return Err(EntailError::Overclaim(Box::new(report)));
-    }
-    Ok((dataset, report))
+    Ok((dataset, ReasoningReport::of_dl_run(&boundaries)))
 }
 
 /// Resolve a query node to an interned id (a variable yields `None`).
@@ -966,9 +959,8 @@ mod tests {
         // And the certificate stops claiming a flatly-exact run.
         assert_eq!(
             report.completeness(),
-            &crate::Completeness::ExactWithinBoundaries
+            crate::Completeness::ExactWithinBoundaries
         );
-        assert!(!report.overclaims());
     }
 
     /// …and a default-graph-only ontology raises nothing, so the boundary is EVIDENCE
@@ -977,6 +969,5 @@ mod tests {
     fn a_default_graph_ontology_raises_no_named_graph_boundary() {
         let (_, report) = materialize_dl_reported(&ontology(None), &[]).expect("dl run");
         assert!(!constructs(&report).contains(&Construct::NamedGraph));
-        assert!(!report.overclaims());
     }
 }

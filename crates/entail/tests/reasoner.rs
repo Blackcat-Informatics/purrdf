@@ -167,7 +167,7 @@ fn honest<T>(answer: &purrdf_entail::Certified<T>) -> &purrdf_entail::DlCertific
     certificate
 }
 
-// --- task 28: the reasoner façade -------------------------------------------------------
+// --- the reasoner façade ----------------------------------------------------------------
 
 #[test]
 fn a_consistent_ontology_is_reported_consistent_and_decided() {
@@ -718,13 +718,12 @@ fn the_augmentation_states_a_role_assertion_the_property_hierarchy_entails() {
         (N::E("a"), N::E("p"), N::E("b")),
     ]);
     let bgp = vec![pattern(var("x"), &ex("q"), var("y"))];
-    let (augmented, report) =
+    let (augmented, _) =
         purrdf_entail::materialize_dl_reported(&dataset, &bgp).expect("consistent");
     assert!(
         holds(&augmented, &ex("a"), &ex("q"), &ex("b")),
         "the entailed super-property edge must reach the augmentation"
     );
-    assert!(!report.overclaims());
 
     // A property the query never names costs nothing and is not injected.
     let unrelated = vec![pattern(var("x"), &ex("unrelated"), var("y"))];
@@ -745,13 +744,12 @@ fn the_augmentation_states_a_role_assertion_transitivity_entails() {
         (N::E("b"), N::E("p"), N::E("c")),
     ]);
     let bgp = vec![pattern(var("x"), &ex("p"), var("y"))];
-    let (augmented, report) =
+    let (augmented, _) =
         purrdf_entail::materialize_dl_reported(&dataset, &bgp).expect("consistent");
     assert!(
         holds(&augmented, &ex("a"), &ex("p"), &ex("c")),
         "transitivity entails a p c"
     );
-    assert!(!report.overclaims());
 }
 
 #[test]
@@ -773,13 +771,12 @@ fn the_augmentation_states_a_subsumption_only_an_assertion_entails() {
         p: QNode::Term(TermValue::iri(SUB_CLASS)),
         o: var("d"),
     }];
-    let (augmented, report) =
+    let (augmented, _) =
         purrdf_entail::materialize_dl_reported(&dataset, &bgp).expect("consistent");
     assert!(
         holds(&augmented, &ex("Only"), SUB_CLASS, &ex("Female")),
         "an ABox-dependent subsumption must reach the augmentation"
     );
-    assert!(!report.overclaims());
 }
 
 #[test]
@@ -808,10 +805,9 @@ fn a_query_blank_node_outside_a_class_expression_raises_the_residue_boundary() {
     );
     assert_eq!(
         report.completeness(),
-        &purrdf_entail::Completeness::ExactWithinBoundaries,
+        purrdf_entail::Completeness::ExactWithinBoundaries,
         "a run that met the residue is not exact"
     );
-    assert!(!report.overclaims());
 }
 
 #[test]
@@ -856,7 +852,6 @@ fn a_class_expression_scaffold_blank_node_is_not_a_non_distinguished_variable() 
         !names.contains(&"non-distinguished-variable"),
         "a class-expression scaffold is ground syntax: {names:?}"
     );
-    assert!(!report.overclaims());
 }
 
 // --- locality module extraction ----------------------------------------------------------
@@ -1156,7 +1151,7 @@ fn module_extraction_is_reproducible() {
     }
 }
 
-// --- task 29: profile certification ------------------------------------------------------
+// --- profile certification ---------------------------------------------------------------
 
 /// The profiles a certificate blocks, as strings, for readable assertions.
 fn blocked(certificate: &ProfileCertificate) -> Vec<&'static str> {

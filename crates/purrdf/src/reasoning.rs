@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use purrdf_datalog::seminaive::BudgetReport;
 use purrdf_entail::{
-    Completeness, EntailError, Materialization, QNode, QTriple, ReasoningReport, Regime, RuleSet,
+    EntailError, Materialization, QNode, QTriple, ReasoningReport, Regime, RuleSet,
 };
 use purrdf_rdf::{
     RdfDataset, RdfDiagnostic, RdfTextDirection, SparqlRequest, SparqlResult, TermValue,
@@ -150,7 +150,6 @@ pub fn query_with_entailment(
 fn simple_report() -> ReasoningReport {
     ReasoningReport::new(
         Regime::Simple,
-        Completeness::for_run(Regime::Simple, &[]),
         Vec::new(),
         Vec::new(),
         BudgetReport::new(0, 0, 0),
@@ -323,7 +322,6 @@ mod tests {
         // `dt-type1` is premise-free, so every supported datatype is typed in every closure.
         assert!(matches!(result, SparqlResult::Boolean(true)));
         assert_eq!(report.regime(), Regime::D);
-        assert!(!report.overclaims());
         // Simple entailment does NOT derive it, so the answer is the regime's and not the
         // data's.
         assert!(matches!(
@@ -358,7 +356,6 @@ mod tests {
         ] {
             let (_, report) = ask_reported(mode);
             assert_eq!(report.regime(), regime, "{regime:?}");
-            assert!(!report.overclaims(), "{regime:?}");
         }
     }
 
