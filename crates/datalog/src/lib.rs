@@ -51,18 +51,27 @@
 //!
 //! # The relation store and its cursors
 //!
-//! - [`store`] — the columnar [`RelationStore`](store::RelationStore): one shared
-//!   arrangement per predicate, held as sorted immutable batches plus a mutable
-//!   tail, deduped by a galloping probe rather than by hashing, and generic over an
-//!   abelian [`Weight`](store::Weight) monoid so signed (Z-set) multiplicities —
-//!   and hence retraction — are a compiled property of the representation.
+//! - [`store`] — the columnar [`RelationStore`](store::RelationStore): ONE arity-4
+//!   relation `triple(subject, predicate, object, graph)` over one term dictionary,
+//!   physically partitioned by its `(predicate, graph)` positions. Each partition is a
+//!   shared arrangement held as sorted immutable batches plus a mutable tail, deduped by a
+//!   galloping probe rather than by hashing, and generic over an abelian
+//!   [`Weight`](store::Weight) monoid so signed (Z-set) multiplicities — and hence
+//!   retraction — are a compiled property of the representation. A constant predicate
+//!   reaches its arrangement through one ordered-map probe; a variable one sweeps the
+//!   matching partitions in lexical order and still indexes inside each.
 //! - [`cursor`] — the zero-allocation lending cursor over one arrangement, and the
 //!   globally value-ordered trie cursor the leapfrog join seeks over.
 //!
 //! # The rule IR
 //!
 //! - [`clause`] — the **DL-clause** `U₁ ∧ … ∧ Uₙ → ∃ȳ. (C₁ ∨ … ∨ Cₘ)`, the crate's one
-//!   rule representation, where each `Cᵢ` is itself a conjunction of head atoms — so
+//!   rule representation. Every atom is the arity-4 quad `triple(?s, ?p, ?o, ?g)` with the
+//!   predicate carried as DATA, so a rule may quantify over the property position — which
+//!   is what OWL 2 RL's `prp-dom`, `prp-spo1`, `prp-trp` and their siblings require and
+//!   what a relation-symbol encoding cannot express at all — and over the graph, so
+//!   reasoning is per-graph rather than flattened. Each `Cᵢ` is itself a conjunction of
+//!   head atoms — so
 //!   `A ⊑ ∃r.C`, which lowers to `∃y. (r(x, y) ∧ C(y))` with ONE shared witness, is one
 //!   rule. That shape covers all five head forms — atomic (a Datalog rule), existential,
 //!   disjunctive, conjunctive and empty (`false`) — so the chase and the hypertableau that

@@ -47,9 +47,11 @@ pub(crate) struct SynthWorkload {
     pub(crate) name: &'static str,
     /// The rule program, in authored order.
     pub(crate) rules: Vec<DlClause>,
-    /// The EDB triples as `(subject, predicate, object)` LEXICAL SURFACES — the exact
-    /// bytes a [`RelationStore`] interns, and the bytes a plan constant renders to.
-    pub(crate) triples: Vec<(String, String, String)>,
+    /// The EDB quads as `(subject, predicate, object, graph)` LEXICAL SURFACES — the
+    /// exact bytes a [`RelationStore`] interns, and the bytes a plan constant renders to.
+    /// Every corpus quad is in the default graph, which is what an atom written without a
+    /// graph position denotes.
+    pub(crate) triples: Vec<(String, String, String, String)>,
     /// The analytically-known DERIVED facts (the least model minus the EDB).
     pub(crate) expected: BTreeSet<Fact>,
     /// The closed-form count of derived facts, cross-checking [`Self::expected`].
@@ -63,8 +65,8 @@ impl SynthWorkload {
     /// generators are pure, so two calls seed byte-identical stores.
     pub(crate) fn edb(&self) -> RelationStore {
         let mut store = RelationStore::new();
-        for (subject, predicate, object) in &self.triples {
-            store.insert(predicate, subject, object);
+        for (subject, predicate, object, graph) in &self.triples {
+            store.insert(subject, predicate, object, graph);
         }
         store
     }
@@ -102,12 +104,23 @@ fn rule(head: (&str, &str, &str), body: &[(&str, &str, &str)]) -> DlClause {
     DlClause::datalog(atom(head), body.iter().copied().map(atom).collect())
 }
 
-/// A derived fact over IRI terms.
+/// One EDB quad, as the lexical surfaces the store interns, in the default graph.
+fn quad(subject: &str, predicate: &str, object: &str) -> (String, String, String, String) {
+    (
+        surface(subject),
+        surface(predicate),
+        surface(object),
+        RelationStore::DEFAULT_GRAPH.to_owned(),
+    )
+}
+
+/// A derived fact over IRI terms, in the default graph.
 fn fact(subject: &str, predicate: &str, object: &str) -> Fact {
     Fact {
         subject: surface(subject),
-        predicate: predicate.to_owned(),
+        predicate: surface(predicate),
         object: surface(object),
+        graph: RelationStore::DEFAULT_GRAPH.to_owned(),
     }
 }
 
@@ -134,8 +147,8 @@ pub(crate) fn transitive_closure(n: usize) -> SynthWorkload {
     let edge = edge_p();
     let path = path_p();
 
-    let triples: Vec<(String, String, String)> = (0..n)
-        .map(|i| (surface(&node(i)), edge.clone(), surface(&node(i + 1))))
+    let triples: Vec<(String, String, String, String)> = (0..n)
+        .map(|i| quad(&node(i), &edge, &node(i + 1)))
         .collect();
 
     let rules = vec![
@@ -177,8 +190,8 @@ pub(crate) fn strongly_connected(n: usize) -> SynthWorkload {
     let path = path_p();
     let same = format!("{BASE}/same_component");
 
-    let triples: Vec<(String, String, String)> = (0..n)
-        .map(|i| (surface(&node(i)), edge.clone(), surface(&node((i + 1) % n))))
+    let triples: Vec<(String, String, String, String)> = (0..n)
+        .map(|i| quad(&node(i), &edge, &node((i + 1) % n)))
         .collect();
 
     let rules = vec![
@@ -232,15 +245,11 @@ pub(crate) fn same_generation(n: usize) -> SynthWorkload {
     let level_1 = |i: usize| format!("{BASE}/p{i}");
     let level_2 = |i: usize, j: usize| format!("{BASE}/c{i}_{j}");
 
-    let mut triples: Vec<(String, String, String)> = Vec::new();
+    let mut triples: Vec<(String, String, String, String)> = Vec::new();
     for i in 0..n {
-        triples.push((surface(&level_1(i)), parent.clone(), surface(&root)));
+        triples.push(quad(&level_1(i), &parent, &root));
         for j in 0..n {
-            triples.push((
-                surface(&level_2(i, j)),
-                parent.clone(),
-                surface(&level_1(i)),
-            ));
+            triples.push(quad(&level_2(i, j), &parent, &level_1(i)));
         }
     }
 
@@ -301,8 +310,8 @@ pub(crate) fn reachability(n: usize) -> SynthWorkload {
     let reach = format!("{BASE}/reach");
     let source = node(0);
 
-    let triples: Vec<(String, String, String)> = (0..n)
-        .map(|i| (surface(&node(i)), edge.clone(), surface(&node(i + 1))))
+    let triples: Vec<(String, String, String, String)> = (0..n)
+        .map(|i| quad(&node(i), &edge, &node(i + 1)))
         .collect();
 
     let rules = vec![

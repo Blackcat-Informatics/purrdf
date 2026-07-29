@@ -52,9 +52,11 @@ pub const PLAN_SOLVER_VERSION: &str = "purrdf-datalog-plan-v1";
 ///
 /// Bumped whenever the DL-clause IR grows a field an execution can observe, so a digest
 /// computed under an older encoding can never be mistaken for one computed under the
-/// current encoding. `v2`: the head gained its disjunct/conjunct nesting level, so a
-/// `v1` digest and a `v2` digest of the same program encode different byte streams.
-const CLAUSE_IR_DIGEST_TAG: &str = "purrdf-datalog-dl-clause-ir-v2";
+/// current encoding. `v2`: the head gained its disjunct/conjunct nesting level. `v3`: an
+/// atom became an arity-4 quad — the predicate is now a TERM (so a variable predicate and
+/// a constant one hash under different variant tags, where before every predicate was one
+/// length-prefixed string) and the graph position joined the encoding.
+const CLAUSE_IR_DIGEST_TAG: &str = "purrdf-datalog-dl-clause-ir-v3";
 
 /// Domain-separation tag for [`PlanIdentity`].
 const PLAN_IDENTITY_TAG: &str = "purrdf-datalog-plan-identity-v1";
@@ -88,17 +90,26 @@ fn hash_term(hasher: &mut blake3::Hasher, term: &ClauseTerm) {
             hasher.update(&[2]);
             frame_str(hasher, surface);
         }
+        ClauseTerm::DefaultGraph => {
+            hasher.update(&[3]);
+        }
     }
 }
 
-/// Hash one clause atom, polarity included.
+/// Hash one clause atom: all FOUR positions, polarity included.
+///
+/// The predicate goes through [`hash_term`] exactly like the subject, the object and the
+/// graph, so a variable predicate carries the `Var` tag and a constant one the `Iri` tag:
+/// `T(?x, ?p, ?y, ?g)` and `T(?x, <p>, ?y, ?g)` are different programs and cannot share a
+/// digest. The graph position is hashed unconditionally, so two rules that differ only in
+/// which graph they read or write address differently too.
 ///
 /// The polarity byte is emitted for head atoms too, where it is always `0`: one atom
 /// encoder for both positions is cheaper to keep correct than two that must agree.
 fn hash_atom(hasher: &mut blake3::Hasher, atom: &ClauseAtom) {
-    hash_term(hasher, atom.subject());
-    frame_str(hasher, atom.predicate());
-    hash_term(hasher, atom.object());
+    for term in atom.terms() {
+        hash_term(hasher, term);
+    }
     hasher.update(&[u8::from(atom.is_negated())]);
 }
 
@@ -106,8 +117,9 @@ fn hash_atom(hasher: &mut blake3::Hasher, atom: &ClauseAtom) {
 ///
 /// # What is hashed
 ///
-/// The whole IR: for each clause, its body literals (subject, predicate, object and
-/// polarity), its existential quantifier list, and its head — a disjunction of
+/// The whole IR: for each clause, its body literals (subject, predicate, object, GRAPH and
+/// polarity — the predicate encoded as a term, so a variable one and a constant one are
+/// distinguishable), its existential quantifier list, and its head — a disjunction of
 /// conjunctions, encoded at BOTH nesting levels. Every variable-length field is
 /// length-prefixed and every enum carries an explicit tag, so this is a structural digest
 /// and not a rendering of a debug format.
@@ -411,7 +423,12 @@ mod tests {
     fn store_of(triples: &[(&str, &str, &str)]) -> RelationStore {
         let mut store = RelationStore::new();
         for &(subject, predicate, object) in triples {
-            store.insert(predicate, &format!("<{subject}>"), &format!("<{object}>"));
+            store.insert(
+                &format!("<{subject}>"),
+                &format!("<{predicate}>"),
+                &format!("<{object}>"),
+                RelationStore::DEFAULT_GRAPH,
+            );
         }
         store
     }
@@ -564,6 +581,85 @@ mod tests {
         );
     }
 
+    /// The digest separates a VARIABLE predicate from a constant one, and separates two
+    /// different graph positions.
+    ///
+    /// Both are execution-relevant: `T(?x, ?p, ?y, ?g)` sweeps partitions and binds `?p`
+    /// where `T(?x, <p>, ?y, ?g)` addresses one and binds nothing there, and a rule that
+    /// reads a named graph reads different data from one that reads the default graph.
+    /// Sharing a cached plan across either difference would run the wrong program.
+    #[test]
+    fn the_digest_separates_the_predicate_and_graph_positions() {
+        let head = || atom("?X", Q, "?Y");
+        let clause = |body: ClauseAtom| vec![DlClause::datalog(head(), vec![body])];
+        let g1 = ClauseTerm::iri("https://example.org/g1");
+        let g2 = ClauseTerm::iri("https://example.org/g2");
+
+        // A constant predicate versus a variable one, over the same graph.
+        let constant = clause(ClauseAtom::quad(
+            v("?X"),
+            ClauseTerm::iri(P),
+            v("?Y"),
+            ClauseTerm::DefaultGraph,
+        ));
+        let variable = clause(ClauseAtom::quad(
+            v("?X"),
+            v("?P"),
+            v("?Y"),
+            ClauseTerm::DefaultGraph,
+        ));
+        assert_ne!(
+            canonical_rule_hash(&constant),
+            canonical_rule_hash(&variable),
+            "a variable predicate and a constant one are different programs"
+        );
+        assert_ne!(
+            PlanIdentity::new(CONTRACT, &constant),
+            PlanIdentity::new(CONTRACT, &variable)
+        );
+        // The convenience constructor is exactly the constant, default-graph form.
+        assert_eq!(
+            canonical_rule_hash(&clause(atom("?X", P, "?Y"))),
+            canonical_rule_hash(&constant)
+        );
+
+        // Two different named graphs, and a named graph versus the default one.
+        let in_g1 = clause(ClauseAtom::quad(
+            v("?X"),
+            ClauseTerm::iri(P),
+            v("?Y"),
+            g1.clone(),
+        ));
+        let in_g2 = clause(ClauseAtom::quad(v("?X"), ClauseTerm::iri(P), v("?Y"), g2));
+        let in_variable_graph = clause(ClauseAtom::quad(
+            v("?X"),
+            ClauseTerm::iri(P),
+            v("?Y"),
+            ClauseTerm::var("?G"),
+        ));
+        let digests = [
+            canonical_rule_hash(&constant),
+            canonical_rule_hash(&in_g1),
+            canonical_rule_hash(&in_g2),
+            canonical_rule_hash(&in_variable_graph),
+        ];
+        for (i, left) in digests.iter().enumerate() {
+            for right in &digests[i + 1..] {
+                assert_ne!(left, right, "graph positions must not collide");
+            }
+        }
+
+        // The graph position of a HEAD atom is hashed too, not only a body atom's.
+        let head_in_g1 = vec![DlClause::datalog(
+            ClauseAtom::quad(v("?X"), ClauseTerm::iri(Q), v("?Y"), g1),
+            vec![atom("?X", P, "?Y")],
+        )];
+        assert_ne!(
+            canonical_rule_hash(&head_in_g1),
+            canonical_rule_hash(&[DlClause::datalog(head(), vec![atom("?X", P, "?Y")])])
+        );
+    }
+
     /// Conjunct order inside one disjunct is hashed: it is the order the atoms are
     /// asserted in, and the order the planner's variable frame is laid out in.
     #[test]
@@ -660,10 +756,10 @@ mod tests {
             let derivation = &evaluation.derivations()[0];
             (derivation.rule(), derivation.sources()[0].predicate.clone())
         };
-        assert_eq!(run(forward), (0, P.to_owned()));
+        assert_eq!(run(forward), (0, format!("<{P}>")));
         assert_eq!(
             run(reversed),
-            (1, P.to_owned()),
+            (1, format!("<{P}>")),
             "the winning derivation names the AUTHORED clause index, which the permutation \
              moved — so the digest must move with it"
         );

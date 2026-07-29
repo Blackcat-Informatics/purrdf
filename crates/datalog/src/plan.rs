@@ -40,11 +40,12 @@
 //! - [`Executable`] additionally memoizes the head-predicate set (the IDB-derivable
 //!   predicates) a completion frontier reads.
 //!
-//! Predicate resolution is deliberately NOT hoisted here: a
-//! [`PredId`](crate::id::PredId) is a per-store handle minted at load/derivation time in
-//! insertion order, so it is meaningless against a store that does not yet exist at plan
-//! time. The plan is store-independent; resolving ids here would be unsound, not an
-//! optimisation.
+//! Term and partition resolution is deliberately NOT hoisted here: a
+//! [`TermId`] and a [`PartitionId`](crate::id::PartitionId) are per-store handles minted
+//! at load/derivation time in insertion order, so they are meaningless against a store
+//! that does not yet exist at plan time. That is why a constant position lowers to its
+//! lexical SURFACE and not to an id. The plan is store-independent; resolving ids here
+//! would be unsound, not an optimisation.
 //!
 //! # Determinism
 //!
@@ -63,6 +64,25 @@ use crate::store::Bound;
 
 // ── Stratification ──────────────────────────────────────────────────────────────
 
+/// The stratification symbol standing for a VARIABLE predicate position.
+///
+/// A predicate is data ([`ClauseAtom`]), so an atom may quantify over it — and then the
+/// atom names no single relation: it reads, or derives into, every one of them. Such a
+/// position is keyed by this symbol. `*` is not a term surface (an IRI renders as `<…>`
+/// and a literal as `"…"`), so it cannot collide with a constant predicate's key.
+pub const ANY_PREDICATE: &str = "*";
+
+/// The stratification symbol of `atom`'s predicate position.
+///
+/// A constant predicate is keyed by its LEXICAL SURFACE — the same bytes the store keys
+/// its partitions by, so a stratum key and a relation key are the same string. A variable
+/// predicate is keyed by [`ANY_PREDICATE`].
+pub fn predicate_symbol(atom: &ClauseAtom) -> String {
+    atom.predicate()
+        .surface()
+        .unwrap_or_else(|| ANY_PREDICATE.to_owned())
+}
+
 /// Assign every predicate of `rules` a stratum, or report the program non-stratifiable.
 ///
 /// A clause's head predicate must sit at or above the stratum of every predicate its body
@@ -78,6 +98,24 @@ use crate::store::Bound;
 /// the only one this crate evaluates — that is exactly the one head predicate, so the edge
 /// set is unchanged by the head's nesting.
 ///
+/// # A variable predicate is a wildcard, and it is coupled conservatively
+///
+/// A predicate position may be a variable, and then the atom names no relation in
+/// particular: it is keyed by [`ANY_PREDICATE`] and coupled to every concrete predicate by
+/// edges added ONCE rather than by expanding the wildcard into every symbol:
+///
+/// * a variable predicate in a BODY reads every relation, so the wildcard is pushed to or
+///   above every concrete predicate (`* ← p` for each `p`);
+/// * a variable predicate in a HEAD derives into every relation, so every concrete
+///   predicate is pushed to or above the wildcard (`p ← *` for each `p`).
+///
+/// A program with both — OWL 2 RL is exactly that shape — therefore collapses every
+/// predicate into one stratum, which is sound: it is a single positive stratum for a
+/// positive program, and it refuses any program that also negates, because a negated read
+/// of a relation something else might derive into has no stratification. Refusing there is
+/// the conservative answer, and it is a refusal by the same rule as any other negative
+/// edge in a cycle, not a special case.
+///
 /// The assignment is a Bellman-Ford-style relaxation over the dependency edges: `n`
 /// passes suffice for a stratifiable program over `n` predicates, and one further pass
 /// that still relaxes proves a negative edge sits inside a cycle. `None` means exactly
@@ -87,39 +125,19 @@ use crate::store::Bound;
 /// program order, so the relaxation sequence — and therefore the result — is a pure
 /// function of the rule program.
 pub fn stratify(rules: &[DlClause]) -> Option<BTreeMap<String, usize>> {
-    // Every predicate, heads and body atoms alike.
-    let mut preds: BTreeSet<&str> = BTreeSet::new();
-    for rule in rules {
-        for head in rule.head_atoms() {
-            preds.insert(head.predicate());
-        }
-        for atom in rule.body() {
-            preds.insert(atom.predicate());
-        }
-    }
+    let (preds, edges) = dependency_edges(rules);
 
-    // Edges: (head predicate, body predicate, negative?).
-    let mut edges: Vec<(&str, &str, bool)> = Vec::new();
-    for rule in rules {
-        for head in rule.head_atoms() {
-            for atom in rule.body() {
-                edges.push((head.predicate(), atom.predicate(), atom.is_negated()));
-            }
-        }
-    }
-
-    let mut stratum: BTreeMap<String, usize> =
-        preds.iter().map(|p| ((*p).to_owned(), 0usize)).collect();
+    let mut stratum: BTreeMap<String, usize> = preds.iter().map(|p| (p.clone(), 0usize)).collect();
 
     let n = preds.len();
     for _pass in 0..=n {
         let mut changed = false;
         for (head, body, negative) in &edges {
-            let body_s = stratum[*body];
+            let body_s = stratum[body];
             let need = if *negative { body_s + 1 } else { body_s };
-            let head_s = stratum[*head];
+            let head_s = stratum[head];
             if head_s < need {
-                stratum.insert((*head).to_owned(), need);
+                stratum.insert(head.clone(), need);
                 changed = true;
             }
         }
@@ -129,6 +147,69 @@ pub fn stratify(rules: &[DlClause]) -> Option<BTreeMap<String, usize>> {
     }
     // Still relaxing after n + 1 passes ⇒ a negative edge sits in a cycle.
     None
+}
+
+/// The predicate symbols of `rules` and the dependency edges
+/// `(head symbol, body symbol, negative?)` over them, in program order.
+///
+/// [`stratify`] relaxes over these edges and
+/// [`negative_cycle`](crate::seminaive::compile) searches the same graph for the cycle it
+/// names, so both are derived from ONE function: a diagnostic that searched a smaller
+/// graph than the decision was taken over could fail to find the cycle it was told exists.
+/// That includes the wildcard coupling edges a variable predicate position adds.
+pub(crate) fn dependency_edges(
+    rules: &[DlClause],
+) -> (BTreeSet<String>, Vec<(String, String, bool)>) {
+    // Every predicate symbol, heads and body atoms alike.
+    let mut preds: BTreeSet<String> = BTreeSet::new();
+    let mut wildcard_head = false;
+    let mut wildcard_body = false;
+    for rule in rules {
+        for head in rule.head_atoms() {
+            let symbol = predicate_symbol(head);
+            wildcard_head |= symbol == ANY_PREDICATE;
+            preds.insert(symbol);
+        }
+        for atom in rule.body() {
+            let symbol = predicate_symbol(atom);
+            wildcard_body |= symbol == ANY_PREDICATE;
+            preds.insert(symbol);
+        }
+    }
+
+    // Edges: (head predicate, body predicate, negative?).
+    let mut edges: Vec<(String, String, bool)> = Vec::new();
+    for rule in rules {
+        for head in rule.head_atoms() {
+            let head_symbol = predicate_symbol(head);
+            for atom in rule.body() {
+                edges.push((
+                    head_symbol.clone(),
+                    predicate_symbol(atom),
+                    atom.is_negated(),
+                ));
+            }
+        }
+    }
+
+    // Couple the wildcard to the concrete symbols, in whichever direction the program
+    // actually uses it. Both directions together intentionally fuse the whole program
+    // into one stratum — see the doc comment.
+    let concrete: Vec<String> = preds
+        .iter()
+        .filter(|symbol| symbol.as_str() != ANY_PREDICATE)
+        .cloned()
+        .collect();
+    for symbol in &concrete {
+        if wildcard_body {
+            edges.push((ANY_PREDICATE.to_owned(), symbol.clone(), false));
+        }
+        if wildcard_head {
+            edges.push((symbol.clone(), ANY_PREDICATE.to_owned(), false));
+        }
+    }
+
+    (preds, edges)
 }
 
 // ── Index selection ─────────────────────────────────────────────────────────────
@@ -220,35 +301,45 @@ impl IndexChoice {
 fn term_is_known(term: &ClauseTerm, bound: &BTreeSet<String>) -> bool {
     match term {
         ClauseTerm::Var(variable) => bound.contains(variable),
-        ClauseTerm::Iri(_) | ClauseTerm::Literal(_) => true,
+        ClauseTerm::Iri(_) | ClauseTerm::Literal(_) | ClauseTerm::DefaultGraph => true,
     }
 }
 
-/// Record every variable of `atom` as bound: the atom has been scanned, so its columns
-/// carry values from here on.
+/// Record every variable of `atom` as bound: the atom has been scanned, so ALL FOUR of its
+/// positions carry values from here on — including a variable predicate, which the
+/// partition key binds, and a variable graph.
 fn bind_atom_variables(atom: &ClauseAtom, bound: &mut BTreeSet<String>) {
-    for term in [atom.subject(), atom.object()] {
+    for term in atom.terms() {
         if let ClauseTerm::Var(variable) = term {
             bound.insert(variable.clone());
         }
     }
 }
 
-/// The guaranteed index shape for `atom`, given the variables already bound.
-fn index_choice(atom: &ClauseAtom, bound: &BTreeSet<String>) -> IndexChoice {
-    IndexChoice::from_pattern(BindingPattern::from_bools([
-        term_is_known(atom.subject(), bound),
-        term_is_known(atom.object(), bound),
-    ]))
+/// Whether two of `atom`'s positions hold the SAME variable — an equality filter the atom
+/// carries on its own, over any pair of its four positions.
+fn atom_has_repeated_variable(atom: &ClauseAtom) -> bool {
+    let terms = atom.terms();
+    (0..terms.len()).any(|left| {
+        ((left + 1)..terms.len()).any(|right| match (terms[left], terms[right]) {
+            (ClauseTerm::Var(left), ClauseTerm::Var(right)) => left == right,
+            _ => false,
+        })
+    })
 }
 
 /// Deterministic sideways-information-passing order for an acyclic positive body.
 ///
 /// With no store in hand, cardinalities cannot be consulted soundly — a plan must stay
 /// store-independent. The static information available at plan time is still worth a
-/// great deal: prefer atoms with more already-bound or constant columns, then more
+/// great deal: prefer atoms with more already-bound or constant positions, then more
 /// constants, then a repeated-variable equality, and finally the authored position.
 /// After an atom is chosen, all of its variables become bound for subsequent choices.
+///
+/// The counts range over all FOUR positions, so an atom whose predicate is already bound —
+/// `prp-dom`'s `T(?x, ?p, ?y)` once `?p` is known — outranks one whose predicate is still
+/// free, which is exactly the ordering that keeps a variable-predicate rule addressing one
+/// partition instead of sweeping them.
 ///
 /// Every component of the key is a plan-time integer and the last component is the
 /// authored position, which is unique — so the maximum is unique and the order is stable.
@@ -262,14 +353,17 @@ fn sips_order(rule: &DlClause, positive: &[usize]) -> Vec<usize> {
             .enumerate()
             .max_by_key(|&(_, &positive_position)| {
                 let atom = &rule.body()[positive[positive_position]];
-                let known = usize::from(term_is_known(atom.subject(), &bound))
-                    + usize::from(term_is_known(atom.object(), &bound));
-                let constants =
-                    usize::from(!atom.subject().is_var()) + usize::from(!atom.object().is_var());
-                let repeated = usize::from(matches!(
-                    (atom.subject(), atom.object()),
-                    (ClauseTerm::Var(left), ClauseTerm::Var(right)) if left == right
-                ));
+                let known = atom
+                    .terms()
+                    .into_iter()
+                    .filter(|term| term_is_known(term, &bound))
+                    .count();
+                let constants = atom
+                    .terms()
+                    .into_iter()
+                    .filter(|term| !term.is_var())
+                    .count();
+                let repeated = usize::from(atom_has_repeated_variable(atom));
                 (known, constants, repeated, usize::MAX - positive_position)
             })
             .expect("a non-empty remaining set has a best atom");
@@ -282,78 +376,188 @@ fn sips_order(rule: &DlClause, positive: &[usize]) -> Vec<usize> {
 
 // ── Lowered operators ───────────────────────────────────────────────────────────
 
-/// The statically selected subject/object term shape of one binary atom.
+/// Argument position 0 of an atom: the subject.
+pub const POSITION_SUBJECT: usize = 0;
+/// Argument position 1 of an atom: the predicate — a TERM, which may be a variable.
+pub const POSITION_PREDICATE: usize = 1;
+/// Argument position 2 of an atom: the object.
+pub const POSITION_OBJECT: usize = 2;
+/// Argument position 3 of an atom: the graph.
+pub const POSITION_GRAPH: usize = 3;
+/// The number of argument positions every atom has.
+pub const ATOM_ARITY: usize = 4;
+
+/// The statically selected shape of ONE argument position.
 ///
-/// Term-kind dispatch happens once, here: the tuple loop never re-interprets a term enum
-/// or re-renders a constant surface.
+/// Term-kind dispatch happens once, here: the tuple loop never re-interprets a term enum,
+/// never re-renders a constant surface, and never looks a variable up by name.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AtomKernel {
-    /// Both positions are variables, bound into these flat slots.
-    Vars {
-        /// The subject variable's slot in the rule's binding frame.
-        subject_slot: usize,
-        /// The object variable's slot in the rule's binding frame.
-        object_slot: usize,
-    },
-    /// A variable subject and a constant object.
-    VarConst {
-        /// The subject variable's slot in the rule's binding frame.
-        subject_slot: usize,
-        /// The object constant's lexical surface.
-        object: String,
-    },
-    /// A constant subject and a variable object.
-    ConstVar {
-        /// The subject constant's lexical surface.
-        subject: String,
-        /// The object variable's slot in the rule's binding frame.
-        object_slot: usize,
-    },
-    /// Both positions are constants — a ground membership probe.
-    Consts {
-        /// The subject constant's lexical surface.
-        subject: String,
-        /// The object constant's lexical surface.
-        object: String,
-    },
+pub enum PositionPlan {
+    /// A constant, rendered once to the exact lexical surface the store interns.
+    Constant(String),
+    /// A variable already bound when this atom runs — READ this frame slot.
+    Bound(usize),
+    /// A variable this atom binds — WRITE this frame slot.
+    Free(usize),
 }
 
-/// The lexical surface of a CONSTANT term — the exact bytes the store interns.
-///
-/// # Panics
-///
-/// Panics on a variable: every caller reaches this only after matching a constant, so a
-/// variable here is a planner bug, never a data state.
-fn constant_surface(term: &ClauseTerm) -> String {
-    term.surface().unwrap_or_else(|| {
-        unreachable!("constant_surface is called only for a constant term, not {term:?}")
-    })
-}
+impl PositionPlan {
+    /// The frame slot of a variable position, or `None` for a constant.
+    pub fn slot(&self) -> Option<usize> {
+        match self {
+            Self::Bound(slot) | Self::Free(slot) => Some(*slot),
+            Self::Constant(_) => None,
+        }
+    }
 
-/// The kernel for `atom`, resolving each variable to its flat binding slot and each
-/// constant to its lexical surface.
-fn atom_kernel(atom: &ClauseAtom, slots: &BTreeMap<String, usize>) -> AtomKernel {
-    match (atom.subject(), atom.object()) {
-        (ClauseTerm::Var(subject), ClauseTerm::Var(object)) => AtomKernel::Vars {
-            subject_slot: slots[subject],
-            object_slot: slots[object],
-        },
-        (ClauseTerm::Var(subject), object) => AtomKernel::VarConst {
-            subject_slot: slots[subject],
-            object: constant_surface(object),
-        },
-        (subject, ClauseTerm::Var(object)) => AtomKernel::ConstVar {
-            subject: constant_surface(subject),
-            object_slot: slots[object],
-        },
-        (subject, object) => AtomKernel::Consts {
-            subject: constant_surface(subject),
-            object: constant_surface(object),
-        },
+    /// The lexical surface of a constant position, or `None` for a variable.
+    pub fn constant(&self) -> Option<&str> {
+        match self {
+            Self::Constant(surface) => Some(surface),
+            Self::Bound(_) | Self::Free(_) => None,
+        }
+    }
+
+    /// Whether this position's value is known before the atom is scanned — a constant, or
+    /// a variable an earlier atom already bound. This is the position's ADORNMENT bit.
+    pub fn is_known(&self) -> bool {
+        matches!(self, Self::Constant(_) | Self::Bound(_))
     }
 }
 
-/// A positive atom lowered to a body coordinate plus one monomorphic term-shape kernel.
+/// One positive atom lowered to a plan over all FOUR of its positions.
+///
+/// The subject and object positions drive the arrangement's `(subject, object)` index; the
+/// predicate and graph positions address the store PARTITION. Both are the same kind of
+/// plan value, because the predicate is a term like any other: nothing here privileges it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AtomShape {
+    /// The four positions, in `(subject, predicate, object, graph)` order.
+    positions: [PositionPlan; ATOM_ARITY],
+    /// Position pairs `(left, right)` with `left < right` that hold the SAME variable, in
+    /// ascending order. A row matches only where those positions agree — the general form
+    /// of the repeated-variable diagonal filter, over any pair of the four positions
+    /// (`T(?p, ?p, ?o, ?g)` is as much a self-join as `p(?x, ?x)` is).
+    equalities: Box<[(usize, usize)]>,
+}
+
+impl AtomShape {
+    /// The four position plans, in `(subject, predicate, object, graph)` order.
+    pub fn positions(&self) -> &[PositionPlan; ATOM_ARITY] {
+        &self.positions
+    }
+
+    /// The subject position's plan.
+    pub fn subject(&self) -> &PositionPlan {
+        &self.positions[POSITION_SUBJECT]
+    }
+
+    /// The predicate position's plan.
+    pub fn predicate(&self) -> &PositionPlan {
+        &self.positions[POSITION_PREDICATE]
+    }
+
+    /// The object position's plan.
+    pub fn object(&self) -> &PositionPlan {
+        &self.positions[POSITION_OBJECT]
+    }
+
+    /// The graph position's plan.
+    pub fn graph(&self) -> &PositionPlan {
+        &self.positions[POSITION_GRAPH]
+    }
+
+    /// The position pairs that must agree for a row to match.
+    pub fn equalities(&self) -> &[(usize, usize)] {
+        &self.equalities
+    }
+
+    /// This atom's arity-4 adornment: bound where the position's value is known before the
+    /// scan, free where the scan binds it.
+    ///
+    /// The same [`BindingPattern`] lattice a backward magic-sets demand is keyed by, now
+    /// over the whole atom rather than over the indexed columns alone — so
+    /// `"bbbb"` is a fully ground probe and `"fbfb"` is the constant-predicate,
+    /// constant-graph shape almost every authored rule has.
+    pub fn adornment(&self) -> BindingPattern {
+        BindingPattern::from_bools(self.positions.iter().map(PositionPlan::is_known))
+    }
+
+    /// Whether this atom addresses exactly ONE store partition — its predicate and graph
+    /// are both known before the scan.
+    ///
+    /// This is the plan-time statement of the performance contract: an atom for which this
+    /// holds reaches its arrangement through one ordered-map probe and then uses the very
+    /// same `(subject, object)` index it always did. Only an atom for which it does NOT
+    /// hold sweeps partitions.
+    pub fn addresses_one_partition(&self) -> bool {
+        self.predicate().is_known() && self.graph().is_known()
+    }
+}
+
+/// The plan for one argument position: its slot if it is a variable, its rendered surface
+/// if it is a constant, and whether an earlier atom already bound it.
+fn position_plan(
+    term: &ClauseTerm,
+    bound: &BTreeSet<String>,
+    slots: &BTreeMap<String, usize>,
+) -> PositionPlan {
+    match term {
+        ClauseTerm::Var(name) => {
+            let slot = slots[name];
+            if bound.contains(name) {
+                PositionPlan::Bound(slot)
+            } else {
+                PositionPlan::Free(slot)
+            }
+        }
+        constant => PositionPlan::Constant(constant.surface().unwrap_or_else(|| {
+            unreachable!("a non-variable clause term always has a lexical surface: {constant:?}")
+        })),
+    }
+}
+
+/// The shape of `atom` against the variables bound before it runs.
+fn atom_shape(
+    atom: &ClauseAtom,
+    bound: &BTreeSet<String>,
+    slots: &BTreeMap<String, usize>,
+) -> AtomShape {
+    let terms = atom.terms();
+    let positions = std::array::from_fn(|position| position_plan(terms[position], bound, slots));
+    let mut equalities = Vec::new();
+    for left in 0..ATOM_ARITY {
+        for right in (left + 1)..ATOM_ARITY {
+            if let (ClauseTerm::Var(left_name), ClauseTerm::Var(right_name)) =
+                (terms[left], terms[right])
+                && left_name == right_name
+            {
+                equalities.push((left, right));
+            }
+        }
+    }
+    AtomShape {
+        positions,
+        equalities: equalities.into_boxed_slice(),
+    }
+}
+
+/// The guaranteed index shape of a lowered atom: the `(subject, object)` face of its
+/// arity-4 adornment, read off the SHAPE rather than re-derived from the clause, so the
+/// index tag and the adornment cannot drift apart.
+///
+/// Only those two positions take part: the predicate and graph positions choose the
+/// PARTITION, and the partition's arrangement is what the index is built over. That split
+/// is why an atom with a free predicate keeps the very same subject/object index it would
+/// have had with a constant one — it just applies it once per partition.
+fn index_choice(shape: &AtomShape) -> IndexChoice {
+    IndexChoice::from_pattern(BindingPattern::from_bools([
+        shape.subject().is_known(),
+        shape.object().is_known(),
+    ]))
+}
+
+/// A positive atom lowered to a body coordinate plus its statically-selected shape.
 ///
 /// Runtime binding presence still selects the concrete store bound (through
 /// [`IndexChoice::bound`]), but variable-name and term-enum interpretation is absent from
@@ -364,10 +568,10 @@ pub struct AtomOperator {
     body_index: usize,
     /// Index within the rule's positive-atom sequence.
     positive_position: usize,
-    /// The guaranteed index shape at this point in the execution order.
+    /// The guaranteed `(subject, object)` index shape at this point in the execution order.
     index: IndexChoice,
-    /// The statically selected term shape.
-    kernel: AtomKernel,
+    /// The statically selected shape of all four positions.
+    shape: AtomShape,
 }
 
 impl AtomOperator {
@@ -381,19 +585,20 @@ impl AtomOperator {
         self.positive_position
     }
 
-    /// The guaranteed index shape at this point in the execution order.
+    /// The guaranteed `(subject, object)` index shape at this point in the execution order.
     pub fn index(&self) -> IndexChoice {
         self.index
     }
 
-    /// The statically selected term shape.
-    pub fn kernel(&self) -> &AtomKernel {
-        &self.kernel
+    /// The statically selected shape of all four positions.
+    pub fn shape(&self) -> &AtomShape {
+        &self.shape
     }
 }
 
 /// Lower every positive atom, in execution order, to its operator — computing each
-/// atom's index shape against exactly the variables bound before it runs.
+/// atom's index shape and position plans against exactly the variables bound before it
+/// runs.
 fn lower_operators(
     rule: &DlClause,
     positive: &[usize],
@@ -405,11 +610,12 @@ fn lower_operators(
     for &positive_position in execution_order {
         let body_index = positive[positive_position];
         let atom = &rule.body()[body_index];
+        let shape = atom_shape(atom, &bound, slots);
         operators.push(AtomOperator {
             body_index,
             positive_position,
-            index: index_choice(atom, &bound),
-            kernel: atom_kernel(atom, slots),
+            index: index_choice(&shape),
+            shape,
         });
         bind_atom_variables(atom, &mut bound);
     }
@@ -616,6 +822,15 @@ fn bridge_edges(node_count: usize, edges: &[(usize, usize)]) -> BTreeSet<usize> 
 /// connected components are the subplans safe to promote. Constants, repeated variables,
 /// trees and bridge atoms therefore all stay binary.
 ///
+/// # Only a single-partition atom is eligible
+///
+/// An atom whose predicate or graph is a VARIABLE denotes a union of arrangements, not one
+/// of them, and a trie level is one sorted arrangement — a leapfrog seek has nothing to
+/// seek over until the partition is fixed. Such an atom contributes no edge here and stays
+/// on the indexed binary path, which handles it by sweeping partitions. This is a
+/// certification rule, not a shortfall: the multiway kernel's precondition is a single
+/// trie, and an atom that does not name one does not meet it.
+///
 /// Components are keyed by their SMALLEST variable node, so the emitted order depends on
 /// the (lexically ordered) variable numbering alone and never on a disjoint-set forest's
 /// internal choice of representative.
@@ -639,6 +854,10 @@ fn certified_cyclic_components(
                 first_occurrence.entry(var.clone()).or_insert(occurrence);
                 occurrence += 1;
             }
+        }
+        if atom.predicate().is_var() || atom.graph().is_var() {
+            // Not a single trie level — see the doc comment.
+            continue;
         }
         let (ClauseTerm::Var(left), ClauseTerm::Var(right)) = (atom.subject(), atom.object())
         else {
@@ -790,10 +1009,11 @@ impl RulePlan {
     /// The body is partitioned into positive (join) and negated (filter) atoms,
     /// preserving body order; variables are assigned flat slots in authored
     /// first-occurrence order across the body and then every head ATOM, disjunct by
-    /// disjunct and conjunct by conjunct. Body-first preserves the join's natural binding
-    /// order, and including the head gives diagnostics a complete rule layout without
-    /// changing the positive operators. For the atomic head this crate evaluates, "the
-    /// head atoms" is the one head atom.
+    /// disjunct and conjunct by conjunct, and within an atom in
+    /// `(subject, predicate, object, graph)` position order. Body-first preserves the
+    /// join's natural binding order, and including the head gives diagnostics a complete
+    /// rule layout without changing the positive operators. For the atomic head this crate
+    /// evaluates, "the head atoms" is the one head atom.
     pub(crate) fn for_rule(rule: &DlClause) -> Self {
         let mut positive = Vec::new();
         let mut negated = Vec::new();
@@ -808,7 +1028,7 @@ impl RulePlan {
         let mut variables = Vec::new();
         let mut slots = BTreeMap::new();
         for atom in rule.body().iter().chain(rule.head_atoms()) {
-            for term in [atom.subject(), atom.object()] {
+            for term in atom.terms() {
                 if let ClauseTerm::Var(name) = term
                     && !slots.contains_key(name)
                 {
@@ -1018,12 +1238,12 @@ impl Parsed {
         let max_stratum = self
             .rules
             .iter()
-            .map(|r| stratum_of[datalog_head(r).predicate()])
+            .map(|r| stratum_of[&predicate_symbol(datalog_head(r))])
             .max()
             .unwrap_or(0);
         let mut strata: Vec<Vec<usize>> = vec![Vec::new(); max_stratum + 1];
         for (i, rule) in self.rules.iter().enumerate() {
-            strata[stratum_of[datalog_head(rule).predicate()]].push(i);
+            strata[stratum_of[&predicate_symbol(datalog_head(rule))]].push(i);
         }
 
         Some(Stratified {
@@ -1086,7 +1306,7 @@ impl Planned {
         let head_predicates: BTreeSet<String> = self
             .rules
             .iter()
-            .map(|r| datalog_head(r).predicate().to_owned())
+            .map(|r| predicate_symbol(datalog_head(r)))
             .collect();
         Executable {
             rules: self.rules,
@@ -1135,10 +1355,22 @@ impl Executable {
         self.strata[k].is_empty()
     }
 
-    /// The IDB-derivable (rule-head) predicates — the ones settled only when their
+    /// The IDB-derivable (rule-head) predicate SYMBOLS — the ones settled only when their
     /// stratum completes, and therefore excluded from a pure-EDB seed frontier.
+    ///
+    /// A constant head predicate contributes its lexical surface, which is the same string
+    /// the store keys its partitions by. A rule whose head predicate is a VARIABLE derives
+    /// into a relation named by data, so it contributes [`ANY_PREDICATE`]: the set then
+    /// says, truthfully, that no finite list of predicates bounds what this program
+    /// derives — see [`Self::derives_any_predicate`].
     pub fn head_predicates(&self) -> &BTreeSet<String> {
         &self.head_predicates
+    }
+
+    /// Whether some rule's head predicate is a variable, so [`Self::head_predicates`] is
+    /// not an exhaustive list of what the program can derive.
+    pub fn derives_any_predicate(&self) -> bool {
+        self.head_predicates.contains(ANY_PREDICATE)
     }
 
     /// The program-order rule indices assigned to stratum `k`.
@@ -1162,16 +1394,17 @@ impl Executable {
         (&self.rules[index], &self.plans[index])
     }
 
-    /// The head predicates of stratum `k`'s rules — recorded into the settled frontier
-    /// when the stratum reaches its natural fixpoint.
+    /// The head predicate SYMBOLS of stratum `k`'s rules — recorded into the settled
+    /// frontier when the stratum reaches its natural fixpoint. See
+    /// [`Self::head_predicates`] for what a variable head predicate contributes.
     ///
     /// # Panics
     ///
     /// Panics if `k` is not a stratum of this program.
-    pub fn stratum_head_predicates(&self, k: usize) -> impl Iterator<Item = &str> {
+    pub fn stratum_head_predicates(&self, k: usize) -> impl Iterator<Item = String> {
         self.strata[k]
             .iter()
-            .map(move |&i| datalog_head(&self.rules[i]).predicate())
+            .map(move |&i| predicate_symbol(datalog_head(&self.rules[i])))
     }
 }
 
@@ -1192,6 +1425,11 @@ mod tests {
 
     fn atom(subject: &str, predicate: &str, object: &str) -> ClauseAtom {
         ClauseAtom::positive(v(subject), predicate, v(object))
+    }
+
+    /// The lexical surface of an IRI — the predicate SYMBOL a stratum is keyed by.
+    fn surface(iri: &str) -> String {
+        format!("<{iri}>")
     }
 
     /// The three-atom triangle `p(X,Y), q(Y,Z), r(Z,X)` — the canonical cyclic body.
@@ -1260,24 +1498,22 @@ mod tests {
         assert_eq!(plan.operator_at(1).index(), IndexChoice::Subject);
         assert_eq!(plan.operator_at(0).index(), IndexChoice::Subject);
         assert_eq!(plan.operator_at(1).body_index(), 1);
+        let driver = plan.operator_at(1).shape();
         assert_eq!(
-            plan.operator_at(1).kernel(),
-            &AtomKernel::ConstVar {
-                subject: "<https://example.org/a>".to_owned(),
-                // Slots follow AUTHORED body order, not execution order: `?Y` first
-                // occurs in body atom 0, so it holds slot 0 even though the atom that
-                // binds it runs second.
-                object_slot: 0,
-            }
+            driver.subject(),
+            &PositionPlan::Constant("<https://example.org/a>".to_owned())
         );
+        // Slots follow AUTHORED body order, not execution order: `?Y` first occurs in
+        // body atom 0, so it holds slot 0 even though the atom that binds it runs second.
+        assert_eq!(driver.object(), &PositionPlan::Free(0));
         // Restoring authored order is a swap program, applied in place.
         assert_eq!(plan.operator_source_order_swaps(), [(0, 1)]);
     }
 
-    /// Every kernel shape is selected statically, and a fully ground atom becomes a
-    /// membership probe with both surfaces rendered once.
+    /// Every subject/object term shape is selected statically, and a fully ground atom
+    /// becomes a membership probe with both surfaces rendered once.
     #[test]
-    fn plan_lowers_every_kernel_shape() {
+    fn plan_lowers_every_position_shape() {
         let a = ClauseTerm::iri("https://example.org/a");
         let lit = ClauseTerm::literal("\"7\"^^<http://www.w3.org/2001/XMLSchema#integer>");
         let rule = DlClause::datalog(
@@ -1290,17 +1526,107 @@ mod tests {
             ],
         );
         let plan = RulePlan::for_rule(&rule);
-        let kernels: Vec<&AtomKernel> = (0..4).map(|i| plan.operator_at(i).kernel()).collect();
-        assert!(matches!(kernels[0], AtomKernel::Vars { .. }));
-        assert!(matches!(kernels[1], AtomKernel::VarConst { .. }));
-        assert!(matches!(kernels[2], AtomKernel::ConstVar { .. }));
+        let shapes: Vec<&AtomShape> = (0..4).map(|i| plan.operator_at(i).shape()).collect();
+        // variable/variable, variable/constant, constant/variable, constant/constant.
+        // A variable position lowers to a frame SLOT (bound or free, depending on where
+        // the sideways-information-passing order put the atom); a constant lowers to its
+        // rendered surface.
+        assert!(shapes[0].subject().slot().is_some());
+        assert!(shapes[0].object().slot().is_some());
+        assert!(shapes[1].subject().slot().is_some());
+        assert!(shapes[1].object().constant().is_some());
+        assert!(shapes[2].subject().constant().is_some());
+        assert!(shapes[2].object().slot().is_some());
         assert_eq!(
-            kernels[3],
-            &AtomKernel::Consts {
-                subject: "<https://example.org/a>".to_owned(),
-                object: "\"7\"^^<http://www.w3.org/2001/XMLSchema#integer>".to_owned(),
-            }
+            shapes[3].subject(),
+            &PositionPlan::Constant("<https://example.org/a>".to_owned())
         );
+        assert_eq!(
+            shapes[3].object(),
+            &PositionPlan::Constant("\"7\"^^<http://www.w3.org/2001/XMLSchema#integer>".to_owned())
+        );
+        // Every one of them names a CONSTANT predicate and the DEFAULT graph, so every one
+        // addresses exactly one partition — the shape an authored rule almost always has.
+        for shape in &shapes {
+            assert!(shape.addresses_one_partition(), "{shape:?}");
+            assert_eq!(
+                shape.predicate().constant(),
+                Some(shape_predicate(shape)),
+                "{shape:?}"
+            );
+            assert_eq!(shape.graph(), &PositionPlan::Constant(String::new()));
+            assert!(shape.equalities().is_empty());
+        }
+        assert_eq!(shapes[3].adornment().code(), "bbbb", "a ground probe");
+    }
+
+    /// The constant predicate surface a fixture shape carries.
+    fn shape_predicate(shape: &AtomShape) -> &str {
+        shape
+            .predicate()
+            .constant()
+            .expect("the fixture predicates are constants")
+    }
+
+    /// A CONSTANT-PREDICATE atom still selects an index and still addresses exactly one
+    /// partition — the performance contract, stated as a plan property rather than as a
+    /// stopwatch reading.
+    ///
+    /// Both facts have to hold together: an atom that reached an index but swept every
+    /// partition to do it would have regressed, and so would one that addressed a single
+    /// partition and then scanned it.
+    #[test]
+    fn a_constant_predicate_atom_reaches_an_index_without_sweeping() {
+        let rule = DlClause::datalog(
+            atom("?X", S, "?Z"),
+            vec![atom("?X", P, "?Y"), atom("?Y", Q, "?Z")],
+        );
+        let plan = RulePlan::for_rule(&rule);
+        for (position, predicate) in [P, Q].into_iter().enumerate() {
+            let shape = plan.operator_at(position).shape();
+            assert!(
+                shape.addresses_one_partition(),
+                "atom {position} names a constant predicate and the default graph, so it \
+                 addresses ONE partition and never sweeps"
+            );
+            assert_eq!(
+                shape.predicate(),
+                &PositionPlan::Constant(surface(predicate))
+            );
+            assert_eq!(shape.graph(), &PositionPlan::Constant(String::new()));
+        }
+        // The first atom drives (nothing is bound yet), the second is index-selected on
+        // the subject `?Y` the first one bound — not a full scan of its partition.
+        assert_eq!(plan.operator_at(0).index(), IndexChoice::Any);
+        assert_eq!(
+            plan.operator_at(1).index(),
+            IndexChoice::Subject,
+            "the joined atom gallops its subject column"
+        );
+        assert_eq!(plan.operator_at(1).shape().adornment().code(), "bbfb");
+
+        // A VARIABLE predicate is the only shape that gives the single-partition property
+        // up, and it gives up nothing else: the subject/object index is unchanged.
+        let variable = DlClause::datalog(
+            atom("?X", S, "?Z"),
+            vec![
+                atom("?X", P, "?Y"),
+                ClauseAtom::quad(v("?Y"), v("?W"), v("?Z"), ClauseTerm::DefaultGraph),
+            ],
+        );
+        let variable = RulePlan::for_rule(&variable);
+        let swept = variable.operator_at(1).shape();
+        assert!(
+            !swept.addresses_one_partition(),
+            "a free predicate position denotes a union of partitions"
+        );
+        assert_eq!(swept.predicate(), &PositionPlan::Free(2));
+        assert_eq!(
+            variable.operator_at(1).index(),
+            IndexChoice::Subject,
+            "and it still gallops the subject column inside every partition it visits"
+        );
+        assert_eq!(swept.adornment().code(), "bffb");
     }
 
     /// An unbound atom is a full scan; once a variable is bound the same atom becomes a
@@ -1582,10 +1908,11 @@ mod tests {
             ),
         ];
         let strata = stratify(&rules).expect("the program is stratifiable");
-        assert_eq!(strata[P], 0);
-        assert_eq!(strata[Q], 0);
+        assert_eq!(strata[&surface(P)], 0);
+        assert_eq!(strata[&surface(Q)], 0);
         assert_eq!(
-            strata[R], 1,
+            strata[&surface(R)],
+            1,
             "a negated read sits strictly below its reader"
         );
     }
@@ -1611,7 +1938,7 @@ mod tests {
             vec![atom("?X", P, "?Y"), atom("?Y", P, "?Z")],
         )];
         let strata = stratify(&rules).expect("positive recursion is stratifiable");
-        assert_eq!(strata[P], 0);
+        assert_eq!(strata[&surface(P)], 0);
     }
 
     #[test]
@@ -1651,15 +1978,17 @@ mod tests {
         assert_eq!(exe.stratum_rule_indices(1), [1]);
         assert_eq!(
             exe.head_predicates(),
-            &[Q.to_owned(), R.to_owned()].into_iter().collect()
+            &[surface(Q), surface(R)].into_iter().collect(),
+            "a head predicate symbol is the constant's lexical surface"
         );
+        assert!(!exe.derives_any_predicate());
         assert_eq!(
             exe.stratum_head_predicates(1).collect::<Vec<_>>(),
-            vec![R],
+            vec![surface(R)],
             "stratum 1 derives exactly r"
         );
         let (rule, plan) = exe.rule_entry(1);
-        assert_eq!(datalog_head(rule).predicate(), R);
+        assert_eq!(datalog_head(rule).predicate_iri(), Some(R));
         assert_eq!(rule.body().len(), 2);
         assert!(rule.body()[1].is_negated());
         assert_eq!(rule.body()[1].object(), &v("?Y"));

@@ -10,6 +10,17 @@
 //! already reached its final extension — the stratified-negation semantics, not an
 //! approximation of it.
 //!
+//! # Atoms are arity-4, and the predicate is data
+//!
+//! An atom is `triple(?s, ?p, ?o, ?g)`. The predicate and graph positions choose the store
+//! PARTITION and the subject/object positions drive its `(subject, object)` index, and the
+//! two are independent: an atom whose predicate and graph are known — a constant, or a
+//! variable an earlier atom bound — addresses one partition through a single ordered-map
+//! probe and then uses exactly the access path it always used, while an atom that
+//! genuinely quantifies over the predicate or the graph sweeps the matching partitions in
+//! lexical order and indexes inside each of them. Carrying the predicate as data therefore
+//! costs an ordinary rule nothing and costs a meta-rule one partition sweep, not a scan.
+//!
 //! # The two physical joins
 //!
 //! Every rule's positive body is evaluated by ONE of two kernels, chosen by the planner:
@@ -38,7 +49,9 @@
 //! # Determinism
 //!
 //! Round candidates are keyed in a [`BTreeMap`] and winners are committed in lexical
-//! `(subject, predicate, object)` order. Where two rules derive the same head fact in one
+//! `(subject, predicate, object, graph)` order. The partition sweep an unbound predicate
+//! drives is in lexical `(predicate surface, graph surface)` order, never in the store's
+//! mint order. Where two rules derive the same head fact in one
 //! round the winner is chosen by a **total order over observable provenance**
 //! — `(proof height, summed source heights, sorted source facts, rule index, source
 //! facts)` — never by arrival order, so neither the row enumeration order nor the rule
@@ -59,14 +72,15 @@ use std::fmt;
 
 use rayon::prelude::*;
 
-use crate::clause::{ClauseAtom, ClauseTerm, DlClause, HeadForm};
+use crate::clause::{ClauseTerm, DlClause, HeadForm};
 use crate::cursor::{LendingIterator, VALUE_OBJECT, VALUE_SUBJECT, ValueCursor};
 use crate::id::{RowId, TermId};
 use crate::plan::{
-    AtomKernel, AtomOperator, CyclicPlan, Executable, IndexChoice, JoinGroup, Parsed, RulePlan,
-    datalog_head,
+    ATOM_ARITY, AtomOperator, AtomShape, CyclicPlan, Executable, IndexChoice, JoinGroup,
+    POSITION_GRAPH, POSITION_OBJECT, POSITION_PREDICATE, POSITION_SUBJECT, Parsed, PositionPlan,
+    RulePlan, datalog_head, predicate_symbol,
 };
-use crate::store::{Bound, Fact, RelationStore};
+use crate::store::{Bound, Fact, PartitionRef, RelationStore};
 
 // ── Budgets ─────────────────────────────────────────────────────────────────────
 
@@ -431,17 +445,20 @@ pub fn compile(rules: Vec<DlClause>) -> Result<Executable, EvalError> {
         return Err(negative_cycle(&rules));
     }
 
+    // Range restriction ranges over all FOUR positions: a head that writes a variable
+    // predicate or a variable graph needs that variable bound by the positive body just as
+    // much as a head subject does, and a positive body atom binds all four of its own.
     for (index, rule) in rules.iter().enumerate() {
         let mut bound: BTreeSet<&str> = BTreeSet::new();
         for atom in rule.body().iter().filter(|atom| !atom.is_negated()) {
-            for term in [atom.subject(), atom.object()] {
+            for term in atom.terms() {
                 if let Some(name) = term.variable() {
                     bound.insert(name);
                 }
             }
         }
         for head in rule.head_atoms() {
-            for term in [head.subject(), head.object()] {
+            for term in head.terms() {
                 if let Some(name) = term.variable()
                     && !bound.contains(name)
                 {
@@ -476,31 +493,32 @@ pub fn compile(rules: Vec<DlClause>) -> Result<Executable, EvalError> {
 /// [`crate::plan::stratify`] has already proven the program non-stratifiable, and that is
 /// exactly the condition, so reaching it would be a contradiction in the stratifier.
 fn negative_cycle(rules: &[DlClause]) -> EvalError {
-    // head -> {body}: "head depends on body", in a fixed lexical order. Written over every
-    // head ATOM — every conjunct of every disjunct — so it agrees exactly with
-    // `crate::plan::stratify`'s edge set, which is total over the whole clause IR rather
-    // than only over its Datalog fragment.
-    let mut depends: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
-    for rule in rules {
-        for head in rule.head_atoms() {
-            let entry = depends.entry(head.predicate()).or_default();
-            for atom in rule.body() {
-                entry.insert(atom.predicate());
-            }
-        }
+    // head -> {body}: "head depends on body", in a fixed lexical order, built from the
+    // SAME edge set `crate::plan::stratify` decided over — including the coupling edges a
+    // variable predicate position adds. Searching a smaller graph than the decision was
+    // taken over could fail to find the cycle the stratifier proved exists.
+    let (_, edges) = crate::plan::dependency_edges(rules);
+    let mut depends: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (head, body, _negative) in &edges {
+        depends
+            .entry(head.clone())
+            .or_default()
+            .insert(body.clone());
     }
 
     for rule in rules {
-        for head in rule.head_atoms().map(ClauseAtom::predicate) {
+        for head in rule.head_atoms() {
+            let head_symbol = predicate_symbol(head);
             for atom in rule.body().iter().filter(|atom| atom.is_negated()) {
-                let Some(path) = shortest_dependency_path(&depends, atom.predicate(), head) else {
+                let negated = predicate_symbol(atom);
+                let Some(path) = shortest_dependency_path(&depends, &negated, &head_symbol) else {
                     continue;
                 };
-                let mut cycle = vec![head.to_owned()];
+                let mut cycle = vec![head_symbol.clone()];
                 cycle.extend(path.into_iter().map(str::to_owned));
                 return EvalError::NonStratifiable {
-                    head: head.to_owned(),
-                    negated: atom.predicate().to_owned(),
+                    head: head_symbol,
+                    negated,
                     cycle,
                 };
             }
@@ -514,9 +532,9 @@ fn negative_cycle(rules: &[DlClause]) -> EvalError {
 /// A breadth-first search over lexically ordered adjacency, so the path is a pure function
 /// of the rule program rather than of a traversal accident.
 fn shortest_dependency_path<'a>(
-    depends: &BTreeMap<&'a str, BTreeSet<&'a str>>,
+    depends: &'a BTreeMap<String, BTreeSet<String>>,
     from: &'a str,
-    to: &'a str,
+    to: &str,
 ) -> Option<Vec<&'a str>> {
     let mut parent: BTreeMap<&str, &str> = BTreeMap::new();
     let mut queue: VecDeque<&str> = VecDeque::from([from]);
@@ -533,10 +551,10 @@ fn shortest_dependency_path<'a>(
             path.reverse();
             return Some(path);
         }
-        for &next in depends.get(node).into_iter().flatten() {
-            if seen.insert(next) {
-                parent.insert(next, node);
-                queue.push_back(next);
+        for next in depends.get(node).into_iter().flatten() {
+            if seen.insert(next.as_str()) {
+                parent.insert(next.as_str(), node);
+                queue.push_back(next.as_str());
             }
         }
     }
@@ -641,19 +659,38 @@ const INDEX_BOTH: u8 = 3;
 
 /// One matched body row, held as ids only.
 ///
-/// A source is `Copy` and 16 bytes: the join never renders a term surface, never clones a
-/// `String` and never re-hashes a fact. Surfaces are resolved once, for committed winners
-/// only, when the [`Derivation`] is built.
+/// A source is `Copy` and carries all FOUR of the matched quad's positions: with the
+/// predicate as data, an atom's predicate is no longer recoverable from the rule text, so
+/// the row has to say which one it matched. The join never renders a term surface, never
+/// clones a `String` and never re-hashes a fact; surfaces are resolved once, for committed
+/// winners only, when the [`Derivation`] is built.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SourceRow {
     /// Index into the producing rule's authored body.
     body_index: usize,
     /// The matched row's subject term.
     subject: TermId,
+    /// The matched row's predicate term — the key of the partition it came from.
+    predicate: TermId,
     /// The matched row's object term.
     object: TermId,
+    /// The matched row's graph term — the other half of that partition key.
+    graph: TermId,
     /// The matched row's store-global row id — the key of the proof-height column.
     row: RowId,
+}
+
+impl SourceRow {
+    /// This row as a [`Fact`] of lexical surfaces.
+    fn fact(self, rel: &RelationStore) -> Fact {
+        let interner = rel.interner();
+        Fact {
+            subject: interner.resolve(self.subject).to_owned(),
+            predicate: interner.resolve(self.predicate).to_owned(),
+            object: interner.resolve(self.object).to_owned(),
+            graph: interner.resolve(self.graph).to_owned(),
+        }
+    }
 }
 
 /// A partial solution of one rule's positive body.
@@ -687,14 +724,55 @@ impl SlotSolution {
 
 // ── The indexed binary join ─────────────────────────────────────────────────────
 
-/// Extend every partial solution by index-selecting `atom`'s matching rows.
+/// What one argument position resolves to under a partial solution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PositionValue {
+    /// Pinned to this interned term — a constant the store knows, or a bound variable.
+    Known(TermId),
+    /// Free: the scan binds it.
+    Free,
+    /// Pinned to a term the store has never interned, so no row can match.
+    Missing,
+}
+
+impl PositionValue {
+    /// The pinned id, or `None` when the position is free.
+    ///
+    /// [`Missing`](Self::Missing) never reaches here: a solution carrying one is discarded
+    /// before any partition is addressed.
+    #[inline]
+    fn known(self) -> Option<TermId> {
+        match self {
+            Self::Known(id) => Some(id),
+            Self::Free | Self::Missing => None,
+        }
+    }
+}
+
+/// Resolve the constant positions of `shape` ONCE per operator invocation.
+///
+/// A constant's surface does not depend on the partial solution, so its dictionary probe
+/// is hoisted out of the per-solution loop exactly as it was before the predicate became a
+/// term. `None` marks a variable position, resolved per solution.
+fn constant_positions(
+    shape: &AtomShape,
+    rel: &RelationStore,
+) -> [Option<PositionValue>; ATOM_ARITY] {
+    std::array::from_fn(|position| {
+        shape.positions()[position].constant().map(|surface| {
+            rel.term_id(surface)
+                .map_or(PositionValue::Missing, PositionValue::Known)
+        })
+    })
+}
+
+/// Extend every partial solution by index-selecting `operator`'s matching rows.
 ///
 /// This is the ONE-TIME scan-mode dispatch: once per operator invocation — not per row —
 /// the scan mode is lifted to a `const SCAN` monomorphization parameter, so the per-row
 /// delta filter has no runtime branch.
 fn extend_slot_solutions(
     operator: &AtomOperator,
-    atom: &ClauseAtom,
     rel: &RelationStore,
     delta: Delta,
     scan: Scan,
@@ -703,344 +781,147 @@ fn extend_slot_solutions(
 ) -> Vec<SlotSolution> {
     match scan {
         Scan::Delta => {
-            extend_slot_operator::<SCAN_DELTA>(operator, atom, rel, delta, solutions, governor)
+            extend_slot_operator::<SCAN_DELTA>(operator, rel, delta, solutions, governor)
         }
-        Scan::Full => {
-            extend_slot_operator::<SCAN_FULL>(operator, atom, rel, delta, solutions, governor)
-        }
+        Scan::Full => extend_slot_operator::<SCAN_FULL>(operator, rel, delta, solutions, governor),
         Scan::OldOnly => {
-            extend_slot_operator::<SCAN_OLD_ONLY>(operator, atom, rel, delta, solutions, governor)
+            extend_slot_operator::<SCAN_OLD_ONLY>(operator, rel, delta, solutions, governor)
         }
     }
 }
 
-/// Dispatch one operator to its statically-shaped kernel.
-///
-/// The planner emits an [`IndexChoice`] compatible with the atom's term shape, so the
-/// admissible `(kernel, index)` pairs are exactly the arms below.
+/// Dispatch one operator to its statically-shaped index kernel.
 fn extend_slot_operator<const SCAN: u8>(
     operator: &AtomOperator,
-    atom: &ClauseAtom,
     rel: &RelationStore,
     delta: Delta,
     solutions: &[SlotSolution],
     governor: &mut StepGovernor,
 ) -> Vec<SlotSolution> {
-    let predicate = atom.predicate();
-    let body_index = operator.body_index();
-    match (operator.kernel(), operator.index()) {
-        (
-            AtomKernel::Vars {
-                subject_slot,
-                object_slot,
-            },
-            index,
-        ) => {
-            let slots = VarSlots {
-                body_index,
-                subject_slot: *subject_slot,
-                object_slot: *object_slot,
-            };
-            match index {
-                IndexChoice::Any => extend_vars::<SCAN, INDEX_ANY>(
-                    predicate, slots, rel, delta, solutions, governor,
-                ),
-                IndexChoice::Subject => extend_vars::<SCAN, INDEX_SUBJECT>(
-                    predicate, slots, rel, delta, solutions, governor,
-                ),
-                IndexChoice::Object => extend_vars::<SCAN, INDEX_OBJECT>(
-                    predicate, slots, rel, delta, solutions, governor,
-                ),
-                IndexChoice::Both => extend_vars::<SCAN, INDEX_BOTH>(
-                    predicate, slots, rel, delta, solutions, governor,
-                ),
-            }
+    match operator.index() {
+        IndexChoice::Any => {
+            extend_atom::<SCAN, INDEX_ANY>(operator, rel, delta, solutions, governor)
         }
-        (
-            AtomKernel::VarConst {
-                subject_slot,
-                object,
-            },
-            index,
-        ) => {
-            let Some(object_id) = rel.term_id(object) else {
-                return Vec::new();
-            };
-            let half = HalfConst {
-                body_index,
-                slot: *subject_slot,
-                constant: object_id,
-            };
-            match index {
-                IndexChoice::Object => extend_var_const::<SCAN, INDEX_OBJECT>(
-                    predicate, half, rel, delta, solutions, governor,
-                ),
-                IndexChoice::Both => extend_var_const::<SCAN, INDEX_BOTH>(
-                    predicate, half, rel, delta, solutions, governor,
-                ),
-                IndexChoice::Any | IndexChoice::Subject => {
-                    unreachable!("a constant object is always a bound position")
-                }
-            }
+        IndexChoice::Subject => {
+            extend_atom::<SCAN, INDEX_SUBJECT>(operator, rel, delta, solutions, governor)
         }
-        (
-            AtomKernel::ConstVar {
-                subject,
-                object_slot,
-            },
-            index,
-        ) => {
-            let Some(subject_id) = rel.term_id(subject) else {
-                return Vec::new();
-            };
-            let half = HalfConst {
-                body_index,
-                slot: *object_slot,
-                constant: subject_id,
-            };
-            match index {
-                IndexChoice::Subject => extend_const_var::<SCAN, INDEX_SUBJECT>(
-                    predicate, half, rel, delta, solutions, governor,
-                ),
-                IndexChoice::Both => extend_const_var::<SCAN, INDEX_BOTH>(
-                    predicate, half, rel, delta, solutions, governor,
-                ),
-                IndexChoice::Any | IndexChoice::Object => {
-                    unreachable!("a constant subject is always a bound position")
-                }
-            }
+        IndexChoice::Object => {
+            extend_atom::<SCAN, INDEX_OBJECT>(operator, rel, delta, solutions, governor)
         }
-        (AtomKernel::Consts { subject, object }, _) => {
-            let (Some(subject_id), Some(object_id)) = (rel.term_id(subject), rel.term_id(object))
-            else {
-                return Vec::new();
-            };
-            extend_consts::<SCAN>(
-                predicate, body_index, subject_id, object_id, rel, delta, solutions, governor,
-            )
+        IndexChoice::Both => {
+            extend_atom::<SCAN, INDEX_BOTH>(operator, rel, delta, solutions, governor)
         }
     }
 }
 
-/// The flat-frame coordinates of a variable/variable atom.
-#[derive(Debug, Clone, Copy)]
-struct VarSlots {
-    /// Index into the rule's authored body.
-    body_index: usize,
-    /// The subject variable's frame slot.
-    subject_slot: usize,
-    /// The object variable's frame slot.
-    object_slot: usize,
-}
-
-/// The flat-frame coordinates of an atom with one variable and one constant.
-#[derive(Debug, Clone, Copy)]
-struct HalfConst {
-    /// Index into the rule's authored body.
-    body_index: usize,
-    /// The variable position's frame slot.
-    slot: usize,
-    /// The interned constant position.
-    constant: TermId,
-}
-
-/// The variable/variable kernel: both positions are frame slots.
-fn extend_vars<const SCAN: u8, const INDEX: u8>(
-    predicate: &str,
-    slots: VarSlots,
+/// The one arity-4 atom kernel: address the partitions the predicate and graph positions
+/// admit, and inside each one select exactly the rows the `(subject, object)` index admits.
+///
+/// The two halves are independent, which is the whole performance argument. `INDEX` is a
+/// monomorphization parameter, so the subject/object access path is decided at compile
+/// time and is the SAME path a predicate-keyed store would have taken. The partition half
+/// is a single ordered-map probe whenever the predicate and graph are known
+/// ([`AtomShape::addresses_one_partition`]) — which is every atom of every rule that
+/// names its predicate — and only degrades to a sweep of matching partitions when the rule
+/// genuinely quantifies over the predicate or the graph.
+fn extend_atom<const SCAN: u8, const INDEX: u8>(
+    operator: &AtomOperator,
     rel: &RelationStore,
     delta: Delta,
     solutions: &[SlotSolution],
     governor: &mut StepGovernor,
 ) -> Vec<SlotSolution> {
+    let shape = operator.shape();
+    let body_index = operator.body_index();
+    let constants = constant_positions(shape, rel);
     let mut next = Vec::new();
-    for solution in solutions {
+
+    'solutions: for solution in solutions {
         if governor.spent() {
             break;
         }
+        // Resolve all four positions: constants were resolved once above, a bound variable
+        // reads its frame slot, a free variable is bound by the scan.
+        let mut values = [PositionValue::Free; ATOM_ARITY];
+        for position in 0..ATOM_ARITY {
+            values[position] = match (&shape.positions()[position], constants[position]) {
+                (PositionPlan::Constant(_), Some(resolved)) => resolved,
+                (PositionPlan::Constant(_), None) => {
+                    unreachable!("a constant position always has a hoisted resolution")
+                }
+                (PositionPlan::Bound(slot), _) => solution
+                    .get(*slot)
+                    .map_or(PositionValue::Missing, PositionValue::Known),
+                (PositionPlan::Free(_), _) => PositionValue::Free,
+            };
+        }
+        if values.contains(&PositionValue::Missing) {
+            // A pinned position the store has never interned matches nothing at all.
+            continue;
+        }
+
+        // The `(subject, object)` index bound. `INDEX` is a compile-time constant, and the
+        // planner only emits a bound index for a position it has proven known.
         let bound = match INDEX {
             INDEX_ANY => Bound::Any,
-            INDEX_SUBJECT => match solution.get(slots.subject_slot) {
+            INDEX_SUBJECT => match values[POSITION_SUBJECT].known() {
                 Some(subject) => Bound::Subject(subject),
                 None => continue,
             },
-            INDEX_OBJECT => match solution.get(slots.object_slot) {
+            INDEX_OBJECT => match values[POSITION_OBJECT].known() {
                 Some(object) => Bound::Object(object),
                 None => continue,
             },
             INDEX_BOTH => match (
-                solution.get(slots.subject_slot),
-                solution.get(slots.object_slot),
+                values[POSITION_SUBJECT].known(),
+                values[POSITION_OBJECT].known(),
             ) {
                 (Some(subject), Some(object)) => Bound::Both(subject, object),
                 _ => continue,
             },
             _ => unreachable!("INDEX is a planned index code"),
         };
-        let mut cursor = rel.select(predicate, bound);
-        while let Some((subject, object, row)) = cursor.next() {
-            if !keep_row::<SCAN>(delta, row)
-                || (slots.subject_slot == slots.object_slot && subject != object)
-            {
-                continue;
-            }
-            if governor.spent() {
-                break;
-            }
-            let mut merged = solution.clone();
-            if INDEX == INDEX_ANY || INDEX == INDEX_OBJECT {
-                merged.bindings[slots.subject_slot] = Some(subject);
-            }
-            if (INDEX == INDEX_ANY || INDEX == INDEX_SUBJECT)
-                && slots.object_slot != slots.subject_slot
-            {
-                merged.bindings[slots.object_slot] = Some(object);
-            }
-            merged.sources.push(SourceRow {
-                body_index: slots.body_index,
-                subject,
-                object,
-                row,
-            });
-            governor.charge();
-            next.push(merged);
-        }
-    }
-    next
-}
 
-/// The variable-subject / constant-object kernel.
-fn extend_var_const<const SCAN: u8, const INDEX: u8>(
-    predicate: &str,
-    half: HalfConst,
-    rel: &RelationStore,
-    delta: Delta,
-    solutions: &[SlotSolution],
-    governor: &mut StepGovernor,
-) -> Vec<SlotSolution> {
-    let mut next = Vec::new();
-    for solution in solutions {
-        if governor.spent() {
-            break;
-        }
-        let bound = match INDEX {
-            INDEX_OBJECT => Bound::Object(half.constant),
-            INDEX_BOTH => match solution.get(half.slot) {
-                Some(subject) => Bound::Both(subject, half.constant),
-                None => continue,
-            },
-            _ => unreachable!("a constant object selects the Object or Both index"),
-        };
-        let mut cursor = rel.select(predicate, bound);
-        while let Some((subject, object, row)) = cursor.next() {
-            if !keep_row::<SCAN>(delta, row) {
-                continue;
+        for partition in rel.partitions(
+            values[POSITION_PREDICATE].known(),
+            values[POSITION_GRAPH].known(),
+        ) {
+            let (predicate, graph) = (partition.predicate(), partition.graph());
+            let mut cursor = partition.select(bound);
+            while let Some((subject, object, row)) = cursor.next() {
+                if !keep_row::<SCAN>(delta, row) {
+                    continue;
+                }
+                let matched = [subject, predicate, object, graph];
+                // The generalized diagonal filter: any two positions holding the same
+                // variable must agree, whichever two they are.
+                if !shape
+                    .equalities()
+                    .iter()
+                    .all(|&(left, right)| matched[left] == matched[right])
+                {
+                    continue;
+                }
+                if governor.spent() {
+                    break 'solutions;
+                }
+                let mut merged = solution.clone();
+                for (position, plan) in shape.positions().iter().enumerate() {
+                    if let PositionPlan::Free(slot) = plan {
+                        merged.bindings[*slot] = Some(matched[position]);
+                    }
+                }
+                merged.sources.push(SourceRow {
+                    body_index,
+                    subject,
+                    predicate,
+                    object,
+                    graph,
+                    row,
+                });
+                governor.charge();
+                next.push(merged);
             }
-            if governor.spent() {
-                break;
-            }
-            let mut merged = solution.clone();
-            if INDEX == INDEX_OBJECT {
-                merged.bindings[half.slot] = Some(subject);
-            }
-            merged.sources.push(SourceRow {
-                body_index: half.body_index,
-                subject,
-                object,
-                row,
-            });
-            governor.charge();
-            next.push(merged);
-        }
-    }
-    next
-}
-
-/// The constant-subject / variable-object kernel.
-fn extend_const_var<const SCAN: u8, const INDEX: u8>(
-    predicate: &str,
-    half: HalfConst,
-    rel: &RelationStore,
-    delta: Delta,
-    solutions: &[SlotSolution],
-    governor: &mut StepGovernor,
-) -> Vec<SlotSolution> {
-    let mut next = Vec::new();
-    for solution in solutions {
-        if governor.spent() {
-            break;
-        }
-        let bound = match INDEX {
-            INDEX_SUBJECT => Bound::Subject(half.constant),
-            INDEX_BOTH => match solution.get(half.slot) {
-                Some(object) => Bound::Both(half.constant, object),
-                None => continue,
-            },
-            _ => unreachable!("a constant subject selects the Subject or Both index"),
-        };
-        let mut cursor = rel.select(predicate, bound);
-        while let Some((subject, object, row)) = cursor.next() {
-            if !keep_row::<SCAN>(delta, row) {
-                continue;
-            }
-            if governor.spent() {
-                break;
-            }
-            let mut merged = solution.clone();
-            if INDEX == INDEX_SUBJECT {
-                merged.bindings[half.slot] = Some(object);
-            }
-            merged.sources.push(SourceRow {
-                body_index: half.body_index,
-                subject,
-                object,
-                row,
-            });
-            governor.charge();
-            next.push(merged);
-        }
-    }
-    next
-}
-
-/// The fully-ground kernel: a membership probe that binds nothing.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "a ground probe's operands are eight scalars; bundling them into a struct \
-              used at exactly one call site would add a type without removing a concept"
-)]
-fn extend_consts<const SCAN: u8>(
-    predicate: &str,
-    body_index: usize,
-    subject_id: TermId,
-    object_id: TermId,
-    rel: &RelationStore,
-    delta: Delta,
-    solutions: &[SlotSolution],
-    governor: &mut StepGovernor,
-) -> Vec<SlotSolution> {
-    let mut next = Vec::new();
-    for solution in solutions {
-        if governor.spent() {
-            break;
-        }
-        let mut cursor = rel.select(predicate, Bound::Both(subject_id, object_id));
-        while let Some((subject, object, row)) = cursor.next() {
-            if !keep_row::<SCAN>(delta, row) {
-                continue;
-            }
-            if governor.spent() {
-                break;
-            }
-            let mut merged = solution.clone();
-            merged.sources.push(SourceRow {
-                body_index,
-                subject,
-                object,
-                row,
-            });
-            governor.charge();
-            next.push(merged);
         }
     }
     next
@@ -1225,37 +1106,52 @@ impl<'a> LeapfrogIntersection<'a> {
     }
 }
 
+/// The single partition a certified cycle atom addresses, or `None` if the store has no
+/// such partition (in which case the component's intersection is empty).
+///
+/// Cycle certification admits only atoms whose predicate AND graph are constants — a trie
+/// level is one sorted arrangement, and an atom that quantifies over its predicate denotes
+/// a union of them — so the surfaces are always there to resolve.
+fn cycle_atom_partition<'a>(shape: &AtomShape, rel: &'a RelationStore) -> Option<PartitionRef<'a>> {
+    let (Some(predicate), Some(graph)) = (shape.predicate().constant(), shape.graph().constant())
+    else {
+        unreachable!("cycle certification admits only constant-predicate, constant-graph atoms")
+    };
+    let (predicate, graph) = (rel.term_id(predicate)?, rel.term_id(graph)?);
+    rel.partition(predicate, graph)
+}
+
+/// The subject and object frame slots of a certified cycle atom.
+///
+/// Cycle certification admits only atoms with two DISTINCT variable positions there, so
+/// both slots exist.
+fn cycle_atom_slots(shape: &AtomShape) -> (usize, usize) {
+    let (Some(subject), Some(object)) = (shape.subject().slot(), shape.object().slot()) else {
+        unreachable!("cycle certification admits only distinct variable-variable atoms")
+    };
+    (subject, object)
+}
+
 /// Build one cycle atom's trie cursor for `variable_slot`, constrained by any binding of
 /// its other variable.
-///
-/// Cycle certification admits only atoms with two DISTINCT variable positions, so the
-/// kernel is always [`AtomKernel::Vars`] and the "other" position is always the one the
-/// descent is not currently on.
 fn cycle_atom_cursor<'a>(
-    predicate: &str,
-    operator: &AtomOperator,
+    partition: PartitionRef<'a>,
+    shape: &AtomShape,
     variable_slot: usize,
     solution: &SlotSolution,
-    rel: &'a RelationStore,
     scan: Scan,
     delta: Delta,
 ) -> Option<LeapfrogValueCursor<'a>> {
-    let AtomKernel::Vars {
-        subject_slot,
-        object_slot,
-    } = operator.kernel()
-    else {
-        return None;
-    };
-    if *subject_slot == variable_slot {
+    let (subject_slot, object_slot) = cycle_atom_slots(shape);
+    if subject_slot == variable_slot {
         Some(LeapfrogValueCursor::subject(
-            rel.values_subject(predicate, solution.get(*object_slot)),
+            partition.values_subject(solution.get(object_slot)),
             scan,
             delta,
         ))
-    } else if *object_slot == variable_slot {
+    } else if object_slot == variable_slot {
         Some(LeapfrogValueCursor::object(
-            rel.values_object(predicate, solution.get(*subject_slot)),
+            partition.values_object(solution.get(subject_slot)),
             scan,
             delta,
         ))
@@ -1267,8 +1163,6 @@ fn cycle_atom_cursor<'a>(
 /// Immutable state shared by every recursive variable level of one leapfrog component.
 #[derive(Debug, Clone, Copy)]
 struct LeapfrogRun<'a> {
-    /// The rule whose body the component's atoms index into.
-    rule: &'a DlClause,
     /// The rule's plan, for the per-atom operators.
     plan: &'a RulePlan,
     /// The certified component being descended.
@@ -1290,32 +1184,28 @@ impl LeapfrogRun<'_> {
     fn append_sources(&self, solution: &mut SlotSolution) -> bool {
         let original = solution.sources.len();
         for &planned in self.cycle.atoms() {
-            let atom = &self.rule.body()[planned.body_index()];
             let operator = self.plan.operator_at(planned.positive_position());
-            let AtomKernel::Vars {
-                subject_slot,
-                object_slot,
-            } = operator.kernel()
-            else {
-                unreachable!("cycle certification admits only distinct variable-variable atoms")
-            };
-            let (Some(subject), Some(object)) =
-                (solution.get(*subject_slot), solution.get(*object_slot))
-            else {
+            let shape = operator.shape();
+            let (subject_slot, object_slot) = cycle_atom_slots(shape);
+            let (Some(subject), Some(object), Some(partition)) = (
+                solution.get(subject_slot),
+                solution.get(object_slot),
+                cycle_atom_partition(shape, self.rel),
+            ) else {
                 solution.sources.truncate(original);
                 return false;
             };
             let scan = scan_for(planned.positive_position(), self.delta_position);
-            let mut rows = self
-                .rel
-                .select(atom.predicate(), Bound::Both(subject, object));
+            let mut rows = partition.select(Bound::Both(subject, object));
             let mut matched = None;
             while let Some((subject, object, row)) = rows.next() {
                 if keep_row_for_scan(scan, self.delta, row) {
                     matched = Some(SourceRow {
                         body_index: planned.body_index(),
                         subject,
+                        predicate: partition.predicate(),
                         object,
+                        graph: partition.graph(),
                         row,
                     });
                     break;
@@ -1356,28 +1246,19 @@ impl LeapfrogRun<'_> {
         let externally_bound = solution.get(variable_slot);
         let mut cursors = Vec::new();
         for &planned in self.cycle.atoms() {
-            let atom = &self.rule.body()[planned.body_index()];
             let operator = self.plan.operator_at(planned.positive_position());
-            let AtomKernel::Vars {
-                subject_slot,
-                object_slot,
-            } = operator.kernel()
-            else {
-                unreachable!("cycle certification admits only distinct variable-variable atoms")
-            };
-            if *subject_slot != variable_slot && *object_slot != variable_slot {
+            let shape = operator.shape();
+            let (subject_slot, object_slot) = cycle_atom_slots(shape);
+            if subject_slot != variable_slot && object_slot != variable_slot {
                 continue;
             }
             let scan = scan_for(planned.positive_position(), self.delta_position);
-            let Some(cursor) = cycle_atom_cursor(
-                atom.predicate(),
-                operator,
-                variable_slot,
-                solution,
-                self.rel,
-                scan,
-                self.delta,
-            ) else {
+            let Some(partition) = cycle_atom_partition(shape, self.rel) else {
+                return;
+            };
+            let Some(cursor) =
+                cycle_atom_cursor(partition, shape, variable_slot, solution, scan, self.delta)
+            else {
                 return;
             };
             cursors.push(cursor);
@@ -1442,15 +1323,14 @@ enum JoinStrategy {
     ForcedBinary,
 }
 
-/// Join `rule`'s positive body against the round snapshot, then apply its NAF filters.
+/// Join a rule's positive body against the round snapshot, then apply its NAF filters.
 ///
 /// The positive join is the semi-naive delta decomposition; negated atoms are evaluated
 /// AFTER it, against the accumulated store, which stratification guarantees holds the
 /// negated predicate's final extension.
 fn join_body(
-    rule: &DlClause,
     plan: &RulePlan,
-    runtime: &RuleRuntime<'_>,
+    runtime: &RuleRuntime,
     snapshot: RoundSnapshot<'_>,
     strategy: JoinStrategy,
     governor: &mut StepGovernor,
@@ -1462,9 +1342,9 @@ fn join_body(
         // following round by the store's own membership test.
         vec![SlotSolution::empty(plan.variables().len())]
     } else if leapfrog {
-        join_positive_leapfrog(rule, plan, snapshot, governor)
+        join_positive_leapfrog(plan, snapshot, governor)
     } else {
-        join_positive_binary(rule, plan, snapshot, governor)
+        join_positive_binary(plan, snapshot, governor)
     };
 
     if !runtime.negated.is_empty() {
@@ -1481,7 +1361,6 @@ fn join_body(
 /// The indexed binary positive join: every planned operator in execution order, for every
 /// semi-naive delta position.
 fn join_positive_binary(
-    rule: &DlClause,
     plan: &RulePlan,
     snapshot: RoundSnapshot<'_>,
     governor: &mut StepGovernor,
@@ -1493,7 +1372,6 @@ fn join_positive_binary(
         for (position, operator) in operators.iter().enumerate() {
             partial = extend_slot_solutions(
                 operator,
-                &rule.body()[operator.body_index()],
                 snapshot.rel,
                 snapshot.delta,
                 scan_for(position, delta_position),
@@ -1520,7 +1398,6 @@ fn join_positive_binary(
 /// The hybrid positive join for a rule with at least one certified cyclic subplan: each
 /// physical group in execution order, for every semi-naive delta position.
 fn join_positive_leapfrog(
-    rule: &DlClause,
     plan: &RulePlan,
     snapshot: RoundSnapshot<'_>,
     governor: &mut StepGovernor,
@@ -1534,7 +1411,6 @@ fn join_positive_leapfrog(
                     let operator = plan.operator_at(planned.positive_position());
                     extend_slot_solutions(
                         operator,
-                        &rule.body()[planned.body_index()],
                         snapshot.rel,
                         snapshot.delta,
                         scan_for(planned.positive_position(), delta_position),
@@ -1544,7 +1420,6 @@ fn join_positive_leapfrog(
                 }
                 JoinGroup::Leapfrog(cycle) => extend_solutions_leapfrog(
                     LeapfrogRun {
-                        rule,
                         plan,
                         cycle,
                         delta_position,
@@ -1589,7 +1464,8 @@ impl ArgShape {
     /// # Panics
     ///
     /// Panics on a variable the plan has no slot for. [`RulePlan`] assigns a slot to every
-    /// variable of the body AND the head, so that is a planner contradiction.
+    /// variable of the body AND the head, in every one of their four positions, so that is
+    /// a planner contradiction.
     fn of(term: &ClauseTerm, variables: &[String]) -> Self {
         match term.variable() {
             Some(name) => Self::Slot(
@@ -1603,6 +1479,13 @@ impl ArgShape {
                     .expect("a non-variable term always has a lexical surface"),
             ),
         }
+    }
+
+    /// The four lowered arguments of `atom`, in `(subject, predicate, object, graph)`
+    /// order.
+    fn of_atom(atom: &crate::clause::ClauseAtom, variables: &[String]) -> [Self; ATOM_ARITY] {
+        let terms = atom.terms();
+        std::array::from_fn(|position| Self::of(terms[position], variables))
     }
 
     /// The interned value of this argument under `solution`.
@@ -1620,84 +1503,77 @@ impl ArgShape {
 
 /// A negated body atom, lowered once per evaluation.
 #[derive(Debug, Clone)]
-struct NegatedAtom<'r> {
-    /// The predicate whose extension is probed.
-    predicate: &'r str,
-    /// The subject argument.
-    subject: ArgShape,
-    /// The object argument.
-    object: ArgShape,
+struct NegatedAtom {
+    /// The four lowered arguments, in `(subject, predicate, object, graph)` order.
+    args: [ArgShape; ATOM_ARITY],
 }
 
-impl NegatedAtom<'_> {
+impl NegatedAtom {
     /// Whether this negated atom is SATISFIED — i.e. some matching fact is present, so it
     /// blocks the rule.
     ///
     /// Two binding modes, both of them the stratified-negation truth value because the
     /// negated predicate's stratum has already completed:
     ///
-    /// * **fully ground** — a unique-key membership probe;
+    /// * **fully ground** — a unique-key membership probe in one partition;
     /// * **partially bound (existential NAF)** — "does SOME fact match the ground
     ///   positions?"; an unbound position is unconstrained, so `not p(?x, ?y)` with `?y`
-    ///   free reads as "`?x` has no `p` at all". Repeated unbound variables are NOT
-    ///   required to agree, matching the reference semantics exactly.
+    ///   free reads as "`?x` has no `p` at all". An unbound PREDICATE or GRAPH position is
+    ///   unconstrained in exactly the same way, so `not T(?x, ?p, ?y, ?g)` with all three
+    ///   free reads as "`?x` is the subject of nothing, anywhere" — the same rule applied
+    ///   to the same kind of position. Repeated unbound variables are NOT required to
+    ///   agree, matching the reference semantics exactly.
     ///
     /// A ground term the store never interned constrains to zero rows, so the atom is not
     /// satisfied and the rule fires.
     fn satisfied(&self, solution: &SlotSolution, rel: &RelationStore) -> bool {
-        let subject = self.subject.interned(solution, rel);
-        let object = self.object.interned(solution, rel);
-        let bound = match (&self.subject, &self.object, subject, object) {
-            // A ground position whose term is absent from the store matches nothing.
-            (ArgShape::Const(_), _, None, _) | (_, ArgShape::Const(_), _, None) => return false,
-            (_, _, Some(subject), Some(object)) => Bound::Both(subject, object),
-            (_, _, Some(subject), None) => Bound::Subject(subject),
-            (_, _, None, Some(object)) => Bound::Object(object),
-            (_, _, None, None) => Bound::Any,
+        let mut values = [None; ATOM_ARITY];
+        for (position, arg) in self.args.iter().enumerate() {
+            let interned = arg.interned(solution, rel);
+            if interned.is_none() && matches!(arg, ArgShape::Const(_)) {
+                // A ground position whose term is absent from the store matches nothing.
+                return false;
+            }
+            values[position] = interned;
+        }
+        let bound = match (values[POSITION_SUBJECT], values[POSITION_OBJECT]) {
+            (Some(subject), Some(object)) => Bound::Both(subject, object),
+            (Some(subject), None) => Bound::Subject(subject),
+            (None, Some(object)) => Bound::Object(object),
+            (None, None) => Bound::Any,
         };
-        rel.select(self.predicate, bound).any_remaining()
+        rel.partitions(values[POSITION_PREDICATE], values[POSITION_GRAPH])
+            .any(|partition| partition.select(bound).any_remaining())
     }
 }
 
 /// Everything about one rule that is a static function of the rule, hoisted out of every
 /// round: the head's lowered arguments and the negated atoms' lowered probes.
 ///
-/// Constant surfaces are rendered ONCE here rather than per candidate, and every borrowed
-/// predicate points into the [`Executable`], so nothing in the round loop allocates a
-/// predicate name.
+/// Constant surfaces are rendered ONCE here rather than per candidate — including the head
+/// predicate's, which is now a term like any other and so may equally well be a slot.
 #[derive(Debug, Clone)]
-struct RuleRuntime<'r> {
-    /// The head predicate.
-    head_predicate: &'r str,
-    /// The head's subject argument.
-    head_subject: ArgShape,
-    /// The head's object argument.
-    head_object: ArgShape,
+struct RuleRuntime {
+    /// The head's four lowered arguments, in `(subject, predicate, object, graph)` order.
+    head: [ArgShape; ATOM_ARITY],
     /// The rule's negated body atoms, in authored order.
-    negated: Vec<NegatedAtom<'r>>,
+    negated: Vec<NegatedAtom>,
 }
 
-impl<'r> RuleRuntime<'r> {
+impl RuleRuntime {
     /// Lower one rule's static shapes.
-    fn new(rule: &'r DlClause, plan: &RulePlan) -> Self {
+    fn new(rule: &DlClause, plan: &RulePlan) -> Self {
         let variables = plan.variables();
         // Every clause inside an `Executable` came through `Parsed::new`, which admits
         // only the atomic head form, so "the head" exists here by construction.
         let head = datalog_head(rule);
         Self {
-            head_predicate: head.predicate(),
-            head_subject: ArgShape::of(head.subject(), variables),
-            head_object: ArgShape::of(head.object(), variables),
+            head: ArgShape::of_atom(head, variables),
             negated: plan
                 .negated()
                 .iter()
-                .map(|&index| {
-                    let atom = &rule.body()[index];
-                    NegatedAtom {
-                        predicate: atom.predicate(),
-                        subject: ArgShape::of(atom.subject(), variables),
-                        object: ArgShape::of(atom.object(), variables),
-                    }
+                .map(|&index| NegatedAtom {
+                    args: ArgShape::of_atom(&rule.body()[index], variables),
                 })
                 .collect(),
         }
@@ -1743,14 +1619,21 @@ impl HeadTerm<'_> {
 }
 
 /// The identity of a candidate head fact, allocation-free.
+///
+/// All four positions are [`HeadTerm`]s: with the predicate carried as data, a head
+/// predicate can be a bound variable, so it cannot be a borrowed `&str` naming a relation.
+/// The field order is the [`Fact`] order, so the derived `Ord` groups candidates the way
+/// the commit sweep will emit them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct HeadKey<'r> {
-    /// The head predicate, borrowed from the executable.
-    predicate: &'r str,
     /// The head subject.
     subject: HeadTerm<'r>,
+    /// The head predicate.
+    predicate: HeadTerm<'r>,
     /// The head object.
     object: HeadTerm<'r>,
+    /// The head graph.
+    graph: HeadTerm<'r>,
 }
 
 /// One rule firing, before the round's winner is chosen.
@@ -1768,16 +1651,12 @@ struct Candidate {
 
 impl Candidate {
     /// The candidate's source facts, in authored body order.
-    fn source_facts(&self, exe: &Executable, rel: &RelationStore) -> Vec<Fact> {
-        let (rule, _) = exe.rule_entry(self.rule);
-        self.sources
-            .iter()
-            .map(|source| Fact {
-                subject: rel.interner().resolve(source.subject).to_owned(),
-                predicate: rule.body()[source.body_index].predicate().to_owned(),
-                object: rel.interner().resolve(source.object).to_owned(),
-            })
-            .collect()
+    ///
+    /// Each source names the quad it actually matched, predicate included: a body atom
+    /// with a variable predicate matched some concrete one, and the provenance has to say
+    /// which.
+    fn source_facts(&self, rel: &RelationStore) -> Vec<Fact> {
+        self.sources.iter().map(|source| source.fact(rel)).collect()
     }
 
     /// Whether this candidate beats `other` for the same head fact.
@@ -1791,7 +1670,7 @@ impl Candidate {
     /// The comparison resolves lexical surfaces, so it is deliberately staged: the cheap
     /// numeric prefix decides almost every real collision, and the allocating tail runs
     /// only on an exact numeric tie.
-    fn preferred_over(&self, other: &Self, exe: &Executable, rel: &RelationStore) -> bool {
+    fn preferred_over(&self, other: &Self, rel: &RelationStore) -> bool {
         match (self.proof_height, self.sum_source_height)
             .cmp(&(other.proof_height, other.sum_source_height))
         {
@@ -1799,8 +1678,8 @@ impl Candidate {
             std::cmp::Ordering::Greater => return false,
             std::cmp::Ordering::Equal => {}
         }
-        let mine = self.source_facts(exe, rel);
-        let theirs = other.source_facts(exe, rel);
+        let mine = self.source_facts(rel);
+        let theirs = other.source_facts(rel);
         let mut mine_sorted = mine.clone();
         mine_sorted.sort();
         let mut theirs_sorted = theirs.clone();
@@ -1831,10 +1710,10 @@ impl<'r> RoundBuffer<'r> {
     }
 
     /// Insert or quality-merge one candidate.
-    fn insert(&mut self, key: HeadKey<'r>, candidate: Candidate, ctx: MergeCtx<'_>) {
+    fn insert(&mut self, key: HeadKey<'r>, candidate: Candidate, rel: &RelationStore) {
         match self.entries.get_mut(&key) {
             Some(existing) => {
-                if candidate.preferred_over(existing, ctx.exe, ctx.rel) {
+                if candidate.preferred_over(existing, rel) {
                     *existing = candidate;
                 }
             }
@@ -1845,21 +1724,12 @@ impl<'r> RoundBuffer<'r> {
     }
 
     /// Fold a completed rule-local buffer in at the scheduling-erasing serial boundary.
-    fn merge_from(&mut self, other: Self, ctx: MergeCtx<'_>) {
+    fn merge_from(&mut self, other: Self, rel: &RelationStore) {
         self.join_steps = self.join_steps.saturating_add(other.join_steps);
         for (key, candidate) in other.entries {
-            self.insert(key, candidate, ctx);
+            self.insert(key, candidate, rel);
         }
     }
-}
-
-/// What a winner comparison needs to resolve provenance surfaces.
-#[derive(Debug, Clone, Copy)]
-struct MergeCtx<'a> {
-    /// The program, for the source atoms' predicates.
-    exe: &'a Executable,
-    /// The accumulated store, for the source terms' surfaces.
-    rel: &'a RelationStore,
 }
 
 /// The immutable snapshot every rule task reads during one semi-naive round.
@@ -1910,33 +1780,42 @@ impl RoundExecution {
 /// Evaluate one rule against the frozen round snapshot into a private buffer.
 fn evaluate_rule<'r>(
     exe: &'r Executable,
-    runtimes: &'r [RuleRuntime<'r>],
+    runtimes: &'r [RuleRuntime],
     rule_index: usize,
     snapshot: RoundSnapshot<'_>,
     strategy: JoinStrategy,
     allowance: u64,
 ) -> RoundBuffer<'r> {
-    let (rule, plan) = exe.rule_entry(rule_index);
+    let (_, plan) = exe.rule_entry(rule_index);
     let runtime = &runtimes[rule_index];
     let mut governor = StepGovernor::new(allowance);
-    let solutions = join_body(rule, plan, runtime, snapshot, strategy, &mut governor);
+    let solutions = join_body(plan, runtime, snapshot, strategy, &mut governor);
 
     let mut buffer = RoundBuffer::new();
     buffer.join_steps = governor.consumed;
-    let ctx = MergeCtx {
-        exe,
-        rel: snapshot.rel,
-    };
     for solution in solutions {
-        let subject = head_term(&runtime.head_subject, &solution, snapshot.rel);
-        let object = head_term(&runtime.head_object, &solution, snapshot.rel);
+        let key = HeadKey {
+            subject: head_term(&runtime.head[POSITION_SUBJECT], &solution, snapshot.rel),
+            predicate: head_term(&runtime.head[POSITION_PREDICATE], &solution, snapshot.rel),
+            object: head_term(&runtime.head[POSITION_OBJECT], &solution, snapshot.rel),
+            graph: head_term(&runtime.head[POSITION_GRAPH], &solution, snapshot.rel),
+        };
         // A fact a prior round or stratum already derived is not a derivation: earlier
-        // wins, exactly as the reference fixpoint decides it.
-        if let (Some(subject_id), Some(object_id)) = (subject.interned(), object.interned())
-            && snapshot
-                .rel
-                .select(runtime.head_predicate, Bound::Both(subject_id, object_id))
-                .any_remaining()
+        // wins, exactly as the reference fixpoint decides it. Every one of the four
+        // positions must already be interned for the quad to be present.
+        if let (Some(subject), Some(predicate), Some(object), Some(graph)) = (
+            key.subject.interned(),
+            key.predicate.interned(),
+            key.object.interned(),
+            key.graph.interned(),
+        ) && snapshot
+            .rel
+            .partition(predicate, graph)
+            .is_some_and(|partition| {
+                partition
+                    .select(Bound::Both(subject, object))
+                    .any_remaining()
+            })
         {
             continue;
         }
@@ -1948,18 +1827,14 @@ fn evaluate_rule<'r>(
             sum_source_height = sum_source_height.saturating_add(u64::from(height));
         }
         buffer.insert(
-            HeadKey {
-                predicate: runtime.head_predicate,
-                subject,
-                object,
-            },
+            key,
             Candidate {
                 rule: rule_index,
                 sources: solution.sources,
                 proof_height: proof_height.saturating_add(1),
                 sum_source_height,
             },
-            ctx,
+            snapshot.rel,
         );
     }
     buffer
@@ -1970,7 +1845,7 @@ fn evaluate_rule<'r>(
 /// # Panics
 ///
 /// Panics if a head variable is unbound. [`compile`] refuses a rule whose head carries a
-/// variable no positive body atom binds, and every positive atom binds both of its
+/// variable no positive body atom binds, and every positive atom binds all four of its
 /// variable positions before the join completes, so an unbound head slot here would be a
 /// contradiction in the range-restriction check.
 fn head_term<'r>(
@@ -1993,7 +1868,7 @@ fn head_term<'r>(
 /// Evaluate every rule of a stratum for one round, erasing scheduling order.
 fn evaluate_round<'r>(
     exe: &'r Executable,
-    runtimes: &'r [RuleRuntime<'r>],
+    runtimes: &'r [RuleRuntime],
     stratum: usize,
     snapshot: RoundSnapshot<'_>,
     execution: RoundExecution,
@@ -2001,15 +1876,11 @@ fn evaluate_round<'r>(
     allowance: u64,
 ) -> RoundBuffer<'r> {
     let rule_indices = exe.stratum_rule_indices(stratum);
-    let ctx = MergeCtx {
-        exe,
-        rel: snapshot.rel,
-    };
     if !execution.should_parallelize(rule_indices.len()) {
         let mut round = RoundBuffer::new();
         for &rule_index in rule_indices {
             let buffer = evaluate_rule(exe, runtimes, rule_index, snapshot, strategy, allowance);
-            round.merge_from(buffer, ctx);
+            round.merge_from(buffer, snapshot.rel);
         }
         return round;
     }
@@ -2025,7 +1896,7 @@ fn evaluate_round<'r>(
 
     let mut round = RoundBuffer::new();
     for buffer in buffers {
-        round.merge_from(buffer, ctx);
+        round.merge_from(buffer, snapshot.rel);
     }
     round
 }
@@ -2087,7 +1958,7 @@ fn evaluate_with(
     execution: RoundExecution,
     strategy: JoinStrategy,
 ) -> Result<Evaluation, EvalError> {
-    let runtimes: Vec<RuleRuntime<'_>> = (0..exe.rule_count())
+    let runtimes: Vec<RuleRuntime> = (0..exe.rule_count())
         .map(|index| {
             let (rule, plan) = exe.rule_entry(index);
             RuleRuntime::new(rule, plan)
@@ -2148,7 +2019,7 @@ fn check_budget(state: &FixpointState) -> Result<(), EvalError> {
 /// Run one stratum's semi-naive fixpoint into `state`.
 fn run_stratum(
     exe: &Executable,
-    runtimes: &[RuleRuntime<'_>],
+    runtimes: &[RuleRuntime],
     stratum: usize,
     state: &mut FixpointState,
     execution: RoundExecution,
@@ -2194,7 +2065,7 @@ fn run_stratum(
         }
 
         let round_lo = state.rel.row_count();
-        commit_round(exe, round, state);
+        commit_round(round, state);
         check_budget(state)?;
 
         // The next round's delta is exactly the rows committed this round — a contiguous
@@ -2206,20 +2077,21 @@ fn run_stratum(
     }
 }
 
-/// Commit a round's winners in lexical `(subject, predicate, object)` order.
+/// Commit a round's winners in lexical `(subject, predicate, object, graph)` order.
 ///
 /// Lexical — never mint order — so store insertion order, row-id assignment and the
 /// derivation sequence are all byte-deterministic. Row-id assignment is a purely additive
 /// side effect of this sorted loop; it never orders the commit.
-fn commit_round(exe: &Executable, round: RoundBuffer<'_>, state: &mut FixpointState) {
+fn commit_round(round: RoundBuffer<'_>, state: &mut FixpointState) {
     let mut winners: Vec<(Fact, Candidate)> = round
         .entries
         .into_iter()
         .map(|(key, candidate)| {
             let fact = Fact {
                 subject: key.subject.surface(&state.rel),
-                predicate: key.predicate.to_owned(),
+                predicate: key.predicate.surface(&state.rel),
                 object: key.object.surface(&state.rel),
+                graph: key.graph.surface(&state.rel),
             };
             (fact, candidate)
         })
@@ -2228,10 +2100,10 @@ fn commit_round(exe: &Executable, round: RoundBuffer<'_>, state: &mut FixpointSt
     winners.sort_by(|(left, _), (right, _)| left.cmp(right));
 
     for (fact, candidate) in winners {
-        let sources = candidate.source_facts(exe, &state.rel);
+        let sources = candidate.source_facts(&state.rel);
         let inserted = state
             .rel
-            .insert(&fact.predicate, &fact.subject, &fact.object);
+            .insert(&fact.subject, &fact.predicate, &fact.object, &fact.graph);
         let (_, _, row) = inserted.expect(
             "a round winner is absent from the store by construction, so it inserts a new row",
         );
@@ -2251,7 +2123,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::clause::HeadDisjunct;
+    use crate::clause::{ClauseAtom, HeadDisjunct};
     use crate::synth_corpus::{self, SynthWorkload};
     use crate::test_support::permute;
 
@@ -2271,26 +2143,42 @@ mod tests {
         ClauseAtom::positive(v(subject), predicate, v(object))
     }
 
-    /// The lexical surface an IRI is stored under.
+    /// The lexical surface an IRI is stored under — for a predicate exactly as much as
+    /// for a subject, because a predicate is an ordinary term.
     fn surface(name: &str) -> String {
         format!("<{name}>")
+    }
+
+    /// One EDB quad, as the surfaces the store interns, in the default graph.
+    fn quad(subject: &str, predicate: &str, object: &str) -> (String, String, String, String) {
+        (
+            subject.to_owned(),
+            surface(predicate),
+            object.to_owned(),
+            RelationStore::DEFAULT_GRAPH.to_owned(),
+        )
     }
 
     fn store_of(triples: &[(&str, &str, &str)]) -> RelationStore {
         let mut store = RelationStore::new();
         for &(subject, predicate, object) in triples {
-            store.insert(predicate, &surface(subject), &surface(object));
+            store.insert(
+                &surface(subject),
+                &surface(predicate),
+                &surface(object),
+                RelationStore::DEFAULT_GRAPH,
+            );
         }
         store
     }
 
-    /// Every `(subject, object)` pair of one predicate, as unbracketed IRI locals.
+    /// Every `(subject, object)` surface pair of one predicate IRI, across every graph.
     fn relation(evaluation: &Evaluation, predicate: &str) -> BTreeSet<(String, String)> {
         evaluation
             .facts()
             .facts_sorted()
             .into_iter()
-            .filter(|fact| fact.predicate == predicate)
+            .filter(|fact| fact.predicate == surface(predicate))
             .map(|fact| (fact.subject, fact.object))
             .collect()
     }
@@ -2348,7 +2236,7 @@ mod tests {
                 .iter()
                 .map(|fact| fact.predicate.as_str())
                 .collect::<Vec<_>>(),
-            [Q, P],
+            [surface(Q), surface(P)],
             "sources follow the authored body, not the execution order"
         );
         assert_eq!(derivation.fact().subject, surface("a"));
@@ -2456,7 +2344,303 @@ mod tests {
         // Equal proof heights and equal sums, so the sorted source facts decide: the
         // `p` fact sorts before the `q` fact, so rule 0 wins.
         assert_eq!(derivation.rule(), 0);
-        assert_eq!(derivation.sources()[0].predicate, P);
+        assert_eq!(derivation.sources()[0].predicate, surface(P));
+    }
+
+    // ── The predicate as data ───────────────────────────────────────────────────
+
+    /// The fixture's own `rdf:type`-shaped and `rdfs:domain`-shaped predicates. PurRDF
+    /// mints no vocabulary, so the fixture names its own under `example.org`.
+    const TYPE: &str = "https://example.org/type";
+    /// The `rdfs:domain`-shaped predicate.
+    const DOMAIN: &str = "https://example.org/domain";
+    /// The `rdfs:subClassOf`-shaped predicate.
+    const SUB_CLASS_OF: &str = "https://example.org/subClassOf";
+
+    /// `prp-dom` — the rule the whole predicate-as-data change exists for:
+    ///
+    /// ```text
+    /// T(?p, domain, ?c) ∧ T(?x, ?p, ?y) → T(?x, type, ?c)
+    /// ```
+    ///
+    /// `?p` stands in PREDICATE position of the second body atom. Under an IR that
+    /// addressed a relation by its predicate this rule could not be written at all.
+    fn prp_dom() -> DlClause {
+        DlClause::datalog(
+            ClauseAtom::positive(v("?x"), TYPE, v("?c")),
+            vec![
+                ClauseAtom::positive(v("?p"), DOMAIN, v("?c")),
+                ClauseAtom::quad(v("?x"), v("?p"), v("?y"), ClauseTerm::DefaultGraph),
+            ],
+        )
+    }
+
+    /// The `prp-dom` fixture EDB: two properties with declared domains, one property with
+    /// none, and assertions over all three.
+    fn prp_dom_edb() -> Vec<(&'static str, &'static str, &'static str)> {
+        vec![
+            ("https://example.org/p1", DOMAIN, "https://example.org/C1"),
+            ("https://example.org/p2", DOMAIN, "https://example.org/C2"),
+            (
+                "https://example.org/x",
+                "https://example.org/p1",
+                "https://example.org/y",
+            ),
+            (
+                "https://example.org/x",
+                "https://example.org/p2",
+                "https://example.org/z",
+            ),
+            (
+                "https://example.org/w",
+                "https://example.org/p1",
+                "https://example.org/v",
+            ),
+            // A property with no declared domain derives nothing.
+            (
+                "https://example.org/x",
+                "https://example.org/undeclared",
+                "https://example.org/y",
+            ),
+        ]
+    }
+
+    /// A rule with a VARIABLE PREDICATE evaluates, and its derived set is exactly the one
+    /// `prp-dom` licenses — no more (an undeclared property contributes nothing) and no
+    /// less (every asserted use of a domained property types its subject).
+    ///
+    /// This is the test that proves the structural defect is fixed: the rule is
+    /// inexpressible without a predicate-as-data encoding, so an evaluator that could not
+    /// bind `?p` could not even be handed this program.
+    #[test]
+    fn a_variable_predicate_rule_evaluates_prp_dom() {
+        let evaluation = run(vec![prp_dom()], store_of(&prp_dom_edb()));
+        assert_eq!(
+            relation(&evaluation, TYPE),
+            [
+                (
+                    surface("https://example.org/w"),
+                    surface("https://example.org/C1")
+                ),
+                (
+                    surface("https://example.org/x"),
+                    surface("https://example.org/C1")
+                ),
+                (
+                    surface("https://example.org/x"),
+                    surface("https://example.org/C2")
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            "exactly the three typings prp-dom licenses"
+        );
+        assert_eq!(
+            evaluation.derivations().len(),
+            3,
+            "one derivation per derived typing"
+        );
+        // Provenance names the concrete predicate each body atom MATCHED, which for the
+        // variable-predicate atom is data rather than rule text.
+        let matched: BTreeSet<String> = evaluation
+            .derivations()
+            .iter()
+            .map(|derivation| derivation.sources()[1].predicate.clone())
+            .collect();
+        assert_eq!(
+            matched,
+            [
+                surface("https://example.org/p1"),
+                surface("https://example.org/p2")
+            ]
+            .into_iter()
+            .collect(),
+            "the variable predicate bound to the properties that actually carry a domain"
+        );
+    }
+
+    /// The `prp-dom` program is byte-stable under a permuted EDB insertion order: the
+    /// arity-4 partitioned store and the partition sweep a variable predicate drives are
+    /// both insertion-order independent.
+    #[test]
+    fn a_variable_predicate_rule_is_insertion_order_independent() {
+        let triples = prp_dom_edb();
+        let reference = run(vec![prp_dom()], store_of(&triples));
+        for seed in 0..12u64 {
+            let again = run(vec![prp_dom()], store_of(&permute(&triples, seed)));
+            assert_eq!(
+                again.facts().facts_sorted(),
+                reference.facts().facts_sorted(),
+                "seed {seed}: facts"
+            );
+            assert_eq!(
+                again.derivations(),
+                reference.derivations(),
+                "seed {seed}: derivations"
+            );
+            assert_eq!(again.budget(), reference.budget(), "seed {seed}: budget");
+        }
+    }
+
+    /// A rule with a VARIABLE GRAPH position reasons PER GRAPH: it joins only within one
+    /// graph and writes its conclusion back into that same graph.
+    ///
+    /// The fixture is `cax-sco` over two graphs whose premises cross: taking the subclass
+    /// axiom from one graph and the type assertion from the other would derive two extra
+    /// facts, so the exact derived set is what proves the graph position is a join key and
+    /// not decoration.
+    #[test]
+    fn a_variable_graph_rule_evaluates_per_graph() {
+        let g1 = surface("https://example.org/g1");
+        let g2 = surface("https://example.org/g2");
+        let graph = ClauseTerm::var("?g");
+        let rule = DlClause::datalog(
+            ClauseAtom::quad(v("?x"), ClauseTerm::iri(TYPE), v("?d"), graph.clone()),
+            vec![
+                ClauseAtom::quad(v("?x"), ClauseTerm::iri(TYPE), v("?c"), graph.clone()),
+                ClauseAtom::quad(v("?c"), ClauseTerm::iri(SUB_CLASS_OF), v("?d"), graph),
+            ],
+        );
+
+        let mut edb = RelationStore::new();
+        let quads = [
+            // g1: x is a C, and C ⊑ D — but NOT C ⊑ E.
+            ("x", TYPE, "C", &g1),
+            ("C", SUB_CLASS_OF, "D", &g1),
+            // g2: y is a C, and C ⊑ E — but NOT C ⊑ D.
+            ("y", TYPE, "C", &g2),
+            ("C", SUB_CLASS_OF, "E", &g2),
+        ];
+        for (subject, predicate, object, graph) in quads {
+            edb.insert(
+                &surface(&format!("https://example.org/{subject}")),
+                &surface(predicate),
+                &surface(&format!("https://example.org/{object}")),
+                graph,
+            );
+        }
+
+        let evaluation = run(vec![rule], edb);
+        let derived: BTreeSet<(String, String, String)> = evaluation
+            .derivations()
+            .iter()
+            .map(|derivation| {
+                let fact = derivation.fact();
+                (
+                    fact.subject.clone(),
+                    fact.object.clone(),
+                    fact.graph.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            derived,
+            [
+                (
+                    surface("https://example.org/x"),
+                    surface("https://example.org/D"),
+                    g1.clone()
+                ),
+                (
+                    surface("https://example.org/y"),
+                    surface("https://example.org/E"),
+                    g2.clone()
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            "each graph's conclusion stays in the graph its premises came from"
+        );
+        // The cross-graph joins are absent, which is the whole point.
+        for (subject, object, graph) in [("x", "E", &g1), ("y", "D", &g2), ("x", "D", &g2)] {
+            assert!(
+                !evaluation.facts().contains(
+                    &surface(&format!("https://example.org/{subject}")),
+                    &surface(TYPE),
+                    &surface(&format!("https://example.org/{object}")),
+                    graph
+                ),
+                "{subject} must not be typed {object} in that graph"
+            );
+        }
+        // The default graph carries nothing: no atom of this rule mentions it.
+        assert_eq!(
+            evaluation.facts().graphs().collect::<Vec<_>>(),
+            vec![g1.as_str(), g2.as_str()]
+        );
+    }
+
+    /// A FREE predicate is a sweep of the store's partitions, and the sweep is a real
+    /// evaluation rather than a plan-time curiosity: this rule projects every quad's
+    /// predicate into a term position, so the answer names exactly the predicates the EDB
+    /// carries.
+    #[test]
+    fn a_free_predicate_sweeps_every_partition() {
+        let used = "https://example.org/used";
+        let rule = DlClause::datalog(
+            ClauseAtom::positive(v("?p"), used, v("?g")),
+            vec![ClauseAtom::quad(
+                v("?s"),
+                v("?p"),
+                v("?o"),
+                ClauseTerm::var("?g"),
+            )],
+        );
+        let g1 = surface("https://example.org/g1");
+        let mut edb = RelationStore::new();
+        for (subject, predicate, object, graph) in [
+            (
+                "a",
+                "https://example.org/p1",
+                "b",
+                RelationStore::DEFAULT_GRAPH,
+            ),
+            (
+                "a",
+                "https://example.org/p2",
+                "b",
+                RelationStore::DEFAULT_GRAPH,
+            ),
+            ("a", "https://example.org/p1", "b", g1.as_str()),
+        ] {
+            edb.insert(
+                &surface(&format!("https://example.org/{subject}")),
+                &surface(predicate),
+                &surface(&format!("https://example.org/{object}")),
+                graph,
+            );
+        }
+        let evaluation = run(vec![rule], edb);
+        assert_eq!(
+            relation(&evaluation, used),
+            [
+                (
+                    surface("https://example.org/p1"),
+                    RelationStore::DEFAULT_GRAPH.to_owned()
+                ),
+                (surface("https://example.org/p1"), g1.clone()),
+                (
+                    surface("https://example.org/p2"),
+                    RelationStore::DEFAULT_GRAPH.to_owned()
+                ),
+                // The rule's own output is a partition too, so the sweep reaches it on the
+                // next round and the fixpoint closes over it — a free predicate really is
+                // "every relation", including the one being derived.
+                (surface(used), RelationStore::DEFAULT_GRAPH.to_owned()),
+            ]
+            .into_iter()
+            .collect(),
+            "every (predicate, graph) partition is visited, the derived one included"
+        );
+        // The derived `used` quads live in the default graph (the head names no graph),
+        // and a graph NAME reached a term position — the default graph included, as the
+        // empty surface it is denoted by.
+        assert!(evaluation.facts().contains(
+            &surface("https://example.org/p1"),
+            &surface(used),
+            RelationStore::DEFAULT_GRAPH,
+            RelationStore::DEFAULT_GRAPH
+        ));
     }
 
     // ── The synthetic corpus against its analytic goldens ───────────────────────
@@ -2499,8 +2683,8 @@ mod tests {
             let reference = run(workload.rules.clone(), workload.edb());
             for seed in 0..4u64 {
                 let mut store = RelationStore::new();
-                for triple in permute(&workload.triples, seed) {
-                    store.insert(&triple.1, &triple.0, &triple.2);
+                for quad in permute(&workload.triples, seed) {
+                    store.insert(&quad.0, &quad.1, &quad.2, &quad.3);
                 }
                 let again = run(workload.rules.clone(), store);
                 assert_eq!(
@@ -2590,10 +2774,10 @@ mod tests {
         let mut triples = Vec::new();
         for i in 0..N {
             for j in 0..N {
-                triples.push((n(i), P.to_owned(), n(j)));
+                triples.push(quad(&n(i), P, &n(j)));
             }
-            triples.push((n(i), Q.to_owned(), n((i + 1) % N)));
-            triples.push((n(i), R.to_owned(), n((i + 2) % N)));
+            triples.push(quad(&n(i), Q, &n((i + 1) % N)));
+            triples.push(quad(&n(i), R, &n((i + 2) % N)));
         }
         let sink = "https://example.org/s";
         let rules = vec![DlClause::datalog(
@@ -2607,8 +2791,9 @@ mod tests {
         let expected: BTreeSet<Fact> = (0..N)
             .map(|x| Fact {
                 subject: n(x),
-                predicate: sink.to_owned(),
+                predicate: surface(sink),
                 object: n((x + N - 2) % N),
+                graph: RelationStore::DEFAULT_GRAPH.to_owned(),
             })
             .collect();
         let expected_rows = expected.len() as u64;
@@ -2866,9 +3051,9 @@ mod tests {
         else {
             panic!("expected a stratification refusal, got {error:?}");
         };
-        assert_eq!(head, P);
-        assert_eq!(negated, Q);
-        assert_eq!(cycle, &[P.to_owned(), Q.to_owned(), P.to_owned()]);
+        assert_eq!(head, &surface(P));
+        assert_eq!(negated, &surface(Q));
+        assert_eq!(cycle, &[surface(P), surface(Q), surface(P)]);
         assert!(
             error.to_string().contains("not "),
             "the message names the negated dependency: {error}"
@@ -2894,10 +3079,7 @@ mod tests {
         let EvalError::NonStratifiable { cycle, .. } = &error else {
             panic!("expected a stratification refusal, got {error:?}");
         };
-        assert_eq!(
-            cycle,
-            &[P.to_owned(), Q.to_owned(), R.to_owned(), P.to_owned()]
-        );
+        assert_eq!(cycle, &[surface(P), surface(Q), surface(R), surface(P)]);
     }
 
     /// Negation OUTSIDE a cycle is perfectly stratifiable and compiles.
@@ -2952,9 +3134,10 @@ mod tests {
         let mut edb = RelationStore::new();
         for i in 0..n {
             edb.insert(
-                src,
                 &surface(&format!("https://example.org/n{i}")),
+                &surface(src),
                 &surface("https://example.org/hub"),
+                RelationStore::DEFAULT_GRAPH,
             );
         }
         let exe = compile(rules).expect("the fixture compiles");
@@ -2986,9 +3169,10 @@ mod tests {
         let mut edb = RelationStore::new();
         for i in 0..n {
             edb.insert(
-                src,
                 &surface(&format!("https://example.org/n{i}")),
+                &surface(src),
                 &surface("https://example.org/hub"),
+                RelationStore::DEFAULT_GRAPH,
             );
         }
         let exe = compile(rules).expect("the fixture compiles");
@@ -3018,9 +3202,10 @@ mod tests {
         let huge = "x".repeat(1 << 20);
         for i in 0..24usize {
             edb.insert(
-                P,
                 &format!("<{huge}{i}>"),
+                &surface(P),
                 &surface("https://example.org/o"),
+                RelationStore::DEFAULT_GRAPH,
             );
         }
         assert!(edb.row_count() < MAX_STORED_FACTS);
@@ -3265,6 +3450,11 @@ mod tests {
         )];
         let evaluation = run(rules, store_of(&[("a", P, "b")]));
         let facts = evaluation.into_facts();
-        assert!(facts.contains(Q, &surface("a"), &surface("b")));
+        assert!(facts.contains(
+            &surface("a"),
+            &surface(Q),
+            &surface("b"),
+            RelationStore::DEFAULT_GRAPH
+        ));
     }
 }

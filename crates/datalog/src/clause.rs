@@ -22,6 +22,47 @@
 //! | [`Conjunctive`](HeadForm::Conjunctive) | `m = 1`, `C₁` is several atoms, `ȳ = ∅` | a chase that asserts a conjunction atomically |
 //! | [`Inconsistency`](HeadForm::Inconsistency) | `m = 0` (the head is `false`) | a hard error carrying a witness |
 //!
+//! # Every atom is an arity-4 quad, and the predicate is DATA
+//!
+//! A [`ClauseAtom`] is `triple(?s, ?p, ?o, ?g)`: four ordinary [`ClauseTerm`] positions,
+//! every one of which may be a variable. The predicate is **not** a relation symbol here —
+//! it is a term carried in the second position, exactly like the subject and the object.
+//!
+//! That is not generality kept for symmetry; it is the difference between expressing OWL 2
+//! RL and not expressing it. `prp-dom` is
+//!
+//! ```text
+//! T(?p, rdfs:domain, ?c) ∧ T(?x, ?p, ?y) → T(?x, rdf:type, ?c)
+//! ```
+//!
+//! and `?p` stands in PREDICATE position of the second body atom. An IR that addressed a
+//! relation *by* its predicate could not write that atom at all, because a relation symbol
+//! can never be a variable — and roughly a quarter of the OWL 2 RL rule set (`prp-rng`,
+//! `prp-fp`, `prp-ifp`, `prp-irp`, `prp-symp`, `prp-asyp`, `prp-trp`, `prp-spo1`,
+//! `prp-spo2`, `prp-eqp1`, `prp-eqp2`, `prp-pdw`, `prp-inv1`, `prp-inv2`, `prp-npa1`,
+//! `prp-npa2` and several `scm-*`) quantifies over exactly that position.
+//!
+//! # The graph position, and how the default graph is denoted
+//!
+//! The fourth position is the graph the atom is asserted in, and it is a `ClauseTerm` like
+//! any other: a constant graph name, or a **variable**, which is what makes a per-graph
+//! rule expressible (`T(?s, ?p, ?o, ?g) → T(?s, rdf:type, ?c, ?g)` reasons inside each
+//! graph and writes its conclusion back into the graph it came from).
+//!
+//! PurRDF mints no vocabulary, so it does not mint a name for the default graph either.
+//! RDF says the default graph HAS no name, and that is what
+//! [`ClauseTerm::DefaultGraph`] denotes: a distinct term kind whose lexical surface is the
+//! EMPTY surface — "no name" stated as no name, rather than as a fabricated IRI a caller
+//! would then have to agree with. It is legal in the graph position only;
+//! [`ClauseAtom::quad`] refuses it anywhere else.
+//!
+//! An atom that does not mention a graph — the [`ClauseAtom::positive`] /
+//! [`ClauseAtom::negated`] convenience, which also fixes the predicate to a constant IRI —
+//! is an atom **in the default graph**. It is not a wildcard and not an implicit variable:
+//! a graph-less program is a program about one graph, which is exactly what a caller who
+//! never mentions graphs means, and it keeps such a program's meaning identical to what it
+//! was before the position existed.
+//!
 //! # Why a disjunct is a CONJUNCTION and not a single atom
 //!
 //! The most common existential axiom in any description logic — `A ⊑ ∃r.C` — lowers to
@@ -89,6 +130,9 @@ use std::fmt;
 /// store interns on ([`crate::store::TermInterner`]), so a planned constant is compared
 /// against stored data without a second rendering convention. An IRI is kept distinct
 /// from a literal because only an IRI is bracketed when rendered.
+///
+/// The variants are ordered variable, IRI, literal, default graph, and the derived [`Ord`]
+/// follows that declaration order.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ClauseTerm {
     /// A clause variable, named as authored (the name is a plan-time key only).
@@ -97,6 +141,15 @@ pub enum ClauseTerm {
     Iri(String),
     /// A constant literal, held as its already-rendered lexical surface.
     Literal(String),
+    /// The default graph — the graph that HAS no name.
+    ///
+    /// Legal in an atom's graph position only ([`ClauseAtom::quad`] refuses it elsewhere).
+    /// Its lexical surface is the EMPTY surface, which is what
+    /// [`RelationStore::DEFAULT_GRAPH`](crate::store::RelationStore::DEFAULT_GRAPH) keys
+    /// the default partition by: PurRDF mints no vocabulary, so it does not mint a name
+    /// for the graph RDF says has none. No IRI surface (`<…>`) and no literal surface
+    /// (`"…"`) is empty, so the denotation cannot collide with a caller's term.
+    DefaultGraph,
 }
 
 impl ClauseTerm {
@@ -115,11 +168,16 @@ impl ClauseTerm {
         Self::Literal(surface.into())
     }
 
+    /// The default graph — see [`ClauseTerm::DefaultGraph`].
+    pub fn default_graph() -> Self {
+        Self::DefaultGraph
+    }
+
     /// The variable name, if this is a variable.
     pub fn variable(&self) -> Option<&str> {
         match self {
             Self::Var(name) => Some(name),
-            Self::Iri(_) | Self::Literal(_) => None,
+            Self::Iri(_) | Self::Literal(_) | Self::DefaultGraph => None,
         }
     }
 
@@ -128,23 +186,46 @@ impl ClauseTerm {
         matches!(self, Self::Var(_))
     }
 
+    /// Whether this term is the default graph.
+    pub fn is_default_graph(&self) -> bool {
+        matches!(self, Self::DefaultGraph)
+    }
+
+    /// The unbracketed IRI, if this term is a constant IRI.
+    pub fn iri_value(&self) -> Option<&str> {
+        match self {
+            Self::Iri(iri) => Some(iri),
+            Self::Var(_) | Self::Literal(_) | Self::DefaultGraph => None,
+        }
+    }
+
     /// The lexical surface of a CONSTANT term — the exact bytes the store interns — or
     /// `None` for a variable, whose surface is a runtime binding rather than a plan-time
     /// property.
     ///
     /// This is the single rendering convention: an IRI is bracketed, a literal is already
-    /// its own surface. An executor grounding a head or a negated atom renders through
-    /// here, so clause constants and stored data are always compared as the same bytes.
+    /// its own surface, and the default graph is the empty surface. An executor grounding
+    /// a head, addressing a relation partition or probing a negated atom renders through
+    /// here, so clause constants and stored data are always compared as the same bytes —
+    /// which is precisely what lets one variable bind a predicate in one atom and a
+    /// subject in another.
     pub fn surface(&self) -> Option<String> {
         match self {
             Self::Iri(iri) => Some(format!("<{iri}>")),
             Self::Literal(surface) => Some(surface.clone()),
+            Self::DefaultGraph => Some(String::new()),
             Self::Var(_) => None,
         }
     }
 }
 
-/// One binary atom `predicate(subject, object)`, optionally negated.
+/// One arity-4 atom `triple(subject, predicate, object, graph)`, optionally negated.
+///
+/// All four positions are ordinary [`ClauseTerm`]s: the predicate is carried as DATA, not
+/// as the relation symbol, so a variable predicate — the shape OWL 2 RL's property
+/// meta-rules need — is an ordinary variable the join binds. See the [module docs](self)
+/// for why that is load-bearing and for how the graph position and the default graph are
+/// denoted.
 ///
 /// The negation flag is meaningful in a clause BODY only: it marks a negation-as-failure
 /// filter, never a join driver. [`HeadDisjunct::new`] refuses a negated atom, so an atom
@@ -153,26 +234,79 @@ impl ClauseTerm {
 pub struct ClauseAtom {
     /// The subject argument.
     subject: ClauseTerm,
-    /// The predicate IRI, UNBRACKETED — the key a relation is addressed by.
-    predicate: String,
+    /// The predicate argument — a term, which may be a variable.
+    predicate: ClauseTerm,
     /// The object argument.
     object: ClauseTerm,
+    /// The graph argument — a term, which may be a variable or the default graph.
+    graph: ClauseTerm,
     /// Whether the atom is negated (a body-only negation-as-failure filter).
     negated: bool,
 }
 
 impl ClauseAtom {
-    /// A positive atom — a head conjunct, or a body join driver.
-    pub fn positive(subject: ClauseTerm, predicate: impl Into<String>, object: ClauseTerm) -> Self {
+    /// A positive quad atom over four explicit terms — the general constructor.
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`ClauseTerm::DefaultGraph`] appears in the subject, predicate or object
+    /// position. It denotes the graph that has no name, so it is meaningful in the graph
+    /// position alone; admitting it elsewhere would give the empty surface a second,
+    /// unrelated meaning. This is a construction bug, never a data state.
+    pub fn quad(
+        subject: ClauseTerm,
+        predicate: ClauseTerm,
+        object: ClauseTerm,
+        graph: ClauseTerm,
+    ) -> Self {
+        assert!(
+            !subject.is_default_graph()
+                && !predicate.is_default_graph()
+                && !object.is_default_graph(),
+            "the default graph is a graph name, so it is legal in the graph position only"
+        );
         Self {
             subject,
-            predicate: predicate.into(),
+            predicate,
             object,
+            graph,
             negated: false,
         }
     }
 
-    /// A negated body atom (a negation-as-failure filter).
+    /// A negated quad atom (a negation-as-failure filter).
+    ///
+    /// # Panics
+    ///
+    /// See [`Self::quad`].
+    pub fn negated_quad(
+        subject: ClauseTerm,
+        predicate: ClauseTerm,
+        object: ClauseTerm,
+        graph: ClauseTerm,
+    ) -> Self {
+        Self {
+            negated: true,
+            ..Self::quad(subject, predicate, object, graph)
+        }
+    }
+
+    /// A positive atom with a CONSTANT predicate IRI, in the DEFAULT GRAPH — the
+    /// overwhelmingly common shape, kept short because most rules are written that way.
+    ///
+    /// Equivalent to `quad(subject, ClauseTerm::iri(predicate), object,
+    /// ClauseTerm::DefaultGraph)`. Not mentioning a graph means the default graph, not
+    /// "any graph"; see the [module docs](self).
+    pub fn positive(subject: ClauseTerm, predicate: impl Into<String>, object: ClauseTerm) -> Self {
+        Self::quad(
+            subject,
+            ClauseTerm::Iri(predicate.into()),
+            object,
+            ClauseTerm::DefaultGraph,
+        )
+    }
+
+    /// The negated sibling of [`Self::positive`].
     pub fn negated(subject: ClauseTerm, predicate: impl Into<String>, object: ClauseTerm) -> Self {
         Self {
             negated: true,
@@ -190,9 +324,22 @@ impl ClauseAtom {
         &self.object
     }
 
-    /// The predicate IRI, unbracketed.
-    pub fn predicate(&self) -> &str {
+    /// The predicate argument, as a term — which may be a variable.
+    pub fn predicate(&self) -> &ClauseTerm {
         &self.predicate
+    }
+
+    /// The graph argument, as a term — which may be a variable or the default graph.
+    pub fn graph(&self) -> &ClauseTerm {
+        &self.graph
+    }
+
+    /// The unbracketed predicate IRI, or `None` when the predicate is not a constant IRI.
+    ///
+    /// A diagnostic or a rule inventory that wants to *name* an atom's predicate asks
+    /// here, and gets `None` exactly when there is no single name to give.
+    pub fn predicate_iri(&self) -> Option<&str> {
+        self.predicate.iri_value()
     }
 
     /// Whether the atom is negated.
@@ -200,9 +347,17 @@ impl ClauseAtom {
         self.negated
     }
 
+    /// This atom's four positions in order: subject, predicate, object, graph.
+    ///
+    /// One accessor for the arity-generic passes (variable collection, adornment, slot
+    /// assignment) so none of them can quietly visit three positions and skip the fourth.
+    pub fn terms(&self) -> [&ClauseTerm; 4] {
+        [&self.subject, &self.predicate, &self.object, &self.graph]
+    }
+
     /// Record every variable of this atom into `into`.
     fn collect_variables(&self, into: &mut BTreeSet<String>) {
-        for term in [&self.subject, &self.object] {
+        for term in self.terms() {
             if let ClauseTerm::Var(name) = term {
                 into.insert(name.clone());
             }
@@ -586,6 +741,12 @@ mod tests {
         ClauseAtom::positive(v(subject), predicate, v(object))
     }
 
+    /// The constant predicate IRI of an atom the fixture built with one.
+    fn predicate_iri(atom: &ClauseAtom) -> &str {
+        atom.predicate_iri()
+            .expect("the fixture atoms carry constant predicate IRIs")
+    }
+
     /// `C(?var)` — a concept assertion, as the binary atom `?var TYPE <C>`.
     fn concept(var: &str, concept_iri: &str) -> ClauseAtom {
         ClauseAtom::positive(v(var), TYPE, ClauseTerm::iri(concept_iri))
@@ -615,7 +776,7 @@ mod tests {
         assert_eq!(clause.body().len(), 2);
         assert!(!clause.body()[0].is_negated());
         assert!(clause.body()[1].is_negated());
-        assert_eq!(clause.body()[1].predicate(), Q);
+        assert_eq!(clause.body()[1].predicate_iri(), Some(Q));
         assert_eq!(clause.body()[1].subject(), &v("?Z"));
         assert_eq!(clause.body()[1].object(), &v("?Y"));
     }
@@ -655,10 +816,7 @@ mod tests {
         assert!(!clause.head_form().is_datalog());
         assert_eq!(clause.datalog_head(), None);
         assert_eq!(
-            clause
-                .head_atoms()
-                .map(ClauseAtom::predicate)
-                .collect::<Vec<_>>(),
+            clause.head_atoms().map(predicate_iri).collect::<Vec<_>>(),
             [Q, R]
         );
     }
@@ -683,10 +841,7 @@ mod tests {
         assert_eq!(clause.head_disjuncts()[0].atoms().len(), 2);
         assert_eq!(clause.head_disjuncts()[0].single_atom(), None);
         assert_eq!(
-            clause
-                .head_atoms()
-                .map(ClauseAtom::predicate)
-                .collect::<Vec<_>>(),
+            clause.head_atoms().map(predicate_iri).collect::<Vec<_>>(),
             [Q, R]
         );
         assert_eq!(HeadForm::Conjunctive.to_string(), "conjunctive");
@@ -778,17 +933,14 @@ mod tests {
             clause
                 .head_disjuncts()
                 .iter()
-                .map(|d| d.atoms().iter().map(ClauseAtom::predicate).collect())
+                .map(|d| d.atoms().iter().map(predicate_iri).collect())
                 .collect::<Vec<Vec<_>>>(),
             [vec![P, Q], vec![R, TYPE]]
         );
         // The flattening a head-form-agnostic pass sees: disjunct order, then conjunct
         // order.
         assert_eq!(
-            clause
-                .head_atoms()
-                .map(ClauseAtom::predicate)
-                .collect::<Vec<_>>(),
+            clause.head_atoms().map(predicate_iri).collect::<Vec<_>>(),
             [P, Q, R, TYPE]
         );
     }
@@ -837,6 +989,110 @@ mod tests {
         assert!(ClauseTerm::var("?x").is_var());
         assert_eq!(ClauseTerm::var("?x").variable(), Some("?x"));
         assert_eq!(ClauseTerm::iri("https://example.org/a").variable(), None);
+    }
+
+    /// The default graph's surface is the EMPTY surface — "no name" stated as no name.
+    /// No IRI surface and no literal surface is empty, so the denotation is unambiguous,
+    /// and no vocabulary IRI was minted to express it.
+    #[test]
+    fn the_default_graph_is_the_empty_surface() {
+        let default = ClauseTerm::default_graph();
+        assert_eq!(default, ClauseTerm::DefaultGraph);
+        assert_eq!(default.surface().as_deref(), Some(""));
+        assert!(default.is_default_graph());
+        assert!(!default.is_var());
+        assert_eq!(default.variable(), None);
+        assert_eq!(default.iri_value(), None);
+        assert!(!ClauseTerm::iri("https://example.org/g").is_default_graph());
+        // Every other constant's surface is non-empty, so nothing can alias it.
+        assert!(
+            !ClauseTerm::iri("")
+                .surface()
+                .expect("an IRI has a surface")
+                .is_empty()
+        );
+    }
+
+    /// A VARIABLE PREDICATE round-trips through the IR: `prp-dom`'s second body atom is
+    /// `T(?x, ?p, ?y)`, and `?p` is an ordinary clause variable there — collected into the
+    /// frontier, and reported as having no constant predicate name.
+    #[test]
+    fn a_variable_predicate_round_trips() {
+        let domain = ClauseTerm::iri("https://example.org/domain");
+        let clause = DlClause::datalog(
+            ClauseAtom::positive(v("?x"), TYPE, v("?c")),
+            vec![
+                ClauseAtom::positive(v("?p"), "https://example.org/domain", v("?c")),
+                ClauseAtom::quad(v("?x"), v("?p"), v("?y"), ClauseTerm::var("?g")),
+            ],
+        );
+        let second = &clause.body()[1];
+        assert_eq!(second.predicate(), &v("?p"));
+        assert!(second.predicate().is_var());
+        assert_eq!(
+            second.predicate_iri(),
+            None,
+            "a variable predicate has no constant name to report"
+        );
+        assert_eq!(second.graph(), &v("?g"));
+        assert_eq!(
+            second.terms(),
+            [&v("?x"), &v("?p"), &v("?y"), &ClauseTerm::var("?g")]
+        );
+        // `?p` and `?g` are ordinary variables: both reach the clause's variable sets.
+        assert_eq!(
+            clause.frontier_variables(),
+            BTreeSet::from(["?c".to_owned(), "?x".to_owned()])
+        );
+        let mut body_variables = BTreeSet::new();
+        for atom in clause.body() {
+            atom.collect_variables(&mut body_variables);
+        }
+        assert!(body_variables.contains("?p"), "{body_variables:?}");
+        assert!(body_variables.contains("?g"), "{body_variables:?}");
+        assert_eq!(clause.body()[0].predicate(), &domain);
+    }
+
+    /// An atom built without a graph is an atom in the DEFAULT GRAPH — not a wildcard —
+    /// and its predicate is the constant IRI it was given.
+    #[test]
+    fn a_graphless_atom_is_in_the_default_graph() {
+        let atom = ClauseAtom::positive(v("?s"), P, v("?o"));
+        assert_eq!(atom.graph(), &ClauseTerm::DefaultGraph);
+        assert_eq!(atom.predicate(), &ClauseTerm::iri(P));
+        assert_eq!(atom.predicate_iri(), Some(P));
+        assert!(!atom.is_negated());
+        let negated = ClauseAtom::negated(v("?s"), P, v("?o"));
+        assert!(negated.is_negated());
+        assert_eq!(negated.graph(), &ClauseTerm::DefaultGraph);
+        // A named graph is an ordinary constant term in the same position.
+        let named = ClauseAtom::quad(
+            v("?s"),
+            ClauseTerm::iri(P),
+            v("?o"),
+            ClauseTerm::iri("https://example.org/g1"),
+        );
+        assert_eq!(named.graph(), &ClauseTerm::iri("https://example.org/g1"));
+        assert!(
+            ClauseAtom::negated_quad(
+                v("?s"),
+                ClauseTerm::iri(P),
+                v("?o"),
+                ClauseTerm::DefaultGraph
+            )
+            .is_negated()
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "legal in the graph position only")]
+    fn the_default_graph_is_refused_in_a_term_position() {
+        let _ = ClauseAtom::quad(
+            ClauseTerm::DefaultGraph,
+            ClauseTerm::iri(P),
+            v("?o"),
+            ClauseTerm::DefaultGraph,
+        );
     }
 
     #[test]

@@ -548,10 +548,11 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::store::RelationStore;
+    use crate::store::{PartitionRef, RelationStore};
     use crate::test_support::permute;
 
-    const P: &str = "https://example.org/p";
+    /// A predicate is an ordinary term, so its store key is its bracketed surface.
+    const P: &str = "<https://example.org/p>";
 
     fn iri(local: &str) -> String {
         format!("<https://example.org/{local}>")
@@ -602,9 +603,25 @@ mod tests {
     fn store_of(tuples: &[(String, String)]) -> RelationStore {
         let mut s = RelationStore::new();
         for (sub, obj) in tuples {
-            assert!(s.insert(P, sub, obj).is_some(), "fixture rows are distinct");
+            assert!(
+                s.insert(sub, P, obj, RelationStore::DEFAULT_GRAPH)
+                    .is_some(),
+                "fixture rows are distinct"
+            );
         }
         s
+    }
+
+    /// The fixture's single `(predicate, graph)` partition — the unit a cursor scans.
+    fn partition_of<'a>(s: &'a RelationStore, predicate: &str) -> Option<PartitionRef<'a>> {
+        let predicate = s.term_id(predicate)?;
+        let graph = s.term_id(RelationStore::DEFAULT_GRAPH)?;
+        s.partition(predicate, graph)
+    }
+
+    /// A row cursor over the fixture's partition, or an empty one when it does not exist.
+    fn select<'a>(s: &'a RelationStore, predicate: &str, bound: Bound) -> RowCursor<'a> {
+        s.select(predicate, RelationStore::DEFAULT_GRAPH, bound)
     }
 
     fn big_store() -> RelationStore {
@@ -614,7 +631,7 @@ mod tests {
     #[test]
     fn cursor_any_yields_every_row_as_a_set() {
         let s = big_store();
-        let got = resolved_set(&s, &drain(s.select(P, Bound::Any)));
+        let got = resolved_set(&s, &drain(select(&s, P, Bound::Any)));
         assert_eq!(got.len(), 201, "200 a-edges + 1 z-edge, deduped");
         assert!(got.contains(&pair("a", "o000")));
         assert!(got.contains(&pair("z", "o000")));
@@ -625,12 +642,12 @@ mod tests {
     fn cursor_subject_bound_gallops_batches() {
         let s = big_store();
         let a = s.term_id(&iri("a")).expect("a interned");
-        let got = resolved_set(&s, &drain(s.select(P, Bound::Subject(a))));
+        let got = resolved_set(&s, &drain(select(&s, P, Bound::Subject(a))));
         assert_eq!(got.len(), 200, "exactly a's 200 edges");
         assert!(got.iter().all(|(sub, _)| *sub == iri("a")));
 
         let z = s.term_id(&iri("z")).expect("z interned");
-        let zrows = resolved_set(&s, &drain(s.select(P, Bound::Subject(z))));
+        let zrows = resolved_set(&s, &drain(select(&s, P, Bound::Subject(z))));
         assert_eq!(zrows, [pair("z", "o000")].into());
     }
 
@@ -639,15 +656,15 @@ mod tests {
         let s = big_store();
         let o0 = s.term_id(&iri("o000")).expect("o000 interned");
         // o000 is the object of BOTH a and z.
-        let got = resolved_set(&s, &drain(s.select(P, Bound::Object(o0))));
+        let got = resolved_set(&s, &drain(select(&s, P, Bound::Object(o0))));
         assert_eq!(got, [pair("a", "o000"), pair("z", "o000")].into());
         // A distinct object appears once.
         let o5 = s.term_id(&iri("o005")).expect("o005 interned");
-        let g5 = resolved_set(&s, &drain(s.select(P, Bound::Object(o5))));
+        let g5 = resolved_set(&s, &drain(select(&s, P, Bound::Object(o5))));
         assert_eq!(g5, [pair("a", "o005")].into());
         // An interned term that is never an object of p selects nothing.
         let a = s.term_id(&iri("a")).expect("a interned");
-        assert!(drain(s.select(P, Bound::Object(a))).is_empty());
+        assert!(drain(select(&s, P, Bound::Object(a))).is_empty());
     }
 
     #[test]
@@ -655,11 +672,11 @@ mod tests {
         let s = big_store();
         let a = s.term_id(&iri("a")).expect("a interned");
         let o7 = s.term_id(&iri("o007")).expect("o007 interned");
-        assert_eq!(drain(s.select(P, Bound::Both(a, o7))).len(), 1);
+        assert_eq!(drain(select(&s, P, Bound::Both(a, o7))).len(), 1);
         // A subject/object that never co-occur select nothing.
         let z = s.term_id(&iri("z")).expect("z interned");
         assert!(
-            drain(s.select(P, Bound::Both(z, o7))).is_empty(),
+            drain(select(&s, P, Bound::Both(z, o7))).is_empty(),
             "z only links o000, never o007"
         );
     }
@@ -668,29 +685,33 @@ mod tests {
     fn cursor_tail_only_small_relation() {
         // A relation below the seal threshold is a pure tail (no batches) — the
         // allocation-light regime — and still selects correctly on every bound.
-        let k = "https://example.org/k";
+        let k = "<https://example.org/k>";
         let mut s = RelationStore::new();
         for (sub, obj) in [("a", "b"), ("a", "c"), ("b", "c")] {
-            assert!(s.insert(k, &iri(sub), &iri(obj)).is_some());
+            assert!(
+                s.insert(&iri(sub), k, &iri(obj), RelationStore::DEFAULT_GRAPH)
+                    .is_some()
+            );
         }
         let a = s.term_id(&iri("a")).expect("a interned");
-        let got = resolved_set(&s, &drain(s.select(k, Bound::Subject(a))));
+        let got = resolved_set(&s, &drain(select(&s, k, Bound::Subject(a))));
         assert_eq!(got, [pair("a", "b"), pair("a", "c")].into());
         let c = s.term_id(&iri("c")).expect("c interned");
         assert_eq!(
-            resolved_set(&s, &drain(s.select(k, Bound::Object(c)))),
+            resolved_set(&s, &drain(select(&s, k, Bound::Object(c)))),
             [pair("a", "c"), pair("b", "c")].into()
         );
-        assert!(s.contains(k, &iri("b"), &iri("c")));
-        assert!(!s.contains(k, &iri("a"), &iri("z")));
+        assert!(s.contains(&iri("b"), k, &iri("c"), RelationStore::DEFAULT_GRAPH));
+        assert!(!s.contains(&iri("a"), k, &iri("z"), RelationStore::DEFAULT_GRAPH));
     }
 
     #[test]
     fn cursor_unknown_predicate_is_an_empty_cursor() {
         let s = big_store();
-        assert!(drain(s.select("https://example.org/absent", Bound::Any)).is_empty());
+        assert!(drain(select(&s, "<https://example.org/absent>", Bound::Any)).is_empty());
         assert_eq!(
-            s.values_subject("https://example.org/absent", None).count(),
+            partition_of(&s, "<https://example.org/absent>")
+                .map_or(0, |p| p.values_subject(None).count()),
             0
         );
     }
@@ -699,22 +720,27 @@ mod tests {
     fn cursor_any_remaining_probes_without_collecting() {
         let s = big_store();
         let a = s.term_id(&iri("a")).expect("a interned");
-        assert!(s.select(P, Bound::Subject(a)).any_remaining());
+        assert!(select(&s, P, Bound::Subject(a)).any_remaining());
         let o0 = s.term_id(&iri("o000")).expect("o000 interned");
-        assert!(s.select(P, Bound::Both(a, o0)).any_remaining());
+        assert!(select(&s, P, Bound::Both(a, o0)).any_remaining());
         let z = s.term_id(&iri("z")).expect("z interned");
         let o7 = s.term_id(&iri("o007")).expect("o007 interned");
-        assert!(!s.select(P, Bound::Both(z, o7)).any_remaining());
+        assert!(!select(&s, P, Bound::Both(z, o7)).any_remaining());
     }
 
     /// The `Debug` surface reports the cursor's position, not the borrowed arrangement.
     #[test]
     fn cursor_debug_prints_position_not_columns() {
         let s = big_store();
-        let text = format!("{:?}", s.select(P, Bound::Any));
+        let text = format!("{:?}", select(&s, P, Bound::Any));
         assert!(text.starts_with("RowCursor"), "{text}");
         assert!(text.contains("leg"), "{text}");
-        let values = format!("{:?}", s.values_object(P, None));
+        let values = format!(
+            "{:?}",
+            partition_of(&s, P)
+                .expect("the fixture partition exists")
+                .values_object(None)
+        );
         assert!(values.starts_with("ValueCursor"), "{values}");
     }
 
@@ -724,21 +750,33 @@ mod tests {
     fn value_cursor_is_globally_sorted_in_both_orientations() {
         let s = big_store();
 
-        let subject_rows: Vec<_> = s.values_subject(P, None).collect();
+        let subject_rows: Vec<_> = partition_of(&s, P)
+            .expect("the fixture partition exists")
+            .values_subject(None)
+            .collect();
         assert_eq!(subject_rows.len(), 201);
         assert!(subject_rows.windows(2).all(|rows| rows[0].0 <= rows[1].0));
 
-        let object_rows: Vec<_> = s.values_object(P, None).collect();
+        let object_rows: Vec<_> = partition_of(&s, P)
+            .expect("the fixture partition exists")
+            .values_object(None)
+            .collect();
         assert_eq!(object_rows.len(), 201);
         assert!(object_rows.windows(2).all(|rows| rows[0].0 <= rows[1].0));
 
         let o0 = s.term_id(&iri("o000")).expect("o000 interned");
-        let subjects_at_o0: Vec<_> = s.values_subject(P, Some(o0)).collect();
+        let subjects_at_o0: Vec<_> = partition_of(&s, P)
+            .expect("the fixture partition exists")
+            .values_subject(Some(o0))
+            .collect();
         assert_eq!(subjects_at_o0.len(), 2, "a and z point at o000");
         assert!(subjects_at_o0.windows(2).all(|rows| rows[0].0 <= rows[1].0));
 
         let a = s.term_id(&iri("a")).expect("a interned");
-        let objects_at_a: Vec<_> = s.values_object(P, Some(a)).collect();
+        let objects_at_a: Vec<_> = partition_of(&s, P)
+            .expect("the fixture partition exists")
+            .values_object(Some(a))
+            .collect();
         assert_eq!(objects_at_a.len(), 200);
         assert!(objects_at_a.windows(2).all(|rows| rows[0].0 <= rows[1].0));
     }
@@ -749,7 +787,9 @@ mod tests {
     fn value_cursor_seek_advances_all_runs() {
         let s = big_store();
         let target = s.term_id(&iri("o150")).expect("o150 interned");
-        let mut cursor = s.values_object(P, None);
+        let mut cursor = partition_of(&s, P)
+            .expect("the fixture partition exists")
+            .values_object(None);
         cursor.seek(target);
         let rows: Vec<_> = cursor.collect();
         assert!(!rows.is_empty());
@@ -760,7 +800,9 @@ mod tests {
     #[test]
     fn value_cursor_frontier_removes_exhausted_batch_runs() {
         let s = big_store();
-        let mut cursor = s.values_object(P, None);
+        let mut cursor = partition_of(&s, P)
+            .expect("the fixture partition exists")
+            .values_object(None);
         let source_count = cursor.sources.len();
         assert!(source_count > 1, "fixture must span multiple sorted runs");
 
@@ -789,17 +831,21 @@ mod tests {
     fn cursor_answers_are_insertion_order_independent() {
         let tuples = big_tuples();
         let reference = store_of(&tuples);
-        let reference_any = resolved_set(&reference, &drain(reference.select(P, Bound::Any)));
+        let reference_any = resolved_set(&reference, &drain(select(&reference, P, Bound::Any)));
 
         // The surfaces a trie orientation yields, resolved out of id space so two
         // differently-ordered stores are comparable at all.
         let subject_surfaces = |s: &RelationStore| -> Vec<String> {
-            s.values_subject(P, None)
+            partition_of(s, P)
+                .expect("the fixture partition exists")
+                .values_subject(None)
                 .map(|(value, _)| s.interner().resolve(value).to_owned())
                 .collect()
         };
         let object_surfaces = |s: &RelationStore| -> Vec<String> {
-            s.values_object(P, None)
+            partition_of(s, P)
+                .expect("the fixture partition exists")
+                .values_object(None)
                 .map(|(value, _)| s.interner().resolve(value).to_owned())
                 .collect()
         };
@@ -811,21 +857,23 @@ mod tests {
         for seed in 0..12u64 {
             let permuted = store_of(&permute(&tuples, seed));
             assert_eq!(
-                resolved_set(&permuted, &drain(permuted.select(P, Bound::Any))),
+                resolved_set(&permuted, &drain(select(&permuted, P, Bound::Any))),
                 reference_any,
                 "seed {seed}: the full scan selects the same rows"
             );
             for local in ["a", "z"] {
                 let want = resolved_set(
                     &reference,
-                    &drain(reference.select(
+                    &drain(select(
+                        &reference,
                         P,
                         Bound::Subject(reference.term_id(&iri(local)).expect("interned")),
                     )),
                 );
                 let got = resolved_set(
                     &permuted,
-                    &drain(permuted.select(
+                    &drain(select(
+                        &permuted,
                         P,
                         Bound::Subject(permuted.term_id(&iri(local)).expect("interned")),
                     )),
@@ -834,14 +882,16 @@ mod tests {
             }
             let want_o = resolved_set(
                 &reference,
-                &drain(reference.select(
+                &drain(select(
+                    &reference,
                     P,
                     Bound::Object(reference.term_id(&iri("o000")).expect("interned")),
                 )),
             );
             let got_o = resolved_set(
                 &permuted,
-                &drain(permuted.select(
+                &drain(select(
+                    &permuted,
                     P,
                     Bound::Object(permuted.term_id(&iri("o000")).expect("interned")),
                 )),
@@ -850,7 +900,10 @@ mod tests {
 
             // The trie stream is always ascending in the store's id order, and carries
             // exactly the same surfaces whatever that order happens to be.
-            let subjects: Vec<_> = permuted.values_subject(P, None).collect();
+            let subjects: Vec<_> = partition_of(&permuted, P)
+                .expect("the fixture partition exists")
+                .values_subject(None)
+                .collect();
             assert!(
                 subjects.windows(2).all(|w| w[0].0 <= w[1].0),
                 "seed {seed}: the subject trie stream is sorted"

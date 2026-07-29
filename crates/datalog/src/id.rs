@@ -8,7 +8,7 @@
 //! Every dense handle in the Datalog evaluator — an interned term, a predicate, a
 //! rule, a materialised row — is an [`Id<C>`]: a `NonZeroU32` wearing a
 //! `PhantomData` brand. The brand `C` makes IDs of different classes DISTINCT
-//! TYPES, so a [`TermId`] can never be passed where a [`PredId`] is expected;
+//! TYPES, so a [`TermId`] can never be passed where a [`PartitionId`] is expected;
 //! cross-class ID confusion is a compile error, not a runtime bug. The
 //! `NonZeroU32` niche keeps `Option<Id<C>>` the same width as `Id<C>` itself, so a
 //! vacant term/row slot costs no extra word.
@@ -137,9 +137,9 @@ impl<C> fmt::Debug for Id<C> {
 /// Brand: an interned atomic-term handle. See [`TermId`].
 #[derive(Debug)]
 pub enum Term {}
-/// Brand: an interned predicate-IRI handle. See [`PredId`].
+/// Brand: a relation-partition handle. See [`PartitionId`].
 #[derive(Debug)]
-pub enum Pred {}
+pub enum Partition {}
 /// Brand: a rule handle. See [`RuleId`].
 #[derive(Debug)]
 pub enum Rule {}
@@ -149,8 +149,14 @@ pub enum Row {}
 
 /// A dense per-interner atomic-term handle.
 pub type TermId = Id<Term>;
-/// A dense per-store predicate-IRI handle.
-pub type PredId = Id<Pred>;
+/// A dense per-store relation-partition handle.
+///
+/// The store holds ONE arity-4 relation `triple(subject, predicate, object, graph)`,
+/// physically partitioned by its `(predicate, graph)` positions; a `PartitionId` addresses
+/// one such partition. It is a distinct brand from [`TermId`] because a partition slot and
+/// an interned term are different index spaces, even though a partition's key is a pair of
+/// term ids.
+pub type PartitionId = Id<Partition>;
 /// A dense per-program rule handle.
 pub type RuleId = Id<Rule>;
 /// A dense per-stratum materialised-row handle.
@@ -198,12 +204,16 @@ mod tests {
     fn id_niche_offset_round_trips_at_boundaries() {
         for slot in [0usize, 1, (u32::MAX - 2) as usize] {
             assert_eq!(TermId::from_index(slot).index(), slot, "slot {slot} term");
-            assert_eq!(PredId::from_index(slot).index(), slot, "slot {slot} pred");
+            assert_eq!(
+                PartitionId::from_index(slot).index(),
+                slot,
+                "slot {slot} partition"
+            );
             assert_eq!(RuleId::from_index(slot).index(), slot, "slot {slot} rule");
             assert_eq!(RowId::from_index(slot).index(), slot, "slot {slot} row");
         }
         // Slot 0 is stored as NonZeroU32(1) — the niche is genuinely used.
-        assert_eq!(PredId::from_index(0).index(), 0);
+        assert_eq!(PartitionId::from_index(0).index(), 0);
     }
 
     /// The `NonZeroU32` niche makes `Option<Id<C>>` no wider than `Id<C>` (no
@@ -216,7 +226,7 @@ mod tests {
             "Option<TermId> must be niche-packed to TermId's width"
         );
         assert_eq!(size_of::<TermId>(), size_of::<u32>());
-        assert_eq!(size_of::<Option<PredId>>(), size_of::<PredId>());
+        assert_eq!(size_of::<Option<PartitionId>>(), size_of::<PartitionId>());
         assert_eq!(size_of::<Option<RowId>>(), size_of::<RowId>());
         assert_eq!(size_of::<Option<RuleId>>(), size_of::<RuleId>());
         // A TermRef is exactly its wrapped TermId — the row-tuple argument handle
@@ -228,10 +238,10 @@ mod tests {
     /// `Ord` is by raw index (mint order) — earlier-minted sorts first.
     #[test]
     fn id_ord_is_mint_order() {
-        let a = PredId::from_index(0);
-        let b = PredId::from_index(1);
+        let a = PartitionId::from_index(0);
+        let b = PartitionId::from_index(1);
         assert!(a < b, "mint order: slot 0 precedes slot 1");
-        assert_eq!(a, PredId::from_index(0));
+        assert_eq!(a, PartitionId::from_index(0));
     }
 
     /// Determinism: an id's identity and order depend on its slot alone, never on
@@ -256,7 +266,7 @@ mod tests {
     /// and a `TermRef` prints the term it wraps.
     #[test]
     fn debug_prints_zero_based_slots() {
-        assert_eq!(format!("{:?}", PredId::from_index(7)), "Id(7)");
+        assert_eq!(format!("{:?}", PartitionId::from_index(7)), "Id(7)");
         assert_eq!(
             format!("{:?}", TermRef::term(TermId::from_index(7))),
             "TermRef(7)"

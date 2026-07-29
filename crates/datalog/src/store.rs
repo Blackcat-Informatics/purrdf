@@ -1,12 +1,43 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The columnar [`RelationStore`]: one shared arrangement per predicate.
+//! The columnar [`RelationStore`]: ONE arity-4 relation
+//! `triple(subject, predicate, object, graph)`, physically partitioned by
+//! `(predicate, graph)`.
+//!
+//! # One relation, partitioned — not one relation per predicate
+//!
+//! The store holds a single logical relation whose four positions are all ordinary terms,
+//! interned in ONE [`TermInterner`]. That is what lets a clause variable bind a predicate
+//! in one atom and a subject in another (`prp-dom`'s `?p`): a predicate is a term, so its
+//! id space is the term id space, not a separate symbol table.
+//!
+//! Physically the rows are partitioned on the `(predicate, graph)` positions, because those
+//! two are constants in the overwhelming majority of atoms. The partitioning is what keeps
+//! the common case fast and the general case possible at once:
+//!
+//! * a **constant (or already-bound) predicate and graph** address exactly one partition
+//!   through [`RelationStore::partition`] — one ordered-map probe on a pair of `u32` ids —
+//!   and then reach the very same galloping `(subject, object)` index the store has always
+//!   had. Carrying the predicate as data costs such an atom nothing;
+//! * a **free predicate or graph** sweeps the matching partitions through
+//!   [`RelationStore::partitions`], in LEXICAL `(predicate surface, graph surface)` order,
+//!   and each partition is still probed through its own `(subject, object)` index. An
+//!   unbound predicate therefore degrades to "one indexed probe per predicate", never to a
+//!   scan of every row in the store.
+//!
+//! # The default graph
+//!
+//! [`RelationStore::DEFAULT_GRAPH`] is the EMPTY surface. RDF's default graph has no name
+//! and PurRDF mints no vocabulary, so the store denotes "no name" by no name rather than by
+//! a fabricated IRI; no IRI surface (`<…>`) and no literal surface (`"…"`) is empty, so the
+//! denotation cannot collide with a caller's term. It is the same denotation
+//! [`ClauseTerm::DefaultGraph`](crate::clause::ClauseTerm::DefaultGraph) renders to.
 //!
 //! # The arrangement shape
 //!
-//! A relation is the `(subject, object)` rows of ONE predicate IRI, held as a
-//! **shared arrangement** — a log of sorted immutable batches plus a small mutable
+//! One partition is the `(subject, object)` rows sharing a `(predicate, graph)` key, held
+//! as a **shared arrangement** — a log of sorted immutable batches plus a small mutable
 //! tail (the columnar LSM discipline):
 //!
 //! - A `Batch` is flat dense-id columns (`subj`, `obj`, `row_id`) in canonical
@@ -38,12 +69,16 @@
 //!   (non-inserting): a miss means the term has never entered the store, so the
 //!   selection is empty. That is the single place probe-miss semantics lives.
 //! - Every consumer-facing sweep is sorted LEXICALLY — [`RelationStore::predicates`]
-//!   through a `BTreeSet`, [`RelationStore::facts_sorted`] through an explicit sort —
-//!   never by mint order and never by hash-table order.
-//! - The interners hold a `hashbrown::HashTable` for O(1) borrowed-key probes. That
+//!   through a `BTreeSet`, [`RelationStore::partitions`] through the maintained lexical
+//!   partition order, [`RelationStore::facts_sorted`] through an explicit sort — never by
+//!   mint order and never by hash-table order.
+//! - The interner holds a `hashbrown::HashTable` for O(1) borrowed-key probes. That
 //!   table is **never iterated**: it is keyed by a fixed-key `ahash` and is only ever
 //!   asked "which id, if any, carries this surface". Insertion order lives in the
 //!   parallel `Vec` side arena, which is what every sweep reads.
+//! - The partition table is a `BTreeMap` keyed by `(predicate id, graph id)`. It is
+//!   probed, never iterated: id order is mint order, so every partition SWEEP reads the
+//!   separately maintained lexical order instead.
 //!
 //! # Terms are lexical surfaces
 //!
@@ -57,13 +92,13 @@ use core::cmp::Ordering;
 use core::convert::Infallible;
 use core::fmt;
 use core::hash::Hasher;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
 use hashbrown::HashTable;
 
 use crate::cursor::{RowCursor, VALUE_OBJECT, VALUE_SUBJECT, ValueCursor};
-use crate::id::{PredId, RowId, TermId};
+use crate::id::{PartitionId, RowId, TermId};
 
 // ── Interners ───────────────────────────────────────────────────────────────────
 
@@ -172,54 +207,13 @@ impl TermInterner {
     }
 }
 
-/// A per-store predicate dictionary: predicate IRI surface → dense [`PredId`].
-///
-/// The same borrowed-key discipline as [`TermInterner`], so the relation table can be
-/// keyed by a `Copy` niche integer instead of an owned `String`.
-#[derive(Debug, Clone, Default)]
-struct PredInterner {
-    /// Predicate surface → id. Never iterated (see the module docs).
-    by_name: HashTable<PredId>,
-    /// First-seen predicate IRI per id, in insertion order (slot = id index).
-    names: Vec<String>,
-}
-
-impl PredInterner {
-    /// Intern `name`, minting a new insertion-ordered id if it is new.
-    fn intern(&mut self, name: &str) -> PredId {
-        let hash = surface_hash(name);
-        let names = &self.names;
-        if let Some(&id) = self.by_name.find(hash, |&id| names[id.index()] == name) {
-            return id;
-        }
-        let id = PredId::from_index(self.names.len());
-        self.names.push(name.to_owned());
-        let names = &self.names;
-        self.by_name
-            .insert_unique(hash, id, |&id| surface_hash(&names[id.index()]));
-        id
-    }
-
-    /// The id of the predicate with this surface, if already interned; never inserts.
-    fn lookup(&self, name: &str) -> Option<PredId> {
-        let hash = surface_hash(name);
-        self.by_name
-            .find(hash, |&id| self.names[id.index()] == name)
-            .copied()
-    }
-
-    /// Every interned predicate surface, in mint order (slot order).
-    ///
-    /// Mint order is NEVER an emission order: callers that sweep resolve and sort
-    /// lexically (see [`RelationStore::predicates`]).
-    fn names(&self) -> &[String] {
-        &self.names
-    }
-}
-
 // ── Bounds ──────────────────────────────────────────────────────────────────────
 
-/// A position-pattern over a binary relation's `(subject, object)` columns.
+/// A position-pattern over one partition's `(subject, object)` columns.
+///
+/// The predicate and graph positions are NOT here: they choose the partition, and the
+/// partition's arrangement is indexed on `(subject, object)`. That separation is what lets
+/// an atom with a free predicate keep its subject/object index — see the module docs.
 ///
 /// The [`TermId`] payloads are handles minted by the interner of the SAME
 /// [`RelationStore`] the bound is probed against (obtain them through
@@ -590,8 +584,9 @@ fn merge_batches<W: Weight>(left: &Batch<W>, right: &Batch<W>) -> Result<Batch<W
 /// tail leg) stay cheap between seals.
 pub(crate) const TAIL_SEAL_THRESHOLD: usize = 64;
 
-/// A single binary relation: the `(subject, object)` rows of ONE predicate IRI, held
-/// as a shared arrangement — a log of sorted immutable [`Batch`]es plus a mutable tail.
+/// A single partition of the store's arity-4 relation: the `(subject, object)` rows
+/// sharing one `(predicate, graph)` key, held as a shared arrangement — a log of sorted
+/// immutable [`Batch`]es plus a mutable tail.
 ///
 /// Term interning lives at the [`RelationStore`] level (one dictionary shared by every
 /// relation), so `insert` borrows the store's interner. Production set semantics fix
@@ -720,85 +715,239 @@ impl Relation {
 
 // ── The store ───────────────────────────────────────────────────────────────────
 
-/// One projected row of the store: a `(subject, predicate, object)` triple of lexical
-/// surfaces.
+/// One projected row of the store: a `(subject, predicate, object, graph)` quad of
+/// lexical surfaces.
 ///
-/// The derived [`Ord`] is `(subject, predicate, object)` lexical order — the emission
-/// order [`RelationStore::facts_sorted`] establishes, and the only fact ordering this
-/// crate ever produces.
+/// The derived [`Ord`] is `(subject, predicate, object, graph)` lexical order — the
+/// emission order [`RelationStore::facts_sorted`] establishes, and the only fact ordering
+/// this crate ever produces. The graph sorts LAST so a dataset confined to one graph keeps
+/// exactly the fact order it had before the position existed.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Fact {
     /// The subject term's lexical surface.
     pub subject: String,
-    /// The predicate IRI surface.
+    /// The predicate term's lexical surface — an IRI predicate renders as `<iri>`, the
+    /// same bytes it would render to in any other position.
     pub predicate: String,
     /// The object term's lexical surface.
     pub object: String,
+    /// The graph term's lexical surface; EMPTY for the default graph
+    /// ([`RelationStore::DEFAULT_GRAPH`]).
+    pub graph: String,
 }
 
-/// A columnar set of binary relations keyed by predicate IRI.
+/// One addressed partition of the store's arity-4 relation: the `(subject, object)`
+/// arrangement of a single `(predicate, graph)` key.
 ///
-/// One `Relation` per predicate, all sharing ONE [`TermInterner`]; this is the
-/// evaluator's working EDB/IDB form. The ids the interner mints are meaningless outside
-/// this store — probes obtain them through [`Self::term_id`].
+/// A `PartitionRef` is the unit a join actually scans. Obtaining one is where the
+/// predicate/graph positions are resolved; everything after it is the store's ordinary
+/// galloping `(subject, object)` access, so an atom whose predicate happens to be a
+/// variable pays for the extra partitions it visits and for nothing else.
+#[derive(Debug, Clone, Copy)]
+pub struct PartitionRef<'a> {
+    /// The partition's dense slot handle.
+    id: PartitionId,
+    /// The interned predicate surface this partition is keyed by.
+    predicate: TermId,
+    /// The interned graph surface this partition is keyed by.
+    graph: TermId,
+    /// The partition's arrangement.
+    relation: &'a Relation,
+}
+
+impl<'a> PartitionRef<'a> {
+    /// The partition's dense slot handle.
+    pub fn id(self) -> PartitionId {
+        self.id
+    }
+
+    /// The interned predicate this partition is keyed by — the value a free predicate
+    /// position binds to.
+    pub fn predicate(self) -> TermId {
+        self.predicate
+    }
+
+    /// The interned graph this partition is keyed by — the value a free graph position
+    /// binds to.
+    pub fn graph(self) -> TermId {
+        self.graph
+    }
+
+    /// The number of distinct `(subject, object)` rows in this partition.
+    pub fn row_count(self) -> usize {
+        self.relation.row_count()
+    }
+
+    /// A galloping lending [`RowCursor`] over the id rows selected by `bound`.
+    pub fn select(self, bound: Bound) -> RowCursor<'a> {
+        self.relation.select(bound)
+    }
+
+    /// A globally subject-value-ordered trie-level cursor; `other` optionally fixes the
+    /// object position.
+    pub fn values_subject(self, other: Option<TermId>) -> ValueCursor<'a, VALUE_SUBJECT> {
+        ValueCursor::new(self.relation, other)
+    }
+
+    /// The object-ordered sibling of [`Self::values_subject`]; `other` optionally fixes
+    /// the subject position.
+    pub fn values_object(self, other: Option<TermId>) -> ValueCursor<'a, VALUE_OBJECT> {
+        ValueCursor::new(self.relation, other)
+    }
+}
+
+/// How a [`Partitions`] sweep is being served.
+enum PartitionsCursor<'a> {
+    /// Both key positions are known, so at most ONE partition can match and it was
+    /// located by an ordered-map probe. This is the constant-predicate hot path: no
+    /// sweep, no filter, straight to the same arrangement a predicate-keyed store would
+    /// have handed back.
+    Single(Option<PartitionRef<'a>>),
+    /// At least one key position is free: walk the store's lexical partition order,
+    /// keeping the partitions whose key agrees with the known positions.
+    Sweep {
+        /// The store being swept.
+        store: &'a RelationStore,
+        /// The required predicate, or `None` if the position is free.
+        predicate: Option<TermId>,
+        /// The required graph, or `None` if the position is free.
+        graph: Option<TermId>,
+        /// The next index into the store's lexical partition order.
+        next: usize,
+    },
+}
+
+/// The partitions matching a `(predicate, graph)` selection, in LEXICAL
+/// `(predicate surface, graph surface)` order.
+///
+/// Allocation-free in both modes, so an atom's partition resolution never materialises a
+/// `Vec` — see [`RelationStore::partitions`].
+pub struct Partitions<'a>(PartitionsCursor<'a>);
+
+impl fmt::Debug for Partitions<'_> {
+    /// Prints the sweep's shape, never the borrowed store.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.0 {
+            PartitionsCursor::Single(found) => f
+                .debug_struct("Partitions")
+                .field("mode", &"single")
+                .field("found", &found.is_some())
+                .finish(),
+            PartitionsCursor::Sweep {
+                predicate,
+                graph,
+                next,
+                ..
+            } => f
+                .debug_struct("Partitions")
+                .field("mode", &"sweep")
+                .field("predicate", predicate)
+                .field("graph", graph)
+                .field("next", next)
+                .finish(),
+        }
+    }
+}
+
+impl<'a> Iterator for Partitions<'a> {
+    type Item = PartitionRef<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.0 {
+            PartitionsCursor::Single(found) => found.take(),
+            PartitionsCursor::Sweep {
+                store,
+                predicate,
+                graph,
+                next,
+            } => {
+                while let Some(&slot) = store.order.get(*next) {
+                    *next += 1;
+                    let (partition_predicate, partition_graph) = store.keys[slot];
+                    if predicate.is_none_or(|wanted| wanted == partition_predicate)
+                        && graph.is_none_or(|wanted| wanted == partition_graph)
+                    {
+                        return Some(store.partition_at(slot));
+                    }
+                }
+                None
+            }
+        }
+    }
+}
+
+/// The store's ONE arity-4 relation `triple(subject, predicate, object, graph)`,
+/// physically partitioned by `(predicate, graph)`.
+///
+/// Every position is an ordinary term interned in ONE [`TermInterner`], so a clause
+/// variable that binds a predicate in one atom can be compared against a subject in
+/// another. The ids the interner mints are meaningless outside this store — probes obtain
+/// them through [`Self::term_id`]. See the module docs for how the partitioning keeps a
+/// constant-predicate atom exactly as fast as it was when predicates were relation
+/// symbols.
 #[derive(Debug, Clone, Default)]
 pub struct RelationStore {
-    /// The store's term dictionary, shared by every relation. This is the persistent
-    /// term arena: never reset within the store's lifetime, because a [`TermId`] handed
-    /// out in round 1 must still resolve in round 40.
+    /// The store's term dictionary, shared by every position of every partition. This is
+    /// the persistent term arena: never reset within the store's lifetime, because a
+    /// [`TermId`] handed out in round 1 must still resolve in round 40.
     interner: TermInterner,
-    /// The store's predicate dictionary, interned once at first insert. Keeps
-    /// [`relations`](Self::relations) keyed by a `Copy` niche integer rather than an
-    /// owned `String`.
-    predicates: PredInterner,
-    /// Binary relations indexed by [`PredId`] slot (`relations[pid.index()]`).
-    ///
-    /// Predicate ids are minted densely (0, 1, 2, …), so a new predicate's slot is
-    /// always the vector's current length; there are never gap / empty relations.
+    /// The partitions, indexed by dense [`PartitionId`] slot.
     relations: Vec<Relation>,
-    /// The number of rows inserted so far across ALL relations — equivalently, the next
+    /// `keys[slot]` is `relations[slot]`'s `(predicate, graph)` key.
+    keys: Vec<(TermId, TermId)>,
+    /// Key → slot. Probed, NEVER iterated: its order is term mint order, which carries no
+    /// lexical meaning. Every sweep reads `order` instead.
+    by_key: BTreeMap<(TermId, TermId), usize>,
+    /// The partition slots in LEXICAL `(predicate surface, graph surface)` order — the
+    /// single sweep order, maintained on partition creation so no sweep has to sort.
+    order: Vec<usize>,
+    /// The number of rows inserted so far across ALL partitions — equivalently, the next
     /// dense [`RowId`] slot to assign. Row ids are minted `0, 1, 2, …` in store-wide
     /// insertion order, so at any point the live rows are exactly `0..row_count`. This
     /// is the single row-id source, and the id never enters a provenance identity.
     row_count: usize,
-    /// A permanently-empty relation handed to [`select`](Self::select) on a predicate
-    /// miss, so an unknown predicate yields an empty [`RowCursor`] with NO `Option`
-    /// branch on the per-row scan. Never inserted into.
+    /// A permanently-empty partition handed to [`select`](Self::select) on a partition
+    /// miss, so an unknown key yields an empty [`RowCursor`] with NO `Option` branch on
+    /// the per-row scan. Never inserted into.
     empty: Relation,
 }
 
 impl RelationStore {
+    /// The lexical surface of the DEFAULT GRAPH: the EMPTY surface.
+    ///
+    /// RDF's default graph has no name, and PurRDF mints no vocabulary, so the store says
+    /// "no name" rather than inventing one. No IRI surface (`<…>`) and no literal surface
+    /// (`"…"`) is empty, so this cannot collide with a caller's term; it is the same
+    /// denotation [`ClauseTerm::DefaultGraph`](crate::clause::ClauseTerm::DefaultGraph)
+    /// renders to, which is what makes a clause constant and stored data comparable.
+    pub const DEFAULT_GRAPH: &'static str = "";
+
     /// A fresh, empty store.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Insert `(subject, object)` under `predicate`, all three as lexical surfaces.
+    /// Insert the quad `(subject, predicate, object, graph)`, all four as lexical
+    /// surfaces.
     ///
-    /// Returns `Some((subject_id, object_id, row_id))` with the terms' interned ids and
-    /// the newly-assigned store-global [`RowId`] if the tuple was newly inserted, or
-    /// `None` if it was already present (dedup).
+    /// Returns `Some((subject_id, object_id, row_id))` with the subject/object interned
+    /// ids and the newly-assigned store-global [`RowId`] if the quad was newly inserted,
+    /// or `None` if it was already present (dedup).
     ///
-    /// The predicate IRI is interned to a [`PredId`] once through a borrowed-key probe —
-    /// no owned-key clone per call. A successful insert stamps the row with the next
-    /// dense row id (insertion order across the whole store), which is the identity the
-    /// semi-naive delta bitset is keyed on. The interned subject/object ids are returned
-    /// alongside it so a commit-path caller threads them onward without a redundant
-    /// second dictionary lookup.
+    /// The predicate and graph surfaces are interned as ordinary terms and their pair
+    /// addresses the partition; a successful insert stamps the row with the next dense row
+    /// id (insertion order across the whole store), which is the identity the semi-naive
+    /// delta span is keyed on.
     pub fn insert(
         &mut self,
-        predicate: &str,
         subject: &str,
+        predicate: &str,
         object: &str,
+        graph: &str,
     ) -> Option<(TermId, TermId, RowId)> {
-        let idx = self.predicates.intern(predicate).index();
-        if idx >= self.relations.len() {
-            // A newly-minted PredId's slot is always the current length (dense mint),
-            // so this resize adds exactly one default relation — never an empty gap.
-            self.relations.resize_with(idx + 1, Relation::default);
-        }
+        let slot = self.partition_slot(predicate, graph);
         let row_id = RowId::from_index(self.row_count);
-        self.relations[idx]
+        self.relations[slot]
             .insert(&mut self.interner, subject, object, row_id)
             .map(|(s_id, o_id)| {
                 self.row_count += 1;
@@ -806,37 +955,72 @@ impl RelationStore {
             })
     }
 
-    /// The number of rows currently in the store across all relations — equivalently,
+    /// The slot of the `(predicate, graph)` partition, creating it if it is new.
+    ///
+    /// A new partition is spliced into the lexical `order` at the position a binary search
+    /// names, so the sweep order stays lexical without ever being re-sorted.
+    fn partition_slot(&mut self, predicate: &str, graph: &str) -> usize {
+        let predicate_id = self.interner.intern(predicate);
+        let graph_id = self.interner.intern(graph);
+        if let Some(&slot) = self.by_key.get(&(predicate_id, graph_id)) {
+            return slot;
+        }
+        let slot = self.relations.len();
+        let position = {
+            let interner = &self.interner;
+            let keys = &self.keys;
+            self.order
+                .binary_search_by(|&other| {
+                    let (other_predicate, other_graph) = keys[other];
+                    (
+                        interner.resolve(other_predicate),
+                        interner.resolve(other_graph),
+                    )
+                        .cmp(&(predicate, graph))
+                })
+                .unwrap_or_else(|position| position)
+        };
+        self.relations.push(Relation::default());
+        self.keys.push((predicate_id, graph_id));
+        self.by_key.insert((predicate_id, graph_id), slot);
+        self.order.insert(position, slot);
+        slot
+    }
+
+    /// The number of rows currently in the store across all partitions — equivalently,
     /// the exclusive upper bound of the live dense [`RowId`]s (`0..row_count`).
     ///
-    /// The semi-naive fixpoint sizes its round-1 delta bitset from this: every
-    /// accumulated row is "new" in round 1, so the seed is
-    /// [`DenseBitset::all_set`](crate::bitset::DenseBitset::all_set) over this count,
-    /// with no per-key materialisation.
+    /// The semi-naive fixpoint sizes its round-1 delta from this: every accumulated row is
+    /// "new" in round 1, so the seed is the contiguous span `[0, row_count)`.
     pub fn row_count(&self) -> usize {
         self.row_count
     }
 
-    /// The store's term dictionary — for resolving a selected id row's `(subject,
-    /// object)` back to their lexical surfaces at the point a caller renders.
+    /// The number of live `(predicate, graph)` partitions.
+    ///
+    /// This is the sweep length an atom with a free predicate or graph pays; an atom with
+    /// both constant never touches it.
+    pub fn partition_count(&self) -> usize {
+        self.relations.len()
+    }
+
+    /// The store's term dictionary — for resolving an id back to its lexical surface at
+    /// the point a caller renders.
     pub fn interner(&self) -> &TermInterner {
         &self.interner
     }
 
     /// The bytes of interned term surfaces held by this store's dictionary — the
     /// term-arena footprint the evaluator's arena ceiling is measured against.
+    ///
+    /// Predicate and graph surfaces are terms too, so they are counted here exactly like a
+    /// subject or an object: the ceiling measures the whole dictionary, not a subset of it.
     pub fn term_bytes(&self) -> usize {
         self.interner.byte_len()
     }
 
-    /// The interned [`PredId`] for `predicate`, if any relation of this store carries
-    /// it; never inserts. `None` means no relation, so any selection on it is empty.
-    pub fn pred_id(&self, predicate: &str) -> Option<PredId> {
-        self.predicates.lookup(predicate)
-    }
-
-    /// The interned id of the term with this lexical surface, if the term has ever been
-    /// inserted into ANY relation of this store. Never inserts.
+    /// The interned id of the term with this lexical surface, if the term has ever entered
+    /// this store in ANY position. Never inserts.
     ///
     /// This is the SINGLE place probe-miss semantics lives: `None` means the term has
     /// never been seen, so any selection or membership bound on it is empty / false —
@@ -846,84 +1030,126 @@ impl RelationStore {
         self.interner.lookup(surface)
     }
 
-    /// Whether `(subject, predicate, object)` is present, as lexical surfaces.
+    /// The dense handle of the `(predicate, graph)` partition, if it exists; never
+    /// creates one.
+    pub fn partition_id(&self, predicate: &str, graph: &str) -> Option<PartitionId> {
+        let (predicate, graph) = (self.term_id(predicate)?, self.term_id(graph)?);
+        self.by_key
+            .get(&(predicate, graph))
+            .copied()
+            .map(PartitionId::from_index)
+    }
+
+    /// The partition keyed by these interned positions, if it exists.
     ///
-    /// Membership for negation-as-failure and downstream dedup: both term surfaces must
-    /// resolve to interned ids ([`Self::term_id`]) or the tuple cannot be present.
-    pub fn contains(&self, predicate: &str, subject: &str, object: &str) -> bool {
+    /// One ordered-map probe on a pair of dense ids — the addressing step of every atom
+    /// whose predicate and graph are constants or already-bound variables, and the reason
+    /// carrying the predicate as data costs such an atom nothing.
+    pub fn partition(&self, predicate: TermId, graph: TermId) -> Option<PartitionRef<'_>> {
+        self.by_key
+            .get(&(predicate, graph))
+            .map(|&slot| self.partition_at(slot))
+    }
+
+    /// Every partition matching the given positions, in LEXICAL
+    /// `(predicate surface, graph surface)` order; `None` means the position is FREE.
+    ///
+    /// With both positions known this is the single [`Self::partition`] probe wrapped as a
+    /// one-element iterator — no sweep at all. With either free it walks the maintained
+    /// lexical order, which is why an unbound predicate is deterministic and is still a
+    /// sequence of indexed probes rather than one undifferentiated scan.
+    pub fn partitions(&self, predicate: Option<TermId>, graph: Option<TermId>) -> Partitions<'_> {
+        match (predicate, graph) {
+            (Some(predicate), Some(graph)) => {
+                Partitions(PartitionsCursor::Single(self.partition(predicate, graph)))
+            }
+            _ => Partitions(PartitionsCursor::Sweep {
+                store: self,
+                predicate,
+                graph,
+                next: 0,
+            }),
+        }
+    }
+
+    /// The partition at a dense slot.
+    fn partition_at(&self, slot: usize) -> PartitionRef<'_> {
+        let (predicate, graph) = self.keys[slot];
+        PartitionRef {
+            id: PartitionId::from_index(slot),
+            predicate,
+            graph,
+            relation: &self.relations[slot],
+        }
+    }
+
+    /// Whether the quad `(subject, predicate, object, graph)` is present, as lexical
+    /// surfaces.
+    ///
+    /// Membership for negation-as-failure and downstream dedup: every surface must resolve
+    /// to an interned id ([`Self::term_id`]) or the quad cannot be present.
+    pub fn contains(&self, subject: &str, predicate: &str, object: &str, graph: &str) -> bool {
         let (Some(s), Some(o)) = (self.term_id(subject), self.term_id(object)) else {
             return false;
         };
-        self.relation(predicate).is_some_and(|r| r.contains(s, o))
+        self.relation(predicate, graph)
+            .is_some_and(|r| r.contains(s, o))
     }
 
-    /// A galloping lending [`RowCursor`] over the id rows under `predicate` selected by
-    /// `bound`.
+    /// A galloping lending [`RowCursor`] over the id rows of the `(predicate, graph)`
+    /// partition selected by `bound`, addressed by lexical surfaces.
     ///
-    /// Yields interned `(subject_id, object_id, row_id)` rows (`Copy` — nothing is
-    /// cloned) one at a time: the term ids for lazy surface resolution through
-    /// [`interner`](Self::interner) where you render, and the store-global [`RowId`] for
-    /// a one-word delta-bitset probe. Picks the cheapest access path for the bound
-    /// positions; an unknown predicate yields an empty cursor over the shared empty
-    /// relation, with NO `Vec` materialised.
-    pub fn select(&self, predicate: &str, bound: Bound) -> RowCursor<'_> {
-        self.relation(predicate)
+    /// The surface-addressed convenience: the join's hot path resolves ids once and goes
+    /// through [`Self::partition`] instead. An unknown partition yields an empty cursor
+    /// over the shared empty relation, with NO `Vec` materialised.
+    pub fn select(&self, predicate: &str, graph: &str, bound: Bound) -> RowCursor<'_> {
+        self.relation(predicate, graph)
             .unwrap_or(&self.empty)
             .select(bound)
     }
 
-    /// A globally subject-value-ordered trie-level cursor over one predicate relation.
+    /// The number of distinct quads under this `(predicate, graph)` key (0 if unknown).
+    pub fn len_for(&self, predicate: &str, graph: &str) -> usize {
+        self.relation(predicate, graph)
+            .map_or(0, Relation::row_count)
+    }
+
+    /// The partition arrangement for a surface-addressed key, if interned.
+    fn relation(&self, predicate: &str, graph: &str) -> Option<&Relation> {
+        let (predicate, graph) = (self.term_id(predicate)?, self.term_id(graph)?);
+        self.by_key
+            .get(&(predicate, graph))
+            .and_then(|&slot| self.relations.get(slot))
+    }
+
+    /// Every predicate surface that carries at least one quad, DISTINCT and in LEXICAL
+    /// order.
     ///
-    /// `other` optionally fixes the object position. An unknown predicate uses the
-    /// permanent empty relation, matching [`Self::select`]'s probe-miss semantics.
-    pub fn values_subject(
-        &self,
-        predicate: &str,
-        other: Option<TermId>,
-    ) -> ValueCursor<'_, VALUE_SUBJECT> {
-        ValueCursor::new(self.relation(predicate).unwrap_or(&self.empty), other)
-    }
-
-    /// The object-value-ordered sibling of [`Self::values_subject`]; `other` optionally
-    /// fixes the subject position.
-    pub fn values_object(
-        &self,
-        predicate: &str,
-        other: Option<TermId>,
-    ) -> ValueCursor<'_, VALUE_OBJECT> {
-        ValueCursor::new(self.relation(predicate).unwrap_or(&self.empty), other)
-    }
-
-    /// The number of distinct tuples stored under `predicate` (0 if unknown).
-    pub fn len_for(&self, predicate: &str) -> usize {
-        self.relation(predicate).map_or(0, Relation::row_count)
-    }
-
-    /// The relation for `predicate`, if interned (resolves `PredId` → slot).
-    fn relation(&self, predicate: &str) -> Option<&Relation> {
-        self.predicates
-            .lookup(predicate)
-            .and_then(|pid| self.relations.get(pid.index()))
-    }
-
-    /// Every predicate IRI surface that has at least one tuple, in LEXICAL order.
-    ///
-    /// Resolves every interned [`PredId`] back to its surface and sorts through a
-    /// `BTreeSet` — NEVER by mint order, which is insertion order and carries no lexical
-    /// meaning — so any "all relations" sweep is byte-deterministic. Every interned
-    /// predicate has at least one tuple, because a [`PredId`] is minted only by
-    /// [`insert`](Self::insert), which then adds the row.
+    /// Resolved out of the partition keys and sorted through a `BTreeSet` — never mint
+    /// order, which is insertion order and carries no lexical meaning — so any "all
+    /// predicates" sweep is byte-deterministic.
     pub fn predicates(&self) -> impl Iterator<Item = &str> {
-        self.predicates
-            .names()
+        self.keys
             .iter()
-            .map(String::as_str)
+            .map(|&(predicate, _)| self.interner.resolve(predicate))
             .collect::<BTreeSet<_>>()
             .into_iter()
     }
 
-    /// Project every live row back to a [`Fact`] triple of lexical surfaces, in sorted
-    /// `(subject, predicate, object)` order.
+    /// Every graph surface that carries at least one quad, DISTINCT and in LEXICAL order.
+    ///
+    /// The default graph appears as the empty surface ([`Self::DEFAULT_GRAPH`]), which
+    /// sorts first.
+    pub fn graphs(&self) -> impl Iterator<Item = &str> {
+        self.keys
+            .iter()
+            .map(|&(_, graph)| self.interner.resolve(graph))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+    }
+
+    /// Project every live row back to a [`Fact`] quad of lexical surfaces, in sorted
+    /// `(subject, predicate, object, graph)` order.
     ///
     /// This is the single columnar-to-lexical bridge. Keeping it in one place prevents
     /// consumers from growing subtly different seed ordering or term-resolution rules,
@@ -931,13 +1157,17 @@ impl RelationStore {
     /// orders.
     pub fn facts_sorted(&self) -> Vec<Fact> {
         let mut facts = Vec::with_capacity(self.row_count);
-        for predicate in self.predicates() {
-            let mut cursor = self.select(predicate, Bound::Any);
+        for &slot in &self.order {
+            let (predicate, graph) = self.keys[slot];
+            let predicate = self.interner.resolve(predicate);
+            let graph = self.interner.resolve(graph);
+            let mut cursor = self.relations[slot].select(Bound::Any);
             while let Some((s_id, o_id, _row)) = crate::cursor::LendingIterator::next(&mut cursor) {
                 facts.push(Fact {
                     subject: self.interner.resolve(s_id).to_owned(),
                     predicate: predicate.to_owned(),
                     object: self.interner.resolve(o_id).to_owned(),
+                    graph: graph.to_owned(),
                 });
             }
         }
@@ -965,7 +1195,7 @@ mod tests {
         predicate: &str,
         bound: Bound,
     ) -> Vec<(TermId, TermId, RowId)> {
-        let mut cursor = s.select(predicate, bound);
+        let mut cursor = s.select(predicate, RelationStore::DEFAULT_GRAPH, bound);
         let mut rows = Vec::new();
         while let Some(row) = cursor.next() {
             rows.push(row);
@@ -1001,8 +1231,10 @@ mod tests {
         (iri(a), iri(b))
     }
 
-    const KNOWS: &str = "https://example.org/knows";
-    const LIKES: &str = "https://example.org/likes";
+    /// Predicate surfaces: a predicate is an ordinary term, so it is stored bracketed
+    /// exactly like any other IRI.
+    const KNOWS: &str = "<https://example.org/knows>";
+    const LIKES: &str = "<https://example.org/likes>";
 
     /// The `knows`/`likes` corpus: `knows` = (a,b), (a,c), (b,c); `likes` = (a,c).
     fn sample_tuples() -> Vec<(&'static str, &'static str, &'static str)> {
@@ -1014,12 +1246,13 @@ mod tests {
         ]
     }
 
-    /// Build a store from `tuples`, asserting every insert is new.
+    /// Build a store from `tuples` in the DEFAULT graph, asserting every insert is new.
     fn store_of(tuples: &[(&str, &str, &str)]) -> RelationStore {
         let mut s = RelationStore::new();
         for &(p, sub, obj) in tuples {
             assert!(
-                s.insert(p, &iri(sub), &iri(obj)).is_some(),
+                s.insert(&iri(sub), p, &iri(obj), RelationStore::DEFAULT_GRAPH)
+                    .is_some(),
                 "fixture tuples are distinct"
             );
         }
@@ -1078,40 +1311,116 @@ mod tests {
     #[test]
     fn store_dedup_reports_none_and_stores_one_row() {
         let mut s = RelationStore::new();
-        assert!(s.insert(KNOWS, &iri("a"), &iri("b")).is_some());
-        // Re-inserting the same (s, p, o) is a no-op that reports None (no new row id).
-        assert!(s.insert(KNOWS, &iri("a"), &iri("b")).is_none());
-        assert_eq!(s.len_for(KNOWS), 1);
+        assert!(
+            s.insert(&iri("a"), KNOWS, &iri("b"), RelationStore::DEFAULT_GRAPH)
+                .is_some()
+        );
+        // Re-inserting the same quad is a no-op that reports None (no new row id).
+        assert!(
+            s.insert(&iri("a"), KNOWS, &iri("b"), RelationStore::DEFAULT_GRAPH)
+                .is_none()
+        );
+        assert_eq!(s.len_for(KNOWS, RelationStore::DEFAULT_GRAPH), 1);
         assert_eq!(
             resolved_set(&s, &select_rows(&s, KNOWS, Bound::Any)),
             [pair("a", "b")].into(),
         );
     }
 
+    /// The SAME `(subject, predicate, object)` in two different graphs is two distinct
+    /// quads: the graph is part of the key, so neither dedups the other away and each
+    /// lives in its own partition.
+    #[test]
+    fn store_separates_the_same_triple_in_two_graphs() {
+        let g1 = iri("g1");
+        let g2 = iri("g2");
+        let mut s = RelationStore::new();
+        assert!(s.insert(&iri("a"), KNOWS, &iri("b"), &g1).is_some());
+        assert!(s.insert(&iri("a"), KNOWS, &iri("b"), &g2).is_some());
+        assert!(
+            s.insert(&iri("a"), KNOWS, &iri("b"), &g1).is_none(),
+            "a repeat within one graph still dedups"
+        );
+        assert_eq!(s.row_count(), 2);
+        assert_eq!(
+            s.partition_count(),
+            2,
+            "one partition per (predicate, graph)"
+        );
+        assert_eq!(s.len_for(KNOWS, &g1), 1);
+        assert_eq!(s.len_for(KNOWS, &g2), 1);
+        assert_eq!(
+            s.len_for(KNOWS, RelationStore::DEFAULT_GRAPH),
+            0,
+            "the default graph is a graph of its own, and it is empty here"
+        );
+        assert!(s.contains(&iri("a"), KNOWS, &iri("b"), &g1));
+        assert!(!s.contains(&iri("a"), KNOWS, &iri("b"), RelationStore::DEFAULT_GRAPH));
+        assert_eq!(
+            s.graphs().collect::<Vec<_>>(),
+            vec![g1.as_str(), g2.as_str()]
+        );
+        assert_eq!(s.predicates().collect::<Vec<_>>(), vec![KNOWS]);
+    }
+
+    /// The default graph is the EMPTY surface, and it partitions like any other graph
+    /// name while sorting before every named one.
+    #[test]
+    fn store_default_graph_is_the_empty_surface() {
+        assert_eq!(RelationStore::DEFAULT_GRAPH, "");
+        let named = iri("g");
+        let mut s = RelationStore::new();
+        assert!(
+            s.insert(&iri("a"), KNOWS, &iri("b"), RelationStore::DEFAULT_GRAPH)
+                .is_some()
+        );
+        assert!(s.insert(&iri("a"), KNOWS, &iri("b"), &named).is_some());
+        assert_eq!(
+            s.graphs().collect::<Vec<_>>(),
+            vec![RelationStore::DEFAULT_GRAPH, named.as_str()],
+            "the empty surface sorts first"
+        );
+        let facts = s.facts_sorted();
+        assert_eq!(facts.len(), 2);
+        assert_eq!(facts[0].graph, RelationStore::DEFAULT_GRAPH);
+        assert_eq!(facts[1].graph, named);
+        assert_eq!(
+            facts[0].predicate, KNOWS,
+            "a predicate is a bracketed IRI term"
+        );
+    }
+
     /// `insert` stamps each newly-inserted row with a dense [`RowId`] in store-wide
-    /// insertion order — `0, 1, 2, …` ACROSS relations, not per relation — and `select`
+    /// insertion order — `0, 1, 2, …` ACROSS partitions, not per partition — and `select`
     /// hands each selected row that same id. A dedup consumes no id, so the id space
     /// stays gap-free and `row_count` counts exactly the live rows. The ids are asserted
     /// as SETS: the arrangement stores rows value-sorted, so a selection enumerates them
     /// in storage order, not insertion order.
     #[test]
-    fn store_insert_assigns_dense_cross_relation_row_ids() {
+    fn store_insert_assigns_dense_cross_partition_row_ids() {
+        let default = RelationStore::DEFAULT_GRAPH;
         let mut s = RelationStore::new();
-        // Interleave predicates so a per-relation index would NOT match the global id.
-        let r0 = s.insert(KNOWS, &iri("a"), &iri("b")).map(|(_, _, r)| r);
-        let r1 = s.insert(LIKES, &iri("a"), &iri("c")).map(|(_, _, r)| r);
-        let r2 = s.insert(KNOWS, &iri("a"), &iri("c")).map(|(_, _, r)| r);
+        // Interleave predicates so a per-partition index would NOT match the global id.
+        let r0 = s
+            .insert(&iri("a"), KNOWS, &iri("b"), default)
+            .map(|(_, _, r)| r);
+        let r1 = s
+            .insert(&iri("a"), LIKES, &iri("c"), default)
+            .map(|(_, _, r)| r);
+        let r2 = s
+            .insert(&iri("a"), KNOWS, &iri("c"), default)
+            .map(|(_, _, r)| r);
         assert_eq!(r0, Some(RowId::from_index(0)));
         assert_eq!(r1, Some(RowId::from_index(1)));
         assert_eq!(
             r2,
             Some(RowId::from_index(2)),
-            "row ids span relations in insertion order"
+            "row ids span partitions in insertion order"
         );
         // A dedup consumes no row id — the space stays dense and `row_count` is exact.
-        assert_eq!(s.insert(KNOWS, &iri("a"), &iri("b")), None);
+        assert_eq!(s.insert(&iri("a"), KNOWS, &iri("b"), default), None);
         assert_eq!(s.row_count(), 3, "three distinct rows ⇒ row ids 0..3");
-        // `select` hands each row its store-global id (never a per-relation index):
+        // `select` hands each row its store-global id (never a per-partition index):
         // knows carries {0, 2}, likes carries {1} — the interleaved likes took id 1.
         let knows_ids: BTreeSet<RowId> = select_rows(&s, KNOWS, Bound::Any)
             .iter()
@@ -1120,7 +1429,7 @@ mod tests {
         assert_eq!(
             knows_ids,
             [RowId::from_index(0), RowId::from_index(2)].into(),
-            "selected rows carry their store-global row id, not a per-relation index",
+            "selected rows carry their store-global row id, not a per-partition index",
         );
         let likes_ids: BTreeSet<RowId> = select_rows(&s, LIKES, Bound::Any)
             .iter()
@@ -1132,24 +1441,25 @@ mod tests {
     /// The arrangement seals its tail into sorted batches past the threshold and still
     /// returns the exact row SET with the exact store-global row ids — the galloping
     /// batch path, not just the tail leg. A heavily-interleaved build (row ids NOT
-    /// contiguous within a relation) confirms every selected row carries its dense global
-    /// id and that `row_count` stays exact across relations.
+    /// contiguous within a partition) confirms every selected row carries its dense global
+    /// id and that `row_count` stays exact across partitions.
     #[test]
     fn store_sealed_batches_preserve_row_set_and_dense_ids() {
-        let (p, q) = ("https://example.org/p", "https://example.org/q");
+        let default = RelationStore::DEFAULT_GRAPH;
+        let (p, q) = ("<https://example.org/p>", "<https://example.org/q>");
         let mut s = RelationStore::new();
-        // Interleave p and q for more than twice the threshold so BOTH relations seal
-        // batches and neither relation's row ids are the contiguous 0, 1, 2, ….
+        // Interleave p and q for more than twice the threshold so BOTH partitions seal
+        // batches and neither partition's row ids are the contiguous 0, 1, 2, ….
         let n = TAIL_SEAL_THRESHOLD * 3;
         for i in 0..n {
             let pred = if i % 2 == 0 { p } else { q };
             assert!(
-                s.insert(pred, &iri("s"), &iri(&format!("o{i:04}")))
+                s.insert(&iri("s"), pred, &iri(&format!("o{i:04}")), default)
                     .is_some()
             );
         }
         assert_eq!(s.row_count(), n, "every distinct row is counted, gap-free");
-        // Each relation returns exactly its half of the rows, each with the global row id
+        // Each partition returns exactly its half of the rows, each with the global row id
         // it was stamped with at insert (the even indices went to p, odd to q).
         let p_ids: BTreeSet<RowId> = select_rows(&s, p, Bound::Any)
             .iter()
@@ -1166,7 +1476,7 @@ mod tests {
         );
         // Dedup still holds across sealed batches: re-inserting a sealed row is a no-op.
         assert!(
-            s.insert(p, &iri("s"), &iri("o0000")).is_none(),
+            s.insert(&iri("s"), p, &iri("o0000"), default).is_none(),
             "a row already sealed into a batch is deduped by the galloping probe"
         );
     }
@@ -1174,11 +1484,14 @@ mod tests {
     #[test]
     fn store_contains_on_lexical_surfaces() {
         let s = sample_store();
-        assert!(s.contains(KNOWS, &iri("a"), &iri("b")));
+        let default = RelationStore::DEFAULT_GRAPH;
+        assert!(s.contains(&iri("a"), KNOWS, &iri("b"), default));
         // A never-seen term surface fails the lookup, so containment is false.
-        assert!(!s.contains(KNOWS, &iri("a"), &iri("z")));
+        assert!(!s.contains(&iri("a"), KNOWS, &iri("z"), default));
         // An unknown predicate is a clean miss, not a panic.
-        assert!(!s.contains("https://example.org/nope", &iri("a"), &iri("b")));
+        assert!(!s.contains(&iri("a"), "<https://example.org/nope>", &iri("b"), default));
+        // So is an unknown graph.
+        assert!(!s.contains(&iri("a"), KNOWS, &iri("b"), &iri("never-a-graph")));
     }
 
     #[test]
@@ -1188,51 +1501,180 @@ mod tests {
         assert_eq!(s.term_id(&iri("never-seen")), None);
         // The miss did not insert: a second lookup still misses.
         assert_eq!(s.term_id(&iri("never-seen")), None);
-        assert_eq!(s.interner().len(), 3, "exactly a, b, c are interned");
+        assert_eq!(
+            s.interner().len(),
+            6,
+            "a, b, c, the two predicate surfaces and the default-graph surface"
+        );
         assert!(!s.interner().is_empty());
     }
 
+    /// A PREDICATE is an ordinary term in the one dictionary, so the same variable can
+    /// bind it in predicate position and compare it in subject position — which is
+    /// exactly what `prp-dom`'s `?p` does.
     #[test]
-    fn store_interner_is_shared_across_relations() {
+    fn store_predicates_are_terms_in_the_one_dictionary() {
+        let default = RelationStore::DEFAULT_GRAPH;
+        let domain = "<https://example.org/domain>";
+        let mut s = RelationStore::new();
+        // `knows domain Person` — the predicate surface KNOWS appears as a SUBJECT here…
+        assert!(s.insert(KNOWS, domain, &iri("Person"), default).is_some());
+        // …and as the predicate of an ordinary quad here.
+        assert!(s.insert(&iri("a"), KNOWS, &iri("b"), default).is_some());
+        let knows = id_of(&s, KNOWS);
+        assert_eq!(
+            s.partition(knows, id_of(&s, default))
+                .expect("the knows partition exists")
+                .row_count(),
+            1
+        );
+        // One id, both roles: the subject occurrence and the partition key are equal.
+        let subjects: BTreeSet<TermId> = select_rows(&s, domain, Bound::Any)
+            .iter()
+            .map(|&(subject, _, _)| subject)
+            .collect();
+        assert_eq!(subjects, [knows].into());
+    }
+
+    #[test]
+    fn store_interner_is_shared_across_partitions() {
         // The same term inserted under two predicates mints ONE id (store-level
-        // dictionary), and a Bound built from that id probes either relation.
+        // dictionary), and a Bound built from that id probes either partition.
         let s = sample_store();
         let a = id_of(&s, &iri("a"));
         assert_eq!(
             resolved_set(&s, &select_rows(&s, LIKES, Bound::Subject(a))),
             [pair("a", "c")].into(),
         );
-        assert_eq!(s.pred_id(KNOWS), Some(PredId::from_index(0)));
-        assert_eq!(s.pred_id("https://example.org/absent"), None);
+        assert_eq!(
+            s.partition_id(KNOWS, RelationStore::DEFAULT_GRAPH),
+            Some(PartitionId::from_index(0))
+        );
+        assert_eq!(
+            s.partition_id("<https://example.org/absent>", RelationStore::DEFAULT_GRAPH),
+            None
+        );
+        assert_eq!(s.partition_id(KNOWS, &iri("absent-graph")), None);
+    }
+
+    /// The partition sweep is the store's answer to a FREE predicate or graph: it visits
+    /// exactly the matching partitions, in lexical order, and each one is still probed
+    /// through its own `(subject, object)` index rather than scanned as raw rows.
+    #[test]
+    fn store_partition_sweep_is_lexical_and_selective() {
+        let default = RelationStore::DEFAULT_GRAPH;
+        let g = iri("g");
+        let mut s = RelationStore::new();
+        // Insert in deliberately anti-lexical predicate order.
+        for (subject, predicate, object, graph) in [
+            ("a", "<https://example.org/zeta>", "b", default),
+            ("a", "<https://example.org/mu>", "b", g.as_str()),
+            ("a", "<https://example.org/alpha>", "b", default),
+            ("c", "<https://example.org/alpha>", "d", g.as_str()),
+        ] {
+            assert!(
+                s.insert(&iri(subject), predicate, &iri(object), graph)
+                    .is_some()
+            );
+        }
+        let key = |s: &RelationStore, p: PartitionRef<'_>| {
+            (
+                s.interner().resolve(p.predicate()).to_owned(),
+                s.interner().resolve(p.graph()).to_owned(),
+            )
+        };
+
+        // Everything free: every partition, lexical by (predicate, graph).
+        let all: Vec<(String, String)> = s.partitions(None, None).map(|p| key(&s, p)).collect();
+        assert_eq!(
+            all,
+            vec![
+                ("<https://example.org/alpha>".to_owned(), String::new()),
+                ("<https://example.org/alpha>".to_owned(), g.clone()),
+                ("<https://example.org/mu>".to_owned(), g.clone()),
+                ("<https://example.org/zeta>".to_owned(), String::new()),
+            ]
+        );
+
+        // A free predicate with a FIXED graph visits only that graph's partitions.
+        let in_g: Vec<(String, String)> = s
+            .partitions(None, Some(id_of(&s, &g)))
+            .map(|p| key(&s, p))
+            .collect();
+        assert_eq!(
+            in_g,
+            vec![
+                ("<https://example.org/alpha>".to_owned(), g.clone()),
+                ("<https://example.org/mu>".to_owned(), g.clone()),
+            ]
+        );
+
+        // A fixed predicate with a free graph visits that predicate across graphs.
+        let alpha = id_of(&s, "<https://example.org/alpha>");
+        assert_eq!(
+            s.partitions(Some(alpha), None)
+                .map(|p| key(&s, p))
+                .collect::<Vec<_>>(),
+            vec![
+                ("<https://example.org/alpha>".to_owned(), String::new()),
+                ("<https://example.org/alpha>".to_owned(), g.clone()),
+            ]
+        );
+
+        // BOTH fixed: at most one partition, and it is the one `partition` probes for —
+        // the constant-predicate path, which never sweeps.
+        let both: Vec<PartitionRef<'_>> = s
+            .partitions(Some(alpha), Some(id_of(&s, default)))
+            .collect();
+        assert_eq!(both.len(), 1);
+        assert_eq!(
+            both[0].id(),
+            s.partition(alpha, id_of(&s, default))
+                .expect("the partition exists")
+                .id()
+        );
+        assert!(format!("{:?}", s.partitions(Some(alpha), Some(alpha))).contains("single"));
+        assert!(format!("{:?}", s.partitions(None, None)).contains("sweep"));
+
+        // A never-interned position selects nothing at all.
+        assert_eq!(s.partitions(Some(alpha), None).count(), 2);
+        assert_eq!(s.partition_count(), 4);
     }
 
     /// The term-arena footprint counts each DISTINCT surface once, grows only on a fresh
     /// intern, and is the same whichever order the terms arrive in — so the evaluator's
-    /// arena ceiling is a property of the data, not of an insertion sequence.
+    /// arena ceiling is a property of the data, not of an insertion sequence. Predicate
+    /// and graph surfaces are counted too: they are terms.
     #[test]
     fn store_term_bytes_counts_each_distinct_surface_once() {
+        let default = RelationStore::DEFAULT_GRAPH;
         let mut s = RelationStore::new();
         assert_eq!(s.term_bytes(), 0);
         assert!(s.interner().is_empty());
 
-        s.insert(KNOWS, &iri("a"), &iri("b"));
+        s.insert(&iri("a"), KNOWS, &iri("b"), default);
         let after_first = s.term_bytes();
-        assert_eq!(after_first, iri("a").len() + iri("b").len());
+        assert_eq!(
+            after_first,
+            iri("a").len() + iri("b").len() + KNOWS.len(),
+            "the default graph's surface is empty, so it adds no bytes"
+        );
 
-        // A repeat of both terms under a second predicate interns nothing new.
-        s.insert(LIKES, &iri("a"), &iri("b"));
-        assert_eq!(s.term_bytes(), after_first);
+        // A repeat of both terms under a second predicate interns only the predicate.
+        s.insert(&iri("a"), LIKES, &iri("b"), default);
+        assert_eq!(s.term_bytes(), after_first + LIKES.len());
+        let after_second = s.term_bytes();
 
         // A new term adds exactly its own bytes.
-        s.insert(KNOWS, &iri("a"), &iri("c"));
-        assert_eq!(s.term_bytes(), after_first + iri("c").len());
+        s.insert(&iri("a"), KNOWS, &iri("c"), default);
+        assert_eq!(s.term_bytes(), after_second + iri("c").len());
         assert_eq!(s.term_bytes(), s.interner().byte_len());
 
-        // The same terms in the opposite order reach the same total.
+        // The same quads in the opposite order reach the same total.
         let mut reversed = RelationStore::new();
-        reversed.insert(KNOWS, &iri("a"), &iri("c"));
-        reversed.insert(LIKES, &iri("a"), &iri("b"));
-        reversed.insert(KNOWS, &iri("a"), &iri("b"));
+        reversed.insert(&iri("a"), KNOWS, &iri("c"), default);
+        reversed.insert(&iri("a"), LIKES, &iri("b"), default);
+        reversed.insert(&iri("a"), KNOWS, &iri("b"), default);
         assert_eq!(reversed.term_bytes(), s.term_bytes());
     }
 
@@ -1245,29 +1687,33 @@ mod tests {
         let _ = s.interner().resolve(TermId::from_index(999));
     }
 
-    /// Emission-order guard: the relation table is a `PredId`-indexed `Vec`, so its slot
-    /// order is mint order. The only consumer-facing enumeration — [`predicates`] — must
-    /// still be lexical, sorted through the `BTreeSet` sweep, never leaking mint order.
-    /// Insert in deliberately anti-lexical order and assert the output is lexical.
+    /// Emission-order guard: the partition table is a slot-indexed `Vec` and the key map
+    /// is keyed by mint-ordered ids, so neither may leak. The consumer-facing
+    /// enumerations — [`RelationStore::predicates`], [`RelationStore::graphs`] and the
+    /// partition sweep — must all be lexical. Insert in deliberately anti-lexical order
+    /// and assert the output is lexical.
     #[test]
     fn store_predicates_never_leak_mint_or_hash_order() {
         let mut s = RelationStore::new();
         for pred in [
-            "https://example.org/zeta",
-            "https://example.org/mu",
-            "https://example.org/alpha",
+            "<https://example.org/zeta>",
+            "<https://example.org/mu>",
+            "<https://example.org/alpha>",
         ] {
-            assert!(s.insert(pred, &iri("x"), &iri("y")).is_some());
+            assert!(
+                s.insert(&iri("x"), pred, &iri("y"), RelationStore::DEFAULT_GRAPH)
+                    .is_some()
+            );
         }
         let preds: Vec<&str> = s.predicates().collect();
         assert_eq!(
             preds,
             vec![
-                "https://example.org/alpha",
-                "https://example.org/mu",
-                "https://example.org/zeta"
+                "<https://example.org/alpha>",
+                "<https://example.org/mu>",
+                "<https://example.org/zeta>"
             ],
-            "predicates() must be lexical — predicate mint order must never leak"
+            "predicates() must be lexical — partition mint order must never leak"
         );
     }
 
@@ -1286,8 +1732,9 @@ mod tests {
         assert_eq!(preds, s2.predicates().collect::<Vec<_>>());
     }
 
-    /// `facts_sorted` is the lexical projection: sorted `(subject, predicate, object)`,
-    /// covering every relation, with no duplicate row.
+    /// `facts_sorted` is the lexical projection: sorted
+    /// `(subject, predicate, object, graph)`, covering every partition, with no duplicate
+    /// row.
     #[test]
     fn store_facts_sorted_is_lexical_and_complete() {
         let s = sample_store();
@@ -1299,6 +1746,7 @@ mod tests {
                 subject: iri(sub),
                 predicate: p.to_owned(),
                 object: iri(obj),
+                graph: RelationStore::DEFAULT_GRAPH.to_owned(),
             })
             .collect();
         expected.sort();
@@ -1311,56 +1759,78 @@ mod tests {
 
     // ── Determinism ─────────────────────────────────────────────────────────────
 
-    /// The determinism contract, property style: the ORDER in which tuples are inserted
+    /// The determinism contract, property style: the ORDER in which quads are inserted
     /// cannot affect any lexical observable of the store. Over many deterministic
     /// permutations of a corpus large enough to force several batch seals and
-    /// consolidations, `facts_sorted`, `predicates`, `row_count`, `len_for` and every
-    /// membership answer are identical.
+    /// consolidations — and spread over several GRAPHS as well as several predicates, so
+    /// the arity-4 partitioning is what is being permuted — `facts_sorted`, `predicates`,
+    /// `graphs`, the partition sweep, `row_count`, `len_for` and every membership answer
+    /// are identical.
     ///
     /// Row ids are deliberately NOT compared: a row id is mint order, which is a
     /// function of insertion order by construction and is never an emission order.
     #[test]
     fn store_insertion_order_does_not_affect_lexical_output() {
-        let preds = ["https://example.org/p", "https://example.org/q"];
-        // 150 tuples over two predicates: past the seal threshold in both, so batches
-        // seal and consolidate at different points under different orders.
-        let corpus: Vec<(usize, usize, usize)> = (0..150)
-            .map(|i| (i % 2, i % 7, i % 23))
+        let preds = ["<https://example.org/p>", "<https://example.org/q>"];
+        let graphs = [
+            RelationStore::DEFAULT_GRAPH.to_owned(),
+            iri("g1"),
+            iri("g2"),
+        ];
+        // 150 quads over two predicates and three graphs: past the seal threshold, so
+        // batches seal and consolidate at different points under different orders.
+        let corpus: Vec<(usize, usize, usize, usize)> = (0..150)
+            .map(|i| (i % 2, i % 3, i % 7, i % 23))
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
-        let tuples: Vec<(String, String, String)> = corpus
+        let quads: Vec<(String, String, String, String)> = corpus
             .iter()
-            .map(|&(p, sub, obj)| {
+            .map(|&(p, g, sub, obj)| {
                 (
-                    preds[p].to_owned(),
                     iri(&format!("s{sub}")),
+                    preds[p].to_owned(),
                     iri(&format!("o{obj}")),
+                    graphs[g].clone(),
                 )
             })
             .collect();
 
-        let build = |order: &[(String, String, String)]| {
+        let build = |order: &[(String, String, String, String)]| {
             let mut s = RelationStore::new();
-            for (p, sub, obj) in order {
-                s.insert(p, sub, obj);
+            for (sub, p, obj, g) in order {
+                s.insert(sub, p, obj, g);
             }
             s
         };
 
-        let reference = build(&tuples);
+        let partition_keys = |s: &RelationStore| -> Vec<(String, String)> {
+            s.partitions(None, None)
+                .map(|p| {
+                    (
+                        s.interner().resolve(p.predicate()).to_owned(),
+                        s.interner().resolve(p.graph()).to_owned(),
+                    )
+                })
+                .collect()
+        };
+
+        let reference = build(&quads);
         let reference_facts = reference.facts_sorted();
         let reference_preds: Vec<String> = reference.predicates().map(ToOwned::to_owned).collect();
+        let reference_graphs: Vec<String> = reference.graphs().map(ToOwned::to_owned).collect();
+        let reference_partitions = partition_keys(&reference);
         assert!(
             reference.row_count() >= TAIL_SEAL_THRESHOLD,
             "the corpus must be large enough to seal batches"
         );
+        assert!(reference_partitions.len() >= 4, "several partitions");
 
         for seed in 0..24u64 {
-            // Duplicated tuples are absorbed whatever the order, so append a second
+            // Duplicated quads are absorbed whatever the order, so append a second
             // shuffled copy of the whole corpus.
-            let mut order = permute(&tuples, seed);
-            order.extend(permute(&tuples, seed ^ 0x5EED));
+            let mut order = permute(&quads, seed);
+            order.extend(permute(&quads, seed ^ 0x5EED));
             let permuted = build(&order);
             assert_eq!(
                 permuted.facts_sorted(),
@@ -1372,19 +1842,45 @@ mod tests {
                 reference_preds,
                 "seed {seed}: the predicate sweep is insertion-order independent"
             );
+            assert_eq!(
+                permuted.graphs().collect::<Vec<_>>(),
+                reference_graphs,
+                "seed {seed}: the graph sweep is insertion-order independent"
+            );
+            assert_eq!(
+                partition_keys(&permuted),
+                reference_partitions,
+                "seed {seed}: the partition sweep is lexical, never mint-ordered"
+            );
             assert_eq!(permuted.row_count(), reference.row_count(), "seed {seed}");
+            assert_eq!(
+                permuted.partition_count(),
+                reference.partition_count(),
+                "seed {seed}"
+            );
             for p in &preds {
-                assert_eq!(permuted.len_for(p), reference.len_for(p), "seed {seed}");
+                for g in &graphs {
+                    assert_eq!(
+                        permuted.len_for(p, g),
+                        reference.len_for(p, g),
+                        "seed {seed}"
+                    );
+                }
             }
             for fact in &reference_facts {
                 assert!(
-                    permuted.contains(&fact.predicate, &fact.subject, &fact.object),
+                    permuted.contains(&fact.subject, &fact.predicate, &fact.object, &fact.graph),
                     "seed {seed}: every reference fact is present"
                 );
             }
             assert!(
-                !permuted.contains(preds[0], &iri("s0"), &iri("never-seen")),
-                "seed {seed}: an absent tuple stays absent"
+                !permuted.contains(
+                    &iri("s0"),
+                    preds[0],
+                    &iri("never-seen"),
+                    RelationStore::DEFAULT_GRAPH
+                ),
+                "seed {seed}: an absent quad stays absent"
             );
         }
     }
@@ -1393,7 +1889,7 @@ mod tests {
     /// row SET is identical whatever the insertion order, including after seals.
     #[test]
     fn store_every_bound_shape_is_insertion_order_independent() {
-        let pred = "https://example.org/p";
+        let pred = "<https://example.org/p>";
         let tuples: Vec<(String, String)> = (0..90)
             .map(|i| (iri(&format!("s{}", i % 5)), iri(&format!("o{}", i % 17))))
             .collect::<BTreeSet<_>>()
@@ -1403,7 +1899,7 @@ mod tests {
         let build = |order: &[(String, String)]| {
             let mut s = RelationStore::new();
             for (sub, obj) in order {
-                s.insert(pred, sub, obj);
+                s.insert(sub, pred, obj, RelationStore::DEFAULT_GRAPH);
             }
             s
         };
