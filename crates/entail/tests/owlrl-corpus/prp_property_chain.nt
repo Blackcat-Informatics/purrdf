@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# GENERATED — by crates/entail/tests/owlrl_oracle.rs's write_owlrl_corpus_inputs. Do not
+# hand-edit; see that test's doc comment to regenerate.
+#
+# fixture: prp_property_chain
+# canonical N-Triples input fed to the owlrl reference engine.
+<http://example.org/chain0> <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://example.org/parentOf> .
+<http://example.org/chain0> <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://example.org/chain1> .
+<http://example.org/chain1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://example.org/parentOf> .
+<http://example.org/chain1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .
+<http://example.org/erin> <http://example.org/parentOf> <http://example.org/frank> .
+<http://example.org/frank> <http://example.org/parentOf> <http://example.org/grace> .
+<http://example.org/hasGrandparent> <http://www.w3.org/2002/07/owl#propertyChainAxiom> <http://example.org/chain0> .

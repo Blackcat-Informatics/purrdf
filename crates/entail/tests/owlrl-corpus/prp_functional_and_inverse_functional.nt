@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# GENERATED — by crates/entail/tests/owlrl_oracle.rs's write_owlrl_corpus_inputs. Do not
+# hand-edit; see that test's doc comment to regenerate.
+#
+# fixture: prp_functional_and_inverse_functional
+# canonical N-Triples input fed to the owlrl reference engine.
+<http://example.org/carX> <http://example.org/hasOwner> <http://example.org/alice> .
+<http://example.org/carY> <http://example.org/hasOwner> <http://example.org/alice> .
+<http://example.org/hasOwner> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#InverseFunctionalProperty> .
+<http://example.org/hasSsn> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#FunctionalProperty> .
+<http://example.org/p1> <http://example.org/hasSsn> "111-11-1111" .
+<http://example.org/p2> <http://example.org/hasSsn> "111-11-1111" .

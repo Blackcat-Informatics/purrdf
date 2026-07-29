@@ -1,0 +1,81 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# The closed set of ways PurRDF's OWL-RL closure is allowed to differ from the `owlrl`
+# reference engine (PyPI, pinned to 7.1.4) over `crates/entail/tests/owlrl-corpus/`.
+#
+# `crates/entail/tests/owlrl_oracle.rs`'s `goldens_match_owlrl_reference` classifies every
+# triple present in exactly one engine's closure and asserts the SET of kinds observed
+# across the whole corpus equals this ledger exactly: an unlisted kind fails the gate (a
+# real, unexplained divergence), and a listed kind that stops occurring also fails it
+# (XPASS discipline — this ledger only ever shrinks on purpose, never drifts). The
+# comparison is over `owlrl.OWLRL_Semantics` specifically (not the combined
+# `RDFS_OWLRL_Semantics`, which always runs full RDFS entailment beyond OWL 2 RL's own
+# Tables 4-9); see the module docs in `owlrl_oracle.rs` for why that is the matching
+# profile.
+#
+# Every entry below names the `RuleId` responsible and the specification clause that
+# makes PurRDF's answer the correct one. Three entries are `owlrl` asserting something
+# beyond OWL 2 RL/RDF's own rule tables (a generalized-RDF conclusion, or a datatype the
+# profile does not list); one is PurRDF over-asserting relative to `owlrl`, and it is
+# PurRDF's own already-documented non-normative extension, not a gap; the remaining four
+# are places where `owlrl` itself UNDER-asserts relative to the OWL 2 RL/RDF rule tables —
+# a genuine incompleteness in the reference engine's own hard-coded optimization, not a
+# PurRDF gap — which this independent oracle exists precisely to be able to find.
+#
+# `dt-diff` has no entry: owlrl's own source (`OWLRL.py::_one_time_rules_datatypes`)
+# skips the literal-value comparisons dt-eq and dt-diff need ("This rules are skipped on
+# purpose at the moment" — its dt-eq output this corpus DOES observe is plain reflexivity
+# from the generic eq-ref rule, not a real cross-literal value comparison), so neither
+# engine's closure ever holds a dt-diff conclusion over this corpus and there is nothing
+# to ledger for it.
+#
+# EXPECTED_DIVERGENCE_COUNT in owlrl_oracle.rs must equal the entry count below (8).
+
+[[divergence]]
+id = "dt-type1-datatype-map-superset"
+rule_id = "dt-type1"
+citation = "OWL 2 Profiles §4.2.1 (Datatype Maps) lists exactly thirty-two datatypes supported in OWL 2 RL; PurRDF transcribes that list verbatim as SUPPORTED_DATATYPES in crates/entail/src/calculus/dt.rs."
+description = "owlrl's own OWL_RL_Datatypes list (owlrl/XsdDatatypes.py) includes four datatypes beyond the profile's thirty-two — rdf:HTML, rdf:langString, xsd:date and xsd:time — and dt-type1 types each of them rdfs:Datatype (plus owl:sameAs reflexivity) unconditionally, on every input including the empty graph. PurRDF's dt-type1 quantifies over exactly the profile's list and correctly omits all four; owlrl's superset is its own implementation choice, not a normative OWL 2 RL conclusion."
+
+[[divergence]]
+id = "dt-type2-generalized-rdf"
+rule_id = "dt-type2"
+citation = "OWL 2 Profiles §4.3 Table 8, dt-type2. Its conclusion T(lt, rdf:type, dt) has a LITERAL as the triple's subject, which RDF 1.2's abstract syntax (and every RDF concrete syntax) disallows outside a generalized reading; see purrdf_entail::Construct::GeneralizedRdf."
+description = "owlrl represents a literal directly as an rdflib Graph subject and asserts dt-type2's conclusion with no restriction (both the literal's own exact datatype and, through owlrl's datatype-subsumption table, any datatype whose value space is a superset — e.g. an xsd:integer literal is also typed xsd:decimal). PurRDF's dt-type2 reaches the identical conclusions but withholds every one of them at the materialization boundary because their subject is a literal; a run that met one reports the Construct::GeneralizedRdf boundary rather than silently omitting it."
+
+[[divergence]]
+id = "dt-eq-generalized-rdf"
+rule_id = "dt-eq"
+citation = "OWL 2 Profiles §4.3 Table 8, dt-eq. Its conclusion lt1 owl:sameAs lt2 has a literal subject for the same reason dt-type2's does; see purrdf_entail::Construct::GeneralizedRdf."
+description = "For a literal equal to itself (or to another literal with the same data value), owlrl asserts the reflexive/symmetric owl:sameAs triple with a literal subject. PurRDF withholds it at the same GeneralizedRdf boundary as dt-type2, for the same reason."
+
+[[divergence]]
+id = "ext-eq-diff-sym"
+rule_id = "ext-eq-diff-sym"
+citation = "No rule of OWL 2 Profiles §4.3 Tables 4-9 concludes owl:differentFrom in either direction — eq-diff1, eq-diff2 and eq-diff3 all conclude inconsistency, never a positive differentFrom triple. RuleId::is_extension (crates/entail/src/rules.rs) marks ext-eq-diff-sym as exactly such a non-normative addition."
+description = "Given only `x owl:differentFrom y`, PurRDF's OWL-RL lane also asserts the sound, symmetric `y owl:differentFrom x` as its one declared, non-normative extension beyond OWL 2 RL/RDF. owlrl implements the profile strictly and asserts only the input direction. PurRDF is not wrong to add it — the extension is sound under the semantics of owl:differentFrom and is reported separately from `rules-fired` on every ReasoningReport — but it is additional to what OWL 2 RL/RDF itself licenses, so a strict-profile reference will never produce it."
+
+[[divergence]]
+id = "scm-sco-reflexive-through-equivalence"
+rule_id = "scm-sco"
+citation = "OWL 2 Profiles §4.3 Table 9, scm-sco: `?c1 rdfs:subClassOf ?c2`, `?c2 rdfs:subClassOf ?c3` ⇒ `?c1 rdfs:subClassOf ?c3`. The rule carries no `rdf:type owl:Class` premise, so it applies unconditionally, including the instantiation `?c3 = ?c1`."
+description = "Given only `C3 owl:equivalentClass C4` (neither class independently typed owl:Class), scm-eqc1 gives both `C3 rdfs:subClassOf C4` and `C4 rdfs:subClassOf C3`; scm-sco then licenses the transitive closure `C3 rdfs:subClassOf C3` (and symmetrically for C4). owlrl's OWLRL.py hard-codes a skip for this exact case — its scm-sco handler's comment reads 'Optimize out the trivial identity case (set elsewhere already)' — but 'elsewhere' is scm-cls, which only fires from an explicit `rdf:type owl:Class` this fixture deliberately omits, so the optimization silently drops a conclusion the rule table licenses. PurRDF has no such shortcut and derives it. This is an incompleteness in the reference engine, not a PurRDF gap."
+
+[[divergence]]
+id = "scm-eqc2-reflexive-through-equivalence"
+rule_id = "scm-eqc2"
+citation = "OWL 2 Profiles §4.3 Table 9, scm-eqc2: `?c1 rdfs:subClassOf ?c2`, `?c2 rdfs:subClassOf ?c1` ⇒ `?c1 owl:equivalentClass ?c2`, applied with `?c1 = ?c2 = C3` once `C3 rdfs:subClassOf C3` is asserted."
+description = "Downstream of the same root cause as scm-sco-reflexive-through-equivalence: because owlrl never asserts the reflexive `C3 rdfs:subClassOf C3` triple, it never reaches the premises that would fire scm-eqc2 for `C3 owl:equivalentClass C3`. PurRDF asserts the premise and therefore the conclusion. An incompleteness in the reference engine, not a PurRDF gap."
+
+[[divergence]]
+id = "scm-spo-reflexive-through-equivalence"
+rule_id = "scm-spo"
+citation = "OWL 2 Profiles §4.3 Table 9, scm-spo: `?p1 rdfs:subPropertyOf ?p2`, `?p2 rdfs:subPropertyOf ?p3` ⇒ `?p1 rdfs:subPropertyOf ?p3`. No `rdf:type owl:ObjectProperty`/`owl:DatatypeProperty` premise, so it applies unconditionally, including `?p3 = ?p1`."
+description = "The property-axiom mirror of scm-sco-reflexive-through-equivalence: given only `name owl:equivalentProperty fullName` (neither typed as a property class), scm-eqp1 gives both subPropertyOf directions and scm-spo's transitive closure licenses the reflexive `name rdfs:subPropertyOf name`. owlrl's OWLRL.py hard-codes the identical 'optimize out the trivial identity case' skip in its scm-spo handler, again assuming scm-op/scm-dp already fired — which needs an explicit property-class typing this fixture omits. An incompleteness in the reference engine, not a PurRDF gap."
+
+[[divergence]]
+id = "scm-eqp2-reflexive-through-equivalence"
+rule_id = "scm-eqp2"
+citation = "OWL 2 Profiles §4.3 Table 9, scm-eqp2: `?p1 rdfs:subPropertyOf ?p2`, `?p2 rdfs:subPropertyOf ?p1` ⇒ `?p1 owl:equivalentProperty ?p2`, applied reflexively once `name rdfs:subPropertyOf name` is asserted."
+description = "Downstream of the same root cause as scm-spo-reflexive-through-equivalence: owlrl never asserts the reflexive subPropertyOf triple, so it never reaches the premises for the reflexive `name owl:equivalentProperty name`. PurRDF asserts the premise and therefore the conclusion. An incompleteness in the reference engine, not a PurRDF gap."
