@@ -11,11 +11,12 @@
 //! Native, wasm-clean entailment for the PurRDF [`RdfDataset`] IR.
 //!
 //! A family of engines sits behind one façade, each the right tool for its regime.
-//! The `rdfs` engine is a forward-materialization ("chase") reasoner: it closes a
-//! dataset's default graph under a fixed RDFS / OWL-RL rule set to a fixpoint via a
-//! native semi-naive evaluator over [`RdfDataset`] terms (no Nemo, no `tokio`, no
-//! string round-trip), so this crate stays `wasm32`-clean and MIT/Apache. `Simple`
-//! is the identity closure; `RDFS` and `OWL-RL` run the chase.
+//! The forward-materialization ("chase") engine closes a dataset's default graph under a
+//! fixed RDF / RDFS / OWL-RL rule set to a fixpoint. That rule set is not written twice:
+//! [`calculus_program`] renders it as DL clauses, and [`materialize`] evaluates exactly
+//! those clauses through `purrdf-datalog`'s native semi-naive evaluator (no Nemo, no
+//! `tokio`, no external reasoner), so this crate stays `wasm32`-clean and MIT/Apache.
+//! `Simple` is the identity closure; `RDF`, `RDFS` and `OWL-RL` run the declared program.
 //!
 //! The open-world `OWL-Direct` (Description-Logic tableau) and `RIF` (rule engine)
 //! regimes need inputs the plain [`materialize`] façade does not have (the query's
@@ -48,9 +49,9 @@ use std::sync::Arc;
 use purrdf_core::RdfDataset;
 
 pub(crate) mod calculus;
+pub(crate) mod engine;
 pub(crate) mod interner;
 pub(crate) mod owl_dl;
-pub(crate) mod rdfs;
 pub mod report;
 pub mod rif;
 mod rif_xml;
@@ -116,6 +117,18 @@ pub enum EntailError {
     /// A knowledge-base or rule document was malformed (e.g. an ill-formed OWL
     /// class-expression graph or an unrecognized RIF construct).
     Parse(String),
+    /// The declared calculus could not be evaluated to a fixpoint.
+    ///
+    /// [`materialize`] runs [`calculus_program`] through `purrdf-datalog`'s semi-naive
+    /// evaluator, and that evaluator refuses rather than approximates: a program it has no
+    /// semantics for, and — the case a caller will actually meet — an input that passes
+    /// one of its three fixed evaluation ceilings. A budget refusal is TOTAL, which is why
+    /// it is an error and not a boundary: there is no partial closure to hand back with a
+    /// note attached, and a truncated closure presented as a complete one is exactly the
+    /// failure a [`ReasoningReport`] exists to prevent. The carried
+    /// [`EvalError`](purrdf_datalog::seminaive::EvalError) names which ceiling and what
+    /// the run had consumed when it stopped.
+    Evaluate(purrdf_datalog::seminaive::EvalError),
     /// The knowledge base is inconsistent: every query would be entailed, so no
     /// meaningful answer set exists. A hard failure rather than a silent default.
     Inconsistent,
@@ -127,6 +140,7 @@ impl std::fmt::Display for EntailError {
             Self::Unsupported(r) => write!(f, "entailment regime {r:?} is not materializable"),
             Self::Build(msg) => write!(f, "entailment build error: {msg}"),
             Self::Parse(msg) => write!(f, "entailment parse error: {msg}"),
+            Self::Evaluate(error) => write!(f, "entailment evaluation error: {error}"),
             Self::Inconsistent => write!(f, "knowledge base is inconsistent"),
         }
     }
@@ -155,10 +169,12 @@ impl std::error::Error for EntailError {}
 /// # Errors
 ///
 /// [`EntailError::Unsupported`] for `OWL-Direct`/`RIF`/`D` (regimes that need extra
-/// inputs or are a spec-inherent boundary); [`EntailError::Build`] if the derived
-/// dataset cannot be frozen. An error is the absence of a run, so it carries no report:
-/// [`EntailError::Unsupported`] already names the regime it refused, and nothing was
-/// closed for a report to describe.
+/// inputs or are a spec-inherent boundary); [`EntailError::Evaluate`] if the run passes
+/// one of `purrdf-datalog`'s three fixed evaluation ceilings; [`EntailError::Build`] if
+/// the derived dataset cannot be frozen. An error is the absence of a run, so it carries
+/// no report: [`EntailError::Unsupported`] already names the regime it refused, an
+/// exhausted budget carries its own accurate consumption figures, and nothing was closed
+/// for a report to describe.
 ///
 /// ```
 /// use purrdf_entail::{Regime, materialize};
@@ -167,12 +183,17 @@ impl std::error::Error for EntailError {}
 /// let mut builder = RdfDatasetBuilder::new();
 /// let cat = builder.intern_iri("http://example.org/Cat");
 /// let animal = builder.intern_iri("http://example.org/Animal");
+/// let tom = builder.intern_iri("http://example.org/tom");
 /// let sub = builder.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
+/// let ty = builder.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
 /// builder.push_quad(cat, sub, animal, None);
+/// builder.push_quad(tom, ty, cat, None);
 /// let dataset = builder.freeze().expect("freeze");
 ///
+/// // rdfs9 re-types the instance: two input quads in, three out.
 /// let (closure, report) = materialize(&dataset, Regime::Rdfs).expect("rdfs");
-/// assert!(closure.quad_refs().count() > 1);
+/// assert_eq!(closure.quad_refs().count(), 3);
+/// assert_eq!(report.rules_fired(), [(purrdf_entail::RuleId::Rdfs9, 1)]);
 /// // RDFS defines 18 patterns; this crate fires 9, and the report says so.
 /// assert_eq!(report.completeness().missing().len(), 9);
 /// assert!(!report.overclaims());
@@ -182,10 +203,8 @@ pub fn materialize(
     regime: Regime,
 ) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
     let (closure, stats) = match regime {
-        Regime::Simple => (rdfs::copy_of(ds)?, report::ChaseStats::none()),
-        Regime::Rdf => rdfs::close_rdf(ds)?,
-        Regime::Rdfs => rdfs::close(ds, false)?,
-        Regime::OwlRl => rdfs::close(ds, true)?,
+        Regime::Simple => (engine::copy_of(ds)?, report::RunStats::none()),
+        Regime::Rdf | Regime::Rdfs | Regime::OwlRl => engine::close(ds, regime)?,
         Regime::OwlDirect | Regime::Rif | Regime::D => {
             return Err(EntailError::Unsupported(regime));
         }
@@ -845,6 +864,118 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A BLANK NODE survives the closure, in both positions it may occupy, and two blank
+    /// nodes that differ only in SCOPE stay two nodes.
+    ///
+    /// The evaluator interns a term by its lexical surface, so a blank node has to be
+    /// rendered to one and read back — and a scope is part of a blank node's identity
+    /// (C0.2) while being absent from any standard surface syntax. Collapsing two scopes
+    /// into one label would silently merge two individuals, which is unsound rather than
+    /// merely lossy, so the fixture asserts the pair stays distinct through a rule that
+    /// touches both positions.
+    #[test]
+    fn blank_nodes_survive_the_closure_and_their_scopes_do_not_collapse() {
+        use purrdf_core::BlankScope;
+
+        let mut b = RdfDatasetBuilder::new();
+        let sub = iri(&mut b, RDFS_SUBCLASSOF);
+        let ty = iri(&mut b, RDF_TYPE);
+        let bb = iri(&mut b, B);
+        let first = b.intern_blank("shared", BlankScope::DEFAULT);
+        let second = b.intern_blank("shared", BlankScope(7));
+        let class = b.intern_blank("class", BlankScope::DEFAULT);
+        // `_:class ⊑ B`, and two same-labelled blanks from different scopes typed by it.
+        b.push_quad(class, sub, bb, None);
+        b.push_quad(first, ty, class, None);
+        b.push_quad(second, ty, class, None);
+        let ds = b.freeze().expect("freeze");
+
+        let (closed, report) = materialize(&ds, Regime::Rdfs).expect("rdfs");
+        // rdfs9 re-types BOTH blank subjects, and credits itself twice — one per node.
+        assert_eq!(report.rules_fired(), [(RuleId::Rdfs9, 2)]);
+        let typed: Vec<TermValue> = closed
+            .quads()
+            .filter(|q| {
+                closed.term_value(q.p) == TermValue::iri(RDF_TYPE)
+                    && closed.term_value(q.o) == TermValue::iri(B)
+            })
+            .map(|q| closed.term_value(q.s))
+            .collect();
+        assert_eq!(
+            typed.len(),
+            2,
+            "two scopes must stay two subjects: {typed:?}"
+        );
+        for value in &typed {
+            let (label, _) = value.as_blank().expect("a blank subject stayed blank");
+            assert_eq!(label, "shared");
+        }
+        assert_ne!(typed[0], typed[1], "the two scopes collapsed into one node");
+        // The blank OBJECT position round-trips too: `_:class ⊑ B` is still about `_:class`.
+        assert!(
+            closed.quads().any(|q| {
+                closed.term_value(q.p) == TermValue::iri(RDFS_SUBCLASSOF)
+                    && closed.term_value(q.s).as_blank().map(|(l, _)| l) == Some("class")
+            }),
+            "the blank subject of the schema triple was not carried through"
+        );
+    }
+
+    /// A ceiling is a REFUSAL, and it reaches the caller as one.
+    ///
+    /// `materialize` evaluates the declared program through `purrdf-datalog`, and that
+    /// evaluator holds three fixed ceilings. There is no partial answer behind one: a
+    /// truncated closure returned as a complete one is precisely the failure a
+    /// [`ReasoningReport`] exists to prevent, so an exhausted budget is
+    /// [`EntailError::Evaluate`] and the closure is not produced at all.
+    ///
+    /// The input is the smallest cross product that passes a ceiling: `p` carries 360
+    /// `rdfs:domain` declarations and 380 triples use `p`, so rdfs2 alone must conclude
+    /// 136 800 typings — more than [`MAX_STORED_FACTS`](purrdf_datalog::seminaive::MAX_STORED_FACTS)
+    /// admits. The report is asserted to carry the OBSERVATION that proved the ceiling was
+    /// passed rather than the ceiling itself, because a figure rounded down to the limit
+    /// would tell a caller nothing about how far over they are.
+    #[test]
+    fn an_exhausted_budget_is_a_refusal_with_an_accurate_report() {
+        use purrdf_datalog::seminaive::{BudgetResource, EvalError, MAX_STORED_FACTS};
+
+        /// `rdfs:domain` declarations on `p`.
+        const CLASSES: usize = 360;
+        /// Triples that use `p`.
+        const TRIPLES: usize = 380;
+
+        let mut b = RdfDatasetBuilder::new();
+        let p = iri(&mut b, "http://example.org/p");
+        let domain = iri(&mut b, RDFS_DOMAIN);
+        for index in 0..CLASSES {
+            let class = iri(&mut b, &format!("http://example.org/C{index}"));
+            b.push_quad(p, domain, class, None);
+        }
+        for index in 0..TRIPLES {
+            let subject = iri(&mut b, &format!("http://example.org/x{index}"));
+            let object = iri(&mut b, &format!("http://example.org/y{index}"));
+            b.push_quad(subject, p, object, None);
+        }
+        let ds = b.freeze().expect("freeze");
+
+        let Err(EntailError::Evaluate(EvalError::BudgetExhausted { resource, report })) =
+            materialize(&ds, Regime::Rdfs)
+        else {
+            panic!("a cross product past a fixed ceiling must be refused, not truncated");
+        };
+        assert_eq!(resource, BudgetResource::StoredFacts);
+        assert!(
+            report.stored_facts() > MAX_STORED_FACTS,
+            "the report must carry the observation that passed the ceiling, not the \
+             ceiling: {} vs {MAX_STORED_FACTS}",
+            report.stored_facts()
+        );
+        // The refusal is the EVALUATOR's, not the façade's: the same input copies fine.
+        let (copied, simple) = materialize(&ds, Regime::Simple).expect("simple");
+        assert_eq!(copied.quad_refs().count(), CLASSES + TRIPLES);
+        assert_eq!(simple.budget().stored_facts(), 0);
     }
 
     #[test]

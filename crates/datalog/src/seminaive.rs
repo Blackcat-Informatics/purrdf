@@ -138,12 +138,13 @@ pub struct BudgetReport {
 impl BudgetReport {
     /// A report over three already-measured coordinates.
     ///
-    /// This crate's own evaluator fills the fields directly; the constructor exists for the
-    /// OTHER forward-chaining engines in the workspace — `purrdf-entail`'s hand-written
-    /// RDFS / OWL-RL chase above all — so that one type says "what did this evaluation
-    /// consume" for every engine rather than each growing its own near-miss. It takes
-    /// MEASUREMENTS, never limits: the three ceilings stay `const` and stay this crate's,
-    /// so nothing here re-opens the caller-supplied-budget door the crate docs close.
+    /// This crate's own evaluator fills the fields directly; the constructor exists so
+    /// that one type can say "what did this evaluation consume" for a run this crate did
+    /// not perform — `purrdf-entail`'s `Simple` lane, which copies a dataset and evaluates
+    /// no program at all, reports the zero measurement through here rather than growing a
+    /// second budget type for the case. It takes MEASUREMENTS, never limits: the three
+    /// ceilings stay `const` and stay this crate's, so nothing here re-opens the
+    /// caller-supplied-budget door the crate docs close.
     ///
     /// The coordinates mean exactly what they mean for [`evaluate`]: candidate solutions
     /// enumerated, facts held when evaluation stopped, and interned term surface bytes. An

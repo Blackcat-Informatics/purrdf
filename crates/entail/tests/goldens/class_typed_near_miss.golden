@@ -9,6 +9,44 @@
 # NEAR MISS for rdfs8 and rdfs10: C is typed, but not as rdfs:Class, and it is
 # not a subClassOf endpoint either — so neither the rdfs:Resource conclusion nor
 # the reflexive one is licensed.
+#
+# EVERY GOLDEN IN THIS CORPUS MOVED AT THE ENGINE SWAP — `materialize` stopped
+# running a hand-written chase and started evaluating the DL-clause program
+# `calculus_program(regime)` already declared. Three causes account for every byte,
+# and the fixture's own accounting below names which triples each one moved here.
+#
+#   1. THE UNLICENSED REFLEXIVES ARE GONE — a SPEC-CONFORMANCE FIX. The chase
+#      emitted `c rdfs:subClassOf c` for every subClassOf ENDPOINT and
+#      `p rdfs:subPropertyOf p` for every PREDICATE. rdfs10 requires `?c rdf:type
+#      rdfs:Class` and rdfs6 requires `?p rdf:type rdf:Property`, and the declared
+#      clauses say so, so those conclusions are drawn only where the specification
+#      licenses them. Both rules still fire — `property_typed` and `class_typed` are
+#      the fixtures that prove they were narrowed rather than switched off.
+#
+#   2. THE RDF LANE IS NOW A FIXPOINT — a BUG FIX. `close_rdf` walked the INPUT
+#      quads once and typed each predicate it saw, so it never applied rdfD2 to its
+#      own conclusions. `rdf:type` is a predicate of every one of them, so
+#      `rdf:type rdf:type rdf:Property` is entailed and was missing. It appears now
+#      in every RDF closure whose input did not already use `rdf:type` as a
+#      predicate; where the input did, the RDF closure is unchanged.
+#
+#   3. THE BUDGET IS THE EVALUATOR'S OWN MEASUREMENT. `join-steps`,
+#      `stored-facts` and `term-arena-bytes` are now `purrdf-datalog`'s
+#      `BudgetReport` rather than a tally the chase kept beside it, so all three
+#      move in every regime. They are the same three coordinates under the same
+#      three definitions, counted by the engine that did the work: `stored-facts`
+#      is the whole saturated store rather than one lane's private index, and
+#      `term-arena-bytes` counts the terms that actually entered the store rather
+#      than a vocabulary table interned whether or not the data mentioned it.
+#
+# WHAT MOVED IN THIS GOLDEN:
+#
+# Cause 2 does NOT apply: the input already uses rdf:type as a predicate, so the RDF
+# closure is unchanged and only its budget moves.
+# Cause 1 — RDFS and OWL-RL lose `rdf:type subPropertyOf rdf:type` and
+# `rdfs:subPropertyOf subPropertyOf rdfs:subPropertyOf` (rdfs6 2 -> 0). The near
+# miss still holds: neither `C rdfs:subClassOf rdfs:Resource` nor
+# `C rdfs:subClassOf C` is concluded, because C is not typed rdfs:Class.
 # exercises: rdfs8 rdfs10
 
 --- input (1 lines) ---
@@ -39,35 +77,30 @@
       rdfD2=1
   boundaries: (2)
       axiomatic-triples datatype-value-space
-  budget: join-steps=1 stored-facts=1 term-arena-bytes=47
+  budget: join-steps=2 stored-facts=2 term-arena-bytes=154
   contract-hash: e3dfc92e2575713a6a555ef1dc5688d9086fe0a41c8eb0dd27aff5579db33158
   inconsistency: none
   overclaims: false
 
 === regime RDFS ===
---- closure (3 lines) ---
+--- closure (1 lines) ---
 <http://example.org/C> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/NotAClass> .
-<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> .
-<http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> .
 --- report ---
   completeness: sound-incomplete
   missing: (9)
       rdfD1 rdfD1a rdfD2 rdfs1 rdfs4 rdfs12 rdfs13 rdfs14
       rdfs14a
-  rules-fired: (1)
-      rdfs6=2
+  rules-fired: (0)
   boundaries: (2)
       axiomatic-triples datatype-value-space
-  budget: join-steps=10 stored-facts=3 term-arena-bytes=642
+  budget: join-steps=0 stored-facts=1 term-arena-bytes=101
   contract-hash: cefc117c539b1191953fd5ad560ef4e275b59e9b6089040894f71113ea33674b
   inconsistency: none
   overclaims: false
 
 === regime OWL-RL ===
---- closure (3 lines) ---
+--- closure (1 lines) ---
 <http://example.org/C> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/NotAClass> .
-<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> .
-<http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> .
 --- report ---
   completeness: sound-incomplete
   missing: (66)
@@ -80,11 +113,10 @@
       dt-diff dt-not-type scm-cls scm-eqc2 scm-op scm-dp scm-eqp2 scm-dom1
       scm-dom2 scm-rng1 scm-rng2 scm-hv scm-svf1 scm-svf2 scm-avf1 scm-avf2
       scm-int scm-uni
-  rules-fired: (1)
-      rdfs6=2
+  rules-fired: (0)
   boundaries: (1)
       datatype-value-space
-  budget: join-steps=10 stored-facts=3 term-arena-bytes=642
+  budget: join-steps=0 stored-facts=1 term-arena-bytes=101
   contract-hash: 369fa3fbbe648a4b2c381015990cc3a2f78e606a40102d5feb3f9fabba07ce45
   inconsistency: none
   overclaims: false

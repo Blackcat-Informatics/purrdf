@@ -233,9 +233,61 @@ struct Fixture {
     /// Checked to parse as [`RuleId`]s; documentation for the reader, not an assertion
     /// about the closure (the registry below makes those, per rule).
     exercises: &'static [&'static str],
+    /// What moved in THIS golden at the engine swap, and why the new answer is licensed.
+    ///
+    /// Rendered into the golden under [`ENGINE_SWAP`], which states the three causes once;
+    /// these lines name the actual triples and tallies each cause moved here. A golden
+    /// regenerated without an entry is the defect this corpus exists to catch, so the
+    /// field is not `Option` and an empty slice is a claim — "this golden did not move" —
+    /// rather than an omission.
+    changed: &'static [&'static str],
     /// The input quads.
     quads: &'static [Quad],
 }
+
+/// The three causes of every byte that moved when `materialize` stopped running a
+/// hand-written chase and started evaluating [`purrdf_entail::calculus_program`].
+///
+/// Written into every golden's header, once, above the fixture's own [`Fixture::changed`]
+/// accounting — so a reader of one golden file sees both the general reason and the
+/// specific triples without having to hold the other twenty-eight in their head.
+///
+/// A fourth thing that could have moved did NOT, and its absence is asserted rather than
+/// assumed: `divergence_literal_subject` still reports the `generalized-rdf` boundary. A
+/// Datalog engine derives a literal-subject conclusion in its own term space and meets the
+/// RDF 1.2 IR only when the answer is materialized, so the failure mode was the boundary
+/// quietly disappearing while the triples still looked right. See
+/// `a_would_be_literal_subject_is_abandoned_and_reported`.
+const ENGINE_SWAP: &[&str] = &[
+    "EVERY GOLDEN IN THIS CORPUS MOVED AT THE ENGINE SWAP — `materialize` stopped",
+    "running a hand-written chase and started evaluating the DL-clause program",
+    "`calculus_program(regime)` already declared. Three causes account for every byte,",
+    "and the fixture's own accounting below names which triples each one moved here.",
+    "",
+    "  1. THE UNLICENSED REFLEXIVES ARE GONE — a SPEC-CONFORMANCE FIX. The chase",
+    "     emitted `c rdfs:subClassOf c` for every subClassOf ENDPOINT and",
+    "     `p rdfs:subPropertyOf p` for every PREDICATE. rdfs10 requires `?c rdf:type",
+    "     rdfs:Class` and rdfs6 requires `?p rdf:type rdf:Property`, and the declared",
+    "     clauses say so, so those conclusions are drawn only where the specification",
+    "     licenses them. Both rules still fire — `property_typed` and `class_typed` are",
+    "     the fixtures that prove they were narrowed rather than switched off.",
+    "",
+    "  2. THE RDF LANE IS NOW A FIXPOINT — a BUG FIX. `close_rdf` walked the INPUT",
+    "     quads once and typed each predicate it saw, so it never applied rdfD2 to its",
+    "     own conclusions. `rdf:type` is a predicate of every one of them, so",
+    "     `rdf:type rdf:type rdf:Property` is entailed and was missing. It appears now",
+    "     in every RDF closure whose input did not already use `rdf:type` as a",
+    "     predicate; where the input did, the RDF closure is unchanged.",
+    "",
+    "  3. THE BUDGET IS THE EVALUATOR'S OWN MEASUREMENT. `join-steps`,",
+    "     `stored-facts` and `term-arena-bytes` are now `purrdf-datalog`'s",
+    "     `BudgetReport` rather than a tally the chase kept beside it, so all three",
+    "     move in every regime. They are the same three coordinates under the same",
+    "     three definitions, counted by the engine that did the work: `stored-facts`",
+    "     is the whole saturated store rather than one lane's private index, and",
+    "     `term-arena-bytes` counts the terms that actually entered the store rather",
+    "     than a vocabulary table interned whether or not the data mentioned it.",
+];
 
 // ── The corpus ──────────────────────────────────────────────────────────────────
 //
@@ -254,6 +306,12 @@ const CORPUS: &[Fixture] = &[
             "of the lane and not of the data.",
         ],
         exercises: &[],
+        changed: &[
+            "The CLOSURE does not move: nothing fires on nothing, in any of the four regimes.",
+            "Cause 3 only — RDFS and OWL-RL report term-arena-bytes=0 where they reported 594.",
+            "The chase pre-interned its thirteen vocabulary constants before looking at the",
+            "data; a store interns a term when a term enters it, and none does here.",
+        ],
         quads: &[],
     },
     Fixture {
@@ -263,6 +321,13 @@ const CORPUS: &[Fixture] = &[
             "predicate is typed rdf:Property. Under Simple it is the identity closure.",
         ],
         exercises: &["rdfD2"],
+        changed: &[
+            "Cause 2 — RDF gains `rdf:type rdf:type rdf:Property` (rdfD2 1 -> 2).",
+            "Cause 1 — RDFS and OWL-RL lose `p rdfs:subPropertyOf p` and",
+            "`rdfs:subPropertyOf rdfs:subPropertyOf rdfs:subPropertyOf` (rdfs6 2 -> 0). Nothing",
+            "in this input is typed rdf:Property, so rdfs6 has no premise: the RDFS closure is",
+            "now the input alone, which is what one untyped triple entails under RDFS.",
+        ],
         quads: &[t(EX_X, EX_P, EX_Y)],
     },
     Fixture {
@@ -275,6 +340,17 @@ const CORPUS: &[Fixture] = &[
             "DEFAULT-GRAPH predicate, so it is not typed rdf:Property.",
         ],
         exercises: &["rdfD2"],
+        changed: &[
+            "Cause 2 — RDF gains `rdf:type rdf:type rdf:Property` (rdfD2 1 -> 2).",
+            "Cause 1 — RDFS and OWL-RL lose four triples (rdfs6 2 -> 0, rdfs10 2 -> 0):",
+            "`A rdfs:subClassOf A` and `B rdfs:subClassOf B` fired on the ENDPOINTS of the",
+            "input's subClassOf edge rather than on rdfs:Class instances, and",
+            "`rdfs:subClassOf rdfs:subPropertyOf rdfs:subClassOf` /",
+            "`rdfs:subPropertyOf rdfs:subPropertyOf rdfs:subPropertyOf` fired on predicates",
+            "rather than on rdf:Property instances.",
+            "What this fixture is FOR is untouched: the named-graph quad is still carried",
+            "through unchanged, still supplies no premise, and the boundary is still reported.",
+        ],
         quads: &[t_in(EX_X, EX_P, EX_Y, EX_G), t(EX_A, RDFS_SUBCLASSOF, EX_B)],
     },
     Fixture {
@@ -284,6 +360,12 @@ const CORPUS: &[Fixture] = &[
             "that predicate.",
         ],
         exercises: &["rdfs2", "prp-dom"],
+        changed: &[
+            "Cause 2 — RDF gains `rdf:type rdf:type rdf:Property` (rdfD2 2 -> 3).",
+            "Cause 1 — RDFS and OWL-RL lose the four reflexive subPropertyOf triples on the",
+            "predicates p, rdf:type, rdfs:domain and rdfs:subPropertyOf (rdfs6 4 -> 0).",
+            "rdfs2 / prp-dom is untouched: `x rdf:type A` is still concluded and still credited.",
+        ],
         quads: &[t(EX_P, RDFS_DOMAIN, EX_A), t(EX_X, EX_P, EX_Y)],
     },
     Fixture {
@@ -293,6 +375,12 @@ const CORPUS: &[Fixture] = &[
             "(q, not p), so the data triple's subject is not typed.",
         ],
         exercises: &["rdfs2", "prp-dom"],
+        changed: &[
+            "Cause 2 — RDF gains `rdf:type rdf:type rdf:Property` (rdfD2 2 -> 3).",
+            "Cause 1 — RDFS and OWL-RL lose the three reflexive subPropertyOf triples on the",
+            "predicates p, rdfs:domain and rdfs:subPropertyOf (rdfs6 3 -> 0). The near miss",
+            "still holds: `x rdf:type A` is absent, because the domain is declared on q.",
+        ],
         quads: &[t(EX_Q, RDFS_DOMAIN, EX_A), t(EX_X, EX_P, EX_Y)],
     },
     Fixture {
@@ -302,6 +390,12 @@ const CORPUS: &[Fixture] = &[
             "that predicate.",
         ],
         exercises: &["rdfs3", "prp-rng"],
+        changed: &[
+            "Cause 2 — RDF gains `rdf:type rdf:type rdf:Property` (rdfD2 2 -> 3).",
+            "Cause 1 — RDFS and OWL-RL lose the four reflexive subPropertyOf triples on the",
+            "predicates p, rdf:type, rdfs:range and rdfs:subPropertyOf (rdfs6 4 -> 0).",
+            "rdfs3 / prp-rng is untouched: `y rdf:type B` is still concluded and still credited.",
+        ],
         quads: &[t(EX_P, RDFS_RANGE, EX_B), t(EX_X, EX_P, EX_Y)],
     },
     Fixture {
@@ -311,12 +405,26 @@ const CORPUS: &[Fixture] = &[
             "(q, not p), so the data triple's object is not typed.",
         ],
         exercises: &["rdfs3", "prp-rng"],
+        changed: &[
+            "Cause 2 — RDF gains `rdf:type rdf:type rdf:Property` (rdfD2 2 -> 3).",
+            "Cause 1 — RDFS and OWL-RL lose the three reflexive subPropertyOf triples on the",
+            "predicates p, rdfs:range and rdfs:subPropertyOf (rdfs6 3 -> 0). The near miss",
+            "still holds: `y rdf:type B` is absent, because the range is declared on q.",
+        ],
         quads: &[t(EX_Q, RDFS_RANGE, EX_B), t(EX_X, EX_P, EX_Y)],
     },
     Fixture {
         name: "subproperty_chain",
         doc: &["rdfs5 / scm-spo: rdfs:subPropertyOf is transitive."],
         exercises: &["rdfs5", "scm-spo"],
+        changed: &[
+            "Cause 2 — RDF gains `rdf:type rdf:type rdf:Property` (rdfD2 1 -> 2).",
+            "Cause 1 — RDFS and OWL-RL lose `p subPropertyOf p`, `q subPropertyOf q`,",
+            "`r subPropertyOf r` and `rdfs:subPropertyOf subPropertyOf rdfs:subPropertyOf`",
+            "(rdfs6 4 -> 0): p, q and r appear only as subPropertyOf ENDPOINTS here, and an",
+            "endpoint is not an rdf:Property instance. rdfs5 / scm-spo is untouched — the",
+            "transitive `p subPropertyOf r` is still concluded and still credited.",
+        ],
         quads: &[
             t(EX_P, RDFS_SUBPROPERTYOF, EX_Q),
             t(EX_Q, RDFS_SUBPROPERTYOF, EX_R),
@@ -329,6 +437,12 @@ const CORPUS: &[Fixture] = &[
             "second edge starts at D rather than at q — so p is not a sub-property of r.",
         ],
         exercises: &["rdfs5", "scm-spo"],
+        changed: &[
+            "Cause 2 — RDF gains `rdf:type rdf:type rdf:Property` (rdfD2 1 -> 2).",
+            "Cause 1 — RDFS and OWL-RL lose the five reflexive subPropertyOf triples on D, p,",
+            "q, r and rdfs:subPropertyOf (rdfs6 5 -> 0). The near miss still holds: the broken",
+            "chain concludes nothing, and now the closure says exactly that.",
+        ],
         quads: &[
             t(EX_P, RDFS_SUBPROPERTYOF, EX_Q),
             t(EX_D, RDFS_SUBPROPERTYOF, EX_R),
@@ -341,6 +455,12 @@ const CORPUS: &[Fixture] = &[
             "uses the sub-property.",
         ],
         exercises: &["rdfs7", "prp-spo1"],
+        changed: &[
+            "Cause 2 — RDF gains `rdf:type rdf:type rdf:Property` (rdfD2 2 -> 3).",
+            "Cause 1 — RDFS and OWL-RL lose `p subPropertyOf p`, `q subPropertyOf q` and",
+            "`rdfs:subPropertyOf subPropertyOf rdfs:subPropertyOf` (rdfs6 3 -> 0).",
+            "rdfs7 / prp-spo1 is untouched: `x q y` is still concluded and still credited.",
+        ],
         quads: &[t(EX_P, RDFS_SUBPROPERTYOF, EX_Q), t(EX_X, EX_P, EX_Y)],
     },
     Fixture {
@@ -350,6 +470,12 @@ const CORPUS: &[Fixture] = &[
             "declared sub-property, so nothing is re-predicated into q.",
         ],
         exercises: &["rdfs7", "prp-spo1"],
+        changed: &[
+            "Cause 2 — RDF gains `rdf:type rdf:type rdf:Property` (rdfD2 2 -> 3).",
+            "Cause 1 — RDFS and OWL-RL lose the four reflexive subPropertyOf triples on p, q,",
+            "r and rdfs:subPropertyOf (rdfs6 4 -> 0). The near miss still holds: `x q y` is",
+            "absent, because the data triple uses r.",
+        ],
         quads: &[t(EX_P, RDFS_SUBPROPERTYOF, EX_Q), t(EX_X, EX_R, EX_Y)],
     },
     Fixture {
@@ -360,6 +486,15 @@ const CORPUS: &[Fixture] = &[
             "`p subPropertyOf p` is licensed by rdfs6 and by nothing else here.",
         ],
         exercises: &["rdfs6"],
+        changed: &[
+            "Cause 2 does NOT apply: the input already uses rdf:type as a predicate, so the RDF",
+            "closure is unchanged and only its budget moves.",
+            "Cause 1 — RDFS and OWL-RL lose `rdf:type subPropertyOf rdf:type` and",
+            "`rdfs:subPropertyOf subPropertyOf rdfs:subPropertyOf` (rdfs6 3 -> 1). The one",
+            "LICENSED conclusion stays: `p rdfs:subPropertyOf p`, from the premise",
+            "`p rdf:type rdf:Property` this fixture asserts. That is the whole point — rdfs6",
+            "was narrowed to its specification premise, not switched off.",
+        ],
         quads: &[t(EX_P, RDF_TYPE, RDF_PROPERTY)],
     },
     Fixture {
@@ -369,11 +504,21 @@ const CORPUS: &[Fixture] = &[
             "absent from the graph entirely, so `p subPropertyOf p` is not concluded.",
             "",
             "Note WHY the near miss removes p rather than merely un-typing it: the chase",
-            "fires the reflexive rule on every PREDICATE as well, which is one of the two",
-            "documented divergences from the spec-correct rule. The fixture",
-            "`divergence_broad_triggers` isolates that; this one isolates rdfs6 proper.",
+            "USED to fire the reflexive rule on every PREDICATE as well, so an un-typed p",
+            "still standing in predicate position would have been re-concluded anyway.",
+            "That is no longer so — `divergence_broad_triggers` is where the change is",
+            "accounted for — but the fixture stays as it is: a near miss that would still",
+            "hold under a broader rule is the stronger control, not the weaker one.",
         ],
         exercises: &["rdfs6"],
+        changed: &[
+            "Cause 2 does NOT apply: the input already uses rdf:type as a predicate, so the RDF",
+            "closure is unchanged and only its budget moves.",
+            "Cause 1 — RDFS and OWL-RL lose `rdf:type subPropertyOf rdf:type` and",
+            "`rdfs:subPropertyOf subPropertyOf rdfs:subPropertyOf` (rdfs6 3 -> 1); the licensed",
+            "`q rdfs:subPropertyOf q` stays. The near miss still holds: `p subPropertyOf p` is",
+            "absent, and now it is absent because p is absent rather than in spite of it.",
+        ],
         quads: &[t(EX_Q, RDF_TYPE, RDF_PROPERTY)],
     },
     Fixture {
@@ -383,6 +528,16 @@ const CORPUS: &[Fixture] = &[
             "and of itself.",
         ],
         exercises: &["rdfs8", "rdfs10"],
+        changed: &[
+            "Cause 2 does NOT apply: the input already uses rdf:type as a predicate, so the RDF",
+            "closure is unchanged and only its budget moves.",
+            "Cause 1 — RDFS and OWL-RL lose `rdfs:Resource rdfs:subClassOf rdfs:Resource`",
+            "(rdfs10 2 -> 1), which fired on the ENDPOINT of rdfs8's own conclusion and not on",
+            "an rdfs:Class instance, and the three reflexive subPropertyOf triples on rdf:type,",
+            "rdfs:subClassOf and rdfs:subPropertyOf (rdfs6 3 -> 0). Both licensed conclusions",
+            "stay: `C rdfs:subClassOf rdfs:Resource` (rdfs8) and `C rdfs:subClassOf C`",
+            "(rdfs10, on the premise `C rdf:type rdfs:Class` this fixture asserts).",
+        ],
         quads: &[t(EX_C, RDF_TYPE, RDFS_CLASS)],
     },
     Fixture {
@@ -393,12 +548,28 @@ const CORPUS: &[Fixture] = &[
             "the reflexive one is licensed.",
         ],
         exercises: &["rdfs8", "rdfs10"],
+        changed: &[
+            "Cause 2 does NOT apply: the input already uses rdf:type as a predicate, so the RDF",
+            "closure is unchanged and only its budget moves.",
+            "Cause 1 — RDFS and OWL-RL lose `rdf:type subPropertyOf rdf:type` and",
+            "`rdfs:subPropertyOf subPropertyOf rdfs:subPropertyOf` (rdfs6 2 -> 0). The near",
+            "miss still holds: neither `C rdfs:subClassOf rdfs:Resource` nor",
+            "`C rdfs:subClassOf C` is concluded, because C is not typed rdfs:Class.",
+        ],
         quads: &[t(EX_C, RDF_TYPE, EX_NOT_A_CLASS)],
     },
     Fixture {
         name: "subclass_instance",
         doc: &["rdfs9 / cax-sco: a sub-class assertion re-types an instance."],
         exercises: &["rdfs9", "cax-sco"],
+        changed: &[
+            "Cause 2 does NOT apply: the input already uses rdf:type as a predicate, so the RDF",
+            "closure is unchanged and only its budget moves.",
+            "Cause 1 — RDFS and OWL-RL lose `A rdfs:subClassOf A` and `B rdfs:subClassOf B`",
+            "(rdfs10 2 -> 0, fired on subClassOf endpoints) and the three reflexive",
+            "subPropertyOf triples on rdf:type, rdfs:subClassOf and rdfs:subPropertyOf",
+            "(rdfs6 3 -> 0). rdfs9 / cax-sco is untouched: `x rdf:type B` is still concluded.",
+        ],
         quads: &[t(EX_A, RDFS_SUBCLASSOF, EX_B), t(EX_X, RDF_TYPE, EX_A)],
     },
     Fixture {
@@ -408,6 +579,14 @@ const CORPUS: &[Fixture] = &[
             "sub-class the axiom names, so it is not re-typed into B.",
         ],
         exercises: &["rdfs9", "cax-sco"],
+        changed: &[
+            "Cause 2 does NOT apply: the input already uses rdf:type as a predicate, so the RDF",
+            "closure is unchanged and only its budget moves.",
+            "Cause 1 — RDFS and OWL-RL lose the same five triples as `subclass_instance`:",
+            "`A rdfs:subClassOf A`, `B rdfs:subClassOf B` (rdfs10 2 -> 0) and the reflexive",
+            "subPropertyOf triples on rdf:type, rdfs:subClassOf and rdfs:subPropertyOf",
+            "(rdfs6 3 -> 0). The near miss still holds: `x rdf:type B` is absent.",
+        ],
         quads: &[t(EX_A, RDFS_SUBCLASSOF, EX_B), t(EX_X, RDF_TYPE, EX_D)],
     },
     Fixture {
@@ -419,6 +598,17 @@ const CORPUS: &[Fixture] = &[
             "this fixture is the fixpoint's own test as well as rdfs11's.",
         ],
         exercises: &["rdfs11", "scm-sco", "rdfs9", "cax-sco"],
+        changed: &[
+            "Cause 2 does NOT apply: the input already uses rdf:type as a predicate, so the RDF",
+            "closure is unchanged and only its budget moves.",
+            "Cause 1 — RDFS and OWL-RL lose nine triples, 30 lines down to 21: the six",
+            "reflexive `Ci rdfs:subClassOf Ci` for A, B, C, D, E and F (rdfs10 6 -> 0, all six",
+            "fired on subClassOf endpoints) and the three reflexive subPropertyOf triples on",
+            "rdf:type, rdfs:subClassOf and rdfs:subPropertyOf (rdfs6 3 -> 0).",
+            "What this fixture is FOR is untouched: rdfs11 / scm-sco still contributes 10",
+            "triples and rdfs9 / cax-sco still contributes 5, so `A rdfs:subClassOf F` and",
+            "`x rdf:type F` are still reached — the multi-round fixpoint still closes.",
+        ],
         quads: &[
             t(EX_A, RDFS_SUBCLASSOF, EX_B),
             t(EX_B, RDFS_SUBCLASSOF, EX_C),
@@ -435,6 +625,13 @@ const CORPUS: &[Fixture] = &[
             "share no endpoint — so `A ⊑ F` is not derivable at any depth.",
         ],
         exercises: &["rdfs11", "scm-sco"],
+        changed: &[
+            "Cause 2 — RDF gains `rdf:type rdf:type rdf:Property` (rdfD2 1 -> 2).",
+            "Cause 1 — RDFS and OWL-RL lose `A rdfs:subClassOf A`, `B rdfs:subClassOf B`,",
+            "`E rdfs:subClassOf E` and `F rdfs:subClassOf F` (rdfs10 4 -> 0) and the reflexive",
+            "subPropertyOf triples on rdfs:subClassOf and rdfs:subPropertyOf (rdfs6 2 -> 0).",
+            "The near miss still holds: `A rdfs:subClassOf F` is absent at every depth.",
+        ],
         quads: &[
             t(EX_A, RDFS_SUBCLASSOF, EX_B),
             t(EX_E, RDFS_SUBCLASSOF, EX_F),
@@ -448,6 +645,14 @@ const CORPUS: &[Fixture] = &[
             "characteristic — so the two fixtures are each other's control.",
         ],
         exercises: &["prp-symp"],
+        changed: &[
+            "Cause 2 does NOT apply: the input already uses rdf:type as a predicate, so the RDF",
+            "closure is unchanged and only its budget moves.",
+            "Cause 1 — RDFS and OWL-RL lose the three reflexive subPropertyOf triples on p,",
+            "rdf:type and rdfs:subPropertyOf (rdfs6 3 -> 0). Under RDFS the closure is now the",
+            "input alone, which is correct: RDFS has no rule for owl:SymmetricProperty.",
+            "prp-symp is untouched — OWL-RL still mirrors both triples.",
+        ],
         quads: &[
             t(EX_P, RDF_TYPE, OWL_SYMMETRIC),
             t(EX_X, EX_P, EX_Y),
@@ -461,6 +666,14 @@ const CORPUS: &[Fixture] = &[
             "prp-symp; see `symmetric`.",
         ],
         exercises: &["prp-trp"],
+        changed: &[
+            "Cause 2 does NOT apply: the input already uses rdf:type as a predicate, so the RDF",
+            "closure is unchanged and only its budget moves.",
+            "Cause 1 — RDFS and OWL-RL lose the three reflexive subPropertyOf triples on p,",
+            "rdf:type and rdfs:subPropertyOf (rdfs6 3 -> 0). Under RDFS the closure is now the",
+            "input alone, which is correct: RDFS has no rule for owl:TransitiveProperty.",
+            "prp-trp is untouched — OWL-RL still composes `x p z`.",
+        ],
         quads: &[
             t(EX_P, RDF_TYPE, OWL_TRANSITIVE),
             t(EX_X, EX_P, EX_Y),
@@ -476,6 +689,13 @@ const CORPUS: &[Fixture] = &[
             "index into its two halves is observable rather than merely asserted.",
         ],
         exercises: &["prp-inv1", "prp-inv2"],
+        changed: &[
+            "Cause 2 — RDF gains `rdf:type rdf:type rdf:Property` (rdfD2 3 -> 4).",
+            "Cause 1 — RDFS and OWL-RL lose the four reflexive subPropertyOf triples on p, q,",
+            "rdfs:subPropertyOf and owl:inverseOf (rdfs6 4 -> 0). Both halves of the axiom are",
+            "untouched: prp-inv1 still mirrors `x p y` into q and prp-inv2 still mirrors",
+            "`u q v` into p, each still credited under its own id.",
+        ],
         quads: &[
             t(EX_P, OWL_INVERSEOF, EX_Q),
             t(EX_X, EX_P, EX_Y),
@@ -489,6 +709,14 @@ const CORPUS: &[Fixture] = &[
             "so neither mirror between p and q is licensed.",
         ],
         exercises: &["prp-inv1", "prp-inv2"],
+        changed: &[
+            "Cause 2 — RDF gains `rdf:type rdf:type rdf:Property` (rdfD2 3 -> 4).",
+            "Cause 1 — RDFS loses the four reflexive subPropertyOf triples on p, q,",
+            "rdfs:subPropertyOf and owl:inverseOf (rdfs6 4 -> 0); OWL-RL loses those four and",
+            "`r subPropertyOf r` as well (rdfs6 5 -> 0), r being a predicate only because",
+            "prp-inv1's own conclusion uses it. The near miss still holds: neither mirror",
+            "between p and q appears.",
+        ],
         quads: &[
             t(EX_P, OWL_INVERSEOF, EX_R),
             t(EX_X, EX_P, EX_Y),
@@ -503,6 +731,16 @@ const CORPUS: &[Fixture] = &[
             "equivalence predicate.",
         ],
         exercises: &["scm-eqc1"],
+        changed: &[
+            "Cause 2 — RDF gains `rdf:type rdf:type rdf:Property` (rdfD2 1 -> 2).",
+            "Cause 1 — RDFS loses `rdfs:subPropertyOf subPropertyOf rdfs:subPropertyOf` and",
+            "`owl:equivalentClass subPropertyOf owl:equivalentClass` (rdfs6 2 -> 0), leaving the",
+            "input alone, which is correct: RDFS has no rule for owl:equivalentClass. OWL-RL",
+            "loses those two and `rdfs:subClassOf subPropertyOf rdfs:subClassOf` (rdfs6 3 -> 0).",
+            "`A rdfs:subClassOf A` and `B rdfs:subClassOf B` STAY, and are not reflexive-rule",
+            "survivors: scm-eqc1 gives both `A subClassOf B` and `B subClassOf A`, and",
+            "rdfs11 / scm-sco composes each pair — the tally still reads scm-sco=2.",
+        ],
         quads: &[t(EX_A, OWL_EQUIVALENTCLASS, EX_B)],
     },
     Fixture {
@@ -512,6 +750,16 @@ const CORPUS: &[Fixture] = &[
             "MISS for scm-eqc1; see `equivalent_class`.",
         ],
         exercises: &["scm-eqp1"],
+        changed: &[
+            "Cause 2 — RDF gains `rdf:type rdf:type rdf:Property` (rdfD2 1 -> 2).",
+            "Cause 1 — RDFS and OWL-RL lose",
+            "`rdfs:subPropertyOf subPropertyOf rdfs:subPropertyOf` and",
+            "`owl:equivalentProperty subPropertyOf owl:equivalentProperty` (rdfs6 2 -> 0). The",
+            "RDFS closure is now the input alone, which is correct: RDFS has no rule for",
+            "owl:equivalentProperty. `A subPropertyOf A` and `B subPropertyOf B` STAY under",
+            "OWL-RL, licensed by rdfs5 / scm-spo over scm-eqp1's two edges (scm-spo=2), not by",
+            "the reflexive rule.",
+        ],
         quads: &[t(EX_A, OWL_EQUIVALENTPROPERTY, EX_B)],
     },
     Fixture {
@@ -526,6 +774,18 @@ const CORPUS: &[Fixture] = &[
             "triple contributes to neither total.",
         ],
         exercises: &["rdfs9", "cax-sco", "rdfs2", "prp-dom"],
+        changed: &[
+            "Cause 2 does NOT apply: the input already uses rdf:type as a predicate, so the RDF",
+            "closure is unchanged and only its budget moves.",
+            "Cause 1 — RDFS and OWL-RL lose `A rdfs:subClassOf A` and `C rdfs:subClassOf C`",
+            "(rdfs10 2 -> 0) and the five reflexive subPropertyOf triples on p, rdf:type,",
+            "rdfs:domain, rdfs:subClassOf and rdfs:subPropertyOf (rdfs6 5 -> 0).",
+            "THE SHARED CONCLUSION ITSELF DID NOT MOVE. `x rdf:type C` is still concluded and",
+            "is still credited to rdfs9 / cax-sco rather than to rdfs2 / prp-dom — but for a",
+            "stated reason now rather than by firing order: the evaluator picks a round's",
+            "winner by a total order over observable provenance, and rdfs9's sources",
+            "(`A subClassOf C`, `x a A`) sort before rdfs2's (`p domain C`, `x p y`).",
+        ],
         quads: &[
             t(EX_A, RDFS_SUBCLASSOF, EX_C),
             t(EX_X, RDF_TYPE, EX_A),
@@ -545,34 +805,26 @@ const CORPUS: &[Fixture] = &[
             "`x says <<( A ⊑ B )>>` into a `mentions` triple, and the object of that",
             "conclusion has to be re-interned.",
             "",
-            "WHY THIS GOLDEN CHANGED — one closure line, restated once in each of the two",
-            "regimes that derive it (RDFS and OWL-RL), and nothing else:",
-            "",
-            "  was: <example.org/x> <example.org/mentions> <rdfs:Resource> .",
-            "  now: <example.org/x> <example.org/mentions>",
-            "       <<( <example.org/A> <rdfs:subClassOf> <example.org/B> )>> .",
-            "",
-            "The old line was UNSOUND. Re-interning folded EVERY triple term to",
-            "rdfs:Resource on the way back into the dataset builder, on the stated",
-            "assumption that the RDFS/OWL-RL rules never derive one in that position.",
-            "rdfs7 / prp-spo1 does: it rewrites a triple's PREDICATE and copies its object",
-            "through unchanged. Nothing in this input entails `x mentions rdfs:Resource` —",
-            "the premises are `says ⊑ mentions` and `x says <<( A ⊑ B )>>`, and what rdfs7",
-            "licenses from them is `x mentions <<( A ⊑ B )>>`, for the object that was",
-            "actually there. That is the new line: a triple term is now rebuilt",
-            "structurally and recursively, so it re-materializes as itself.",
-            "",
-            "Nothing else in this golden moves, and nothing should. The chase is",
-            "untouched — it never looked inside the triple term before and still does not",
-            "— so both closures still hold 10 lines, the changed line keeps its sort",
-            "position (`<<(` sorts where `<http` did, immediately before the `x says`",
-            "line), and the rule tallies, the join-step / stored-fact /",
-            "term-arena budgets, the boundary lists and the contract hashes are all",
-            "byte-identical. Only the object term the re-interner emitted for that one",
-            "conclusion differs. The Simple and RDF closures are unchanged too: neither",
-            "regime fires rdfs7, so neither ever re-interned the triple term.",
+            "AN EARLIER FIX THIS FIXTURE PINS. The engine used to emit",
+            "`x mentions rdfs:Resource` for that conclusion: re-interning folded EVERY",
+            "triple term to rdfs:Resource on the way back into the dataset builder, on the",
+            "stated assumption that the RDFS/OWL-RL rules never derive one in that",
+            "position. rdfs7 / prp-spo1 does, and the substitution was UNSOUND — nothing",
+            "in this input entails `x mentions rdfs:Resource`. A triple term is now",
+            "rebuilt structurally and recursively, so it re-materializes as itself.",
         ],
         exercises: &["rdfs7", "prp-spo1"],
+        changed: &[
+            "Cause 2 — RDF gains `rdf:type rdf:type rdf:Property` (rdfD2 3 -> 4).",
+            "Cause 1 — RDFS and OWL-RL lose `A rdfs:subClassOf A` and `B rdfs:subClassOf B`",
+            "(rdfs10 2 -> 0) and the four reflexive subPropertyOf triples on says, mentions,",
+            "rdfs:subClassOf and rdfs:subPropertyOf (rdfs6 4 -> 0).",
+            "The line this fixture exists for is untouched: rdfs7 / prp-spo1 still concludes",
+            "`x mentions <<( A rdfs:subClassOf B )>>`, with the triple term carried through as",
+            "itself. The engine now interns a triple term as one lexical surface rather than as",
+            "one interner id, which is the same opacity by a different mechanism — rdfs14 /",
+            "rdfs14a still do not fire, and the triple-term boundary is still reported.",
+        ],
         quads: &[
             t(EX_SAYS, RDFS_SUBPROPERTYOF, EX_MENTIONS),
             t_quoted(EX_X, EX_SAYS, EX_A, RDFS_SUBCLASSOF, EX_B),
@@ -582,46 +834,71 @@ const CORPUS: &[Fixture] = &[
     Fixture {
         name: "divergence_literal_subject",
         doc: &[
-            "DOCUMENTED DIVERGENCE 1 of 2 — NARROWER CONCLUSIONS.",
+            "DOCUMENTED DIVERGENCE 1 of 2 — NARROWER CONCLUSIONS. It is not a divergence",
+            "of the CALCULUS: it is the RDF 1.2 IR declining to hold what the calculus",
+            "concludes, and it survives the engine swap for that reason.",
             "",
             "`p rdfs:range A` with `x p \"cat\"^^xsd:string` makes rdfs3 / prp-rng conclude",
             "`\"cat\" rdf:type A`, whose subject is a literal. That is a GENERALIZED-RDF",
-            "triple, which the RDF 1.2 dataset IR cannot represent, so the chase abandons",
-            "the conclusion, counts the drop, and reports a generalized-rdf boundary. The",
-            "golden captures that answer.",
+            "triple, which the RDF 1.2 dataset IR cannot represent, so the conclusion is",
+            "abandoned when the answer is materialized, the drop is counted, and a",
+            "generalized-rdf boundary is reported. The golden captures that answer.",
             "",
-            "EXPECTED DIRECTION OF CHANGE: the closure must NOT change — no engine may put",
-            "a literal in subject position, so the triple stays absent. What is at risk is",
-            "the EVIDENCE: a Datalog engine derives the generalized triple in its own term",
-            "space and only meets the boundary when it materializes back into the IR, so",
-            "the failure mode to watch for is the generalized-rdf boundary silently",
-            "disappearing from the report. The drop tally, and therefore join-steps, may",
-            "legitimately move; the boundary may not.",
+            "The generalized fact is NOT withheld from the calculus — it stays in the",
+            "evaluator's own term space and may still serve as a premise. Nothing here",
+            "gives it one, so this closure is the input alone either way; what the",
+            "distinction buys is that a REPRESENTABLE conclusion is never lost merely",
+            "because its derivation passed through an unrepresentable one.",
         ],
         exercises: &["rdfs3", "prp-rng"],
+        changed: &[
+            "Cause 2 — RDF gains `rdf:type rdf:type rdf:Property` (rdfD2 2 -> 3).",
+            "Cause 1 — RDFS and OWL-RL lose the three reflexive subPropertyOf triples on p,",
+            "rdfs:range and rdfs:subPropertyOf (rdfs6 3 -> 0).",
+            "THE DIVERGENCE THIS FIXTURE ISOLATES DID NOT MOVE, in either direction. No",
+            "conclusion puts the literal in subject position, `\"cat\" rdf:type A` is still",
+            "absent, and — the observable that was actually at risk — the generalized-rdf",
+            "boundary is still REPORTED in both regimes. The evaluator now derives that",
+            "conclusion in its own term space and abandons it when the answer is materialized",
+            "back into the RDF 1.2 IR, so the boundary had to survive a mechanism change, not",
+            "merely a rule change.",
+        ],
         quads: &[t(EX_P, RDFS_RANGE, EX_A), t_lit(EX_X, EX_P, "cat")],
     },
     Fixture {
         name: "divergence_broad_triggers",
         doc: &[
-            "DOCUMENTED DIVERGENCE 2 of 2 — BROADER TRIGGERS.",
+            "DOCUMENTED DIVERGENCE 2 of 2 — BROADER TRIGGERS. RESOLVED, in the",
+            "specification's favour, by the engine swap; this fixture is now the guard.",
             "",
             "Nothing here is typed rdfs:Class or rdf:Property. The spec-correct rules",
             "rdfs10 (`?c rdf:type rdfs:Class ⇒ ?c ⊑ ?c`) and rdfs6 (`?p rdf:type",
-            "rdf:Property ⇒ ?p subPropertyOf ?p`) therefore have no premise to fire on.",
-            "The current chase fires them anyway: reflexive subClassOf on every",
-            "subClassOf ENDPOINT, and reflexive subPropertyOf on every PREDICATE. Each is",
-            "sound — the first is rdfs10 composed with the domain and range axioms of",
-            "rdfs:subClassOf, the second is rdfs6 composed with rdfD2 — but neither is the",
-            "declared rule.",
+            "rdf:Property ⇒ ?p subPropertyOf ?p`) therefore have no premise to fire on,",
+            "and the closure is the input alone.",
             "",
-            "EXPECTED DIRECTION OF CHANGE: FEWER triples. A spec-correct engine will emit",
-            "none of `A ⊑ A`, `B ⊑ B`, `rdfs:subClassOf subPropertyOf rdfs:subClassOf` or",
-            "`p subPropertyOf p` for this input, so the closure SHRINKS and the rdfs6 /",
-            "rdfs10 tallies fall. That is a deliberate output change, and the diff against",
-            "this golden is where it must be acknowledged.",
+            "The hand-written chase fired them anyway: reflexive subClassOf on every",
+            "subClassOf ENDPOINT, and reflexive subPropertyOf on every PREDICATE. Each was",
+            "sound — the first is rdfs10 composed with the domain and range axioms of",
+            "rdfs:subClassOf, the second is rdfs6 composed with rdfD2 — but neither was the",
+            "declared rule, and the declared rule is what the report's contract hash names.",
+            "The five triples that went are listed under WHAT MOVED below.",
         ],
         exercises: &["rdfs6", "rdfs10"],
+        changed: &[
+            "Cause 2 — RDF gains `rdf:type rdf:type rdf:Property` (rdfD2 2 -> 3).",
+            "Cause 1, IN FULL — this is the fixture that isolates it. All five unlicensed",
+            "conclusions are gone from RDFS and OWL-RL (rdfs6 3 -> 0, rdfs10 2 -> 0):",
+            "",
+            "  A rdfs:subClassOf A                                    (rdfs10 on an endpoint)",
+            "  B rdfs:subClassOf B                                    (rdfs10 on an endpoint)",
+            "  p rdfs:subPropertyOf p                                 (rdfs6 on a predicate)",
+            "  rdfs:subClassOf rdfs:subPropertyOf rdfs:subClassOf     (rdfs6 on a predicate)",
+            "  rdfs:subPropertyOf rdfs:subPropertyOf rdfs:subPropertyOf  (rdfs6 on a predicate)",
+            "",
+            "Nothing here is typed rdfs:Class or rdf:Property, so the specification licenses",
+            "neither rule, and the closure is now the input alone. The direction is the one",
+            "predicted: FEWER triples.",
+        ],
         quads: &[t(EX_A, RDFS_SUBCLASSOF, EX_B), t(EX_X, EX_P, EX_Y)],
     },
 ];
@@ -765,6 +1042,17 @@ fn render_report(out: &mut String, report: &ReasoningReport) {
     let _ = writeln!(out, "{indent}overclaims: {}", report.overclaims());
 }
 
+/// Append `lines` as `#`-prefixed header comment lines, with a bare `#` for a blank.
+fn write_comment_block(out: &mut String, lines: &[&str]) {
+    for line in lines {
+        if line.is_empty() {
+            out.push_str("#\n");
+        } else {
+            let _ = writeln!(out, "# {line}");
+        }
+    }
+}
+
 /// Append a canonical N-Quads block under a `--- label (N lines) ---` banner.
 fn write_nquads(out: &mut String, label: &str, nquads: &str) {
     let count = nquads.lines().count();
@@ -788,13 +1076,11 @@ fn render_golden(fixture: &Fixture) -> String {
          #\n",
     );
     let _ = writeln!(out, "# fixture: {}", fixture.name);
-    for line in fixture.doc {
-        if line.is_empty() {
-            out.push_str("#\n");
-        } else {
-            let _ = writeln!(out, "# {line}");
-        }
-    }
+    write_comment_block(&mut out, fixture.doc);
+    out.push_str("#\n");
+    write_comment_block(&mut out, ENGINE_SWAP);
+    out.push_str("#\n# WHAT MOVED IN THIS GOLDEN:\n#\n");
+    write_comment_block(&mut out, fixture.changed);
     let _ = writeln!(out, "# exercises: {}", fixture.exercises.join(" "));
     out.push('\n');
 
@@ -1451,18 +1737,28 @@ fn a_shared_conclusion_is_credited_once() {
 /// DOCUMENTED DIVERGENCE 1 — NARROWER CONCLUSIONS. A would-be literal subject is
 /// abandoned, counted, and reported; the closure gains nothing.
 ///
-/// EXPECTED DIRECTION OF CHANGE: none, in the closure. No engine may put a literal in
-/// subject position, so `"cat" rdf:type A` must stay absent. The thing that can regress is
-/// the EVIDENCE — a Datalog engine derives the generalized triple in its own term space
-/// and only meets the boundary when it materializes back into the RDF 1.2 IR, so the
-/// failure mode is the generalized-rdf boundary quietly disappearing. The drop tally, and
-/// through it join-steps, may legitimately move.
+/// THE OBSERVABLE AT RISK IS THE BOUNDARY, NOT THE TRIPLES. No engine may put a literal in
+/// subject position, so `"cat" rdf:type A` stays absent whatever runs — the closure could
+/// not have moved and did not. What could have vanished silently is the EVIDENCE: the
+/// evaluator derives the generalized triple in its own term space and meets the RDF 1.2 IR
+/// only when the answer is materialized, so a materializer that simply skipped what it
+/// could not represent would produce a closure that looks exactly right and a report that
+/// no longer says anything was dropped. The boundary assertion below is the guard against
+/// precisely that, and it is the reason this test asserts the report and not only the
+/// quads.
 #[test]
 fn a_would_be_literal_subject_is_abandoned_and_reported() {
     let ds = build(fixture("divergence_literal_subject"));
     for regime in [Regime::Rdfs, Regime::OwlRl] {
         let (closed, report) = materialize(&ds, regime).expect("runnable regime");
         let nquads = canonicalize(&closed).nquads;
+        // The closure is the input, exactly: rdfs3's only candidate was abandoned, and
+        // nothing else here has a premise.
+        assert_eq!(
+            nquads,
+            canonicalize(&ds).nquads,
+            "{regime:?}: the closure must be the input alone"
+        );
         // The literal is still in the closure — it is an input OBJECT. What may never
         // appear is a line that STARTS with it.
         assert!(
@@ -1488,40 +1784,74 @@ fn a_would_be_literal_subject_is_abandoned_and_reported() {
     }
 }
 
-/// DOCUMENTED DIVERGENCE 2 — BROADER TRIGGERS. The chase fires the two reflexive rules on
-/// premises the specification does not license.
+/// DOCUMENTED DIVERGENCE 2 — BROADER TRIGGERS, RESOLVED. The two reflexive rules fire on
+/// their specification premises and on nothing else.
 ///
-/// `divergence_broad_triggers` types nothing as `rdfs:Class` or `rdf:Property`, so
-/// spec-correct rdfs10 and rdfs6 have nothing to fire on. Every triple asserted below is
-/// therefore one the current engine emits UNLICENSED. Each is sound as a composition —
-/// rdfs10 with the domain/range axioms of `rdfs:subClassOf`, rdfs6 with rdfD2 — but none is
-/// the declared rule.
+/// This replaces a test that asserted the opposite. That one was written to FAIL at the
+/// moment the engine swap landed, so that the output change had to be acknowledged rather
+/// than absorbed; this is the acknowledgement, and it states the new contract in both
+/// directions, because "the rule was narrowed" and "the rule was switched off" produce the
+/// same empty answer on the negative fixture alone.
 ///
-/// EXPECTED DIRECTION OF CHANGE: FEWER triples. A spec-correct engine emits none of these,
-/// so the closure SHRINKS and the rdfs6 / rdfs10 tallies fall. This test is written to
-/// FAIL at that moment, on purpose: it is where the output change has to be acknowledged
-/// rather than absorbed.
+/// * NEGATIVE — `divergence_broad_triggers` types nothing as `rdfs:Class` or
+///   `rdf:Property`, so neither rule has a premise, and none of the five conclusions the
+///   chase used to emit appears. Each was SOUND as a composition — rdfs10 with the
+///   domain/range axioms of `rdfs:subClassOf`, rdfs6 with rdfD2 — but neither composition
+///   is the declared rule, and the declared rule is what the report's contract hash names.
+/// * POSITIVE — `class_typed` and `property_typed` assert the premise the specification
+///   requires, and both rules still fire there.
 #[test]
-fn the_reflexive_rules_fire_on_unlicensed_premises() {
-    let lines = closure_lines("divergence_broad_triggers", Regime::Rdfs);
-    for (s, p, o) in [
-        // rdfs10 fired on subClassOf ENDPOINTS, not on rdfs:Class instances.
-        (EX_A, RDFS_SUBCLASSOF, EX_A),
-        (EX_B, RDFS_SUBCLASSOF, EX_B),
-        // rdfs6 fired on every PREDICATE, not on rdf:Property instances.
-        (EX_P, RDFS_SUBPROPERTYOF, EX_P),
-        (RDFS_SUBCLASSOF, RDFS_SUBPROPERTYOF, RDFS_SUBCLASSOF),
-    ] {
+fn the_reflexive_rules_fire_only_on_their_licensed_premises() {
+    for regime in [Regime::Rdfs, Regime::OwlRl] {
+        let lines = closure_lines("divergence_broad_triggers", regime);
+        for (s, p, o) in [
+            // rdfs10 used to fire on subClassOf ENDPOINTS, not on rdfs:Class instances.
+            (EX_A, RDFS_SUBCLASSOF, EX_A),
+            (EX_B, RDFS_SUBCLASSOF, EX_B),
+            // rdfs6 used to fire on every PREDICATE, not on rdf:Property instances.
+            (EX_P, RDFS_SUBPROPERTYOF, EX_P),
+            (RDFS_SUBCLASSOF, RDFS_SUBPROPERTYOF, RDFS_SUBCLASSOF),
+            (RDFS_SUBPROPERTYOF, RDFS_SUBPROPERTYOF, RDFS_SUBPROPERTYOF),
+        ] {
+            assert!(
+                !lines.contains(&nquads_line(s, p, o)),
+                "{regime:?}: <{s}> <{p}> <{o}> is emitted on an unlicensed premise"
+            );
+        }
+        // The premises the SPECIFICATION requires are genuinely absent, which is what
+        // makes the absence above the licensed answer rather than an accident.
+        assert!(!lines.contains(&nquads_line(EX_A, RDF_TYPE, RDFS_CLASS)));
+        assert!(!lines.contains(&nquads_line(EX_P, RDF_TYPE, RDF_PROPERTY)));
+        // Nothing at all is entailed here beyond the two input triples.
+        assert_eq!(
+            lines,
+            [
+                nquads_line(EX_A, RDFS_SUBCLASSOF, EX_B),
+                nquads_line(EX_X, EX_P, EX_Y),
+            ]
+            .into_iter()
+            .collect::<BTreeSet<String>>(),
+            "{regime:?}: this input entails nothing"
+        );
+
+        // NARROWED, NOT SWITCHED OFF: given the premise, each rule still concludes.
         assert!(
-            lines.contains(&nquads_line(s, p, o)),
-            "the broader trigger is gone: <{s}> <{p}> <{o}> is no longer emitted. That is \
-             the spec-correct answer — regenerate the goldens and retire this test."
+            closure_lines("class_typed", regime).contains(&nquads_line(
+                EX_C,
+                RDFS_SUBCLASSOF,
+                EX_C
+            )),
+            "{regime:?}: rdfs10 no longer fires on an rdfs:Class instance"
+        );
+        assert!(
+            closure_lines("property_typed", regime).contains(&nquads_line(
+                EX_P,
+                RDFS_SUBPROPERTYOF,
+                EX_P
+            )),
+            "{regime:?}: rdfs6 no longer fires on an rdf:Property instance"
         );
     }
-    // The premises the SPECIFICATION requires are genuinely absent, which is what makes
-    // the four conclusions above unlicensed rather than merely redundant.
-    assert!(!lines.contains(&nquads_line(EX_A, RDF_TYPE, RDFS_CLASS)));
-    assert!(!lines.contains(&nquads_line(EX_P, RDF_TYPE, RDF_PROPERTY)));
 }
 
 /// The corpus reaches every rule the chase fires, by ATTRIBUTION rather than by outcome.

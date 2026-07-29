@@ -4,8 +4,7 @@
 //! The RIF-Core forward-chaining ("bottom-up") rule evaluator.
 //!
 //! A definite Horn rule set is materialized to its least fixpoint by a
-//! deterministic semi-naive chase over interned `u32` triple ids, mirroring the
-//! frontier/delta discipline of `crate::rdfs`. The seed fact set is the source
+//! deterministic semi-naive chase over interned `u32` triple ids. The seed fact set is the source
 //! dataset's default-graph triples plus the rule set's ground facts; each round
 //! fires every rule where at least one body atom can bind a *frontier* (newly
 //! derived) fact, joining the remaining atoms against the whole accumulated set.

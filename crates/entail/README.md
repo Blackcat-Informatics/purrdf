@@ -26,13 +26,13 @@ external reasoner, no `tokio`, and no string round-trip.
 
 | Entry point | Regime(s) | Engine |
 | --- | --- | --- |
-| `materialize(ds, regime)` | `Simple`, `RDF`, `RDFS`, `OWL-RL` | Forward-materialization ("chase") over a fixed rule set via a native semi-naive fixpoint. Returns `(closure, ReasoningReport)` — the report is not optional. |
+| `materialize(ds, regime)` | `Simple`, `RDF`, `RDFS`, `OWL-RL` | Forward materialization ("chase") of `calculus_program(regime)` through `purrdf-datalog`'s native semi-naive fixpoint — the declared rule set *is* the executable, so the contract hash a report carries names the clauses that ran. Returns `(closure, ReasoningReport)` — the report is not optional. |
 | `materialize_dl(...)` | `OWL-Direct` | Open-world OWL DL over an ALCOIQ tableau — needs the query's class expressions, so it is not reachable through the plain `materialize` façade. |
 | `materialize_rif(...)` | `RIF` | RIF-Core rule entailment over a parsed `RuleSet`. |
 | `parse_rif_xml(...)` / `resolve_rif_imports(...)` | `RIF` | Normative RIF-XML parsing with caller-owned, I/O-free import resolution. |
 | `Regime::from_iri(iri)` | — | Parse a `sparql:entailmentRegime` IRI to its enum. |
 | `rules(regime)` / `implemented(regime)` | — | The rule table a regime is *defined by*, and the subset this crate fires. Their difference is the measurable gap. |
-| `calculus_program(regime)` | — | The regime's calculus as DL-clause data, so its `purrdf-datalog` contract hash is recomputable by a consumer. |
+| `calculus_program(regime)` | — | The regime's calculus as DL-clause data — the very program `materialize` evaluates, so its `purrdf-datalog` contract hash is recomputable by a consumer. |
 
 `D` (datatype) entailment is a typed, spec-inherent boundary
 (`EntailError::Unsupported`) rather than a silent default.

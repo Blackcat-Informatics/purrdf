@@ -6,21 +6,63 @@
 #   cargo test -p purrdf-entail --test oracle -- --ignored --exact regenerate_goldens
 #
 # fixture: divergence_literal_subject
-# DOCUMENTED DIVERGENCE 1 of 2 — NARROWER CONCLUSIONS.
+# DOCUMENTED DIVERGENCE 1 of 2 — NARROWER CONCLUSIONS. It is not a divergence
+# of the CALCULUS: it is the RDF 1.2 IR declining to hold what the calculus
+# concludes, and it survives the engine swap for that reason.
 #
 # `p rdfs:range A` with `x p "cat"^^xsd:string` makes rdfs3 / prp-rng conclude
 # `"cat" rdf:type A`, whose subject is a literal. That is a GENERALIZED-RDF
-# triple, which the RDF 1.2 dataset IR cannot represent, so the chase abandons
-# the conclusion, counts the drop, and reports a generalized-rdf boundary. The
-# golden captures that answer.
+# triple, which the RDF 1.2 dataset IR cannot represent, so the conclusion is
+# abandoned when the answer is materialized, the drop is counted, and a
+# generalized-rdf boundary is reported. The golden captures that answer.
 #
-# EXPECTED DIRECTION OF CHANGE: the closure must NOT change — no engine may put
-# a literal in subject position, so the triple stays absent. What is at risk is
-# the EVIDENCE: a Datalog engine derives the generalized triple in its own term
-# space and only meets the boundary when it materializes back into the IR, so
-# the failure mode to watch for is the generalized-rdf boundary silently
-# disappearing from the report. The drop tally, and therefore join-steps, may
-# legitimately move; the boundary may not.
+# The generalized fact is NOT withheld from the calculus — it stays in the
+# evaluator's own term space and may still serve as a premise. Nothing here
+# gives it one, so this closure is the input alone either way; what the
+# distinction buys is that a REPRESENTABLE conclusion is never lost merely
+# because its derivation passed through an unrepresentable one.
+#
+# EVERY GOLDEN IN THIS CORPUS MOVED AT THE ENGINE SWAP — `materialize` stopped
+# running a hand-written chase and started evaluating the DL-clause program
+# `calculus_program(regime)` already declared. Three causes account for every byte,
+# and the fixture's own accounting below names which triples each one moved here.
+#
+#   1. THE UNLICENSED REFLEXIVES ARE GONE — a SPEC-CONFORMANCE FIX. The chase
+#      emitted `c rdfs:subClassOf c` for every subClassOf ENDPOINT and
+#      `p rdfs:subPropertyOf p` for every PREDICATE. rdfs10 requires `?c rdf:type
+#      rdfs:Class` and rdfs6 requires `?p rdf:type rdf:Property`, and the declared
+#      clauses say so, so those conclusions are drawn only where the specification
+#      licenses them. Both rules still fire — `property_typed` and `class_typed` are
+#      the fixtures that prove they were narrowed rather than switched off.
+#
+#   2. THE RDF LANE IS NOW A FIXPOINT — a BUG FIX. `close_rdf` walked the INPUT
+#      quads once and typed each predicate it saw, so it never applied rdfD2 to its
+#      own conclusions. `rdf:type` is a predicate of every one of them, so
+#      `rdf:type rdf:type rdf:Property` is entailed and was missing. It appears now
+#      in every RDF closure whose input did not already use `rdf:type` as a
+#      predicate; where the input did, the RDF closure is unchanged.
+#
+#   3. THE BUDGET IS THE EVALUATOR'S OWN MEASUREMENT. `join-steps`,
+#      `stored-facts` and `term-arena-bytes` are now `purrdf-datalog`'s
+#      `BudgetReport` rather than a tally the chase kept beside it, so all three
+#      move in every regime. They are the same three coordinates under the same
+#      three definitions, counted by the engine that did the work: `stored-facts`
+#      is the whole saturated store rather than one lane's private index, and
+#      `term-arena-bytes` counts the terms that actually entered the store rather
+#      than a vocabulary table interned whether or not the data mentioned it.
+#
+# WHAT MOVED IN THIS GOLDEN:
+#
+# Cause 2 — RDF gains `rdf:type rdf:type rdf:Property` (rdfD2 2 -> 3).
+# Cause 1 — RDFS and OWL-RL lose the three reflexive subPropertyOf triples on p,
+# rdfs:range and rdfs:subPropertyOf (rdfs6 3 -> 0).
+# THE DIVERGENCE THIS FIXTURE ISOLATES DID NOT MOVE, in either direction. No
+# conclusion puts the literal in subject position, `"cat" rdf:type A` is still
+# absent, and — the observable that was actually at risk — the generalized-rdf
+# boundary is still REPORTED in both regimes. The evaluator now derives that
+# conclusion in its own term space and abandons it when the answer is materialized
+# back into the RDF 1.2 IR, so the boundary had to survive a mechanism change, not
+# merely a rule change.
 # exercises: rdfs3 prp-rng
 
 --- input (2 lines) ---
@@ -42,52 +84,46 @@
   overclaims: false
 
 === regime RDF ===
---- closure (4 lines) ---
+--- closure (5 lines) ---
 <http://example.org/p> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
 <http://example.org/p> <http://www.w3.org/2000/01/rdf-schema#range> <http://example.org/A> .
 <http://example.org/x> <http://example.org/p> "cat" .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
 <http://www.w3.org/2000/01/rdf-schema#range> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
 --- report ---
   completeness: sound-incomplete
   missing: (2)
       rdfD1 rdfD1a
   rules-fired: (1)
-      rdfD2=2
+      rdfD2=3
   boundaries: (2)
       axiomatic-triples datatype-value-space
-  budget: join-steps=2 stored-facts=2 term-arena-bytes=62
+  budget: join-steps=5 stored-facts=5 term-arena-bytes=217
   contract-hash: e3dfc92e2575713a6a555ef1dc5688d9086fe0a41c8eb0dd27aff5579db33158
   inconsistency: none
   overclaims: false
 
 === regime RDFS ===
---- closure (5 lines) ---
+--- closure (2 lines) ---
 <http://example.org/p> <http://www.w3.org/2000/01/rdf-schema#range> <http://example.org/A> .
-<http://example.org/p> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://example.org/p> .
 <http://example.org/x> <http://example.org/p> "cat" .
-<http://www.w3.org/2000/01/rdf-schema#range> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#range> .
-<http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> .
 --- report ---
   completeness: sound-incomplete
   missing: (9)
       rdfD1 rdfD1a rdfD2 rdfs1 rdfs4 rdfs12 rdfs13 rdfs14
       rdfs14a
-  rules-fired: (1)
-      rdfs6=3
+  rules-fired: (0)
   boundaries: (3)
       generalized-rdf axiomatic-triples datatype-value-space
-  budget: join-steps=17 stored-facts=5 term-arena-bytes=696
+  budget: join-steps=4 stored-facts=3 term-arena-bytes=164
   contract-hash: cefc117c539b1191953fd5ad560ef4e275b59e9b6089040894f71113ea33674b
   inconsistency: none
   overclaims: false
 
 === regime OWL-RL ===
---- closure (5 lines) ---
+--- closure (2 lines) ---
 <http://example.org/p> <http://www.w3.org/2000/01/rdf-schema#range> <http://example.org/A> .
-<http://example.org/p> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://example.org/p> .
 <http://example.org/x> <http://example.org/p> "cat" .
-<http://www.w3.org/2000/01/rdf-schema#range> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#range> .
-<http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> .
 --- report ---
   completeness: sound-incomplete
   missing: (66)
@@ -100,11 +136,10 @@
       dt-diff dt-not-type scm-cls scm-eqc2 scm-op scm-dp scm-eqp2 scm-dom1
       scm-dom2 scm-rng1 scm-rng2 scm-hv scm-svf1 scm-svf2 scm-avf1 scm-avf2
       scm-int scm-uni
-  rules-fired: (1)
-      rdfs6=3
+  rules-fired: (0)
   boundaries: (2)
       generalized-rdf datatype-value-space
-  budget: join-steps=17 stored-facts=5 term-arena-bytes=696
+  budget: join-steps=4 stored-facts=3 term-arena-bytes=164
   contract-hash: 369fa3fbbe648a4b2c381015990cc3a2f78e606a40102d5feb3f9fabba07ce45
   inconsistency: none
   overclaims: false

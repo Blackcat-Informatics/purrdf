@@ -165,16 +165,19 @@ impl Construct {
             Self::TripleTerm => {
                 "an RDF 1.2 triple term is interned as one atomic term, so the chase never \
                  looks inside it: rdfs14 and rdfs14a (which replace a triple term with a \
-                 fresh blank node typed rdfs:Proposition) do not fire, and a triple term \
-                 reached in a subject or object position of a conclusion folds to \
-                 rdfs:Resource rather than being reconstructed"
+                 fresh blank node typed rdfs:Proposition) do not fire, and the closure \
+                 states nothing about the triple the term quotes; a conclusion built \
+                 AROUND such a term carries it through unchanged"
             }
             Self::GeneralizedRdf => {
-                "a conclusion whose subject position would hold a literal or a triple term \
-                 is a generalized-RDF triple, which the RDF 1.2 dataset IR cannot \
-                 represent; the chase drops such a conclusion rather than fabricating a \
-                 term for it, so rules that can conclude into subject position (rdfs3 / \
-                 prp-rng, prp-symp, prp-inv1, prp-inv2) are incomplete over literal objects"
+                "a conclusion whose subject position would hold a literal or a triple term, \
+                 or whose predicate position would hold anything but an IRI, is a \
+                 generalized-RDF triple, which the RDF 1.2 dataset IR cannot represent; \
+                 such a conclusion is derived in the evaluator's own term space and then \
+                 abandoned when the answer is materialized, rather than a term being \
+                 fabricated for it, so rules that can conclude into subject position \
+                 (rdfs3 / prp-rng, prp-symp, prp-inv1, prp-inv2) are incomplete over \
+                 literal objects"
             }
             Self::AxiomaticTriples => {
                 "RDF and RDFS Semantics fix infinite sets of axiomatic triples — the \
@@ -343,38 +346,51 @@ impl InconsistencyWitness {
 
 /// What one reasoning run consumed and produced, gathered by the engine that ran it.
 ///
-/// Purely a carrier between [`crate::rdfs`] and [`ReasoningReport::of_run`]; it is the
+/// Purely a carrier between [`crate::engine`] and [`ReasoningReport::of_run`]; it is the
 /// engine's measurements, not the report's shape.
+///
+/// The budget is the evaluator's OWN [`BudgetReport`], carried through rather than
+/// re-derived: `purrdf-datalog` counts candidate solutions, stored facts and term-arena
+/// bytes as it runs, and a second tally kept alongside it here could only ever agree with
+/// it by accident. What this crate adds is the two measurements the evaluator has no way
+/// to make — which rule a committed derivation is attributed to under the active regime's
+/// specification names, and how many conclusions the RDF 1.2 IR could not hold.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct ChaseStats {
-    /// Conclusions committed, per [`ChaseRule`], indexed by [`ChaseRule::index`].
+pub(crate) struct RunStats {
+    /// Conclusions committed AND materialized, per [`ChaseRule`], indexed by
+    /// [`ChaseRule::index`].
     pub(crate) fired: [u64; ChaseRule::COUNT],
-    /// Candidate conclusions enumerated, committed or not.
-    pub(crate) join_steps: u64,
-    /// Facts held when the chase stopped.
-    pub(crate) stored_facts: usize,
-    /// Interned term surface bytes held when the chase stopped.
-    pub(crate) term_arena_bytes: usize,
-    /// Conclusions dropped because their subject position would not be a legal RDF 1.2
-    /// subject — the [`Construct::GeneralizedRdf`] boundary's observation.
+    /// What the evaluation consumed of `purrdf-datalog`'s three fixed ceilings.
+    pub(crate) budget: BudgetReport,
+    /// Conclusions dropped because the RDF 1.2 IR cannot hold them — a literal or triple
+    /// term in subject position, or a non-IRI in predicate position. The
+    /// [`Construct::GeneralizedRdf`] boundary's observation.
     pub(crate) generalized_rdf_drops: u64,
 }
 
-impl ChaseStats {
+impl RunStats {
     /// The measurements of a run that evaluated nothing — the `Simple` identity closure.
-    pub(crate) const fn none() -> Self {
+    pub(crate) fn none() -> Self {
+        Self::of_budget(BudgetReport::new(0, 0, 0))
+    }
+
+    /// A fresh tally over an evaluation that consumed `budget`.
+    pub(crate) fn of_budget(budget: BudgetReport) -> Self {
         Self {
             fired: [0; ChaseRule::COUNT],
-            join_steps: 0,
-            stored_facts: 0,
-            term_arena_bytes: 0,
+            budget,
             generalized_rdf_drops: 0,
         }
     }
 
-    /// Credit one committed conclusion to `rule`.
+    /// Credit one committed, materialized conclusion to `rule`.
     pub(crate) const fn commit(&mut self, rule: ChaseRule) {
         self.fired[rule.index()] += 1;
+    }
+
+    /// Record one conclusion the RDF 1.2 IR could not hold.
+    pub(crate) const fn drop_generalized(&mut self) {
+        self.generalized_rdf_drops += 1;
     }
 }
 
@@ -437,13 +453,13 @@ pub struct ReasoningReport {
 
 impl ReasoningReport {
     /// Assemble the report for a run of `regime` over `ds` that measured `stats`.
-    pub(crate) fn of_run(ds: &RdfDataset, regime: Regime, stats: &ChaseStats) -> Self {
+    pub(crate) fn of_run(ds: &RdfDataset, regime: Regime, stats: &RunStats) -> Self {
         Self {
             regime,
             completeness: Completeness::for_regime(regime),
             rules_fired: fired_rules(regime, stats),
             boundaries: boundaries(ds, regime, stats),
-            budget: BudgetReport::new(stats.join_steps, stats.stored_facts, stats.term_arena_bytes),
+            budget: stats.budget,
             contract_hash: calculus_contract_hash(regime),
             // No chase path can reach an inconsistency; see [`InconsistencyWitness`].
             inconsistency: None,
@@ -470,13 +486,21 @@ impl ReasoningReport {
     ///
     /// # What a count means, exactly
     ///
-    /// One count is one triple this rule was the FIRST to add to the closure. The chase
-    /// enumerates candidate conclusions and commits the ones that are genuinely new; a
-    /// triple two rules both conclude is credited to whichever reached it first in the
-    /// chase's deterministic firing order, and the second rule's re-derivation is not
-    /// counted. The counts therefore sum to exactly the number of inferred triples in the
-    /// result, which is the sum a reader can check. They are NOT a measure of a rule's
-    /// total work: [`ReasoningReport::budget`]'s join-step count is.
+    /// One count is one triple this rule was CREDITED with adding to the closure. The
+    /// evaluator commits a derived fact once, and it records exactly one derivation for
+    /// it; a triple two rules both conclude is credited to one of them, and the second
+    /// rule's re-derivation is not counted. Which one is not an arrival accident:
+    /// `purrdf-datalog` picks the round's winner by a total order over observable
+    /// provenance — proof height, then summed source heights, then the sorted source
+    /// facts, then the clause's authored index — so the attribution is a function of the
+    /// program and the data, and a triple derivable in fewer steps is credited to the rule
+    /// that got there in fewer steps.
+    ///
+    /// The counts therefore sum to exactly the number of inferred triples in the result,
+    /// which is the sum a reader can check. A conclusion the RDF 1.2 IR cannot hold is
+    /// credited to nobody — it never becomes an inferred triple — and is reported as the
+    /// [`Construct::GeneralizedRdf`] boundary instead. The counts are NOT a measure of a
+    /// rule's total work: [`ReasoningReport::budget`]'s join-step count is.
     ///
     /// # The three rules an `OWL-RL` run names from the RDFS tables
     ///
@@ -545,9 +569,11 @@ impl ReasoningReport {
 ///
 /// Iterates [`RuleId::ALL`] — a `&'static` slice in table order — and sums the tallies of
 /// the chase rules that report under each id, so no map iteration and no tally-array order
-/// reaches the output. Two chase rules can share an id (a rule fired from either premise
-/// position is one rule), which is why this sums rather than assigns.
-fn fired_rules(regime: Regime, stats: &ChaseStats) -> Vec<(RuleId, u64)> {
+/// reaches the output. It SUMS rather than assigns because the id is what a report names
+/// and the [`ChaseRule`] is what a firing is tallied against: the two are one-to-one
+/// today, and a later rule stated under an id an existing rule already carries would be
+/// added here rather than silently overwrite it.
+fn fired_rules(regime: Regime, stats: &RunStats) -> Vec<(RuleId, u64)> {
     let owl = matches!(regime, Regime::OwlRl);
     RuleId::ALL
         .iter()
@@ -577,7 +603,7 @@ fn fired_rules(regime: Regime, stats: &ChaseStats) -> Vec<(RuleId, u64)> {
 /// `Simple` meets none of them: the identity closure copies every quad of every graph
 /// faithfully, triple terms and literals included, so there is nothing it failed to
 /// handle. That is also what keeps [`Completeness::Exact`] honest for that regime.
-fn boundaries(ds: &RdfDataset, regime: Regime, stats: &ChaseStats) -> Vec<Boundary> {
+fn boundaries(ds: &RdfDataset, regime: Regime, stats: &RunStats) -> Vec<Boundary> {
     let survey = match regime {
         Regime::Rdf | Regime::Rdfs | Regime::OwlRl => DatasetSurvey::of(ds),
         // Not this chase's lanes: `Simple` copies faithfully, and the other three never

@@ -618,10 +618,10 @@ static RDF_AND_RDFS_RULES: [RuleId; 18] = splice_rdf_rdfs();
 /// `D` are not defined by a fixed rule table this crate can enumerate.
 static NO_RULES: [RuleId; 0] = [];
 
-// --- What the chase in `rdfs.rs` actually fires today. ---
+// --- What the declared calculus in `calculus.rs` actually fires today. ---
 
-/// `close_rdf` emits `p rdf:type rdf:Property` for every default-graph predicate,
-/// which is exactly `rdfD2` (the rule RDF 1.0 spelled `rdf1`).
+/// The bare-`RDF` lane's one clause types every default-graph predicate an
+/// `rdf:Property`, which is exactly `rdfD2` (the rule RDF 1.0 spelled `rdf1`).
 static IMPLEMENTED_RDF: [RuleId; 1] = [RuleId::RdfD2];
 
 /// The RDFS patterns the chase evaluates, in specification order.
@@ -697,9 +697,9 @@ pub fn rules(regime: Regime) -> &'static [RuleId] {
 ///   from `scm-eqc1` then `cax-sco`, and `prp-eqp1` / `prp-eqp2` follow from `scm-eqp1`
 ///   then `prp-spo1`.
 /// * Under `OwlRl` the chase additionally fires the RDFS-shaped rules `rdfs6`,
-///   `rdfs8`, and `rdfs10`, plus reflexive `rdfs:subClassOf` / `rdfs:subPropertyOf`
-///   closures over vertices the RDFS tables do not reach. Those are not OWL 2 RL rule
-///   ids, so they cannot appear in an `OwlRl` list that must stay a subset of the 78.
+///   `rdfs8`, and `rdfs10`. Those are not OWL 2 RL rule ids — OWL 2 RL/RDF omits them
+///   from its tables — so they cannot appear in an `OwlRl` list that must stay a subset
+///   of the 78, but an `OwlRl` report does name them, under their RDFS ids.
 ///
 /// ```
 /// use purrdf_entail::{Regime, RuleId, implemented, rules};

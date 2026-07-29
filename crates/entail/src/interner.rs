@@ -70,37 +70,6 @@ impl Interner {
             TermValue::Iri(_) | TermValue::Blank { .. }
         )
     }
-
-    /// The total surface bytes of every interned term.
-    ///
-    /// The measurement a [`BudgetReport`](purrdf_datalog::seminaive::BudgetReport) calls
-    /// `term_arena_bytes`: how much term text an evaluation is holding, which is the
-    /// quantity a fact count alone cannot bound (one relation of a thousand megabyte-long
-    /// IRIs is small in facts and enormous in bytes).
-    pub(crate) fn term_bytes(&self) -> usize {
-        self.values.iter().map(term_bytes).sum()
-    }
-}
-
-/// The surface bytes of one term: the text an interner must retain to reproduce it.
-///
-/// A literal's datatype IRI and language tag count, because both are part of the term's
-/// identity and both are stored. A triple term counts its three components, recursively,
-/// for the same reason. A literal's base direction is part of its identity too but
-/// contributes no bytes: it is a two-valued enum stored inline, not arena text, and this
-/// measurement is of retained *text*.
-pub(crate) fn term_bytes(value: &TermValue) -> usize {
-    match value {
-        TermValue::Iri(iri) => iri.len(),
-        TermValue::Blank { label, .. } => label.len(),
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            ..
-        } => lexical_form.len() + datatype.len() + language.as_ref().map_or(0, String::len),
-        TermValue::Triple { s, p, o } => term_bytes(s) + term_bytes(p) + term_bytes(o),
-    }
 }
 
 /// Intern a [`TermValue`] into `b`, returning its dataset-local id.

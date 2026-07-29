@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The chase's calculus, declared as DL-clause data.
+//! The chase's calculus, declared as DL-clause data — and evaluated from that declaration.
 //!
-//! [`ChaseRule`] names every rule the forward chase in [`crate::rdfs`] fires, once, so
-//! three things that must agree cannot drift apart:
+//! [`ChaseRule`] names every rule the forward chase fires, once, so three things that must
+//! agree cannot drift apart:
 //!
 //! * the tag a firing is COUNTED under ([`ChaseRule::rule_id`], which answers with the
 //!   name the active regime's specification gives the rule);
@@ -12,24 +12,23 @@
 //! * the DL clause that STATES the rule ([`calculus_program`]), whose digest is the
 //!   report's [`contract_hash`](purrdf_datalog::cache::contract_hash).
 //!
-//! # The program is a declaration, not the executable
+//! # The declaration IS the executable
 //!
 //! [`calculus_program`] renders the specification rules that [`crate::implemented`] names
 //! — plus, for `OWL-RL`, the three RDFS-shaped rules that lane also fires and that have no
 //! OWL 2 RL rule id — as [`DlClause`]s over spec `rdf:`/`rdfs:`/`owl:` IRIs. It is the
 //! calculus's IDENTITY: hash it and a consumer can tell whether a cached closure was
-//! minted under the rule set it is about to trust. It is not what runs. The chase is
-//! hand-written, and it differs from this declaration in two documented directions:
+//! minted under the rule set it is about to trust.
 //!
-//! * BROADER triggers for the two reflexive rules. `rdfs6` is declared here with its
-//!   specification premise `?p rdf:type rdf:Property`, while the chase emits
-//!   `?p rdfs:subPropertyOf ?p` for every predicate it sees — the composition of `rdfD2`
-//!   with `rdfs6`, and sound for exactly that reason. `rdfs10` is declared with
-//!   `?c rdf:type rdfs:Class` and fired additionally on `rdfs:subClassOf` endpoints,
-//!   which is that rule composed with the domain and range axiomatic triples of
-//!   `rdfs:subClassOf`. [`crate::implemented`] records both.
-//! * NARROWER conclusions where the RDF 1.2 IR cannot hold what a rule concludes. Those
-//!   are reported as a [`Boundary`](crate::Boundary), not hidden here.
+//! It is also what runs. [`crate::engine`] hands these very clauses to
+//! `purrdf-datalog`'s semi-naive evaluator, so the digest in a report names the clauses
+//! that produced the closure the report accompanies rather than a parallel description of
+//! them. There was once a hand-written chase beside this declaration, and it diverged from
+//! it in two directions — broader triggers for the two reflexive rules, and narrower
+//! conclusions where the RDF 1.2 IR could not hold what a rule concluded. The first
+//! divergence is gone with the second implementation; the second is not a property of the
+//! calculus at all but of the IR the answer is materialized into, and it surfaces as a
+//! [`Boundary`](crate::Boundary) on the run that met it.
 //!
 //! Because the declaration is data, adding a rule to the chase changes the digest, which
 //! is the property a cache consumer actually needs: no false negatives.
@@ -200,7 +199,7 @@ fn atom(subject: ClauseTerm, predicate: &str, object: ClauseTerm) -> ClauseAtom 
     ClauseAtom::positive(subject, predicate, object)
 }
 
-/// The DL clauses that state `rule`.
+/// The DL clauses that state — and, through [`crate::engine`], run — `rule`.
 ///
 /// Most rules are one clause. `scm-eqc1` and `scm-eqp1` are two each: their specification
 /// conclusion is a conjunction of two triples, and a conjunctive head is not a Datalog
@@ -339,9 +338,9 @@ fn clauses_for(rule: ChaseRule) -> Vec<DlClause> {
     }
 }
 
-/// The DL-clause program that STATES `regime`'s calculus, in a fixed order.
+/// The DL-clause program that STATES — and RUNS — `regime`'s calculus, in a fixed order.
 ///
-/// # What it is, and what it is not
+/// # What it is
 ///
 /// It is the calculus's IDENTITY. Every rule this crate's forward chase fires under
 /// `regime` is rendered here as a [`DlClause`] over specification `rdf:`/`rdfs:`/`owl:`
@@ -351,19 +350,18 @@ fn clauses_for(rule: ChaseRule) -> Vec<DlClause> {
 /// [`ReasoningReport::contract_hash`](crate::ReasoningReport::contract_hash) carries, and
 /// adding a rule to the chase moves it, which is the one property a cache consumer needs.
 ///
-/// It is NOT the chase's source. The chase is hand-written and differs from this
-/// declaration in two documented directions, both of them visible elsewhere in the API
-/// rather than papered over here:
+/// It is also the chase's SOURCE: [`materialize`](crate::materialize) evaluates exactly
+/// this program through `purrdf-datalog`'s semi-naive evaluator, so there is no second
+/// statement of the calculus for the digest to be right about and the run to be wrong
+/// about.
 ///
-/// * BROADER triggers for the two reflexive rules. `rdfs6` is declared with its
-///   specification premise `?p rdf:type rdf:Property`, while the chase emits
-///   `?p rdfs:subPropertyOf ?p` for every predicate it sees — the composition of `rdfD2`
-///   with `rdfs6`, and sound for exactly that reason. `rdfs10` is declared with
-///   `?c rdf:type rdfs:Class` and is fired additionally on `rdfs:subClassOf` endpoints,
-///   which is that rule composed with the domain and range axiomatic triples of
-///   `rdfs:subClassOf`. [`implemented`](crate::implemented) records both.
-/// * NARROWER conclusions where the RDF 1.2 IR cannot hold what a rule concludes. Those
-///   surface as a [`Boundary`](crate::Boundary) on the run that met them.
+/// The one thing the program does not decide is what the RDF 1.2 dataset IR can HOLD. A
+/// rule that concludes into subject or predicate position can reach a term RDF 1.2 does
+/// not admit there — a literal subject, above all — and such a conclusion is a
+/// generalized-RDF triple that is derived in the evaluator's own term space and then
+/// abandoned at the materialization boundary rather than fabricated around. That is
+/// reported as a [`Boundary`](crate::Boundary) on the run that met it, with
+/// [`Construct::GeneralizedRdf`](crate::Construct::GeneralizedRdf) as the reason.
 ///
 /// # Order
 ///
@@ -391,11 +389,32 @@ fn clauses_for(rule: ChaseRule) -> Vec<DlClause> {
 /// ```
 #[must_use]
 pub fn calculus_program(regime: Regime) -> Vec<DlClause> {
-    ChaseRule::ALL
-        .into_iter()
-        .filter(|rule| rule.fires_under(regime))
-        .flat_map(clauses_for)
-        .collect()
+    program_with_attribution(regime).0
+}
+
+/// `regime`'s program, paired with the [`ChaseRule`] each clause states.
+///
+/// A [`Derivation`](purrdf_datalog::seminaive::Derivation) names its producing clause by
+/// authored index, so attributing a firing means asking which rule authored clause `i` —
+/// and the only honest way to answer is to build the answer in the SAME walk that builds
+/// the program. Two rules contribute two clauses each (`scm-eqc1` and `scm-eqp1`), so the
+/// map is not the identity and cannot be reconstructed from a rule count.
+///
+/// [`calculus_program`] is this function's first element, so the published program and the
+/// attribution can never be out of step.
+pub(crate) fn program_with_attribution(regime: Regime) -> (Vec<DlClause>, Vec<ChaseRule>) {
+    let mut clauses = Vec::new();
+    let mut attribution = Vec::new();
+    for rule in ChaseRule::ALL {
+        if !rule.fires_under(regime) {
+            continue;
+        }
+        for clause in clauses_for(rule) {
+            clauses.push(clause);
+            attribution.push(rule);
+        }
+    }
+    (clauses, attribution)
 }
 
 /// The identity of the calculus `regime` runs, as `purrdf-datalog` computes it.
@@ -456,7 +475,7 @@ pub(crate) const ALL_REGIMES: [Regime; 7] = [
 mod tests {
     use super::{
         ALL_REGIMES, ChaseRule, OWL_RL_RDFS_SHAPED_EXTRAS, calculus_contract_hash,
-        calculus_program, fired_rule_ids,
+        calculus_program, fired_rule_ids, program_with_attribution,
     };
     use crate::{Regime, RuleId, implemented, rules};
     use purrdf_datalog::cache::contract_hash;
@@ -588,6 +607,34 @@ mod tests {
             assert!(
                 !rule.fires_under(Regime::Rdfs) || rule.fires_under(Regime::OwlRl),
                 "{rule:?} fires under RDFS but not OWL-RL"
+            );
+        }
+    }
+
+    /// The attribution is exactly as long as the program, is the published program's own
+    /// clause list, and credits every rule the lane fires — including the two rules that
+    /// contribute two clauses each, which is what makes the map non-trivial.
+    #[test]
+    fn the_attribution_indexes_the_published_program() {
+        for regime in ALL_REGIMES {
+            let (program, attribution) = program_with_attribution(regime);
+            assert_eq!(program, calculus_program(regime), "{regime:?}");
+            assert_eq!(program.len(), attribution.len(), "{regime:?}");
+            let credited: BTreeSet<ChaseRule> = attribution.iter().copied().collect();
+            let firing: BTreeSet<ChaseRule> = ChaseRule::ALL
+                .into_iter()
+                .filter(|rule| rule.fires_under(regime))
+                .collect();
+            assert_eq!(credited, firing, "{regime:?}");
+        }
+        // The two conjunctive-conclusion rules are stated as two clauses each, so the
+        // attribution names them twice and a clause index is NOT a rule index.
+        let (_, owl) = program_with_attribution(Regime::OwlRl);
+        for rule in [ChaseRule::EquivalentClass, ChaseRule::EquivalentProperty] {
+            assert_eq!(
+                owl.iter().filter(|&&r| r == rule).count(),
+                2,
+                "{rule:?} states two clauses"
             );
         }
     }

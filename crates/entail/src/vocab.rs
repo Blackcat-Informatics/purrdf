@@ -34,6 +34,9 @@ pub(crate) const OWL_INVERSEOF: &str = "http://www.w3.org/2002/07/owl#inverseOf"
 pub(crate) const OWL_SYMMETRICPROPERTY: &str = "http://www.w3.org/2002/07/owl#SymmetricProperty";
 /// `owl:TransitiveProperty`.
 pub(crate) const OWL_TRANSITIVEPROPERTY: &str = "http://www.w3.org/2002/07/owl#TransitiveProperty";
+/// `xsd:string` — the datatype a literal carries when it carries no other (RDF 1.1 C0.1),
+/// and therefore the one a canonical N-Quads surface leaves implicit.
+pub(crate) const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 
 // --- OWL 2 DL class-expression and axiom vocabulary (OWL-Direct reverse mapping). ---
 

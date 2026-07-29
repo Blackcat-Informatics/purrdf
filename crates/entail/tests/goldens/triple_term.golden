@@ -15,32 +15,54 @@
 # `x says <<( A ⊑ B )>>` into a `mentions` triple, and the object of that
 # conclusion has to be re-interned.
 #
-# WHY THIS GOLDEN CHANGED — one closure line, restated once in each of the two
-# regimes that derive it (RDFS and OWL-RL), and nothing else:
+# AN EARLIER FIX THIS FIXTURE PINS. The engine used to emit
+# `x mentions rdfs:Resource` for that conclusion: re-interning folded EVERY
+# triple term to rdfs:Resource on the way back into the dataset builder, on the
+# stated assumption that the RDFS/OWL-RL rules never derive one in that
+# position. rdfs7 / prp-spo1 does, and the substitution was UNSOUND — nothing
+# in this input entails `x mentions rdfs:Resource`. A triple term is now
+# rebuilt structurally and recursively, so it re-materializes as itself.
 #
-#   was: <example.org/x> <example.org/mentions> <rdfs:Resource> .
-#   now: <example.org/x> <example.org/mentions>
-#        <<( <example.org/A> <rdfs:subClassOf> <example.org/B> )>> .
+# EVERY GOLDEN IN THIS CORPUS MOVED AT THE ENGINE SWAP — `materialize` stopped
+# running a hand-written chase and started evaluating the DL-clause program
+# `calculus_program(regime)` already declared. Three causes account for every byte,
+# and the fixture's own accounting below names which triples each one moved here.
 #
-# The old line was UNSOUND. Re-interning folded EVERY triple term to
-# rdfs:Resource on the way back into the dataset builder, on the stated
-# assumption that the RDFS/OWL-RL rules never derive one in that position.
-# rdfs7 / prp-spo1 does: it rewrites a triple's PREDICATE and copies its object
-# through unchanged. Nothing in this input entails `x mentions rdfs:Resource` —
-# the premises are `says ⊑ mentions` and `x says <<( A ⊑ B )>>`, and what rdfs7
-# licenses from them is `x mentions <<( A ⊑ B )>>`, for the object that was
-# actually there. That is the new line: a triple term is now rebuilt
-# structurally and recursively, so it re-materializes as itself.
+#   1. THE UNLICENSED REFLEXIVES ARE GONE — a SPEC-CONFORMANCE FIX. The chase
+#      emitted `c rdfs:subClassOf c` for every subClassOf ENDPOINT and
+#      `p rdfs:subPropertyOf p` for every PREDICATE. rdfs10 requires `?c rdf:type
+#      rdfs:Class` and rdfs6 requires `?p rdf:type rdf:Property`, and the declared
+#      clauses say so, so those conclusions are drawn only where the specification
+#      licenses them. Both rules still fire — `property_typed` and `class_typed` are
+#      the fixtures that prove they were narrowed rather than switched off.
 #
-# Nothing else in this golden moves, and nothing should. The chase is
-# untouched — it never looked inside the triple term before and still does not
-# — so both closures still hold 10 lines, the changed line keeps its sort
-# position (`<<(` sorts where `<http` did, immediately before the `x says`
-# line), and the rule tallies, the join-step / stored-fact /
-# term-arena budgets, the boundary lists and the contract hashes are all
-# byte-identical. Only the object term the re-interner emitted for that one
-# conclusion differs. The Simple and RDF closures are unchanged too: neither
-# regime fires rdfs7, so neither ever re-interned the triple term.
+#   2. THE RDF LANE IS NOW A FIXPOINT — a BUG FIX. `close_rdf` walked the INPUT
+#      quads once and typed each predicate it saw, so it never applied rdfD2 to its
+#      own conclusions. `rdf:type` is a predicate of every one of them, so
+#      `rdf:type rdf:type rdf:Property` is entailed and was missing. It appears now
+#      in every RDF closure whose input did not already use `rdf:type` as a
+#      predicate; where the input did, the RDF closure is unchanged.
+#
+#   3. THE BUDGET IS THE EVALUATOR'S OWN MEASUREMENT. `join-steps`,
+#      `stored-facts` and `term-arena-bytes` are now `purrdf-datalog`'s
+#      `BudgetReport` rather than a tally the chase kept beside it, so all three
+#      move in every regime. They are the same three coordinates under the same
+#      three definitions, counted by the engine that did the work: `stored-facts`
+#      is the whole saturated store rather than one lane's private index, and
+#      `term-arena-bytes` counts the terms that actually entered the store rather
+#      than a vocabulary table interned whether or not the data mentioned it.
+#
+# WHAT MOVED IN THIS GOLDEN:
+#
+# Cause 2 — RDF gains `rdf:type rdf:type rdf:Property` (rdfD2 3 -> 4).
+# Cause 1 — RDFS and OWL-RL lose `A rdfs:subClassOf A` and `B rdfs:subClassOf B`
+# (rdfs10 2 -> 0) and the four reflexive subPropertyOf triples on says, mentions,
+# rdfs:subClassOf and rdfs:subPropertyOf (rdfs6 4 -> 0).
+# The line this fixture exists for is untouched: rdfs7 / prp-spo1 still concludes
+# `x mentions <<( A rdfs:subClassOf B )>>`, with the triple term carried through as
+# itself. The engine now interns a triple term as one lexical surface rather than as
+# one interner id, which is the same opacity by a different mechanism — rdfs14 /
+# rdfs14a still do not fire, and the triple-term boundary is still reported.
 # exercises: rdfs7 prp-spo1
 
 --- input (3 lines) ---
@@ -64,11 +86,12 @@
   overclaims: false
 
 === regime RDF ===
---- closure (6 lines) ---
+--- closure (7 lines) ---
 <http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .
 <http://example.org/says> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
 <http://example.org/says> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://example.org/mentions> .
 <http://example.org/x> <http://example.org/says> <<( <http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> )>> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
 <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
 <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
 --- report ---
@@ -76,52 +99,40 @@
   missing: (2)
       rdfD1 rdfD1a
   rules-fired: (1)
-      rdfD2=3
+      rdfD2=4
   boundaries: (3)
       triple-term axiomatic-triples datatype-value-space
-  budget: join-steps=3 stored-facts=3 term-arena-bytes=120
+  budget: join-steps=7 stored-facts=7 term-arena-bytes=426
   contract-hash: e3dfc92e2575713a6a555ef1dc5688d9086fe0a41c8eb0dd27aff5579db33158
   inconsistency: none
   overclaims: false
 
 === regime RDFS ===
---- closure (10 lines) ---
-<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/A> .
+--- closure (4 lines) ---
 <http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .
-<http://example.org/B> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .
-<http://example.org/mentions> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://example.org/mentions> .
 <http://example.org/says> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://example.org/mentions> .
-<http://example.org/says> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://example.org/says> .
 <http://example.org/x> <http://example.org/mentions> <<( <http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> )>> .
 <http://example.org/x> <http://example.org/says> <<( <http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> )>> .
-<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#subClassOf> .
-<http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> .
 --- report ---
   completeness: sound-incomplete
   missing: (9)
       rdfD1 rdfD1a rdfD2 rdfs1 rdfs4 rdfs12 rdfs13 rdfs14
       rdfs14a
-  rules-fired: (3)
-      rdfs6=4 rdfs7=1 rdfs10=2
+  rules-fired: (1)
+      rdfs7=1
   boundaries: (3)
       triple-term axiomatic-triples datatype-value-space
-  budget: join-steps=41 stored-facts=10 term-arena-bytes=791
+  budget: join-steps=13 stored-facts=4 term-arena-bytes=324
   contract-hash: cefc117c539b1191953fd5ad560ef4e275b59e9b6089040894f71113ea33674b
   inconsistency: none
   overclaims: false
 
 === regime OWL-RL ===
---- closure (10 lines) ---
-<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/A> .
+--- closure (4 lines) ---
 <http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .
-<http://example.org/B> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .
-<http://example.org/mentions> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://example.org/mentions> .
 <http://example.org/says> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://example.org/mentions> .
-<http://example.org/says> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://example.org/says> .
 <http://example.org/x> <http://example.org/mentions> <<( <http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> )>> .
 <http://example.org/x> <http://example.org/says> <<( <http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> )>> .
-<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#subClassOf> .
-<http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> .
 --- report ---
   completeness: sound-incomplete
   missing: (66)
@@ -134,11 +145,11 @@
       dt-diff dt-not-type scm-cls scm-eqc2 scm-op scm-dp scm-eqp2 scm-dom1
       scm-dom2 scm-rng1 scm-rng2 scm-hv scm-svf1 scm-svf2 scm-avf1 scm-avf2
       scm-int scm-uni
-  rules-fired: (3)
-      prp-spo1=1 rdfs6=4 rdfs10=2
+  rules-fired: (1)
+      prp-spo1=1
   boundaries: (2)
       triple-term datatype-value-space
-  budget: join-steps=41 stored-facts=10 term-arena-bytes=791
+  budget: join-steps=13 stored-facts=4 term-arena-bytes=324
   contract-hash: 369fa3fbbe648a4b2c381015990cc3a2f78e606a40102d5feb3f9fabba07ce45
   inconsistency: none
   overclaims: false
