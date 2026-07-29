@@ -468,6 +468,71 @@ int32_t purrdf_cursor_next(PurrdfCursor *cursor,
 void purrdf_cursor_free(PurrdfCursor *cursor);
 
 /**
+ * Materialize an RDF document under a SPARQL entailment regime.
+ *
+ * `document` is parsed as N-Quads, which accepts an N-Triples document
+ * unchanged, so a document that names a graph keeps naming it. `regime` is one
+ * of `simple`, `rdf`, `rdfs`, `owl-rl`, `owl-direct`, `rif`, `d` — the same
+ * spellings the CLI, WASM and the Python surface accept; the last three cannot
+ * be forward-materialized and are refused with a message naming the four that
+ * can.
+ *
+ * On success `*out_nquads` receives the canonical (RDFC-1.0) N-Quads closure —
+ * every input quad plus every triple the regime's implemented rules infer — and
+ * `*out_report` receives the byte-stable rendered reasoning report, which names
+ * which rules fired and how often, which specification rules did NOT fire, which
+ * constructs were left at a boundary, the evaluation budget, and the calculus's
+ * contract hash. **Free BOTH with `purrdf_buffer_free`.** The report is not
+ * optional: a caller that reported "OWL-RL entailment" without saying that
+ * twelve of seventy-eight rules ran would be making exactly the overclaim the
+ * report exists to prevent.
+ *
+ * On any error neither out-param is written, so there is nothing to free.
+ *
+ * # Safety
+ * `document` and `regime` must be non-null, NUL-terminated C strings;
+ * `out_nquads` and `out_report` must be writable pointers; `out_error` must be
+ * null or writable.
+ */
+int32_t purrdf_entail_materialize_to_nquads(const char *document,
+                                            const char *regime,
+                                            PurrdfBuffer **out_nquads,
+                                            PurrdfBuffer **out_report,
+                                            PurrdfError **out_error);
+
+/**
+ * Write the rule table the specification *defines* `regime` by — one canonical
+ * rule name per newline-terminated line, in specification table order — to
+ * `*out_buffer` (free with `purrdf_buffer_free`).
+ *
+ * An empty buffer for a regime with no rule table (`simple`, and the three that
+ * are not forward-materializable). `owl-rl` yields all 78 rules of OWL 2
+ * Profiles §4.3 Tables 4–9 whether or not this build fires them — that is the
+ * point: diff it against `purrdf_entail_implemented_rules` to measure the gap.
+ *
+ * # Safety
+ * `regime` must be a non-null, NUL-terminated C string; `out_buffer` must be a
+ * writable pointer; `out_error` must be null or writable.
+ */
+int32_t purrdf_entail_rules(const char *regime, PurrdfBuffer **out_buffer, PurrdfError **out_error);
+
+/**
+ * Write the subset of `purrdf_entail_rules(regime)` this build's chase actually
+ * fires today to `*out_buffer` (free with `purrdf_buffer_free`).
+ *
+ * `purrdf_entail_rules(r)` minus `purrdf_entail_implemented_rules(r)` is the
+ * regime's measurable gap — the same set the rendered report's `missing` lines
+ * name.
+ *
+ * # Safety
+ * `regime` must be a non-null, NUL-terminated C string; `out_buffer` must be a
+ * writable pointer; `out_error` must be null or writable.
+ */
+int32_t purrdf_entail_implemented_rules(const char *regime,
+                                        PurrdfBuffer **out_buffer,
+                                        PurrdfError **out_error);
+
+/**
  * Return the status code carried by an error, or `Panic` if `err` is null.
  *
  * # Safety

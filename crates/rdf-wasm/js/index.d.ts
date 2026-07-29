@@ -472,6 +472,20 @@ export class ProjectionLift {
   free(): void;
 }
 
+/**
+ * One closure of one document under one SPARQL entailment regime: the canonical
+ * N-Quads and the byte-stable rendered reasoning report. Returned by
+ * `entailMaterialize`.
+ */
+export class RegimeClosure {
+  private constructor();
+  /** The materialized dataset (input quads + inferred triples) as canonical N-Quads. */
+  readonly nquads: string;
+  /** What the run did: rules fired, rules missing, boundaries, budget, contract hash. */
+  readonly report: string;
+  free(): void;
+}
+
 export class QueryEngine {
   constructor();
   query(dataset: Dataset, sparql: string, options?: QueryOptions | null): QueryResult;
@@ -516,6 +530,28 @@ export function liftProjection(
   profile: LiftProfile,
   configJson: string,
 ): ProjectionLift;
+/**
+ * The CLI/C-ABI/Python/JS spellings of the SPARQL entailment regimes. The first
+ * four can be forward-materialized; `owl-direct` needs the query's class
+ * expressions, `rif` needs a parsed rule set, and `d` is a spec-inherent
+ * boundary for forward materialization.
+ */
+export type EntailmentRegime =
+  | "simple"
+  | "rdf"
+  | "rdfs"
+  | "owl-rl"
+  | "owl-direct"
+  | "rif"
+  | "d";
+
+export function entailMaterialize(
+  document: string,
+  regime: EntailmentRegime | string,
+): RegimeClosure;
+export function entailRules(regime: EntailmentRegime | string): string[];
+export function entailImplementedRules(regime: EntailmentRegime | string): string[];
+export function entailCheckGoldenVectors(): void;
 export function shaclEntail(shapesTtl: string, dataNt: string): string;
 export function shaclValidateToSarif(shapesTtl: string, dataNt: string): string;
 export function version(): string;

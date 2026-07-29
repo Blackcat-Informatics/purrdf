@@ -81,6 +81,7 @@ macro_rules! ffi_guard {
 
 pub mod buffer;
 pub mod cursor;
+pub mod entail;
 pub mod error;
 pub mod graph;
 pub mod gts;

@@ -4,7 +4,8 @@
 // purrdf — the idiomatic RDF/JS surface over the wasm engine.
 //
 // The wasm-bindgen-generated classes (DataFactory/Dataset/Quad/Sink/Term) and the
-// free functions (version, shaclValidateToSarif, shaclEntail) are re-exported as-is —
+// free functions (version, shaclValidateToSarif, shaclEntail, entailMaterialize,
+// entailRules, entailImplementedRules, entailCheckGoldenVectors) are re-exported as-is —
 // the whole `#[wasm_bindgen]` surface is reachable from the package root, so
 // SHACL validation/entailment and Dataset.canonicalize()/isomorphic() need no deep
 // `./pkg/` import. This wrapper adds the isomorphic glue that the synchronous
@@ -22,11 +23,16 @@ import init, {
   CompiledJsonLdContext,
   DataFactory,
   Dataset,
+  entailCheckGoldenVectors,
+  entailImplementedRules,
+  entailMaterialize,
+  entailRules,
   liftProjection,
   ProjectionLift,
   ProjectionPackage,
   Quad,
   QueryEngine,
+  RegimeClosure,
   shaclEntail,
   shaclValidateToSarif,
   Sink,
@@ -335,11 +341,16 @@ export {
   CompiledJsonLdContext,
   DataFactory,
   Dataset,
+  entailCheckGoldenVectors,
+  entailImplementedRules,
+  entailMaterialize,
+  entailRules,
   liftProjection,
   ProjectionLift,
   ProjectionPackage,
   Quad,
   QueryEngine,
+  RegimeClosure,
   shaclEntail,
   shaclValidateToSarif,
   Sink,

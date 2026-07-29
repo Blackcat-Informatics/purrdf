@@ -72,6 +72,15 @@ const reparsed = Dataset.parse(nq, "nquads");
   graph against a Turtle shapes graph and returns a SARIF 2.1.0 report;
   `shaclEntail(shapesTtl, dataNt)` materializes the SHACL-AF `sh:rule` inferences as
   N-Triples.
+- **Entailment regimes** — `entailMaterialize(document, regime)` closes an N-Quads
+  (or N-Triples) document under a SPARQL entailment regime (`simple` / `rdf` /
+  `rdfs` / `owl-rl`) and returns both the canonical N-Quads closure and a
+  byte-stable reasoning report; `entailRules(regime)` /
+  `entailImplementedRules(regime)` expose the specification's rule table and the
+  subset this build fires, so the gap is measurable rather than asserted. Unlike
+  `shaclEntail` these take no shapes graph. `entailCheckGoldenVectors()` replays
+  the project's committed cross-host golden vector artifact through the loaded
+  wasm and throws on the first byte that differs from the native reference.
 - **`Sink`** — a streaming consumer (`push(quad)` / `finish() → Dataset`) over the
   `purrdf-events` ingestion protocol; **`datasetToStream`** / **`streamToDataset`**
   are the async RDF/JS Stream/Sink helpers.
