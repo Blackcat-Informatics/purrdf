@@ -1,9 +1,20 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! PyO3 bindings for **entailment-regime materialization** — the `purrdf.entail`
-//! submodule: close an RDF document under `Simple` / `RDF` / `RDFS` / `OWL-RL` /
-//! `D` and get back both the closure and a report of what the run actually did.
+//! PyO3 bindings for **entailment-regime materialization** and the **OWL 2
+//! Direct-Semantics reasoning services** — the `purrdf.entail` submodule.
+//!
+//! Two lanes, and they are not interchangeable:
+//!
+//! * the **chase** — [`materialize`] / [`materialize_nt`] close a document under
+//!   `Simple` / `RDF` / `RDFS` / `OWL-RL` / `D` and return the closure with a report
+//!   whose completeness is `exact` / `sound-incomplete <n>`;
+//! * the **tableau** — [`consistency`], [`classify`], [`realize`], [`instances`],
+//!   [`entails`], [`profile`], [`extract_module`], [`justify`] and
+//!   [`explain_conclusion`] each return `(answer, certificate)` where the
+//!   certificate's completeness is `decided` / `decided-within-boundaries` /
+//!   `budget-exhausted`. The DL lane has no rule table to subtract, so reusing the
+//!   chase's notion would report "exact" for a search that ran out of budget.
 //!
 //! # Not to be confused with `purrdf.shapes.entail`
 //!
@@ -44,8 +55,11 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use purrdf_validate::regime::{
-    MATERIALIZABLE_REGIME_NAMES, REGIME_NAMES, implemented_rules_string,
-    materialize_to_nquads_string, parse_regime, regime_name, render_reasoning_report, rules_string,
+    MATERIALIZABLE_REGIME_NAMES, REGIME_NAMES, classify_to_string, consistency_to_string,
+    entails_to_string, explain_conclusion_to_string, extract_module_to_string,
+    implemented_rules_string, instances_to_string, justify_to_string, materialize_to_nquads_string,
+    parse_regime, profile_to_string, realize_to_string, regime_name, render_reasoning_report,
+    rules_string,
 };
 
 use crate::entail::{EntailError, Regime, materialize as materialize_closure};
@@ -251,6 +265,243 @@ fn implemented_rules(regime: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
     Ok(table.lines().map(str::to_owned).collect())
 }
 
+// ── The Description-Logic reasoning services ────────────────────────────────────
+//
+// Nine entry points, one shape: `(answer, certificate)`, both `str`. The pair is a
+// tuple rather than an object for the same reason `materialize` returns
+// `(closure, report)`: a caller must UNPACK both, so the evidence for how completely
+// a question was decided cannot be dropped by not asking for it.
+//
+// Each is the same convert → detach → call the boundary → map the error sequence
+// `materialize_nt` is. Nothing here reasons; `purrdf_validate::regime` does, and
+// the C-ABI and WASM hosts call the very same functions.
+
+/// Is the knowledge base consistent — does it have a model at all?
+///
+/// `data` is an N-Quads (or N-Triples) document. `step_cap` narrows the
+/// per-decision tableau step cap; **0 (the default) means the knowledge base's own
+/// cap**, not a cap of zero steps. It can only NARROW, so it cannot make a hard
+/// instance answerable — only make the `budget-exhausted` certificate reachable.
+///
+/// Returns `(answer, certificate)`. The answer is `consistency true|false|unknown`;
+/// `unknown` means the search reached its step cap and is NEVER collapsed to
+/// `false`. The certificate is the `purrdf-dl-certificate 1` block, whose
+/// completeness is the DL lane's own notion — `decided`,
+/// `decided-within-boundaries` (some axiom never became a DL clause; the
+/// certificate names each construct) or `budget-exhausted`.
+///
+/// This is the only DL service that answers for an unsatisfiable ontology, because
+/// it is the one that detects one.
+///
+/// Raises `ValueError` on a malformed document or a failed reverse mapping.
+#[pyfunction]
+#[pyo3(signature = (data, step_cap = 0))]
+fn consistency(py: Python<'_>, data: &str, step_cap: u32) -> PyResult<(String, String)> {
+    let answer = py
+        .detach(|| consistency_to_string(data, step_cap))
+        .map_err(PyValueError::new_err)?;
+    Ok(answer.into_parts())
+}
+
+/// The entailed subsumption hierarchy over the ontology's named classes.
+///
+/// Returns `(answer, certificate)`. The answer carries `equivalent`, `subclass`
+/// (the full transitively-closed relation), `direct` (its transitive reduction) and
+/// `unsatisfiable` lines, in that block order. Both subsumption blocks are present
+/// because they are different facts: `direct` is "direct as far as this run
+/// decided", which weakens under a `budget-exhausted` certificate while every
+/// listed pair stays a genuine subsumption.
+///
+/// Costs one tableau decision per ORDERED pair of named classes plus the
+/// consistency check; the certificate's `decisions` line reports it.
+///
+/// Raises `ValueError` on a malformed document, or on an ontology with no model —
+/// every class then subsumes every other and the hierarchy would carry no
+/// information.
+#[pyfunction]
+#[pyo3(signature = (data, step_cap = 0))]
+fn classify(py: Python<'_>, data: &str, step_cap: u32) -> PyResult<(String, String)> {
+    let answer = py
+        .detach(|| classify_to_string(data, step_cap))
+        .map_err(PyValueError::new_err)?;
+    Ok(answer.into_parts())
+}
+
+/// The entailed types of the ontology's named individuals, and the most specific of
+/// them.
+///
+/// Returns `(answer, certificate)`; the answer carries `type` lines followed by
+/// `direct-type` lines.
+///
+/// Raises `ValueError` on a malformed document or an ontology with no model.
+#[pyfunction]
+#[pyo3(signature = (data, step_cap = 0))]
+fn realize(py: Python<'_>, data: &str, step_cap: u32) -> PyResult<(String, String)> {
+    let answer = py
+        .detach(|| realize_to_string(data, step_cap))
+        .map_err(PyValueError::new_err)?;
+    Ok(answer.into_parts())
+}
+
+/// The named individuals entailed to be instances of `class_`.
+///
+/// `class_` is ONE N-Triples term — `"<https://example.org/Cat>"`, angle brackets
+/// included. A class the ontology never mentions is not an error: nothing
+/// constrains it, so the empty answer for it is a real answer.
+///
+/// Returns `(answer, certificate)`; the answer carries `instance <term>` lines.
+///
+/// Raises `ValueError` on a malformed document, a `class_` that is not one
+/// N-Triples term, or an ontology with no model.
+#[pyfunction]
+#[pyo3(signature = (data, class_, step_cap = 0))]
+fn instances(
+    py: Python<'_>,
+    data: &str,
+    class_: &str,
+    step_cap: u32,
+) -> PyResult<(String, String)> {
+    let answer = py
+        .detach(|| instances_to_string(data, class_, step_cap))
+        .map_err(PyValueError::new_err)?;
+    Ok(answer.into_parts())
+}
+
+/// Does the ontology entail `axiom`?
+///
+/// `axiom` is ONE triple of the OWL 2 RDF mapping, in N-Triples syntax. Seven
+/// reserved predicates select the seven named axiom kinds — `rdfs:subClassOf`,
+/// `owl:equivalentClass`, `owl:disjointWith`, `rdf:type`, `owl:sameAs`,
+/// `owl:differentFrom`, `rdfs:subPropertyOf` — and any other predicate is an
+/// object-property assertion. No encoding is invented here: this is the mapping the
+/// reasoner's own reverse mapping reads.
+///
+/// Returns `(answer, certificate)`. The answer is `entails true|false|unknown`
+/// followed by the axiom as it was READ (`axiom <kind>` plus one `term` line each),
+/// so a caller can see which axiom its predicate selected.
+///
+/// Raises `ValueError` on a malformed document, an `axiom` that is not one triple,
+/// an axiom statement that names a graph, or an ontology with no model.
+#[pyfunction]
+#[pyo3(signature = (data, axiom, step_cap = 0))]
+fn entails(py: Python<'_>, data: &str, axiom: &str, step_cap: u32) -> PyResult<(String, String)> {
+    let answer = py
+        .detach(|| entails_to_string(data, axiom, step_cap))
+        .map_err(PyValueError::new_err)?;
+    Ok(answer.into_parts())
+}
+
+/// Which OWL 2 profiles the ontology is provably in, and what blocked the others.
+///
+/// Returns `(answer, certificate)`. The answer is `certified <profile>` lines, most
+/// restrictive first (`EL`, `QL`, `RL`, `DL`, `Full`), so
+/// `answer.splitlines()[0].removeprefix("certified ")` is the most restrictive
+/// profile the ontology is provably in.
+///
+/// Purely syntactic — no tableau, no closure, no budget — so the certificate is a
+/// `purrdf-owl-profile-certificate 1` block rather than a DL one: there is no search
+/// whose completeness could be reported, and rendering a fabricated `decided` would
+/// be the overclaim the certificates exist to prevent. It ends
+/// `one-directional true`: a certification PROVES membership, a violation does NOT
+/// prove non-membership.
+///
+/// Raises `ValueError` on a malformed document.
+#[pyfunction]
+#[pyo3(signature = (data))]
+fn profile(py: Python<'_>, data: &str) -> PyResult<(String, String)> {
+    let answer = py
+        .detach(|| profile_to_string(data))
+        .map_err(PyValueError::new_err)?;
+    Ok(answer.into_parts())
+}
+
+/// The locality module of the ontology for a seed signature.
+///
+/// `signature` is one N-Triples term per line (blank lines ignored). `method` is
+/// `"bot"`, `"top"` or `"star"`.
+///
+/// Returns `(answer, certificate)`. The answer is the extracted module as canonical
+/// (RDFC-1.0) N-Quads — the same serializer `materialize_nt` uses. The certificate's
+/// `conservative` line says whether the module is the minimal one or a sound
+/// SUPERSET, which is what a caller sizing a module needs to know.
+///
+/// Raises `ValueError` on a malformed document, a signature line that is not one
+/// N-Triples term, an unknown `method` spelling (naming the accepted set), or a
+/// module that cannot be frozen.
+#[pyfunction]
+#[pyo3(signature = (data, signature, method))]
+fn extract_module(
+    py: Python<'_>,
+    data: &str,
+    signature: &str,
+    method: &str,
+) -> PyResult<(String, String)> {
+    let answer = py
+        .detach(|| extract_module_to_string(data, signature, method))
+        .map_err(PyValueError::new_err)?;
+    Ok(answer.into_parts())
+}
+
+/// WHY a Description-Logic axiom is entailed: a minimal subset of the ontology that
+/// still entails it.
+///
+/// A tableau performs no derivation steps, so this is a JUSTIFICATION and
+/// deliberately not called a proof. [`explain_conclusion`] is the chase lane's
+/// genuinely derivational explanation; the two are different KINDS of thing rather
+/// than two spellings of one, which is why there is no single `explain`.
+///
+/// `axiom` is read exactly as [`entails`] reads it.
+///
+/// Returns `(answer, certificate)`. The answer is the justification's axioms as
+/// canonical N-Quads — a justification introduces no term, so it is an ordinary RDF
+/// 1.2 dataset of axioms already present in the input. The certificate's
+/// `sufficient` and `minimal` lines are **re-decided** over the justification alone
+/// and over each of its one-axiom-smaller subsets, so they check the answer rather
+/// than restate it.
+///
+/// Raises `ValueError` if the ontology does not entail the axiom — the empty set
+/// reads as "nothing is needed" and means the opposite — or if the tableau could not
+/// decide it, leaving no answer to shrink against.
+#[pyfunction]
+#[pyo3(signature = (data, axiom))]
+fn justify(py: Python<'_>, data: &str, axiom: &str) -> PyResult<(String, String)> {
+    let answer = py
+        .detach(|| justify_to_string(data, axiom))
+        .map_err(PyValueError::new_err)?;
+    Ok(answer.into_parts())
+}
+
+/// WHY one triple of a chase closure holds: which rules, from which premises.
+///
+/// `conclusion` is ONE N-Quads statement; its graph, if it names one, selects the
+/// closure to explain.
+///
+/// Returns `(answer, certificate)`. The answer carries `asserted`, `steps` and one
+/// `rule` line per cited rule. The certificate's `derived-*` lines are what the
+/// CHECKER re-derived from the proof term and the clause program — not what the
+/// proof claims — so a proof whose stated conclusion its own premises do not license
+/// shows up as differing lines rather than a silent `checked true`.
+///
+/// Raises `ValueError` for `RDF` and `RDFS`, four of whose rules conclude about a
+/// FRESH blank node: an existential head has no Datalog semantics, so a "proof" of
+/// such a step could only be believed. Also for a conclusion that is neither
+/// asserted nor derived — a hard error, because there is nothing to explain and an
+/// empty answer would read as though there were.
+#[pyfunction]
+#[pyo3(signature = (data, regime, conclusion))]
+fn explain_conclusion(
+    py: Python<'_>,
+    data: &str,
+    regime: &Bound<'_, PyAny>,
+    conclusion: &str,
+) -> PyResult<(String, String)> {
+    let name = regime_name(native_regime(regime)?);
+    let answer = py
+        .detach(|| explain_conclusion_to_string(data, name, conclusion))
+        .map_err(PyValueError::new_err)?;
+    Ok(answer.into_parts())
+}
+
 /// Register the entailment-regime surface on a Python module.
 ///
 /// Called by the unified `purrdf_native` cdylib to populate the
@@ -262,6 +513,15 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(materialize_nt, m)?)?;
     m.add_function(wrap_pyfunction!(rules, m)?)?;
     m.add_function(wrap_pyfunction!(implemented_rules, m)?)?;
+    m.add_function(wrap_pyfunction!(consistency, m)?)?;
+    m.add_function(wrap_pyfunction!(classify, m)?)?;
+    m.add_function(wrap_pyfunction!(realize, m)?)?;
+    m.add_function(wrap_pyfunction!(instances, m)?)?;
+    m.add_function(wrap_pyfunction!(entails, m)?)?;
+    m.add_function(wrap_pyfunction!(profile, m)?)?;
+    m.add_function(wrap_pyfunction!(extract_module, m)?)?;
+    m.add_function(wrap_pyfunction!(justify, m)?)?;
+    m.add_function(wrap_pyfunction!(explain_conclusion, m)?)?;
     Ok(())
 }
 

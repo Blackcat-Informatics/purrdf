@@ -37,17 +37,33 @@ BINARYEN_VERSION := 130
 # dataset-description/research-object projection profiles, the compiled JSON-LD
 # context/options/registry engine, validation-scoped asserted-subclass
 # membership shared by native SHACL and SHACL-SPARQL, and now the entailment
-# engine — measures 8_767_155 bytes; 9_040_000 keeps 3.11% headroom. The
-# reasoning surface is the capability responsible for this reviewed increase:
-# crates/rdf-wasm/src/entail.rs exports regimes, rule inventories and
-# materialization to JS, so purrdf-entail and the purrdf-datalog semi-naive
-# engine under it are now reachable from an exported symbol and link into the
-# artifact — the 78-rule OWL 2 RL table, the RDF/RDFS/D tables, the existential
-# chase, the 93-entry construct table, and the OWL-Direct ALCOIQ tableau. A
-# symbol-retaining diagnostic build of the same module attributes 183_789 bytes
-# of function bodies to purrdf-entail and 191_671 to purrdf-datalog, 3.99% of
-# its code section, against a 618_787-byte rise over the 8_148_368 measured for
-# the previous ceiling. The artifact's size is a joint function of
+# engine AND the nine OWL reasoner services — measures 9_148_895 bytes;
+# 9_430_000 keeps 3.07% headroom.
+#
+# Two reviewed increases, in order. First, crates/rdf-wasm/src/entail.rs began
+# exporting regimes, rule inventories and materialization, so purrdf-entail and
+# the purrdf-datalog engine under it became reachable from an exported symbol
+# and linked in for the first time — the 78-rule OWL 2 RL table, the RDF/RDFS/D
+# tables, the existential chase, the 93-entry construct table and the OWL-Direct
+# tableau — taking 8_148_368 to 8_779_131.
+#
+# Second, the same module now exports the nine reasoner services (consistency,
+# classify, realize, instances, entails, profile, extract_module, justify,
+# explain_conclusion). Before them, roughly ten thousand lines of reasoning were
+# reachable from no host at all; leaving them Rust-only would have been a
+# producer with no consumer, and dropping the three largest from wasm alone
+# would have left one of the four hosts unable to reach what the other three
+# can. Attributed by ablation, three full builds on the pinned toolchain:
+#
+#   baseline (materialize + inventories)          8_779_131
+#   + six tableau services                        9_011_119   (+231_988)
+#   + profile, extract_module                     9_075_983   (+64_864)
+#   + explain_conclusion                          9_148_895   (+72_912)
+#
+# The largest single item is explain_conclusion: it is the only reachable
+# consumer of purrdf-datalog's proof terms, so the proof arena, its canonical
+# encoding and its re-deriving checker link in for the first time. The
+# artifact's size is a joint function of
 # rustc (tracks stable), wasm-bindgen (pinned in Cargo.toml), and binaryen
 # (pinned via BINARYEN_VERSION), so a moved number is attributable.
 #
@@ -57,7 +73,7 @@ BINARYEN_VERSION := 130
 # artifact grew: a new capability or dependency, or a routine rustc-stable /
 # binaryen bump (a valid, must-be-explained reason). Never raise it merely to
 # turn a red gate green.
-WASM_SIZE_BUDGET_BYTES := 9040000
+WASM_SIZE_BUDGET_BYTES := 9430000
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'

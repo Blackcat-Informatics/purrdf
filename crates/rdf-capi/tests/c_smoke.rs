@@ -130,9 +130,17 @@ fn c_abi_smoke() {
     } else {
         "LD_LIBRARY_PATH"
     };
+    // The third argument is the COMMITTED tri-host entailment golden vector. The
+    // C program walks it case by case through `purrdf_entail_materialize_to_nquads`
+    // and compares both outputs byte for byte, so the artifact the Rust test, the
+    // WASM module and the Python suite all check reaches the C ABI too — one
+    // artifact, four hosts, rather than a fixture per host.
     let run = Command::new(&bin)
         .arg(format!("{manifest}/../rdf/tests/fixtures/okf-terms.trig"))
         .arg(format!("{manifest}/../rdf/tests/fixtures/okf-terms.json"))
+        .arg(format!(
+            "{manifest}/../validate/tests/fixtures/regime-boundary.vectors"
+        ))
         .env(loader_path_var, profile_dir)
         .status()
         .expect("failed to run the C smoke binary");

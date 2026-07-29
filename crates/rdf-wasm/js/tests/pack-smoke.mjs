@@ -31,8 +31,8 @@ const PACKAGE_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 // with the WASM_SIZE_BUDGET_BYTES raise that records it. Node 24.18.0/npm 11.16.0
 // measured a 2_977_978-byte tarball and 8_944_110 unpacked bytes over 8 entries.
 // Both ceilings retain about 3% headroom for supported packagers.
-const MAX_TARBALL_BYTES = 3_070_000;
-const MAX_UNPACKED_BYTES = 9_220_000;
+const MAX_TARBALL_BYTES = 3_210_000;
+const MAX_UNPACKED_BYTES = 9_620_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
 const NPM_INSTALL_TIMEOUT_MS = 180_000;
 const SMOKE_TIMEOUT_MS = 60_000;

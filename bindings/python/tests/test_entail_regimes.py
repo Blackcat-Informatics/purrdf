@@ -17,15 +17,25 @@ What is asserted here, and why:
   closure and the report. A chase that leaked hash order, a clock or an address
   would diverge here.
 * **The honest gap.** `rules(OWL_RL)` is the 78-rule specification table;
-  `implemented_rules(OWL_RL)` is the strictly smaller set this workspace fires.
-  The gap is asserted to be non-empty and to be exactly the report's `missing`
-  lines — the report and the inventory cannot drift apart.
+  `implemented_rules(OWL_RL)` is the subset this workspace fires. The two are
+  asserted to PARTITION the table — fired and missing cover it exactly, without
+  overlap, in specification order — and the missing half is asserted to be
+  exactly the report's `missing` lines, so the report and the inventory cannot
+  drift apart. The gap is legitimately EMPTY for a regime whose table is
+  complete, which OWL-RL's and D's now are; an assertion that it is non-empty
+  would pin a capability gap that has been closed.
+* **One artifact, four hosts.** The committed tri-host golden vector
+  (`crates/validate/tests/fixtures/regime-boundary.vectors`) is walked through
+  `materialize_nt` here, so Python checks the same bytes the Rust test, the C ABI
+  and the WASM module do rather than a fixture of its own.
 * **Refusals are typed and legible.** A malformed document, an unknown regime
   spelling, and a regime that cannot be forward-materialized all raise
   `ValueError`, and the spelling error names the whole accepted set.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
 
@@ -65,11 +75,16 @@ ALL_REGIMES = [
     entail.Regime.RIF,
     entail.Regime.D,
 ]
+# Every regime that closes. `D` belongs here: datatype entailment is realized as
+# the five `dt-*` rules of OWL 2 Profiles §4.3 Table 8, so it chases like any
+# other rule table. Omitting it would exempt the newly-materializable regime from
+# the byte-determinism and gap-versus-report coverage the other four get.
 MATERIALIZABLE = [
     entail.Regime.SIMPLE,
     entail.Regime.RDF,
     entail.Regime.RDFS,
     entail.Regime.OWL_RL,
+    entail.Regime.D,
 ]
 # Exactly two regimes are refused, both for spec-inherent reasons: OWL-Direct
 # needs the query's class expressions and RIF needs a parsed rule set. D was
@@ -331,3 +346,79 @@ def test_a_non_regime_argument_names_the_accepted_set() -> None:
     assert "purrdf.entail.Regime" in message
     for spelling in ACCEPTED_SPELLINGS:
         assert spelling in message, f"{message} omits {spelling}"
+
+
+# ── One artifact, four hosts ────────────────────────────────────────────────────
+
+# The COMMITTED tri-host golden vector. The `purrdf-validate` Rust test, the C
+# smoke (`crates/rdf-capi/tests/smoke.c`) and the WASM module's
+# `entailCheckGoldenVectors` all check these very bytes; this walks them from
+# Python, so "one artifact, four hosts" is a claim Python participates in rather
+# than one made on its behalf.
+GOLDEN_VECTOR = (
+    Path(__file__).resolve().parents[3]
+    / "crates"
+    / "validate"
+    / "tests"
+    / "fixtures"
+    / "regime-boundary.vectors"
+)
+
+# The directives that open a body, mapped to the case field they fill.
+_BODY_DIRECTIVES = {"@input": "input", "@closure": "closure", "@report": "report"}
+
+
+def _golden_cases() -> list[dict[str, str]]:
+    """Parse the committed artifact into its cases.
+
+    The format is line-oriented and deliberately dependency-free (see
+    `parse_regime_vectors` in `purrdf-validate`): a line starting with `@` is a
+    directive, every other line belongs to the body the last body-directive
+    opened, and outside a body only blank lines and `#` comments are legal.
+    """
+    cases: list[dict[str, str]] = []
+    case: dict[str, str] = {}
+    section: str | None = None
+    for raw in GOLDEN_VECTOR.read_text(encoding="utf-8").splitlines(keepends=True):
+        line = raw.rstrip("\n")
+        if not line.startswith("@"):
+            if section is not None:
+                case[section] = case.get(section, "") + raw
+            continue
+        section = None
+        keyword, _, argument = line.partition(" ")
+        if keyword == "@case":
+            case = {"name": argument.strip()}
+        elif keyword == "@regime":
+            case["regime"] = argument.strip()
+        elif keyword in _BODY_DIRECTIVES:
+            section = _BODY_DIRECTIVES[keyword]
+            case.setdefault(section, "")
+        elif keyword == "@end":
+            cases.append(case)
+            case = {}
+    return cases
+
+
+def test_the_golden_vector_artifact_is_readable() -> None:
+    """The artifact exists, parses, and covers every materializable regime."""
+    cases = _golden_cases()
+    assert cases, GOLDEN_VECTOR
+    covered = {case["regime"] for case in cases}
+    for regime in MATERIALIZABLE:
+        spelling = str(regime).rsplit(".", 1)[-1].lower().replace("_", "-")
+        assert spelling in covered, f"{spelling} is not covered by {GOLDEN_VECTOR}"
+
+
+@pytest.mark.parametrize(
+    "case", _golden_cases(), ids=lambda case: str(case["name"])
+)
+def test_the_golden_vector_matches_through_python(case: dict[str, str]) -> None:
+    """Python produces the committed bytes, for both the closure and the report.
+
+    A divergence here is the same one failing artifact the other three hosts
+    report, not a fourth fixture that quietly stopped agreeing with them.
+    """
+    closure, report = entail.materialize_nt(case["input"], case["regime"])
+    assert closure == case["closure"]
+    assert report == case["report"]

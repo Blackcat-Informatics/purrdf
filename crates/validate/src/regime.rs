@@ -3,7 +3,25 @@
 
 //! Entailment-**regime** materialization → canonical N-Quads **and a rendered
 //! report**, in one call — the shared string boundary every language binding
-//! routes through.
+//! routes through; plus the OWL 2 Direct-Semantics reasoning services, each with
+//! **its own** certificate rendered beside its answer.
+//!
+//! # Two lanes, two completeness notions, never interchanged
+//!
+//! The first half of this module is the **chase**: [`materialize_to_nquads_string`]
+//! closes a document under a regime's rule table and renders a
+//! [`ReasoningReport`] whose `completeness` line is `rules(r) ∖ implemented(r)`.
+//!
+//! The second half is the **tableau**: [`consistency_to_string`],
+//! [`classify_to_string`], [`realize_to_string`], [`instances_to_string`],
+//! [`entails_to_string`], [`profile_to_string`], [`extract_module_to_string`],
+//! [`justify_to_string`] and [`explain_conclusion_to_string`]. Those services
+//! render a [`DlCertificate`], whose completeness is `decided` /
+//! `decided-within-boundaries` / `budget-exhausted` — a different measurement
+//! entirely, because the DL lane has no rule table to subtract and reusing the
+//! chase's notion would report "exact" for a search that ran out of budget. The
+//! two renderings therefore carry DIFFERENT banners, so a consumer cannot mistake
+//! one for the other by parsing the wrong grammar.
 //!
 //! # Not to be confused with [`crate::entail`]
 //!
@@ -62,9 +80,13 @@
 //! and no dependency beyond `purrdf-entail` over what the crate already had.
 
 use core::fmt;
+use core::fmt::Write as _;
 
+use purrdf_core::{RdfLiteral, RdfTerm, RdfTriple, TermValue, emit_term};
 use purrdf_entail::{
-    Completeness, EntailError, ReasoningReport, Regime, implemented, materialize, rules,
+    ChaseProof, Completeness, DlAxiom, DlCertificate, DlCompleteness, EntailError, Justification,
+    ModuleMethod, OwlProfile, ProfileCertificate, Reasoner, ReasoningReport, Regime, Verdict,
+    explain_conclusion, extract_module, implemented, justify, materialize, profile, rules,
 };
 
 /// The accepted regime spellings, in the order an error message lists them.
@@ -658,6 +680,1084 @@ fn parse_regime_vectors(text: &str) -> Result<Vec<RegimeVector>, String> {
     Ok(cases)
 }
 
+// ── The Description-Logic reasoning services ────────────────────────────────
+
+/// The banner every [`DlCertificate`] rendering opens with.
+///
+/// Deliberately NOT [`REPORT_FORMAT_BANNER`]: a tableau certificate and a chase
+/// report answer different questions, and a consumer that parsed one as the other
+/// would read `decided` where it expected `exact`.
+pub const DL_CERTIFICATE_BANNER: &str = "purrdf-dl-certificate 1";
+
+/// The banner an OWL 2 profile certificate rendering opens with.
+pub const PROFILE_CERTIFICATE_BANNER: &str = "purrdf-owl-profile-certificate 1";
+
+/// The banner a module-extraction certificate rendering opens with.
+pub const MODULE_CERTIFICATE_BANNER: &str = "purrdf-module-extraction 1";
+
+/// The banner a justification certificate rendering opens with.
+pub const JUSTIFICATION_CERTIFICATE_BANNER: &str = "purrdf-justification 1";
+
+/// The banner a chase-proof certificate rendering opens with.
+pub const CHASE_PROOF_CERTIFICATE_BANNER: &str = "purrdf-chase-proof 1";
+
+/// The accepted locality-module method spellings, in the order an error lists them.
+pub const MODULE_METHOD_NAMES: [&str; 3] = ["bot", "top", "star"];
+
+/// The axiom kinds [`entails_to_string`] and [`justify_to_string`] can decide, in
+/// the order the `axiom` line of a rendering spells them.
+///
+/// These are the [`DlAxiom`] variant names verbatim, so the rendering names the
+/// same thing the Rust API does.
+pub const AXIOM_KINDS: [&str; 8] = [
+    "SubClassOf",
+    "EquivalentClasses",
+    "DisjointClasses",
+    "ClassAssertion",
+    "ObjectPropertyAssertion",
+    "SameIndividual",
+    "DifferentIndividuals",
+    "SubObjectPropertyOf",
+];
+
+/// `rdf:type` — the OWL 2 RDF mapping's class-assertion predicate, and the
+/// scaffold predicate [`parse_one_term`] parses a bare term through.
+const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+/// `rdfs:subClassOf` — the mapping's sub-class predicate.
+const RDFS_SUBCLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+/// `rdfs:subPropertyOf` — the mapping's sub-property predicate.
+const RDFS_SUBPROPERTY_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subPropertyOf";
+/// `owl:equivalentClass` — the mapping's class-equivalence predicate.
+const OWL_EQUIVALENT_CLASS: &str = "http://www.w3.org/2002/07/owl#equivalentClass";
+/// `owl:disjointWith` — the mapping's class-disjointness predicate.
+const OWL_DISJOINT_WITH: &str = "http://www.w3.org/2002/07/owl#disjointWith";
+/// `owl:sameAs` — the mapping's individual-identity predicate.
+const OWL_SAME_AS: &str = "http://www.w3.org/2002/07/owl#sameAs";
+/// `owl:differentFrom` — the mapping's individual-difference predicate.
+const OWL_DIFFERENT_FROM: &str = "http://www.w3.org/2002/07/owl#differentFrom";
+
+/// One reasoning service's answer and the certificate of the run that produced it.
+///
+/// The DL twin of [`RegimeClosure`], and for the same reason: both strings cross an
+/// FFI boundary and a positional pair is the wrong thing to get backwards there.
+/// There is no certificate-free constructor and no second entry point that drops
+/// the certificate — a caller that does not care must still bind it, because the
+/// alternative is how "the reasoner says no" comes to mean "the reasoner ran out
+/// of steps".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReasoningAnswer {
+    /// The service's answer, in the service's own line-oriented rendering.
+    answer: String,
+    /// The certificate of the run that produced it.
+    certificate: String,
+}
+
+impl ReasoningAnswer {
+    /// The service's answer.
+    ///
+    /// Line-oriented and byte-stable, in the grammar the service's entry point
+    /// documents. A dataset-valued answer ([`extract_module_to_string`],
+    /// [`justify_to_string`]) is canonical (RDFC-1.0) N-Quads instead.
+    #[must_use]
+    pub fn answer(&self) -> &str {
+        &self.answer
+    }
+
+    /// The certificate of the run that produced [`Self::answer`].
+    ///
+    /// Never empty, and always terminated by the service's own honesty gate — the
+    /// `overclaims` line for a tableau service, `conservative` for a module
+    /// extraction — so a consumer can apply the gate without re-deriving it.
+    #[must_use]
+    pub fn certificate(&self) -> &str {
+        &self.certificate
+    }
+
+    /// Consume the answer, yielding `(answer, certificate)`.
+    #[must_use]
+    pub fn into_parts(self) -> (String, String) {
+        (self.answer, self.certificate)
+    }
+}
+
+// ── Term syntax at the boundary ─────────────────────────────────────────────
+
+/// Render `term` in N-Triples term syntax (`<iri>`, `_:label`, `"lex"@en`,
+/// `<<( s p o )>>`).
+///
+/// The escaping is [`purrdf_core::emit_term`]'s, so a term rendered here and the
+/// same term rendered by the native serializers escape identically. Triple terms
+/// recurse HERE rather than through `emit_term`'s owned model, because the owned
+/// model requires a triple term's predicate to be an IRI and this function must be
+/// total over [`TermValue`].
+///
+/// N-Triples terms are self-delimiting — `<…>` ends at the unescaped `>`, `_:…` at
+/// whitespace, `"…"` at the unescaped closing quote — which is what makes a
+/// two-term line like `subclass <C> <D>` unambiguous even though a literal's
+/// lexical form may contain a space.
+fn emit(term: &TermValue) -> String {
+    match term {
+        TermValue::Iri(iri) => emit_term(&RdfTerm::iri(iri.clone())),
+        TermValue::Blank { label, scope } => emit_term(&RdfTerm::blank_node(
+            scope.qualify_label(label).into_owned(),
+        )),
+        TermValue::Literal {
+            lexical_form,
+            datatype,
+            language,
+            direction,
+        } => emit_term(&RdfTerm::literal(RdfLiteral {
+            lexical_form: lexical_form.clone(),
+            datatype: Some(datatype.clone()),
+            language: language.clone(),
+            direction: *direction,
+        })),
+        TermValue::Triple { s, p, o } => match p.as_iri() {
+            Some(predicate) => emit_term(&RdfTerm::triple(RdfTriple::new(
+                to_owned_term(s),
+                predicate.to_owned(),
+                to_owned_term(o),
+            ))),
+            // A triple term whose predicate is not an IRI is not a well-formed RDF
+            // triple, so the owned model cannot hold it. Rendering it structurally
+            // is the honest option: the caller sees what the term actually is
+            // rather than a silently dropped component.
+            None => format!("<<( {} {} {} )>>", emit(s), emit(p), emit(o)),
+        },
+    }
+}
+
+/// The owned-model twin of a non-recursive [`TermValue`], for [`emit`].
+///
+/// A triple term nests through [`emit`]'s own recursion, so this only has to be
+/// correct for the three flat kinds; a nested triple term is rebuilt from its
+/// rendering rather than from this, which is why the fallback is an IRI-shaped
+/// term carrying the rendering instead of a panic.
+fn to_owned_term(term: &TermValue) -> RdfTerm {
+    match term {
+        TermValue::Iri(iri) => RdfTerm::iri(iri.clone()),
+        TermValue::Blank { label, scope } => {
+            RdfTerm::blank_node(scope.qualify_label(label).into_owned())
+        }
+        TermValue::Literal {
+            lexical_form,
+            datatype,
+            language,
+            direction,
+        } => RdfTerm::literal(RdfLiteral {
+            lexical_form: lexical_form.clone(),
+            datatype: Some(datatype.clone()),
+            language: language.clone(),
+            direction: *direction,
+        }),
+        TermValue::Triple { s, p, o } => RdfTerm::triple(RdfTriple::new(
+            to_owned_term(s),
+            p.as_iri().unwrap_or_default().to_owned(),
+            to_owned_term(o),
+        )),
+    }
+}
+
+/// Parse ONE N-Triples term — an IRI or a blank node — from `text`.
+///
+/// Implemented by parsing `text` in SUBJECT position of a scaffold triple rather
+/// than by a hand-rolled term parser, so the boundary's term syntax is exactly the
+/// native codec's and cannot drift from it. The scaffold's predicate and object are
+/// `rdf:type`, an RDF specification IRI: it is read and discarded, never emitted,
+/// and PurRDF mints nothing here.
+///
+/// A literal is refused by the codec itself, which is the right answer: a class, an
+/// individual and a property are all NAMES, and a literal is not a name.
+fn parse_one_term(text: &str) -> Result<TermValue, String> {
+    let scaffold = format!("{} <{RDF_TYPE}> <{RDF_TYPE}> .\n", text.trim());
+    let dataset = purrdf_rdf::parse_dataset(scaffold.as_bytes(), INPUT_MEDIA_TYPE, None)
+        .map_err(|diagnostic| format!("\"{text}\" is not one N-Triples term: {diagnostic}"))?;
+    let mut quads = dataset.quads();
+    let Some(quad) = quads.next() else {
+        return Err(format!("\"{text}\" is not one N-Triples term: it is empty"));
+    };
+    if quads.next().is_some() {
+        return Err(format!(
+            "\"{text}\" is not ONE N-Triples term: it parses as more than one"
+        ));
+    }
+    // The scaffold's own predicate, object and (absent) graph must come back
+    // unchanged. They do not when `text` was more than one term: `<A> <B>` makes
+    // the scaffold a four-term N-Quads statement whose graph is the trailing
+    // `rdf:type`, which would otherwise be read as the single term `<A>`.
+    let intact = quad.g.is_none()
+        && dataset.term_value(quad.p).as_iri() == Some(RDF_TYPE)
+        && dataset.term_value(quad.o).as_iri() == Some(RDF_TYPE);
+    if !intact {
+        return Err(format!(
+            "\"{text}\" is not ONE N-Triples term: it parses as more than one"
+        ));
+    }
+    Ok(dataset.term_value(quad.s))
+}
+
+/// Parse a newline-separated signature: one N-Triples term per non-blank line.
+fn parse_signature(text: &str) -> Result<Vec<TermValue>, String> {
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(parse_one_term)
+        .collect()
+}
+
+/// Parse ONE N-Quads statement into `(graph, subject, predicate, object)`.
+fn parse_one_statement(
+    text: &str,
+) -> Result<(Option<TermValue>, TermValue, TermValue, TermValue), String> {
+    let dataset = purrdf_rdf::parse_dataset(text.as_bytes(), INPUT_MEDIA_TYPE, None)
+        .map_err(|diagnostic| format!("\"{text}\" is not one N-Quads statement: {diagnostic}"))?;
+    let mut quads = dataset.quads();
+    let Some(quad) = quads.next() else {
+        return Err(format!(
+            "\"{text}\" is not one N-Quads statement: it is empty"
+        ));
+    };
+    if quads.next().is_some() {
+        return Err(format!(
+            "\"{text}\" is not ONE N-Quads statement: it parses as more than one"
+        ));
+    }
+    Ok((
+        quad.g.map(|g| dataset.term_value(g)),
+        dataset.term_value(quad.s),
+        dataset.term_value(quad.p),
+        dataset.term_value(quad.o),
+    ))
+}
+
+/// Read an axiom written as ONE triple of the **OWL 2 RDF mapping**.
+///
+/// No mini-language is invented here: every [`DlAxiom`] variant already HAS an RDF
+/// spelling, and it is the one the reasoner's own reverse mapping reads. Seven
+/// reserved predicates select the seven named variants and every other predicate is
+/// an object-property assertion — exactly the OWL 2 mapping's own dispatch:
+///
+/// | triple | axiom |
+/// |---|---|
+/// | `C rdfs:subClassOf D` | `SubClassOf` |
+/// | `C owl:equivalentClass D` | `EquivalentClasses` |
+/// | `C owl:disjointWith D` | `DisjointClasses` |
+/// | `a rdf:type C` | `ClassAssertion` |
+/// | `a owl:sameAs b` | `SameIndividual` |
+/// | `a owl:differentFrom b` | `DifferentIndividuals` |
+/// | `p rdfs:subPropertyOf q` | `SubObjectPropertyOf` |
+/// | `a p b` (anything else) | `ObjectPropertyAssertion` |
+///
+/// An axiom names no graph, so a statement that does is refused rather than having
+/// its graph silently dropped.
+fn parse_axiom(text: &str) -> Result<DlAxiom, String> {
+    let (graph, subject, predicate, object) = parse_one_statement(text)?;
+    if graph.is_some() {
+        return Err(format!(
+            "\"{text}\" names a graph; an axiom is one triple and is not graph-scoped"
+        ));
+    }
+    Ok(match predicate.as_iri() {
+        Some(RDFS_SUBCLASS_OF) => DlAxiom::SubClassOf {
+            sub: subject,
+            sup: object,
+        },
+        Some(OWL_EQUIVALENT_CLASS) => DlAxiom::EquivalentClasses {
+            left: subject,
+            right: object,
+        },
+        Some(OWL_DISJOINT_WITH) => DlAxiom::DisjointClasses {
+            left: subject,
+            right: object,
+        },
+        Some(RDF_TYPE) => DlAxiom::ClassAssertion {
+            individual: subject,
+            class: object,
+        },
+        Some(OWL_SAME_AS) => DlAxiom::SameIndividual {
+            left: subject,
+            right: object,
+        },
+        Some(OWL_DIFFERENT_FROM) => DlAxiom::DifferentIndividuals {
+            left: subject,
+            right: object,
+        },
+        Some(RDFS_SUBPROPERTY_OF) => DlAxiom::SubObjectPropertyOf {
+            sub: subject,
+            sup: object,
+        },
+        _ => DlAxiom::ObjectPropertyAssertion {
+            subject,
+            property: predicate,
+            object,
+        },
+    })
+}
+
+/// The [`AXIOM_KINDS`] name of `axiom`, and its terms in declaration order.
+fn axiom_parts(axiom: &DlAxiom) -> (&'static str, Vec<&TermValue>) {
+    match axiom {
+        DlAxiom::SubClassOf { sub, sup } => ("SubClassOf", vec![sub, sup]),
+        DlAxiom::EquivalentClasses { left, right } => ("EquivalentClasses", vec![left, right]),
+        DlAxiom::DisjointClasses { left, right } => ("DisjointClasses", vec![left, right]),
+        DlAxiom::ClassAssertion { individual, class } => {
+            ("ClassAssertion", vec![individual, class])
+        }
+        DlAxiom::ObjectPropertyAssertion {
+            subject,
+            property,
+            object,
+        } => ("ObjectPropertyAssertion", vec![subject, property, object]),
+        DlAxiom::SameIndividual { left, right } => ("SameIndividual", vec![left, right]),
+        DlAxiom::DifferentIndividuals { left, right } => {
+            ("DifferentIndividuals", vec![left, right])
+        }
+        DlAxiom::SubObjectPropertyOf { sub, sup } => ("SubObjectPropertyOf", vec![sub, sup]),
+    }
+}
+
+/// Write `axiom` as an `axiom <kind>` line followed by one `term <t>` line each.
+fn write_axiom(axiom: &DlAxiom, out: &mut String) {
+    let (kind, terms) = axiom_parts(axiom);
+    out.push_str("axiom ");
+    out.push_str(kind);
+    out.push('\n');
+    for term in terms {
+        out.push_str("term ");
+        out.push_str(&emit(term));
+        out.push('\n');
+    }
+}
+
+// ── Certificate rendering ───────────────────────────────────────────────────
+
+/// Render a [`DlCertificate`] to the boundary's byte-stable textual form.
+///
+/// The grammar, in emission order — one fact per line, `\n`-terminated:
+///
+/// ```text
+/// purrdf-dl-certificate 1
+/// service <name>
+/// completeness decided | completeness decided-within-boundaries | completeness budget-exhausted
+/// boundary <construct> <reason>           (0..n, Construct declaration order)
+/// steps <n>
+/// budget <n>
+/// decisions <n>
+/// overclaims false | overclaims true
+/// ```
+///
+/// `completeness` is the DL lane's own notion and NOT the chase's: the middle value
+/// says the search finished and the reverse mapping still could not turn every
+/// axiom of the supplied ontology into a DL clause, so a `False` answer under it
+/// means only "not entailed by what was read". `budget-exhausted` says at least one
+/// tableau run reached its step cap, which is why a boolean service answers
+/// `unknown` rather than `false` — reporting a resource limit as an entailment is
+/// the defect this line exists to prevent.
+///
+/// `steps` is a count of saturation rounds and `budget` the per-DECISION cap, so
+/// `steps` may legitimately exceed `budget` when `decisions` is greater than one.
+/// Neither is a clock reading, so the rendering is identical on `wasm32`.
+///
+/// `overclaims` is derivable and is emitted anyway, for the same reason
+/// [`render_reasoning_report`] emits its own: a consumer on the far side of an FFI
+/// boundary should not have to re-derive the gate to check it.
+#[must_use]
+pub fn render_dl_certificate(service: &str, certificate: &DlCertificate) -> String {
+    let mut out = String::new();
+    out.push_str(DL_CERTIFICATE_BANNER);
+    out.push('\n');
+    let _ = writeln!(out, "service {service}");
+    let completeness = match certificate.completeness() {
+        DlCompleteness::Decided => "decided",
+        DlCompleteness::DecidedWithinBoundaries => "decided-within-boundaries",
+        DlCompleteness::BudgetExhausted => "budget-exhausted",
+    };
+    let _ = writeln!(out, "completeness {completeness}");
+    for boundary in certificate.boundaries() {
+        let _ = writeln!(
+            out,
+            "boundary {} {}",
+            boundary.construct().as_str(),
+            boundary.reason()
+        );
+    }
+    let _ = writeln!(out, "steps {}", certificate.steps());
+    let _ = writeln!(out, "budget {}", certificate.budget());
+    let _ = writeln!(out, "decisions {}", certificate.decisions());
+    let _ = writeln!(out, "overclaims {}", certificate.overclaims());
+    out
+}
+
+/// The rendering of a three-valued [`Verdict`]: `true`, `false` or `unknown`.
+///
+/// `unknown` is never collapsed to `false`. That is the whole point of the third
+/// value, and it is the one substitution a string boundary could make silently.
+fn verdict_name(verdict: Verdict) -> &'static str {
+    match verdict {
+        Verdict::True => "true",
+        Verdict::False => "false",
+        Verdict::Unknown => "unknown",
+    }
+}
+
+/// Open a [`Reasoner`] over `document`, narrowed to `step_cap` when that is non-zero.
+///
+/// `step_cap` can only NARROW: [`Reasoner::with_step_cap`] clamps to the knowledge
+/// base's own cap, which is a pure function of its size. `0` means "do not narrow"
+/// rather than "a cap of zero steps", because a zero cap would exhaust every
+/// decision and make the parameter a footgun at three language boundaries.
+fn open_reasoner(document: &str, step_cap: u32) -> Result<Reasoner, String> {
+    let dataset = purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
+        .map_err(|diagnostic| diagnostic.to_string())?;
+    let reasoner = Reasoner::new(&dataset).map_err(|error| format!("reasoner: {error}"))?;
+    Ok(if step_cap == 0 {
+        reasoner
+    } else {
+        reasoner.with_step_cap(u64::from(step_cap))
+    })
+}
+
+/// The message a service that cannot reason over an unsatisfiable ontology is
+/// refused with.
+///
+/// Named rather than answered: every class subsumes every other in an ontology with
+/// no model, so an answer would be a complete graph carrying no information. The
+/// message points at the one service that DOES answer for such an ontology.
+fn service_error(service: &str, error: &EntailError) -> String {
+    match error {
+        EntailError::Unsatisfiable => format!(
+            "{service}: the ontology has no model, so every answer would be vacuous; \
+             consistency_to_string reports this as `consistency false`"
+        ),
+        other => format!("{service}: {other}"),
+    }
+}
+
+// ── The services ────────────────────────────────────────────────────────────
+
+/// Is the ontology consistent — does it have a model at all?
+///
+/// The one DL service that does not fail on an unsatisfiable ontology, because it
+/// is the service that DETECTS one.
+///
+/// The answer is one line, `consistency true | false | unknown`; `unknown` means
+/// the tableau reached its step cap, which the certificate's
+/// `completeness budget-exhausted` line says in its own words.
+///
+/// # Errors
+///
+/// A malformed document (the native codec's own diagnostic), or a reverse mapping
+/// that fails on a malformed OWL class-expression graph.
+///
+/// ```
+/// use purrdf_validate::regime::consistency_to_string;
+///
+/// let data = "<http://example.org/x> \
+///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .\n";
+/// let decided = consistency_to_string(data, 0).expect("reverse-maps");
+/// assert_eq!(decided.answer(), "consistency true\n");
+/// // The certificate is never optional and never claims more than it decided.
+/// assert!(decided.certificate().starts_with("purrdf-dl-certificate 1\n"));
+/// assert!(decided.certificate().ends_with("overclaims false\n"));
+/// ```
+pub fn consistency_to_string(document: &str, step_cap: u32) -> Result<ReasoningAnswer, String> {
+    let reasoner = open_reasoner(document, step_cap)?;
+    let (verdict, certificate) = reasoner.consistency().into_parts();
+    Ok(ReasoningAnswer {
+        answer: format!("consistency {}\n", verdict_name(verdict)),
+        certificate: render_dl_certificate("consistency", &certificate),
+    })
+}
+
+/// The subsumption hierarchy over the ontology's named classes.
+///
+/// The answer's grammar, in emission order — each block in the classifier's own
+/// sorted, dataset-independent term order:
+///
+/// ```text
+/// equivalent <C> <D>      (0..n, each unordered pair once)
+/// subclass <C> <D>        (0..n, the FULL transitively-closed relation)
+/// direct <C> <D>          (0..n, the transitive reduction)
+/// unsatisfiable <C>       (0..n, the classes established equivalent to owl:Nothing)
+/// ```
+///
+/// `subclass` and `direct` are both emitted because they are different facts:
+/// `direct` is "direct as far as this run decided", which weakens under a
+/// `budget-exhausted` certificate while every listed pair stays a genuine
+/// subsumption. Dropping either would make the other's meaning ambiguous.
+///
+/// # Errors
+///
+/// A malformed document, or an ontology with no model — every class then subsumes
+/// every other and the hierarchy would be a complete graph.
+pub fn classify_to_string(document: &str, step_cap: u32) -> Result<ReasoningAnswer, String> {
+    let reasoner = open_reasoner(document, step_cap)?;
+    let (hierarchy, certificate) = reasoner
+        .classify()
+        .map_err(|error| service_error("classify", &error))?
+        .into_parts();
+    let mut answer = String::new();
+    for (left, right) in hierarchy.equivalences() {
+        let _ = writeln!(answer, "equivalent {} {}", emit(left), emit(right));
+    }
+    for (sub, sup) in hierarchy.subsumptions() {
+        let _ = writeln!(answer, "subclass {} {}", emit(sub), emit(sup));
+    }
+    for (sub, sup) in hierarchy.direct_subsumptions() {
+        let _ = writeln!(answer, "direct {} {}", emit(sub), emit(sup));
+    }
+    for class in hierarchy.unsatisfiable() {
+        let _ = writeln!(answer, "unsatisfiable {}", emit(class));
+    }
+    Ok(ReasoningAnswer {
+        answer,
+        certificate: render_dl_certificate("classify", &certificate),
+    })
+}
+
+/// The entailed types of the ontology's named individuals, and the most specific
+/// of them.
+///
+/// The answer's grammar, in emission order:
+///
+/// ```text
+/// type <a> <C>            (0..n, every established a : C)
+/// direct-type <a> <C>     (0..n, the most specific of them)
+/// ```
+///
+/// Both blocks are emitted for the reason [`classify_to_string`] emits both of its
+/// subsumption blocks: `direct-type` is a statement about the hierarchy as this run
+/// decided it, and `type` is the answer set.
+///
+/// # Errors
+///
+/// A malformed document, or an ontology with no model.
+pub fn realize_to_string(document: &str, step_cap: u32) -> Result<ReasoningAnswer, String> {
+    let reasoner = open_reasoner(document, step_cap)?;
+    let (realization, certificate) = reasoner
+        .realize()
+        .map_err(|error| service_error("realize", &error))?
+        .into_parts();
+    let mut answer = String::new();
+    for (individual, class) in realization.types() {
+        let _ = writeln!(answer, "type {} {}", emit(individual), emit(class));
+    }
+    for (individual, class) in realization.direct_types() {
+        let _ = writeln!(answer, "direct-type {} {}", emit(individual), emit(class));
+    }
+    Ok(ReasoningAnswer {
+        answer,
+        certificate: render_dl_certificate("realize", &certificate),
+    })
+}
+
+/// The named individuals entailed to be instances of `class`.
+///
+/// `class` is ONE N-Triples term — `<iri>` or `_:label`. A class the ontology never
+/// mentions is not an error: it is an atomic name no axiom constrains, which is what
+/// the Direct Semantics says it is, and the (empty) answer for it is a real answer.
+///
+/// The answer's grammar: `instance <a>`, zero or more, sorted.
+///
+/// # Errors
+///
+/// A malformed document, a `class` that is not one N-Triples term, or an ontology
+/// with no model — every individual would then be an instance of every class.
+pub fn instances_to_string(
+    document: &str,
+    class: &str,
+    step_cap: u32,
+) -> Result<ReasoningAnswer, String> {
+    let term = parse_one_term(class)?;
+    let mut reasoner = open_reasoner(document, step_cap)?;
+    let (individuals, certificate) = reasoner
+        .instances(&term)
+        .map_err(|error| service_error("instances", &error))?
+        .into_parts();
+    let mut answer = String::new();
+    for individual in &individuals {
+        let _ = writeln!(answer, "instance {}", emit(individual));
+    }
+    Ok(ReasoningAnswer {
+        answer,
+        certificate: render_dl_certificate("instances", &certificate),
+    })
+}
+
+/// Does the ontology entail `axiom`?
+///
+/// `axiom` is ONE triple of the OWL 2 RDF mapping — see [`parse_axiom`] for the
+/// seven reserved predicates and the object-property-assertion default.
+///
+/// The answer's grammar, in emission order:
+///
+/// ```text
+/// entails true | entails false | entails unknown
+/// axiom <kind>            (one of AXIOM_KINDS)
+/// term <t>                (2..3, in the axiom's own declaration order)
+/// ```
+///
+/// The axiom is echoed because the predicate DISPATCHES: a caller that meant an
+/// object-property assertion and wrote `rdfs:subClassOf` can see which axiom was
+/// actually decided rather than inferring it from a verdict.
+///
+/// # Errors
+///
+/// A malformed document, an `axiom` that is not one triple, an axiom statement that
+/// names a graph, or an ontology with no model — in which case every axiom is
+/// entailed and the answer would be worthless.
+///
+/// ```
+/// use purrdf_validate::regime::entails_to_string;
+///
+/// let data = "<http://example.org/Cat> \
+///     <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .\n\
+///     <http://example.org/tom> \
+///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .\n";
+/// // Not asserted, and entailed.
+/// let asked = "<http://example.org/tom> \
+///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Animal> .\n";
+/// let decided = entails_to_string(data, asked, 0).expect("decides");
+/// assert!(decided.answer().starts_with("entails true\n"));
+/// assert!(decided.answer().contains("\naxiom ClassAssertion\n"));
+/// ```
+pub fn entails_to_string(
+    document: &str,
+    axiom: &str,
+    step_cap: u32,
+) -> Result<ReasoningAnswer, String> {
+    let parsed = parse_axiom(axiom)?;
+    let mut reasoner = open_reasoner(document, step_cap)?;
+    let (verdict, certificate) = reasoner
+        .entails(&parsed)
+        .map_err(|error| service_error("entails", &error))?
+        .into_parts();
+    let mut answer = format!("entails {}\n", verdict_name(verdict));
+    write_axiom(&parsed, &mut answer);
+    Ok(ReasoningAnswer {
+        answer,
+        certificate: render_dl_certificate("entails", &certificate),
+    })
+}
+
+/// Which OWL 2 profiles the ontology is provably in, and what blocked the others.
+///
+/// Purely syntactic — no tableau, no closure, no budget — which is why this is the
+/// one service whose certificate is NOT a [`DlCertificate`]: there is no search to
+/// report the completeness of, and rendering a fabricated `decided` beside a
+/// certification that never ran a tableau would be a lie of the exact kind the DL
+/// certificate exists to prevent.
+///
+/// The answer's grammar: `certified <profile>`, most restrictive first
+/// (`EL`, `QL`, `RL`, `DL`, `Full`). `Full` is always certified.
+///
+/// The certificate's grammar:
+///
+/// ```text
+/// purrdf-owl-profile-certificate 1
+/// service profile
+/// violation <profile> <term> <subject> <reason…>   (0..n, sorted)
+/// certifies-el true|false
+/// certifies-ql true|false
+/// certifies-rl true|false
+/// certifies-dl true|false
+/// certifies-full true|false
+/// one-directional true
+/// ```
+///
+/// The first three fields of a `violation` line are self-delimiting N-Triples terms
+/// and a profile name; the rest of the line is the reason, exactly as
+/// [`render_reasoning_report`]'s `boundary` lines are shaped.
+///
+/// `one-directional` is this certificate's honesty gate and is a constant `true`:
+/// a certification PROVES membership, and a violation does not prove
+/// non-membership — it says only that the syntactic analysis could not place this
+/// occurrence somewhere legal. A consumer must not read a violation as a proof of
+/// exclusion, and the line says so on every certificate rather than in prose the
+/// consumer may never read.
+///
+/// # Errors
+///
+/// A malformed document (the native codec's own diagnostic).
+///
+/// ```
+/// use purrdf_validate::regime::profile_to_string;
+///
+/// let data = "<http://example.org/Cat> \
+///     <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .\n";
+/// let certified = profile_to_string(data).expect("parses");
+/// // A bare sub-class axiom is in every profile, most restrictive first.
+/// assert_eq!(certified.answer().lines().next(), Some("certified EL"));
+/// assert!(certified.certificate().ends_with("one-directional true\n"));
+/// ```
+pub fn profile_to_string(document: &str) -> Result<ReasoningAnswer, String> {
+    let dataset = purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
+        .map_err(|diagnostic| diagnostic.to_string())?;
+    let certificate = profile(&dataset);
+    Ok(ReasoningAnswer {
+        answer: render_profile_answer(&certificate),
+        certificate: render_profile_certificate(&certificate),
+    })
+}
+
+/// The `certified <profile>` block of [`profile_to_string`]'s answer.
+fn render_profile_answer(certificate: &ProfileCertificate) -> String {
+    let mut answer = String::new();
+    for profile in certificate.certified() {
+        let _ = writeln!(answer, "certified {}", profile.as_str());
+    }
+    answer
+}
+
+/// The violation block and the per-profile gate of [`profile_to_string`].
+fn render_profile_certificate(certificate: &ProfileCertificate) -> String {
+    let mut out = String::new();
+    out.push_str(PROFILE_CERTIFICATE_BANNER);
+    out.push('\n');
+    out.push_str("service profile\n");
+    for violation in certificate.violations() {
+        let _ = writeln!(
+            out,
+            "violation {} {} {} {}",
+            violation.profile().as_str(),
+            emit(violation.term()),
+            emit(violation.subject()),
+            violation.reason()
+        );
+    }
+    // A dense per-profile answer beside the sparse violation list, so a consumer
+    // asking "is this RL?" reads one line rather than searching for the ABSENCE of
+    // a violation — which is the reading a sparse list makes easy to get wrong.
+    for profile in OwlProfile::ALL {
+        let _ = writeln!(
+            out,
+            "certifies-{} {}",
+            profile.as_str().to_ascii_lowercase(),
+            certificate.certifies(profile)
+        );
+    }
+    out.push_str("one-directional true\n");
+    out
+}
+
+/// The locality module of the ontology for a seed signature.
+///
+/// `signature` is one N-Triples term per non-blank line. `method` is `bot`, `top`
+/// or `star` — see [`MODULE_METHOD_NAMES`].
+///
+/// The answer is the extracted module as canonical (RDFC-1.0) N-Quads, exactly as
+/// [`materialize_to_nquads_string`]'s closure is, so the two dataset-valued
+/// services serialize through one path.
+///
+/// The certificate's grammar:
+///
+/// ```text
+/// purrdf-module-extraction 1
+/// service extract-module
+/// method BOT | TOP | STAR
+/// axioms <n>
+/// signature <t>                    (0..n, the signature the fixpoint CLOSED to)
+/// conservative-keep <s> <p>        (0..n)
+/// conservative false | conservative true
+/// ```
+///
+/// `conservative` is this certificate's honesty gate: `true` says at least one
+/// triple was kept because the extractor could not decide its locality exactly, so
+/// the module is a SUPERSET rather than the minimal one. That is the sound
+/// direction of the doctrine, made visible instead of silently inflating a module a
+/// caller is sizing.
+///
+/// # Errors
+///
+/// A malformed document, a signature line that is not one N-Triples term, an
+/// unknown `method` spelling (the message names the accepted set), or a module that
+/// cannot be frozen into a dataset.
+pub fn extract_module_to_string(
+    document: &str,
+    signature: &str,
+    method: &str,
+) -> Result<ReasoningAnswer, String> {
+    let notion = parse_module_method(method)?;
+    let seed = parse_signature(signature)?;
+    let dataset = purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
+        .map_err(|diagnostic| diagnostic.to_string())?;
+    let extraction = extract_module(&dataset, &seed, notion)
+        .map_err(|error| format!("extract-module: {error}"))?;
+
+    let mut certificate = String::new();
+    certificate.push_str(MODULE_CERTIFICATE_BANNER);
+    certificate.push('\n');
+    certificate.push_str("service extract-module\n");
+    let _ = writeln!(certificate, "method {}", extraction.method().as_str());
+    let _ = writeln!(certificate, "axioms {}", extraction.axioms());
+    for term in extraction.signature() {
+        let _ = writeln!(certificate, "signature {}", emit(term));
+    }
+    for keep in extraction.conservative_keeps() {
+        let _ = writeln!(
+            certificate,
+            "conservative-keep {} {}",
+            emit(keep.subject()),
+            emit(keep.predicate())
+        );
+    }
+    let _ = writeln!(
+        certificate,
+        "conservative {}",
+        !extraction.conservative_keeps().is_empty()
+    );
+
+    Ok(ReasoningAnswer {
+        answer: purrdf_rdf::canonical_flat_nquads(extraction.module().as_ref())?,
+        certificate,
+    })
+}
+
+/// Parse a locality-module method from its CLI spelling.
+fn parse_module_method(name: &str) -> Result<ModuleMethod, String> {
+    match name {
+        "bot" => Ok(ModuleMethod::Bot),
+        "top" => Ok(ModuleMethod::Top),
+        "star" => Ok(ModuleMethod::Star),
+        other => Err(format!(
+            "unknown locality-module method \"{other}\"; accepted: {}",
+            MODULE_METHOD_NAMES.join(", ")
+        )),
+    }
+}
+
+/// WHY a Description-Logic axiom is entailed: a minimal subset of the ontology that
+/// still entails it.
+///
+/// A tableau performs no derivation steps, so this is a JUSTIFICATION and
+/// deliberately not called a proof — see [`explain_conclusion_to_string`] for the
+/// chase lane's genuinely derivational explanation and for why the two are
+/// different kinds of thing rather than two spellings of one.
+///
+/// The answer is the justification's axioms as canonical (RDFC-1.0) N-Quads: a
+/// justification introduces no term at all, so it is emitted as an ordinary RDF 1.2
+/// dataset holding exactly the axioms already present in the input.
+///
+/// The certificate's grammar:
+///
+/// ```text
+/// purrdf-justification 1
+/// service justify
+/// axiom <kind>
+/// term <t>                   (2..3)
+/// axioms <n>
+/// decisions <n>
+/// digest <64 lowercase hex>
+/// sufficient true | false
+/// minimal true | false
+/// overclaims false | overclaims true
+/// ```
+///
+/// `sufficient` and `minimal` are **re-decided here**, over the justification alone
+/// and over each of its one-axiom-smaller subsets. They do not consult the search
+/// that found the justification and cannot be misled by it, which is what makes them
+/// a check rather than a restatement. `overclaims` is `true` unless both hold: a
+/// subset that does not entail, or that carries an axiom the entailment does not
+/// need, is a weaker answer than "a justification" and says so.
+///
+/// `digest` is BLAKE3 over the canonical N-Quads of the justification — a CONTENT
+/// digest, never an IRI, because PurRDF mints no vocabulary.
+///
+/// # Errors
+///
+/// A malformed document; an `axiom` that is not one triple; an ontology that does
+/// not entail the axiom (a subset of a non-entailing ontology does not entail
+/// either, so the search would return the empty set, which reads as "nothing is
+/// needed" and means the opposite); or a tableau that ran out of step budget
+/// deciding the axiom, leaving no answer to shrink against.
+///
+/// ```
+/// use purrdf_validate::regime::justify_to_string;
+///
+/// let sub = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+/// let data = format!(
+///     "<http://example.org/Cat> <{sub}> <http://example.org/Mammal> .\n\
+///      <http://example.org/Mammal> <{sub}> <http://example.org/Animal> .\n\
+///      <http://example.org/Fish> <{sub}> <http://example.org/Animal> .\n"
+/// );
+/// let asked = format!("<http://example.org/Cat> <{sub}> <http://example.org/Animal> .\n");
+/// let why = justify_to_string(&data, &asked).expect("entailed");
+/// // The chain, and NOT the sibling.
+/// assert_eq!(why.answer().lines().count(), 2);
+/// assert!(why.certificate().contains("\nsufficient true\n"));
+/// assert!(why.certificate().contains("\nminimal true\n"));
+/// assert!(why.certificate().ends_with("overclaims false\n"));
+/// ```
+pub fn justify_to_string(document: &str, axiom: &str) -> Result<ReasoningAnswer, String> {
+    let parsed = parse_axiom(axiom)?;
+    let dataset = purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
+        .map_err(|diagnostic| diagnostic.to_string())?;
+    let justification = justify(&dataset, &parsed).map_err(|error| format!("justify: {error}"))?;
+    Ok(ReasoningAnswer {
+        answer: purrdf_rdf::canonical_flat_nquads(justification.ontology().as_ref())?,
+        certificate: render_justification(&justification)?,
+    })
+}
+
+/// Render a [`Justification`], re-deciding both halves of its claim.
+fn render_justification(justification: &Justification) -> Result<String, String> {
+    let sufficient = justification
+        .is_sufficient()
+        .map_err(|error| format!("justify: re-deciding sufficiency: {error}"))?;
+    let minimal = justification
+        .is_minimal()
+        .map_err(|error| format!("justify: re-deciding minimality: {error}"))?;
+    let mut out = String::new();
+    out.push_str(JUSTIFICATION_CERTIFICATE_BANNER);
+    out.push('\n');
+    out.push_str("service justify\n");
+    write_axiom(justification.axiom(), &mut out);
+    let _ = writeln!(out, "axioms {}", justification.axioms());
+    let _ = writeln!(out, "decisions {}", justification.decisions());
+    let _ = writeln!(out, "digest {}", justification.digest_hex());
+    let _ = writeln!(out, "sufficient {sufficient}");
+    let _ = writeln!(out, "minimal {minimal}");
+    let _ = writeln!(out, "overclaims {}", !(sufficient && minimal));
+    Ok(out)
+}
+
+/// WHY a chase conclusion holds: the derivation, re-derived from the clause program.
+///
+/// The chase's explanation is a DERIVATION — which rule, from which premises — and
+/// is a different kind of thing from [`justify_to_string`]'s justification. Giving
+/// them one entry point would let a caller write code that treats a tableau answer
+/// as though a rule had fired.
+///
+/// `conclusion` is ONE N-Quads statement. Its graph, if it names one, selects the
+/// closure to explain under the dataset semantics
+/// [`materialize_to_nquads_string`] documents: no graph is the default graph closed
+/// against itself, and a named graph is closed against the union of itself and the
+/// default graph. A conclusion drawn in one graph therefore has an explanation in
+/// that graph's run and, in general, in no other.
+///
+/// The answer's grammar, in emission order:
+///
+/// ```text
+/// asserted true | asserted false
+/// steps <n>
+/// rule <rule-id>            (0..n, specification table order, deduplicated)
+/// ```
+///
+/// `asserted true` is a real explanation and a checkable one: a given triple is
+/// explained by the fact that it is given, and the check runs against the SEEDED
+/// store, so a derived fact cannot be passed off as a given.
+///
+/// The certificate's grammar:
+///
+/// ```text
+/// purrdf-chase-proof 1
+/// service explain-conclusion
+/// regime <cli-spelling>
+/// graph default | graph <t>
+/// conclusion-subject <t>
+/// conclusion-predicate <t>
+/// conclusion-object <t>
+/// derived-subject <surface>
+/// derived-predicate <surface>
+/// derived-object <surface>
+/// digest <64 lowercase hex>
+/// proof-term-bytes <n>
+/// checked true | checked false
+/// overclaims false | overclaims true
+/// ```
+///
+/// The `derived-*` lines are what the CHECKER re-derived from the proof term and
+/// the clause program — not what the proof claims. They are emitted beside the
+/// `conclusion-*` lines precisely so the two can be compared: a proof whose stated
+/// conclusion is not the one its own premises license shows up as three differing
+/// lines rather than as a silent `checked true`.
+///
+/// `proof-term-bytes` is the length of the proof term's canonical encoding. The
+/// encoding itself does NOT cross this boundary — see the crate's own README-level
+/// note on the typed surface that would be needed to carry the derivation DAG — so
+/// `digest` is what a consumer compares across hosts.
+///
+/// # Errors
+///
+/// A malformed document; a `conclusion` that is not one statement; an unknown
+/// regime spelling; `rdf` or `rdfs`, whose four blank-node-minting rules have
+/// existential heads with no Datalog semantics and therefore no checkable proof
+/// term; a conclusion that is neither asserted nor derived; or a proof that does
+/// not re-derive, which is an engine defect made visible rather than shipped.
+pub fn explain_conclusion_to_string(
+    document: &str,
+    regime: &str,
+    conclusion: &str,
+) -> Result<ReasoningAnswer, String> {
+    let parsed = parse_regime(regime)?;
+    let (graph, subject, predicate, object) = parse_one_statement(conclusion)?;
+    let dataset = purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
+        .map_err(|diagnostic| diagnostic.to_string())?;
+    let proof = explain_conclusion(
+        &dataset,
+        parsed,
+        graph.as_ref(),
+        &subject,
+        &predicate,
+        &object,
+    )
+    .map_err(|error| format!("explain-conclusion: {error}"))?;
+    Ok(ReasoningAnswer {
+        answer: render_chase_proof_answer(&proof),
+        certificate: render_chase_proof_certificate(&proof),
+    })
+}
+
+/// The `asserted`/`steps`/`rule` block of [`explain_conclusion_to_string`].
+fn render_chase_proof_answer(proof: &ChaseProof) -> String {
+    let mut answer = String::new();
+    let _ = writeln!(answer, "asserted {}", proof.is_asserted());
+    let _ = writeln!(answer, "steps {}", proof.steps());
+    for rule in proof.rules() {
+        let _ = writeln!(answer, "rule {}", rule.as_str());
+    }
+    answer
+}
+
+/// The certificate of [`explain_conclusion_to_string`], with the proof RE-CHECKED.
+fn render_chase_proof_certificate(proof: &ChaseProof) -> String {
+    let (subject, predicate, object) = proof.conclusion();
+    let mut out = String::new();
+    out.push_str(CHASE_PROOF_CERTIFICATE_BANNER);
+    out.push('\n');
+    out.push_str("service explain-conclusion\n");
+    let _ = writeln!(out, "regime {}", regime_name(proof.regime()));
+    match proof.graph() {
+        None => out.push_str("graph default\n"),
+        Some(graph) => {
+            let _ = writeln!(out, "graph {}", emit(graph));
+        }
+    }
+    let _ = writeln!(out, "conclusion-subject {}", emit(subject));
+    let _ = writeln!(out, "conclusion-predicate {}", emit(predicate));
+    let _ = writeln!(out, "conclusion-object {}", emit(object));
+    // RE-DERIVED, not re-read: `check` walks the premises to the facts they
+    // establish, matches the cited clause's body against them, and instantiates the
+    // head. The proof's stated conclusion is not an input to that computation.
+    let checked = proof.check();
+    match &checked {
+        Ok(fact) => {
+            let _ = writeln!(out, "derived-subject {}", fact.subject);
+            let _ = writeln!(out, "derived-predicate {}", fact.predicate);
+            let _ = writeln!(out, "derived-object {}", fact.object);
+        }
+        Err(error) => {
+            let _ = writeln!(out, "derived-subject unchecked");
+            let _ = writeln!(out, "derived-predicate unchecked");
+            let _ = writeln!(out, "derived-object {error}");
+        }
+    }
+    let _ = writeln!(out, "digest {}", proof.digest_hex());
+    let _ = writeln!(out, "proof-term-bytes {}", proof.encode().len());
+    let _ = writeln!(out, "checked {}", checked.is_ok());
+    let _ = writeln!(out, "overclaims {}", checked.is_err());
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1086,5 +2186,536 @@ mod tests {
                 .find_map(|line| line.strip_prefix("contract-hash ").map(str::to_owned))
                 .expect("a contract hash")
         });
+    }
+
+    // ── The Description-Logic reasoning services ────────────────────────────
+
+    /// `A ⊑ B ⊑ C`, `D ⊑ C`, and one instance of `A`.
+    const TAXONOMY: &str = "\
+<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .
+<http://example.org/B> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .
+<http://example.org/D> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .
+<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .
+";
+
+    /// `A` and `B` are disjoint and `x` is in both: an ontology with NO model.
+    const UNSATISFIABLE: &str = "\
+<http://example.org/A> <http://www.w3.org/2002/07/owl#disjointWith> <http://example.org/B> .
+<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .
+<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> .
+";
+
+    /// `A ⊑ C` — asserted nowhere, entailed by the chain.
+    const CHAIN_AXIOM: &str = "<http://example.org/A> \
+<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .\n";
+
+    /// Every service, as `(name, produced)`, over `document`.
+    ///
+    /// One list so a service added without a certificate assertion is a compile
+    /// error at this call site rather than an omission nobody notices.
+    fn every_service(document: &str) -> Vec<(&'static str, Result<ReasoningAnswer, String>)> {
+        vec![
+            ("consistency", consistency_to_string(document, 0)),
+            ("classify", classify_to_string(document, 0)),
+            ("realize", realize_to_string(document, 0)),
+            (
+                "instances",
+                instances_to_string(document, "<http://example.org/C>", 0),
+            ),
+            ("entails", entails_to_string(document, CHAIN_AXIOM, 0)),
+            ("profile", profile_to_string(document)),
+            (
+                "extract-module",
+                extract_module_to_string(document, "<http://example.org/A>\n", "star"),
+            ),
+            ("justify", justify_to_string(document, CHAIN_AXIOM)),
+            (
+                "explain-conclusion",
+                explain_conclusion_to_string(
+                    document,
+                    "owl-rl",
+                    "<http://example.org/x> \
+                     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+                     <http://example.org/C> .\n",
+                ),
+            ),
+        ]
+    }
+
+    /// EVERY service carries a certificate, and every certificate names its own
+    /// service and ends with its own honesty gate.
+    ///
+    /// The invariant this whole surface exists for: an answer without a statement
+    /// of how completely it was decided is the defect, not the missing feature.
+    #[test]
+    fn every_service_carries_its_certificate() {
+        for (service, produced) in every_service(TAXONOMY) {
+            let produced = produced.unwrap_or_else(|error| panic!("{service}: {error}"));
+            let certificate = produced.certificate();
+            assert!(!certificate.is_empty(), "{service}");
+            assert!(
+                certificate.contains(&format!("\nservice {service}\n")),
+                "{service}: {certificate}"
+            );
+            // The gate is the LAST line, so a truncated certificate is visibly
+            // truncated rather than silently gate-free.
+            let gate = certificate.lines().last().unwrap_or_default();
+            assert!(
+                matches!(
+                    gate,
+                    "overclaims false" | "one-directional true" | "conservative false"
+                ),
+                "{service}: {gate}"
+            );
+            assert!(certificate.ends_with('\n'), "{service}");
+        }
+    }
+
+    /// The DL certificate is NOT the chase report, and cannot be parsed as one.
+    ///
+    /// The two banners differ precisely so a consumer that reached for the wrong
+    /// grammar fails at the first line rather than reading `decided` where it
+    /// expected `exact`.
+    #[test]
+    fn the_two_lanes_render_different_certificates() {
+        let chase = materialize_to_nquads_string("owl-rl", TAXONOMY).expect("owl-rl");
+        assert!(chase.report().starts_with(REPORT_FORMAT_BANNER));
+        let tableau = consistency_to_string(TAXONOMY, 0).expect("consistency");
+        assert!(tableau.certificate().starts_with(DL_CERTIFICATE_BANNER));
+        assert_ne!(REPORT_FORMAT_BANNER, DL_CERTIFICATE_BANNER);
+        // …and neither completeness vocabulary appears in the other's rendering.
+        assert!(!chase.report().contains("completeness decided"));
+        assert!(!tableau.certificate().contains("completeness exact"));
+    }
+
+    /// Every service is byte-stable across repeated calls.
+    ///
+    /// Each call reverse-maps a freshly-interned knowledge base, so a rendering
+    /// that leaked interner order, a clock or an address would diverge here.
+    #[test]
+    fn the_dl_renderings_are_byte_stable_across_calls() {
+        let first: Vec<_> = every_service(TAXONOMY)
+            .into_iter()
+            .map(|(service, produced)| (service, produced.expect("a service runs")))
+            .collect();
+        for _ in 0..8 {
+            for ((service, expected), (_, again)) in first.iter().zip(
+                every_service(TAXONOMY)
+                    .into_iter()
+                    .map(|(service, produced)| (service, produced.expect("a service runs"))),
+            ) {
+                assert_eq!(expected, &again, "{service}");
+            }
+        }
+    }
+
+    /// Classification derives the transitive closure AND its reduction, and both
+    /// are emitted because they are different facts.
+    #[test]
+    fn classify_emits_the_closure_and_its_reduction() {
+        let answer = classify_to_string(TAXONOMY, 0)
+            .expect("classify")
+            .into_parts()
+            .0;
+        // A ⊑ C is entailed but not asserted, and it is NOT a direct subsumption:
+        // B sits between them.
+        assert!(answer.contains("subclass <http://example.org/A> <http://example.org/C>\n"));
+        assert!(!answer.contains("direct <http://example.org/A> <http://example.org/C>\n"));
+        assert!(answer.contains("direct <http://example.org/A> <http://example.org/B>\n"));
+        // `owl:Nothing` is read as ⊥, so it is unsatisfiable and subsumed by every
+        // named class — the answers the semantics gives, not an opaque-class reading.
+        assert!(
+            answer.contains("unsatisfiable <http://www.w3.org/2002/07/owl#Nothing>\n"),
+            "{answer}"
+        );
+        // The blocks appear in the documented order.
+        let subclass = answer
+            .find("\nsubclass ")
+            .or_else(|| answer.find("subclass "));
+        let direct = answer.find("direct <");
+        assert!(subclass < direct, "{answer}");
+    }
+
+    /// Realization lists every entailed type and marks the most specific one.
+    #[test]
+    fn realize_marks_the_most_specific_type() {
+        let answer = realize_to_string(TAXONOMY, 0)
+            .expect("realize")
+            .into_parts()
+            .0;
+        for class in ["A", "B", "C"] {
+            assert!(
+                answer.contains(&format!(
+                    "type <http://example.org/x> <http://example.org/{class}>\n"
+                )),
+                "{answer}"
+            );
+        }
+        // `owl:Thing` is a type of every individual and is listed: an entailed
+        // answer omitted for being obvious is an answer set that is not one.
+        assert!(
+            answer.contains("type <http://example.org/x> <http://www.w3.org/2002/07/owl#Thing>")
+        );
+        // Exactly one direct type — the most specific of the three.
+        let direct: Vec<&str> = answer
+            .lines()
+            .filter(|line| line.starts_with("direct-type "))
+            .collect();
+        assert_eq!(
+            direct,
+            vec!["direct-type <http://example.org/x> <http://example.org/A>"]
+        );
+    }
+
+    /// Instance retrieval reaches THROUGH the hierarchy, and an unmentioned class
+    /// is an empty answer rather than an error.
+    #[test]
+    fn instances_retrieves_through_the_hierarchy() {
+        let answer = instances_to_string(TAXONOMY, "<http://example.org/C>", 0)
+            .expect("instances")
+            .into_parts()
+            .0;
+        assert_eq!(answer, "instance <http://example.org/x>\n");
+        // A class no axiom constrains: a real question with a real, empty answer.
+        let unknown = instances_to_string(TAXONOMY, "<http://example.org/Unmentioned>", 0)
+            .expect("an unconstrained name is a real name");
+        assert_eq!(unknown.answer(), "");
+        assert!(unknown.certificate().ends_with("overclaims false\n"));
+    }
+
+    /// Every OWL 2 RDF-mapping predicate dispatches to the axiom kind it spells,
+    /// and any other predicate is an object-property assertion.
+    #[test]
+    fn the_axiom_encoding_is_the_owl_2_rdf_mapping() {
+        let cases = [
+            (RDFS_SUBCLASS_OF, "SubClassOf"),
+            (OWL_EQUIVALENT_CLASS, "EquivalentClasses"),
+            (OWL_DISJOINT_WITH, "DisjointClasses"),
+            (RDF_TYPE, "ClassAssertion"),
+            (OWL_SAME_AS, "SameIndividual"),
+            (OWL_DIFFERENT_FROM, "DifferentIndividuals"),
+            (RDFS_SUBPROPERTY_OF, "SubObjectPropertyOf"),
+            ("http://example.org/p", "ObjectPropertyAssertion"),
+        ];
+        for (predicate, kind) in cases {
+            let statement =
+                format!("<http://example.org/s> <{predicate}> <http://example.org/o> .\n");
+            let answer = entails_to_string(TAXONOMY, &statement, 0)
+                .unwrap_or_else(|error| panic!("{kind}: {error}"))
+                .into_parts()
+                .0;
+            assert!(answer.contains(&format!("\naxiom {kind}\n")), "{answer}");
+            assert!(AXIOM_KINDS.contains(&kind));
+        }
+        // …and all eight kinds are covered, so a ninth variant fails here.
+        assert_eq!(cases.len(), AXIOM_KINDS.len());
+    }
+
+    /// An entailed axiom is `true`, an unentailed one is `false`, and neither is
+    /// invented: `A ⊑ C` follows from the chain, `C ⊑ A` does not.
+    #[test]
+    fn entails_decides_both_directions() {
+        let entailed = entails_to_string(TAXONOMY, CHAIN_AXIOM, 0).expect("decides");
+        assert!(entailed.answer().starts_with("entails true\n"));
+        let reversed = "<http://example.org/C> \
+<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/A> .\n";
+        let refuted = entails_to_string(TAXONOMY, reversed, 0).expect("decides");
+        assert!(refuted.answer().starts_with("entails false\n"));
+    }
+
+    /// A search that runs out of budget answers `unknown`, NEVER `false`, and the
+    /// certificate says why.
+    ///
+    /// This is the third completeness state made reachable from the boundary: the
+    /// `step_cap` argument can only NARROW, so it cannot make a hard instance
+    /// answerable — it can only make this branch executable.
+    #[test]
+    fn an_exhausted_budget_is_unknown_and_never_false() {
+        let starved = entails_to_string(TAXONOMY, CHAIN_AXIOM, 1).expect("decides nothing");
+        assert_eq!(starved.answer().lines().next(), Some("entails unknown"));
+        assert!(
+            starved
+                .certificate()
+                .contains("\ncompleteness budget-exhausted\n"),
+            "{}",
+            starved.certificate()
+        );
+        assert!(starved.certificate().contains("\nbudget 1\n"));
+        // The gate still holds: an exhausted run claims nothing it cannot support.
+        assert!(starved.certificate().ends_with("overclaims false\n"));
+        // …and the un-narrowed call decides the same question.
+        assert!(
+            entails_to_string(TAXONOMY, CHAIN_AXIOM, 0)
+                .expect("decides")
+                .answer()
+                .starts_with("entails true\n")
+        );
+    }
+
+    /// An ontology with no model is REFUSED by every service but the one that
+    /// detects it — and that one answers `false`.
+    #[test]
+    fn an_unsatisfiable_ontology_is_refused_rather_than_answered_vacuously() {
+        let detected = consistency_to_string(UNSATISFIABLE, 0).expect("consistency answers");
+        assert_eq!(detected.answer(), "consistency false\n");
+        for service in ["classify", "realize"] {
+            let produced = match service {
+                "classify" => classify_to_string(UNSATISFIABLE, 0),
+                _ => realize_to_string(UNSATISFIABLE, 0),
+            };
+            let error = produced.expect_err("no model");
+            assert!(error.starts_with(service), "{error}");
+            assert!(error.contains("consistency_to_string"), "{error}");
+        }
+    }
+
+    /// Profile certification lists the profiles most restrictive first and says,
+    /// densely, which it certifies — the reading a sparse violation list makes easy
+    /// to get wrong.
+    #[test]
+    fn profile_certifies_most_restrictive_first() {
+        let certified = profile_to_string(TAXONOMY).expect("parses");
+        assert_eq!(
+            certified.answer(),
+            "certified EL\ncertified QL\ncertified RL\ncertified DL\ncertified Full\n"
+        );
+        for profile in ["el", "ql", "rl", "dl", "full"] {
+            assert!(
+                certified
+                    .certificate()
+                    .contains(&format!("\ncertifies-{profile} true\n")),
+                "{}",
+                certified.certificate()
+            );
+        }
+        // The one-directional doctrine is stated on the certificate itself, not
+        // only in prose a consumer may never read.
+        assert!(certified.certificate().ends_with("one-directional true\n"));
+    }
+
+    /// A construct outside a profile blocks it BY NAME, and `Full` is certified
+    /// whatever the ontology says.
+    #[test]
+    fn a_profile_violation_names_its_term_and_reason() {
+        // `owl:complementOf` is not in the EL grammar.
+        let complement = "<http://example.org/NotA> \
+<http://www.w3.org/2002/07/owl#complementOf> <http://example.org/A> .\n";
+        let certified = profile_to_string(complement).expect("parses");
+        let violations: Vec<&str> = certified
+            .certificate()
+            .lines()
+            .filter_map(|line| line.strip_prefix("violation "))
+            .collect();
+        assert!(!violations.is_empty(), "{}", certified.certificate());
+        for violation in violations {
+            // profile, term, subject, then the rest of the line is the reason.
+            let mut fields = violation.splitn(4, ' ');
+            let profile = fields.next().expect("a profile");
+            assert!(
+                OwlProfile::ALL
+                    .iter()
+                    .any(|known| known.as_str() == profile),
+                "{violation}"
+            );
+            assert!(fields.next().is_some_and(|term| term.starts_with('<')));
+            assert!(fields.next().is_some_and(|subject| !subject.is_empty()));
+            assert!(fields.next().is_some_and(|reason| reason.len() > 4));
+        }
+        // Full is every RDF graph, so it is always certified.
+        assert!(certified.answer().ends_with("certified Full\n"));
+        assert!(certified.certificate().contains("\ncertifies-full true\n"));
+    }
+
+    /// Module extraction keeps the chain above the seed and leaves the sibling
+    /// behind — and says how it decided every keep.
+    #[test]
+    fn extract_module_is_smaller_than_the_ontology() {
+        let extracted =
+            extract_module_to_string(TAXONOMY, "<http://example.org/A>\n", "bot").expect("extract");
+        assert!(extracted.answer().contains("<http://example.org/A>"));
+        // The ⊥-module for {A} follows the chain UP; the sibling D is not on it.
+        assert!(
+            !extracted.answer().contains("<http://example.org/D>"),
+            "{}",
+            extracted.answer()
+        );
+        assert!(extracted.certificate().contains("\nmethod BOT\n"));
+        // Fewer axioms than the ontology has: a module that kept everything would
+        // be sound and useless, so the count is the load-bearing measurement.
+        let axioms: usize = extracted
+            .certificate()
+            .lines()
+            .find_map(|line| line.strip_prefix("axioms "))
+            .and_then(|count| count.parse().ok())
+            .expect("an axiom count");
+        assert!(
+            (1..TAXONOMY.lines().count()).contains(&axioms),
+            "{}",
+            extracted.certificate()
+        );
+        // Every keep was decided by the locality rules, which is the strongest
+        // thing an extraction can say.
+        assert!(extracted.certificate().ends_with("conservative false\n"));
+        // …and the three methods are all reachable and distinct in the rendering.
+        for method in MODULE_METHOD_NAMES {
+            let produced = extract_module_to_string(TAXONOMY, "<http://example.org/A>\n", method)
+                .unwrap_or_else(|error| panic!("{method}: {error}"));
+            assert!(
+                produced
+                    .certificate()
+                    .contains(&format!("\nmethod {}\n", method.to_ascii_uppercase())),
+                "{method}"
+            );
+        }
+    }
+
+    /// An unknown module method is refused with the accepted set named.
+    #[test]
+    fn an_unknown_module_method_names_the_accepted_set() {
+        let error = extract_module_to_string(TAXONOMY, "", "nested").expect_err("unknown");
+        assert!(error.contains("nested"), "{error}");
+        for method in MODULE_METHOD_NAMES {
+            assert!(error.contains(method), "{error} omits {method}");
+        }
+    }
+
+    /// A justification is minimal AND sufficient, and both halves are RE-DECIDED
+    /// here rather than restated from the search that found it.
+    #[test]
+    fn justify_re_decides_both_halves_of_its_claim() {
+        let why = justify_to_string(TAXONOMY, CHAIN_AXIOM).expect("entailed");
+        // The chain, and NOT the sibling: two axioms of the four.
+        assert_eq!(why.answer().lines().count(), 2, "{}", why.answer());
+        assert!(!why.answer().contains("<http://example.org/D>"));
+        assert!(why.certificate().contains("\nsufficient true\n"));
+        assert!(why.certificate().contains("\nminimal true\n"));
+        assert!(why.certificate().ends_with("overclaims false\n"));
+        // The identity is a CONTENT digest, never an IRI.
+        let digest = why
+            .certificate()
+            .lines()
+            .find_map(|line| line.strip_prefix("digest "))
+            .expect("a digest");
+        assert_eq!(digest.len(), 64);
+        assert!(
+            digest
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase())
+        );
+        // …and the axiom it justifies is echoed, so the answer is self-describing.
+        assert!(why.certificate().contains("\naxiom SubClassOf\n"));
+    }
+
+    /// An unentailed axiom has NO justification, and that is a refusal rather than
+    /// an empty set — which would read as "nothing is needed" and mean the opposite.
+    #[test]
+    fn an_unentailed_axiom_has_no_justification() {
+        let reversed = "<http://example.org/C> \
+<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/A> .\n";
+        let error = justify_to_string(TAXONOMY, reversed).expect_err("not entailed");
+        assert!(error.starts_with("justify: "), "{error}");
+        assert!(error.contains("does not entail"), "{error}");
+    }
+
+    /// A chase proof RE-DERIVES its conclusion; the certificate reports what the
+    /// checker computed beside what the proof claims.
+    #[test]
+    fn explain_conclusion_re_derives_rather_than_re_reads() {
+        let derived = "<http://example.org/x> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .\n";
+        let why = explain_conclusion_to_string(TAXONOMY, "owl-rl", derived).expect("derived");
+        assert!(why.answer().starts_with("asserted false\n"));
+        assert!(
+            why.answer().contains("\nrule cax-sco\n"),
+            "{}",
+            why.answer()
+        );
+        assert!(why.certificate().contains("\nchecked true\n"));
+        assert!(why.certificate().ends_with("overclaims false\n"));
+        // The re-derived fact and the stated conclusion agree, line for line.
+        let field = |key: &str| {
+            why.certificate()
+                .lines()
+                .find_map(|line| line.strip_prefix(key).map(str::to_owned))
+                .unwrap_or_else(|| panic!("{key}"))
+        };
+        assert_eq!(field("conclusion-subject "), field("derived-subject "));
+        assert_eq!(field("conclusion-predicate "), field("derived-predicate "));
+        assert_eq!(field("conclusion-object "), field("derived-object "));
+        // An ASSERTED triple is explained by the fact that it is asserted, which is
+        // a real explanation and a checkable one.
+        let asserted = "<http://example.org/x> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .\n";
+        let given = explain_conclusion_to_string(TAXONOMY, "owl-rl", asserted).expect("asserted");
+        assert!(given.answer().starts_with("asserted true\n"));
+        assert!(given.certificate().contains("\nchecked true\n"));
+    }
+
+    /// The two lanes whose rules mint a fresh blank node are refused BY NAME, and
+    /// an underivable conclusion is a hard error rather than an empty explanation.
+    #[test]
+    fn an_unexplainable_conclusion_is_refused_by_name() {
+        let derived = "<http://example.org/x> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .\n";
+        for regime in ["rdf", "rdfs"] {
+            let error = explain_conclusion_to_string(TAXONOMY, regime, derived)
+                .expect_err("existential heads");
+            assert!(error.contains("existential"), "{error}");
+        }
+        let absent = "<http://example.org/nobody> \
+<http://example.org/nothing> <http://example.org/nowhere> .\n";
+        let error =
+            explain_conclusion_to_string(TAXONOMY, "owl-rl", absent).expect_err("not derived");
+        assert!(error.contains("no derivation"), "{error}");
+    }
+
+    // ── The boundary's term syntax ──────────────────────────────────────────
+
+    /// A term round-trips through the boundary's syntax, for every kind a DL
+    /// answer can carry.
+    #[test]
+    fn terms_round_trip_through_the_boundary_syntax() {
+        for (term, rendered) in [
+            (
+                TermValue::iri("http://example.org/A"),
+                "<http://example.org/A>",
+            ),
+            (TermValue::blank("b0"), "_:b0"),
+        ] {
+            assert_eq!(emit(&term), rendered);
+            assert_eq!(parse_one_term(rendered).expect("a term"), term);
+        }
+        // A literal renders (an answer may carry one) but is NOT a name, so it is
+        // refused in the positions that take a class, an individual or a property.
+        assert_eq!(
+            emit(&TermValue::lang_literal("hello world", "EN")),
+            "\"hello world\"@en"
+        );
+        assert!(parse_one_term("\"hello\"").is_err());
+    }
+
+    /// A malformed term, axiom or document is an error, never a silent empty answer.
+    #[test]
+    fn malformed_boundary_input_is_an_error() {
+        assert!(consistency_to_string("this is not n-quads\n", 0).is_err());
+        assert!(profile_to_string("this is not n-quads\n").is_err());
+        assert!(instances_to_string(TAXONOMY, "not a term", 0).is_err());
+        // Two terms where one was asked for.
+        assert!(
+            instances_to_string(TAXONOMY, "<http://example.org/A> <http://example.org/B>", 0)
+                .is_err()
+        );
+        // Two statements where one axiom was asked for.
+        let two = format!(
+            "{CHAIN_AXIOM}<http://example.org/D> \
+<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .\n"
+        );
+        assert!(entails_to_string(TAXONOMY, &two, 0).is_err());
+        // An axiom is one triple and is not graph-scoped.
+        let scoped = "<http://example.org/A> \
+<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> \
+<http://example.org/g> .\n";
+        let error = entails_to_string(TAXONOMY, scoped, 0).expect_err("graph-scoped");
+        assert!(error.contains("names a graph"), "{error}");
     }
 }

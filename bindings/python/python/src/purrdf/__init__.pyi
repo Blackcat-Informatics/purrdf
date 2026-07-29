@@ -783,7 +783,9 @@ class entail:
     # report is never optional: it names which rules fired, which specification
     # rules did not, and the calculus's contract hash. Read the closure with
     # `closure.to_nquads()`. Raises ValueError for an unknown regime spelling
-    # and for a regime that cannot be forward-materialized (owl-direct, rif, d).
+    # and for a regime that cannot be forward-materialized (owl-direct, rif).
+    # `d` is NOT one of them: datatype entailment materializes as the five
+    # `dt-*` rules of OWL 2 Profiles §4.3 Table 8.
     @staticmethod
     def materialize(dataset: RdfDataset, regime: RegimeLike) -> tuple[RdfDataset, str]: ...
     # The text-in/text-out twin of `materialize`: an N-Quads (or N-Triples)
@@ -798,6 +800,80 @@ class entail:
     # difference between the two is the regime's measurable gap.
     @staticmethod
     def implemented_rules(regime: RegimeLike) -> list[str]: ...
+
+    # ── The OWL 2 Direct-Semantics reasoning services ────────────────────────
+    # A different LANE from the four above. `materialize*` is the chase, whose
+    # report reads `completeness exact | sound-incomplete <n>` — a difference of
+    # two rule tables. Everything below is the tableau, whose certificate reads
+    # `completeness decided | decided-within-boundaries | budget-exhausted`. The
+    # DL lane has no rule table to subtract, so reusing the chase's notion would
+    # report "exact" for a search that ran out of budget; the two renderings carry
+    # different banners so neither can be parsed as the other.
+    #
+    # Every service returns `(answer, certificate)`. The pair is a tuple, so a
+    # caller must UNPACK the evidence rather than being able to not ask for it.
+    #
+    # `step_cap` narrows the per-decision tableau step cap; 0 (the default) means
+    # the knowledge base's own cap, NOT a cap of zero steps. It can only narrow,
+    # so it cannot make a hard instance answerable — only make the
+    # `budget-exhausted` certificate reachable.
+
+    # Does the knowledge base have a model at all? The answer is one line,
+    # `consistency true|false|unknown`. The only DL service that answers for an
+    # unsatisfiable ontology, because it is the one that detects one.
+    @staticmethod
+    def consistency(data: str, step_cap: int = ...) -> tuple[str, str]: ...
+    # The entailed subsumption hierarchy over the named classes: `equivalent`,
+    # `subclass` (the full transitive closure), `direct` (its reduction) and
+    # `unsatisfiable` lines, in that block order. Raises ValueError for an
+    # ontology with no model, where every class subsumes every other.
+    @staticmethod
+    def classify(data: str, step_cap: int = ...) -> tuple[str, str]: ...
+    # The entailed types of the named individuals (`type` lines) and the most
+    # specific of them (`direct-type` lines).
+    @staticmethod
+    def realize(data: str, step_cap: int = ...) -> tuple[str, str]: ...
+    # The named individuals entailed to be instances of `class_`, as
+    # `instance <term>` lines. `class_` is ONE N-Triples term, angle brackets
+    # included. A class the ontology never mentions yields an empty answer, which
+    # is a real answer rather than an error.
+    @staticmethod
+    def instances(data: str, class_: str, step_cap: int = ...) -> tuple[str, str]: ...
+    # Does the ontology entail `axiom`? `axiom` is ONE triple of the OWL 2 RDF
+    # mapping: rdfs:subClassOf, owl:equivalentClass, owl:disjointWith, rdf:type,
+    # owl:sameAs, owl:differentFrom and rdfs:subPropertyOf select the seven named
+    # axiom kinds, and any other predicate is an object-property assertion. The
+    # answer is `entails true|false|unknown` followed by the axiom AS READ.
+    @staticmethod
+    def entails(data: str, axiom: str, step_cap: int = ...) -> tuple[str, str]: ...
+    # Which OWL 2 profiles the ontology is provably in (`certified <profile>`
+    # lines, most restrictive first: EL, QL, RL, DL, Full) and what blocked the
+    # others. Purely syntactic, so the certificate is an OWL profile certificate
+    # rather than a DL one — there is no search whose completeness to report.
+    @staticmethod
+    def profile(data: str) -> tuple[str, str]: ...
+    # The locality module for a seed signature (one N-Triples term per line) under
+    # `method` ("bot", "top" or "star"). The answer is the module as canonical
+    # N-Quads; the certificate's `conservative` line says whether it is the
+    # minimal module or a sound superset.
+    @staticmethod
+    def extract_module(data: str, signature: str, method: str) -> tuple[str, str]: ...
+    # WHY a DL axiom is entailed: a minimal subset of the ontology that still
+    # entails it, as canonical N-Quads. A tableau performs no derivation steps, so
+    # this is a JUSTIFICATION and deliberately not called a proof. The
+    # certificate's `sufficient` and `minimal` lines are RE-DECIDED here, so they
+    # check the answer rather than restate it.
+    @staticmethod
+    def justify(data: str, axiom: str) -> tuple[str, str]: ...
+    # WHY one triple of a chase closure holds: which rules, from which premises.
+    # `conclusion` is ONE N-Quads statement. The certificate's `derived-*` lines
+    # are what the CHECKER re-derived from the proof term and the clause program,
+    # not what the proof claims. Raises ValueError for RDF and RDFS, four of whose
+    # rules have existential heads with no checkable proof term.
+    @staticmethod
+    def explain_conclusion(
+        data: str, regime: RegimeLike, conclusion: str
+    ) -> tuple[str, str]: ...
 
 # ── GTS surface grouping (purrdf.gts) ────────────────────────────────────────────
 # The GTS entry points are also present at the purrdf root (declared above); the
