@@ -1355,6 +1355,7 @@ dependencies = [
  "hashbrown 0.15.5",
  "purrdf-core",
  "purrdf-datalog",
+ "purrdf-xsd",
  "roxmltree",
 ]
 

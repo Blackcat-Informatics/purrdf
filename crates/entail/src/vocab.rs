@@ -198,3 +198,77 @@ pub(crate) const OWL_ASSERTIONPROPERTY: &str = "http://www.w3.org/2002/07/owl#as
 pub(crate) const OWL_TARGETINDIVIDUAL: &str = "http://www.w3.org/2002/07/owl#targetIndividual";
 /// `owl:targetValue` — a negative DATA-property assertion's object.
 pub(crate) const OWL_TARGETVALUE: &str = "http://www.w3.org/2002/07/owl#targetValue";
+
+// --- OWL 2 RL equality and datatype vocabulary (Tables 4 and 8). ---
+
+/// `owl:differentFrom` — the negation of `owl:sameAs`, which `eq-diff1` clashes against
+/// and `dt-diff` concludes.
+pub(crate) const OWL_DIFFERENTFROM: &str = "http://www.w3.org/2002/07/owl#differentFrom";
+/// `owl:AllDifferent` — the class whose `owl:members` / `owl:distinctMembers` list
+/// `eq-diff2` and `eq-diff3` read.
+pub(crate) const OWL_ALLDIFFERENT: &str = "http://www.w3.org/2002/07/owl#AllDifferent";
+
+/// `xsd:nonNegativeInteger` — the datatype OWL 2 Profiles §4.3 Table 6 writes the
+/// cardinality literals of `cls-maxc1`, `cls-maxc2` and the four `cls-maxqc*` rules with.
+pub(crate) const XSD_NONNEGATIVEINTEGER: &str =
+    "http://www.w3.org/2001/XMLSchema#nonNegativeInteger";
+
+/// `rdf:PlainLiteral` — a datatype supported in OWL 2 RL.
+pub(crate) const RDF_PLAINLITERAL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#PlainLiteral";
+/// `rdf:XMLLiteral` — a datatype supported in OWL 2 RL.
+pub(crate) const RDF_XMLLITERAL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#XMLLiteral";
+/// `xsd:decimal` — a datatype supported in OWL 2 RL.
+pub(crate) const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
+/// `xsd:integer` — a datatype supported in OWL 2 RL.
+pub(crate) const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+/// `xsd:nonPositiveInteger` — a datatype supported in OWL 2 RL.
+pub(crate) const XSD_NONPOSITIVEINTEGER: &str =
+    "http://www.w3.org/2001/XMLSchema#nonPositiveInteger";
+/// `xsd:positiveInteger` — a datatype supported in OWL 2 RL.
+pub(crate) const XSD_POSITIVEINTEGER: &str = "http://www.w3.org/2001/XMLSchema#positiveInteger";
+/// `xsd:negativeInteger` — a datatype supported in OWL 2 RL.
+pub(crate) const XSD_NEGATIVEINTEGER: &str = "http://www.w3.org/2001/XMLSchema#negativeInteger";
+/// `xsd:long` — a datatype supported in OWL 2 RL.
+pub(crate) const XSD_LONG: &str = "http://www.w3.org/2001/XMLSchema#long";
+/// `xsd:int` — a datatype supported in OWL 2 RL.
+pub(crate) const XSD_INT: &str = "http://www.w3.org/2001/XMLSchema#int";
+/// `xsd:short` — a datatype supported in OWL 2 RL.
+pub(crate) const XSD_SHORT: &str = "http://www.w3.org/2001/XMLSchema#short";
+/// `xsd:byte` — a datatype supported in OWL 2 RL.
+pub(crate) const XSD_BYTE: &str = "http://www.w3.org/2001/XMLSchema#byte";
+/// `xsd:unsignedLong` — a datatype supported in OWL 2 RL.
+pub(crate) const XSD_UNSIGNEDLONG: &str = "http://www.w3.org/2001/XMLSchema#unsignedLong";
+/// `xsd:unsignedInt` — a datatype supported in OWL 2 RL.
+pub(crate) const XSD_UNSIGNEDINT: &str = "http://www.w3.org/2001/XMLSchema#unsignedInt";
+/// `xsd:unsignedShort` — a datatype supported in OWL 2 RL.
+pub(crate) const XSD_UNSIGNEDSHORT: &str = "http://www.w3.org/2001/XMLSchema#unsignedShort";
+/// `xsd:unsignedByte` — a datatype supported in OWL 2 RL.
+pub(crate) const XSD_UNSIGNEDBYTE: &str = "http://www.w3.org/2001/XMLSchema#unsignedByte";
+/// `xsd:float` — a datatype supported in OWL 2 RL.
+pub(crate) const XSD_FLOAT: &str = "http://www.w3.org/2001/XMLSchema#float";
+/// `xsd:double` — a datatype supported in OWL 2 RL.
+pub(crate) const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+/// `xsd:normalizedString` — a datatype supported in OWL 2 RL.
+pub(crate) const XSD_NORMALIZEDSTRING: &str = "http://www.w3.org/2001/XMLSchema#normalizedString";
+/// `xsd:token` — a datatype supported in OWL 2 RL.
+pub(crate) const XSD_TOKEN: &str = "http://www.w3.org/2001/XMLSchema#token";
+/// `xsd:language` — a datatype supported in OWL 2 RL.
+pub(crate) const XSD_LANGUAGE: &str = "http://www.w3.org/2001/XMLSchema#language";
+/// `xsd:Name` — a datatype supported in OWL 2 RL.
+pub(crate) const XSD_NAME: &str = "http://www.w3.org/2001/XMLSchema#Name";
+/// `xsd:NCName` — a datatype supported in OWL 2 RL.
+pub(crate) const XSD_NCNAME: &str = "http://www.w3.org/2001/XMLSchema#NCName";
+/// `xsd:NMTOKEN` — a datatype supported in OWL 2 RL.
+pub(crate) const XSD_NMTOKEN: &str = "http://www.w3.org/2001/XMLSchema#NMTOKEN";
+/// `xsd:boolean` — a datatype supported in OWL 2 RL.
+pub(crate) const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+/// `xsd:hexBinary` — a datatype supported in OWL 2 RL.
+pub(crate) const XSD_HEXBINARY: &str = "http://www.w3.org/2001/XMLSchema#hexBinary";
+/// `xsd:base64Binary` — a datatype supported in OWL 2 RL.
+pub(crate) const XSD_BASE64BINARY: &str = "http://www.w3.org/2001/XMLSchema#base64Binary";
+/// `xsd:anyURI` — a datatype supported in OWL 2 RL.
+pub(crate) const XSD_ANYURI: &str = "http://www.w3.org/2001/XMLSchema#anyURI";
+/// `xsd:dateTime` — a datatype supported in OWL 2 RL.
+pub(crate) const XSD_DATETIME: &str = "http://www.w3.org/2001/XMLSchema#dateTime";
+/// `xsd:dateTimeStamp` — a datatype supported in OWL 2 RL.
+pub(crate) const XSD_DATETIMESTAMP: &str = "http://www.w3.org/2001/XMLSchema#dateTimeStamp";

@@ -109,7 +109,7 @@ enum Task {
 ///
 /// # Errors
 ///
-/// [`EntailError::Inconsistent`] if the data is inconsistent (every query would then be
+/// [`EntailError::Unsatisfiable`] if the data is unsatisfiable (every query would then be
 /// entailed, so there is no meaningful answer set); [`EntailError::Parse`] on a
 /// malformed class-expression graph; [`EntailError::Build`] on tableau step-cap
 /// exhaustion.
@@ -119,7 +119,7 @@ pub fn materialize_dl(
 ) -> Result<Arc<RdfDataset>, EntailError> {
     let mut kb = Kb::from_dataset(ds)?;
     if !kb.is_consistent()? {
-        return Err(EntailError::Inconsistent);
+        return Err(EntailError::Unsatisfiable);
     }
     let v = Vocab::intern(&mut kb.interner);
 

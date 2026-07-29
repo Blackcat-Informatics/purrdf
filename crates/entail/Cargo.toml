@@ -37,6 +37,13 @@ purrdf-core = { workspace = true }
 # instead of comparing two prose claims. wasm32-unknown-unknown-clean, so this
 # crate stays in the workspace wasm gate.
 purrdf-datalog = { workspace = true }
+# The XSD value space. OWL 2 Profiles §4.3 Table 8 quantifies over "the data value of a
+# literal", which is arithmetic over values rather than a join over triples, so the chase
+# decides it with the repository's own zero-dependency, wasm-clean kernel crate instead of
+# comparing lexical forms and calling it datatype reasoning. purrdf-xsd is already a
+# transitive dependency of every artifact that ships this crate, so the edge costs
+# essentially nothing, and it stays wasm32-unknown-unknown-clean.
+purrdf-xsd = { workspace = true }
 roxmltree = { workspace = true }
 # Fixed-key store-once interners and RIF posting-list indexes.
 ahash = { workspace = true }

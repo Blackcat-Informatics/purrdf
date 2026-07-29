@@ -561,7 +561,7 @@ pub(crate) enum CliRegime {
     /// RIF-Core entailment — not materializable without a rule set.
     #[value(name = "rif")]
     Rif,
-    /// Datatype (D) entailment — a spec-inherent boundary for materialization.
+    /// Datatype (D) entailment — Simple plus OWL 2 Profiles §4.3 Table 8.
     #[value(name = "d")]
     D,
 }

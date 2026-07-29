@@ -151,15 +151,15 @@ impl Kb {
     ///
     /// # Errors
     ///
-    /// [`EntailError::Inconsistent`] if the base knowledge base is already
-    /// inconsistent; [`EntailError::Build`] on step-cap exhaustion.
+    /// [`EntailError::Unsatisfiable`] if the base knowledge base is already
+    /// unsatisfiable; [`EntailError::Build`] on step-cap exhaustion.
     pub(crate) fn entails_instance(
         &self,
         individual: u32,
         concept_id: u32,
     ) -> Result<bool, EntailError> {
         if !self.is_consistent()? {
-            return Err(EntailError::Inconsistent);
+            return Err(EntailError::Unsatisfiable);
         }
         let neg = self.table.negate(concept_id);
         let consistent = tableau::consistent(self, true, &[(individual, neg)], &[])?;
@@ -171,11 +171,11 @@ impl Kb {
     ///
     /// # Errors
     ///
-    /// [`EntailError::Inconsistent`] if the base knowledge base is already
-    /// inconsistent; [`EntailError::Build`] on step-cap exhaustion.
+    /// [`EntailError::Unsatisfiable`] if the base knowledge base is already
+    /// unsatisfiable; [`EntailError::Build`] on step-cap exhaustion.
     pub(crate) fn entails_subclass(&self, sub_id: u32, sup_id: u32) -> Result<bool, EntailError> {
         if !self.is_consistent()? {
-            return Err(EntailError::Inconsistent);
+            return Err(EntailError::Unsatisfiable);
         }
         let neg_sup = self.table.negate(sup_id);
         let consistent = tableau::consistent(self, false, &[], &[sub_id, neg_sup])?;

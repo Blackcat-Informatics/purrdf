@@ -63,16 +63,38 @@ use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 use purrdf_datalog::clause::{ClauseTerm, DlClause};
-use purrdf_datalog::seminaive::{compile, evaluate};
+use purrdf_datalog::seminaive::{Derivation, compile, evaluate};
 use purrdf_datalog::store::RelationStore;
 
 use crate::axioms::axioms_for;
-use crate::calculus::program_with_attribution;
+use crate::calculus::{ChaseRule, clash_rule, program_with_attribution};
+use crate::datatypes::LiteralIndex;
 use crate::interner::intern_into;
-use crate::lists::{ListIndex, is_internal};
+use crate::lists::{CLASH_RELATION, ListIndex, is_internal};
 use crate::report::RunStats;
-use crate::vocab::XSD_STRING;
+use crate::report::{InconsistencyWitness, WitnessTriple};
+use crate::vocab::{XSD_NONNEGATIVEINTEGER, XSD_STRING};
 use crate::{EntailError, Regime};
+
+/// Every LITERAL constant the declared calculus names, as `(lexical form, datatype IRI)`.
+///
+/// Two, and both are OWL 2 Profiles §4.3 Table 6's own: `cls-maxc1`, `cls-maxc2` and the
+/// four `cls-maxqc*` rules match a cardinality against `"0"^^xsd:nonNegativeInteger` or
+/// `"1"^^xsd:nonNegativeInteger`. They are declared here rather than in the family module
+/// because [`Terms`] has to be able to read a surface BACK as a [`TermValue`], and a
+/// [`ClauseTerm::Literal`] carries a rendered surface with no structure to recover one
+/// from. One table, two consumers: [`literal_surface`] renders the clause constant and
+/// [`Terms::record_literals`] records the value it reads back as, so the two cannot drift.
+const DECLARED_LITERALS: [(&str, &str); 2] =
+    [("0", XSD_NONNEGATIVEINTEGER), ("1", XSD_NONNEGATIVEINTEGER)];
+
+/// The store surface of the typed literal `"lexical"^^<datatype>`.
+///
+/// The one rendering convention, shared by the clause constants of
+/// [`crate::calculus::cls`] and by the dataset literals they must compare equal to.
+pub(crate) fn literal_surface(lexical: &str, datatype: &str) -> String {
+    surface_of(&TermValue::typed_literal(lexical, datatype))
+}
 
 /// A faithful copy of `ds` (the identity closure for `Simple`).
 pub(crate) fn copy_of(ds: &RdfDataset) -> Result<Arc<RdfDataset>, EntailError> {
@@ -122,6 +144,7 @@ pub(crate) fn close(
 
     let mut terms = Terms::default();
     terms.record_program(&program);
+    terms.record_literals();
     let mut edb = RelationStore::new();
     // The axiomatic triples are PREMISES, not conclusions: `S RDFS entails E` is defined
     // over the interpretations satisfying S *and* the axioms, and no rule of §9.2.1
@@ -134,6 +157,7 @@ pub(crate) fn close(
         let _ = edb.insert(&subject, &predicate, &object, RelationStore::DEFAULT_GRAPH);
     }
     let mut lists = ListIndex::default();
+    let mut literals = LiteralIndex::default();
     for quad in ds.quads() {
         if quad.g.is_some() {
             continue; // entailment operates over the default graph
@@ -143,6 +167,15 @@ pub(crate) fn close(
         let object = terms.record(&ds.term_value(quad.o));
         if walks_collections(regime) {
             lists.observe(&subject, &predicate, &object);
+        }
+        if decides_datatypes(regime) {
+            for (surface, value) in [
+                (&subject, ds.term_value(quad.s)),
+                (&predicate, ds.term_value(quad.p)),
+                (&object, ds.term_value(quad.o)),
+            ] {
+                observe_literal(&mut literals, surface, &value);
+            }
         }
         let _ = edb.insert(&subject, &predicate, &object, RelationStore::DEFAULT_GRAPH);
     }
@@ -157,9 +190,35 @@ pub(crate) fn close(
             let _ = edb.insert(&fact.subject, fact.predicate, &fact.object, &fact.graph);
         }
     }
+    // The XSD value spaces OWL 2 Profiles Table 8 quantifies over, decided ONCE over the
+    // literals the dataset holds. See [`crate::datatypes`] for why an infinite premise is
+    // a boundary rather than a loop, and why an unmodelled datatype is not judged.
+    if decides_datatypes(regime) {
+        // A datatype the pre-pass names is a TERM of the store, and `dt-type2` writes it
+        // into an `rdf:type` object, so the dictionary has to be able to read it back —
+        // including the datatype of an ILL-TYPED literal, which need not be one of the
+        // thirty-two the program's own constants already cover.
+        let datatypes: Vec<String> = literals.datatypes().map(str::to_owned).collect();
+        for datatype in datatypes {
+            let _ = terms.record(&TermValue::iri(datatype));
+        }
+        for fact in literals.materialize() {
+            let _ = edb.insert(&fact.subject, fact.predicate, &fact.object, &fact.graph);
+        }
+    }
 
     let executable = compile(program).map_err(EntailError::Evaluate)?;
     let evaluation = evaluate(&executable, edb).map_err(EntailError::Evaluate)?;
+
+    // AN INCONSISTENCY IS DECIDED BEFORE AN ANSWER IS BUILT. Seventeen OWL 2 RL rules
+    // conclude `false`, and a match on one of them says the knowledge base entails
+    // everything — so there is no closure to hand back, only evidence. The first clash in
+    // the evaluation's own total derivation order is the witness, which makes the choice a
+    // function of the program and the data rather than of the round a rule happened to
+    // fire in.
+    if let Some(witness) = first_clash(&evaluation, &attribution, &terms, regime) {
+        return Err(EntailError::Inconsistent(Box::new(witness)));
+    }
 
     // The budget is the evaluator's own measurement, not a second tally kept alongside it.
     let mut stats = RunStats::of_budget(evaluation.budget());
@@ -204,6 +263,88 @@ pub(crate) fn close(
 /// `owl:members` and the cycle is ordinary data there.
 const fn walks_collections(regime: Regime) -> bool {
     matches!(regime, Regime::OwlRl)
+}
+
+/// Whether `regime`'s lane decides XSD value spaces before it evaluates.
+///
+/// The two lanes that fire OWL 2 Profiles §4.3 Table 8: `OWL-RL`, which owns the table,
+/// and `D`, which IS that table (see [`crate::rules::rules`]). No other lane looks inside
+/// a literal at all — RDFS entailment compares a literal by its lexical form and datatype
+/// IRI, never by its data value, which is what its own
+/// [`Construct::DatatypeValueSpace`](crate::Construct::DatatypeValueSpace) boundary says.
+const fn decides_datatypes(regime: Regime) -> bool {
+    matches!(regime, Regime::OwlRl | Regime::D)
+}
+
+/// Record `value` in the datatype pre-pass's index, if it is a literal.
+fn observe_literal(literals: &mut LiteralIndex, surface: &str, value: &TermValue) {
+    if let TermValue::Literal {
+        lexical_form,
+        datatype,
+        language,
+        ..
+    } = value
+    {
+        literals.observe(surface, lexical_form, datatype, language.is_some());
+    }
+}
+
+/// The FIRST inconsistency the evaluation witnessed, in its own total derivation order.
+///
+/// A [`CLASH_RELATION`] row is what a `false`-headed rule's lowering
+/// ([`crate::calculus::constraint_clause`]) derives, and its subject names the rule. The
+/// derivation's sources are the matched body facts in the rule's AUTHORED body order, so
+/// the witness's premises line up against the specification's own rule-table entry.
+///
+/// An INTERNAL source is dropped from the witness rather than rendered: `prp-adp`,
+/// `cax-adc`, `eq-diff2`, `eq-diff3` and `dt-not-type` all match rows of this crate's
+/// bookkeeping relations, and a row of `LIST(head, index, member)` is not an asserted
+/// triple a caller can look for in their data. What remains is exactly the triples that
+/// are.
+fn first_clash(
+    evaluation: &purrdf_datalog::seminaive::Evaluation,
+    attribution: &[ChaseRule],
+    terms: &Terms,
+    regime: Regime,
+) -> Option<InconsistencyWitness> {
+    let owl = matches!(regime, Regime::OwlRl);
+    evaluation
+        .derivations()
+        .iter()
+        .find(|derivation| derivation.fact().predicate == CLASH_RELATION)
+        .map(|derivation| witness_of(derivation, attribution, terms, owl))
+}
+
+/// The witness a clash derivation carries.
+fn witness_of(
+    derivation: &Derivation,
+    attribution: &[ChaseRule],
+    terms: &Terms,
+    owl: bool,
+) -> InconsistencyWitness {
+    // The rule is read from the clash row's own subject where it names one, and from the
+    // clause attribution otherwise; the two agree, and `a_clash_row_names_its_own_rule`
+    // asserts so. Reading the marker first is what keeps the witness right even for a
+    // rule stated as more than one clause.
+    let rule = clash_rule(&derivation.fact().subject)
+        .unwrap_or_else(|| attribution[derivation.rule()])
+        .rule_id(owl);
+    let premises = derivation
+        .sources()
+        .iter()
+        .filter(|source| !is_internal(&source.predicate))
+        .map(|source| {
+            WitnessTriple::new(
+                terms.value(&source.subject).clone(),
+                terms.value(&source.predicate).clone(),
+                terms.value(&source.object).clone(),
+            )
+        })
+        .collect();
+    // The chase reads and writes the default graph only, so a witness is always drawn
+    // from it; `None` IS the default graph, and naming one would be inventing a graph the
+    // premises did not come from.
+    InconsistencyWitness::new(rule, premises, None)
 }
 
 /// Whether `value` may occupy a triple SUBJECT position in RDF 1.2 — an IRI or a blank
@@ -267,6 +408,20 @@ impl Terms {
                     }
                 }
             }
+        }
+    }
+
+    /// Record every LITERAL constant the declared calculus names.
+    ///
+    /// [`DECLARED_LITERALS`] is the table, and it is a table rather than a walk over the
+    /// program for the reason [`Self::record_program`] documents: a
+    /// [`ClauseTerm::Literal`] is an already-rendered surface with no structure to recover
+    /// a [`TermValue`] from, so the value has to be stated beside the rendering rather than
+    /// guessed from it. `every_clause_literal_is_declared_or_internal` is what keeps the
+    /// table exhaustive.
+    fn record_literals(&mut self) {
+        for (lexical, datatype) in DECLARED_LITERALS {
+            let _ = self.record(&TermValue::typed_literal(lexical, datatype));
         }
     }
 
@@ -614,20 +769,29 @@ mod tests {
         assert!(!admits_subject(&triple) && !admits_predicate(&triple));
     }
 
-    /// EVERY constant of EVERY declared clause is a spec IRI or an INTERNAL relation id,
-    /// and nothing else.
+    /// EVERY literal constant of EVERY declared clause is one the surface dictionary can
+    /// read BACK, or an internal id that never has to be.
     ///
-    /// [`super::Terms::record_program`] records IRI constants and nothing else, because a
-    /// [`ClauseTerm::Literal`] is an already-rendered surface with no structure to recover
-    /// a [`TermValue`] from. That stays true for a literal a rule COMPARES DATA AGAINST —
-    /// there is still no way to read one back — and the exception is exactly the internal
-    /// relation ids of [`crate::lists`], which are carried in a `ClauseTerm::Literal`
-    /// because the IR has no fifth term kind and which are never read back at all: every
-    /// conclusion whose predicate is one is dropped before materialization. So the check is
-    /// not weakened, it is stated over the two cases separately, and a rule that names an
-    /// ordinary literal constant still fails here.
+    /// [`super::Terms`] records IRI constants by walking the program and literal constants
+    /// from [`DECLARED_LITERALS`], because a [`ClauseTerm::Literal`] is an already-rendered
+    /// surface with no structure to recover a [`TermValue`] from. Two kinds of literal
+    /// constant are legitimate and this asserts each against its own condition:
+    ///
+    /// * an INTERNAL id — a relation name of [`crate::lists`], a list index, a clash
+    ///   marker — which is carried in a `ClauseTerm::Literal` because the IR has no fifth
+    ///   term kind, and which is never read back at all: every conclusion whose predicate
+    ///   is internal is dropped before materialization, and a clash refuses the run;
+    /// * a SPECIFICATION literal — the two cardinality literals OWL 2 Profiles Table 6
+    ///   writes — which IS read back, and must therefore be in the recorded dictionary.
+    ///
+    /// A rule that names any other literal fails here rather than panicking in
+    /// [`super::Terms::value`] on some input that happens to reach it.
     #[test]
-    fn every_clause_constant_is_an_iri_or_an_internal_relation() {
+    fn every_clause_literal_is_declared_or_internal() {
+        let mut terms = super::Terms::default();
+        terms.record_literals();
+        let mut declared = 0_usize;
+        let mut internal = 0_usize;
         for regime in ALL_REGIMES {
             for clause in calculus_program(regime) {
                 for atom in clause.body().iter().chain(clause.head_atoms()) {
@@ -635,14 +799,35 @@ mod tests {
                         let ClauseTerm::Literal(surface) = term else {
                             continue;
                         };
+                        if crate::lists::is_internal(surface) {
+                            internal += 1;
+                            continue;
+                        }
                         assert!(
-                            crate::lists::INTERNAL_RELATIONS.contains(&surface.as_str()),
+                            terms.by_surface.contains_key(surface),
                             "{regime:?}: a clause names the literal constant {surface:?}, \
                              which the surface dictionary cannot read back"
                         );
+                        declared += 1;
                     }
                 }
             }
+        }
+        assert!(internal > 0 && declared > 0, "both cases must be exercised");
+        // Every declared literal is actually USED; an entry nothing names is a table that
+        // has outlived its rule.
+        for (lexical, datatype) in super::DECLARED_LITERALS {
+            let surface = super::literal_surface(lexical, datatype);
+            assert!(
+                calculus_program(Regime::OwlRl).iter().any(|clause| {
+                    clause.body().iter().chain(clause.head_atoms()).any(|atom| {
+                        atom.terms()
+                            .iter()
+                            .any(|term| matches!(term, ClauseTerm::Literal(s) if *s == surface))
+                    })
+                }),
+                "{surface:?} is declared and named by no rule"
+            );
         }
     }
 

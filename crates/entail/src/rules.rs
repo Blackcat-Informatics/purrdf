@@ -15,7 +15,10 @@
 //! `rules(r)` minus `implemented(r)` is therefore the regime's gap, expressed as an
 //! executable artifact instead of an assertion in a README. Both return `&'static`
 //! slices in specification table order, so the inventory is deterministic and free of
-//! map iteration.
+//! map iteration. For `OWL-RL` the gap is now EMPTY — which is a claim about the RULE
+//! TABLE and not about the closure; see
+//! [`Completeness::ExactWithinBoundaries`](crate::Completeness::ExactWithinBoundaries) for
+//! the difference and why a report states both.
 //!
 //! PurRDF mints no vocabulary here: [`RuleId`] carries specification rule *names*
 //! (`"eq-ref"`, `"cls-svf1"`, `"rdfs4"`), not IRIs.
@@ -649,61 +652,22 @@ static IMPLEMENTED_RDFS: [RuleId; 14] = [
     RuleId::Rdfs13,
 ];
 
-/// The OWL 2 RL rules the chase evaluates, in specification table order.
+/// The OWL 2 RL rules the chase evaluates: all seventy-eight, in specification table
+/// order.
 ///
-/// Three groups are absent, and each is absent for one stated reason rather than for want
-/// of attention:
-///
-/// * `eq-*` (Table 4) and `dt-*` (Table 8) — the equality and datatype calculi, which are
-///   their own work and are not attempted by the clauses this crate declares;
-/// * `cls-*` (Table 6) — the class-expression rules;
-/// * the eight rules of Tables 5 and 7 that conclude `false` — `prp-irp`, `prp-asyp`,
-///   `prp-pdw`, `prp-adp`, `prp-npa1`, `prp-npa2`, `cax-dw` and `cax-adc`. Those eight ARE
-///   declared: [`crate::calculus::prp`] and [`crate::calculus::cax`] state each of them
-///   with the specification's own body. They are not EVALUATED, because a semi-naive
-///   least-fixpoint evaluator computes the least model of a set of definite clauses and
-///   `body → false` is not one, so the evaluator refuses the head form by name. A rule bent
-///   into an atomic head to make this list longer would put a fabricated triple in the
-///   closure, so the gap is declared instead.
-static IMPLEMENTED_OWL_RL: [RuleId; 37] = [
-    RuleId::PrpAp,
-    RuleId::PrpDom,
-    RuleId::PrpRng,
-    RuleId::PrpFp,
-    RuleId::PrpIfp,
-    RuleId::PrpSymp,
-    RuleId::PrpTrp,
-    RuleId::PrpSpo1,
-    RuleId::PrpSpo2,
-    RuleId::PrpEqp1,
-    RuleId::PrpEqp2,
-    RuleId::PrpInv1,
-    RuleId::PrpInv2,
-    RuleId::PrpKey,
-    RuleId::CaxSco,
-    RuleId::CaxEqc1,
-    RuleId::CaxEqc2,
-    RuleId::ScmCls,
-    RuleId::ScmSco,
-    RuleId::ScmEqc1,
-    RuleId::ScmEqc2,
-    RuleId::ScmOp,
-    RuleId::ScmDp,
-    RuleId::ScmSpo,
-    RuleId::ScmEqp1,
-    RuleId::ScmEqp2,
-    RuleId::ScmDom1,
-    RuleId::ScmDom2,
-    RuleId::ScmRng1,
-    RuleId::ScmRng2,
-    RuleId::ScmHv,
-    RuleId::ScmSvf1,
-    RuleId::ScmSvf2,
-    RuleId::ScmAvf1,
-    RuleId::ScmAvf2,
-    RuleId::ScmInt,
-    RuleId::ScmUni,
-];
+/// The list is the whole of Tables 4–9. Seventeen of its entries conclude `false` rather
+/// than a triple — `eq-diff1`, `eq-diff2`, `eq-diff3`, `prp-irp`, `prp-asyp`, `prp-pdw`,
+/// `prp-adp`, `prp-npa1`, `prp-npa2`, `cls-nothing2`, `cls-com`, `cls-maxc1`,
+/// `cls-maxqc1`, `cls-maxqc2`, `cax-dw`, `cax-adc` and `dt-not-type` — and they are
+/// claimed here because a body match on one of them is DETECTED: the calculus lowers each
+/// to a clause the evaluator runs ([`crate::calculus::constraint_clause`]) and a match
+/// becomes [`EntailError::Inconsistent`](crate::EntailError) carrying a witness. "Fires"
+/// for such a rule means "is decided", which is the only thing a rule with no conclusion
+/// can do.
+static IMPLEMENTED_OWL_RL: [RuleId; 78] = splice_owl_rl();
+
+/// The rules the `D` lane evaluates: OWL 2 Profiles §4.3 Table 8, entire.
+static IMPLEMENTED_D: [RuleId; 5] = OWL_RL_DATATYPES;
 
 /// The rule table `regime` is *defined by* — what the specification requires of a
 /// complete implementation, not what this crate currently does.
@@ -717,14 +681,20 @@ static IMPLEMENTED_OWL_RL: [RuleId; 37] = [
 /// * `OwlRl` — OWL 2 Profiles §4.3 Tables 4–9: 78 rules. Note that OWL 2 RL/RDF
 ///   deliberately omits the RDF/RDFS axiomatic triples and "most, but not all of the
 ///   entailment rules of RDFS", so this list is *not* a superset of the RDFS table.
-/// * `OwlDirect`, `Rif`, `D` — not defined by a fixed rule table (a tableau, a
-///   caller-supplied rule set, and a datatype map respectively); empty.
+/// * `D` — datatype entailment, realized as OWL 2 Profiles §4.3 Table 8: the five `dt-*`
+///   rules, which are the fixed rule table this crate can enumerate for it. What Table 8
+///   does not cover — the infinite value spaces themselves — is reported as the
+///   [`Construct::DatatypeValueSpace`](crate::Construct::DatatypeValueSpace) boundary
+///   rather than claimed.
+/// * `OwlDirect`, `Rif` — not defined by a fixed rule table (a tableau and a
+///   caller-supplied rule set respectively); empty.
 ///
 /// ```
 /// use purrdf_entail::{Regime, rules};
 ///
 /// assert_eq!(rules(Regime::OwlRl).len(), 78);
 /// assert_eq!(rules(Regime::Rdfs).len(), 18);
+/// assert_eq!(rules(Regime::D).len(), 5);
 /// assert!(rules(Regime::Simple).is_empty());
 /// ```
 #[must_use]
@@ -733,7 +703,8 @@ pub fn rules(regime: Regime) -> &'static [RuleId] {
         Regime::Rdf => &RDF_PATTERNS,
         Regime::Rdfs => &RDF_AND_RDFS_RULES,
         Regime::OwlRl => &OWL_RL_RULES,
-        Regime::Simple | Regime::OwlDirect | Regime::Rif | Regime::D => &NO_RULES,
+        Regime::D => &OWL_RL_DATATYPES,
+        Regime::Simple | Regime::OwlDirect | Regime::Rif => &NO_RULES,
     }
 }
 
@@ -742,7 +713,7 @@ pub fn rules(regime: Regime) -> &'static [RuleId] {
 /// Always a subsequence of `rules(regime)` — same order, no additions — so
 /// `rules(r).len() - implemented(r).len()` is the regime's measurable gap.
 ///
-/// Two honesty notes, so this list is read for exactly what it claims:
+/// Three honesty notes, so this list is read for exactly what it claims:
 ///
 /// * It lists rules the chase *evaluates directly*, which is a stronger claim than "the
 ///   closure contains what this rule would conclude": several rules are redundant given
@@ -753,22 +724,35 @@ pub fn rules(regime: Regime) -> &'static [RuleId] {
 ///   `rdfs8`, and `rdfs10`. Those are not OWL 2 RL rule ids — OWL 2 RL/RDF omits them
 ///   from its tables — so they cannot appear in an `OwlRl` list that must stay a subset
 ///   of the 78, but an `OwlRl` report does name them, under their RDFS ids.
+/// * For the seventeen rules whose conclusion is `false`, "fires" means DECIDES: a body
+///   match is [`EntailError::Inconsistent`](crate::EntailError) carrying a witness rather
+///   than a triple in the closure. That is the only thing a rule with no conclusion can
+///   do, and it is what makes claiming them here honest.
+///
+/// A complete rule table is NOT a complete closure, and the two are reported separately:
+/// see [`Completeness::ExactWithinBoundaries`](crate::Completeness::ExactWithinBoundaries).
 ///
 /// ```
 /// use purrdf_entail::{Regime, RuleId, implemented, rules};
 ///
-/// // The gap is data, not prose.
+/// // The gap is data, not prose — and for OWL 2 RL there is none left.
 /// let missing: Vec<RuleId> = rules(Regime::OwlRl)
 ///     .iter()
 ///     .copied()
 ///     .filter(|r| !implemented(Regime::OwlRl).contains(r))
 ///     .collect();
-/// assert_eq!(missing.len(), 41);
-/// assert!(missing.contains(&RuleId::EqRef));
-/// // `cax-dw` concludes `false`, which the Datalog evaluator has no semantics for: it is
-/// // DECLARED by the calculus and deliberately not claimed here.
-/// assert!(missing.contains(&RuleId::CaxDw));
-/// assert!(!missing.contains(&RuleId::CaxSco));
+/// assert!(missing.is_empty());
+/// // `cax-dw` concludes `false`; it is claimed because a body match on it is DECIDED and
+/// // reported as an inconsistency witness.
+/// assert!(implemented(Regime::OwlRl).contains(&RuleId::CaxDw));
+///
+/// // RDFS still has one: the four rules that mint a fresh blank node.
+/// let missing: Vec<RuleId> = rules(Regime::Rdfs)
+///     .iter()
+///     .copied()
+///     .filter(|r| !implemented(Regime::Rdfs).contains(r))
+///     .collect();
+/// assert_eq!(missing.len(), 4);
 /// ```
 #[must_use]
 pub fn implemented(regime: Regime) -> &'static [RuleId] {
@@ -776,14 +760,15 @@ pub fn implemented(regime: Regime) -> &'static [RuleId] {
         Regime::Rdf => &IMPLEMENTED_RDF,
         Regime::Rdfs => &IMPLEMENTED_RDFS,
         Regime::OwlRl => &IMPLEMENTED_OWL_RL,
-        Regime::Simple | Regime::OwlDirect | Regime::Rif | Regime::D => &NO_RULES,
+        Regime::D => &IMPLEMENTED_D,
+        Regime::Simple | Regime::OwlDirect | Regime::Rif => &NO_RULES,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        IMPLEMENTED_OWL_RL, IMPLEMENTED_RDF, IMPLEMENTED_RDFS, OWL_RL_CLASS_AXIOMS,
+        IMPLEMENTED_D, IMPLEMENTED_OWL_RL, IMPLEMENTED_RDF, IMPLEMENTED_RDFS, OWL_RL_CLASS_AXIOMS,
         OWL_RL_CLASS_EXPRESSIONS, OWL_RL_DATATYPES, OWL_RL_EQUALITY, OWL_RL_PROPERTY_AXIOMS,
         OWL_RL_SCHEMA_VOCABULARY, RDF_PATTERNS, RDFS_PATTERNS, RuleId, implemented, rules,
     };
@@ -1141,10 +1126,10 @@ mod tests {
                 ("Simple", 0, 0),
                 ("RDF", 3, 1),
                 ("RDFS", 18, 14),
-                ("OWL-RL", 78, 37),
+                ("OWL-RL", 78, 78),
                 ("OWL-Direct", 0, 0),
                 ("RIF", 0, 0),
-                ("D", 0, 0),
+                ("D", 5, 5),
             ],
             "(regime, spec rules, implemented rules)"
         );
@@ -1159,39 +1144,40 @@ mod tests {
         assert_eq!(implemented(Regime::Rdfs), &IMPLEMENTED_RDFS);
         assert_eq!(implemented(Regime::OwlRl), &IMPLEMENTED_OWL_RL);
 
-        let owl: Vec<&str> = implemented(Regime::OwlRl)
-            .iter()
-            .map(|r| r.as_str())
-            .collect();
-        assert_eq!(
-            owl,
-            [
-                "prp-ap", "prp-dom", "prp-rng", "prp-fp", "prp-ifp", "prp-symp", "prp-trp",
-                "prp-spo1", "prp-spo2", "prp-eqp1", "prp-eqp2", "prp-inv1", "prp-inv2", "prp-key",
-                "cax-sco", "cax-eqc1", "cax-eqc2", "scm-cls", "scm-sco", "scm-eqc1", "scm-eqc2",
-                "scm-op", "scm-dp", "scm-spo", "scm-eqp1", "scm-eqp2", "scm-dom1", "scm-dom2",
-                "scm-rng1", "scm-rng2", "scm-hv", "scm-svf1", "scm-svf2", "scm-avf1", "scm-avf2",
-                "scm-int", "scm-uni",
-            ]
-        );
-        // The eight rules of these three tables that are DECLARED and not evaluated: every
-        // one concludes `false`. Naming them here is what keeps "not implemented" from
-        // being read as "not written down".
-        for declared in [
+        assert_eq!(implemented(Regime::D), &IMPLEMENTED_D);
+
+        // `OWL-RL` is COMPLETE: the chase evaluates the whole of Tables 4-9, so the
+        // implemented list IS the specification list — asserted as an identity rather than
+        // as a copied transcription, because a copy of seventy-eight names would only
+        // repeat what `rules` already says.
+        assert_eq!(implemented(Regime::OwlRl), rules(Regime::OwlRl));
+        // The seventeen rules of those tables whose conclusion is `false`. They are
+        // claimed here because a body match on one of them is DETECTED and reported as an
+        // inconsistency witness, which is the only thing a rule with no conclusion can do;
+        // see `crate::calculus::constraint_clause`.
+        for decided in [
+            RuleId::EqDiff1,
+            RuleId::EqDiff2,
+            RuleId::EqDiff3,
             RuleId::PrpIrp,
             RuleId::PrpAsyp,
             RuleId::PrpPdw,
             RuleId::PrpAdp,
             RuleId::PrpNpa1,
             RuleId::PrpNpa2,
+            RuleId::ClsNothing2,
+            RuleId::ClsCom,
+            RuleId::ClsMaxc1,
+            RuleId::ClsMaxqc1,
+            RuleId::ClsMaxqc2,
             RuleId::CaxDw,
             RuleId::CaxAdc,
+            RuleId::DtNotType,
         ] {
             assert!(
-                !implemented(Regime::OwlRl).contains(&declared),
-                "{declared} concludes `false` and may not be claimed as implemented"
+                implemented(Regime::OwlRl).contains(&decided),
+                "{decided} concludes `false` and is DECIDED, so it is implemented"
             );
-            assert!(rules(Regime::OwlRl).contains(&declared));
         }
         let rdfs: Vec<&str> = implemented(Regime::Rdfs)
             .iter()

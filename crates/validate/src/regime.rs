@@ -63,7 +63,9 @@
 
 use core::fmt;
 
-use purrdf_entail::{EntailError, ReasoningReport, Regime, implemented, materialize, rules};
+use purrdf_entail::{
+    Completeness, EntailError, ReasoningReport, Regime, implemented, materialize, rules,
+};
 
 /// The accepted regime spellings, in the order an error message lists them.
 ///
@@ -77,7 +79,7 @@ pub const REGIME_NAMES: [&str; 7] = ["simple", "rdf", "rdfs", "owl-rl", "owl-dir
 /// The other three are refused with a message that names these: `owl-direct`
 /// needs the query's class expressions, `rif` needs a parsed rule set, and `d`
 /// is a spec-inherent boundary for forward materialization.
-pub const MATERIALIZABLE_REGIME_NAMES: [&str; 4] = ["simple", "rdf", "rdfs", "owl-rl"];
+pub const MATERIALIZABLE_REGIME_NAMES: [&str; 5] = ["simple", "rdf", "rdfs", "owl-rl", "d"];
 
 /// The version banner every rendered report opens with.
 pub const REPORT_FORMAT_BANNER: &str = "purrdf-reasoning-report 1";
@@ -293,7 +295,7 @@ fn rule_lines(rules: &[purrdf_entail::RuleId]) -> String {
 /// ```text
 /// purrdf-reasoning-report 1
 /// regime <cli-spelling>
-/// completeness exact | completeness sound-incomplete <count>
+/// completeness exact | completeness exact-within-boundaries | completeness sound-incomplete <count>
 /// missing <rule-id>                       (0..n, specification table order)
 /// fired <rule-id> <conclusions>           (0..n, specification table order)
 /// boundary <construct> <reason>           (0..n, Construct declaration order)
@@ -310,12 +312,18 @@ fn rule_lines(rules: &[purrdf_entail::RuleId]) -> String {
 /// on the far side of an FFI boundary should not have to re-derive the gate to
 /// check it.
 ///
+/// `completeness` has three forms and the middle one is the interesting one:
+/// `exact-within-boundaries` says the rule TABLE was complete and the run still
+/// met a construct it could not fully handle, which is what an `owl-rl` closure
+/// is. Reporting that as plain `exact` would be the overclaim the last line
+/// exists to forbid.
+///
 /// The `inconsistency` line names the rule that detected a clash. It is `none`
-/// for every closure this boundary can currently produce — not because the case
-/// is unhandled, but because, as
-/// [`InconsistencyWitness`](purrdf_entail::InconsistencyWitness) documents, none
-/// of the seventeen OWL 2 RL rules that conclude `false` is implemented, so no
-/// chase path can reach one. The witness's premise *triples* are not rendered
+/// for every closure this boundary produces, and that is now a CHECKED fact
+/// rather than a vacuous one: the seventeen OWL 2 RL rules that conclude `false`
+/// all run, and a run that witnesses one is REFUSED — the witness reaches the
+/// caller on `purrdf_entail::EntailError::Inconsistent`, not in a report of a
+/// closure that does not exist. The witness's premise *triples* are not rendered
 /// here; a Rust caller that needs them reads them from
 /// [`purrdf_entail::materialize`] directly, where they are terms rather than text.
 #[must_use]
@@ -336,16 +344,16 @@ impl fmt::Display for RenderedReport<'_> {
         let report = self.0;
         writeln!(f, "{REPORT_FORMAT_BANNER}")?;
         writeln!(f, "regime {}", regime_name(report.regime()))?;
-        let completeness = report.completeness();
-        if completeness.is_exact() {
-            writeln!(f, "completeness exact")?;
-        } else {
-            writeln!(
-                f,
-                "completeness sound-incomplete {}",
-                completeness.missing().len()
-            )?;
+        match report.completeness() {
+            Completeness::Exact => writeln!(f, "completeness exact")?,
+            Completeness::ExactWithinBoundaries => {
+                writeln!(f, "completeness exact-within-boundaries")?;
+            }
+            Completeness::SoundIncomplete { missing } => {
+                writeln!(f, "completeness sound-incomplete {}", missing.len())?;
+            }
         }
+        let completeness = report.completeness();
         for rule in completeness.missing() {
             writeln!(f, "missing {}", rule.as_str())?;
         }
@@ -704,6 +712,7 @@ mod tests {
         }
         // …and the CLI's own enum has no eighth value this set is missing.
         assert_eq!(REGIME_NAMES.len(), 7);
+        assert_eq!(MATERIALIZABLE_REGIME_NAMES.len(), 5);
         for name in MATERIALIZABLE_REGIME_NAMES {
             assert!(REGIME_NAMES.contains(&name), "{name}");
         }
@@ -727,15 +736,20 @@ mod tests {
         }
     }
 
-    /// The three regimes that need inputs this façade does not have are refused
+    /// The two regimes that need inputs this façade does not have are refused
     /// by name, and the refusal says which regimes *do* materialize.
+    ///
+    /// `d` used to be a third. It is not any more: `entailment/D` is realized as
+    /// the five `dt-*` rules of OWL 2 Profiles §4.3 Table 8, so it materializes
+    /// like any other lane.
     #[test]
     fn a_non_materializable_regime_is_refused_by_name() {
-        for name in ["owl-direct", "rif", "d"] {
+        assert!(materialize_to_nquads_string("d", SCHEMA).is_ok());
+        for name in ["owl-direct", "rif"] {
             let error = materialize_to_nquads_string(name, SCHEMA).expect_err("unsupported");
             assert!(error.contains(name), "{error}");
             assert!(
-                error.contains("materializable regimes: simple, rdf, rdfs, owl-rl"),
+                error.contains("materializable regimes: simple, rdf, rdfs, owl-rl, d"),
                 "{error}"
             );
         }
@@ -867,6 +881,88 @@ mod tests {
         }
     }
 
+    /// REGENERATE [`REGIME_GOLDEN_VECTORS`] from the current engine.
+    ///
+    /// `#[ignore]`d, so an ordinary `cargo test` can only ever COMPARE — the same
+    /// discipline `purrdf-entail`'s oracle corpus keeps, and for the same reason: a
+    /// golden that regenerates itself on every run is not a golden. The `@case`
+    /// names, their `@regime`s and their `@input` documents are the artifact's own
+    /// and are carried through unchanged; only the `@closure` and `@report` bodies
+    /// are rewritten, so a regeneration can never invent a case or quietly change
+    /// what one is about.
+    ///
+    /// ```text
+    /// cargo test -p purrdf-validate --lib -- --ignored --exact \
+    ///     regime::tests::regenerate_regime_golden_vectors
+    /// ```
+    #[test]
+    #[ignore = "writes the committed golden vector; run deliberately"]
+    fn regenerate_regime_golden_vectors() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/regime-boundary.vectors");
+        let source = std::fs::read_to_string(&path).expect("the committed vector");
+        let mut out = String::new();
+        let mut lines = source.lines().peekable();
+        while let Some(line) = lines.next() {
+            if let Some(rest) = line.strip_prefix("@closure") {
+                assert!(rest.is_empty(), "@closure takes no argument");
+                // Skip the committed bodies; they are replaced wholesale below.
+                while lines.peek().is_some_and(|next| !next.starts_with("@end")) {
+                    let _ = lines.next();
+                }
+                continue;
+            }
+            out.push_str(line);
+            out.push('\n');
+        }
+        // Re-run every case and splice its two bodies back in.
+        let mut rendered = String::new();
+        let mut case_regime: Option<&str> = None;
+        let mut input = String::new();
+        let mut in_input = false;
+        for line in out.lines() {
+            if let Some(name) = line.strip_prefix("@regime ") {
+                case_regime = Some(Box::leak(name.to_owned().into_boxed_str()));
+            }
+            if line == "@input" {
+                in_input = true;
+                input.clear();
+                rendered.push_str(line);
+                rendered.push('\n');
+                continue;
+            }
+            if line == "@end" {
+                let regime = case_regime.expect("a case names its regime");
+                let closed =
+                    materialize_to_nquads_string(regime, &input).expect("a golden case runs");
+                rendered.push_str("@closure\n");
+                rendered.push_str(closed.nquads());
+                rendered.push_str("@report\n");
+                rendered.push_str(closed.report());
+                rendered.push_str("@end\n");
+                in_input = false;
+                continue;
+            }
+            if in_input && !line.starts_with('@') {
+                input.push_str(line);
+                input.push('\n');
+                rendered.push_str(line);
+                rendered.push('\n');
+                continue;
+            }
+            if in_input && line == "@report" {
+                in_input = false;
+                continue;
+            }
+            if line.starts_with("@report") {
+                continue;
+            }
+            rendered.push_str(line);
+            rendered.push('\n');
+        }
+        std::fs::write(&path, &rendered).expect("write the golden vector");
+    }
+
     /// The inventory strings are the specification tables, in table order, and
     /// `implemented` is a subsequence of `rules`.
     #[test]
@@ -874,7 +970,16 @@ mod tests {
         assert_eq!(rules_string("owl-rl").expect("known").lines().count(), 78);
         assert_eq!(rules_string("rdfs").expect("known").lines().count(), 18);
         assert_eq!(rules_string("rdf").expect("known").lines().count(), 3);
-        for regime in ["simple", "owl-direct", "rif", "d"] {
+        // `d` is OWL 2 Profiles §4.3 Table 8 — five rules, all of them fired.
+        assert_eq!(rules_string("d").expect("known").lines().count(), 5);
+        assert_eq!(
+            implemented_rules_string("d")
+                .expect("known")
+                .lines()
+                .count(),
+            5
+        );
+        for regime in ["simple", "owl-direct", "rif"] {
             assert_eq!(rules_string(regime).expect("known"), "", "{regime}");
             assert_eq!(implemented_rules_string(regime).expect("known"), "");
         }

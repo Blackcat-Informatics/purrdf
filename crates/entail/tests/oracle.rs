@@ -19,7 +19,7 @@
 //!
 //! # What is captured, and what deliberately is not
 //!
-//! Each golden holds, for one fixture and for each of the four regimes `materialize` can
+//! Each golden holds, for one fixture and for each of the five regimes `materialize` can
 //! run: the closure as **canonical N-Quads** (`purrdf_core::canonicalize` — the repository's
 //! RDFC-1.0 canonicalizer, not a serializer written here) and the [`ReasoningReport`]
 //! rendered field by field in the report's own documented order.
@@ -62,7 +62,9 @@ use std::str::FromStr as _;
 use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId, canonicalize};
-use purrdf_entail::{ReasoningReport, Regime, RuleId, implemented, materialize, rules};
+use purrdf_entail::{
+    Completeness, EntailError, ReasoningReport, Regime, RuleId, implemented, materialize, rules,
+};
 
 // ── Vocabulary ──────────────────────────────────────────────────────────────────
 //
@@ -143,6 +145,52 @@ const OWL_INTERSECTIONOF: &str = "http://www.w3.org/2002/07/owl#intersectionOf";
 const OWL_UNIONOF: &str = "http://www.w3.org/2002/07/owl#unionOf";
 /// `rdfs:label` — a built-in annotation property, and `prp-ap`'s witness.
 const RDFS_LABEL: &str = "http://www.w3.org/2000/01/rdf-schema#label";
+/// `owl:Nothing` — `cls-nothing1`'s subject and `cls-nothing2`'s class.
+const OWL_NOTHING: &str = "http://www.w3.org/2002/07/owl#Nothing";
+/// `owl:differentFrom` — what `dt-diff` concludes and `eq-diff1` clashes against.
+const OWL_DIFFERENTFROM: &str = "http://www.w3.org/2002/07/owl#differentFrom";
+/// `owl:AllDifferent` — the class `eq-diff2` and `eq-diff3` read a list off.
+const OWL_ALLDIFFERENT: &str = "http://www.w3.org/2002/07/owl#AllDifferent";
+/// `owl:members` — the list-valued property of `owl:AllDifferent` and `owl:AllDisjoint*`.
+const OWL_MEMBERS: &str = "http://www.w3.org/2002/07/owl#members";
+/// `owl:distinctMembers` — `owl:AllDifferent`'s other list-valued property.
+const OWL_DISTINCTMEMBERS: &str = "http://www.w3.org/2002/07/owl#distinctMembers";
+/// `owl:IrreflexiveProperty`.
+const OWL_IRREFLEXIVEPROPERTY: &str = "http://www.w3.org/2002/07/owl#IrreflexiveProperty";
+/// `owl:AsymmetricProperty`.
+const OWL_ASYMMETRICPROPERTY: &str = "http://www.w3.org/2002/07/owl#AsymmetricProperty";
+/// `owl:propertyDisjointWith`.
+const OWL_PROPERTYDISJOINTWITH: &str = "http://www.w3.org/2002/07/owl#propertyDisjointWith";
+/// `owl:AllDisjointProperties`.
+const OWL_ALLDISJOINTPROPERTIES: &str = "http://www.w3.org/2002/07/owl#AllDisjointProperties";
+/// `owl:AllDisjointClasses`.
+const OWL_ALLDISJOINTCLASSES: &str = "http://www.w3.org/2002/07/owl#AllDisjointClasses";
+/// `owl:disjointWith`.
+const OWL_DISJOINTWITH: &str = "http://www.w3.org/2002/07/owl#disjointWith";
+/// `owl:complementOf`.
+const OWL_COMPLEMENTOF: &str = "http://www.w3.org/2002/07/owl#complementOf";
+/// `owl:oneOf`.
+const OWL_ONEOF: &str = "http://www.w3.org/2002/07/owl#oneOf";
+/// `owl:maxCardinality`.
+const OWL_MAXCARDINALITY: &str = "http://www.w3.org/2002/07/owl#maxCardinality";
+/// `owl:maxQualifiedCardinality`.
+const OWL_MAXQUALIFIEDCARDINALITY: &str = "http://www.w3.org/2002/07/owl#maxQualifiedCardinality";
+/// `owl:onClass`.
+const OWL_ONCLASS: &str = "http://www.w3.org/2002/07/owl#onClass";
+/// `owl:sourceIndividual` — a negative property assertion's subject.
+const OWL_SOURCEINDIVIDUAL: &str = "http://www.w3.org/2002/07/owl#sourceIndividual";
+/// `owl:assertionProperty` — a negative property assertion's predicate.
+const OWL_ASSERTIONPROPERTY: &str = "http://www.w3.org/2002/07/owl#assertionProperty";
+/// `owl:targetIndividual` — a negative OBJECT-property assertion's object.
+const OWL_TARGETINDIVIDUAL: &str = "http://www.w3.org/2002/07/owl#targetIndividual";
+/// `owl:targetValue` — a negative DATA-property assertion's object.
+const OWL_TARGETVALUE: &str = "http://www.w3.org/2002/07/owl#targetValue";
+/// `xsd:nonNegativeInteger` — the datatype OWL 2 Profiles Table 6 writes every cardinality
+/// literal of `cls-maxc1`, `cls-maxc2` and the four `cls-maxqc*` rules with.
+const XSD_NONNEGATIVEINTEGER: &str = "http://www.w3.org/2001/XMLSchema#nonNegativeInteger";
+/// `xsd:integer` — a datatype supported in OWL 2 RL, and NOT one of the three RDF 1.2
+/// Semantics §8 makes mandatory, which is what makes it `dt-type1`'s witness.
+const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 /// `rdf:first`.
 const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
 /// `rdf:rest`.
@@ -257,6 +305,24 @@ const fn t_lit(s: &'static str, p: &'static str, lexical: &'static str) -> Quad 
     }
 }
 
+/// A default-graph triple whose object is a literal of an explicit datatype.
+///
+/// [`t_lit`] is the `xsd:string` case; this one is what the `dt-*` family and OWL 2
+/// Profiles Table 6's cardinality literals need, where the datatype IS the premise.
+const fn t_lit_dt(
+    s: &'static str,
+    p: &'static str,
+    lexical: &'static str,
+    datatype: &'static str,
+) -> Quad {
+    Quad {
+        s,
+        p,
+        o: Term::Literal { lexical, datatype },
+        g: None,
+    }
+}
+
 /// A default-graph triple whose object is an RDF 1.2 triple term.
 const fn t_quoted(
     s: &'static str,
@@ -295,13 +361,22 @@ struct Fixture {
     /// Checked to parse as [`RuleId`]s; documentation for the reader, not an assertion
     /// about the closure (the registry below makes those, per rule).
     exercises: &'static [&'static str],
-    /// What moved in THIS golden at the engine swap, and why the new answer is licensed.
+    /// What moved in THIS golden at each change the corpus has seen, and why the new
+    /// answer is licensed.
     ///
-    /// Rendered into the golden under [`ENGINE_SWAP`], which states the three causes once;
-    /// these lines name the actual triples and tallies each cause moved here. A golden
-    /// regenerated without an entry is the defect this corpus exists to catch, so the
-    /// field is not `Option` and an empty slice is a claim — "this golden did not move" —
-    /// rather than an omission.
+    /// Rendered into the golden beneath [`ENGINE_SWAP`], [`AXIOMATIC_PATH`],
+    /// [`OWL_RL_TABLES`] and [`OWL_RL_COMPLETE`], each of which states one change's causes
+    /// ONCE; these lines name the actual triples and tallies each cause moved HERE. It is
+    /// append-only — a fixture's entry accumulates one section per change it lived
+    /// through, so a reader of one golden can see the whole history of that answer without
+    /// leaving the file.
+    ///
+    /// A golden regenerated without an entry is the defect this corpus exists to catch, so
+    /// the field is not `Option` and an empty slice is a claim — "this golden did not
+    /// move" — rather than an omission. A fixture that did not exist before a change says
+    /// so instead, which is a different claim and is checked as one; see
+    /// [`CLASH_CORPUS`]'s [`NO_GOLDEN`] for the third case, a fixture that has no golden
+    /// at all.
     changed: &'static [&'static str],
     /// The input quads.
     quads: &'static [Quad],
@@ -464,6 +539,88 @@ const OWL_RL_TABLES: &[&str] = &[
     "  error rather than producing a closure over its well-formed prefix.",
 ];
 
+/// The four causes of every byte that moved when the `OWL-RL` lane stopped stating three
+/// of OWL 2 Profiles §4.3's six tables and started stating all six.
+///
+/// Written into every golden's header beneath [`OWL_RL_TABLES`], for the same reason the
+/// other three are: the general cause once, the fixture's own triples in its own
+/// [`Fixture::changed`].
+///
+/// The single strongest fact about this diff is stated first, because it makes the other
+/// fifty-nine goldens checkable at a glance: EVERY already-committed golden changed in the
+/// `OWL-RL` section, gained a `D` section, and moved in no other way. `Simple`, `RDF` and
+/// `RDFS` are byte-identical across all sixty files that already existed.
+const OWL_RL_COMPLETE: &[&str] = &[
+    "AND EVERY GOLDEN MOVED A FOURTH TIME, IN THE OWL-RL SECTION AND NOWHERE ELSE, AND",
+    "GAINED A D SECTION — the OWL-RL lane now states OWL 2 Profiles §4.3 Tables 4, 6 and 8",
+    "as well, which is the whole of the rule set. Simple, RDF and RDFS are byte-identical to",
+    "the previous golden in all sixty files that already existed, and nothing was removed",
+    "from any closure anywhere. Four causes account for the new bytes.",
+    "",
+    "  i. FORTY-ONE MORE RULES FIRE, AND THE LANE IS COMPLETE. implemented(OWL-RL) is 78 of",
+    "     78 where it was 37: Table 4's nine eq-*, Table 6's nineteen cls-* and Table 8's",
+    "     five dt-* are now stated and evaluated. Every OWL-RL report's `missing` list is",
+    "     therefore EMPTY where it held 41 ids, and its completeness reads",
+    "     `exact-within-boundaries` where it read `sound-incomplete`. Those are different",
+    "     claims and the golden now spells them differently: `exact` means the rule table",
+    "     was complete AND nothing got in the way, and no OWL-RL run reaches it, because",
+    "     the datatype-value-space boundary is inherent to the lane.",
+    "",
+    "     SEVENTEEN OF THE FORTY-ONE CONCLUDE `false` AND ARE NOW EVALUATED RATHER THAN",
+    "     DECLARED. A body match on eq-diff1, eq-diff2, eq-diff3, prp-irp, prp-asyp,",
+    "     prp-pdw, prp-adp, prp-npa1, prp-npa2, cls-nothing2, cls-com, cls-maxc1,",
+    "     cls-maxqc1, cls-maxqc2, cax-dw, cax-adc or dt-not-type makes `materialize` REFUSE",
+    "     the run, carrying an inconsistency witness that names the rule and the asserted",
+    "     triples that satisfied it. There is no closure for such a run, so no golden can",
+    "     hold one: the eighteen fixtures that reach those rules — plus dt-diff, whose",
+    "     witness is eq-diff1's — live in the oracle's CLASH_CORPUS with their controls",
+    "     beside them, and the evidence is the refusal.",
+    "",
+    " ii. eq-ref ASSERTS `?x owl:sameAs ?x` FOR EVERY TERM OF EVERY TRIPLE, so every OWL-RL",
+    "     closure grows by exactly one reflexive assertion per distinct term of that closure",
+    "     — which is the single largest source of new lines in this diff and the reason the",
+    "     smallest closures here are now three-figure. Each fixture's accounting below names",
+    "     the terms ITS closure gained, and nothing else it gained.",
+    "",
+    "     A reflexive assertion whose subject is a LITERAL or a TRIPLE TERM is generalized",
+    "     RDF, which the RDF 1.2 dataset IR cannot represent, so it is derived in the",
+    "     evaluator's own term space and abandoned at the materialization boundary. That is",
+    "     why `triple_term` is the one already-committed golden whose BOUNDARY list moved:",
+    "     eq-ref reaches `<<( A ⊑ B )>> owl:sameAs <<( A ⊑ B )>>` and cannot represent it,",
+    "     so that run now reports generalized-rdf beside the triple-term boundary it always",
+    "     reported. Every other lane and fixture keeps the boundary list it had.",
+    "",
+    "iii. THREE MORE RULES ARE PREMISE-FREE, AND EVERY OWL-RL CLOSURE CARRIES THE SAME",
+    "     98-LINE BLOCK. cls-thing and cls-nothing1 type owl:Thing and owl:Nothing an",
+    "     owl:Class; dt-type1 types each of the thirty-two datatypes OWL 2 Profiles §4.2.1",
+    "     lists as supported in OWL 2 RL an rdfs:Datatype; scm-cls draws five distinct",
+    "     triples from the two classes; and eq-ref closes over all of it, one reflexive",
+    "     assertion for each of the fifty distinct terms. 43 + 5 + 50 = 98, that block is",
+    "     exactly empty.golden's OWL-RL closure, it is INPUT-INDEPENDENT and therefore a",
+    "     subset of every other OWL-RL closure in the corpus, and",
+    "     `the_rdfs_closure_of_every_fixture_contains_the_empty_one` asserts every layer of",
+    "     it — the two specification lists by NAME, the other two as DERIVATIONS. Each",
+    "     golden below accounts only for the lines BEYOND it. It replaces the nine-line",
+    "     prp-ap block the previous change's cause ii describes, which is a subset of it.",
+    "",
+    " iv. THE OWL-RL LANE'S CONTRACT HASH MOVED ONCE, DELIBERATELY, AND THE D LANE HAS A",
+    "     CALCULUS WHERE IT HAD NONE. The hash is the digest of the evaluated program, so a",
+    "     consumer holding a closure minted under the 37-rule calculus can tell — which is",
+    "     the whole point of carrying it. And `entailment/D` IS datatype entailment,",
+    "     realized here as Simple entailment plus Table 8, so `materialize` now runs a lane",
+    "     it used to refuse: every golden gains a fifth section for it. A D closure is the",
+    "     input plus dt-type1's thirty-two typings and nothing else — dt-type2, dt-eq and",
+    "     dt-diff conclude only triples with a literal subject, and that lane has no rule",
+    "     that could consume one — which is a small answer, honestly reported, rather than",
+    "     an unrun regime.",
+    "",
+    "  THE BUDGET ROSE IN THE OWL-RL LANE AND IS STILL NEGLIGIBLE. That lane's worst case in",
+    "  this corpus went from 209 to 2,416 join steps (union_instance_near_miss) and from 30",
+    "  to 170 stored facts (datatype_value_equality), against ceilings of 1,048,576 and",
+    "  131,072 — 0.23% and 0.13%. The corpus worst case is still the RDFS lane's, unchanged",
+    "  at 2,577 join steps and 208 stored facts in subclass_chain: 0.25% and 0.16%.",
+];
+
 // ── The corpus ──────────────────────────────────────────────────────────────────
 //
 // Every fixture is minimal on purpose: the smallest input that reaches the rule, so a
@@ -506,6 +663,24 @@ const CORPUS: &[Fixture] = &[
             "cause ii describes, and nothing else: no rule this change added has a premise",
             "in this input, so the fixture's own conclusions are exactly what they were.",
             "The tally gains prp-ap=9.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 9 -> 98 lines, and this golden is where all 98 of them are pinned: it",
+            "IS the input-independent premise-free block cause iii describes, and nothing here is",
+            "about data because there is none. cls-thing and cls-nothing1 type owl:Thing and",
+            "owl:Nothing an owl:Class, dt-type1 types the thirty-two supported datatypes",
+            "rdfs:Datatype, prp-ap's nine typings are carried through from the previous change,",
+            "scm-cls draws five triples from the two classes, and eq-ref closes over all fifty",
+            "distinct terms. 43 + 5 + 50 = 98.",
+            "",
+            "The tally gains eq-ref=50 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 0 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
         ],
         quads: &[],
     },
@@ -544,6 +719,26 @@ const CORPUS: &[Fixture] = &[
             "cause ii describes, and nothing else: no rule this change added has a premise",
             "in this input, so the fixture's own conclusions are exactly what they were.",
             "The tally gains prp-ap=9.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 10 -> 102 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 4 about this fixture's own terms.",
+            "All 1 lines that were there before are unchanged.",
+            "What is new are 3 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:p ex:x ex:y",
+            "",
+            "The tally gains eq-ref=53 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 1 input quad plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
         ],
         quads: &[t(EX_X, EX_P, EX_Y)],
     },
@@ -595,6 +790,33 @@ const CORPUS: &[Fixture] = &[
             "cause ii describes, and nothing else: no rule this change added has a premise",
             "in this input, so the fixture's own conclusions are exactly what they were.",
             "The tally gains prp-ap=9.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 11 -> 102 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 4 about this fixture's own terms.",
+            "All 2 lines that were there before are unchanged.",
+            "What is new are 2 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:A ex:B",
+            "",
+            "AND THE ABSENCES ARE THE POINT, ON THIS FIXTURE MORE THAN ANY OTHER: x, p and y get",
+            "NO reflexive assertion. They appear only in the named graph, the chase reads the",
+            "default graph only, and eq-ref's premise is a triple of the graph it reads — so a",
+            "rule that fires on literally every triple still does not reach them. A chase that",
+            "had started reading named graphs would show up here as three extra lines.",
+            "",
+            "The tally gains eq-ref=52 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 2 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule. Its boundary list",
+            "adds named-graph, which the input holds.",
         ],
         quads: &[t_in(EX_X, EX_P, EX_Y, EX_G), t(EX_A, RDFS_SUBCLASSOF, EX_B)],
     },
@@ -637,6 +859,26 @@ const CORPUS: &[Fixture] = &[
             "cause ii describes, and nothing else: no rule this change added has a premise",
             "in this input, so the fixture's own conclusions are exactly what they were.",
             "The tally gains prp-ap=9.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 12 -> 106 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 8 about this fixture's own terms.",
+            "All 3 lines that were there before are unchanged.",
+            "What is new are 5 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:A ex:p ex:x ex:y rdfs:domain",
+            "",
+            "The tally gains eq-ref=55 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 2 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
         ],
         quads: &[t(EX_P, RDFS_DOMAIN, EX_A), t(EX_X, EX_P, EX_Y)],
     },
@@ -682,6 +924,26 @@ const CORPUS: &[Fixture] = &[
             "cause ii describes, and nothing else: no rule this change added has a premise",
             "in this input, so the fixture's own conclusions are exactly what they were.",
             "The tally gains prp-ap=9.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 11 -> 106 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 8 about this fixture's own terms.",
+            "All 2 lines that were there before are unchanged.",
+            "What is new are 6 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:A ex:p ex:q ex:x ex:y rdfs:domain",
+            "",
+            "The tally gains eq-ref=56 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 2 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
         ],
         quads: &[t(EX_Q, RDFS_DOMAIN, EX_A), t(EX_X, EX_P, EX_Y)],
     },
@@ -722,6 +984,26 @@ const CORPUS: &[Fixture] = &[
             "cause ii describes, and nothing else: no rule this change added has a premise",
             "in this input, so the fixture's own conclusions are exactly what they were.",
             "The tally gains prp-ap=9.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 12 -> 106 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 8 about this fixture's own terms.",
+            "All 3 lines that were there before are unchanged.",
+            "What is new are 5 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:B ex:p ex:x ex:y rdfs:range",
+            "",
+            "The tally gains eq-ref=55 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 2 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
         ],
         quads: &[t(EX_P, RDFS_RANGE, EX_B), t(EX_X, EX_P, EX_Y)],
     },
@@ -764,6 +1046,26 @@ const CORPUS: &[Fixture] = &[
             "cause ii describes, and nothing else: no rule this change added has a premise",
             "in this input, so the fixture's own conclusions are exactly what they were.",
             "The tally gains prp-ap=9.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 11 -> 106 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 8 about this fixture's own terms.",
+            "All 2 lines that were there before are unchanged.",
+            "What is new are 6 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:B ex:p ex:q ex:x ex:y rdfs:range",
+            "",
+            "The tally gains eq-ref=56 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 2 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
         ],
         quads: &[t(EX_Q, RDFS_RANGE, EX_B), t(EX_X, EX_P, EX_Y)],
     },
@@ -806,6 +1108,26 @@ const CORPUS: &[Fixture] = &[
             "cause ii describes, and nothing else: no rule this change added has a premise",
             "in this input, so the fixture's own conclusions are exactly what they were.",
             "The tally gains prp-ap=9.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 12 -> 105 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 7 about this fixture's own terms.",
+            "All 3 lines that were there before are unchanged.",
+            "What is new are 4 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:p ex:q ex:r rdfs:subPropertyOf",
+            "",
+            "The tally gains eq-ref=54 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 2 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
         ],
         quads: &[
             t(EX_P, RDFS_SUBPROPERTYOF, EX_Q),
@@ -852,6 +1174,26 @@ const CORPUS: &[Fixture] = &[
             "cause ii describes, and nothing else: no rule this change added has a premise",
             "in this input, so the fixture's own conclusions are exactly what they were.",
             "The tally gains prp-ap=9.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 11 -> 105 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 7 about this fixture's own terms.",
+            "All 2 lines that were there before are unchanged.",
+            "What is new are 5 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:D ex:p ex:q ex:r rdfs:subPropertyOf",
+            "",
+            "The tally gains eq-ref=55 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 2 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
         ],
         quads: &[
             t(EX_P, RDFS_SUBPROPERTYOF, EX_Q),
@@ -894,6 +1236,26 @@ const CORPUS: &[Fixture] = &[
             "cause ii describes, and nothing else: no rule this change added has a premise",
             "in this input, so the fixture's own conclusions are exactly what they were.",
             "The tally gains prp-ap=9.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 12 -> 106 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 8 about this fixture's own terms.",
+            "All 3 lines that were there before are unchanged.",
+            "What is new are 5 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:p ex:q ex:x ex:y rdfs:subPropertyOf",
+            "",
+            "The tally gains eq-ref=55 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 2 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
         ],
         quads: &[t(EX_P, RDFS_SUBPROPERTYOF, EX_Q), t(EX_X, EX_P, EX_Y)],
     },
@@ -935,6 +1297,26 @@ const CORPUS: &[Fixture] = &[
             "cause ii describes, and nothing else: no rule this change added has a premise",
             "in this input, so the fixture's own conclusions are exactly what they were.",
             "The tally gains prp-ap=9.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 11 -> 106 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 8 about this fixture's own terms.",
+            "All 2 lines that were there before are unchanged.",
+            "What is new are 6 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:p ex:q ex:r ex:x ex:y rdfs:subPropertyOf",
+            "",
+            "The tally gains eq-ref=56 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 2 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
         ],
         quads: &[t(EX_P, RDFS_SUBPROPERTYOF, EX_Q), t(EX_X, EX_R, EX_Y)],
     },
@@ -977,6 +1359,26 @@ const CORPUS: &[Fixture] = &[
             "directions trivially. rdfs6 is untouched, and scm-op does not fire: p is typed",
             "rdf:Property, not owl:ObjectProperty.",
             "The tally gains prp-ap=9 scm-eqp2=1.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 12 -> 105 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 7 about this fixture's own terms.",
+            "All 3 lines that were there before are unchanged.",
+            "What is new are 4 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:p owl:equivalentProperty rdf:Property rdfs:subPropertyOf",
+            "",
+            "The tally gains eq-ref=54 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 1 input quad plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
         ],
         quads: &[t(EX_P, RDF_TYPE, RDF_PROPERTY)],
     },
@@ -1021,6 +1423,26 @@ const CORPUS: &[Fixture] = &[
             "The same as `property_typed`, on q. The near miss still holds: `p subPropertyOf p`",
             "is absent because p is absent, and so now is `p owl:equivalentProperty p`.",
             "The tally gains prp-ap=9 scm-eqp2=1.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 12 -> 105 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 7 about this fixture's own terms.",
+            "All 3 lines that were there before are unchanged.",
+            "What is new are 4 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:q owl:equivalentProperty rdf:Property rdfs:subPropertyOf",
+            "",
+            "The tally gains eq-ref=54 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 1 input quad plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
         ],
         quads: &[t(EX_Q, RDF_TYPE, RDF_PROPERTY)],
     },
@@ -1064,6 +1486,26 @@ const CORPUS: &[Fixture] = &[
             "itself. rdfs8 and rdfs10 are untouched — this fixture's own rules still fire, and",
             "scm-cls does NOT, which is what makes this the near miss for `owl_class`.",
             "The tally gains prp-ap=9 scm-eqc2=1.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 13 -> 105 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 7 about this fixture's own terms.",
+            "All 4 lines that were there before are unchanged.",
+            "What is new are 3 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:C rdfs:Class rdfs:Resource",
+            "",
+            "The tally gains eq-ref=53 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 1 input quad plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
         ],
         quads: &[t(EX_C, RDF_TYPE, RDFS_CLASS)],
     },
@@ -1104,6 +1546,26 @@ const CORPUS: &[Fixture] = &[
             "cause ii describes, and nothing else: no rule this change added has a premise",
             "in this input, so the fixture's own conclusions are exactly what they were.",
             "The tally gains prp-ap=9.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 10 -> 101 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 3 about this fixture's own terms.",
+            "All 1 lines that were there before are unchanged.",
+            "What is new are 2 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:C ex:NotAClass",
+            "",
+            "The tally gains eq-ref=52 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 1 input quad plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
         ],
         quads: &[t(EX_C, RDF_TYPE, EX_NOT_A_CLASS)],
     },
@@ -1116,7 +1578,29 @@ const CORPUS: &[Fixture] = &[
             "this is the only way the rule reaches a premise.",
         ],
         exercises: &["rdfs12"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 10 -> 101 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 3 about this fixture's own terms.",
+            "All 1 lines that were there before are unchanged.",
+            "What is new are 2 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:p rdfs:ContainerMembershipProperty",
+            "",
+            "The tally gains eq-ref=52 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 1 input quad plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[t(EX_P, RDF_TYPE, RDFS_CONTAINERMEMBERSHIPPROPERTY)],
     },
     Fixture {
@@ -1127,7 +1611,29 @@ const CORPUS: &[Fixture] = &[
             "is not concluded.",
         ],
         exercises: &["rdfs12"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 10 -> 101 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 3 about this fixture's own terms.",
+            "All 1 lines that were there before are unchanged.",
+            "What is new are 2 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:q rdfs:ContainerMembershipProperty",
+            "",
+            "The tally gains eq-ref=52 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 1 input quad plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[t(EX_Q, RDF_TYPE, RDFS_CONTAINERMEMBERSHIPPROPERTY)],
     },
     Fixture {
@@ -1139,7 +1645,29 @@ const CORPUS: &[Fixture] = &[
             "not to rdfs1's premise-free one.",
         ],
         exercises: &["rdfs13"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 10 -> 100 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 2 about this fixture's own terms.",
+            "All 1 lines that were there before are unchanged.",
+            "What is new is one reflexive `owl:sameAs` assertion. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:dt",
+            "",
+            "The tally gains eq-ref=51 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 1 input quad plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[t(EX_DT, RDF_TYPE, RDFS_DATATYPE)],
     },
     Fixture {
@@ -1149,7 +1677,29 @@ const CORPUS: &[Fixture] = &[
             "`dt rdfs:subClassOf rdfs:Literal` is not concluded.",
         ],
         exercises: &["rdfs13"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 10 -> 101 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 3 about this fixture's own terms.",
+            "All 1 lines that were there before are unchanged.",
+            "What is new are 2 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:NotAClass ex:dt",
+            "",
+            "The tally gains eq-ref=52 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 1 input quad plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[t(EX_DT, RDF_TYPE, EX_NOT_A_CLASS)],
     },
     Fixture {
@@ -1265,6 +1815,26 @@ const CORPUS: &[Fixture] = &[
             "cause ii describes, and nothing else: no rule this change added has a premise",
             "in this input, so the fixture's own conclusions are exactly what they were.",
             "The tally gains prp-ap=9.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 12 -> 104 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 6 about this fixture's own terms.",
+            "All 3 lines that were there before are unchanged.",
+            "What is new are 3 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:A ex:B ex:x",
+            "",
+            "The tally gains eq-ref=53 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 2 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
         ],
         quads: &[t(EX_A, RDFS_SUBCLASSOF, EX_B), t(EX_X, RDF_TYPE, EX_A)],
     },
@@ -1310,6 +1880,26 @@ const CORPUS: &[Fixture] = &[
             "cause ii describes, and nothing else: no rule this change added has a premise",
             "in this input, so the fixture's own conclusions are exactly what they were.",
             "The tally gains prp-ap=9.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 11 -> 104 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 6 about this fixture's own terms.",
+            "All 2 lines that were there before are unchanged.",
+            "What is new are 4 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:A ex:B ex:D ex:x",
+            "",
+            "The tally gains eq-ref=54 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 2 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
         ],
         quads: &[t(EX_A, RDFS_SUBCLASSOF, EX_B), t(EX_X, RDF_TYPE, EX_D)],
     },
@@ -1395,6 +1985,26 @@ const CORPUS: &[Fixture] = &[
             "cause ii describes, and nothing else: no rule this change added has a premise",
             "in this input, so the fixture's own conclusions are exactly what they were.",
             "The tally gains prp-ap=9.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 30 -> 126 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 28 about this fixture's own terms.",
+            "All 21 lines that were there before are unchanged.",
+            "What is new are 7 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:A ex:B ex:C ex:D ex:E ex:F ex:x",
+            "",
+            "The tally gains eq-ref=57 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 6 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
         ],
         quads: &[
             t(EX_A, RDFS_SUBCLASSOF, EX_B),
@@ -1449,6 +2059,26 @@ const CORPUS: &[Fixture] = &[
             "cause ii describes, and nothing else: no rule this change added has a premise",
             "in this input, so the fixture's own conclusions are exactly what they were.",
             "The tally gains prp-ap=9.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 11 -> 104 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 6 about this fixture's own terms.",
+            "All 2 lines that were there before are unchanged.",
+            "What is new are 4 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:A ex:B ex:E ex:F",
+            "",
+            "The tally gains eq-ref=54 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 2 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
         ],
         quads: &[
             t(EX_A, RDFS_SUBCLASSOF, EX_B),
@@ -1499,6 +2129,26 @@ const CORPUS: &[Fixture] = &[
             "cause ii describes, and nothing else: no rule this change added has a premise",
             "in this input, so the fixture's own conclusions are exactly what they were.",
             "The tally gains prp-ap=9.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 14 -> 108 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 10 about this fixture's own terms.",
+            "All 5 lines that were there before are unchanged.",
+            "What is new are 5 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:p ex:x ex:y ex:z owl:SymmetricProperty",
+            "",
+            "The tally gains eq-ref=55 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 3 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
         ],
         quads: &[
             t(EX_P, RDF_TYPE, OWL_SYMMETRIC),
@@ -1548,6 +2198,26 @@ const CORPUS: &[Fixture] = &[
             "cause ii describes, and nothing else: no rule this change added has a premise",
             "in this input, so the fixture's own conclusions are exactly what they were.",
             "The tally gains prp-ap=9.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 13 -> 107 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 9 about this fixture's own terms.",
+            "All 4 lines that were there before are unchanged.",
+            "What is new are 5 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:p ex:x ex:y ex:z owl:TransitiveProperty",
+            "",
+            "The tally gains eq-ref=55 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 3 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
         ],
         quads: &[
             t(EX_P, RDF_TYPE, OWL_TRANSITIVE),
@@ -1601,6 +2271,26 @@ const CORPUS: &[Fixture] = &[
             "cause ii describes, and nothing else: no rule this change added has a premise",
             "in this input, so the fixture's own conclusions are exactly what they were.",
             "The tally gains prp-ap=9.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 14 -> 110 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 12 about this fixture's own terms.",
+            "All 5 lines that were there before are unchanged.",
+            "What is new are 7 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:p ex:q ex:u ex:v ex:x ex:y owl:inverseOf",
+            "",
+            "The tally gains eq-ref=57 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 3 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
         ],
         quads: &[
             t(EX_P, OWL_INVERSEOF, EX_Q),
@@ -1652,6 +2342,26 @@ const CORPUS: &[Fixture] = &[
             "cause ii describes, and nothing else: no rule this change added has a premise",
             "in this input, so the fixture's own conclusions are exactly what they were.",
             "The tally gains prp-ap=9.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 13 -> 110 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 12 about this fixture's own terms.",
+            "All 4 lines that were there before are unchanged.",
+            "What is new are 8 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:p ex:q ex:r ex:u ex:v ex:x ex:y owl:inverseOf",
+            "",
+            "The tally gains eq-ref=58 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 3 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
         ],
         quads: &[
             t(EX_P, OWL_INVERSEOF, EX_R),
@@ -1709,6 +2419,26 @@ const CORPUS: &[Fixture] = &[
             "re-derived — it is a premise, not a conclusion — so the tally reads scm-eqc2=3 and",
             "not 4. scm-eqc1 and scm-sco are untouched at 2 each.",
             "The tally gains prp-ap=9 scm-eqc2=3.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 17 -> 108 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 10 about this fixture's own terms.",
+            "All 8 lines that were there before are unchanged.",
+            "What is new are 2 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:A ex:B",
+            "",
+            "The tally gains eq-ref=52 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 1 input quad plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
         ],
         quads: &[t(EX_A, OWL_EQUIVALENTCLASS, EX_B)],
     },
@@ -1755,6 +2485,26 @@ const CORPUS: &[Fixture] = &[
             "rdfs5 / scm-spo composes the reflexives, and scm-eqp2 reads all three mutual pairs",
             "back. scm-eqp1 and scm-spo are untouched at 2 each.",
             "The tally gains prp-ap=9 scm-eqp2=3.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 17 -> 110 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 12 about this fixture's own terms.",
+            "All 8 lines that were there before are unchanged.",
+            "What is new are 4 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:A ex:B owl:equivalentProperty rdfs:subPropertyOf",
+            "",
+            "The tally gains eq-ref=54 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 1 input quad plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
         ],
         quads: &[t(EX_A, OWL_EQUIVALENTPROPERTY, EX_B)],
     },
@@ -1816,6 +2566,26 @@ const CORPUS: &[Fixture] = &[
             "cause ii describes, and nothing else: no rule this change added has a premise",
             "in this input, so the fixture's own conclusions are exactly what they were.",
             "The tally gains prp-ap=9.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 14 -> 109 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 11 about this fixture's own terms.",
+            "All 5 lines that were there before are unchanged.",
+            "What is new are 6 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:A ex:C ex:p ex:x ex:y rdfs:domain",
+            "",
+            "The tally gains eq-ref=56 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 4 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
         ],
         quads: &[
             t(EX_A, RDFS_SUBCLASSOF, EX_C),
@@ -1896,6 +2666,31 @@ const CORPUS: &[Fixture] = &[
             "cause ii describes, and nothing else: no rule this change added has a premise",
             "in this input, so the fixture's own conclusions are exactly what they were.",
             "The tally gains prp-ap=9.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 13 -> 108 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 10 about this fixture's own terms.",
+            "All 4 lines that were there before are unchanged.",
+            "What is new are 6 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:A ex:B ex:mentions ex:says ex:x rdfs:subPropertyOf",
+            "",
+            "The tally gains eq-ref=56 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "AND THE BOUNDARY LIST MOVED, in this golden alone: eq-ref reaches a reflexive",
+            "assertion whose subject is the TRIPLE TERM, which is generalized RDF the RDF 1.2 IR",
+            "cannot hold, so the run now reports generalized-rdf beside the triple-term boundary",
+            "it always reported. Nothing about the triple term itself changed.",
+            "THE NEW D SECTION: this fixture's 3 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule. Its boundary list",
+            "adds triple-term, which the input holds.",
         ],
         quads: &[
             t(EX_SAYS, RDFS_SUBPROPERTYOF, EX_MENTIONS),
@@ -1967,6 +2762,34 @@ const CORPUS: &[Fixture] = &[
             "cause ii describes, and nothing else: no rule this change added has a premise",
             "in this input, so the fixture's own conclusions are exactly what they were.",
             "The tally gains prp-ap=9.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 11 -> 104 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 6 about this fixture's own terms.",
+            "All 2 lines that were there before are unchanged.",
+            "What is new are 4 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:A ex:p ex:x rdfs:range",
+            "",
+            "AND THE LITERAL STILL NEVER STARTS A LINE: eq-ref concludes `\"cat\" owl:sameAs",
+            "\"cat\"`, which is a literal subject, so it is derived in the evaluator's own term",
+            "space and abandoned exactly as rdfs3's and rdfs4's conclusions already were. The",
+            "generalized-rdf boundary this fixture exists to pin now has a third independent",
+            "producer and is reported as it always was.",
+            "",
+            "The tally gains eq-ref=54 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 2 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule. Its boundary list",
+            "adds generalized-rdf, because dt-type2 and dt-eq did derive a literal-subject",
+            "conclusion here and it was abandoned.",
         ],
         quads: &[t(EX_P, RDFS_RANGE, EX_A), t_lit(EX_X, EX_P, "cat")],
     },
@@ -2049,6 +2872,26 @@ const CORPUS: &[Fixture] = &[
             "cause ii describes, and nothing else: no rule this change added has a premise",
             "in this input, so the fixture's own conclusions are exactly what they were.",
             "The tally gains prp-ap=9.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 11 -> 105 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 7 about this fixture's own terms.",
+            "All 2 lines that were there before are unchanged.",
+            "What is new are 5 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:A ex:B ex:p ex:x ex:y",
+            "",
+            "The tally gains eq-ref=55 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 2 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
         ],
         quads: &[t(EX_A, RDFS_SUBCLASSOF, EX_B), t(EX_X, EX_P, EX_Y)],
     },
@@ -2064,7 +2907,29 @@ const CORPUS: &[Fixture] = &[
             "the property characteristic — so the two fixtures are each other's control.",
         ],
         exercises: &["prp-fp"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 16 -> 108 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 10 about this fixture's own terms.",
+            "All 7 lines that were there before are unchanged.",
+            "What is new are 3 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:p ex:x owl:FunctionalProperty",
+            "",
+            "The tally gains eq-ref=53 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 3 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[
             t(EX_P, RDF_TYPE, OWL_FUNCTIONALPROPERTY),
             t(EX_X, EX_P, EX_Y),
@@ -2080,7 +2945,29 @@ const CORPUS: &[Fixture] = &[
             "between the two rules.",
         ],
         exercises: &["prp-ifp"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 16 -> 108 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 10 about this fixture's own terms.",
+            "All 7 lines that were there before are unchanged.",
+            "What is new are 3 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:p ex:w owl:InverseFunctionalProperty",
+            "",
+            "The tally gains eq-ref=53 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 3 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[
             t(EX_P, RDF_TYPE, OWL_INVERSEFUNCTIONALPROPERTY),
             t(EX_X, EX_P, EX_W),
@@ -2102,7 +2989,30 @@ const CORPUS: &[Fixture] = &[
             "materialized, so this closure holds the conclusion and no trace of the walk.",
         ],
         exercises: &["prp-spo2"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 17 -> 118 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 20 about this fixture's own terms.",
+            "All 8 lines that were there before are unchanged.",
+            "What is new are 12 reflexive `owl:sameAs` assertions. eq-ref draws one for every",
+            "term of every triple; these are the ones the shared block does not already hold and",
+            "no other rule had already reached, by subject:",
+            "",
+            "  ex:chained ex:l0 ex:l1 ex:p ex:q ex:x ex:y ex:z owl:propertyChainAxiom rdf:first",
+            "  rdf:nil rdf:rest",
+            "",
+            "The tally gains eq-ref=62 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 7 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[
             t(EX_CHAINED, OWL_PROPERTYCHAINAXIOM, EX_L0),
             t(EX_L0, RDF_FIRST, EX_P),
@@ -2120,7 +3030,30 @@ const CORPUS: &[Fixture] = &[
             "at u rather than at y — so the chain composes nothing.",
         ],
         exercises: &["prp-spo2"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 16 -> 118 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 20 about this fixture's own terms.",
+            "All 7 lines that were there before are unchanged.",
+            "What is new are 13 reflexive `owl:sameAs` assertions. eq-ref draws one for every",
+            "term of every triple; these are the ones the shared block does not already hold and",
+            "no other rule had already reached, by subject:",
+            "",
+            "  ex:chained ex:l0 ex:l1 ex:p ex:q ex:u ex:x ex:y ex:z owl:propertyChainAxiom",
+            "  rdf:first rdf:nil rdf:rest",
+            "",
+            "The tally gains eq-ref=63 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 7 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[
             t(EX_CHAINED, OWL_PROPERTYCHAINAXIOM, EX_L0),
             t(EX_L0, RDF_FIRST, EX_P),
@@ -2145,7 +3078,29 @@ const CORPUS: &[Fixture] = &[
             "conclusion — which is why the tally reads prp-eqp1=1 and prp-eqp2=1 here.",
         ],
         exercises: &["prp-eqp1", "prp-eqp2"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 21 -> 118 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 20 about this fixture's own terms.",
+            "All 12 lines that were there before are unchanged.",
+            "What is new are 8 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:p ex:q ex:u ex:v ex:x ex:y owl:equivalentProperty rdfs:subPropertyOf",
+            "",
+            "The tally gains eq-ref=58 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 3 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[
             t(EX_P, OWL_EQUIVALENTPROPERTY, EX_Q),
             t(EX_X, EX_P, EX_Y),
@@ -2159,7 +3114,29 @@ const CORPUS: &[Fixture] = &[
             "q, so neither the p-triple nor the q-triple is re-predicated into the other.",
         ],
         exercises: &["prp-eqp1", "prp-eqp2"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 20 -> 118 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 20 about this fixture's own terms.",
+            "All 11 lines that were there before are unchanged.",
+            "What is new are 9 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:p ex:q ex:r ex:u ex:v ex:x ex:y owl:equivalentProperty rdfs:subPropertyOf",
+            "",
+            "The tally gains eq-ref=59 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 3 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[
             t(EX_P, OWL_EQUIVALENTPROPERTY, EX_R),
             t(EX_X, EX_P, EX_Y),
@@ -2178,7 +3155,29 @@ const CORPUS: &[Fixture] = &[
             "report credits.",
         ],
         exercises: &["cax-eqc1", "cax-eqc2"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 21 -> 114 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 16 about this fixture's own terms.",
+            "All 12 lines that were there before are unchanged.",
+            "What is new are 4 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:A ex:B ex:u ex:x",
+            "",
+            "The tally gains eq-ref=54 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 3 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[
             t(EX_A, OWL_EQUIVALENTCLASS, EX_B),
             t(EX_X, RDF_TYPE, EX_A),
@@ -2192,7 +3191,29 @@ const CORPUS: &[Fixture] = &[
             "B, so neither instance is re-typed into the other's class.",
         ],
         exercises: &["cax-eqc1", "cax-eqc2"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 20 -> 114 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 16 about this fixture's own terms.",
+            "All 11 lines that were there before are unchanged.",
+            "What is new are 5 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:A ex:B ex:C ex:u ex:x",
+            "",
+            "The tally gains eq-ref=55 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 3 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[
             t(EX_A, OWL_EQUIVALENTCLASS, EX_C),
             t(EX_X, RDF_TYPE, EX_A),
@@ -2213,7 +3234,41 @@ const CORPUS: &[Fixture] = &[
             "the one term the premise reads.",
         ],
         exercises: &["scm-cls"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 15 -> 104 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 6 about this fixture's own terms.",
+            "Of the 6 fixture-specific lines that were there before, 5 are unchanged and one —",
+            "`owl:Nothing rdfs:subClassOf owl:Thing` — is still in the closure but is now part of",
+            "the shared block, because cls-nothing1 and cls-thing put it there for every input.",
+            "Nothing was lost.",
+            "What is new is one reflexive `owl:sameAs` assertion. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:C",
+            "",
+            "The tally gains eq-ref=51 cls-thing=1 cls-nothing1=1 dt-type1=32; the report's",
+            "missing list is empty where it held 41 ids, and its completeness reads exact-within-",
+            "boundaries where it read sound-incomplete.",
+            "AND ATTRIBUTION MOVED, IN BOTH DIRECTIONS. scm-cls reads 9 where it read 4, because",
+            "cls-thing and cls-nothing1 give it two more premises: it now says its four things",
+            "about owl:Thing and owl:Nothing as well as about C, and five of those eight are",
+            "distinct. scm-sco falls from 1 to 0 and leaves the tally, for the same reason and",
+            "not for a different one: its single conclusion here was `owl:Nothing rdfs:subClassOf",
+            "owl:Thing`, composed from `owl:Nothing ⊑ C` and `C ⊑ owl:Thing`, and scm-cls now",
+            "draws that triple directly from `owl:Thing rdf:type owl:Class` in one step. The",
+            "triple is still in the closure — it is the line named above as having moved into the",
+            "shared block.",
+            "THE NEW D SECTION: this fixture's 1 input quad plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[t(EX_C, RDF_TYPE, OWL_CLASS)],
     },
     Fixture {
@@ -2223,7 +3278,29 @@ const CORPUS: &[Fixture] = &[
             "converse of scm-eqc1. Also the NEAR MISS for scm-eqp2; see `mutual_subproperty`.",
         ],
         exercises: &["scm-eqc2"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 17 -> 108 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 10 about this fixture's own terms.",
+            "All 8 lines that were there before are unchanged.",
+            "What is new are 2 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:A ex:B",
+            "",
+            "The tally gains eq-ref=52 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 2 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[
             t(EX_A, RDFS_SUBCLASSOF, EX_B),
             t(EX_B, RDFS_SUBCLASSOF, EX_A),
@@ -2239,7 +3316,29 @@ const CORPUS: &[Fixture] = &[
             "position.",
         ],
         exercises: &["scm-eqp2"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 17 -> 110 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 12 about this fixture's own terms.",
+            "All 8 lines that were there before are unchanged.",
+            "What is new are 4 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:p ex:q owl:equivalentProperty rdfs:subPropertyOf",
+            "",
+            "The tally gains eq-ref=54 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 2 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[
             t(EX_P, RDFS_SUBPROPERTYOF, EX_Q),
             t(EX_Q, RDFS_SUBPROPERTYOF, EX_P),
@@ -2252,7 +3351,29 @@ const CORPUS: &[Fixture] = &[
             "Also the NEAR MISS for scm-dp; see `datatype_property`.",
         ],
         exercises: &["scm-op"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 12 -> 105 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 7 about this fixture's own terms.",
+            "All 3 lines that were there before are unchanged.",
+            "What is new are 4 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:p owl:ObjectProperty owl:equivalentProperty rdfs:subPropertyOf",
+            "",
+            "The tally gains eq-ref=54 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 1 input quad plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[t(EX_P, RDF_TYPE, OWL_OBJECTPROPERTY)],
     },
     Fixture {
@@ -2265,7 +3386,29 @@ const CORPUS: &[Fixture] = &[
             "other's conclusion.",
         ],
         exercises: &["scm-dp"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 12 -> 105 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 7 about this fixture's own terms.",
+            "All 3 lines that were there before are unchanged.",
+            "What is new are 4 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:q owl:DatatypeProperty owl:equivalentProperty rdfs:subPropertyOf",
+            "",
+            "The tally gains eq-ref=54 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 1 input quad plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[t(EX_Q, RDF_TYPE, OWL_DATATYPEPROPERTY)],
     },
     Fixture {
@@ -2275,7 +3418,29 @@ const CORPUS: &[Fixture] = &[
             "scm-dom2; see `domain_inherited`.",
         ],
         exercises: &["scm-dom1"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 12 -> 105 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 7 about this fixture's own terms.",
+            "All 3 lines that were there before are unchanged.",
+            "What is new are 4 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:A ex:B ex:r rdfs:domain",
+            "",
+            "The tally gains eq-ref=54 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 2 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[t(EX_R, RDFS_DOMAIN, EX_A), t(EX_A, RDFS_SUBCLASSOF, EX_B)],
     },
     Fixture {
@@ -2286,7 +3451,29 @@ const CORPUS: &[Fixture] = &[
             "hierarchies, and each fixture supplies the hierarchy the other does not.",
         ],
         exercises: &["scm-dom2"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 12 -> 106 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 8 about this fixture's own terms.",
+            "All 3 lines that were there before are unchanged.",
+            "What is new are 5 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:A ex:p ex:q rdfs:domain rdfs:subPropertyOf",
+            "",
+            "The tally gains eq-ref=55 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 2 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[
             t(EX_Q, RDFS_DOMAIN, EX_A),
             t(EX_P, RDFS_SUBPROPERTYOF, EX_Q),
@@ -2299,7 +3486,29 @@ const CORPUS: &[Fixture] = &[
             "scm-rng2; see `range_inherited`.",
         ],
         exercises: &["scm-rng1"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 12 -> 105 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 7 about this fixture's own terms.",
+            "All 3 lines that were there before are unchanged.",
+            "What is new are 4 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:A ex:B ex:r rdfs:range",
+            "",
+            "The tally gains eq-ref=54 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 2 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[t(EX_R, RDFS_RANGE, EX_A), t(EX_A, RDFS_SUBCLASSOF, EX_B)],
     },
     Fixture {
@@ -2309,7 +3518,29 @@ const CORPUS: &[Fixture] = &[
             "for scm-rng1, on the same pairing as `domain_widened` / `domain_inherited`.",
         ],
         exercises: &["scm-rng2"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 12 -> 106 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 8 about this fixture's own terms.",
+            "All 3 lines that were there before are unchanged.",
+            "What is new are 5 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:A ex:p ex:q rdfs:range rdfs:subPropertyOf",
+            "",
+            "The tally gains eq-ref=55 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 2 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[t(EX_Q, RDFS_RANGE, EX_A), t(EX_P, RDFS_SUBPROPERTYOF, EX_Q)],
     },
     Fixture {
@@ -2319,7 +3550,29 @@ const CORPUS: &[Fixture] = &[
             "related by rdfs:subPropertyOf, are ordered by rdfs:subClassOf the same way.",
         ],
         exercises: &["scm-hv"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 15 -> 112 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 14 about this fixture's own terms.",
+            "All 6 lines that were there before are unchanged.",
+            "What is new are 8 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:A ex:B ex:p ex:q ex:x owl:hasValue owl:onProperty rdfs:subPropertyOf",
+            "",
+            "The tally gains eq-ref=58 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 5 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[
             t(EX_A, OWL_HASVALUE, EX_X),
             t(EX_A, OWL_ONPROPERTY, EX_P),
@@ -2335,7 +3588,29 @@ const CORPUS: &[Fixture] = &[
             "the sub-property relation between their properties orders nothing.",
         ],
         exercises: &["scm-hv"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 14 -> 112 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 14 about this fixture's own terms.",
+            "All 5 lines that were there before are unchanged.",
+            "What is new are 9 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:A ex:B ex:p ex:q ex:x ex:y owl:hasValue owl:onProperty rdfs:subPropertyOf",
+            "",
+            "The tally gains eq-ref=59 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 5 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[
             t(EX_A, OWL_HASVALUE, EX_X),
             t(EX_A, OWL_ONPROPERTY, EX_P),
@@ -2351,7 +3626,29 @@ const CORPUS: &[Fixture] = &[
             "their fillers. Also the NEAR MISS for scm-svf2; see `some_values_property`.",
         ],
         exercises: &["scm-svf1"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 15 -> 111 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 13 about this fixture's own terms.",
+            "All 6 lines that were there before are unchanged.",
+            "What is new are 7 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:A ex:B ex:C ex:D ex:p owl:onProperty owl:someValuesFrom",
+            "",
+            "The tally gains eq-ref=57 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 5 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[
             t(EX_A, OWL_SOMEVALUESFROM, EX_C),
             t(EX_A, OWL_ONPROPERTY, EX_P),
@@ -2369,7 +3666,29 @@ const CORPUS: &[Fixture] = &[
             "classes so neither closure can hold the other's conclusion.",
         ],
         exercises: &["scm-svf2"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 15 -> 112 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 14 about this fixture's own terms.",
+            "All 6 lines that were there before are unchanged.",
+            "What is new are 8 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:C ex:E ex:F ex:p ex:q owl:onProperty owl:someValuesFrom rdfs:subPropertyOf",
+            "",
+            "The tally gains eq-ref=58 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 5 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[
             t(EX_E, OWL_SOMEVALUESFROM, EX_C),
             t(EX_E, OWL_ONPROPERTY, EX_P),
@@ -2386,7 +3705,29 @@ const CORPUS: &[Fixture] = &[
             "see `all_values_property`.",
         ],
         exercises: &["scm-avf1"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 15 -> 111 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 13 about this fixture's own terms.",
+            "All 6 lines that were there before are unchanged.",
+            "What is new are 7 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:A ex:B ex:C ex:D ex:p owl:allValuesFrom owl:onProperty",
+            "",
+            "The tally gains eq-ref=57 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 5 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[
             t(EX_A, OWL_ALLVALUESFROM, EX_C),
             t(EX_A, OWL_ONPROPERTY, EX_P),
@@ -2410,7 +3751,29 @@ const CORPUS: &[Fixture] = &[
             "It is also the NEAR MISS for scm-avf1; see `all_values_filler`.",
         ],
         exercises: &["scm-avf2"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 15 -> 112 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 14 about this fixture's own terms.",
+            "All 6 lines that were there before are unchanged.",
+            "What is new are 8 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:C ex:E ex:F ex:p ex:q owl:allValuesFrom owl:onProperty rdfs:subPropertyOf",
+            "",
+            "The tally gains eq-ref=58 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 5 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[
             t(EX_E, OWL_ALLVALUESFROM, EX_C),
             t(EX_E, OWL_ONPROPERTY, EX_P),
@@ -2430,7 +3793,29 @@ const CORPUS: &[Fixture] = &[
             "Also the NEAR MISS for scm-uni; see `union_of`.",
         ],
         exercises: &["scm-int"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 16 -> 114 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 16 about this fixture's own terms.",
+            "All 7 lines that were there before are unchanged.",
+            "What is new are 9 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:A ex:B ex:C ex:l0 ex:l1 owl:intersectionOf rdf:first rdf:nil rdf:rest",
+            "",
+            "The tally gains eq-ref=59 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 5 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[
             t(EX_C, OWL_INTERSECTIONOF, EX_L0),
             t(EX_L0, RDF_FIRST, EX_A),
@@ -2448,7 +3833,29 @@ const CORPUS: &[Fixture] = &[
             "what separates them.",
         ],
         exercises: &["scm-uni"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 16 -> 114 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 16 about this fixture's own terms.",
+            "All 7 lines that were there before are unchanged.",
+            "What is new are 9 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:A ex:B ex:D ex:l0 ex:l1 owl:unionOf rdf:first rdf:nil rdf:rest",
+            "",
+            "The tally gains eq-ref=59 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "THE NEW D SECTION: this fixture's 5 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[
             t(EX_D, OWL_UNIONOF, EX_L0),
             t(EX_L0, RDF_FIRST, EX_A),
@@ -2470,7 +3877,36 @@ const CORPUS: &[Fixture] = &[
             "smallest list for which the universal quantifier means anything.",
         ],
         exercises: &["prp-key"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 20 -> 117 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 19 about this fixture's own terms.",
+            "All 11 lines that were there before are unchanged.",
+            "What is new are 8 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:C ex:l0 ex:p ex:z owl:hasKey rdf:first rdf:nil rdf:rest",
+            "",
+            "The tally gains eq-ref=60 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "AND ATTRIBUTION MOVED: prp-key reads 2 where it read 4. Nothing stopped firing and",
+            "no triple left the closure. Two of prp-key's four conclusions were the trivial `x",
+            "owl:sameAs x` and `y owl:sameAs y` — every instance agrees with ITSELF on every key",
+            "property — and eq-ref reaches both from the input triples in one step where prp-key",
+            "has to walk the key list first. A report credits the shorter proof, so prp-key keeps",
+            "exactly the two conclusions that are about the key: `x owl:sameAs y` and its",
+            "symmetric partner.",
+            "THE NEW D SECTION: this fixture's 7 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[
             t(EX_C, OWL_HASKEY, EX_L0),
             t(EX_L0, RDF_FIRST, EX_P),
@@ -2488,7 +3924,35 @@ const CORPUS: &[Fixture] = &[
             "value is u where x's is z — so they are not identified.",
         ],
         exercises: &["prp-key"],
-        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        changed: &[
+            "NEW FIXTURE — no committed golden moved; this one did not exist.",
+            "",
+            "AT THE COMPLETED OWL-RL TABLES — OWL-RL ONLY, PLUS A NEW D SECTION. Simple, RDF",
+            "and RDFS are byte-identical.",
+            "OWL-RL closure 18 -> 116 lines: the 98-line input-independent premise-free block",
+            "cause iii describes — which subsumes the nine prp-ap lines the previous change's",
+            "cause ii named — plus 18 about this fixture's own terms.",
+            "All 9 lines that were there before are unchanged.",
+            "What is new are 9 reflexive `owl:sameAs` assertions. eq-ref draws one for every term",
+            "of every triple; these are the ones the shared block does not already hold and no",
+            "other rule had already reached, by subject:",
+            "",
+            "  ex:C ex:l0 ex:p ex:u ex:z owl:hasKey rdf:first rdf:nil rdf:rest",
+            "",
+            "The tally gains eq-ref=61 cls-thing=1 cls-nothing1=1 dt-type1=32 scm-cls=5; the",
+            "report's missing list is empty where it held 41 ids, and its completeness reads",
+            "exact-within-boundaries where it read sound-incomplete.",
+            "AND ONE RULE LEAVES THE TALLY: prp-key falls from 2 to 0 and is no longer named at",
+            "all. That is the same effect as in `has_key` taken to its conclusion — BOTH of the",
+            "conclusions prp-key had here were the trivial self-agreements `x owl:sameAs x` and",
+            "`y owl:sameAs y`, because this fixture is the near miss and x and y do NOT agree on",
+            "the key — and eq-ref now reaches both in fewer steps. No triple left the closure,",
+            "and prp-key is still credited where it says something: `has_key`, at 2.",
+            "THE NEW D SECTION: this fixture's 7 input quads plus dt-type1's thirty-two",
+            "rdfs:Datatype typings, and nothing else. dt-type2, dt-eq and dt-diff conclude only",
+            "triples with a literal subject, and the D lane holds no rule that could consume one,",
+            "so its closure is Simple entailment plus one premise-free rule.",
+        ],
         quads: &[
             t(EX_C, OWL_HASKEY, EX_L0),
             t(EX_L0, RDF_FIRST, EX_P),
@@ -2497,6 +3961,1085 @@ const CORPUS: &[Fixture] = &[
             t(EX_Y, RDF_TYPE, EX_C),
             t(EX_X, EX_P, EX_Z),
             t(EX_Y, EX_P, EX_U),
+        ],
+    },
+    // ── Table 4 `eq-*`, Table 6 `cls-*` and Table 8 `dt-*` ────────────────────────
+    //
+    // Every fixture below is new with the completed OWL 2 RL rule table, so none of them
+    // moved a committed golden: each states, in its own `changed` field, that it did not
+    // exist. The fixtures for the rules that conclude `false` are NOT here — a run over one
+    // of those has no closure to write a golden from — they are in [`CLASH_CORPUS`].
+    Fixture {
+        name: "same_as",
+        doc: &[
+            "eq-sym: owl:sameAs is symmetric. Differs from `plain_triple` in exactly one",
+            "term — the predicate — so the two are each other's control: `plain_triple`",
+            "concludes no owl:sameAs between distinct terms at all.",
+        ],
+        exercises: &["eq-sym"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[t(EX_X, OWL_SAMEAS, EX_Y)],
+    },
+    Fixture {
+        name: "same_as_chain",
+        doc: &["eq-trans: owl:sameAs is transitive."],
+        exercises: &["eq-trans"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[t(EX_X, OWL_SAMEAS, EX_Y), t(EX_Y, OWL_SAMEAS, EX_Z)],
+    },
+    Fixture {
+        name: "same_as_chain_near_miss",
+        doc: &[
+            "NEAR MISS for eq-trans: the chain is broken at the join point — the second",
+            "edge starts at u rather than at y — so x and z are not identified. eq-sym",
+            "closes each edge in both directions and still reaches nothing across the gap.",
+        ],
+        exercises: &["eq-trans"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[t(EX_X, OWL_SAMEAS, EX_Y), t(EX_U, OWL_SAMEAS, EX_Z)],
+    },
+    Fixture {
+        name: "same_as_subject",
+        doc: &[
+            "eq-rep-s: equality substitutes in SUBJECT position. `x owl:sameAs u` with",
+            "`x p y` concludes `u p y`.",
+            "",
+            "This fixture, `same_as_predicate` and `same_as_object` are the same two triples",
+            "differing only in WHICH POSITION of `x p y` the owl:sameAs axiom names, which",
+            "is exactly the difference between the three eq-rep-* rules — so the three are",
+            "each other's near misses and no other input is needed to deny any of them.",
+        ],
+        exercises: &["eq-rep-s"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[t(EX_X, OWL_SAMEAS, EX_U), t(EX_X, EX_P, EX_Y)],
+    },
+    Fixture {
+        name: "same_as_predicate",
+        doc: &[
+            "eq-rep-p: equality substitutes in PREDICATE position. `p owl:sameAs q` with",
+            "`x p y` concludes `x q y` — the one rule of the calculus that rewrites a",
+            "predicate from a variable bound in the OBJECT position of another atom.",
+            "",
+            "Also the near miss for eq-rep-s and eq-rep-o; see `same_as_subject`.",
+        ],
+        exercises: &["eq-rep-p"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[t(EX_P, OWL_SAMEAS, EX_Q), t(EX_X, EX_P, EX_Y)],
+    },
+    Fixture {
+        name: "same_as_object",
+        doc: &[
+            "eq-rep-o: equality substitutes in OBJECT position. `y owl:sameAs v` with",
+            "`x p y` concludes `x p v`.",
+            "",
+            "Also the near miss for eq-rep-s; see `same_as_subject`.",
+        ],
+        exercises: &["eq-rep-o"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[t(EX_Y, OWL_SAMEAS, EX_V), t(EX_X, EX_P, EX_Y)],
+    },
+    Fixture {
+        name: "intersection_instance",
+        doc: &[
+            "cls-int1: an instance of EVERY member of an intersection list is an instance",
+            "of the intersection. The premise is a conjunction whose length depends on the",
+            "data, stated as a recursion into an internal relation, so a two-member list is",
+            "the smallest input for which the universal quantifier means anything.",
+        ],
+        exercises: &["cls-int1"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_C, OWL_INTERSECTIONOF, EX_L0),
+            t(EX_L0, RDF_FIRST, EX_A),
+            t(EX_L0, RDF_REST, EX_L1),
+            t(EX_L1, RDF_FIRST, EX_B),
+            t(EX_L1, RDF_REST, RDF_NIL),
+            t(EX_X, RDF_TYPE, EX_A),
+            t(EX_X, RDF_TYPE, EX_B),
+        ],
+    },
+    Fixture {
+        name: "intersection_instance_near_miss",
+        doc: &[
+            "NEAR MISS for cls-int1: x is an instance of the FIRST member and of E, which",
+            "is not in the list, so the conjunction over the list is unsatisfied and",
+            "`x rdf:type C` is not concluded.",
+        ],
+        exercises: &["cls-int1"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_C, OWL_INTERSECTIONOF, EX_L0),
+            t(EX_L0, RDF_FIRST, EX_A),
+            t(EX_L0, RDF_REST, EX_L1),
+            t(EX_L1, RDF_FIRST, EX_B),
+            t(EX_L1, RDF_REST, RDF_NIL),
+            t(EX_X, RDF_TYPE, EX_A),
+            t(EX_X, RDF_TYPE, EX_E),
+        ],
+    },
+    Fixture {
+        name: "intersection_member_typing",
+        doc: &[
+            "cls-int2: an instance of an intersection is an instance of EVERY member. The",
+            "conclusion is per-member, so this rule reads list MEMBERSHIP where cls-int1",
+            "has to walk the list.",
+            "",
+            "`intersection_of` is the NEAR MISS: it is the identical axiom with no instance,",
+            "so the members are named and nothing is typed by them.",
+        ],
+        exercises: &["cls-int2"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_C, OWL_INTERSECTIONOF, EX_L0),
+            t(EX_L0, RDF_FIRST, EX_A),
+            t(EX_L0, RDF_REST, EX_L1),
+            t(EX_L1, RDF_FIRST, EX_B),
+            t(EX_L1, RDF_REST, RDF_NIL),
+            t(EX_X, RDF_TYPE, EX_C),
+        ],
+    },
+    Fixture {
+        name: "union_instance",
+        doc: &[
+            "cls-uni: an instance of ANY member of a union list is an instance of the",
+            "union — the existential counterpart of cls-int1's universal.",
+        ],
+        exercises: &["cls-uni"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_D, OWL_UNIONOF, EX_L0),
+            t(EX_L0, RDF_FIRST, EX_A),
+            t(EX_L0, RDF_REST, EX_L1),
+            t(EX_L1, RDF_FIRST, EX_B),
+            t(EX_L1, RDF_REST, RDF_NIL),
+            t(EX_X, RDF_TYPE, EX_A),
+        ],
+    },
+    Fixture {
+        name: "union_instance_near_miss",
+        doc: &[
+            "NEAR MISS for cls-uni: x is an instance of E, which is not a member of the",
+            "union, so `x rdf:type D` is not concluded.",
+        ],
+        exercises: &["cls-uni"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_D, OWL_UNIONOF, EX_L0),
+            t(EX_L0, RDF_FIRST, EX_A),
+            t(EX_L0, RDF_REST, EX_L1),
+            t(EX_L1, RDF_FIRST, EX_B),
+            t(EX_L1, RDF_REST, RDF_NIL),
+            t(EX_X, RDF_TYPE, EX_E),
+        ],
+    },
+    Fixture {
+        name: "some_values_instance",
+        doc: &[
+            "cls-svf1: an existential restriction recognizes its instances — x has a",
+            "p-value typed by the filler, so x is an instance of the restriction.",
+        ],
+        exercises: &["cls-svf1"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_E, OWL_SOMEVALUESFROM, EX_C),
+            t(EX_E, OWL_ONPROPERTY, EX_P),
+            t(EX_X, EX_P, EX_Y),
+            t(EX_Y, RDF_TYPE, EX_C),
+        ],
+    },
+    Fixture {
+        name: "some_values_instance_near_miss",
+        doc: &[
+            "NEAR MISS for cls-svf1 AND for cls-svf2, in the one input. The p-value y is",
+            "not typed by the filler, so cls-svf1 has no premise; and the filler is C rather",
+            "than owl:Thing, so cls-svf2 has none either. `x rdf:type E` is absent both ways.",
+        ],
+        exercises: &["cls-svf1", "cls-svf2"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_E, OWL_SOMEVALUESFROM, EX_C),
+            t(EX_E, OWL_ONPROPERTY, EX_P),
+            t(EX_X, EX_P, EX_Y),
+        ],
+    },
+    Fixture {
+        name: "some_values_thing",
+        doc: &[
+            "cls-svf2: an existential restriction over owl:Thing recognizes anything with a",
+            "value at all. Not a redundant special case of cls-svf1: nothing in this",
+            "calculus types an INDIVIDUAL owl:Thing — cls-thing types the CLASS — so the",
+            "filler-typed premise cls-svf1 needs is unreachable and the specification states",
+            "this case separately. It differs from `some_values_instance_near_miss` in",
+            "exactly the filler.",
+        ],
+        exercises: &["cls-svf2"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_E, OWL_SOMEVALUESFROM, OWL_THING),
+            t(EX_E, OWL_ONPROPERTY, EX_P),
+            t(EX_X, EX_P, EX_Y),
+        ],
+    },
+    Fixture {
+        name: "all_values_instance",
+        doc: &[
+            "cls-avf: a universal restriction types the values of its instances — x is an",
+            "instance of the restriction and has a p-value, so that value is typed by the",
+            "filler.",
+        ],
+        exercises: &["cls-avf"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_E, OWL_ALLVALUESFROM, EX_C),
+            t(EX_E, OWL_ONPROPERTY, EX_P),
+            t(EX_X, RDF_TYPE, EX_E),
+            t(EX_X, EX_P, EX_Y),
+        ],
+    },
+    Fixture {
+        name: "all_values_instance_near_miss",
+        doc: &[
+            "NEAR MISS for cls-avf: the restriction's instance is u, not x, so the p-value",
+            "y belongs to something the restriction says nothing about and is not typed.",
+        ],
+        exercises: &["cls-avf"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_E, OWL_ALLVALUESFROM, EX_C),
+            t(EX_E, OWL_ONPROPERTY, EX_P),
+            t(EX_U, RDF_TYPE, EX_E),
+            t(EX_X, EX_P, EX_Y),
+        ],
+    },
+    Fixture {
+        name: "has_value_assert",
+        doc: &[
+            "cls-hv1: an owl:hasValue restriction ASSERTS the value on each of its",
+            "instances. The value is a LITERAL, which is what makes this rule's conclusion",
+            "one the three-IRI shape cannot express — the registry's conclusion type carries",
+            "a typed literal for exactly this case.",
+        ],
+        exercises: &["cls-hv1"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t_lit(EX_E, OWL_HASVALUE, "cat"),
+            t(EX_E, OWL_ONPROPERTY, EX_P),
+            t(EX_X, RDF_TYPE, EX_E),
+        ],
+    },
+    Fixture {
+        name: "has_value_recognize",
+        doc: &[
+            "cls-hv2: the converse of cls-hv1 — whatever carries the value is RECOGNIZED as",
+            "an instance of the restriction.",
+        ],
+        exercises: &["cls-hv2"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t_lit(EX_E, OWL_HASVALUE, "cat"),
+            t(EX_E, OWL_ONPROPERTY, EX_P),
+            t_lit(EX_X, EX_P, "cat"),
+        ],
+    },
+    Fixture {
+        name: "has_value_near_miss",
+        doc: &[
+            "NEAR MISS for cls-hv1 AND for cls-hv2, in the one input. x carries \"dog\"",
+            "where the restriction names \"cat\", so cls-hv2 does not recognize x and",
+            "nothing types x an instance for cls-hv1 to assert \"cat\" on. Both of the",
+            "conclusions those two rules license are therefore absent.",
+        ],
+        exercises: &["cls-hv1", "cls-hv2"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t_lit(EX_E, OWL_HASVALUE, "cat"),
+            t(EX_E, OWL_ONPROPERTY, EX_P),
+            t_lit(EX_X, EX_P, "dog"),
+        ],
+    },
+    Fixture {
+        name: "max_cardinality_one",
+        doc: &[
+            "cls-maxc2: two p-values on an instance of an owl:maxCardinality 1 restriction",
+            "are the same thing. The cardinality literal is",
+            "\"1\"^^xsd:nonNegativeInteger exactly as OWL 2 Profiles Table 6 writes it.",
+        ],
+        exercises: &["cls-maxc2"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t_lit_dt(EX_E, OWL_MAXCARDINALITY, "1", XSD_NONNEGATIVEINTEGER),
+            t(EX_E, OWL_ONPROPERTY, EX_P),
+            t(EX_X, RDF_TYPE, EX_E),
+            t(EX_X, EX_P, EX_Y),
+            t(EX_X, EX_P, EX_Z),
+        ],
+    },
+    Fixture {
+        name: "max_cardinality_one_near_miss",
+        doc: &[
+            "NEAR MISS for cls-maxc2: the cardinality is \"2\", and Table 6 matches the",
+            "literals \"0\" and \"1\" and no others, so no rule of the family has a premise",
+            "and the two values are not identified.",
+        ],
+        exercises: &["cls-maxc2"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t_lit_dt(EX_E, OWL_MAXCARDINALITY, "2", XSD_NONNEGATIVEINTEGER),
+            t(EX_E, OWL_ONPROPERTY, EX_P),
+            t(EX_X, RDF_TYPE, EX_E),
+            t(EX_X, EX_P, EX_Y),
+            t(EX_X, EX_P, EX_Z),
+        ],
+    },
+    Fixture {
+        name: "max_qualified_one",
+        doc: &[
+            "cls-maxqc3: two p-values TYPED BY THE QUALIFYING CLASS on an instance of an",
+            "owl:maxQualifiedCardinality 1 restriction are the same thing.",
+        ],
+        exercises: &["cls-maxqc3"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t_lit_dt(
+                EX_E,
+                OWL_MAXQUALIFIEDCARDINALITY,
+                "1",
+                XSD_NONNEGATIVEINTEGER,
+            ),
+            t(EX_E, OWL_ONPROPERTY, EX_P),
+            t(EX_E, OWL_ONCLASS, EX_C),
+            t(EX_X, RDF_TYPE, EX_E),
+            t(EX_X, EX_P, EX_Y),
+            t(EX_Y, RDF_TYPE, EX_C),
+            t(EX_X, EX_P, EX_Z),
+            t(EX_Z, RDF_TYPE, EX_C),
+        ],
+    },
+    Fixture {
+        name: "max_qualified_one_near_miss",
+        doc: &[
+            "NEAR MISS for cls-maxqc3 AND for cls-maxqc4, in the one input. z is typed D",
+            "rather than the qualifying class C, so cls-maxqc3 sees one qualifying value",
+            "and not two; and the qualifying class is C rather than owl:Thing, so cls-maxqc4",
+            "has no premise at all. `y owl:sameAs z` is absent both ways.",
+        ],
+        exercises: &["cls-maxqc3", "cls-maxqc4"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t_lit_dt(
+                EX_E,
+                OWL_MAXQUALIFIEDCARDINALITY,
+                "1",
+                XSD_NONNEGATIVEINTEGER,
+            ),
+            t(EX_E, OWL_ONPROPERTY, EX_P),
+            t(EX_E, OWL_ONCLASS, EX_C),
+            t(EX_X, RDF_TYPE, EX_E),
+            t(EX_X, EX_P, EX_Y),
+            t(EX_Y, RDF_TYPE, EX_C),
+            t(EX_X, EX_P, EX_Z),
+            t(EX_Z, RDF_TYPE, EX_D),
+        ],
+    },
+    Fixture {
+        name: "max_qualified_one_thing",
+        doc: &[
+            "cls-maxqc4: the same as cls-maxqc3 with owl:Thing as the qualifying class,",
+            "where the values need no typing at all. It differs from",
+            "`max_qualified_one_near_miss` in the owl:onClass term, which is exactly the",
+            "difference between the two rules.",
+        ],
+        exercises: &["cls-maxqc4"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t_lit_dt(
+                EX_E,
+                OWL_MAXQUALIFIEDCARDINALITY,
+                "1",
+                XSD_NONNEGATIVEINTEGER,
+            ),
+            t(EX_E, OWL_ONPROPERTY, EX_P),
+            t(EX_E, OWL_ONCLASS, OWL_THING),
+            t(EX_X, RDF_TYPE, EX_E),
+            t(EX_X, EX_P, EX_Y),
+            t(EX_X, EX_P, EX_Z),
+        ],
+    },
+    Fixture {
+        name: "one_of",
+        doc: &[
+            "cls-oo: every member of an owl:oneOf enumeration is an instance of it. Read",
+            "through the list pre-pass, like cls-int2 and cls-uni: the conclusion is",
+            "per-member, so membership is all the rule needs.",
+        ],
+        exercises: &["cls-oo"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_C, OWL_ONEOF, EX_L0),
+            t(EX_L0, RDF_FIRST, EX_X),
+            t(EX_L0, RDF_REST, EX_L1),
+            t(EX_L1, RDF_FIRST, EX_Y),
+            t(EX_L1, RDF_REST, RDF_NIL),
+        ],
+    },
+    Fixture {
+        name: "one_of_near_miss",
+        doc: &[
+            "NEAR MISS for cls-oo: the identical list under owl:unionOf. A union types",
+            "nothing until something is typed by a member, and nothing here is, so",
+            "`x rdf:type C` is absent — the enumeration's own claim, and only the",
+            "enumeration's.",
+        ],
+        exercises: &["cls-oo"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_C, OWL_UNIONOF, EX_L0),
+            t(EX_L0, RDF_FIRST, EX_X),
+            t(EX_L0, RDF_REST, EX_L1),
+            t(EX_L1, RDF_FIRST, EX_Y),
+            t(EX_L1, RDF_REST, RDF_NIL),
+        ],
+    },
+    Fixture {
+        name: "datatype_value_typing",
+        doc: &[
+            "dt-type2, evidenced DOWNSTREAM. Every conclusion of dt-type2 has a LITERAL",
+            "subject — `lt rdf:type dt` — so not one of them can be materialized into the",
+            "RDF 1.2 IR and the rule can never be credited in a closure. What it licenses",
+            "IS observable: `\"1\"^^xsd:integer rdf:type xsd:integer` is the filler-typed",
+            "premise cls-svf1 needs, so the restriction E recognizes x.",
+            "",
+            "`x rdf:type E` is therefore dt-type2's evidence, and the generalized-rdf",
+            "boundary on the same run is the evidence that the intermediate conclusion was",
+            "derived and then abandoned rather than never drawn.",
+        ],
+        exercises: &["dt-type2", "cls-svf1"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_E, OWL_SOMEVALUESFROM, XSD_INTEGER),
+            t(EX_E, OWL_ONPROPERTY, EX_P),
+            t_lit_dt(EX_X, EX_P, "1", XSD_INTEGER),
+        ],
+    },
+    Fixture {
+        name: "datatype_value_typing_near_miss",
+        doc: &[
+            "NEAR MISS for dt-type2: the filler is xsd:string, and the data value of",
+            "\"1\"^^xsd:integer is not in xsd:string's value space, so dt-type2 does not",
+            "type the literal by it and cls-svf1 has no premise: `x rdf:type E` is absent.",
+        ],
+        exercises: &["dt-type2", "cls-svf1"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_E, OWL_SOMEVALUESFROM, XSD_STRING),
+            t(EX_E, OWL_ONPROPERTY, EX_P),
+            t_lit_dt(EX_X, EX_P, "1", XSD_INTEGER),
+        ],
+    },
+    Fixture {
+        name: "datatype_value_equality",
+        doc: &[
+            "dt-eq, evidenced DOWNSTREAM, for the same reason dt-type2 is: every conclusion",
+            "of the rule — `lt1 owl:sameAs lt2` — has a literal subject and is dropped at",
+            "the materialization boundary.",
+            "",
+            "\"1\"^^xsd:integer and \"01\"^^xsd:integer are two lexical forms of ONE data",
+            "value, so dt-eq makes them owl:sameAs and eq-rep-o rewrites the object of",
+            "`x p \"1\"` into `x p \"01\"`. That triple the IR holds perfectly well, and it",
+            "is the whole of what dt-eq is for: the rule exists so an ontology written in",
+            "one lexical form can meet a rule written in another.",
+        ],
+        exercises: &["dt-eq", "eq-rep-o"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t_lit_dt(EX_X, EX_P, "1", XSD_INTEGER),
+            t_lit_dt(EX_Y, EX_Q, "01", XSD_INTEGER),
+        ],
+    },
+    Fixture {
+        name: "datatype_value_equality_near_miss",
+        doc: &[
+            "NEAR MISS for dt-eq: \"2\"^^xsd:integer is a DIFFERENT data value from",
+            "\"1\"^^xsd:integer, so the two literals are not owl:sameAs, eq-rep-o has no",
+            "premise, and `x p \"01\"^^xsd:integer` is absent. Nothing here is inconsistent",
+            "either: dt-diff concludes owl:differentFrom only where something already",
+            "asserts owl:sameAs over the same pair, and nothing does.",
+        ],
+        exercises: &["dt-eq", "eq-rep-o"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t_lit_dt(EX_X, EX_P, "1", XSD_INTEGER),
+            t_lit_dt(EX_Y, EX_Q, "2", XSD_INTEGER),
+        ],
+    },
+];
+
+/// The [`Fixture::changed`] accounting every [`CLASH_CORPUS`] fixture carries.
+///
+/// A `changed` entry is a claim about a golden, and these fixtures have none, so the claim
+/// they make is that there is nothing to claim — stated once, shared, and asserted by
+/// `the_goldens_directory_is_exactly_the_corpus` rather than left as a convention.
+const NO_GOLDEN: &[&str] = &[
+    "NO GOLDEN, BY CONSTRUCTION. This fixture belongs to CLASH_CORPUS, whose evidence is",
+    "the OUTCOME OF A RUN rather than a closure: the `clashes` half must refuse with a",
+    "named inconsistency witness, and the refusing half has no closure to write a golden",
+    "from. Its control is kept beside it for the same reason — a pair of runs is the unit",
+    "of evidence here, and splitting it across two tables would put half of a control in a",
+    "corpus that cannot hold the other half.",
+];
+
+/// The fixtures whose evidence is that a run over them is REFUSED, and their controls.
+///
+/// The seventeen OWL 2 RL rules that conclude `false`, plus `dt-diff`, are evidenced by
+/// [`RuleFixtures::Refuting`]: `materialize(.., Regime::OwlRl)` over the `clashes` fixture
+/// must return [`purrdf_entail::EntailError::Inconsistent`] naming the expected rule, and
+/// must succeed over the `consistent` one. Neither half can live in [`CORPUS`]: the golden
+/// writer materializes every fixture under all five regimes and would panic on the first.
+///
+/// Every pair differs in exactly one term — the term the rule's premise reads — for the
+/// same reason every near miss in [`CORPUS`] does: "the rule did not fire" has to be
+/// attributable.
+const CLASH_CORPUS: &[Fixture] = &[
+    Fixture {
+        name: "eq_diff1_clash",
+        doc: &["eq-diff1: two individuals asserted both owl:sameAs and owl:differentFrom."],
+        exercises: &["eq-diff1"],
+        changed: NO_GOLDEN,
+        quads: &[t(EX_X, OWL_SAMEAS, EX_Y), t(EX_X, OWL_DIFFERENTFROM, EX_Y)],
+    },
+    Fixture {
+        name: "eq_diff1_consistent",
+        doc: &[
+            "CONTROL for eq-diff1: the owl:differentFrom assertion names z, not y, so the",
+            "two assertions are about different pairs and the run closes.",
+        ],
+        exercises: &["eq-diff1"],
+        changed: NO_GOLDEN,
+        quads: &[t(EX_X, OWL_SAMEAS, EX_Y), t(EX_X, OWL_DIFFERENTFROM, EX_Z)],
+    },
+    Fixture {
+        name: "eq_diff2_clash",
+        doc: &[
+            "eq-diff2: an owl:AllDifferent whose owl:members list holds two members asserted",
+            "owl:sameAs. Two members is the smallest list for which the rule's `i ≠ j` side",
+            "condition can hold at all.",
+        ],
+        exercises: &["eq-diff2"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t(EX_W, RDF_TYPE, OWL_ALLDIFFERENT),
+            t(EX_W, OWL_MEMBERS, EX_L0),
+            t(EX_L0, RDF_FIRST, EX_X),
+            t(EX_L0, RDF_REST, EX_L1),
+            t(EX_L1, RDF_FIRST, EX_Y),
+            t(EX_L1, RDF_REST, RDF_NIL),
+            t(EX_X, OWL_SAMEAS, EX_Y),
+        ],
+    },
+    Fixture {
+        name: "eq_diff2_consistent",
+        doc: &[
+            "CONTROL for eq-diff2: the equality names z, which is not a member of the list,",
+            "so no two members of the owl:AllDifferent are identified.",
+        ],
+        exercises: &["eq-diff2"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t(EX_W, RDF_TYPE, OWL_ALLDIFFERENT),
+            t(EX_W, OWL_MEMBERS, EX_L0),
+            t(EX_L0, RDF_FIRST, EX_X),
+            t(EX_L0, RDF_REST, EX_L1),
+            t(EX_L1, RDF_FIRST, EX_Y),
+            t(EX_L1, RDF_REST, RDF_NIL),
+            t(EX_X, OWL_SAMEAS, EX_Z),
+        ],
+    },
+    Fixture {
+        name: "eq_diff3_clash",
+        doc: &[
+            "eq-diff3: the same as eq-diff2 over owl:distinctMembers. Not redundant — OWL",
+            "2's RDF mapping writes an owl:AllDifferent axiom with either property, and a",
+            "graph may carry the OWL 1 spelling.",
+        ],
+        exercises: &["eq-diff3"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t(EX_W, RDF_TYPE, OWL_ALLDIFFERENT),
+            t(EX_W, OWL_DISTINCTMEMBERS, EX_L0),
+            t(EX_L0, RDF_FIRST, EX_X),
+            t(EX_L0, RDF_REST, EX_L1),
+            t(EX_L1, RDF_FIRST, EX_Y),
+            t(EX_L1, RDF_REST, RDF_NIL),
+            t(EX_X, OWL_SAMEAS, EX_Y),
+        ],
+    },
+    Fixture {
+        name: "eq_diff3_consistent",
+        doc: &[
+            "CONTROL for eq-diff3: the equality names z, which is not in the",
+            "owl:distinctMembers list.",
+        ],
+        exercises: &["eq-diff3"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t(EX_W, RDF_TYPE, OWL_ALLDIFFERENT),
+            t(EX_W, OWL_DISTINCTMEMBERS, EX_L0),
+            t(EX_L0, RDF_FIRST, EX_X),
+            t(EX_L0, RDF_REST, EX_L1),
+            t(EX_L1, RDF_FIRST, EX_Y),
+            t(EX_L1, RDF_REST, RDF_NIL),
+            t(EX_X, OWL_SAMEAS, EX_Z),
+        ],
+    },
+    Fixture {
+        name: "prp_irp_clash",
+        doc: &["prp-irp: an irreflexive property relating something to itself."],
+        exercises: &["prp-irp"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t(EX_P, RDF_TYPE, OWL_IRREFLEXIVEPROPERTY),
+            t(EX_X, EX_P, EX_X),
+        ],
+    },
+    Fixture {
+        name: "prp_irp_consistent",
+        doc: &[
+            "CONTROL for prp-irp: the triple relates x to y, so the property is used and",
+            "not used reflexively.",
+        ],
+        exercises: &["prp-irp"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t(EX_P, RDF_TYPE, OWL_IRREFLEXIVEPROPERTY),
+            t(EX_X, EX_P, EX_Y),
+        ],
+    },
+    Fixture {
+        name: "prp_asyp_clash",
+        doc: &["prp-asyp: an asymmetric property asserted in both directions."],
+        exercises: &["prp-asyp"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t(EX_P, RDF_TYPE, OWL_ASYMMETRICPROPERTY),
+            t(EX_X, EX_P, EX_Y),
+            t(EX_Y, EX_P, EX_X),
+        ],
+    },
+    Fixture {
+        name: "prp_asyp_consistent",
+        doc: &[
+            "CONTROL for prp-asyp: the return direction names z, so no pair is asserted",
+            "both ways.",
+        ],
+        exercises: &["prp-asyp"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t(EX_P, RDF_TYPE, OWL_ASYMMETRICPROPERTY),
+            t(EX_X, EX_P, EX_Y),
+            t(EX_Y, EX_P, EX_Z),
+        ],
+    },
+    Fixture {
+        name: "prp_pdw_clash",
+        doc: &["prp-pdw: two disjoint properties sharing a subject/object pair."],
+        exercises: &["prp-pdw"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t(EX_P, OWL_PROPERTYDISJOINTWITH, EX_Q),
+            t(EX_X, EX_P, EX_Y),
+            t(EX_X, EX_Q, EX_Y),
+        ],
+    },
+    Fixture {
+        name: "prp_pdw_consistent",
+        doc: &[
+            "CONTROL for prp-pdw: the q-triple's object is z, so the two properties are",
+            "both used and share no pair.",
+        ],
+        exercises: &["prp-pdw"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t(EX_P, OWL_PROPERTYDISJOINTWITH, EX_Q),
+            t(EX_X, EX_P, EX_Y),
+            t(EX_X, EX_Q, EX_Z),
+        ],
+    },
+    Fixture {
+        name: "prp_adp_clash",
+        doc: &[
+            "prp-adp: an owl:AllDisjointProperties whose owl:members list holds two",
+            "properties sharing a subject/object pair.",
+        ],
+        exercises: &["prp-adp"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t(EX_W, RDF_TYPE, OWL_ALLDISJOINTPROPERTIES),
+            t(EX_W, OWL_MEMBERS, EX_L0),
+            t(EX_L0, RDF_FIRST, EX_P),
+            t(EX_L0, RDF_REST, EX_L1),
+            t(EX_L1, RDF_FIRST, EX_Q),
+            t(EX_L1, RDF_REST, RDF_NIL),
+            t(EX_X, EX_P, EX_Y),
+            t(EX_X, EX_Q, EX_Y),
+        ],
+    },
+    Fixture {
+        name: "prp_adp_consistent",
+        doc: &["CONTROL for prp-adp: the q-triple's object is z, so no pair is shared."],
+        exercises: &["prp-adp"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t(EX_W, RDF_TYPE, OWL_ALLDISJOINTPROPERTIES),
+            t(EX_W, OWL_MEMBERS, EX_L0),
+            t(EX_L0, RDF_FIRST, EX_P),
+            t(EX_L0, RDF_REST, EX_L1),
+            t(EX_L1, RDF_FIRST, EX_Q),
+            t(EX_L1, RDF_REST, RDF_NIL),
+            t(EX_X, EX_P, EX_Y),
+            t(EX_X, EX_Q, EX_Z),
+        ],
+    },
+    Fixture {
+        name: "prp_npa1_clash",
+        doc: &[
+            "prp-npa1: a negative OBJECT-property assertion whose triple is nevertheless",
+            "asserted.",
+        ],
+        exercises: &["prp-npa1"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t(EX_W, OWL_SOURCEINDIVIDUAL, EX_X),
+            t(EX_W, OWL_ASSERTIONPROPERTY, EX_P),
+            t(EX_W, OWL_TARGETINDIVIDUAL, EX_Y),
+            t(EX_X, EX_P, EX_Y),
+        ],
+    },
+    Fixture {
+        name: "prp_npa1_consistent",
+        doc: &[
+            "CONTROL for prp-npa1: the asserted triple's object is z, so the assertion the",
+            "axiom denies is not made.",
+        ],
+        exercises: &["prp-npa1"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t(EX_W, OWL_SOURCEINDIVIDUAL, EX_X),
+            t(EX_W, OWL_ASSERTIONPROPERTY, EX_P),
+            t(EX_W, OWL_TARGETINDIVIDUAL, EX_Y),
+            t(EX_X, EX_P, EX_Z),
+        ],
+    },
+    Fixture {
+        name: "prp_npa2_clash",
+        doc: &[
+            "prp-npa2: a negative DATA-property assertion whose triple is nevertheless",
+            "asserted. The target is a literal, which is what separates this rule from",
+            "prp-npa1.",
+        ],
+        exercises: &["prp-npa2"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t(EX_W, OWL_SOURCEINDIVIDUAL, EX_X),
+            t(EX_W, OWL_ASSERTIONPROPERTY, EX_P),
+            t_lit(EX_W, OWL_TARGETVALUE, "cat"),
+            t_lit(EX_X, EX_P, "cat"),
+        ],
+    },
+    Fixture {
+        name: "prp_npa2_consistent",
+        doc: &[
+            "CONTROL for prp-npa2: the asserted value is \"dog\", which is a different data",
+            "value from the \"cat\" the axiom denies, so dt-eq does not identify the two",
+            "and the run closes.",
+        ],
+        exercises: &["prp-npa2"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t(EX_W, OWL_SOURCEINDIVIDUAL, EX_X),
+            t(EX_W, OWL_ASSERTIONPROPERTY, EX_P),
+            t_lit(EX_W, OWL_TARGETVALUE, "cat"),
+            t_lit(EX_X, EX_P, "dog"),
+        ],
+    },
+    Fixture {
+        name: "cls_nothing2_clash",
+        doc: &["cls-nothing2: an instance of owl:Nothing, the empty class."],
+        exercises: &["cls-nothing2"],
+        changed: NO_GOLDEN,
+        quads: &[t(EX_X, RDF_TYPE, OWL_NOTHING)],
+    },
+    Fixture {
+        name: "cls_nothing2_consistent",
+        doc: &[
+            "CONTROL for cls-nothing2: an instance of owl:Thing rather than owl:Nothing —",
+            "the one term the rule reads.",
+        ],
+        exercises: &["cls-nothing2"],
+        changed: NO_GOLDEN,
+        quads: &[t(EX_X, RDF_TYPE, OWL_THING)],
+    },
+    Fixture {
+        name: "cls_com_clash",
+        doc: &["cls-com: something typed by a class and by its complement."],
+        exercises: &["cls-com"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t(EX_A, OWL_COMPLEMENTOF, EX_B),
+            t(EX_X, RDF_TYPE, EX_A),
+            t(EX_X, RDF_TYPE, EX_B),
+        ],
+    },
+    Fixture {
+        name: "cls_com_consistent",
+        doc: &[
+            "CONTROL for cls-com: the second typing is about y, so both classes are",
+            "inhabited and neither instance is in both.",
+        ],
+        exercises: &["cls-com"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t(EX_A, OWL_COMPLEMENTOF, EX_B),
+            t(EX_X, RDF_TYPE, EX_A),
+            t(EX_Y, RDF_TYPE, EX_B),
+        ],
+    },
+    Fixture {
+        name: "cls_maxc1_clash",
+        doc: &[
+            "cls-maxc1: a p-value on an instance of an owl:maxCardinality 0 restriction.",
+            "The cardinality literal is \"0\"^^xsd:nonNegativeInteger, exactly as OWL 2",
+            "Profiles Table 6 writes it.",
+        ],
+        exercises: &["cls-maxc1"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t_lit_dt(EX_E, OWL_MAXCARDINALITY, "0", XSD_NONNEGATIVEINTEGER),
+            t(EX_E, OWL_ONPROPERTY, EX_P),
+            t(EX_X, RDF_TYPE, EX_E),
+            t(EX_X, EX_P, EX_Y),
+        ],
+    },
+    Fixture {
+        name: "cls_maxc1_consistent",
+        doc: &[
+            "CONTROL for cls-maxc1: the cardinality is \"1\", so the same input is an",
+            "ordinary cls-maxc2 premise instead — the one term the rule reads, and the",
+            "clearest evidence that the literal is matched rather than parsed loosely.",
+        ],
+        exercises: &["cls-maxc1"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t_lit_dt(EX_E, OWL_MAXCARDINALITY, "1", XSD_NONNEGATIVEINTEGER),
+            t(EX_E, OWL_ONPROPERTY, EX_P),
+            t(EX_X, RDF_TYPE, EX_E),
+            t(EX_X, EX_P, EX_Y),
+        ],
+    },
+    Fixture {
+        name: "cls_maxqc1_clash",
+        doc: &[
+            "cls-maxqc1: a p-value TYPED BY THE QUALIFYING CLASS on an instance of an",
+            "owl:maxQualifiedCardinality 0 restriction.",
+        ],
+        exercises: &["cls-maxqc1"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t_lit_dt(
+                EX_E,
+                OWL_MAXQUALIFIEDCARDINALITY,
+                "0",
+                XSD_NONNEGATIVEINTEGER,
+            ),
+            t(EX_E, OWL_ONPROPERTY, EX_P),
+            t(EX_E, OWL_ONCLASS, EX_C),
+            t(EX_X, RDF_TYPE, EX_E),
+            t(EX_X, EX_P, EX_Y),
+            t(EX_Y, RDF_TYPE, EX_C),
+        ],
+    },
+    Fixture {
+        name: "cls_maxqc1_consistent",
+        doc: &[
+            "CONTROL for cls-maxqc1: the qualifying typing is about z rather than about the",
+            "p-value y, so the restriction counts no qualifying value.",
+        ],
+        exercises: &["cls-maxqc1"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t_lit_dt(
+                EX_E,
+                OWL_MAXQUALIFIEDCARDINALITY,
+                "0",
+                XSD_NONNEGATIVEINTEGER,
+            ),
+            t(EX_E, OWL_ONPROPERTY, EX_P),
+            t(EX_E, OWL_ONCLASS, EX_C),
+            t(EX_X, RDF_TYPE, EX_E),
+            t(EX_X, EX_P, EX_Y),
+            t(EX_Z, RDF_TYPE, EX_C),
+        ],
+    },
+    Fixture {
+        name: "cls_maxqc2_clash",
+        doc: &[
+            "cls-maxqc2: the owl:Thing-qualified form of cls-maxqc1, where ANY p-value on an",
+            "instance clashes because no typing of the value is required.",
+        ],
+        exercises: &["cls-maxqc2"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t_lit_dt(
+                EX_E,
+                OWL_MAXQUALIFIEDCARDINALITY,
+                "0",
+                XSD_NONNEGATIVEINTEGER,
+            ),
+            t(EX_E, OWL_ONPROPERTY, EX_P),
+            t(EX_E, OWL_ONCLASS, OWL_THING),
+            t(EX_X, RDF_TYPE, EX_E),
+            t(EX_X, EX_P, EX_Y),
+        ],
+    },
+    Fixture {
+        name: "cls_maxqc2_consistent",
+        doc: &[
+            "CONTROL for cls-maxqc2: the qualifying class is C rather than owl:Thing, and",
+            "nothing types the p-value a C, so neither cls-maxqc2 (which requires the",
+            "owl:Thing constant) nor cls-maxqc1 (which requires the typing) has a premise.",
+        ],
+        exercises: &["cls-maxqc2"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t_lit_dt(
+                EX_E,
+                OWL_MAXQUALIFIEDCARDINALITY,
+                "0",
+                XSD_NONNEGATIVEINTEGER,
+            ),
+            t(EX_E, OWL_ONPROPERTY, EX_P),
+            t(EX_E, OWL_ONCLASS, EX_C),
+            t(EX_X, RDF_TYPE, EX_E),
+            t(EX_X, EX_P, EX_Y),
+        ],
+    },
+    Fixture {
+        name: "cax_dw_clash",
+        doc: &["cax-dw: two classes declared owl:disjointWith sharing an instance."],
+        exercises: &["cax-dw"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t(EX_A, OWL_DISJOINTWITH, EX_B),
+            t(EX_X, RDF_TYPE, EX_A),
+            t(EX_X, RDF_TYPE, EX_B),
+        ],
+    },
+    Fixture {
+        name: "cax_dw_consistent",
+        doc: &[
+            "CONTROL for cax-dw: the second typing is about y, so the disjoint classes are",
+            "both inhabited and share nothing.",
+        ],
+        exercises: &["cax-dw"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t(EX_A, OWL_DISJOINTWITH, EX_B),
+            t(EX_X, RDF_TYPE, EX_A),
+            t(EX_Y, RDF_TYPE, EX_B),
+        ],
+    },
+    Fixture {
+        name: "cax_adc_clash",
+        doc: &[
+            "cax-adc: an owl:AllDisjointClasses whose owl:members list holds two classes",
+            "sharing an instance.",
+        ],
+        exercises: &["cax-adc"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t(EX_W, RDF_TYPE, OWL_ALLDISJOINTCLASSES),
+            t(EX_W, OWL_MEMBERS, EX_L0),
+            t(EX_L0, RDF_FIRST, EX_A),
+            t(EX_L0, RDF_REST, EX_L1),
+            t(EX_L1, RDF_FIRST, EX_B),
+            t(EX_L1, RDF_REST, RDF_NIL),
+            t(EX_X, RDF_TYPE, EX_A),
+            t(EX_X, RDF_TYPE, EX_B),
+        ],
+    },
+    Fixture {
+        name: "cax_adc_consistent",
+        doc: &["CONTROL for cax-adc: the second typing is about y, so no instance is shared."],
+        exercises: &["cax-adc"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t(EX_W, RDF_TYPE, OWL_ALLDISJOINTCLASSES),
+            t(EX_W, OWL_MEMBERS, EX_L0),
+            t(EX_L0, RDF_FIRST, EX_A),
+            t(EX_L0, RDF_REST, EX_L1),
+            t(EX_L1, RDF_FIRST, EX_B),
+            t(EX_L1, RDF_REST, RDF_NIL),
+            t(EX_X, RDF_TYPE, EX_A),
+            t(EX_Y, RDF_TYPE, EX_B),
+        ],
+    },
+    Fixture {
+        name: "dt_not_type_clash",
+        doc: &[
+            "dt-not-type: a literal whose lexical form is outside the value space of the",
+            "datatype IT ITSELF CARRIES — the ill-typed-literal clash. Read without that",
+            "qualification the rule would make every graph holding a string inconsistent,",
+            "because a string is not in xsd:integer's value space; the datatype in question",
+            "is the literal's own.",
+        ],
+        exercises: &["dt-not-type"],
+        changed: NO_GOLDEN,
+        quads: &[t_lit_dt(EX_X, EX_P, "cat", XSD_INTEGER)],
+    },
+    Fixture {
+        name: "dt_not_type_consistent",
+        doc: &[
+            "CONTROL for dt-not-type: the same triple with a lexical form that IS in",
+            "xsd:integer's value space.",
+        ],
+        exercises: &["dt-not-type"],
+        changed: NO_GOLDEN,
+        quads: &[t_lit_dt(EX_X, EX_P, "1", XSD_INTEGER)],
+    },
+    Fixture {
+        name: "dt_diff_clash",
+        doc: &[
+            "dt-diff, whose witness is eq-diff1 rather than itself. dt-diff CONCLUDES —",
+            "`lt1 owl:differentFrom lt2` — so it cannot refuse a run on its own; what it",
+            "does is supply eq-diff1's second premise.",
+            "",
+            "A functional property with two value-DIFFERENT values makes prp-fp conclude",
+            "`\"1\" owl:sameAs \"2\"`, dt-diff then concludes",
+            "`\"1\" owl:differentFrom \"2\"` over the same pair, and eq-diff1 has both of",
+            "its premises. Every one of those intermediate conclusions has a literal",
+            "subject and none of them can be materialized, which is exactly why the rule",
+            "needs a refusal to be observable at all.",
+        ],
+        exercises: &["dt-diff", "prp-fp", "eq-diff1"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t(EX_P, RDF_TYPE, OWL_FUNCTIONALPROPERTY),
+            t_lit_dt(EX_X, EX_P, "1", XSD_INTEGER),
+            t_lit_dt(EX_X, EX_P, "2", XSD_INTEGER),
+        ],
+    },
+    Fixture {
+        name: "dt_diff_consistent",
+        doc: &[
+            "CONTROL for dt-diff: \"01\"^^xsd:integer is the SAME data value as",
+            "\"1\"^^xsd:integer, so prp-fp's owl:sameAs is licensed by dt-eq as well and",
+            "dt-diff has nothing to conclude. The one term that changed is the lexical form.",
+        ],
+        exercises: &["dt-diff", "prp-fp", "eq-diff1"],
+        changed: NO_GOLDEN,
+        quads: &[
+            t(EX_P, RDF_TYPE, OWL_FUNCTIONALPROPERTY),
+            t_lit_dt(EX_X, EX_P, "1", XSD_INTEGER),
+            t_lit_dt(EX_X, EX_P, "01", XSD_INTEGER),
         ],
     },
 ];
@@ -2532,10 +5075,15 @@ fn build(fixture: &Fixture) -> Arc<RdfDataset> {
     builder.freeze().expect("fixture dataset freezes")
 }
 
-/// The fixture named `name`.
+/// The fixture named `name`, from either table.
+///
+/// [`CORPUS`] and [`CLASH_CORPUS`] partition the fixtures by what kind of evidence they
+/// carry — a closure or a refusal — but they are one namespace, and
+/// `the_goldens_directory_is_exactly_the_corpus` asserts that no name is in both.
 fn fixture(name: &str) -> &'static Fixture {
     CORPUS
         .iter()
+        .chain(CLASH_CORPUS)
         .find(|f| f.name == name)
         .unwrap_or_else(|| panic!("no fixture named {name} in the corpus"))
 }
@@ -2543,7 +5091,7 @@ fn fixture(name: &str) -> &'static Fixture {
 /// The canonical N-Quads lines of `regime`'s closure over the fixture named `name`.
 fn closure_lines(name: &str, regime: Regime) -> BTreeSet<String> {
     let ds = build(fixture(name));
-    let (closed, _report) = materialize(&ds, regime).expect("the four oracle regimes run");
+    let (closed, _report) = materialize(&ds, regime).expect("the five oracle regimes run");
     canonicalize(&closed)
         .nquads
         .lines()
@@ -2558,15 +5106,23 @@ fn nquads_line(s: &str, p: &str, o: &str) -> String {
 
 // ── Rendering a golden ──────────────────────────────────────────────────────────
 
-/// The four regimes `materialize` can run, with the names the goldens use.
+/// The five regimes `materialize` can run, with the names the goldens use.
 ///
-/// `OWL-Direct`, `RIF` and `D` are refused by the façade — they need inputs it does not
-/// have — so an oracle over `materialize` cannot and must not include them.
-const ORACLE_REGIMES: [(Regime, &str); 4] = [
+/// `OWL-Direct` and `RIF` are refused by the façade — one needs the query's class
+/// expressions and the other a parsed rule set — so an oracle over `materialize` cannot and
+/// must not include them.
+///
+/// `D` was refused for the same kind of reason until Table 8 was stated, and it is not any
+/// more: `entailment/D` IS datatype entailment, this crate realizes it as Simple entailment
+/// plus the five `dt-*` rules, and `materialize` runs it. Leaving it out would make the
+/// module's own claim — that a golden holds every regime `materialize` can run — false, and
+/// would leave the newest lane in the crate the only one nothing pins.
+const ORACLE_REGIMES: [(Regime, &str); 5] = [
     (Regime::Simple, "Simple"),
     (Regime::Rdf, "RDF"),
     (Regime::Rdfs, "RDFS"),
     (Regime::OwlRl, "OWL-RL"),
+    (Regime::D, "D"),
 ];
 
 /// How many space-separated tokens a wrapped list puts on one line.
@@ -2591,15 +5147,22 @@ fn write_wrapped(out: &mut String, indent: &str, label: &str, tokens: &[String])
 /// a pure function of the construct (`Boundary::of` is the only constructor), pinned by the
 /// crate's unit tests, and repeating a paragraph of prose in thirty golden files would make
 /// the goldens harder to diff without making them say more.
+///
+/// `completeness` is rendered as three distinct words rather than the two
+/// [`Completeness::is_exact`] collapses to. `exact` and `exact-within-boundaries` differ in
+/// whether the run met a construct OUTSIDE the rule table, which is precisely the
+/// distinction the third variant exists to make visible; a golden that printed one word for
+/// both could not show a lane going from complete-and-unobstructed to
+/// complete-but-bounded, which is what the `OWL-RL` lane just did.
 fn render_report(out: &mut String, report: &ReasoningReport) {
     let indent = "  ";
     let _ = writeln!(
         out,
         "{indent}completeness: {}",
-        if report.completeness().is_exact() {
-            "exact"
-        } else {
-            "sound-incomplete"
+        match report.completeness() {
+            Completeness::Exact => "exact",
+            Completeness::ExactWithinBoundaries => "exact-within-boundaries",
+            Completeness::SoundIncomplete { .. } => "sound-incomplete",
         }
     );
     let missing: Vec<String> = report
@@ -2681,6 +5244,8 @@ fn render_golden(fixture: &Fixture) -> String {
     write_comment_block(&mut out, AXIOMATIC_PATH);
     out.push_str("#\n");
     write_comment_block(&mut out, OWL_RL_TABLES);
+    out.push_str("#\n");
+    write_comment_block(&mut out, OWL_RL_COMPLETE);
     out.push_str("#\n# WHAT MOVED IN THIS GOLDEN:\n#\n");
     write_comment_block(&mut out, fixture.changed);
     let _ = writeln!(out, "# exercises: {}", fixture.exercises.join(" "));
@@ -2690,7 +5255,7 @@ fn render_golden(fixture: &Fixture) -> String {
     write_nquads(&mut out, "input", &canonicalize(&ds).nquads);
 
     for (regime, name) in ORACLE_REGIMES {
-        let (closed, report) = materialize(&ds, regime).expect("the four oracle regimes run");
+        let (closed, report) = materialize(&ds, regime).expect("the five oracle regimes run");
         let _ = writeln!(out, "\n=== regime {name} ===");
         write_nquads(&mut out, "closure", &canonicalize(&closed).nquads);
         out.push_str("--- report ---\n");
@@ -2789,10 +5354,13 @@ fn rendering_is_byte_stable_within_a_run() {
     }
 }
 
-/// The goldens directory holds exactly the corpus: no orphans, no duplicates.
+/// The goldens directory holds exactly [`CORPUS`], and exactly nothing of [`CLASH_CORPUS`].
 ///
-/// Without this, deleting a fixture would leave a golden nobody compares — an oracle that
-/// looks larger than it is.
+/// Without the first half, deleting a fixture would leave a golden nobody compares — an
+/// oracle that looks larger than it is. The second half is the other direction and is why
+/// the two tables exist: a `CLASH_CORPUS` fixture's `OWL-RL` run is REFUSED, so
+/// [`render_golden`] cannot render one, and a golden for it could only have been produced
+/// by moving the fixture into the wrong table.
 #[test]
 fn the_goldens_directory_is_exactly_the_corpus() {
     let expected: BTreeSet<String> = CORPUS
@@ -2811,12 +5379,34 @@ fn the_goldens_directory_is_exactly_the_corpus() {
         })
         .collect();
     assert_eq!(found, expected);
+    // The two tables are one namespace, and no fixture may be in both.
+    let clash: BTreeSet<&str> = CLASH_CORPUS.iter().map(|fixture| fixture.name).collect();
+    assert_eq!(clash.len(), CLASH_CORPUS.len(), "two fixtures share a name");
+    for fixture in CLASH_CORPUS {
+        assert!(
+            !expected.contains(&format!("{}.golden", fixture.name)),
+            "{}: a refusing fixture cannot also be a golden's",
+            fixture.name
+        );
+        assert!(
+            !golden_path(fixture.name).exists(),
+            "{}: a refusing fixture has a golden, which cannot have been generated",
+            fixture.name
+        );
+        // A `changed` field is a claim about a golden; these have none, and they all say so
+        // in the same words rather than each inventing a way to say nothing moved.
+        assert_eq!(
+            fixture.changed, NO_GOLDEN,
+            "{}: a CLASH_CORPUS fixture states why it has no golden, verbatim",
+            fixture.name
+        );
+    }
 }
 
-/// Every rule id a fixture claims to exercise is a real rule id.
+/// Every rule id a fixture of either table claims to exercise is a real rule id.
 #[test]
 fn fixture_exercise_lists_name_real_rules() {
-    for fixture in CORPUS {
+    for fixture in CORPUS.iter().chain(CLASH_CORPUS) {
         for spelling in fixture.exercises {
             let rule = RuleId::from_str(spelling)
                 .unwrap_or_else(|_| panic!("{}: {spelling} is not a rule id", fixture.name));
@@ -2832,27 +5422,77 @@ fn fixture_exercise_lists_name_real_rules() {
 
 // ── The rule fixture registry ───────────────────────────────────────────────────
 
-/// One side of a rule's evidence: a fixture, and the conclusion to look for in its closure.
+/// One conclusion the registry looks for, as a canonical N-Quads line.
 ///
-/// The conclusion is three IRIs because every conclusion this registry checks is a
-/// default-graph triple over IRIs. A rule whose interesting conclusion is not of that shape
-/// — the generalized-RDF case — is evidenced by its own dedicated test below, where the
-/// absence of a triple is the whole point and a boundary carries the rest.
+/// Two constructors rather than one, because the corpus's terms are `&'static str`
+/// constants and a canonical line cannot be assembled from them at compile time. Every
+/// conclusion is a DEFAULT-GRAPH triple whose subject and predicate are IRIs — no rule of
+/// any lane concludes otherwise, and one that could would be a generalized-RDF triple the
+/// RDF 1.2 IR cannot hold — so the only position that needs a sum type is the object.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Conclusion {
+    /// A triple over three IRIs — the common case.
+    Iris(&'static str, &'static str, &'static str),
+    /// A triple whose object is a datatyped literal, which `cls-hv1` concludes whenever the
+    /// `owl:hasValue` is one, and which `dt-eq`'s downstream `eq-rep-o` conclusion always
+    /// is.
+    Literal {
+        /// The subject IRI.
+        subject: &'static str,
+        /// The predicate IRI.
+        predicate: &'static str,
+        /// The object literal's lexical form.
+        lexical: &'static str,
+        /// The object literal's datatype IRI.
+        datatype: &'static str,
+    },
+}
+
+impl Conclusion {
+    /// The canonical N-Quads line this conclusion is, exactly as `purrdf_core::canonicalize`
+    /// writes it — including RDF 1.1 C0.1's rule that an `xsd:string` literal leaves its
+    /// datatype implicit, which is why the datatype is not printed unconditionally.
+    fn line(self) -> String {
+        match self {
+            Self::Iris(s, p, o) => format!("<{s}> <{p}> <{o}> ."),
+            Self::Literal {
+                subject,
+                predicate,
+                lexical,
+                datatype,
+            } => {
+                if datatype == XSD_STRING {
+                    format!("<{subject}> <{predicate}> \"{lexical}\" .")
+                } else {
+                    format!("<{subject}> <{predicate}> \"{lexical}\"^^<{datatype}> .")
+                }
+            }
+        }
+    }
+}
+
+/// One side of a rule's evidence: a fixture, and the conclusion to look for in its closure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Case {
     /// The fixture's name.
     fixture: &'static str,
-    /// The conclusion triple, as `(subject, predicate, object)` IRIs.
-    conclusion: (&'static str, &'static str, &'static str),
+    /// The conclusion, as the canonical N-Quads line it must be (or must not be).
+    conclusion: Conclusion,
 }
 
 /// What the corpus can say about one rule of one regime.
 ///
-/// Three states, and the gaps between them are the point. `NotYetImplemented` is a
+/// Five states, and the gaps between them are the point. `NotYetImplemented` is a
 /// COMPLETE entry: it is a true, checked statement that the chase does not fire this rule,
 /// asserted against the inventory rather than assumed. A rule with no entry at all is not
-/// a state this type can express, which is what makes "one fixture per rule" hold for the
-/// rules nobody has written yet.
+/// a state this type can express, which is what makes "one fixture per rule" hold.
+///
+/// The three states beyond `Registered` exist because three families of rule have no
+/// conclusion the ordinary present/absent control can read: a premise-free rule holds for
+/// every input, a rule that concludes `false` produces no closure at all, and a rule whose
+/// every conclusion is generalized RDF produces nothing the RDF 1.2 IR can hold. Each is
+/// evidenced by the strongest thing that IS observable about it, and none of them is
+/// weakened to a bare "it is declared".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuleFixtures {
     /// The chase fires this rule, and the corpus proves it both ways.
@@ -2879,6 +5519,45 @@ enum RuleFixtures {
         /// The same dataset, and a same-shaped conclusion that must be ABSENT from it.
         denied: Case,
     },
+    /// The rule's conclusion is `false`, so a body match REFUSES the run rather than adding
+    /// a triple, and the evidence is a pair of RUNS rather than a pair of closures.
+    ///
+    /// `materialize(.., Regime::OwlRl)` over `clashes` must return
+    /// [`purrdf_entail::EntailError::Inconsistent`] carrying a witness that names `witness`;
+    /// over `consistent` it must return a closure. The `witness` id is normally the rule's
+    /// own — the rule that refused is the rule the witness names — with exactly one
+    /// exception, and it is a real fact about the rule rather than a bookkeeping one:
+    /// `dt-diff` CONCLUDES `owl:differentFrom` rather than `false`, so it can never refuse
+    /// a run itself. What it does is supply `eq-diff1`'s second premise, and every one of
+    /// its own conclusions has a literal subject and is dropped at the materialization
+    /// boundary. `eq-diff1`'s refusal on an input where dt-diff is the only possible source
+    /// of that premise is therefore the only observation that `dt-diff` fired at all.
+    Refuting {
+        /// An input the rule refuses: `materialize` must fail with an inconsistency.
+        clashes: &'static str,
+        /// The rule the witness must name — the rule itself, except for `dt-diff`.
+        witness: RuleId,
+        /// The same input, changed in exactly the way that removes the rule's premise:
+        /// `materialize` must succeed.
+        consistent: &'static str,
+    },
+    /// EVERY conclusion of the rule is generalized RDF — a literal in subject position —
+    /// so none of them can be materialized and the rule can never be credited in a closure.
+    ///
+    /// The evidence moves one hop DOWNSTREAM, to a triple the rule licenses and the RDF 1.2
+    /// IR can hold, plus the [`purrdf_entail::Construct::GeneralizedRdf`] boundary on the
+    /// positive run. The boundary is what separates "the rule fired and its conclusion was
+    /// abandoned" from "the rule never fired": without it, a chase that had simply dropped
+    /// the rule would still pass the downstream assertion if any other path reached the same
+    /// triple, and with it the run has to have derived something it could not represent.
+    Generalized {
+        /// An input where the rule fires: the DOWNSTREAM conclusion must be PRESENT, and
+        /// the run must report the generalized-rdf boundary.
+        positive: Case,
+        /// The same input, changed in exactly the way that removes the rule's premise:
+        /// the same downstream conclusion must be ABSENT.
+        near_miss: Case,
+    },
     /// The chase does not fire this rule, so the corpus has nothing to show.
     NotYetImplemented,
 }
@@ -2886,18 +5565,13 @@ enum RuleFixtures {
 /// A registry row: the rule, its positive fixture and conclusion, and its near-miss
 /// fixture. The conclusion is shared — a near miss asserts the ABSENCE of the very triple
 /// the positive asserts the presence of, which is what makes the pair a control.
-type Row = (
-    RuleId,
-    &'static str,
-    (&'static str, &'static str, &'static str),
-    &'static str,
-);
+type Row = (RuleId, &'static str, Conclusion, &'static str);
 
 /// `Regime::Rdf`'s registered rules.
 const RDF_ROWS: &[Row] = &[(
     RuleId::RdfD2,
     "plain_triple",
-    (EX_P, RDF_TYPE, RDF_PROPERTY),
+    Conclusion::Iris(EX_P, RDF_TYPE, RDF_PROPERTY),
     "named_graph",
 )];
 
@@ -2905,12 +5579,12 @@ const RDF_ROWS: &[Row] = &[(
 /// the conclusion that must be PRESENT in its closure, and a same-shaped conclusion that
 /// must be ABSENT from it. See [`RuleFixtures::Axiomatic`] for why the control moves
 /// inside one fixture instead of across two.
-type AxiomaticRow = (
-    RuleId,
-    &'static str,
-    (&'static str, &'static str, &'static str),
-    (&'static str, &'static str, &'static str),
-);
+type AxiomaticRow = (RuleId, &'static str, Conclusion, Conclusion);
+
+/// A refuting rule's registry row: the rule, the fixture whose run must be REFUSED, the
+/// rule the inconsistency witness must name, and the fixture whose run must succeed. See
+/// [`RuleFixtures::Refuting`], including why `dt-diff`'s witness is `eq-diff1`.
+type RefutingRow = (RuleId, &'static str, RuleId, &'static str);
 
 /// The premise-free rules the `RDFS` lane fires.
 ///
@@ -2922,23 +5596,52 @@ type AxiomaticRow = (
 const RDFS_AXIOMATIC_ROWS: &[AxiomaticRow] = &[(
     RuleId::Rdfs1,
     "empty",
-    (XSD_STRING, RDF_TYPE, RDFS_DATATYPE),
-    (EX_DT, RDF_TYPE, RDFS_DATATYPE),
+    Conclusion::Iris(XSD_STRING, RDF_TYPE, RDFS_DATATYPE),
+    Conclusion::Iris(EX_DT, RDF_TYPE, RDFS_DATATYPE),
 )];
 
-/// The premise-free rules the `OWL-RL` lane fires.
+/// The premise-free rules the `OWL-RL` lane fires, in specification table order.
 ///
-/// `prp-ap` types each BUILT-IN annotation property of OWL 2 RL an
-/// `owl:AnnotationProperty`, and OWL 2 Structural Specification §5.5 fixes that list at
-/// nine. `rdfs:label` is therefore typed in EVERY `OWL-RL` closure, including the empty
-/// graph's, and `example.org/p` is typed in none: that pair is the whole content of the
-/// rule, stated as one presence and one absence.
-const OWL_RL_AXIOMATIC_ROWS: &[AxiomaticRow] = &[(
-    RuleId::PrpAp,
-    "empty",
-    (RDFS_LABEL, RDF_TYPE, OWL_ANNOTATIONPROPERTY),
-    (EX_P, RDF_TYPE, OWL_ANNOTATIONPROPERTY),
-)];
+/// Four of them, and each quantifies over a list the SPECIFICATION fixes rather than over
+/// the graph — which is what makes the empty dataset the right witness and a term outside
+/// the list the right denial:
+///
+/// * `cls-thing` and `cls-nothing1` type `owl:Thing` and `owl:Nothing` an `owl:Class`,
+///   and nothing else. `example.org/A` is a class name the corpus uses everywhere and is
+///   typed an `owl:Class` by neither.
+/// * `dt-type1` types each of the thirty-two datatypes OWL 2 Profiles §4.2.1 lists as
+///   supported in OWL 2 RL an `rdfs:Datatype`. `xsd:integer` is one; `example.org/dt` is
+///   not, and neither is `owl:real`, which is in the OWL 2 datatype map and deliberately
+///   NOT supported in OWL 2 RL.
+/// * `prp-ap` types each BUILT-IN annotation property of OWL 2 RL an
+///   `owl:AnnotationProperty`, and OWL 2 Structural Specification §5.5 fixes that list at
+///   nine. `rdfs:label` is one; `example.org/p` is not.
+const OWL_RL_AXIOMATIC_ROWS: &[AxiomaticRow] = &[
+    (
+        RuleId::PrpAp,
+        "empty",
+        Conclusion::Iris(RDFS_LABEL, RDF_TYPE, OWL_ANNOTATIONPROPERTY),
+        Conclusion::Iris(EX_P, RDF_TYPE, OWL_ANNOTATIONPROPERTY),
+    ),
+    (
+        RuleId::ClsThing,
+        "empty",
+        Conclusion::Iris(OWL_THING, RDF_TYPE, OWL_CLASS),
+        Conclusion::Iris(EX_A, RDF_TYPE, OWL_CLASS),
+    ),
+    (
+        RuleId::ClsNothing1,
+        "empty",
+        Conclusion::Iris(OWL_NOTHING, RDF_TYPE, OWL_CLASS),
+        Conclusion::Iris(EX_A, RDF_TYPE, OWL_CLASS),
+    ),
+    (
+        RuleId::DtType1,
+        "empty",
+        Conclusion::Iris(XSD_INTEGER, RDF_TYPE, RDFS_DATATYPE),
+        Conclusion::Iris(EX_DT, RDF_TYPE, RDFS_DATATYPE),
+    ),
+];
 
 /// The premise-free rules `regime` registers.
 fn axiomatic_rows(regime: Regime) -> &'static [AxiomaticRow] {
@@ -2959,306 +5662,611 @@ const RDFS_ROWS: &[Row] = &[
     (
         RuleId::RdfD2,
         "plain_triple",
-        (EX_P, RDF_TYPE, RDF_PROPERTY),
+        Conclusion::Iris(EX_P, RDF_TYPE, RDF_PROPERTY),
         "named_graph",
     ),
     (
         RuleId::Rdfs2,
         "domain",
-        (EX_X, RDF_TYPE, EX_A),
+        Conclusion::Iris(EX_X, RDF_TYPE, EX_A),
         "domain_near_miss",
     ),
     (
         RuleId::Rdfs3,
         "range",
-        (EX_Y, RDF_TYPE, EX_B),
+        Conclusion::Iris(EX_Y, RDF_TYPE, EX_B),
         "range_near_miss",
     ),
     (
         RuleId::Rdfs4,
         "plain_triple",
-        (EX_X, RDF_TYPE, RDFS_RESOURCE),
+        Conclusion::Iris(EX_X, RDF_TYPE, RDFS_RESOURCE),
         "named_graph",
     ),
     (
         RuleId::Rdfs5,
         "subproperty_chain",
-        (EX_P, RDFS_SUBPROPERTYOF, EX_R),
+        Conclusion::Iris(EX_P, RDFS_SUBPROPERTYOF, EX_R),
         "subproperty_chain_near_miss",
     ),
     (
         RuleId::Rdfs6,
         "property_typed",
-        (EX_P, RDFS_SUBPROPERTYOF, EX_P),
+        Conclusion::Iris(EX_P, RDFS_SUBPROPERTYOF, EX_P),
         "property_typed_near_miss",
     ),
     (
         RuleId::Rdfs7,
         "subproperty_rewrite",
-        (EX_X, EX_Q, EX_Y),
+        Conclusion::Iris(EX_X, EX_Q, EX_Y),
         "subproperty_rewrite_near_miss",
     ),
     (
         RuleId::Rdfs8,
         "class_typed",
-        (EX_C, RDFS_SUBCLASSOF, RDFS_RESOURCE),
+        Conclusion::Iris(EX_C, RDFS_SUBCLASSOF, RDFS_RESOURCE),
         "class_typed_near_miss",
     ),
     (
         RuleId::Rdfs9,
         "subclass_instance",
-        (EX_X, RDF_TYPE, EX_B),
+        Conclusion::Iris(EX_X, RDF_TYPE, EX_B),
         "subclass_instance_near_miss",
     ),
     (
         RuleId::Rdfs10,
         "class_typed",
-        (EX_C, RDFS_SUBCLASSOF, EX_C),
+        Conclusion::Iris(EX_C, RDFS_SUBCLASSOF, EX_C),
         "class_typed_near_miss",
     ),
     (
         RuleId::Rdfs11,
         "subclass_chain",
-        (EX_A, RDFS_SUBCLASSOF, EX_F),
+        Conclusion::Iris(EX_A, RDFS_SUBCLASSOF, EX_F),
         "subclass_chain_near_miss",
     ),
     (
         RuleId::Rdfs12,
         "container_membership",
-        (EX_P, RDFS_SUBPROPERTYOF, RDFS_MEMBER),
+        Conclusion::Iris(EX_P, RDFS_SUBPROPERTYOF, RDFS_MEMBER),
         "container_membership_near_miss",
     ),
     (
         RuleId::Rdfs13,
         "datatype_declared",
-        (EX_DT, RDFS_SUBCLASSOF, RDFS_LITERAL),
+        Conclusion::Iris(EX_DT, RDFS_SUBCLASSOF, RDFS_LITERAL),
         "datatype_declared_near_miss",
     ),
 ];
 
-/// `Regime::OwlRl`'s registered rules, in specification table order.
+/// `Regime::OwlRl`'s rules that conclude a triple on a premise, grouped by the table each
+/// belongs to.
 ///
 /// Nine of them are the RDFS rules above under their OWL 2 RL names, evaluated in the OWL
 /// lane — the same fixture, a different calculus — and the rest are the lane's own.
-/// `prp-ap` is not here: it is premise-free, so it is in [`OWL_RL_AXIOMATIC_ROWS`] instead.
+///
+/// Twenty-four of the lane's seventy-eight rules are NOT here, and each is in the table
+/// that says what it does instead: the four premise-free ones in
+/// [`OWL_RL_AXIOMATIC_ROWS`], the eighteen that refuse a run in [`OWL_RL_REFUTING_ROWS`],
+/// and the two whose every conclusion is generalized RDF in [`OWL_RL_GENERALIZED_ROWS`].
 const OWL_RL_ROWS: &[Row] = &[
     (
         RuleId::PrpDom,
         "domain",
-        (EX_X, RDF_TYPE, EX_A),
+        Conclusion::Iris(EX_X, RDF_TYPE, EX_A),
         "domain_near_miss",
     ),
     (
         RuleId::PrpRng,
         "range",
-        (EX_Y, RDF_TYPE, EX_B),
+        Conclusion::Iris(EX_Y, RDF_TYPE, EX_B),
         "range_near_miss",
     ),
     (
         RuleId::PrpSymp,
         "symmetric",
-        (EX_Y, EX_P, EX_X),
+        Conclusion::Iris(EX_Y, EX_P, EX_X),
         "transitive",
     ),
     (
         RuleId::PrpTrp,
         "transitive",
-        (EX_X, EX_P, EX_Z),
+        Conclusion::Iris(EX_X, EX_P, EX_Z),
         "symmetric",
     ),
     (
         RuleId::PrpSpo1,
         "subproperty_rewrite",
-        (EX_X, EX_Q, EX_Y),
+        Conclusion::Iris(EX_X, EX_Q, EX_Y),
         "subproperty_rewrite_near_miss",
     ),
     (
         RuleId::PrpInv1,
         "inverse_pair",
-        (EX_Y, EX_Q, EX_X),
+        Conclusion::Iris(EX_Y, EX_Q, EX_X),
         "inverse_pair_near_miss",
     ),
     (
         RuleId::PrpInv2,
         "inverse_pair",
-        (EX_V, EX_P, EX_U),
+        Conclusion::Iris(EX_V, EX_P, EX_U),
         "inverse_pair_near_miss",
     ),
     (
         RuleId::CaxSco,
         "subclass_instance",
-        (EX_X, RDF_TYPE, EX_B),
+        Conclusion::Iris(EX_X, RDF_TYPE, EX_B),
         "subclass_instance_near_miss",
     ),
     (
         RuleId::ScmSco,
         "subclass_chain",
-        (EX_A, RDFS_SUBCLASSOF, EX_F),
+        Conclusion::Iris(EX_A, RDFS_SUBCLASSOF, EX_F),
         "subclass_chain_near_miss",
     ),
     (
         RuleId::ScmEqc1,
         "equivalent_class",
-        (EX_B, RDFS_SUBCLASSOF, EX_A),
+        Conclusion::Iris(EX_B, RDFS_SUBCLASSOF, EX_A),
         "equivalent_property",
     ),
     (
         RuleId::ScmSpo,
         "subproperty_chain",
-        (EX_P, RDFS_SUBPROPERTYOF, EX_R),
+        Conclusion::Iris(EX_P, RDFS_SUBPROPERTYOF, EX_R),
         "subproperty_chain_near_miss",
     ),
     (
         RuleId::ScmEqp1,
         "equivalent_property",
-        (EX_B, RDFS_SUBPROPERTYOF, EX_A),
+        Conclusion::Iris(EX_B, RDFS_SUBPROPERTYOF, EX_A),
         "equivalent_class",
     ),
     (
         RuleId::PrpFp,
         "functional",
-        (EX_Y, OWL_SAMEAS, EX_Z),
+        Conclusion::Iris(EX_Y, OWL_SAMEAS, EX_Z),
         "inverse_functional",
     ),
     (
         RuleId::PrpIfp,
         "inverse_functional",
-        (EX_X, OWL_SAMEAS, EX_Y),
+        Conclusion::Iris(EX_X, OWL_SAMEAS, EX_Y),
         "functional",
     ),
     (
         RuleId::PrpSpo2,
         "property_chain",
-        (EX_X, EX_CHAINED, EX_Z),
+        Conclusion::Iris(EX_X, EX_CHAINED, EX_Z),
         "property_chain_near_miss",
     ),
     (
         RuleId::PrpEqp1,
         "equivalent_property_data",
-        (EX_X, EX_Q, EX_Y),
+        Conclusion::Iris(EX_X, EX_Q, EX_Y),
         "equivalent_property_data_near_miss",
     ),
     (
         RuleId::PrpEqp2,
         "equivalent_property_data",
-        (EX_U, EX_P, EX_V),
+        Conclusion::Iris(EX_U, EX_P, EX_V),
         "equivalent_property_data_near_miss",
     ),
     (
         RuleId::PrpKey,
         "has_key",
-        (EX_X, OWL_SAMEAS, EX_Y),
+        Conclusion::Iris(EX_X, OWL_SAMEAS, EX_Y),
         "has_key_near_miss",
     ),
     (
         RuleId::CaxEqc1,
         "equivalent_class_instance",
-        (EX_X, RDF_TYPE, EX_B),
+        Conclusion::Iris(EX_X, RDF_TYPE, EX_B),
         "equivalent_class_instance_near_miss",
     ),
     (
         RuleId::CaxEqc2,
         "equivalent_class_instance",
-        (EX_U, RDF_TYPE, EX_A),
+        Conclusion::Iris(EX_U, RDF_TYPE, EX_A),
         "equivalent_class_instance_near_miss",
     ),
     (
         RuleId::ScmCls,
         "owl_class",
-        (EX_C, RDFS_SUBCLASSOF, OWL_THING),
+        Conclusion::Iris(EX_C, RDFS_SUBCLASSOF, OWL_THING),
         "class_typed",
     ),
     (
         RuleId::ScmEqc2,
         "mutual_subclass",
-        (EX_A, OWL_EQUIVALENTCLASS, EX_B),
+        Conclusion::Iris(EX_A, OWL_EQUIVALENTCLASS, EX_B),
         "mutual_subproperty",
     ),
     (
         RuleId::ScmOp,
         "object_property",
-        (EX_P, OWL_EQUIVALENTPROPERTY, EX_P),
+        Conclusion::Iris(EX_P, OWL_EQUIVALENTPROPERTY, EX_P),
         "datatype_property",
     ),
     (
         RuleId::ScmDp,
         "datatype_property",
-        (EX_Q, OWL_EQUIVALENTPROPERTY, EX_Q),
+        Conclusion::Iris(EX_Q, OWL_EQUIVALENTPROPERTY, EX_Q),
         "object_property",
     ),
     (
         RuleId::ScmEqp2,
         "mutual_subproperty",
-        (EX_P, OWL_EQUIVALENTPROPERTY, EX_Q),
+        Conclusion::Iris(EX_P, OWL_EQUIVALENTPROPERTY, EX_Q),
         "mutual_subclass",
     ),
     (
         RuleId::ScmDom1,
         "domain_widened",
-        (EX_R, RDFS_DOMAIN, EX_B),
+        Conclusion::Iris(EX_R, RDFS_DOMAIN, EX_B),
         "domain_inherited",
     ),
     (
         RuleId::ScmDom2,
         "domain_inherited",
-        (EX_P, RDFS_DOMAIN, EX_A),
+        Conclusion::Iris(EX_P, RDFS_DOMAIN, EX_A),
         "domain_widened",
     ),
     (
         RuleId::ScmRng1,
         "range_widened",
-        (EX_R, RDFS_RANGE, EX_B),
+        Conclusion::Iris(EX_R, RDFS_RANGE, EX_B),
         "range_inherited",
     ),
     (
         RuleId::ScmRng2,
         "range_inherited",
-        (EX_P, RDFS_RANGE, EX_A),
+        Conclusion::Iris(EX_P, RDFS_RANGE, EX_A),
         "range_widened",
     ),
     (
         RuleId::ScmHv,
         "has_value_restrictions",
-        (EX_A, RDFS_SUBCLASSOF, EX_B),
+        Conclusion::Iris(EX_A, RDFS_SUBCLASSOF, EX_B),
         "has_value_restrictions_near_miss",
     ),
     (
         RuleId::ScmSvf1,
         "some_values_filler",
-        (EX_A, RDFS_SUBCLASSOF, EX_B),
+        Conclusion::Iris(EX_A, RDFS_SUBCLASSOF, EX_B),
         "some_values_property",
     ),
     (
         RuleId::ScmSvf2,
         "some_values_property",
-        (EX_E, RDFS_SUBCLASSOF, EX_F),
+        Conclusion::Iris(EX_E, RDFS_SUBCLASSOF, EX_F),
         "some_values_filler",
     ),
     (
         RuleId::ScmAvf1,
         "all_values_filler",
-        (EX_A, RDFS_SUBCLASSOF, EX_B),
+        Conclusion::Iris(EX_A, RDFS_SUBCLASSOF, EX_B),
         "all_values_property",
     ),
     (
         RuleId::ScmAvf2,
         "all_values_property",
-        (EX_F, RDFS_SUBCLASSOF, EX_E),
+        Conclusion::Iris(EX_F, RDFS_SUBCLASSOF, EX_E),
         "all_values_filler",
     ),
     (
         RuleId::ScmInt,
         "intersection_of",
-        (EX_C, RDFS_SUBCLASSOF, EX_A),
+        Conclusion::Iris(EX_C, RDFS_SUBCLASSOF, EX_A),
         "union_of",
     ),
     (
         RuleId::ScmUni,
         "union_of",
-        (EX_A, RDFS_SUBCLASSOF, EX_D),
+        Conclusion::Iris(EX_A, RDFS_SUBCLASSOF, EX_D),
         "intersection_of",
     ),
+    // --- Table 4, the six `eq-*` rules that conclude a triple. ---
+    //
+    // `eq-ref` has a premise — `T(?s, ?p, ?o)` — so it is NOT axiomatic, even though it
+    // fires on the empty graph: the premise-free rules put triples there for it to read.
+    // `named_graph` is the near miss for exactly that reason: the chase reads the default
+    // graph only, so a term that appears solely in a named graph is a term no triple of
+    // this run mentions, and it is the one input where `x owl:sameAs x` can be absent.
+    (
+        RuleId::EqRef,
+        "plain_triple",
+        Conclusion::Iris(EX_X, OWL_SAMEAS, EX_X),
+        "named_graph",
+    ),
+    (
+        RuleId::EqSym,
+        "same_as",
+        Conclusion::Iris(EX_Y, OWL_SAMEAS, EX_X),
+        "plain_triple",
+    ),
+    (
+        RuleId::EqTrans,
+        "same_as_chain",
+        Conclusion::Iris(EX_X, OWL_SAMEAS, EX_Z),
+        "same_as_chain_near_miss",
+    ),
+    (
+        RuleId::EqRepS,
+        "same_as_subject",
+        Conclusion::Iris(EX_U, EX_P, EX_Y),
+        "same_as_object",
+    ),
+    (
+        RuleId::EqRepP,
+        "same_as_predicate",
+        Conclusion::Iris(EX_X, EX_Q, EX_Y),
+        "same_as_subject",
+    ),
+    (
+        RuleId::EqRepO,
+        "same_as_object",
+        Conclusion::Iris(EX_X, EX_P, EX_V),
+        "same_as_predicate",
+    ),
+    // --- Table 6, the twelve `cls-*` rules that conclude a triple. ---
+    (
+        RuleId::ClsInt1,
+        "intersection_instance",
+        Conclusion::Iris(EX_X, RDF_TYPE, EX_C),
+        "intersection_instance_near_miss",
+    ),
+    (
+        RuleId::ClsInt2,
+        "intersection_member_typing",
+        Conclusion::Iris(EX_X, RDF_TYPE, EX_A),
+        "intersection_of",
+    ),
+    (
+        RuleId::ClsUni,
+        "union_instance",
+        Conclusion::Iris(EX_X, RDF_TYPE, EX_D),
+        "union_instance_near_miss",
+    ),
+    (
+        RuleId::ClsSvf1,
+        "some_values_instance",
+        Conclusion::Iris(EX_X, RDF_TYPE, EX_E),
+        "some_values_instance_near_miss",
+    ),
+    (
+        RuleId::ClsSvf2,
+        "some_values_thing",
+        Conclusion::Iris(EX_X, RDF_TYPE, EX_E),
+        "some_values_instance_near_miss",
+    ),
+    (
+        RuleId::ClsAvf,
+        "all_values_instance",
+        Conclusion::Iris(EX_Y, RDF_TYPE, EX_C),
+        "all_values_instance_near_miss",
+    ),
+    (
+        RuleId::ClsHv1,
+        "has_value_assert",
+        Conclusion::Literal {
+            subject: EX_X,
+            predicate: EX_P,
+            lexical: "cat",
+            datatype: XSD_STRING,
+        },
+        "has_value_near_miss",
+    ),
+    (
+        RuleId::ClsHv2,
+        "has_value_recognize",
+        Conclusion::Iris(EX_X, RDF_TYPE, EX_E),
+        "has_value_near_miss",
+    ),
+    (
+        RuleId::ClsMaxc2,
+        "max_cardinality_one",
+        Conclusion::Iris(EX_Y, OWL_SAMEAS, EX_Z),
+        "max_cardinality_one_near_miss",
+    ),
+    (
+        RuleId::ClsMaxqc3,
+        "max_qualified_one",
+        Conclusion::Iris(EX_Y, OWL_SAMEAS, EX_Z),
+        "max_qualified_one_near_miss",
+    ),
+    (
+        RuleId::ClsMaxqc4,
+        "max_qualified_one_thing",
+        Conclusion::Iris(EX_Y, OWL_SAMEAS, EX_Z),
+        "max_qualified_one_near_miss",
+    ),
+    (
+        RuleId::ClsOo,
+        "one_of",
+        Conclusion::Iris(EX_X, RDF_TYPE, EX_C),
+        "one_of_near_miss",
+    ),
 ];
+
+/// The `OWL-RL` rules whose conclusion is `false`, and the two runs that evidence each.
+///
+/// Eighteen rows: the seventeen rules of Tables 4–8 that conclude `false`, plus `dt-diff`,
+/// whose witness is `eq-diff1` for the reason [`RuleFixtures::Refuting`] gives. Every
+/// fixture named here is in [`CLASH_CORPUS`], because the `clashes` half has no closure and
+/// therefore no golden, and a control belongs beside the thing it controls.
+const OWL_RL_REFUTING_ROWS: &[RefutingRow] = &[
+    (
+        RuleId::EqDiff1,
+        "eq_diff1_clash",
+        RuleId::EqDiff1,
+        "eq_diff1_consistent",
+    ),
+    (
+        RuleId::EqDiff2,
+        "eq_diff2_clash",
+        RuleId::EqDiff2,
+        "eq_diff2_consistent",
+    ),
+    (
+        RuleId::EqDiff3,
+        "eq_diff3_clash",
+        RuleId::EqDiff3,
+        "eq_diff3_consistent",
+    ),
+    (
+        RuleId::PrpIrp,
+        "prp_irp_clash",
+        RuleId::PrpIrp,
+        "prp_irp_consistent",
+    ),
+    (
+        RuleId::PrpAsyp,
+        "prp_asyp_clash",
+        RuleId::PrpAsyp,
+        "prp_asyp_consistent",
+    ),
+    (
+        RuleId::PrpPdw,
+        "prp_pdw_clash",
+        RuleId::PrpPdw,
+        "prp_pdw_consistent",
+    ),
+    (
+        RuleId::PrpAdp,
+        "prp_adp_clash",
+        RuleId::PrpAdp,
+        "prp_adp_consistent",
+    ),
+    (
+        RuleId::PrpNpa1,
+        "prp_npa1_clash",
+        RuleId::PrpNpa1,
+        "prp_npa1_consistent",
+    ),
+    (
+        RuleId::PrpNpa2,
+        "prp_npa2_clash",
+        RuleId::PrpNpa2,
+        "prp_npa2_consistent",
+    ),
+    (
+        RuleId::ClsNothing2,
+        "cls_nothing2_clash",
+        RuleId::ClsNothing2,
+        "cls_nothing2_consistent",
+    ),
+    (
+        RuleId::ClsCom,
+        "cls_com_clash",
+        RuleId::ClsCom,
+        "cls_com_consistent",
+    ),
+    (
+        RuleId::ClsMaxc1,
+        "cls_maxc1_clash",
+        RuleId::ClsMaxc1,
+        "cls_maxc1_consistent",
+    ),
+    (
+        RuleId::ClsMaxqc1,
+        "cls_maxqc1_clash",
+        RuleId::ClsMaxqc1,
+        "cls_maxqc1_consistent",
+    ),
+    (
+        RuleId::ClsMaxqc2,
+        "cls_maxqc2_clash",
+        RuleId::ClsMaxqc2,
+        "cls_maxqc2_consistent",
+    ),
+    (
+        RuleId::CaxDw,
+        "cax_dw_clash",
+        RuleId::CaxDw,
+        "cax_dw_consistent",
+    ),
+    (
+        RuleId::CaxAdc,
+        "cax_adc_clash",
+        RuleId::CaxAdc,
+        "cax_adc_consistent",
+    ),
+    // `dt-diff` is the one row whose witness is not its own id; see
+    // [`RuleFixtures::Refuting`]. It concludes `owl:differentFrom`, every one of those
+    // conclusions has a literal subject and is dropped, and `eq-diff1` is the only consumer
+    // in the whole of OWL 2 RL — so eq-diff1's refusal on an input where nothing else can
+    // supply that premise is the only observation that dt-diff fired.
+    (
+        RuleId::DtDiff,
+        "dt_diff_clash",
+        RuleId::EqDiff1,
+        "dt_diff_consistent",
+    ),
+    (
+        RuleId::DtNotType,
+        "dt_not_type_clash",
+        RuleId::DtNotType,
+        "dt_not_type_consistent",
+    ),
+];
+
+/// The `OWL-RL` rules every one of whose conclusions is generalized RDF, and the DOWNSTREAM
+/// triple each licenses.
+///
+/// Two rows. `dt-type2` concludes `lt rdf:type dt` and `dt-eq` concludes
+/// `lt1 owl:sameAs lt2`; both put a literal in SUBJECT position, which the RDF 1.2 dataset
+/// IR cannot represent, so neither rule can ever put a line in a closure or be credited in
+/// a report. The rows below name the triple one hop later that the RDF 1.2 IR does hold —
+/// `cls-svf1`'s and `eq-rep-o`'s respectively — and
+/// `every_rule_is_registered_or_declared_unimplemented` additionally requires the positive
+/// run to report the generalized-rdf boundary, so "the conclusion was abandoned" is
+/// distinguishable from "the rule never fired".
+const OWL_RL_GENERALIZED_ROWS: &[Row] = &[
+    (
+        RuleId::DtType2,
+        "datatype_value_typing",
+        Conclusion::Iris(EX_X, RDF_TYPE, EX_E),
+        "datatype_value_typing_near_miss",
+    ),
+    (
+        RuleId::DtEq,
+        "datatype_value_equality",
+        Conclusion::Literal {
+            subject: EX_X,
+            predicate: EX_P,
+            lexical: "01",
+            datatype: XSD_INTEGER,
+        },
+        "datatype_value_equality_near_miss",
+    ),
+];
+
+/// The refuting rules `regime` registers.
+fn refuting_rows(regime: Regime) -> &'static [RefutingRow] {
+    match regime {
+        Regime::OwlRl => OWL_RL_REFUTING_ROWS,
+        Regime::Simple
+        | Regime::Rdf
+        | Regime::Rdfs
+        | Regime::OwlDirect
+        | Regime::Rif
+        | Regime::D => &[],
+    }
+}
+
+/// The generalized-conclusion rules `regime` registers.
+fn generalized_rows(regime: Regime) -> &'static [Row] {
+    match regime {
+        Regime::OwlRl => OWL_RL_GENERALIZED_ROWS,
+        Regime::Simple
+        | Regime::Rdf
+        | Regime::Rdfs
+        | Regime::OwlDirect
+        | Regime::Rif
+        | Regime::D => &[],
+    }
+}
 
 /// The rows `regime` registers.
 fn rows(regime: Regime) -> &'static [Row] {
@@ -3299,13 +6307,46 @@ fn registration(regime: Regime, id: RuleId) -> RuleFixtures {
             },
         };
     }
+    if let Some(&(_, clashes, witness, consistent)) =
+        refuting_rows(regime).iter().find(|row| row.0 == id)
+    {
+        return RuleFixtures::Refuting {
+            clashes,
+            witness,
+            consistent,
+        };
+    }
+    if let Some(&(_, positive, conclusion, near_miss)) =
+        generalized_rows(regime).iter().find(|row| row.0 == id)
+    {
+        return RuleFixtures::Generalized {
+            positive: Case {
+                fixture: positive,
+                conclusion,
+            },
+            near_miss: Case {
+                fixture: near_miss,
+                conclusion,
+            },
+        };
+    }
     RuleFixtures::NotYetImplemented
 }
 
-/// The four regimes the registry ranges over — the ones `materialize` can run.
+/// The four regimes the registry ranges over.
+///
+/// NOT every regime `materialize` can run: `D` is absent. The registry's unit of evidence
+/// is a rule's conclusion in a CLOSURE, and `D` is Simple entailment plus OWL 2 Profiles
+/// Table 8 — a lane in which `dt-type2`, `dt-eq` and `dt-diff` have no consumer at all, so
+/// the downstream triples [`RuleFixtures::Generalized`] and [`RuleFixtures::Refuting`] rely
+/// on (`cls-svf1`, `eq-rep-o`, `eq-diff1`, `prp-fp`) are not in the lane and the evidence
+/// those two states are built from does not exist there. The `D` lane is pinned instead by
+/// the goldens, which hold its closure and its report for every fixture of the corpus: its
+/// rule table is Table 8 entire, and the `OWL-RL` rows below are what evidence each of
+/// those five rules.
 const REGISTRY_REGIMES: [Regime; 4] = [Regime::Simple, Regime::Rdf, Regime::Rdfs, Regime::OwlRl];
 
-/// THE REGISTRY. Every rule of every runnable regime is in exactly one of two states, and
+/// THE REGISTRY. Every rule of every runnable regime is in exactly one of five states, and
 /// the `NotYetImplemented` set is EXACTLY the inventory's gap.
 ///
 /// Two independent statements meet here. The report DERIVES its missing list as
@@ -3316,10 +6357,15 @@ const REGISTRY_REGIMES: [Regime; 4] = [Regime::Simple, Regime::Rdf, Regime::Rdfs
 ///   complement while the registry still calls it `NotYetImplemented`;
 /// * adding fixtures without implementing the rule fails the same way, from the other
 ///   side;
-/// * and a `Registered` rule that stops firing fails on its own positive assertion.
+/// * a `Registered` rule that stops firing fails on its own positive assertion;
+/// * a `Refuting` rule that stops refusing, or starts naming a different rule in its
+///   witness, fails on the run itself;
+/// * and a `Generalized` rule that stops firing fails on the downstream triple, or — the
+///   subtler regression — on the boundary, if its conclusion were ever silently skipped
+///   instead of derived and abandoned.
 ///
-/// That is the mechanism that makes "one test per rule" non-re-interpretable for the 66
-/// OWL 2 RL rules still to come.
+/// That is the mechanism that makes "one test per rule" non-re-interpretable for all 78
+/// OWL 2 RL rules at once.
 #[test]
 fn every_rule_is_registered_or_declared_unimplemented() {
     for regime in REGISTRY_REGIMES {
@@ -3341,8 +6387,7 @@ fn every_rule_is_registered_or_declared_unimplemented() {
                         "{regime:?} / {id}: a near miss must deny the same conclusion the \
                          positive asserts"
                     );
-                    let (s, p, o) = positive.conclusion;
-                    let line = nquads_line(s, p, o);
+                    let line = positive.conclusion.line();
                     assert!(
                         closure_lines(positive.fixture, regime).contains(&line),
                         "{regime:?} / {id}: positive fixture {} did not conclude {line}",
@@ -3371,18 +6416,86 @@ fn every_rule_is_registered_or_declared_unimplemented() {
                          that holds"
                     );
                     let lines = closure_lines(holds.fixture, regime);
-                    let (s, p, o) = holds.conclusion;
                     assert!(
-                        lines.contains(&nquads_line(s, p, o)),
+                        lines.contains(&holds.conclusion.line()),
                         "{regime:?} / {id}: the empty dataset did not conclude {}",
-                        nquads_line(s, p, o)
+                        holds.conclusion.line()
                     );
-                    let (s, p, o) = denied.conclusion;
                     assert!(
-                        !lines.contains(&nquads_line(s, p, o)),
+                        !lines.contains(&denied.conclusion.line()),
                         "{regime:?} / {id}: the rule ranged over a term it must not, \
                          concluding {}",
-                        nquads_line(s, p, o)
+                        denied.conclusion.line()
+                    );
+                }
+                RuleFixtures::Refuting {
+                    clashes,
+                    witness,
+                    consistent,
+                } => {
+                    assert!(registered.insert(id), "{regime:?} registers {id} twice");
+                    assert_ne!(
+                        clashes, consistent,
+                        "{regime:?} / {id}: a control must be a DIFFERENT input"
+                    );
+                    let error = materialize(&build(fixture(clashes)), regime)
+                        .err()
+                        .unwrap_or_else(|| {
+                            panic!("{regime:?} / {id}: {clashes} closed instead of refusing")
+                        });
+                    let EntailError::Inconsistent(found) = error else {
+                        panic!("{regime:?} / {id}: {clashes} failed with {error}, not a clash");
+                    };
+                    assert_eq!(
+                        found.rule(),
+                        witness,
+                        "{regime:?} / {id}: {clashes} was refused by the wrong rule"
+                    );
+                    assert!(
+                        !found.premises().is_empty(),
+                        "{regime:?} / {id}: a witness must name the triples that satisfied it"
+                    );
+                    assert!(
+                        materialize(&build(fixture(consistent)), regime).is_ok(),
+                        "{regime:?} / {id}: the control {consistent} was refused too, so the \
+                         refusal is not attributable to the rule's premise"
+                    );
+                }
+                RuleFixtures::Generalized {
+                    positive,
+                    near_miss,
+                } => {
+                    assert!(registered.insert(id), "{regime:?} registers {id} twice");
+                    assert_ne!(
+                        positive.fixture, near_miss.fixture,
+                        "{regime:?} / {id}: a near miss must be a DIFFERENT input"
+                    );
+                    assert_eq!(
+                        positive.conclusion, near_miss.conclusion,
+                        "{regime:?} / {id}: a near miss must deny the same conclusion the \
+                         positive asserts"
+                    );
+                    let (closed, report) = materialize(&build(fixture(positive.fixture)), regime)
+                        .expect("the positive fixture of a generalized rule closes");
+                    let line = positive.conclusion.line();
+                    assert!(
+                        canonicalize(&closed).nquads.lines().any(|l| l == line),
+                        "{regime:?} / {id}: positive fixture {} did not reach {line}",
+                        positive.fixture
+                    );
+                    assert!(
+                        report
+                            .boundaries()
+                            .iter()
+                            .any(|b| b.construct().as_str() == "generalized-rdf"),
+                        "{regime:?} / {id}: the rule's own conclusions are generalized RDF, \
+                         so the run that fired it must report that boundary — without it, \
+                         the downstream triple is evidence of nothing in particular"
+                    );
+                    assert!(
+                        !closure_lines(near_miss.fixture, regime).contains(&line),
+                        "{regime:?} / {id}: near-miss fixture {} reached {line} anyway",
+                        near_miss.fixture
                     );
                 }
                 RuleFixtures::NotYetImplemented => {
@@ -3422,7 +6535,10 @@ fn the_registry_shape_is_pinned() {
         .iter()
         .map(|&regime| {
             let total = rules(regime).len();
-            let registered = rows(regime).len() + axiomatic_rows(regime).len();
+            let registered = rows(regime).len()
+                + axiomatic_rows(regime).len()
+                + refuting_rows(regime).len()
+                + generalized_rows(regime).len();
             (regime_label(regime), total, registered, total - registered)
         })
         .collect();
@@ -3432,7 +6548,7 @@ fn the_registry_shape_is_pinned() {
             ("Simple", 0, 0, 0),
             ("RDF", 3, 1, 2),
             ("RDFS", 18, 14, 4),
-            ("OWL-RL", 78, 37, 41),
+            ("OWL-RL", 78, 78, 0),
         ],
         "(regime, rules the spec defines, rules with fixtures, rules not yet implemented)"
     );
@@ -3452,14 +6568,19 @@ const fn regime_label(regime: Regime) -> &'static str {
     }
 }
 
-/// Every fixture the registry names is in the corpus, and every corpus fixture is used by
-/// the registry or is one of the awkward/divergence cases that carry their own tests.
+/// Every fixture the registry names is in one of the two corpus tables, and every fixture
+/// of either table is used by the registry or is one of the awkward/divergence cases that
+/// carry their own tests.
 #[test]
 fn the_registry_and_the_corpus_agree() {
-    let corpus: BTreeSet<&str> = CORPUS.iter().map(|fixture| fixture.name).collect();
+    let corpus: BTreeSet<&str> = CORPUS
+        .iter()
+        .chain(CLASH_CORPUS)
+        .map(|fixture| fixture.name)
+        .collect();
     let mut used: BTreeMap<&str, usize> = BTreeMap::new();
     for regime in REGISTRY_REGIMES {
-        for &(_, positive, _, near_miss) in rows(regime) {
+        for &(_, positive, _, near_miss) in rows(regime).iter().chain(generalized_rows(regime)) {
             for name in [positive, near_miss] {
                 assert!(corpus.contains(name), "{name} is not in the corpus");
                 *used.entry(name).or_default() += 1;
@@ -3469,6 +6590,22 @@ fn the_registry_and_the_corpus_agree() {
             assert!(corpus.contains(fixture), "{fixture} is not in the corpus");
             *used.entry(fixture).or_default() += 1;
         }
+        for &(_, clashes, _, consistent) in refuting_rows(regime) {
+            for name in [clashes, consistent] {
+                assert!(corpus.contains(name), "{name} is not in the corpus");
+                *used.entry(name).or_default() += 1;
+            }
+        }
+    }
+    // A `CLASH_CORPUS` fixture exists ONLY to be a registry row's half, so every one of
+    // them must be reached — there is no "carries its own test" escape on that side, and a
+    // clash fixture nothing names would be an input nothing ever runs.
+    for fixture in CLASH_CORPUS {
+        assert!(
+            used.contains_key(fixture.name),
+            "{}: a CLASH_CORPUS fixture the registry never names is never run",
+            fixture.name
+        );
     }
     // The fixtures the registry does NOT reach, named explicitly. Each one exists for a
     // reason the registry cannot express — a boundary, a fixpoint depth, a shared
@@ -3683,9 +6820,13 @@ fn a_would_be_literal_subject_is_abandoned_and_reported() {
 ///
 /// So the contract this test states is neither "the shortcut" nor "nothing". It is:
 ///
-/// * `OWL-RL` — still nothing. OWL 2 Profiles §4.3 omits the RDF and RDFS axiomatic
-///   triples, so that lane has no premise to reach and the closure is the input alone.
-///   The shortcut must not come back.
+/// * `OWL-RL` — still nothing about the hierarchies. OWL 2 Profiles §4.3 omits the RDF and
+///   RDFS axiomatic triples, so that lane has no premise to reach, and beyond the
+///   premise-free block its closure is the input plus `eq-ref`'s reflexive `owl:sameAs`
+///   for each of the input's five terms. That addition is Table 4's and is licensed by
+///   `eq-ref`'s own premise — every term of every triple — rather than by anything about
+///   `rdfs:Class` or `rdf:Property`, which is why it does not blunt the control: the
+///   `rdfs:subClassOf` and `rdfs:subPropertyOf` shortcut must not come back.
 /// * `RDFS` — the reflexive triples are back, each with its premise DERIVED and present
 ///   in the same closure, so the path is checkable rather than asserted.
 /// * And the property that separates "walked the path" from "went back to the shortcut":
@@ -3694,13 +6835,24 @@ fn a_would_be_literal_subject_is_abandoned_and_reported() {
 ///   `y ⊑ y` must therefore still be absent, under BOTH lanes.
 #[test]
 fn the_reflexive_rules_fire_on_their_licensed_premises_and_the_axioms_supply_them() {
-    // OWL-RL asserts no axiomatic triples, so its lane has no path to the premises and
-    // this input still entails nothing AT ALL — nothing, that is, beyond `prp-ap`'s nine
-    // premise-free annotation-property typings, which hold for every input including the
-    // empty graph and are therefore subtracted here rather than listed. That subtraction
-    // is what keeps this a statement about the DATA: `empty`'s OWL-RL closure is asserted
-    // to be exactly those nine in
-    // `the_rdfs_closure_of_every_fixture_contains_the_empty_one`.
+    // OWL-RL asserts no axiomatic triples, so its lane has no path to the premises of
+    // rdfs6 and rdfs10 and this input still entails nothing about the SUB-CLASS and
+    // SUB-PROPERTY hierarchies at all. The premise-free block — `prp-ap`'s nine typings,
+    // `cls-thing`, `cls-nothing1`, `dt-type1`'s thirty-two, and everything `scm-cls` and
+    // `eq-ref` draw from those — holds for every input including the empty graph, so it is
+    // subtracted here rather than listed. That subtraction is what keeps this a statement
+    // about the DATA, and `the_rdfs_closure_of_every_fixture_contains_the_empty_one`
+    // asserts that the subtracted block really is input-independent.
+    //
+    // What remains is the input, plus one thing that is new with Table 4 and belongs here:
+    // `eq-ref` types every term of every triple `owl:sameAs` ITSELF, which is five terms
+    // for these two triples. Those five are conclusions about the DATA and so are not
+    // subtracted, and they are exactly why this residue grew — the reflexive owl:sameAs
+    // assertions are licensed by eq-ref's own premise `T(?s, ?p, ?o)`, which the input
+    // supplies directly, where the reflexive rdfs:subClassOf and rdfs:subPropertyOf
+    // assertions are licensed only through axiomatic triples this lane does not assert.
+    // The two reflexivities are therefore separable, and the point of this fixture — that
+    // OWL-RL says nothing about the hierarchies here — survives verbatim.
     let premise_free = closure_lines("empty", Regime::OwlRl);
     let owl: BTreeSet<String> = closure_lines("divergence_broad_triggers", Regime::OwlRl)
         .difference(&premise_free)
@@ -3711,10 +6863,17 @@ fn the_reflexive_rules_fire_on_their_licensed_premises_and_the_axioms_supply_the
         [
             nquads_line(EX_A, RDFS_SUBCLASSOF, EX_B),
             nquads_line(EX_X, EX_P, EX_Y),
+            nquads_line(EX_A, OWL_SAMEAS, EX_A),
+            nquads_line(EX_B, OWL_SAMEAS, EX_B),
+            nquads_line(EX_P, OWL_SAMEAS, EX_P),
+            nquads_line(EX_X, OWL_SAMEAS, EX_X),
+            nquads_line(EX_Y, OWL_SAMEAS, EX_Y),
         ]
         .into_iter()
         .collect::<BTreeSet<String>>(),
-        "OWL-RL: this input entails nothing under a lane that omits the axiomatic triples"
+        "OWL-RL: this input entails its own two triples, eq-ref's reflexive owl:sameAs for \
+         each of their five terms, and — under a lane that omits the axiomatic triples — \
+         nothing else"
     );
 
     // RDFS reaches the premises through the axioms, and only then draws the conclusions.
@@ -3812,14 +6971,42 @@ fn the_rdfs_closure_of_every_fixture_contains_the_empty_one() {
             "{regime:?} closed the empty graph into something"
         );
     }
-    // `OWL-RL` omits the axiomatic triples by OWL 2 Profiles §4.3's own choice, so its
-    // empty-graph closure is not the 113-line RDFS block. It is not empty either: `prp-ap`
-    // is premise-free, and its nine built-in annotation properties are the whole of what
-    // that lane entails from nothing. They are pinned by NAME rather than by count,
-    // because the list is the specification's (OWL 2 Structural Specification §5.5) and a
-    // tenth appearing would be an invented one.
-    let owl_empty = closure_lines("empty", Regime::OwlRl);
-    let annotation_properties: BTreeSet<String> = [
+    the_owl_rl_closure_of_every_fixture_contains_the_empty_one();
+}
+
+/// The `OWL-RL` half of the same claim, over the block FOUR premise-free rules now put in
+/// every closure.
+///
+/// `OWL-RL` omits the RDF and RDFS axiomatic triples by OWL 2 Profiles §4.3's own choice, so
+/// its empty-graph closure is not the 113-line RDFS block; it is what four premise-free
+/// rules and their consequences make, and it is pinned in four layers.
+///
+/// The two layers whose content is a SPECIFICATION'S LIST are pinned by NAME rather than by
+/// count, because a name is checkable against the document and a count is not — a tenth
+/// annotation property or a thirty-third datatype would be an invented one:
+///
+/// * `prp-ap` types the nine built-in annotation properties OWL 2 Structural Specification
+///   §5.5 fixes;
+/// * `dt-type1` types the thirty-two datatypes OWL 2 Profiles §4.2.1 lists as supported in
+///   OWL 2 RL. `owl:real` and `owl:rational` are in the OWL 2 datatype map and are
+///   deliberately NOT in that list, so both are named here as absences.
+///
+/// The two layers that are DERIVED are pinned as derivations rather than as literals, so
+/// they cannot be updated by transcription when the layer beneath them moves:
+///
+/// * `cls-thing` and `cls-nothing1` type `owl:Thing` and `owl:Nothing` an `owl:Class`, and
+///   `scm-cls` says exactly four things about each `owl:Class` — five distinct triples over
+///   those two, because three of the eight coincide;
+/// * `eq-ref` types every term of every triple `owl:sameAs` itself, so the reflexive block
+///   is a FUNCTION of the rest of the closure: one assertion per distinct term, and the only
+///   term the reflexive assertions themselves introduce is `owl:sameAs`.
+///
+/// The whole is then asserted to be a LOWER BOUND on every other `OWL-RL` closure in the
+/// corpus, which is the fact each golden's accounting leans on when it reports only the
+/// lines beyond it.
+fn the_owl_rl_closure_of_every_fixture_contains_the_empty_one() {
+    /// OWL 2 Structural Specification §5.5 — the built-in annotation properties.
+    const BUILT_IN_ANNOTATION_PROPERTIES: [&str; 9] = [
         "http://www.w3.org/2000/01/rdf-schema#label",
         "http://www.w3.org/2000/01/rdf-schema#comment",
         "http://www.w3.org/2000/01/rdf-schema#seeAlso",
@@ -3829,24 +7016,142 @@ fn the_rdfs_closure_of_every_fixture_contains_the_empty_one() {
         "http://www.w3.org/2002/07/owl#priorVersion",
         "http://www.w3.org/2002/07/owl#backwardCompatibleWith",
         "http://www.w3.org/2002/07/owl#incompatibleWith",
+    ];
+    /// OWL 2 Profiles §4.2.1 — the datatypes supported in OWL 2 RL, transcribed
+    /// independently of the crate's own list so the two are a cross-check rather than one
+    /// list read twice.
+    const SUPPORTED_DATATYPES: [&str; 32] = [
+        "http://www.w3.org/1999/02/22-rdf-syntax-ns#PlainLiteral",
+        "http://www.w3.org/1999/02/22-rdf-syntax-ns#XMLLiteral",
+        "http://www.w3.org/2000/01/rdf-schema#Literal",
+        "http://www.w3.org/2001/XMLSchema#decimal",
+        "http://www.w3.org/2001/XMLSchema#integer",
+        "http://www.w3.org/2001/XMLSchema#nonNegativeInteger",
+        "http://www.w3.org/2001/XMLSchema#nonPositiveInteger",
+        "http://www.w3.org/2001/XMLSchema#positiveInteger",
+        "http://www.w3.org/2001/XMLSchema#negativeInteger",
+        "http://www.w3.org/2001/XMLSchema#long",
+        "http://www.w3.org/2001/XMLSchema#int",
+        "http://www.w3.org/2001/XMLSchema#short",
+        "http://www.w3.org/2001/XMLSchema#byte",
+        "http://www.w3.org/2001/XMLSchema#unsignedLong",
+        "http://www.w3.org/2001/XMLSchema#unsignedInt",
+        "http://www.w3.org/2001/XMLSchema#unsignedShort",
+        "http://www.w3.org/2001/XMLSchema#unsignedByte",
+        "http://www.w3.org/2001/XMLSchema#float",
+        "http://www.w3.org/2001/XMLSchema#double",
+        "http://www.w3.org/2001/XMLSchema#string",
+        "http://www.w3.org/2001/XMLSchema#normalizedString",
+        "http://www.w3.org/2001/XMLSchema#token",
+        "http://www.w3.org/2001/XMLSchema#language",
+        "http://www.w3.org/2001/XMLSchema#Name",
+        "http://www.w3.org/2001/XMLSchema#NCName",
+        "http://www.w3.org/2001/XMLSchema#NMTOKEN",
+        "http://www.w3.org/2001/XMLSchema#boolean",
+        "http://www.w3.org/2001/XMLSchema#hexBinary",
+        "http://www.w3.org/2001/XMLSchema#base64Binary",
+        "http://www.w3.org/2001/XMLSchema#anyURI",
+        "http://www.w3.org/2001/XMLSchema#dateTime",
+        "http://www.w3.org/2001/XMLSchema#dateTimeStamp",
+    ];
+
+    let owl_empty = closure_lines("empty", Regime::OwlRl);
+
+    // LAYER 1 and 2 — the two specification lists, plus the two `owl:Class` typings, are
+    // the whole of the closure's `rdf:type` lines. Equality, so nothing is typed that these
+    // four rules do not type.
+    let mut typings: BTreeSet<String> = BUILT_IN_ANNOTATION_PROPERTIES
+        .into_iter()
+        .map(|property| nquads_line(property, RDF_TYPE, OWL_ANNOTATIONPROPERTY))
+        .collect();
+    typings.extend(
+        SUPPORTED_DATATYPES
+            .into_iter()
+            .map(|datatype| nquads_line(datatype, RDF_TYPE, RDFS_DATATYPE)),
+    );
+    typings.insert(nquads_line(OWL_THING, RDF_TYPE, OWL_CLASS));
+    typings.insert(nquads_line(OWL_NOTHING, RDF_TYPE, OWL_CLASS));
+    let found_typings: BTreeSet<String> = owl_empty
+        .iter()
+        .filter(|line| line.contains(&format!("> <{RDF_TYPE}> <")))
+        .cloned()
+        .collect();
+    assert_eq!(
+        found_typings, typings,
+        "OWL-RL's empty-graph typings are exactly prp-ap's nine, dt-type1's thirty-two, and \
+         cls-thing's and cls-nothing1's one each"
+    );
+    // The two datatypes OWL 2 RL deliberately does NOT support, named as absences.
+    for unsupported in [
+        "http://www.w3.org/2002/07/owl#real",
+        "http://www.w3.org/2002/07/owl#rational",
+    ] {
+        assert!(
+            !owl_empty.contains(&nquads_line(unsupported, RDF_TYPE, RDFS_DATATYPE)),
+            "dt-type1 typed {unsupported}, which OWL 2 Profiles §4.2.1 excludes"
+        );
+    }
+
+    // LAYER 3 — scm-cls over the two classes cls-thing and cls-nothing1 assert. Four
+    // conclusions each; `owl:Thing rdfs:subClassOf owl:Thing` and
+    // `owl:Nothing rdfs:subClassOf owl:Nothing` are each drawn twice and
+    // `owl:Nothing rdfs:subClassOf owl:Thing` three times, so five triples remain.
+    let schema: BTreeSet<String> = [
+        nquads_line(OWL_THING, RDFS_SUBCLASSOF, OWL_THING),
+        nquads_line(OWL_THING, OWL_EQUIVALENTCLASS, OWL_THING),
+        nquads_line(OWL_NOTHING, RDFS_SUBCLASSOF, OWL_NOTHING),
+        nquads_line(OWL_NOTHING, RDFS_SUBCLASSOF, OWL_THING),
+        nquads_line(OWL_NOTHING, OWL_EQUIVALENTCLASS, OWL_NOTHING),
     ]
     .into_iter()
-    .map(|property| nquads_line(property, RDF_TYPE, OWL_ANNOTATIONPROPERTY))
     .collect();
+
+    // LAYER 4 — eq-ref, DERIVED from the three layers below it rather than transcribed.
+    let named: BTreeSet<String> = typings
+        .iter()
+        .chain(&schema)
+        .flat_map(|line| iri_terms(line))
+        .chain(std::iter::once(OWL_SAMEAS.to_owned()))
+        .collect();
+    let reflexive: BTreeSet<String> = named
+        .iter()
+        .map(|term| nquads_line(term, OWL_SAMEAS, term))
+        .collect();
+
+    let expected: BTreeSet<String> = typings
+        .iter()
+        .chain(&schema)
+        .chain(&reflexive)
+        .cloned()
+        .collect();
     assert_eq!(
-        owl_empty, annotation_properties,
-        "OWL-RL's empty-graph closure is exactly prp-ap's nine typings"
+        owl_empty, expected,
+        "OWL-RL's empty-graph closure is exactly the four premise-free rules, what scm-cls \
+         draws from two of them, and eq-ref over all of it"
     );
+
     // …and, as with the RDFS block, it is a LOWER BOUND on every other OWL-RL closure.
     for fixture in CORPUS {
         let lines = closure_lines(fixture.name, Regime::OwlRl);
         let absent: Vec<&String> = owl_empty.difference(&lines).collect();
         assert!(
             absent.is_empty(),
-            "{}: prp-ap is not input-independent — {absent:?} is missing",
+            "{}: the premise-free block is not input-independent — {absent:?} is missing",
             fixture.name
         );
     }
+}
+
+/// The three IRIs of a canonical N-Quads line over three IRIs, without their brackets.
+///
+/// Only ever applied to the `OWL-RL` empty-graph closure, every line of which is a
+/// default-graph triple over three IRIs — a shape the assertion above checks by
+/// construction, since it builds the same lines from the specification's own names.
+fn iri_terms(line: &str) -> Vec<String> {
+    line.trim_end_matches(" .")
+        .split_whitespace()
+        .map(|term| term.trim_matches(['<', '>']).to_owned())
+        .collect()
 }
 
 /// The corpus reaches every rule the chase fires, by ATTRIBUTION rather than by outcome.
@@ -3858,13 +7163,72 @@ fn the_rdfs_closure_of_every_fixture_contains_the_empty_one() {
 /// actually derived. The union of `rules_fired` over the whole corpus closes that gap.
 ///
 /// The expected set is `implemented(regime)`, plus — for `OWL-RL` only — the three
-/// RDFS-shaped rules that lane fires under no OWL 2 RL name. Equality, not containment: a
-/// rule credited that the inventory does not list is as much a defect as one the corpus
-/// never reaches.
+/// RDFS-shaped rules that lane fires under no OWL 2 RL name, MINUS the twenty rules that
+/// can never appear in `rules_fired` at all. Equality, not containment: a rule credited
+/// that the inventory does not list is as much a defect as one the corpus never reaches.
+///
+/// # Why twenty rules are subtracted, and why that is not a hole
+///
+/// `rules_fired` counts triples a rule was credited with ADDING to the closure, so a rule
+/// that adds no triple can never be in it. Two families cannot, for two different reasons,
+/// and neither is a gap in the corpus's coverage — each is evidenced by the registry state
+/// that fits what the rule actually does:
+///
+/// * the eighteen [`RuleFixtures::Refuting`] rules conclude `false` (or, for `dt-diff`,
+///   conclude only into `eq-diff1`'s premise). A body match REFUSES the run, so there is no
+///   report to credit anything in — `materialize` returned an error instead of a report —
+///   and the evidence is the refusal plus its named witness;
+/// * the two [`RuleFixtures::Generalized`] rules, `dt-type2` and `dt-eq`, conclude only
+///   triples with a LITERAL SUBJECT. Every one of those is derived in the evaluator's own
+///   term space and abandoned at the materialization boundary, and a conclusion the RDF 1.2
+///   IR cannot hold is credited to nobody by construction — it is reported as the
+///   generalized-rdf boundary instead, which is what those two rows assert.
+///
+/// The subtracted set is asserted to be EXACTLY the union of those two registry tables, so
+/// the exemption list here and the registry cannot drift: adding a row to either table
+/// without a reason, or removing one, moves both sides of that equality.
 #[test]
 fn every_rule_the_chase_fires_is_credited_somewhere_in_the_corpus() {
     /// The rules the `OWL-RL` lane fires that OWL 2 Profiles gives no rule id.
     const OWL_RL_RDFS_SHAPED_EXTRAS: [RuleId; 3] = [RuleId::Rdfs6, RuleId::Rdfs8, RuleId::Rdfs10];
+    /// The rules that produce no creditable triple, BY NAME. Seventeen conclude `false`;
+    /// `dt-diff` concludes only `owl:differentFrom` over literal subjects; `dt-type2` and
+    /// `dt-eq` conclude only over literal subjects too.
+    const UNCREDITABLE: [RuleId; 20] = [
+        RuleId::EqDiff1,
+        RuleId::EqDiff2,
+        RuleId::EqDiff3,
+        RuleId::PrpIrp,
+        RuleId::PrpAsyp,
+        RuleId::PrpPdw,
+        RuleId::PrpAdp,
+        RuleId::PrpNpa1,
+        RuleId::PrpNpa2,
+        RuleId::ClsNothing2,
+        RuleId::ClsCom,
+        RuleId::ClsMaxc1,
+        RuleId::ClsMaxqc1,
+        RuleId::ClsMaxqc2,
+        RuleId::CaxDw,
+        RuleId::CaxAdc,
+        RuleId::DtType2,
+        RuleId::DtEq,
+        RuleId::DtDiff,
+        RuleId::DtNotType,
+    ];
+
+    // The subtraction and the registry are the same statement, made twice.
+    let by_registry: BTreeSet<RuleId> = OWL_RL_REFUTING_ROWS
+        .iter()
+        .map(|row| row.0)
+        .chain(OWL_RL_GENERALIZED_ROWS.iter().map(|row| row.0))
+        .collect();
+    assert_eq!(
+        by_registry,
+        UNCREDITABLE.into_iter().collect::<BTreeSet<RuleId>>(),
+        "the rules exempted from attribution must be exactly the Refuting and Generalized \
+         registry rows, so an exemption cannot outlive the evidence that replaced it"
+    );
 
     for (regime, label) in ORACLE_REGIMES {
         let mut credited: BTreeSet<RuleId> = BTreeSet::new();
@@ -3876,6 +7240,9 @@ fn every_rule_the_chase_fires_is_credited_somewhere_in_the_corpus() {
         let mut expected: BTreeSet<RuleId> = implemented(regime).iter().copied().collect();
         if matches!(regime, Regime::OwlRl) {
             expected.extend(OWL_RL_RDFS_SHAPED_EXTRAS);
+        }
+        for rule in UNCREDITABLE {
+            expected.remove(&rule);
         }
         assert_eq!(
             credited, expected,

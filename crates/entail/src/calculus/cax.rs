@@ -19,18 +19,18 @@
 //! conclusion's attribution onto `cax-sco` and make an `OWL-RL` report say a rule fired
 //! that the caller's ontology never used.
 //!
-//! # The two rules stated here that the evaluator refuses
+//! # The two rules stated here that conclude `false`
 //!
 //! `cax-dw` and `cax-adc` conclude `false`: a body match is an INCONSISTENCY WITNESS, not a
 //! triple. Both are stated with the specification's own bodies and declared with
-//! `refuses:`, so they are excluded from the evaluated program and absent from
-//! [`crate::implemented`] — see [`super::declare_chase_rules`] for why a declared gap beats
-//! a rule bent into a shape the evaluator will accept.
+//! `concludes: Inconsistency,`, and [`super::constraint_clause`] lowers each into the
+//! clause the evaluator runs — see the [calculus docs](super) for why the lowering
+//! fabricates nothing.
 
-use purrdf_datalog::clause::{ClauseTerm, DlClause};
+use purrdf_datalog::clause::DlClause;
 
-use super::{atom, internal, iri, negated_internal, var};
-use crate::lists::{INDEX_EQUAL_RELATION, LIST_RELATION};
+use super::{atom, internal, internal_graph, iri, var};
+use crate::lists::{INDEX_DISTINCT_RELATION, LIST_RELATION};
 use crate::vocab::{
     OWL_ALLDISJOINTCLASSES, OWL_DISJOINTWITH, OWL_EQUIVALENTCLASS, OWL_MEMBERS, RDF_TYPE,
 };
@@ -70,7 +70,7 @@ pub(super) fn disjoint_with() -> Vec<DlClause> {
 /// `?c1 … ?cn`, `?z rdf:type ?ci`, `?z rdf:type ?cj` with `i ≠ j` ⇒ `false`.
 ///
 /// The two members come from [`crate::lists`]'s `LIST(head, index, member)` and `i ≠ j` is
-/// `¬INDEX_EQUAL(?i, ?j)` over the reflexive index relation the pre-pass materializes.
+/// `INDEX_DISTINCT(?i, ?j)` over the index pairs the pre-pass materializes.
 /// Dropping that condition would let `i = j` match and make a single class assertion an
 /// inconsistency, which is unsound — so it is expressed even though the `false` head means
 /// no evaluator runs the clause today.
@@ -80,11 +80,11 @@ pub(super) fn all_disjoint_classes() -> Vec<DlClause> {
         atom(var("?x"), OWL_MEMBERS, var("?y")),
         internal(LIST_RELATION, var("?y"), var("?ci"), var("?i")),
         internal(LIST_RELATION, var("?y"), var("?cj"), var("?j")),
-        negated_internal(
-            INDEX_EQUAL_RELATION,
+        internal(
+            INDEX_DISTINCT_RELATION,
             var("?i"),
             var("?j"),
-            ClauseTerm::DefaultGraph,
+            internal_graph(),
         ),
         atom(var("?z"), RDF_TYPE, var("?ci")),
         atom(var("?z"), RDF_TYPE, var("?cj")),
@@ -117,7 +117,7 @@ macro_rules! cax_rules {
                 id: CaxDw,
                 lanes: [OwlRl],
                 clauses: cax::disjoint_with,
-                refuses: Inconsistency,
+                concludes: Inconsistency,
             },
             /// `cax-adc` — the same, over an `owl:AllDisjointClasses` list. DECLARED, not
             /// evaluated: the head is `false`.
@@ -125,7 +125,7 @@ macro_rules! cax_rules {
                 id: CaxAdc,
                 lanes: [OwlRl],
                 clauses: cax::all_disjoint_classes,
-                refuses: Inconsistency,
+                concludes: Inconsistency,
             },
         }
     };

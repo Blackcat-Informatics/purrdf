@@ -498,7 +498,9 @@ pub fn decide(case: &Owl2Case) -> Answer {
     };
     match purrdf_entail::materialize_dl(&dataset, &[]) {
         Ok(_) => Answer::Decided(Verdict::Consistent),
-        Err(EntailError::Inconsistent) => Answer::Decided(Verdict::Inconsistent),
+        Err(EntailError::Inconsistent(_) | EntailError::Unsatisfiable) => {
+            Answer::Decided(Verdict::Inconsistent)
+        }
         Err(e) => Answer::Withheld(e.to_string()),
     }
 }

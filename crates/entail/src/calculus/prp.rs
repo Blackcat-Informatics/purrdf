@@ -15,17 +15,16 @@
 //! [`super::rdfs`], where the RDFS numbering orders it; [`super::ChaseRule::rule_id`]
 //! answers with the OWL name under the `OWL-RL` lane.
 //!
-//! # The six rules stated here that the evaluator refuses
+//! # The six rules stated here that conclude `false`
 //!
 //! `prp-irp`, `prp-asyp`, `prp-pdw`, `prp-adp`, `prp-npa1` and `prp-npa2` all conclude
-//! `false`: a body match is an INCONSISTENCY WITNESS, not a triple. The IR represents that
-//! head form ([`HeadForm::Inconsistency`](purrdf_datalog::clause::HeadForm::Inconsistency))
-//! and this family states all six of them, with the specification's own bodies — but a
-//! semi-naive least-fixpoint evaluator computes the least model of a set of DEFINITE
-//! clauses, and `body → false` is not one. They are declared with `refuses:`, excluded from
-//! the evaluated program, and absent from [`crate::implemented`]. Turning any of them into
-//! an atomic-headed rule to make the inventory larger would put a triple in the closure
-//! that the specification does not license, which is strictly worse than a declared gap.
+//! `false`: a body match is an INCONSISTENCY WITNESS, not a triple. Each is declared with
+//! `concludes: Inconsistency,` and the specification's own body, and
+//! [`super::constraint_clause`] lowers it — mechanically — into a clause whose head is one
+//! atom of the internal clash relation, which the evaluator runs like any other. A match
+//! becomes [`EntailError::Inconsistent`](crate::EntailError) carrying the matched premises
+//! as the witness. See the [calculus docs](super) for why that lowering puts nothing in
+//! the closure.
 //!
 //! # The two rules that walk a list
 //!
@@ -43,10 +42,10 @@
 //! forbids both — a property chain has at least two properties and a key at least one — so
 //! the encoding is complete for every ontology the specification admits.
 
-use purrdf_datalog::clause::{ClauseTerm, DlClause};
+use purrdf_datalog::clause::DlClause;
 
-use super::{atom, internal, iri, negated_internal, quad, var};
-use crate::lists::{AGREE_RELATION, CHAIN_RELATION, INDEX_EQUAL_RELATION, LIST_RELATION};
+use super::{atom, internal, internal_graph, iri, quad, var};
+use crate::lists::{AGREE_RELATION, CHAIN_RELATION, INDEX_DISTINCT_RELATION, LIST_RELATION};
 use crate::vocab::{
     OWL_ALLDISJOINTPROPERTIES, OWL_ANNOTATIONPROPERTY, OWL_ASSERTIONPROPERTY,
     OWL_ASYMMETRICPROPERTY, OWL_BACKWARDCOMPATIBLEWITH, OWL_DEPRECATED, OWL_EQUIVALENTPROPERTY,
@@ -241,22 +240,22 @@ pub(super) fn property_disjoint() -> Vec<DlClause> {
 /// `?p1 … ?pn`, `T(?u, ?pi, ?v)`, `T(?u, ?pj, ?v)` with `i ≠ j` ⇒ `false`.
 ///
 /// The two members are read from [`crate::lists`]'s `LIST(head, index, member)`, and the
-/// `i ≠ j` side condition is `¬INDEX_EQUAL(?i, ?j)` — negation over the reflexive index
-/// relation the pre-pass materializes. Stating the rule WITHOUT that condition would let
+/// `i ≠ j` side condition is `INDEX_DISTINCT(?i, ?j)` — the inequality relation the
+/// pre-pass materializes. Stating the rule WITHOUT that condition would let
 /// `i = j` match and make a single property assertion an inconsistency, which is unsound;
 /// the condition is therefore expressed rather than dropped, even though the `false` head
-/// means no evaluator runs the clause today.
+/// is lowered rather than refused.
 pub(super) fn all_disjoint_properties() -> Vec<DlClause> {
     vec![DlClause::inconsistency(vec![
         atom(var("?x"), RDF_TYPE, iri(OWL_ALLDISJOINTPROPERTIES)),
         atom(var("?x"), OWL_MEMBERS, var("?y")),
         internal(LIST_RELATION, var("?y"), var("?pi"), var("?i")),
         internal(LIST_RELATION, var("?y"), var("?pj"), var("?j")),
-        negated_internal(
-            INDEX_EQUAL_RELATION,
+        internal(
+            INDEX_DISTINCT_RELATION,
             var("?i"),
             var("?j"),
-            ClauseTerm::DefaultGraph,
+            internal_graph(),
         ),
         quad(var("?u"), var("?pi"), var("?v")),
         quad(var("?u"), var("?pj"), var("?v")),
@@ -384,7 +383,7 @@ macro_rules! prp_rules {
                 id: PrpIrp,
                 lanes: [OwlRl],
                 clauses: prp::irreflexive,
-                refuses: Inconsistency,
+                concludes: Inconsistency,
             },
             /// `prp-symp` — a symmetric property mirrors its triples. `OWL-RL` only.
             Symmetric {
@@ -398,7 +397,7 @@ macro_rules! prp_rules {
                 id: PrpAsyp,
                 lanes: [OwlRl],
                 clauses: prp::asymmetric,
-                refuses: Inconsistency,
+                concludes: Inconsistency,
             },
             /// `prp-trp` — a transitive property composes its triples. `OWL-RL` only.
             Transitive {
@@ -433,7 +432,7 @@ macro_rules! prp_rules {
                 id: PrpPdw,
                 lanes: [OwlRl],
                 clauses: prp::property_disjoint,
-                refuses: Inconsistency,
+                concludes: Inconsistency,
             },
             /// `prp-adp` — the same, over an `owl:AllDisjointProperties` list. DECLARED,
             /// not evaluated: the head is `false`.
@@ -441,7 +440,7 @@ macro_rules! prp_rules {
                 id: PrpAdp,
                 lanes: [OwlRl],
                 clauses: prp::all_disjoint_properties,
-                refuses: Inconsistency,
+                concludes: Inconsistency,
             },
             /// `prp-inv1` — an `owl:inverseOf` assertion, read left to right. `OWL-RL`
             /// only.
@@ -470,7 +469,7 @@ macro_rules! prp_rules {
                 id: PrpNpa1,
                 lanes: [OwlRl],
                 clauses: prp::negative_object_assertion,
-                refuses: Inconsistency,
+                concludes: Inconsistency,
             },
             /// `prp-npa2` — the same for a negative DATA-property assertion. DECLARED,
             /// not evaluated: the head is `false`.
@@ -478,7 +477,7 @@ macro_rules! prp_rules {
                 id: PrpNpa2,
                 lanes: [OwlRl],
                 clauses: prp::negative_data_assertion,
-                refuses: Inconsistency,
+                concludes: Inconsistency,
             },
         }
     };

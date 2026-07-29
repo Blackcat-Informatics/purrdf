@@ -16,7 +16,12 @@
 //! [`calculus_program`] renders it as DL clauses, and [`materialize`] evaluates exactly
 //! those clauses through `purrdf-datalog`'s native semi-naive evaluator (no Nemo, no
 //! `tokio`, no external reasoner), so this crate stays `wasm32`-clean and MIT/Apache.
-//! `Simple` is the identity closure; `RDF`, `RDFS` and `OWL-RL` run the declared program.
+//! `Simple` is the identity closure; `RDF`, `RDFS`, `OWL-RL` and `D` run the declared
+//! program. The `OWL-RL` lane states the WHOLE of OWL 2 Profiles §4.3 Tables 4–9 — all 78
+//! rules — and the seventeen of them whose conclusion is `false` are DECIDED rather than
+//! drawn: a body match is [`EntailError::Inconsistent`] carrying an
+//! [`InconsistencyWitness`], because an inconsistent knowledge base entails every triple
+//! and a closure over it would answer a question nobody asked.
 //!
 //! The open-world `OWL-Direct` (Description-Logic tableau) and `RIF` (rule engine)
 //! regimes need inputs the plain [`materialize`] façade does not have (the query's
@@ -24,8 +29,11 @@
 //!
 //! It mints **no** vocabulary IRIs: every constant in `vocab` is a standard
 //! `rdf:`/`rdfs:`/`owl:` IRI from the entailment spec itself. `D` (datatype)
-//! entailment remains an [`EntailError::Unsupported`] boundary, which the caller
-//! records as a typed, spec-inherent gap.
+//! entailment IS materializable: this crate realizes it as Simple entailment plus the
+//! five `dt-*` rules of OWL 2 Profiles §4.3 Table 8, which is the part of D-entailment a
+//! forward chase can produce, and reports the value-space boundary the rest of it lives
+//! behind. Only `OWL-Direct` and `RIF` remain [`EntailError::Unsupported`] through this
+//! façade, and both because they need an input it does not have.
 //!
 //! What each regime *is* and what this crate currently *does* are both data, not
 //! prose: [`rules`] returns the specification rule table a [`Regime`] is defined by
@@ -50,6 +58,7 @@ use purrdf_core::RdfDataset;
 
 pub(crate) mod axioms;
 pub(crate) mod calculus;
+pub(crate) mod datatypes;
 pub(crate) mod engine;
 pub(crate) mod interner;
 pub(crate) mod lists;
@@ -87,7 +96,12 @@ pub enum Regime {
     OwlDirect,
     /// `entailment/RIF` — RIF-Core rule entailment; needs a parsed rule set.
     Rif,
-    /// `entailment/D` — datatype entailment; not materialize-and-match.
+    /// `entailment/D` — datatype entailment.
+    ///
+    /// Realized as Simple entailment plus the five `dt-*` rules of OWL 2 Profiles §4.3
+    /// Table 8, which is the fixed rule table this crate can enumerate for it: the rest of
+    /// D-entailment quantifies over infinite value spaces and is reported as the
+    /// [`Construct::DatatypeValueSpace`] boundary rather than claimed.
     D,
 }
 
@@ -145,7 +159,30 @@ pub enum EntailError {
     MalformedList(String),
     /// The knowledge base is inconsistent: every query would be entailed, so no
     /// meaningful answer set exists. A hard failure rather than a silent default.
-    Inconsistent,
+    ///
+    /// # The witness is not optional
+    ///
+    /// Seventeen OWL 2 RL rules conclude `false`, and turning a body match on one of them
+    /// into an error is a real behaviour change for a caller: ordinary dirty data — ONE
+    /// `owl:disjointWith` violation, ONE ill-typed literal — stops being a closure that
+    /// returns answers and becomes a refusal. That is correct, because an inconsistent
+    /// knowledge base entails every triple and a closure over it would be an answer to a
+    /// question nobody asked. It is also unusable without evidence, so the evidence is
+    /// carried rather than offered: [`InconsistencyWitness`] names the rule whose premises
+    /// were all satisfied, the asserted triples that satisfied them in that rule's own
+    /// premise order, and the graph they were read from.
+    ///
+    /// Boxed because it is the one variant with a non-trivial payload and an error type is
+    /// returned by value from every entailment entry point.
+    Inconsistent(Box<InconsistencyWitness>),
+    /// The `OWL-Direct` knowledge base is unsatisfiable, as the tableau found it.
+    ///
+    /// Distinct from [`Self::Inconsistent`] because the evidence is of a different kind: a
+    /// tableau closes every branch of a search, it does not fire a named rule on named
+    /// premises, so there is no [`RuleId`] to carry and no triple set that is THE witness.
+    /// Reporting it under the chase's variant would mean inventing a rule id, which this
+    /// crate does not do.
+    Unsatisfiable,
 }
 
 impl std::fmt::Display for EntailError {
@@ -156,7 +193,20 @@ impl std::fmt::Display for EntailError {
             Self::Parse(msg) => write!(f, "entailment parse error: {msg}"),
             Self::Evaluate(error) => write!(f, "entailment evaluation error: {error}"),
             Self::MalformedList(msg) => write!(f, "entailment collection error: {msg}"),
-            Self::Inconsistent => write!(f, "knowledge base is inconsistent"),
+            Self::Inconsistent(witness) => write!(
+                f,
+                "knowledge base is inconsistent: {} was satisfied by {} asserted {}",
+                witness.rule(),
+                witness.premises().len(),
+                if witness.premises().len() == 1 {
+                    "triple"
+                } else {
+                    "triples"
+                }
+            ),
+            Self::Unsatisfiable => {
+                write!(f, "the OWL-Direct knowledge base is unsatisfiable")
+            }
         }
     }
 }
@@ -183,8 +233,9 @@ impl std::error::Error for EntailError {}
 ///
 /// # Errors
 ///
-/// [`EntailError::Unsupported`] for `OWL-Direct`/`RIF`/`D` (regimes that need extra
-/// inputs or are a spec-inherent boundary); [`EntailError::Evaluate`] if the run passes
+/// [`EntailError::Unsupported`] for `OWL-Direct`/`RIF` (the two regimes that need an
+/// input this façade does not have); [`EntailError::Inconsistent`] if a rule that
+/// concludes `false` matched, carrying the witness; [`EntailError::Evaluate`] if the run passes
 /// one of `purrdf-datalog`'s three fixed evaluation ceilings; [`EntailError::Build`] if
 /// the derived dataset cannot be frozen. An error is the absence of a run, so it carries
 /// no report: [`EntailError::Unsupported`] already names the regime it refused, an
@@ -224,8 +275,8 @@ pub fn materialize(
 ) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
     let (closure, stats) = match regime {
         Regime::Simple => (engine::copy_of(ds)?, report::RunStats::none()),
-        Regime::Rdf | Regime::Rdfs | Regime::OwlRl => engine::close(ds, regime)?,
-        Regime::OwlDirect | Regime::Rif | Regime::D => {
+        Regime::Rdf | Regime::Rdfs | Regime::OwlRl | Regime::D => engine::close(ds, regime)?,
+        Regime::OwlDirect | Regime::Rif => {
             return Err(EntailError::Unsupported(regime));
         }
     };
@@ -319,8 +370,10 @@ mod tests {
         assert!(!has(&rdfs, X, p, z), "no transitive under RDFS regime");
     }
 
+    /// The two regimes this façade cannot serve are the two that need an input it does not
+    /// have — and `D`, which used to be a third, is now a lane like any other.
     #[test]
-    fn owl_direct_rif_and_d_are_unsupported_via_facade() {
+    fn owl_direct_and_rif_are_unsupported_via_facade_but_d_is_not() {
         let ds = dataset(&[(X, RDF_TYPE, A)]);
         assert!(matches!(
             materialize(&ds, Regime::OwlDirect),
@@ -330,10 +383,23 @@ mod tests {
             materialize(&ds, Regime::Rif),
             Err(EntailError::Unsupported(Regime::Rif))
         ));
-        assert!(matches!(
-            materialize(&ds, Regime::D),
-            Err(EntailError::Unsupported(Regime::D))
-        ));
+        // `D` is Simple entailment plus OWL 2 Profiles §4.3 Table 8, and it runs.
+        let (closed, report) = materialize(&ds, Regime::D).expect("d is materializable");
+        assert_eq!(report.regime(), Regime::D);
+        assert_eq!(rules(Regime::D).len(), 5);
+        assert_eq!(implemented(Regime::D).len(), 5);
+        // `dt-type1` is premise-free, so every supported datatype is typed in every `D`
+        // closure — including the empty graph's.
+        assert!(
+            has(
+                &closed,
+                "http://www.w3.org/2001/XMLSchema#integer",
+                RDF_TYPE,
+                "http://www.w3.org/2000/01/rdf-schema#Datatype"
+            ),
+            "dt-type1 must type every datatype supported in OWL 2 RL"
+        );
+        assert!(!report.overclaims());
     }
 
     #[test]
@@ -513,40 +579,67 @@ mod tests {
             .collect();
         assert_eq!(
             gaps,
-            vec![("Simple", 0), ("RDF", 2), ("RDFS", 4), ("OWL-RL", 41)],
+            vec![("Simple", 0), ("RDF", 2), ("RDFS", 4), ("OWL-RL", 0)],
             "(regime, rules the regime defines that the chase does not fire)"
         );
 
-        // Only `Simple` is exact today, and it is exact because it has no rule table —
-        // not because the chase is complete for anything.
+        // `Simple` is exact because it has no rule table. `OWL-RL` is exact because the
+        // chase fires all seventy-eight rules of Tables 4-9 — and it is exact WITHIN
+        // BOUNDARIES, not flatly exact, because three of those rules quantify over all
+        // literals and one concludes about literal subjects. The two are different claims
+        // and the report makes both of them.
         let (_, simple) = materialize(&ds, Regime::Simple).expect("simple");
-        assert!(simple.completeness().is_exact());
+        assert_eq!(simple.completeness(), &Completeness::Exact);
         assert!(rules(Regime::Simple).is_empty());
+        let (_, owl) = materialize(&ds, Regime::OwlRl).expect("owl-rl");
+        assert_eq!(
+            owl.completeness(),
+            &Completeness::ExactWithinBoundaries,
+            "a complete rule table beside a boundary is not a contradiction, and it is \
+             not `Exact` either"
+        );
+        assert!(owl.completeness().is_exact());
+        assert!(!owl.boundaries().is_empty());
     }
 
-    /// The named missing rules are the right ones, not merely the right count.
+    /// The named missing rules are the right ones, not merely the right count — and for
+    /// `OWL-RL` there are none left to name.
     #[test]
     fn the_missing_rules_are_named() {
         let ds = schema_fixture();
         let (_, report) = materialize(&ds, Regime::OwlRl).expect("owl-rl");
-        let missing = report.completeness().missing();
-        // Fired, so absent from the gap.
-        for present in [RuleId::CaxSco, RuleId::PrpTrp, RuleId::ScmSco] {
-            assert!(!missing.contains(&present), "{present} is implemented");
-        }
-        // Not fired, so present in the gap — one from each of Tables 4, 6 and 8, plus
-        // two of the rules that are DECLARED and not evaluated because they conclude
-        // `false`. The last two are the interesting case: the calculus states them, so
-        // "missing" here means "not fired", which is exactly what the report claims.
-        for absent in [
+        assert!(
+            report.completeness().missing().is_empty(),
+            "OWL 2 RL is complete: {:?}",
+            report.completeness().missing()
+        );
+        // One rule from each of the six tables, named, so "complete" is checked against
+        // the tables rather than against a count.
+        for present in [
             RuleId::EqRef,
+            RuleId::PrpTrp,
             RuleId::ClsSvf1,
+            RuleId::CaxSco,
             RuleId::DtType1,
-            RuleId::CaxDw,
-            RuleId::PrpIrp,
+            RuleId::ScmSco,
         ] {
-            assert!(missing.contains(&absent), "{absent} is missing");
+            assert!(implemented(Regime::OwlRl).contains(&present), "{present}");
         }
+
+        // `RDFS` still has a gap, and it is still named. The four are exactly the rules
+        // that conclude about a FRESH blank node, which is an existential head this
+        // crate's Datalog evaluator refuses.
+        let (_, rdfs) = materialize(&ds, Regime::Rdfs).expect("rdfs");
+        let missing = rdfs.completeness().missing();
+        assert_eq!(
+            missing,
+            [
+                RuleId::RdfD1,
+                RuleId::RdfD1a,
+                RuleId::Rdfs14,
+                RuleId::Rdfs14a
+            ]
+        );
         // The gap is in specification table order, like the table it is drawn from.
         let mut sorted = missing.to_vec();
         sorted.sort_unstable();
@@ -574,9 +667,11 @@ mod tests {
                     "{regime:?} reported Exact alongside {:?}",
                     report.boundaries()
                 );
-                // Spelled out, so the gate does not depend on `overclaims` being right.
+                // Spelled out, so the gate does not depend on `overclaims` being right:
+                // the FLATLY-exact variant is the one that may not sit beside a boundary,
+                // and `ExactWithinBoundaries` is the honest way to say the other half.
                 assert!(
-                    !report.completeness().is_exact() || report.boundaries().is_empty(),
+                    *report.completeness() != Completeness::Exact || report.boundaries().is_empty(),
                     "{regime:?}"
                 );
             }
@@ -818,17 +913,20 @@ mod tests {
         assert!(rdfs.budget().join_steps() >= committed);
     }
 
-    /// An inconsistency witness is `None`, and that is a fact about the rule set: every
-    /// rule that could conclude `false` is in the regime's missing list.
+    /// A CONSISTENT run reports no inconsistency, and that is now a CHECKED fact rather
+    /// than a vacuous one.
+    ///
+    /// Before the seventeen `false`-headed rules were wired, `inconsistency() == None`
+    /// meant "nothing looked"; it now means "seventeen rules looked and found nothing",
+    /// which is the difference between an unchecked field and evidence.
     #[test]
-    fn no_run_reports_an_inconsistency_and_none_could() {
+    fn a_consistent_run_reports_no_inconsistency() {
         let ds = schema_fixture();
         for regime in RUNNABLE {
             let (_, report) = materialize(&ds, regime).expect("runnable regime");
             assert!(report.inconsistency().is_none(), "{regime:?}");
         }
-        // The reason, asserted rather than asserted-in-a-comment: not one of OWL 2 RL's
-        // inconsistency rules is implemented, so no chase path can detect a clash.
+        // And every rule that could have found one really is in the lane's rule set.
         for rule in [
             RuleId::EqDiff1,
             RuleId::PrpIrp,
@@ -839,33 +937,287 @@ mod tests {
             RuleId::CaxDw,
             RuleId::DtNotType,
         ] {
-            assert!(
-                !implemented(Regime::OwlRl).contains(&rule),
-                "{rule} became implemented; the witness is now reachable and must be wired"
-            );
+            assert!(implemented(Regime::OwlRl).contains(&rule), "{rule}");
         }
-        // The type is complete and constructible today, so wiring it later moves nothing
-        // else.
-        let witness = InconsistencyWitness::new(
-            RuleId::CaxDw,
+    }
+
+    /// AN INCONSISTENCY IS A REFUSAL, AND IT CARRIES ITS WITNESS.
+    ///
+    /// This is the behaviour change the seventeen `false`-headed rules bring: ONE
+    /// `owl:disjointWith` violation turns a materialization from "returns answers" into an
+    /// error. Correct — an inconsistent knowledge base entails every triple, so a closure
+    /// over it answers a question nobody asked — and unusable without evidence, which is
+    /// why the witness is carried rather than offered.
+    #[test]
+    fn a_disjointness_violation_is_a_refusal_with_a_witness() {
+        let disjoint = "http://www.w3.org/2002/07/owl#disjointWith";
+        let ds = dataset(&[(A, disjoint, B), (X, RDF_TYPE, A), (X, RDF_TYPE, B)]);
+
+        let Err(EntailError::Inconsistent(witness)) = materialize(&ds, Regime::OwlRl) else {
+            panic!("two disjoint classes with a shared instance is `cax-dw`");
+        };
+        assert_eq!(witness.rule(), RuleId::CaxDw);
+        // The premises are the specification's own, in the specification's own order.
+        let premises: Vec<(TermValue, TermValue, TermValue)> = witness
+            .premises()
+            .iter()
+            .map(|t| {
+                (
+                    t.subject().clone(),
+                    t.predicate().clone(),
+                    t.object().clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            premises,
             vec![
-                WitnessTriple::new(
+                (
                     TermValue::iri(A),
-                    TermValue::iri("http://www.w3.org/2002/07/owl#disjointWith"),
-                    TermValue::iri(B),
+                    TermValue::iri(disjoint),
+                    TermValue::iri(B)
                 ),
-                WitnessTriple::new(
+                (
                     TermValue::iri(X),
                     TermValue::iri(RDF_TYPE),
-                    TermValue::iri(A),
+                    TermValue::iri(A)
                 ),
-            ],
-            None,
+                (
+                    TermValue::iri(X),
+                    TermValue::iri(RDF_TYPE),
+                    TermValue::iri(B)
+                ),
+            ]
         );
-        assert_eq!(witness.rule(), RuleId::CaxDw);
-        assert_eq!(witness.premises().len(), 2);
-        assert_eq!(witness.premises()[1].object(), &TermValue::iri(A));
+        // The chase reads the default graph only, so the witness came from it.
         assert!(witness.graph().is_none());
+        // The message names the rule, so a caller who only logs the error still learns
+        // which axiom their data broke.
+        let rendered = EntailError::Inconsistent(witness).to_string();
+        assert!(rendered.contains("cax-dw"), "{rendered}");
+
+        // The RDFS lane says nothing about `owl:disjointWith`, so the same graph is
+        // ordinary data there and closes without complaint. An inconsistency is a property
+        // of a CALCULUS and a graph, never of a graph alone.
+        assert!(materialize(&ds, Regime::Rdfs).is_ok());
+    }
+
+    /// The witness is DETERMINISTIC: the same input names the same rule and the same
+    /// premises on every run, which is what makes it usable in a golden.
+    #[test]
+    fn the_inconsistency_witness_is_deterministic() {
+        let ds = dataset(&[
+            (
+                "http://example.org/irreflexive",
+                RDF_TYPE,
+                "http://www.w3.org/2002/07/owl#IrreflexiveProperty",
+            ),
+            (X, "http://example.org/irreflexive", X),
+        ]);
+        let render = || {
+            let Err(EntailError::Inconsistent(witness)) = materialize(&ds, Regime::OwlRl) else {
+                panic!("an irreflexive property relating something to itself is `prp-irp`");
+            };
+            format!("{witness:?}")
+        };
+        assert_eq!(render(), render());
+        let Err(EntailError::Inconsistent(witness)) = materialize(&ds, Regime::OwlRl) else {
+            unreachable!("just asserted")
+        };
+        assert_eq!(witness.rule(), RuleId::PrpIrp);
+        assert_eq!(witness.premises().len(), 2);
+    }
+
+    /// An ILL-TYPED LITERAL is an inconsistency under `D` as well as under `OWL-RL`, and
+    /// it is `dt-not-type` that says so.
+    ///
+    /// This is the second half of the behaviour change: ordinary dirty data — one literal
+    /// whose lexical form its own datatype does not accept — refuses the run.
+    #[test]
+    fn an_ill_typed_literal_is_a_refusal_under_the_datatype_lanes() {
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, X);
+        let p = iri(&mut b, "http://example.org/age");
+        let bad = b.intern_literal(purrdf_core::RdfLiteral::typed(
+            "cat",
+            "http://www.w3.org/2001/XMLSchema#integer",
+        ));
+        b.push_quad(s, p, bad, None);
+        let ds = b.freeze().expect("freeze");
+
+        for regime in [Regime::OwlRl, Regime::D] {
+            let Err(EntailError::Inconsistent(witness)) = materialize(&ds, regime) else {
+                panic!("{regime:?}: an ill-typed literal is `dt-not-type`");
+            };
+            assert_eq!(witness.rule(), RuleId::DtNotType, "{regime:?}");
+            // The witness names a TRIPLE that carries the bad literal, not merely the
+            // literal: the internal `DT_ILL_TYPED` premise is bookkeeping, not an
+            // asserted triple, so it is filtered out of the evidence. Which occurrence it
+            // names is whichever the evaluator's total order reached first — under
+            // `OWL-RL` that is `eq-ref`'s own `lt owl:sameAs lt`, which is an occurrence
+            // of the literal like any other — so the check is on the position the rule
+            // binds rather than on a particular carrier.
+            assert_eq!(witness.premises().len(), 1, "{regime:?}");
+            assert_eq!(
+                witness.premises()[0].object(),
+                &TermValue::typed_literal("cat", "http://www.w3.org/2001/XMLSchema#integer"),
+                "{regime:?}"
+            );
+        }
+        // A well-typed literal in the same shape closes fine.
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, X);
+        let p = iri(&mut b, "http://example.org/age");
+        let good = b.intern_literal(purrdf_core::RdfLiteral::typed(
+            "7",
+            "http://www.w3.org/2001/XMLSchema#integer",
+        ));
+        b.push_quad(s, p, good, None);
+        let ds = b.freeze().expect("freeze");
+        assert!(materialize(&ds, Regime::D).is_ok());
+        assert!(materialize(&ds, Regime::OwlRl).is_ok());
+    }
+
+    /// A FUNCTIONAL DATA PROPERTY with two value-different values is an inconsistency, and
+    /// that is the whole of Table 8 working with Tables 4 and 5 at once.
+    ///
+    /// `prp-fp` concludes `"1"^^xsd:integer owl:sameAs "2"^^xsd:integer` — a triple with a
+    /// literal SUBJECT, so it is generalized RDF and never reaches the closure — `dt-diff`
+    /// concludes the two are different, and `eq-diff1` puts the two together. It is the
+    /// classic OWL 2 RL clash, it is unreachable without all three tables, and it is the
+    /// only way a `owl:sameAs` between two literals can arise at all: the RDF 1.2 IR
+    /// cannot hold one as an ASSERTION, because a literal may not be a subject.
+    ///
+    /// It also exercises the one-orientation `DT_DIFFERENT` relation end to end. The
+    /// pre-pass emits `lt1 ≠ lt2` for `lt1 < lt2` only — halving the largest relation this
+    /// crate materializes — and `eq-sym` supplies the mirror, so the clash is found
+    /// whichever way round the derived equality happens to be committed.
+    #[test]
+    fn a_functional_data_property_with_two_values_is_inconsistent() {
+        let functional = "http://www.w3.org/2002/07/owl#FunctionalProperty";
+        let integer = "http://www.w3.org/2001/XMLSchema#integer";
+        let build = |left: &str, right: &str| {
+            let mut b = RdfDatasetBuilder::new();
+            let p = iri(&mut b, "http://example.org/age");
+            let ty = iri(&mut b, RDF_TYPE);
+            let fp = iri(&mut b, functional);
+            let x = iri(&mut b, X);
+            let one = b.intern_literal(purrdf_core::RdfLiteral::typed(left, integer));
+            let two = b.intern_literal(purrdf_core::RdfLiteral::typed(right, integer));
+            b.push_quad(p, ty, fp, None);
+            b.push_quad(x, p, one, None);
+            b.push_quad(x, p, two, None);
+            b.freeze().expect("freeze")
+        };
+
+        // Two DIFFERENT values: `prp-fp` then `dt-diff` then `eq-diff1`.
+        let Err(EntailError::Inconsistent(witness)) = materialize(&build("1", "2"), Regime::OwlRl)
+        else {
+            panic!("a functional property with two value-different values must clash");
+        };
+        assert_eq!(witness.rule(), RuleId::EqDiff1);
+        assert_eq!(witness.premises().len(), 2, "{:?}", witness.premises());
+
+        // Two SPELLINGS OF ONE value: `dt-eq` says they are the same thing, so there is
+        // nothing to clash — and `eq-rep-o` carries the value across the spellings.
+        let (closed, report) =
+            materialize(&build("1", "01"), Regime::OwlRl).expect("one value, two spellings");
+        assert!(report.inconsistency().is_none());
+        assert!(
+            closed.quads().any(|q| {
+                closed.term_value(q.s) == TermValue::iri(X)
+                    && closed.term_value(q.o) == TermValue::typed_literal("01", integer)
+            }),
+            "dt-eq and eq-rep-o must keep the equal-valued spelling on the subject"
+        );
+        // The `owl:sameAs` between the two literals is licensed and UNREPRESENTABLE, so it
+        // is dropped at the boundary and the drop is reported rather than fabricated
+        // around.
+        assert!(
+            report
+                .boundaries()
+                .iter()
+                .any(|boundary| boundary.construct() == Construct::GeneralizedRdf),
+            "{:?}",
+            report.boundaries()
+        );
+        assert!(!report.overclaims());
+    }
+
+    /// `owl:sameAs` substitutes in the PREDICATE position, and it is `eq-rep-p` that does
+    /// it — the one rule of the calculus that rewrites a triple's predicate from a term
+    /// bound in another atom's OBJECT position.
+    ///
+    /// It gets a test of its own because it is the rule an IR that addressed relations by
+    /// predicate symbol could not express at all: `?p2` is data in the `owl:sameAs` triple
+    /// and a relation name in the conclusion.
+    #[test]
+    fn equality_substitutes_in_the_predicate_position() {
+        let same_as = "http://www.w3.org/2002/07/owl#sameAs";
+        let p = "http://example.org/p";
+        let q = "http://example.org/q";
+        let y = "http://example.org/y";
+        let ds = dataset(&[(p, same_as, q), (X, p, y)]);
+        let (closed, report) = materialize(&ds, Regime::OwlRl).expect("owl-rl");
+        assert!(has(&closed, X, q, y), "eq-rep-p must rewrite the predicate");
+        assert!(
+            report
+                .rules_fired()
+                .iter()
+                .any(|&(rule, count)| rule == RuleId::EqRepP && count >= 1),
+            "{:?}",
+            report.rules_fired()
+        );
+        // And the equivalence relation itself is closed: `eq-sym` mirrors the assertion
+        // and `eq-ref` makes every term the same as itself.
+        assert!(has(&closed, q, same_as, p), "eq-sym");
+        assert!(has(&closed, X, same_as, X), "eq-ref");
+    }
+
+    /// `owl:sameAs` does NOT substitute inside an RDF 1.2 TRIPLE TERM, and the run says so.
+    ///
+    /// The chase interns a triple term as ONE atomic term and never looks inside it, so
+    /// `<<( :x :p :y )>>` and `<<( :x :p :z )>>` stay two terms even when `:y owl:sameAs
+    /// :z`. That is a documented boundary rather than silence: an implementation that
+    /// substituted inside would be doing something the chase cannot see, and one that said
+    /// nothing would let a caller believe the congruence was complete.
+    #[test]
+    fn equality_does_not_substitute_inside_a_triple_term() {
+        let same_as = "http://www.w3.org/2002/07/owl#sameAs";
+        let p = "http://example.org/p";
+        let y = "http://example.org/y";
+        let z = "http://example.org/z";
+
+        let mut b = RdfDatasetBuilder::new();
+        let x = iri(&mut b, X);
+        let says = iri(&mut b, SAYS);
+        let same = iri(&mut b, same_as);
+        let yy = iri(&mut b, y);
+        let zz = iri(&mut b, z);
+        let pp = iri(&mut b, p);
+        let quoted = b.intern_triple(x, pp, yy);
+        b.push_quad(yy, same, zz, None);
+        b.push_quad(x, says, quoted, None);
+        let ds = b.freeze().expect("freeze");
+
+        let (closed, report) = materialize(&ds, Regime::OwlRl).expect("owl-rl");
+        let substituted = quoted_value(X, p, TermValue::iri(z));
+        assert!(
+            !objects_of(&closed, X, SAYS).contains(&substituted),
+            "the chase substituted inside a triple term"
+        );
+        // The original is carried through untouched…
+        assert!(objects_of(&closed, X, SAYS).contains(&quoted_value(X, p, TermValue::iri(y))));
+        // …and the boundary that licenses the omission is reported.
+        assert!(
+            report
+                .boundaries()
+                .iter()
+                .any(|boundary| boundary.construct() == Construct::TripleTerm),
+            "{:?}",
+            report.boundaries()
+        );
+        assert!(!report.overclaims());
     }
 
     /// Two runs of the same input render byte-identically, across every regime and every

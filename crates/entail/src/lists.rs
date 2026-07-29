@@ -43,18 +43,26 @@
 //!
 //! # The index, and why `i ≠ j` is expressible at all
 //!
-//! `prp-adp` and `cax-adc` are written over two members `?ci` and `?cj` with the side
-//! condition `i ≠ j`, and a DL clause has no inequality. It has NEGATION, so the pre-pass
-//! also emits the REFLEXIVE index relation
+//! `eq-diff2`, `eq-diff3`, `prp-adp` and `cax-adc` are written over two members `?ci` and
+//! `?cj` with the side condition `i ≠ j`, and a DL clause has no inequality. So the
+//! pre-pass materializes the condition itself:
 //!
 //! ```text
-//! INDEX_EQUAL(i, i)   for every index it created
+//! INDEX_DISTINCT(i, j)   for every ORDERED pair of DIFFERENT indices it created
 //! ```
 //!
-//! and `¬INDEX_EQUAL(?i, ?j)` is exactly `?i ≠ ?j` over the indices that exist. Both rules
-//! conclude `false`, so neither is evaluated today — but a rule stated without its side
-//! condition would be UNSOUND rather than merely unevaluated, which is why the relation is
-//! materialized rather than the condition dropped.
+//! and `INDEX_DISTINCT(?i, ?j)` is exactly `?i ≠ ?j` over the indices that exist. It is a
+//! POSITIVE relation rather than the negation of a reflexive one, and that is load-bearing
+//! rather than a style choice: these four rules all conclude `false`, so they are lowered
+//! into clauses whose head is the internal clash relation, and a negated body atom in a
+//! program whose rules quantify over the PREDICATE position puts the negative dependency
+//! edge inside a cycle — `purrdf-datalog` then refuses the whole program as
+//! non-stratifiable, correctly, because a variable predicate can range over the negated
+//! relation itself. Materializing the inequality is quadratic in the LENGTH OF THE LONGEST
+//! LIST and in nothing else, so the cost is a handful of rows.
+//!
+//! A rule stated without its side condition would be UNSOUND rather than merely slower:
+//! `i = j` would match, and one class assertion would be an inconsistency.
 //!
 //! # No IRI is minted, and no internal id can reach the output
 //!
@@ -98,12 +106,30 @@ use crate::vocab::{
 /// decides "internal" for every surface the store can hold, with no table to keep in step.
 pub(crate) const INTERNAL_SIGIL: char = '\u{0}';
 
+/// The GRAPH every BINARY internal relation's rows live in.
+///
+/// A ternary internal relation spends the atom's fourth position on its third argument
+/// ([`LIST_RELATION`], [`CHAIN_RELATION`], [`AGREE_RELATION`]), so its rows already sit
+/// outside the default partition. A BINARY one has that position spare, and it may NOT
+/// spend it on the default graph: the OWL-RL lane fires rules whose body is
+/// `T(?s, ?p, ?o)` with an unbound PREDICATE — `eq-ref`, `eq-rep-s`, `eq-rep-p`,
+/// `eq-rep-o` — and such an atom sweeps every partition of the graph it names. A binary
+/// internal relation in the default graph would therefore be swept as if it were data, and
+/// `eq-ref` would conclude `⟪dt-equal⟫ owl:sameAs ⟪dt-equal⟫` about this crate's own
+/// bookkeeping.
+///
+/// So the rows go in a graph whose name leads with [`INTERNAL_SIGIL`] and is therefore not
+/// a term any dataset can hold. `no_internal_id_reaches_a_serialized_closure` is what keeps
+/// that true end to end.
+pub(crate) const INTERNAL_GRAPH: &str = "\u{0}graph";
+
 /// The internal predicate of `LIST(head, index, member)`.
 pub(crate) const LIST_RELATION: &str = "\u{0}list";
 
-/// The internal predicate of the reflexive `INDEX_EQUAL(i, i)`, whose NEGATION is the
-/// `i ≠ j` side condition `prp-adp` and `cax-adc` are written with.
-pub(crate) const INDEX_EQUAL_RELATION: &str = "\u{0}index-equal";
+/// The internal predicate of `INDEX_DISTINCT(i, j)` — the `i ≠ j` side condition
+/// `eq-diff2`, `eq-diff3`, `prp-adp` and `cax-adc` are written with, materialized as a
+/// POSITIVE relation over the index pairs that exist.
+pub(crate) const INDEX_DISTINCT_RELATION: &str = "\u{0}index-distinct";
 
 /// The internal predicate of `CHAIN(cell, u, v)` — `prp-spo2`'s ordered traversal.
 pub(crate) const CHAIN_RELATION: &str = "\u{0}chain";
@@ -111,13 +137,69 @@ pub(crate) const CHAIN_RELATION: &str = "\u{0}chain";
 /// The internal predicate of `AGREE(cell, x, y)` — `prp-key`'s ordered traversal.
 pub(crate) const AGREE_RELATION: &str = "\u{0}agree";
 
+/// The internal predicate of `ALL_TYPES(cell, y)` — `cls-int1`'s universal traversal.
+///
+/// "`?y` is an instance of every class from `?cell` onwards", which is the conjunction of
+/// `n` body atoms `cls-int1` writes as `LIST[?x, ?c1, …, ?cn]` followed by `?y rdf:type
+/// ?c1 … ?y rdf:type ?cn`. Same shape as [`AGREE_RELATION`], one argument narrower, so its
+/// third position is the default graph rather than a third argument.
+pub(crate) const ALL_TYPES_RELATION: &str = "\u{0}all-types";
+
+/// The internal predicate of `CLASH(rule, a, b)` — a satisfied inconsistency body.
+///
+/// The eight rules of Tables 5 and 7, the five of Table 6, the three of Table 4 and the
+/// one of Table 8 whose conclusion is `false` are DECLARED with `false`
+/// ([`HeadForm::Inconsistency`](purrdf_datalog::clause::HeadForm::Inconsistency)) and
+/// LOWERED, mechanically, to a clause whose head is one atom of this relation — see
+/// [`crate::calculus::constraint_clause`]. The evaluator therefore runs the
+/// specification's own body, and a match becomes
+/// [`EntailError::Inconsistent`](crate::EntailError) carrying the matched body facts as
+/// the witness rather than a triple in the closure.
+///
+/// A row of this relation can never reach an answer for two independent reasons: its
+/// predicate is internal, like every other relation here, and the run it belongs to is
+/// refused outright.
+pub(crate) const CLASH_RELATION: &str = "\u{0}clash";
+
+/// The internal predicate of `DT_VALUE(literal, datatype)` — the datatype pre-pass's
+/// membership relation.
+///
+/// "the data value of `literal` lies in the value space of `datatype`", computed once per
+/// run by `purrdf-xsd` over the literals the dataset actually holds. `dt-type2` reads it;
+/// see [`crate::datatypes`] for why a value space is walked by a pre-pass rather than
+/// quantified over by a clause.
+pub(crate) const DT_VALUE_RELATION: &str = "\u{0}dt-value";
+
+/// The internal predicate of `DT_EQUAL(lt1, lt2)` — two literals with ONE data value.
+pub(crate) const DT_EQUAL_RELATION: &str = "\u{0}dt-equal";
+
+/// The internal predicate of `DT_DIFFERENT(lt1, lt2)` — two literals with DIFFERENT data
+/// values.
+///
+/// The `dt-diff` side of the pair [`DT_EQUAL_RELATION`] answers, and POSITIVE for the same
+/// reason [`INDEX_DISTINCT_RELATION`] is: this program quantifies over the predicate
+/// position, so every negated body atom's dependency edge lands inside a cycle and
+/// `purrdf-datalog` refuses the whole program as non-stratifiable. An inequality a rule
+/// needs is therefore materialized, never negated.
+pub(crate) const DT_DIFFERENT_RELATION: &str = "\u{0}dt-different";
+
+/// The internal predicate of `DT_ILL_TYPED(lt, dt)` — a literal OUTSIDE `dt`'s value
+/// space, which `dt-not-type` turns into an inconsistency.
+pub(crate) const DT_ILL_TYPED_RELATION: &str = "\u{0}dt-ill-typed";
+
 /// Every internal relation this crate names, for the tests that range over all of them.
 #[cfg(test)]
-pub(crate) const INTERNAL_RELATIONS: [&str; 4] = [
+pub(crate) const INTERNAL_RELATIONS: [&str; 10] = [
     LIST_RELATION,
-    INDEX_EQUAL_RELATION,
+    INDEX_DISTINCT_RELATION,
     CHAIN_RELATION,
     AGREE_RELATION,
+    ALL_TYPES_RELATION,
+    CLASH_RELATION,
+    DT_VALUE_RELATION,
+    DT_EQUAL_RELATION,
+    DT_DIFFERENT_RELATION,
+    DT_ILL_TYPED_RELATION,
 ];
 
 /// The OWL predicates whose OBJECT is required to be an RDF collection.
@@ -309,17 +391,21 @@ impl ListIndex {
                 cell = next;
             }
         }
-        // The reflexive index relation, whose negation is the `i ≠ j` side condition.
-        // One row per index that exists, so `¬INDEX_EQUAL(?i, ?j)` cannot be satisfied by
-        // an index the walk never created.
-        for index in indices {
-            let surface = index_surface(index);
-            facts.push(InternalFact {
-                subject: surface.clone(),
-                predicate: INDEX_EQUAL_RELATION,
-                object: surface,
-                graph: String::new(),
-            });
+        // The `i ≠ j` side condition, materialized: one row per ORDERED pair of DIFFERENT
+        // indices the walk created. Quadratic in the length of the longest list and in
+        // nothing else, and positive rather than a negation — see the [module docs](self)
+        // for why that difference decides whether the whole program stratifies.
+        for left in &indices {
+            for right in &indices {
+                if left != right {
+                    facts.push(InternalFact {
+                        subject: index_surface(*left),
+                        predicate: INDEX_DISTINCT_RELATION,
+                        object: index_surface(*right),
+                        graph: INTERNAL_GRAPH.to_owned(),
+                    });
+                }
+            }
         }
         Ok(facts)
     }
@@ -342,7 +428,7 @@ fn bracketed(iri: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AGREE_RELATION, CHAIN_RELATION, INDEX_EQUAL_RELATION, INTERNAL_RELATIONS, LIST_RELATION,
+        AGREE_RELATION, CHAIN_RELATION, INDEX_DISTINCT_RELATION, INTERNAL_RELATIONS, LIST_RELATION,
         LIST_VALUED, ListIndex, is_internal,
     };
     use crate::vocab::{OWL_INTERSECTIONOF, RDF_FIRST, RDF_NIL, RDF_REST};
@@ -401,15 +487,15 @@ mod tests {
             "the head is the LIST subject, the member the object, the index the fourth \
              position"
         );
-        let equal: Vec<(&str, &str)> = facts
+        let distinct: Vec<(&str, &str)> = facts
             .iter()
-            .filter(|f| f.predicate == INDEX_EQUAL_RELATION)
+            .filter(|f| f.predicate == INDEX_DISTINCT_RELATION)
             .map(|f| (f.subject.as_str(), f.object.as_str()))
             .collect();
         assert_eq!(
-            equal,
-            vec![("\u{0}0", "\u{0}0"), ("\u{0}1", "\u{0}1")],
-            "INDEX_EQUAL is reflexive, so its negation is inequality"
+            distinct,
+            vec![("\u{0}0", "\u{0}1"), ("\u{0}1", "\u{0}0")],
+            "INDEX_DISTINCT holds exactly the ordered pairs of DIFFERENT indices"
         );
     }
 
@@ -517,14 +603,20 @@ mod tests {
         ] {
             assert!(!is_internal(surface), "{surface:?}");
         }
-        // The four are named individually so a rename cannot silently drop one.
+        // All ten are named individually so a rename cannot silently drop one.
         assert_eq!(
             INTERNAL_RELATIONS,
             [
                 LIST_RELATION,
-                INDEX_EQUAL_RELATION,
+                INDEX_DISTINCT_RELATION,
                 CHAIN_RELATION,
-                AGREE_RELATION
+                AGREE_RELATION,
+                super::ALL_TYPES_RELATION,
+                super::CLASH_RELATION,
+                super::DT_VALUE_RELATION,
+                super::DT_EQUAL_RELATION,
+                super::DT_DIFFERENT_RELATION,
+                super::DT_ILL_TYPED_RELATION,
             ]
         );
     }
