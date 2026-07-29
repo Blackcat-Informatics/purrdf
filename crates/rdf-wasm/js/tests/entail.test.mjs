@@ -26,8 +26,17 @@ import {
   ready,
   entailCheckGoldenVectors,
   entailCheckInconsistentRefusal,
+  entailClassify,
+  entailConsistency,
+  entailEntails,
+  entailExplainConclusion,
+  entailExtractModule,
   entailImplementedRules,
+  entailInstances,
+  entailJustify,
   entailMaterialize,
+  entailProfile,
+  entailRealize,
   entailRules,
 } from "../index.mjs";
 
@@ -121,7 +130,7 @@ test("entailMaterialize closes under rdfs and always returns a report", () => {
     closed.nquads,
     /<http:\/\/example\.org\/x> <http:\/\/www\.w3\.org\/1999\/02\/22-rdf-syntax-ns#type> <http:\/\/example\.org\/C> \./,
   );
-  assert.ok(closed.report.startsWith("purrdf-reasoning-report 2\n"));
+  assert.ok(closed.report.startsWith("purrdf-reasoning-report 3\n"));
   assert.ok(closed.report.includes("\nregime rdfs\n"));
   // The report says what the run could NOT do, rather than claiming completeness
   // it does not have. Asserted as the invariant, not as a `sound-incomplete <n>`
@@ -180,7 +189,7 @@ test("entailMaterialize materializes every regime spelling", () => {
     ["d", ""],
   ]) {
     const closed = entailMaterialize(SCHEMA, regime, program);
-    assert.match(closed.report, /^purrdf-reasoning-report 2\n/);
+    assert.match(closed.report, /^purrdf-reasoning-report 3\n/);
     assert.ok(closed.report.includes(`\nregime ${regime}\n`), regime);
     assert.ok(closed.report.includes("\nwithheld-surrogates "), regime);
     assert.ok(closed.report.endsWith("inconsistency none\n"), regime);
@@ -232,4 +241,193 @@ test("the rule inventories are the specification tables, and the gap is measurab
 test("the rule inventories reject an unknown regime, naming the accepted set", () => {
   assert.throws(() => entailRules("rdfs-plus"), /accepted: simple, rdf, rdfs/);
   assert.throws(() => entailImplementedRules("rdfs-plus"), /accepted: simple, rdf, rdfs/);
+});
+
+// ── The Description-Logic reasoning services, driven through the PACKAGE ROOT ──
+//
+// Not deep imports of `./pkg/purrdf_wasm.js` (the `exports` map in package.json
+// refuses that with ERR_PACKAGE_PATH_NOT_EXPORTED) — every call below goes through
+// `../index.mjs`, the same public entry point `import "@blackcatinformatics/purrdf"`
+// resolves to. Each service is actually CALLED and its `.answer`/`.certificate`
+// getters are inspected; a `typeof fn === "function"` check would pass even if the
+// service silently returned garbage, which is exactly what nine wasm-bindgen
+// exports sitting compiled-but-unreachable would have looked like from here.
+
+// `A ⊑ B ⊑ C`, `D ⊑ C`, and one instance of `A` — entails `x : B`, `x : C`, and the
+// unasserted axiom `A ⊑ C` without ever asserting either.
+const TAXONOMY = `<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .
+<http://example.org/B> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .
+<http://example.org/D> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .
+<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .
+`;
+
+// `A ⊑ C` — entailed by the chain, asserted nowhere in TAXONOMY.
+const CHAIN_AXIOM =
+  "<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .\n";
+
+test("entailConsistency decides consistency ON WASM, with its certificate", () => {
+  const decided = entailConsistency(TAXONOMY, 0);
+  assert.equal(decided.answer, "consistency true\n");
+  // Never optional. `completeness decided` is reported only because the boundary
+  // list beside it is, in fact, empty — the DL certificate's own honesty gate.
+  assert.ok(decided.certificate.startsWith("purrdf-dl-certificate 1\n"));
+  assert.ok(decided.certificate.includes("\nservice consistency\n"));
+  assert.ok(decided.certificate.includes("\ncompleteness decided\n"));
+  assert.ok(!decided.certificate.includes("\nboundary "));
+});
+
+test("entailClassify reaches the full subsumption hierarchy ON WASM", () => {
+  const classified = entailClassify(TAXONOMY, 0);
+  // Direct: only the asserted edges. Transitive: also the chain A -> C.
+  assert.ok(
+    classified.answer.includes(
+      "direct <http://example.org/A> <http://example.org/B>\n",
+    ),
+  );
+  assert.ok(
+    classified.answer.includes(
+      "subclass <http://example.org/A> <http://example.org/C>\n",
+    ),
+    classified.answer,
+  );
+  assert.ok(
+    !classified.answer.includes(
+      "direct <http://example.org/A> <http://example.org/C>\n",
+    ),
+    "A -> C is transitive, not direct",
+  );
+  assert.ok(classified.certificate.startsWith("purrdf-dl-certificate 1\n"));
+  assert.ok(classified.certificate.includes("\nservice classify\n"));
+});
+
+test("entailRealize reaches the individuals' entailed types ON WASM", () => {
+  const realized = entailRealize(TAXONOMY, 0);
+  assert.ok(
+    realized.answer.includes(
+      "type <http://example.org/x> <http://example.org/C>\n",
+    ),
+    realized.answer,
+  );
+  assert.ok(
+    realized.answer.includes(
+      "direct-type <http://example.org/x> <http://example.org/A>\n",
+    ),
+    realized.answer,
+  );
+  assert.ok(realized.certificate.includes("\nservice realize\n"));
+});
+
+test("entailInstances retrieves instances for a class the schema never asserts them of ON WASM", () => {
+  const instances = entailInstances(TAXONOMY, "<http://example.org/C>", 0);
+  assert.ok(
+    instances.answer.includes("instance <http://example.org/x>\n"),
+    instances.answer,
+  );
+  assert.ok(instances.certificate.includes("\nservice instances\n"));
+});
+
+test("entailEntails decides an axiom entailed nowhere by assertion ON WASM", () => {
+  const decided = entailEntails(TAXONOMY, CHAIN_AXIOM, 0);
+  assert.ok(decided.answer.startsWith("entails true\n"), decided.answer);
+  assert.ok(decided.answer.includes("\naxiom SubClassOf\n"));
+  assert.ok(decided.answer.includes("\nterm <http://example.org/A>\n"));
+  assert.ok(decided.answer.includes("\nterm <http://example.org/C>\n"));
+  assert.ok(decided.certificate.includes("\nservice entails\n"));
+});
+
+test("entailEntails answers unknown (never false) on an exhausted budget ON WASM", () => {
+  const starved = entailEntails(TAXONOMY, CHAIN_AXIOM, 1);
+  assert.equal(starved.answer.split("\n")[0], "entails unknown");
+  assert.ok(starved.certificate.includes("\ncompleteness budget-exhausted\n"));
+});
+
+test("entailProfile certifies the most restrictive profile first ON WASM", () => {
+  const certified = entailProfile(TAXONOMY);
+  assert.equal(certified.answer.split("\n")[0], "certified EL");
+  assert.ok(certified.certificate.startsWith("purrdf-owl-profile-certificate 1\n"));
+  assert.ok(certified.certificate.includes("\nservice profile\n"));
+  // A certification proves membership; a violation never proves exclusion.
+  assert.ok(certified.certificate.endsWith("one-directional true\n"));
+});
+
+test("entailExtractModule extracts a locality module as canonical N-Quads ON WASM", () => {
+  const extracted = entailExtractModule(TAXONOMY, "<http://example.org/A>\n", "star");
+  assert.ok(
+    extracted.answer.includes(
+      "<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .",
+    ),
+    extracted.answer,
+  );
+  assert.ok(extracted.certificate.startsWith("purrdf-module-extraction 1\n"));
+  assert.ok(extracted.certificate.includes("\nservice extract-module\n"));
+  assert.ok(extracted.certificate.includes("\nmethod STAR\n"));
+});
+
+test("entailExtractModule rejects an unknown method, naming the accepted set", () => {
+  assert.throws(
+    () => entailExtractModule(TAXONOMY, "<http://example.org/A>\n", "nested"),
+    /bot, top, star/,
+  );
+});
+
+test("entailJustify finds a minimal entailing subset ON WASM", () => {
+  const why = entailJustify(TAXONOMY, CHAIN_AXIOM);
+  // The chain (A ⊑ B ⊑ C) — and NOT the irrelevant D ⊑ C axiom.
+  assert.ok(
+    why.answer.includes(
+      "<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .",
+    ),
+    why.answer,
+  );
+  assert.ok(!why.answer.includes("<http://example.org/D>"), why.answer);
+  assert.ok(why.certificate.startsWith("purrdf-justification 1\n"));
+  assert.ok(why.certificate.includes("\nservice justify\n"));
+  assert.ok(why.certificate.includes("\naxiom SubClassOf\n"));
+  assert.ok(why.certificate.includes("\nsufficient true\n"));
+  assert.ok(why.certificate.includes("\nminimal true\n"));
+  assert.ok(why.certificate.endsWith("overclaims false\n"));
+});
+
+test("entailExplainConclusion derives a chase conclusion never asserted ON WASM", () => {
+  const proof = entailExplainConclusion(
+    TAXONOMY,
+    "owl-rl",
+    "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .\n",
+  );
+  assert.ok(proof.answer.startsWith("asserted false\n"), proof.answer);
+  assert.ok(proof.answer.includes("\nrule "), proof.answer);
+  assert.ok(proof.certificate.startsWith("purrdf-chase-proof 1\n"));
+  assert.ok(proof.certificate.includes("\nservice explain-conclusion\n"));
+  // `checked` is the RE-DERIVED verdict, the terminal line of a chase-proof
+  // certificate: the checker walked the premises to the head independently of
+  // what the proof claims.
+  assert.ok(proof.certificate.endsWith("checked true\n"));
+});
+
+test("entailExplainConclusion refuses rdf/rdfs for an existential rule's conclusion", () => {
+  assert.throws(
+    () => entailExplainConclusion(TAXONOMY, "rdfs", CHAIN_AXIOM),
+    /existential/,
+  );
+});
+
+test("every DL reasoning service is reachable from the package root, not only ./pkg/", () => {
+  // Falsifiable against the dark-feature defect: these nine names were compiled
+  // into the shipped wasm binary (the size budget already paid for them) but
+  // `../index.mjs` re-exported none of them, and the npm `exports` map refuses a
+  // deep `./pkg/` import — so no consumer of the published package could reach any
+  // of them at all.
+  for (const fn of [
+    entailConsistency,
+    entailClassify,
+    entailRealize,
+    entailInstances,
+    entailEntails,
+    entailProfile,
+    entailExtractModule,
+    entailJustify,
+    entailExplainConclusion,
+  ]) {
+    assert.equal(typeof fn, "function");
+  }
 });

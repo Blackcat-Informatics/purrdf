@@ -51,6 +51,9 @@ jobs:
       - name: Check cross-registry release coherence
         run: python3 scripts/check-versions.py
 
+      - name: Check every wasm-bindgen free function is re-exported from the npm package root
+        run: python3 scripts/check-wasm-js-exports.py
+
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 45

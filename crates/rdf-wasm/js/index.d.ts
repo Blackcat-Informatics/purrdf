@@ -486,6 +486,31 @@ export class RegimeClosure {
   free(): void;
 }
 
+/**
+ * One Description-Logic reasoning service's answer and the certificate of the run
+ * that produced it. Returned by `entailConsistency`, `entailClassify`,
+ * `entailRealize`, `entailInstances`, `entailEntails`, `entailProfile`,
+ * `entailExtractModule`, `entailJustify`, and `entailExplainConclusion`.
+ */
+export class ReasoningAnswer {
+  private constructor();
+  /**
+   * The service's answer, in the service's own line-oriented rendering. A
+   * dataset-valued answer (`entailExtractModule`, `entailJustify`) is canonical
+   * (RDFC-1.0) N-Quads instead.
+   */
+  readonly answer: string;
+  /**
+   * How completely the service decided: the `purrdf-dl-certificate 1` block for a
+   * tableau service (`entailConsistency`, `entailClassify`, `entailRealize`,
+   * `entailInstances`, `entailEntails`), or that service's own certificate grammar
+   * for the three that run no tableau (`entailProfile`, `entailExtractModule`,
+   * `entailExplainConclusion`).
+   */
+  readonly certificate: string;
+  free(): void;
+}
+
 export class QueryEngine {
   constructor();
   query(dataset: Dataset, sparql: string, options?: QueryOptions | null): QueryResult;
@@ -567,6 +592,120 @@ export function entailRules(regime: EntailmentRegime | string): string[];
 export function entailImplementedRules(regime: EntailmentRegime | string): string[];
 export function entailCheckGoldenVectors(): void;
 export function entailCheckInconsistentRefusal(): void;
+
+/** The `bot`/`top`/`star` locality-module extraction methods `entailExtractModule` accepts. */
+export type ModuleExtractionMethod = "bot" | "top" | "star";
+
+/**
+ * `entailConsistency(document, stepCap)` → is the knowledge base consistent?
+ *
+ * `stepCap` narrows the per-decision tableau step cap; `0` means the knowledge
+ * base's own cap, not a cap of zero steps. The one DL service that answers for an
+ * unsatisfiable ontology, because it is the one that detects one.
+ *
+ * Throws if `document` fails to parse or the reverse mapping fails.
+ */
+export function entailConsistency(document: string, stepCap: number): ReasoningAnswer;
+
+/**
+ * `entailClassify(document, stepCap)` → the entailed subsumption hierarchy over the
+ * ontology's named classes: `equivalent`, `subclass` (the full transitively-closed
+ * relation), `direct` (its transitive reduction) and `unsatisfiable` lines.
+ *
+ * Throws on a malformed document, or on an ontology with no model.
+ */
+export function entailClassify(document: string, stepCap: number): ReasoningAnswer;
+
+/**
+ * `entailRealize(document, stepCap)` → the entailed types of the ontology's named
+ * individuals, and the most specific of them (`type` then `direct-type` lines).
+ *
+ * Throws on a malformed document or an ontology with no model.
+ */
+export function entailRealize(document: string, stepCap: number): ReasoningAnswer;
+
+/**
+ * `entailInstances(document, classTerm, stepCap)` → the named individuals entailed
+ * to be instances of `classTerm`, as `instance <term>` lines.
+ *
+ * `classTerm` is ONE N-Triples term — `"<http://example.org/Cat>"`, angle brackets
+ * included. A class the ontology never mentions is not an error: the empty answer
+ * for it is a real answer.
+ *
+ * Throws on a malformed document, a `classTerm` that is not one N-Triples term, or
+ * an ontology with no model.
+ */
+export function entailInstances(
+  document: string,
+  classTerm: string,
+  stepCap: number,
+): ReasoningAnswer;
+
+/**
+ * `entailEntails(document, axiom, stepCap)` → does the ontology entail `axiom`?
+ *
+ * `axiom` is ONE triple of the OWL 2 RDF mapping, in N-Triples syntax; seven
+ * reserved predicates select the seven named axiom kinds and any other predicate is
+ * an object-property assertion. The answer is `entails true|false|unknown` followed
+ * by the axiom as it was read.
+ *
+ * Throws on a malformed document, an `axiom` that is not one triple, or an ontology
+ * with no model.
+ */
+export function entailEntails(
+  document: string,
+  axiom: string,
+  stepCap: number,
+): ReasoningAnswer;
+
+/**
+ * `entailProfile(document)` → which OWL 2 profiles the ontology is provably in
+ * (`certified <profile>` lines, most restrictive first), and what blocked the
+ * others. Purely syntactic: no tableau, no closure, no budget.
+ *
+ * Throws on a malformed document.
+ */
+export function entailProfile(document: string): ReasoningAnswer;
+
+/**
+ * `entailExtractModule(document, signature, method)` → the locality module of the
+ * ontology for a seed signature, as canonical (RDFC-1.0) N-Quads.
+ *
+ * `signature` is one N-Triples term per line (blank lines ignored). `method` is
+ * `bot`, `top` or `star`; an unknown spelling throws with the accepted set named.
+ */
+export function entailExtractModule(
+  document: string,
+  signature: string,
+  method: ModuleExtractionMethod | string,
+): ReasoningAnswer;
+
+/**
+ * `entailJustify(document, axiom)` → WHY a Description-Logic axiom is entailed: a
+ * minimal subset of the ontology (as canonical N-Quads) that still entails it.
+ *
+ * Throws if the ontology does not entail the axiom, or if the tableau could not
+ * decide it.
+ */
+export function entailJustify(document: string, axiom: string): ReasoningAnswer;
+
+/**
+ * `entailExplainConclusion(document, regime, conclusion)` → WHY one triple of a
+ * chase closure holds: which rules, from which premises.
+ *
+ * `conclusion` is ONE N-Quads statement; its graph, if it names one, selects the
+ * closure to explain.
+ *
+ * Throws for `rdf` and `rdfs` (four of whose rules conclude about a fresh blank
+ * node with no checkable proof term), or for a conclusion that is neither asserted
+ * nor derived.
+ */
+export function entailExplainConclusion(
+  document: string,
+  regime: EntailmentRegime | string,
+  conclusion: string,
+): ReasoningAnswer;
+
 export function shaclEntail(shapesTtl: string, dataNt: string): string;
 export function shaclValidateToSarif(shapesTtl: string, dataNt: string): string;
 export function version(): string;

@@ -95,6 +95,7 @@ check: ## The full local gate: fmt, clippy, build, tests, hygiene.
 	bash scripts/check-generated.sh
 	python3 scripts/check-issue-refs.py
 	python3 scripts/check-versions.py
+	python3 scripts/check-wasm-js-exports.py
 	cargo test --workspace --locked
 	$(MAKE) rdf-core-hygiene
 	$(MAKE) wasm
