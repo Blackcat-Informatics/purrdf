@@ -66,6 +66,15 @@ difference is the gap, and it is also what a `ReasoningReport` reports as
 The per-rule table is generated from this crate's own API and drift-guarded:
 [`docs/book/src/entailment-rules.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/book/src/entailment-rules.md).
 
+Neither column counts an **extension** — a rule this crate fires that no
+specification table states. `OWL-RL` has one, `ext-eq-diff-sym` (symmetry of
+`owl:differentFrom`, sound and shaped exactly like `prp-symp`); every other regime
+has none. It is in neither `rules()` nor `implemented()` for any regime, because
+those name specification rules and adding a sound rule the table omits does not
+change what the table says. Ask `extensions(regime)` for the list, or read the
+`extension` lines of any report: a caller who must act only on normative
+conclusions can see exactly what to discount.
+
 Three bounds are stated rather than papered over:
 
 * **The four existential rules fire, and their conclusions are withheld.**

@@ -77,6 +77,7 @@ def test_engines_expose_expected_surface() -> None:
     assert hasattr(purrdf.entail, "materialize_nt")
     assert hasattr(purrdf.entail, "rules")
     assert hasattr(purrdf.entail, "implemented_rules")
+    assert hasattr(purrdf.entail, "extensions")
     assert hasattr(purrdf.entail, "Regime")
     assert hasattr(purrdf.slice, "SliceCatalog")
     assert hasattr(purrdf.gts, "gts_from_quads")

@@ -56,9 +56,9 @@ use std::os::raw::c_char;
 
 use purrdf_validate::regime::{
     ReasoningAnswer, classify_to_string, consistency_to_string, entails_to_string,
-    explain_conclusion_to_string, extract_module_to_string, implemented_rules_string,
-    instances_to_string, justify_to_string, materialize_to_nquads_string, profile_to_string,
-    realize_to_string, rules_string,
+    explain_conclusion_to_string, extension_rules_string, extract_module_to_string,
+    implemented_rules_string, instances_to_string, justify_to_string, materialize_to_nquads_string,
+    profile_to_string, realize_to_string, rules_string,
 };
 
 use crate::buffer::PurrdfBuffer;
@@ -231,6 +231,49 @@ pub unsafe extern "C" fn purrdf_entail_implemented_rules(
             }
             let regime = cstr_to_str(regime)?;
             let bytes = implemented_rules_bytes(regime)
+                .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
+            *out_buffer = PurrdfBuffer::into_raw(bytes);
+            Ok(PurrdfStatus::Ok)
+        })
+    }
+}
+
+/// The rules this build fires beyond the specification table, one name per line.
+/// Native-testable, pointer-free core.
+fn extensions_bytes(regime: &str) -> Result<Vec<u8>, String> {
+    Ok(extension_rules_string(regime)?.into_bytes())
+}
+
+/// Write the rules this build fires BEYOND `regime`'s specification table to
+/// `*out_buffer` (free with `purrdf_buffer_free`).
+///
+/// Disjoint from both `purrdf_entail_rules(regime)` and
+/// `purrdf_entail_implemented_rules(regime)`: the normative table is a statement
+/// about the specification and does not move because this build fires a sound rule
+/// the table happens not to list. A rendered report names the same rules on its
+/// `extension` line — this answers the question without materializing a dataset
+/// first. Empty for a lane with nothing added to it.
+///
+/// # Safety
+/// `regime` must be a non-null, NUL-terminated C string; `out_buffer` must be a
+/// writable pointer; `out_error` must be null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_entail_extensions(
+    regime: *const c_char,
+    out_buffer: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    // SAFETY: identical contract to `purrdf_entail_rules` above.
+    unsafe {
+        ffi_try!(out_error, {
+            if regime.is_null() || out_buffer.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_entail_extensions",
+                ));
+            }
+            let regime = cstr_to_str(regime)?;
+            let bytes = extensions_bytes(regime)
                 .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
             *out_buffer = PurrdfBuffer::into_raw(bytes);
             Ok(PurrdfStatus::Ok)

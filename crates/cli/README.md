@@ -212,6 +212,11 @@ entailment conformance: on W3C's own OWL 2 RL entailment tests this chase scores
 **11 of 27 positive and 23 of 23 negative**, the latter meaning no unsoundness was
 found. Both numbers are true and stating only the first is an overclaim; see
 [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md).
+
+One further rule fires under `owl-rl` that no specification table states:
+`ext-eq-diff-sym`, symmetry of `owl:differentFrom`. It is counted in neither
+number above, and every report names it on an `extension` line, so a run whose
+conclusions must be strictly normative can be filtered from the report itself.
 The per-rule table is generated from the library's own API and drift-guarded:
 [`docs/book/src/entailment-rules.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/book/src/entailment-rules.md).
 

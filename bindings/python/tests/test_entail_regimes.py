@@ -343,6 +343,52 @@ def test_implemented_rules_are_measurable_against_the_specification_table() -> N
     assert [rule for rule in spec if rule in fired] == fired
 
 
+def test_extensions_name_what_this_build_adds_beyond_the_table() -> None:
+    """A third inventory, disjoint from the other two, answerable without materializing.
+
+    `rules()` and `implemented_rules()` are both statements about the
+    specification table. Neither can express "this build also fires a sound rule
+    the table omits", and before this was bound the only way to find that out was
+    to close a dataset and read the report's `extension` line. Asking is now a
+    question in its own right.
+    """
+    added = entail.extensions(entail.Regime.OWL_RL)
+    assert added == ["ext-eq-diff-sym"]
+
+    # Extending a lane is a decision taken per lane; only one has been taken.
+    for regime in [entail.Regime.SIMPLE, entail.Regime.RDF, entail.Regime.RDFS,
+                   entail.Regime.D, *NO_RULE_TABLE]:
+        assert entail.extensions(regime) == [], str(regime)
+
+    # The load-bearing invariant, over EVERY regime: an extension appears in
+    # neither normative inventory. The 78 stays 78 because what a sound rule the
+    # table omits does to this build does not change what the table says.
+    for regime in [*RULE_TABLE_REGIMES, *NO_RULE_TABLE]:
+        spec = entail.rules(regime)
+        fired = entail.implemented_rules(regime)
+        for rule in entail.extensions(regime):
+            assert rule not in spec, f"{regime}: {rule} is not a specification rule"
+            assert rule not in fired, f"{regime}: {rule} is not an implemented rule"
+    assert len(entail.rules(entail.Regime.OWL_RL)) == 78
+    assert len(entail.implemented_rules(entail.Regime.OWL_RL)) == 78
+
+    # And the report names the same rules the inventory does, so the two
+    # disclosures cannot drift apart.
+    _closure, report = entail.materialize(_dataset(), entail.Regime.OWL_RL, "")
+    reported = [
+        line.removeprefix("extension ")
+        for line in report.splitlines()
+        if line.startswith("extension ")
+    ]
+    assert reported == added
+
+
+def test_extensions_rejects_an_unknown_regime() -> None:
+    """The same hard failure the other two inventories give, naming the accepted set."""
+    with pytest.raises(ValueError, match="accepted: simple, rdf, rdfs"):
+        entail.extensions("rdfs-plus")
+
+
 @pytest.mark.parametrize("regime", RULE_TABLE_REGIMES, ids=lambda r: str(r))
 def test_the_gap_is_exactly_the_reports_missing_lines(regime: entail.Regime) -> None:
     """The inventory and the report cannot drift apart."""

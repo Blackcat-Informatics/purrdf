@@ -71,7 +71,10 @@ caller-supplied configuration.
   query-directed OWL-Direct and RIF, entirely in interned
   `TermId` space. Every closure comes back with a `ReasoningReport` saying which
   rules fired, which did not, which boundaries the run met, and the contract hash
-  of the calculus it ran. The umbrella `query_with_entailment` façade keeps query
+  of the calculus it ran, and disclosing on an `extension` line the one rule that
+  fires without a specification table behind it (`ext-eq-diff-sym`, symmetry of
+  `owl:differentFrom` under OWL 2 RL — counted in neither figure above and named by
+  `extensions(regime)`). The umbrella `query_with_entailment` façade keeps query
   parsing and the selected regime together; RIF-XML imports stay caller-resolved
   and network-free.
 - **GTS graph transport** — a single-file, content-addressed, append-only

@@ -38,7 +38,7 @@
 //! GIL, calls that boundary, and maps its `Result<_, String>` onto `ValueError`.
 //! That is its whole job.
 //!
-//! # Why both [`rules`] and [`implemented_rules`]
+//! # Why all three of [`rules`], [`implemented_rules`] and [`extensions`]
 //!
 //! `rules(regime)` is the rule table the specification *defines* the regime by;
 //! `implemented_rules(regime)` is the subset this workspace's chase currently
@@ -50,15 +50,23 @@
 //! The same gap appears as the `missing` lines of the rendered report
 //! that every materialization returns; the report is never optional here, for the
 //! reason [`purrdf_validate::regime`] documents at length.
+//!
+//! [`extensions`] is the third inventory, and it is disjoint from both others: the
+//! rules this build fires that the specification table does not list. Neither of
+//! the other two can express that — both are statements ABOUT the table — so
+//! without it a caller had to materialize a dataset and read a report line to
+//! learn what a build adds. A non-normative rule that is sound is still a
+//! behaviour difference, and a caller who needs strictly table-defined behaviour
+//! has to be able to see it before deciding.
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use purrdf_validate::regime::{
     REGIME_NAMES, classify_to_string, consistency_to_string, entails_to_string,
-    explain_conclusion_to_string, extract_module_to_string, implemented_rules_string,
-    instances_to_string, justify_to_string, materialize_to_nquads_string, parse_regime,
-    profile_to_string, realize_to_string, regime_name, regime_plan, regime_rule_set,
+    explain_conclusion_to_string, extension_rules_string, extract_module_to_string,
+    implemented_rules_string, instances_to_string, justify_to_string, materialize_to_nquads_string,
+    parse_regime, profile_to_string, realize_to_string, regime_name, regime_plan, regime_rule_set,
     render_entail_error, render_reasoning_report, rules_string,
 };
 
@@ -286,6 +294,26 @@ fn rules(regime: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
 fn implemented_rules(regime: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
     // As in `rules`: a static-table lookup, so no GIL release.
     let table = implemented_rules_string(regime_name(native_regime(regime)?))
+        .map_err(PyValueError::new_err)?;
+    Ok(table.lines().map(str::to_owned).collect())
+}
+
+/// The rules this build fires BEYOND `regime`'s specification table.
+///
+/// Disjoint from both [`rules`] and [`implemented_rules`] by construction: the
+/// normative table is a statement about the specification, and it does not move
+/// because this workspace fires a sound rule the table happens not to list. A
+/// rendered report names the same rules on its `extension` line — this answers
+/// the question without materializing a dataset first.
+///
+/// `[]` for a lane with nothing added to it, which is every lane but `OWL-RL`.
+///
+/// Raises `ValueError` for an unknown regime spelling, naming the accepted set.
+#[pyfunction]
+#[pyo3(signature = (regime))]
+fn extensions(regime: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
+    // As in `rules`: a static-table lookup, so no GIL release.
+    let table = extension_rules_string(regime_name(native_regime(regime)?))
         .map_err(PyValueError::new_err)?;
     Ok(table.lines().map(str::to_owned).collect())
 }
@@ -538,6 +566,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(materialize_nt, m)?)?;
     m.add_function(wrap_pyfunction!(rules, m)?)?;
     m.add_function(wrap_pyfunction!(implemented_rules, m)?)?;
+    m.add_function(wrap_pyfunction!(extensions, m)?)?;
     m.add_function(wrap_pyfunction!(consistency, m)?)?;
     m.add_function(wrap_pyfunction!(classify, m)?)?;
     m.add_function(wrap_pyfunction!(realize, m)?)?;

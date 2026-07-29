@@ -467,6 +467,31 @@ int main(int argc, char **argv) {
     CHECK(rule_len > 0, "the OWL 2 RL rule table is not empty");
     purrdf_buffer_free(rule_table);
 
+    /* what this build fires BEYOND that table — a third, disjoint inventory. The
+     * exact bytes, not merely non-emptiness: a caller filtering for strictly
+     * normative conclusions has to be able to read the name. */
+    PurrdfBuffer *added = NULL;
+    rc = purrdf_entail_extensions("owl-rl", &added, &error);
+    CHECK(rc == PURRDF_STATUS_OK && added != NULL, "entail_extensions(owl-rl)");
+    const uint8_t *added_bytes = NULL;
+    size_t added_len = 0;
+    purrdf_buffer_data(added, &added_bytes, &added_len);
+    CHECK(added_len == strlen("ext-eq-diff-sym\n") &&
+              memcmp(added_bytes, "ext-eq-diff-sym\n", added_len) == 0,
+          "the OWL 2 RL lane's one extension is named");
+    printf("entail_extensions(owl-rl): %.*s", (int)added_len, (const char *)added_bytes);
+    purrdf_buffer_free(added);
+
+    /* and a lane with nothing added to it is EMPTY, not absent */
+    PurrdfBuffer *none = NULL;
+    rc = purrdf_entail_extensions("rdfs", &none, &error);
+    CHECK(rc == PURRDF_STATUS_OK && none != NULL, "entail_extensions(rdfs)");
+    const uint8_t *none_bytes = NULL;
+    size_t none_len = 0;
+    purrdf_buffer_data(none, &none_bytes, &none_len);
+    CHECK(none_len == 0, "RDFS has had no extension taken for it");
+    purrdf_buffer_free(none);
+
     /* the OWL 2 Direct-Semantics services: an answer AND its certificate.
      * `A ⊑ B ⊑ C` with one instance of `A` — enough to entail `A ⊑ C`, which is
      * asserted nowhere. */

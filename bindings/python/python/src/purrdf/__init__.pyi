@@ -12,7 +12,13 @@
 from __future__ import annotations
 
 import builtins
-from typing import IO, Any, Callable, Literal, TypeAlias, TypedDict, overload
+from typing import IO, Any, Callable, TypeAlias, TypedDict, overload
+
+# `Literal` is aliased because this package DEFINES an RDF `Literal` class below.
+# Importing typing's under its own name shadows it, and mypy then resolves the RDF
+# class in `_Term` to `typing.Literal` and demands type parameters for it. Same
+# reason `builtins` is imported qualified above.
+from typing import Literal as TypingLiteral
 
 # ── Statement codec (bindings/python/src/rdf.rs) ────────────────────────────────
 
@@ -26,7 +32,7 @@ def canonicalize_turtle(
 
 # ── Deterministic graph/tabular/research-object projection carriers ────────────
 
-type ProjectionProfile = Literal[
+type ProjectionProfile = TypingLiteral[
     "lpg-csv",
     "neo4j-csv",
     "open-cypher",
@@ -44,7 +50,7 @@ type ProjectionProfile = Literal[
     "void",
     "frictionless-data-package-1",
 ]
-type LiftProfile = Literal[
+type LiftProfile = TypingLiteral[
     "lpg-csv",
     "neo4j-csv",
     "open-cypher",
@@ -56,7 +62,7 @@ type LiftProfile = Literal[
     "dcat-3",
     "frictionless-data-package-1",
 ]
-type ArtifactEvent = Literal[
+type ArtifactEvent = TypingLiteral[
     "begin-package",
     "begin-artifact",
     "chunk",
@@ -136,7 +142,7 @@ def project_artifacts(
     data: bytes | str,
     *,
     format: RdfFormat,
-    profile: Literal["lpg-csv", "neo4j-csv", "open-cypher", "graphml"],
+    profile: TypingLiteral["lpg-csv", "neo4j-csv", "open-cypher", "graphml"],
     config: bytes | str,
     artifact_callback: Callable[[ArtifactEvent, str | None, bytes], None],
     progress_callback: Callable[[ProjectionProgress], None] | None = ...,
@@ -800,6 +806,11 @@ class entail:
     # difference between the two is the regime's measurable gap.
     @staticmethod
     def implemented_rules(regime: RegimeLike) -> list[str]: ...
+    # The rules this build fires BEYOND the specification table, disjoint from
+    # both lists above. Non-normative and named, so a caller can tell what this
+    # build adds without materializing a dataset to read a report line.
+    @staticmethod
+    def extensions(regime: RegimeLike) -> list[str]: ...
 
     # ── The OWL 2 Direct-Semantics reasoning services ────────────────────────
     # A different LANE from the four above. `materialize*` is the chase, whose

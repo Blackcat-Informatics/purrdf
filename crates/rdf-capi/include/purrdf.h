@@ -542,6 +542,25 @@ int32_t purrdf_entail_implemented_rules(const char *regime,
                                         PurrdfError **out_error);
 
 /**
+ * Write the rules this build fires BEYOND `regime`'s specification table to
+ * `*out_buffer` (free with `purrdf_buffer_free`).
+ *
+ * Disjoint from both `purrdf_entail_rules(regime)` and
+ * `purrdf_entail_implemented_rules(regime)`: the normative table is a statement
+ * about the specification and does not move because this build fires a sound rule
+ * the table happens not to list. A rendered report names the same rules on its
+ * `extension` line — this answers the question without materializing a dataset
+ * first. Empty for a lane with nothing added to it.
+ *
+ * # Safety
+ * `regime` must be a non-null, NUL-terminated C string; `out_buffer` must be a
+ * writable pointer; `out_error` must be null or writable.
+ */
+int32_t purrdf_entail_extensions(const char *regime,
+                                 PurrdfBuffer **out_buffer,
+                                 PurrdfError **out_error);
+
+/**
  * Decide whether an ontology has a model at all.
  *
  * `document` is parsed as N-Quads (which accepts N-Triples). `step_cap` narrows

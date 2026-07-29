@@ -243,7 +243,19 @@ defined = entail.rules("owl-rl")             # 78 — OWL 2 Profiles §4.3 Table
 fired = entail.implemented_rules("owl-rl")   # 78
 missing = [rule for rule in entail.rules("rdfs") if rule not in entail.implemented_rules("rdfs")]
 # [] — RDFS fires 18 of its 18 rules; the gap is legitimately empty
+added = entail.extensions("owl-rl")          # ['ext-eq-diff-sym']
 ```
+
+`extensions(regime)` is a third, disjoint inventory: the rules this build fires
+that **no specification table states**. `owl-rl` has one — `ext-eq-diff-sym`,
+symmetry of `owl:differentFrom`, sound and shaped exactly like `prp-symp` — and
+every other regime has none. It appears in neither `rules()` nor
+`implemented_rules()` for any regime, so the 78 above is unaffected by it: those
+two are statements about the specification, and firing a sound rule the table
+omits does not change what the table says. Asking is a question in its own right
+rather than something you learn by materializing a dataset and reading the
+report's `extension` line — though the report says the same thing, and the two
+cannot drift apart.
 
 `rdfD1`, `rdfD1a`, `rdfs14` and `rdfs14a` are in that fired set and each concludes
 about a *fresh* blank node. The restricted chase mints one as a frontier-addressed

@@ -590,6 +590,14 @@ export function entailMaterialize(
 ): RegimeClosure;
 export function entailRules(regime: EntailmentRegime | string): string[];
 export function entailImplementedRules(regime: EntailmentRegime | string): string[];
+/**
+ * The rules this build fires BEYOND `regime`'s specification table.
+ *
+ * Disjoint from both `entailRules` and `entailImplementedRules`: the normative table
+ * is a statement about the specification and does not move because this build fires a
+ * sound rule the table happens not to list. `[]` for a lane with nothing added to it.
+ */
+export function entailExtensions(regime: EntailmentRegime | string): string[];
 export function entailCheckGoldenVectors(): void;
 export function entailCheckInconsistentRefusal(): void;
 

@@ -9,7 +9,8 @@
 // entailImplementedRules, entailCheckGoldenVectors,
 // entailCheckInconsistentRefusal, entailConsistency, entailClassify,
 // entailRealize, entailInstances, entailEntails, entailProfile,
-// entailExtractModule, entailJustify, entailExplainConclusion) are re-exported
+// entailExtensions, entailExtractModule, entailJustify,
+// entailExplainConclusion) are re-exported
 // as-is — the whole `#[wasm_bindgen]` surface is reachable from the package
 // root, so SHACL validation/entailment, the DL reasoning services, and
 // Dataset.canonicalize()/isomorphic() need no deep `./pkg/` import. This
@@ -34,6 +35,7 @@ import init, {
   entailConsistency,
   entailEntails,
   entailExplainConclusion,
+  entailExtensions,
   entailExtractModule,
   entailImplementedRules,
   entailInstances,
@@ -363,6 +365,7 @@ export {
   entailConsistency,
   entailEntails,
   entailExplainConclusion,
+  entailExtensions,
   entailExtractModule,
   entailImplementedRules,
   entailInstances,

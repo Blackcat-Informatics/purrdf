@@ -3,7 +3,7 @@
 
 // Node real-execution conformance for the entailment-REGIME surface reached through
 // the PUBLIC package root (`../index.mjs`) — `entailMaterialize` / `entailRules` /
-// `entailImplementedRules` / `entailCheckGoldenVectors`. Not to be confused with
+// `entailImplementedRules` / `entailExtensions` / `entailCheckGoldenVectors`. Not to be confused with
 // `shaclEntail` (tests/shacl.test.mjs), which is SHACL-AF `sh:rule` entailment over a
 // shapes graph; these close a document under a regime's own specification rule table.
 //
@@ -30,6 +30,7 @@ import {
   entailConsistency,
   entailEntails,
   entailExplainConclusion,
+  entailExtensions,
   entailExtractModule,
   entailImplementedRules,
   entailInstances,
@@ -208,7 +209,7 @@ test("entailMaterialize rejects a malformed document (never a silent empty closu
 });
 
 test("the rule inventories are the specification tables, and the gap is measurable", () => {
-  // OWL 2 Profiles §4.3 Tables 4-9; RDF 1.1 Semantics §9.2.1.
+  // OWL 2 Profiles §4.3 Tables 4-9; RDF 1.2 Semantics §8.1.1 and §9.2.1.
   assert.equal(entailRules("owl-rl").length, 78);
   assert.equal(entailRules("rdfs").length, 18);
   assert.equal(entailRules("rdf").length, 3);
@@ -241,6 +242,40 @@ test("the rule inventories are the specification tables, and the gap is measurab
 test("the rule inventories reject an unknown regime, naming the accepted set", () => {
   assert.throws(() => entailRules("rdfs-plus"), /accepted: simple, rdf, rdfs/);
   assert.throws(() => entailImplementedRules("rdfs-plus"), /accepted: simple, rdf, rdfs/);
+  assert.throws(() => entailExtensions("rdfs-plus"), /accepted: simple, rdf, rdfs/);
+});
+
+test("entailExtensions names what this build adds beyond the specification table", () => {
+  // Asking is not the same as materializing: a caller learns what the build adds
+  // without closing a dataset first, which is the whole reason this is bound.
+  assert.deepEqual(entailExtensions("owl-rl"), ["ext-eq-diff-sym"]);
+
+  // Extending a lane is a decision taken per lane, and only one has been taken.
+  for (const regime of ["simple", "rdf", "rdfs", "owl-direct", "rif", "d"]) {
+    assert.deepEqual(entailExtensions(regime), [], regime);
+  }
+
+  // The load-bearing invariant: an extension is in NEITHER normative inventory,
+  // for every regime. The 78 stays 78 because a sound rule the table omits does
+  // not change what the table says.
+  for (const regime of ["simple", "rdf", "rdfs", "owl-rl", "owl-direct", "rif", "d"]) {
+    const defined = entailRules(regime);
+    const fired = entailImplementedRules(regime);
+    for (const rule of entailExtensions(regime)) {
+      assert.ok(!defined.includes(rule), `${regime}: ${rule} not in rules()`);
+      assert.ok(!fired.includes(rule), `${regime}: ${rule} not in implemented()`);
+    }
+  }
+  assert.equal(entailRules("owl-rl").length, 78);
+  assert.equal(entailImplementedRules("owl-rl").length, 78);
+
+  // And the report's `extension` line names the same rules the inventory does,
+  // so the two disclosures cannot drift apart.
+  const reported = entailMaterialize(SCHEMA, "owl-rl", "")
+    .report.split("\n")
+    .filter((line) => line.startsWith("extension "))
+    .map((line) => line.slice("extension ".length));
+  assert.deepEqual(reported, entailExtensions("owl-rl"));
 });
 
 // ── The Description-Logic reasoning services, driven through the PACKAGE ROOT ──

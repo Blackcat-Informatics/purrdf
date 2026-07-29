@@ -133,6 +133,69 @@ def load_rule_inventory() -> dict[str, tuple[int, int]]:
     return {name: (int(defined), int(impl)) for name, defined, impl in rows}
 
 
+def load_rule_extensions() -> list[str]:
+    """Every rule this workspace fires that no specification table states.
+
+    Read from the same generated inventory as ``load_rule_inventory``, so the two
+    cannot disagree about what is normative. An empty result is legitimate — a
+    build that extends nothing — and the disclosure claim below is then vacuous
+    rather than failing.
+    """
+    text = _read(_INVENTORY)
+    section = re.search(r"\n## Extensions\n(.*?)(?:\n## |\Z)", text, re.DOTALL)
+    if not section:
+        raise SystemExit(
+            f"check-doc-claims: no '## Extensions' section in "
+            f"{_INVENTORY.relative_to(_REPO)}; the generator always emits one "
+            f"(empty when nothing is extended), so a missing section means the "
+            f"generator changed shape and this claim would silently pass"
+        )
+    return re.findall(
+        r"^\| [A-Za-z-]+ \| `[a-z-]+` \| `([a-z0-9-]+)` \|$",
+        section.group(1),
+        re.MULTILINE,
+    )
+
+
+def extension_disclosure_claim(extensions: list[str]) -> list[str]:
+    """A document that publishes the coverage table must NAME what exceeds it.
+
+    The coverage claim above compels every such document to restate the defined
+    and implemented counts, and nothing compelled it to mention a rule that fires
+    outside both. That combination is worse than an unchecked document: a gate
+    holds the number continuously true while the sentence around it stays
+    materially incomplete, so a reader who trusts the gate is misled by exactly
+    the part it verifies. Requiring the extension NAMES rather than a count keeps
+    this structural — a second extension fails this the day it lands.
+
+    The document set is the UNION of the tables discovered structurally and the
+    registered READMEs that state the rule-table claim in prose. Restricting it to
+    table-carriers alone would leave the front pages that say "all 78 rules"
+    without publishing a table — the highest-traffic prose in the repository —
+    ungated.
+    """
+    problems: list[str] = []
+    documents = sorted(
+        set(rule_coverage_documents())
+        | {_README, _ENTAIL_README, _PURRDF_README, _CLI_README, _PY_README}
+    )
+    for path in documents:
+        rel = path.relative_to(_REPO)
+        text = _read(path)
+        for rule in extensions:
+            if f"`{rule}`" not in text:
+                problems.append(
+                    f"{rel}: states the rule-table coverage but never names "
+                    f"`{rule}`, a rule this build fires that no specification "
+                    f"table states. A document that publishes the coverage "
+                    f"counts must also disclose what fires beyond them, or it is "
+                    f"a continuously-verified number wrapped in an incomplete "
+                    f"sentence (docs/book/src/entailment-rules.md "
+                    f"'## Extensions')"
+                )
+    return problems
+
+
 # ---------------------------------------------------------------------------
 # Source 2 — the generated conformance-matrix block
 # ---------------------------------------------------------------------------
@@ -517,7 +580,7 @@ def rule_coverage_table_claims(
 # `class entail` is a reasoning service, and the Python README documents each one
 # in its service table. Mirrors the stub's own two-block layout.
 _CHASE_ENTRY_POINTS = frozenset(
-    {"materialize", "materialize_nt", "rules", "implemented_rules"}
+    {"materialize", "materialize_nt", "rules", "implemented_rules", "extensions"}
 )
 
 
@@ -1329,6 +1392,8 @@ def main() -> int:
     problems.extend(rl_matrix_agreement_claim(matrix, lanes))
     checked += 1
     problems.extend(py_service_table_claim(load_py_entail_services()))
+    checked += 1
+    problems.extend(extension_disclosure_claim(load_rule_extensions()))
     checked += 1
 
     for claim in build_claims(inventory, matrix, census, lanes):

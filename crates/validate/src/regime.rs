@@ -86,7 +86,7 @@ use purrdf_core::{RdfLiteral, RdfTerm, RdfTriple, TermValue, emit_term};
 use purrdf_entail::{
     ChaseProof, Completeness, DlAxiom, DlCertificate, DlCompleteness, EntailError, Justification,
     Materialization, ModuleMethod, OwlProfile, ProfileCertificate, Reasoner, ReasoningReport,
-    Regime, RuleSet, Verdict, explain_conclusion, extract_module, implemented, justify,
+    Regime, RuleSet, Verdict, explain_conclusion, extensions, extract_module, implemented, justify,
     materialize, parse_rif_xml, profile, rules,
 };
 
@@ -442,6 +442,41 @@ pub fn rules_string(regime: &str) -> Result<String, String> {
 /// ```
 pub fn implemented_rules_string(regime: &str) -> Result<String, String> {
     Ok(rule_lines(implemented(parse_regime(regime)?)))
+}
+
+/// The rules `regime`'s lane fires BEYOND its specification table, one name per line.
+///
+/// The empty string for a lane with nothing added to it. These names appear in neither
+/// [`rules_string`] nor [`implemented_rules_string`]: the normative table is a statement
+/// about the specification and does not move because this workspace fires a sound rule the
+/// table happens not to list. A rendered report discloses the same names on its
+/// `extension` line, but a caller should not have to materialize a dataset to find out
+/// what a build adds — that is the question this answers.
+///
+/// # Errors
+///
+/// An unknown `regime` spelling; the message names the accepted set.
+///
+/// ```
+/// use purrdf_validate::regime::{extension_rules_string, implemented_rules_string, rules_string};
+///
+/// let added = extension_rules_string("owl-rl").expect("known");
+/// // Whatever the lane adds is disjoint from the table it is defined by, and from the
+/// // subset of that table which fires. Both hold by construction, for every lane.
+/// for rule in added.lines() {
+///     assert!(!rules_string("owl-rl").expect("known").lines().any(|r| r == rule));
+///     assert!(
+///         !implemented_rules_string("owl-rl")
+///             .expect("known")
+///             .lines()
+///             .any(|r| r == rule)
+///     );
+/// }
+/// // Extending a lane is a decision taken per lane; RDFS has had none taken for it.
+/// assert_eq!(extension_rules_string("rdfs").expect("known"), "");
+/// ```
+pub fn extension_rules_string(regime: &str) -> Result<String, String> {
+    Ok(rule_lines(extensions(parse_regime(regime)?)))
 }
 
 /// `rules`, one canonical specification name per line, newline-terminated.

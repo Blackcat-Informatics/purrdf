@@ -40,7 +40,7 @@
 use purrdf_validate::regime::{
     ReasoningAnswer as BoundaryAnswer, RegimeClosure as BoundaryClosure,
     check_inconsistent_refusal, check_regime_golden_vectors, classify_to_string,
-    consistency_to_string, entails_to_string, explain_conclusion_to_string,
+    consistency_to_string, entails_to_string, explain_conclusion_to_string, extension_rules_string,
     extract_module_to_string, implemented_rules_string, instances_to_string, justify_to_string,
     materialize_to_nquads_string, profile_to_string, realize_to_string, rules_string,
 };
@@ -162,6 +162,31 @@ pub(crate) fn implemented_rules_impl(regime: &str) -> Result<Vec<String>, String
 #[wasm_bindgen(js_name = entailImplementedRules)]
 pub fn entail_implemented_rules(regime: &str) -> Result<Vec<String>, JsError> {
     implemented_rules_impl(regime).map_err(|e| JsError::new(&e))
+}
+
+/// The rules this build fires beyond the specification table. See [`entail_extensions`].
+pub(crate) fn extensions_impl(regime: &str) -> Result<Vec<String>, String> {
+    Ok(extension_rules_string(regime)?
+        .lines()
+        .map(str::to_owned)
+        .collect())
+}
+
+/// `entailExtensions(regime)` → the rules this build fires BEYOND `regime`'s
+/// specification table, one canonical rule name per array entry.
+///
+/// Disjoint from both `entailRules(regime)` and `entailImplementedRules(regime)`:
+/// the normative table is a statement about the specification and does not move
+/// because this build fires a sound rule the table happens not to list. A rendered
+/// report names the same rules on its `extension` line — this answers the question
+/// without materializing a dataset first.
+///
+/// `[]` for a lane with nothing added to it, which is every lane but `owl-rl`.
+///
+/// Throws for an unknown regime spelling, naming the accepted set.
+#[wasm_bindgen(js_name = entailExtensions)]
+pub fn entail_extensions(regime: &str) -> Result<Vec<String>, JsError> {
+    extensions_impl(regime).map_err(|e| JsError::new(&e))
 }
 
 /// `entailCheckGoldenVectors()` — run the committed tri-host golden vector
