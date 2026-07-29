@@ -1,0 +1,263 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# The golden vector for the PurRDF entailment-regime string boundary
+# (`purrdf_validate::regime`). ONE artifact, consumed by every host: the Rust
+# test in `purrdf-validate`, and later the C-ABI and WASM crates, all call
+# `purrdf_validate::regime::check_regime_golden_vectors()` over these bytes, so a
+# host that diverges fails against the same expectations instead of against a
+# fixture that quietly stopped agreeing with the other two.
+#
+# Format (see `parse_regime_vectors`): a line starting with `@` is a directive;
+# every other line belongs to the body the last body-directive opened; outside a
+# body only blank lines and `#` comments are legal. A body line may therefore
+# never begin with `@` — neither N-Quads nor a rendered report ever does.
+#
+#   @case <name>      opens a case
+#   @regime <name>    the regime's CLI spelling
+#   @input            body: the N-Quads/N-Triples input document
+#   @closure          body: the canonical N-Quads the closure must serialize to
+#   @report           body: the report rendering the run must produce
+#   @end              closes the case
+#
+# Every IRI is under `example.org`: PurRDF mints no vocabulary, and the only
+# non-example.org IRIs below are the `rdf:`/`rdfs:`/`owl:` terms the entailment
+# specifications themselves define.
+
+@case simple-copies-a-named-graph-verbatim
+@regime simple
+@input
+<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .
+<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .
+<http://example.org/x> <http://example.org/p> <http://example.org/y> <http://example.org/g> .
+@closure
+<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .
+<http://example.org/x> <http://example.org/p> <http://example.org/y> <http://example.org/g> .
+<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .
+@report
+purrdf-reasoning-report 1
+regime simple
+completeness exact
+budget join-steps 0
+budget stored-facts 0
+budget term-arena-bytes 0
+contract-hash 4151090ce6c2ecdae843e351420ddcf10f79e525c60b4c6d07bebeabaa07fbd5
+inconsistency none
+overclaims false
+@end
+
+@case rdf-types-every-predicate
+@regime rdf
+@input
+<http://example.org/x> <http://example.org/p> <http://example.org/y> .
+@closure
+<http://example.org/p> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://example.org/x> <http://example.org/p> <http://example.org/y> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+@report
+purrdf-reasoning-report 1
+regime rdf
+completeness sound-incomplete 2
+missing rdfD1
+missing rdfD1a
+fired rdfD2 2
+boundary axiomatic-triples RDF and RDFS Semantics fix infinite sets of axiomatic triples — the container-membership family rdf:_1, rdf:_2, … above all — and no forward chase can materialize an infinite set; none is asserted, so rdfs1 and rdfs12, whose premises those axioms supply, have nothing to fire on
+boundary datatype-value-space datatype value spaces are infinite, so the rules quantified over them (rdfD1 and rdfD1a for RDF and RDFS; dt-type2, dt-eq and dt-diff for OWL 2 RL) have no finite materialization; literals are compared by their lexical form and datatype IRI, never by their data value
+budget join-steps 3
+budget stored-facts 3
+budget term-arena-bytes 168
+contract-hash e3dfc92e2575713a6a555ef1dc5688d9086fe0a41c8eb0dd27aff5579db33158
+inconsistency none
+overclaims false
+@end
+
+@case rdfs-subclass-domain-and-range
+@regime rdfs
+@input
+<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .
+<http://example.org/B> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .
+<http://example.org/p> <http://www.w3.org/2000/01/rdf-schema#domain> <http://example.org/A> .
+<http://example.org/p> <http://www.w3.org/2000/01/rdf-schema#range> <http://example.org/B> .
+<http://example.org/x> <http://example.org/p> <http://example.org/y> .
+<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .
+@closure
+<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .
+<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .
+<http://example.org/B> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .
+<http://example.org/p> <http://www.w3.org/2000/01/rdf-schema#domain> <http://example.org/A> .
+<http://example.org/p> <http://www.w3.org/2000/01/rdf-schema#range> <http://example.org/B> .
+<http://example.org/x> <http://example.org/p> <http://example.org/y> .
+<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .
+<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> .
+<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .
+<http://example.org/y> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> .
+<http://example.org/y> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .
+@report
+purrdf-reasoning-report 1
+regime rdfs
+completeness sound-incomplete 9
+missing rdfD1
+missing rdfD1a
+missing rdfD2
+missing rdfs1
+missing rdfs4
+missing rdfs12
+missing rdfs13
+missing rdfs14
+missing rdfs14a
+fired rdfs3 1
+fired rdfs9 3
+fired rdfs11 1
+boundary axiomatic-triples RDF and RDFS Semantics fix infinite sets of axiomatic triples — the container-membership family rdf:_1, rdf:_2, … above all — and no forward chase can materialize an infinite set; none is asserted, so rdfs1 and rdfs12, whose premises those axioms supply, have nothing to fire on
+boundary datatype-value-space datatype value spaces are infinite, so the rules quantified over them (rdfD1 and rdfD1a for RDF and RDFS; dt-type2, dt-eq and dt-diff for OWL 2 RL) have no finite materialization; literals are compared by their lexical form and datatype IRI, never by their data value
+budget join-steps 37
+budget stored-facts 11
+budget term-arena-bytes 319
+contract-hash cefc117c539b1191953fd5ad560ef4e275b59e9b6089040894f71113ea33674b
+inconsistency none
+overclaims false
+@end
+
+@case owl-rl-transitive-symmetric-and-inverse
+@regime owl-rl
+@input
+<http://example.org/rel> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#TransitiveProperty> .
+<http://example.org/rel> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#SymmetricProperty> .
+<http://example.org/rel> <http://www.w3.org/2002/07/owl#inverseOf> <http://example.org/back> .
+<http://example.org/x> <http://example.org/rel> <http://example.org/y> .
+<http://example.org/y> <http://example.org/rel> <http://example.org/z> .
+@closure
+<http://example.org/rel> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#SymmetricProperty> .
+<http://example.org/rel> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#TransitiveProperty> .
+<http://example.org/rel> <http://www.w3.org/2002/07/owl#inverseOf> <http://example.org/back> .
+<http://example.org/x> <http://example.org/back> <http://example.org/x> .
+<http://example.org/x> <http://example.org/back> <http://example.org/y> .
+<http://example.org/x> <http://example.org/back> <http://example.org/z> .
+<http://example.org/x> <http://example.org/rel> <http://example.org/x> .
+<http://example.org/x> <http://example.org/rel> <http://example.org/y> .
+<http://example.org/x> <http://example.org/rel> <http://example.org/z> .
+<http://example.org/y> <http://example.org/back> <http://example.org/x> .
+<http://example.org/y> <http://example.org/back> <http://example.org/y> .
+<http://example.org/y> <http://example.org/back> <http://example.org/z> .
+<http://example.org/y> <http://example.org/rel> <http://example.org/x> .
+<http://example.org/y> <http://example.org/rel> <http://example.org/y> .
+<http://example.org/y> <http://example.org/rel> <http://example.org/z> .
+<http://example.org/z> <http://example.org/back> <http://example.org/x> .
+<http://example.org/z> <http://example.org/back> <http://example.org/y> .
+<http://example.org/z> <http://example.org/back> <http://example.org/z> .
+<http://example.org/z> <http://example.org/rel> <http://example.org/x> .
+<http://example.org/z> <http://example.org/rel> <http://example.org/y> .
+<http://example.org/z> <http://example.org/rel> <http://example.org/z> .
+@report
+purrdf-reasoning-report 1
+regime owl-rl
+completeness sound-incomplete 66
+missing eq-ref
+missing eq-sym
+missing eq-trans
+missing eq-rep-s
+missing eq-rep-p
+missing eq-rep-o
+missing eq-diff1
+missing eq-diff2
+missing eq-diff3
+missing prp-ap
+missing prp-fp
+missing prp-ifp
+missing prp-irp
+missing prp-asyp
+missing prp-spo2
+missing prp-eqp1
+missing prp-eqp2
+missing prp-pdw
+missing prp-adp
+missing prp-key
+missing prp-npa1
+missing prp-npa2
+missing cls-thing
+missing cls-nothing1
+missing cls-nothing2
+missing cls-int1
+missing cls-int2
+missing cls-uni
+missing cls-com
+missing cls-svf1
+missing cls-svf2
+missing cls-avf
+missing cls-hv1
+missing cls-hv2
+missing cls-maxc1
+missing cls-maxc2
+missing cls-maxqc1
+missing cls-maxqc2
+missing cls-maxqc3
+missing cls-maxqc4
+missing cls-oo
+missing cax-eqc1
+missing cax-eqc2
+missing cax-dw
+missing cax-adc
+missing dt-type1
+missing dt-type2
+missing dt-eq
+missing dt-diff
+missing dt-not-type
+missing scm-cls
+missing scm-eqc2
+missing scm-op
+missing scm-dp
+missing scm-eqp2
+missing scm-dom1
+missing scm-dom2
+missing scm-rng1
+missing scm-rng2
+missing scm-hv
+missing scm-svf1
+missing scm-svf2
+missing scm-avf1
+missing scm-avf2
+missing scm-int
+missing scm-uni
+fired prp-symp 3
+fired prp-trp 4
+fired prp-inv1 9
+boundary datatype-value-space datatype value spaces are infinite, so the rules quantified over them (rdfD1 and rdfD1a for RDF and RDFS; dt-type2, dt-eq and dt-diff for OWL 2 RL) have no finite materialization; literals are compared by their lexical form and datatype IRI, never by their data value
+budget join-steps 112
+budget stored-facts 21
+budget term-arena-bytes 304
+contract-hash 369fa3fbbe648a4b2c381015990cc3a2f78e606a40102d5feb3f9fabba07ce45
+inconsistency none
+overclaims false
+@end
+
+@case rdfs-abandons-a-generalized-conclusion
+@regime rdfs
+@input
+<http://example.org/label> <http://www.w3.org/2000/01/rdf-schema#range> <http://example.org/A> .
+<http://example.org/x> <http://example.org/label> "cat"^^<http://www.w3.org/2001/XMLSchema#string> .
+@closure
+<http://example.org/label> <http://www.w3.org/2000/01/rdf-schema#range> <http://example.org/A> .
+<http://example.org/x> <http://example.org/label> "cat" .
+@report
+purrdf-reasoning-report 1
+regime rdfs
+completeness sound-incomplete 9
+missing rdfD1
+missing rdfD1a
+missing rdfD2
+missing rdfs1
+missing rdfs4
+missing rdfs12
+missing rdfs13
+missing rdfs14
+missing rdfs14a
+boundary generalized-rdf a conclusion whose subject position would hold a literal or a triple term, or whose predicate position would hold anything but an IRI, is a generalized-RDF triple, which the RDF 1.2 dataset IR cannot represent; such a conclusion is derived in the evaluator's own term space and then abandoned when the answer is materialized, rather than a term being fabricated for it, so rules that can conclude into subject position (rdfs3 / prp-rng, prp-symp, prp-inv1, prp-inv2) are incomplete over literal objects
+boundary axiomatic-triples RDF and RDFS Semantics fix infinite sets of axiomatic triples — the container-membership family rdf:_1, rdf:_2, … above all — and no forward chase can materialize an infinite set; none is asserted, so rdfs1 and rdfs12, whose premises those axioms supply, have nothing to fire on
+boundary datatype-value-space datatype value spaces are infinite, so the rules quantified over them (rdfD1 and rdfD1a for RDF and RDFS; dt-type2, dt-eq and dt-diff for OWL 2 RL) have no finite materialization; literals are compared by their lexical form and datatype IRI, never by their data value
+budget join-steps 4
+budget stored-facts 3
+budget term-arena-bytes 168
+contract-hash cefc117c539b1191953fd5ad560ef4e275b59e9b6089040894f71113ea33674b
+inconsistency none
+overclaims false
+@end
