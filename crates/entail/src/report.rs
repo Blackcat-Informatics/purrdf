@@ -73,8 +73,8 @@ impl Completeness {
     ///
     /// // The identity closure has no rules to be missing.
     /// assert!(Completeness::for_regime(Regime::Simple).is_exact());
-    /// // OWL 2 RL defines 78 rules; this crate's chase fires 12 of them.
-    /// assert_eq!(Completeness::for_regime(Regime::OwlRl).missing().len(), 66);
+    /// // OWL 2 RL defines 78 rules; this crate's chase fires 37 of them.
+    /// assert_eq!(Completeness::for_regime(Regime::OwlRl).missing().len(), 41);
     /// ```
     #[must_use]
     pub fn for_regime(regime: Regime) -> Self {

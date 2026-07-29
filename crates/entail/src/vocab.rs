@@ -149,3 +149,52 @@ pub(crate) const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#f
 pub(crate) const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
 /// `rdf:nil`.
 pub(crate) const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
+
+// --- OWL 2 RL property-axiom, class-axiom and schema vocabulary (Tables 5, 7 and 9). ---
+
+/// `owl:AnnotationProperty` — the class `prp-ap` types the built-in annotation properties
+/// with.
+pub(crate) const OWL_ANNOTATIONPROPERTY: &str = "http://www.w3.org/2002/07/owl#AnnotationProperty";
+/// `owl:versionInfo` — a built-in annotation property.
+pub(crate) const OWL_VERSIONINFO: &str = "http://www.w3.org/2002/07/owl#versionInfo";
+/// `owl:priorVersion` — a built-in annotation property.
+pub(crate) const OWL_PRIORVERSION: &str = "http://www.w3.org/2002/07/owl#priorVersion";
+/// `owl:backwardCompatibleWith` — a built-in annotation property.
+pub(crate) const OWL_BACKWARDCOMPATIBLEWITH: &str =
+    "http://www.w3.org/2002/07/owl#backwardCompatibleWith";
+/// `owl:incompatibleWith` — a built-in annotation property.
+pub(crate) const OWL_INCOMPATIBLEWITH: &str = "http://www.w3.org/2002/07/owl#incompatibleWith";
+/// `owl:deprecated` — a built-in annotation property.
+pub(crate) const OWL_DEPRECATED: &str = "http://www.w3.org/2002/07/owl#deprecated";
+/// `owl:InverseFunctionalProperty`.
+pub(crate) const OWL_INVERSEFUNCTIONALPROPERTY: &str =
+    "http://www.w3.org/2002/07/owl#InverseFunctionalProperty";
+/// `owl:IrreflexiveProperty`.
+pub(crate) const OWL_IRREFLEXIVEPROPERTY: &str =
+    "http://www.w3.org/2002/07/owl#IrreflexiveProperty";
+/// `owl:AsymmetricProperty`.
+pub(crate) const OWL_ASYMMETRICPROPERTY: &str = "http://www.w3.org/2002/07/owl#AsymmetricProperty";
+/// `owl:propertyChainAxiom`.
+pub(crate) const OWL_PROPERTYCHAINAXIOM: &str = "http://www.w3.org/2002/07/owl#propertyChainAxiom";
+/// `owl:propertyDisjointWith`.
+pub(crate) const OWL_PROPERTYDISJOINTWITH: &str =
+    "http://www.w3.org/2002/07/owl#propertyDisjointWith";
+/// `owl:AllDisjointProperties`.
+pub(crate) const OWL_ALLDISJOINTPROPERTIES: &str =
+    "http://www.w3.org/2002/07/owl#AllDisjointProperties";
+/// `owl:AllDisjointClasses`.
+pub(crate) const OWL_ALLDISJOINTCLASSES: &str = "http://www.w3.org/2002/07/owl#AllDisjointClasses";
+/// `owl:members` — the list-valued property of `owl:AllDisjoint*` and `owl:AllDifferent`.
+pub(crate) const OWL_MEMBERS: &str = "http://www.w3.org/2002/07/owl#members";
+/// `owl:distinctMembers` — `owl:AllDifferent`'s other list-valued property.
+pub(crate) const OWL_DISTINCTMEMBERS: &str = "http://www.w3.org/2002/07/owl#distinctMembers";
+/// `owl:hasKey`.
+pub(crate) const OWL_HASKEY: &str = "http://www.w3.org/2002/07/owl#hasKey";
+/// `owl:sourceIndividual` — a negative property assertion's subject.
+pub(crate) const OWL_SOURCEINDIVIDUAL: &str = "http://www.w3.org/2002/07/owl#sourceIndividual";
+/// `owl:assertionProperty` — a negative property assertion's predicate.
+pub(crate) const OWL_ASSERTIONPROPERTY: &str = "http://www.w3.org/2002/07/owl#assertionProperty";
+/// `owl:targetIndividual` — a negative OBJECT-property assertion's object.
+pub(crate) const OWL_TARGETINDIVIDUAL: &str = "http://www.w3.org/2002/07/owl#targetIndividual";
+/// `owl:targetValue` — a negative DATA-property assertion's object.
+pub(crate) const OWL_TARGETVALUE: &str = "http://www.w3.org/2002/07/owl#targetValue";

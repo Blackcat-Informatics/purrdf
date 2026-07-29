@@ -52,6 +52,7 @@ pub(crate) mod axioms;
 pub(crate) mod calculus;
 pub(crate) mod engine;
 pub(crate) mod interner;
+pub(crate) mod lists;
 pub(crate) mod owl_dl;
 pub mod report;
 pub mod rif;
@@ -130,6 +131,18 @@ pub enum EntailError {
     /// [`EvalError`](purrdf_datalog::seminaive::EvalError) names which ceiling and what
     /// the run had consumed when it stopped.
     Evaluate(purrdf_datalog::seminaive::EvalError),
+    /// An RDF collection an OWL 2 axiom points at is not a well-formed collection.
+    ///
+    /// `owl:intersectionOf`, `owl:unionOf`, `owl:oneOf`, `owl:members`,
+    /// `owl:distinctMembers`, `owl:propertyChainAxiom` and `owl:hasKey` all REQUIRE their
+    /// object to be an RDF collection, and the `OWL-RL` lane walks each one into an
+    /// internal relation before evaluating. A cell with no `rdf:first`, with two, with no
+    /// `rdf:rest`, with two, a walk that never reaches `rdf:nil`, or a cycle is a refusal
+    /// rather than a truncation: reasoning over the well-formed PREFIX of a broken
+    /// collection would answer a question the caller did not ask, and it would do so
+    /// silently. The message names the collection's head, the cell the walk stopped at,
+    /// and the fault.
+    MalformedList(String),
     /// The knowledge base is inconsistent: every query would be entailed, so no
     /// meaningful answer set exists. A hard failure rather than a silent default.
     Inconsistent,
@@ -142,6 +155,7 @@ impl std::fmt::Display for EntailError {
             Self::Build(msg) => write!(f, "entailment build error: {msg}"),
             Self::Parse(msg) => write!(f, "entailment parse error: {msg}"),
             Self::Evaluate(error) => write!(f, "entailment evaluation error: {error}"),
+            Self::MalformedList(msg) => write!(f, "entailment collection error: {msg}"),
             Self::Inconsistent => write!(f, "knowledge base is inconsistent"),
         }
     }
@@ -499,7 +513,7 @@ mod tests {
             .collect();
         assert_eq!(
             gaps,
-            vec![("Simple", 0), ("RDF", 2), ("RDFS", 4), ("OWL-RL", 66)],
+            vec![("Simple", 0), ("RDF", 2), ("RDFS", 4), ("OWL-RL", 41)],
             "(regime, rules the regime defines that the chase does not fire)"
         );
 
@@ -520,12 +534,16 @@ mod tests {
         for present in [RuleId::CaxSco, RuleId::PrpTrp, RuleId::ScmSco] {
             assert!(!missing.contains(&present), "{present} is implemented");
         }
-        // Not fired, so present in the gap — one from each of Tables 4, 6, 8 and 9.
+        // Not fired, so present in the gap — one from each of Tables 4, 6 and 8, plus
+        // two of the rules that are DECLARED and not evaluated because they conclude
+        // `false`. The last two are the interesting case: the calculus states them, so
+        // "missing" here means "not fired", which is exactly what the report claims.
         for absent in [
             RuleId::EqRef,
             RuleId::ClsSvf1,
             RuleId::DtType1,
-            RuleId::ScmCls,
+            RuleId::CaxDw,
+            RuleId::PrpIrp,
         ] {
             assert!(missing.contains(&absent), "{absent} is missing");
         }

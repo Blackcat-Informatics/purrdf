@@ -251,6 +251,15 @@ inconsistency none
 overclaims false
 @end
 
+# WHAT MOVED IN THIS CASE, AND WHY: the OWL-RL lane now states the whole of OWL 2
+# Profiles §4.3 Tables 5, 7 and 9, so `implemented(OWL-RL)` is 37 of 78 where it was
+# 12. Two things follow, and nothing else in this artifact moved. (1) The closure
+# gains nine triples that are NOT about this input at all: prp-ap is premise-free and
+# types each built-in annotation property of OWL 2 RL an owl:AnnotationProperty, so
+# those nine hold for every OWL-RL run including one over the empty graph. (2) The
+# report's `missing` list drops from 66 rules to 41 and the contract hash moves once,
+# because the calculus the digest names is a different one. The transitive, symmetric
+# and inverse conclusions this case exists for are byte-for-byte unchanged.
 @case owl-rl-transitive-symmetric-and-inverse
 @regime owl-rl
 @input
@@ -281,10 +290,19 @@ overclaims false
 <http://example.org/z> <http://example.org/rel> <http://example.org/x> .
 <http://example.org/z> <http://example.org/rel> <http://example.org/y> .
 <http://example.org/z> <http://example.org/rel> <http://example.org/z> .
+<http://www.w3.org/2000/01/rdf-schema#comment> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2000/01/rdf-schema#isDefinedBy> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2000/01/rdf-schema#label> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2000/01/rdf-schema#seeAlso> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2002/07/owl#backwardCompatibleWith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2002/07/owl#deprecated> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2002/07/owl#incompatibleWith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2002/07/owl#priorVersion> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2002/07/owl#versionInfo> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
 @report
 purrdf-reasoning-report 1
 regime owl-rl
-completeness sound-incomplete 66
+completeness sound-incomplete 41
 missing eq-ref
 missing eq-sym
 missing eq-trans
@@ -294,17 +312,10 @@ missing eq-rep-o
 missing eq-diff1
 missing eq-diff2
 missing eq-diff3
-missing prp-ap
-missing prp-fp
-missing prp-ifp
 missing prp-irp
 missing prp-asyp
-missing prp-spo2
-missing prp-eqp1
-missing prp-eqp2
 missing prp-pdw
 missing prp-adp
-missing prp-key
 missing prp-npa1
 missing prp-npa2
 missing cls-thing
@@ -326,8 +337,6 @@ missing cls-maxqc2
 missing cls-maxqc3
 missing cls-maxqc4
 missing cls-oo
-missing cax-eqc1
-missing cax-eqc2
 missing cax-dw
 missing cax-adc
 missing dt-type1
@@ -335,30 +344,15 @@ missing dt-type2
 missing dt-eq
 missing dt-diff
 missing dt-not-type
-missing scm-cls
-missing scm-eqc2
-missing scm-op
-missing scm-dp
-missing scm-eqp2
-missing scm-dom1
-missing scm-dom2
-missing scm-rng1
-missing scm-rng2
-missing scm-hv
-missing scm-svf1
-missing scm-svf2
-missing scm-avf1
-missing scm-avf2
-missing scm-int
-missing scm-uni
+fired prp-ap 9
 fired prp-symp 3
 fired prp-trp 4
 fired prp-inv1 9
 boundary datatype-value-space rdfD1 and rdfD1a conclude about a FRESH blank node standing for a datatyped literal, or for an inhabited value space, and an existentially quantified head is not a Datalog clause: the evaluator mints no terms, so neither rule fires. rdfs1 recognizes the datatypes RDF 1.2 Semantics §8 makes mandatory (rdf:langString, rdf:dirLangString, xsd:string) and no others, and the OWL 2 RL rules quantified over value spaces (dt-type2, dt-eq, dt-diff) are not fired at all; literals are compared by their lexical form and datatype IRI, never by their data value
 budget join-steps 112
-budget stored-facts 21
-budget term-arena-bytes 304
-contract-hash 369fa3fbbe648a4b2c381015990cc3a2f78e606a40102d5feb3f9fabba07ce45
+budget stored-facts 30
+budget term-arena-bytes 771
+contract-hash 4b53900c70e40b84c40af1a00c4b6fb385cd8a4fb59424d15ce0547d684bd3a0
 inconsistency none
 overclaims false
 @end

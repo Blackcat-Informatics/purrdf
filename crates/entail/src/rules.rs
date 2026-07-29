@@ -650,19 +650,59 @@ static IMPLEMENTED_RDFS: [RuleId; 14] = [
 ];
 
 /// The OWL 2 RL rules the chase evaluates, in specification table order.
-static IMPLEMENTED_OWL_RL: [RuleId; 12] = [
+///
+/// Three groups are absent, and each is absent for one stated reason rather than for want
+/// of attention:
+///
+/// * `eq-*` (Table 4) and `dt-*` (Table 8) — the equality and datatype calculi, which are
+///   their own work and are not attempted by the clauses this crate declares;
+/// * `cls-*` (Table 6) — the class-expression rules;
+/// * the eight rules of Tables 5 and 7 that conclude `false` — `prp-irp`, `prp-asyp`,
+///   `prp-pdw`, `prp-adp`, `prp-npa1`, `prp-npa2`, `cax-dw` and `cax-adc`. Those eight ARE
+///   declared: [`crate::calculus::prp`] and [`crate::calculus::cax`] state each of them
+///   with the specification's own body. They are not EVALUATED, because a semi-naive
+///   least-fixpoint evaluator computes the least model of a set of definite clauses and
+///   `body → false` is not one, so the evaluator refuses the head form by name. A rule bent
+///   into an atomic head to make this list longer would put a fabricated triple in the
+///   closure, so the gap is declared instead.
+static IMPLEMENTED_OWL_RL: [RuleId; 37] = [
+    RuleId::PrpAp,
     RuleId::PrpDom,
     RuleId::PrpRng,
+    RuleId::PrpFp,
+    RuleId::PrpIfp,
     RuleId::PrpSymp,
     RuleId::PrpTrp,
     RuleId::PrpSpo1,
+    RuleId::PrpSpo2,
+    RuleId::PrpEqp1,
+    RuleId::PrpEqp2,
     RuleId::PrpInv1,
     RuleId::PrpInv2,
+    RuleId::PrpKey,
     RuleId::CaxSco,
+    RuleId::CaxEqc1,
+    RuleId::CaxEqc2,
+    RuleId::ScmCls,
     RuleId::ScmSco,
     RuleId::ScmEqc1,
+    RuleId::ScmEqc2,
+    RuleId::ScmOp,
+    RuleId::ScmDp,
     RuleId::ScmSpo,
     RuleId::ScmEqp1,
+    RuleId::ScmEqp2,
+    RuleId::ScmDom1,
+    RuleId::ScmDom2,
+    RuleId::ScmRng1,
+    RuleId::ScmRng2,
+    RuleId::ScmHv,
+    RuleId::ScmSvf1,
+    RuleId::ScmSvf2,
+    RuleId::ScmAvf1,
+    RuleId::ScmAvf2,
+    RuleId::ScmInt,
+    RuleId::ScmUni,
 ];
 
 /// The rule table `regime` is *defined by* — what the specification requires of a
@@ -704,10 +744,11 @@ pub fn rules(regime: Regime) -> &'static [RuleId] {
 ///
 /// Two honesty notes, so this list is read for exactly what it claims:
 ///
-/// * It lists rules the chase *evaluates directly*. Some unlisted rules are
-///   nonetheless sound consequences of the listed ones: `cax-eqc1` / `cax-eqc2` follow
-///   from `scm-eqc1` then `cax-sco`, and `prp-eqp1` / `prp-eqp2` follow from `scm-eqp1`
-///   then `prp-spo1`.
+/// * It lists rules the chase *evaluates directly*, which is a stronger claim than "the
+///   closure contains what this rule would conclude": several rules are redundant given
+///   others (`cax-eqc1` also follows from `scm-eqc1` then `cax-sco`, one round later), and
+///   listing a rule this crate does not run because something else reaches its conclusions
+///   would make a report credit a rule the caller's ontology never used.
 /// * Under `OwlRl` the chase additionally fires the RDFS-shaped rules `rdfs6`,
 ///   `rdfs8`, and `rdfs10`. Those are not OWL 2 RL rule ids — OWL 2 RL/RDF omits them
 ///   from its tables — so they cannot appear in an `OwlRl` list that must stay a subset
@@ -722,8 +763,11 @@ pub fn rules(regime: Regime) -> &'static [RuleId] {
 ///     .copied()
 ///     .filter(|r| !implemented(Regime::OwlRl).contains(r))
 ///     .collect();
-/// assert_eq!(missing.len(), 66);
+/// assert_eq!(missing.len(), 41);
 /// assert!(missing.contains(&RuleId::EqRef));
+/// // `cax-dw` concludes `false`, which the Datalog evaluator has no semantics for: it is
+/// // DECLARED by the calculus and deliberately not claimed here.
+/// assert!(missing.contains(&RuleId::CaxDw));
 /// assert!(!missing.contains(&RuleId::CaxSco));
 /// ```
 #[must_use]
@@ -1097,7 +1141,7 @@ mod tests {
                 ("Simple", 0, 0),
                 ("RDF", 3, 1),
                 ("RDFS", 18, 14),
-                ("OWL-RL", 78, 12),
+                ("OWL-RL", 78, 37),
                 ("OWL-Direct", 0, 0),
                 ("RIF", 0, 0),
                 ("D", 0, 0),
@@ -1122,10 +1166,33 @@ mod tests {
         assert_eq!(
             owl,
             [
-                "prp-dom", "prp-rng", "prp-symp", "prp-trp", "prp-spo1", "prp-inv1", "prp-inv2",
-                "cax-sco", "scm-sco", "scm-eqc1", "scm-spo", "scm-eqp1",
+                "prp-ap", "prp-dom", "prp-rng", "prp-fp", "prp-ifp", "prp-symp", "prp-trp",
+                "prp-spo1", "prp-spo2", "prp-eqp1", "prp-eqp2", "prp-inv1", "prp-inv2", "prp-key",
+                "cax-sco", "cax-eqc1", "cax-eqc2", "scm-cls", "scm-sco", "scm-eqc1", "scm-eqc2",
+                "scm-op", "scm-dp", "scm-spo", "scm-eqp1", "scm-eqp2", "scm-dom1", "scm-dom2",
+                "scm-rng1", "scm-rng2", "scm-hv", "scm-svf1", "scm-svf2", "scm-avf1", "scm-avf2",
+                "scm-int", "scm-uni",
             ]
         );
+        // The eight rules of these three tables that are DECLARED and not evaluated: every
+        // one concludes `false`. Naming them here is what keeps "not implemented" from
+        // being read as "not written down".
+        for declared in [
+            RuleId::PrpIrp,
+            RuleId::PrpAsyp,
+            RuleId::PrpPdw,
+            RuleId::PrpAdp,
+            RuleId::PrpNpa1,
+            RuleId::PrpNpa2,
+            RuleId::CaxDw,
+            RuleId::CaxAdc,
+        ] {
+            assert!(
+                !implemented(Regime::OwlRl).contains(&declared),
+                "{declared} concludes `false` and may not be claimed as implemented"
+            );
+            assert!(rules(Regime::OwlRl).contains(&declared));
+        }
         let rdfs: Vec<&str> = implemented(Regime::Rdfs)
             .iter()
             .map(|r| r.as_str())

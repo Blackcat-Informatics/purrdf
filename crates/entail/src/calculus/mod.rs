@@ -58,7 +58,7 @@
 //! rules it will hold when it does.
 
 use purrdf_datalog::cache::{ContractHash, contract_hash};
-use purrdf_datalog::clause::{ClauseAtom, ClauseTerm, DlClause};
+use purrdf_datalog::clause::{ClauseAtom, ClauseTerm, DlClause, HeadForm};
 
 use crate::Regime;
 use crate::rules::RuleId;
@@ -95,6 +95,31 @@ fn atom(subject: ClauseTerm, predicate: &str, object: ClauseTerm) -> ClauseAtom 
     ClauseAtom::positive(subject, predicate, object)
 }
 
+/// An atom of an INTERNAL relation — `relation(first, second, third)`.
+///
+/// The predicate is an interner-local id rather than an IRI, because PurRDF mints no
+/// vocabulary and an internal relation is not vocabulary; see [`crate::lists`] for the
+/// three-arguments-in-four-positions convention and for how such an id is kept out of the
+/// materialized answer.
+fn internal(
+    relation: &'static str,
+    first: ClauseTerm,
+    second: ClauseTerm,
+    third: ClauseTerm,
+) -> ClauseAtom {
+    ClauseAtom::quad(first, ClauseTerm::literal(relation), second, third)
+}
+
+/// The negation-as-failure sibling of [`internal`].
+fn negated_internal(
+    relation: &'static str,
+    first: ClauseTerm,
+    second: ClauseTerm,
+    third: ClauseTerm,
+) -> ClauseAtom {
+    ClauseAtom::negated_quad(first, ClauseTerm::literal(relation), second, third)
+}
+
 /// One entry of the accumulated rule table, counted as `1`, so the table sizes itself and
 /// no family can get the width of a firing tally wrong.
 macro_rules! one_rule {
@@ -121,6 +146,20 @@ macro_rules! reported_id {
     };
 }
 
+/// The head form the evaluator REFUSES this rule for, or `None` when it evaluates it.
+///
+/// A rule declared with `refuses: Inconsistency` states clauses the semi-naive evaluator
+/// has no semantics for, and says so by name rather than being quietly absent from the
+/// family table. See [`declare_chase_rules`] for what that costs and buys.
+macro_rules! refused_form {
+    () => {
+        None
+    };
+    ($form:ident) => {
+        Some(HeadForm::$form)
+    };
+}
+
 /// State the calculus from the concatenated family tables.
 ///
 /// Every per-rule fact the crate needs is derived here from ONE declaration of that rule,
@@ -139,6 +178,28 @@ macro_rules! reported_id {
 ///
 /// and the entries arrive in the order the families are concatenated, which is the order
 /// the program is authored in and therefore the order its digest is taken over.
+///
+/// # A rule the evaluator cannot run is DECLARED, not omitted
+///
+/// One optional field, `refuses:`, names a head form
+/// [`compile`](purrdf_datalog::seminaive::compile) has no semantics for:
+///
+/// ```text
+/// /// `cax-dw` — two disjoint classes with a shared instance.
+/// DisjointWith {
+///     id: CaxDw,
+///     lanes: [OwlRl],
+///     clauses: cax::disjoint_with,
+///     refuses: Inconsistency,   // the head is `false`
+/// }
+/// ```
+///
+/// Such a rule states its clauses like any other — the specification's own body, the
+/// specification's own conclusion — and is excluded from [`program_with_attribution`], so
+/// it is neither evaluated nor claimed by [`crate::implemented`]. That is the honest
+/// state, and it is the only honest one: contorting a `false`-headed rule into an atomic
+/// one would put a fabricated conclusion in the closure, and leaving the rule out of the
+/// table altogether would make the gap invisible.
 macro_rules! declare_chase_rules {
     (
         $(
@@ -148,6 +209,7 @@ macro_rules! declare_chase_rules {
                 $( owl: $owl:ident, )?
                 lanes: [ $( $lane:ident ),+ ],
                 clauses: $clauses:path,
+                $( refuses: $refuses:ident, )?
             }
         ),* $(,)?
     ) => {
@@ -198,21 +260,47 @@ macro_rules! declare_chase_rules {
             ///
             /// `Simple` fires nothing (it is the identity closure); `RDF` fires the single
             /// predicate-typing rule; `RDFS` fires that one plus thirteen RDFS patterns;
-            /// `OWL-RL` fires nine of those thirteen plus six OWL rules. `OWL-Direct`,
+            /// `OWL-RL` fires nine of those thirteen plus forty-eight OWL rules, forty of
+            /// which it also EVALUATES (see [`Self::refused_head_form`]). `OWL-Direct`,
             /// `RIF` and `D` are not this chase's lanes at all, and no rule names them.
             pub(crate) const fn fires_under(self, regime: Regime) -> bool {
                 match self {
                     $( Self::$variant => matches!(regime, $( Regime::$lane )|+), )*
                 }
             }
+
+            /// The head form the semi-naive evaluator REFUSES this rule for, or `None`
+            /// when it runs it.
+            ///
+            /// `Some(form)` is a rule that is DECLARED — its clauses state exactly what
+            /// the specification says — and not evaluated, because
+            /// [`compile`](purrdf_datalog::seminaive::compile) is a Datalog evaluator and
+            /// `form` is not a Datalog head. Such a rule contributes nothing to
+            /// [`calculus_program`] and is absent from [`crate::implemented`].
+            pub(crate) const fn refused_head_form(self) -> Option<HeadForm> {
+                match self {
+                    $( Self::$variant => refused_form!($($refuses)?), )*
+                }
+            }
+
+            /// Whether this rule's lane actually EVALUATES it — `fires_under` says the
+            /// lane owns the rule, this says the evaluator can run it.
+            pub(crate) const fn is_evaluated(self) -> bool {
+                self.refused_head_form().is_none()
+            }
         }
 
         /// The DL clauses that state — and, through [`crate::engine`], run — `rule`.
         ///
-        /// Most rules are one clause. `scm-eqc1` and `scm-eqp1` are two each: their
-        /// specification conclusion is a conjunction of two triples, and a conjunctive head
-        /// is not a Datalog clause, so each direction is stated separately rather than
-        /// encoded in a head form the evaluator refuses.
+        /// Most rules are one clause. Some are several, and always for one of two
+        /// reasons. A rule whose specification conclusion is a CONJUNCTION contributes one
+        /// clause per conjunct — `scm-cls` four, `scm-eqc1`, `scm-op`, `scm-dp` and
+        /// `scm-eqp1` two each — because a conjunctive head is not a Datalog clause, and
+        /// `rdfs1`, `rdfs4` and `prp-ap` likewise state one clause per constant they
+        /// quantify over. A rule whose premise walks an RDF COLLECTION contributes three:
+        /// two that accumulate the traversal into an internal relation and one that reads
+        /// it off the axiom (`prp-spo2`, `prp-key`). Either way the clause count is not the
+        /// rule count, which is what [`program_with_attribution`] exists to keep straight.
         ///
         /// The lane is not a parameter. Nine of these rules carry two specification NAMES —
         /// one RDFS, one OWL 2 RL — but the clause each names is the same clause, so the
@@ -279,9 +367,12 @@ collect_families! { { rdfs_rules, prp_rules, cls_rules, cax_rules, scm_rules } }
 /// Clauses appear in the chase's own rule-declaration order — the RDF pattern of RDF 1.2
 /// Semantics §8.1.1, then the RDFS patterns of §9.2.1 in numeric order, then the OWL 2 RL
 /// rules of Tables 4–9 that only the `OWL-RL` lane fires, in table order — restricted to
-/// the rules `regime`'s lane fires. `scm-eqc1` and `scm-eqp1` take two clauses each (their
-/// specification conclusion is a conjunction, which is not a Datalog head), contributing
-/// their two directions in the order the specification writes them. The result is a pure
+/// the rules `regime`'s lane fires that it also EVALUATES — the eight that conclude `false`
+/// are declared by the family tables and contribute no clause here, because the evaluator
+/// has no semantics for them. Several rules take more than one clause (a conjunctive
+/// conclusion, a constant quantified over, or a collection traversal), so the clause
+/// count is not the rule count.
+/// The result is a pure
 /// function of `regime`: no map iteration, no hashing, no allocation order reaches it.
 ///
 /// `Simple` yields the empty program: the identity closure has no rules, and that is a
@@ -295,8 +386,9 @@ collect_families! { { rdfs_rules, prp_rules, cls_rules, cax_rules, scm_rules } }
 /// assert!(calculus_program(Regime::Simple).is_empty());
 /// // Fourteen RDF/RDFS patterns; `rdfs1` and `rdfs4` take three clauses each.
 /// assert_eq!(calculus_program(Regime::Rdfs).len(), 18);
-/// // Nine of those RDFS patterns plus six OWL rules, two of which take two clauses.
-/// assert_eq!(calculus_program(Regime::OwlRl).len(), 17);
+/// // Nine of those RDFS patterns plus thirty-one OWL rules — the eight that conclude
+/// // `false` are DECLARED and not evaluated, so they contribute no clause here.
+/// assert_eq!(calculus_program(Regime::OwlRl).len(), 59);
 /// ```
 #[must_use]
 pub fn calculus_program(regime: Regime) -> Vec<DlClause> {
@@ -308,8 +400,8 @@ pub fn calculus_program(regime: Regime) -> Vec<DlClause> {
 /// A [`Derivation`](purrdf_datalog::seminaive::Derivation) names its producing clause by
 /// authored index, so attributing a firing means asking which rule authored clause `i` —
 /// and the only honest way to answer is to build the answer in the SAME walk that builds
-/// the program. Two rules contribute two clauses each (`scm-eqc1` and `scm-eqp1`), so the
-/// map is not the identity and cannot be reconstructed from a rule count.
+/// the program. Several rules contribute more than one clause each, so the map is not the
+/// identity and cannot be reconstructed from a rule count.
 ///
 /// [`calculus_program`] is this function's first element, so the published program and the
 /// attribution can never be out of step.
@@ -317,7 +409,7 @@ pub(crate) fn program_with_attribution(regime: Regime) -> (Vec<DlClause>, Vec<Ch
     let mut clauses = Vec::new();
     let mut attribution = Vec::new();
     for rule in ChaseRule::ALL {
-        if !rule.fires_under(regime) {
+        if !rule.fires_under(regime) || !rule.is_evaluated() {
             continue;
         }
         for clause in clauses_for(rule) {
@@ -326,6 +418,26 @@ pub(crate) fn program_with_attribution(regime: Regime) -> (Vec<DlClause>, Vec<Ch
         }
     }
     (clauses, attribution)
+}
+
+/// The rules `regime`'s lane DECLARES and the evaluator refuses, with the clauses that
+/// state them and the head form the refusal names.
+///
+/// This is the other half of [`program_with_attribution`]: together the two are every rule
+/// the lane owns, split by whether this crate's Datalog evaluator has semantics for it.
+/// The split is checked rather than asserted —
+/// `the_declared_refusals_are_refused_by_name` hands each of these clauses to `compile`
+/// and requires the refusal it names.
+#[cfg(test)]
+pub(crate) fn declared_refusals(regime: Regime) -> Vec<(ChaseRule, HeadForm, Vec<DlClause>)> {
+    ChaseRule::ALL
+        .into_iter()
+        .filter(|rule| rule.fires_under(regime))
+        .filter_map(|rule| {
+            rule.refused_head_form()
+                .map(|form| (rule, form, clauses_for(rule)))
+        })
+        .collect()
 }
 
 /// The identity of the calculus `regime` runs, as `purrdf-datalog` computes it.
@@ -345,7 +457,7 @@ fn fired_rule_ids(regime: Regime) -> Vec<RuleId> {
     let owl = matches!(regime, Regime::OwlRl);
     let mut ids: Vec<RuleId> = ChaseRule::ALL
         .into_iter()
-        .filter(|rule| rule.fires_under(regime))
+        .filter(|rule| rule.fires_under(regime) && rule.is_evaluated())
         .map(|rule| rule.rule_id(owl))
         .collect();
     ids.sort_unstable();
@@ -386,12 +498,53 @@ pub(crate) const ALL_REGIMES: [Regime; 7] = [
 mod tests {
     use super::{
         ALL_REGIMES, ChaseRule, OWL_RL_RDFS_SHAPED_EXTRAS, calculus_contract_hash,
-        calculus_program, fired_rule_ids, program_with_attribution,
+        calculus_program, declared_refusals, fired_rule_ids, program_with_attribution,
     };
     use crate::{Regime, RuleId, implemented, rules};
     use purrdf_datalog::cache::contract_hash;
+    use purrdf_datalog::clause::HeadForm;
     use purrdf_datalog::seminaive::compile;
     use std::collections::BTreeSet;
+
+    /// EVERY declared-and-refused rule is refused BY THE EVALUATOR, under the head form
+    /// its declaration names.
+    ///
+    /// This is what turns "the evaluator cannot run this" from a comment into a checked
+    /// fact. Each such rule's clauses are handed to
+    /// [`compile`](purrdf_datalog::seminaive::compile) on their own, and the refusal must
+    /// name the same form the family table wrote in `refuses:`. A rule that was quietly
+    /// rewritten into an atomic head — the exact way a fabricated conclusion would enter
+    /// the closure — compiles instead of refusing, and fails here.
+    #[test]
+    fn the_declared_refusals_are_refused_by_name() {
+        let mut refused = 0_usize;
+        for regime in ALL_REGIMES {
+            for (rule, form, clauses) in declared_refusals(regime) {
+                assert!(!clauses.is_empty(), "{rule:?} declares no clause");
+                for clause in &clauses {
+                    assert_eq!(
+                        clause.head_form(),
+                        form,
+                        "{rule:?} declares {form} and states {}",
+                        clause.head_form()
+                    );
+                }
+                let error = compile(clauses).expect_err("a refused rule must not compile");
+                let rendered = error.to_string();
+                assert!(rendered.contains(&form.to_string()), "{rule:?}: {rendered}");
+                refused += 1;
+            }
+        }
+        // Only the `OWL-RL` lane declares any, and it declares eight.
+        assert_eq!(refused, 8);
+        assert!(declared_refusals(Regime::Rdfs).is_empty());
+        assert!(
+            declared_refusals(Regime::OwlRl)
+                .iter()
+                .all(|(_, form, _)| *form == HeadForm::Inconsistency),
+            "every rule refused today concludes `false`"
+        );
+    }
 
     /// The chase's tags ARE the inventory: for every regime, the rule ids the lane fires
     /// equal `implemented(regime)` plus, for `OWL-RL` only, the three RDFS-shaped rules
@@ -458,7 +611,7 @@ mod tests {
                 (Regime::Simple, 0),
                 (Regime::Rdf, 1),
                 (Regime::Rdfs, 18),
-                (Regime::OwlRl, 17),
+                (Regime::OwlRl, 59),
                 (Regime::OwlDirect, 0),
                 (Regime::Rif, 0),
                 (Regime::D, 0),
@@ -503,7 +656,7 @@ mod tests {
             ),
             (
                 Regime::OwlRl,
-                "369fa3fbbe648a4b2c381015990cc3a2f78e606a40102d5feb3f9fabba07ce45",
+                "4b53900c70e40b84c40af1a00c4b6fb385cd8a4fb59424d15ce0547d684bd3a0",
             ),
             (Regime::OwlDirect, empty),
             (Regime::Rif, empty),
@@ -537,8 +690,15 @@ mod tests {
     }
 
     /// The lane membership is a partition the enum cannot silently widen: `RDFS` fires
-    /// fourteen rules, `OWL-RL` nine of them plus six of its own, `RDF` one, and nothing
-    /// else fires at all.
+    /// fourteen rules, `OWL-RL` OWNS forty-eight and EVALUATES forty of them, `RDF` one,
+    /// and nothing else fires at all.
+    ///
+    /// The two `OWL-RL` numbers are different questions and both are pinned. Ownership is
+    /// which rules the lane's table declares; evaluation is which of them this crate's
+    /// Datalog evaluator has semantics for. The eight-rule difference is exactly the rules
+    /// that conclude `false` — `prp-irp`, `prp-asyp`, `prp-pdw`, `prp-adp`, `prp-npa1`,
+    /// `prp-npa2`, `cax-dw`, `cax-adc` — and it is checked as a NAMED set below rather
+    /// than as a count, so a rule that quietly stops being evaluated fails here.
     ///
     /// `RDFS` is no longer a subset of `OWL-RL`, and that is deliberate: OWL 2 Profiles
     /// §4.3 omits the RDF and RDFS axiomatic triples, so the five rules the `RDFS` lane
@@ -552,12 +712,40 @@ mod tests {
                 .filter(|rule| rule.fires_under(regime))
                 .count()
         };
+        let evaluated = |regime: Regime| {
+            ChaseRule::ALL
+                .into_iter()
+                .filter(|rule| rule.fires_under(regime) && rule.is_evaluated())
+                .count()
+        };
         assert_eq!(count(Regime::Rdf), 1);
         assert_eq!(count(Regime::Rdfs), 14);
-        assert_eq!(count(Regime::OwlRl), 15);
+        assert_eq!(count(Regime::OwlRl), 48);
+        assert_eq!(evaluated(Regime::Rdf), 1);
+        assert_eq!(evaluated(Regime::Rdfs), 14);
+        assert_eq!(evaluated(Regime::OwlRl), 40);
         for regime in [Regime::Simple, Regime::OwlDirect, Regime::Rif, Regime::D] {
             assert_eq!(count(regime), 0, "{regime:?}");
         }
+        // The eight declared-and-refused rules, by the id they are reported under.
+        let refused: Vec<RuleId> = ChaseRule::ALL
+            .into_iter()
+            .filter(|rule| rule.fires_under(Regime::OwlRl) && !rule.is_evaluated())
+            .map(|rule| rule.rule_id(true))
+            .collect();
+        assert_eq!(
+            refused,
+            vec![
+                RuleId::PrpIrp,
+                RuleId::PrpAsyp,
+                RuleId::PrpPdw,
+                RuleId::PrpAdp,
+                RuleId::PrpNpa1,
+                RuleId::PrpNpa2,
+                RuleId::CaxDw,
+                RuleId::CaxAdc,
+            ]
+        );
         // The nine rules the two lanes SHARE are named, so a rule silently joining or
         // leaving the overlap fails here rather than in a golden.
         let shared: Vec<RuleId> = ChaseRule::ALL
@@ -593,7 +781,7 @@ mod tests {
             let credited: BTreeSet<ChaseRule> = attribution.iter().copied().collect();
             let firing: BTreeSet<ChaseRule> = ChaseRule::ALL
                 .into_iter()
-                .filter(|rule| rule.fires_under(regime))
+                .filter(|rule| rule.fires_under(regime) && rule.is_evaluated())
                 .collect();
             assert_eq!(credited, firing, "{regime:?}");
         }

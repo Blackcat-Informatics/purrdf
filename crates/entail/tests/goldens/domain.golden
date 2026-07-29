@@ -73,6 +73,58 @@
 #      join steps and 165-210 stored facts against ceilings of 1,048,576 and 131,072 —
 #      0.25% and 0.16% at this corpus's worst case (`subclass_chain`, 2,577 steps).
 #
+# AND EVERY GOLDEN MOVED A THIRD TIME, IN THE OWL-RL SECTION AND NOWHERE ELSE — the
+# OWL-RL lane now states the whole of OWL 2 Profiles §4.3 Tables 5, 7 and 9. Simple,
+# RDF and RDFS are byte-identical to the previous golden in all thirty-three files that
+# already existed, and NOTHING was removed from any closure anywhere. Three causes
+# account for the new bytes.
+#
+#   i. TWENTY-FIVE MORE RULES FIRE. implemented(OWL-RL) is 37 of 78 where it was 12.
+#      Table 5 gains prp-ap, prp-fp, prp-ifp, prp-spo2, prp-eqp1, prp-eqp2 and
+#      prp-key; Table 7 gains cax-eqc1 and cax-eqc2; Table 9 gains scm-cls, scm-eqc2,
+#      scm-op, scm-dp, scm-eqp2, scm-dom1, scm-dom2, scm-rng1, scm-rng2, scm-hv,
+#      scm-svf1, scm-svf2, scm-avf1, scm-avf2, scm-int and scm-uni. Every OWL-RL
+#      report's `missing` list therefore shrinks from 66 to 41, and the lane's contract
+#      hash moves once — which is the point of the digest: a consumer holding a closure
+#      minted under the twelve-rule calculus can tell.
+#
+#  ii. EVERY OWL-RL CLOSURE CARRIES THE SAME NINE-LINE prp-ap BLOCK. prp-ap is
+#      PREMISE-FREE — it types each built-in annotation property of OWL 2 RL an
+#      owl:AnnotationProperty, and OWL 2 Structural Specification §5.5 fixes that list
+#      at nine — so its conclusions are in every OWL-RL closure, including the empty
+#      graph's. That block is INPUT-INDEPENDENT: it is exactly empty.golden's OWL-RL
+#      closure, it is a subset of every other fixture's, and
+#      `the_rdfs_closure_of_every_fixture_contains_the_empty_one` asserts both, by NAME
+#      rather than by count, so a tenth typing would be an invented one and would fail.
+#      Each golden below therefore accounts only for the lines BEYOND it, and for
+#      twenty-eight of the thirty-three there are none.
+#
+# iii. EIGHT RULES ARE DECLARED AND NOT FIRED, WHICH IS WHY `missing` IS 41 AND NOT 33.
+#      prp-irp, prp-asyp, prp-pdw, prp-adp, prp-npa1, prp-npa2, cax-dw and cax-adc all
+#      conclude `false`. The calculus STATES each of them, with the specification's own
+#      body — including the `i ≠ j` side condition of the two that read a list, which
+#      is expressed as negation over an internal reflexive index relation rather than
+#      dropped — and the semi-naive evaluator refuses the head form by name, because a
+#      least-fixpoint evaluator over DEFINITE clauses has no semantics for `body →
+#      false`. They stay in `missing` because they do not fire, which is exactly what
+#      that list claims. Wiring a `false` head to a typed inconsistency witness is a
+#      separate change; bending one into an atomic head to shorten this list would put
+#      a triple in the closure that nothing licenses.
+#
+#   THE BUDGET ROSE IN THE OWL-RL LANE AND IS STILL NEGLIGIBLE. That lane's worst case
+#   in this corpus went from 151 to 209 join steps (subclass_chain) against a ceiling of
+#   1,048,576 — 0.02%. The corpus worst case is unchanged at 2,577 join steps and 208
+#   stored facts, both in the RDFS lane, which no rule here touches: 0.25% and 0.16%.
+#
+#   TWO RULES READ AN RDF COLLECTION AND ONE PRE-PASS SERVES THEM. scm-int and scm-uni
+#   join an internal LIST(head, index, member) relation the OWL-RL lane materializes
+#   once per run from rdf:first / rdf:rest; prp-spo2 and prp-key recurse over the
+#   collection directly, into internal ternary relations. NONE of those ids is an IRI —
+#   PurRDF mints no vocabulary — and none can reach a closure: every conclusion whose
+#   predicate is internal is dropped before materialization and credited to nothing.
+#   A malformed or cyclic collection an OWL axiom points at stops the run with a named
+#   error rather than producing a closure over its well-formed prefix.
+#
 # WHAT MOVED IN THIS GOLDEN:
 #
 # Cause 2 — RDF gains `rdf:type rdf:type rdf:Property` (rdfD2 2 -> 3).
@@ -100,6 +152,12 @@
 # rdfs2 / prp-dom is untouched — `x rdf:type A` is still concluded and still credited.
 # Around it, A is now an rdfs:Class (rdfs3 over the axiomatic range of rdfs:domain)
 # and p an rdf:Property (rdfs2 over its axiomatic domain), so both reflexives follow.
+#
+# AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.
+# OWL-RL closure 3 -> 12 lines: the nine-line input-independent prp-ap block
+# cause ii describes, and nothing else: no rule this change added has a premise
+# in this input, so the fixture's own conclusions are exactly what they were.
+# The tally gains prp-ap=9.
 # exercises: rdfs2 prp-dom
 
 --- input (2 lines) ---
@@ -282,27 +340,33 @@
   overclaims: false
 
 === regime OWL-RL ===
---- closure (3 lines) ---
+--- closure (12 lines) ---
 <http://example.org/p> <http://www.w3.org/2000/01/rdf-schema#domain> <http://example.org/A> .
 <http://example.org/x> <http://example.org/p> <http://example.org/y> .
 <http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .
+<http://www.w3.org/2000/01/rdf-schema#comment> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2000/01/rdf-schema#isDefinedBy> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2000/01/rdf-schema#label> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2000/01/rdf-schema#seeAlso> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2002/07/owl#backwardCompatibleWith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2002/07/owl#deprecated> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2002/07/owl#incompatibleWith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2002/07/owl#priorVersion> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2002/07/owl#versionInfo> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
 --- report ---
   completeness: sound-incomplete
-  missing: (66)
+  missing: (41)
       eq-ref eq-sym eq-trans eq-rep-s eq-rep-p eq-rep-o eq-diff1 eq-diff2
-      eq-diff3 prp-ap prp-fp prp-ifp prp-irp prp-asyp prp-spo2 prp-eqp1
-      prp-eqp2 prp-pdw prp-adp prp-key prp-npa1 prp-npa2 cls-thing cls-nothing1
-      cls-nothing2 cls-int1 cls-int2 cls-uni cls-com cls-svf1 cls-svf2 cls-avf
-      cls-hv1 cls-hv2 cls-maxc1 cls-maxc2 cls-maxqc1 cls-maxqc2 cls-maxqc3 cls-maxqc4
-      cls-oo cax-eqc1 cax-eqc2 cax-dw cax-adc dt-type1 dt-type2 dt-eq
-      dt-diff dt-not-type scm-cls scm-eqc2 scm-op scm-dp scm-eqp2 scm-dom1
-      scm-dom2 scm-rng1 scm-rng2 scm-hv scm-svf1 scm-svf2 scm-avf1 scm-avf2
-      scm-int scm-uni
-  rules-fired: (1)
-      prp-dom=1
+      eq-diff3 prp-irp prp-asyp prp-pdw prp-adp prp-npa1 prp-npa2 cls-thing
+      cls-nothing1 cls-nothing2 cls-int1 cls-int2 cls-uni cls-com cls-svf1 cls-svf2
+      cls-avf cls-hv1 cls-hv2 cls-maxc1 cls-maxc2 cls-maxqc1 cls-maxqc2 cls-maxqc3
+      cls-maxqc4 cls-oo cax-dw cax-adc dt-type1 dt-type2 dt-eq dt-diff
+      dt-not-type
+  rules-fired: (2)
+      prp-ap=9 prp-dom=1
   boundaries: (1)
       datatype-value-space
-  budget: join-steps=4 stored-facts=3 term-arena-bytes=182
-  contract-hash: 369fa3fbbe648a4b2c381015990cc3a2f78e606a40102d5feb3f9fabba07ce45
+  budget: join-steps=10 stored-facts=12 term-arena-bytes=649
+  contract-hash: 4b53900c70e40b84c40af1a00c4b6fb385cd8a4fb59424d15ce0547d684bd3a0
   inconsistency: none
   overclaims: false

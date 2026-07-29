@@ -108,6 +108,47 @@ const OWL_EQUIVALENTCLASS: &str = "http://www.w3.org/2002/07/owl#equivalentClass
 const OWL_EQUIVALENTPROPERTY: &str = "http://www.w3.org/2002/07/owl#equivalentProperty";
 /// `xsd:string`.
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+/// `owl:AnnotationProperty`.
+const OWL_ANNOTATIONPROPERTY: &str = "http://www.w3.org/2002/07/owl#AnnotationProperty";
+/// `owl:FunctionalProperty`.
+const OWL_FUNCTIONALPROPERTY: &str = "http://www.w3.org/2002/07/owl#FunctionalProperty";
+/// `owl:InverseFunctionalProperty`.
+const OWL_INVERSEFUNCTIONALPROPERTY: &str =
+    "http://www.w3.org/2002/07/owl#InverseFunctionalProperty";
+/// `owl:propertyChainAxiom`.
+const OWL_PROPERTYCHAINAXIOM: &str = "http://www.w3.org/2002/07/owl#propertyChainAxiom";
+/// `owl:hasKey`.
+const OWL_HASKEY: &str = "http://www.w3.org/2002/07/owl#hasKey";
+/// `owl:sameAs`.
+const OWL_SAMEAS: &str = "http://www.w3.org/2002/07/owl#sameAs";
+/// `owl:Class`.
+const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
+/// `owl:Thing`.
+const OWL_THING: &str = "http://www.w3.org/2002/07/owl#Thing";
+/// `owl:ObjectProperty`.
+const OWL_OBJECTPROPERTY: &str = "http://www.w3.org/2002/07/owl#ObjectProperty";
+/// `owl:DatatypeProperty`.
+const OWL_DATATYPEPROPERTY: &str = "http://www.w3.org/2002/07/owl#DatatypeProperty";
+/// `owl:onProperty`.
+const OWL_ONPROPERTY: &str = "http://www.w3.org/2002/07/owl#onProperty";
+/// `owl:hasValue`.
+const OWL_HASVALUE: &str = "http://www.w3.org/2002/07/owl#hasValue";
+/// `owl:someValuesFrom`.
+const OWL_SOMEVALUESFROM: &str = "http://www.w3.org/2002/07/owl#someValuesFrom";
+/// `owl:allValuesFrom`.
+const OWL_ALLVALUESFROM: &str = "http://www.w3.org/2002/07/owl#allValuesFrom";
+/// `owl:intersectionOf`.
+const OWL_INTERSECTIONOF: &str = "http://www.w3.org/2002/07/owl#intersectionOf";
+/// `owl:unionOf`.
+const OWL_UNIONOF: &str = "http://www.w3.org/2002/07/owl#unionOf";
+/// `rdfs:label` — a built-in annotation property, and `prp-ap`'s witness.
+const RDFS_LABEL: &str = "http://www.w3.org/2000/01/rdf-schema#label";
+/// `rdf:first`.
+const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
+/// `rdf:rest`.
+const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
+/// `rdf:nil`.
+const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
 
 /// Fixture class `example.org/A`.
 const EX_A: &str = "http://example.org/A";
@@ -149,6 +190,14 @@ const EX_U: &str = "http://example.org/u";
 const EX_V: &str = "http://example.org/v";
 /// Fixture named graph `example.org/g`.
 const EX_G: &str = "http://example.org/g";
+/// Fixture individual `example.org/w`.
+const EX_W: &str = "http://example.org/w";
+/// Fixture property `example.org/chained`, the head of a property-chain axiom.
+const EX_CHAINED: &str = "http://example.org/chained";
+/// The first cell of a fixture RDF collection.
+const EX_L0: &str = "http://example.org/l0";
+/// The second cell of a fixture RDF collection.
+const EX_L1: &str = "http://example.org/l1";
 
 // ── The fixture model ───────────────────────────────────────────────────────────
 
@@ -350,6 +399,71 @@ const AXIOMATIC_PATH: &[&str] = &[
     "     0.25% and 0.16% at this corpus's worst case (`subclass_chain`, 2,577 steps).",
 ];
 
+/// The three causes of every byte that moved when the `OWL-RL` lane started stating the
+/// whole of OWL 2 Profiles §4.3 Tables 5, 7 and 9.
+///
+/// Written into every golden's header beneath [`AXIOMATIC_PATH`], for the same reason the
+/// other two are: the general cause once, the fixture's own triples in its own
+/// [`Fixture::changed`].
+///
+/// The single strongest fact about this diff is stated first, because it makes the other
+/// thirty-two goldens checkable at a glance: EVERY changed golden changed in the `OWL-RL`
+/// section and in no other. `Simple`, `RDF` and `RDFS` are byte-identical across all
+/// thirty-three files that already existed.
+const OWL_RL_TABLES: &[&str] = &[
+    "AND EVERY GOLDEN MOVED A THIRD TIME, IN THE OWL-RL SECTION AND NOWHERE ELSE — the",
+    "OWL-RL lane now states the whole of OWL 2 Profiles §4.3 Tables 5, 7 and 9. Simple,",
+    "RDF and RDFS are byte-identical to the previous golden in all thirty-three files that",
+    "already existed, and NOTHING was removed from any closure anywhere. Three causes",
+    "account for the new bytes.",
+    "",
+    "  i. TWENTY-FIVE MORE RULES FIRE. implemented(OWL-RL) is 37 of 78 where it was 12.",
+    "     Table 5 gains prp-ap, prp-fp, prp-ifp, prp-spo2, prp-eqp1, prp-eqp2 and",
+    "     prp-key; Table 7 gains cax-eqc1 and cax-eqc2; Table 9 gains scm-cls, scm-eqc2,",
+    "     scm-op, scm-dp, scm-eqp2, scm-dom1, scm-dom2, scm-rng1, scm-rng2, scm-hv,",
+    "     scm-svf1, scm-svf2, scm-avf1, scm-avf2, scm-int and scm-uni. Every OWL-RL",
+    "     report's `missing` list therefore shrinks from 66 to 41, and the lane's contract",
+    "     hash moves once — which is the point of the digest: a consumer holding a closure",
+    "     minted under the twelve-rule calculus can tell.",
+    "",
+    " ii. EVERY OWL-RL CLOSURE CARRIES THE SAME NINE-LINE prp-ap BLOCK. prp-ap is",
+    "     PREMISE-FREE — it types each built-in annotation property of OWL 2 RL an",
+    "     owl:AnnotationProperty, and OWL 2 Structural Specification §5.5 fixes that list",
+    "     at nine — so its conclusions are in every OWL-RL closure, including the empty",
+    "     graph's. That block is INPUT-INDEPENDENT: it is exactly empty.golden's OWL-RL",
+    "     closure, it is a subset of every other fixture's, and",
+    "     `the_rdfs_closure_of_every_fixture_contains_the_empty_one` asserts both, by NAME",
+    "     rather than by count, so a tenth typing would be an invented one and would fail.",
+    "     Each golden below therefore accounts only for the lines BEYOND it, and for",
+    "     twenty-eight of the thirty-three there are none.",
+    "",
+    "iii. EIGHT RULES ARE DECLARED AND NOT FIRED, WHICH IS WHY `missing` IS 41 AND NOT 33.",
+    "     prp-irp, prp-asyp, prp-pdw, prp-adp, prp-npa1, prp-npa2, cax-dw and cax-adc all",
+    "     conclude `false`. The calculus STATES each of them, with the specification's own",
+    "     body — including the `i ≠ j` side condition of the two that read a list, which",
+    "     is expressed as negation over an internal reflexive index relation rather than",
+    "     dropped — and the semi-naive evaluator refuses the head form by name, because a",
+    "     least-fixpoint evaluator over DEFINITE clauses has no semantics for `body →",
+    "     false`. They stay in `missing` because they do not fire, which is exactly what",
+    "     that list claims. Wiring a `false` head to a typed inconsistency witness is a",
+    "     separate change; bending one into an atomic head to shorten this list would put",
+    "     a triple in the closure that nothing licenses.",
+    "",
+    "  THE BUDGET ROSE IN THE OWL-RL LANE AND IS STILL NEGLIGIBLE. That lane's worst case",
+    "  in this corpus went from 151 to 209 join steps (subclass_chain) against a ceiling of",
+    "  1,048,576 — 0.02%. The corpus worst case is unchanged at 2,577 join steps and 208",
+    "  stored facts, both in the RDFS lane, which no rule here touches: 0.25% and 0.16%.",
+    "",
+    "  TWO RULES READ AN RDF COLLECTION AND ONE PRE-PASS SERVES THEM. scm-int and scm-uni",
+    "  join an internal LIST(head, index, member) relation the OWL-RL lane materializes",
+    "  once per run from rdf:first / rdf:rest; prp-spo2 and prp-key recurse over the",
+    "  collection directly, into internal ternary relations. NONE of those ids is an IRI —",
+    "  PurRDF mints no vocabulary — and none can reach a closure: every conclusion whose",
+    "  predicate is internal is dropped before materialization and credited to nothing.",
+    "  A malformed or cyclic collection an OWL axiom points at stops the run with a named",
+    "  error rather than producing a closure over its well-formed prefix.",
+];
+
 // ── The corpus ──────────────────────────────────────────────────────────────────
 //
 // Every fixture is minimal on purpose: the smallest input that reaches the rule, so a
@@ -386,6 +500,12 @@ const CORPUS: &[Fixture] = &[
             "every other RDFS closure in the corpus.",
             "The two INHERENT boundaries still hold and the report still says sound-incomplete,",
             "so this fixture still pins what it was written to pin.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 0 -> 9 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, and nothing else: no rule this change added has a premise",
+            "in this input, so the fixture's own conclusions are exactly what they were.",
+            "The tally gains prp-ap=9.",
         ],
         quads: &[],
     },
@@ -418,6 +538,12 @@ const CORPUS: &[Fixture] = &[
             "rdf:Property, and rdfs6 draws the reflexive sub-property from THAT premise — the",
             "triple the engine swap removed as unlicensed is back, now with `p rdf:type",
             "rdf:Property` present in the same closure to license it.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 1 -> 10 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, and nothing else: no rule this change added has a premise",
+            "in this input, so the fixture's own conclusions are exactly what they were.",
+            "The tally gains prp-ap=9.",
         ],
         quads: &[t(EX_X, EX_P, EX_Y)],
     },
@@ -463,6 +589,12 @@ const CORPUS: &[Fixture] = &[
             "the chase read that graph, and it does not. The default-graph subClassOf edge",
             "gets the full axiomatic treatment: both endpoints typed rdfs:Class and both",
             "reflexives drawn.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 2 -> 11 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, and nothing else: no rule this change added has a premise",
+            "in this input, so the fixture's own conclusions are exactly what they were.",
+            "The tally gains prp-ap=9.",
         ],
         quads: &[t_in(EX_X, EX_P, EX_Y, EX_G), t(EX_A, RDFS_SUBCLASSOF, EX_B)],
     },
@@ -499,6 +631,12 @@ const CORPUS: &[Fixture] = &[
             "rdfs2 / prp-dom is untouched — `x rdf:type A` is still concluded and still credited.",
             "Around it, A is now an rdfs:Class (rdfs3 over the axiomatic range of rdfs:domain)",
             "and p an rdf:Property (rdfs2 over its axiomatic domain), so both reflexives follow.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 3 -> 12 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, and nothing else: no rule this change added has a premise",
+            "in this input, so the fixture's own conclusions are exactly what they were.",
+            "The tally gains prp-ap=9.",
         ],
         quads: &[t(EX_P, RDFS_DOMAIN, EX_A), t(EX_X, EX_P, EX_Y)],
     },
@@ -538,6 +676,12 @@ const CORPUS: &[Fixture] = &[
             "on q. Note it is now a STRONGER near miss — q is typed rdf:Property and A an",
             "rdfs:Class exactly as in the positive, so the only difference left between the two",
             "closures is the one triple the rule is about.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 2 -> 11 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, and nothing else: no rule this change added has a premise",
+            "in this input, so the fixture's own conclusions are exactly what they were.",
+            "The tally gains prp-ap=9.",
         ],
         quads: &[t(EX_Q, RDFS_DOMAIN, EX_A), t(EX_X, EX_P, EX_Y)],
     },
@@ -572,6 +716,12 @@ const CORPUS: &[Fixture] = &[
             "  ex:y rdf:type rdfs:Resource",
             "",
             "rdfs3 / prp-rng is untouched — `y rdf:type B` is still concluded and still credited.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 3 -> 12 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, and nothing else: no rule this change added has a premise",
+            "in this input, so the fixture's own conclusions are exactly what they were.",
+            "The tally gains prp-ap=9.",
         ],
         quads: &[t(EX_P, RDFS_RANGE, EX_B), t(EX_X, EX_P, EX_Y)],
     },
@@ -608,6 +758,12 @@ const CORPUS: &[Fixture] = &[
             "  ex:y rdf:type rdfs:Resource",
             "",
             "The near miss still holds: `y rdf:type B` is absent, because the range is on q.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 2 -> 11 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, and nothing else: no rule this change added has a premise",
+            "in this input, so the fixture's own conclusions are exactly what they were.",
+            "The tally gains prp-ap=9.",
         ],
         quads: &[t(EX_Q, RDFS_RANGE, EX_B), t(EX_X, EX_P, EX_Y)],
     },
@@ -644,6 +800,12 @@ const CORPUS: &[Fixture] = &[
             "concluded and still credited (rdfs5=1). The three reflexives are back, but from",
             "the licensed premise this time: rdfs:subPropertyOf has an axiomatic domain AND",
             "range of rdf:Property, so p, q and r are all typed rdf:Property first.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 3 -> 12 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, and nothing else: no rule this change added has a premise",
+            "in this input, so the fixture's own conclusions are exactly what they were.",
+            "The tally gains prp-ap=9.",
         ],
         quads: &[
             t(EX_P, RDFS_SUBPROPERTYOF, EX_Q),
@@ -684,6 +846,12 @@ const CORPUS: &[Fixture] = &[
             "",
             "The near miss still holds: the chain is broken at the join point, so `p",
             "subPropertyOf r` is absent while every reflexive is present.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 2 -> 11 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, and nothing else: no rule this change added has a premise",
+            "in this input, so the fixture's own conclusions are exactly what they were.",
+            "The tally gains prp-ap=9.",
         ],
         quads: &[
             t(EX_P, RDFS_SUBPROPERTYOF, EX_Q),
@@ -720,6 +888,12 @@ const CORPUS: &[Fixture] = &[
             "  ex:y rdf:type rdfs:Resource",
             "",
             "rdfs7 / prp-spo1 is untouched: `x q y` is still concluded and still credited.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 3 -> 12 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, and nothing else: no rule this change added has a premise",
+            "in this input, so the fixture's own conclusions are exactly what they were.",
+            "The tally gains prp-ap=9.",
         ],
         quads: &[t(EX_P, RDFS_SUBPROPERTYOF, EX_Q), t(EX_X, EX_P, EX_Y)],
     },
@@ -755,6 +929,12 @@ const CORPUS: &[Fixture] = &[
             "  ex:y rdf:type rdfs:Resource",
             "",
             "The near miss still holds: `x q y` is absent, because the data triple uses r.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 2 -> 11 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, and nothing else: no rule this change added has a premise",
+            "in this input, so the fixture's own conclusions are exactly what they were.",
+            "The tally gains prp-ap=9.",
         ],
         quads: &[t(EX_P, RDFS_SUBPROPERTYOF, EX_Q), t(EX_X, EX_R, EX_Y)],
     },
@@ -786,6 +966,17 @@ const CORPUS: &[Fixture] = &[
             "The smallest diff in the corpus, and the most direct: p is typed rdf:Property by",
             "the input itself, so rdfs6's premise never needed the axioms. Only rdfs4's",
             "rdfs:Resource typing is new.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 2 -> 12 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, plus 1 about this fixture's own terms —",
+            "",
+            "  ex:p owl:equivalentProperty ex:p",
+            "",
+            "scm-eqp2 reads rdfs6's own conclusion `p rdfs:subPropertyOf p`, which holds in both",
+            "directions trivially. rdfs6 is untouched, and scm-op does not fire: p is typed",
+            "rdf:Property, not owl:ObjectProperty.",
+            "The tally gains prp-ap=9 scm-eqp2=1.",
         ],
         quads: &[t(EX_P, RDF_TYPE, RDF_PROPERTY)],
     },
@@ -820,6 +1011,16 @@ const CORPUS: &[Fixture] = &[
             "  ex:q rdfs:subPropertyOf ex:q",
             "",
             "The near miss still holds: `p subPropertyOf p` is absent because p is absent.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 2 -> 12 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, plus 1 about this fixture's own terms —",
+            "",
+            "  ex:q owl:equivalentProperty ex:q",
+            "",
+            "The same as `property_typed`, on q. The near miss still holds: `p subPropertyOf p`",
+            "is absent because p is absent, and so now is `p owl:equivalentProperty p`.",
+            "The tally gains prp-ap=9 scm-eqp2=1.",
         ],
         quads: &[t(EX_Q, RDF_TYPE, RDF_PROPERTY)],
     },
@@ -851,6 +1052,18 @@ const CORPUS: &[Fixture] = &[
             "",
             "rdfs8 and rdfs10 are untouched: `C rdfs:subClassOf rdfs:Resource` and `C",
             "rdfs:subClassOf C` are still concluded from the input's own rdfs:Class typing.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 3 -> 13 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, plus 1 about this fixture's own terms —",
+            "",
+            "  ex:C owl:equivalentClass ex:C",
+            "",
+            "scm-eqc2 reads rdfs10's own conclusion: `C rdfs:subClassOf C` holds in both",
+            "directions trivially, so the mutual-subclass premise is met and C is equivalent to",
+            "itself. rdfs8 and rdfs10 are untouched — this fixture's own rules still fire, and",
+            "scm-cls does NOT, which is what makes this the near miss for `owl_class`.",
+            "The tally gains prp-ap=9 scm-eqc2=1.",
         ],
         quads: &[t(EX_C, RDF_TYPE, RDFS_CLASS)],
     },
@@ -885,6 +1098,12 @@ const CORPUS: &[Fixture] = &[
             "rdfs:Resource` nor `C ⊑ C` appears. NotAClass itself now IS an rdfs:Class — it",
             "is the object of an rdf:type triple, whose axiomatic range is rdfs:Class — which",
             "is a conclusion about NotAClass and not about C, and leaves the control intact.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 1 -> 10 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, and nothing else: no rule this change added has a premise",
+            "in this input, so the fixture's own conclusions are exactly what they were.",
+            "The tally gains prp-ap=9.",
         ],
         quads: &[t(EX_C, RDF_TYPE, EX_NOT_A_CLASS)],
     },
@@ -1016,6 +1235,36 @@ const CORPUS: &[Fixture] = &[
             "  ex:x rdf:type rdfs:Resource",
             "",
             "rdfs9 / cax-sco is untouched: `x rdf:type B` is still concluded.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 1 -> 10 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, and nothing else: no rule this change added has a premise",
+            "in this input, so the fixture's own conclusions are exactly what they were.",
+            "The tally gains prp-ap=9.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 1 -> 10 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, and nothing else: no rule this change added has a premise",
+            "in this input, so the fixture's own conclusions are exactly what they were.",
+            "The tally gains prp-ap=9.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 1 -> 10 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, and nothing else: no rule this change added has a premise",
+            "in this input, so the fixture's own conclusions are exactly what they were.",
+            "The tally gains prp-ap=9.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 1 -> 10 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, and nothing else: no rule this change added has a premise",
+            "in this input, so the fixture's own conclusions are exactly what they were.",
+            "The tally gains prp-ap=9.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 3 -> 12 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, and nothing else: no rule this change added has a premise",
+            "in this input, so the fixture's own conclusions are exactly what they were.",
+            "The tally gains prp-ap=9.",
         ],
         quads: &[t(EX_A, RDFS_SUBCLASSOF, EX_B), t(EX_X, RDF_TYPE, EX_A)],
     },
@@ -1055,6 +1304,12 @@ const CORPUS: &[Fixture] = &[
             "  ex:x rdf:type rdfs:Resource",
             "",
             "The near miss still holds: `x rdf:type B` is absent.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 2 -> 11 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, and nothing else: no rule this change added has a premise",
+            "in this input, so the fixture's own conclusions are exactly what they were.",
+            "The tally gains prp-ap=9.",
         ],
         quads: &[t(EX_A, RDFS_SUBCLASSOF, EX_B), t(EX_X, RDF_TYPE, EX_D)],
     },
@@ -1134,6 +1389,12 @@ const CORPUS: &[Fixture] = &[
             "multi-round fixpoint still closes. The six reflexive `Ci ⊑ Ci` are back — every",
             "Ci is now typed rdfs:Class from the axiomatic domain and range of rdfs:subClassOf",
             "— and this is the corpus's budget worst case at 2,577 join steps.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 21 -> 30 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, and nothing else: no rule this change added has a premise",
+            "in this input, so the fixture's own conclusions are exactly what they were.",
+            "The tally gains prp-ap=9.",
         ],
         quads: &[
             t(EX_A, RDFS_SUBCLASSOF, EX_B),
@@ -1182,6 +1443,12 @@ const CORPUS: &[Fixture] = &[
             "  ex:F rdfs:subClassOf rdfs:Resource",
             "",
             "The near miss still holds: `A rdfs:subClassOf F` is absent at every depth.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 2 -> 11 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, and nothing else: no rule this change added has a premise",
+            "in this input, so the fixture's own conclusions are exactly what they were.",
+            "The tally gains prp-ap=9.",
         ],
         quads: &[
             t(EX_A, RDFS_SUBCLASSOF, EX_B),
@@ -1226,6 +1493,12 @@ const CORPUS: &[Fixture] = &[
             "for owl:SymmetricProperty: owl:SymmetricProperty appears only as an rdf:type",
             "object, so the axiomatic range of rdf:type makes it an rdfs:Class and nothing",
             "more is said about it. prp-symp is untouched — the OWL-RL section is identical.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 5 -> 14 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, and nothing else: no rule this change added has a premise",
+            "in this input, so the fixture's own conclusions are exactly what they were.",
+            "The tally gains prp-ap=9.",
         ],
         quads: &[
             t(EX_P, RDF_TYPE, OWL_SYMMETRIC),
@@ -1269,6 +1542,12 @@ const CORPUS: &[Fixture] = &[
             "As `symmetric`: RDFS says nothing about owl:TransitiveProperty beyond its being",
             "the object of an rdf:type triple and therefore an rdfs:Class. prp-trp is",
             "untouched — the OWL-RL section is identical.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 4 -> 13 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, and nothing else: no rule this change added has a premise",
+            "in this input, so the fixture's own conclusions are exactly what they were.",
+            "The tally gains prp-ap=9.",
         ],
         quads: &[
             t(EX_P, RDF_TYPE, OWL_TRANSITIVE),
@@ -1316,6 +1595,12 @@ const CORPUS: &[Fixture] = &[
             "Both halves of the axiom are untouched — the OWL-RL section is identical.",
             "owl:inverseOf is now typed rdf:Property because it is a PREDICATE (rdfD2), which",
             "is the one place this fixture shows rdfD2 reaching something the axioms do not.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 5 -> 14 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, and nothing else: no rule this change added has a premise",
+            "in this input, so the fixture's own conclusions are exactly what they were.",
+            "The tally gains prp-ap=9.",
         ],
         quads: &[
             t(EX_P, OWL_INVERSEOF, EX_Q),
@@ -1361,6 +1646,12 @@ const CORPUS: &[Fixture] = &[
             "  owl:inverseOf rdfs:subPropertyOf owl:inverseOf",
             "",
             "The near miss still holds: neither mirror between p and q appears.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 4 -> 13 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, and nothing else: no rule this change added has a premise",
+            "in this input, so the fixture's own conclusions are exactly what they were.",
+            "The tally gains prp-ap=9.",
         ],
         quads: &[
             t(EX_P, OWL_INVERSEOF, EX_R),
@@ -1402,6 +1693,22 @@ const CORPUS: &[Fixture] = &[
             "types A or B an rdfs:Class under RDFS, since owl:equivalentClass has no",
             "axiomatic range. The OWL-RL section, where scm-eqc1 does license them, is",
             "identical to before.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 5 -> 17 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, plus 3 about this fixture's own terms —",
+            "",
+            "  ex:A owl:equivalentClass ex:A",
+            "  ex:B owl:equivalentClass ex:A",
+            "  ex:B owl:equivalentClass ex:B",
+            "",
+            "scm-eqc2 is the converse of scm-eqc1 and this fixture now exercises the round trip:",
+            "scm-eqc1 turns `A owl:equivalentClass B` into both sub-class edges, rdfs11 / scm-sco",
+            "composes each pair into `A ⊑ A` and `B ⊑ B`, and scm-eqc2 reads all three mutual",
+            "pairs back as equivalences. The input's own `A owl:equivalentClass B` is not",
+            "re-derived — it is a premise, not a conclusion — so the tally reads scm-eqc2=3 and",
+            "not 4. scm-eqc1 and scm-sco are untouched at 2 each.",
+            "The tally gains prp-ap=9 scm-eqc2=3.",
         ],
         quads: &[t(EX_A, OWL_EQUIVALENTCLASS, EX_B)],
     },
@@ -1435,6 +1742,19 @@ const CORPUS: &[Fixture] = &[
             "",
             "As `equivalent_class`, with owl:equivalentProperty. The OWL-RL section is",
             "identical.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 5 -> 17 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, plus 3 about this fixture's own terms —",
+            "",
+            "  ex:A owl:equivalentProperty ex:A",
+            "  ex:B owl:equivalentProperty ex:A",
+            "  ex:B owl:equivalentProperty ex:B",
+            "",
+            "The property mirror of `equivalent_class`: scm-eqp1 gives both sub-property edges,",
+            "rdfs5 / scm-spo composes the reflexives, and scm-eqp2 reads all three mutual pairs",
+            "back. scm-eqp1 and scm-spo are untouched at 2 each.",
+            "The tally gains prp-ap=9 scm-eqp2=3.",
         ],
         quads: &[t(EX_A, OWL_EQUIVALENTPROPERTY, EX_B)],
     },
@@ -1490,6 +1810,12 @@ const CORPUS: &[Fixture] = &[
             "before. rdfs9's tally rose from 1 to 4 because the axioms give it three more",
             "conclusions (through `⊑ rdfs:Resource`), and the sum of the tally is still",
             "exactly the inferred-triple count, which is the invariant this fixture guards.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 5 -> 14 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, and nothing else: no rule this change added has a premise",
+            "in this input, so the fixture's own conclusions are exactly what they were.",
+            "The tally gains prp-ap=9.",
         ],
         quads: &[
             t(EX_A, RDFS_SUBCLASSOF, EX_C),
@@ -1564,6 +1890,12 @@ const CORPUS: &[Fixture] = &[
             "conclude about a fresh blank node the evaluator may not mint. Note that rdfs4",
             "does NOT type the triple term rdfs:Resource: that conclusion has a triple term",
             "in subject position, so it is generalized RDF and is dropped at the boundary.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 4 -> 13 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, and nothing else: no rule this change added has a premise",
+            "in this input, so the fixture's own conclusions are exactly what they were.",
+            "The tally gains prp-ap=9.",
         ],
         quads: &[
             t(EX_SAYS, RDFS_SUBPROPERTYOF, EX_MENTIONS),
@@ -1629,6 +1961,12 @@ const CORPUS: &[Fixture] = &[
             "and rdfs4 now types x, p and A rdfs:Resource. rdfs4 also strengthens the",
             "boundary: its object clause concludes into subject position too, so the literal",
             "is now dropped twice over rather than once.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 2 -> 11 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, and nothing else: no rule this change added has a premise",
+            "in this input, so the fixture's own conclusions are exactly what they were.",
+            "The tally gains prp-ap=9.",
         ],
         quads: &[t(EX_P, RDFS_RANGE, EX_A), t_lit(EX_X, EX_P, "cat")],
     },
@@ -1705,8 +2043,461 @@ const CORPUS: &[Fixture] = &[
             "that had simply restored the endpoint shortcut would emit them.",
             "UNDER OWL-RL NOTHING CHANGED AT ALL: that lane asserts no axiomatic triples,",
             "its closure is still the input alone, and the shortcut is still gone.",
+            "",
+            "AT THE OWL-RL TABLES — OWL-RL ONLY. Simple, RDF and RDFS are byte-identical.",
+            "OWL-RL closure 2 -> 11 lines: the nine-line input-independent prp-ap block",
+            "cause ii describes, and nothing else: no rule this change added has a premise",
+            "in this input, so the fixture's own conclusions are exactly what they were.",
+            "The tally gains prp-ap=9.",
         ],
         quads: &[t(EX_A, RDFS_SUBCLASSOF, EX_B), t(EX_X, EX_P, EX_Y)],
+    },
+    // ── Table 5 `prp-*`, Table 7 `cax-*` and Table 9 `scm-*` ──────────────────────
+    //
+    // Every fixture below is new with the OWL 2 RL tables, so none of them moved a
+    // committed golden: each states, in its own `changed` field, that it did not exist.
+    Fixture {
+        name: "functional",
+        doc: &[
+            "prp-fp: a functional property's two values are the same thing. Also the NEAR",
+            "MISS for prp-ifp — it differs from `inverse_functional` in exactly one term,",
+            "the property characteristic — so the two fixtures are each other's control.",
+        ],
+        exercises: &["prp-fp"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_P, RDF_TYPE, OWL_FUNCTIONALPROPERTY),
+            t(EX_X, EX_P, EX_Y),
+            t(EX_X, EX_P, EX_Z),
+        ],
+    },
+    Fixture {
+        name: "inverse_functional",
+        doc: &[
+            "prp-ifp: an inverse-functional property's two subjects are the same thing.",
+            "Also the NEAR MISS for prp-fp; see `functional`. The two share a shape and",
+            "differ in the direction the property is read, which is exactly the difference",
+            "between the two rules.",
+        ],
+        exercises: &["prp-ifp"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_P, RDF_TYPE, OWL_INVERSEFUNCTIONALPROPERTY),
+            t(EX_X, EX_P, EX_W),
+            t(EX_Y, EX_P, EX_W),
+        ],
+    },
+    Fixture {
+        name: "property_chain",
+        doc: &[
+            "AWKWARD CASE — prp-spo2, the first rule whose premise is an RDF COLLECTION of",
+            "unbounded length. `chained owl:propertyChainAxiom (p q)` with the path",
+            "`x p y q z` concludes `x chained z`.",
+            "",
+            "The rule is written `LIST[?x, ?p1, …, ?pn]` followed by n body atoms, which is",
+            "a conjunction whose length depends on the data and therefore not a clause. It",
+            "is stated instead as a recursion over rdf:first / rdf:rest into an INTERNAL",
+            "ternary relation, grounded at the last cell so every clause stays",
+            "range-restricted. The internal relation's rows are dropped before the answer is",
+            "materialized, so this closure holds the conclusion and no trace of the walk.",
+        ],
+        exercises: &["prp-spo2"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_CHAINED, OWL_PROPERTYCHAINAXIOM, EX_L0),
+            t(EX_L0, RDF_FIRST, EX_P),
+            t(EX_L0, RDF_REST, EX_L1),
+            t(EX_L1, RDF_FIRST, EX_Q),
+            t(EX_L1, RDF_REST, RDF_NIL),
+            t(EX_X, EX_P, EX_Y),
+            t(EX_Y, EX_Q, EX_Z),
+        ],
+    },
+    Fixture {
+        name: "property_chain_near_miss",
+        doc: &[
+            "NEAR MISS for prp-spo2: the path is broken at the join — the q-triple starts",
+            "at u rather than at y — so the chain composes nothing.",
+        ],
+        exercises: &["prp-spo2"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_CHAINED, OWL_PROPERTYCHAINAXIOM, EX_L0),
+            t(EX_L0, RDF_FIRST, EX_P),
+            t(EX_L0, RDF_REST, EX_L1),
+            t(EX_L1, RDF_FIRST, EX_Q),
+            t(EX_L1, RDF_REST, RDF_NIL),
+            t(EX_X, EX_P, EX_Y),
+            t(EX_U, EX_Q, EX_Z),
+        ],
+    },
+    Fixture {
+        name: "equivalent_property_data",
+        doc: &[
+            "prp-eqp1 and prp-eqp2: an owl:equivalentProperty axiom re-predicates a triple",
+            "in both directions. One axiom drives both rules — `x p y` drives prp-eqp1 and",
+            "`u q v` drives prp-eqp2 — so the split of the rule into its two halves is",
+            "observable rather than merely asserted.",
+            "",
+            "Both conclusions ALSO follow from scm-eqp1 and then prp-spo1, one round later.",
+            "The report credits the rule that was FIRST to add the triple, and these two",
+            "fire from the input alone while the two-hop path has to wait for scm-eqp1's",
+            "conclusion — which is why the tally reads prp-eqp1=1 and prp-eqp2=1 here.",
+        ],
+        exercises: &["prp-eqp1", "prp-eqp2"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_P, OWL_EQUIVALENTPROPERTY, EX_Q),
+            t(EX_X, EX_P, EX_Y),
+            t(EX_U, EX_Q, EX_V),
+        ],
+    },
+    Fixture {
+        name: "equivalent_property_data_near_miss",
+        doc: &[
+            "NEAR MISS for prp-eqp1 and prp-eqp2: the axiom names r as p's equivalent, not",
+            "q, so neither the p-triple nor the q-triple is re-predicated into the other.",
+        ],
+        exercises: &["prp-eqp1", "prp-eqp2"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_P, OWL_EQUIVALENTPROPERTY, EX_R),
+            t(EX_X, EX_P, EX_Y),
+            t(EX_U, EX_Q, EX_V),
+        ],
+    },
+    Fixture {
+        name: "equivalent_class_instance",
+        doc: &[
+            "cax-eqc1 and cax-eqc2: an owl:equivalentClass axiom re-types an instance in",
+            "both directions. One axiom drives both rules, as `equivalent_property_data`",
+            "does for the property pair.",
+            "",
+            "Both conclusions also follow from scm-eqc1 and then cax-sco, one round later;",
+            "these two reach them from the input alone and are therefore the rules the",
+            "report credits.",
+        ],
+        exercises: &["cax-eqc1", "cax-eqc2"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_A, OWL_EQUIVALENTCLASS, EX_B),
+            t(EX_X, RDF_TYPE, EX_A),
+            t(EX_U, RDF_TYPE, EX_B),
+        ],
+    },
+    Fixture {
+        name: "equivalent_class_instance_near_miss",
+        doc: &[
+            "NEAR MISS for cax-eqc1 and cax-eqc2: the axiom names C as A's equivalent, not",
+            "B, so neither instance is re-typed into the other's class.",
+        ],
+        exercises: &["cax-eqc1", "cax-eqc2"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_A, OWL_EQUIVALENTCLASS, EX_C),
+            t(EX_X, RDF_TYPE, EX_A),
+            t(EX_U, RDF_TYPE, EX_B),
+        ],
+    },
+    Fixture {
+        name: "owl_class",
+        doc: &[
+            "scm-cls: an owl:Class is a sub-class of itself and of owl:Thing, equivalent to",
+            "itself, and a super-class of owl:Nothing. The specification's conclusion is a",
+            "CONJUNCTION of those four triples; the calculus states one clause per conjunct",
+            "over the one premise, which is the same statement without a head form the",
+            "evaluator refuses.",
+            "",
+            "`class_typed` is the NEAR MISS: it types C rdfs:Class rather than owl:Class, so",
+            "rdfs8 and rdfs10 fire and scm-cls does not — the two fixtures differ in exactly",
+            "the one term the premise reads.",
+        ],
+        exercises: &["scm-cls"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[t(EX_C, RDF_TYPE, OWL_CLASS)],
+    },
+    Fixture {
+        name: "mutual_subclass",
+        doc: &[
+            "scm-eqc2: two classes that are sub-classes of each other are equivalent — the",
+            "converse of scm-eqc1. Also the NEAR MISS for scm-eqp2; see `mutual_subproperty`.",
+        ],
+        exercises: &["scm-eqc2"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_A, RDFS_SUBCLASSOF, EX_B),
+            t(EX_B, RDFS_SUBCLASSOF, EX_A),
+        ],
+    },
+    Fixture {
+        name: "mutual_subproperty",
+        doc: &[
+            "scm-eqp2: two properties that are sub-properties of each other are equivalent —",
+            "the converse of scm-eqp1. Also the NEAR MISS for scm-eqc2: the two fixtures",
+            "have the same shape over the class and the property hierarchy respectively, so",
+            "each denies the other's conclusion by naming different terms in the same",
+            "position.",
+        ],
+        exercises: &["scm-eqp2"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_P, RDFS_SUBPROPERTYOF, EX_Q),
+            t(EX_Q, RDFS_SUBPROPERTYOF, EX_P),
+        ],
+    },
+    Fixture {
+        name: "object_property",
+        doc: &[
+            "scm-op: an owl:ObjectProperty is a sub-property of, and equivalent to, itself.",
+            "Also the NEAR MISS for scm-dp; see `datatype_property`.",
+        ],
+        exercises: &["scm-op"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[t(EX_P, RDF_TYPE, OWL_OBJECTPROPERTY)],
+    },
+    Fixture {
+        name: "datatype_property",
+        doc: &[
+            "scm-dp: an owl:DatatypeProperty is a sub-property of, and equivalent to,",
+            "itself. Also the NEAR MISS for scm-op; the two rules differ in exactly one",
+            "constant — the class the premise names — and so do the two fixtures, which",
+            "additionally name different properties so that neither closure can contain the",
+            "other's conclusion.",
+        ],
+        exercises: &["scm-dp"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[t(EX_Q, RDF_TYPE, OWL_DATATYPEPROPERTY)],
+    },
+    Fixture {
+        name: "domain_widened",
+        doc: &[
+            "scm-dom1: a domain widens along rdfs:subClassOf. Also the NEAR MISS for",
+            "scm-dom2; see `domain_inherited`.",
+        ],
+        exercises: &["scm-dom1"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[t(EX_R, RDFS_DOMAIN, EX_A), t(EX_A, RDFS_SUBCLASSOF, EX_B)],
+    },
+    Fixture {
+        name: "domain_inherited",
+        doc: &[
+            "scm-dom2: a domain is inherited along rdfs:subPropertyOf. Also the NEAR MISS",
+            "for scm-dom1: the two rules move a domain declaration along the two different",
+            "hierarchies, and each fixture supplies the hierarchy the other does not.",
+        ],
+        exercises: &["scm-dom2"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_Q, RDFS_DOMAIN, EX_A),
+            t(EX_P, RDFS_SUBPROPERTYOF, EX_Q),
+        ],
+    },
+    Fixture {
+        name: "range_widened",
+        doc: &[
+            "scm-rng1: a range widens along rdfs:subClassOf. Also the NEAR MISS for",
+            "scm-rng2; see `range_inherited`.",
+        ],
+        exercises: &["scm-rng1"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[t(EX_R, RDFS_RANGE, EX_A), t(EX_A, RDFS_SUBCLASSOF, EX_B)],
+    },
+    Fixture {
+        name: "range_inherited",
+        doc: &[
+            "scm-rng2: a range is inherited along rdfs:subPropertyOf. Also the NEAR MISS",
+            "for scm-rng1, on the same pairing as `domain_widened` / `domain_inherited`.",
+        ],
+        exercises: &["scm-rng2"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[t(EX_Q, RDFS_RANGE, EX_A), t(EX_P, RDFS_SUBPROPERTYOF, EX_Q)],
+    },
+    Fixture {
+        name: "has_value_restrictions",
+        doc: &[
+            "scm-hv: two owl:hasValue restrictions on the SAME value, whose properties are",
+            "related by rdfs:subPropertyOf, are ordered by rdfs:subClassOf the same way.",
+        ],
+        exercises: &["scm-hv"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_A, OWL_HASVALUE, EX_X),
+            t(EX_A, OWL_ONPROPERTY, EX_P),
+            t(EX_B, OWL_HASVALUE, EX_X),
+            t(EX_B, OWL_ONPROPERTY, EX_Q),
+            t(EX_P, RDFS_SUBPROPERTYOF, EX_Q),
+        ],
+    },
+    Fixture {
+        name: "has_value_restrictions_near_miss",
+        doc: &[
+            "NEAR MISS for scm-hv: the two restrictions name DIFFERENT values (x and y), so",
+            "the sub-property relation between their properties orders nothing.",
+        ],
+        exercises: &["scm-hv"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_A, OWL_HASVALUE, EX_X),
+            t(EX_A, OWL_ONPROPERTY, EX_P),
+            t(EX_B, OWL_HASVALUE, EX_Y),
+            t(EX_B, OWL_ONPROPERTY, EX_Q),
+            t(EX_P, RDFS_SUBPROPERTYOF, EX_Q),
+        ],
+    },
+    Fixture {
+        name: "some_values_filler",
+        doc: &[
+            "scm-svf1: two owl:someValuesFrom restrictions on ONE property, ordered by",
+            "their fillers. Also the NEAR MISS for scm-svf2; see `some_values_property`.",
+        ],
+        exercises: &["scm-svf1"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_A, OWL_SOMEVALUESFROM, EX_C),
+            t(EX_A, OWL_ONPROPERTY, EX_P),
+            t(EX_B, OWL_SOMEVALUESFROM, EX_D),
+            t(EX_B, OWL_ONPROPERTY, EX_P),
+            t(EX_C, RDFS_SUBCLASSOF, EX_D),
+        ],
+    },
+    Fixture {
+        name: "some_values_property",
+        doc: &[
+            "scm-svf2: two owl:someValuesFrom restrictions on ONE filler, ordered by their",
+            "properties. Also the NEAR MISS for scm-svf1: the two rules differ in which of",
+            "the restriction's two coordinates varies, and the fixtures name different",
+            "classes so neither closure can hold the other's conclusion.",
+        ],
+        exercises: &["scm-svf2"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_E, OWL_SOMEVALUESFROM, EX_C),
+            t(EX_E, OWL_ONPROPERTY, EX_P),
+            t(EX_F, OWL_SOMEVALUESFROM, EX_C),
+            t(EX_F, OWL_ONPROPERTY, EX_Q),
+            t(EX_P, RDFS_SUBPROPERTYOF, EX_Q),
+        ],
+    },
+    Fixture {
+        name: "all_values_filler",
+        doc: &[
+            "scm-avf1: two owl:allValuesFrom restrictions on ONE property, ordered by their",
+            "fillers — covariantly, exactly like scm-svf1. Also the NEAR MISS for scm-avf2;",
+            "see `all_values_property`.",
+        ],
+        exercises: &["scm-avf1"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_A, OWL_ALLVALUESFROM, EX_C),
+            t(EX_A, OWL_ONPROPERTY, EX_P),
+            t(EX_B, OWL_ALLVALUESFROM, EX_D),
+            t(EX_B, OWL_ONPROPERTY, EX_P),
+            t(EX_C, RDFS_SUBCLASSOF, EX_D),
+        ],
+    },
+    Fixture {
+        name: "all_values_property",
+        doc: &[
+            "AWKWARD CASE — scm-avf2, the one rule of Table 9 whose conclusion is",
+            "CONTRAVARIANT. Two owl:allValuesFrom restrictions on one filler with",
+            "`p rdfs:subPropertyOf q` conclude `F rdfs:subClassOf E`, the other way round",
+            "from scm-svf2's `E rdfs:subClassOf F` on the identical premise shape: a",
+            "universal restriction over the WIDER property is the stronger class. This",
+            "fixture and `some_values_property` are byte-for-byte the same input but for the",
+            "restriction predicate, so the direction of the conclusion is attributable to",
+            "the rule and to nothing else.",
+            "",
+            "It is also the NEAR MISS for scm-avf1; see `all_values_filler`.",
+        ],
+        exercises: &["scm-avf2"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_E, OWL_ALLVALUESFROM, EX_C),
+            t(EX_E, OWL_ONPROPERTY, EX_P),
+            t(EX_F, OWL_ALLVALUESFROM, EX_C),
+            t(EX_F, OWL_ONPROPERTY, EX_Q),
+            t(EX_P, RDFS_SUBPROPERTYOF, EX_Q),
+        ],
+    },
+    Fixture {
+        name: "intersection_of",
+        doc: &[
+            "scm-int: an intersection is a sub-class of each of its members. The premise is",
+            "an RDF COLLECTION, read through the list pre-pass rather than through a",
+            "recursion: the rule concludes one triple per member INDEPENDENTLY, so",
+            "membership is all it needs and the member's position is bound and unused.",
+            "",
+            "Also the NEAR MISS for scm-uni; see `union_of`.",
+        ],
+        exercises: &["scm-int"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_C, OWL_INTERSECTIONOF, EX_L0),
+            t(EX_L0, RDF_FIRST, EX_A),
+            t(EX_L0, RDF_REST, EX_L1),
+            t(EX_L1, RDF_FIRST, EX_B),
+            t(EX_L1, RDF_REST, RDF_NIL),
+        ],
+    },
+    Fixture {
+        name: "union_of",
+        doc: &[
+            "scm-uni: a union is a super-class of each of its members. The same collection",
+            "as `intersection_of`, under the other connective and a different class, so the",
+            "two are each other's near miss and the DIRECTION of each rule's conclusion is",
+            "what separates them.",
+        ],
+        exercises: &["scm-uni"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_D, OWL_UNIONOF, EX_L0),
+            t(EX_L0, RDF_FIRST, EX_A),
+            t(EX_L0, RDF_REST, EX_L1),
+            t(EX_L1, RDF_FIRST, EX_B),
+            t(EX_L1, RDF_REST, RDF_NIL),
+        ],
+    },
+    Fixture {
+        name: "has_key",
+        doc: &[
+            "AWKWARD CASE — prp-key, whose premise UNIVERSALLY quantifies over an RDF",
+            "collection: two instances of C that agree on every property of C's key are the",
+            "same thing.",
+            "",
+            "Like prp-spo2 this is stated as a recursion over rdf:first / rdf:rest into an",
+            "internal ternary relation — `agree from this cell onwards` — and the internal",
+            "rows never reach the answer. The key here is one property long, which is the",
+            "smallest list for which the universal quantifier means anything.",
+        ],
+        exercises: &["prp-key"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_C, OWL_HASKEY, EX_L0),
+            t(EX_L0, RDF_FIRST, EX_P),
+            t(EX_L0, RDF_REST, RDF_NIL),
+            t(EX_X, RDF_TYPE, EX_C),
+            t(EX_Y, RDF_TYPE, EX_C),
+            t(EX_X, EX_P, EX_Z),
+            t(EX_Y, EX_P, EX_Z),
+        ],
+    },
+    Fixture {
+        name: "has_key_near_miss",
+        doc: &[
+            "NEAR MISS for prp-key: the two instances DISAGREE on the key property — y's",
+            "value is u where x's is z — so they are not identified.",
+        ],
+        exercises: &["prp-key"],
+        changed: &["NEW FIXTURE — no committed golden moved; this one did not exist."],
+        quads: &[
+            t(EX_C, OWL_HASKEY, EX_L0),
+            t(EX_L0, RDF_FIRST, EX_P),
+            t(EX_L0, RDF_REST, RDF_NIL),
+            t(EX_X, RDF_TYPE, EX_C),
+            t(EX_Y, RDF_TYPE, EX_C),
+            t(EX_X, EX_P, EX_Z),
+            t(EX_Y, EX_P, EX_U),
+        ],
     },
 ];
 
@@ -1888,6 +2679,8 @@ fn render_golden(fixture: &Fixture) -> String {
     write_comment_block(&mut out, ENGINE_SWAP);
     out.push_str("#\n");
     write_comment_block(&mut out, AXIOMATIC_PATH);
+    out.push_str("#\n");
+    write_comment_block(&mut out, OWL_RL_TABLES);
     out.push_str("#\n# WHAT MOVED IN THIS GOLDEN:\n#\n");
     write_comment_block(&mut out, fixture.changed);
     let _ = writeln!(out, "# exercises: {}", fixture.exercises.join(" "));
@@ -2133,16 +2926,26 @@ const RDFS_AXIOMATIC_ROWS: &[AxiomaticRow] = &[(
     (EX_DT, RDF_TYPE, RDFS_DATATYPE),
 )];
 
+/// The premise-free rules the `OWL-RL` lane fires.
+///
+/// `prp-ap` types each BUILT-IN annotation property of OWL 2 RL an
+/// `owl:AnnotationProperty`, and OWL 2 Structural Specification §5.5 fixes that list at
+/// nine. `rdfs:label` is therefore typed in EVERY `OWL-RL` closure, including the empty
+/// graph's, and `example.org/p` is typed in none: that pair is the whole content of the
+/// rule, stated as one presence and one absence.
+const OWL_RL_AXIOMATIC_ROWS: &[AxiomaticRow] = &[(
+    RuleId::PrpAp,
+    "empty",
+    (RDFS_LABEL, RDF_TYPE, OWL_ANNOTATIONPROPERTY),
+    (EX_P, RDF_TYPE, OWL_ANNOTATIONPROPERTY),
+)];
+
 /// The premise-free rules `regime` registers.
 fn axiomatic_rows(regime: Regime) -> &'static [AxiomaticRow] {
     match regime {
         Regime::Rdfs => RDFS_AXIOMATIC_ROWS,
-        Regime::Simple
-        | Regime::Rdf
-        | Regime::OwlRl
-        | Regime::OwlDirect
-        | Regime::Rif
-        | Regime::D => &[],
+        Regime::OwlRl => OWL_RL_AXIOMATIC_ROWS,
+        Regime::Simple | Regime::Rdf | Regime::OwlDirect | Regime::Rif | Regime::D => &[],
     }
 }
 
@@ -2236,7 +3039,8 @@ const RDFS_ROWS: &[Row] = &[
 /// `Regime::OwlRl`'s registered rules, in specification table order.
 ///
 /// Nine of them are the RDFS rules above under their OWL 2 RL names, evaluated in the OWL
-/// lane — the same fixture, a different calculus — and six are the lane's own.
+/// lane — the same fixture, a different calculus — and the rest are the lane's own.
+/// `prp-ap` is not here: it is premise-free, so it is in [`OWL_RL_AXIOMATIC_ROWS`] instead.
 const OWL_RL_ROWS: &[Row] = &[
     (
         RuleId::PrpDom,
@@ -2309,6 +3113,150 @@ const OWL_RL_ROWS: &[Row] = &[
         "equivalent_property",
         (EX_B, RDFS_SUBPROPERTYOF, EX_A),
         "equivalent_class",
+    ),
+    (
+        RuleId::PrpFp,
+        "functional",
+        (EX_Y, OWL_SAMEAS, EX_Z),
+        "inverse_functional",
+    ),
+    (
+        RuleId::PrpIfp,
+        "inverse_functional",
+        (EX_X, OWL_SAMEAS, EX_Y),
+        "functional",
+    ),
+    (
+        RuleId::PrpSpo2,
+        "property_chain",
+        (EX_X, EX_CHAINED, EX_Z),
+        "property_chain_near_miss",
+    ),
+    (
+        RuleId::PrpEqp1,
+        "equivalent_property_data",
+        (EX_X, EX_Q, EX_Y),
+        "equivalent_property_data_near_miss",
+    ),
+    (
+        RuleId::PrpEqp2,
+        "equivalent_property_data",
+        (EX_U, EX_P, EX_V),
+        "equivalent_property_data_near_miss",
+    ),
+    (
+        RuleId::PrpKey,
+        "has_key",
+        (EX_X, OWL_SAMEAS, EX_Y),
+        "has_key_near_miss",
+    ),
+    (
+        RuleId::CaxEqc1,
+        "equivalent_class_instance",
+        (EX_X, RDF_TYPE, EX_B),
+        "equivalent_class_instance_near_miss",
+    ),
+    (
+        RuleId::CaxEqc2,
+        "equivalent_class_instance",
+        (EX_U, RDF_TYPE, EX_A),
+        "equivalent_class_instance_near_miss",
+    ),
+    (
+        RuleId::ScmCls,
+        "owl_class",
+        (EX_C, RDFS_SUBCLASSOF, OWL_THING),
+        "class_typed",
+    ),
+    (
+        RuleId::ScmEqc2,
+        "mutual_subclass",
+        (EX_A, OWL_EQUIVALENTCLASS, EX_B),
+        "mutual_subproperty",
+    ),
+    (
+        RuleId::ScmOp,
+        "object_property",
+        (EX_P, OWL_EQUIVALENTPROPERTY, EX_P),
+        "datatype_property",
+    ),
+    (
+        RuleId::ScmDp,
+        "datatype_property",
+        (EX_Q, OWL_EQUIVALENTPROPERTY, EX_Q),
+        "object_property",
+    ),
+    (
+        RuleId::ScmEqp2,
+        "mutual_subproperty",
+        (EX_P, OWL_EQUIVALENTPROPERTY, EX_Q),
+        "mutual_subclass",
+    ),
+    (
+        RuleId::ScmDom1,
+        "domain_widened",
+        (EX_R, RDFS_DOMAIN, EX_B),
+        "domain_inherited",
+    ),
+    (
+        RuleId::ScmDom2,
+        "domain_inherited",
+        (EX_P, RDFS_DOMAIN, EX_A),
+        "domain_widened",
+    ),
+    (
+        RuleId::ScmRng1,
+        "range_widened",
+        (EX_R, RDFS_RANGE, EX_B),
+        "range_inherited",
+    ),
+    (
+        RuleId::ScmRng2,
+        "range_inherited",
+        (EX_P, RDFS_RANGE, EX_A),
+        "range_widened",
+    ),
+    (
+        RuleId::ScmHv,
+        "has_value_restrictions",
+        (EX_A, RDFS_SUBCLASSOF, EX_B),
+        "has_value_restrictions_near_miss",
+    ),
+    (
+        RuleId::ScmSvf1,
+        "some_values_filler",
+        (EX_A, RDFS_SUBCLASSOF, EX_B),
+        "some_values_property",
+    ),
+    (
+        RuleId::ScmSvf2,
+        "some_values_property",
+        (EX_E, RDFS_SUBCLASSOF, EX_F),
+        "some_values_filler",
+    ),
+    (
+        RuleId::ScmAvf1,
+        "all_values_filler",
+        (EX_A, RDFS_SUBCLASSOF, EX_B),
+        "all_values_property",
+    ),
+    (
+        RuleId::ScmAvf2,
+        "all_values_property",
+        (EX_F, RDFS_SUBCLASSOF, EX_E),
+        "all_values_filler",
+    ),
+    (
+        RuleId::ScmInt,
+        "intersection_of",
+        (EX_C, RDFS_SUBCLASSOF, EX_A),
+        "union_of",
+    ),
+    (
+        RuleId::ScmUni,
+        "union_of",
+        (EX_A, RDFS_SUBCLASSOF, EX_D),
+        "intersection_of",
     ),
 ];
 
@@ -2484,7 +3432,7 @@ fn the_registry_shape_is_pinned() {
             ("Simple", 0, 0, 0),
             ("RDF", 3, 1, 2),
             ("RDFS", 18, 14, 4),
-            ("OWL-RL", 78, 12, 66),
+            ("OWL-RL", 78, 37, 41),
         ],
         "(regime, rules the spec defines, rules with fixtures, rules not yet implemented)"
     );
@@ -2747,8 +3695,17 @@ fn a_would_be_literal_subject_is_abandoned_and_reported() {
 #[test]
 fn the_reflexive_rules_fire_on_their_licensed_premises_and_the_axioms_supply_them() {
     // OWL-RL asserts no axiomatic triples, so its lane has no path to the premises and
-    // this input still entails nothing at all.
-    let owl = closure_lines("divergence_broad_triggers", Regime::OwlRl);
+    // this input still entails nothing AT ALL — nothing, that is, beyond `prp-ap`'s nine
+    // premise-free annotation-property typings, which hold for every input including the
+    // empty graph and are therefore subtracted here rather than listed. That subtraction
+    // is what keeps this a statement about the DATA: `empty`'s OWL-RL closure is asserted
+    // to be exactly those nine in
+    // `the_rdfs_closure_of_every_fixture_contains_the_empty_one`.
+    let premise_free = closure_lines("empty", Regime::OwlRl);
+    let owl: BTreeSet<String> = closure_lines("divergence_broad_triggers", Regime::OwlRl)
+        .difference(&premise_free)
+        .cloned()
+        .collect();
     assert_eq!(
         owl,
         [
@@ -2847,12 +3804,47 @@ fn the_rdfs_closure_of_every_fixture_contains_the_empty_one() {
         );
     }
     // And it really is the AXIOMS that put it there: no other lane asserts them, so no
-    // other lane has it. `Simple` copies the input, and `OWL-RL` omits the axiomatic
-    // triples by OWL 2 Profiles §4.3's own choice.
-    for regime in [Regime::Simple, Regime::Rdf, Regime::OwlRl] {
+    // other lane has it. `Simple` copies the input and `RDF` has one rule with a premise,
+    // so both close the empty graph into nothing.
+    for regime in [Regime::Simple, Regime::Rdf] {
         assert!(
             closure_lines("empty", regime).is_empty(),
             "{regime:?} closed the empty graph into something"
+        );
+    }
+    // `OWL-RL` omits the axiomatic triples by OWL 2 Profiles §4.3's own choice, so its
+    // empty-graph closure is not the 113-line RDFS block. It is not empty either: `prp-ap`
+    // is premise-free, and its nine built-in annotation properties are the whole of what
+    // that lane entails from nothing. They are pinned by NAME rather than by count,
+    // because the list is the specification's (OWL 2 Structural Specification §5.5) and a
+    // tenth appearing would be an invented one.
+    let owl_empty = closure_lines("empty", Regime::OwlRl);
+    let annotation_properties: BTreeSet<String> = [
+        "http://www.w3.org/2000/01/rdf-schema#label",
+        "http://www.w3.org/2000/01/rdf-schema#comment",
+        "http://www.w3.org/2000/01/rdf-schema#seeAlso",
+        "http://www.w3.org/2000/01/rdf-schema#isDefinedBy",
+        "http://www.w3.org/2002/07/owl#deprecated",
+        "http://www.w3.org/2002/07/owl#versionInfo",
+        "http://www.w3.org/2002/07/owl#priorVersion",
+        "http://www.w3.org/2002/07/owl#backwardCompatibleWith",
+        "http://www.w3.org/2002/07/owl#incompatibleWith",
+    ]
+    .into_iter()
+    .map(|property| nquads_line(property, RDF_TYPE, OWL_ANNOTATIONPROPERTY))
+    .collect();
+    assert_eq!(
+        owl_empty, annotation_properties,
+        "OWL-RL's empty-graph closure is exactly prp-ap's nine typings"
+    );
+    // …and, as with the RDFS block, it is a LOWER BOUND on every other OWL-RL closure.
+    for fixture in CORPUS {
+        let lines = closure_lines(fixture.name, Regime::OwlRl);
+        let absent: Vec<&String> = owl_empty.difference(&lines).collect();
+        assert!(
+            absent.is_empty(),
+            "{}: prp-ap is not input-independent — {absent:?} is missing",
+            fixture.name
         );
     }
 }

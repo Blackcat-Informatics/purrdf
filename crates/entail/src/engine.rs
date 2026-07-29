@@ -69,6 +69,7 @@ use purrdf_datalog::store::RelationStore;
 use crate::axioms::axioms_for;
 use crate::calculus::program_with_attribution;
 use crate::interner::intern_into;
+use crate::lists::{ListIndex, is_internal};
 use crate::report::RunStats;
 use crate::vocab::XSD_STRING;
 use crate::{EntailError, Regime};
@@ -98,12 +99,21 @@ pub(crate) fn copy_of(ds: &RdfDataset) -> Result<Arc<RdfDataset>, EntailError> {
 /// [`Construct::AxiomaticTriples`](crate::Construct::AxiomaticTriples) says both this and
 /// the unbounded `rdf:_n` family in one boundary.
 ///
-/// The default graph alone supplies premises and receives conclusions — every atom of
-/// every declared clause names
+/// The default graph alone supplies premises and receives conclusions — every atom over
+/// SPEC vocabulary names
 /// [`ClauseTerm::DefaultGraph`](purrdf_datalog::clause::ClauseTerm::DefaultGraph), which
 /// `the_declared_programs_read_and_write_the_default_graph_only` asserts — so quads in a
 /// named graph are carried through untouched and the run reports the
-/// [`Construct::NamedGraph`](crate::Construct::NamedGraph) boundary.
+/// [`Construct::NamedGraph`](crate::Construct::NamedGraph) boundary. The atoms of the
+/// INTERNAL relations ([`crate::lists`]) use that fourth position for the relation's third
+/// argument instead, which is not a graph at all and never reaches the answer.
+///
+/// # The collections are walked before the clauses run
+///
+/// The `OWL-RL` lane's rule table writes `LIST[…]`, a meta-notation no clause has, so this
+/// function walks each RDF collection an OWL axiom points at into an internal relation
+/// before evaluating. A malformed or cyclic collection is [`EntailError::MalformedList`]
+/// rather than a closure over its well-formed prefix.
 pub(crate) fn close(
     ds: &RdfDataset,
     regime: Regime,
@@ -123,6 +133,7 @@ pub(crate) fn close(
         let object = terms.record(&TermValue::iri(object));
         let _ = edb.insert(&subject, &predicate, &object, RelationStore::DEFAULT_GRAPH);
     }
+    let mut lists = ListIndex::default();
     for quad in ds.quads() {
         if quad.g.is_some() {
             continue; // entailment operates over the default graph
@@ -130,7 +141,21 @@ pub(crate) fn close(
         let subject = terms.record(&ds.term_value(quad.s));
         let predicate = terms.record(&ds.term_value(quad.p));
         let object = terms.record(&ds.term_value(quad.o));
+        if walks_collections(regime) {
+            lists.observe(&subject, &predicate, &object);
+        }
         let _ = edb.insert(&subject, &predicate, &object, RelationStore::DEFAULT_GRAPH);
+    }
+    // The RDF collections the OWL 2 axioms point at, walked ONCE into the internal
+    // relations the `LIST[…]` rules join against. A malformed or cyclic collection stops
+    // the run here rather than producing a closure over the well-formed prefix of it.
+    if walks_collections(regime) {
+        for fact in lists
+            .materialize()
+            .map_err(|error| EntailError::MalformedList(error.to_string()))?
+        {
+            let _ = edb.insert(&fact.subject, fact.predicate, &fact.object, &fact.graph);
+        }
     }
 
     let executable = compile(program).map_err(EntailError::Evaluate)?;
@@ -142,6 +167,17 @@ pub(crate) fn close(
     b.push_dataset(ds);
     for derivation in evaluation.derivations() {
         let fact = derivation.fact();
+        // An INTERNAL conclusion is bookkeeping, not an answer. `prp-spo2` and `prp-key`
+        // accumulate their list traversals in relations whose predicate is an
+        // interner-local id ([`crate::lists`]), and those rows are premises for the rule's
+        // own final clause and nothing else. They are neither materialized — no internal
+        // id may reach the dataset builder, let alone a serializer — nor credited, because
+        // a per-rule count is "triples this rule was first to add" and a traversal row is
+        // not a triple. Dropping them is also NOT the generalized-RDF boundary: nothing
+        // was lost, so nothing is reported.
+        if is_internal(&fact.predicate) {
+            continue;
+        }
         let subject = terms.value(&fact.subject);
         let predicate = terms.value(&fact.predicate);
         if !admits_subject(subject) || !admits_predicate(predicate) {
@@ -158,6 +194,16 @@ pub(crate) fn close(
     }
     let dataset = b.freeze().map_err(|e| EntailError::Build(e.to_string()))?;
     Ok((dataset, stats))
+}
+
+/// Whether `regime`'s lane walks the RDF collections its axioms point at.
+///
+/// `OWL-RL` alone: it is the only lane whose rule table writes `LIST[…]`, and it is the
+/// only calculus that REQUIRES those objects to be well-formed collections. An `RDFS` run
+/// over a cyclic `owl:members` list is not an error, because RDFS says nothing about
+/// `owl:members` and the cycle is ordinary data there.
+const fn walks_collections(regime: Regime) -> bool {
+    matches!(regime, Regime::OwlRl)
 }
 
 /// Whether `value` may occupy a triple SUBJECT position in RDF 1.2 — an IRI or a blank
@@ -363,11 +409,15 @@ fn write_u_escape(ch: char, out: &mut String) {
 
 #[cfg(test)]
 mod tests {
-    use super::{admits_predicate, admits_subject, surface_of};
+    use super::{admits_predicate, admits_subject, close, surface_of};
+    use crate::Regime;
     use crate::calculus::ALL_REGIMES;
     use crate::calculus_program;
-    use crate::vocab::{RDF_TYPE, XSD_STRING};
-    use purrdf_core::{BlankScope, RdfTextDirection, TermValue};
+    use crate::vocab::{
+        OWL_HASKEY, OWL_INTERSECTIONOF, OWL_PROPERTYCHAINAXIOM, OWL_UNIONOF, RDF_FIRST, RDF_NIL,
+        RDF_REST, RDF_TYPE, RDFS_SUBCLASSOF, XSD_STRING,
+    };
+    use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfTextDirection, TermValue};
     use purrdf_datalog::clause::{ClauseTerm, DlClause};
     use purrdf_datalog::store::RelationStore;
     use std::collections::BTreeSet;
@@ -378,6 +428,83 @@ mod tests {
     const EX_P: &str = "http://example.org/p";
     /// A fixture object IRI.
     const EX_O: &str = "http://example.org/o";
+    /// A fixture class, and the subject of the intersection axiom.
+    const EX_C: &str = "http://example.org/C";
+    /// A fixture class, and the first member of both collections.
+    const EX_A: &str = "http://example.org/A";
+    /// A fixture class, and the second member of both collections.
+    const EX_B: &str = "http://example.org/B";
+    /// A fixture class, and the subject of the union axiom.
+    const EX_D: &str = "http://example.org/D";
+    /// The first collection cell.
+    const EX_L0: &str = "http://example.org/l0";
+    /// The second collection cell.
+    const EX_L1: &str = "http://example.org/l1";
+    /// The first cell of the chain list.
+    const EX_L2: &str = "http://example.org/l2";
+    /// The second cell of the chain list.
+    const EX_L3: &str = "http://example.org/l3";
+    /// The single cell of the key list.
+    const EX_L4: &str = "http://example.org/l4";
+    /// The property a chain axiom composes into.
+    const EX_CHAINED: &str = "http://example.org/chained";
+    /// The first property of the chain.
+    const EX_Q: &str = "http://example.org/q";
+    /// The second property of the chain.
+    const EX_R: &str = "http://example.org/r";
+    /// A fixture individual.
+    const EX_X: &str = "http://example.org/x";
+    /// A fixture individual.
+    const EX_Y: &str = "http://example.org/y";
+    /// A fixture individual.
+    const EX_Z: &str = "http://example.org/z";
+    /// A fixture individual.
+    const EX_W: &str = "http://example.org/w";
+    /// A fixture individual.
+    const EX_V: &str = "http://example.org/v";
+
+    /// Freeze `triples` into a default-graph dataset.
+    fn dataset_of(triples: &[(&str, &str, &str)]) -> std::sync::Arc<purrdf_core::RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        for &(s, p, o) in triples {
+            let s = b.intern_iri(s);
+            let p = b.intern_iri(p);
+            let o = b.intern_iri(o);
+            b.push_quad(s, p, o, None);
+        }
+        b.freeze().expect("the fixture freezes")
+    }
+
+    /// A dataset that reaches every internal relation this crate has: an intersection and
+    /// a union list (`scm-int`, `scm-uni` — the `LIST` relation), a property chain
+    /// (`prp-spo2` — `CHAIN`) and a key (`prp-key` — `AGREE`).
+    fn collection_fixture() -> std::sync::Arc<purrdf_core::RdfDataset> {
+        dataset_of(&[
+            // C owl:intersectionOf (A B) and D owl:unionOf (A B), sharing one list.
+            (EX_C, OWL_INTERSECTIONOF, EX_L0),
+            (EX_D, OWL_UNIONOF, EX_L0),
+            (EX_L0, RDF_FIRST, EX_A),
+            (EX_L0, RDF_REST, EX_L1),
+            (EX_L1, RDF_FIRST, EX_B),
+            (EX_L1, RDF_REST, RDF_NIL),
+            // chained owl:propertyChainAxiom (q r), with the path x q y r z.
+            (EX_CHAINED, OWL_PROPERTYCHAINAXIOM, EX_L2),
+            (EX_L2, RDF_FIRST, EX_Q),
+            (EX_L2, RDF_REST, EX_L3),
+            (EX_L3, RDF_FIRST, EX_R),
+            (EX_L3, RDF_REST, RDF_NIL),
+            (EX_X, EX_Q, EX_Y),
+            (EX_Y, EX_R, EX_Z),
+            // C owl:hasKey (r), with two C-instances agreeing on r.
+            (EX_C, OWL_HASKEY, EX_L4),
+            (EX_L4, RDF_FIRST, EX_R),
+            (EX_L4, RDF_REST, RDF_NIL),
+            (EX_X, RDF_TYPE, EX_C),
+            (EX_W, RDF_TYPE, EX_C),
+            (EX_X, EX_R, EX_V),
+            (EX_W, EX_R, EX_V),
+        ])
+    }
 
     /// A triple term over three IRIs, by value.
     fn quoted(s: &str, p: &str, o: &str) -> TermValue {
@@ -487,23 +614,31 @@ mod tests {
         assert!(!admits_subject(&triple) && !admits_predicate(&triple));
     }
 
-    /// EVERY constant of EVERY declared clause is an IRI.
+    /// EVERY constant of EVERY declared clause is a spec IRI or an INTERNAL relation id,
+    /// and nothing else.
     ///
     /// [`super::Terms::record_program`] records IRI constants and nothing else, because a
     /// [`ClauseTerm::Literal`] is an already-rendered surface with no structure to recover
-    /// a [`TermValue`] from. This is the assertion that turns "no rule uses a literal
-    /// constant today" from an assumption into a checked fact, so the change that adds one
-    /// fails here instead of materializing a term the surface renderer disagrees with.
+    /// a [`TermValue`] from. That stays true for a literal a rule COMPARES DATA AGAINST —
+    /// there is still no way to read one back — and the exception is exactly the internal
+    /// relation ids of [`crate::lists`], which are carried in a `ClauseTerm::Literal`
+    /// because the IR has no fifth term kind and which are never read back at all: every
+    /// conclusion whose predicate is one is dropped before materialization. So the check is
+    /// not weakened, it is stated over the two cases separately, and a rule that names an
+    /// ordinary literal constant still fails here.
     #[test]
-    fn every_clause_constant_is_an_iri() {
+    fn every_clause_constant_is_an_iri_or_an_internal_relation() {
         for regime in ALL_REGIMES {
             for clause in calculus_program(regime) {
                 for atom in clause.body().iter().chain(clause.head_atoms()) {
                     for term in atom.terms() {
+                        let ClauseTerm::Literal(surface) = term else {
+                            continue;
+                        };
                         assert!(
-                            !matches!(term, ClauseTerm::Literal(_)),
-                            "{regime:?}: a clause names the literal constant {term:?}, which \
-                             the surface dictionary cannot read back"
+                            crate::lists::INTERNAL_RELATIONS.contains(&surface.as_str()),
+                            "{regime:?}: a clause names the literal constant {surface:?}, \
+                             which the surface dictionary cannot read back"
                         );
                     }
                 }
@@ -511,18 +646,33 @@ mod tests {
         }
     }
 
-    /// EVERY atom of EVERY declared clause names the default graph.
+    /// EVERY atom over SPEC vocabulary names the default graph.
     ///
     /// [`super::close`] seeds the default graph alone and emits every conclusion into it;
     /// this is the statement that makes that a faithful evaluation of the program rather
     /// than a silent restriction of it. A rule that later reasons per-graph fails here,
     /// which is the signal to teach the seeding and the emission about graphs.
+    ///
+    /// An INTERNAL relation's atom is excluded, and the exclusion is the point rather than
+    /// a hole: its fourth position is not a graph at all but the relation's third argument
+    /// — a `ClauseAtom` is four terms and an internal ternary relation needs three of them
+    /// beside the predicate. See [`crate::lists`] for the convention. The test still ranges
+    /// over EVERY atom; it just asks the right question of each kind.
     #[test]
     fn the_declared_programs_read_and_write_the_default_graph_only() {
+        let mut internal_atoms = 0_usize;
         for regime in ALL_REGIMES {
             let program: Vec<DlClause> = calculus_program(regime);
             for clause in &program {
                 for atom in clause.body().iter().chain(clause.head_atoms()) {
+                    let internal = atom
+                        .predicate()
+                        .surface()
+                        .is_some_and(|surface| crate::lists::is_internal(&surface));
+                    if internal {
+                        internal_atoms += 1;
+                        continue;
+                    }
                     assert!(
                         atom.graph().is_default_graph(),
                         "{regime:?}: an atom names the graph {:?}",
@@ -531,5 +681,94 @@ mod tests {
                 }
             }
         }
+        assert!(
+            internal_atoms > 0,
+            "the exclusion above must be exercised, or it is not a statement about \
+             anything"
+        );
+    }
+
+    /// NO INTERNAL ID REACHES A SERIALIZED CLOSURE.
+    ///
+    /// The list pre-pass and the two traversal rules put interner-local ids in the fact
+    /// store — a relation name, a list index, and the rows the traversals accumulate — and
+    /// none of them is an RDF term. This is the assertion that they cannot escape: an
+    /// `OWL-RL` closure over a graph that exercises `scm-int`, `scm-uni`, `prp-spo2` and
+    /// `prp-key` is canonicalized, and no byte of the result may carry the internal sigil
+    /// or any internal relation's name.
+    ///
+    /// It is asserted over the SERIALIZED form rather than over the dataset's term table
+    /// because that is what a caller sees; a term that reached the table but never a quad
+    /// would still be a defect, and `no_term_of_the_closure_is_internal` below covers the
+    /// table.
+    #[test]
+    fn no_internal_id_reaches_a_serialized_closure() {
+        let closed = close(&collection_fixture(), Regime::OwlRl)
+            .expect("the fixture's collections are well formed")
+            .0;
+        let nquads = purrdf_core::canonicalize(&closed).nquads;
+        assert!(
+            !nquads.contains(crate::lists::INTERNAL_SIGIL),
+            "an internal id reached the serialized closure:\n{nquads}"
+        );
+        for relation in crate::lists::INTERNAL_RELATIONS {
+            assert!(
+                !nquads.contains(relation),
+                "{relation:?} reached the output"
+            );
+        }
+        // The fixture really does exercise the internal machinery: without these the test
+        // would pass over a closure that never had an internal id to leak.
+        assert!(
+            nquads.contains(&format!("<{EX_C}> <{RDFS_SUBCLASSOF}> <{EX_A}> .")),
+            "scm-int did not read the intersection list:\n{nquads}"
+        );
+        assert!(
+            nquads.contains(&format!("<{EX_X}> <{EX_CHAINED}> <{EX_Z}> .")),
+            "prp-spo2 did not walk the property chain:\n{nquads}"
+        );
+    }
+
+    /// The same claim over the closure's TERM TABLE: not one term of the dataset is an
+    /// internal id, whether or not a quad mentions it.
+    #[test]
+    fn no_term_of_the_closure_is_internal() {
+        let closed = close(&collection_fixture(), Regime::OwlRl)
+            .expect("the fixture's collections are well formed")
+            .0;
+        for quad in closed.quads() {
+            for term in [quad.s, quad.p, quad.o] {
+                let surface = surface_of(&closed.term_value(term));
+                assert!(!crate::lists::is_internal(&surface), "{surface:?}");
+            }
+        }
+    }
+
+    /// A malformed collection an OWL axiom points at is a HARD ERROR, not a partial answer.
+    #[test]
+    fn a_malformed_collection_refuses_the_run() {
+        // …and no rdf:rest, so the cell is not a collection cell.
+        let ds = dataset_of(&[(EX_C, OWL_INTERSECTIONOF, EX_L0), (EX_L0, RDF_FIRST, EX_A)]);
+        let error = close(&ds, Regime::OwlRl).expect_err("a malformed collection is refused");
+        let rendered = error.to_string();
+        assert!(rendered.contains("carries no rdf:rest"), "{rendered}");
+        assert!(rendered.contains(EX_L0), "{rendered}");
+        // The RDFS lane says nothing about `owl:intersectionOf`, so the same graph is
+        // ordinary data there and closes without complaint.
+        assert!(close(&ds, Regime::Rdfs).is_ok());
+    }
+
+    /// A CYCLIC collection terminates with a refusal rather than hanging.
+    #[test]
+    fn a_cyclic_collection_refuses_the_run_rather_than_hanging() {
+        let ds = dataset_of(&[
+            (EX_C, OWL_INTERSECTIONOF, EX_L0),
+            (EX_L0, RDF_FIRST, EX_A),
+            (EX_L0, RDF_REST, EX_L1),
+            (EX_L1, RDF_FIRST, EX_B),
+            (EX_L1, RDF_REST, EX_L0),
+        ]);
+        let error = close(&ds, Regime::OwlRl).expect_err("a cycle is refused");
+        assert!(error.to_string().contains("cyclic"), "{error}");
     }
 }
