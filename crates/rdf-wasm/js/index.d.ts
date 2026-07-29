@@ -531,10 +531,11 @@ export function liftProjection(
   configJson: string,
 ): ProjectionLift;
 /**
- * The CLI/C-ABI/Python/JS spellings of the SPARQL entailment regimes. The first
- * four can be forward-materialized; `owl-direct` needs the query's class
- * expressions, `rif` needs a parsed rule set, and `d` is a spec-inherent
- * boundary for forward materialization.
+ * The CLI/C-ABI/Python/JS spellings of the SPARQL entailment regimes. Five of
+ * them — `simple`, `rdf`, `rdfs`, `owl-rl` and `d` — can be forward-materialized
+ * (`d` is realized as the five `dt-*` rules of OWL 2 Profiles §4.3 Table 8).
+ * Exactly two cannot: `owl-direct` needs the query's class expressions and `rif`
+ * needs a parsed rule set, neither of which `entailMaterialize` is given.
  */
 export type EntailmentRegime =
   | "simple"

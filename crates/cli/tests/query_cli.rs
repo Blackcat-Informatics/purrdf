@@ -450,9 +450,12 @@ fn corrupt_pack_fails_closed() {
 
 /// `--entailment` shares the exit-3 unsupported-regime boundary with `reason`
 /// (`crates/cli/src/reason.rs::resolve_materializable_regime`, wired into `query` via
-/// `crates/cli/src/query.rs`): `owl-direct`, `rif`, and `d` each need inputs (query class
-/// expressions or a rule set) the CLI cannot materialize, so `query --entailment` on any
+/// `crates/cli/src/query.rs`): `owl-direct` and `rif` each need inputs (query class
+/// expressions or a rule set) the CLI cannot supply, so `query --entailment` on either
 /// of them must exit code **3**, not merely fail.
+///
+/// `d` is not one of them — the library materializes it, so `query --entailment d`
+/// runs the closure and answers, which the tail of this test asserts.
 #[test]
 fn entailment_boundary_regimes_exit_three() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -460,8 +463,8 @@ fn entailment_boundary_regimes_exit_three() {
     let ttl = write_file(dir, "data.ttl", DATA_TTL);
     let query = "SELECT ?o WHERE { ?s <http://example.org/knows> ?o }";
 
-    for regime in ["owl-direct", "rif", "d"] {
-        let out = run(&[
+    let ask = |regime: &str| {
+        run(&[
             "query",
             "--data",
             &ttl,
@@ -470,7 +473,10 @@ fn entailment_boundary_regimes_exit_three() {
             "--results-format",
             "json",
             query,
-        ]);
+        ])
+    };
+    for regime in ["owl-direct", "rif"] {
+        let out = ask(regime);
         assert_eq!(
             out.status.code(),
             Some(3),
@@ -483,6 +489,13 @@ fn entailment_boundary_regimes_exit_three() {
             stderr(&out)
         );
     }
+    // `d` materializes (OWL 2 Profiles §4.3 Table 8), so it answers instead of exiting 3.
+    let out = ask("d");
+    assert!(
+        out.status.success(),
+        "query --entailment d must materialize and answer; stderr:\n{}",
+        stderr(&out)
+    );
 }
 
 /// A SELECT piped through stdout is stable enough to run as a process smoke (the binary

@@ -22,16 +22,21 @@ use purrdf_entail::{Regime, materialize};
 const SUBCLASSOF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
 const TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
+/// The fixture namespace. `example.org` per the project rule: a bench mints no
+/// vocabulary of its own, and a reserved-for-documentation authority is the only
+/// one it may put in a term.
+const EX: &str = "http://example.org/";
+
 /// `C{i} subClassOf C{i+1}` for i in 0..n, plus `x{i} a C{i}`.
 fn hierarchy(n: usize) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
     let sco = b.intern_iri(SUBCLASSOF);
     let ty = b.intern_iri(TYPE);
     for i in 0..n {
-        let ci = b.intern_iri(&format!("http://ex/C{i}"));
-        let cj = b.intern_iri(&format!("http://ex/C{}", i + 1));
+        let ci = b.intern_iri(&format!("{EX}C{i}"));
+        let cj = b.intern_iri(&format!("{EX}C{}", i + 1));
         b.push_quad(ci, sco, cj, None);
-        let xi = b.intern_iri(&format!("http://ex/x{i}"));
+        let xi = b.intern_iri(&format!("{EX}x{i}"));
         b.push_quad(xi, ty, ci, None);
     }
     b.freeze().expect("freeze")

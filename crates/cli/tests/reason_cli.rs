@@ -20,10 +20,12 @@
 //!   and `subPropertyOf` triple propagation.
 //! * **owl-rl** — OWL 2 RL beyond RDFS: `owl:SymmetricProperty` and
 //!   `owl:TransitiveProperty` closure.
+//! * **d** — datatype entailment as OWL 2 Profiles §4.3 Table 8: `dt-type1` types
+//!   every datatype of the OWL 2 RL datatype map an `rdfs:Datatype`.
 //!
-//! The three non-materializable regimes (`owl-direct`, `rif`, `d`) are the exit-3
-//! boundary (they need query class expressions or a rule set the CLI cannot supply), and
-//! a `.purrpck` pack source exercises the pack→dataset reconstruction path inside
+//! The two non-materializable regimes (`owl-direct`, `rif`) are the exit-3 boundary
+//! (they need query class expressions or a rule set the CLI cannot supply), and a
+//! `.purrpck` pack source exercises the pack→dataset reconstruction path inside
 //! `reason`.
 
 use std::path::Path;
@@ -235,9 +237,55 @@ fn owl_rl_infers_symmetric_and_transitive() {
     );
 }
 
-/// The three non-materializable regimes (`owl-direct`, `rif`, `d`) each exit with code 3
+/// `reason --regime d` is datatype entailment, and it MATERIALIZES: the library
+/// realizes `entailment/D` as the five `dt-*` rules of OWL 2 Profiles §4.3 Table 8,
+/// so the CLI runs them rather than refusing. `dt-type1` types every datatype of the
+/// OWL 2 RL datatype map an `rdfs:Datatype`, and the input triples survive.
+///
+/// Falsifiable against the old behavior: this exited 3 with "cannot be materialized"
+/// while the CLI still refused a regime the library, Python, wasm and C ABI all close.
+#[test]
+fn d_materializes_the_datatype_map() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "d.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+            "ex:x ex:age \"1\"^^xsd:integer .\n",
+        ),
+    );
+    let out = path(dir, "out.nt");
+
+    let o = run(&["reason", "--regime", "d", &seed, &out]);
+    assert!(o.status.success(), "d reason failed: {}", stderr(&o));
+    let text = std::fs::read_to_string(&out).expect("read output");
+
+    // dt-type1: a datatype of the map is an rdfs:Datatype.
+    assert!(
+        text.contains(&format!(
+            "<http://www.w3.org/2001/XMLSchema#integer> {RDF_TYPE} \
+             <http://www.w3.org/2000/01/rdf-schema#Datatype>"
+        )),
+        "d must type xsd:integer an rdfs:Datatype via dt-type1; got: {text}"
+    );
+    // …and the asserted triple survives into the closure.
+    assert!(
+        text.contains(
+            "<http://example.org/x> <http://example.org/age> \
+             \"1\"^^<http://www.w3.org/2001/XMLSchema#integer>"
+        ),
+        "the original triple must be preserved; got: {text}"
+    );
+}
+
+/// The two non-materializable regimes (`owl-direct`, `rif`) each exit with code 3
 /// and print a diagnostic to stderr naming why: they need query class expressions or a
 /// rule set the CLI has no way to supply.
+///
+/// `d` is deliberately NOT in this list — see [`d_materializes_the_datatype_map`].
 #[test]
 fn boundary_regimes_exit_three_with_diagnostic() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -251,11 +299,7 @@ fn boundary_regimes_exit_three_with_diagnostic() {
 
     // Each boundary regime is unsupported for a DISTINCT spec-inherent reason; the
     // diagnostic must name that specific reason, not a generic catch-all.
-    for (regime, expected_reason) in [
-        ("owl-direct", "class expressions"),
-        ("rif", "rule set"),
-        ("d", "datatype"),
-    ] {
+    for (regime, expected_reason) in [("owl-direct", "class expressions"), ("rif", "rule set")] {
         let o = run(&["reason", "--regime", regime, &seed, &out]);
         assert_eq!(
             o.status.code(),

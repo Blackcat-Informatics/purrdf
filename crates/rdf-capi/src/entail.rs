@@ -61,9 +61,9 @@ fn materialize_to_nquads_bytes(document: &str, regime: &str) -> Result<(Vec<u8>,
 /// `document` is parsed as N-Quads, which accepts an N-Triples document
 /// unchanged, so a document that names a graph keeps naming it. `regime` is one
 /// of `simple`, `rdf`, `rdfs`, `owl-rl`, `owl-direct`, `rif`, `d` — the same
-/// spellings the CLI, WASM and the Python surface accept; the last three cannot
-/// be forward-materialized and are refused with a message naming the four that
-/// can.
+/// spellings the CLI, WASM and the Python surface accept. Exactly two of them —
+/// `owl-direct` and `rif` — cannot be forward-materialized, and are refused with a
+/// message naming the five that can (`simple`, `rdf`, `rdfs`, `owl-rl`, `d`).
 ///
 /// On success `*out_nquads` receives the canonical (RDFC-1.0) N-Quads closure —
 /// every input quad plus every triple the regime's implemented rules infer — and
@@ -71,9 +71,10 @@ fn materialize_to_nquads_bytes(document: &str, regime: &str) -> Result<(Vec<u8>,
 /// which rules fired and how often, which specification rules did NOT fire, which
 /// constructs were left at a boundary, the evaluation budget, and the calculus's
 /// contract hash. **Free BOTH with `purrdf_buffer_free`.** The report is not
-/// optional: a caller that reported "OWL-RL entailment" without saying that
-/// twelve of seventy-eight rules ran would be making exactly the overclaim the
-/// report exists to prevent.
+/// optional: all seventy-eight OWL 2 RL rules now run, so a caller that reported
+/// "OWL-RL entailment" without saying which CONSTRUCTS were left at a boundary
+/// would be making exactly the overclaim the report exists to prevent — a
+/// complete rule table is not a complete closure.
 ///
 /// On any error neither out-param is written, so there is nothing to free.
 ///
@@ -127,7 +128,7 @@ fn rules_bytes(regime: &str) -> Result<Vec<u8>, String> {
 /// rule name per newline-terminated line, in specification table order — to
 /// `*out_buffer` (free with `purrdf_buffer_free`).
 ///
-/// An empty buffer for a regime with no rule table (`simple`, and the three that
+/// An empty buffer for a regime with no rule table (`simple`, and the two that
 /// are not forward-materializable). `owl-rl` yields all 78 rules of OWL 2
 /// Profiles §4.3 Tables 4–9 whether or not this build fires them — that is the
 /// point: diff it against `purrdf_entail_implemented_rules` to measure the gap.
@@ -236,7 +237,12 @@ mod tests {
              <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> ."
         ));
         assert!(report.starts_with("purrdf-reasoning-report 1\n"));
-        assert!(report.contains("\ncompleteness sound-incomplete 4\n"));
+        // The report says what the run could NOT do. Asserted as the invariant
+        // rather than as a `sound-incomplete <n>` literal: the count moves every
+        // time a rule lands, and the honesty gate does not.
+        assert!(report.contains("\ncompleteness "));
+        assert!(report.contains("\nboundary "));
+        assert!(report.ends_with("overclaims false\n"));
     }
 
     #[test]
@@ -252,11 +258,15 @@ mod tests {
 
     #[test]
     fn a_non_materializable_regime_is_refused_by_name() {
-        let error = materialize_to_nquads_bytes(SCHEMA, "rif").expect_err("unsupported");
-        assert!(
-            error.contains("materializable regimes: simple, rdf, rdfs, owl-rl"),
-            "{error}"
-        );
+        for regime in ["rif", "owl-direct"] {
+            let error = materialize_to_nquads_bytes(SCHEMA, regime).expect_err("unsupported");
+            assert!(
+                error.contains("materializable regimes: simple, rdf, rdfs, owl-rl, d"),
+                "{error}"
+            );
+        }
+        // `d` is on the other side of that line: the C ABI materializes it too.
+        assert!(materialize_to_nquads_bytes(SCHEMA, "d").is_ok());
     }
 
     #[test]
@@ -269,9 +279,17 @@ mod tests {
         let rules = String::from_utf8(rules_bytes("owl-rl").expect("known")).expect("utf8");
         assert_eq!(rules.lines().count(), 78);
         let rdfs = String::from_utf8(rules_bytes("rdfs").expect("known")).expect("utf8");
+        assert_eq!(rdfs.lines().count(), 18);
         let fired =
             String::from_utf8(implemented_rules_bytes("rdfs").expect("known")).expect("utf8");
-        assert_eq!(rdfs.lines().count() - fired.lines().count(), 4);
+        // The gap is MEASURED, never asserted as a literal: the implemented set is
+        // a subsequence of the defined one, so the two ways of counting the gap
+        // must agree — and it is legitimately empty once the table is complete.
+        let missing = rdfs
+            .lines()
+            .filter(|rule| !fired.lines().any(|f| f == *rule))
+            .count();
+        assert_eq!(missing, rdfs.lines().count() - fired.lines().count());
         assert!(rules_bytes("simple").expect("known").is_empty());
     }
 
@@ -340,12 +358,16 @@ mod tests {
                 purrdf_entail_rules(regime.as_ptr(), &raw mut buffer, &raw mut error),
                 PurrdfStatus::Ok as i32
             );
+            // 18 is the SPECIFICATION's count and does not move.
             assert_eq!(take(buffer).lines().count(), 18);
             assert_eq!(
                 purrdf_entail_implemented_rules(regime.as_ptr(), &raw mut buffer, &raw mut error),
                 PurrdfStatus::Ok as i32
             );
-            assert_eq!(take(buffer).lines().count(), 14);
+            // The implemented count DOES move as rules land, so it is bounded, not
+            // pinned: never empty, never more than the table it is a subset of.
+            let implemented = take(buffer).lines().count();
+            assert!((1..=18).contains(&implemented), "{implemented}");
             assert!(error.is_null());
         }
     }

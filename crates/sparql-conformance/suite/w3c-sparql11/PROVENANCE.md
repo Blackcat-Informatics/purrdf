@@ -100,14 +100,19 @@ template label legitimately recurs across `INSERT … WHERE` operations.
 ## W3C entailment-regime group (commit `426c7df`)
 
 The `entailment/` group's `sd:entailmentRegime` is read by the harness, which
-materializes the dataset's closure via the native `purrdf-entail` reasoner
-(RDFS + OWL-RL-shaped) before the query runs. **40 of 70 cases pass** — every
-`rdf*`/`rdfs*`/`lang`/`plainLit`/`bind*` case and many OWL cases. The 30
-residuals are ledgered `Entailment`: OWL-Direct-only (`parent*`, `simple*`) and
-OWL-DL query answering (`sparqldl-*`, `paper-sparqldl-Q*`) — full DL
-is not a materialize-and-match affair; RIF-rule entailment (`rif*`); and RDF
-axiomatic-triple entailment under the bare RDF regime (`rdf01`). These are
-spec-inherent boundaries of a forward-materialization reasoner, not silent skips.
+answers each case under the regime the manifest names: forward materialization via
+the native `purrdf-entail` reasoner for the RDF/RDFS/D/OWL-RL regimes, a
+query-directed ALCOIQ tableau (`purrdf_entail::materialize_dl`) for OWL-Direct, and
+a Horn forward chase over the referenced RIF-in-XML rule documents
+(`purrdf_entail::materialize_rif`) for RIF. **The entire group passes — 70 of 70,
+with zero ledgered residuals**, which the harness prints as
+`70 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled`.
+
+That covers every `rdf*`/`rdfs*`/`lang`/`plainLit`/`bind*` case, the
+`parent*`/`simple*`/`owlds*` OWL-Direct cases, the full `sparqldl-*` /
+`paper-sparqldl-Q*` OWL-DL query-answering set, and all four `rif*` cases;
+`crates/sparql-conformance/src/xfail.rs` records the same fact on the ledger side,
+where this group has no `Entailment` entry at all.
 
 ### RIF rule-document sub-corpus (distinct upstream)
 

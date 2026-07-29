@@ -1297,16 +1297,17 @@ fn entailment_then_canonical_composes() {
     );
 }
 
-/// An unsupported entailment regime (`d` / `owl-direct` / `rif`) is the exit-3 boundary,
-/// matching `reason`'s classification.
+/// An unsupported entailment regime (`owl-direct` / `rif`) is the exit-3 boundary,
+/// matching `reason`'s classification. `d` is not one of them: it materializes here
+/// exactly as it does under `reason`, which the loop below also asserts.
 #[test]
 fn unsupported_entailment_regime_exits_three() {
     let dir = tempfile::tempdir().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedA.nq", SEED_A);
     let out = path(dir, "out.nq");
-    for regime in ["d", "owl-direct", "rif"] {
-        let o = run(&[
+    let convert = |regime: &str| {
+        run(&[
             "convert",
             "--from",
             "nquads",
@@ -1316,7 +1317,10 @@ fn unsupported_entailment_regime_exits_three() {
             regime,
             &seed,
             &out,
-        ]);
+        ])
+    };
+    for regime in ["owl-direct", "rif"] {
+        let o = convert(regime);
         assert_eq!(
             o.status.code(),
             Some(3),
@@ -1324,6 +1328,13 @@ fn unsupported_entailment_regime_exits_three() {
             stderr(&o)
         );
     }
+    // …and `d` is NOT a boundary: the library materializes it, so `convert` does too.
+    let o = convert("d");
+    assert!(
+        o.status.success(),
+        "regime d must materialize, not exit 3; stderr: {}",
+        stderr(&o)
+    );
 }
 
 /// A downstream consumer closing its end of the stdout pipe early (the ubiquitous

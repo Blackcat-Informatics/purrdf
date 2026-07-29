@@ -76,9 +76,15 @@ pub const REGIME_NAMES: [&str; 7] = ["simple", "rdf", "rdfs", "owl-rl", "owl-dir
 
 /// The subset of [`REGIME_NAMES`] that [`materialize_to_nquads_string`] can close.
 ///
-/// The other three are refused with a message that names these: `owl-direct`
-/// needs the query's class expressions, `rif` needs a parsed rule set, and `d`
-/// is a spec-inherent boundary for forward materialization.
+/// The other two are refused with a message that names these: `owl-direct` needs
+/// the query's class expressions and `rif` needs a parsed rule set. Neither is an
+/// input a document-in/document-out boundary has any way to supply, which is what
+/// makes those two — and only those two — spec-inherent here.
+///
+/// `d` is deliberately in this list. Datatype entailment is realized as the five
+/// `dt-*` rules of OWL 2 Profiles §4.3 Table 8, so it chases like any other rule
+/// table; what Table 8 does not cover — the infinite value spaces themselves — is
+/// reported as a `boundary` line, not withheld as a refusal.
 pub const MATERIALIZABLE_REGIME_NAMES: [&str; 5] = ["simple", "rdf", "rdfs", "owl-rl", "d"];
 
 /// The version banner every rendered report opens with.
@@ -183,13 +189,15 @@ impl RegimeClosure {
 /// The report is never optional and never separately requested — the same
 /// discipline [`purrdf_entail::materialize`] enforces in Rust, carried across the
 /// string boundary. A binding that renders "RDFS entailment" without saying which
-/// nine of the eighteen RDFS patterns did not fire is the overclaim the report
-/// exists to prevent.
+/// of the eighteen RDFS patterns did not fire — or, once they all do, which
+/// CONSTRUCTS the run still could not fully handle — is the overclaim the report
+/// exists to prevent. A complete rule table is not a complete closure, which is
+/// why the report carries `boundary` lines beside `missing` ones.
 ///
 /// # Errors
 ///
 /// * An unknown `regime` spelling — the message names the accepted set.
-/// * A regime that cannot be forward-materialized (`owl-direct`, `rif`, `d`) —
+/// * A regime that cannot be forward-materialized (`owl-direct`, `rif`) —
 ///   the message names [`MATERIALIZABLE_REGIME_NAMES`].
 /// * A malformed input document (the native codec's own diagnostic).
 /// * An exhausted evaluation ceiling or a dataset that cannot be frozen (the
@@ -211,9 +219,13 @@ impl RegimeClosure {
 ///     "<http://example.org/x> \
 ///      <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> ."
 /// ));
-/// // …and the report says so, and says what it could not do.
+/// // …and the report says so, and says what it could not do. The `boundary`
+/// // lines are the load-bearing ones: they survive a rule table going complete,
+/// // which a `sound-incomplete <n>` assertion would not.
 /// assert!(closed.report().contains("\nfired rdfs9 "));
-/// assert!(closed.report().contains("\ncompleteness sound-incomplete 4\n"));
+/// assert!(closed.report().contains("\nboundary "));
+/// // The invariant no report may violate, whatever the rule table's state.
+/// assert!(closed.report().ends_with("overclaims false\n"));
 /// ```
 pub fn materialize_to_nquads_string(regime: &str, document: &str) -> Result<RegimeClosure, String> {
     let parsed = parse_regime(regime)?;
@@ -222,8 +234,8 @@ pub fn materialize_to_nquads_string(regime: &str, document: &str) -> Result<Regi
     let (closure, report) = materialize(&dataset, parsed).map_err(|error| match error {
         EntailError::Unsupported(_) => format!(
             "entailment regime \"{regime}\" cannot be forward-materialized \
-             (owl-direct needs the query's class expressions, rif needs a parsed rule set, \
-             and d is a spec-inherent boundary); materializable regimes: {}",
+             (owl-direct needs the query's class expressions, \
+             rif needs a parsed rule set); materializable regimes: {}",
             MATERIALIZABLE_REGIME_NAMES.join(", ")
         ),
         other => format!("entailment regime \"{regime}\": {other}"),
@@ -236,7 +248,7 @@ pub fn materialize_to_nquads_string(regime: &str, document: &str) -> Result<Regi
 
 /// The rule table `regime` is *defined by*, one specification rule name per line.
 ///
-/// The empty string for a regime with no rule table (`simple`, and the three that
+/// The empty string for a regime with no rule table (`simple`, and the two that
 /// are not forward-materializable). Lines are in specification table order — the
 /// order `purrdf-entail` returns them in — and the string always ends with a
 /// newline when it is non-empty.
@@ -267,12 +279,21 @@ pub fn rules_string(regime: &str) -> Result<String, String> {
 ///
 /// An unknown `regime` spelling; the message names the accepted set.
 ///
+/// The gap is a MEASUREMENT, so this example measures it rather than asserting a
+/// number that goes stale the day a rule lands:
+///
 /// ```
 /// use purrdf_validate::regime::{implemented_rules_string, rules_string};
 ///
 /// let defined = rules_string("rdfs").expect("known");
 /// let fired = implemented_rules_string("rdfs").expect("known");
-/// assert_eq!(defined.lines().count() - fired.lines().count(), 4);
+/// let missing: Vec<&str> = defined
+///     .lines()
+///     .filter(|rule| !fired.lines().any(|f| f == *rule))
+///     .collect();
+/// // `fired` is always a subsequence of `defined`, so the two agree — and the
+/// // gap is legitimately empty for a regime whose table is fully implemented.
+/// assert_eq!(missing.len(), defined.lines().count() - fired.lines().count());
 /// ```
 pub fn implemented_rules_string(regime: &str) -> Result<String, String> {
     Ok(rule_lines(implemented(parse_regime(regime)?)))
@@ -752,6 +773,9 @@ mod tests {
                 error.contains("materializable regimes: simple, rdf, rdfs, owl-rl, d"),
                 "{error}"
             );
+            // …and the refusal names TWO reasons, not three: `d` is no longer one
+            // of them, so the string must not claim it as a boundary.
+            assert!(!error.contains("d is a spec-inherent boundary"), "{error}");
         }
     }
 

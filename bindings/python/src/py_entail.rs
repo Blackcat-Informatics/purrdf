@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! PyO3 bindings for **entailment-regime materialization** — the `purrdf.entail`
-//! submodule: close an RDF document under `Simple` / `RDF` / `RDFS` / `OWL-RL`
-//! and get back both the closure and a report of what the run actually did.
+//! submodule: close an RDF document under `Simple` / `RDF` / `RDFS` / `OWL-RL` /
+//! `D` and get back both the closure and a report of what the run actually did.
 //!
 //! # Not to be confused with `purrdf.shapes.entail`
 //!
@@ -31,9 +31,12 @@
 //!
 //! `rules(regime)` is the rule table the specification *defines* the regime by;
 //! `implemented_rules(regime)` is the subset this workspace's chase currently
-//! fires. The difference is the honest gap — for `OWL-RL` it is most of the
-//! table — and both are exposed so a caller can measure it instead of trusting a
-//! docstring. The same gap appears as the `missing` lines of the rendered report
+//! fires. The difference is the honest gap — for `OWL-RL` and for `D` it is now
+//! EMPTY, and where it is not empty it is the existential-head patterns that mint
+//! a fresh blank node. Both are exposed so a caller can MEASURE the gap instead of
+//! trusting a docstring, which is the whole point: a number written here would be
+//! stale the day a rule lands, and the pair never is.
+//! The same gap appears as the `missing` lines of the rendered report
 //! that every materialization returns; the report is never optional here, for the
 //! reason [`purrdf_validate::regime`] documents at length.
 
@@ -77,8 +80,8 @@ pub(crate) enum PyRegime {
     OWL_DIRECT,
     /// `entailment/RIF` — needs a caller-supplied rule set; not materializable here.
     RIF,
-    /// `entailment/D` — datatype entailment; a spec-inherent boundary for
-    /// forward materialization.
+    /// `entailment/D` — datatype entailment, realized as the five `dt-*` rules of
+    /// OWL 2 Profiles §4.3 Table 8; forward-materializable.
     D,
 }
 
@@ -126,8 +129,8 @@ fn native_regime(regime: &Bound<'_, PyAny>) -> PyResult<Regime> {
 fn refusal(regime: Regime) -> String {
     format!(
         "entailment regime \"{}\" cannot be forward-materialized \
-         (owl-direct needs the query's class expressions, rif needs a parsed rule set, \
-         and d is a spec-inherent boundary); materializable regimes: {}",
+         (owl-direct needs the query's class expressions, \
+         rif needs a parsed rule set); materializable regimes: {}",
         regime_name(regime),
         MATERIALIZABLE_REGIME_NAMES.join(", ")
     )
@@ -145,12 +148,14 @@ fn refusal(regime: Regime) -> String {
 /// The report is the second element and is never optional — the same discipline
 /// the Rust and C-ABI surfaces enforce. It names, in a byte-stable rendering,
 /// which rules fired and how often, which specification rules did NOT fire, which
-/// constructs were left at a boundary, and the calculus's contract hash. A
-/// binding that answered "OWL-RL entailment" without saying that twelve of
-/// seventy-eight rules ran is exactly the overclaim the report exists to prevent.
+/// constructs were left at a boundary, and the calculus's contract hash. All
+/// seventy-eight OWL 2 RL rules now run, so the report's job under `OWL-RL` has
+/// shifted from naming the missing rules to naming the CONSTRUCTS still at a
+/// boundary — a complete rule table is not a complete closure, and reporting the
+/// first as if it were the second is exactly the overclaim the report prevents.
 ///
 /// Raises `ValueError` for an unknown regime spelling (naming the accepted set),
-/// for a regime that cannot be forward-materialized (`owl-direct`, `rif`, `d`),
+/// for a regime that cannot be forward-materialized (`owl-direct`, `rif`),
 /// and for an exhausted evaluation ceiling.
 #[pyfunction]
 #[pyo3(signature = (dataset, regime))]
@@ -214,7 +219,7 @@ fn materialize_nt(
 /// The rule table `regime` is *defined by*, one specification rule name per
 /// entry, in specification table order.
 ///
-/// `[]` for a regime with no rule table (`simple`, and the three that are not
+/// `[]` for a regime with no rule table (`simple`, and the two that are not
 /// forward-materializable). `OWL-RL` returns all 78 rules of OWL 2 Profiles
 /// §4.3 Tables 4–9 whether or not this workspace fires them — that is the point:
 /// compare it with [`implemented_rules`] to measure the gap.
@@ -231,9 +236,10 @@ fn rules(regime: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
 
 /// The subset of [`rules`] this workspace's chase actually fires today.
 ///
-/// A strict subset for every regime with a rule table. `rules(r)` minus
-/// `implemented_rules(r)` is the regime's measurable gap — the same set the
-/// rendered report's `missing` lines name.
+/// Always a subsequence of [`rules`] — same order, no additions — and for
+/// `OWL-RL` and `D` it is now the WHOLE table, not a strict subset. `rules(r)`
+/// minus `implemented_rules(r)` is the regime's measurable gap, the same set the
+/// rendered report's `missing` lines name, and it is legitimately empty.
 ///
 /// Raises `ValueError` for an unknown regime spelling, naming the accepted set.
 #[pyfunction]
@@ -285,12 +291,23 @@ mod tests {
 
     /// The dataset path's refusal is byte-identical to the string boundary's, so
     /// the two surfaces cannot describe the same limit in different words.
+    ///
+    /// Exactly two regimes reach it. `d` used to be a third and is not any more:
+    /// it materializes, which the tail of this test pins so the two lists cannot
+    /// drift apart again.
     #[test]
     fn refusal_matches_the_string_boundary() {
-        for name in ["owl-direct", "rif", "d"] {
+        for name in ["owl-direct", "rif"] {
             let native = parse_regime(name).expect("an accepted spelling");
             let boundary = materialize_to_nquads_string(name, "").expect_err("not materializable");
             assert_eq!(refusal(native), boundary);
+        }
+        assert!(materialize_to_nquads_string("d", "").is_ok());
+        for name in MATERIALIZABLE_REGIME_NAMES {
+            assert!(
+                materialize_to_nquads_string(name, "").is_ok(),
+                "{name} is listed as materializable"
+            );
         }
     }
 }

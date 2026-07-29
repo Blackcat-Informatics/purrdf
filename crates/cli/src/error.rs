@@ -12,8 +12,11 @@
 //!   (e.g. stdin with no explicit format) is indistinguishable to a caller from one
 //!   clap rejects.
 //! * **3** — an entailment-regime boundary the CLI cannot cross
-//!   ([`CliError::UnsupportedRegime`]): the regime needs inputs (query class
-//!   expressions or a rule set) the CLI has no way to supply.
+//!   ([`CliError::UnsupportedRegime`]). Exactly two regimes reach it: `owl-direct`
+//!   needs the query's class expressions and `rif` needs a parsed rule set, and a
+//!   `reason`/`--entailment` invocation supplies neither. Every other regime —
+//!   `simple`, `rdf`, `rdfs`, `owl-rl` and `d` — is forward-materializable and
+//!   never lands here.
 //! * **1** — every other runtime failure ([`CliError::Runtime`]): a parse/serialize
 //!   diagnostic, a pack-integrity failure, an I/O error, or a results-serialization
 //!   error.
@@ -34,7 +37,7 @@ pub(crate) enum CliError {
     /// An argument / usage error (exit code 2).
     Usage(String),
     /// An entailment regime the CLI cannot materialize because it needs extra
-    /// inputs (exit code 3).
+    /// inputs — `owl-direct` or `rif` (exit code 3).
     UnsupportedRegime(String),
     /// Any other runtime failure — parse, serialize, pack integrity, or I/O
     /// (exit code 1).

@@ -41,4 +41,10 @@ purrdf-xsd = { workspace = true }
 purrdf-iri = { workspace = true }
 purrdf-events = { workspace = true }
 purrdf-entail = { workspace = true }
+# Carried because `purrdf-entail`'s PUBLIC surface carries datalog types across it:
+# `EntailError::Evaluate` holds a `seminaive::EvalError`, and `ReasoningReport`
+# hands out a `cache::ContractHash` and a `seminaive::BudgetReport`. Without this
+# edge a consumer could reach those values but never name their types from the
+# umbrella alone, which is exactly the reach-into-a-sub-crate this crate forbids.
+purrdf-datalog = { workspace = true }
 purrdf-validate = { workspace = true }

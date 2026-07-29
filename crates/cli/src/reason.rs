@@ -3,8 +3,8 @@
 
 //! The `reason` subcommand: `Source → materialize → Sink`.
 //!
-//! Map the requested regime to its library [`Regime`], reject the regimes the CLI
-//! cannot materialize (they need inputs it has no way to supply), load the source
+//! Map the requested regime to its library [`Regime`], reject the two regimes the
+//! CLI cannot materialize (they need inputs it has no way to supply), load the source
 //! as a concrete dataset, compute the entailment closure, and write it through the
 //! [`sink`] to the output. Both `--from`/`--to` are resolved up front (mirroring
 //! `convert`): an explicit choice always wins, otherwise the format is inferred
@@ -24,14 +24,16 @@ use crate::ledger;
 use crate::sink;
 use crate::source;
 
-/// Resolve a [`CliRegime`] to its library [`Regime`], rejecting the regimes the CLI
-/// cannot materialize.
+/// Resolve a [`CliRegime`] to its library [`Regime`], rejecting the two regimes the
+/// CLI cannot materialize.
 ///
-/// OWL-Direct needs the query's class expressions, RIF needs a parsed rule set, and
-/// D (datatype) entailment is a spec-inherent materialization boundary — the CLI has
-/// no way to supply those inputs, so they map to the exit-3
-/// [`CliError::UnsupportedRegime`] path. Shared by `reason` and `convert
-/// --entailment` so both reject identically.
+/// OWL-Direct needs the query's class expressions and RIF needs a parsed RIF rule
+/// set — the CLI has no way to supply either input, so those two map to the exit-3
+/// [`CliError::UnsupportedRegime`] path. Every other regime materializes, `d`
+/// included: datatype entailment is realized as the five `dt-*` rules of OWL 2
+/// Profiles §4.3 Table 8, which [`materialize`] chases like any other rule table,
+/// so refusing it here would be the CLI withholding a capability the library has.
+/// Shared by `reason` and `convert --entailment` so both reject identically.
 pub(crate) fn resolve_materializable_regime(regime: CliRegime) -> Result<Regime, CliError> {
     let regime = regime.to_native();
     // Each boundary regime is unsupported for a DIFFERENT spec-inherent reason; name it.
@@ -40,8 +42,7 @@ pub(crate) fn resolve_materializable_regime(regime: CliRegime) -> Result<Regime,
             "it needs the query's class expressions, which materialization alone cannot supply",
         ),
         Regime::Rif => Some("it needs a parsed RIF rule set, which the CLI has no way to supply"),
-        Regime::D => Some("datatype (D) entailment is a spec-inherent materialization boundary"),
-        Regime::Simple | Regime::Rdf | Regime::Rdfs | Regime::OwlRl => None,
+        Regime::Simple | Regime::Rdf | Regime::Rdfs | Regime::OwlRl | Regime::D => None,
     };
     if let Some(reason) = reason {
         return Err(CliError::UnsupportedRegime(format!(

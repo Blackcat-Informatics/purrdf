@@ -94,8 +94,12 @@ test("entailMaterialize closes under rdfs and always returns a report", () => {
   );
   assert.ok(closed.report.startsWith("purrdf-reasoning-report 1\n"));
   assert.ok(closed.report.includes("\nregime rdfs\n"));
-  // The report names the gap rather than claiming completeness it does not have.
-  assert.ok(closed.report.includes("\ncompleteness sound-incomplete 4\n"));
+  // The report says what the run could NOT do, rather than claiming completeness
+  // it does not have. Asserted as the invariant, not as a `sound-incomplete <n>`
+  // literal: the count moves as rules land, and a `boundary` line outlives a rule
+  // table going complete.
+  assert.ok(closed.report.includes("\ncompleteness "));
+  assert.ok(closed.report.includes("\nboundary "));
   assert.ok(closed.report.endsWith("overclaims false\n"));
 });
 
@@ -124,14 +128,20 @@ test("entailMaterialize rejects an unknown regime, naming the accepted set", () 
   assert.throws(() => entailMaterialize(SCHEMA, "RDFS"), /accepted:/);
 });
 
-test("entailMaterialize refuses the three non-materializable regimes by name", () => {
-  for (const regime of ["owl-direct", "rif", "d"]) {
+test("entailMaterialize refuses the two non-materializable regimes by name", () => {
+  for (const regime of ["owl-direct", "rif"]) {
     assert.throws(
       () => entailMaterialize(SCHEMA, regime),
-      /materializable regimes: simple, rdf, rdfs, owl-rl/,
+      /materializable regimes: simple, rdf, rdfs, owl-rl, d/,
       regime,
     );
   }
+  // `d` is NOT one of them: datatype entailment is the five `dt-*` rules of
+  // OWL 2 Profiles §4.3 Table 8, and it materializes here as it does on the
+  // Rust, C-ABI and Python hosts.
+  const closed = entailMaterialize(SCHEMA, "d");
+  assert.match(closed.report, /^purrdf-reasoning-report 1\n/);
+  assert.match(closed.report, /\nregime d\n/);
 });
 
 test("entailMaterialize rejects a malformed document (never a silent empty closure)", () => {
@@ -147,11 +157,12 @@ test("the rule inventories are the specification tables, and the gap is measurab
   assert.deepEqual(entailRules("simple"), []);
   assert.deepEqual(entailImplementedRules("simple"), []);
 
-  // The implemented set is a strict subsequence of the defined set…
-  for (const regime of ["rdf", "rdfs", "owl-rl"]) {
+  // The implemented set is a subsequence of the defined set — no additions, and
+  // the gap is legitimately empty for a regime whose table is fully implemented…
+  for (const regime of ["rdf", "rdfs", "owl-rl", "d"]) {
     const defined = entailRules(regime);
     const fired = entailImplementedRules(regime);
-    assert.ok(fired.length < defined.length, `${regime}: the gap must be visible`);
+    assert.ok(fired.length <= defined.length, `${regime}: no rule is invented`);
     for (const rule of fired) assert.ok(defined.includes(rule), `${regime}: ${rule}`);
   }
 

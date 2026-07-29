@@ -28,11 +28,14 @@
 //! # Why the report is not optional
 //!
 //! [`materialize_impl`] returns the closure **and** the rendered reasoning report,
-//! never one without the other. A binding that answered "OWL-RL entailment"
-//! without saying that twelve of seventy-eight rules ran is exactly the overclaim
-//! the report exists to prevent; [`purrdf_validate::regime`] documents the
-//! discipline in full, and the rendering is byte-stable by construction so the
-//! string survives this host boundary unchanged.
+//! never one without the other. All seventy-eight OWL 2 RL rules now run, so under
+//! `owl-rl` the report's load-bearing lines are the `boundary` ones: a binding that
+//! answered "OWL-RL entailment" without saying which CONSTRUCTS the run could not
+//! fully handle would be making exactly the overclaim the report exists to prevent,
+//! because a complete rule table is not a complete closure.
+//! [`purrdf_validate::regime`] documents the discipline in full, and the rendering
+//! is byte-stable by construction so the string survives this host boundary
+//! unchanged.
 
 use purrdf_validate::regime::{
     RegimeClosure as BoundaryClosure, check_regime_golden_vectors, implemented_rules_string,
@@ -99,9 +102,10 @@ pub(crate) fn materialize_impl(document: &str, regime: &str) -> Result<RegimeClo
 /// spellings the CLI, the C ABI and the Python surface accept.
 ///
 /// Throws if `document` fails to parse, if `regime` is not one of those
-/// spellings, or if `regime` is one of the three that cannot be forward
-/// materialized (`owl-direct`, `rif`, `d`); the message names the accepted set in
-/// every case.
+/// spellings, or if `regime` is one of the two that cannot be forward
+/// materialized (`owl-direct`, `rif`); the message names the accepted set in
+/// every case. `d` is not one of them — datatype entailment materializes, as the
+/// five `dt-*` rules of OWL 2 Profiles §4.3 Table 8.
 #[wasm_bindgen(js_name = entailMaterialize)]
 pub fn entail_materialize(document: &str, regime: &str) -> Result<RegimeClosure, JsError> {
     materialize_impl(document, regime).map_err(|e| JsError::new(&e))
@@ -115,7 +119,7 @@ pub(crate) fn rules_impl(regime: &str) -> Result<Vec<String>, String> {
 /// `entailRules(regime)` → the rule table the specification *defines* the regime
 /// by, one canonical rule name per array entry, in specification table order.
 ///
-/// `[]` for a regime with no rule table (`simple`, and the three that are not
+/// `[]` for a regime with no rule table (`simple`, and the two that are not
 /// forward-materializable). `owl-rl` returns all 78 rules of OWL 2 Profiles §4.3
 /// Tables 4–9 whether or not this build fires them — that is the point: compare
 /// it with [`entail_implemented_rules`] to measure the gap.
@@ -201,14 +205,15 @@ mod tests {
             "<http://example.org/x> \
              <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> ."
         ));
-        // …and the report is never optional, and names the gap.
+        // …and the report is never optional, and says what the run could NOT do.
+        // Asserted as the invariant rather than as a `sound-incomplete <n>`
+        // literal: the count moves every time a rule lands, the honesty gate does
+        // not, and a `boundary` line outlives a rule table going complete.
         assert!(closed.report().starts_with("purrdf-reasoning-report 1\n"));
         assert!(closed.report().contains("\nregime rdfs\n"));
-        assert!(
-            closed
-                .report()
-                .contains("\ncompleteness sound-incomplete 4\n")
-        );
+        assert!(closed.report().contains("\ncompleteness "));
+        assert!(closed.report().contains("\nboundary "));
+        assert!(closed.report().ends_with("overclaims false\n"));
     }
 
     #[test]
@@ -224,11 +229,16 @@ mod tests {
 
     #[test]
     fn a_non_materializable_regime_is_refused_by_name() {
-        let error = materialize_impl(SCHEMA, "owl-direct").expect_err("unsupported");
-        assert!(
-            error.contains("materializable regimes: simple, rdf, rdfs, owl-rl"),
-            "{error}"
-        );
+        for regime in ["owl-direct", "rif"] {
+            let error = materialize_impl(SCHEMA, regime).expect_err("unsupported");
+            assert!(
+                error.contains("materializable regimes: simple, rdf, rdfs, owl-rl, d"),
+                "{error}"
+            );
+        }
+        // `d` is on the other side of that line: it materializes here as it does
+        // on the Rust, C-ABI and Python hosts.
+        assert!(materialize_impl(SCHEMA, "d").is_ok());
     }
 
     #[test]
@@ -238,14 +248,19 @@ mod tests {
 
     #[test]
     fn the_inventories_are_the_specification_tables() {
+        // The SPECIFICATION's counts; these do not move.
         assert_eq!(rules_impl("owl-rl").expect("known").len(), 78);
-        assert_eq!(rules_impl("rdfs").expect("known").len(), 18);
-        // The implemented set is a strict subset with a measurable gap.
+        let defined = rules_impl("rdfs").expect("known");
+        assert_eq!(defined.len(), 18);
+        // The implemented set is a subsequence of it, and the gap is MEASURED —
+        // never a literal, which would go stale the day a rule lands, and which
+        // may legitimately be zero once the table is complete.
         let implemented = implemented_rules_impl("rdfs").expect("known");
-        assert_eq!(
-            rules_impl("rdfs").expect("known").len() - implemented.len(),
-            4
-        );
+        let missing = defined
+            .iter()
+            .filter(|rule| !implemented.contains(rule))
+            .count();
+        assert_eq!(missing, defined.len() - implemented.len());
         // An empty table is an empty array, not a one-element array of "".
         assert!(rules_impl("simple").expect("known").is_empty());
         assert!(implemented_rules_impl("simple").expect("known").is_empty());
