@@ -543,9 +543,34 @@ const CORPUS: &[Fixture] = &[
             "so rdfs14 / rdfs14a do not fire and a triple-term boundary is reported. The",
             "second quad makes the harder thing happen: rdfs7 re-predicates",
             "`x says <<( A ⊑ B )>>` into a `mentions` triple, and the object of that",
-            "conclusion has to be re-interned. See `triple_term_object_folds_to_resource`",
-            "below for what the current engine does with it, and why that is a BUG this",
-            "oracle records rather than repairs.",
+            "conclusion has to be re-interned.",
+            "",
+            "WHY THIS GOLDEN CHANGED — one closure line, restated once in each of the two",
+            "regimes that derive it (RDFS and OWL-RL), and nothing else:",
+            "",
+            "  was: <example.org/x> <example.org/mentions> <rdfs:Resource> .",
+            "  now: <example.org/x> <example.org/mentions>",
+            "       <<( <example.org/A> <rdfs:subClassOf> <example.org/B> )>> .",
+            "",
+            "The old line was UNSOUND. Re-interning folded EVERY triple term to",
+            "rdfs:Resource on the way back into the dataset builder, on the stated",
+            "assumption that the RDFS/OWL-RL rules never derive one in that position.",
+            "rdfs7 / prp-spo1 does: it rewrites a triple's PREDICATE and copies its object",
+            "through unchanged. Nothing in this input entails `x mentions rdfs:Resource` —",
+            "the premises are `says ⊑ mentions` and `x says <<( A ⊑ B )>>`, and what rdfs7",
+            "licenses from them is `x mentions <<( A ⊑ B )>>`, for the object that was",
+            "actually there. That is the new line: a triple term is now rebuilt",
+            "structurally and recursively, so it re-materializes as itself.",
+            "",
+            "Nothing else in this golden moves, and nothing should. The chase is",
+            "untouched — it never looked inside the triple term before and still does not",
+            "— so both closures still hold 10 lines, the changed line keeps its sort",
+            "position (`<<(` sorts where `<http` did, immediately before the `x says`",
+            "line), and the rule tallies, the join-step / stored-fact /",
+            "term-arena budgets, the boundary lists and the contract hashes are all",
+            "byte-identical. Only the object term the re-interner emitted for that one",
+            "conclusion differs. The Simple and RDF closures are unchanged too: neither",
+            "regime fires rdfs7, so neither ever re-interned the triple term.",
         ],
         exercises: &["rdfs7", "prp-spo1"],
         quads: &[
@@ -1319,23 +1344,27 @@ fn a_named_graph_supplies_no_premises_and_receives_no_conclusions() {
     }
 }
 
-/// A triple term is one atomic term to the chase, so it is a reported boundary — and the
-/// current engine's handling of a triple term in a DERIVED object position is wrong.
+/// A triple term is one atomic term to the chase — a reported boundary — and a conclusion
+/// built AROUND it carries it through unchanged.
 ///
 /// `x says <<( A ⊑ B )>>` with `says ⊑ mentions` makes rdfs7 / prp-spo1 conclude
-/// `x mentions <<( A ⊑ B )>>`. What the engine actually emits is
-/// `x mentions rdfs:Resource`: the re-interning path folds a triple term to
-/// `rdfs:Resource` on the way back into the dataset builder, on the stated assumption that
-/// "the RDFS/OWL-RL rules never derive" one there. rdfs7 does.
+/// `x mentions <<( A ⊑ B )>>`: the rule rewrites the PREDICATE and copies the object
+/// through, so the object of the conclusion is the object of the premise, whatever kind of
+/// term that is.
 ///
-/// This is a BUG, and it is UNSOUND — `x mentions rdfs:Resource` is not entailed by the
-/// input under any of these regimes, so this is a wrong triple rather than a missing one.
-/// It is deliberately NOT fixed here. Fixing it would change the closure, and this file's
-/// entire job is to record the closure as it stands so the engine swap can be reviewed
-/// against something that did not move underneath it. The assertion below is written to
-/// FAIL once the fold is repaired, which is the right time to revisit it.
+/// The engine used to emit `x mentions rdfs:Resource` instead — the re-interning path
+/// folded any triple term to `rdfs:Resource` on the way back into the dataset builder, on
+/// the stated assumption that "the RDFS/OWL-RL rules never derive" one there. rdfs7 does,
+/// and the substitution was UNSOUND: `x mentions rdfs:Resource` is entailed by this input
+/// under none of these regimes, so it was a wrong triple rather than a missing one. Both
+/// halves are asserted below — the licensed conclusion present, the fabricated one absent —
+/// so a regression in either direction fails here and not only in the golden.
+///
+/// Opacity itself is NOT the bug and is not repaired: the chase still never reasons INTO
+/// the quoted triple (rdfs14 / rdfs14a do not fire), which withholds conclusions rather
+/// than inventing them, and the triple-term boundary is what tells a caller so.
 #[test]
-fn triple_term_object_folds_to_resource() {
+fn a_derived_triple_term_object_is_carried_through_not_folded() {
     let ds = build(fixture("triple_term"));
     for regime in [Regime::Rdfs, Regime::OwlRl] {
         let (closed, report) = materialize(&ds, regime).expect("runnable regime");
@@ -1348,15 +1377,26 @@ fn triple_term_object_folds_to_resource() {
         );
         let lines = canonicalize(&closed).nquads;
         assert!(
-            lines.contains(&nquads_line(EX_X, EX_MENTIONS, RDFS_RESOURCE)),
-            "{regime:?}: the fold this test records is gone — good, but the goldens and \
-             this test now both need updating"
-        );
-        assert!(
-            !lines.contains(&format!(
+            lines.contains(&format!(
                 "<{EX_X}> <{EX_MENTIONS}> <<( <{EX_A}> <{RDFS_SUBCLASSOF}> <{EX_B}> )>> ."
             )),
-            "{regime:?}: the correct conclusion appeared; the fold has been repaired"
+            "{regime:?}: rdfs7 did not carry the triple term through the rewrite"
+        );
+        assert!(
+            !lines.contains(&nquads_line(EX_X, EX_MENTIONS, RDFS_RESOURCE)),
+            "{regime:?}: the unsound fold to rdfs:Resource is back"
+        );
+        // The exact derived set about `x mentions`: one conclusion, and it is that one.
+        let mentions: Vec<&str> = lines
+            .lines()
+            .filter(|line| line.starts_with(&format!("<{EX_X}> <{EX_MENTIONS}> ")))
+            .collect();
+        assert_eq!(
+            mentions,
+            vec![format!(
+                "<{EX_X}> <{EX_MENTIONS}> <<( <{EX_A}> <{RDFS_SUBCLASSOF}> <{EX_B}> )>> ."
+            )],
+            "{regime:?}: the rewrite concluded more than the one licensed triple"
         );
     }
 }

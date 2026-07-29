@@ -199,7 +199,7 @@ mod tests {
     use crate::vocab::{
         OWL_SYMMETRICPROPERTY, OWL_TRANSITIVEPROPERTY, RDF_PROPERTY, RDF_TYPE, RDFS_SUBCLASSOF,
     };
-    use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermRef, TermValue};
+    use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfTextDirection, TermRef, TermValue};
 
     fn iri(b: &mut RdfDatasetBuilder, s: &str) -> purrdf_core::TermId {
         b.intern_iri(s)
@@ -854,5 +854,208 @@ mod tests {
         // No inference: x is not typed B.
         assert!(!has(&closed, X, RDF_TYPE, B));
         assert!(has(&closed, X, RDF_TYPE, A));
+    }
+
+    // ── Rebuilding a conclusion AROUND a term the rules cannot look inside ──────
+    //
+    // rdfs7 / prp-spo1 rewrites a triple's PREDICATE and copies its object through
+    // unchanged, so the object of the conclusion has to be re-interned into the emitted
+    // dataset whatever kind of term it is. Substituting a different term there is
+    // unsound: it asserts a triple nothing entails. These tests pin the round trip for
+    // each object kind the rewrite can carry.
+
+    /// Fixture property `example.org/says`.
+    const SAYS: &str = "http://example.org/says";
+    /// Fixture property `example.org/mentions`, the super-property of `says`.
+    const MENTIONS: &str = "http://example.org/mentions";
+    /// `rdfs:subPropertyOf`, the axiom that drives the rewrite.
+    const RDFS_SUBPROPERTYOF: &str = "http://www.w3.org/2000/01/rdf-schema#subPropertyOf";
+    /// `rdfs:Resource` — the IRI the old fold substituted for a triple term. Named here
+    /// only so its ABSENCE can be asserted.
+    const RDFS_RESOURCE: &str = "http://www.w3.org/2000/01/rdf-schema#Resource";
+
+    /// `says ⊑ mentions` plus `x says <o>`, where `o` is whatever term `object` interns.
+    ///
+    /// The smallest input that makes rdfs7 / prp-spo1 build a conclusion AROUND `o`:
+    /// the predicate changes, the object is carried through, and the emitted triple can
+    /// only be right if `o` re-materializes as itself.
+    fn rewrite_fixture(
+        object: impl FnOnce(&mut RdfDatasetBuilder) -> purrdf_core::TermId,
+    ) -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let x = iri(&mut b, X);
+        let says = iri(&mut b, SAYS);
+        let mentions = iri(&mut b, MENTIONS);
+        let spo = iri(&mut b, RDFS_SUBPROPERTYOF);
+        let o = object(&mut b);
+        b.push_quad(says, spo, mentions, None);
+        b.push_quad(x, says, o, None);
+        b.freeze().expect("freeze")
+    }
+
+    /// Every default-graph object of `(s, p)`, by value.
+    fn objects_of(ds: &RdfDataset, s: &str, p: &str) -> Vec<TermValue> {
+        ds.quads()
+            .filter(|q| {
+                q.g.is_none()
+                    && ds.term_value(q.s) == TermValue::iri(s)
+                    && ds.term_value(q.p) == TermValue::iri(p)
+            })
+            .map(|q| ds.term_value(q.o))
+            .collect()
+    }
+
+    /// A triple term over three IRIs, by value.
+    fn quoted_value(s: &str, p: &str, o: TermValue) -> TermValue {
+        TermValue::Triple {
+            s: Box::new(TermValue::iri(s)),
+            p: Box::new(TermValue::iri(p)),
+            o: Box::new(o),
+        }
+    }
+
+    /// rdfs7 / prp-spo1 carries a triple-term object through the rewrite intact.
+    ///
+    /// `x says <<( A ⊑ B )>>` with `says ⊑ mentions` entails
+    /// `x mentions <<( A ⊑ B )>>` and nothing else about `x mentions`. The engine used
+    /// to emit `x mentions rdfs:Resource` here, which is not entailed by this input
+    /// under any regime — a wrong triple, not a missing one.
+    #[test]
+    fn a_subproperty_rewrite_carries_a_triple_term_object_through() {
+        let ds = rewrite_fixture(|b| {
+            let s = b.intern_iri(A);
+            let p = b.intern_iri(RDFS_SUBCLASSOF);
+            let o = b.intern_iri(B);
+            b.intern_triple(s, p, o)
+        });
+        let expected = quoted_value(A, RDFS_SUBCLASSOF, TermValue::iri(B));
+        for regime in [Regime::Rdfs, Regime::OwlRl] {
+            let (closed, report) = materialize(&ds, regime).expect("runnable regime");
+            assert_eq!(
+                objects_of(&closed, X, MENTIONS),
+                vec![expected.clone()],
+                "{regime:?}: the rewrite must conclude exactly the triple term"
+            );
+            assert!(
+                !has(&closed, X, MENTIONS, RDFS_RESOURCE),
+                "{regime:?}: a term was fabricated for the triple term"
+            );
+            // Opacity is the licensed part, and it is REPORTED: the chase never reasons
+            // into the quoted triple (rdfs14 / rdfs14a do not fire), so the closure is
+            // sound-incomplete and says so.
+            assert!(
+                report
+                    .boundaries()
+                    .iter()
+                    .any(|boundary| boundary.construct() == Construct::TripleTerm),
+                "{regime:?}: the triple-term boundary must be reported"
+            );
+            assert!(!report.overclaims(), "{regime:?}");
+        }
+    }
+
+    /// The reconstruction NESTS: a triple term whose object is itself a triple term
+    /// round-trips to full depth through the same rewrite.
+    #[test]
+    fn a_subproperty_rewrite_carries_a_nested_triple_term_through() {
+        let ds = rewrite_fixture(|b| {
+            let a = b.intern_iri(A);
+            let sco = b.intern_iri(RDFS_SUBCLASSOF);
+            let bb = b.intern_iri(B);
+            let inner = b.intern_triple(a, sco, bb);
+            let p = b.intern_iri("http://example.org/p");
+            b.intern_triple(a, p, inner)
+        });
+        let expected = quoted_value(
+            A,
+            "http://example.org/p",
+            quoted_value(A, RDFS_SUBCLASSOF, TermValue::iri(B)),
+        );
+        for regime in [Regime::Rdfs, Regime::OwlRl] {
+            let (closed, _report) = materialize(&ds, regime).expect("runnable regime");
+            assert_eq!(
+                objects_of(&closed, X, MENTIONS),
+                vec![expected.clone()],
+                "{regime:?}: the nested triple term was not rebuilt to depth"
+            );
+        }
+    }
+
+    /// A directional language-tagged literal keeps its base direction across the rewrite.
+    ///
+    /// Direction participates in literal identity (C0.1), so a conclusion that dropped it
+    /// would be about a DIFFERENT literal than the premise was.
+    #[test]
+    fn a_subproperty_rewrite_preserves_a_literal_base_direction() {
+        for direction in [RdfTextDirection::Ltr, RdfTextDirection::Rtl] {
+            let ds = rewrite_fixture(|b| {
+                b.intern_literal(purrdf_core::RdfLiteral {
+                    lexical_form: "hello".to_owned(),
+                    datatype: None,
+                    language: Some("en".to_owned()),
+                    direction: Some(direction),
+                })
+            });
+            let expected = TermValue::Literal {
+                lexical_form: "hello".to_owned(),
+                datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".to_owned(),
+                language: Some("en".to_owned()),
+                direction: Some(direction),
+            };
+            for regime in [Regime::Rdfs, Regime::OwlRl] {
+                let (closed, _report) = materialize(&ds, regime).expect("runnable regime");
+                assert_eq!(
+                    objects_of(&closed, X, MENTIONS),
+                    vec![expected.clone()],
+                    "{regime:?}: {direction:?} was not preserved through the rewrite"
+                );
+            }
+        }
+    }
+
+    /// A triple term in a position the rules CANNOT use fabricates nothing.
+    ///
+    /// `p rdfs:range A` with `x p <<( A ⊑ B )>>` would have rdfs3 / prp-rng conclude
+    /// `<<( A ⊑ B )>> rdf:type A`, whose subject is a triple term — a generalized-RDF
+    /// triple the IR cannot hold. The conclusion is abandoned and the drop is reported;
+    /// what may never happen is a stand-in term being invented so the triple can be
+    /// emitted anyway.
+    #[test]
+    fn a_triple_term_the_rules_cannot_conclude_into_fabricates_no_term() {
+        let mut b = RdfDatasetBuilder::new();
+        let x = iri(&mut b, X);
+        let p = iri(&mut b, "http://example.org/p");
+        let rng = iri(&mut b, RDFS_RANGE);
+        let a = iri(&mut b, A);
+        let sco = iri(&mut b, RDFS_SUBCLASSOF);
+        let bb = iri(&mut b, B);
+        let quoted = b.intern_triple(a, sco, bb);
+        b.push_quad(p, rng, a, None);
+        b.push_quad(x, p, quoted, None);
+        let ds = b.freeze().expect("freeze");
+
+        for regime in [Regime::Rdfs, Regime::OwlRl] {
+            let (closed, report) = materialize(&ds, regime).expect("runnable regime");
+            // Nothing was concluded ABOUT the triple term…
+            assert!(
+                !closed
+                    .quads()
+                    .any(|q| matches!(closed.term_value(q.s), TermValue::Triple { .. })),
+                "{regime:?}: a triple term reached subject position"
+            );
+            // …and no stand-in was minted to carry the abandoned conclusion.
+            assert!(
+                !has(&closed, X, RDF_TYPE, A) && !has(&closed, RDFS_RESOURCE, RDF_TYPE, A),
+                "{regime:?}: a term was fabricated for the abandoned conclusion"
+            );
+            assert!(
+                report
+                    .boundaries()
+                    .iter()
+                    .any(|boundary| boundary.construct() == Construct::GeneralizedRdf),
+                "{regime:?}: the abandoned conclusion must be reported"
+            );
+            assert!(!report.overclaims(), "{regime:?}");
+        }
     }
 }
