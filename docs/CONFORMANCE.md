@@ -70,7 +70,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | ShEx negative syntax | shexTest v2.1.0, `negativeSyntax/` | **99 / 99** rejected |
 | ShEx negative structure | shexTest v2.1.0, `negativeStructure/` | **14 / 14** rejected |
 | SHACL | W3C data-shapes, `core/` + `sparql/` + `af/` | **126 / 126** · 0 ledgered |
-| SHACL (first-party corpus) | `crates/shapes/corpus/` | **69 / 69** frozen expected reports |
+| SHACL (first-party corpus) | `crates/shapes/corpus/` | **70 / 70** frozen expected reports |
 | Schema → SHACL | first-party exact/lossy/corruption/resource suites + locked language oracles | **5 / 5** production directions; exact emitted-schema recompilation or located closed-profile losses; no deferred reader |
 | Syntax codecs | W3C rdf-tests `crates/rdf/tests/corpus/w3c/` | **250 / 250** round-trip (nquads 27, ntriples 29, rdfxml 31, trig 60, turtle 103) · 0 gaps |
 | JSON-LD 1.1 context lens | W3C JSON-LD 1.1 REC + first-party RDF 1.2 vectors | **73 / 73** applicable toRDF · **13 / 13** exact compaction · 0 gaps; frozen provenance and checksums |
@@ -78,7 +78,9 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | OBO Graphs view | official OBO Graphs 0.3.2 JSON Schema | production advanced-object fixture accepted; deliberate node/chain corruptions rejected |
 | Research-object carriers | five adversarial native fixtures plus shared semantic matrix | **5 / 5** native fixtures import with non-empty located ledgers · **25 / 25** shared-semantic source/target paths stabilize; Frictionless output validates against the vendored Data Package v1 schema |
 | SPARQL 1.1/1.2 | full W3C sparql11 (query+update) + sparql12 + entailment, via `purrdf-sparql-conformance` | **797** pass · 5 typed xfail · 0 fail (all W3C `service` federation cases green; SPARQL 1.1 query+update fully vendored; SPARQL 1.2 RDF-star triple-term/reifier/annotation surface fully passing; the 5 non-passes are upstream-errata fixtures with non-canonical XSD lexicals) |
-| Entailment (RDFS / OWL-RL / OWL-Direct / RIF) | native `purrdf-entail` reasoners | RDFS + OWL-RL forward chase, open-world OWL-Direct via the ALCOIQ tableau, RIF-Core rule engine, and RDF-axiomatic predicate typing; **70/70** W3C entailment cases pass (only `D`-datatype entailment remains a boundary, unexercised by the corpus) |
+| Entailment (SPARQL regimes) | W3C sparql11 `entailment/` group, via `purrdf-sparql-conformance` | **70 / 70** · 0 ledgered — RDF/RDFS/OWL-RL chase, open-world OWL-Direct via the ALCOIQ tableau, RIF-Core rule engine, and RDF-axiomatic predicate typing |
+| Entailment (OWL 2 DL consistency) | vendored W3C OWL 2 test suite, `crates/sparql-conformance/entailment-suite/w3c-owl2/` | **233 / 261** agreeing verdicts · 28 typed-ledger divergences · 0 unledgered · 0 stale. Consistency-shaped corpus (226 `otest:ConsistencyTest` + 35 `otest:InconsistencyTest`, no entailment tests upstream), so it grades the DL/tableau lane only |
+| Entailment rule tables | `purrdf-entail` `rules()` / `implemented()` | `OWL-RL` **78 / 78** (OWL 2 Profiles §4.3 Tables 4–9) · `RDFS` **14 / 18** · `RDF` **1 / 3** · `D` **5 / 5** (§4.3 Table 8). The four RDF/RDFS residuals all conclude about a fresh blank node. Per-rule detail is generated and drift-guarded: [`docs/book/src/entailment-rules.md`](book/src/entailment-rules.md) |
 | RDFC-1.0 canonicalization | W3C fixtures, `crates/rdf/tests/fixtures/rdfc/` | **65** vectors (64 eval + 1 negative), green |
 | rdflib drop-in (LSP) gate | rdflib 7.6 own vendored tests | **62** pass · 24 strict-xfail (ledgered) |
 | purrdf.compat parity | first-party differential vs rdflib 7.6 | **338** pass · 5 strict-xfail (ledgered) |
@@ -95,7 +97,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
   `af/rules/` inferred-graph fixtures (DASH `dash:InferencingTestCase` rules plus
   first-party cases) driving the SHACL Rules harness. See its README for
   provenance.
-- `crates/shapes/corpus/` — PurRDF's own frozen SHACL corpus: 69 cases with
+- `crates/shapes/corpus/` — PurRDF's own frozen SHACL corpus: 70 cases with
   byte-frozen expected reports, covering purrdf-specific behavior (reifier
   shapes, path forms, property pairs, qualified shapes, SHACL-AF
   `sh:expression`).
@@ -107,6 +109,12 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
   exercises the public facade end to end.
 - `crates/sparql-conformance/` — the W3C SPARQL 1.1 harness plus first-party
   extension-function and standpoint suites.
+- `crates/sparql-conformance/entailment-suite/w3c-owl2/` — the vendored W3C OWL 2 test
+  suite, flattened to 261 cases with a per-case `profile.json` and premise
+  ontology, driving the DL/tableau consistency harness
+  (`crates/sparql-conformance/tests/owl2_conformance.rs`). Its divergence ledger
+  lives in `crates/sparql-conformance/src/owl2.rs` and is frozen by
+  `scripts/conformance-frozen/sparql-conformance-w3c-owl2.sha256`.
 - `crates/rdf/tests/corpus/w3c/` — the W3C rdf-tests syntax corpus (Turtle,
   TriG, N-Triples, N-Quads, RDF/XML) driving the native-codec round-trip gate.
 - `crates/rdf/tests/fixtures/jsonld-w3c-rec/` — the revision-pinned W3C JSON-LD 1.1
@@ -221,13 +229,35 @@ issue, so the matrix stays honest:
   entailment-regime case now passes natively (see below); only these vendored
   fixtures' non-canonical lexicals differ.
 - **Entailment** — the native `purrdf-entail` crate carries four reasoners: the
-  RDFS / OWL-RL forward-materialization chase; the bare-`RDF` axiomatic
-  predicate-typing rule; an open-world **OWL-Direct** Description-Logic reasoner
-  (an ALCOIQ tableau answering instance/subsumption queries via classification +
-  realization + query-directed materialization); and a **RIF-Core** rule engine.
-  **All 70 W3C entailment cases pass** — RDF/RDFS/OWL-RL, OWL-Direct(DL),
-  RIF-rule, and RDF-axiomatic. Only `D`-datatype entailment remains a boundary,
-  and no case in the vendored corpus exercises it alone.
+  RDF / RDFS / OWL-RL / D forward-materialization chase, which runs the regime's
+  declared DL-clause program through `purrdf-datalog`'s semi-naive evaluator; the
+  bare-`RDF` axiomatic predicate-typing rule; an open-world **OWL-Direct**
+  Description-Logic reasoner (an ALCOIQ tableau answering instance/subsumption
+  queries via classification + realization + query-directed materialization); and
+  a **RIF-Core** rule engine. **All 70 W3C SPARQL entailment-regime cases pass**
+  with zero ledgered residuals — RDF/RDFS/OWL-RL, OWL-Direct(DL), RIF-rule, and
+  RDF-axiomatic.
+
+  Two bounds remain, and both are reported rather than hidden:
+
+  1. **Four of the 18 RDF + RDFS patterns are not fired** — `rdfD1`, `rdfD1a`,
+     `rdfs14`, `rdfs14a`. Each concludes about a *fresh* blank node, an
+     existentially quantified head the Datalog evaluator refuses by construction
+     rather than approximating with a minted surrogate. `OWL-RL` fires all 78
+     rules of OWL 2 Profiles §4.3 Tables 4–9, and `D` all five of Table 8; the
+     value spaces Table 8 does not cover are reported as a
+     `Construct::DatatypeValueSpace` boundary on the run. Every one of these
+     numbers is machine-readable through `rules(regime)` / `implemented(regime)`
+     and rendered into a drift-guarded document, so it cannot silently rot.
+  2. **The vendored W3C OWL 2 corpus is consistency-shaped.** All 261 cases are
+     `otest:ConsistencyTest` (226) or `otest:InconsistencyTest` (35) — the
+     upstream material contains no entailment tests — so the `Entailment (OWL 2
+     DL consistency)` row grades the tableau lane's satisfiability verdicts and
+     says nothing about the OWL 2 RL rule table. 233 verdicts agree; the 28 that
+     do not are each named in a typed ledger
+     (`purrdf_sparql_conformance::owl2::LEDGER`) with its construct. An
+     unledgered divergence, a ledgered case that has started agreeing, and a
+     ledger entry naming a case that no longer exists are all hard failures.
 - **SHACL** — the W3C `core/` and `sparql/` suites now pass **126 / 126**
   with **0 ledgered xfails**. A validation-only SHACL-AF corpus is vendored from
   pySHACL's DASH tests under `vectors/shacl/af/` and is discovered and gated by

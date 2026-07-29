@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-entail"
-description = "PurRDF native entailment: wasm-clean forward-materialization RDFS + OWL-RL closure over the RdfDataset IR"
+description = "PurRDF native entailment: wasm-clean RDF/RDFS/OWL 2 RL/D forward materialization over the RdfDataset IR, with a reasoning report on every closure"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

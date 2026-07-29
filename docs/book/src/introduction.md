@@ -45,8 +45,10 @@ reimplemented per language.
   the W3C conformance suites. See [SPARQL](sparql/querying.md).
 - **SHACL and ShEx** — native validators for both shape languages.
   See [Validation](validation/shacl.md).
-- **Entailment** — Simple/RDF/RDFS/OWL-RL materialization, an OWL-Direct
-  tableau, and RIF-Core rules. See [Entailment](entailment.md).
+- **Entailment** — Simple/RDF/RDFS/OWL-RL/D materialization (all 78 OWL 2 RL
+  rules), an OWL-Direct tableau, and RIF-Core rules, with a reasoning report on
+  every closure. See [Entailment](entailment.md), evaluated on the
+  [Datalog fixpoint engine](datalog.md).
 - **GTS graph transport** — a single-file, content-addressed, append-only
   container for RDF 1.2 graphs and binary payloads.
   See [GTS Graph Transport](gts.md).

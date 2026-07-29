@@ -95,8 +95,8 @@ Transcode a source into a target syntax or the pack container.
 - `--base <IRI>` — base IRI for resolving relative IRIs while parsing, also
   threaded into the serializer as its base.
 - `--entailment <R>` — materialize a regime's closure **in memory** before
-  serializing (see [`reason`](#reason) for the supported regimes and the exit-3
-  boundary; the two lanes reject identically).
+  serializing (see [`reason`](#reason) for the regimes the CLI materializes and
+  the exit-3 refusals; the two lanes reject identically).
 - `--canonical` — emit the RDFC-1.0 canonical N-Quads document instead of `--to`.
   Canonical output is **always** N-Quads, so `--canonical` overrides (and lets you
   omit) `--to`.
@@ -189,7 +189,7 @@ Materialize an entailment regime's closure over the source graph and write it ou
   `--from`/`--to`.
 - `--base <IRI>` — base IRI for the input parse, also threaded into the serializer.
 
-**Supported (materializable) regimes:**
+**Regimes the CLI materializes:**
 
 | `--regime` | Meaning |
 |---|---|
@@ -198,13 +198,20 @@ Materialize an entailment regime's closure over the source graph and write it ou
 | `rdfs` | RDFS entailment |
 | `owl-rl` | OWL 2 RL entailment |
 
-**The unsupported boundary (exit code 3).** Three regimes cannot be materialized
-by the CLI because they need inputs it has no way to supply, and each is rejected
-with a distinct diagnostic:
+`rdfs` fires 14 of the 18 RDF + RDFS patterns; `owl-rl` fires all 78 rules of
+OWL 2 Profiles §4.3 Tables 4–9. The per-rule table is generated from the library's
+own API and drift-guarded:
+[`docs/book/src/entailment-rules.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/book/src/entailment-rules.md).
 
-- `owl-direct` — OWL Direct (DL) needs the query's class expressions;
-- `rif` — RIF-Core needs a parsed rule set;
-- `d` — datatype (D) entailment is a spec-inherent materialization boundary.
+**The refused regimes (exit code 3).** Three regimes are rejected by the CLI's
+regime resolver, each with a distinct diagnostic:
+
+- `owl-direct` — OWL Direct (DL) needs the query's class expressions, which the
+  CLI has no way to supply;
+- `rif` — RIF-Core needs a parsed rule set, which the CLI has no way to supply;
+- `d` — refused by the CLI. The library (`purrdf-entail`) and the shared string
+  boundary the Python, WebAssembly, and C hosts call do materialize `d`, as
+  Simple entailment plus the five `dt-*` rules of OWL 2 Profiles §4.3 Table 8.
 
 `convert --entailment` shares this boundary and rejects identically.
 
@@ -215,7 +222,7 @@ purrdf reason --regime rdfs people.ttl closure.nt
 # OWL 2 RL closure from stdin to stdout (explicit formats required for `-`).
 cat ontology.ttl | purrdf reason --regime owl-rl --from ttl --to nt - -
 
-# The unsupported boundary: exits 3 with an explanatory message.
+# A refused regime: exits 3 with an explanatory message.
 purrdf reason --regime owl-direct people.ttl out.ttl
 echo $?   # 3
 ```
@@ -368,7 +375,7 @@ purrdf --loss-ledger=convert.loss.json convert star-data.ttl plain.trix
 | `0` | success |
 | `1` | runtime failure — a parse/serialize diagnostic, a pack-integrity failure, an I/O error, or a result/shape mismatch |
 | `2` | usage error — a malformed command line (clap), or a pipeline usage error such as `-` without an explicit format |
-| `3` | unsupported entailment regime — `owl-direct` / `rif` / `d` cannot be materialized by the CLI |
+| `3` | refused entailment regime — `owl-direct` / `rif` / `d` are not materialized by the CLI (see [`reason`](#reason)) |
 
 On any failure the error's message is printed to stderr and its category becomes
 the process exit code; nothing is swallowed.

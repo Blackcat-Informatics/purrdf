@@ -37,6 +37,8 @@ SPDX-License-Identifier: CC-BY-4.0
 # Reasoning & Transport
 
 - [Entailment](entailment.md)
+  - [Entailment Rule Inventory](entailment-rules.md)
+- [Datalog: the Fixpoint Engine](datalog.md)
 - [GTS Graph Transport](gts.md)
 - [Slices, Mappings & Provenance](slices.md)
 

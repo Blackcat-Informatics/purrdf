@@ -61,10 +61,15 @@ caller-supplied configuration.
   and targets, on PurRDF's own engine.
 - **ShEx 2.1** — ShExC/ShExJ schemas and shape-map validation, gated against the
   official shexTest suite.
-- **Entailment** — RDFS / OWL-RL forward materialization plus query-directed
-  OWL-Direct and RIF, entirely in interned `TermId` space. The umbrella
-  `query_with_entailment` façade keeps query parsing and the selected regime
-  together; RIF-XML imports stay caller-resolved and network-free.
+- **Entailment** — Simple / RDF / RDFS / OWL 2 RL / D forward materialization
+  (all 78 OWL 2 RL rules of OWL 2 Profiles §4.3 Tables 4–9; 14 of the 18 RDF +
+  RDFS patterns, the four residuals being the ones that conclude about a fresh
+  blank node) plus query-directed OWL-Direct and RIF, entirely in interned
+  `TermId` space. Every closure comes back with a `ReasoningReport` saying which
+  rules fired, which did not, which boundaries the run met, and the contract hash
+  of the calculus it ran. The umbrella `query_with_entailment` façade keeps query
+  parsing and the selected regime together; RIF-XML imports stay caller-resolved
+  and network-free.
 - **GTS graph transport** — a single-file, content-addressed, append-only
   container for RDF 1.2 graphs: BLAKE3-chained CBOR segments, deterministic fold,
   COSE signing/encryption, pure-Rust crypto (wasm-friendly).
@@ -123,7 +128,7 @@ let schema = purrdf::shex::parse_shexc(
 | `sparql` | [`purrdf-sparql-algebra`](https://crates.io/crates/purrdf-sparql-algebra) + [`purrdf-sparql-eval`](https://crates.io/crates/purrdf-sparql-eval) + [`purrdf-sparql-results`](https://crates.io/crates/purrdf-sparql-results) |
 | `shapes` | [`purrdf-shapes`](https://crates.io/crates/purrdf-shapes) (SHACL) |
 | `shex` | [`purrdf-shex`](https://crates.io/crates/purrdf-shex) (ShEx 2.1) |
-| `entail` | [`purrdf-entail`](https://crates.io/crates/purrdf-entail) (RDFS / OWL-RL / OWL-Direct / RIF) |
+| `entail` | [`purrdf-entail`](https://crates.io/crates/purrdf-entail) (Simple / RDF / RDFS / OWL-RL / D / OWL-Direct / RIF) |
 | `validate` | [`purrdf-validate`](https://crates.io/crates/purrdf-validate) (SARIF 2.1.0 boundary) |
 | `slice` | [`purrdf-slice`](https://crates.io/crates/purrdf-slice) (slice catalog) |
 | `viz` | RDF 1.2 semantic projection, deterministic layout, and SVG export |

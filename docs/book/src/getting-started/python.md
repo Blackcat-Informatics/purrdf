@@ -44,6 +44,35 @@ SHACL result dicts keep the stable keys `focus`, `path`, `value`, `severity`,
 `component`, `source_shape`, and `message`. See [SHACL](../validation/shacl.md)
 and [ShEx](../validation/shex.md) for what the engines cover.
 
+## Entailment
+
+`purrdf.entail` closes a dataset under a SPARQL entailment regime. It is not
+`purrdf.shapes.entail`, which applies the SHACL-AF `sh:rule`s a *shapes* graph
+declares; this one takes no shapes and uses the regime's own specification rule
+table.
+
+```python
+import purrdf
+from purrdf import entail
+
+dataset = purrdf.RdfDataset(my_turtle, purrdf.RdfFormat.TURTLE)
+closure, report = entail.materialize(dataset, "rdfs")
+print(closure.to_nquads())
+print(report)          # what fired, what did not, boundaries, budget, contract hash
+```
+
+The report is the second return value and is never optional — the same
+discipline the Rust, WebAssembly, and C surfaces enforce. `entail.materialize_nt(text, regime)`
+is the text-in/text-out twin for callers holding an N-Triples/N-Quads document.
+
+Coverage is measurable rather than asserted: `entail.rules(regime)` is the rule
+table the specification defines the regime by, and
+`entail.implemented_rules(regime)` is the subset that fires. `"owl-direct"` and
+`"rif"` raise `ValueError` here, because they need the query's class expressions
+and a parsed rule set respectively. See [Entailment](../entailment.md) for the
+full picture and the [rule inventory](../entailment-rules.md) for the per-rule
+table.
+
 ## rdflib compatibility
 
 The package ships an rdflib compatibility layer:
@@ -97,6 +126,7 @@ complete example.
 
 - [rdflib Compatibility](../interop/rdflib.md) — the drop-in story in depth.
 - [Validation](../validation/shacl.md) — SHACL and ShEx from Python.
+- [Entailment](../entailment.md) — the regimes, the report, and what each fires.
 - [GTS Graph Transport](../gts.md) — the container format the exports read.
 - [Graph, Tabular & Research-Object Projections](../concepts/projections.md) — LPG, CSVW, OBO,
   SKOS, and five research-object carriers.

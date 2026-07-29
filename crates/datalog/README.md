@@ -3,17 +3,29 @@ SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinform
 SPDX-License-Identifier: CC-BY-4.0
 -->
 
-# purrdf-datalog
+<p align="center">
+  <a href="https://github.com/Blackcat-Informatics/purrdf">
+    <img src="https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg" alt="PurRDF logo" width="120" height="120">
+  </a>
+</p>
+
+# `purrdf-datalog` — Deterministic Datalog Evaluation
+
+[![crates.io](https://img.shields.io/crates/v/purrdf-datalog.svg)](https://crates.io/crates/purrdf-datalog)
+[![docs.rs](https://docs.rs/purrdf-datalog/badge.svg)](https://docs.rs/purrdf-datalog)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
+[![Repository](https://img.shields.io/badge/repo-Blackcat--Informatics%2Fpurrdf-181717.svg)](https://github.com/Blackcat-Informatics/purrdf)
 
 Deterministic, wasm-clean Datalog evaluation: a columnar relation store and a
 stratified semi-naive fixpoint, carrying no ambient I/O, no wall clock and no
 RNG.
 
-This crate is the shared execution substrate beneath PurRDF's rule-driven
-engines. A rule set is *data* — a table of clauses over a relation store — so
-the RDF, RDFS and OWL 2 RL calculi, RIF-Core rules and SHACL-AF `sh:rule`
-entailment are rule tables over one evaluator rather than four hand-written
-fixpoints.
+A rule set is *data* — a table of clauses over a relation store — rather than a
+hand-written loop. Its consumer today is
+[`purrdf-entail`](https://crates.io/crates/purrdf-entail): the RDF, RDFS, OWL 2
+RL and D calculi are declared as DL-clause programs and evaluated here, which is
+what lets a reasoning report carry a *contract hash* of the exact program that
+ran instead of a claim about which rules were meant to.
 
 ## Design commitments
 
@@ -45,7 +57,24 @@ fixpoints.
 * **No optionality.** No Cargo features; no conditional compilation selecting
   between semantics.
 
-## Licence
+## Part of PurRDF
 
-Dual-licensed under [MIT](../../LICENSES/MIT.txt) or
-[Apache-2.0](../../LICENSES/Apache-2.0.txt), at your option.
+This crate is one member of the [PurRDF](https://github.com/Blackcat-Informatics/purrdf)
+workspace — an RDF 1.2 toolkit with native codecs, SPARQL, SHACL, ShEx,
+entailment, and the GTS graph transport, carried into Python, WebAssembly, and
+C. It is the evaluator beneath
+[`purrdf-entail`](https://crates.io/crates/purrdf-entail) and is published
+separately so a caller can depend on the fixpoint alone. Note that it is not
+re-exported by the umbrella [`purrdf`](https://crates.io/crates/purrdf) crate.
+
+There are deliberately no Cargo feature flags anywhere in the workspace. MSRV
+follows the workspace `rust-version` (currently 1.96, stable toolchain only).
+
+## License
+
+Licensed under either of
+
+- [Apache License, Version 2.0](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-APACHE)
+- [MIT license](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
+
+at your option.

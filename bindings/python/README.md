@@ -184,8 +184,59 @@ results = shex.validate(
 print(all(entry["conformant"] for entry in results))
 ```
 
-The ShEx 2.1 validator passes 1,051/1,051 attempted validation tests of the official
+The ShEx 2.1 validator passes 1,105/1,105 attempted validation tests of the official
 shexTest suite (see the repo's `docs/CONFORMANCE.md`).
+
+## Entailment regimes
+
+The SPARQL entailment regimes live at `purrdf.entail` (mirroring the
+`purrdf-entail` Rust crate). It closes a dataset under a regime's own
+specification rule table and takes no shapes at all — not to be confused with
+`purrdf.shapes.entail(...)`, which applies the SHACL-AF `sh:rule`s a *shapes*
+graph declares.
+
+```python
+import purrdf
+from purrdf import entail
+
+dataset = purrdf.RdfDataset(my_turtle, purrdf.RdfFormat.TURTLE)
+closure, report = entail.materialize(dataset, "rdfs")
+print(closure.to_nquads())
+print(report)
+```
+
+For callers holding a document rather than a parsed dataset, `entail.materialize_nt(text, regime)`
+takes N-Triples/N-Quads and returns `(canonical_nquads, report)`. Both accept the
+regime as a plain string (`"simple"`, `"rdf"`, `"rdfs"`, `"owl-rl"`, `"d"`) or as
+`entail.Regime.RDFS`.
+
+**The report is the second return value and is never optional.** It is a
+byte-stable rendering naming which rules fired and how often, which specification
+rules did *not* fire, which constructs the run left at a boundary, what it
+consumed of the evaluator's fixed ceilings, and the contract hash of the calculus
+that ran — so a cached closure minted under a different rule set can be refused
+rather than trusted.
+
+The rule tables are readable directly, so coverage is something you measure
+rather than something you take on faith:
+
+```python
+defined = entail.rules("owl-rl")             # 78 — OWL 2 Profiles §4.3 Tables 4–9
+fired = entail.implemented_rules("owl-rl")   # 78
+missing = [rule for rule in entail.rules("rdfs") if rule not in entail.implemented_rules("rdfs")]
+# ['rdfD1', 'rdfD1a', 'rdfs14', 'rdfs14a'] — the four that conclude about a fresh blank node
+```
+
+`ValueError` is raised for an unknown regime spelling (the message names the
+accepted set), for `"owl-direct"` and `"rif"` — which need the query's class
+expressions and a parsed rule set respectively, neither of which this surface can
+supply — and for an exhausted evaluation ceiling. An exhausted ceiling is a
+refusal, never a truncated closure handed back as a complete one.
+
+Nothing here re-implements the reasoner: every entry point routes through the
+same shared boundary the WebAssembly and C hosts call, checked against one
+committed golden-vector artifact, so the four hosts return byte-identical results
+for the same input.
 
 ## rdflib compatibility layer
 

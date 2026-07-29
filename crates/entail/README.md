@@ -26,7 +26,7 @@ external reasoner, no `tokio`, and no string round-trip.
 
 | Entry point | Regime(s) | Engine |
 | --- | --- | --- |
-| `materialize(ds, regime)` | `Simple`, `RDF`, `RDFS`, `OWL-RL` | Forward materialization ("chase") of `calculus_program(regime)` through `purrdf-datalog`'s native semi-naive fixpoint — the declared rule set *is* the executable, so the contract hash a report carries names the clauses that ran. Returns `(closure, ReasoningReport)` — the report is not optional. |
+| `materialize(ds, regime)` | `Simple`, `RDF`, `RDFS`, `OWL-RL`, `D` | Forward materialization ("chase") of `calculus_program(regime)` through `purrdf-datalog`'s native semi-naive fixpoint — the declared rule set *is* the executable, so the contract hash a report carries names the clauses that ran. Returns `(closure, ReasoningReport)` — the report is not optional. |
 | `materialize_dl(...)` | `OWL-Direct` | Open-world OWL DL over an ALCOIQ tableau — needs the query's class expressions, so it is not reachable through the plain `materialize` façade. |
 | `materialize_rif(...)` | `RIF` | RIF-Core rule entailment over a parsed `RuleSet`. |
 | `parse_rif_xml(...)` / `resolve_rif_imports(...)` | `RIF` | Normative RIF-XML parsing with caller-owned, I/O-free import resolution. |
@@ -34,8 +34,46 @@ external reasoner, no `tokio`, and no string round-trip.
 | `rules(regime)` / `implemented(regime)` | — | The rule table a regime is *defined by*, and the subset this crate fires. Their difference is the measurable gap. |
 | `calculus_program(regime)` | — | The regime's calculus as DL-clause data — the very program `materialize` evaluates, so its `purrdf-datalog` contract hash is recomputable by a consumer. |
 
-`D` (datatype) entailment is a typed, spec-inherent boundary
-(`EntailError::Unsupported`) rather than a silent default.
+`EntailError::Unsupported` is reached by exactly two regimes — `OWL-Direct` and
+`RIF` — and in both cases because the plain `materialize` façade has no way to
+supply the input they need (the query's class expressions; a parsed rule set),
+not because the regime is unimplemented.
+
+## Rule coverage
+
+The rule tables are data, not prose. `rules(regime)` is what the specification
+defines the regime by; `implemented(regime)` is what the chase fires. The
+difference is the gap, and it is also what a `ReasoningReport` reports as
+`missing`:
+
+| Regime | Rule table | Defined | Implemented |
+| --- | --- | ---: | ---: |
+| `Simple` | — (identity closure) | 0 | 0 |
+| `RDF` | RDF 1.2 Semantics §8.1.1 | 3 | 1 |
+| `RDFS` | RDF 1.2 Semantics §8.1.1 + §9.2.1 | 18 | 14 |
+| `OWL-RL` | OWL 2 Profiles §4.3 Tables 4–9 | 78 | 78 |
+| `D` | OWL 2 Profiles §4.3 Table 8 | 5 | 5 |
+
+The per-rule table is generated from this crate's own API and drift-guarded:
+[`docs/book/src/entailment-rules.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/book/src/entailment-rules.md).
+
+Two bounds are stated rather than papered over:
+
+* **The four RDF/RDFS residuals are one gap.** `rdfD1`, `rdfD1a`, `rdfs14` and
+  `rdfs14a` each conclude about a *fresh* blank node — an existentially
+  quantified head the Datalog evaluator refuses by construction rather than
+  approximating with a minted surrogate.
+* **A complete rule table is not a complete closure.** `OWL-RL` fires all 78
+  rules, and a report still says `ExactWithinBoundaries` rather than `Exact`
+  whenever the run met a `Boundary` (an infinite datatype value space, for
+  instance). `D` is realized as Simple entailment plus the five `dt-*` rules,
+  which is the part of D-entailment a forward chase can produce; the value
+  spaces themselves are reported as `Construct::DatatypeValueSpace`.
+
+Seventeen of the 78 OWL 2 RL rules conclude `false` rather than a triple.
+"Implemented" for those means *decided*: a body match becomes
+`EntailError::Inconsistent` carrying an `InconsistencyWitness` — the only thing a
+rule with no conclusion can do.
 
 ## Invariants
 
@@ -51,16 +89,34 @@ external reasoner, no `tokio`, and no string round-trip.
   a different rule set can be refused rather than trusted. A report that claims
   `Exact` while naming a boundary is a test failure.
 * **wasm-clean and dependency-lean.** Dependencies are `purrdf-core`,
-  `purrdf-datalog`, `roxmltree` and two fixed-key hashers (all
-  `wasm32-unknown-unknown`-clean), so this crate carries into Rust, WebAssembly,
-  and C without a threads/filesystem/RNG dependency.
+  `purrdf-datalog`, `purrdf-xsd`, `roxmltree` and two fixed-key hashers (`ahash`
+  and `hashbrown`) — all `wasm32-unknown-unknown`-clean, so this crate carries
+  into Rust, Python, WebAssembly, and C without a threads/filesystem/RNG
+  dependency.
 * **Determinism.** The chase is a fixpoint over the frozen IR; a given input and
   regime always yields the same closure — and the same report, byte for byte.
+
+## The same engine in four hosts
+
+Rust is the reference surface; Python, WebAssembly and the C ABI reach the chase
+through one shared string boundary (`purrdf_validate::regime`), not through three
+re-implementations. All four are checked against one committed golden-vector
+artifact, so a divergence is one vector failing rather than three surfaces that
+quietly stopped agreeing.
+
+| Host | Materialize | Defined rule table | Implemented rules |
+| --- | --- | --- | --- |
+| Rust | `materialize(&ds, Regime::Rdfs)` | `rules(Regime::Rdfs)` | `implemented(Regime::Rdfs)` |
+| Python | `purrdf.entail.materialize(dataset, "rdfs")` | `purrdf.entail.rules("rdfs")` | `purrdf.entail.implemented_rules("rdfs")` |
+| JavaScript / WebAssembly | `entailMaterialize(doc, "rdfs")` | `entailRules("rdfs")` | `entailImplementedRules("rdfs")` |
+| C | `purrdf_entail_materialize_to_nquads(...)` | `purrdf_entail_rules(...)` | `purrdf_entail_implemented_rules(...)` |
 
 ## Local Checks
 
 ```bash
 cargo test -p purrdf-entail
+# Regenerate the drift-guarded rule inventory:
+cargo run -p purrdf-entail --example gen_rule_inventory
 ```
 
 ## Part of PurRDF

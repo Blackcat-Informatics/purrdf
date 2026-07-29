@@ -63,10 +63,20 @@ the *same engine* rather than a port.
 
 Across the toolkit, out-of-scope input is a **typed error**, never a partial
 answer: malformed RDF is an `RdfDiagnostic`, an unsupported SPARQL builtin is
-`EvalError::Unsupported`, a malformed ShEx schema is a `ShexError`,
-D-entailment is `EntailError::Unsupported`, and an unsupported results
-projection is a typed format error. Lossy-by-design projections are permitted
-but *loud*, via the [loss ledger](../slices.md#the-loss-ledger).
+`EvalError::Unsupported`, a malformed ShEx schema is a `ShexError`, an
+entailment regime whose required input the `materialize` facade cannot supply
+(`OWL-Direct`, `RIF`) is `EntailError::Unsupported`, an exhausted evaluation
+ceiling is `EntailError::Evaluate` rather than a truncated closure, and an
+unsupported results projection is a typed format error. Lossy-by-design
+projections are permitted but *loud*, via the
+[loss ledger](../slices.md#the-loss-ledger).
+
+The reasoning side adds a second discipline on top of hard-fail: where a run
+*succeeds* but is bounded, it says so. `materialize` returns a
+`ReasoningReport` with every closure — never a bare dataset — carrying the
+regime's completeness, the rules that did and did not fire, the boundaries met,
+and a contract hash of the calculus that ran. A correct-but-incomplete answer
+delivered silently is the same failure mode as a wrong one.
 
 ## Conformance corpora are the contract
 

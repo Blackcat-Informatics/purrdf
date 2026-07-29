@@ -62,7 +62,9 @@ They live under `crates/*/benches/`:
   LinkML import/lowering throughput and one-operation allocation traffic.
 - `crates/shapes/benches/schema_surface.rs` — complete ontology-aware schema
   compilation for shaped-only, sparse, and dense property surfaces.
-- `crates/entail/benches/chase.rs` — RDFS forward-materialization chase scaling.
+- `crates/entail/benches/chase.rs` — RDFS forward-materialization chase scaling
+  (`materialize(ds, Regime::Rdfs)` end to end, so the declared clause program and
+  `purrdf-datalog`'s semi-naive fixpoint are both inside the timed loop).
 - `crates/gts/benches/authoring.rs` — GTS container authoring.
 - `crates/rdf-wasm/benches/query_engine_reuse.rs` — package-root
   `QueryEngine` reuse vs. fresh-engine construction.
@@ -96,7 +98,7 @@ Additional benches are run package-by-package, e.g.
 | `crates/sparql-eval/benches/lateral_service.rs` | `SERVICE ?g` LATERAL substitute-and-forward cost as the number of distinct endpoint bindings grows. |
 | `crates/shapes/benches/validate.rs` | SHACL Core validation latency plus JSON Schema/LinkML → SHACL import/lowering throughput and allocation traffic on deterministic fixtures. |
 | `crates/shapes/benches/schema_surface.rs` | RDFC-keyed shaped-only compilation and sparse/dense ontology-complete class/property relation plus JSON Schema/OpenAPI emission. |
-| `crates/entail/benches/chase.rs` | RDFS semi-naive materialization scaling on subclass chains. |
+| `crates/entail/benches/chase.rs` | RDFS materialization scaling on subclass chains, measured through the whole `materialize` path: clause-program lowering plus `purrdf-datalog`'s semi-naive fixpoint. |
 | `crates/gts/benches/authoring.rs` | GTS container authoring: append, hash, and CBOR-log construction throughput. |
 | `crates/rdf-wasm/benches/query_engine_reuse.rs` | Binding-level SELECT overhead for reused package-root `QueryEngine` instances vs. fresh construction. |
 | `crates/iri/benches/parse.rs` | `purrdf_iri::parse` component validation across scheme, authority, path, query, and fragment classes. |
