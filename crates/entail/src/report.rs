@@ -90,8 +90,9 @@ impl Completeness {
     /// assert!(Completeness::for_regime(Regime::Simple).is_exact());
     /// // OWL 2 RL defines 78 rules, and this crate's chase fires all of them.
     /// assert!(Completeness::for_regime(Regime::OwlRl).missing().is_empty());
-    /// // RDFS still misses the four rules that mint a fresh blank node.
-    /// assert_eq!(Completeness::for_regime(Regime::Rdfs).missing().len(), 4);
+    /// // RDFS's four blank-node-minting rules are evaluated by the restricted chase, so
+    /// // its table is complete too.
+    /// assert!(Completeness::for_regime(Regime::Rdfs).missing().is_empty());
     /// ```
     #[must_use]
     pub fn for_regime(regime: Regime) -> Self {
@@ -137,10 +138,22 @@ impl Completeness {
 /// boundary is identified by the enum below and, where a specification names the rules it
 /// blocks, by those rules' own ids in the [`Boundary::reason`] text.
 ///
-/// Variants are declared in the order a report lists them: the three a RUN observes first
-/// (the input held the construct, or a conclusion was actually abandoned because of it),
-/// then the two that are INHERENT to a lane and hold for every input. The derived [`Ord`]
-/// follows that declaration order.
+/// Variants are declared in the order a report lists them: the three the CHASE observes
+/// first (the input held the construct, or a conclusion was actually abandoned because of
+/// it), then the two that are INHERENT to a chase lane and hold for every input, then the
+/// six the OWL-Direct reverse mapping raises when an axiom it cannot fully handle is read.
+/// The derived [`Ord`] follows that declaration order.
+///
+/// # The OWL-Direct block exists so an axiom is never SILENTLY dropped
+///
+/// The reverse mapping ([`materialize_dl`](crate::materialize_dl)) once answered `Ok(())`
+/// for any structural triple it did not recognize, so `owl:propertyChainAxiom`,
+/// `owl:imports`, a datatype restriction and a mistyped `owl:` term all vanished without a
+/// word — and one of them was worse than vanishing, because a chain axiom fell into the
+/// catch-all and was ingested as a role ASSERTION whose object was the RDF list head. The
+/// six variants below are what replaced that: every OWL 2 construct the layer reads either
+/// reaches the knowledge base or raises one of them, and
+/// `every_owl2_construct_is_handled_or_bounded` is the test that admits no third answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Construct {
     /// Quads outside the default graph.
@@ -153,16 +166,40 @@ pub enum Construct {
     AxiomaticTriples,
     /// Datatype value spaces, which are infinite.
     DatatypeValueSpace,
+    /// The SURROGATE blank nodes `rdfD1`, `rdfD1a`, `rdfs14` and `rdfs14a` invent.
+    Surrogate,
+    /// `owl:propertyChainAxiom` — a COMPLEX role inclusion.
+    PropertyChain,
+    /// A number restriction over a role a property chain or a transitivity axiom makes
+    /// NON-SIMPLE, which OWL 2 DL forbids.
+    NonSimpleRole,
+    /// OWL 2's data ranges — the concrete domain.
+    DataRange,
+    /// `owl:topObjectProperty` / `owl:bottomObjectProperty` and their data siblings — the
+    /// two BUILT-IN roles whose extension the semantics fixes.
+    BuiltinRole,
+    /// `owl:imports` — an ontology document this run was not handed.
+    OntologyImport,
+    /// A term of the reserved `owl:`/`rdf:`/`rdfs:` vocabulary the reverse mapping does not
+    /// recognize.
+    UnrecognizedTerm,
 }
 
 impl Construct {
     /// Every construct, in declaration order — the order a report lists boundaries in.
-    pub(crate) const ALL: [Self; 5] = [
+    pub(crate) const ALL: [Self; 12] = [
         Self::NamedGraph,
         Self::TripleTerm,
         Self::GeneralizedRdf,
         Self::AxiomaticTriples,
         Self::DatatypeValueSpace,
+        Self::Surrogate,
+        Self::PropertyChain,
+        Self::NonSimpleRole,
+        Self::DataRange,
+        Self::BuiltinRole,
+        Self::OntologyImport,
+        Self::UnrecognizedTerm,
     ];
 
     /// A short, stable name for the construct.
@@ -174,6 +211,13 @@ impl Construct {
             Self::GeneralizedRdf => "generalized-rdf",
             Self::AxiomaticTriples => "axiomatic-triples",
             Self::DatatypeValueSpace => "datatype-value-space",
+            Self::Surrogate => "surrogate",
+            Self::PropertyChain => "property-chain",
+            Self::NonSimpleRole => "non-simple-role",
+            Self::DataRange => "data-range",
+            Self::BuiltinRole => "builtin-role",
+            Self::OntologyImport => "ontology-import",
+            Self::UnrecognizedTerm => "unrecognized-term",
         }
     }
 
@@ -236,6 +280,98 @@ impl Construct {
                  space whose lexical form is not in that datatype's lexical space is not \
                  found: \"1.0\"^^xsd:decimal is not typed xsd:integer. A datatype \
                  purrdf-xsd does not model is not judged either way"
+            }
+            Self::Surrogate => {
+                "rdfD1, rdfD1a, rdfs14 and rdfs14a all conclude about a FRESH blank node — \
+                 the surrogate the specification writes `_:nnn`. All four FIRE: the \
+                 restricted chase mints each surrogate as a frontier-addressed Skolem \
+                 witness, so re-deriving the same obligation reuses the same witness and \
+                 the fixpoint converges, and the closure is closed under everything the \
+                 surrogate then licenses. What does not reach the answer is the surrogate \
+                 ITSELF: every conclusion mentioning one is dropped at the materialization \
+                 boundary and counted here. \
+                 \
+                 That is a requirement of SPARQL's entailment regimes, not a shortcut. The \
+                 regime's answers are drawn from the SCOPING GRAPH, and a surrogate is not \
+                 in it, so a solution binding a variable to one is not an answer the regime \
+                 admits. The W3C case `rdfs13` is the proof: it asks `?L rdf:type \
+                 rdfs:Literal` over a graph whose only literal is \"foo\" and requires ZERO \
+                 rows, while rdfD1's surrogate gives `_:nnn rdf:type xsd:string` and hence \
+                 `_:nnn rdf:type rdfs:Literal` through rdfs1, rdfs13 and rdfs9. Emitting \
+                 that row would be WRONG, where withholding it is merely incomplete. \
+                 \
+                 Nothing surrogate-FREE is lost by the exclusion: replacing a term by a \
+                 fresh blank node can only weaken a triple, so every conclusion that does \
+                 not mention a surrogate was already licensed by the triple the surrogate \
+                 stands for"
+            }
+            Self::PropertyChain => {
+                "owl:propertyChainAxiom states a COMPLEX role inclusion p₁ ∘ … ∘ pₙ ⊑ p, \
+                 and the ALCOIQ completion procedure here decides a hierarchy of SIMPLE \
+                 roles: it closes a role over its asserted sub-roles and inverses, which \
+                 is a reachability question, whereas a chain axiom needs the role hierarchy \
+                 compiled into a non-deterministic finite automaton per role and the \
+                 hierarchy itself checked for REGULARITY (SROIQ's acyclicity condition on \
+                 the chain order) before that automaton exists. Neither is implemented, so \
+                 a chain axiom raises this boundary instead of being read. It is emphatically \
+                 not dropped: the reverse mapping's catch-all used to ingest one as a ROLE \
+                 ASSERTION over the axiom's RDF list head, which stated something the \
+                 ontology does not say. The OWL 2 RL lane's prp-spo2 DOES walk a chain, so \
+                 this boundary is the DL lane's alone"
+            }
+            Self::NonSimpleRole => {
+                "OWL 2 DL requires the role of a number restriction (owl:minCardinality, \
+                 owl:maxCardinality, owl:cardinality and their qualified forms) to be \
+                 SIMPLE — not transitive, not the super-role of a transitive role, and not \
+                 the head of a property chain — because counting successors of a composite \
+                 role is undecidable. An ontology that violates the restriction is not \
+                 OWL 2 DL, so the tableau neither decides it nor guesses at it: the \
+                 restriction is read and this boundary is raised beside the answer, naming \
+                 the syntactic condition the input broke"
+            }
+            Self::DataRange => {
+                "OWL 2's data ranges — owl:onDatatype with owl:withRestrictions facets, \
+                 owl:datatypeComplementOf, owl:onDataRange, owl:onProperties and an \
+                 owl:oneOf over literals — are CONCRETE-DOMAIN expressions, and this \
+                 tableau has no concrete-domain decision procedure: a literal is an opaque \
+                 term with no value-space structure, so \"5\"^^xsd:integer and \
+                 \"5.0\"^^xsd:decimal are two terms and a facet such as xsd:minInclusive \
+                 cannot be evaluated at all. Reading a data range as an ABSTRACT class \
+                 expression would be a WRONG answer rather than an incomplete one — it \
+                 would make the datatype an ordinary named class and admit models the \
+                 datatype map forbids — so the range is not read and this boundary is \
+                 raised. A data PROPERTY assertion is still ingested: its object is an \
+                 opaque term, which is exactly what an abstract role edge needs"
+            }
+            Self::BuiltinRole => {
+                "owl:topObjectProperty / owl:topDataProperty (the UNIVERSAL role, whose \
+                 extension is every pair of the domain) and owl:bottomObjectProperty / \
+                 owl:bottomDataProperty (the EMPTY role) are built-in: their extension is \
+                 fixed by the semantics rather than by the ontology. The role machinery \
+                 here addresses a role by its IRI and closes it over the ASSERTED hierarchy \
+                 and inverses only, so a built-in role would read as an ordinary named one \
+                 — an assertion over the empty role would fail to clash, and a universal \
+                 role would connect nothing. Raising the boundary says which of the two \
+                 answers the run is not entitled to"
+            }
+            Self::OntologyImport => {
+                "owl:imports names another ontology DOCUMENT, and OWL 2's imports closure \
+                 is the union of the importing ontology with every document it transitively \
+                 names. This layer reasons over the dataset it was handed and fetches \
+                 nothing — PurRDF performs no I/O, has no network and must stay \
+                 wasm32-clean — so the imported axioms are premises this run did not have. \
+                 A caller who wants them merges the documents before calling; the boundary \
+                 is what stops the run pretending the merge already happened"
+            }
+            Self::UnrecognizedTerm => {
+                "a term in the reserved owl:, rdf: or rdfs: vocabulary that the OWL-2-RDF \
+                 reverse mapping here does not recognize. Reserved vocabulary is not user \
+                 vocabulary, so ingesting such a triple as an ordinary role assertion would \
+                 be a WRONG reading rather than an incomplete one — it would put a \
+                 structural term in the ABox as though it were an individual. The triple is \
+                 therefore neither read nor discarded in silence: it raises this boundary, \
+                 which is also what a mistyped or newer-than-this-release OWL term looks \
+                 like from inside"
             }
         }
     }
@@ -419,6 +555,10 @@ pub(crate) struct RunStats {
     /// term in subject position, or a non-IRI in predicate position. The
     /// [`Construct::GeneralizedRdf`] boundary's observation.
     pub(crate) generalized_rdf_drops: u64,
+    /// Conclusions dropped because they mention a SURROGATE blank node the chase invented.
+    /// The [`Construct::Surrogate`] boundary's observation; see its reason for why a
+    /// SPARQL entailment regime may not answer with one.
+    pub(crate) surrogate_drops: u64,
 }
 
 impl RunStats {
@@ -433,6 +573,7 @@ impl RunStats {
             fired: [0; ChaseRule::COUNT],
             budget,
             generalized_rdf_drops: 0,
+            surrogate_drops: 0,
         }
     }
 
@@ -444,6 +585,11 @@ impl RunStats {
     /// Record one conclusion the RDF 1.2 IR could not hold.
     pub(crate) const fn drop_generalized(&mut self) {
         self.generalized_rdf_drops += 1;
+    }
+
+    /// Record one conclusion withheld because it mentions a surrogate blank node.
+    pub(crate) const fn drop_surrogate(&mut self) {
+        self.surrogate_drops += 1;
     }
 }
 
@@ -502,6 +648,8 @@ pub struct ReasoningReport {
     contract_hash: ContractHash,
     /// Evidence of an inconsistency, if one was detected.
     inconsistency: Option<InconsistencyWitness>,
+    /// How many conclusions were withheld because they mention a surrogate blank node.
+    withheld_surrogates: u64,
 }
 
 impl ReasoningReport {
@@ -529,6 +677,54 @@ impl ReasoningReport {
             // A run that WITNESSES an inconsistency is refused, so a report that exists at
             // all is a report of a run that found none; see [`InconsistencyWitness`].
             inconsistency: None,
+            withheld_surrogates: stats.surrogate_drops,
+        }
+    }
+
+    /// Assemble the report for an `OWL-Direct` run that met `boundaries`.
+    ///
+    /// The DL lane has no rule TABLE — it is a tableau, so [`rules`] and [`implemented`]
+    /// are both empty for it and [`Completeness::for_regime`] answers
+    /// [`Completeness::Exact`] vacuously. What it does have is CONSTRUCTS, and this
+    /// constructor is where they narrow that vacuous `Exact` to
+    /// [`Completeness::ExactWithinBoundaries`]: a run over an ontology carrying an
+    /// `owl:propertyChainAxiom` has no missing rule to report and is still not a complete
+    /// answer, and saying `Exact` beside a non-empty boundary list is precisely the
+    /// overclaim [`Self::overclaims`] forbids.
+    ///
+    /// `boundaries` arrives as a set, so it is already deduplicated; it is re-ordered here
+    /// into [`Construct`] declaration order, which is the order every report lists
+    /// boundaries in.
+    ///
+    /// The budget is zero on all three coordinates and that is a fact about the lane
+    /// rather than an unfilled field: the tableau is not `purrdf-datalog`'s evaluator and
+    /// consumes none of its three ceilings. Its own bound is a step cap whose exhaustion is
+    /// [`EntailError::Build`](crate::EntailError), never a truncated answer.
+    pub(crate) fn of_dl_run(boundaries: &std::collections::BTreeSet<Construct>) -> Self {
+        let boundaries: Vec<Boundary> = Construct::ALL
+            .into_iter()
+            .filter(|construct| boundaries.contains(construct))
+            .map(Boundary::of)
+            .collect();
+        let completeness = match Completeness::for_regime(Regime::OwlDirect) {
+            Completeness::Exact if !boundaries.is_empty() => Completeness::ExactWithinBoundaries,
+            other => other,
+        };
+        Self {
+            regime: Regime::OwlDirect,
+            completeness,
+            rules_fired: Vec::new(),
+            boundaries,
+            budget: BudgetReport::new(0, 0, 0),
+            contract_hash: calculus_contract_hash(Regime::OwlDirect),
+            // The tableau reports an unsatisfiable knowledge base as
+            // `EntailError::Unsatisfiable`, which carries no rule and no premise set, so
+            // there is no `InconsistencyWitness` to attach and a report that exists is a
+            // report of a satisfiable knowledge base.
+            inconsistency: None,
+            // The tableau invents no surrogate: it decides satisfiability rather than
+            // materializing a closure, so there is nothing to withhold.
+            withheld_surrogates: 0,
         }
     }
 
@@ -619,6 +815,25 @@ impl ReasoningReport {
         self.inconsistency.as_ref()
     }
 
+    /// How many conclusions were WITHHELD because they mention a surrogate blank node.
+    ///
+    /// `rdfD1`, `rdfD1a`, `rdfs14` and `rdfs14a` conclude about a fresh `_:nnn`, and a
+    /// SPARQL entailment regime draws its answers from the scoping graph — so a solution
+    /// binding a variable to a surrogate is not an answer it admits, and every conclusion
+    /// mentioning one is dropped at the materialization boundary. This is the count of
+    /// them, and it is what makes the [`Construct::Surrogate`] boundary a MEASUREMENT
+    /// rather than a standing disclaimer.
+    ///
+    /// It is also the only thing a caller can observe about those four rules: their
+    /// conclusions are withheld by construction, so they can never appear in
+    /// [`Self::rules_fired`] — which counts triples that entered the closure — and a
+    /// non-zero count here is the evidence that they fired at all. Zero for every lane
+    /// that states none of the four (`Simple`, `OWL-RL`, `D`, `OWL-Direct`).
+    #[must_use]
+    pub const fn withheld_surrogates(&self) -> u64 {
+        self.withheld_surrogates
+    }
+
     /// Whether this report claims more than its own evidence supports.
     ///
     /// True when [`Completeness::Exact`] — the variant that means "and nothing got in the
@@ -691,6 +906,18 @@ fn boundaries(ds: &RdfDataset, regime: Regime, stats: &RunStats) -> Vec<Boundary
             // them, so its lane does not meet this boundary.
             Construct::AxiomaticTriples => matches!(regime, Regime::Rdf | Regime::Rdfs),
             Construct::DatatypeValueSpace => true,
+            Construct::Surrogate => stats.surrogate_drops > 0,
+            // The six OWL-Direct boundaries are the reverse mapping's, raised by
+            // `ReasoningReport::of_dl_run` from the axioms it actually read. No chase lane
+            // parses an OWL class expression at all, so none of them can be met here — and
+            // the arm is written out rather than defaulted so a seventh construct has to
+            // decide which side of the split it is on.
+            Construct::PropertyChain
+            | Construct::NonSimpleRole
+            | Construct::DataRange
+            | Construct::BuiltinRole
+            | Construct::OntologyImport
+            | Construct::UnrecognizedTerm => false,
         })
         .map(Boundary::of)
         .collect()

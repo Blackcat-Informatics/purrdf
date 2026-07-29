@@ -54,6 +54,15 @@ pub(crate) enum Concept {
     Max(u32, Role, Box<Self>),
     /// `{a₁,…,aₙ}` — a nominal (`owl:oneOf`), interned individual ids (sorted, deduped).
     Nominal(Vec<u32>),
+    /// `∃r.Self` — the local reflexivity restriction (`owl:hasSelf`).
+    ///
+    /// It is an ATOMIC leaf rather than a quantifier: `∃r.Self` says the node has an
+    /// `r`-edge to ITSELF, which is a property of one node and its edges rather than a
+    /// constraint that recurses into a filler concept. That is why [`Concept::neg`] wraps
+    /// it in `Not` exactly as it does a named class, and why the two global role axioms
+    /// `owl:ReflexiveProperty` (`⊤ ⊑ ∃r.Self`) and `owl:IrreflexiveProperty`
+    /// (`⊤ ⊑ ¬∃r.Self`) are ordinary GCIs here rather than a second mechanism.
+    SelfRestriction(Role),
 }
 
 impl Concept {
@@ -68,7 +77,7 @@ impl Concept {
     /// (`Named` / `Nominal`) leaf.
     pub(crate) fn nnf(self) -> Self {
         match self {
-            Self::Top | Self::Bottom | Self::Named(_) => self,
+            Self::Top | Self::Bottom | Self::Named(_) | Self::SelfRestriction(_) => self,
             Self::Nominal(ids) => Self::nominal(ids),
             Self::And(cs) => Self::And(cs.into_iter().map(Self::nnf).collect()),
             Self::Or(cs) => Self::Or(cs.into_iter().map(Self::nnf).collect()),
@@ -85,7 +94,7 @@ impl Concept {
         match c {
             Self::Top => Self::Bottom,
             Self::Bottom => Self::Top,
-            Self::Named(_) => Self::Not(Box::new(c)),
+            Self::Named(_) | Self::SelfRestriction(_) => Self::Not(Box::new(c)),
             Self::Nominal(ids) => Self::Not(Box::new(Self::nominal(ids))),
             Self::Not(inner) => inner.nnf(),
             Self::And(cs) => Self::Or(cs.into_iter().map(Self::neg).collect()),
@@ -139,6 +148,10 @@ pub(crate) enum Decomp {
     Nominal(Vec<u32>),
     /// `¬{a₁,…,aₙ}`.
     NegNominal(Vec<u32>),
+    /// `∃r.Self` — an atomic positive leaf about the node's own `r`-loop.
+    SelfRestriction(Role),
+    /// `¬∃r.Self` — an atomic negative leaf about the node's own `r`-loop.
+    NegSelfRestriction(Role),
 }
 
 /// A structural interning table mapping (NNF) concepts to dense concept ids.
@@ -184,9 +197,11 @@ impl ConceptTable {
             Concept::Bottom => Decomp::Bottom,
             Concept::Named(_) => Decomp::Named,
             Concept::Nominal(ids) => Decomp::Nominal(ids.clone()),
+            Concept::SelfRestriction(role) => Decomp::SelfRestriction(*role),
             Concept::Not(inner) => match inner.as_ref() {
                 Concept::Named(_) => Decomp::NegNamed,
                 Concept::Nominal(ids) => Decomp::NegNominal(ids.clone()),
+                Concept::SelfRestriction(role) => Decomp::NegSelfRestriction(*role),
                 // NNF guarantees `Not` wraps only an atomic leaf.
                 other => unreachable!("non-atomic under Not in NNF: {other:?}"),
             },

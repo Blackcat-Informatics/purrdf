@@ -550,6 +550,63 @@ const OWL_RL_TABLES: &[&str] = &[
 /// fifty-nine goldens checkable at a glance: EVERY already-committed golden changed in the
 /// `OWL-RL` section, gained a `D` section, and moved in no other way. `Simple`, `RDF` and
 /// `RDFS` are byte-identical across all sixty files that already existed.
+/// What moved when the four EXISTENTIAL patterns were wired, stated once for every golden.
+///
+/// It is a shared block rather than a per-fixture note because the cause is shared: no
+/// fixture's own data changed, and the same four rules joined the same two lanes for every
+/// one of them.
+const EXISTENTIAL_CHASE: &[&str] = &[
+    "AND EVERY GOLDEN MOVED A FIFTH TIME — the RDF and RDFS lanes now state the four",
+    "patterns whose conclusions are EXISTENTIALLY QUANTIFIED, and every lane's",
+    "contract-hash moved. Five causes account for every byte, and only one of them adds a",
+    "line to any closure.",
+    "",
+    "  I. rdfD1, rdfD1a, rdfs14 AND rdfs14a NOW FIRE. Each concludes about a FRESH blank",
+    "     node — the surrogate RDF 1.2 Semantics writes `_:nnn` — which is an existential",
+    "     head a least-fixpoint evaluator over definite clauses has no semantics for. Those",
+    "     two lanes are therefore evaluated by purrdf-datalog's RESTRICTED CHASE instead:",
+    "     each surrogate is a frontier-addressed Skolem witness, so re-deriving an",
+    "     obligation recovers the same witness and the fixpoint converges, and the clause",
+    "     set's termination is COMPUTED — constant-refined weak acyclicity over the position",
+    "     dependency graph — rather than assumed or asked for. implemented(RDF) is 3 of 3",
+    "     and implemented(RDFS) 18 of 18 where they were 1 and 14, so both `missing` lists",
+    "     are empty and both completeness lines read exact-within-boundaries.",
+    "",
+    " II. THE SURROGATES DO NOT REACH THE ANSWER, AND THAT IS REQUIRED. A SPARQL entailment",
+    "     regime draws its answers from the SCOPING GRAPH, and a surrogate is not in it, so",
+    "     every conclusion mentioning one is dropped at the materialization boundary and",
+    "     counted. The W3C case rdfs13 is the proof: it asks `?L rdf:type rdfs:Literal` over",
+    "     a graph whose only literal is \"foo\" and demands ZERO rows, which rdfD1's surrogate",
+    "     would otherwise supply through rdfs1, rdfs13 and rdfs9. Every RDF and RDFS report",
+    "     therefore gains the `surrogate` boundary. Nothing surrogate-FREE is lost: replacing",
+    "     a term by a fresh blank node only weakens a triple, so every conclusion that does",
+    "     not mention a surrogate was already licensed by the triple it stands for.",
+    "",
+    "III. ONE LINE IS NEW IN EVERY RDF CLOSURE, AND IT IS A GENUINE ENTAILMENT. rdfD1a is",
+    "     premise-free — `_:nnn rdf:type ddd` holds for any graph, even the empty one — so",
+    "     the closure really does use rdf:type as a predicate and rdfD2 types it an",
+    "     rdf:Property. `rdf:type rdf:type rdf:Property` therefore appears in every RDF",
+    "     closure that did not already hold it, INCLUDING the empty graph's. The RDFS lane",
+    "     already held that line through the axiomatic triples, so no RDFS closure gains a",
+    "     line at all: every RDFS conclusion the surrogates license mentions one.",
+    "",
+    " IV. THE BUDGET IS THE CHASE'S OWN MEASUREMENT. The RDF and RDFS lanes' join-steps,",
+    "     stored-facts and term-arena-bytes are now purrdf-datalog's ChaseOutcome budget",
+    "     rather than its Evaluation budget — the same three coordinates under the same three",
+    "     definitions, counted by the engine that did the work. The chase is a naive fixpoint",
+    "     that re-derives against the whole store each round rather than a semi-naive one, so",
+    "     join-steps rises; stored-facts rises by the surrogate facts, which are stored even",
+    "     though they are withheld. Both stay far below their ceilings.",
+    "",
+    "  V. EVERY CONTRACT HASH MOVED, INCLUDING OWL-RL'S AND D'S, AND NO OWL 2 RL RULE",
+    "     CHANGED. A rule that concludes `false` is lowered into a clause whose head names a",
+    "     clash marker built from the rule's DECLARATION INDEX, and declaring rdfD1 and",
+    "     rdfD1a ahead of rdfD2 — where RDF 1.2 Semantics §8.1.1 puts them — renumbers every",
+    "     rule after them. The digest is allowed to be conservative in exactly this",
+    "     direction: refusing a cached closure that could have been kept is a cost, trusting",
+    "     one minted under a different rule set is a defect.",
+];
+
 const OWL_RL_COMPLETE: &[&str] = &[
     "AND EVERY GOLDEN MOVED A FOURTH TIME, IN THE OWL-RL SECTION AND NOWHERE ELSE, AND",
     "GAINED A D SECTION — the OWL-RL lane now states OWL 2 Profiles §4.3 Tables 4, 6 and 8",
@@ -5246,6 +5303,8 @@ fn render_golden(fixture: &Fixture) -> String {
     write_comment_block(&mut out, OWL_RL_TABLES);
     out.push_str("#\n");
     write_comment_block(&mut out, OWL_RL_COMPLETE);
+    out.push_str("#\n");
+    write_comment_block(&mut out, EXISTENTIAL_CHASE);
     out.push_str("#\n# WHAT MOVED IN THIS GOLDEN:\n#\n");
     write_comment_block(&mut out, fixture.changed);
     let _ = writeln!(out, "# exercises: {}", fixture.exercises.join(" "));
@@ -5557,6 +5616,32 @@ enum RuleFixtures {
         /// The same input, changed in exactly the way that removes the rule's premise:
         /// the same downstream conclusion must be ABSENT.
         near_miss: Case,
+    },
+    /// EVERY conclusion of the rule mentions a SURROGATE blank node the chase invented, so
+    /// none of them reaches the answer and the rule can never be credited in a closure.
+    ///
+    /// The four rules `rdfD1`, `rdfD1a`, `rdfs14` and `rdfs14a` conclude about a fresh
+    /// `_:nnn`, and a SPARQL entailment regime draws its answers from the scoping graph —
+    /// so a solution binding a variable to a surrogate is not an answer it admits and every
+    /// conclusion mentioning one is dropped at the materialization boundary. The W3C case
+    /// `rdfs13` is the proof that this is required rather than convenient: it asks
+    /// `?L rdf:type rdfs:Literal` over a graph whose only literal is `"foo"` and demands
+    /// ZERO rows, which `rdfD1`'s surrogate would otherwise supply through `rdfs1`,
+    /// `rdfs13` and `rdfs9`.
+    ///
+    /// So the evidence is the WITHHELD COUNT — the one thing a caller can observe about a
+    /// rule whose every conclusion is withheld — and it is a two-sided control like every
+    /// other state here: `positive`'s run withholds strictly more than `baseline`'s. For a
+    /// PREMISE-FREE rule there is no input that denies it, so `baseline` is `None` and the
+    /// comparison is against zero over the EMPTY dataset, exactly as
+    /// [`RuleFixtures::Axiomatic`] moves its own control inside one input.
+    Withheld {
+        /// A fixture whose run withholds surrogate conclusions.
+        positive: &'static str,
+        /// The same input without the term the rule observes; `None` for a premise-free
+        /// rule, whose positive fixture is the empty dataset and whose comparison is
+        /// against zero.
+        baseline: Option<&'static str>,
     },
     /// The chase does not fire this rule, so the corpus has nothing to show.
     NotYetImplemented,
@@ -6242,6 +6327,49 @@ const OWL_RL_GENERALIZED_ROWS: &[Row] = &[
     ),
 ];
 
+/// A withheld-conclusion registry row: the rule, its positive fixture, and the baseline
+/// its withheld count must exceed (`None` for a premise-free rule).
+type WithheldRow = (RuleId, &'static str, Option<&'static str>);
+
+/// The `RDF` lane's rules whose every conclusion mentions a surrogate.
+///
+/// `rdfD1` observes a datatyped literal, so `divergence_literal_subject` — whose graph
+/// holds one — withholds more than `plain_triple`, whose graph holds none. `rdfD1a` is
+/// PREMISE-FREE, so
+/// its control is against zero on the empty dataset: a rule that mints a witness over the
+/// empty graph mints one over every graph.
+const RDF_WITHHELD_ROWS: &[WithheldRow] = &[
+    (
+        RuleId::RdfD1,
+        "divergence_literal_subject",
+        Some("plain_triple"),
+    ),
+    (RuleId::RdfD1a, "empty", None),
+];
+
+/// The `RDFS` lane's — the two RDF patterns plus the two triple-term ones.
+///
+/// `rdfs14` observes a TRIPLE TERM, so `triple_term` withholds more than `plain_triple`.
+const RDFS_WITHHELD_ROWS: &[WithheldRow] = &[
+    (
+        RuleId::RdfD1,
+        "divergence_literal_subject",
+        Some("plain_triple"),
+    ),
+    (RuleId::RdfD1a, "empty", None),
+    (RuleId::Rdfs14, "triple_term", Some("plain_triple")),
+    (RuleId::Rdfs14a, "empty", None),
+];
+
+/// The withheld-conclusion rules `regime` registers.
+fn withheld_rows(regime: Regime) -> &'static [WithheldRow] {
+    match regime {
+        Regime::Rdf => RDF_WITHHELD_ROWS,
+        Regime::Rdfs => RDFS_WITHHELD_ROWS,
+        Regime::Simple | Regime::OwlRl | Regime::OwlDirect | Regime::Rif | Regime::D => &[],
+    }
+}
+
 /// The refuting rules `regime` registers.
 fn refuting_rows(regime: Regime) -> &'static [RefutingRow] {
     match regime {
@@ -6329,6 +6457,9 @@ fn registration(regime: Regime, id: RuleId) -> RuleFixtures {
                 conclusion,
             },
         };
+    }
+    if let Some(&(_, positive, baseline)) = withheld_rows(regime).iter().find(|row| row.0 == id) {
+        return RuleFixtures::Withheld { positive, baseline };
     }
     RuleFixtures::NotYetImplemented
 }
@@ -6496,6 +6627,37 @@ fn every_rule_is_registered_or_declared_unimplemented() {
                         !closure_lines(near_miss.fixture, regime).contains(&line),
                         "{regime:?} / {id}: near-miss fixture {} reached {line} anyway",
                         near_miss.fixture
+                    );
+                }
+                RuleFixtures::Withheld { positive, baseline } => {
+                    registered.insert(id);
+                    let withheld = |fixture: &str| -> u64 {
+                        let ds = build(CORPUS.iter().find(|f| f.name == fixture).expect(fixture));
+                        materialize(&ds, regime)
+                            .expect("runnable regime")
+                            .1
+                            .withheld_surrogates()
+                    };
+                    let got = withheld(positive);
+                    let floor = baseline.map_or(0, withheld);
+                    assert!(
+                        got > floor,
+                        "{regime:?} / {id}: {positive} must withhold more surrogate \
+                         conclusions than {} — {got} vs {floor}",
+                        baseline.unwrap_or("nothing at all")
+                    );
+                    assert!(
+                        materialize(
+                            &build(CORPUS.iter().find(|f| f.name == positive).unwrap()),
+                            regime
+                        )
+                        .expect("runnable regime")
+                        .1
+                        .boundaries()
+                        .iter()
+                        .any(|b| b.construct().as_str() == "surrogate"),
+                        "{regime:?} / {id}: a run that withheld a conclusion must report \
+                         the surrogate boundary"
                     );
                 }
                 RuleFixtures::NotYetImplemented => {
@@ -6962,15 +7124,25 @@ fn the_rdfs_closure_of_every_fixture_contains_the_empty_one() {
             fixture.name
         );
     }
-    // And it really is the AXIOMS that put it there: no other lane asserts them, so no
-    // other lane has it. `Simple` copies the input and `RDF` has one rule with a premise,
-    // so both close the empty graph into nothing.
-    for regime in [Regime::Simple, Regime::Rdf] {
-        assert!(
-            closure_lines("empty", regime).is_empty(),
-            "{regime:?} closed the empty graph into something"
-        );
-    }
+    // And it really is the AXIOMS that put the 113 lines there: no other lane asserts
+    // them, so no other lane has them. `Simple` copies the input, so it closes the empty
+    // graph into nothing at all.
+    assert!(
+        closure_lines("empty", Regime::Simple).is_empty(),
+        "Simple closed the empty graph into something"
+    );
+    // `RDF` closes it into exactly ONE line, and that line is a genuine entailment of the
+    // EMPTY graph rather than a leak. `rdfD1a` is premise-free — "for any graph, even the
+    // empty one, `_:nnn rdf:type ddd` holds for each recognized `ddd`" — so the closure
+    // really does use `rdf:type` as a predicate, and `rdfD2` types every predicate an
+    // `rdf:Property`. The surrogate ITSELF is withheld (a SPARQL entailment regime does
+    // not answer with one), which is why this is one line and not four.
+    let rdf = closure_lines("empty", Regime::Rdf);
+    assert_eq!(
+        rdf.iter().collect::<Vec<_>>(),
+        vec![&format!("<{RDF_TYPE}> <{RDF_TYPE}> <{RDF_PROPERTY}> .")],
+        "the RDF lane's empty-graph closure"
+    );
     the_owl_rl_closure_of_every_fixture_contains_the_empty_one();
 }
 
@@ -7194,7 +7366,11 @@ fn every_rule_the_chase_fires_is_credited_somewhere_in_the_corpus() {
     /// The rules that produce no creditable triple, BY NAME. Seventeen conclude `false`;
     /// `dt-diff` concludes only `owl:differentFrom` over literal subjects; `dt-type2` and
     /// `dt-eq` conclude only over literal subjects too.
-    const UNCREDITABLE: [RuleId; 20] = [
+    const UNCREDITABLE: [RuleId; 24] = [
+        RuleId::RdfD1,
+        RuleId::RdfD1a,
+        RuleId::Rdfs14,
+        RuleId::Rdfs14a,
         RuleId::EqDiff1,
         RuleId::EqDiff2,
         RuleId::EqDiff3,
@@ -7222,12 +7398,14 @@ fn every_rule_the_chase_fires_is_credited_somewhere_in_the_corpus() {
         .iter()
         .map(|row| row.0)
         .chain(OWL_RL_GENERALIZED_ROWS.iter().map(|row| row.0))
+        .chain(RDFS_WITHHELD_ROWS.iter().map(|row| row.0))
         .collect();
     assert_eq!(
         by_registry,
         UNCREDITABLE.into_iter().collect::<BTreeSet<RuleId>>(),
-        "the rules exempted from attribution must be exactly the Refuting and Generalized \
-         registry rows, so an exemption cannot outlive the evidence that replaced it"
+        "the rules exempted from attribution must be exactly the Refuting, Generalized and \
+         Withheld registry rows, so an exemption cannot outlive the evidence that replaced \
+         it"
     );
 
     for (regime, label) in ORACLE_REGIMES {

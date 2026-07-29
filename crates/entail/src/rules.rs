@@ -15,8 +15,8 @@
 //! `rules(r)` minus `implemented(r)` is therefore the regime's gap, expressed as an
 //! executable artifact instead of an assertion in a README. Both return `&'static`
 //! slices in specification table order, so the inventory is deterministic and free of
-//! map iteration. For `OWL-RL` the gap is now EMPTY — which is a claim about the RULE
-//! TABLE and not about the closure; see
+//! map iteration. For `RDF`, `RDFS`, `OWL-RL` and `D` the gap is now EMPTY — which is a
+//! claim about the RULE TABLE and not about the closure; see
 //! [`Completeness::ExactWithinBoundaries`](crate::Completeness::ExactWithinBoundaries) for
 //! the difference and why a report states both.
 //!
@@ -623,19 +623,36 @@ static NO_RULES: [RuleId; 0] = [];
 
 // --- What the declared calculus in `calculus.rs` actually fires today. ---
 
-/// The bare-`RDF` lane's one clause types every default-graph predicate an
-/// `rdf:Property`, which is exactly `rdfD2` (the rule RDF 1.0 spelled `rdf1`).
-static IMPLEMENTED_RDF: [RuleId; 1] = [RuleId::RdfD2];
-
-/// The RDF and RDFS patterns the `RDFS` lane evaluates, in specification order.
+/// The RDF patterns the bare-`RDF` lane evaluates: all three of RDF 1.2 Semantics §8.1.1.
 ///
-/// `rdfD2` heads the list because RDFS entailment subsumes RDF entailment and
-/// [`rules`] has always listed the §8.1.1 patterns first. The four that are absent —
-/// `rdfD1`, `rdfD1a`, `rdfs14`, `rdfs14a` — are absent for one structural reason: each
-/// concludes about a FRESH blank node, an existentially quantified head this crate's
-/// Datalog evaluator refuses by design. See [`crate::calculus::rdfs`] for why minting
-/// those surrogates would be wrong rather than merely expensive.
-static IMPLEMENTED_RDFS: [RuleId; 14] = [
+/// `rdfD1` and `rdfD1a` conclude about a FRESH blank node, which is an existential head the
+/// semi-naive evaluator has no semantics for — so this lane is evaluated by
+/// `purrdf-datalog`'s restricted chase instead, which mints each surrogate as a
+/// frontier-addressed Skolem witness. The surrogates do not reach the ANSWER, and that is a
+/// requirement of SPARQL's entailment regimes rather than a shortcut; see
+/// [`Construct::Surrogate`](crate::Construct::Surrogate).
+static IMPLEMENTED_RDF: [RuleId; 3] = [RuleId::RdfD1, RuleId::RdfD1a, RuleId::RdfD2];
+
+/// The RDF and RDFS patterns the `RDFS` lane evaluates: all eighteen.
+///
+/// The §8.1.1 patterns head the list because RDFS entailment subsumes RDF entailment and
+/// [`rules`] has always listed them first. Four of the eighteen — `rdfD1`, `rdfD1a`,
+/// `rdfs14`, `rdfs14a` — conclude about a FRESH blank node, which is an existentially
+/// quantified head the semi-naive evaluator has no semantics for, so this lane is
+/// evaluated by `purrdf-datalog`'s restricted chase: each surrogate is a
+/// frontier-addressed Skolem witness, re-deriving an obligation reuses its witness, and the
+/// clause set's termination is COMPUTED from the position dependency graph rather than
+/// assumed.
+///
+/// The surrogates do not reach the ANSWER. A SPARQL entailment regime draws its answers
+/// from the scoping graph and a surrogate is not in it, so every conclusion mentioning one
+/// is dropped at the materialization boundary and reported as the
+/// [`Construct::Surrogate`](crate::Construct::Surrogate) boundary. That is why claiming
+/// these four here is honest and not an overclaim: they FIRE, exactly as `dt-type2`,
+/// `dt-eq` and `dt-diff` fire while every one of their conclusions is unrepresentable.
+static IMPLEMENTED_RDFS: [RuleId; 18] = [
+    RuleId::RdfD1,
+    RuleId::RdfD1a,
     RuleId::RdfD2,
     RuleId::Rdfs1,
     RuleId::Rdfs2,
@@ -650,6 +667,8 @@ static IMPLEMENTED_RDFS: [RuleId; 14] = [
     RuleId::Rdfs11,
     RuleId::Rdfs12,
     RuleId::Rdfs13,
+    RuleId::Rdfs14,
+    RuleId::Rdfs14a,
 ];
 
 /// The OWL 2 RL rules the chase evaluates: all seventy-eight, in specification table
@@ -746,13 +765,15 @@ pub fn rules(regime: Regime) -> &'static [RuleId] {
 /// // reported as an inconsistency witness.
 /// assert!(implemented(Regime::OwlRl).contains(&RuleId::CaxDw));
 ///
-/// // RDFS still has one: the four rules that mint a fresh blank node.
+/// // RDFS has none either: the four rules that mint a fresh blank node are evaluated by
+/// // `purrdf-datalog`'s restricted chase rather than by the semi-naive evaluator.
 /// let missing: Vec<RuleId> = rules(Regime::Rdfs)
 ///     .iter()
 ///     .copied()
 ///     .filter(|r| !implemented(Regime::Rdfs).contains(r))
 ///     .collect();
-/// assert_eq!(missing.len(), 4);
+/// assert!(missing.is_empty());
+/// assert!(implemented(Regime::Rdfs).contains(&RuleId::RdfD1));
 /// ```
 #[must_use]
 pub fn implemented(regime: Regime) -> &'static [RuleId] {
@@ -1124,8 +1145,8 @@ mod tests {
             counts,
             vec![
                 ("Simple", 0, 0),
-                ("RDF", 3, 1),
-                ("RDFS", 18, 14),
+                ("RDF", 3, 3),
+                ("RDFS", 18, 18),
                 ("OWL-RL", 78, 78),
                 ("OWL-Direct", 0, 0),
                 ("RIF", 0, 0),
@@ -1186,16 +1207,19 @@ mod tests {
         assert_eq!(
             rdfs,
             [
-                "rdfD2", "rdfs1", "rdfs2", "rdfs3", "rdfs4", "rdfs5", "rdfs6", "rdfs7", "rdfs8",
-                "rdfs9", "rdfs10", "rdfs11", "rdfs12", "rdfs13",
+                "rdfD1", "rdfD1a", "rdfD2", "rdfs1", "rdfs2", "rdfs3", "rdfs4", "rdfs5", "rdfs6",
+                "rdfs7", "rdfs8", "rdfs9", "rdfs10", "rdfs11", "rdfs12", "rdfs13", "rdfs14",
+                "rdfs14a",
             ]
         );
-        // The bare-RDF regime implements predicate typing only, under its current name.
+        // The RDFS lane is COMPLETE over its own eighteen patterns.
+        assert_eq!(implemented(Regime::Rdfs), rules(Regime::Rdfs));
+        // …and the bare-RDF regime over its three.
         let rdf: Vec<&str> = implemented(Regime::Rdf)
             .iter()
             .map(|r| r.as_str())
             .collect();
-        assert_eq!(rdf, ["rdfD2"]);
+        assert_eq!(rdf, ["rdfD1", "rdfD1a", "rdfD2"]);
     }
 
     #[test]

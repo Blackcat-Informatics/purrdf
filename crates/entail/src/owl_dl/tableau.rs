@@ -253,6 +253,14 @@ impl<'a> Tableau<'a> {
                 let rb = self.root(&mut st, b);
                 merge(&mut st, ra, rb);
             }
+            // `owl:differentFrom` / `owl:AllDifferent`, as recorded `≠` pairs. Without
+            // them no `≤n r.C` restriction can be violated, because the clash rule counts
+            // PAIRWISE-DISTINCT neighbours and OWL 2 makes no unique name assumption.
+            for &(a, b) in &self.kb.different_from {
+                let ra = self.root(&mut st, a);
+                let rb = self.root(&mut st, b);
+                set_distinct(&mut st, ra, rb);
+            }
         }
         for &(a, c) in extra {
             let ra = self.root(&mut st, a);
@@ -348,11 +356,47 @@ impl<'a> Tableau<'a> {
             if find(st, i) != i {
                 continue;
             }
-            if self.node_clashes(st, i) {
+            if self.node_clashes(st, i) || self.role_axiom_clashes(st, i) {
                 st.clash = true;
                 return;
             }
         }
+    }
+
+    /// Whether a ROLE axiom that constrains edges rather than labels is violated at `x`.
+    ///
+    /// Two of OWL 2's role axioms say nothing about any node's concept label, so neither
+    /// can be internalized as a GCI and neither is caught by [`Tableau::node_clashes`]:
+    ///
+    /// * `owl:AsymmetricProperty` — `r(x, y)` and `r(y, x)` cannot both hold. A self-loop
+    ///   is the case `y = x`, so asymmetry subsumes irreflexivity exactly as OWL 2 says it
+    ///   does.
+    /// * `owl:propertyDisjointWith` / `owl:AllDisjointProperties` — one pair `(x, y)`
+    ///   cannot carry both roles.
+    ///
+    /// Both are decided over [`Tableau::neighbors`], so both see the role hierarchy and the
+    /// inverse-role closure: a sub-role edge of an asymmetric role violates the axiom, which
+    /// is what makes the check about the role's EXTENSION rather than about its spelling.
+    fn role_axiom_clashes(&self, st: &State, x: usize) -> bool {
+        for &property in &self.kb.asymmetric {
+            let role = Role::Named(property);
+            for y in self.neighbors(st, x, role) {
+                if self.neighbors(st, y, role).contains(&x) {
+                    return true;
+                }
+            }
+        }
+        for &(left, right) in &self.kb.disjoint_roles {
+            let shared = self.neighbors(st, x, Role::Named(left));
+            if shared.is_empty() {
+                continue;
+            }
+            let other = self.neighbors(st, x, Role::Named(right));
+            if shared.iter().any(|y| other.contains(y)) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Whether representative node `x` carries a clash.
@@ -382,8 +426,23 @@ impl<'a> Tableau<'a> {
             {
                 return true;
             }
+            // `¬∃r.Self` on a node that HAS an `r`-loop. This is the whole content of
+            // `owl:IrreflexiveProperty` (`⊤ ⊑ ¬∃r.Self`) as well as of a negated
+            // `owl:hasSelf`, so both are decided here rather than by a second mechanism.
+            if let Decomp::NegSelfRestriction(role) = *self.kb.table.decomp(cid)
+                && self.has_self_loop(st, x, role)
+            {
+                return true;
+            }
         }
         self.max_clash(st, x)
+    }
+
+    /// Whether `x` has a `role`-edge to itself, read through the role hierarchy and the
+    /// inverse-role closure.
+    fn has_self_loop(&self, st: &State, x: usize, role: Role) -> bool {
+        let x = find(st, x);
+        self.neighbors(st, x, role).contains(&x)
     }
 
     /// Whether some `≤n r.C` on node `x` is violated by `> n` pairwise-`≠` neighbours.
@@ -418,6 +477,7 @@ impl<'a> Tableau<'a> {
             changed |= self.rule_and(st, i);
             changed |= self.rule_all(st, i);
             changed |= self.rule_nominal(st, i);
+            changed |= self.rule_self(st, i);
             if !self.blocked(st, i) {
                 changed |= self.rule_exists(st, i);
                 changed |= self.rule_min(st, i);
@@ -583,6 +643,40 @@ impl<'a> Tableau<'a> {
         changed
     }
 
+    /// `Self`-rule: `∃r.Self ∈ L(x)` gives `x` an `r`-edge to itself.
+    ///
+    /// The edge, not a fresh successor: `∃r.Self` says the node is its OWN `r`-successor,
+    /// which is why it is an atomic leaf rather than a quantifier and why the rule is
+    /// deterministic and terminating — a node has at most one loop per role, so the rule
+    /// fires at most once per `(node, role)` pair.
+    ///
+    /// This is also `owl:ReflexiveProperty`: that axiom is internalized as the GCI
+    /// `⊤ ⊑ ∃r.Self`, so the meta-concept lands in every node's label at creation and this
+    /// rule puts the loop on every node.
+    fn rule_self(&self, st: &mut State, x: usize) -> bool {
+        let selves: Vec<Role> = st.nodes[x]
+            .label
+            .iter()
+            .filter_map(|&cid| match *self.kb.table.decomp(cid) {
+                Decomp::SelfRestriction(role) => Some(role),
+                _ => None,
+            })
+            .collect();
+        let mut changed = false;
+        for role in selves {
+            if self.has_self_loop(st, x, role) {
+                continue;
+            }
+            let x = find(st, x);
+            // A loop is its own inverse, so the direction the edge is stored in does not
+            // matter; the named property is what the role hierarchy is closed over.
+            let (Role::Named(property) | Role::Inv(property)) = role;
+            st.edges.push((x, x, property));
+            changed = true;
+        }
+        changed
+    }
+
     /// Add concept `c` to node `y`'s label; `⊤` is trivially present. Returns whether
     /// the label grew.
     fn add_concept(&self, st: &mut State, y: usize, c: u32) -> bool {
@@ -630,11 +724,68 @@ impl<'a> Tableau<'a> {
     }
 
     /// The `role`-neighbours of `x` (deterministic, first-seen edge order).
+    ///
+    /// # Transitivity is in the NEIGHBOURHOOD, not in a second rule
+    ///
+    /// A role declared `owl:TransitiveProperty` contributes its TRANSITIVE CLOSURE here, so
+    /// every rule that reads a neighbourhood — `∀`, `∃`, `≥`, the `≤` clash, the two role
+    /// axioms — sees the semantics of the transitive role without any of them being taught
+    /// about transitivity. `∀r.C` therefore propagates `C` along a whole `r`-path, which is
+    /// exactly what transitivity entails, and it does so without the `∀+` rule's habit of
+    /// interning a fresh `∀s.C` concept mid-search (this table is finalized before the
+    /// tableau starts, so there is no fresh concept to intern).
+    ///
+    /// The closure is taken per transitive achiever, never over the union: `q ⊑ r` with `q`
+    /// transitive and `r` not gives `r` every `q⁺`-pair, but two DIFFERENT sub-roles of `r`
+    /// do not compose into one — `r` itself is not transitive, and composing them would
+    /// invent pairs the ontology does not entail.
+    ///
+    /// Counting a transitive role's neighbours in a `≤n` restriction is only meaningful
+    /// because OWL 2 DL forbids exactly that combination; an ontology that states it is not
+    /// OWL 2 DL and the reverse mapping raises
+    /// [`Construct::NonSimpleRole`](crate::Construct::NonSimpleRole) for it.
     fn neighbors(&self, st: &State, x: usize, role: Role) -> Vec<usize> {
         let ach = self.achievers(role);
         let x = find(st, x);
         let mut out: Vec<usize> = Vec::new();
         let mut seen: BTreeSet<usize> = BTreeSet::new();
+        self.step(st, x, &ach, &mut seen, &mut out);
+        for &(prop, dir) in &ach {
+            if !self.kb.transitive.contains(&prop) {
+                continue;
+            }
+            let single: BTreeSet<(u32, bool)> = std::iter::once((prop, dir)).collect();
+            // Breadth-first over this one transitive role, seeded from `x`'s own step.
+            let mut frontier: Vec<usize> = Vec::new();
+            self.step(st, x, &single, &mut BTreeSet::new(), &mut frontier);
+            let mut visited: BTreeSet<usize> = frontier.iter().copied().collect();
+            while let Some(y) = frontier.pop() {
+                if seen.insert(y) {
+                    out.push(y);
+                }
+                let mut next: Vec<usize> = Vec::new();
+                self.step(st, y, &single, &mut BTreeSet::new(), &mut next);
+                for z in next {
+                    if visited.insert(z) {
+                        frontier.push(z);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// One edge step from `x` over the `(property, forward?)` patterns `ach`, appending
+    /// newly seen endpoints to `out` in first-seen edge order.
+    fn step(
+        &self,
+        st: &State,
+        x: usize,
+        ach: &BTreeSet<(u32, bool)>,
+        seen: &mut BTreeSet<usize>,
+        out: &mut Vec<usize>,
+    ) {
+        let x = find(st, x);
         for &(from, to, prop) in &st.edges {
             let f = find(st, from);
             let t = find(st, to);
@@ -645,7 +796,6 @@ impl<'a> Tableau<'a> {
                 out.push(f);
             }
         }
-        out
     }
 
     /// The `(property, forward?)` edge patterns that realize `role`, closed under the

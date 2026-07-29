@@ -51,13 +51,16 @@
 //! patterns and [`Construct::TripleTerm`](crate::Construct::TripleTerm) for the two triple
 //! term ones, and `rules(Regime::Rdfs)` minus [`crate::implemented`] names all four.
 
-use purrdf_datalog::clause::DlClause;
+use purrdf_datalog::clause::{ClauseAtom, DlClause, HeadDisjunct};
 
-use super::{atom, iri, quad, var};
+use super::{atom, internal, iri, quad, var};
+use crate::lists::{
+    DATATYPED_RELATION, QUOTED_RELATION, SURROGATE_D_RELATION, SURROGATE_T_RELATION,
+};
 use crate::vocab::{
     RDF_DIRLANGSTRING, RDF_LANGSTRING, RDF_PROPERTY, RDF_TYPE, RDFS_CLASS,
     RDFS_CONTAINERMEMBERSHIPPROPERTY, RDFS_DATATYPE, RDFS_DOMAIN, RDFS_LITERAL, RDFS_MEMBER,
-    RDFS_RANGE, RDFS_RESOURCE, RDFS_SUBCLASSOF, RDFS_SUBPROPERTYOF, XSD_STRING,
+    RDFS_PROPOSITION, RDFS_RANGE, RDFS_RESOURCE, RDFS_SUBCLASSOF, RDFS_SUBPROPERTYOF, XSD_STRING,
 };
 
 /// `rdfD2`: `T(?s, ?p, ?o)` ⇒ `?p rdf:type rdf:Property`.
@@ -120,6 +123,136 @@ pub(super) fn resource_typed() -> Vec<DlClause> {
             )
         })
         .collect()
+}
+
+/// The surrogate family's clauses: MINT one fresh blank node per observed term, then
+/// substitute it into every position that term occupied.
+///
+/// `rdfD1` and `rdfs14` are the same rule over two different observations — a datatyped
+/// literal, a triple term — so they are stated by one function over the pair of internal
+/// relations each uses, and the four clauses it returns are:
+///
+/// ```text
+/// ∃y. ( SURROGATE(?t, y) ∧ T(y, rdf:type, ?c) )   :-   OBSERVED(?t, ?c)
+/// T(?y, ?p, ?o)   :-   SURROGATE(?t, ?y) ∧ T(?t, ?p, ?o)
+/// T(?s, ?y, ?o)   :-   SURROGATE(?t, ?y) ∧ T(?s, ?t, ?o)
+/// T(?s, ?p, ?y)   :-   SURROGATE(?t, ?y) ∧ T(?s, ?p, ?t)
+/// ```
+///
+/// # Why the mint is a CONJUNCTIVE existential head
+///
+/// The surrogate must be reachable from the three substitution clauses, and a witness a
+/// chase mints is addressed on its rule's FRONTIER — the head variables the body also
+/// binds. Writing the mint as `∃y. T(y, rdf:type, ?c)` alone would put only `?c` in the
+/// frontier, so every literal of one datatype would share ONE surrogate. Naming `?t` in the
+/// head through the `SURROGATE` atom is what makes the witness a function of the observed
+/// TERM, which is what the specification's `_:nnn` means.
+///
+/// The conjunction is also why the two head atoms share the witness at all:
+/// `A → ∃y. r(x,y)` and `A → ∃y. C(y)` are two rules minting two unrelated witnesses, and
+/// `A → ∃y. (r(x,y) ∧ C(y))` is one rule minting one.
+fn surrogate_family(
+    observed: &'static str,
+    surrogate: &'static str,
+    substitute: bool,
+) -> Vec<DlClause> {
+    let mint = DlClause::new(
+        vec![HeadDisjunct::new(vec![
+            internal(surrogate, var("?t"), var("?y"), super::internal_graph()),
+            atom(var("?y"), RDF_TYPE, var("?c")),
+        ])],
+        vec!["?y".to_owned()],
+        vec![internal(
+            observed,
+            var("?t"),
+            var("?c"),
+            super::internal_graph(),
+        )],
+    );
+    if !substitute {
+        return vec![mint];
+    }
+    let mut clauses = vec![mint];
+    // One substitution clause per triple position, because RDF 1.2 Semantics writes the
+    // rule over "any triple in which the term appears" and a term appears in three places.
+    for position in 0..3usize {
+        let mut head = [var("?s"), var("?p"), var("?o")];
+        let mut body = head.clone();
+        head[position] = var("?y");
+        body[position] = var("?t");
+        clauses.push(DlClause::datalog(
+            quad(head[0].clone(), head[1].clone(), head[2].clone()),
+            vec![
+                internal(surrogate, var("?t"), var("?y"), super::internal_graph()),
+                quad(body[0].clone(), body[1].clone(), body[2].clone()),
+            ],
+        ));
+    }
+    clauses
+}
+
+/// `rdfD1`: a triple in which a datatyped literal `"sss"^^ddd` appears, for a recognized
+/// `ddd`, entails that triple with the literal replaced by a fresh `_:nnn`, plus
+/// `_:nnn rdf:type ddd`.
+///
+/// The premise is [`DATATYPED_RELATION`], materialized once per run over the literals the
+/// dataset holds: the clause language has no term-kind test, so "is a datatyped literal
+/// with a recognized datatype" is a question only a pass over the data can answer. See
+/// [`surrogate_family`] for the four clauses and for why the head is conjunctive.
+pub(super) fn datatyped_surrogate() -> Vec<DlClause> {
+    surrogate_family(DATATYPED_RELATION, SURROGATE_D_RELATION, true)
+}
+
+/// `rdfD1a`: for any graph, even the empty one, `_:nnn rdf:type ddd` holds for each
+/// recognized `ddd` with a non-empty value space.
+///
+/// Premise-free and existential: one clause per recognized datatype, each minting one
+/// witness addressed on the empty frontier — which is exactly right, because the rule
+/// quantifies over `D` rather than over the graph and says nothing that distinguishes two
+/// inhabitants of one value space.
+///
+/// All three of [`RECOGNIZED_DATATYPES`] have a non-empty value space (`xsd:string` holds
+/// every string; the two language-tagged datatypes hold every tagged string), so the
+/// qualification excludes none of them.
+pub(super) fn datatype_inhabited() -> Vec<DlClause> {
+    RECOGNIZED_DATATYPES
+        .into_iter()
+        .map(|datatype| {
+            DlClause::new(
+                vec![HeadDisjunct::atom(ClauseAtom::positive(
+                    var("?y"),
+                    RDF_TYPE,
+                    iri(datatype),
+                ))],
+                vec!["?y".to_owned()],
+                Vec::new(),
+            )
+        })
+        .collect()
+}
+
+/// `rdfs14`: a triple in which a triple term appears entails that triple with the term
+/// replaced by a fresh `_:nnn`, plus `_:nnn rdf:type rdfs:Proposition`.
+///
+/// Structurally `rdfD1` over a different observation; see [`surrogate_family`].
+pub(super) fn triple_term_surrogate() -> Vec<DlClause> {
+    surrogate_family(QUOTED_RELATION, SURROGATE_T_RELATION, true)
+}
+
+/// `rdfs14a`: for any graph, even the empty one, `_:nnn rdf:type rdfs:Proposition` holds.
+///
+/// Premise-free and existential, exactly like [`datatype_inhabited`], and one clause
+/// because there is one `rdfs:Proposition`.
+pub(super) fn proposition_inhabited() -> Vec<DlClause> {
+    vec![DlClause::new(
+        vec![HeadDisjunct::atom(ClauseAtom::positive(
+            var("?y"),
+            RDF_TYPE,
+            iri(RDFS_PROPOSITION),
+        ))],
+        vec!["?y".to_owned()],
+        Vec::new(),
+    )]
 }
 
 /// `rdfs2` / `prp-dom`: `?p rdfs:domain ?c`, `T(?x, ?p, ?y)` ⇒ `?x rdf:type ?c`.
@@ -245,6 +378,20 @@ pub(super) fn datatype_literal() -> Vec<DlClause> {
 macro_rules! rdfs_rules {
     ($continue:ident, $rest:tt, $($rules:tt)*) => {
         $continue! { $rest $($rules)*
+            /// `rdfD1` — a datatyped literal's surrogate blank node, typed with the
+            /// literal's datatype and substituted into every triple the literal occurs in.
+            DatatypedSurrogate {
+                id: RdfD1,
+                lanes: [Rdf, Rdfs],
+                clauses: rdfs::datatyped_surrogate,
+            },
+            /// `rdfD1a` — every recognized datatype with a non-empty value space has an
+            /// inhabitant, in every graph including the empty one. Premise-free.
+            DatatypeInhabited {
+                id: RdfD1a,
+                lanes: [Rdf, Rdfs],
+                clauses: rdfs::datatype_inhabited,
+            },
             /// `rdfD2` — every predicate is an `rdf:Property`. RDFS entailment subsumes
             /// RDF entailment, so both lanes fire it.
             PredicateProperty {
@@ -337,6 +484,20 @@ macro_rules! rdfs_rules {
                 id: Rdfs13,
                 lanes: [Rdfs],
                 clauses: rdfs::datatype_literal,
+            },
+            /// `rdfs14` — a triple term's surrogate blank node, typed `rdfs:Proposition`
+            /// and substituted into every triple the term occurs in.
+            TripleTermSurrogate {
+                id: Rdfs14,
+                lanes: [Rdfs],
+                clauses: rdfs::triple_term_surrogate,
+            },
+            /// `rdfs14a` — `rdfs:Proposition` has an inhabitant, in every graph including
+            /// the empty one. Premise-free.
+            PropositionInhabited {
+                id: Rdfs14a,
+                lanes: [Rdfs],
+                clauses: rdfs::proposition_inhabited,
             },
         }
     };

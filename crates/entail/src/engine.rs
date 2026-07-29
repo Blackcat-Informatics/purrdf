@@ -62,7 +62,8 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
-use purrdf_datalog::clause::{ClauseTerm, DlClause};
+use purrdf_datalog::chase::chase;
+use purrdf_datalog::clause::{ClauseTerm, DlClause, HeadForm};
 use purrdf_datalog::seminaive::{Derivation, compile, evaluate};
 use purrdf_datalog::store::RelationStore;
 
@@ -73,6 +74,7 @@ use crate::interner::intern_into;
 use crate::lists::{CLASH_RELATION, ListIndex, is_internal};
 use crate::report::RunStats;
 use crate::report::{InconsistencyWitness, WitnessTriple};
+use crate::surrogates::SurrogateIndex;
 use crate::vocab::{XSD_NONNEGATIVEINTEGER, XSD_STRING};
 use crate::{EntailError, Regime};
 
@@ -158,6 +160,7 @@ pub(crate) fn close(
     }
     let mut lists = ListIndex::default();
     let mut literals = LiteralIndex::default();
+    let mut surrogates = SurrogateIndex::default();
     for quad in ds.quads() {
         if quad.g.is_some() {
             continue; // entailment operates over the default graph
@@ -175,6 +178,15 @@ pub(crate) fn close(
                 (&object, ds.term_value(quad.o)),
             ] {
                 observe_literal(&mut literals, surface, &value);
+            }
+        }
+        if mints_surrogates(regime) {
+            for (surface, value) in [
+                (&subject, ds.term_value(quad.s)),
+                (&predicate, ds.term_value(quad.p)),
+                (&object, ds.term_value(quad.o)),
+            ] {
+                surrogates.observe(surface, &value);
             }
         }
         let _ = edb.insert(&subject, &predicate, &object, RelationStore::DEFAULT_GRAPH);
@@ -205,6 +217,30 @@ pub(crate) fn close(
         for fact in literals.materialize() {
             let _ = edb.insert(&fact.subject, fact.predicate, &fact.object, &fact.graph);
         }
+    }
+
+    // What `rdfD1` and `rdfs14` OBSERVE — a datatyped literal, a triple term — decided
+    // once over the dataset's own terms. The clause language has no term-kind test, so
+    // neither premise is expressible as a clause; see [`crate::surrogates`].
+    if mints_surrogates(regime) {
+        let iris: Vec<String> = surrogates.iris().map(str::to_owned).collect();
+        for iri in iris {
+            let _ = terms.record(&TermValue::iri(iri));
+        }
+        for fact in surrogates.materialize() {
+            let _ = edb.insert(&fact.subject, fact.predicate, &fact.object, &fact.graph);
+        }
+    }
+
+    // A lane whose calculus states an EXISTENTIAL rule is evaluated by the restricted
+    // chase; every other lane keeps the semi-naive evaluator, which refuses a non-atomic
+    // head by name. The routing is a property of the PROGRAM rather than a lane list, so a
+    // rule that later becomes existential moves its own lane without a second edit here.
+    if program
+        .iter()
+        .any(|clause| clause.head_form() == HeadForm::Existential)
+    {
+        return chase_close(ds, &program, &attribution, edb, &terms);
     }
 
     let executable = compile(program).map_err(EntailError::Evaluate)?;
@@ -255,6 +291,79 @@ pub(crate) fn close(
     Ok((dataset, stats))
 }
 
+/// Evaluate an EXISTENTIAL calculus with the restricted chase and materialize its answer.
+///
+/// # Why a second evaluation path, and what it does NOT change
+///
+/// A least-fixpoint evaluator over definite clauses has no semantics for `∃ȳ. …`, so
+/// `compile` refuses one by name; the chase is the consumer that head form was represented
+/// for. The two agree on everything else: the chase fires an atomic clause exactly as the
+/// semi-naive evaluator does, over the same seeded store, to the same least fixpoint. What
+/// differs is that it INVENTS terms, and the two consequences of that are handled here.
+///
+/// # Termination is COMPUTED, and the certificate is the admission
+///
+/// `purrdf_datalog::chase::chase` certifies the clause set by constant-refined weak
+/// acyclicity before it runs a round: an existential edge of the position dependency graph
+/// that lies in a cycle is [`ChaseError::NonTerminating`], and nothing else is refused for
+/// termination. There is no caller-supplied budget and no acyclicity parameter — the
+/// analysis is a function of the clauses the calculus declares, and `the_existential_lanes_are_certified_terminating`
+/// asserts that both lanes that reach here are certified.
+///
+/// # The surrogates do not reach the answer, and that is REQUIRED
+///
+/// Every conclusion mentioning a witness the chase invented is dropped at the
+/// materialization boundary and counted, which raises the
+/// [`Construct::Surrogate`](crate::Construct::Surrogate) boundary. See that construct's
+/// reason for the W3C case that makes the exclusion mandatory rather than merely
+/// convenient, and for why nothing surrogate-free is lost by it.
+///
+/// It is also what keeps [`Terms::value`] total. The dictionary is exhaustive over the
+/// terms the store was SEEDED with plus the program's own constants, and a witness is
+/// neither — so a witness surface is never looked up, because the fact carrying it was
+/// already dropped.
+fn chase_close(
+    ds: &RdfDataset,
+    program: &[DlClause],
+    attribution: &[ChaseRule],
+    edb: RelationStore,
+    terms: &Terms,
+) -> Result<(Arc<RdfDataset>, RunStats), EntailError> {
+    let outcome = chase(program, edb).map_err(EntailError::Chase)?;
+    let witnesses: std::collections::BTreeSet<&str> = outcome.witnesses().witnesses().collect();
+    let mut stats = RunStats::of_budget(outcome.budget());
+    let mut b = RdfDatasetBuilder::new();
+    b.push_dataset(ds);
+    for derivation in outcome.derivations() {
+        let fact = derivation.fact();
+        // Bookkeeping, not an answer — the two surrogate relations and the observation
+        // relations they read; see the semi-naive path for the same exclusion.
+        if is_internal(&fact.predicate) {
+            continue;
+        }
+        if [&fact.subject, &fact.predicate, &fact.object, &fact.graph]
+            .into_iter()
+            .any(|surface| witnesses.contains(surface.as_str()))
+        {
+            stats.drop_surrogate();
+            continue;
+        }
+        let subject = terms.value(&fact.subject);
+        let predicate = terms.value(&fact.predicate);
+        if !admits_subject(subject) || !admits_predicate(predicate) {
+            stats.drop_generalized();
+            continue;
+        }
+        stats.commit(attribution[derivation.clause()]);
+        let s = intern_into(&mut b, subject);
+        let p = intern_into(&mut b, predicate);
+        let o = intern_into(&mut b, terms.value(&fact.object));
+        b.push_quad(s, p, o, None);
+    }
+    let dataset = b.freeze().map_err(|e| EntailError::Build(e.to_string()))?;
+    Ok((dataset, stats))
+}
+
 /// Whether `regime`'s lane walks the RDF collections its axioms point at.
 ///
 /// `OWL-RL` alone: it is the only lane whose rule table writes `LIST[…]`, and it is the
@@ -263,6 +372,16 @@ pub(crate) fn close(
 /// `owl:members` and the cycle is ordinary data there.
 const fn walks_collections(regime: Regime) -> bool {
     matches!(regime, Regime::OwlRl)
+}
+
+/// Whether `regime`'s lane states a rule that INVENTS a surrogate blank node.
+///
+/// The two lanes whose rule tables hold `rdfD1` / `rdfD1a` (`RDF`, and `RDFS` because RDFS
+/// entailment subsumes RDF entailment) and `rdfs14` / `rdfs14a` (`RDFS`). `OWL-RL` states
+/// none of the four — OWL 2 RL/RDF omits the RDF and RDFS axiomatic material — and `D`
+/// states OWL 2 Profiles Table 8 alone, so neither pays for the pre-pass or the chase.
+const fn mints_surrogates(regime: Regime) -> bool {
+    matches!(regime, Regime::Rdf | Regime::Rdfs)
 }
 
 /// Whether `regime`'s lane decides XSD value spaces before it evaluates.

@@ -187,9 +187,42 @@ pub(crate) const DT_DIFFERENT_RELATION: &str = "\u{0}dt-different";
 /// space, which `dt-not-type` turns into an inconsistency.
 pub(crate) const DT_ILL_TYPED_RELATION: &str = "\u{0}dt-ill-typed";
 
+/// The internal predicate of `DATATYPED(literal, datatype)` — a literal of the graph whose
+/// datatype RDF 1.2 Semantics §8 makes MANDATORY for every interpretation to recognize.
+///
+/// `rdfD1`'s premise, and a pre-pass relation for the same reason `DT_VALUE` is: the clause
+/// language has no term-kind test, so "a triple in which a datatyped literal appears" is a
+/// question about the SHAPE of a term, and only a pass over the dataset can answer it.
+pub(crate) const DATATYPED_RELATION: &str = "\u{0}datatyped";
+
+/// The internal predicate of `QUOTED(triple-term, rdfs:Proposition)` — a triple term of the
+/// graph, paired with the class `rdfs14` types its surrogate with.
+///
+/// The object is a constant, and it is carried anyway so this relation has exactly
+/// [`DATATYPED_RELATION`]'s shape: the two rules differ in what they observe, not in what
+/// they do about it, and one clause shape for both is one fewer place to be wrong.
+pub(crate) const QUOTED_RELATION: &str = "\u{0}quoted";
+
+/// The internal predicate of `SURROGATE_D(literal, _:nnn)` — the fresh blank node `rdfD1`
+/// invents for a datatyped literal.
+///
+/// The relation is what gives the surrogate an ADDRESS. `rdfD1` concludes about a fresh
+/// `_:nnn` in every position the literal occupied, and a chase mints a witness as a
+/// function of its FRONTIER — so without an atom that mentions the literal, two literals
+/// under the same subject and predicate would share one witness. Naming the literal in the
+/// head is what makes the witness a function of the literal, which is what the rule says.
+pub(crate) const SURROGATE_D_RELATION: &str = "\u{0}surrogate-d";
+
+/// The internal predicate of `SURROGATE_T(triple-term, _:nnn)` — `rdfs14`'s surrogate.
+///
+/// Separate from [`SURROGATE_D_RELATION`] so a firing is attributable: the substitution
+/// clauses read one relation each, so the rule that invented a surrogate is the rule that
+/// gets credited for putting it into a triple.
+pub(crate) const SURROGATE_T_RELATION: &str = "\u{0}surrogate-t";
+
 /// Every internal relation this crate names, for the tests that range over all of them.
 #[cfg(test)]
-pub(crate) const INTERNAL_RELATIONS: [&str; 10] = [
+pub(crate) const INTERNAL_RELATIONS: [&str; 14] = [
     LIST_RELATION,
     INDEX_DISTINCT_RELATION,
     CHAIN_RELATION,
@@ -200,6 +233,10 @@ pub(crate) const INTERNAL_RELATIONS: [&str; 10] = [
     DT_EQUAL_RELATION,
     DT_DIFFERENT_RELATION,
     DT_ILL_TYPED_RELATION,
+    DATATYPED_RELATION,
+    QUOTED_RELATION,
+    SURROGATE_D_RELATION,
+    SURROGATE_T_RELATION,
 ];
 
 /// The OWL predicates whose OBJECT is required to be an RDF collection.
@@ -603,7 +640,7 @@ mod tests {
         ] {
             assert!(!is_internal(surface), "{surface:?}");
         }
-        // All ten are named individually so a rename cannot silently drop one.
+        // All fourteen are named individually so a rename cannot silently drop one.
         assert_eq!(
             INTERNAL_RELATIONS,
             [
@@ -617,6 +654,10 @@ mod tests {
                 super::DT_EQUAL_RELATION,
                 super::DT_DIFFERENT_RELATION,
                 super::DT_ILL_TYPED_RELATION,
+                super::DATATYPED_RELATION,
+                super::QUOTED_RELATION,
+                super::SURROGATE_D_RELATION,
+                super::SURROGATE_T_RELATION,
             ]
         );
     }

@@ -72,45 +72,23 @@ impl Verdict {
 /// lane does not yet model. A catch-all would defeat the point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Owl2Gap {
-    /// `owl:AsymmetricProperty` is not in the tableau's vocabulary, so the role
-    /// axiom it states cannot clash.
-    AsymmetricProperty,
-    /// `owl:IrreflexiveProperty` is not in the tableau's vocabulary, so the role
-    /// axiom it states cannot clash.
-    IrreflexiveProperty,
-    /// Property disjointness — `owl:propertyDisjointWith` and
-    /// `owl:AllDisjointProperties` — is not modelled.
-    PropertyDisjointness,
-    /// `owl:NegativePropertyAssertion` (the `owl:sourceIndividual` /
-    /// `owl:assertionProperty` / `owl:targetIndividual`-or-`owl:targetValue`
-    /// reification) is not modelled, so a negative assertion cannot contradict
-    /// its positive counterpart.
-    NegativePropertyAssertion,
-    /// `owl:hasKey` is not modelled, so a key violation cannot be detected.
-    HasKey,
     /// `owl:bottomObjectProperty` / `owl:bottomDataProperty` are read as ordinary
     /// named roles rather than as the empty role, so an assertion over one cannot
-    /// clash.
+    /// clash. The reverse mapping RAISES the `builtin-role` boundary for it, so the
+    /// incompleteness is reported rather than silent — but a boundary is not a
+    /// verdict, and the case still diverges.
     BottomProperty,
-    /// Individual difference — `owl:differentFrom`, `owl:AllDifferent` (both the
-    /// `owl:members` and the legacy `owl:distinctMembers` spellings) — is not
-    /// modelled. Without it, no cardinality restriction can be violated by
-    /// distinct fillers.
-    DifferentIndividuals,
-    /// `owl:AllDisjointClasses` (the n-ary spelling; the binary
-    /// `owl:disjointWith` *is* modelled) is not read.
-    AllDisjointClasses,
     /// OWL 2 requires every interpretation domain to be non-empty, so
     /// `owl:Thing owl:equivalentClass owl:Nothing` is unsatisfiable. The tableau
     /// admits the empty model instead and reports it satisfiable.
     EmptyDomain,
-    /// `owl:hasSelf` is not a recognized `owl:Restriction` constraint, so the
-    /// class-expression parser refuses the graph and the run withholds.
-    SelfRestriction,
-    /// The realization pass would assert a type triple whose subject is a
-    /// literal, which the RDF IR rejects on freeze, so the run withholds. A
-    /// datatype-property premise reaches this.
-    LiteralSubjectInjection,
+    /// Two literals with DIFFERENT data values denote different elements of the
+    /// domain, and this tableau treats a literal as an opaque abstract term with no
+    /// unique-name assumption. A functional data property with two distinct literal
+    /// values therefore merges them instead of clashing. This is the concrete-domain
+    /// gap the `data-range` boundary describes, met through the equality rules
+    /// rather than through a data range.
+    DistinctLiterals,
     /// The class-expression graph is cyclic, which the parser refuses rather than
     /// unfolding, so the run withholds.
     CyclicClassExpression,
@@ -121,17 +99,9 @@ impl Owl2Gap {
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
-            Self::AsymmetricProperty => "asymmetric-property",
-            Self::IrreflexiveProperty => "irreflexive-property",
-            Self::PropertyDisjointness => "property-disjointness",
-            Self::NegativePropertyAssertion => "negative-property-assertion",
-            Self::HasKey => "has-key",
             Self::BottomProperty => "bottom-property",
-            Self::DifferentIndividuals => "different-individuals",
-            Self::AllDisjointClasses => "all-disjoint-classes",
             Self::EmptyDomain => "empty-domain",
-            Self::SelfRestriction => "self-restriction",
-            Self::LiteralSubjectInjection => "literal-subject-injection",
+            Self::DistinctLiterals => "distinct-literals",
             Self::CyclicClassExpression => "cyclic-class-expression",
         }
     }
@@ -141,27 +111,20 @@ impl Owl2Gap {
     /// where the ontology is satisfiable).
     ///
     /// **No variant is one today.** Every gap left in this enum is an
-    /// incompleteness: an axiom that goes unread, so a real clash is missed, or a
-    /// graph the run refuses outright. The predicate stays — pinned by a test
-    /// asserting the unsound set is empty, and surfaced as `[UNSOUND]` in the
-    /// harness log — because that is the ledger's most consequential distinction:
-    /// an incompleteness withholds an answer PurRDF is entitled to, whereas an
-    /// unsoundness asserts one it is not. The match below is exhaustive on
-    /// purpose, so a new gap cannot be added without classifying itself here.
+    /// incompleteness: an axiom whose whole content this layer cannot model, so a
+    /// real clash is missed, or a graph the run refuses outright. The predicate
+    /// stays — pinned by a test asserting the unsound set is empty, and surfaced as
+    /// `[UNSOUND]` in the harness log — because that is the ledger's most
+    /// consequential distinction: an incompleteness withholds an answer PurRDF is
+    /// entitled to, whereas an unsoundness asserts one it is not. The match below is
+    /// exhaustive on purpose, so a new gap cannot be added without classifying
+    /// itself here.
     #[must_use]
     pub const fn is_unsound(self) -> bool {
         match self {
-            Self::AsymmetricProperty
-            | Self::IrreflexiveProperty
-            | Self::PropertyDisjointness
-            | Self::NegativePropertyAssertion
-            | Self::HasKey
-            | Self::BottomProperty
-            | Self::DifferentIndividuals
-            | Self::AllDisjointClasses
+            Self::BottomProperty
             | Self::EmptyDomain
-            | Self::SelfRestriction
-            | Self::LiteralSubjectInjection
+            | Self::DistinctLiterals
             | Self::CyclicClassExpression => false,
         }
     }
@@ -182,87 +145,11 @@ pub struct LedgerEntry {
 /// from this table must agree. Entries are grouped by root cause; each group's
 /// comment states the construct the tableau does not read and what that costs.
 pub const LEDGER: &[LedgerEntry] = &[
-    // --- `owl:AsymmetricProperty` / `owl:IrreflexiveProperty` ----------------
-    //     Both are OWL 2 role axioms whose whole content is a negative
-    //     constraint (`¬∃r.Self`, and `r ⊓ r⁻ ⊑ ⊥`). Neither IRI is in the
-    //     tableau's vocabulary table, so the premise's asserted role edge meets
-    //     no constraint and the ontology reads as satisfiable.
-    LedgerEntry {
-        case: "new-feature-asymmetricproperty-001",
-        gap: Owl2Gap::AsymmetricProperty,
-    },
-    LedgerEntry {
-        case: "rdfbased-sem-char-asymmetric-inst",
-        gap: Owl2Gap::AsymmetricProperty,
-    },
-    LedgerEntry {
-        case: "rdfbased-sem-char-asymmetric-term",
-        gap: Owl2Gap::AsymmetricProperty,
-    },
-    LedgerEntry {
-        case: "new-feature-irreflexiveproperty-001",
-        gap: Owl2Gap::IrreflexiveProperty,
-    },
-    LedgerEntry {
-        case: "rdfbased-sem-char-irreflexive-inst",
-        gap: Owl2Gap::IrreflexiveProperty,
-    },
-    // --- Property disjointness ----------------------------------------------
-    //     `owl:propertyDisjointWith` and its n-ary `owl:AllDisjointProperties`
-    //     spelling are unread, so two asserted edges over disjoint roles never
-    //     clash.
-    LedgerEntry {
-        case: "new-feature-disjointdataproperties-001",
-        gap: Owl2Gap::PropertyDisjointness,
-    },
-    LedgerEntry {
-        case: "rdfbased-sem-eqdis-disprop-eqprop",
-        gap: Owl2Gap::PropertyDisjointness,
-    },
-    LedgerEntry {
-        case: "rdfbased-sem-eqdis-disprop-inst",
-        gap: Owl2Gap::PropertyDisjointness,
-    },
-    LedgerEntry {
-        case: "rdfbased-sem-eqdis-disprop-irrflxv",
-        gap: Owl2Gap::PropertyDisjointness,
-    },
-    LedgerEntry {
-        case: "rdfbased-sem-ndis-alldisjointproperties-fw",
-        gap: Owl2Gap::PropertyDisjointness,
-    },
-    // --- `owl:NegativePropertyAssertion` -------------------------------------
-    //     The reified negative assertion is read as four ordinary triples about
-    //     a blank node, so it never contradicts the positive assertion the case
-    //     pairs it with.
-    LedgerEntry {
-        case: "new-feature-negativedatapropertyassertion-001",
-        gap: Owl2Gap::NegativePropertyAssertion,
-    },
-    LedgerEntry {
-        case: "new-feature-negativeobjectpropertyassertion-001",
-        gap: Owl2Gap::NegativePropertyAssertion,
-    },
-    LedgerEntry {
-        case: "rdfbased-sem-npa-dat-fw",
-        gap: Owl2Gap::NegativePropertyAssertion,
-    },
-    LedgerEntry {
-        case: "rdfbased-sem-npa-ind-fw",
-        gap: Owl2Gap::NegativePropertyAssertion,
-    },
-    // --- `owl:hasKey` --------------------------------------------------------
-    LedgerEntry {
-        case: "new-feature-keys-002",
-        gap: Owl2Gap::HasKey,
-    },
-    LedgerEntry {
-        case: "new-feature-keys-006",
-        gap: Owl2Gap::HasKey,
-    },
     // --- `owl:bottomObjectProperty` / `owl:bottomDataProperty` ---------------
     //     Read as ordinary named roles, so an assertion over one is admitted
-    //     instead of clashing against the empty role.
+    //     instead of clashing against the empty role. The reverse mapping raises
+    //     the `builtin-role` boundary on both of these runs, so the gap is
+    //     reported in the reasoning report even though the verdict diverges.
     LedgerEntry {
         case: "new-feature-bottomdataproperty-001",
         gap: Owl2Gap::BottomProperty,
@@ -271,37 +158,16 @@ pub const LEDGER: &[LedgerEntry] = &[
         case: "new-feature-bottomobjectproperty-001",
         gap: Owl2Gap::BottomProperty,
     },
-    // --- Individual difference ------------------------------------------------
-    //     `owl:differentFrom` and `owl:AllDifferent` are unread. The tableau's
-    //     `≤n r.C` clash rule needs pairwise-distinct fillers to fire, so the
-    //     max-cardinality case below is a casualty of the same gap rather than a
-    //     cardinality bug.
+    // --- Distinct literals ----------------------------------------------------
+    //     `hasName` is functional and Peter has two DIFFERENT literal names, so
+    //     OWL 2 makes the ontology unsatisfiable. This tableau's `≤1 r.⊤` rule
+    //     merges the two literal nodes instead, because a literal is an opaque
+    //     abstract term here and nothing forces two of them apart. `owl:hasKey`
+    //     itself IS modelled now (new-feature-keys-002 agrees); this case is a
+    //     concrete-domain gap wearing a key's clothes.
     LedgerEntry {
-        case: "rdfbased-sem-eqdis-different-irrflxv",
-        gap: Owl2Gap::DifferentIndividuals,
-    },
-    LedgerEntry {
-        case: "rdfbased-sem-eqdis-different-sameas",
-        gap: Owl2Gap::DifferentIndividuals,
-    },
-    LedgerEntry {
-        case: "rdfbased-sem-ndis-alldifferent-fw",
-        gap: Owl2Gap::DifferentIndividuals,
-    },
-    LedgerEntry {
-        case: "rdfbased-sem-ndis-alldifferent-fw-distinctmembers",
-        gap: Owl2Gap::DifferentIndividuals,
-    },
-    LedgerEntry {
-        case: "webont-maxcardinality-001",
-        gap: Owl2Gap::DifferentIndividuals,
-    },
-    // --- `owl:AllDisjointClasses` --------------------------------------------
-    //     The binary `owl:disjointWith` is modelled; the n-ary
-    //     `owl:AllDisjointClasses` / `owl:members` spelling is not.
-    LedgerEntry {
-        case: "rdfbased-sem-ndis-alldisjointclasses-fw",
-        gap: Owl2Gap::AllDisjointClasses,
+        case: "new-feature-keys-006",
+        gap: Owl2Gap::DistinctLiterals,
     },
     // --- Non-empty interpretation domain --------------------------------------
     //     `owl:Thing owl:equivalentClass owl:Nothing` is unsatisfiable ONLY
@@ -312,17 +178,9 @@ pub const LEDGER: &[LedgerEntry] = &[
         gap: Owl2Gap::EmptyDomain,
     },
     // --- Withheld: the run refused to decide ---------------------------------
-    //     Three cases where PurRDF returns an `EntailError` rather than a
-    //     verdict. A refusal is an honest capability gap and is bucketed apart
-    //     from a wrong answer, but it is still ledgered — never scored as a pass.
-    LedgerEntry {
-        case: "new-feature-selfrestriction-001",
-        gap: Owl2Gap::SelfRestriction,
-    },
-    LedgerEntry {
-        case: "webont-datatypeproperty-001",
-        gap: Owl2Gap::LiteralSubjectInjection,
-    },
+    //     One case where PurRDF returns an `EntailError` rather than a verdict. A
+    //     refusal is an honest capability gap and is bucketed apart from a wrong
+    //     answer, but it is still ledgered — never scored as a pass.
     LedgerEntry {
         case: "webont-i5-26-007",
         gap: Owl2Gap::CyclicClassExpression,

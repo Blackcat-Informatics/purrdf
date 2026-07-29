@@ -99,6 +99,14 @@
 //!   planner-certified cyclic component — and the two are held to producing identical
 //!   relations by a differential test. Rounds are rule-parallel through rayon's indexed
 //!   `par_iter`, merged strictly in program order.
+//! - [`chase`] — the restricted existential chase, the consumer the existential head form
+//!   was represented for. [`certify`](chase::certify) is a pure function of the clause set
+//!   that either proves it terminating by constant-refined weak acyclicity or names the
+//!   existential edges that lie in a cycle, and [`chase`](chase::chase) runs the fixpoint
+//!   only on a certified program. A witness is a BLANK NODE addressed on the frontier
+//!   binding — PurRDF mints no vocabulary, so it mints no individual either — and an
+//!   already-witnessed obligation is skipped, which is what makes the fixpoint converge. A
+//!   disjunctive head, an inconsistency clause and a negated body atom are refused by name.
 //!
 //! # Checkable proofs
 //!
@@ -136,6 +144,7 @@ pub mod arena;
 pub mod binding_pattern;
 pub mod bitset;
 pub mod cache;
+pub mod chase;
 pub mod clause;
 pub mod cursor;
 pub mod id;

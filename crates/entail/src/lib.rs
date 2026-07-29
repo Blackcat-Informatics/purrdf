@@ -67,10 +67,11 @@ pub mod report;
 pub mod rif;
 mod rif_xml;
 pub(crate) mod rules;
+pub(crate) mod surrogates;
 pub(crate) mod vocab;
 
 pub use calculus::calculus_program;
-pub use owl_dl::query::{QNode, QTriple, materialize_dl};
+pub use owl_dl::query::{QNode, QTriple, materialize_dl, materialize_dl_reported};
 pub use report::{
     Boundary, Completeness, Construct, InconsistencyWitness, ReasoningReport, WitnessTriple,
 };
@@ -145,6 +146,22 @@ pub enum EntailError {
     /// [`EvalError`](purrdf_datalog::seminaive::EvalError) names which ceiling and what
     /// the run had consumed when it stopped.
     Evaluate(purrdf_datalog::seminaive::EvalError),
+    /// The declared calculus states an EXISTENTIAL rule the restricted chase refused.
+    ///
+    /// `rdfD1`, `rdfD1a`, `rdfs14` and `rdfs14a` conclude about a FRESH blank node, and a
+    /// least-fixpoint evaluator over definite clauses has no semantics for that head form,
+    /// so the `RDF` and `RDFS` lanes run through `purrdf-datalog`'s restricted chase
+    /// instead. The chase refuses rather than approximates, and the refusal a caller will
+    /// actually meet is one of the three fixed evaluation ceilings —
+    /// [`ChaseError::BudgetExhausted`](purrdf_datalog::chase::ChaseError::BudgetExhausted)
+    /// — carrying an accurate report. The one refusal that is about the CALCULUS rather
+    /// than the input is
+    /// [`ChaseError::NonTerminating`](purrdf_datalog::chase::ChaseError::NonTerminating):
+    /// the chase computes its own termination class from the clause set and runs only a
+    /// program it certified, so a rule set whose position dependency graph puts an
+    /// existential edge in a cycle is named rather than looped on. Neither declared lane
+    /// is such a program, which is a CHECKED fact rather than a hope.
+    Chase(purrdf_datalog::chase::ChaseError),
     /// An RDF collection an OWL 2 axiom points at is not a well-formed collection.
     ///
     /// `owl:intersectionOf`, `owl:unionOf`, `owl:oneOf`, `owl:members`,
@@ -192,6 +209,7 @@ impl std::fmt::Display for EntailError {
             Self::Build(msg) => write!(f, "entailment build error: {msg}"),
             Self::Parse(msg) => write!(f, "entailment parse error: {msg}"),
             Self::Evaluate(error) => write!(f, "entailment evaluation error: {error}"),
+            Self::Chase(error) => write!(f, "entailment chase error: {error}"),
             Self::MalformedList(msg) => write!(f, "entailment collection error: {msg}"),
             Self::Inconsistent(witness) => write!(
                 f,
@@ -264,9 +282,12 @@ impl std::error::Error for EntailError {}
 /// // axiomatic domain and range of `rdfs:subClassOf`), each is therefore a sub-class of
 /// // itself and of `rdfs:Resource`, and rdfs4 types every term an `rdfs:Resource`.
 /// assert!(closure.quad_refs().count() > 3);
-/// // RDFS defines 18 patterns; this crate fires 14, and the report names the other four.
-/// assert_eq!(report.completeness().missing(),
-///            [RuleId::RdfD1, RuleId::RdfD1a, RuleId::Rdfs14, RuleId::Rdfs14a]);
+/// // RDFS defines 18 patterns and this crate fires all 18 — the four that conclude about
+/// // a fresh blank node through `purrdf-datalog`'s restricted chase. The closure is still
+/// // not everything the regime entails, and the report says so with a BOUNDARY rather
+/// // than with a missing rule: a surrogate blank node is not an answer a SPARQL
+/// // entailment regime admits, so every conclusion mentioning one is withheld.
+/// assert!(report.completeness().missing().is_empty());
 /// assert!(!report.overclaims());
 /// ```
 pub fn materialize(
@@ -579,7 +600,7 @@ mod tests {
             .collect();
         assert_eq!(
             gaps,
-            vec![("Simple", 0), ("RDF", 2), ("RDFS", 4), ("OWL-RL", 0)],
+            vec![("Simple", 0), ("RDF", 0), ("RDFS", 0), ("OWL-RL", 0)],
             "(regime, rules the regime defines that the chase does not fire)"
         );
 
@@ -626,24 +647,23 @@ mod tests {
             assert!(implemented(Regime::OwlRl).contains(&present), "{present}");
         }
 
-        // `RDFS` still has a gap, and it is still named. The four are exactly the rules
-        // that conclude about a FRESH blank node, which is an existential head this
-        // crate's Datalog evaluator refuses.
+        // `RDFS` has NO gap left: the four rules that conclude about a fresh blank node
+        // are evaluated by the restricted chase, which is the consumer the existential
+        // head form was represented for. That is a claim about the RULE TABLE, and the
+        // report makes the other claim separately — the surrogates those four invent do
+        // not reach the answer, so the run is `ExactWithinBoundaries` and names the
+        // `surrogate` boundary rather than saying `Exact`.
         let (_, rdfs) = materialize(&ds, Regime::Rdfs).expect("rdfs");
-        let missing = rdfs.completeness().missing();
-        assert_eq!(
-            missing,
-            [
-                RuleId::RdfD1,
-                RuleId::RdfD1a,
-                RuleId::Rdfs14,
-                RuleId::Rdfs14a
-            ]
-        );
-        // The gap is in specification table order, like the table it is drawn from.
-        let mut sorted = missing.to_vec();
-        sorted.sort_unstable();
-        assert_eq!(missing, sorted.as_slice());
+        assert!(rdfs.completeness().missing().is_empty());
+        assert_eq!(rdfs.completeness(), &Completeness::ExactWithinBoundaries);
+        for rule in [
+            RuleId::RdfD1,
+            RuleId::RdfD1a,
+            RuleId::Rdfs14,
+            RuleId::Rdfs14a,
+        ] {
+            assert!(implemented(Regime::Rdfs).contains(&rule), "{rule}");
+        }
     }
 
     /// THE OVERCLAIM GATE: a report may never say `Exact` while naming a boundary.
@@ -1326,7 +1346,8 @@ mod tests {
     /// would tell a caller nothing about how far over they are.
     #[test]
     fn an_exhausted_budget_is_a_refusal_with_an_accurate_report() {
-        use purrdf_datalog::seminaive::{BudgetResource, EvalError, MAX_STORED_FACTS};
+        use purrdf_datalog::chase::ChaseError;
+        use purrdf_datalog::seminaive::{BudgetResource, MAX_STORED_FACTS};
 
         /// `rdfs:domain` declarations on `p`.
         const CLASSES: usize = 360;
@@ -1347,7 +1368,10 @@ mod tests {
         }
         let ds = b.freeze().expect("freeze");
 
-        let Err(EntailError::Evaluate(EvalError::BudgetExhausted { resource, report })) =
+        // The `RDFS` lane runs through the restricted chase (it states four existential
+        // rules), so its ceiling refusal is the chase's — the SAME three fixed constants,
+        // charged the same way, refused by name rather than truncated.
+        let Err(EntailError::Chase(ChaseError::BudgetExhausted { resource, report })) =
             materialize(&ds, Regime::Rdfs)
         else {
             panic!("a cross product past a fixed ceiling must be refused, not truncated");

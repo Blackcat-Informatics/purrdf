@@ -194,6 +194,56 @@
 #   131,072 — 0.23% and 0.13%. The corpus worst case is still the RDFS lane's, unchanged
 #   at 2,577 join steps and 208 stored facts in subclass_chain: 0.25% and 0.16%.
 #
+# AND EVERY GOLDEN MOVED A FIFTH TIME — the RDF and RDFS lanes now state the four
+# patterns whose conclusions are EXISTENTIALLY QUANTIFIED, and every lane's
+# contract-hash moved. Five causes account for every byte, and only one of them adds a
+# line to any closure.
+#
+#   I. rdfD1, rdfD1a, rdfs14 AND rdfs14a NOW FIRE. Each concludes about a FRESH blank
+#      node — the surrogate RDF 1.2 Semantics writes `_:nnn` — which is an existential
+#      head a least-fixpoint evaluator over definite clauses has no semantics for. Those
+#      two lanes are therefore evaluated by purrdf-datalog's RESTRICTED CHASE instead:
+#      each surrogate is a frontier-addressed Skolem witness, so re-deriving an
+#      obligation recovers the same witness and the fixpoint converges, and the clause
+#      set's termination is COMPUTED — constant-refined weak acyclicity over the position
+#      dependency graph — rather than assumed or asked for. implemented(RDF) is 3 of 3
+#      and implemented(RDFS) 18 of 18 where they were 1 and 14, so both `missing` lists
+#      are empty and both completeness lines read exact-within-boundaries.
+#
+#  II. THE SURROGATES DO NOT REACH THE ANSWER, AND THAT IS REQUIRED. A SPARQL entailment
+#      regime draws its answers from the SCOPING GRAPH, and a surrogate is not in it, so
+#      every conclusion mentioning one is dropped at the materialization boundary and
+#      counted. The W3C case rdfs13 is the proof: it asks `?L rdf:type rdfs:Literal` over
+#      a graph whose only literal is "foo" and demands ZERO rows, which rdfD1's surrogate
+#      would otherwise supply through rdfs1, rdfs13 and rdfs9. Every RDF and RDFS report
+#      therefore gains the `surrogate` boundary. Nothing surrogate-FREE is lost: replacing
+#      a term by a fresh blank node only weakens a triple, so every conclusion that does
+#      not mention a surrogate was already licensed by the triple it stands for.
+#
+# III. ONE LINE IS NEW IN EVERY RDF CLOSURE, AND IT IS A GENUINE ENTAILMENT. rdfD1a is
+#      premise-free — `_:nnn rdf:type ddd` holds for any graph, even the empty one — so
+#      the closure really does use rdf:type as a predicate and rdfD2 types it an
+#      rdf:Property. `rdf:type rdf:type rdf:Property` therefore appears in every RDF
+#      closure that did not already hold it, INCLUDING the empty graph's. The RDFS lane
+#      already held that line through the axiomatic triples, so no RDFS closure gains a
+#      line at all: every RDFS conclusion the surrogates license mentions one.
+#
+#  IV. THE BUDGET IS THE CHASE'S OWN MEASUREMENT. The RDF and RDFS lanes' join-steps,
+#      stored-facts and term-arena-bytes are now purrdf-datalog's ChaseOutcome budget
+#      rather than its Evaluation budget — the same three coordinates under the same three
+#      definitions, counted by the engine that did the work. The chase is a naive fixpoint
+#      that re-derives against the whole store each round rather than a semi-naive one, so
+#      join-steps rises; stored-facts rises by the surrogate facts, which are stored even
+#      though they are withheld. Both stay far below their ceilings.
+#
+#   V. EVERY CONTRACT HASH MOVED, INCLUDING OWL-RL'S AND D'S, AND NO OWL 2 RL RULE
+#      CHANGED. A rule that concludes `false` is lowered into a clause whose head names a
+#      clash marker built from the rule's DECLARATION INDEX, and declaring rdfD1 and
+#      rdfD1a ahead of rdfD2 — where RDF 1.2 Semantics §8.1.1 puts them — renumbers every
+#      rule after them. The digest is allowed to be conservative in exactly this
+#      direction: refusing a cached closure that could have been kept is a cost, trusting
+#      one minted under a different rule set is a defect.
+#
 # WHAT MOVED IN THIS GOLDEN:
 #
 # NEW FIXTURE — no committed golden moved; this one did not exist.
@@ -247,15 +297,14 @@
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
 <http://www.w3.org/2002/07/owl#equivalentClass> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
 --- report ---
-  completeness: sound-incomplete
-  missing: (2)
-      rdfD1 rdfD1a
+  completeness: exact-within-boundaries
+  missing: (0)
   rules-fired: (1)
       rdfD2=2
-  boundaries: (2)
-      axiomatic-triples datatype-value-space
-  budget: join-steps=5 stored-facts=5 term-arena-bytes=259
-  contract-hash: e3dfc92e2575713a6a555ef1dc5688d9086fe0a41c8eb0dd27aff5579db33158
+  boundaries: (3)
+      axiomatic-triples datatype-value-space surrogate
+  budget: join-steps=22 stored-facts=8 term-arena-bytes=524
+  contract-hash: 9724540a02daf06f349ba8aecf52f9e3e21abf7042d1bfcc630172baa7f23ee3
   inconsistency: none
   overclaims: false
 
@@ -392,16 +441,15 @@
 <http://www.w3.org/2002/07/owl#equivalentClass> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
 <http://www.w3.org/2002/07/owl#equivalentClass> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2002/07/owl#equivalentClass> .
 --- report ---
-  completeness: sound-incomplete
-  missing: (4)
-      rdfD1 rdfD1a rdfs14 rdfs14a
-  rules-fired: (10)
-      rdfD2=4 rdfs1=3 rdfs2=13 rdfs3=10 rdfs4=38 rdfs6=18 rdfs8=18 rdfs9=3
-      rdfs10=17 rdfs13=3
-  boundaries: (2)
-      axiomatic-triples datatype-value-space
-  budget: join-steps=2101 stored-facts=179 term-arena-bytes=1835
-  contract-hash: 3083bceef6ed2293040a176631681ad0ab5ae1d6a79c4f75327184f60972cc2c
+  completeness: exact-within-boundaries
+  missing: (0)
+  rules-fired: (9)
+      rdfD2=5 rdfs1=3 rdfs2=24 rdfs3=13 rdfs4=26 rdfs6=18 rdfs8=18 rdfs10=17
+      rdfs13=3
+  boundaries: (3)
+      axiomatic-triples datatype-value-space surrogate
+  budget: join-steps=8870 stored-facts=190 term-arena-bytes=1983
+  contract-hash: f6a5eff90528f49ba8d3b83ae7feac8e3b71586f320fb478c6ddb60ca6dc979e
   inconsistency: none
   overclaims: false
 
@@ -530,7 +578,7 @@
   boundaries: (1)
       datatype-value-space
   budget: join-steps=1981 stored-facts=114 term-arena-bytes=2355
-  contract-hash: 93c1ae5a8efc1a4fb642111c1d19d0c8539ddfa02926813c6afd3fad067a4867
+  contract-hash: 61a9a84001b40b06a8dfe4b38e331ca1943893cbd191b272d6ffead048fa2de0
   inconsistency: none
   overclaims: false
 
@@ -579,6 +627,6 @@
   boundaries: (1)
       datatype-value-space
   budget: join-steps=0 stored-facts=35 term-arena-bytes=1688
-  contract-hash: 04878a1e6a2961a3bdc5e54ba3ebb8364f8f08cf49b7a9d3fe33835f6cf8e6d0
+  contract-hash: 20ac9aa48ce8dd9b25bc7239798566da2d1559458c6ed12befa520c3fdb16cb7
   inconsistency: none
   overclaims: false

@@ -201,6 +201,66 @@ pub(crate) const OWL_TARGETVALUE: &str = "http://www.w3.org/2002/07/owl#targetVa
 
 // --- OWL 2 RL equality and datatype vocabulary (Tables 4 and 8). ---
 
+// --- OWL 2 role characteristics, self restrictions and built-in roles. ---
+
+/// `owl:ReflexiveProperty` — the global role axiom `⊤ ⊑ ∃r.Self`.
+pub(crate) const OWL_REFLEXIVEPROPERTY: &str = "http://www.w3.org/2002/07/owl#ReflexiveProperty";
+/// `owl:hasSelf` — the local reflexivity restriction `∃r.Self`.
+pub(crate) const OWL_HASSELF: &str = "http://www.w3.org/2002/07/owl#hasSelf";
+/// `owl:disjointUnionOf` — `C ≡ C₁ ⊔ … ⊔ Cₙ` with the `Cᵢ` pairwise disjoint.
+pub(crate) const OWL_DISJOINTUNIONOF: &str = "http://www.w3.org/2002/07/owl#disjointUnionOf";
+/// `owl:NegativePropertyAssertion` — the reified `¬p(s, o)` axiom's class.
+pub(crate) const OWL_NEGATIVEPROPERTYASSERTION: &str =
+    "http://www.w3.org/2002/07/owl#NegativePropertyAssertion";
+/// `owl:topObjectProperty` — the universal object role.
+pub(crate) const OWL_TOPOBJECTPROPERTY: &str = "http://www.w3.org/2002/07/owl#topObjectProperty";
+/// `owl:bottomObjectProperty` — the empty object role.
+pub(crate) const OWL_BOTTOMOBJECTPROPERTY: &str =
+    "http://www.w3.org/2002/07/owl#bottomObjectProperty";
+/// `owl:topDataProperty` — the universal data role.
+pub(crate) const OWL_TOPDATAPROPERTY: &str = "http://www.w3.org/2002/07/owl#topDataProperty";
+/// `owl:bottomDataProperty` — the empty data role.
+pub(crate) const OWL_BOTTOMDATAPROPERTY: &str = "http://www.w3.org/2002/07/owl#bottomDataProperty";
+
+// --- OWL 2 data ranges (the concrete domain). ---
+
+/// `owl:onDatatype` — the base datatype of a datatype restriction.
+pub(crate) const OWL_ONDATATYPE: &str = "http://www.w3.org/2002/07/owl#onDatatype";
+/// `owl:withRestrictions` — the facet list of a datatype restriction.
+pub(crate) const OWL_WITHRESTRICTIONS: &str = "http://www.w3.org/2002/07/owl#withRestrictions";
+/// `owl:datatypeComplementOf` — the complement of a data range.
+pub(crate) const OWL_DATATYPECOMPLEMENTOF: &str =
+    "http://www.w3.org/2002/07/owl#datatypeComplementOf";
+/// `owl:onDataRange` — the filler of a qualified DATA cardinality restriction.
+pub(crate) const OWL_ONDATARANGE: &str = "http://www.w3.org/2002/07/owl#onDataRange";
+/// `owl:onProperties` — the property list of an n-ary data restriction.
+pub(crate) const OWL_ONPROPERTIES: &str = "http://www.w3.org/2002/07/owl#onProperties";
+/// `owl:DataRange` — OWL 1's deprecated spelling of `rdfs:Datatype`.
+pub(crate) const OWL_DATARANGE: &str = "http://www.w3.org/2002/07/owl#DataRange";
+/// `owl:real` — OWL 2's built-in datatype for the real numbers.
+pub(crate) const OWL_REAL: &str = "http://www.w3.org/2002/07/owl#real";
+/// `owl:rational` — OWL 2's built-in datatype for the rationals.
+pub(crate) const OWL_RATIONAL: &str = "http://www.w3.org/2002/07/owl#rational";
+
+// --- OWL 2 ontology header and axiom/annotation reification. ---
+
+/// `owl:imports` — the ontology-document import that fixes the imports closure.
+pub(crate) const OWL_IMPORTS: &str = "http://www.w3.org/2002/07/owl#imports";
+/// `owl:versionIRI` — the ontology's version identity.
+pub(crate) const OWL_VERSIONIRI: &str = "http://www.w3.org/2002/07/owl#versionIRI";
+/// `owl:OntologyProperty` — the class of ontology-header properties.
+pub(crate) const OWL_ONTOLOGYPROPERTY: &str = "http://www.w3.org/2002/07/owl#OntologyProperty";
+/// `owl:Axiom` — the class of a reified (annotated) axiom.
+pub(crate) const OWL_AXIOM: &str = "http://www.w3.org/2002/07/owl#Axiom";
+/// `owl:Annotation` — the class of a reified (annotated) annotation.
+pub(crate) const OWL_ANNOTATION: &str = "http://www.w3.org/2002/07/owl#Annotation";
+/// `owl:annotatedSource` — the subject of a reified axiom or annotation.
+pub(crate) const OWL_ANNOTATEDSOURCE: &str = "http://www.w3.org/2002/07/owl#annotatedSource";
+/// `owl:annotatedProperty` — the predicate of a reified axiom or annotation.
+pub(crate) const OWL_ANNOTATEDPROPERTY: &str = "http://www.w3.org/2002/07/owl#annotatedProperty";
+/// `owl:annotatedTarget` — the object of a reified axiom or annotation.
+pub(crate) const OWL_ANNOTATEDTARGET: &str = "http://www.w3.org/2002/07/owl#annotatedTarget";
+
 /// `owl:differentFrom` — the negation of `owl:sameAs`, which `eq-diff1` clashes against
 /// and `dt-diff` concludes.
 pub(crate) const OWL_DIFFERENTFROM: &str = "http://www.w3.org/2002/07/owl#differentFrom";

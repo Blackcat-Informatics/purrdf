@@ -41,6 +41,7 @@ use crate::interner::{Interner, intern_into};
 use crate::owl_dl::Kb;
 use crate::owl_dl::concept::{Concept, Role};
 use crate::owl_dl::parser::{CeExtractor, TripleIndex, Vocab, index_insert};
+use crate::report::{Construct, ReasoningReport};
 use crate::vocab::{OWL_SAMEAS, RDF_TYPE, RDFS_DOMAIN, RDFS_RANGE, RDFS_SUBCLASSOF};
 
 /// A node of a query basic-graph-pattern triple: a variable (by name) or a concrete
@@ -117,6 +118,36 @@ pub fn materialize_dl(
     ds: &RdfDataset,
     query_bgp: &[QTriple],
 ) -> Result<Arc<RdfDataset>, EntailError> {
+    materialize_dl_reported(ds, query_bgp).map(|(dataset, _)| dataset)
+}
+
+/// [`materialize_dl`], plus the [`ReasoningReport`] for the run.
+///
+/// # Why this exists beside the plain seam
+///
+/// The reverse mapping meets constructs it cannot fully handle — an
+/// `owl:propertyChainAxiom`, an `owl:imports`, a datatype restriction, a term of the
+/// reserved vocabulary this release does not know — and every one of them used to vanish
+/// without a word. They are now [`Boundary`](crate::Boundary)s, and a boundary that no
+/// caller can read is only a slower kind of silence, so this is the entry point that hands
+/// them over. [`materialize_dl`] delegates here and discards the report, exactly as
+/// [`materialize`](crate::materialize) does NOT: the augmented dataset is a value a caller
+/// may legitimately want on its own, and the boundary list is one call away rather than a
+/// second engine.
+///
+/// The report's [`Completeness`](crate::Completeness) is
+/// [`Exact`](crate::Completeness::Exact) when the ontology held nothing this layer could
+/// not read, and [`ExactWithinBoundaries`](crate::Completeness::ExactWithinBoundaries) when
+/// it did — never `Exact` beside a non-empty boundary list, which is the overclaim
+/// [`ReasoningReport::overclaims`] forbids.
+///
+/// # Errors
+///
+/// The same as [`materialize_dl`].
+pub fn materialize_dl_reported(
+    ds: &RdfDataset,
+    query_bgp: &[QTriple],
+) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
     let mut kb = Kb::from_dataset(ds)?;
     if !kb.is_consistent()? {
         return Err(EntailError::Unsatisfiable);
@@ -144,8 +175,12 @@ pub fn materialize_dl(
         .collect();
 
     // Extract query class expressions (borrows the interner immutably; the concept
-    // table is a disjoint field, interned below).
-    let raw_tasks = extract_tasks(&kb.interner, &q_index, &v, &resolved)?;
+    // table is a disjoint field, interned below). A class expression written in the QUERY
+    // can meet a boundary just as one written in the data can, so the extractor's
+    // boundaries join the knowledge base's.
+    let (raw_tasks, query_boundaries) = extract_tasks(&kb.interner, &q_index, &v, &resolved)?;
+    let mut boundaries = kb.boundaries().clone();
+    boundaries.extend(query_boundaries);
 
     // Intern all concepts we must reason about, then finalize the negation cache once.
     // `owl:Thing`/`owl:Nothing` reason as `⊤`/`⊥`, never as opaque atomic classes.
@@ -166,8 +201,10 @@ pub fn materialize_dl(
     inject_same_as(&mut b, &kb, &data_index);
     inject_tasks(&mut b, &kb, &q_index, &named_cid, &tasks, &mut fresh)?;
 
-    b.freeze()
-        .map_err(|e| EntailError::Build(format!("freeze augmented dataset: {e}")))
+    let dataset = b
+        .freeze()
+        .map_err(|e| EntailError::Build(format!("freeze augmented dataset: {e}")))?;
+    Ok((dataset, ReasoningReport::of_dl_run(&boundaries)))
 }
 
 /// Resolve a query node to an interned id (a variable yields `None`).
@@ -245,7 +282,7 @@ fn extract_tasks(
     q_index: &TripleIndex,
     v: &Vocab,
     resolved: &[(Option<u32>, Option<u32>, Option<u32>)],
-) -> Result<Vec<RawTask>, EntailError> {
+) -> Result<(Vec<RawTask>, BTreeSet<Construct>), EntailError> {
     let mut ce = CeExtractor::new(q_index, interner, v);
     let mut tasks = Vec::new();
     let mut seen: BTreeSet<(u8, u32)> = BTreeSet::new();
@@ -293,7 +330,8 @@ fn extract_tasks(
             tasks.push(RawTask::Range { prop: sid });
         }
     }
-    Ok(tasks)
+    let boundaries = ce.boundaries().clone();
+    Ok((tasks, boundaries))
 }
 
 /// The concept a named class IRI denotes: `⊤` for `owl:Thing`, `⊥` for `owl:Nothing`,
@@ -414,6 +452,17 @@ fn inject_same_as(b: &mut RdfDatasetBuilder, kb: &Kb, data_index: &TripleIndex) 
                 }
                 let p_id = intern_into(b, kb.interner.value(p));
                 for &s2 in &s_class {
+                    // An `owl:sameAs` between an individual and a LITERAL puts the literal
+                    // in the individual's equality class, so re-stating the individual's
+                    // triples over it would put a literal in SUBJECT position — a
+                    // generalized-RDF triple the dataset IR cannot hold, which used to
+                    // fail the whole freeze. The conclusion is genuinely entailed and
+                    // genuinely unrepresentable, so it is abandoned here exactly as the
+                    // forward chase abandons its own; every representable conclusion of
+                    // the same equality class is still stated.
+                    if !kb.interner.is_subject(s2) {
+                        continue;
+                    }
                     for &o2 in &o_class {
                         if s2 == s && o2 == o {
                             continue;

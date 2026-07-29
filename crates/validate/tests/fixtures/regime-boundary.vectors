@@ -57,16 +57,15 @@ overclaims false
 @report
 purrdf-reasoning-report 1
 regime rdf
-completeness sound-incomplete 2
-missing rdfD1
-missing rdfD1a
+completeness exact-within-boundaries
 fired rdfD2 2
 boundary axiomatic-triples the FINITE part of the RDF and RDFS axiomatic triples — the fixed domain, range, type and sub-class statements about the RDF and RDFS vocabulary itself — is asserted as a premise, so every conclusion it licenses is drawn; two things are not. The container-membership family rdf:_1, rdf:_2, … is unbounded and no forward chase can materialize an infinite set, so rdfs12 fires only on a container property the graph itself types. And the asserted axioms are premises rather than conclusions, so the closure does not restate them: they are entailed but not emitted
 boundary datatype-value-space rdfD1 and rdfD1a conclude about a FRESH blank node standing for a datatyped literal, or for an inhabited value space, and an existentially quantified head is not a Datalog clause: the evaluator mints no terms, so neither rule fires. rdfs1 recognizes the datatypes RDF 1.2 Semantics §8 makes mandatory (rdf:langString, rdf:dirLangString, xsd:string) and no others. The OWL 2 RL rules quantified over value spaces (dt-type2, dt-eq, dt-diff) DO fire, over the literals the dataset holds rather than over the infinitely many a value space contains, and value-space membership is decided through the candidate datatype's LEXICAL space, so a value in a datatype's value space whose lexical form is not in that datatype's lexical space is not found: "1.0"^^xsd:decimal is not typed xsd:integer. A datatype purrdf-xsd does not model is not judged either way
-budget join-steps 3
-budget stored-facts 3
-budget term-arena-bytes 168
-contract-hash e3dfc92e2575713a6a555ef1dc5688d9086fe0a41c8eb0dd27aff5579db33158
+boundary surrogate rdfD1, rdfD1a, rdfs14 and rdfs14a all conclude about a FRESH blank node — the surrogate the specification writes `_:nnn`. All four FIRE: the restricted chase mints each surrogate as a frontier-addressed Skolem witness, so re-deriving the same obligation reuses the same witness and the fixpoint converges, and the closure is closed under everything the surrogate then licenses. What does not reach the answer is the surrogate ITSELF: every conclusion mentioning one is dropped at the materialization boundary and counted here. That is a requirement of SPARQL's entailment regimes, not a shortcut. The regime's answers are drawn from the SCOPING GRAPH, and a surrogate is not in it, so a solution binding a variable to one is not an answer the regime admits. The W3C case `rdfs13` is the proof: it asks `?L rdf:type rdfs:Literal` over a graph whose only literal is "foo" and requires ZERO rows, while rdfD1's surrogate gives `_:nnn rdf:type xsd:string` and hence `_:nnn rdf:type rdfs:Literal` through rdfs1, rdfs13 and rdfs9. Emitting that row would be WRONG, where withholding it is merely incomplete. Nothing surrogate-FREE is lost by the exclusion: replacing a term by a fresh blank node can only weaken a triple, so every conclusion that does not mention a surrogate was already licensed by the triple the surrogate stands for
+budget join-steps 25
+budget stored-facts 6
+budget term-arena-bytes 433
+contract-hash 9724540a02daf06f349ba8aecf52f9e3e21abf7042d1bfcc630172baa7f23ee3
 inconsistency none
 overclaims false
 @end
@@ -225,28 +224,25 @@ overclaims false
 @report
 purrdf-reasoning-report 1
 regime rdfs
-completeness sound-incomplete 4
-missing rdfD1
-missing rdfD1a
-missing rdfs14
-missing rdfs14a
-fired rdfD2 3
+completeness exact-within-boundaries
+fired rdfD2 5
 fired rdfs1 3
-fired rdfs2 15
-fired rdfs3 11
-fired rdfs4 38
+fired rdfs2 25
+fired rdfs3 13
+fired rdfs4 27
 fired rdfs6 18
 fired rdfs8 19
-fired rdfs9 6
+fired rdfs9 3
 fired rdfs10 18
 fired rdfs11 1
 fired rdfs13 3
 boundary axiomatic-triples the FINITE part of the RDF and RDFS axiomatic triples — the fixed domain, range, type and sub-class statements about the RDF and RDFS vocabulary itself — is asserted as a premise, so every conclusion it licenses is drawn; two things are not. The container-membership family rdf:_1, rdf:_2, … is unbounded and no forward chase can materialize an infinite set, so rdfs12 fires only on a container property the graph itself types. And the asserted axioms are premises rather than conclusions, so the closure does not restate them: they are entailed but not emitted
 boundary datatype-value-space rdfD1 and rdfD1a conclude about a FRESH blank node standing for a datatyped literal, or for an inhabited value space, and an existentially quantified head is not a Datalog clause: the evaluator mints no terms, so neither rule fires. rdfs1 recognizes the datatypes RDF 1.2 Semantics §8 makes mandatory (rdf:langString, rdf:dirLangString, xsd:string) and no others. The OWL 2 RL rules quantified over value spaces (dt-type2, dt-eq, dt-diff) DO fire, over the literals the dataset holds rather than over the infinitely many a value space contains, and value-space membership is decided through the candidate datatype's LEXICAL space, so a value in a datatype's value space whose lexical form is not in that datatype's lexical space is not found: "1.0"^^xsd:decimal is not typed xsd:integer. A datatype purrdf-xsd does not model is not judged either way
-budget join-steps 2257
-budget stored-facts 190
-budget term-arena-bytes 1810
-contract-hash 3083bceef6ed2293040a176631681ad0ab5ae1d6a79c4f75327184f60972cc2c
+boundary surrogate rdfD1, rdfD1a, rdfs14 and rdfs14a all conclude about a FRESH blank node — the surrogate the specification writes `_:nnn`. All four FIRE: the restricted chase mints each surrogate as a frontier-addressed Skolem witness, so re-deriving the same obligation reuses the same witness and the fixpoint converges, and the closure is closed under everything the surrogate then licenses. What does not reach the answer is the surrogate ITSELF: every conclusion mentioning one is dropped at the materialization boundary and counted here. That is a requirement of SPARQL's entailment regimes, not a shortcut. The regime's answers are drawn from the SCOPING GRAPH, and a surrogate is not in it, so a solution binding a variable to one is not an answer the regime admits. The W3C case `rdfs13` is the proof: it asks `?L rdf:type rdfs:Literal` over a graph whose only literal is "foo" and requires ZERO rows, while rdfD1's surrogate gives `_:nnn rdf:type xsd:string` and hence `_:nnn rdf:type rdfs:Literal` through rdfs1, rdfs13 and rdfs9. Emitting that row would be WRONG, where withholding it is merely incomplete. Nothing surrogate-FREE is lost by the exclusion: replacing a term by a fresh blank node can only weaken a triple, so every conclusion that does not mention a surrogate was already licensed by the triple the surrogate stands for
+budget join-steps 9455
+budget stored-facts 201
+budget term-arena-bytes 1958
+contract-hash f6a5eff90528f49ba8d3b83ae7feac8e3b71586f320fb478c6ddb60ca6dc979e
 inconsistency none
 overclaims false
 @end
@@ -413,7 +409,7 @@ boundary datatype-value-space rdfD1 and rdfD1a conclude about a FRESH blank node
 budget join-steps 2133
 budget stored-facts 127
 budget term-arena-bytes 2500
-contract-hash 93c1ae5a8efc1a4fb642111c1d19d0c8539ddfa02926813c6afd3fad067a4867
+contract-hash 61a9a84001b40b06a8dfe4b38e331ca1943893cbd191b272d6ffead048fa2de0
 inconsistency none
 overclaims false
 @end
@@ -550,28 +546,24 @@ overclaims false
 @report
 purrdf-reasoning-report 1
 regime rdfs
-completeness sound-incomplete 4
-missing rdfD1
-missing rdfD1a
-missing rdfs14
-missing rdfs14a
-fired rdfD2 3
+completeness exact-within-boundaries
+fired rdfD2 5
 fired rdfs1 3
-fired rdfs2 14
-fired rdfs3 9
-fired rdfs4 35
+fired rdfs2 22
+fired rdfs3 12
+fired rdfs4 25
 fired rdfs6 18
 fired rdfs8 17
-fired rdfs9 3
 fired rdfs10 16
 fired rdfs13 3
 boundary generalized-rdf a conclusion whose subject position would hold a literal or a triple term, or whose predicate position would hold anything but an IRI, is a generalized-RDF triple, which the RDF 1.2 dataset IR cannot represent; such a conclusion is derived in the evaluator's own term space and then abandoned when the answer is materialized, rather than a term being fabricated for it. It is still a PREMISE, so nothing downstream is lost. Rules that can conclude into subject position (rdfs3 / prp-rng, prp-symp, prp-inv1, prp-inv2, eq-ref, eq-rep-p) are therefore incomplete over literal objects, and every conclusion of dt-type2, dt-eq and dt-diff is unrepresentable by construction, because each of the three puts a literal in subject position
 boundary axiomatic-triples the FINITE part of the RDF and RDFS axiomatic triples — the fixed domain, range, type and sub-class statements about the RDF and RDFS vocabulary itself — is asserted as a premise, so every conclusion it licenses is drawn; two things are not. The container-membership family rdf:_1, rdf:_2, … is unbounded and no forward chase can materialize an infinite set, so rdfs12 fires only on a container property the graph itself types. And the asserted axioms are premises rather than conclusions, so the closure does not restate them: they are entailed but not emitted
 boundary datatype-value-space rdfD1 and rdfD1a conclude about a FRESH blank node standing for a datatyped literal, or for an inhabited value space, and an existentially quantified head is not a Datalog clause: the evaluator mints no terms, so neither rule fires. rdfs1 recognizes the datatypes RDF 1.2 Semantics §8 makes mandatory (rdf:langString, rdf:dirLangString, xsd:string) and no others. The OWL 2 RL rules quantified over value spaces (dt-type2, dt-eq, dt-diff) DO fire, over the literals the dataset holds rather than over the infinitely many a value space contains, and value-space membership is decided through the candidate datatype's LEXICAL space, so a value in a datatype's value space whose lexical form is not in that datatype's lexical space is not found: "1.0"^^xsd:decimal is not typed xsd:integer. A datatype purrdf-xsd does not model is not judged either way
-budget join-steps 2049
-budget stored-facts 174
-budget term-arena-bytes 1753
-contract-hash 3083bceef6ed2293040a176631681ad0ab5ae1d6a79c4f75327184f60972cc2c
+boundary surrogate rdfD1, rdfD1a, rdfs14 and rdfs14a all conclude about a FRESH blank node — the surrogate the specification writes `_:nnn`. All four FIRE: the restricted chase mints each surrogate as a frontier-addressed Skolem witness, so re-deriving the same obligation reuses the same witness and the fixpoint converges, and the closure is closed under everything the surrogate then licenses. What does not reach the answer is the surrogate ITSELF: every conclusion mentioning one is dropped at the materialization boundary and counted here. That is a requirement of SPARQL's entailment regimes, not a shortcut. The regime's answers are drawn from the SCOPING GRAPH, and a surrogate is not in it, so a solution binding a variable to one is not an answer the regime admits. The W3C case `rdfs13` is the proof: it asks `?L rdf:type rdfs:Literal` over a graph whose only literal is "foo" and requires ZERO rows, while rdfD1's surrogate gives `_:nnn rdf:type xsd:string` and hence `_:nnn rdf:type rdfs:Literal` through rdfs1, rdfs13 and rdfs9. Emitting that row would be WRONG, where withholding it is merely incomplete. Nothing surrogate-FREE is lost by the exclusion: replacing a term by a fresh blank node can only weaken a triple, so every conclusion that does not mention a surrogate was already licensed by the triple the surrogate stands for
+budget join-steps 8827
+budget stored-facts 192
+budget term-arena-bytes 1966
+contract-hash f6a5eff90528f49ba8d3b83ae7feac8e3b71586f320fb478c6ddb60ca6dc979e
 inconsistency none
 overclaims false
 @end
@@ -626,7 +618,7 @@ boundary datatype-value-space rdfD1 and rdfD1a conclude about a FRESH blank node
 budget join-steps 40
 budget stored-facts 98
 budget term-arena-bytes 1759
-contract-hash 04878a1e6a2961a3bdc5e54ba3ebb8364f8f08cf49b7a9d3fe33835f6cf8e6d0
+contract-hash 20ac9aa48ce8dd9b25bc7239798566da2d1559458c6ed12befa520c3fdb16cb7
 inconsistency none
 overclaims false
 @end
@@ -772,7 +764,7 @@ boundary datatype-value-space rdfD1 and rdfD1a conclude about a FRESH blank node
 budget join-steps 2058
 budget stored-facts 115
 budget term-arena-bytes 2466
-contract-hash 93c1ae5a8efc1a4fb642111c1d19d0c8539ddfa02926813c6afd3fad067a4867
+contract-hash 61a9a84001b40b06a8dfe4b38e331ca1943893cbd191b272d6ffead048fa2de0
 inconsistency none
 overclaims false
 @end

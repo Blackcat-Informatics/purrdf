@@ -458,8 +458,9 @@ fn constraint_clause(rule: ChaseRule, clause: &DlClause) -> DlClause {
 /// use purrdf_entail::{Regime, calculus_program};
 ///
 /// assert!(calculus_program(Regime::Simple).is_empty());
-/// // Fourteen RDF/RDFS patterns; `rdfs1` and `rdfs4` take three clauses each.
-/// assert_eq!(calculus_program(Regime::Rdfs).len(), 18);
+/// // All eighteen RDF/RDFS patterns; `rdfs1`, `rdfs4` and `rdfD1a` take three clauses
+/// // each, and `rdfD1` and `rdfs14` four (one mint plus one substitution per position).
+/// assert_eq!(calculus_program(Regime::Rdfs).len(), 30);
 /// // `D` is the five `dt-*` rules, and `dt-type1` states one clause per supported
 /// // datatype — thirty-two of them.
 /// assert_eq!(calculus_program(Regime::D).len(), 36);
@@ -594,6 +595,7 @@ mod tests {
     };
     use crate::{Regime, RuleId, implemented, rules};
     use purrdf_datalog::cache::contract_hash;
+    use purrdf_datalog::chase::certify;
     use purrdf_datalog::clause::HeadForm;
     use purrdf_datalog::seminaive::compile;
     use std::collections::BTreeSet;
@@ -718,19 +720,74 @@ mod tests {
         }
     }
 
-    /// Every declared program is a well-formed, admissible Datalog program.
+    /// Every declared program is ADMISSIBLE to the engine that will run it.
     ///
     /// A declaration the evaluator would refuse is not a statement of a calculus, it is a
-    /// typo; compiling it is the cheapest possible proof that it is neither non-Datalog in
-    /// its head form nor unsafe in its range restriction, and — since the seventeen
-    /// constraints reach it LOWERED — that the lowering is admissible too.
+    /// typo. There are now two engines, and which one a lane reaches is a property of its
+    /// program rather than of a hard-coded list — so this asserts the same thing of both:
+    ///
+    /// * a program of ATOMIC clauses must `compile`, which proves it is neither non-Datalog
+    ///   in its head form nor unsafe in its range restriction, and — since the seventeen
+    ///   constraints reach it LOWERED — that the lowering is admissible too;
+    /// * a program stating an EXISTENTIAL clause must be refused by `compile` BY NAME (a
+    ///   least-fixpoint evaluator over definite clauses has no semantics for `∃ȳ. …`) and
+    ///   must be certified terminating by the chase's own analysis, which is what admits it
+    ///   there.
     #[test]
-    fn every_declared_program_compiles() {
+    fn every_declared_program_is_admissible_to_the_engine_that_runs_it() {
+        let mut existential_lanes = 0_usize;
         for regime in ALL_REGIMES {
             let program = calculus_program(regime);
+            let existential = program
+                .iter()
+                .any(|clause| clause.head_form() == HeadForm::Existential);
+            if existential {
+                existential_lanes += 1;
+                let refusal = compile(program.clone())
+                    .expect_err("a least-fixpoint evaluator has no semantics for an existential");
+                assert!(
+                    refusal.to_string().contains("existential"),
+                    "{regime:?}: the refusal must NAME the head form: {refusal}"
+                );
+                assert!(
+                    certify(&program).is_certified(),
+                    "{regime:?}: the chase must certify the lane it is asked to run —                      {}",
+                    certify(&program)
+                );
+                continue;
+            }
             assert!(
                 compile(program).is_ok(),
                 "{regime:?}'s declared program must be admissible"
+            );
+        }
+        // The two lanes whose rule tables hold rdfD1 / rdfD1a / rdfs14 / rdfs14a.
+        assert_eq!(existential_lanes, 2);
+    }
+
+    /// NO LANE BOTH INVENTS TERMS AND DECIDES INCONSISTENCY.
+    ///
+    /// A `false`-headed rule is lowered into a clause over the internal clash relation, and
+    /// [`crate::engine`] turns a clash ROW into a witness by reading the derivation's
+    /// SOURCES — the matched body facts. A chase derivation records the clause that
+    /// concluded a fact, not the facts that satisfied its body, so a clash on the chase
+    /// path could be detected but not EXPLAINED. Rather than let that become a witness with
+    /// no premises, the two capabilities are kept in disjoint lanes, and this is the
+    /// assertion that keeps them there: a lane that gains an existential rule and a
+    /// constraint rule at once fails here, in the calculus, rather than silently degrading
+    /// a witness at run time.
+    #[test]
+    fn no_lane_both_states_an_existential_and_a_constraint() {
+        for regime in ALL_REGIMES {
+            let existential = calculus_program(regime)
+                .iter()
+                .any(|clause| clause.head_form() == HeadForm::Existential);
+            let constraint = ChaseRule::ALL
+                .into_iter()
+                .any(|rule| rule.fires_under(regime) && rule.is_constraint());
+            assert!(
+                !(existential && constraint),
+                "{regime:?} states both an existential rule and a rule that concludes                  `false`; the chase cannot carry a clash witness's premises"
             );
         }
     }
@@ -753,8 +810,8 @@ mod tests {
             sizes,
             vec![
                 (Regime::Simple, 0),
-                (Regime::Rdf, 1),
-                (Regime::Rdfs, 18),
+                (Regime::Rdf, 8),
+                (Regime::Rdfs, 30),
                 (Regime::OwlRl, PINNED_OWL_RL_CLAUSES),
                 (Regime::OwlDirect, 0),
                 (Regime::Rif, 0),
@@ -811,18 +868,29 @@ mod tests {
         }
     }
 
-    /// The `RDF` lane's calculus identity — unmoved by this branch, because its one rule is.
+    /// The `RDF` lane's calculus identity, moved deliberately by stating `rdfD1` and
+    /// `rdfD1a` — the two RDF patterns whose conclusions are existentially quantified.
+    /// A consumer holding a closure minted under the one-rule calculus can tell, which is
+    /// the whole point of the digest.
     const PINNED_RDF_HASH: &str =
-        "e3dfc92e2575713a6a555ef1dc5688d9086fe0a41c8eb0dd27aff5579db33158";
-    /// The `RDFS` lane's — likewise unmoved.
+        "9724540a02daf06f349ba8aecf52f9e3e21abf7042d1bfcc630172baa7f23ee3";
+    /// The `RDFS` lane's, moved for the same reason with `rdfs14` and `rdfs14a` besides.
     const PINNED_RDFS_HASH: &str =
-        "3083bceef6ed2293040a176631681ad0ab5ae1d6a79c4f75327184f60972cc2c";
-    /// The `OWL-RL` lane's, moved deliberately by stating Tables 4, 6 and 8 and by
-    /// lowering the seventeen `false`-headed rules into clauses the evaluator runs.
+        "f6a5eff90528f49ba8d3b83ae7feac8e3b71586f320fb478c6ddb60ca6dc979e";
+    /// The `OWL-RL` lane's. It moved on this branch WITHOUT any OWL 2 RL rule changing,
+    /// and the reason is worth stating rather than hiding: a rule that concludes `false` is
+    /// lowered into a clause whose head names a clash marker built from the rule's
+    /// DECLARATION INDEX, and declaring `rdfD1` and `rdfD1a` ahead of `rdfD2` — which is
+    /// where RDF 1.2 Semantics §8.1.1 puts them — renumbers every rule after them. So the
+    /// seventeen markers moved, the clauses that carry them moved, and the digest moved
+    /// with them. Nothing this lane concludes changed, and that is exactly the case the
+    /// digest is allowed to be conservative about: a consumer refusing a cached closure it
+    /// could have kept is a cost, whereas trusting one minted under a different rule set is
+    /// a defect.
     const PINNED_OWL_RL_HASH: &str =
-        "93c1ae5a8efc1a4fb642111c1d19d0c8539ddfa02926813c6afd3fad067a4867";
-    /// The `D` lane's, which had no calculus at all before this branch.
-    const PINNED_D_HASH: &str = "04878a1e6a2961a3bdc5e54ba3ebb8364f8f08cf49b7a9d3fe33835f6cf8e6d0";
+        "61a9a84001b40b06a8dfe4b38e331ca1943893cbd191b272d6ffead048fa2de0";
+    /// The `D` lane's, moved by the same renumbering — `dt-not-type` is a constraint too.
+    const PINNED_D_HASH: &str = "20ac9aa48ce8dd9b25bc7239798566da2d1559458c6ed12befa520c3fdb16cb7";
 
     /// Two lanes with different rule sets have different calculus identities, and the
     /// three rule-free regimes share the empty program's identity.
@@ -861,8 +929,8 @@ mod tests {
                 .filter(|rule| rule.fires_under(regime))
                 .count()
         };
-        assert_eq!(count(Regime::Rdf), 1);
-        assert_eq!(count(Regime::Rdfs), 14);
+        assert_eq!(count(Regime::Rdf), 3);
+        assert_eq!(count(Regime::Rdfs), 18);
         // The whole of OWL 2 Profiles §4.3 Tables 4-9 — seventy-eight rules — plus the
         // three RDFS-shaped rules the lane fires under no OWL name.
         assert_eq!(count(Regime::OwlRl), 78 + 3);
