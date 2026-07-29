@@ -46,10 +46,10 @@ committed block is stale).
 
 At the time of writing every suite is green — for example 1,105/1,105
 attempted shexTest validation cases, 126/126 W3C SHACL, 250/250 codec
-round-trips, 70/70 W3C SPARQL entailment-regime cases, and 233/261 agreeing
+round-trips, 70/70 W3C SPARQL entailment-regime cases, and 256/261 agreeing
 verdicts on the vendored W3C OWL 2 DL-consistency corpus — with the remaining
 non-passes strictly ledgered (five SPARQL fixtures with upstream-errata
-non-canonical XSD lexicals; 28 typed OWL 2 divergences). Always read the current
+non-canonical XSD lexicals; 5 typed OWL 2 divergences). Always read the current
 numbers from
 [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md)
 rather than this snapshot.

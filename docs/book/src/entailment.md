@@ -70,8 +70,8 @@ of a sentence:
 | Regime | Rule table | Defined | Implemented |
 | --- | --- | ---: | ---: |
 | `Simple` | — (identity closure) | 0 | 0 |
-| `RDF` | RDF 1.2 Semantics §8.1.1 | 3 | 1 |
-| `RDFS` | RDF 1.2 Semantics §8.1.1 + §9.2.1 | 18 | 14 |
+| `RDF` | RDF 1.2 Semantics §8.1.1 | 3 | 3 |
+| `RDFS` | RDF 1.2 Semantics §8.1.1 + §9.2.1 | 18 | 18 |
 | `OWL-RL` | OWL 2 Profiles §4.3 Tables 4–9 | 78 | 78 |
 | `D` | OWL 2 Profiles §4.3 Table 8 | 5 | 5 |
 | `OWL-Direct` | — (ALCOIQ tableau, not a fixed table) | 0 | 0 |
@@ -83,10 +83,15 @@ drift-guarded, so it cannot fall behind the code.
 
 Where the numbers stop:
 
-- **The four RDF/RDFS residuals are one gap, not four.** `rdfD1`, `rdfD1a`,
-  `rdfs14`, and `rdfs14a` each conclude about a *fresh* blank node. That is an
-  existentially quantified head, which the Datalog evaluator refuses by
-  construction rather than approximating with a minted surrogate.
+- **The four existential rules fire, but their conclusions are withheld.**
+  `rdfD1`, `rdfD1a`, `rdfs14` and `rdfs14a` each conclude about a *fresh* blank
+  node. The restricted chase mints each one as a frontier-addressed Skolem
+  witness and closes under it, so the rules genuinely fire — but every
+  conclusion mentioning a surrogate is dropped when the closure is materialized
+  back, because a SPARQL entailment regime draws its answers from the scoping
+  graph and a surrogate is not in it. The withholding is reported as
+  `Construct::Surrogate`. Nothing surrogate-free is lost: replacing a term with
+  a fresh blank node only weakens a triple.
 - **A complete rule table is not a complete closure.** `OWL-RL` fires all 78
   rules, and a run that met a boundary still reports
   `Completeness::ExactWithinBoundaries` rather than `Exact`. The two claims are
@@ -200,13 +205,13 @@ Two corpora measure two different things, and the distinction matters:
   ledgered residuals: the RDF/RDFS/OWL-RL chase, the OWL-Direct (DL) tableau, the
   RIF-Core rule engine, and RDF-axiomatic predicate typing, all run through the
   SPARQL conformance harness.
-- **W3C OWL 2 test suite — 233 of 261 cases agree, 28 ledgered**, zero
+- **W3C OWL 2 test suite — 256 of 261 cases agree, 5 ledgered**, zero
   unledgered. This corpus is *consistency*-shaped: all 261 vendored cases are
   `otest:ConsistencyTest` (226) or `otest:InconsistencyTest` (35), because the
   upstream material contains no entailment tests. It therefore grades the
   DL/tableau lane's satisfiability verdicts and says nothing about the OWL 2 RL
   rule table, which is a forward chase covered by authored per-rule fixtures.
-  Every one of the 28 divergences is named in a typed ledger; an unledgered
+  Every one of the 5 divergences is named in a typed ledger; an unledgered
   divergence, and a ledgered case that has started agreeing, are both hard
   failures.
 

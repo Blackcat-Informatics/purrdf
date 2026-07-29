@@ -33,26 +33,11 @@ EOF
   fi
 fi
 
-crates=(
-  purrdf-events
-  purrdf-iri
-  purrdf-xsd
-  purrdf-gts
-  purrdf-core
-  purrdf-columnar
-  purrdf-datalog
-  purrdf-entail
-  purrdf-sparql-algebra
-  purrdf-sparql-results
-  purrdf-sparql-eval
-  purrdf-rdf
-  purrdf-slice
-  purrdf-shapes
-  purrdf-shex
-  purrdf-validate
-  purrdf
-  purrdf-wasm
-)
+# One definition of the release set, shared with the release workflow and with
+# scripts/check-crates-io-records.sh.
+# shellcheck source=scripts/release-crates.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/release-crates.sh"
+crates=("${PURRDF_RELEASE_CRATES[@]}")
 
 crate_version_exists() {
   local crate="$1"
@@ -99,6 +84,36 @@ wait_for_crate_version() {
   echo "Timed out waiting for crates.io to expose ${crate} ${VERSION}" >&2
   exit 1
 }
+
+# State the irreversible plan BEFORE the long gates run, not one crate at a
+# time while publishing. This script is the token lane, so unlike the release
+# workflow it is ALLOWED to create crate records — but creating one is a
+# permanent, outward-facing act, so which records it will create is stated up
+# front where the operator can still stop. Any crates.io status other than
+# 200/404 aborts inside the helpers above rather than being read as "missing".
+echo "crates.io plan for ${VERSION}:"
+new_records=0
+for crate in "${crates[@]}"; do
+  if crate_version_exists "$crate"; then
+    printf '  skip           %s (version already published)\n' "$crate"
+  elif crate_record_exists "$crate"; then
+    printf '  publish        %s (crate record exists)\n' "$crate"
+  else
+    printf '  CREATE RECORD  %s (new crate — needs this token; a Trusted Publisher cannot create it)\n' "$crate"
+    new_records=$((new_records + 1))
+  fi
+done
+if [[ "$new_records" -gt 0 ]]; then
+  cat <<EOF
+
+${new_records} crate record(s) above do not exist yet. This run will create them.
+After it finishes, add a crates.io Trusted Publisher entry for each new crate
+(GitHub Actions / Blackcat-Informatics / purrdf / release-cargo.yaml / no
+environment) — until then the rust-v* release workflow refuses to publish, by
+design (scripts/check-crates-io-records.sh).
+EOF
+fi
+echo
 
 cargo fmt --all --check
 cargo check --workspace --lib --tests --locked

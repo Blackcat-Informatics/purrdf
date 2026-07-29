@@ -79,30 +79,6 @@ The five schema-language reverse paths are therefore PurRDF replacements, not
 compatibility layers around gmeow's private models. They share one deterministic
 schema-to-SHACL engine and caller-owned vocabulary boundary.
 
-## Datalog physical primitives
-
-A later snapshot than the original extraction above: `../gmeow-ontology` at
-`8906e41b15d5adaeccede35dab7e36c7eab86147`.
-
-`purrdf-datalog`'s physical primitives — `id`, `arena`, `bitset` and
-`binding_pattern` — were ported from that snapshot's
-`crates/logic/src/physical/`, with the branded-id type taken from its
-`crates/term-arena/src/id.rs`.
-
-The source is licensed `AGPL-3.0-only`; the port is relicensed
-`MIT OR Apache-2.0` under common ownership by the copyright holder. Every ported
-file carries a fresh SPDX header and no upstream licence text survives.
-
-The port is not a transcription. Three couplings were removed rather than
-vendored: the sister project's error and arbitrary-precision crates (unused by
-these modules), its shared term arena (the branded `Id<C>` is now defined here),
-and `smallvec` (replaced by a fixed-capacity inline tuple, so the crate keeps its
-two-dependency budget and its handles become `Copy`). Ordering was tightened
-beyond the source — `BindingPattern` and `TermRef` gained a total order so index
-selection can key an ordered map rather than a hash map, because in this crate no
-map iteration order may reach an output path. Nightly `portable_simd` and
-`unsafe` are absent from the ported subset, so the crate holds
-`#![forbid(unsafe_code)]` on stable without rewriting.
 - The legacy graph/tabular writers in `crates/pipeline/src/stages/lpg.rs` and
   `crates/pipeline/src/stages/export.rs` at
   `d7745068f59b6dee187ab6b806bd2c04c9a1280a` were used solely as migration
@@ -167,3 +143,56 @@ Cutover staging:
   integrated, not compatibility surfaces to preserve.
 - See `docs/CUTOVER.md` for the publish order, local gates, and dependency
   replacement rules.
+
+## Datalog physical primitives
+
+A later snapshot than the original extraction above: `../gmeow-ontology` at
+`8906e41b15d5adaeccede35dab7e36c7eab86147`.
+
+Every module of `purrdf-datalog` is accounted for below, ported or authored.
+An earlier revision of this section named only the first four and was corrected:
+the relicensing basis has to cover what was actually taken, and an incomplete
+record is the one kind of provenance error that cannot be caught by a gate —
+`scripts/check-licenses.py` verifies that a file *declares* an identifier, never
+that the declaration is warranted.
+
+Ported from that snapshot's `crates/logic/src/physical/`, module for module:
+
+| module | upstream |
+| --- | --- |
+| `id` | `physical/id.rs`, with the branded-id type from `crates/term-arena/src/id.rs` |
+| `arena` | `physical/arena.rs` |
+| `bitset` | `physical/bitset.rs` |
+| `binding_pattern` | `physical/binding_pattern.rs` |
+| `store` | `physical/store.rs` |
+| `cursor` | `physical/cursor.rs` |
+| `plan` | `physical/plan.rs` |
+| `seminaive` | `physical/seminaive.rs` |
+| `chase` | `physical/chase.rs` |
+| `proof` | `physical/proof.rs` |
+| `synth_corpus` | `crates/logic/src/synth_corpus.rs` |
+
+`cache` is a split: its plan identity, cache and canonical rule hash come from
+the tail of `physical/plan.rs`; its contract hash is authored here, modelled on
+the upstream contract-hash idea but computed over data rather than source text,
+because this workspace's wasm artifact is size-budgeted and embedding source to
+checksum it would spend the budget on a checksum.
+
+`clause` and `lib` are authored here. The DL-clause IR has no upstream
+counterpart: the disjunctive-TGD shape carrying atomic, conjunctive, disjunctive
+and empty heads in one type was designed for this crate.
+
+The source is licensed `AGPL-3.0-only`; the port is relicensed
+`MIT OR Apache-2.0` under common ownership by the copyright holder. Every ported
+file carries a fresh SPDX header and no upstream licence text survives.
+
+The port is not a transcription. Three couplings were removed rather than
+vendored: the sister project's error and arbitrary-precision crates (unused by
+these modules), its shared term arena (the branded `Id<C>` is now defined here),
+and `smallvec` (replaced by a fixed-capacity inline tuple, so the crate keeps its
+two-dependency budget and its handles become `Copy`). Ordering was tightened
+beyond the source — `BindingPattern` and `TermRef` gained a total order so index
+selection can key an ordered map rather than a hash map, because in this crate no
+map iteration order may reach an output path. Nightly `portable_simd` and
+`unsafe` are absent from the ported subset, so the crate holds
+`#![forbid(unsafe_code)]` on stable without rewriting.
