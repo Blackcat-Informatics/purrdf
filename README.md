@@ -89,7 +89,7 @@ but it assumes nothing about your ontology or application.
   unsoundness was found; all 18 RDF + RDFS patterns, the four existential ones
   firing through the restricted chase with their surrogate blank nodes withheld at
   the materialization boundary), an open-world OWL-Direct
-  ALCOIQ tableau, and RIF-Core rules. **Every closure comes back with a reasoning
+  SHOIQ(D) tableau, and RIF-Core rules. **Every closure comes back with a reasoning
   report** naming what fired, what did not, the boundaries met, the budget
   consumed, and the contract hash of the calculus that ran — so an incomplete
   answer can never be delivered as a complete one. One rule fires that no

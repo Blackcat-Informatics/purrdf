@@ -7,7 +7,7 @@
 //! interner; [`data`] is the CONCRETE domain — the data ranges and literal values a
 //! datatype map fixes rather than the ontology; [`parser`] reverse-maps an [`RdfDataset`]
 //! into a [`Kb`] (TBox, RBox,
-//! ABox, plus anonymous class expressions); [`tableau`] is the `ALCOIQ(D)` completion
+//! ABox, plus anonymous class expressions); [`tableau`] is the `SHOIQ(D)` completion
 //! procedure that decides consistency; and [`saturate`] is the consequence-based
 //! calculus that derives the WHOLE named-class subsumption relation in one fixpoint,
 //! so classification is not a loop over the tableau. [`Kb`] ties them together and exposes the

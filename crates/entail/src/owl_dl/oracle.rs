@@ -77,7 +77,7 @@
 //! to build a root for, so a signature with no individual would compare a nonempty-domain
 //! question against an empty-graph one.
 //!
-//! The signature is the ABSTRACT `ALCHOIQ` fragment, and the concrete domain is outside it by
+//! The signature is the ABSTRACT `SHOIQ(D)` fragment, and the concrete domain is outside it by
 //! construction rather than by omission: one interpretation here fixes a single domain `Δ`,
 //! while a data range is a subset of a second, disjoint value domain `Δ_D` that no amount of
 //! guessing over `Δ` can stand in for. Reading a data range as a subset of `Δ` would be a
@@ -95,7 +95,7 @@
 //!
 //! **Asserted where the bound is sufficient, counted where it is not:** the oracle finds no
 //! model over any domain up to its bound while the tableau answers consistent. In general
-//! this is NOT a divergence. `ALCHOIQ` has no bounded-model property — `≥3 r.⊤` alone has no
+//! this is NOT a divergence. `SHOIQ(D)` has no bounded-model property — `≥3 r.⊤` alone has no
 //! model over a two-element domain and is perfectly consistent — so "no model of size ≤ k"
 //! is usually silent about satisfiability, and such a case is tallied as `unbounded`.
 //!

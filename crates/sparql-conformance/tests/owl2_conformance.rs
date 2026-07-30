@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! W3C OWL 2 conformance: the vendored corpus, graded against PurRDF's
-//! `OWL-Direct` ALCOIQ tableau.
+//! `OWL-Direct` SHOIQ(D) tableau.
 //!
 //! # Read the row correctly
 //!
@@ -90,8 +90,9 @@ fn owl2_dl_consistency_conformance() {
         excluded.total
     );
     eprintln!(
-        "[w3c-owl2] of those {}: {} the tableau CANNOT DECIDE (it does not terminate), {} it \
-         decides today, {} it withholds on, {} carry no RDF/XML premise",
+        "[w3c-owl2] of those {}: {} the tableau could not decide when probed (non-terminating \
+         under the ceiling), {} it decided when probed, {} it withheld on, {} carry no RDF/XML \
+         premise — a recorded measurement read from census.tsv's dl_probe column, not a live run",
         excluded.total,
         excluded.non_terminating,
         excluded.decides,

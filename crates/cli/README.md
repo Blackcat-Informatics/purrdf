@@ -203,7 +203,7 @@ Materialize an entailment regime's closure over the source graph and write it ou
 | `rdfs` | RDFS entailment | — |
 | `owl-rl` | OWL 2 RL entailment | — |
 | `d` | Datatype entailment: Simple plus the five `dt-*` rules of OWL 2 Profiles §4.3 Table 8 | — |
-| `owl-direct` | The ALCOIQ tableau's query-independent augmentation | — |
+| `owl-direct` | The SHOIQ(D) tableau's query-independent augmentation | — |
 | `rif` | RIF-Core entailment under the rule document `--rules` names | **required** |
 
 `rdfs` fires 18 of the 18 RDF + RDFS patterns; `owl-rl` fires all 78 rules of

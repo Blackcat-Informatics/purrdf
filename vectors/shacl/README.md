@@ -21,14 +21,14 @@ manifests; expected-failure entries live in the harness xfail ledger,
 never here. The first-party frozen corpus in `crates/shapes/corpus/`
 remains separate and authoritative for purrdf-specific behavior.
 
-## First-party AF seam (`af/`)
+## Vendored AF seam (`af/`)
 
-`af/manifest.ttl` is a **first-party** conformance seam, NOT part of the
-vendored upstream mirror — upstream at the pinned commit ships no SHACL
-Advanced Features (AF) tests. The placeholder manifest declares itself a
-manifest with no entries, so the harness discovers **0 tests** from it today
-and the total stays 126. When upstream publishes AF manifests they vendor in
-here and the harness picks them up automatically (the harness discovers
-`af/manifest.ttl` directly, so the vendored root `manifest.ttl` stays
-pristine). First-party AF coverage (e.g. `sh:expression`) already lives in the
-shapes corpus (`crates/shapes/corpus`).
+`af/` is a **vendored third-party** seam, not part of the W3C mirror above and
+not first-party: its SHACL Advanced Features tests come from the pySHACL/DASH
+suite (Apache-2.0 — see `LICENSING.md`'s carve-out table), because the W3C
+suite at the pinned commit ships no AF tests of its own. The harness discovers
+`af/manifest.ttl` directly, so the vendored W3C root `manifest.ttl` stays
+pristine; the seam contributes **6** `sht:Validate` entries of the harness's
+126 total (120 from `core/` + `sparql/`). First-party AF coverage (e.g.
+`sh:expression`) lives separately in the shapes corpus
+(`crates/shapes/corpus`).

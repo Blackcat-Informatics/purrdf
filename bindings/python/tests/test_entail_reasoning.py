@@ -463,17 +463,35 @@ def test_an_asserted_conclusion_is_explained_by_being_asserted() -> None:
     assert "\nchecked true\n" in certificate
 
 
-@pytest.mark.parametrize("regime", [entail.Regime.RDF, entail.Regime.RDFS])
-def test_an_existential_head_has_no_checkable_proof(regime: entail.Regime) -> None:
-    """Four RDF/RDFS rules conclude about a FRESH blank node.
+def test_an_existential_rule_elsewhere_does_not_refuse_the_conclusion() -> None:
+    """The existential refusal is per CONCLUSION, not per regime.
 
-    An existentially quantified head has no Datalog semantics, so there is no head
-    for the checker to instantiate: a "proof" of such a step could only be
-    believed, which is precisely what a proof term exists not to require. The
-    refusal names the reason rather than returning an unverifiable derivation.
+    Four RDF/RDFS rules conclude about a fresh blank node, and an existentially
+    quantified head has no Datalog semantics — there is no head for the checker
+    to instantiate. That refuses the conclusions that NEED such a rule, not the
+    regime that merely contains one: `tom rdf:type Animal` is derived purely by
+    the subclass chain, an ordinary Datalog derivation, so `RDFS` explains it
+    with a proof the checker re-derives.
     """
+    answer, certificate = entail.explain_conclusion(
+        TAXONOMY, entail.Regime.RDFS, DERIVED_TRIPLE
+    )
+    # `asserted false`: the conclusion is DERIVED, not a given axiom — and the
+    # rules that derived it are ordinary Datalog rules, named in the answer.
+    assert answer.startswith("asserted false\n")
+    assert "rule rdfs" in answer
+    assert "\nchecked true\n" in certificate
+
+
+def test_a_goal_only_an_existential_rule_could_reach_refuses_by_name() -> None:
+    """Where the Datalog subset neither derives nor finds the goal given, and the
+    regime HAS existential rules, "not entailed" would be a false answer — one of
+    those rules may be what derives it, and this checker cannot produce a term
+    for such a step. `RDF`'s three-rule table cannot derive the subclass-chain
+    conclusion, so the same triple that `RDFS` explains refuses here, naming the
+    reason."""
     with pytest.raises(ValueError, match="existential"):
-        entail.explain_conclusion(TAXONOMY, regime, DERIVED_TRIPLE)
+        entail.explain_conclusion(TAXONOMY, entail.Regime.RDF, DERIVED_TRIPLE)
 
 
 def test_an_underivable_conclusion_is_a_hard_error() -> None:

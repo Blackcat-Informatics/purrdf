@@ -146,7 +146,7 @@ pub enum Regime {
     Rdfs,
     /// `entailment/OWL-RL` (a.k.a. OWL 2 RL) — RDFS + the OWL-RL-shaped rules.
     OwlRl,
-    /// `entailment/OWL-Direct` — open-world OWL DL via the ALCOIQ tableau. Not a
+    /// `entailment/OWL-Direct` — open-world OWL DL via the SHOIQ(D) tableau. Not a
     /// materialize-and-match affair; it needs the query's class expressions.
     OwlDirect,
     /// `entailment/RIF` — RIF-Core rule entailment; needs a parsed rule set.
@@ -218,7 +218,7 @@ pub enum Materialization<'a> {
     OwlRl,
     /// `entailment/D` — Simple entailment plus the five `dt-*` rules of Table 8.
     D,
-    /// `entailment/OWL-Direct` — the ALCOIQ tableau, directed by the query's basic graph
+    /// `entailment/OWL-Direct` — the SHOIQ(D) tableau, directed by the query's basic graph
     /// pattern.
     ///
     /// The pattern is what makes this lane query-directed: a class expression written in

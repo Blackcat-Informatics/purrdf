@@ -42,6 +42,7 @@ Those files are *not* Blackcat Informatics® copyright, are vendored verbatim, a
 | `crates/sparql-conformance/suite/w3c-sparql11/` | W3C `rdf-tests` SPARQL 1.1 suite, plus the referenced W3C RIF Working Group rule documents | `LicenseRef-W3C-Test-Suite` (W3C Test Suite / Software and Document License) |
 | `crates/sparql-conformance/suite/w3c-sparql12/` | W3C SPARQL 1.2 / RDF 1.2 suite | `LicenseRef-W3C-Test-Suite` |
 | `crates/sparql-conformance/entailment-suite/w3c-owl2/` | W3C OWL 2 test suite | `LicenseRef-W3C-Test-Suite` |
+| `crates/sparql-conformance/entailment-suite/w3c-owl2-rl/` | W3C OWL 2 test suite (entailment cases) | `LicenseRef-W3C-Test-Suite` |
 | `crates/rdf/tests/corpus/w3c/` | W3C `rdf-tests` syntax corpus | W3C test-suite dual licensing (see its `LICENSE`) |
 | `crates/rdf/tests/fixtures/jsonld-w3c-rec/` | W3C JSON-LD 1.1 test suite | W3C test-suite dual licensing (see its `LICENSE.md`) |
 | `crates/rdf/tests/fixtures/rdfc/` | W3C `rdf-canon` (RDFC-1.0) vectors | W3C Software and Document License |
@@ -63,7 +64,7 @@ repository:
 - `scripts/check-licenses.py` treats any directory under `crates/` or `bindings/` that
   holds a `LICENSES/` subdirectory as a vendored root, and fails the build if a file
   beneath one lacks a `.license` SPDX sidecar, an inline SPDX header, or a `REUSE.toml`
-  annotation. Today that covers the three W3C SPARQL/OWL 2 suites and the OBO Graphs
+  annotation. Today that covers the four W3C SPARQL/OWL 2 suites and the OBO Graphs
   schema closure.
 - `scripts/check-corpus-frozen.py` SHA-256-verifies `vectors/shacl`,
   `vectors/shexTest`, `crates/shapes/corpus`,

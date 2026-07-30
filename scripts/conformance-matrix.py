@@ -295,7 +295,10 @@ def _suite_entailment() -> SuiteResult:
     consistency-shaped upstream cases — so the harness emits a second line,
     `OWL2-DL-EXCLUDED`, tallying what the other 221 would do. It is scraped into
     this row's note so the pass count is never read as the whole upstream
-    material: most of the exclusions are cases the tableau decides today.
+    material: most of the exclusions are cases the tableau decided when the
+    exclusion was probed (a recorded measurement in census.tsv's dl_probe
+    column, not a live run — the harness reads the column and cannot detect a
+    regression among the excluded cases).
     """
     cmd = [
         "cargo", "test", "-p", "purrdf-sparql-conformance", "--locked",
@@ -323,8 +326,8 @@ def _suite_entailment() -> SuiteResult:
             detail = _augment(
                 detail,
                 f"corpus is a subset: {ex_total} more consistency-shaped cases "
-                f"upstream are NOT vendored ({decides} the tableau decides today, "
-                f"{non_term} non-terminating, {withholds} withheld, "
+                f"upstream are NOT vendored ({decides} the tableau decided when "
+                f"probed, {non_term} non-terminating, {withholds} withheld, "
                 f"{no_premise} with no RDF/XML premise)",
             )
         else:

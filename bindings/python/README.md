@@ -285,7 +285,7 @@ refusal, never a truncated closure handed back as a complete one. Being
 ## Description-Logic reasoning services
 
 Materialization is the chase. The OWL 2 Direct-Semantics *reasoner* is a second
-lane on the same module — an ALCOIQ tableau — and every one of its services is on
+lane on the same module — a SHOIQ(D) tableau — and every one of its services is on
 `purrdf.entail`. Each takes an N-Triples (or N-Quads) document and returns
 `(answer, certificate)` as a tuple, so a caller unpacks the evidence rather than
 being able to not ask for it:

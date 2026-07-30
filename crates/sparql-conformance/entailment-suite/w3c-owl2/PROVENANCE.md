@@ -9,7 +9,7 @@ This tree vendors the **W3C OWL 2 test suite**, pre-flattened to one directory
 per test case. It is consumed by the native OWL 2 grader
 (`crates/sparql-conformance/src/owl2.rs`, driven by
 `crates/sparql-conformance/tests/owl2_conformance.rs`), which decides each case's
-consistency through PurRDF's `OWL-Direct` ALCOIQ tableau and grades the answer
+consistency through PurRDF's `OWL-Direct` SHOIQ(D) tableau and grades the answer
 against the verdict the W3C published for it.
 
 ## What this corpus does and does NOT validate
@@ -101,7 +101,7 @@ The flattened source holds five W3C OWL 2 buckets. Exactly one is vendored here:
 |-----------------|------:|-----------|-----|
 | `w3c-owl2-full` | 261 | **yes** | The mainline bucket of `all.rdf`, taken whole. 226 consistency + 35 inconsistency cases, 202 KB, graded end-to-end in ~180 ms in a debug build. |
 | `w3c-owl2-el` | 19 | no | All 19 case names are, name-for-name, a subset of `w3c-owl2-full`. Vendoring them would duplicate payload for zero additional coverage. |
-| `w3c-owl2-full-decided` | 32 | no | Held to contain premises on which PurRDF's ALCOIQ tableau does not terminate inside any budget a required gate can carry. That is now **measured** rather than inherited — see *The exclusions, measured* below — and the measurement finds **30** non-terminating cases at a 40 s ceiling, `webont-i5-8-001` among them. A conformance row that cannot finish is not a conformance row, but the count is budget-dependent and is recorded with its budget. |
+| `w3c-owl2-full-decided` | 32 | no | Held to contain premises on which PurRDF's SHOIQ(D) tableau does not terminate inside any budget a required gate can carry. That is now **measured** rather than inherited — see *The exclusions, measured* below — and the measurement finds **30** non-terminating cases at a 40 s ceiling, `webont-i5-8-001` among them. A conformance row that cannot finish is not a conformance row, but the count is budget-dependent and is recorded with its budget. |
 | `w3c-owl2-full-divergence` | 122 | no | 3.9 MB — roughly twenty times the vendored payload — dominated by `webont-description-logic-*` premises of 100–220 KB each. Left out under the size discipline that governs this tree. |
 | `w3c-owl2-el-divergence` | 2 | no | Two cases from the same triage bucket as `w3c-owl2-full-divergence`, excluded with it. |
 

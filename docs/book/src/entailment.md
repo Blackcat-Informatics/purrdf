@@ -17,7 +17,7 @@ no async runtime, and no string round-trip.
 | Entry point | Regime(s) | Engine |
 | --- | --- | --- |
 | `materialize(ds, regime)` | `Simple`, `RDF`, `RDFS`, `OWL-RL`, `D` | Forward materialization ("chase") of the regime's declared clause program via a native semi-naive fixpoint. Returns `(closure, ReasoningReport)`; the report is not optional. |
-| `materialize_dl(...)` | `OWL-Direct` | Open-world OWL DL over an ALCOIQ tableau — it needs the query's class expressions, so it is not reachable through the plain `materialize` facade. |
+| `materialize_dl(...)` | `OWL-Direct` | Open-world OWL DL over a SHOIQ(D) tableau — it needs the query's class expressions, so it is not reachable through the plain `materialize` facade. |
 | `materialize_rif(...)` | `RIF` | RIF-Core rule entailment over a parsed `RuleSet`. |
 | `parse_rif_xml(...)` / `resolve_rif_imports(...)` | `RIF` | RIF-XML parsing with caller-owned, I/O-free import resolution. |
 | `rules(regime)` / `implemented(regime)` | — | The rule table a regime is *defined by*, and the subset this workspace fires. Their difference is the measurable gap. |
@@ -82,7 +82,7 @@ of a sentence:
 | `RDFS` | RDF 1.2 Semantics §8.1.1 + §9.2.1 | 18 | 18 |
 | `OWL-RL` | OWL 2 Profiles §4.3 Tables 4–9 | 78 | 78 |
 | `D` | OWL 2 Profiles §4.3 Table 8 | 5 | 5 |
-| `OWL-Direct` | — (ALCOIQ tableau, not a fixed table) | 0 | 0 |
+| `OWL-Direct` | — (SHOIQ(D) tableau, not a fixed table) | 0 | 0 |
 | `RIF` | — (caller-supplied rule set) | 0 | 0 |
 
 The per-rule breakdown — every rule id, its specification citation, and whether
@@ -171,7 +171,7 @@ the same report text as Rust for the same input.
 ## OWL-Direct: the tableau
 
 `OWL-Direct` semantics is open-world Description Logic, which a forward chase
-cannot answer. `materialize_dl` runs an **ALCOIQ tableau** instead — answering
+cannot answer. `materialize_dl` runs an **SHOIQ(D) tableau** instead — answering
 instance and subsumption queries via classification, realization, and
 query-directed materialization. Because it needs the query's class
 expressions, it has its own entry point rather than hiding behind

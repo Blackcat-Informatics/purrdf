@@ -102,7 +102,7 @@ template label legitimately recurs across `INSERT … WHERE` operations.
 The `entailment/` group's `sd:entailmentRegime` is read by the harness, which
 answers each case under the regime the manifest names: forward materialization via
 the native `purrdf-entail` reasoner for the RDF/RDFS/D/OWL-RL regimes, a
-query-directed ALCOIQ tableau (`purrdf_entail::materialize_dl`) for OWL-Direct, and
+query-directed SHOIQ(D) tableau (`purrdf_entail::materialize_dl`) for OWL-Direct, and
 a Horn forward chase over the referenced RIF-in-XML rule documents
 (`purrdf_entail::materialize_rif`) for RIF. **The entire group passes — 70 of 70,
 with zero ledgered residuals**, which the harness prints as

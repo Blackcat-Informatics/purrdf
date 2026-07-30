@@ -8,7 +8,7 @@
 //! Every case in `entailment-suite/w3c-owl2/` is a **satisfiability** case — the
 //! W3C published either `otest:ConsistencyTest` or `otest:InconsistencyTest` for
 //! it, and nothing else. The grader loads the case's verbatim RDF/XML premise
-//! ontology and asks PurRDF's open-world `OWL-Direct` ALCOIQ tableau (through
+//! ontology and asks PurRDF's open-world `OWL-Direct` SHOIQ(D) tableau (through
 //! [`purrdf_entail::materialize_dl_reported`]) whether it is consistent, then compares that
 //! answer with the published one.
 //!
@@ -320,7 +320,7 @@ pub fn discover(root: &Path) -> Result<Vec<Owl2Case>, String> {
     Ok(cases)
 }
 
-/// Decide one case with PurRDF's `OWL-Direct` ALCOIQ tableau.
+/// Decide one case with PurRDF's `OWL-Direct` SHOIQ(D) tableau.
 ///
 /// The premise is parsed by the first-party RDF/XML codec into the default graph
 /// (which is the only graph the DL knowledge-base builder reads) under a

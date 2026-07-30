@@ -1,15 +1,19 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! An `ALCOIQ(D)` tableau consistency procedure (the OWL-Direct decision core).
+//! A `SHOIQ(D)` tableau consistency procedure (the OWL-Direct decision core).
 //!
 //! This is a from-scratch implementation of the standard completion-graph algorithm
 //! (Horrocks & Sattler, "A Tableau Decision Procedure for SHOIQ", 2007; Baader et
-//! al., "The Description Logic Handbook", ch. 3) restricted to the `ALCOIQ` fragment
-//! the OWL-Direct fixtures exercise: the boolean connectives, existential/universal
-//! restrictions, qualified number restrictions (`Q`), inverse roles (`I`), and
-//! nominals (`O`), over a CONCRETE DOMAIN (`D`) of datatype values. Algorithms are not
-//! copyrightable; this code is original.
+//! al., "The Description Logic Handbook", ch. 3) over the `SHOIQ(D)` fragment: the
+//! boolean connectives, existential/universal restrictions, transitive roles (`S`),
+//! role hierarchies (`H`), qualified number restrictions (`Q`), inverse roles (`I`),
+//! and nominals (`O`), over a CONCRETE DOMAIN (`D`) of datatype values. Beyond the
+//! letters it also decides self-restrictions (`owl:hasSelf`, and through them the
+//! reflexive/irreflexive role axioms), role disjointness and asymmetry; the one
+//! `SROIQ` role feature it does NOT decide is `owl:propertyChainAxiom`, which is a
+//! named [`Construct::PropertyChain`](crate::report::Construct) boundary rather than
+//! a silent drop. Algorithms are not copyrightable; this code is original.
 //!
 //! ## Two domains, not one
 //!

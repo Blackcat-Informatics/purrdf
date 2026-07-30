@@ -483,7 +483,7 @@ impl Construct {
             }
             Self::PropertyChain => {
                 "owl:propertyChainAxiom states a COMPLEX role inclusion p₁ ∘ … ∘ pₙ ⊑ p, \
-                 and the ALCOIQ completion procedure here decides a hierarchy of SIMPLE \
+                 and the SHOIQ(D) completion procedure here decides a hierarchy of SIMPLE \
                  roles: it closes a role over its asserted sub-roles and inverses, which \
                  is a reachability question, whereas a chain axiom needs the role hierarchy \
                  compiled into a non-deterministic finite automaton per role and the \

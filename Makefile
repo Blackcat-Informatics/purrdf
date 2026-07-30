@@ -38,7 +38,7 @@ BINARYEN_VERSION := 130
 # context/options/registry engine, validation-scoped asserted-subclass
 # membership shared by native SHACL and SHACL-SPARQL, and now the entailment
 # engine, the nine OWL reasoner services AND the concrete domain — measures
-# 9_396_501 bytes against the 9_690_000 ceiling, which is 3.03% headroom. That
+# 9_396_985 bytes against the 9_690_000 ceiling, which is 3.02% headroom. That
 # figure is RECORDED AS A GATED CONSTANT below (WASM_SIZE_MEASURED_BYTES), not as
 # prose: it had already drifted 139_211 bytes behind the build once, because a
 # comment is the one part of this file nothing checks.
@@ -67,21 +67,21 @@ BINARYEN_VERSION := 130
 # reachable from no host at all; leaving them Rust-only would have been a
 # producer with no consumer, and dropping the three largest from wasm alone
 # would have left one of the four hosts unable to reach what the other three
-# can. Attributed by ablation, three full builds on the pinned toolchain. The rows below
-# are HISTORICAL-MEASUREMENTS: each is what the artifact measured when that capability
-# landed, not what it measures today.
+# can. Attributed by ablation, three full builds on the pinned toolchain. The
+# rows below are HISTORICAL-MEASUREMENTS: each is what the artifact measured
+# when that capability landed, not what it measures today.
 #
 #   baseline (materialize + inventories)          8_779_131
 #   + six tableau services                        9_011_119   (+231_988)
 #   + profile, extract_module                     9_075_983   (+64_864)
 #   + explain_conclusion                          9_148_895   (+72_912)
 #
-# Those four rows are the ATTRIBUTION measured when the services landed; the
-# deltas are what they cost, and the last row is not the current artifact. The
+# Those four rows are the attribution measured when the services landed; the
+# deltas are what they cost, and the last row is not the current artifact.
 # END-HISTORICAL. The 139_211 bytes between that last row and 9_288_106 are the
-# extension rule family, the
-# call-scoped plan cache, the surfaced termination certificate and the
-# extension inventory binding, all of which reached wasm afterwards.
+# extension rule family, the call-scoped plan cache, the surfaced termination
+# certificate and the extension inventory binding, all of which reached wasm
+# afterwards.
 #
 # The largest single item is explain_conclusion: it is the only reachable
 # consumer of purrdf-datalog's proof terms, so the proof arena, its canonical
@@ -115,7 +115,7 @@ WASM_SIZE_BUDGET_BYTES := 9690000
 # it, is what moved the ceiling to 9_690_000.
 #
 # The measured constant below is the CURRENT size, not that intermediate figure.
-WASM_SIZE_MEASURED_BYTES := 9396501
+WASM_SIZE_MEASURED_BYTES := 9396985
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'

@@ -19,7 +19,7 @@
 //! upstream W3C OWL 2 manifest and each grading a different reasoning lane:
 //!
 //! * [`owl2`] grades `entailment-suite/w3c-owl2/` — 261 *consistency*-shaped
-//!   cases — against PurRDF's `OWL-Direct` ALCOIQ tableau. It validates the DL
+//!   cases — against PurRDF's `OWL-Direct` SHOIQ(D) tableau. It validates the DL
 //!   lane's satisfiability verdicts and says nothing about the OWL 2 RL rule
 //!   table.
 //! * [`owl2_rl`] grades `entailment-suite/w3c-owl2-rl/` — 27 positive and 23

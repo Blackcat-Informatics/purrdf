@@ -27,7 +27,7 @@ external reasoner, no `tokio`, and no string round-trip.
 | Entry point | Regime(s) | Engine |
 | --- | --- | --- |
 | `materialize(ds, plan)` | **all seven** | Forward materialization ("chase") of `calculus_program(regime)` through `purrdf-datalog`'s native semi-naive fixpoint — the declared rule set *is* the executable, so the contract hash a report carries names the clauses that ran. Returns `(closure, ReasoningReport)` — the report is not optional. `plan` is a `Materialization`, which carries each regime's own input, so the function is TOTAL: `OwlDirect(&[QTriple])` and `Rif(&RuleSet)` delegate to the two entry points below rather than being refused. |
-| `materialize_dl_reported(ds, bgp)` | `OWL-Direct` | Open-world OWL DL over an ALCOIQ tableau, directed by the query's class expressions — what `materialize(ds, Materialization::OwlDirect(bgp))` delegates to. Answers a BGP whose variables are all distinguished; a query blank node is a non-distinguished variable and raises the `NonDistinguishedVariable` boundary rather than being answered incompletely in silence. |
+| `materialize_dl_reported(ds, bgp)` | `OWL-Direct` | Open-world OWL DL over a SHOIQ(D) tableau, directed by the query's class expressions — what `materialize(ds, Materialization::OwlDirect(bgp))` delegates to. Answers a BGP whose variables are all distinguished; a query blank node is a non-distinguished variable and raises the `NonDistinguishedVariable` boundary rather than being answered incompletely in silence. |
 | `Reasoner::new(ds)` | `OWL-Direct` | The Description-Logic services — consistency, class satisfiability, classification, realization, instance retrieval and axiom entailment. Each answer arrives as a `Certified<T>` carrying a `DlCertificate`: the DL lane's own completeness notion, which reports both the constructs the reverse mapping could not read and a search that ran out of deterministic steps. |
 | `extract_module(ds, signature, method)` | — | Syntactic locality module extraction (`BOT` / `TOP` / `STAR`). Sound, not minimal: a construct whose locality is not decided exactly is kept conservatively and the keep is reported. |
 | `profile(ds)` | — | OWL 2 profile certification: which of EL, QL, RL, DL and Full the ontology is *provably* in, with a violation list. A certification proves membership; a violation proves only that the cheap structural condition failed. |
@@ -60,7 +60,7 @@ difference is the gap, and it is also what a `ReasoningReport` reports as
 | `RDFS` | RDF 1.2 Semantics §8.1.1 + §9.2.1 | 18 | 18 |
 | `OWL-RL` | OWL 2 Profiles §4.3 Tables 4–9 | 78 | 78 |
 | `D` | OWL 2 Profiles §4.3 Table 8 | 5 | 5 |
-| `OWL-Direct` | — (ALCOIQ tableau, not a fixed table) | 0 | 0 |
+| `OWL-Direct` | — (SHOIQ(D) tableau, not a fixed table) | 0 | 0 |
 | `RIF` | — (caller-supplied rule set) | 0 | 0 |
 
 The per-rule table is generated from this crate's own API and drift-guarded:
