@@ -938,6 +938,49 @@ fn write_owlrl_corpus_inputs() {
     }
 }
 
+/// Every golden's embedded `--- input ---` block equals the corpus file it names.
+///
+/// The golden records the input `owlrl` was actually run over, and that record is the only
+/// thing tying its closure to today's fixture. `corpus_inputs_match_fixtures` proves the
+/// `.nt` file matches the [`CORPUS`] table; this proves the GOLDEN matches the `.nt` file.
+/// Without it, regenerating the corpus without re-running the Python script leaves a
+/// closure of a superseded ontology, and the divergence set becomes a diff between two
+/// different questions — with the evidence of that sitting unread inside the golden.
+#[test]
+fn goldens_embed_the_input_they_were_generated_from() {
+    let mut stale = Vec::new();
+    for fixture in CORPUS {
+        let golden = std::fs::read_to_string(golden_path(fixture.name))
+            .unwrap_or_else(|e| panic!("{}: read golden: {e}", fixture.name));
+        let embedded: String = golden
+            .lines()
+            .skip_while(|l| *l != "--- input ---")
+            .skip(1)
+            .take_while(|l| *l != "--- owlrl closure ---")
+            .map(|l| format!("{l}\n"))
+            .collect();
+        assert!(
+            !embedded.is_empty(),
+            "{}: the golden has no `--- input ---` block, so nothing ties its closure to \
+             the committed input",
+            fixture.name
+        );
+        let committed = std::fs::read_to_string(corpus_path(fixture.name))
+            .unwrap_or_else(|e| panic!("{}: read corpus input: {e}", fixture.name));
+        if embedded.trim_end() != committed.trim_end() {
+            stale.push(fixture.name);
+        }
+    }
+    assert!(
+        stale.is_empty(),
+        "{} golden(s) record an input that is no longer the committed one, so their \
+         closures answer a superseded question: {}\nRegenerate with \
+         `uv run --script crates/entail/tests/regenerate_owlrl_goldens.py`.",
+        stale.len(),
+        stale.join(", ")
+    );
+}
+
 /// Every committed corpus input equals what the fixture table renders today.
 ///
 /// Catches the failure mode `oracle.rs` guards against for its own goldens: editing a
@@ -1041,6 +1084,45 @@ const OWLRL_EXTRA_DATATYPES: [&str; 4] = [
     "http://www.w3.org/2001/XMLSchema#date",
     "http://www.w3.org/2001/XMLSchema#time",
 ];
+
+/// The header of the committed divergence artifact, so the file explains itself.
+const DIFF_HEADER: &str = "\
+# Every triple on which PurRDF's OWL-RL closure and the `owlrl` reference engine differ,
+# over crates/entail/tests/owlrl-corpus/, as `<fixture> <direction> <triple>`.
+#
+# This is the SET the gate asserts, and it is asserted in both directions: a newly
+# divergent triple fails, and a divergence that stops occurring fails too. The typed
+# ledger beside it (owlrl-divergences.toml) says which CATEGORY each of these belongs to
+# and why PurRDF's answer is the correct one; a category alone cannot do this job, because
+# `classify_divergence` recognizes a shape and would absorb any triple that merely looks
+# like a known divergence.
+#
+# Regenerate with PURRDF_WRITE_OWLRL_DIFF=1 after confirming every change is intended.
+";
+
+/// The committed divergence artifact's path.
+fn diff_artifact_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("owlrl-divergence-triples.txt")
+}
+
+/// The recorded divergence set, comment and blank lines skipped.
+fn read_expected_diff() -> BTreeSet<String> {
+    let path = diff_artifact_path();
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "cannot read {}: {e}. It records the exact set of triples the two engines \
+             differ on; regenerate with PURRDF_WRITE_OWLRL_DIFF=1.",
+            path.display()
+        )
+    });
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(str::to_owned)
+        .collect()
+}
 
 /// Classify one line present in exactly one engine's closure into a ledger kind id, or
 /// `None` if it matches no known, explained divergence.
@@ -1252,11 +1334,20 @@ fn goldens_match_owlrl_reference() {
     let mut observed_kinds: BTreeSet<&'static str> = BTreeSet::new();
     let mut unexplained: Vec<String> = Vec::new();
 
+    // Every divergent triple, tagged by fixture and direction, pinned against a committed
+    // artifact below. The KIND set alone is not enough: `classify_divergence` recognizes a
+    // SHAPE, so a triple that merely looks like a known divergence is absorbed whether or
+    // not it was ever expected — a shared triple deleted from a golden, or a fabricated one
+    // added to it, both classify and both used to pass. What a reader wants guaranteed is
+    // that the two engines differ on exactly these triples.
+    let mut observed_diff: BTreeSet<String> = BTreeSet::new();
+
     for fixture in CORPUS {
         let ours = purrdf_closure_lines(fixture);
         let theirs = read_golden_closure(fixture.name);
 
         for only_ours in ours.difference(&theirs) {
+            observed_diff.insert(format!("{} purrdf-only {only_ours}", fixture.name));
             match classify_divergence(only_ours) {
                 Some(kind) => {
                     observed_kinds.insert(kind);
@@ -1268,6 +1359,7 @@ fn goldens_match_owlrl_reference() {
             }
         }
         for only_theirs in theirs.difference(&ours) {
+            observed_diff.insert(format!("{} owlrl-only {only_theirs}", fixture.name));
             match classify_divergence(only_theirs) {
                 Some(kind) => {
                     observed_kinds.insert(kind);
@@ -1279,6 +1371,38 @@ fn goldens_match_owlrl_reference() {
             }
         }
     }
+
+    if std::env::var_os("PURRDF_WRITE_OWLRL_DIFF").is_some() {
+        let mut out = String::from(DIFF_HEADER);
+        for line in &observed_diff {
+            out.push_str(line);
+            out.push('\n');
+        }
+        std::fs::write(diff_artifact_path(), out).expect("write the divergence artifact");
+    }
+
+    let expected_diff = read_expected_diff();
+    let appeared: Vec<&String> = observed_diff.difference(&expected_diff).collect();
+    let vanished: Vec<&String> = expected_diff.difference(&observed_diff).collect();
+    assert!(
+        appeared.is_empty() && vanished.is_empty(),
+        "the two engines no longer differ on exactly the recorded triples.\n\
+         {} newly divergent (PurRDF changed, or a golden was edited):\n{}\n\
+         {} no longer divergent (a divergence closed — record the gain):\n{}\n\
+         Regenerate with PURRDF_WRITE_OWLRL_DIFF=1 after confirming each change is intended.",
+        appeared.len(),
+        appeared
+            .iter()
+            .map(|l| format!("  + {l}"))
+            .collect::<Vec<String>>()
+            .join("\n"),
+        vanished.len(),
+        vanished
+            .iter()
+            .map(|l| format!("  - {l}"))
+            .collect::<Vec<String>>()
+            .join("\n"),
+    );
 
     assert!(
         unexplained.is_empty(),

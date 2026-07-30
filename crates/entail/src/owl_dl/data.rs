@@ -391,6 +391,13 @@ mod tests {
             )
         }
 
+        fn lang_literal(&mut self, lexical: &str, language: &str) -> TermId {
+            crate::interner::intern_into(
+                &mut self.builder,
+                &TermValue::lang_literal(lexical, language),
+            )
+        }
+
         fn quad(&mut self, s: TermId, p: TermId, o: TermId) {
             self.builder.push_quad(s, p, o, None);
         }
@@ -624,6 +631,48 @@ mod tests {
             !consistent,
             "a functional property cannot hold two different values"
         );
+    }
+
+    /// A functional data property over two LANGUAGE-TAGGED literals.
+    ///
+    /// `rdf:langString`'s value space is the `(lexical form, language, direction)` triples,
+    /// so `"hello"@en` and `"goodbye"@en` are two values and a functional property may not
+    /// hold both. This case is separated ONLY by value-class distinctness: unlike two
+    /// numeric literals, whose incompatible ranges make the merged node's constraint set
+    /// unsatisfiable and clash through the concrete domain, two `rdf:langString` values sit
+    /// in ONE range, so nothing but their distinctness forces them apart. Disabling that
+    /// check left every other test in this workspace passing, which is what this one is for.
+    #[test]
+    fn a_functional_data_property_separates_two_language_tagged_values() {
+        let mut f = Fixture::new();
+        let ty = f.iri(RDF_TYPE);
+        let functional = f.iri(OWL_FUNCTIONALPROPERTY);
+        let individual = f.iri(EX_A);
+        let property = f.iri(EX_P);
+        f.quad(property, ty, functional);
+        let hello = f.lang_literal("hello", "en");
+        let goodbye = f.lang_literal("goodbye", "en");
+        f.quad(individual, property, hello);
+        f.quad(individual, property, goodbye);
+        let (consistent, _) = run(&f.freeze());
+        assert!(
+            !consistent,
+            "\"hello\"@en and \"goodbye\"@en are two rdf:langString values, so a \
+             functional property cannot hold both"
+        );
+
+        // The same property over ONE value twice is consistent — the assertion above must
+        // fail for distinctness, not because language-tagged literals clash on sight.
+        let mut g = Fixture::new();
+        let ty = g.iri(RDF_TYPE);
+        let functional = g.iri(OWL_FUNCTIONALPROPERTY);
+        let individual = g.iri(EX_A);
+        let property = g.iri(EX_P);
+        g.quad(property, ty, functional);
+        let once = g.lang_literal("hello", "en");
+        g.quad(individual, property, once);
+        let (consistent, _) = run(&g.freeze());
+        assert!(consistent, "one value held once is consistent");
     }
 
     /// The numeric tower, exactly where the specification puts it. OWL 2's datatype map nests
