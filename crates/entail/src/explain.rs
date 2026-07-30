@@ -396,15 +396,24 @@ pub fn explain_conclusion(
     predicate: &TermValue,
     object: &TermValue,
 ) -> Result<ChaseProof, ExplainError> {
-    let (program, attribution) = program_with_attribution(regime);
-    // The restricted chase's existential heads have no Datalog semantics, so there is no
-    // head for the checker to instantiate. Named rather than approximated.
-    if program
+    let (full_program, attribution) = program_with_attribution(regime);
+    // An existential head has no Datalog semantics — there is no head for the checker to
+    // instantiate — so those clauses cannot appear in a checkable proof. They are dropped
+    // here rather than used to refuse the whole REGIME.
+    //
+    // The distinction is load-bearing. `Rdfs` has four existential rules out of eighteen
+    // (`rdfD1`, `rdfD1a`, `rdfs14`, `rdfs14a`), and refusing the regime on their account meant
+    // a conclusion derived purely by `rdfs9` — an ordinary Datalog rule — could not be
+    // explained under `rdfs` while the identical conclusion explained fine under `owl-rl`.
+    // Refusing to explain X because sibling rule Y is existential is not doing X.
+    let existential_present = full_program
         .iter()
-        .any(|clause| clause.head_form() == HeadForm::Existential)
-    {
-        return Err(ExplainError::Existential(regime));
-    }
+        .any(|clause| clause.head_form() == HeadForm::Existential);
+    let program: Vec<_> = full_program
+        .iter()
+        .filter(|clause| clause.head_form() != HeadForm::Existential)
+        .cloned()
+        .collect();
 
     let (edb, _terms) = seed(ds, regime, &program, graph)?;
     let goal = Fact {
@@ -431,6 +440,13 @@ pub fn explain_conclusion(
             // and a checkable one — and if it is neither, that is the unresolvable
             // antecedent, refused by name.
             if !seeded.contains(&goal.subject, &goal.predicate, &goal.object, &goal.graph) {
+                // The Datalog subset did not reach it. If the regime HAS existential rules,
+                // one of them may be what derives it, and this checker cannot produce a term
+                // for such a step — so the refusal is named rather than reported as
+                // "not entailed", which would be a different and false answer.
+                if existential_present {
+                    return Err(ExplainError::Existential(regime));
+                }
                 return Err(ExplainError::NotDerived {
                     conclusion: format!("{} {} {}", goal.subject, goal.predicate, goal.object),
                 });
@@ -1071,22 +1087,46 @@ mod tests {
         assert!(error.to_string().contains("no derivation"), "{error}");
     }
 
-    /// THE EXISTENTIAL LANES ARE REFUSED BY NAME rather than given an unverifiable proof.
+    /// AN EXISTENTIAL RULE IN THE TABLE DOES NOT REFUSE THE REGIME.
+    ///
+    /// Both branches, because the interesting failure is over-refusal rather than
+    /// under-refusal. `Rdfs` carries four existential rules out of eighteen, and an earlier
+    /// revision rejected the whole regime on their account — so `Cat ⊑ Animal`, derived purely
+    /// by `rdfs11`, could not be explained under `rdfs` while the identical conclusion
+    /// explained fine under `owl-rl`. The refusal now depends on the CONCLUSION, not the table.
     #[test]
-    fn the_restricted_chase_lanes_have_no_proof_term() {
+    fn an_existential_rule_elsewhere_in_the_table_does_not_refuse_the_conclusion() {
         let ds = chain();
-        for regime in [Regime::Rdf, Regime::Rdfs] {
-            let error = explain_conclusion(
-                &ds,
-                regime,
-                None,
-                &TermValue::iri(CAT),
-                &TermValue::iri(SUB),
-                &TermValue::iri(MAMMAL),
-            )
-            .expect_err("the restricted chase has no checkable proof term");
-            assert!(matches!(error, ExplainError::Existential(r) if r == regime));
-        }
+
+        // Derivable by an ordinary Datalog rule: explained, and the proof checks.
+        let proof = explain_conclusion(
+            &ds,
+            Regime::Rdfs,
+            None,
+            &TermValue::iri(CAT),
+            &TermValue::iri(SUB),
+            &TermValue::iri(ANIMAL),
+        )
+        .expect("rdfs11 derives it and rdfs11 is a Datalog rule");
+        assert!(proof.check().is_ok(), "the returned proof must re-derive");
+
+        // Not reachable through the Datalog subset. The regime HAS existential rules, so one
+        // of them may be what derives it and this checker cannot produce a term for such a
+        // step — refused by name rather than reported as "not entailed", which would be a
+        // different and false answer.
+        let error = explain_conclusion(
+            &ds,
+            Regime::Rdfs,
+            None,
+            &TermValue::iri(FISH),
+            &TermValue::iri(SUB),
+            &TermValue::iri(CAT),
+        )
+        .expect_err("no Datalog rule derives it");
+        assert!(
+            matches!(error, ExplainError::Existential(Regime::Rdfs)),
+            "{error}"
+        );
     }
 
     /// A proof's digest is a content digest, and its encoding round-trips.
