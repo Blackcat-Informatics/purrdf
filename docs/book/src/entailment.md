@@ -243,7 +243,7 @@ Two corpora measure two different things, and the distinction matters:
   **156 the tableau decides today** (93 consistent, 63 inconsistent), 30 do not
   terminate under a 40 s ceiling, 12 are withheld (7 reasoner, 5 parse), and 23
   carry no RDF/XML premise — so the exclusion was payload triage, not a
-  capability limit, and "256 of 261" is a number over a corpus rather than over
+  capability limit, and "257 of 261" is a number over a corpus rather than over
   what W3C published. The harness measures and prints all of it on every run.
 - **W3C OWL 2 RL entailment tests — 34 of 50 cases agree, 16 ledgered**, zero
   unledgered. This is the independent oracle for the rule table: W3C's own

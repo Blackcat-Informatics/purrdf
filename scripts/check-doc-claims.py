@@ -186,15 +186,64 @@ def load_rule_extensions() -> list[str]:
     )
 
 
-def regime_count_claim() -> list[str]:
-    """Any document enumerating the accepted regimes must list all of them.
+def codec_table_claim() -> list[str]:
+    """The book's codec table must list every `NativeRdfFormat`, with its real media type.
 
-    `REGIME_NAMES` in `crates/validate/src/regime.rs` is the one accepted set, and every host
-    routes through it. The npm READMEs advertised four and five of the seven — understating
-    the branch's own headline, that materialization is TOTAL over the regimes — because a
-    prose list is invisible to a gate that only checks numbers. Checked by membership rather
-    than by a count: a document that names one regime in a `/`-separated list must name them
-    all, so adding a regime fails every stale enumeration on the day it lands.
+    The table listed seven of nine, omitting TriX and HexTuples, and its prose said "seven" —
+    internally consistent and wrong about the code. Both are full codecs with media types,
+    `classify` aliases and dispatch entries. Derived from `FormatDescriptor`'s own table rather
+    than from a count, so a tenth format fails this on the day it is added.
+    """
+    problems: list[str] = []
+    source = _read(
+        _REPO / "crates" / "rdf" / "src" / "native_codecs" / "media_type.rs"
+    )
+    media = re.findall(r'^\s+media_type: "([^"]+)",$', source, re.MULTILINE)
+    if not media:
+        raise SystemExit(
+            "check-doc-claims: no media_type entries found in media_type.rs; the codec-table "
+            "claim cannot be checked, so do not leave it unchecked"
+        )
+    path = _REPO / "docs" / "book" / "src" / "concepts" / "codecs.md"
+    text = _read(path)
+    rel = path.relative_to(_REPO)
+    for media_type in sorted(set(media)):
+        if f"`{media_type}`" not in text:
+            problems.append(
+                f"{rel}: the codec table omits `{media_type}`, which "
+                f"crates/rdf/src/native_codecs/media_type.rs registers as a first-party "
+                f"format with its own codec and `classify` aliases"
+            )
+    spelled = {
+        7: "seven", 8: "eight", 9: "nine", 10: "ten", 11: "eleven", 12: "twelve",
+    }.get(len(set(media)))
+    for claim_match in re.finditer(r"for ([a-z]+) formats", text):
+        if spelled and claim_match.group(1) != spelled:
+            problems.append(
+                f"{rel}: says `{claim_match.group(0)}`, but media_type.rs registers "
+                f"{len(set(media))} ({spelled})"
+            )
+    return problems
+
+
+
+def regime_count_claim() -> list[str]:
+    """A document that names two or more regimes must name all of them.
+
+    `REGIME_NAMES` in `crates/validate/src/regime.rs` is the one accepted set and every host
+    routes through it. Two npm READMEs advertised four and five of the seven, understating that
+    materialization is TOTAL over the regimes — this branch's own headline.
+
+    The first attempt matched a `/`-separated run of backticked names. It reached two of the
+    four documents it named: the CLI README lists regimes in a MARKDOWN TABLE and the Python
+    README in a COMMA run, and neither is a slash run. Rather than enumerate shapes — there is
+    always another shape — this counts the regimes a document mentions ANYWHERE and requires
+    the set to be empty, a single regime, or complete. A page discussing one regime is fine; a
+    page that enumerates is not allowed to enumerate a subset.
+
+    Also checks the spelled-out count, so removing a regime from `REGIME_NAMES` fails every
+    document that advertises "all seven", and a vacuity guard, because the version this
+    replaces silently checked almost nothing.
     """
     problems: list[str] = []
     boundary = _read(_REPO / "crates" / "validate" / "src" / "regime.rs")
@@ -207,33 +256,64 @@ def regime_count_claim() -> list[str]:
             "the regime-enumeration claim cannot be checked, so do not leave it unchecked"
         )
     accepted = re.findall(r'"([a-z-]+)"', names.group(1))
+    spelled = {
+        1: "one", 2: "two", 3: "three", 4: "four", 5: "five",
+        6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten",
+    }.get(len(accepted))
+
     documents = [
         _REPO / "crates" / "rdf-wasm" / "README.md",
         _REPO / "crates" / "rdf-wasm" / "js" / "README.md",
         _CLI_README,
         _PY_README,
+        _README,
+        _ENTAIL_README,
+        _PURRDF_README,
+        _CONFORMANCE,
+        _ENTAILMENT,
     ]
+    enumerating = 0
     for path in documents:
         if not path.is_file():
             continue
         text = _read(path)
         rel = path.relative_to(_REPO)
-        # A regime enumeration is a run of at least three backticked names joined by `/`.
-        for run_match in re.finditer(
-            r'(?:`"?[a-z-]+"?`\s*/\s*){2,}`"?[a-z-]+"?`', text
-        ):
-            listed = set(re.findall(r'`"?([a-z-]+)"?`', run_match.group(0)))
-            if not listed & set(accepted):
-                continue  # some other slash-separated list of backticked words
-            missing = sorted(set(accepted) - listed)
+        mentioned = {
+            regime
+            for regime in accepted
+            if re.search(r'`"?' + re.escape(regime) + r'"?`', text)
+        }
+        if len(mentioned) >= 2:
+            enumerating += 1
+            missing = sorted(set(accepted) - mentioned)
             if missing:
                 problems.append(
-                    f"{rel}: enumerates regimes as `{run_match.group(0)}` but omits "
-                    f"{', '.join(missing)} — REGIME_NAMES accepts all "
-                    f"{len(accepted)}, and every one of them materializes"
+                    f"{rel}: names {len(mentioned)} of the {len(accepted)} entailment "
+                    f"regimes and omits {', '.join(missing)}. A document that enumerates "
+                    f"regimes may not enumerate a subset — REGIME_NAMES accepts all of them "
+                    f"and every one materializes"
                 )
-    return problems
+        # A spelled-out total must match the real one, so removing a regime fails here too.
+        for claim in re.finditer(
+            r"all (?:the )?([A-Z]+|[a-z]+) (?:SPARQL )?(?:entailment )?regimes", text
+        ):
+            word = claim.group(1).lower()
+            if word in {
+                "one", "two", "three", "four", "five", "six", "seven", "eight",
+                "nine", "ten",
+            } and word != spelled:
+                problems.append(
+                    f"{rel}: claims `{claim.group(0)}`, but REGIME_NAMES has "
+                    f"{len(accepted)} ({spelled})"
+                )
 
+    if enumerating == 0:
+        raise SystemExit(
+            "check-doc-claims: no document was found to enumerate regimes at all. The first "
+            "version of this claim reached two of four documents for exactly this kind of "
+            "reason; fix the extraction rather than leaving the enumerations unchecked"
+        )
+    return problems
 
 
 def makefile_measured_size_claim() -> list[str]:
@@ -1447,6 +1527,42 @@ def build_claims(
         ),
         # --- OWL 2 DL consistency, sourced from the matrix block --------------
         Claim(
+            "the rdflib vendor scoreboard in its PROVENANCE",
+            _REPO / "bindings" / "python" / "tests" / "rdflib_suite" / "vendor"
+            / "PROVENANCE.md",
+            _flow(r"\*\*(?P<passed>\d+) passed / (?P<xfail>\d+) xfailed\*\*"),
+            {"passed": rdflib_pass, "xfail": rdflib_x},
+            mat,
+        ),
+        Claim(
+            "the rdflib scoreboard in the Python test README",
+            _REPO / "bindings" / "python" / "tests" / "README.md",
+            _flow(r"Scoreboard: \*\*(?P<passed>\d+) passed / (?P<xfail>\d+) xfailed\*\*"),
+            {"passed": rdflib_pass, "xfail": rdflib_x},
+            mat,
+        ),
+        Claim(
+            "the OWL 2 DL-consistency figure in the book's entailment chapter",
+            _ENTAILMENT,
+            _flow(r'"(?P<passed>\d+) of (?P<total>\d+)" is a number over a corpus'),
+            {"passed": owl2_pass, "total": owl2_total},
+            mat,
+        ),
+        Claim(
+            "the SHACL first-party corpus size in the CONFORMANCE command block",
+            _CONFORMANCE,
+            _flow(r"# the (?P<total>\d+)-case frozen corpus"),
+            {"total": corpus_pass},
+            mat,
+        ),
+        Claim(
+            "the SHACL first-party corpus size in the book's validation chapter",
+            _REPO / "docs" / "book" / "src" / "validation" / "shacl.md",
+            _flow(r"a first-party frozen corpus of (?P<total>\d+) cases"),
+            {"total": corpus_pass},
+            mat,
+        ),
+        Claim(
             "the OWL 2 DL-consistency scoreboard row",
             _CONFORMANCE,
             r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* agreeing verdicts · "
@@ -1614,6 +1730,8 @@ def main() -> int:
     problems.extend(makefile_measured_size_claim())
     checked += 1
     problems.extend(regime_count_claim())
+    checked += 1
+    problems.extend(codec_table_claim())
     checked += 1
 
     for claim in build_claims(inventory, matrix, census, lanes):

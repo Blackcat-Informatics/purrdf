@@ -66,9 +66,10 @@ repository:
   annotation. Today that covers the three W3C SPARQL/OWL 2 suites and the OBO Graphs
   schema closure.
 - `scripts/check-corpus-frozen.py` SHA-256-verifies `vectors/shacl`,
-  `vectors/shexTest`, `crates/shapes/corpus`, and
-  `crates/sparql-conformance/entailment-suite/w3c-owl2` against committed freeze
-  manifests, so vendored bytes cannot be edited in place.
+  `vectors/shexTest`, `crates/shapes/corpus`,
+  `crates/sparql-conformance/entailment-suite/w3c-owl2` and
+  `crates/sparql-conformance/entailment-suite/w3c-owl2-rl` against committed
+  freeze manifests, so vendored bytes cannot be edited in place.
 
 ## Proprietary / commercial licensing
 

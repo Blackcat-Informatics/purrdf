@@ -27,7 +27,7 @@ remains separate and authoritative for purrdf-specific behavior.
 vendored upstream mirror — upstream at the pinned commit ships no SHACL
 Advanced Features (AF) tests. The placeholder manifest declares itself a
 manifest with no entries, so the harness discovers **0 tests** from it today
-and the total stays 120. When upstream publishes AF manifests they vendor in
+and the total stays 126. When upstream publishes AF manifests they vendor in
 here and the harness picks them up automatically (the harness discovers
 `af/manifest.ttl` directly, so the vendored root `manifest.ttl` stays
 pristine). First-party AF coverage (e.g. `sh:expression`) already lives in the

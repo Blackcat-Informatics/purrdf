@@ -170,7 +170,7 @@ make conformance                                      # the single matrix (all o
 cargo test -p purrdf-iri                               # IRI + RFC 3986 resolution
 cargo test -p purrdf-shex                              # all four ShEx suites
 cargo test -p purrdf-shapes --test w3c_conformance -- --nocapture   # W3C SHACL scoreboard
-cargo test -p purrdf-shapes --test conformance         # the 69-case frozen corpus
+cargo test -p purrdf-shapes --test conformance         # the 70-case frozen corpus
 cargo run -p purrdf-shapes --example schema_reverse --locked        # all five schema readers
 make pydantic-oracle linkml-oracle typescript-oracle graphql-oracle # independent schema runtimes
 cargo test -p purrdf-sparql-conformance                # W3C SPARQL

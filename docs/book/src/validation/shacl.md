@@ -354,7 +354,7 @@ serializing.
 ## Conformance
 
 The validator is gated by the vendored W3C `data-shapes` suite, a vendored
-DASH SHACL-AF/rules corpus, and a first-party frozen corpus of 69 cases with
+DASH SHACL-AF/rules corpus, and a first-party frozen corpus of 70 cases with
 byte-frozen expected reports; SHACL Rules output is compared to expected
 inferred graphs by RDFC-1.0 isomorphism. See
 [Conformance & Testing](../project/conformance.md).
