@@ -59,6 +59,11 @@ hashbrown = { workspace = true }
 [dev-dependencies]
 # Report-only chase microbenchmark; `make bench` lane, excluded from `make check`.
 criterion = { workspace = true }
+# Generates the random small knowledge bases the OWL-Direct tableau is checked against in
+# `owl_dl::oracle`, where every generated verdict is compared with a naive exponential
+# model-enumeration oracle. Driven from a FIXED ChaCha seed, so the corpus is identical on
+# every run and a failure reproduces; test-only, so it reaches no shipped artifact.
+proptest = { workspace = true }
 
 [[bench]]
 # Forward-materialization chase latency over a synthetic subclass hierarchy at two

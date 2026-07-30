@@ -287,7 +287,7 @@ full scoreboard and how-to-run in [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md)
 | SHACL (first-party frozen corpus) | `crates/shapes/corpus/` | **70 / 70** |
 | SPARQL 1.1 | W3C suite via `purrdf-sparql-conformance` | green, xfail-ledgered |
 | Entailment (SPARQL regimes) | W3C sparql11 `entailment/` group | **70 / 70**, 0 ledgered |
-| Entailment (OWL 2 DL consistency) | vendored W3C OWL 2 suite | **256 / 261** agreeing, 5 ledgered, 0 unledgered |
+| Entailment (OWL 2 DL consistency) | vendored W3C OWL 2 suite | **257 / 261** agreeing, 4 ledgered, 0 unledgered |
 | Entailment (OWL 2 RL, W3C entailment tests) | vendored W3C OWL 2 entailment suite | **34 / 50** agreeing, 16 ledgered, 0 unledgered — negative lane **23 / 23** (no unsoundness), positive lane **11 / 27** |
 | RDFC-1.0 | W3C canonicalization fixtures | green |
 | GTS | frozen cross-language vectors (`vectors/`) | byte-exact |

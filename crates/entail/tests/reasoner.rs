@@ -55,6 +55,14 @@ const SAME_AS: &str = "http://www.w3.org/2002/07/owl#sameAs";
 const DIFFERENT_FROM: &str = "http://www.w3.org/2002/07/owl#differentFrom";
 const FUNCTIONAL_PROPERTY: &str = "http://www.w3.org/2002/07/owl#FunctionalProperty";
 const XSD_NON_NEGATIVE_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#nonNegativeInteger";
+const RDFS_DATATYPE: &str = "http://www.w3.org/2000/01/rdf-schema#Datatype";
+const ON_DATATYPE: &str = "http://www.w3.org/2002/07/owl#onDatatype";
+const WITH_RESTRICTIONS: &str = "http://www.w3.org/2002/07/owl#withRestrictions";
+const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+const XSD_MIN_INCLUSIVE: &str = "http://www.w3.org/2001/XMLSchema#minInclusive";
+const XSD_MAX_INCLUSIVE: &str = "http://www.w3.org/2001/XMLSchema#maxInclusive";
+const XSD_PATTERN: &str = "http://www.w3.org/2001/XMLSchema#pattern";
 
 /// A fixture term. PurRDF mints no vocabulary, so every fixture IRI is `example.org`.
 fn ex(local: &str) -> String {
@@ -222,6 +230,168 @@ fn a_contradictory_ontology_is_reported_inconsistent_rather_than_thrown() {
         reasoner.instances(&iri("A")),
         Err(purrdf_entail::EntailError::Unsatisfiable)
     ));
+}
+
+/// `ex:C ⊑ ∃ex:p.(xsd:integer[<facets>])` with `ex:a : ex:C`, as fixture triples.
+///
+/// `facets` is a list of `(facet IRI, lexical form)` over `xsd:integer` unless the facet is
+/// `xsd:pattern`, whose value is an `xsd:string`.
+fn facet_ontology(facets: &[(&'static str, &'static str)]) -> Arc<RdfDataset> {
+    let mut triples = vec![
+        typed(N::E("C"), N::V(OWL_CLASS)),
+        typed(N::E("p"), N::V(DATATYPE_PROPERTY)),
+        sub(N::E("C"), N::B("restriction")),
+        typed(N::B("restriction"), N::V(RESTRICTION)),
+        (N::B("restriction"), N::V(ON_PROPERTY), N::E("p")),
+        (N::B("restriction"), N::V(SOME_VALUES), N::B("range")),
+        typed(N::B("range"), N::V(RDFS_DATATYPE)),
+        (N::B("range"), N::V(ON_DATATYPE), N::V(XSD_INTEGER)),
+        (N::B("range"), N::V(WITH_RESTRICTIONS), N::B("cell0")),
+        typed(N::E("a"), N::E("C")),
+    ];
+    // The facet cells, written as an RDF collection over `cell0`, `cell1`, …
+    let cells: [&'static str; 2] = ["cell0", "cell1"];
+    let facet_nodes: [&'static str; 2] = ["facet0", "facet1"];
+    for (index, &(facet, lexical)) in facets.iter().enumerate() {
+        let datatype = if facet == XSD_PATTERN {
+            XSD_STRING
+        } else {
+            XSD_INTEGER
+        };
+        triples.push((
+            N::B(facet_nodes[index]),
+            N::V(facet),
+            N::L(lexical, datatype),
+        ));
+        triples.push((N::B(cells[index]), N::V(FIRST), N::B(facet_nodes[index])));
+        let tail = if index + 1 == facets.len() {
+            N::V(NIL)
+        } else {
+            N::B(cells[index + 1])
+        };
+        triples.push((N::B(cells[index]), N::V(REST), tail));
+    }
+    ds(&triples)
+}
+
+/// AN EMPTY DATATYPE RANGE IS AN INCONSISTENCY, and the certificate says `Decided`.
+///
+/// `xsd:integer` bounded below by 5 and above by 3 holds no value, so a class whose every
+/// member must have a `p`-value in it is unsatisfiable and an individual asserted into it
+/// makes the whole ontology so. Nothing here is bounded: the facets were evaluated over the
+/// integers, and the certificate is entitled to claim a decided answer.
+#[test]
+fn an_empty_datatype_range_is_reported_inconsistent_and_decided() {
+    let dataset = facet_ontology(&[(XSD_MIN_INCLUSIVE, "5"), (XSD_MAX_INCLUSIVE, "3")]);
+    let reasoner = Reasoner::new(&dataset).expect("reverse-map");
+    let answer = reasoner.consistency();
+    assert_eq!(*answer.answer(), Verdict::False);
+    let certificate = honest(&answer);
+    assert_eq!(certificate.completeness(), DlCompleteness::Decided);
+    assert!(certificate.boundaries().is_empty());
+}
+
+/// …and the class ITSELF is unsatisfiable, which is the narrower question and the one that
+/// holds without any individual being asserted.
+#[test]
+fn a_class_forced_into_an_empty_datatype_range_is_unsatisfiable() {
+    // The same terminology, with no instance: the ontology is consistent (the class is simply
+    // empty) and `ex:C` is the unsatisfiable class.
+    let dataset = ds(&[
+        typed(N::E("C"), N::V(OWL_CLASS)),
+        typed(N::E("p"), N::V(DATATYPE_PROPERTY)),
+        sub(N::E("C"), N::B("restriction")),
+        typed(N::B("restriction"), N::V(RESTRICTION)),
+        (N::B("restriction"), N::V(ON_PROPERTY), N::E("p")),
+        (N::B("restriction"), N::V(SOME_VALUES), N::B("range")),
+        typed(N::B("range"), N::V(RDFS_DATATYPE)),
+        (N::B("range"), N::V(ON_DATATYPE), N::V(XSD_INTEGER)),
+        (N::B("range"), N::V(WITH_RESTRICTIONS), N::B("cell0")),
+        (N::B("cell0"), N::V(FIRST), N::B("facet0")),
+        (N::B("cell0"), N::V(REST), N::V(NIL)),
+        (
+            N::B("facet0"),
+            N::V(XSD_MAX_INCLUSIVE),
+            N::L("3", XSD_INTEGER),
+        ),
+        // `ex:C ⊑ ∃p.[≤3]` alone is satisfiable; adding `⊑ ∃p.[≥5]` under a FUNCTIONAL `p`
+        // is what empties it, because the one value must then be in both.
+        typed(N::E("p"), N::V(FUNCTIONAL_PROPERTY)),
+        sub(N::E("C"), N::B("restriction2")),
+        typed(N::B("restriction2"), N::V(RESTRICTION)),
+        (N::B("restriction2"), N::V(ON_PROPERTY), N::E("p")),
+        (N::B("restriction2"), N::V(ALL_VALUES), N::B("range2")),
+        typed(N::B("range2"), N::V(RDFS_DATATYPE)),
+        (N::B("range2"), N::V(ON_DATATYPE), N::V(XSD_INTEGER)),
+        (N::B("range2"), N::V(WITH_RESTRICTIONS), N::B("cell1")),
+        (N::B("cell1"), N::V(FIRST), N::B("facet1")),
+        (N::B("cell1"), N::V(REST), N::V(NIL)),
+        (
+            N::B("facet1"),
+            N::V(XSD_MIN_INCLUSIVE),
+            N::L("5", XSD_INTEGER),
+        ),
+    ]);
+    let mut reasoner = Reasoner::new(&dataset).expect("reverse-map");
+    assert_eq!(
+        *reasoner.consistency().answer(),
+        Verdict::True,
+        "an empty class is not an inconsistent ontology"
+    );
+    let answer = reasoner
+        .class_satisfiability(&iri("C"))
+        .expect("the class is decided");
+    assert_eq!(
+        *answer.answer(),
+        Verdict::False,
+        "every member of ex:C needs one p-value that is both ≥5 and ≤3"
+    );
+    let certificate = honest(&answer);
+    assert_eq!(certificate.completeness(), DlCompleteness::Decided);
+}
+
+/// A SATISFIABLE facet stays satisfiable. Over-eager emptiness would be unsoundness in the
+/// other direction, and it is the more dangerous one: an invented inconsistency entails every
+/// answer a caller could ask for.
+#[test]
+fn a_satisfiable_datatype_range_is_reported_consistent_and_decided() {
+    let dataset = facet_ontology(&[(XSD_MIN_INCLUSIVE, "3"), (XSD_MAX_INCLUSIVE, "5")]);
+    let reasoner = Reasoner::new(&dataset).expect("reverse-map");
+    let answer = reasoner.consistency();
+    assert_eq!(*answer.answer(), Verdict::True);
+    let certificate = honest(&answer);
+    assert_eq!(certificate.completeness(), DlCompleteness::Decided);
+    assert!(certificate.boundaries().is_empty());
+}
+
+/// THE RESIDUE IS NAMED. An `xsd:pattern` facet is a regular-language question this layer
+/// does not decide, so the range is undecided — and an undecided range may not close a
+/// branch. The verdict stays `True` and the certificate stops claiming a flatly decided run.
+#[test]
+fn an_undecidable_facet_is_reported_within_boundaries_rather_than_guessed() {
+    let dataset = facet_ontology(&[(XSD_PATTERN, "[0-9]+")]);
+    let reasoner = Reasoner::new(&dataset).expect("reverse-map");
+    let answer = reasoner.consistency();
+    assert_eq!(
+        *answer.answer(),
+        Verdict::True,
+        "an undecided range must never invent an inconsistency"
+    );
+    let certificate = honest(&answer);
+    assert_eq!(
+        certificate.completeness(),
+        DlCompleteness::DecidedWithinBoundaries
+    );
+    let constructs: Vec<String> = certificate
+        .boundaries()
+        .iter()
+        .map(|boundary| boundary.construct().to_string())
+        .collect();
+    assert_eq!(constructs, vec!["data-range".to_owned()]);
+    assert!(
+        certificate.boundaries()[0].reason().contains("xsd:pattern"),
+        "the reason must name the facet that was not decided"
+    );
 }
 
 #[test]

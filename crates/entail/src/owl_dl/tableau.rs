@@ -1,14 +1,28 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! An `ALCOIQ` tableau consistency procedure (the OWL-Direct decision core).
+//! An `ALCOIQ(D)` tableau consistency procedure (the OWL-Direct decision core).
 //!
 //! This is a from-scratch implementation of the standard completion-graph algorithm
 //! (Horrocks & Sattler, "A Tableau Decision Procedure for SHOIQ", 2007; Baader et
 //! al., "The Description Logic Handbook", ch. 3) restricted to the `ALCOIQ` fragment
 //! the OWL-Direct fixtures exercise: the boolean connectives, existential/universal
 //! restrictions, qualified number restrictions (`Q`), inverse roles (`I`), and
-//! nominals (`O`). Algorithms are not copyrightable; this code is original.
+//! nominals (`O`), over a CONCRETE DOMAIN (`D`) of datatype values. Algorithms are not
+//! copyrightable; this code is original.
+//!
+//! ## Two domains, not one
+//!
+//! OWL 2 interprets an ontology over an object domain `Δ_I` — what `owl:Thing` denotes — and
+//! a disjoint data domain `Δ_D` of literal values. A node of the completion graph inhabits
+//! one or the other ([`Node::concrete`]), and the difference is load-bearing in two places: a
+//! concrete node is NOT seeded with the internalized TBox, because a general concept inclusion
+//! quantifies over `Δ_I` alone; and a concrete node's constraints are decided by
+//! [`crate::owl_dl::data`] against the XSD value spaces rather than by the abstract rules.
+//! Two literals are one element of `Δ_D` exactly when they denote one VALUE — the data domain
+//! has no unique-name freedom to spend — which is what lets a functional data property clash
+//! on `"1"^^xsd:integer` and `"2"^^xsd:integer` while accepting `"1"^^xsd:integer` and
+//! `"01"^^xsd:integer`.
 //!
 //! ## Shape of the search
 //!
@@ -82,6 +96,24 @@ struct Node {
     neq: BTreeSet<usize>,
     /// Union-find forward pointer once merged away (`None` while a representative).
     merged: Option<usize>,
+    /// Whether this node inhabits the DATA domain (a literal value) rather than the object
+    /// domain.
+    ///
+    /// OWL 2 interprets an ontology over two domains, and `owl:Thing` denotes only the object
+    /// one. A concrete node is therefore NOT seeded with the internalized TBox: every general
+    /// concept inclusion is a statement about `Δ_I`, and placing `nnf(¬C ⊔ D)` on a literal's
+    /// node would let a TBox axiom close a branch over an element the axiom does not
+    /// quantify over — an inconsistency the ontology does not state.
+    concrete: bool,
+    /// The VALUE class this node denotes, when it denotes a literal whose value is known.
+    ///
+    /// The data domain admits no unique-name freedom: two literals denote one element exactly
+    /// when they denote one value. Two nodes carrying different classes are therefore
+    /// DISTINCT with nothing having said so, which is what lets a functional data property
+    /// clash on two disagreeing values; and two nodes carrying the same class can never be
+    /// counted as two, which is what stops `"1"^^xsd:integer` and `"01"^^xsd:integer` from
+    /// satisfying a `≥2` restriction between them.
+    value_class: Option<u32>,
 }
 
 /// A completion graph under construction.
@@ -234,21 +266,41 @@ fn find(st: &State, mut x: usize) -> usize {
 }
 
 /// Whether `a` and `b` are forced distinct (`a ≠ b`), resolving representatives.
+///
+/// Two kinds of force, and the second is not a recorded `≠`: an explicit inequality the
+/// `≥`-rule or an `owl:differentFrom` put on the graph, and a disagreement of VALUE CLASS.
+/// The data domain interprets a literal as its value, so two nodes denoting different values
+/// are different elements whether or not anything said so — that is not a unique-name
+/// assumption, it is the datatype map.
 fn are_distinct(st: &State, a: usize, b: usize) -> bool {
     let a = find(st, a);
     let b = find(st, b);
     if a == b {
         return false;
     }
+    if let (Some(left), Some(right)) = (st.nodes[a].value_class, st.nodes[b].value_class)
+        && left != right
+    {
+        return true;
+    }
     st.nodes[a].neq.iter().any(|&w| find(st, w) == b)
         || st.nodes[b].neq.iter().any(|&w| find(st, w) == a)
 }
 
 /// Record `a ≠ b`.
+///
+/// Two nodes denoting ONE value cannot be distinct, so forcing an inequality between them is a
+/// clash for the same reason forcing one between a node and itself is.
 fn set_distinct(st: &mut State, a: usize, b: usize) {
     let a = find(st, a);
     let b = find(st, b);
     if a == b {
+        st.clash = true;
+        return;
+    }
+    if let (Some(left), Some(right)) = (st.nodes[a].value_class, st.nodes[b].value_class)
+        && left == right
+    {
         st.clash = true;
         return;
     }
@@ -260,7 +312,15 @@ fn set_distinct(st: &mut State, a: usize, b: usize) {
 ///
 /// Orientation keeps a root over a tree node, else the lower index. A forced merge of
 /// a `≠` pair sets [`State::clash`].
-fn merge(st: &mut State, keep: usize, discard: usize) {
+///
+/// # Why this is a method
+///
+/// Identifying an abstract node with a literal's node says the abstract node WAS that literal
+/// value all along, and every meta-concept the internalized TBox put on it therefore never
+/// applied: a general concept inclusion quantifies over `owl:Thing`, and no literal value is
+/// in it. Dropping them needs the internalized TBox in scope, which is what makes this a
+/// method on the driver rather than a free function over the state.
+fn merge_nodes(t: &Tableau<'_>, st: &mut State, keep: usize, discard: usize) {
     let mut keep = find(st, keep);
     let mut discard = find(st, discard);
     if keep == discard {
@@ -298,6 +358,24 @@ fn merge(st: &mut State, keep: usize, discard: usize) {
     st.nodes[keep].nominals.extend(disc_nominals);
     if st.nodes[discard].root {
         st.nodes[keep].root = true;
+    }
+    // A node identified with a literal's node denotes that literal's value, and inherits both
+    // the domain it lives in and the value class that decides its identity. `are_distinct`
+    // above already refused the merge when the two classes disagree, so this cannot silently
+    // overwrite one value with another.
+    if st.nodes[discard].concrete {
+        st.nodes[keep].concrete = true;
+    }
+    if st.nodes[keep].value_class.is_none() {
+        st.nodes[keep].value_class = st.nodes[discard].value_class;
+    }
+    // The keeper is now known to inhabit the DATA domain, so the internalized TBox never
+    // constrained it. Withdrawing those meta-concepts can only remove a clash, never add one,
+    // which is the direction an identification is allowed to move the answer in.
+    if st.nodes[keep].concrete {
+        for meta in &t.meta {
+            st.nodes[keep].label.remove(meta);
+        }
     }
     st.nodes[discard].merged = Some(keep);
 }
@@ -349,7 +427,7 @@ impl<'a> Tableau<'a> {
             for &(a, b) in &self.kb.same_as {
                 let ra = self.root(&mut st, a);
                 let rb = self.root(&mut st, b);
-                merge(&mut st, ra, rb);
+                merge_nodes(self, &mut st, ra, rb);
             }
             // `owl:differentFrom` / `owl:AllDifferent`, as recorded `≠` pairs. Without
             // them no `≤n r.C` restriction can be violated, because the clash rule counts
@@ -383,25 +461,40 @@ impl<'a> Tableau<'a> {
                 nominals: BTreeSet::new(),
                 neq: BTreeSet::new(),
                 merged: None,
+                concrete: false,
+                value_class: None,
             });
         }
         st
     }
 
     /// Get or create the root node for individual term id `a`.
+    ///
+    /// A LITERAL gets a root here exactly as a named individual does — it is the object of a
+    /// data-property assertion and every rule that reads a neighbourhood must see it — but it
+    /// is a node of the DATA domain: it carries the literal's value class and it is not seeded
+    /// with the internalized TBox, because a general concept inclusion quantifies over
+    /// `owl:Thing` and a literal value is not in it.
     fn root(&self, st: &mut State, a: u32) -> usize {
         if let Some(&n) = st.root_of.get(&a) {
             return find(st, n);
         }
         let idx = st.nodes.len();
+        let concrete = self.kb.interner.is_literal(a);
         st.nodes.push(Node {
-            label: self.seed_label(),
+            label: if concrete {
+                BTreeSet::new()
+            } else {
+                self.seed_label()
+            },
             parent: None,
             incoming: None,
             root: true,
             nominals: std::iter::once(a).collect(),
             neq: BTreeSet::new(),
             merged: None,
+            concrete,
+            value_class: self.kb.literal_class.get(&a).copied(),
         });
         st.root_of.insert(a, idx);
         idx
@@ -506,8 +599,9 @@ impl<'a> Tableau<'a> {
     /// Whether representative node `x` carries a clash.
     ///
     /// The clash triggers are `⊥`, a complementary concept pair `C, ¬C`, a negated
-    /// nominal `¬{…}` naming one of the node's *own* individuals, and a `≤n r.C`
-    /// violated by more than `n` pairwise-distinct `C`-neighbours.
+    /// nominal `¬{…}` naming one of the node's *own* individuals, a `≤n r.C`
+    /// violated by more than `n` pairwise-distinct `C`-neighbours, and an unsatisfiable
+    /// CONCRETE-domain constraint set ([`Tableau::data_clashes`]).
     ///
     /// A **positive** nominal set `{a₁,…,aₙ} ∈ L(x)` is deliberately *not* a clash
     /// trigger, even when `x` already denotes some other name. OWL 2 makes no unique
@@ -539,7 +633,69 @@ impl<'a> Tableau<'a> {
                 return true;
             }
         }
-        self.max_clash(st, x)
+        self.max_clash(st, x) || self.data_clashes(st, x)
+    }
+
+    /// Whether the CONCRETE-domain constraints on `x` have no solution.
+    ///
+    /// A node labelled `Data(r₁) … Data(rₘ) ¬Data(s₁) … ¬Data(sₖ)` denotes a literal value in
+    /// `r₁ ∩ … ∩ rₘ ∩ ¬s₁ ∩ … ∩ ¬sₖ`, and an EMPTY intersection has no such value. That is the
+    /// whole of the concrete-domain decision procedure at this layer, and it is
+    /// [`purrdf_xsd::range`]'s answer rather than a second datatype model written beside it.
+    ///
+    /// Only a PROVED emptiness closes the branch. A range the decision procedure cannot decide
+    /// answers "not provably empty" and is reported as a boundary instead, because inventing an
+    /// inconsistency is the one error a reasoner cannot recover from.
+    ///
+    /// The second half is the counting question a per-node emptiness check cannot see: `≥n r.DR`
+    /// demands `n` PAIRWISE-DISTINCT values of `DR`, and the data domain has no unique-name
+    /// freedom to supply them from, so a range holding fewer than `n` values refutes the
+    /// restriction outright. Every `∀r.DR′` on the same node narrows the range those witnesses
+    /// are drawn from, so the two are counted together.
+    ///
+    /// An ontology stating no data range and holding no literal skips all of it.
+    fn data_clashes(&self, st: &State, x: usize) -> bool {
+        if self.kb.data_ranges.is_empty() {
+            return false;
+        }
+        let mut positive: Vec<u32> = Vec::new();
+        let mut negative: Vec<u32> = Vec::new();
+        for &cid in &st.nodes[x].label {
+            match *self.kb.table.decomp(cid) {
+                Decomp::Data(range) => positive.push(range),
+                Decomp::NegData(range) => negative.push(range),
+                _ => {}
+            }
+        }
+        if (!positive.is_empty() || !negative.is_empty())
+            && self
+                .kb
+                .data_ranges
+                .conjunction_is_empty(&positive, &negative)
+        {
+            return true;
+        }
+        for &cid in &st.nodes[x].label {
+            let Decomp::Min(n, role, filler) = *self.kb.table.decomp(cid) else {
+                continue;
+            };
+            let Decomp::Data(range) = *self.kb.table.decomp(filler) else {
+                continue;
+            };
+            let mut demanded = vec![range];
+            for &other in &st.nodes[x].label {
+                if let Decomp::All(universal_role, universal_filler) = *self.kb.table.decomp(other)
+                    && universal_role == role
+                    && let Decomp::Data(narrowed) = *self.kb.table.decomp(universal_filler)
+                {
+                    demanded.push(narrowed);
+                }
+            }
+            if self.kb.data_ranges.provably_fewer_than(&demanded, n) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Whether `x` has a `role`-edge to itself, read through the role hierarchy and the
@@ -738,7 +894,7 @@ impl<'a> Tableau<'a> {
                 continue;
             }
             let ra = self.root(st, a);
-            merge(st, ra, rx);
+            merge_nodes(self, st, ra, rx);
             changed = true;
             if st.clash {
                 return changed;
@@ -781,6 +937,22 @@ impl<'a> Tableau<'a> {
         changed
     }
 
+    /// Whether a filler concept can only be satisfied by an element of the DATA domain.
+    ///
+    /// Two shapes say so: a data range, and a nominal naming a literal (which is how
+    /// `owl:hasValue` over a data property reads). Both are POSITIVE forms — `¬Data(r)` and
+    /// `¬{"cat"}` hold of every abstract element too, so neither says anything about which
+    /// domain a node inhabits.
+    fn is_concrete_filler(&self, c: u32) -> bool {
+        match self.kb.table.decomp(c) {
+            Decomp::Data(_) => true,
+            Decomp::Nominal(members) => members
+                .iter()
+                .any(|&member| self.kb.interner.is_literal(member)),
+            _ => false,
+        }
+    }
+
     /// Add concept `c` to node `y`'s label; `⊤` is trivially present. Returns whether
     /// the label grew.
     fn add_concept(&self, st: &mut State, y: usize, c: u32) -> bool {
@@ -797,8 +969,16 @@ impl<'a> Tableau<'a> {
     }
 
     /// Create a fresh tree successor of `x` under `role`, labelled with `fillers`.
+    ///
+    /// A successor whose filler is a DATA RANGE is a node of the data domain, and is therefore
+    /// created without the internalized TBox in its label — see [`Node::concrete`].
     fn new_successor(&self, st: &mut State, x: usize, role: Role, fillers: &[u32]) -> usize {
-        let mut label = self.seed_label();
+        let concrete = fillers.iter().any(|&c| self.is_concrete_filler(c));
+        let mut label = if concrete {
+            BTreeSet::new()
+        } else {
+            self.seed_label()
+        };
         for &c in fillers {
             if !matches!(self.kb.table.decomp(c), Decomp::Top) {
                 label.insert(c);
@@ -817,6 +997,8 @@ impl<'a> Tableau<'a> {
             nominals: BTreeSet::new(),
             neq: BTreeSet::new(),
             merged: None,
+            concrete,
+            value_class: None,
         });
         // A forward role stores `x → y`; an inverse role stores `y → x`.
         if inverted {
@@ -1051,13 +1233,13 @@ impl<'a> Tableau<'a> {
                 true
             }
             Branch::Merge(a, b) => {
-                merge(st, a, b);
+                merge_nodes(self, st, a, b);
                 !st.clash
             }
             Branch::MergeNominal(x, a) => {
                 let x = find(st, x);
                 let ra = self.root(st, a);
-                merge(st, ra, x);
+                merge_nodes(self, st, ra, x);
                 !st.clash
             }
         }

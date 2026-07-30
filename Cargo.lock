@@ -1356,6 +1356,7 @@ dependencies = [
  "blake3",
  "criterion",
  "hashbrown 0.15.5",
+ "proptest",
  "purrdf-core",
  "purrdf-datalog",
  "purrdf-xsd",

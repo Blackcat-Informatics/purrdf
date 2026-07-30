@@ -225,11 +225,11 @@ Two corpora measure two different things, and the distinction matters:
   ledgered residuals: the RDF/RDFS/OWL-RL chase, the OWL-Direct (DL) tableau, the
   RIF-Core rule engine, and RDF-axiomatic predicate typing, all run through the
   SPARQL conformance harness.
-- **W3C OWL 2 test suite — 256 of 261 cases agree, 5 ledgered**, zero
+- **W3C OWL 2 test suite — 257 of 261 cases agree, 4 ledgered**, zero
   unledgered. This corpus is *consistency*-shaped: all 261 vendored cases are
   `otest:ConsistencyTest` (226) or `otest:InconsistencyTest` (35). It therefore
   grades the DL/tableau lane's satisfiability verdicts and says nothing about
-  the OWL 2 RL rule table. Every one of the 5 divergences is named in a typed
+  the OWL 2 RL rule table. Every one of the 4 divergences is named in a typed
   ledger; an unledgered divergence, and a ledgered case that has started
   agreeing, are both hard failures.
 

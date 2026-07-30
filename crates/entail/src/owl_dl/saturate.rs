@@ -268,9 +268,17 @@ impl Normalized {
                 Decomp::Min(_, Role::Named(role), filler) => {
                     out.push_ex_right(id, *role, *filler);
                 }
+                // A data range whose value set is PROVABLY empty is `⊥`, so a class the
+                // terminology forces into one is derived empty rather than only refuted. The
+                // converse — a non-empty range is not `⊤` — is deliberately absent: it says
+                // nothing about the object domain at all.
+                Decomp::Data(range) if kb.data_ranges.is_range_empty(*range) => {
+                    out.push_sub(id, kb.bottom);
+                }
                 // Everything else is an opaque atomic name to this calculus: an inverse
-                // role, a `∀`, a `≤n`, a nominal, a self restriction. Recording NO axiom for
-                // it loses derivations and invents none, which is the sound direction.
+                // role, a `∀`, a `≤n`, a nominal, a self restriction, a data range that is
+                // not empty. Recording NO axiom for it loses derivations and invents none,
+                // which is the sound direction.
                 _ => {}
             }
             // `C ⊓ ¬C ⊑ ⊥` is valid for every concept, and it is what lets a disjointness

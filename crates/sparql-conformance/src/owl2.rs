@@ -94,13 +94,6 @@ pub enum Owl2Gap {
     /// `owl:Thing owl:equivalentClass owl:Nothing` is unsatisfiable. The tableau
     /// admits the empty model instead and reports it satisfiable.
     EmptyDomain,
-    /// Two literals with DIFFERENT data values denote different elements of the
-    /// domain, and this tableau treats a literal as an opaque abstract term with no
-    /// unique-name assumption. A functional data property with two distinct literal
-    /// values therefore merges them instead of clashing. This is the concrete-domain
-    /// gap the `data-range` boundary describes, met through the equality rules
-    /// rather than through a data range.
-    DistinctLiterals,
     /// The class-expression graph is cyclic, which the parser refuses rather than
     /// unfolding, so the run withholds.
     CyclicClassExpression,
@@ -113,7 +106,6 @@ impl Owl2Gap {
         match self {
             Self::BottomProperty => "bottom-property",
             Self::EmptyDomain => "empty-domain",
-            Self::DistinctLiterals => "distinct-literals",
             Self::CyclicClassExpression => "cyclic-class-expression",
         }
     }
@@ -134,10 +126,7 @@ impl Owl2Gap {
     #[must_use]
     pub const fn is_unsound(self) -> bool {
         match self {
-            Self::BottomProperty
-            | Self::EmptyDomain
-            | Self::DistinctLiterals
-            | Self::CyclicClassExpression => false,
+            Self::BottomProperty | Self::EmptyDomain | Self::CyclicClassExpression => false,
         }
     }
 }
@@ -169,17 +158,6 @@ pub const LEDGER: &[LedgerEntry] = &[
     LedgerEntry {
         case: "new-feature-bottomobjectproperty-001",
         gap: Owl2Gap::BottomProperty,
-    },
-    // --- Distinct literals ----------------------------------------------------
-    //     `hasName` is functional and Peter has two DIFFERENT literal names, so
-    //     OWL 2 makes the ontology unsatisfiable. This tableau's `≤1 r.⊤` rule
-    //     merges the two literal nodes instead, because a literal is an opaque
-    //     abstract term here and nothing forces two of them apart. `owl:hasKey`
-    //     itself IS modelled now (new-feature-keys-002 agrees); this case is a
-    //     concrete-domain gap wearing a key's clothes.
-    LedgerEntry {
-        case: "new-feature-keys-006",
-        gap: Owl2Gap::DistinctLiterals,
     },
     // --- Non-empty interpretation domain --------------------------------------
     //     `owl:Thing owl:equivalentClass owl:Nothing` is unsatisfiable ONLY

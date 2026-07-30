@@ -218,3 +218,12 @@ opt-level = 2
 
 [profile.dev.package.purrdf-core]
 opt-level = 2
+
+# Same argument, different hot loop: the OWL-Direct tableau is checked against a naive
+# model-enumeration oracle (`owl_dl::oracle`) that decides satisfiability by enumerating
+# EVERY interpretation over a bounded domain. That is exponential on purpose — the oracle's
+# whole value is being too simple to be wrong — so the suite's cost is a bitmask inner loop
+# run hundreds of millions of times, which un-inlined dev codegen makes roughly 15x slower
+# and pushes the module past a reasonable test budget.
+[profile.dev.package.purrdf-entail]
+opt-level = 2

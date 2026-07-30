@@ -123,6 +123,15 @@ pub(crate) enum Shape {
     /// A referenced class expression over a one-element RDF collection, which is what
     /// exercises the `rdf:first` / `rdf:rest` / `rdf:nil` walk.
     Collection,
+    /// A complete restriction whose filler is a DATATYPE RESTRICTION: an `owl:someValuesFrom`
+    /// over `[ rdf:type rdfs:Datatype ; owl:onDatatype xsd:integer ;
+    /// owl:withRestrictions ( [ xsd:minInclusive "1"^^xsd:integer ] ) ]`.
+    DatatypeRestriction,
+    /// The same, with `owl:datatypeComplementOf xsd:integer` as the data range.
+    DatatypeComplement,
+    /// A complete qualified-cardinality restriction whose filler is a data range
+    /// (`owl:minQualifiedCardinality` with `owl:onDataRange`).
+    DataCardinality,
 }
 
 /// What the OWL-Direct layer does with one construct.
@@ -253,16 +262,19 @@ pub(crate) const OWL2_CONSTRUCTS: &[OwlConstruct] = &[
         Shape::TypeObject,
         "a class declaration: it names a class without constraining any model",
     ),
-    inert(
+    operand(
         RDFS_DATATYPE,
         Shape::TypeObject,
-        "a datatype declaration; the datatype's own value space is what the data-range \
-         boundary reports, and the declaration alone constrains no model",
+        "marks the node as a DATA RANGE rather than a class expression — which is the only \
+         thing that tells an owl:intersectionOf / unionOf / oneOf over the concrete domain \
+         apart from one over the abstract one; the range itself is read when an axiom \
+         REFERENCES the node",
     ),
     handled(
         RDFS_LITERAL,
         Shape::ClassDenotation,
-        "read as an ordinary named class, which is all the abstract layer can say about it",
+        "the whole DATA DOMAIN — the data range every literal value inhabits, and the range \
+         owl:datatypeComplementOf takes the complement with respect to",
     ),
     inert(
         RDFS_LABEL,
@@ -493,20 +505,40 @@ pub(crate) const OWL2_CONSTRUCTS: &[OwlConstruct] = &[
          that agree on every key property are identified",
     ),
     // --- OWL 2: data ranges (the concrete domain) --------------------------------------
-    bounded(OWL_ONDATATYPE, Shape::ClassExprIri, Construct::DataRange),
-    bounded(
+    operand(
+        OWL_ONDATATYPE,
+        Shape::DatatypeRestriction,
+        "the base datatype of a datatype restriction, read from the restriction node together \
+         with its owl:withRestrictions facets",
+    ),
+    operand(
         OWL_WITHRESTRICTIONS,
-        Shape::ClassExprList,
-        Construct::DataRange,
+        Shape::DatatypeRestriction,
+        "the constraining facets of a datatype restriction — xsd:minInclusive, \
+         xsd:maxInclusive, xsd:minExclusive, xsd:maxExclusive, xsd:length, xsd:minLength and \
+         xsd:maxLength are intersected over the base datatype's value space; xsd:pattern and \
+         rdf:langRange make the range undecidable here and raise the data-range boundary",
     ),
-    bounded(
+    handled(
         OWL_DATATYPECOMPLEMENTOF,
-        Shape::ClassExprIri,
-        Construct::DataRange,
+        Shape::DatatypeComplement,
+        "the data range Δ_D ∖ DR — the complement taken with respect to the WHOLE data \
+         domain, so a complement of rdfs:Literal is empty and a class forced into one is \
+         unsatisfiable",
     ),
-    bounded(OWL_ONDATARANGE, Shape::RestrictionIri, Construct::DataRange),
+    operand(
+        OWL_ONDATARANGE,
+        Shape::DataCardinality,
+        "the data range a qualified cardinality restriction counts over, read from that \
+         restriction exactly as owl:onClass is for an object property",
+    ),
     bounded(OWL_ONPROPERTIES, Shape::ClassExprList, Construct::DataRange),
-    bounded(OWL_DATARANGE, Shape::TypeObject, Construct::DataRange),
+    operand(
+        OWL_DATARANGE,
+        Shape::TypeObject,
+        "OWL 1's spelling of rdfs:Datatype: it marks the node as a data range, and the range \
+         is read when an axiom references the node",
+    ),
     bounded(OWL_REAL, Shape::ClassDenotation, Construct::DataRange),
     bounded(OWL_RATIONAL, Shape::ClassDenotation, Construct::DataRange),
     // --- OWL 2: built-in roles ---------------------------------------------------------
@@ -612,7 +644,8 @@ mod tests {
     use crate::report::Construct;
     use crate::vocab::{
         OWL_MEMBERS, OWL_ONCLASS, OWL_ONPROPERTY, OWL_RESTRICTION, RDF_FIRST, RDF_NIL, RDF_REST,
-        RDF_TYPE, RDFS_SUBCLASSOF, XSD_NONNEGATIVEINTEGER,
+        RDF_TYPE, RDFS_DATATYPE, RDFS_SUBCLASSOF, XSD_INTEGER, XSD_MININCLUSIVE,
+        XSD_NONNEGATIVEINTEGER,
     };
     use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, TermId, TermValue};
     use std::collections::BTreeSet;
@@ -785,6 +818,49 @@ mod tests {
                 let node = f.blank("expr");
                 f.quad(a, sub_class, node);
                 f.quad(node, term, b);
+            }
+            Shape::DatatypeRestriction | Shape::DatatypeComplement | Shape::DataCardinality => {
+                let node = f.blank("restriction");
+                let restriction = f.iri(OWL_RESTRICTION);
+                let on_property = f.iri(OWL_ONPROPERTY);
+                let datatype = f.iri(RDFS_DATATYPE);
+                let integer = f.iri(XSD_INTEGER);
+                f.quad(a, sub_class, node);
+                f.quad(node, ty, restriction);
+                f.quad(node, on_property, p);
+                match construct.shape {
+                    Shape::DatatypeRestriction => {
+                        let range = f.blank("range");
+                        let some = f.iri(super::OWL_SOMEVALUESFROM);
+                        let on_datatype = f.iri(super::OWL_ONDATATYPE);
+                        let with_restrictions = f.iri(super::OWL_WITHRESTRICTIONS);
+                        let facet = f.blank("facet");
+                        let min_inclusive = f.iri(XSD_MININCLUSIVE);
+                        let one = f.literal("1", XSD_INTEGER);
+                        f.quad(facet, min_inclusive, one);
+                        let head = f.list(&[facet]);
+                        f.quad(range, ty, datatype);
+                        f.quad(range, on_datatype, integer);
+                        f.quad(range, with_restrictions, head);
+                        f.quad(node, some, range);
+                    }
+                    Shape::DatatypeComplement => {
+                        let range = f.blank("range");
+                        let some = f.iri(super::OWL_SOMEVALUESFROM);
+                        let complement = f.iri(super::OWL_DATATYPECOMPLEMENTOF);
+                        f.quad(range, ty, datatype);
+                        f.quad(range, complement, integer);
+                        f.quad(node, some, range);
+                    }
+                    // `Shape::DataCardinality`.
+                    _ => {
+                        let qualified = f.iri(super::OWL_MINQUALIFIEDCARDINALITY);
+                        let on_data_range = f.iri(super::OWL_ONDATARANGE);
+                        let value = f.literal("1", XSD_NONNEGATIVEINTEGER);
+                        f.quad(node, qualified, value);
+                        f.quad(node, on_data_range, integer);
+                    }
+                }
             }
         }
         f.freeze()

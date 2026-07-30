@@ -3,9 +3,11 @@
 
 //! The native OWL-Direct (Description-Logic) reasoner core.
 //!
-//! Four layers compose here: [`concept`] is the DL syntax and its structural
-//! interner; [`parser`] reverse-maps an [`RdfDataset`] into a [`Kb`] (TBox, RBox,
-//! ABox, plus anonymous class expressions); [`tableau`] is the `ALCOIQ` completion
+//! Five layers compose here: [`concept`] is the DL syntax and its structural
+//! interner; [`data`] is the CONCRETE domain — the data ranges and literal values a
+//! datatype map fixes rather than the ontology; [`parser`] reverse-maps an [`RdfDataset`]
+//! into a [`Kb`] (TBox, RBox,
+//! ABox, plus anonymous class expressions); [`tableau`] is the `ALCOIQ(D)` completion
 //! procedure that decides consistency; and [`saturate`] is the consequence-based
 //! calculus that derives the WHOLE named-class subsumption relation in one fixpoint,
 //! so classification is not a loop over the tableau. [`Kb`] ties them together and exposes the
@@ -36,6 +38,10 @@ use crate::report::Construct;
 
 pub(crate) mod concept;
 pub(crate) mod constructs;
+pub(crate) mod data;
+/// The differential test of [`tableau`] against a naive model-enumeration oracle.
+#[cfg(test)]
+mod oracle;
 pub(crate) mod parser;
 pub(crate) mod query;
 pub(crate) mod saturate;
@@ -111,6 +117,19 @@ pub(crate) struct Kb {
     pub(crate) disjoint_roles: BTreeSet<(u32, u32)>,
     /// `owl:hasKey` axioms: the keyed class's concept id and its key property term ids.
     pub(crate) keys: Vec<(u32, Vec<u32>)>,
+    /// The CONCRETE domain: every data range the ontology states, decided once.
+    ///
+    /// A [`Concept::Data`] leaf indexes this table. It is empty for an ontology that states
+    /// no data range and no literal, and the tableau's concrete-domain rules are skipped
+    /// wholesale in that case.
+    pub(crate) data_ranges: data::DataRangeTable,
+    /// Literal term id → its VALUE class, for the literals that reach the knowledge base.
+    ///
+    /// The data domain admits no unique-name freedom: two literals denote one element exactly
+    /// when they denote one value. Sharing a class is therefore identity and differing in
+    /// class is distinctness — neither is a name comparison, and a literal whose value cannot
+    /// be examined is simply absent here rather than guessed either way.
+    pub(crate) literal_class: BTreeMap<u32, u32>,
     /// The constructs this knowledge base could not fully handle, in `Construct` order.
     pub(crate) boundaries: BTreeSet<Construct>,
 }
@@ -142,6 +161,8 @@ impl Kb {
             asymmetric: BTreeSet::new(),
             disjoint_roles: BTreeSet::new(),
             keys: Vec::new(),
+            data_ranges: data::DataRangeTable::default(),
+            literal_class: BTreeMap::new(),
             boundaries: BTreeSet::new(),
         }
     }

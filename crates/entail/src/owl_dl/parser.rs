@@ -52,31 +52,66 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_core::{RdfDataset, TermValue};
+use purrdf_xsd::XsdDatatype;
+use purrdf_xsd::range::{DataRange, Facet};
 
 use crate::EntailError;
 use crate::interner::Interner;
 use crate::owl_dl::Kb;
-use crate::owl_dl::concept::{Concept, ConceptTable, Role};
+use crate::owl_dl::concept::{Concept, ConceptTable, Decomp, Role};
 use crate::owl_dl::constructs::{Support, support_of};
+use crate::owl_dl::data::{self, DataRangeTable, LiteralValue};
 use crate::report::Construct;
 use crate::vocab::{
     OWL_ALLDIFFERENT, OWL_ALLDISJOINTCLASSES, OWL_ALLDISJOINTPROPERTIES, OWL_ALLVALUESFROM,
     OWL_ANNOTATIONPROPERTY, OWL_ASSERTIONPROPERTY, OWL_ASYMMETRICPROPERTY, OWL_AXIOM,
-    OWL_CARDINALITY, OWL_CLASS, OWL_COMPLEMENTOF, OWL_DATATYPECOMPLEMENTOF, OWL_DATATYPEPROPERTY,
-    OWL_DIFFERENTFROM, OWL_DISJOINTUNIONOF, OWL_DISJOINTWITH, OWL_DISTINCTMEMBERS,
-    OWL_EQUIVALENTCLASS, OWL_EQUIVALENTPROPERTY, OWL_FUNCTIONALPROPERTY, OWL_HASKEY, OWL_HASSELF,
-    OWL_HASVALUE, OWL_INTERSECTIONOF, OWL_INVERSEFUNCTIONALPROPERTY, OWL_INVERSEOF,
-    OWL_IRREFLEXIVEPROPERTY, OWL_MAXCARDINALITY, OWL_MAXQUALIFIEDCARDINALITY, OWL_MEMBERS,
-    OWL_MINCARDINALITY, OWL_MINQUALIFIEDCARDINALITY, OWL_NAMEDINDIVIDUAL,
+    OWL_CARDINALITY, OWL_CLASS, OWL_COMPLEMENTOF, OWL_DATARANGE, OWL_DATATYPECOMPLEMENTOF,
+    OWL_DATATYPEPROPERTY, OWL_DIFFERENTFROM, OWL_DISJOINTUNIONOF, OWL_DISJOINTWITH,
+    OWL_DISTINCTMEMBERS, OWL_EQUIVALENTCLASS, OWL_EQUIVALENTPROPERTY, OWL_FUNCTIONALPROPERTY,
+    OWL_HASKEY, OWL_HASSELF, OWL_HASVALUE, OWL_INTERSECTIONOF, OWL_INVERSEFUNCTIONALPROPERTY,
+    OWL_INVERSEOF, OWL_IRREFLEXIVEPROPERTY, OWL_MAXCARDINALITY, OWL_MAXQUALIFIEDCARDINALITY,
+    OWL_MEMBERS, OWL_MINCARDINALITY, OWL_MINQUALIFIEDCARDINALITY, OWL_NAMEDINDIVIDUAL,
     OWL_NEGATIVEPROPERTYASSERTION, OWL_NOTHING, OWL_OBJECTPROPERTY, OWL_ONCLASS, OWL_ONDATARANGE,
     OWL_ONDATATYPE, OWL_ONEOF, OWL_ONPROPERTIES, OWL_ONPROPERTY, OWL_ONTOLOGY,
-    OWL_ONTOLOGYPROPERTY, OWL_PROPERTYDISJOINTWITH, OWL_QUALIFIEDCARDINALITY,
-    OWL_REFLEXIVEPROPERTY, OWL_RESTRICTION, OWL_SAMEAS, OWL_SOMEVALUESFROM, OWL_SOURCEINDIVIDUAL,
-    OWL_SYMMETRICPROPERTY, OWL_TARGETINDIVIDUAL, OWL_TARGETVALUE, OWL_THING,
-    OWL_TRANSITIVEPROPERTY, OWL_UNIONOF, OWL_WITHRESTRICTIONS, RDF_FIRST, RDF_NIL, RDF_PROPERTY,
-    RDF_REST, RDF_TYPE, RDFS_CLASS, RDFS_DATATYPE, RDFS_DOMAIN, RDFS_RANGE, RDFS_SUBCLASSOF,
-    RDFS_SUBPROPERTYOF,
+    OWL_ONTOLOGYPROPERTY, OWL_PROPERTYDISJOINTWITH, OWL_QUALIFIEDCARDINALITY, OWL_RATIONAL,
+    OWL_REAL, OWL_REFLEXIVEPROPERTY, OWL_RESTRICTION, OWL_SAMEAS, OWL_SOMEVALUESFROM,
+    OWL_SOURCEINDIVIDUAL, OWL_SYMMETRICPROPERTY, OWL_TARGETINDIVIDUAL, OWL_TARGETVALUE, OWL_THING,
+    OWL_TRANSITIVEPROPERTY, OWL_UNIONOF, OWL_WITHRESTRICTIONS, RDF_FIRST, RDF_LANGRANGE, RDF_NIL,
+    RDF_PROPERTY, RDF_REST, RDF_TYPE, RDFS_CLASS, RDFS_DATATYPE, RDFS_DOMAIN, RDFS_LITERAL,
+    RDFS_RANGE, RDFS_SUBCLASSOF, RDFS_SUBPROPERTYOF, XSD_LENGTH, XSD_MAXEXCLUSIVE,
+    XSD_MAXINCLUSIVE, XSD_MAXLENGTH, XSD_MINEXCLUSIVE, XSD_MININCLUSIVE, XSD_MINLENGTH, XSD_NS,
+    XSD_PATTERN,
 };
+
+/// Which constraining facet a predicate of an `owl:withRestrictions` list cell states.
+///
+/// The facet IRIs sit in the XML Schema namespace, which the OWL-2-RDF mapping does not
+/// reserve, so they are recognized by this table rather than by the reserved-namespace split.
+/// [`FacetSlot::Undecided`] is the honest arm: a facet whose constraint this layer decides
+/// nothing about makes the whole range opaque, because SILENTLY DROPPING a facet is unsound —
+/// under a complement, a dropped constraint SHRINKS the range and can invent an emptiness the
+/// ontology does not state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FacetSlot {
+    /// `xsd:minInclusive`.
+    MinInclusive,
+    /// `xsd:maxInclusive`.
+    MaxInclusive,
+    /// `xsd:minExclusive`.
+    MinExclusive,
+    /// `xsd:maxExclusive`.
+    MaxExclusive,
+    /// `xsd:length`.
+    Length,
+    /// `xsd:minLength`.
+    MinLength,
+    /// `xsd:maxLength`.
+    MaxLength,
+    /// A facet this layer models nothing about — `xsd:pattern`, whose emptiness question is a
+    /// regular-language product construction, and `rdf:langRange`, whose value space is
+    /// `rdf:langString`'s rather than an XSD one.
+    Undecided,
+}
 
 /// The interned vocabulary term ids the reverse mapping keys on. Fields are
 /// `pub(crate)` so the query-answering layer can build the same class-expression
@@ -142,6 +177,21 @@ pub(crate) struct Vocab {
     pub(crate) rest: u32,
     pub(crate) nil: u32,
     pub(crate) named_individual: u32,
+    /// `rdfs:Datatype` — the typing that marks a node as a DATA RANGE rather than a class.
+    pub(crate) datatype: u32,
+    /// `owl:DataRange` — OWL 1's spelling of the same typing.
+    pub(crate) data_range_class: u32,
+    /// `rdfs:Literal` — the whole data domain.
+    pub(crate) literal: u32,
+    /// `owl:real`, `owl:rational` — datatype names outside the modelled XSD value space.
+    pub(crate) real: u32,
+    /// See [`Vocab::real`].
+    pub(crate) rational: u32,
+    /// Facet predicate term ids paired with the constraining facet each states.
+    ///
+    /// A `Vec` rather than a map: there are nine of them, so a linear scan is both smaller
+    /// and faster than a tree, and the fixed reading order keeps every lookup deterministic.
+    pub(crate) facets: Vec<(u32, FacetSlot)>,
     /// Class/property-typing objects that mark structure, not an instance assertion.
     pub(crate) structural_types: BTreeSet<u32>,
 }
@@ -179,6 +229,19 @@ impl Vocab {
         ] {
             structural_types.insert(i.intern_iri(iri));
         }
+        let facets = [
+            (XSD_MININCLUSIVE, FacetSlot::MinInclusive),
+            (XSD_MAXINCLUSIVE, FacetSlot::MaxInclusive),
+            (XSD_MINEXCLUSIVE, FacetSlot::MinExclusive),
+            (XSD_MAXEXCLUSIVE, FacetSlot::MaxExclusive),
+            (XSD_LENGTH, FacetSlot::Length),
+            (XSD_MINLENGTH, FacetSlot::MinLength),
+            (XSD_MAXLENGTH, FacetSlot::MaxLength),
+            (XSD_PATTERN, FacetSlot::Undecided),
+            (RDF_LANGRANGE, FacetSlot::Undecided),
+        ]
+        .map(|(iri, slot)| (i.intern_iri(iri), slot))
+        .to_vec();
 
         Self {
             ty: i.intern_iri(RDF_TYPE),
@@ -241,6 +304,12 @@ impl Vocab {
             rest: i.intern_iri(RDF_REST),
             nil: i.intern_iri(RDF_NIL),
             named_individual: i.intern_iri(OWL_NAMEDINDIVIDUAL),
+            datatype: i.intern_iri(RDFS_DATATYPE),
+            data_range_class: i.intern_iri(OWL_DATARANGE),
+            literal: i.intern_iri(RDFS_LITERAL),
+            real: i.intern_iri(OWL_REAL),
+            rational: i.intern_iri(OWL_RATIONAL),
+            facets,
             structural_types,
         }
     }
@@ -267,6 +336,11 @@ pub(crate) struct CeExtractor<'a> {
     index: &'a TripleIndex,
     interner: &'a Interner,
     v: &'a Vocab,
+    /// The knowledge base's data-range table, which a decoded data range is recorded in.
+    /// Borrowed rather than owned so a class expression written in a QUERY lands its data
+    /// ranges in the same table — and therefore under the same concept ids — as one written
+    /// in the data.
+    ranges: &'a mut DataRangeTable,
     /// Node id → its class expression (memoized).
     expr_cache: BTreeMap<u32, Concept>,
     /// Nodes on the current recursion stack (cycle guard).
@@ -282,11 +356,17 @@ pub(crate) struct CeExtractor<'a> {
 impl<'a> CeExtractor<'a> {
     /// Build an extractor over `index`, resolving terms through `interner` and keying
     /// on `v`.
-    pub(crate) fn new(index: &'a TripleIndex, interner: &'a Interner, v: &'a Vocab) -> Self {
+    pub(crate) fn new(
+        index: &'a TripleIndex,
+        interner: &'a Interner,
+        v: &'a Vocab,
+        ranges: &'a mut DataRangeTable,
+    ) -> Self {
         Self {
             index,
             interner,
             v,
+            ranges,
             expr_cache: BTreeMap::new(),
             in_progress: BTreeSet::new(),
             boundaries: BTreeSet::new(),
@@ -358,25 +438,23 @@ impl<'a> CeExtractor<'a> {
         if node == self.v.nothing {
             return Ok(Concept::Bottom);
         }
-        // A RESERVED term used in a class position that this layer does not model —
-        // `owl:real`, `owl:rational`, a newer-than-this-release OWL class — is read
-        // opaquely under its own boundary rather than as an ordinary named class, which is
-        // what it would otherwise silently become.
+        // A DATA RANGE is a CONCRETE-domain expression: a subset of the data domain rather
+        // than of `owl:Thing`. It is decoded first, because most of the vocabulary below
+        // (`owl:intersectionOf`, `owl:unionOf`, `owl:oneOf`) is spelled the same way in both
+        // domains and only the datatype typing tells them apart.
+        if self.is_data_range(node)? {
+            let range = self.data_range(node)?;
+            let id = self.ranges.intern(range);
+            return Ok(Concept::Data(id));
+        }
+        // A RESERVED term used in a class position that this layer does not model — a
+        // built-in role, a newer-than-this-release OWL class — is read opaquely under its own
+        // boundary rather than as an ordinary named class, which is what it would otherwise
+        // silently become.
         if let TermValue::Iri(iri) = self.interner.value(node)
             && let Some(Support::Bounded(construct)) = support_of(iri)
         {
             return Ok(self.opaque(node, construct));
-        }
-        // A DATA range is a concrete-domain expression, not a class expression; reading it
-        // as one would be a wrong answer rather than an incomplete one.
-        for data_range in [
-            self.v.on_datatype,
-            self.v.datatype_complement,
-            self.v.with_restrictions,
-        ] {
-            if self.get(node, data_range).is_some() {
-                return Ok(self.opaque(node, Construct::DataRange));
-            }
         }
         if let Some(head) = self.get(node, self.v.intersection) {
             let items = self.expr_list(head)?;
@@ -389,26 +467,231 @@ impl<'a> CeExtractor<'a> {
         if let Some(inner) = self.get(node, self.v.complement) {
             return Ok(Concept::Not(Box::new(self.expr(inner)?)));
         }
+        // An `owl:oneOf` reached HERE enumerates INDIVIDUALS: one over literals is a
+        // `DataOneOf`, which [`CeExtractor::is_data_range`] recognized above.
         if let Some(head) = self.get(node, self.v.one_of) {
-            let ids = self.node_list(head)?;
-            // An `owl:oneOf` over LITERALS is `DataOneOf`, a data range.
-            if ids
-                .iter()
-                .any(|&id| matches!(self.interner.value(id), TermValue::Literal { .. }))
-            {
-                return Ok(self.opaque(node, Construct::DataRange));
-            }
-            return Ok(one_of(ids));
+            return Ok(one_of(self.node_list(head)?));
         }
         if self.get(node, self.v.on_property).is_some() || self.is_typed(node, self.v.restriction) {
             return self.restriction(node);
         }
-        if self.get(node, self.v.on_properties).is_some() {
-            // An n-ary data restriction: several data properties over one data range.
-            return Ok(self.opaque(node, Construct::DataRange));
-        }
         // An atomic named (or otherwise opaque) class.
         Ok(Concept::Named(node))
+    }
+
+    /// Whether `node` denotes a DATA RANGE — a subset of the data domain — rather than a
+    /// class expression.
+    ///
+    /// The question is decided by the node's own syntax, never by guessing at the property a
+    /// restriction happens to mention: a datatype NAME, a `rdfs:Datatype` (or OWL 1
+    /// `owl:DataRange`) typing, one of the data-range-defining predicates, or an `owl:oneOf`
+    /// whose members are literals. Every IRI in the XML Schema namespace is a datatype name,
+    /// which is what keeps `xsd:anyURI` from being read as an ordinary named class.
+    ///
+    /// # Errors
+    ///
+    /// [`EntailError::Parse`] on a malformed `owl:oneOf` collection.
+    fn is_data_range(&self, node: u32) -> Result<bool, EntailError> {
+        if let TermValue::Iri(iri) = self.interner.value(node)
+            && (iri.starts_with(XSD_NS) || node == self.v.literal)
+        {
+            return Ok(true);
+        }
+        if node == self.v.real || node == self.v.rational {
+            return Ok(true);
+        }
+        if self.is_typed(node, self.v.datatype) || self.is_typed(node, self.v.data_range_class) {
+            return Ok(true);
+        }
+        for defining in [
+            self.v.on_datatype,
+            self.v.datatype_complement,
+            self.v.with_restrictions,
+            self.v.on_properties,
+        ] {
+            if self.get(node, defining).is_some() {
+                return Ok(true);
+            }
+        }
+        if let Some(head) = self.get(node, self.v.one_of) {
+            let members = self.node_list(head)?;
+            if members
+                .iter()
+                .any(|&id| matches!(self.interner.value(id), TermValue::Literal { .. }))
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Decode the data range rooted at `node`.
+    ///
+    /// Everything this layer cannot decide EXACTLY becomes [`DataRange::Opaque`], which is
+    /// undecidable by construction rather than by omission: `purrdf_xsd::range` answers
+    /// `Undecided` for it, the tableau refuses to clash on it, and
+    /// [`DataRangeTable::exactly_decided`](crate::owl_dl::data::DataRangeTable::exactly_decided)
+    /// reports the boundary. Reading it as anything narrower would let a dropped constraint
+    /// invent an emptiness under a complement.
+    ///
+    /// # Errors
+    ///
+    /// [`EntailError::Parse`] on a malformed collection in a data-range position.
+    fn data_range(&self, node: u32) -> Result<DataRange, EntailError> {
+        if node == self.v.literal {
+            return Ok(DataRange::Any);
+        }
+        if let TermValue::Iri(iri) = self.interner.value(node) {
+            if let Some(datatype) = XsdDatatype::from_iri(iri) {
+                return Ok(DataRange::Datatype(datatype));
+            }
+            // A datatype NAME whose value space this layer does not model: `owl:real`,
+            // `owl:rational`, `xsd:anyURI`, a caller's own `rdfs:Datatype`.
+            return Ok(DataRange::Opaque);
+        }
+        if let Some(base) = self.get(node, self.v.on_datatype) {
+            return self.datatype_restriction(node, base);
+        }
+        if let Some(inner) = self.get(node, self.v.datatype_complement) {
+            let inner = self.data_range(inner)?;
+            return Ok(DataRange::Not(Box::new(inner)));
+        }
+        if let Some(head) = self.get(node, self.v.intersection) {
+            return Ok(DataRange::And(self.data_range_list(head)?));
+        }
+        if let Some(head) = self.get(node, self.v.union) {
+            return Ok(DataRange::Or(self.data_range_list(head)?));
+        }
+        if let Some(head) = self.get(node, self.v.one_of) {
+            return self.data_one_of(head);
+        }
+        // An n-ary data range (`owl:onProperties` with `owl:onDataRange`) — and any datatype
+        // node carrying nothing this layer reads. OWL 2 defines no n-ary datatype at all, so
+        // there is no datatype map entry to decide such a range against.
+        Ok(DataRange::Opaque)
+    }
+
+    /// `owl:onDatatype` + `owl:withRestrictions`: a base datatype narrowed by facets.
+    fn datatype_restriction(&self, node: u32, base: u32) -> Result<DataRange, EntailError> {
+        let Some(base) = (match self.interner.value(base) {
+            TermValue::Iri(iri) => XsdDatatype::from_iri(iri),
+            _ => None,
+        }) else {
+            return Ok(DataRange::Opaque);
+        };
+        let Some(head) = self.get(node, self.v.with_restrictions) else {
+            // A restriction with no facet list is the base datatype itself.
+            return Ok(DataRange::Datatype(base));
+        };
+        match self.facet_list(head)? {
+            Some(facets) => Ok(DataRange::Restriction { base, facets }),
+            None => Ok(DataRange::Opaque),
+        }
+    }
+
+    /// Walk an RDF list of data ranges.
+    fn data_range_list(&self, head: u32) -> Result<Vec<DataRange>, EntailError> {
+        let members = self.node_list(head)?;
+        members
+            .into_iter()
+            .map(|member| self.data_range(member))
+            .collect()
+    }
+
+    /// `DataOneOf`: an `owl:oneOf` collection of LITERALS.
+    ///
+    /// A member that is not a literal, or whose value this layer cannot examine, makes the
+    /// whole enumeration opaque — an enumeration with a member missing is a SMALLER set, and
+    /// a smaller set under a complement is a larger one, so neither direction is sound.
+    fn data_one_of(&self, head: u32) -> Result<DataRange, EntailError> {
+        let members = self.node_list(head)?;
+        let mut values = Vec::with_capacity(members.len());
+        for member in members {
+            match data::literal_value(self.interner.value(member)) {
+                Some(LiteralValue::Value(value)) => values.push(value),
+                // An ill-typed member denotes nothing, so it contributes nothing: the
+                // enumeration is exactly the remaining values.
+                Some(LiteralValue::IllTyped) => {}
+                _ => return Ok(DataRange::Opaque),
+            }
+        }
+        Ok(DataRange::OneOf(values))
+    }
+
+    /// Decode an `owl:withRestrictions` collection, or `None` when a cell carries a facet this
+    /// layer decides nothing about (or no facet at all).
+    fn facet_list(&self, head: u32) -> Result<Option<Vec<Facet>>, EntailError> {
+        let index = self.index;
+        let cells = self.node_list(head)?;
+        let mut out = Vec::with_capacity(cells.len());
+        for cell in cells {
+            let Some(predicates) = index.get(&cell) else {
+                return Ok(None);
+            };
+            let mut stated = false;
+            for (predicate, objects) in predicates {
+                let Some(slot) = self.facet_slot(*predicate) else {
+                    continue;
+                };
+                stated = true;
+                let Some(&value) = objects.first() else {
+                    return Ok(None);
+                };
+                match self.facet(slot, value) {
+                    Some(facet) => out.push(facet),
+                    None => return Ok(None),
+                }
+            }
+            if !stated {
+                return Ok(None);
+            }
+        }
+        Ok(Some(out))
+    }
+
+    /// Which constraining facet `predicate` states, if any.
+    fn facet_slot(&self, predicate: u32) -> Option<FacetSlot> {
+        self.v
+            .facets
+            .iter()
+            .find(|&&(facet, _)| facet == predicate)
+            .map(|&(_, slot)| slot)
+    }
+
+    /// One facet, from its slot and its literal value; `None` when it cannot be read exactly.
+    fn facet(&self, slot: FacetSlot, value: u32) -> Option<Facet> {
+        let TermValue::Literal {
+            lexical_form,
+            datatype,
+            language: None,
+            ..
+        } = self.interner.value(value)
+        else {
+            return None;
+        };
+        match slot {
+            FacetSlot::Length | FacetSlot::MinLength | FacetSlot::MaxLength => {
+                let length = lexical_form.trim().parse::<u64>().ok()?;
+                Some(match slot {
+                    FacetSlot::Length => Facet::Length(length),
+                    FacetSlot::MinLength => Facet::MinLength(length),
+                    _ => Facet::MaxLength(length),
+                })
+            }
+            FacetSlot::MinInclusive
+            | FacetSlot::MaxInclusive
+            | FacetSlot::MinExclusive
+            | FacetSlot::MaxExclusive => {
+                let bound = purrdf_xsd::parse_by_iri(lexical_form, datatype).ok()??;
+                Some(match slot {
+                    FacetSlot::MinInclusive => Facet::MinInclusive(bound),
+                    FacetSlot::MaxInclusive => Facet::MaxInclusive(bound),
+                    FacetSlot::MinExclusive => Facet::MinExclusive(bound),
+                    _ => Facet::MaxExclusive(bound),
+                })
+            }
+            FacetSlot::Undecided => None,
+        }
     }
 
     /// Decode an `owl:Restriction` node.
@@ -439,25 +722,21 @@ impl<'a> CeExtractor<'a> {
         if let Some(lit) = self.get(node, self.v.has_self) {
             return Ok(self.self_restriction(role, lit));
         }
-        // A qualified cardinality over a DATA range counts into the concrete domain.
-        if self.get(node, self.v.on_data_range).is_some() {
-            return Ok(self.opaque(node, Construct::DataRange));
-        }
         if let Some(lit) = self.get(node, self.v.min_qcard) {
             let n = self.card(lit)?;
-            let c = self.qualified_class(node)?;
+            let c = self.qualified_filler(node)?;
             self.counted_roles.insert(role);
             return Ok(Concept::Min(n, role, Box::new(c)));
         }
         if let Some(lit) = self.get(node, self.v.max_qcard) {
             let n = self.card(lit)?;
-            let c = self.qualified_class(node)?;
+            let c = self.qualified_filler(node)?;
             self.counted_roles.insert(role);
             return Ok(Concept::Max(n, role, Box::new(c)));
         }
         if let Some(lit) = self.get(node, self.v.qcard) {
             let n = self.card(lit)?;
-            let c = self.qualified_class(node)?;
+            let c = self.qualified_filler(node)?;
             self.counted_roles.insert(role);
             return Ok(Concept::And(vec![
                 Concept::Min(n, role, Box::new(c.clone())),
@@ -511,13 +790,22 @@ impl<'a> CeExtractor<'a> {
         }
     }
 
-    /// The `owl:onClass` filler of a qualified cardinality restriction.
-    fn qualified_class(&mut self, node: u32) -> Result<Concept, EntailError> {
-        let on_class = self.v.on_class;
-        let c = self.get(node, on_class).ok_or_else(|| {
-            EntailError::Parse("qualified cardinality without owl:onClass".to_owned())
-        })?;
-        self.expr(c)
+    /// The filler of a qualified cardinality restriction: `owl:onClass` for an object
+    /// property, `owl:onDataRange` for a data property.
+    ///
+    /// The two are the SAME position in two domains, so they resolve through one function and
+    /// both reach [`CeExtractor::expr`] — which is what makes `≥n p.DR` over a data range an
+    /// ordinary counting restriction whose filler happens to be a concrete-domain leaf.
+    fn qualified_filler(&mut self, node: u32) -> Result<Concept, EntailError> {
+        let filler = self
+            .get(node, self.v.on_class)
+            .or_else(|| self.get(node, self.v.on_data_range))
+            .ok_or_else(|| {
+                EntailError::Parse(
+                    "qualified cardinality without owl:onClass or owl:onDataRange".to_owned(),
+                )
+            })?;
+        self.expr(filler)
     }
 
     /// The role denoted by property node `r` (`Inv` for an anonymous inverse).
@@ -612,8 +900,9 @@ pub(crate) fn build(ds: &RdfDataset) -> Result<Kb, EntailError> {
     }
 
     let mut acc = Accums::default();
+    let mut ranges = DataRangeTable::default();
     {
-        let mut ce = CeExtractor::new(&index, &interner, &v);
+        let mut ce = CeExtractor::new(&index, &interner, &v, &mut ranges);
         // The n-ary axioms are stated as a node carrying a list or a reification, so they
         // are read from the node rather than from any one of its triples.
         for (&node, preds) in &index {
@@ -649,6 +938,17 @@ pub(crate) fn build(ds: &RdfDataset) -> Result<Kb, EntailError> {
         }
     }
 
+    // Every literal that reaches the knowledge base carries its VALUE into the completion
+    // graph, and the literals' value classes decide which of them are one element of the data
+    // domain and which are provably different ones.
+    let literal_class = register_literals(&interner, &mut table, &mut ranges, &mut acc);
+    // A data range this layer cannot decide EXACTLY is a reported boundary rather than a
+    // silent weakening. The predicate is `purrdf-xsd`'s own, so the boundary and the decision
+    // procedure cannot drift apart.
+    if !ranges.exactly_decided() {
+        acc.boundaries.insert(Construct::DataRange);
+    }
+
     table.finalize();
     Ok(Kb {
         interner,
@@ -669,8 +969,78 @@ pub(crate) fn build(ds: &RdfDataset) -> Result<Kb, EntailError> {
         asymmetric: acc.asymmetric,
         disjoint_roles: acc.disjoint_roles,
         keys: acc.keys,
+        data_ranges: ranges,
+        literal_class,
         boundaries: acc.boundaries,
     })
+}
+
+/// Give every literal that reaches the knowledge base its VALUE, and return the value-class
+/// partition of those literals.
+///
+/// A literal is a term of the completion graph — the object of a data-property assertion, a
+/// member of an `owl:hasValue` or `owl:oneOf` nominal — and until its value is known it is an
+/// opaque abstract symbol, which is the reading that makes `"5"^^xsd:integer` and
+/// `"5.0"^^xsd:decimal` two things and lets a functional data property hold both. Two facts
+/// are recorded here, and each is separately load-bearing:
+///
+/// 1. the singleton data range `{value}`, asserted on the literal's own node, so that a
+///    `∀p.DR` or `∃p.DR` reaching the literal is DECIDED against the value the ontology
+///    actually stated rather than only against the range's own emptiness;
+/// 2. the literal's VALUE CLASS, which is what makes two literals one element of the data
+///    domain or two — see [`Kb::literal_class`](crate::owl_dl::Kb::literal_class).
+///
+/// A literal whose lexical form is not in its datatype's lexical space is given the EMPTY
+/// range, which is how OWL 2's rule that such an ontology is inconsistent reaches the tableau
+/// through the same clash as every other empty range instead of a special case. A literal
+/// whose datatype is outside the modelled value space is given nothing at all — no range and
+/// no class — and raises the data-range boundary, because whether it is even well-typed, let
+/// alone which other literals it agrees with, is not decided here.
+///
+/// The literals considered are exactly the ones an axiom reaches: the objects of ingested role
+/// assertions, and the members of every interned nominal. A literal that only ever appears in
+/// an annotation is not one of them, and OWL 2's Direct Semantics agrees — an annotation
+/// constrains no interpretation, so its literal need not even denote.
+fn register_literals(
+    interner: &Interner,
+    table: &mut ConceptTable,
+    ranges: &mut DataRangeTable,
+    acc: &mut Accums,
+) -> BTreeMap<u32, u32> {
+    let mut terms: BTreeSet<u32> = acc
+        .abox_roles
+        .iter()
+        .map(|&(_, _, object)| object)
+        .collect();
+    for id in 0..table.len() {
+        if let Decomp::Nominal(members) | Decomp::NegNominal(members) =
+            table.decomp(u32::try_from(id).expect("concept id fits u32"))
+        {
+            terms.extend(members.iter().copied());
+        }
+    }
+    let described: Vec<(u32, LiteralValue)> = terms
+        .into_iter()
+        .filter_map(|term| data::literal_value(interner.value(term)).map(|value| (term, value)))
+        .collect();
+    if described.is_empty() {
+        return BTreeMap::new();
+    }
+    let classes = data::literal_classes(&described);
+    for (term, value) in &described {
+        let range = match value {
+            LiteralValue::Value(value) => DataRange::OneOf(vec![value.clone()]),
+            LiteralValue::IllTyped => DataRange::OneOf(Vec::new()),
+            LiteralValue::TermIdentified | LiteralValue::Unmodelled => continue,
+        };
+        let id = ranges.intern(range);
+        let concept = table.intern(Concept::Data(id));
+        acc.abox_types.push((*term, concept));
+    }
+    if classes.any_unmodelled {
+        acc.boundaries.insert(Construct::DataRange);
+    }
+    classes.class_of
 }
 
 /// Whether `role` is NON-SIMPLE — transitive, or the super-role of a transitive role.
@@ -906,7 +1276,7 @@ fn axiom(
     } else if p == v.ty {
         type_assertion(ce, table, acc, v, interner, s, o)?;
     } else {
-        role_or_boundary(acc, interner, s, p, o);
+        role_or_boundary(acc, interner, v, s, p, o);
     }
     Ok(())
 }
@@ -949,9 +1319,17 @@ fn disjoint_union(
 ///   so there is nothing to do here and nothing lost;
 /// * an INERT construct constrains no model, so ignoring it loses nothing either;
 /// * a BOUNDED construct records its boundary;
+/// * a CONSTRAINING FACET is a component of the datatype restriction that carries it, read by
+///   the data-range decoder from the restriction node rather than one triple at a time. The
+///   facet IRIs sit in the XML Schema namespace, which the OWL-2-RDF mapping does not reserve,
+///   so without naming them here a facet would fall through to the last arm and put an axiom's
+///   own scaffolding — an `owl:withRestrictions` list cell — in the ABox as an individual;
 /// * a term outside the reserved namespaces is the caller's own vocabulary and becomes a
 ///   role assertion.
-fn role_or_boundary(acc: &mut Accums, interner: &Interner, s: u32, p: u32, o: u32) {
+fn role_or_boundary(acc: &mut Accums, interner: &Interner, v: &Vocab, s: u32, p: u32, o: u32) {
+    if v.facets.iter().any(|&(facet, _)| facet == p) {
+        return;
+    }
     let iri = match interner.value(p) {
         TermValue::Iri(iri) => iri.clone(),
         // A non-IRI predicate is not RDF 1.2 and cannot reach here from a frozen dataset,

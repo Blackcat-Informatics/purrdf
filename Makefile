@@ -37,13 +37,22 @@ BINARYEN_VERSION := 130
 # dataset-description/research-object projection profiles, the compiled JSON-LD
 # context/options/registry engine, validation-scoped asserted-subclass
 # membership shared by native SHACL and SHACL-SPARQL, and now the entailment
-# engine AND the nine OWL reasoner services — measures 9_288_106 bytes against
-# the 9_430_000 ceiling, which is 1.53% headroom. That figure is RECORDED AS A
-# GATED CONSTANT below (WASM_SIZE_MEASURED_BYTES), not as prose: it had already
-# drifted 139_211 bytes behind the build once, because a comment is the one part
-# of this file nothing checks. Headroom is now thin by the standard this
-# procedure sets, so the next capability that reaches wasm must either fit or
-# raise the ceiling deliberately, with its own justification.
+# engine, the nine OWL reasoner services AND the concrete domain — measures
+# 9_396_501 bytes against the 9_690_000 ceiling, which is 3.03% headroom. That
+# figure is RECORDED AS A GATED CONSTANT below (WASM_SIZE_MEASURED_BYTES), not as
+# prose: it had already drifted 139_211 bytes behind the build once, because a
+# comment is the one part of this file nothing checks.
+#
+# The ceiling moved 9_430_000 -> 9_690_000 here, and the reason is a capability
+# rather than a red gate: purrdf-xsd gained a datatype-range satisfiability
+# decider (facet intersection and complement over the XSD value space, deciding
+# whether a data range is EMPTY), and owl_dl wired it in so OWL 2 data ranges are
+# decided instead of being read and set aside at a boundary. The artifact fit the
+# old ceiling with 0.355% left, which is below the 'few percent' this procedure
+# asks for — and a ceiling that tight is one that gets raised under pressure by
+# whoever next adds anything, which is the failure this procedure exists to
+# prevent. Taking the raise here, with the capability that earned it named, is
+# the honest form of that decision.
 #
 # Two reviewed increases, in order. First, crates/rdf-wasm/src/entail.rs began
 # exporting regimes, rule inventories and materialization, so purrdf-entail and
@@ -84,7 +93,7 @@ BINARYEN_VERSION := 130
 # artifact grew: a new capability or dependency, or a routine rustc-stable /
 # binaryen bump (a valid, must-be-explained reason). Never raise it merely to
 # turn a red gate green.
-WASM_SIZE_BUDGET_BYTES := 9430000
+WASM_SIZE_BUDGET_BYTES := 9690000
 
 # The size the artifact ACTUALLY measures on the pinned toolchain, gated by
 # `wasm-pkg-size` so it cannot fall behind the build the way the comment above
@@ -100,7 +109,7 @@ WASM_SIZE_BUDGET_BYTES := 9430000
 # `realize` services now reach instead of running one tableau refutation per
 # ordered pair of named classes. It replaces an algorithm rather than adding a
 # capability, so the ceiling is untouched.
-WASM_SIZE_MEASURED_BYTES := 9313841
+WASM_SIZE_MEASURED_BYTES := 9396501
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'

@@ -506,18 +506,60 @@ impl Construct {
                  the syntactic condition the input broke"
             }
             Self::DataRange => {
-                "OWL 2's data ranges — owl:onDatatype with owl:withRestrictions facets, \
-                 owl:datatypeComplementOf, owl:onDataRange, owl:onProperties and an \
-                 owl:oneOf over literals — are CONCRETE-DOMAIN expressions, and this \
-                 tableau has no concrete-domain decision procedure: a literal is an opaque \
-                 term with no value-space structure, so \"5\"^^xsd:integer and \
-                 \"5.0\"^^xsd:decimal are two terms and a facet such as xsd:minInclusive \
-                 cannot be evaluated at all. Reading a data range as an ABSTRACT class \
-                 expression would be a WRONG answer rather than an incomplete one — it \
-                 would make the datatype an ordinary named class and admit models the \
-                 datatype map forbids — so the range is not read and this boundary is \
-                 raised. A data PROPERTY assertion is still ingested: its object is an \
-                 opaque term, which is exactly what an abstract role edge needs"
+                "a DATA RANGE this run could not decide EXACTLY. OWL 2's data ranges are \
+                 concrete-domain expressions — subsets of the data domain rather than of \
+                 owl:Thing — and the tableau decides them by asking purrdf-xsd whether the \
+                 intersection of the ranges on a node is EMPTY, over the XSD value spaces \
+                 themselves. So an owl:onDatatype with xsd:minInclusive / xsd:maxInclusive / \
+                 xsd:minExclusive / xsd:maxExclusive / xsd:length / xsd:minLength / \
+                 xsd:maxLength facets, an owl:datatypeComplementOf (complemented against the \
+                 WHOLE data domain, so a complement of rdfs:Literal is empty), an \
+                 intersection or union of data ranges, an owl:oneOf over literals and an \
+                 owl:onDataRange in a qualified cardinality are all read and DECIDED; a class \
+                 whose members must inhabit an empty range is unsatisfiable, a literal whose \
+                 lexical form is outside its datatype's lexical space denotes nothing and \
+                 makes the ontology inconsistent, and two literals are one element of the data \
+                 domain exactly when they denote one VALUE — \"1\"^^xsd:integer and \
+                 \"01\"^^xsd:integer always, \"5\"^^xsd:integer and \"5.0\"^^xsd:decimal \
+                 because OWL 2's datatype map nests the integers in the decimals, and \
+                 \"5\"^^xsd:float, \"5\"^^xsd:double and \"5\"^^xsd:decimal never, because \
+                 that map makes those three value spaces pairwise disjoint. \
+                 \
+                 What is left, and what this boundary names, is where the decision procedure \
+                 answers UNDECIDED rather than proving emptiness or exhibiting a value. It is \
+                 raised on exactly that answer, so the boundary and the procedure cannot drift \
+                 apart, and there are five ways to reach it. FIRST, the xsd:pattern and \
+                 rdf:langRange facets: deciding whether a regular language intersected with a \
+                 complemented one is empty is an automaton product construction, and \
+                 rdf:langRange constrains rdf:langString's value space rather than an XSD one. \
+                 SECOND, a datatype outside the modelled value space — owl:real, owl:rational, \
+                 xsd:anyURI, a caller's own rdfs:Datatype — or a value beyond the representable \
+                 domain: an unmodelled value space may OVERLAP a modelled one (every \
+                 xsd:decimal value is an owl:real value), so it cannot be assumed disjoint \
+                 either. THIRD, the TEMPORAL value spaces beyond what a listed set of values \
+                 can say: a bound facet once the range is COMPLEMENTED, and xsd:dayTimeDuration \
+                 or xsd:yearMonthDuration as whole datatypes, which are infinite proper \
+                 subspaces of one duration space. The XSD order on all of them is PARTIAL — a \
+                 timezone-less xsd:dateTime is incomparable with one whose offset falls inside \
+                 the fourteen-hour indeterminacy window, and xsd:duration's order has two \
+                 independent components — so an interval's complement is not again a union of \
+                 intervals and the exact set algebra the decision rests on does not close \
+                 there. What DOES decide is every temporal enumeration and its complement, and \
+                 every uncomplemented bound: contradictory bounds prove emptiness and a \
+                 satisfiable inclusive bound exhibits its own endpoint. FOURTH, a facet that \
+                 does not apply to its base datatype's value space — a bound on a string, a \
+                 length on a number, any facet on xsd:boolean, a bound drawn from a different \
+                 value space than the base, a NaN bound — and an enumeration over \
+                 xsd:float/xsd:double that must separate positive zero from negative zero, \
+                 which the interval order over those spaces cannot. Neither is silently \
+                 dropped: under a complement a dropped constraint SHRINKS the range and would \
+                 invent an emptiness the ontology does not state. FIFTH, an n-ary data range \
+                 (owl:onProperties over one owl:onDataRange), for which OWL 2 defines no \
+                 datatype at all, so no datatype map entry exists to decide it against. \
+                 \
+                 An undecided range is never read as a clash. Every branch it touches stays \
+                 open, which loses conclusions and invents none — the only direction a \
+                 reasoner can be wrong in and recover"
             }
             Self::BuiltinRole => {
                 "owl:topObjectProperty / owl:topDataProperty (the UNIVERSAL role, whose \

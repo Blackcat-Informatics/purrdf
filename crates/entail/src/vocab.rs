@@ -242,6 +242,37 @@ pub(crate) const OWL_REAL: &str = "http://www.w3.org/2002/07/owl#real";
 /// `owl:rational` — OWL 2's built-in datatype for the rationals.
 pub(crate) const OWL_RATIONAL: &str = "http://www.w3.org/2002/07/owl#rational";
 
+// --- The constraining facets of a datatype restriction. ---
+//
+// A facet is written as the sole predicate of one `owl:withRestrictions` list cell, so
+// these IRIs occur in PREDICATE position and are recognized by the data-range reader
+// rather than by the class-expression reader. They sit in the XML Schema namespace,
+// which is not one of the three the OWL-2-RDF mapping reserves, so the reader must name
+// them explicitly: a facet predicate that fell through to the caller's-own-vocabulary
+// arm would become an ABox role assertion over a list cell.
+
+/// The XML Schema namespace. An IRI in it names a DATATYPE — a data range — wherever a
+/// class expression could otherwise be read.
+pub(crate) const XSD_NS: &str = "http://www.w3.org/2001/XMLSchema#";
+/// `xsd:minInclusive` — the inclusive lower bound of an ordered value space.
+pub(crate) const XSD_MININCLUSIVE: &str = "http://www.w3.org/2001/XMLSchema#minInclusive";
+/// `xsd:maxInclusive` — the inclusive upper bound of an ordered value space.
+pub(crate) const XSD_MAXINCLUSIVE: &str = "http://www.w3.org/2001/XMLSchema#maxInclusive";
+/// `xsd:minExclusive` — the exclusive lower bound of an ordered value space.
+pub(crate) const XSD_MINEXCLUSIVE: &str = "http://www.w3.org/2001/XMLSchema#minExclusive";
+/// `xsd:maxExclusive` — the exclusive upper bound of an ordered value space.
+pub(crate) const XSD_MAXEXCLUSIVE: &str = "http://www.w3.org/2001/XMLSchema#maxExclusive";
+/// `xsd:length` — the exact length of a string or binary value.
+pub(crate) const XSD_LENGTH: &str = "http://www.w3.org/2001/XMLSchema#length";
+/// `xsd:minLength` — the minimum length of a string or binary value.
+pub(crate) const XSD_MINLENGTH: &str = "http://www.w3.org/2001/XMLSchema#minLength";
+/// `xsd:maxLength` — the maximum length of a string or binary value.
+pub(crate) const XSD_MAXLENGTH: &str = "http://www.w3.org/2001/XMLSchema#maxLength";
+/// `xsd:pattern` — a regular-expression facet over a lexical space.
+pub(crate) const XSD_PATTERN: &str = "http://www.w3.org/2001/XMLSchema#pattern";
+/// `rdf:langRange` — a language-range facet over `rdf:langString`.
+pub(crate) const RDF_LANGRANGE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langRange";
+
 // --- OWL 2 ontology header and axiom/annotation reification. ---
 
 /// `owl:imports` — the ontology-document import that fixes the imports closure.

@@ -82,6 +82,7 @@ use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermId, TermValue};
 use crate::EntailError;
 use crate::interner::{Interner, intern_into};
 use crate::owl_dl::concept::{Concept, Role};
+use crate::owl_dl::data::DataRangeTable;
 use crate::owl_dl::parser::{CeExtractor, TripleIndex, Vocab, index_insert};
 use crate::owl_dl::saturate::{Taxonomy, saturate};
 use crate::owl_dl::{Kb, class_concept, tableau};
@@ -223,9 +224,16 @@ pub fn materialize_dl_reported(
     // table is a disjoint field, interned below). A class expression written in the QUERY
     // can meet a boundary just as one written in the data can, so the extractor's
     // boundaries join the knowledge base's.
-    let (raw_tasks, query_boundaries) = extract_tasks(&kb.interner, &q_index, &v, &resolved)?;
+    let (raw_tasks, query_boundaries) =
+        extract_tasks(&kb.interner, &mut kb.data_ranges, &q_index, &v, &resolved)?;
     let mut boundaries = kb.boundaries().clone();
     boundaries.extend(query_boundaries);
+    // A data range the query itself wrote lands in the knowledge base's own table, so one the
+    // decision procedure cannot decide exactly raises the boundary here for the same reason
+    // one written in the data raises it in the reverse mapping.
+    if !kb.data_ranges.exactly_decided() {
+        boundaries.insert(Construct::DataRange);
+    }
     if has_non_distinguished_variable(&kb.interner, &q_index, &raw_tasks, &resolved) {
         boundaries.insert(Construct::NonDistinguishedVariable);
     }
@@ -538,11 +546,12 @@ fn inject_roles(
 /// returning the raw tasks and the concepts they reference (in query order).
 fn extract_tasks(
     interner: &Interner,
+    ranges: &mut DataRangeTable,
     q_index: &TripleIndex,
     v: &Vocab,
     resolved: &[(Option<u32>, Option<u32>, Option<u32>)],
 ) -> Result<(Vec<RawTask>, BTreeSet<Construct>), EntailError> {
-    let mut ce = CeExtractor::new(q_index, interner, v);
+    let mut ce = CeExtractor::new(q_index, interner, v, ranges);
     let mut tasks = Vec::new();
     let mut seen: BTreeSet<(u8, u32)> = BTreeSet::new();
     for &(s, p, o) in resolved {

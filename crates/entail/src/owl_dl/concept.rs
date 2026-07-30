@@ -54,6 +54,17 @@ pub(crate) enum Concept {
     Max(u32, Role, Box<Self>),
     /// `{a₁,…,aₙ}` — a nominal (`owl:oneOf`), interned individual ids (sorted, deduped).
     Nominal(Vec<u32>),
+    /// A DATA RANGE, by its id in the knowledge base's
+    /// [`DataRangeTable`](crate::owl_dl::data::DataRangeTable) — the concrete-domain
+    /// counterpart of a named class.
+    ///
+    /// It is an ATOMIC leaf, exactly like [`Concept::Named`]: it says the element is a
+    /// literal VALUE lying in a subset of the data domain, which is a statement about that
+    /// one element rather than a constraint that recurses into a sub-concept. What separates
+    /// it from a named class is that its extension is fixed by the datatype map rather than
+    /// by the ontology, so the tableau does not guess at it — it asks
+    /// [`purrdf_xsd::range`] whether the conjunction of the ranges on a node is empty.
+    Data(u32),
     /// `∃r.Self` — the local reflexivity restriction (`owl:hasSelf`).
     ///
     /// It is an ATOMIC leaf rather than a quantifier: `∃r.Self` says the node has an
@@ -77,7 +88,11 @@ impl Concept {
     /// (`Named` / `Nominal`) leaf.
     pub(crate) fn nnf(self) -> Self {
         match self {
-            Self::Top | Self::Bottom | Self::Named(_) | Self::SelfRestriction(_) => self,
+            Self::Top
+            | Self::Bottom
+            | Self::Named(_)
+            | Self::SelfRestriction(_)
+            | Self::Data(_) => self,
             Self::Nominal(ids) => Self::nominal(ids),
             Self::And(cs) => Self::And(cs.into_iter().map(Self::nnf).collect()),
             Self::Or(cs) => Self::Or(cs.into_iter().map(Self::nnf).collect()),
@@ -94,7 +109,7 @@ impl Concept {
         match c {
             Self::Top => Self::Bottom,
             Self::Bottom => Self::Top,
-            Self::Named(_) | Self::SelfRestriction(_) => Self::Not(Box::new(c)),
+            Self::Named(_) | Self::SelfRestriction(_) | Self::Data(_) => Self::Not(Box::new(c)),
             Self::Nominal(ids) => Self::Not(Box::new(Self::nominal(ids))),
             Self::Not(inner) => inner.nnf(),
             Self::And(cs) => Self::Or(cs.into_iter().map(Self::neg).collect()),
@@ -152,6 +167,12 @@ pub(crate) enum Decomp {
     SelfRestriction(Role),
     /// `¬∃r.Self` — an atomic negative leaf about the node's own `r`-loop.
     NegSelfRestriction(Role),
+    /// A data range, by its id in the knowledge base's data-range table (atomic positive
+    /// leaf). The id is carried here — unlike [`Decomp::Named`]'s class, which the indexing
+    /// concept id already identifies — because the tableau must reach the RANGE to decide it.
+    Data(u32),
+    /// The complement of a data range (atomic negative leaf).
+    NegData(u32),
 }
 
 /// A structural interning table mapping (NNF) concepts to dense concept ids.
@@ -198,10 +219,12 @@ impl ConceptTable {
             Concept::Named(_) => Decomp::Named,
             Concept::Nominal(ids) => Decomp::Nominal(ids.clone()),
             Concept::SelfRestriction(role) => Decomp::SelfRestriction(*role),
+            Concept::Data(range) => Decomp::Data(*range),
             Concept::Not(inner) => match inner.as_ref() {
                 Concept::Named(_) => Decomp::NegNamed,
                 Concept::Nominal(ids) => Decomp::NegNominal(ids.clone()),
                 Concept::SelfRestriction(role) => Decomp::NegSelfRestriction(*role),
+                Concept::Data(range) => Decomp::NegData(*range),
                 // NNF guarantees `Not` wraps only an atomic leaf.
                 other => unreachable!("non-atomic under Not in NNF: {other:?}"),
             },

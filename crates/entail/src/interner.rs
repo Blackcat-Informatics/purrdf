@@ -84,6 +84,19 @@ impl Interner {
             TermValue::Iri(_) | TermValue::Blank { .. }
         )
     }
+
+    /// Whether `id` denotes a LITERAL — an element of the DATA domain rather than of the
+    /// object domain.
+    ///
+    /// Total over `u32` rather than indexing: the OWL-Direct tableau's own unit tests build a
+    /// knowledge base from bare symbol ids without interning a term for each, and an
+    /// abstract-domain symbol the interner never saw is exactly the "not a literal" answer.
+    pub(crate) fn is_literal(&self, id: u32) -> bool {
+        matches!(
+            self.values.get(id as usize),
+            Some(TermValue::Literal { .. })
+        )
+    }
 }
 
 /// Intern a [`TermValue`] into `b`, returning its dataset-local id.
