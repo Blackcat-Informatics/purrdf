@@ -2330,12 +2330,13 @@ mod tests {
         }
     }
 
-    /// The regimes whose search cannot complete say `skipped`, not `confirmed`.
+    /// The regimes whose search is skipped say `skipped`, not `confirmed`.
     ///
-    /// The other half of the honesty gate. `rdfs` and `owl-rl` carry meta-rules whose
-    /// predicate is a variable, so the backward search cannot reach a fixpoint in
-    /// interactive time; reporting anything but `skipped` there would claim a
-    /// corroboration that never happened.
+    /// The other half of the honesty gate. `rdfs` and `owl-rl` are skipped on COST, not
+    /// inability: measured in release, RDFS reaches its fixpoint in seconds and OWL 2 RL is
+    /// budget-cut, and both would report `Confirmed`. Neither is affordable per
+    /// explanation, so the check does not run — and the certificate must say `skipped`
+    /// rather than imply a corroboration that was never attempted.
     #[test]
     fn the_backward_check_reports_skipped_where_it_does_not_run() {
         let data = "<http://example.org/x> \
