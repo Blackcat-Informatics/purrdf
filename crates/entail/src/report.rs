@@ -336,6 +336,10 @@ pub enum Construct {
     /// A number restriction over a role a property chain or a transitivity axiom makes
     /// NON-SIMPLE, which OWL 2 DL forbids.
     NonSimpleRole,
+    /// An at-most number restriction over an INVERSE role — the syntactic corner where
+    /// `SHOIQ`'s nominal/inverse/counting interaction can require the nominal-introduction
+    /// (`NN`/`NI`) rule for completeness, which neither decision core implements.
+    CountingOnInverse,
     /// OWL 2's data ranges — the concrete domain.
     DataRange,
     /// `owl:topObjectProperty` / `owl:bottomObjectProperty` and their data siblings — the
@@ -358,7 +362,7 @@ pub enum Construct {
 
 impl Construct {
     /// Every construct, in declaration order — the order a report lists boundaries in.
-    pub(crate) const ALL: [Self; 14] = [
+    pub(crate) const ALL: [Self; 15] = [
         Self::NamedGraph,
         Self::TripleTerm,
         Self::GeneralizedRdf,
@@ -367,6 +371,7 @@ impl Construct {
         Self::Surrogate,
         Self::PropertyChain,
         Self::NonSimpleRole,
+        Self::CountingOnInverse,
         Self::DataRange,
         Self::BuiltinRole,
         Self::OntologyImport,
@@ -387,6 +392,7 @@ impl Construct {
             Self::Surrogate => "surrogate",
             Self::PropertyChain => "property-chain",
             Self::NonSimpleRole => "non-simple-role",
+            Self::CountingOnInverse => "counting-on-inverse",
             Self::DataRange => "data-range",
             Self::BuiltinRole => "builtin-role",
             Self::OntologyImport => "ontology-import",
@@ -530,6 +536,19 @@ impl Construct {
                  OWL 2 DL, so the tableau neither decides it nor guesses at it: the \
                  restriction is read and this boundary is raised beside the answer, naming \
                  the syntactic condition the input broke"
+            }
+            Self::CountingOnInverse => {
+                "an at-most number restriction over an INVERSE role. This is the corner of \
+                 SHOIQ where nominals, inverse roles and counting interact: completeness \
+                 there can require the nominal-introduction (NN/NI) rule, which merges \
+                 anonymous predecessors into fresh NOMINALS when a named individual bounds \
+                 how many it may have — and neither this workspace's hypertableau nor its \
+                 concept-tree differential reference implements that rule, a SHARED absence \
+                 no differential between them can see. A `consistent` verdict for an \
+                 ontology in this corner may therefore be one the full calculus refutes. \
+                 The boundary is raised from the restriction's SHAPE — an at-most over an \
+                 inverse — because that is the trigger the missing rule fires on; ontologies \
+                 without one are outside the corner and carry no boundary"
             }
             Self::DataRange => {
                 "a DATA RANGE this run could not decide EXACTLY. OWL 2's data ranges are \
@@ -1532,6 +1551,7 @@ fn boundaries(ds: &RdfDataset, regime: Regime, stats: &RunStats) -> Vec<Boundary
             | Construct::OntologyImport
             | Construct::UnrecognizedTerm
             | Construct::NonDistinguishedVariable
+            | Construct::CountingOnInverse
             | Construct::NonHornTBox => false,
         })
         .map(Boundary::of)

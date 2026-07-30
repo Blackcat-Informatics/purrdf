@@ -2771,6 +2771,50 @@ mod tests {
         ]
     }
 
+    /// The nominal/inverse/counting corner carries its NAMED boundary.
+    ///
+    /// Neither decision core implements the NN/NI nominal-introduction rule, a SHARED
+    /// absence the differential between them cannot see — so the disclosure has to be
+    /// machine-carried, not prose. An at-most over an INVERSE role is the shape the
+    /// missing rule fires on; `owl:InverseFunctionalProperty` is exactly `≤1 r⁻.⊤`, so
+    /// an ontology declaring one carries `counting-on-inverse` and its completeness
+    /// reads decided-within-boundaries rather than a bare decided. An ontology without
+    /// the shape carries no such line.
+    #[test]
+    fn counting_on_inverse_is_a_named_boundary() {
+        let ifp = "<http://example.org/ssn> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+<http://www.w3.org/2002/07/owl#InverseFunctionalProperty> .\n\
+<http://example.org/a> <http://example.org/ssn> <http://example.org/n1> .\n";
+        let answer = consistency_to_string(ifp, 0).expect("decides");
+        assert!(
+            answer.answer().starts_with("consistency true"),
+            "{answer:?}"
+        );
+        assert!(
+            answer
+                .certificate()
+                .contains("boundary counting-on-inverse"),
+            "the NN/NI corner must be disclosed on the certificate: {}",
+            answer.certificate()
+        );
+        assert!(
+            answer
+                .certificate()
+                .contains("completeness decided-within-boundaries"),
+            "{}",
+            answer.certificate()
+        );
+
+        let plain = "<http://example.org/a> <http://example.org/p> <http://example.org/b> .\n";
+        let answer = consistency_to_string(plain, 0).expect("decides");
+        assert!(
+            !answer.certificate().contains("counting-on-inverse"),
+            "no at-most-over-inverse, no boundary: {}",
+            answer.certificate()
+        );
+    }
+
     /// The counting boundaries answer HONESTLY: an unrepresentable cardinality is a
     /// named refusal, an unpayable one is `unknown`, and neither is ever a verdict.
     ///

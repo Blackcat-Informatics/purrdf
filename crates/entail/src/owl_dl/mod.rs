@@ -34,8 +34,8 @@ use purrdf_core::RdfDataset;
 
 use crate::EntailError;
 use crate::interner::Interner;
-use crate::owl_dl::concept::Concept;
 use crate::owl_dl::concept::ConceptTable;
+use crate::owl_dl::concept::{Concept, Decomp, Role};
 use crate::owl_dl::graph::Assumptions;
 use crate::report::Construct;
 
@@ -301,6 +301,17 @@ impl Kb {
     /// axioms and assertions are in place.
     pub(crate) fn finalize(&mut self) {
         self.table.finalize();
+        // The NN/NI corner is a property of the finalized table, not of any one parsed
+        // axiom: an at-most restriction over an INVERSE role is the shape whose
+        // completeness can require the nominal-introduction rule neither decision core
+        // implements. Raised here so every certificate over such an ontology carries the
+        // limit instead of reading `decided` over a verdict the full calculus might refute.
+        for id in 0..self.table.len() as u32 {
+            if let Decomp::Max(_, Role::Inv(_), _) = self.table.decomp(id) {
+                self.boundaries.insert(Construct::CountingOnInverse);
+                break;
+            }
+        }
     }
 
     /// Whether the knowledge base (TBox + ABox) is consistent.
