@@ -251,9 +251,16 @@ pub enum FolControl {
 /// The step budget [`resolve_fol`]'s grounding phase is charged against.
 #[derive(Debug, Clone, Copy)]
 pub struct FolBudget {
-    /// The maximum number of NEWLY committed ground rule instances before
-    /// grounding is cut short and the outcome demoted to
-    /// [`FolStatus::Partial`].
+    /// The maximum amount of WORK grounding may do before it is cut short and the
+    /// outcome demoted to [`FolStatus::Partial`].
+    ///
+    /// A work unit is one candidate answer unified against a body literal, or one newly
+    /// committed ground rule instance. Both are charged, because either alone leaves the
+    /// other unbounded: an earlier revision counted commits only and tested the total
+    /// between expansion rounds, so a single round could enumerate an entire
+    /// cross-product before the budget was ever consulted. On a rule whose head is all
+    /// variables — the shape a meta-rule table needs, where the predicate is carried as
+    /// data — that round does not finish, and a budget that cannot fire is not a budget.
     pub max_steps: u64,
 }
 
@@ -397,7 +404,14 @@ impl Engine {
     /// demanded under the same key keeps its ORIGINAL call node.
     fn register_call(&mut self, dag: &TermDag, atom: NodeId) -> String {
         let key = canon(dag, atom);
-        self.calls.entry(key.clone()).or_insert(atom);
+        if let Entry::Vacant(slot) = self.calls.entry(key.clone()) {
+            slot.insert(atom);
+            // A NEW demanded call is work. Charging only answer unifications leaves this
+            // dimension free, and it is the one that grows without bound when a body atom
+            // carries free variables: early rounds demand ever more general call patterns
+            // while no answers exist yet, so nothing is charged and the fixpoint recedes.
+            self.steps += 1;
+        }
         key
     }
 
@@ -476,8 +490,16 @@ fn solve_body(
     body: &[FolLit],
     selected: &mut [bool],
     subst: &Subst,
+    cap: u64,
     out: &mut Vec<Subst>,
 ) {
+    // THE SEARCH IS WHERE THE WORK IS. Charging only committed rules bounds the OUTPUT
+    // and leaves the enumeration that produces it unbounded, which is how a fully-variable
+    // rule head turns one round into a cross-product over every constant in the program.
+    if engine.steps >= cap {
+        engine.exhausted = true;
+        return;
+    }
     let remaining: Vec<usize> = (0..body.len()).filter(|&i| !selected[i]).collect();
     if remaining.is_empty() {
         out.push(subst.clone());
@@ -512,17 +534,22 @@ fn solve_body(
                 .unwrap_or_default();
             let ctx = SortContext::default();
             for answer in answers {
+                if engine.steps >= cap {
+                    engine.exhausted = true;
+                    break;
+                }
+                engine.steps += 1;
                 let mut candidate = subst.clone();
                 if matches!(
                     unify::unify_sorted(dag, instantiated, answer, &mut candidate, &ctx),
                     Unified::Ok
                 ) {
-                    solve_body(dag, engine, body, selected, &candidate, out);
+                    solve_body(dag, engine, body, selected, &candidate, cap, out);
                 }
             }
         }
         FolLit::Neg(_) => {
-            solve_body(dag, engine, body, selected, subst, out);
+            solve_body(dag, engine, body, selected, subst, cap, out);
         }
     }
     selected[i] = false;
@@ -544,7 +571,12 @@ struct Produced {
 
 /// One grounding round: cross every currently-demanded call against every
 /// program clause, and return every newly-derivable ground rule instance found.
-fn expand_round(dag: &mut TermDag, engine: &mut Engine, program: &FolProgram) -> Vec<Produced> {
+fn expand_round(
+    dag: &mut TermDag,
+    engine: &mut Engine,
+    program: &FolProgram,
+    cap: u64,
+) -> Vec<Produced> {
     let mut produced = Vec::new();
     let call_keys: Vec<(String, NodeId)> = engine
         .calls
@@ -553,7 +585,13 @@ fn expand_round(dag: &mut TermDag, engine: &mut Engine, program: &FolProgram) ->
         .collect();
 
     for (call_key, call_node) in call_keys {
+        if engine.exhausted {
+            break;
+        }
         for (rule_idx, clause) in program.clauses.iter().enumerate() {
+            if engine.exhausted {
+                break;
+            }
             let (head, body) = freshen_clause(dag, clause);
             let mut base = Subst::new();
             let ctx = SortContext::default();
@@ -566,7 +604,15 @@ fn expand_round(dag: &mut TermDag, engine: &mut Engine, program: &FolProgram) ->
 
             let mut selected = vec![false; body.len()];
             let mut solutions = Vec::new();
-            solve_body(dag, engine, &body, &mut selected, &base, &mut solutions);
+            solve_body(
+                dag,
+                engine,
+                &body,
+                &mut selected,
+                &base,
+                cap,
+                &mut solutions,
+            );
 
             for subst in &solutions {
                 let ground_head = unify::apply(dag, subst, head);
@@ -641,7 +687,11 @@ fn ground(dag: &mut TermDag, engine: &mut Engine, program: &FolProgram, budget: 
         let calls_before = engine.calls.len();
         let ground_rules_before = engine.ground_rules.len();
 
-        let produced = expand_round(dag, engine, program);
+        if engine.steps > budget.max_steps {
+            engine.exhausted = true;
+            return false;
+        }
+        let produced = expand_round(dag, engine, program, budget.max_steps);
         if engine.floundered {
             return true;
         }
@@ -664,7 +714,7 @@ fn ground(dag: &mut TermDag, engine: &mut Engine, program: &FolProgram, budget: 
         }
 
         engine.steps += newly_committed;
-        if engine.steps > budget.max_steps {
+        if engine.exhausted || engine.steps > budget.max_steps {
             engine.exhausted = true;
             return false;
         }
@@ -1600,12 +1650,22 @@ mod tests {
             goal: goal_atom,
             goal_vars: vec![],
         };
-        let budget = FolBudget { max_steps: 1 };
+        // 4 work units, not 1. `max_steps` now charges every newly demanded call as well
+        // as every committed rule, so 1 unit is spent before the `base` FACT is committed
+        // and the run truncates ahead of the state this test is about. 4 reaches the
+        // intended shape and is truer to this test's name than the old value ever was:
+        // the goal comes back `Undefined` here, where 1 and 2 units yield `False`.
+        let budget = FolBudget { max_steps: 4 };
         let FolControl::Decided(outcome) = resolve_fol(&mut dag, &program, &budget) else {
             panic!("a budget cut is Partial, not Unsupported");
         };
         assert_eq!(outcome.status, FolStatus::Partial);
         assert_eq!(outcome.truth_of(&dag, base), Truth::True);
+        assert_eq!(
+            outcome.truth_of(&dag, goal_atom),
+            Truth::Undefined,
+            "a truncated negation leaves the goal UNDEFINED, not merely not-True"
+        );
         assert_ne!(
             outcome.truth_of(&dag, goal_atom),
             Truth::True,
@@ -1624,7 +1684,7 @@ mod tests {
             goal: goal_atom,
             goal_vars: vec![],
         };
-        let budget = FolBudget { max_steps: 1 };
+        let budget = FolBudget { max_steps: 4 };
         let FolControl::Decided(first) = resolve_fol(&mut dag, &program, &budget) else {
             panic!("expected a decision");
         };
