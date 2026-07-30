@@ -683,7 +683,7 @@ const fn splice_rdf_rdfs() -> [RuleId; 18] {
 /// All 78 OWL 2 RL/RDF rules, Table 4 through Table 9.
 static OWL_RL_RULES: [RuleId; 78] = splice_owl_rl();
 
-/// All 16 RDF + RDFS entailment patterns; RDFS entailment subsumes RDF entailment.
+/// All 18 RDF + RDFS entailment patterns; RDFS entailment subsumes RDF entailment.
 static RDF_AND_RDFS_RULES: [RuleId; 18] = splice_rdf_rdfs();
 
 /// No rules: `Simple` entailment is the identity closure, and `OWL-Direct` / `RIF` /

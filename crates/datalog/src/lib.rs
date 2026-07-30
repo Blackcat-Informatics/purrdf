@@ -80,10 +80,14 @@
 //!   head atoms — so
 //!   `A ⊑ ∃r.C`, which lowers to `∃y. (r(x, y) ∧ C(y))` with ONE shared witness, is one
 //!   rule. That shape covers all five head forms — atomic (a Datalog rule), existential,
-//!   disjunctive, conjunctive and empty (`false`) — so the chase and the hypertableau that
-//!   will consume the last four need no second IR and no redesign of this one. Only the
-//!   atomic form has evaluation semantics here; the other four are refused by name at the
-//!   plan pipeline's entrance, never silently accepted and never silently dropped.
+//!   disjunctive, conjunctive and empty (`false`) — in one type, so a consumer of any of
+//!   them needs no second IR. Only the atomic form has evaluation semantics in the
+//!   semi-naive evaluator; [`chase`] consumes the existential and conjunctive forms, and
+//!   the disjunctive and inconsistency forms are REFUSED BY NAME at the plan pipeline's
+//!   entrance — never silently accepted and never silently dropped. Nothing in this
+//!   workspace case-splits over these clauses; `purrdf-entail`'s OWL-Direct tableau does
+//!   that over its own concept representation. Classifying a form this crate declines is
+//!   what makes the refusal precise rather than a parse failure.
 //!
 //! # Planning
 //!

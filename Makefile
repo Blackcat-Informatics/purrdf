@@ -102,13 +102,16 @@ WASM_SIZE_BUDGET_BYTES := 9690000
 # point — it converts "someone will notice the artifact grew" into a red gate,
 # and it is why the growth attribution above can be trusted.
 #
-# Currently 9_313_841. The 25_735 bytes above the previous 9_288_106 are the
+# The 25_735 bytes between 9_288_106 and 9_313_841 were the
 # consequence-based classifier (crates/entail/src/owl_dl/saturate.rs): a
 # normalization pass over the concept table plus the saturation fixpoint that
 # derives the whole class taxonomy at once, which the exported `classify` and
 # `realize` services now reach instead of running one tableau refutation per
-# ordered pair of named classes. It replaces an algorithm rather than adding a
-# capability, so the ceiling is untouched.
+# ordered pair of named classes. It replaced an algorithm rather than adding a
+# capability, and did not move the ceiling; the concrete domain, which followed
+# it, is what moved the ceiling to 9_690_000.
+#
+# The measured constant below is the CURRENT size, not that intermediate figure.
 WASM_SIZE_MEASURED_BYTES := 9396501
 
 help: ## Show this help.

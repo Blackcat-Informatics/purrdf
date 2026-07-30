@@ -804,7 +804,8 @@ class entail:
         data: str, regime: RegimeLike, program: str
     ) -> tuple[str, str]: ...
     # The rule table the specification DEFINES the regime by, in table order
-    # (78 rules for OWL-RL, 18 for RDFS, 3 for RDF, none for the rest).
+    # (78 rules for OWL-RL, 18 for RDFS, 5 for D, 3 for RDF; `simple`, `owl-direct`
+    # and `rif` have no specification table of their own, so `[]`).
     @staticmethod
     def rules(regime: RegimeLike) -> list[str]: ...
     # The subset of `rules(regime)` this workspace's chase actually fires. The

@@ -256,10 +256,16 @@ issue, so the matrix stays honest:
 
   Two bounds remain, and both are reported rather than hidden:
 
-  1. **Four of the 18 RDF + RDFS patterns are not fired** — `rdfD1`, `rdfD1a`,
-     `rdfs14`, `rdfs14a`. Each concludes about a *fresh* blank node, an
-     existentially quantified head the Datalog evaluator refuses by construction
-     rather than approximating with a minted surrogate. `OWL-RL` fires all 78
+  1. **Four of the 18 RDF + RDFS patterns answer a bounded question** — `rdfD1`,
+     `rdfD1a`, `rdfs14`, `rdfs14a`. Each concludes about a *fresh* blank node.
+     They FIRE: the restricted chase mints a frontier-addressed Skolem witness
+     and closes under it, so `implemented(Rdfs)` is 18 of 18. What is bounded is
+     the ANSWER — every conclusion mentioning a witness is withheld when the
+     closure is materialized back, because a SPARQL entailment regime draws its
+     answers from the scoping graph and a minted blank node is not in it. The run
+     says so with a `Construct::Surrogate` boundary and a `completeness
+     exact-within-boundaries` verdict rather than with a missing rule. `OWL-RL`
+     fires all 78
      rules of OWL 2 Profiles §4.3 Tables 4–9, and `D` all five of Table 8; the
      value spaces Table 8 does not cover are reported as a
      `Construct::DatatypeValueSpace` boundary on the run. Every one of these
@@ -271,7 +277,7 @@ issue, so the matrix stays honest:
      subset.** All 261 cases are `otest:ConsistencyTest` (226) or
      `otest:InconsistencyTest` (35), so the `Entailment (OWL 2 DL consistency)`
      row grades the tableau lane's satisfiability verdicts and says nothing
-     about the OWL 2 RL rule table. 256 verdicts agree; the 5 that do not are
+     about the OWL 2 RL rule table. 257 verdicts agree; the 4 that do not are
      each named in a typed ledger (`purrdf_sparql_conformance::owl2::LEDGER`)
      with its construct. An unledgered divergence, a ledgered case that has
      started agreeing, and a ledger entry naming a case that no longer exists
@@ -389,7 +395,7 @@ The node-expression kinds split into two tiers:
   separate boolean `sh:desc` flag. The owned semantics are pinned by the
   first-party corpus and unit tests, while the vendored `vectors/shacl/af/`
   suite provides additional coverage for the overlapping normative surface.
-- **rdflib drop-in residuals** — 24 rdflib-suite + 5 compat-parity strict
+- **rdflib drop-in residuals** — 1 rdflib-suite + 4 compat-parity strict
   xfails cover Graph-subclass identity through set operators, rdf:List /
   Collection mutation, `Result.bindings` / `SELECT *` subselect projection,
   graph-prefix forwarding, aggregate/nested-FILTER evaluation, and

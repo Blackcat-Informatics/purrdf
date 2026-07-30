@@ -75,6 +75,7 @@ _CLI_README = _REPO / "crates" / "cli" / "README.md"
 _PY_README = _REPO / "bindings" / "python" / "README.md"
 _PY_STUB = _REPO / "bindings" / "python" / "python" / "src" / "purrdf" / "__init__.pyi"
 _RELEASE = _REPO / "docs" / "RELEASE.md"
+_MAKEFILE = _REPO / "Makefile"
 _RELEASE_CRATES = _REPO / "scripts" / "release-crates.sh"
 
 _INTRODUCTION = _REPO / "docs" / "book" / "src" / "introduction.md"
@@ -183,6 +184,96 @@ def load_rule_extensions() -> list[str]:
         section.group(1),
         re.MULTILINE,
     )
+
+
+def regime_count_claim() -> list[str]:
+    """Any document enumerating the accepted regimes must list all of them.
+
+    `REGIME_NAMES` in `crates/validate/src/regime.rs` is the one accepted set, and every host
+    routes through it. The npm READMEs advertised four and five of the seven — understating
+    the branch's own headline, that materialization is TOTAL over the regimes — because a
+    prose list is invisible to a gate that only checks numbers. Checked by membership rather
+    than by a count: a document that names one regime in a `/`-separated list must name them
+    all, so adding a regime fails every stale enumeration on the day it lands.
+    """
+    problems: list[str] = []
+    boundary = _read(_REPO / "crates" / "validate" / "src" / "regime.rs")
+    names = re.search(
+        r"pub const REGIME_NAMES: \[&str; \d+\] = \[(.*?)\];", boundary, re.DOTALL
+    )
+    if not names:
+        raise SystemExit(
+            "check-doc-claims: cannot read REGIME_NAMES out of crates/validate/src/regime.rs; "
+            "the regime-enumeration claim cannot be checked, so do not leave it unchecked"
+        )
+    accepted = re.findall(r'"([a-z-]+)"', names.group(1))
+    documents = [
+        _REPO / "crates" / "rdf-wasm" / "README.md",
+        _REPO / "crates" / "rdf-wasm" / "js" / "README.md",
+        _CLI_README,
+        _PY_README,
+    ]
+    for path in documents:
+        if not path.is_file():
+            continue
+        text = _read(path)
+        rel = path.relative_to(_REPO)
+        # A regime enumeration is a run of at least three backticked names joined by `/`.
+        for run_match in re.finditer(
+            r'(?:`"?[a-z-]+"?`\s*/\s*){2,}`"?[a-z-]+"?`', text
+        ):
+            listed = set(re.findall(r'`"?([a-z-]+)"?`', run_match.group(0)))
+            if not listed & set(accepted):
+                continue  # some other slash-separated list of backticked words
+            missing = sorted(set(accepted) - listed)
+            if missing:
+                problems.append(
+                    f"{rel}: enumerates regimes as `{run_match.group(0)}` but omits "
+                    f"{', '.join(missing)} — REGIME_NAMES accepts all "
+                    f"{len(accepted)}, and every one of them materializes"
+                )
+    return problems
+
+
+
+def makefile_measured_size_claim() -> list[str]:
+    """No byte figure in the Makefile's budget comment may contradict the gated constant.
+
+    `WASM_SIZE_MEASURED_BYTES` is checked by equality against the build, so the CONSTANT
+    cannot drift. The prose around it can, and did: a "Currently 9_313_841" line outlived
+    the constant by 82,660 bytes, inside the very comment block that says "a comment is the
+    one part of this file nothing checks". Any underscored byte literal in that block must
+    either be the current measured size, the current ceiling, or a figure the prose marks as
+    historical by naming the range it spans.
+    """
+    problems: list[str] = []
+    text = _read(_MAKEFILE)
+    rel = _MAKEFILE.relative_to(_REPO)
+    measured = re.search(r"^WASM_SIZE_MEASURED_BYTES := (\d+)$", text, re.MULTILINE)
+    budget = re.search(r"^WASM_SIZE_BUDGET_BYTES := (\d+)$", text, re.MULTILINE)
+    if not measured or not budget:
+        raise SystemExit(
+            f"check-doc-claims: {rel} no longer defines both wasm size constants; the "
+            f"claim cannot be checked, so do not leave it unchecked"
+        )
+    current = {measured.group(1), budget.group(1)}
+    # The comment block runs from the budget rationale to the measured constant.
+    block = text[: measured.start()]
+    # A "Currently <n>" or "measures <n>" assertion is about TODAY and must be current.
+    for match in re.finditer(
+        r"(?:Currently|measures)\s+((?:\d{1,3}_)+\d{3})", block
+    ):
+        value = match.group(1).replace("_", "")
+        if value not in current:
+            problems.append(
+                f"{rel}: the comment asserts the artifact `{match.group(0)}`, but "
+                f"WASM_SIZE_MEASURED_BYTES is {measured.group(1)} and "
+                f"WASM_SIZE_BUDGET_BYTES is {budget.group(1)}. A present-tense byte figure "
+                f"in this block must be one of those two; describe a superseded measurement "
+                f"as a range it spans instead"
+            )
+    return problems
+
 
 
 def xfail_ledger_prose_claim(sizes: dict[str, int]) -> list[str]:
@@ -1466,6 +1557,10 @@ def main() -> int:
     checked += 1
     problems.extend(xfail_ledger_prose_claim(load_xfail_ledger_sizes()))
     checked += 2
+    problems.extend(makefile_measured_size_claim())
+    checked += 1
+    problems.extend(regime_count_claim())
+    checked += 1
 
     for claim in build_claims(inventory, matrix, census, lanes):
         claim.check()

@@ -98,7 +98,7 @@
 //! to a normal `cargo test`, which can only ever compare.
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr as _;
 use std::sync::Arc;
 
@@ -957,8 +957,11 @@ fn goldens_embed_the_input_they_were_generated_from() {
             .skip_while(|l| *l != "--- input ---")
             .skip(1)
             .take_while(|l| *l != "--- owlrl closure ---")
-            .map(|l| format!("{l}\n"))
-            .collect();
+            .fold(String::new(), |mut acc, l| {
+                acc.push_str(l);
+                acc.push('\n');
+                acc
+            });
         assert!(
             !embedded.is_empty(),
             "{}: the golden has no `--- input ---` block, so nothing ties its closure to \
@@ -1101,8 +1104,8 @@ const DIFF_HEADER: &str = "\
 ";
 
 /// The committed divergence artifact's path.
-fn diff_artifact_path() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+fn diff_artifact_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("owlrl-divergence-triples.txt")
 }

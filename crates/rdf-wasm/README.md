@@ -73,8 +73,9 @@ const reparsed = Dataset.parse(nq, "nquads");
   `shaclEntail(shapesTtl, dataNt)` materializes the SHACL-AF `sh:rule` inferences as
   N-Triples.
 - **Entailment regimes** — `entailMaterialize(document, regime, program)` closes an N-Quads
-  (or N-Triples) document under a SPARQL entailment regime (`simple` / `rdf` /
-  `rdfs` / `owl-rl`) and returns both the canonical N-Quads closure and a
+  (or N-Triples) document under any of the SEVEN SPARQL entailment regimes
+  (`simple` / `rdf` / `rdfs` / `owl-rl` / `d` / `owl-direct` / `rif`; none is
+  refused for being the regime it is) and returns both the canonical N-Quads closure and a
   byte-stable reasoning report; `entailRules(regime)` /
   `entailImplementedRules(regime)` expose the specification's rule table and the
   subset this build fires, so the gap is measurable rather than asserted. Unlike

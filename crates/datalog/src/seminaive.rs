@@ -263,9 +263,10 @@ pub enum EvalError {
     /// A clause's head is existential, disjunctive, conjunctive or `false`, so it is not a
     /// Datalog rule and this evaluator has no semantics for it.
     ///
-    /// The DL-clause IR ([`crate::clause`]) represents all five head forms because the
-    /// chase and the hypertableau that will consume the other four must not require the
-    /// IR to be redesigned. A semi-naive least-fixpoint evaluator, however, computes the
+    /// The DL-clause IR ([`crate::clause`]) represents all five head forms in one type, so a
+    /// consumer of any of them needs no second IR: [`crate::chase`] takes the existential and
+    /// conjunctive forms, and the remaining two are refused by name rather than parsed away.
+    /// A semi-naive least-fixpoint evaluator, however, computes the
     /// least model of a set of DEFINITE clauses — exactly one head atom, no quantifier: an
     /// existential mints witnesses, a disjunction has no single least model, a conjunction
     /// abbreviates several clauses at once, and `false` derives nothing while asserting

@@ -14,13 +14,25 @@
 //! — a conjunction of body literals implying an existentially closed disjunction of
 //! **conjunctions** of head atoms. One shape, five head forms:
 //!
-//! | form | shape | consumer |
+//! | form | shape | what consumes it IN THIS WORKSPACE |
 //! |---|---|---|
 //! | [`Atomic`](HeadForm::Atomic) | `m = 1`, `C₁` is one atom, `ȳ = ∅` | this crate's semi-naive evaluator ([`crate::seminaive`]) |
-//! | [`Existential`](HeadForm::Existential) | `ȳ ≠ ∅` | a restricted chase with frontier-addressed Skolem witnesses |
-//! | [`Disjunctive`](HeadForm::Disjunctive) | `m > 1`, `ȳ = ∅` | a hypertableau case split |
-//! | [`Conjunctive`](HeadForm::Conjunctive) | `m = 1`, `C₁` is several atoms, `ȳ = ∅` | a chase that asserts a conjunction atomically |
+//! | [`Existential`](HeadForm::Existential) | `ȳ ≠ ∅` | [`crate::chase`], a restricted chase with frontier-addressed Skolem witnesses |
+//! | [`Conjunctive`](HeadForm::Conjunctive) | `m = 1`, `C₁` is several atoms, `ȳ = ∅` | [`crate::chase`], which asserts a conjunction atomically |
 //! | [`Inconsistency`](HeadForm::Inconsistency) | `m = 0` (the head is `false`) | a hard error carrying a witness |
+//! | [`Disjunctive`](HeadForm::Disjunctive) | `m > 1`, `ȳ = ∅` | **nothing here — it is REFUSED by name** |
+//!
+//! The last row is the load-bearing one. A disjunctive head needs a case split, and no
+//! evaluator in this crate performs one, so [`crate::chase`] returns
+//! [`ChaseError::DisjunctiveHead`](crate::chase::ChaseError::DisjunctiveHead) rather than
+//! picking a disjunct — which would assert something the program does not entail. The form
+//! is CLASSIFIED here so that refusal can name it, which is the difference between a
+//! rejected input and a silently dropped one.
+//!
+//! Case splitting over OWL 2 DL happens in `purrdf-entail`'s OWL-Direct tableau, over that
+//! module's own concept representation rather than over these clauses. So this row records a
+//! deliberate boundary of this IR's evaluators, not a gap waiting on a component: the shape
+//! is representable, and representing it is what lets the refusal be precise.
 //!
 //! # Every atom is an arity-4 quad, and the predicate is DATA
 //!

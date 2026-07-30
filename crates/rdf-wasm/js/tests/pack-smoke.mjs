@@ -28,14 +28,44 @@ const PACKAGE_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 // SHACL and SHACL-SPARQL accounts for one. The latest is the reasoning surface:
 // the exported entailment API in crates/rdf-wasm/src/entail.rs links
 // purrdf-entail and purrdf-datalog into the wasm artifact, so both ceilings move
-// with the WASM_SIZE_BUDGET_BYTES raise that records it. Node 24.18.0/npm 11.16.0
-// measured a 2_977_978-byte tarball and 8_944_110 unpacked bytes over 8 entries.
-// Both ceilings retain about 3% headroom for supported packagers.
-const MAX_TARBALL_BYTES = 3_210_000;
-const MAX_UNPACKED_BYTES = 9_620_000;
+// with the WASM_SIZE_BUDGET_BYTES raise that records it. The most recent is the
+// concrete domain, which moved the wasm artifact and both of these with it.
+//
+// The MEASURED figures below are gated by EQUALITY, not treated as prose. The
+// pair that used to sit in this comment fell 226_581 and 670_516 bytes behind the
+// build while the sentence still claimed "about 3% headroom" — the real figures
+// were 0.170% and 0.056%, which is 5_441 and 5_374 bytes from a red gate. A
+// ceiling only speaks when it is crossed, so it cannot report drift underneath
+// itself; an equality does, and it forces the commit that moved the package to
+// say so. Raise the ceilings deliberately, the same way the Makefile's are
+// raised: rebuild, read the printed size, restore a few percent of headroom, and
+// state in the commit which capability grew the package.
+const MEASURED_TARBALL_BYTES = 3_204_593;
+const MEASURED_UNPACKED_BYTES = 9_614_698;
+const MAX_TARBALL_BYTES = 3_310_000;
+const MAX_UNPACKED_BYTES = 9_920_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
 const NPM_INSTALL_TIMEOUT_MS = 180_000;
 const SMOKE_TIMEOUT_MS = 60_000;
+
+/**
+ * Fail unless `actual` equals the recorded measurement exactly.
+ *
+ * Not a ceiling: any change to the packaged bytes fails here until the recorded figure moves
+ * in the same commit. That is the point — it converts "someone will notice the package grew"
+ * into a red gate, and it is why the attribution in the comment above can be trusted.
+ */
+function assertMeasured(label, actual, recorded) {
+  if (actual !== recorded) {
+    throw new Error(
+      `${label} measures ${actual} bytes but this file records ${recorded}. ` +
+        `The recorded size is not a ceiling — it is the measurement this package publishes. ` +
+        `Set it to ${actual} in the same commit that moved the package, and say WHY it moved. ` +
+        `If the move also crosses the ceiling, restore a few percent of headroom deliberately ` +
+        `rather than raising it to go green.`,
+    );
+  }
+}
 
 function run(command, args, options = {}) {
   const { timeout = DEFAULT_COMMAND_TIMEOUT_MS, ...execOptions } = options;
@@ -165,6 +195,8 @@ try {
   const packument = parsePackument(packOutput);
   assertBudget("tarball", packument.size, MAX_TARBALL_BYTES);
   assertBudget("unpacked package", packument.unpackedSize, MAX_UNPACKED_BYTES);
+  assertMeasured("tarball", packument.size, MEASURED_TARBALL_BYTES);
+  assertMeasured("unpacked package", packument.unpackedSize, MEASURED_UNPACKED_BYTES);
   await writeSummary(packument);
 
   const project = join(root, "project");
