@@ -829,6 +829,28 @@ const STEP_CAP: u64 = 400;
 /// Three things happen here: the tableau is asked twice and must answer identically; a case
 /// it could not finish is skipped; and where the oracle exhibits a model the tableau's
 /// `consistent` is asserted unconditionally.
+/// Whether `c` can force the domain to hold an element none of the named individuals
+/// denotes.
+///
+/// `∃r.C` and `≥n r.C` do so outright. `≤n r.C` and `∀r.C` do so UNDER NEGATION, because
+/// `¬(≤n r.C)` is `≥(n+1) r.C` and `¬∀r.C` is `∃r.¬C` — a reading that is easy to miss and
+/// whose omission would make the bounded-domain test below unsound in the one direction it
+/// exists to check. Rather than track polarity, any occurrence of the four counts, which
+/// over-approximates and can only ever DECLINE to assert.
+fn forces_unnamed_element(c: &Concept) -> bool {
+    match c {
+        Concept::Some(..) | Concept::All(..) | Concept::Min(..) | Concept::Max(..) => true,
+        Concept::Not(inner) => forces_unnamed_element(inner),
+        Concept::And(members) | Concept::Or(members) => members.iter().any(forces_unnamed_element),
+        Concept::Top
+        | Concept::Bottom
+        | Concept::Named(_)
+        | Concept::Nominal(_)
+        | Concept::SelfRestriction(_)
+        | Concept::Data(_) => false,
+    }
+}
+
 fn check(sig: Signature, axioms: &[Axiom], tally: &RefCell<Tally>) -> Result<(), TestCaseError> {
     let case = Case::assemble(sig, axioms);
     let cap = tableau::step_cap(&case.kb).min(STEP_CAP);
@@ -859,7 +881,38 @@ fn check(sig: Signature, axioms: &[Axiom], tally: &RefCell<Tally>) -> Result<(),
             }
             tally.borrow_mut().modelled += 1;
         }
-        None if first.consistent => tally.borrow_mut().unbounded += 1,
+        None if first.consistent => {
+            // The oracle found no model up to its bound. For a knowledge base that can
+            // force an element beyond the named individuals, that is silent — `≥3 r.⊤` is
+            // consistent and has no model over two elements — and the case is only
+            // counted. But when NOTHING in the axiom set can force such an element, a
+            // model, if one exists, restricts to the individuals' own equivalence classes:
+            // removing elements can only make `∀`, `≤n` and `¬` easier, and there is no
+            // `∃`/`≥n` left to break. So provided the enumeration is wide enough to give
+            // every individual its own element, "no model up to the bound" IS "no model",
+            // and a consistent verdict is an UNSOUNDNESS — the direction that asserts
+            // something false rather than withholding something true.
+            let bounded = sig.individuals <= sig.max_domain
+                && axioms.iter().all(|axiom| match axiom {
+                    Axiom::Gci(sub, sup) => {
+                        !forces_unnamed_element(sub) && !forces_unnamed_element(sup)
+                    }
+                    Axiom::Type(_, c) => !forces_unnamed_element(c),
+                    _ => true,
+                });
+            if bounded {
+                return Err(TestCaseError::fail(format!(
+                    "the tableau accepted a knowledge base with NO model, and nothing in \
+                     it can force an element beyond the {} named individuals, so every \
+                     interpretation up to {} elements was checked and none is a model \
+                     — this is an unsoundness\naxioms:\n{}",
+                    sig.individuals,
+                    sig.max_domain,
+                    case.axioms_text()
+                )));
+            }
+            tally.borrow_mut().unbounded += 1;
+        }
         None => tally.borrow_mut().refuted += 1,
     }
     Ok(())
