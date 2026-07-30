@@ -20,7 +20,7 @@ pub(crate) fn resolve_media_type(format: &str) -> Result<&'static str, String> {
         .map_err(|_| {
             format!(
                 "unsupported RDF format {format:?} (use turtle/ntriples/nquads/trig/rdfxml/\
-                 jsonld/yamlld or their media types)"
+                 trix/hextuples/jsonld/yamlld or their media types)"
             )
         })
 }

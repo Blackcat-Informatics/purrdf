@@ -407,7 +407,27 @@ _CODEC_FRONT_PAGES = (
     _PURRDF_README,
     _REPO / "crates" / "rdf" / "README.md",
     _INTRODUCTION,
+    # The playground is the page a reader is most likely to MEET the codecs on, and its
+    # own format lists are what the console renders — so a count there is a claim about
+    # behaviour, not only about prose. It was outside this set while the comment above
+    # named exactly this failure.
+    _REPO / "docs" / "playground" / "engine.worker.mjs",
+    _REPO / "docs" / "playground" / "index.html",
 )
+
+
+def codec_listings(text: str) -> list[tuple[str, str]]:
+    """Every `const NAME = [ … ];` array in `text` whose members look like format ids.
+
+    A prose page has none and is checked by mention alone; a code page declares the
+    format set it actually offers, and each such declaration is a separate claim.
+    """
+    listings: list[tuple[str, str]] = []
+    for match in re.finditer(
+        r"const (\w*FORMATS\w*) = \[([\s\S]*?)\];", text
+    ):
+        listings.append((match.group(1), match.group(2)))
+    return listings
 
 
 def codec_table_claim() -> tuple[list[str], int]:
@@ -496,13 +516,33 @@ def codec_table_claim() -> tuple[list[str], int]:
     _check_spelled_count(text, rel)
     checked = 1
 
-    display_names = sorted({_CODEC_DISPLAY_NAMES[fid] for fid, _, _ in descriptors})
+    # Each format is named acceptably by either its DISPLAY name (prose pages) or its
+    # format id (code, where the id is the string the engine is actually handed) — the
+    # claim is that the page accounts for every registered format, not that it spells it
+    # one particular way.
+    spellings = sorted(
+        (_CODEC_DISPLAY_NAMES[fid], fid) for fid, _, _ in descriptors
+    )
     for front_page in _CODEC_FRONT_PAGES:
         front_text = _read(front_page)
         front_rel = front_page.relative_to(_REPO)
         checked += 1
-        for name in display_names:
-            if name not in front_text:
+        # A code page declares its formats as ARRAYS, and a format present in one array
+        # but missing from another is exactly the gap a whole-file mention test cannot
+        # see: the console would offer a format it could parse and not serialize. Each
+        # declared list is therefore checked for completeness on its own.
+        for list_name, listing in codec_listings(front_text):
+            missing_from_list = sorted(
+                fid for _, fid in spellings if f'"{fid}"' not in listing
+            )
+            if missing_from_list:
+                problems.append(
+                    f"{front_page.relative_to(_REPO)}: the `{list_name}` list omits "
+                    f"{', '.join(missing_from_list)}, which "
+                    f"crates/rdf/src/native_codecs/media_type.rs registers"
+                )
+        for name, fid in spellings:
+            if name not in front_text and f'"{fid}"' not in front_text:
                 problems.append(
                     f"{front_rel}: never names `{name}`, a first-party format "
                     f"crates/rdf/src/native_codecs/media_type.rs registers"
