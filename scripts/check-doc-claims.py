@@ -231,8 +231,9 @@ def regime_count_claim() -> list[str]:
     """A document that names two or more regimes must name all of them.
 
     `REGIME_NAMES` in `crates/validate/src/regime.rs` is the one accepted set and every host
-    routes through it. Two npm READMEs advertised four and five of the seven, understating that
-    materialization is TOTAL over the regimes — this branch's own headline.
+    routes through it. Two npm READMEs advertised four and five of the seven, understating the
+    property that matters most about the surface: materialization is TOTAL over the regimes, and
+    no regime is refused for being the regime it is.
 
     The first attempt matched a `/`-separated run of backticked names. It reached two of the
     four documents it named: the CLI README lists regimes in a MARKDOWN TABLE and the Python
@@ -1171,10 +1172,10 @@ def build_claims(
             _CONFORMANCE,
             r"(?P<graded>\d+) of the (?P<shaped>\d+) consistency-shaped cases upstream — "
             r"and of the (?P<excluded>\d+) it leaves out, \*\*(?P<decides>\d+) the tableau "
-            r"decides today\*\* \((?P<dc>\d+) consistent \+ (?P<di>\d+) inconsistent\), "
-            r"(?P<nonterm>\d+) do not terminate under a 40 s ceiling, (?P<withheld>\d+) are "
-            r"withheld \((?P<wr>\d+) reasoner, (?P<wp>\d+) parse\) and (?P<nopremise>\d+) "
-            r"carry no RDF/XML premise",
+            r"decided when the exclusion was measured\*\* \((?P<dc>\d+) consistent \+ "
+            r"(?P<di>\d+) inconsistent\), (?P<nonterm>\d+) did not terminate under a 40 s "
+            r"ceiling, (?P<withheld>\d+) were withheld \((?P<wr>\d+) reasoner, "
+            r"(?P<wp>\d+) parse\) and (?P<nopremise>\d+) carry no RDF/XML premise",
         ),
         (
             "the DL subset/exclusion tally in the CONFORMANCE known-gaps item",
@@ -1185,10 +1186,10 @@ def build_claims(
             )
             + ANY
             + _flow(
-                r"reports what the other \*\*(?P<excluded>\d+)\*\* do — "
-                r"\*\*(?P<decides>\d+) the tableau decides today\*\* "
+                r"reports what the other \*\*(?P<excluded>\d+)\*\* did when the probe ran — "
+                r"\*\*(?P<decides>\d+) the tableau decided\*\* "
                 r"\((?P<dc>\d+) consistent, (?P<di>\d+) inconsistent\), "
-                r"(?P<nonterm>\d+) that do not terminate under a 40 s ceiling"
+                r"(?P<nonterm>\d+) that did not terminate under a 40 s ceiling"
             )
             + ANY
             + _flow(
@@ -1202,10 +1203,11 @@ def build_claims(
             _flow(
                 r"(?P<graded>\d+) of the (?P<shaped>\d+) consistency-shaped cases "
                 r"upstream\. Of the (?P<excluded>\d+) it leaves out, "
-                r"\*\*(?P<decides>\d+) the tableau decides today\*\* "
+                r"\*\*(?P<decides>\d+) the tableau decided when the exclusion was "
+                r"measured\*\* "
                 r"\((?P<dc>\d+) consistent, (?P<di>\d+) inconsistent\), "
-                r"(?P<nonterm>\d+) do not terminate under a 40 s ceiling, "
-                r"(?P<withheld>\d+) are withheld \((?P<wr>\d+) reasoner, "
+                r"(?P<nonterm>\d+) did not terminate under a 40 s ceiling, "
+                r"(?P<withheld>\d+) were withheld \((?P<wr>\d+) reasoner, "
                 r"(?P<wp>\d+) parse\), and (?P<nopremise>\d+) carry no RDF/XML premise"
             ),
         ),

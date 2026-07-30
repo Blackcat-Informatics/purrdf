@@ -240,11 +240,18 @@ Two corpora measure two different things, and the distinction matters:
   literal, which is exactly the half an entailment grade needs. They are
   vendored and graded by the next bullet. Second, the corpus is a **subset**:
   261 of the 482 consistency-shaped cases upstream. Of the 221 it leaves out,
-  **156 the tableau decides today** (93 consistent, 63 inconsistent), 30 do not
-  terminate under a 40 s ceiling, 12 are withheld (7 reasoner, 5 parse), and 23
-  carry no RDF/XML premise — so the exclusion was payload triage, not a
-  capability limit, and "257 of 261" is a number over a corpus rather than over
-  what W3C published. The harness measures and prints all of it on every run.
+  **156 the tableau decided when the exclusion was measured** (93 consistent, 63
+  inconsistent), 30 did not terminate under a 40 s ceiling, 12 were withheld (7
+  reasoner, 5 parse), and 23 carry no RDF/XML premise — so the exclusion was
+  payload triage, not a capability limit, and "257 of 261" is a number over a
+  corpus rather than over what W3C published.
+
+  Those five figures are a **dated measurement**, recorded in `census.tsv`'s
+  `dl_probe` column and described in that suite's `PROVENANCE.md`. The harness
+  reads the column and prints it on every run; it does NOT re-run the reasoner
+  over the 221 excluded cases, so this row cannot detect a regression among them.
+  Re-deriving them means re-running the probe, which is a deliberate act rather
+  than part of the gate.
 - **W3C OWL 2 RL entailment tests — 34 of 50 cases agree, 16 ledgered**, zero
   unledgered. This is the independent oracle for the rule table: W3C's own
   entailment tests, forward-materialized under `Regime::OwlRl` and checked for
