@@ -198,7 +198,13 @@ def codec_table_claim() -> list[str]:
     source = _read(
         _REPO / "crates" / "rdf" / "src" / "native_codecs" / "media_type.rs"
     )
-    media = re.findall(r'^\s+media_type: "([^"]+)",$', source, re.MULTILINE)
+    # Each descriptor's media type paired with its star capability, so the table's CONTENT is
+    # checked and not merely its row set. Listing every format while mislabelling one is a
+    # document that satisfies a presence check and still tells a reader something false.
+    descriptors = re.findall(
+        r'media_type: "([^"]+)",[\s\S]*?carries_star: (true|false),', source
+    )
+    media = [media_type for media_type, _ in descriptors]
     if not media:
         raise SystemExit(
             "check-doc-claims: no media_type entries found in media_type.rs; the codec-table "
@@ -214,6 +220,23 @@ def codec_table_claim() -> list[str]:
                 f"crates/rdf/src/native_codecs/media_type.rs registers as a first-party "
                 f"format with its own codec and `classify` aliases"
             )
+    # The row's own star column, read from the table and compared with the descriptor.
+    for media_type, star in descriptors:
+        row = re.search(
+            r"^\|[^|]*\|\s*`" + re.escape(media_type) + r"`\s*\|\s*([^|]+?)\s*\|$",
+            text,
+            re.MULTILINE,
+        )
+        if not row:
+            continue  # absence is already reported above
+        documented = row.group(1).strip().lower()
+        expected = "yes" if star == "true" else "no"
+        if documented != expected:
+            problems.append(
+                f"{rel}: the codec table says `{media_type}` is star-capable "
+                f"`{documented}`, but media_type.rs records `carries_star: {star}`"
+            )
+
     spelled = {
         7: "seven", 8: "eight", 9: "nine", 10: "ten", 11: "eleven", 12: "twelve",
     }.get(len(set(media)))
@@ -364,11 +387,44 @@ def makefile_measured_size_claim() -> list[str]:
     # rests on; those figures are history by construction and must not be forced to today's
     # value. The tag is machine-readable rather than prose, because a gate that has to infer
     # "this paragraph is historical" from wording is the kind of gate that inspects nothing.
+    # The region must be TERMINATED. An unbounded `\Z` fallback would let an unclosed tag
+    # swallow every figure after it, which is the loophole shape this whole claim exists to
+    # close — and moving the tag above the live measurement was exactly how it was exploited.
     for region in re.finditer(
-        r"HISTORICAL-MEASUREMENTS:(.*?)(?:END-HISTORICAL|\Z)", block, re.DOTALL
+        r"HISTORICAL-MEASUREMENTS:(.*?)END-HISTORICAL", block, re.DOTALL
     ):
         for figure in re.finditer(r"((?:\d{1,3}_)+\d{3})", region.group(1)):
             historical.add(int(figure.group(1).replace("_", "")))
+    if "HISTORICAL-MEASUREMENTS:" in block and "END-HISTORICAL" not in block:
+        problems.append(
+            f"{rel}: the budget comment opens a HISTORICAL-MEASUREMENTS region and never "
+            f"closes it with END-HISTORICAL, so every figure after it would be exempt. "
+            f"Terminate the region."
+        )
+
+    # The two CURRENT constants must each be stated somewhere OUTSIDE a historical region.
+    # Without this, tagging a region so that it covers the live measurement exempts the very
+    # figures this claim exists to check, and the block reads as documented while asserting
+    # nothing about today.
+    live_text = re.sub(
+        r"HISTORICAL-MEASUREMENTS:.*?END-HISTORICAL", "", block, flags=re.DOTALL
+    )
+    live_figures = {
+        int(m.group(1).replace("_", ""))
+        for m in re.finditer(r"((?:\d{1,3}_)+\d{3})", live_text)
+    }
+    for name, value in (
+        ("WASM_SIZE_MEASURED_BYTES", measured_bytes),
+        ("WASM_SIZE_BUDGET_BYTES", budget_bytes),
+    ):
+        if value not in live_figures:
+            problems.append(
+                f"{rel}: the budget comment never states {name} ({value}) outside a "
+                f"HISTORICAL-MEASUREMENTS region. The block must say what the artifact "
+                f"measures TODAY; a figure reachable only inside a historical region is a "
+                f"record of the past, and tagging a region so it covers the live measurement "
+                f"is how this check gets hollowed out"
+            )
     for pair in re.finditer(
         r"((?:\d{1,3}_)+\d{3})\s*(?:->|to|and)\s*((?:\d{1,3}_)+\d{3})", block
     ):

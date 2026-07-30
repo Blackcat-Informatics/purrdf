@@ -1009,7 +1009,15 @@ fn run_property(
     );
     // The OVER-PERMISSIVE direction, floored per property. An assertion that never fires
     // reads exactly like one that passes, so each property states how often its bound was
-    // sufficient. Two properties state ZERO, and that is asserted as an equality rather than
+    // sufficient.
+    //
+    // A FLOOR rather than an equality, deliberately. The seed is fixed, so these counts are
+    // deterministic and an equality would compile — but the question being asked is "does this
+    // direction bind often enough to be checking something", not "is this number exactly N". A
+    // floor set ~20% below the observed count answers the first: a generator or tableau change
+    // that materially narrows the checked population fails, while an improvement that widens
+    // it does not generate churn on four constants. The two ZERO cases are equalities, because
+    // there the question really is "is this still structurally impossible". Two properties state ZERO, and that is asserted as an equality rather than
     // waved past: their signatures name more individuals than their enumeration has elements,
     // so `bounded_domain` can never hold for them, and widening either signature must force
     // this number to be revisited rather than silently starting to mean something.
