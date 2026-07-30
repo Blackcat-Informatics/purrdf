@@ -122,6 +122,13 @@ WASM_SIZE_BUDGET_BYTES := 9690000
 # ordinary codegen jitter from the touched-but-still-linked `Construct` enum
 # and id-brand additions rather than a capability moving the artifact at all.
 #
+# The increase 9_396_449 -> 9_405_331 is the reasoning session reaching the
+# artifact: a `Reasoner` class over the shared boundary's `ReasonerSession`, so a
+# browser pays one parse and one reverse mapping for N questions instead of N of
+# each. It is nine methods and a handle over code the artifact already carried —
+# the services themselves did not change — which is why a whole new host-facing
+# class costs under nine kilobytes. Still far below WASM_SIZE_BUDGET_BYTES, so
+# this is a measurement update and not a ceiling raise.
 # The increase 9_393_818 -> 9_396_449 is the combined approach's algebra
 # restriction and witness scrub reaching the artifact through the umbrella's
 # query path, plus the counting-on-inverse boundary: the shared limit of both
@@ -136,7 +143,7 @@ WASM_SIZE_BUDGET_BYTES := 9690000
 # is shared by both, so it is linked exactly once either way.
 #
 # The measured constant below is the CURRENT size, not that intermediate figure.
-WASM_SIZE_MEASURED_BYTES := 9396449
+WASM_SIZE_MEASURED_BYTES := 9405331
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
