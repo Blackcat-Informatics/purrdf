@@ -278,14 +278,14 @@ lowering was), exactly as `goal_directed.rs` was for gmeow's data.
 its conclusion BACKWARD over the same clause program, so a proof is reached by two
 engines sharing only that program and a disagreement fails the call.
 
-Whether the backward search can REFUTE depends on the rule table's shape, since a
-refutation needs a fixpoint and a confirmation does not. `Simple`, `Rdf` and `D`
-reach one in microseconds (`Rdf` 196us, `D` 310us). `Rdfs` and `OwlRl` carry
-meta-rules whose predicate is a variable, so a head matches every goal, relevance
-slicing prunes nothing (75 of 75 clauses for RDFS, 138 of 138 for OWL 2 RL) and the
-search returns `Partial` after ~390ms and ~6.2s; those two are skipped and the
-certificate reports `backward skipped`. The port is kept faithful because it is also
-the receiving surface for the sister project's goal-directed layer.
+Whether the search can REFUTE depends on reaching a fixpoint, which a confirmation
+does not need. `Simple`, `Rdf` and `D` reach one in microseconds. `Rdfs` and `OwlRl`
+are skipped on COST rather than inability: measured in release, RDFS reaches
+`Complete` in ~4.8s — its refutation branch is live — and OWL 2 RL is budget-cut to
+`Partial` at ~31s, with both reporting a confirmation. Neither is affordable per
+explanation, so the certificate reports `backward skipped` for them. The port is kept
+faithful because it is also the receiving surface for the sister project's
+goal-directed layer.
 
 ## The combined approach (`purrdf-entail::combined`)
 

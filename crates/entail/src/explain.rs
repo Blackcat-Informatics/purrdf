@@ -381,10 +381,9 @@ pub enum BackwardCheck {
     /// The search did not reach its fixpoint, so it has no opinion. `Partial` cannot
     /// support a refutation: "no answer yet" is not "no answer".
     Abstained,
-    /// Not attempted, because this regime's rule table is not one the backward search
-    /// completes over in interactive time: `Rdfs` and `OwlRl` carry meta-rules whose
-    /// predicate is a variable, so the backward search returns `Partial` rather than
-    /// reaching the fixpoint a refutation needs.
+    /// Not attempted, on COST rather than inability. `Rdfs` completes in ~4.8s and
+    /// `OwlRl` is budget-cut at ~31s (release, this crate's fixtures); both would report
+    /// `Confirmed` there. Neither is affordable per explanation, so neither is run.
     Skipped,
 }
 
@@ -430,15 +429,17 @@ fn clause_term_of(surface: &str) -> ClauseTerm {
 ///
 /// # Which regimes are checked, and why not all of them
 ///
-/// Whether the search completes depends on the rule table's SHAPE. `Simple`, `Rdf` and `D`
-/// have small, largely schema-specific tables and reach their fixpoint in microseconds —
-/// measured over a seeded store: `Rdf` (4 rules) 196µs, `D` (36 rules) 310µs, both
-/// `Complete`. `Rdfs` and `OwlRl` carry meta-rules whose predicate is a VARIABLE, so a head
-/// matches every goal and its body demands everything; relevance analysis prunes nothing
-/// there (sliced against a ground goal, RDFS keeps 75 of 75 clauses and OWL 2 RL 138 of
-/// 138) and the search returns `Partial` after ~390ms and ~6.2s respectively. Paying
-/// seconds for an outcome that can only ever be `Abstained` buys nothing, so those two are
-/// [`BackwardCheck::Skipped`] and the certificate says so.
+/// A refutation needs the search to reach its fixpoint; a confirmation does not. Both
+/// halves of that are cheap for `Simple`, `Rdf` and `D`, whose rule tables are small and
+/// largely schema-specific — they complete in microseconds.
+///
+/// `Rdfs` and `OwlRl` are skipped on COST, not on inability, and the difference matters
+/// enough to state plainly. Measured in release on this crate's own fixtures: RDFS reaches
+/// `Complete` in ~4.8s — its refutation branch is live, and skipping it gives up a check
+/// that would fire — and OWL 2 RL is budget-cut to `Partial` at ~31s. Both report
+/// `Confirmed` on those fixtures. Neither figure is affordable on a per-explanation
+/// diagnostic, so both are [`BackwardCheck::Skipped`] and the certificate says so rather
+/// than implying a corroboration that was never attempted.
 ///
 /// The backward resolver has NO separate EDB channel — a clause program is the whole story
 /// for it — so seeded facts are appended as empty-bodied clauses.

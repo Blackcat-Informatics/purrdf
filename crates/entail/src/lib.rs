@@ -137,7 +137,9 @@ pub(crate) mod vocab;
 
 pub use calculus::calculus_program;
 pub use combined::{CombinedMaterialization, materialize_combined};
-pub use explain::{ChaseProof, ExplainError, Justification, explain_conclusion, justify};
+pub use explain::{
+    BackwardCheck, ChaseProof, ExplainError, Justification, explain_conclusion, justify,
+};
 pub use owl_dl::query::{QNode, QTriple, materialize_dl_reported};
 pub use reasoner::{
     Certified, ClassHierarchy, ConservativeKeep, DlAxiom, DlCertificate, DlCompleteness,

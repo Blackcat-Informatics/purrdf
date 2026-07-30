@@ -2211,6 +2211,7 @@ fn render_justification(justification: &Justification) -> Result<String, String>
 /// conclusion-subject <t>
 /// conclusion-predicate <t>
 /// conclusion-object <t>
+/// backward confirmed | abstained | skipped
 /// derived-subject <surface>
 /// derived-predicate <surface>
 /// derived-object <surface>
@@ -2273,10 +2274,13 @@ fn render_chase_proof_certificate(proof: &ChaseProof) -> String {
     let _ = writeln!(out, "conclusion-subject {}", emit(subject));
     let _ = writeln!(out, "conclusion-predicate {}", emit(predicate));
     let _ = writeln!(out, "conclusion-object {}", emit(object));
+    // The independent backward re-derivation's verdict, so a corroborated conclusion is
+    // distinguishable from one nothing cross-checked.
+    let _ = writeln!(out, "backward {}", proof.backward().as_str());
+
     // RE-DERIVED, not re-read: `check` walks the premises to the facts they
     // establish, matches the cited clause's body against them, and instantiates the
     // head. The proof's stated conclusion is not an input to that computation.
-    let _ = writeln!(out, "backward {}", proof.backward().as_str());
     let checked = proof.check();
     match &checked {
         Ok(fact) => {

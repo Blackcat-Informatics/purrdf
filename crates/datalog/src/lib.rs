@@ -152,16 +152,13 @@
 //!   two engines that share the clause program and nothing else, and a
 //!   disagreement fails the call rather than being reported as a proof.
 //!
-//!   Whether the backward search can REFUTE depends on the rule table's shape,
-//!   because a refutation needs a fixpoint while a confirmation does not. `Simple`,
-//!   `Rdf` and `D` reach one in microseconds (measured over a seeded store: `Rdf`
-//!   196µs, `D` 310µs). `Rdfs` and `OwlRl` carry meta-rules whose predicate is a
-//!   VARIABLE — the shape that lets one variable bind a predicate in one atom and a
-//!   subject in another — so a head matches every goal, relevance analysis prunes
-//!   nothing (sliced against a ground goal, RDFS keeps 75 of 75 clauses and OWL 2
-//!   RL 138 of 138), and the search returns `Partial` after ~390ms and ~6.2s. The
-//!   explanation path therefore skips those two and says `backward skipped` on the
-//!   certificate rather than paying seconds for an outcome that could only abstain.
+//!   Whether the search can REFUTE depends on reaching a fixpoint, which a
+//!   confirmation does not need. `Simple`, `Rdf` and `D` reach one in microseconds.
+//!   `Rdfs` and `OwlRl` are skipped on COST, not inability: measured in release,
+//!   RDFS reaches `Complete` in ~4.8s — its refutation branch is live — and OWL 2
+//!   RL is budget-cut to `Partial` at ~31s, with both reporting a confirmation.
+//!   Neither is affordable on a per-explanation diagnostic, so the certificate
+//!   reports `backward skipped` for them rather than implying a check that never ran.
 //!
 //! # Reuse
 //!
