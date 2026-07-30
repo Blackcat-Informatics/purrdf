@@ -54,14 +54,15 @@ evaluation-correctness gaps still to close.
 
 Eleven update groups are vendored verbatim and run through the harness's
 UPDATE-eval path (`SparqlEngine::update` → RDFC-1.0 canonical post-state diff).
-The engine's UPDATE implementation is strong: 97 of 102 cases pass outright.
+All 102 UPDATE-eval cases pass outright; the ledger holds no `update-semantics`
+entry.
 
 | Group | Cases | Green | Ledgered (reason) |
 |-------|------:|------:|-------------------|
-| add | 8 | 7 | 1 update-semantics |
-| basic-update | 13 | 11 | 2 update-semantics (cross-op bnode scoping) |
+| add | 8 | 8 | — |
+| basic-update | 13 | 13 | — |
 | clear | 4 | 4 | — |
-| copy | 6 | 4 | 2 update-semantics |
+| copy | 6 | 6 | — |
 | delete | 19 | 19 | — |
 | delete-data | 6 | 6 | — |
 | delete-insert | 17 | 17 | — |
@@ -70,8 +71,10 @@ The engine's UPDATE implementation is strong: 97 of 102 cases pass outright.
 | move | 6 | 6 | — |
 | update-silent | 13 | 13 | — |
 
-The 5 `update-semantics` residuals are genuine post-state divergences (COPY/ADD
-graph edge cases; blank-node scoping across separate INSERT operations).
+The five `update-semantics` divergences these groups once ledgered (COPY/ADD
+graph edge cases; blank-node scoping across separate INSERT operations) are
+fixed: the ledger is asserted with XPASS discipline, so a case that starts
+passing must leave it, and all five did.
 
 ## Full W3C syntax groups (commit `426c7df`)
 
@@ -90,8 +93,8 @@ zero ledgered residuals.**
 | syntax-update-2 | 1 | 1 | — |
 | syntax-fed | 3 | 3 | — |
 
-Six genuine parser gaps surfaced by these groups were fixed in-branch (not
-ledgered): two relative-IRI positives (resolved via the per-file `BASE` above);
+Five genuine parser gaps these groups surfaced are fixed rather than
+ledgered: two relative-IRI positives (resolved via the per-file `BASE` above);
 `SELECT *` in an aggregate query is now rejected (§11.1); a `BIND(… AS ?v)`
 whose target is already in scope is rejected (§19.6); and reuse of a blank-node
 label across two `INSERT DATA` operations is rejected (§4.1.1) — while the same

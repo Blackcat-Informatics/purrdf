@@ -35,10 +35,11 @@ ran instead of a claim about which rules were meant to.
   `∃y. (r(x, y) ∧ C(y))` with one *shared* witness, is a single rule rather
   than two unrelated ones. That single shape holds all five head forms —
   atomic (a Datalog rule), existential, disjunctive, conjunctive and empty
-  (`false`) — so the chase and the hypertableau that consume the last four
-  need no second representation. The semi-naive evaluator runs the atomic form
-  and refuses the other four **by name**: never silently accepted, never
-  silently dropped.
+  (`false`) — so a consumer of any of them needs no second representation.
+  The semi-naive evaluator runs the atomic form; the chase consumes the
+  existential and conjunctive forms; the disjunctive and inconsistency forms
+  are refused **by name** at the plan pipeline's entrance: never silently
+  accepted, never silently dropped.
 * **Plans are content-addressed.** A compiled program is keyed by a BLAKE3
   digest over the planner version, the caller's contract hash and a canonical
   digest of the clause program. The cache is owned by the caller, never a

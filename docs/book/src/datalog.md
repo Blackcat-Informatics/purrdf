@@ -34,10 +34,13 @@ which lowers to `∃y. (r(x, y) ∧ C(y))` with one *shared* witness, is one rul
 rather than two unrelated ones.
 
 The semi-naive evaluator runs the atomic form and refuses the other four **by
-name**. That refusal is the reason the four RDF/RDFS residuals in the entailment
-rule inventory are a gap and not a silent approximation: a rule that concludes
-about a fresh blank node has an existential head, and inventing a surrogate for
-that witness would answer a question the caller did not ask.
+name**. The existential form is not lost by that refusal: the restricted chase
+consumes it, minting frontier-addressed Skolem witnesses, which is how the four
+existential RDF/RDFS patterns fire and the rule inventory reads complete. What
+never happens is a surrogate leaking into an answer — the entailment layer above
+withholds every conclusion that mentions a witness at the materialization
+boundary and reports the withholding, rather than inventing an answer the caller
+did not ask for.
 
 ## Determinism
 

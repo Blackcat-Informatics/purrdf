@@ -11,9 +11,10 @@
 //!   `sh:rule`** entailment. It needs a *shapes* graph and applies the rules that
 //!   graph declares.
 //! * This module's `entailMaterialize(document, regime)` is **SPARQL
-//!   entailment-regime** materialization (`Simple` / `RDF` / `RDFS` / `OWL-RL`).
-//!   It takes no shapes at all: it closes a document under the regime's own
-//!   specification rule table.
+//!   entailment-regime** materialization over all seven regimes (`simple` /
+//!   `rdf` / `rdfs` / `owl-rl` / `owl-direct` / `rif` / `d`). It takes no
+//!   shapes at all: it closes a document under the regime's own rule table (or,
+//!   for `rif`, the caller's).
 //!
 //! # One boundary, three hosts
 //!

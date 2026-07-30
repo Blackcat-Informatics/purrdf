@@ -6,7 +6,7 @@
 PurRDF ships one logical version across three registries — crates.io (the Rust
 workspace), PyPI (``purrdf``), and npm (``@blackcatinformatics/purrdf``) — from
 three independent tag namespaces (``rust-v*`` / ``py-v*`` / ``npm-v*``). Nothing
-mechanically forces those three version sources to agree, and nothing forces the
+mechanically forces those four version sources to agree, and nothing forces the
 crates.io release lane to publish exactly the crates that are publishable. This
 lint closes both gaps as a hard, no-optionality gate:
 

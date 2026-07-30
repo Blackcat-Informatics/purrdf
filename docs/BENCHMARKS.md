@@ -222,7 +222,7 @@ The `validate` benchmark contains four deterministic SHACL workloads:
 
 | Group | Fixed fixture and measured boundary |
 | --- | --- |
-| `shacl_validate/corpus_all` | All 69 committed first-party conformance cases, including text ingestion, shapes parsing, target resolution, constraint evaluation, and report assembly. |
+| `shacl_validate/corpus_all` | All 70 committed first-party conformance cases, including text ingestion, shapes parsing, target resolution, constraint evaluation, and report assembly. |
 | `shacl_focus_core` | 512, 1,024, 2,048, 3,000, 100,000, and 1,000,000 target nodes. Each node contributes four quads; the shapes exercise a 40-level asserted subclass hierarchy, pattern, datatype, and class constraints. |
 | `shacl_focus_sparql` | 64, 512, and 4,096 target nodes with two quads per node and a caller-declared SHACL-SPARQL function. |
 | `shacl_focus_realtime` | One prepared 1,000,000-node snapshot (4,000,079 quads and 3,000,088 terms), a compatibility focus filter over one node, and id-native prepared requests containing 1, 8, 64, 512, or 4,096 focus nodes. Dataset and shapes preparation stays outside each request's timed loop. |
@@ -259,7 +259,7 @@ Each chunk evaluates in canonical source order; chunk outputs are reduced in
 that same order, so report bytes and the selected earliest hard error do not
 depend on worker timing. Canonical focus sorting also stays serial below 4,096
 nodes and uses deterministic stable parallel sorting for larger sets. Unit tests
-force serial and parallel execution across all 69 corpus cases, 2- and 4-worker
+force serial and parallel execution across all 70 corpus cases, 2- and 4-worker
 pools, several chunk geometries, SHACL-AF user functions, and competing hard
 errors; a separate test proves genuine four-worker participation.
 

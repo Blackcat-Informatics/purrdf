@@ -558,8 +558,8 @@ export function liftProjection(
 /**
  * The CLI/C-ABI/Python/JS spellings of the SPARQL entailment regimes. ALL SEVEN
  * materialize through `entailMaterialize`; none is refused for being the regime
- * it is. Two of them need an extra INPUT rather than permission, and the
- * `program` argument is where it goes — see `entailMaterialize`.
+ * it is. One of them — `"rif"` — needs an extra INPUT rather than permission,
+ * and the `program` argument is where it goes — see `entailMaterialize`.
  */
 export type EntailmentRegime =
   | "simple"

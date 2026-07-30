@@ -45,9 +45,11 @@ cargo lane:
   publishing;
 - every workspace crate version must match the tag version.
 
-Two crates are deliberately never published: `purrdf-capi` (built via
-cargo-c, distributed as `libpurrdf`) and `purrdf-sparql-conformance` (the
-test harness).
+Four workspace members are deliberately never published to crates.io:
+`purrdf-capi` (built via cargo-c, distributed as `libpurrdf`),
+`purrdf-sparql-conformance` (the test harness), `purrdf-cli` (the `purrdf`
+binary), and `purrdf-python` (the extension crate, which ships to PyPI via
+maturin instead).
 
 ## Cutting a release
 

@@ -58,8 +58,9 @@ const reparsed = Dataset.parse(nq, "nquads");
   `quotedTriple`, `fromTerm`, `fromQuad`.
 - **`Dataset`** (RDF/JS `DatasetCore`) — `Dataset.parse(input, format, base?)`,
   `serialize(format)`, `add`/`delete`/`has`/`match`/`quads`/`size`, and iteration
-  (`for (const quad of dataset)`). Formats: `turtle`, `ntriples`, `nquads`, `trig`,
-  `rdfxml` (or their media types); `serialize` additionally accepts `jsonld`.
+  (`for (const quad of dataset)`). Formats, for both `parse` and `serialize`:
+  `turtle`, `ntriples`, `nquads`, `trig`, `rdfxml`, `jsonld`, `yamlld` (or their
+  media types).
 - **Graph identity** — `Dataset.canonicalize()` returns the RDFC-1.0 canonical, flat
   N-Quads for the graph; `Dataset.isomorphic(other)` decides RDF graph equality under
   blank-node relabeling (an exact oracle backed by full RDFC-1.0 canonicalization).
@@ -109,8 +110,10 @@ triple is never rendered as asserted unless an assertion occurrence is present.
   `SERVICE` and `LOAD` fail explicitly.
 - Text codecs ride purrdf's native codecs — no Store dependency and no
   `purrdf-gts` RDF-codec feature.
-- A quoted-triple term as a quad **object** currently round-trips only through
-  **N-Quads** (a current native serializer limitation for the other formats).
+- A quoted-triple term as a quad **object** round-trips through every format
+  this surface accepts — `turtle`, `trig`, `ntriples`, `nquads`, `jsonld`,
+  `yamlld`, and `rdfxml` (via `rdf:parseType="Triple"`) — byte-identically
+  under RDFC-1.0 canonicalization.
 
 ## Building
 

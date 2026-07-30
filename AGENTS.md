@@ -138,8 +138,9 @@ black-cat family system — `#cat-head-core` is shared verbatim; only the
 
 Tag-driven trusted publishing: `rust-v*` → crates.io (18 crates, ordered),
 `py-v*` → PyPI (`purrdf`). See [`docs/RELEASE.md`](./docs/RELEASE.md). Version
-is single-sourced in `[workspace.package]`. `purrdf-capi` and
-`purrdf-sparql-conformance` are never published.
+is single-sourced in `[workspace.package]`. Four members never reach
+crates.io: `purrdf-capi`, `purrdf-sparql-conformance`, `purrdf-cli`, and
+`purrdf-python` (PyPI via maturin instead).
 
 ## 7. Provenance
 

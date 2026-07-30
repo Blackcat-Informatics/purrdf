@@ -76,6 +76,7 @@ _PY_README = _REPO / "bindings" / "python" / "README.md"
 _PY_STUB = _REPO / "bindings" / "python" / "python" / "src" / "purrdf" / "__init__.pyi"
 _RELEASE = _REPO / "docs" / "RELEASE.md"
 _MAKEFILE = _REPO / "Makefile"
+_AGENTS = _REPO / "AGENTS.md"
 _RELEASE_CRATES = _REPO / "scripts" / "release-crates.sh"
 
 _INTRODUCTION = _REPO / "docs" / "book" / "src" / "introduction.md"
@@ -184,6 +185,172 @@ def load_rule_extensions() -> list[str]:
         section.group(1),
         re.MULTILINE,
     )
+
+
+def load_projection_profile_count() -> int:
+    """How many projection profiles the carrier enum defines."""
+    source = _read(_REPO / "crates" / "rdf" / "src" / "projections" / "carrier.rs")
+    body = re.search(r"pub enum ProjectionProfile \{(.*?)\n\}", source, re.DOTALL)
+    if not body:
+        raise SystemExit(
+            "check-doc-claims: cannot find ProjectionProfile in carrier.rs; the profile-count "
+            "claim cannot be checked, so do not leave it unchecked"
+        )
+    count = len(re.findall(r"^\s{4}[A-Z][A-Za-z0-9]*,", body.group(1), re.MULTILINE))
+    if count == 0:
+        raise SystemExit("check-doc-claims: ProjectionProfile parsed to zero variants")
+    return count
+
+
+def load_never_published() -> list[str]:
+    """The workspace members whose manifests say `publish = false`, by crate name."""
+    names: list[str] = []
+    for manifest in sorted(_REPO.glob("crates/*/Cargo.toml")) + sorted(
+        _REPO.glob("bindings/*/Cargo.toml")
+    ):
+        text = _read(manifest)
+        if re.search(r"^publish\s*=\s*false", text, re.MULTILINE):
+            name = re.search(r'^name\s*=\s*"([^"]+)"', text, re.MULTILINE)
+            if name:
+                names.append(name.group(1))
+    if not names:
+        raise SystemExit(
+            "check-doc-claims: found no publish=false manifest; the never-published claim "
+            "cannot be checked, so do not leave it unchecked"
+        )
+    return sorted(names)
+
+
+_SPELLED = {
+    1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven",
+    8: "eight", 9: "nine", 10: "ten", 11: "eleven", 12: "twelve", 13: "thirteen",
+    14: "fourteen", 15: "fifteen", 16: "sixteen", 17: "seventeen", 18: "eighteen",
+}
+
+
+def never_published_claim() -> list[str]:
+    """The documents naming the never-published set must name ALL of it, spelled right.
+
+    `publish = false` is the ground truth, and two documents restate it. Both once said
+    "two" while four manifests carried the flag — the flag had grown and the prose had
+    not, because nothing derived one from the other.
+    """
+    problems: list[str] = []
+    names = load_never_published()
+    spelled = _SPELLED.get(len(names))
+    for path in (_REPO / "docs" / "book" / "src" / "project" / "releases.md", _AGENTS):
+        if not path.is_file():
+            continue
+        text = _read(path)
+        rel = path.relative_to(_REPO)
+        for crate in names:
+            if crate not in text:
+                problems.append(
+                    f"{rel}: names the never-published set but omits `{crate}`, whose "
+                    f"manifest says `publish = false`"
+                )
+        stated = re.search(
+            r"(?:^|\s)([A-Z]?[a-z]+) (?:workspace )?(?:crates|members) (?:are deliberately never published|never reach)",
+            text,
+        )
+        if stated and spelled and stated.group(1).lower() != spelled:
+            problems.append(
+                f"{rel}: says `{stated.group(0).strip()}`, but {len(names)} manifests "
+                f"({', '.join(names)}) say `publish = false`"
+            )
+    return problems
+
+
+def profile_count_claim() -> list[str]:
+    """Any 'All <word> profiles' sentence must equal the carrier enum's variant count."""
+    problems: list[str] = []
+    count = load_projection_profile_count()
+    spelled = _SPELLED.get(count)
+    for path in (_REPO / "crates" / "rdf" / "README.md",):
+        text = _read(path)
+        rel = path.relative_to(_REPO)
+        found = re.findall(r"All ([a-z]+) profiles", text)
+        if not found:
+            problems.append(
+                f"{rel}: no 'All <word> profiles' sentence found — the profile-count claim "
+                f"was reworded or removed; update the pattern so it stays checked"
+            )
+        for word in found:
+            if spelled and word != spelled:
+                problems.append(
+                    f"{rel}: says 'All {word} profiles', but ProjectionProfile has "
+                    f"{count} variants ({spelled})"
+                )
+    return problems
+
+
+def program_regime_dts_claim() -> list[str]:
+    """index.d.ts's 'needs an extra INPUT' sentence must match PROGRAM_REGIME_NAMES."""
+    problems: list[str] = []
+    boundary = _read(_REPO / "crates" / "validate" / "src" / "regime.rs")
+    program = re.search(
+        r"PROGRAM_REGIME_NAMES: \[&str; (\d+)\] = \[(.*?)\]", boundary, re.DOTALL
+    )
+    if not program:
+        raise SystemExit(
+            "check-doc-claims: cannot read PROGRAM_REGIME_NAMES; the program-regime claim "
+            "cannot be checked, so do not leave it unchecked"
+        )
+    count = int(program.group(1))
+    names = re.findall(r'"([a-z-]+)"', program.group(2))
+    dts = _REPO / "crates" / "rdf-wasm" / "js" / "index.d.ts"
+    text = _read(dts)
+    rel = dts.relative_to(_REPO)
+    spelled = _SPELLED.get(count, str(count))
+    sentence = re.search(r"([A-Z][a-z]+) of them(?:[^.]*?)extra INPUT", text)
+    if not sentence:
+        problems.append(
+            f"{rel}: no '<word> of them ... extra INPUT' sentence found — the "
+            f"program-regime claim was reworded; update the pattern so it stays checked"
+        )
+    elif sentence.group(1).lower() != spelled:
+        problems.append(
+            f"{rel}: says `{sentence.group(1)} of them` need a program, but "
+            f"PROGRAM_REGIME_NAMES has {count} ({', '.join(names)})"
+        )
+    else:
+        for name in names:
+            if f'`"{name}"`' not in text:
+                problems.append(
+                    f"{rel}: the program-taking regime `{name}` is never named"
+                )
+    return problems
+
+
+def banned_stale_fragment_names() -> list[str]:
+    """The DL fragment has ONE published name; its two superseded spellings are banned.
+
+    The decision core was published as ALCOIQ on nineteen sites and ALCHOIQ in the
+    oracle, and both understated what the code decides. The settled name is SHOIQ(D);
+    a superseded spelling reappearing anywhere in the documented surface is a
+    regression to the two-name state, caught here by name.
+    """
+    problems: list[str] = []
+    for root in ("crates", "bindings", "docs"):
+        for path in sorted((_REPO / root).rglob("*")):
+            if path.suffix not in {".rs", ".md", ".pyi", ".mjs", ".ts"}:
+                continue
+            if "/pkg/" in str(path) or "node_modules" in str(path):
+                continue
+            text = _read(path)
+            for match in re.finditer(r"\bALCH?OIQ\b", text):
+                line = text.count("\n", 0, match.start()) + 1
+                problems.append(
+                    f"{path.relative_to(_REPO)}:{line}: superseded fragment spelling "
+                    f"`{match.group(0)}` — the decision core's one published name is "
+                    f"SHOIQ(D)"
+                )
+    readme = _read(_README)
+    for match in re.finditer(r"\bALCH?OIQ\b", readme):
+        problems.append(
+            f"README.md: superseded fragment spelling `{match.group(0)}`"
+        )
+    return problems
 
 
 def codec_table_claim() -> list[str]:
@@ -296,6 +463,16 @@ def regime_count_claim() -> list[str]:
         _CONFORMANCE,
         _ENTAILMENT,
     ]
+    # The documents whose PURPOSE is to enumerate the regime surface. A page here that
+    # stops recognising at least two regimes has not gone clean — it has been reworded
+    # out of this claim's reach, which is how two of them came to advertise four and
+    # five of the seven. De-registering one is a deliberate edit to this list.
+    must_enumerate = {
+        _REPO / "crates" / "rdf-wasm" / "README.md",
+        _REPO / "crates" / "rdf-wasm" / "js" / "README.md",
+        _CLI_README,
+        _PY_README,
+    }
     enumerating = 0
     for path in documents:
         if not path.is_file():
@@ -307,6 +484,13 @@ def regime_count_claim() -> list[str]:
             for regime in accepted
             if re.search(r'`"?' + re.escape(regime) + r'"?`', text)
         }
+        if path in must_enumerate and len(mentioned) < 2:
+            problems.append(
+                f"{rel}: recognises {len(mentioned)} regime name(s), below this "
+                f"document's floor of 2 — its regime enumeration has been reworded out "
+                f"of this claim's reach. Restore the backticked names, or de-register "
+                f"the document from must_enumerate in the same commit and say why"
+            )
         if len(mentioned) >= 2:
             enumerating += 1
             missing = sorted(set(accepted) - mentioned)
@@ -1369,6 +1553,29 @@ def build_claims(
     ]
     claims += [
         Claim(
+            "the root README's OWL 2 RL rule-count headline",
+            _README,
+            _flow(r"\*\*all (?P<owlrl>\d+) OWL 2 RL rules\*\*"),
+            {"owlrl": inventory["OWL-RL"][0]},
+            inv,
+        ),
+        Claim(
+            "the root README's RDF+RDFS pattern-count headline",
+            _README,
+            _flow(r"all (?P<rdfs>\d+) RDF \+ RDFS patterns"),
+            {"rdfs": inventory["RDFS"][0]},
+            inv,
+        ),
+        Claim(
+            "the SHACL corpus size in the benchmarks doc",
+            _REPO / "docs" / "BENCHMARKS.md",
+            _flow(r"All (?P<total>\d+) committed first-party conformance cases"),
+            {"total": corpus_pass},
+            mat,
+        ),
+    ]
+    claims += [
+        Claim(
             what,
             path,
             pattern,
@@ -1790,6 +1997,14 @@ def main() -> int:
     problems.extend(regime_count_claim())
     checked += 1
     problems.extend(codec_table_claim())
+    checked += 1
+    problems.extend(never_published_claim())
+    checked += 1
+    problems.extend(profile_count_claim())
+    checked += 1
+    problems.extend(program_regime_dts_claim())
+    checked += 1
+    problems.extend(banned_stale_fragment_names())
     checked += 1
 
     for claim in build_claims(inventory, matrix, census, lanes):

@@ -30,9 +30,10 @@
 //!   is **SHACL-AF `sh:rule`** entailment. It needs a *shapes* graph and applies
 //!   the rules that graph declares.
 //! * [`purrdf_entail_materialize_to_nquads`] is **SPARQL entailment-regime**
-//!   materialization (`simple` / `rdf` / `rdfs` / `owl-rl`). It takes no shapes
-//!   at all: it closes a document under the regime's own specification rule
-//!   table.
+//!   materialization over all seven regimes (`simple` / `rdf` / `rdfs` /
+//!   `owl-rl` / `owl-direct` / `rif` / `d`). It takes no shapes at all: it
+//!   closes a document under the regime's own rule table (or, for `rif`, the
+//!   caller's).
 //!
 //! # One boundary, three hosts
 //!

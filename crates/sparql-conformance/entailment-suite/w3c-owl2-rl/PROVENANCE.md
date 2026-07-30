@@ -223,10 +223,10 @@ loose. `webont-i5-8-001`, the one case that document named, is among them. The
 `owl2_conformance` harness pins both 221 and 30 as constants and prints the 30 by
 name, so the exclusion cannot go quiet again.
 
-The other headline the probe produces: of the 221 consistency-shaped cases the DL
-corpus leaves out, **156 are decided today**. Their exclusion is a payload-size
-and triage decision, not a capability limit, and reporting "256 agreed of 261"
-without that context overstates the coverage. That is why the harness prints
+The other headline the probe produced: of the 221 consistency-shaped cases the DL
+corpus leaves out, **156 the tableau decided when probed**. Their exclusion is a
+payload-size and triage decision, not a capability limit, and reporting
+"257 agreed of 261" without that context overstates the coverage. That is why the harness prints
 `OWL2-DL-EXCLUDED` next to `OWL2-ENTAILMENT`.
 
 ## License

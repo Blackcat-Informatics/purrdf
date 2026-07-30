@@ -141,7 +141,7 @@ entries; ambiguous profile data hard-fails.
 
 ### Graph, tabular, and research-object projection archives
 
-All fourteen profiles use the same canonical USTAR package surface and strict,
+All sixteen profiles use the same canonical USTAR package surface and strict,
 profile-tagged configuration. PurRDF does not choose vocabulary, identity,
 profile context, or resource limits for the caller.
 
