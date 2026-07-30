@@ -33,7 +33,7 @@ from ..query import (
     Variable,
     _read_result_source,
 )
-from ..term import BNode, Literal, URIRef, from_native
+from ..term import BNode, Identifier, Literal, URIRef, from_native
 
 
 class _NativeResultSerializer(ResultSerializer):

@@ -302,6 +302,7 @@ class Store:
         format: RdfFormat | None = ...,
         *,
         path: str | None = ...,
+        base: str | None = ...,
     ) -> None: ...
     def bulk_load(
         self,
@@ -364,6 +365,7 @@ class MutableDataset:
         format: RdfFormat | None = ...,
         *,
         path: str | None = ...,
+        base: str | None = ...,
     ) -> None: ...
     def add(self, quad: Quad) -> bool: ...
     def remove(self, quad: Quad) -> bool: ...

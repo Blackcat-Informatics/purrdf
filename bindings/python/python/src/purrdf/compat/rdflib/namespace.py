@@ -723,8 +723,14 @@ SOSA = Namespace("http://www.w3.org/ns/sosa/")
 SSN = Namespace("http://www.w3.org/ns/ssn/")
 
 
-# prefixes for the core Namespaces shipped with rdflib
-_NAMESPACE_PREFIXES_CORE: dict[str, Namespace] = {
+# prefixes for the core Namespaces shipped with rdflib.
+#
+# The values are heterogeneous BY DESIGN, matching rdflib: a plain `Namespace` is a
+# `str` subclass, while a `DefinedNamespace` subclass (`RDF`) is a CLASS whose
+# metaclass stringifies to the same IRI. `bind()` only needs `str(ns)`, which both
+# satisfy, so the annotation names what the dict really holds rather than the narrower
+# type one of the five entries happens not to be.
+_NAMESPACE_PREFIXES_CORE: dict[str, Namespace | type[DefinedNamespace]] = {
     "owl": OWL,
     "rdf": RDF,
     "rdfs": RDFS,
