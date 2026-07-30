@@ -330,11 +330,16 @@ pub enum Construct {
     /// A NON-DISTINGUISHED variable in a query basic graph pattern — a blank node the
     /// `OWL-Direct` layer was handed that is not part of a class expression.
     NonDistinguishedVariable,
+    /// A TBox axiom outside the Horn fragment the combined approach's restricted chase
+    /// can lower into a `DlClause` program — so query answering for a basic graph pattern
+    /// carrying a non-distinguished variable fell back to whole-vocabulary augmentation
+    /// instead of the combined approach's chase-and-filter answer.
+    NonHornTBox,
 }
 
 impl Construct {
     /// Every construct, in declaration order — the order a report lists boundaries in.
-    pub(crate) const ALL: [Self; 13] = [
+    pub(crate) const ALL: [Self; 14] = [
         Self::NamedGraph,
         Self::TripleTerm,
         Self::GeneralizedRdf,
@@ -348,6 +353,7 @@ impl Construct {
         Self::OntologyImport,
         Self::UnrecognizedTerm,
         Self::NonDistinguishedVariable,
+        Self::NonHornTBox,
     ];
 
     /// A short, stable name for the construct.
@@ -367,6 +373,7 @@ impl Construct {
             Self::OntologyImport => "ontology-import",
             Self::UnrecognizedTerm => "unrecognized-term",
             Self::NonDistinguishedVariable => "non-distinguished-variable",
+            Self::NonHornTBox => "non-horn-tbox",
         }
     }
 
@@ -604,6 +611,25 @@ impl Construct {
                  the run reports the residue instead of claiming to have closed it. A query \
                  blank node that IS the scaffold of a class expression is not this: it is \
                  ground syntax the reverse mapping reads, and it raises nothing"
+            }
+            Self::NonHornTBox => {
+                "the combined approach answers a basic graph pattern with a non-distinguished \
+                 variable by lowering the TBox's SIMPLE existential shape — `A ⊑ B` and \
+                 `A ⊑ ∃r.B` over named classes and a named role — into `purrdf-datalog`'s \
+                 DL-clause IR, running the RESTRICTED CHASE to mint a frontier-Skolem witness \
+                 for every existential, and filtering any answer that would bind a \
+                 DISTINGUISHED (projected) variable to a minted witness. That lowering \
+                 recognizes exactly two axiom shapes; an ontology whose TBox holds anything \
+                 else reachable from a `rdfs:subClassOf` triple — an equivalence, a \
+                 disjointness, a class expression on the SUBCLASS side, a restriction that is \
+                 not a plain `owl:someValuesFrom` of a named class over a named property, or \
+                 any of the other OWL 2 constructs the reverse mapping's own boundaries name \
+                 — falls outside it, and so does a Horn-shaped TBox whose existentials the \
+                 chase cannot certify terminating (a genuine schema-level cycle through the \
+                 existential positions). Either way the run falls back to the pre-existing \
+                 query-directed whole-vocabulary augmentation and its own — narrower — \
+                 guarantees, which is sound but may miss a certain answer that only a \
+                 non-distinguished variable's binding to a chase witness would have found"
             }
         }
     }
@@ -1413,18 +1439,20 @@ fn boundaries(ds: &RdfDataset, regime: Regime, stats: &RunStats) -> Vec<Boundary
             Construct::AxiomaticTriples => matches!(regime, Regime::Rdf | Regime::Rdfs),
             Construct::DatatypeValueSpace => true,
             Construct::Surrogate => stats.surrogate_drops > 0,
-            // The six OWL-Direct boundaries are the reverse mapping's, raised by
-            // `ReasoningReport::of_dl_run` from the axioms it actually read. No chase lane
-            // parses an OWL class expression at all, so none of them can be met here — and
-            // the arm is written out rather than defaulted so a seventh construct has to
-            // decide which side of the split it is on.
+            // The eight OWL-Direct boundaries are the reverse mapping's (and the combined
+            // approach's), raised by `ReasoningReport::of_dl_run` from the axioms and the
+            // query it actually read. No chase lane parses an OWL class expression or runs
+            // the combined approach's own TBox lowering at all, so none of them can be met
+            // here — and the arm is written out rather than defaulted so a ninth construct
+            // has to decide which side of the split it is on.
             Construct::PropertyChain
             | Construct::NonSimpleRole
             | Construct::DataRange
             | Construct::BuiltinRole
             | Construct::OntologyImport
             | Construct::UnrecognizedTerm
-            | Construct::NonDistinguishedVariable => false,
+            | Construct::NonDistinguishedVariable
+            | Construct::NonHornTBox => false,
         })
         .map(Boundary::of)
         .collect()

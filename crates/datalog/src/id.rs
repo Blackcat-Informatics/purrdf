@@ -149,6 +149,16 @@ pub enum Row {}
 /// Brand: a hash-consed proof-term handle. See [`ProofId`].
 #[derive(Debug)]
 pub enum Proof {}
+/// Brand: a hash-consed compound-term arena node handle. See [`NodeId`].
+#[derive(Debug)]
+pub enum Node {}
+/// Brand: a unification metavariable handle. See [`MetaId`].
+#[derive(Debug)]
+pub enum Meta {}
+/// Brand: an interned atomic-symbol handle (a compound term's leaf/free lexical
+/// surface), distinct from `TermId`'s own atomic-fact-term interner. See [`SymId`].
+#[derive(Debug)]
+pub enum Sym {}
 
 /// A dense per-interner atomic-term handle.
 pub type TermId = Id<Term>;
@@ -171,6 +181,18 @@ pub type RowId = Id<Row>;
 /// by their position in a canonical emission walk, so two arenas that built the same proof
 /// through different sequences encode to the same bytes.
 pub type ProofId = Id<Proof>;
+/// A dense per-arena hash-consed compound-term node handle, minted by
+/// [`crate::term::TermDag`] in interning order.
+pub type NodeId = Id<Node>;
+/// A dense per-arena unification metavariable handle, minted by
+/// [`crate::term::TermDag::fresh_meta`].
+pub type MetaId = Id<Meta>;
+/// A dense per-arena interned atomic-symbol handle — the lexical surface a
+/// [`NodeId`]'s [`Leaf`](crate::term::NodeData::Leaf) or
+/// [`Free`](crate::term::NodeData::Free) variant carries, kept in its own interner
+/// distinct from [`TermId`] because the two arenas serve different consumers and
+/// have no reason to share an index space.
+pub type SymId = Id<Sym>;
 
 /// The argument handle every arena'd row tuple uses.
 ///
@@ -222,6 +244,9 @@ mod tests {
             assert_eq!(RuleId::from_index(slot).index(), slot, "slot {slot} rule");
             assert_eq!(RowId::from_index(slot).index(), slot, "slot {slot} row");
             assert_eq!(ProofId::from_index(slot).index(), slot, "slot {slot} proof");
+            assert_eq!(NodeId::from_index(slot).index(), slot, "slot {slot} node");
+            assert_eq!(MetaId::from_index(slot).index(), slot, "slot {slot} meta");
+            assert_eq!(SymId::from_index(slot).index(), slot, "slot {slot} sym");
         }
         // Slot 0 is stored as NonZeroU32(1) — the niche is genuinely used.
         assert_eq!(PartitionId::from_index(0).index(), 0);
@@ -241,6 +266,9 @@ mod tests {
         assert_eq!(size_of::<Option<RowId>>(), size_of::<RowId>());
         assert_eq!(size_of::<Option<RuleId>>(), size_of::<RuleId>());
         assert_eq!(size_of::<Option<ProofId>>(), size_of::<ProofId>());
+        assert_eq!(size_of::<Option<NodeId>>(), size_of::<NodeId>());
+        assert_eq!(size_of::<Option<MetaId>>(), size_of::<MetaId>());
+        assert_eq!(size_of::<Option<SymId>>(), size_of::<SymId>());
         // A TermRef is exactly its wrapped TermId — the row-tuple argument handle
         // adds no width over the atomic handle it carries, and inherits the niche.
         assert_eq!(size_of::<TermRef>(), size_of::<TermId>());

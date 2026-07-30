@@ -11,7 +11,7 @@ reasoning substrate — so that neither repository has to infer the other's stat
 
 Every observation about gmeow's tree below is a **dated measurement against gmeow
 snapshot `8906e41b15d5adaeccede35dab7e36c7eab86147`** — the same snapshot PurRDF's
-datalog and goal-directed ports were taken from, which is what makes the port
+datalog and unify/SLG ports were taken from, which is what makes the port
 window drift-free. gmeow's tree moves; re-verify against its HEAD before acting on
 a row.
 
@@ -113,12 +113,16 @@ the rational↔decimal identity exactly (`"0.5"^^xsd:decimal` ≡
 
 ### 4. Goal-directed / SLG layer
 
-PurRDF carries faithful ports of gmeow's `unify`, `resolve_fol` (SLG–WFS) and
-`goal_directed` modules, taken at the same snapshot, with the gmeow couplings
-(`gmeow_errors`, `gmeow_term_arena`, ℚ builtins) stripped at the boundary — see
-`PROVENANCE.md` for the module-for-module record. gmeow's own goal-directed
-layer ports onto these rather than re-porting; the ported tests are the
-compatibility contract.
+PurRDF carries faithful ports of gmeow's `unify` and `resolve_fol` (SLG–WFS)
+modules, taken at the same snapshot, with the gmeow couplings (`gmeow_errors`,
+`gmeow_term_arena`, ℚ builtins) stripped at the boundary — see `PROVENANCE.md`
+for the module-for-module record. `goal_directed.rs` itself is deliberately NOT
+ported: its substance is lowering gmeow's RDF-authored reasoning-program corpus,
+a vocabulary PurRDF will never mint; the backward-evaluation capability it
+exposed is delivered by `resolve_fol` plus the `solve_datalog_goal` bridge onto
+the DL-clause IR. gmeow's corpus-lowering layer therefore ports ONTO these
+modules — the lowering stays on the gmeow side, calling a substrate that is now
+shared — and the ported tests are the compatibility contract.
 
 ### 5. Substrate features with no PurRDF home yet
 

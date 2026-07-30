@@ -96,6 +96,23 @@
 //! trusting a sentence about it. See [`report`] for the whole shape, and for why a report
 //! cannot claim [`Completeness::Exact`] beside a boundary it names — the completeness is
 //! DERIVED from the boundary list rather than stored beside it.
+//!
+//! # The combined approach, for a non-distinguished query variable
+//!
+//! [`materialize_dl_reported`]'s own whole-vocabulary augmentation is exact for a basic
+//! graph pattern all of whose variables are DISTINGUISHED (projected) — its module docs say
+//! so explicitly, because the decomposition it relies on genuinely does not extend to a
+//! non-distinguished (unprojected, or blank-node) variable: an open-world model may satisfy
+//! an existential through an anonymous element no finite augmentation over named terms can
+//! produce. [`combined`] is where that gap is closed for the fragment it can be closed for:
+//! TBox axioms of the shape `A ⊑ B` and `A ⊑ ∃r.B` over named vocabulary lower into
+//! `purrdf-datalog`'s DL-clause IR, the crate's own restricted chase materializes the
+//! existential witnesses those axioms license as ordinary blank-node facts, and a caller
+//! filters out any answer that would bind a DISTINGUISHED variable to one of them — the
+//! combined approach of Lutz/Toman/Wolter and Stefanoni/Motik/Horrocks, applied over this
+//! crate's own chase rather than a description-logic-specific canonical-model construction.
+//! Outside that fragment [`materialize_combined`] reports "not applicable" and the caller
+//! keeps using the whole-vocabulary augmentation, disclosing [`Construct::NonHornTBox`].
 
 use std::sync::Arc;
 
@@ -103,6 +120,7 @@ use purrdf_core::RdfDataset;
 
 pub(crate) mod axioms;
 pub(crate) mod calculus;
+pub mod combined;
 pub(crate) mod datatypes;
 pub(crate) mod engine;
 pub mod explain;
@@ -118,6 +136,7 @@ pub(crate) mod surrogates;
 pub(crate) mod vocab;
 
 pub use calculus::calculus_program;
+pub use combined::{CombinedMaterialization, materialize_combined};
 pub use explain::{ChaseProof, ExplainError, Justification, explain_conclusion, justify};
 pub use owl_dl::query::{QNode, QTriple, materialize_dl_reported};
 pub use reasoner::{

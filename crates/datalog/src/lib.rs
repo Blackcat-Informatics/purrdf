@@ -129,6 +129,25 @@
 //!   shared subproof is stored once; a proof is named by a BLAKE3 content digest over its
 //!   canonical encoding, never by a fabricated IRI.
 //!
+//! # Goal-directed backward resolution
+//!
+//! - [`term`], [`unify`], [`resolve_fol`] — a SEPARATE, generic compound-term
+//!   arena, a Robinson-style order-sorted unification algorithm over it, and an
+//!   SLG-tabled backward resolver with three-valued well-founded semantics,
+//!   existing beside the forward semi-naive fixpoint above. Some questions —
+//!   "does this one goal hold, and why" — are cheaper to answer BACKWARD, from the
+//!   goal toward the facts that support it, without materialising the rest of the
+//!   program's model the way [`seminaive::evaluate`] must. [`unify`] operates on
+//!   [`term::TermDag`]'s function-symbol applications and locally-nameless binders
+//!   rather than on the flat quad shape, because the resolver's tabling needs
+//!   richer structure than a quad can hold, and because a future description-logic
+//!   layer built on this receiving surface will need genuinely compound concept
+//!   terms. [`resolve_fol::solve_datalog_goal`] bridges the two worlds: it lowers
+//!   this crate's own [`clause::DlClause`] program into the compound-term IR and
+//!   answers one goal by SLG resolution, so the capability is real, tested
+//!   machinery over the crate's actual data rather than a standalone algorithm
+//!   nobody calls.
+//!
 //! # Reuse
 //!
 //! - [`cache`] — the caller-owned, content-addressed plan cache. A compiled program is
@@ -158,8 +177,11 @@ pub mod cursor;
 pub mod id;
 pub mod plan;
 pub mod proof;
+pub mod resolve_fol;
 pub mod seminaive;
 pub mod store;
+pub mod term;
+pub mod unify;
 
 #[cfg(test)]
 pub(crate) mod synth_corpus;

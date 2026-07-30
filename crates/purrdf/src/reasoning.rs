@@ -3,11 +3,13 @@
 
 //! Entailment-aware SPARQL orchestration over the native PurRDF engines.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use purrdf_datalog::seminaive::BudgetReport;
 use purrdf_entail::{
     EntailError, Materialization, QNode, QTriple, ReasoningReport, Regime, RuleSet,
+    materialize_combined,
 };
 use purrdf_rdf::{
     RdfDataset, RdfDiagnostic, RdfTextDirection, SparqlRequest, SparqlResult, TermValue,
@@ -119,6 +121,14 @@ pub fn query_with_entailment(
         QueryEntailment::OwlDirect => collect_query_bgp(&prepared_query.query),
         _ => Vec::new(),
     };
+    // Populated only when the OWL-Direct lane answered through the COMBINED APPROACH
+    // (`purrdf_entail::materialize_combined`) rather than the whole-vocabulary
+    // augmentation: the set of blank terms its restricted chase minted as existential
+    // witnesses, which the filter below removes from any DISTINGUISHED (projected)
+    // variable's bindings before the answer is returned. A witness is not a certain
+    // answer for a distinguished variable — the regime draws its answers from the
+    // scoping graph, and a minted witness is not in it.
+    let mut combined_surrogates = None;
     // ONE call, seven modes. `purrdf_entail::materialize` is total over
     // `Materialization`, so this lane no longer splits into "the regimes that
     // materialize" and "the two that need their own entry point".
@@ -128,15 +138,104 @@ pub fn query_with_entailment(
         QueryEntailment::Rdfs => purrdf_entail::materialize(dataset, Materialization::Rdfs)?,
         QueryEntailment::OwlRl => purrdf_entail::materialize(dataset, Materialization::OwlRl)?,
         QueryEntailment::D => purrdf_entail::materialize(dataset, Materialization::D)?,
-        QueryEntailment::OwlDirect => {
-            purrdf_entail::materialize(dataset, Materialization::OwlDirect(&pattern))?
-        }
+        QueryEntailment::OwlDirect => match materialize_combined(dataset, &pattern)? {
+            // The ontology's TBox is in the certified Horn fragment: answer through the
+            // combined approach (restricted-chase witnesses for the anonymous part,
+            // filtered below) rather than the whole-vocabulary augmentation, which is
+            // silently incomplete for a query's non-distinguished variable.
+            Some(combined) => {
+                combined_surrogates = Some(combined.surrogates);
+                (combined.dataset, combined.report)
+            }
+            // Outside that fragment: the pre-existing augmentation, boundary and all,
+            // exactly as before.
+            None => purrdf_entail::materialize(dataset, Materialization::OwlDirect(&pattern))?,
+        },
         QueryEntailment::Rif(ruleset) => {
             purrdf_entail::materialize(dataset, Materialization::Rif(ruleset))?
         }
     };
-    let result = engine.query_prepared(&prepared, &prepared_query, request.substitutions)?;
+    let mut result = engine.query_prepared(&prepared, &prepared_query, request.substitutions)?;
+    if let Some(surrogates) = combined_surrogates {
+        let distinguished = distinguished_variables(&prepared_query.query);
+        withhold_surrogate_bindings(&mut result, &surrogates, distinguished.as_ref());
+    }
     Ok((result, report))
+}
+
+/// The query's DISTINGUISHED (projected) variable names, or `None` if the query has no
+/// projection to read one from (`ASK`, `CONSTRUCT`, `DESCRIBE`). [`withhold_surrogate_bindings`]
+/// reads that `None` as "every variable is distinguished" — the conservative, maximally
+/// filtering reading, and the correct one: none of those three query forms lets a caller
+/// read a query variable's binding the way `SELECT` does, but a `CONSTRUCT` template or an
+/// `ASK` verdict can still be built FROM one, so a witness reaching any of their variables
+/// must be withheld rather than assumed harmless.
+fn distinguished_variables(query: &Query) -> Option<BTreeSet<String>> {
+    let pattern = match query {
+        Query::Select { pattern, .. }
+        | Query::Construct { pattern, .. }
+        | Query::Describe { pattern, .. }
+        | Query::Ask { pattern, .. } => pattern,
+    };
+    find_projection(pattern)
+}
+
+/// The variable list of the first [`GraphPattern::Project`] reached by peeling off solution
+/// modifiers — `SELECT`'s own root pattern is exactly that, wrapped by
+/// `Slice`/`OrderBy`/`Distinct`/`Reduced`/`Group` and the like. `None` if none is found
+/// (there is no `SELECT` projection to read).
+fn find_projection(pattern: &GraphPattern) -> Option<BTreeSet<String>> {
+    match pattern {
+        GraphPattern::Project { variables, .. } => {
+            Some(variables.iter().map(|v| v.as_str().to_owned()).collect())
+        }
+        GraphPattern::Filter { inner, .. }
+        | GraphPattern::Graph { inner, .. }
+        | GraphPattern::Extend { inner, .. }
+        | GraphPattern::Service { inner, .. }
+        | GraphPattern::OrderBy { inner, .. }
+        | GraphPattern::Distinct { inner }
+        | GraphPattern::Reduced { inner }
+        | GraphPattern::Slice { inner, .. }
+        | GraphPattern::Group { inner, .. } => find_projection(inner),
+        _ => None,
+    }
+}
+
+/// Drop every solution row that binds a DISTINGUISHED variable to a chase-minted witness.
+///
+/// `distinguished`'s `None` reading is "every variable is distinguished" (see
+/// [`distinguished_variables`]), which is the conservative default for `ASK`/`CONSTRUCT`/
+/// `DESCRIBE` — it filters at least as much as the precise answer would, never less, so it
+/// can never let a witness leak.
+///
+/// A no-op for anything but [`SparqlResult::Solutions`]: `ASK` and `CONSTRUCT`/`DESCRIBE`
+/// results are booleans and graphs respectively, and a witness reaching a `CONSTRUCT`
+/// template is a property of the template, not of a variable binding this filter can name.
+fn withhold_surrogate_bindings(
+    result: &mut SparqlResult,
+    surrogates: &BTreeSet<String>,
+    distinguished: Option<&BTreeSet<String>>,
+) {
+    let SparqlResult::Solutions {
+        variables, rows, ..
+    } = result
+    else {
+        return;
+    };
+    let is_distinguished = |name: &str| match distinguished {
+        Some(names) => names.contains(name),
+        None => true,
+    };
+    let is_surrogate = |value: &TermValue| match value {
+        TermValue::Blank { label, .. } => surrogates.contains(label),
+        TermValue::Iri(_) | TermValue::Literal { .. } | TermValue::Triple { .. } => false,
+    };
+    rows.retain(|row| {
+        !row.iter()
+            .zip(variables.iter())
+            .any(|(cell, name)| is_distinguished(name) && cell.as_ref().is_some_and(is_surrogate))
+    });
 }
 
 /// The report for the identity closure — what `materialize(ds, Materialization::Simple)` returns.
@@ -238,7 +337,7 @@ fn literal_to_term_value(literal: &Literal) -> TermValue {
 #[cfg(test)]
 mod tests {
     use purrdf_entail::{Atom, RifTerm, Rule, RuleSet};
-    use purrdf_rdf::{RdfDatasetBuilder, TermValue};
+    use purrdf_rdf::{BlankScope, RdfDatasetBuilder, TermValue};
 
     use super::*;
 
@@ -419,5 +518,145 @@ mod tests {
             ask(QueryEntailment::Rif(&rules)),
             SparqlResult::Boolean(true)
         ));
+    }
+
+    // ── The combined approach: a non-distinguished variable, answered correctly ────────
+
+    const COMBINED_NS: &str = "https://example.org/combined#";
+    const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
+    const OWL_RESTRICTION: &str = "http://www.w3.org/2002/07/owl#Restriction";
+    const OWL_ON_PROPERTY: &str = "http://www.w3.org/2002/07/owl#onProperty";
+    const OWL_SOME_VALUES_FROM: &str = "http://www.w3.org/2002/07/owl#someValuesFrom";
+
+    /// `A ⊑ ∃r.B`, `a : A` — the classic shape a query-independent, whole-vocabulary
+    /// augmentation cannot answer correctly for a non-distinguished variable, because no
+    /// NAMED individual need be `r`-related to anything: the axiom only entails that SOME
+    /// element is.
+    fn some_values_from_ontology() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let ty = b.intern_iri(RDF_TYPE);
+        let class = b.intern_iri(OWL_CLASS);
+        let subclass_of = b.intern_iri(RDFS_SUBCLASS);
+        let a = b.intern_iri(&format!("{COMBINED_NS}A"));
+        let big_b = b.intern_iri(&format!("{COMBINED_NS}B"));
+        let r = b.intern_iri(&format!("{COMBINED_NS}r"));
+        let little_a = b.intern_iri(&format!("{COMBINED_NS}a"));
+        let restriction = b.intern_blank("restriction", BlankScope::DEFAULT);
+        let restriction_class = b.intern_iri(OWL_RESTRICTION);
+        let on_property = b.intern_iri(OWL_ON_PROPERTY);
+        let some_values_from = b.intern_iri(OWL_SOME_VALUES_FROM);
+        b.push_quad(a, ty, class, None);
+        b.push_quad(big_b, ty, class, None);
+        b.push_quad(restriction, ty, restriction_class, None);
+        b.push_quad(restriction, on_property, r, None);
+        b.push_quad(restriction, some_values_from, big_b, None);
+        b.push_quad(a, subclass_of, restriction, None);
+        b.push_quad(little_a, ty, a, None);
+        b.freeze().expect("freeze")
+    }
+
+    /// HALF ONE: `a` IS a certain answer of `SELECT ?x WHERE { ?x r ?y . ?y a B }`, even
+    /// though no triple — asserted or in the whole-vocabulary augmentation — ever states
+    /// that any named individual is `r`-related to anything. Only the combined approach's
+    /// restricted-chase witness makes the match possible.
+    #[test]
+    fn the_combined_approach_finds_the_certain_answer_a_whole_vocabulary_augmentation_misses() {
+        let query = format!("SELECT ?x WHERE {{ ?x <{COMBINED_NS}r> ?y . ?y a <{COMBINED_NS}B> }}");
+        let (result, report) = query_with_entailment(
+            &NativeSparqlEngine::new(),
+            &some_values_from_ontology(),
+            SparqlRequest {
+                query: &query,
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryEntailment::OwlDirect,
+        )
+        .unwrap();
+        assert_eq!(report.regime(), Regime::OwlDirect);
+        let SparqlResult::Solutions {
+            variables, rows, ..
+        } = result
+        else {
+            panic!("expected a solution sequence");
+        };
+        let x = variables
+            .iter()
+            .position(|v| v == "x")
+            .expect("?x is projected");
+        let bindings: Vec<&TermValue> = rows
+            .iter()
+            .map(|row| row[x].as_ref().expect("?x is bound"))
+            .collect();
+        assert_eq!(
+            bindings,
+            vec![&TermValue::iri(format!("{COMBINED_NS}a"))],
+            "a is a certain answer: every model has SOME r-successor of a typed B"
+        );
+    }
+
+    /// HALF TWO: no chase-minted Skolem surrogate ever leaks as a binding for a
+    /// DISTINGUISHED variable. `?y` is now the projected variable, and the only "value"
+    /// `?y` could take is the witness the restricted chase invented for the existential —
+    /// which is not a certain answer (the axiom does not name which element it is), so the
+    /// solution set must be EMPTY rather than surfacing the internal witness.
+    #[test]
+    fn no_chase_witness_leaks_as_a_binding_for_a_distinguished_variable() {
+        let query = format!(
+            "SELECT ?y WHERE {{ <{COMBINED_NS}a> <{COMBINED_NS}r> ?y . ?y a <{COMBINED_NS}B> }}"
+        );
+        let (result, report) = query_with_entailment(
+            &NativeSparqlEngine::new(),
+            &some_values_from_ontology(),
+            SparqlRequest {
+                query: &query,
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryEntailment::OwlDirect,
+        )
+        .unwrap();
+        assert_eq!(report.regime(), Regime::OwlDirect);
+        let SparqlResult::Solutions { rows, .. } = result else {
+            panic!("expected a solution sequence");
+        };
+        assert!(
+            rows.is_empty(),
+            "a chase-minted witness must never bind the distinguished ?y: {rows:?}"
+        );
+    }
+
+    /// The wiring itself: an ontology outside the combined approach's Horn fragment (here,
+    /// `owl:equivalentClass`) still answers through the pre-existing whole-vocabulary
+    /// augmentation, unchanged.
+    #[test]
+    fn an_ontology_outside_the_horn_fragment_still_uses_the_whole_vocabulary_augmentation() {
+        let mut b = RdfDatasetBuilder::new();
+        let ty = b.intern_iri(RDF_TYPE);
+        let class = b.intern_iri(OWL_CLASS);
+        let equiv = b.intern_iri("http://www.w3.org/2002/07/owl#equivalentClass");
+        let a = b.intern_iri(&format!("{COMBINED_NS}A"));
+        let big_b = b.intern_iri(&format!("{COMBINED_NS}B"));
+        let little_a = b.intern_iri(&format!("{COMBINED_NS}a"));
+        b.push_quad(a, ty, class, None);
+        b.push_quad(big_b, ty, class, None);
+        b.push_quad(a, equiv, big_b, None);
+        b.push_quad(little_a, ty, a, None);
+        let dataset = b.freeze().expect("freeze");
+
+        let query = format!("ASK {{ <{COMBINED_NS}a> a <{COMBINED_NS}B> }}");
+        let (result, report) = query_with_entailment(
+            &NativeSparqlEngine::new(),
+            &dataset,
+            SparqlRequest {
+                query: &query,
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryEntailment::OwlDirect,
+        )
+        .unwrap();
+        assert_eq!(report.regime(), Regime::OwlDirect);
+        assert!(matches!(result, SparqlResult::Boolean(true)));
     }
 }
