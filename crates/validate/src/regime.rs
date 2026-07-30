@@ -85,9 +85,9 @@ use core::fmt::Write as _;
 use purrdf_core::{RdfLiteral, RdfTerm, RdfTriple, TermValue, emit_term};
 use purrdf_entail::{
     ChaseProof, Completeness, DlAxiom, DlCertificate, DlCompleteness, EntailError, Justification,
-    Materialization, ModuleMethod, OwlProfile, ProfileCertificate, Reasoner, ReasoningReport,
-    Regime, RuleSet, Verdict, explain_conclusion, extensions, extract_module, implemented, justify,
-    materialize, parse_rif_xml, profile, rules,
+    Materialization, ModuleExtraction, ModuleMethod, OwlProfile, ProfileCertificate, Reasoner,
+    ReasoningReport, Regime, RuleSet, Verdict, explain_conclusion, extensions, extract_module,
+    implemented, justify, materialize, parse_rif_xml, profile, rules,
 };
 
 /// The accepted regime spellings, in the order an error message lists them.
@@ -1457,21 +1457,103 @@ fn verdict_name(verdict: Verdict) -> &'static str {
     }
 }
 
-/// Open a [`Reasoner`] over `document`, narrowed to `step_cap` when that is non-zero.
+/// A reasoning session over ONE ontology.
 ///
-/// `step_cap` can only NARROW: [`Reasoner::with_step_cap`] clamps to the knowledge
-/// base's own cap, which is a pure function of its size. `0` means "do not narrow"
-/// rather than "a cap of zero steps", because a zero cap would exhaust every
-/// decision and make the parameter a footgun at three language boundaries.
-fn open_reasoner(document: &str, step_cap: u32) -> Result<Reasoner, String> {
-    let dataset = purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
-        .map_err(|diagnostic| diagnostic.to_string())?;
-    let reasoner = Reasoner::new(&dataset).map_err(|error| format!("reasoner: {error}"))?;
-    Ok(if step_cap == 0 {
-        reasoner
-    } else {
-        reasoner.with_step_cap(u64::from(step_cap))
-    })
+/// Every service below answers a question about a document, and each one's free-function
+/// form takes that document as a `&str`. A caller asking three questions therefore parses
+/// the document three times and reverse-maps it three times, even though the document is
+/// the expensive part and does not change between questions. This type holds it: [`open`]
+/// pays the parse once, the first knowledge-base service pays the reverse-mapping once,
+/// and every later question reuses both.
+///
+/// The free functions are thin wrappers over this type rather than a second
+/// implementation, so a session answer and a one-shot answer cannot drift apart.
+///
+/// # Laziness here is semantics, not an optimization
+///
+/// The knowledge base is built by the first service that needs one and NOT by [`open`].
+/// Four services ([`Self::profile`], [`Self::extract_module`], [`Self::justify`],
+/// [`Self::explain_conclusion`]) read the dataset and never reason, and `profile` is
+/// documented to answer for *any* parseable document — including one whose `owl:hasKey`
+/// axioms exhaust the tableau while [`Reasoner::new`] applies them. Building eagerly
+/// would make those services start failing on documents they answer today.
+///
+/// [`open`]: Self::open
+///
+/// ```
+/// use purrdf_validate::regime::ReasonerSession;
+///
+/// let data = "<http://example.org/tom> \
+///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .\n";
+/// let mut session = ReasonerSession::open(data, 0).expect("parses");
+/// // Two questions, one parse and one reverse mapping.
+/// assert_eq!(session.consistency().expect("decides").answer(), "consistency true\n");
+/// assert!(session.classify().expect("decides").answer().contains("subclass"));
+/// ```
+pub struct ReasonerSession {
+    /// The parsed document. Every service reads it; `Arc` because parsing hands one back.
+    dataset: std::sync::Arc<purrdf_rdf::RdfDataset>,
+    /// The requested per-decision cap, applied when the knowledge base is built.
+    step_cap: u32,
+    /// The reverse-mapped knowledge base, built by the first service that needs it.
+    reasoner: Option<Reasoner>,
+}
+
+impl std::fmt::Debug for ReasonerSession {
+    /// The session's SHAPE — how big the document is and whether it has reasoned yet.
+    ///
+    /// [`Reasoner`] elides its knowledge base for the reason given on its own `Debug`,
+    /// and a dataset is likewise thousands of interned ids. What a reader wants from a
+    /// debug line is the size of the problem and whether the reverse mapping has been
+    /// paid for, which is what this prints.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReasonerSession")
+            .field("quads", &self.dataset.quad_count())
+            .field("step_cap", &self.step_cap)
+            .field("reasoned", &self.reasoner.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl ReasonerSession {
+    /// Parse `document` and open a session over it.
+    ///
+    /// `step_cap` can only NARROW: [`Reasoner::with_step_cap`] clamps to the knowledge
+    /// base's own cap, which is a pure function of its size. `0` means "do not narrow"
+    /// rather than "a cap of zero steps", because a zero cap would exhaust every
+    /// decision and make the parameter a footgun at three language boundaries.
+    ///
+    /// # Errors
+    ///
+    /// A malformed document (the native codec's own diagnostic). Nothing is reverse-mapped
+    /// here, so an ontology whose knowledge base cannot be built still opens — and fails on
+    /// the first service that needs one, with that service's own message.
+    pub fn open(document: &str, step_cap: u32) -> Result<Self, String> {
+        let dataset = purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
+            .map_err(|diagnostic| diagnostic.to_string())?;
+        Ok(Self {
+            dataset,
+            step_cap,
+            reasoner: None,
+        })
+    }
+
+    /// The knowledge base, building it on first use.
+    fn kb(&mut self) -> Result<&mut Reasoner, String> {
+        if self.reasoner.is_none() {
+            let reasoner =
+                Reasoner::new(&self.dataset).map_err(|error| format!("reasoner: {error}"))?;
+            self.reasoner = Some(if self.step_cap == 0 {
+                reasoner
+            } else {
+                reasoner.with_step_cap(u64::from(self.step_cap))
+            });
+        }
+        Ok(self
+            .reasoner
+            .as_mut()
+            .expect("the knowledge base was just built"))
+    }
 }
 
 /// The message a service that cannot reason over an unsatisfiable ontology is
@@ -1487,6 +1569,198 @@ fn service_error(service: &str, error: &EntailError) -> String {
              consistency_to_string reports this as `consistency false`"
         ),
         other => format!("{service}: {other}"),
+    }
+}
+
+/// The services, as methods on a session.
+///
+/// Each one carries the doc comment of its free-function form rather than repeating it;
+/// the answer and certificate grammars, and every error condition, are documented there.
+/// The free function is a wrapper over the method, so the two cannot disagree.
+///
+/// Argument validation happens before the knowledge base is touched, preserving each
+/// free function's error precedence: a `class` that is not one N-Triples term is reported
+/// as such even for an ontology whose knowledge base could not have been built.
+impl ReasonerSession {
+    /// See [`consistency_to_string`].
+    ///
+    /// # Errors
+    ///
+    /// A knowledge base that cannot be built from the document.
+    pub fn consistency(&mut self) -> Result<ReasoningAnswer, String> {
+        let (verdict, certificate) = self.kb()?.consistency().into_parts();
+        Ok(ReasoningAnswer {
+            answer: format!("consistency {}\n", verdict_name(verdict)),
+            certificate: render_dl_certificate("consistency", &certificate),
+        })
+    }
+
+    /// See [`classify_to_string`].
+    ///
+    /// # Errors
+    ///
+    /// A knowledge base that cannot be built, or an ontology with no model.
+    pub fn classify(&mut self) -> Result<ReasoningAnswer, String> {
+        let (hierarchy, certificate) = self
+            .kb()?
+            .classify()
+            .map_err(|error| service_error("classify", &error))?
+            .into_parts();
+        let mut answer = String::new();
+        for (left, right) in hierarchy.equivalences() {
+            let _ = writeln!(answer, "equivalent {} {}", emit(left), emit(right));
+        }
+        for (sub, sup) in hierarchy.subsumptions() {
+            let _ = writeln!(answer, "subclass {} {}", emit(sub), emit(sup));
+        }
+        for (sub, sup) in hierarchy.direct_subsumptions() {
+            let _ = writeln!(answer, "direct {} {}", emit(sub), emit(sup));
+        }
+        for class in hierarchy.unsatisfiable() {
+            let _ = writeln!(answer, "unsatisfiable {}", emit(class));
+        }
+        Ok(ReasoningAnswer {
+            answer,
+            certificate: render_dl_certificate("classify", &certificate),
+        })
+    }
+
+    /// See [`realize_to_string`].
+    ///
+    /// # Errors
+    ///
+    /// A knowledge base that cannot be built, or an ontology with no model.
+    pub fn realize(&mut self) -> Result<ReasoningAnswer, String> {
+        let (realization, certificate) = self
+            .kb()?
+            .realize()
+            .map_err(|error| service_error("realize", &error))?
+            .into_parts();
+        let mut answer = String::new();
+        for (individual, class) in realization.types() {
+            let _ = writeln!(answer, "type {} {}", emit(individual), emit(class));
+        }
+        for (individual, class) in realization.direct_types() {
+            let _ = writeln!(answer, "direct-type {} {}", emit(individual), emit(class));
+        }
+        Ok(ReasoningAnswer {
+            answer,
+            certificate: render_dl_certificate("realize", &certificate),
+        })
+    }
+
+    /// See [`instances_to_string`].
+    ///
+    /// # Errors
+    ///
+    /// A `class` that is not one N-Triples term, a knowledge base that cannot be built,
+    /// or an ontology with no model.
+    pub fn instances(&mut self, class: &str) -> Result<ReasoningAnswer, String> {
+        let term = parse_one_term(class)?;
+        let (individuals, certificate) = self
+            .kb()?
+            .instances(&term)
+            .map_err(|error| service_error("instances", &error))?
+            .into_parts();
+        let mut answer = String::new();
+        for individual in &individuals {
+            let _ = writeln!(answer, "instance {}", emit(individual));
+        }
+        Ok(ReasoningAnswer {
+            answer,
+            certificate: render_dl_certificate("instances", &certificate),
+        })
+    }
+
+    /// See [`entails_to_string`].
+    ///
+    /// # Errors
+    ///
+    /// An `axiom` that is not one triple, a knowledge base that cannot be built, or an
+    /// ontology with no model.
+    pub fn entails(&mut self, axiom: &str) -> Result<ReasoningAnswer, String> {
+        let parsed = parse_axiom(axiom)?;
+        let (verdict, certificate) = self
+            .kb()?
+            .entails(&parsed)
+            .map_err(|error| service_error("entails", &error))?
+            .into_parts();
+        let mut answer = format!("entails {}\n", verdict_name(verdict));
+        write_axiom(&parsed, &mut answer);
+        Ok(ReasoningAnswer {
+            answer,
+            certificate: render_dl_certificate("entails", &certificate),
+        })
+    }
+
+    /// See [`profile_to_string`]. Purely syntactic — never builds a knowledge base.
+    #[must_use]
+    pub fn profile(&self) -> ReasoningAnswer {
+        let certificate = profile(&self.dataset);
+        ReasoningAnswer {
+            answer: render_profile_answer(&certificate),
+            certificate: render_profile_certificate(&certificate),
+        }
+    }
+
+    /// See [`extract_module_to_string`]. Never builds a knowledge base.
+    ///
+    /// # Errors
+    ///
+    /// An unknown `method`, a `signature` that is not N-Triples terms, or an extraction
+    /// that fails.
+    pub fn extract_module(&self, signature: &str, method: &str) -> Result<ReasoningAnswer, String> {
+        let notion = parse_module_method(method)?;
+        let seed = parse_signature(signature)?;
+        let extraction = extract_module(&self.dataset, &seed, notion)
+            .map_err(|error| format!("extract-module: {error}"))?;
+        Ok(ReasoningAnswer {
+            answer: purrdf_rdf::canonical_flat_nquads(extraction.module().as_ref())?,
+            certificate: render_module_certificate(&extraction),
+        })
+    }
+
+    /// See [`justify_to_string`]. Never builds a knowledge base.
+    ///
+    /// # Errors
+    ///
+    /// An `axiom` that is not one triple, or a justification that cannot be re-decided.
+    pub fn justify(&self, axiom: &str) -> Result<ReasoningAnswer, String> {
+        let parsed = parse_axiom(axiom)?;
+        let justification =
+            justify(&self.dataset, &parsed).map_err(|error| format!("justify: {error}"))?;
+        Ok(ReasoningAnswer {
+            answer: purrdf_rdf::canonical_flat_nquads(justification.ontology().as_ref())?,
+            certificate: render_justification(&justification)?,
+        })
+    }
+
+    /// See [`explain_conclusion_to_string`]. Never builds a knowledge base.
+    ///
+    /// # Errors
+    ///
+    /// An unknown `regime`, a `conclusion` that is not one statement, or a conclusion the
+    /// regime does not derive.
+    pub fn explain_conclusion(
+        &self,
+        regime: &str,
+        conclusion: &str,
+    ) -> Result<ReasoningAnswer, String> {
+        let parsed = parse_regime(regime)?;
+        let (graph, subject, predicate, object) = parse_one_statement(conclusion)?;
+        let proof = explain_conclusion(
+            &self.dataset,
+            parsed,
+            graph.as_ref(),
+            &subject,
+            &predicate,
+            &object,
+        )
+        .map_err(|error| format!("explain-conclusion: {error}"))?;
+        Ok(ReasoningAnswer {
+            answer: render_chase_proof_answer(&proof),
+            certificate: render_chase_proof_certificate(&proof),
+        })
     }
 }
 
@@ -1520,12 +1794,7 @@ fn service_error(service: &str, error: &EntailError) -> String {
 /// assert!(!decided.certificate().contains("\nboundary "));
 /// ```
 pub fn consistency_to_string(document: &str, step_cap: u32) -> Result<ReasoningAnswer, String> {
-    let reasoner = open_reasoner(document, step_cap)?;
-    let (verdict, certificate) = reasoner.consistency().into_parts();
-    Ok(ReasoningAnswer {
-        answer: format!("consistency {}\n", verdict_name(verdict)),
-        certificate: render_dl_certificate("consistency", &certificate),
-    })
+    ReasonerSession::open(document, step_cap)?.consistency()
 }
 
 /// The subsumption hierarchy over the ontology's named classes.
@@ -1550,28 +1819,7 @@ pub fn consistency_to_string(document: &str, step_cap: u32) -> Result<ReasoningA
 /// A malformed document, or an ontology with no model — every class then subsumes
 /// every other and the hierarchy would be a complete graph.
 pub fn classify_to_string(document: &str, step_cap: u32) -> Result<ReasoningAnswer, String> {
-    let reasoner = open_reasoner(document, step_cap)?;
-    let (hierarchy, certificate) = reasoner
-        .classify()
-        .map_err(|error| service_error("classify", &error))?
-        .into_parts();
-    let mut answer = String::new();
-    for (left, right) in hierarchy.equivalences() {
-        let _ = writeln!(answer, "equivalent {} {}", emit(left), emit(right));
-    }
-    for (sub, sup) in hierarchy.subsumptions() {
-        let _ = writeln!(answer, "subclass {} {}", emit(sub), emit(sup));
-    }
-    for (sub, sup) in hierarchy.direct_subsumptions() {
-        let _ = writeln!(answer, "direct {} {}", emit(sub), emit(sup));
-    }
-    for class in hierarchy.unsatisfiable() {
-        let _ = writeln!(answer, "unsatisfiable {}", emit(class));
-    }
-    Ok(ReasoningAnswer {
-        answer,
-        certificate: render_dl_certificate("classify", &certificate),
-    })
+    ReasonerSession::open(document, step_cap)?.classify()
 }
 
 /// The entailed types of the ontology's named individuals, and the most specific
@@ -1592,22 +1840,7 @@ pub fn classify_to_string(document: &str, step_cap: u32) -> Result<ReasoningAnsw
 ///
 /// A malformed document, or an ontology with no model.
 pub fn realize_to_string(document: &str, step_cap: u32) -> Result<ReasoningAnswer, String> {
-    let reasoner = open_reasoner(document, step_cap)?;
-    let (realization, certificate) = reasoner
-        .realize()
-        .map_err(|error| service_error("realize", &error))?
-        .into_parts();
-    let mut answer = String::new();
-    for (individual, class) in realization.types() {
-        let _ = writeln!(answer, "type {} {}", emit(individual), emit(class));
-    }
-    for (individual, class) in realization.direct_types() {
-        let _ = writeln!(answer, "direct-type {} {}", emit(individual), emit(class));
-    }
-    Ok(ReasoningAnswer {
-        answer,
-        certificate: render_dl_certificate("realize", &certificate),
-    })
+    ReasonerSession::open(document, step_cap)?.realize()
 }
 
 /// The named individuals entailed to be instances of `class`.
@@ -1627,20 +1860,7 @@ pub fn instances_to_string(
     class: &str,
     step_cap: u32,
 ) -> Result<ReasoningAnswer, String> {
-    let term = parse_one_term(class)?;
-    let mut reasoner = open_reasoner(document, step_cap)?;
-    let (individuals, certificate) = reasoner
-        .instances(&term)
-        .map_err(|error| service_error("instances", &error))?
-        .into_parts();
-    let mut answer = String::new();
-    for individual in &individuals {
-        let _ = writeln!(answer, "instance {}", emit(individual));
-    }
-    Ok(ReasoningAnswer {
-        answer,
-        certificate: render_dl_certificate("instances", &certificate),
-    })
+    ReasonerSession::open(document, step_cap)?.instances(class)
 }
 
 /// Does the ontology entail `axiom`?
@@ -1685,18 +1905,7 @@ pub fn entails_to_string(
     axiom: &str,
     step_cap: u32,
 ) -> Result<ReasoningAnswer, String> {
-    let parsed = parse_axiom(axiom)?;
-    let mut reasoner = open_reasoner(document, step_cap)?;
-    let (verdict, certificate) = reasoner
-        .entails(&parsed)
-        .map_err(|error| service_error("entails", &error))?
-        .into_parts();
-    let mut answer = format!("entails {}\n", verdict_name(verdict));
-    write_axiom(&parsed, &mut answer);
-    Ok(ReasoningAnswer {
-        answer,
-        certificate: render_dl_certificate("entails", &certificate),
-    })
+    ReasonerSession::open(document, step_cap)?.entails(axiom)
 }
 
 /// Which OWL 2 profiles the ontology is provably in, and what blocked the others.
@@ -1750,13 +1959,7 @@ pub fn entails_to_string(
 /// assert!(certified.certificate().ends_with("one-directional true\n"));
 /// ```
 pub fn profile_to_string(document: &str) -> Result<ReasoningAnswer, String> {
-    let dataset = purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
-        .map_err(|diagnostic| diagnostic.to_string())?;
-    let certificate = profile(&dataset);
-    Ok(ReasoningAnswer {
-        answer: render_profile_answer(&certificate),
-        certificate: render_profile_certificate(&certificate),
-    })
+    Ok(ReasonerSession::open(document, 0)?.profile())
 }
 
 /// The `certified <profile>` block of [`profile_to_string`]'s answer.
@@ -1836,40 +2039,7 @@ pub fn extract_module_to_string(
     signature: &str,
     method: &str,
 ) -> Result<ReasoningAnswer, String> {
-    let notion = parse_module_method(method)?;
-    let seed = parse_signature(signature)?;
-    let dataset = purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
-        .map_err(|diagnostic| diagnostic.to_string())?;
-    let extraction = extract_module(&dataset, &seed, notion)
-        .map_err(|error| format!("extract-module: {error}"))?;
-
-    let mut certificate = String::new();
-    certificate.push_str(MODULE_CERTIFICATE_BANNER);
-    certificate.push('\n');
-    certificate.push_str("service extract-module\n");
-    let _ = writeln!(certificate, "method {}", extraction.method().as_str());
-    let _ = writeln!(certificate, "axioms {}", extraction.axioms());
-    for term in extraction.signature() {
-        let _ = writeln!(certificate, "signature {}", emit(term));
-    }
-    for keep in extraction.conservative_keeps() {
-        let _ = writeln!(
-            certificate,
-            "conservative-keep {} {}",
-            emit(keep.subject()),
-            emit(keep.predicate())
-        );
-    }
-    let _ = writeln!(
-        certificate,
-        "conservative {}",
-        !extraction.conservative_keeps().is_empty()
-    );
-
-    Ok(ReasoningAnswer {
-        answer: purrdf_rdf::canonical_flat_nquads(extraction.module().as_ref())?,
-        certificate,
-    })
+    ReasonerSession::open(document, 0)?.extract_module(signature, method)
 }
 
 /// Parse a locality-module method from its CLI spelling.
@@ -1950,14 +2120,38 @@ fn parse_module_method(name: &str) -> Result<ModuleMethod, String> {
 /// assert!(why.certificate().ends_with("minimal true\n"));
 /// ```
 pub fn justify_to_string(document: &str, axiom: &str) -> Result<ReasoningAnswer, String> {
-    let parsed = parse_axiom(axiom)?;
-    let dataset = purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
-        .map_err(|diagnostic| diagnostic.to_string())?;
-    let justification = justify(&dataset, &parsed).map_err(|error| format!("justify: {error}"))?;
-    Ok(ReasoningAnswer {
-        answer: purrdf_rdf::canonical_flat_nquads(justification.ontology().as_ref())?,
-        certificate: render_justification(&justification)?,
-    })
+    ReasonerSession::open(document, 0)?.justify(axiom)
+}
+
+/// The certificate of [`ReasonerSession::extract_module`].
+///
+/// `conservative` is this certificate's honesty gate: an extraction is conservative when
+/// the method kept every axiom whose removal it could not prove safe, and each such axiom
+/// is named by its own `conservative-keep` line rather than only counted.
+fn render_module_certificate(extraction: &ModuleExtraction) -> String {
+    let mut certificate = String::new();
+    certificate.push_str(MODULE_CERTIFICATE_BANNER);
+    certificate.push('\n');
+    certificate.push_str("service extract-module\n");
+    let _ = writeln!(certificate, "method {}", extraction.method().as_str());
+    let _ = writeln!(certificate, "axioms {}", extraction.axioms());
+    for term in extraction.signature() {
+        let _ = writeln!(certificate, "signature {}", emit(term));
+    }
+    for keep in extraction.conservative_keeps() {
+        let _ = writeln!(
+            certificate,
+            "conservative-keep {} {}",
+            emit(keep.subject()),
+            emit(keep.predicate())
+        );
+    }
+    let _ = writeln!(
+        certificate,
+        "conservative {}",
+        !extraction.conservative_keeps().is_empty()
+    );
+    certificate
 }
 
 /// Render a [`Justification`], re-deciding both halves of its claim.
@@ -2048,23 +2242,7 @@ pub fn explain_conclusion_to_string(
     regime: &str,
     conclusion: &str,
 ) -> Result<ReasoningAnswer, String> {
-    let parsed = parse_regime(regime)?;
-    let (graph, subject, predicate, object) = parse_one_statement(conclusion)?;
-    let dataset = purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
-        .map_err(|diagnostic| diagnostic.to_string())?;
-    let proof = explain_conclusion(
-        &dataset,
-        parsed,
-        graph.as_ref(),
-        &subject,
-        &predicate,
-        &object,
-    )
-    .map_err(|error| format!("explain-conclusion: {error}"))?;
-    Ok(ReasoningAnswer {
-        answer: render_chase_proof_answer(&proof),
-        certificate: render_chase_proof_certificate(&proof),
-    })
+    ReasonerSession::open(document, 0)?.explain_conclusion(regime, conclusion)
 }
 
 /// The `asserted`/`steps`/`rule` block of [`explain_conclusion_to_string`].
@@ -2121,6 +2299,86 @@ fn render_chase_proof_certificate(proof: &ChaseProof) -> String {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    /// A session's answers do not depend on what was asked before them.
+    ///
+    /// THE LOAD-BEARING CHECK for the session. `Reasoner::instances` and
+    /// `Reasoner::entails` take `&mut self`, so a reused knowledge base is mutated by
+    /// every question — and the whole point of the session is that the second question
+    /// reuses it. If any of that mutation were observable, a service would answer one
+    /// thing on a fresh knowledge base and another after a sibling ran, which is a wrong
+    /// answer that no single-service test could see.
+    ///
+    /// Asks each service twice: once with a sibling run before it, once on its own.
+    #[test]
+    fn a_session_answers_the_same_as_a_fresh_one_whatever_ran_before() {
+        let mut session = ReasonerSession::open(SCHEMA, 0).expect("parses");
+        // Deliberately interleaved: the two `&mut self` services run BETWEEN the three
+        // that only read, so any state they leave behind would show up downstream.
+        let consistency = session.consistency().expect("decides");
+        let instances = session
+            .instances("<http://example.org/C>")
+            .expect("decides");
+        let classify = session.classify().expect("decides");
+        let entails = session
+            .entails(
+                "<http://example.org/A> \
+<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .",
+            )
+            .expect("decides");
+        let realize = session.realize().expect("decides");
+        let profile = session.profile();
+
+        // Each free function opens its own session, so these are the fresh answers.
+        for (asked_in_sequence, fresh) in [
+            (
+                &consistency,
+                consistency_to_string(SCHEMA, 0).expect("decides"),
+            ),
+            (
+                &instances,
+                instances_to_string(SCHEMA, "<http://example.org/C>", 0).expect("decides"),
+            ),
+            (&classify, classify_to_string(SCHEMA, 0).expect("decides")),
+            (
+                &entails,
+                entails_to_string(
+                    SCHEMA,
+                    "<http://example.org/A> \
+<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .",
+                    0,
+                )
+                .expect("decides"),
+            ),
+            (&realize, realize_to_string(SCHEMA, 0).expect("decides")),
+            (&profile, profile_to_string(SCHEMA).expect("parses")),
+        ] {
+            assert_eq!(asked_in_sequence.answer(), fresh.answer());
+            // The certificate too: `decisions` and `steps` are measured per call, and a
+            // reused knowledge base that carried work forward would report fewer of them.
+            assert_eq!(asked_in_sequence.certificate(), fresh.certificate());
+        }
+    }
+
+    /// The knowledge base is built lazily, and that is a semantic requirement.
+    ///
+    /// `profile` is documented to answer for ANY parseable document. Building the
+    /// knowledge base in `open` would make it inherit every way `Reasoner::new` can fail,
+    /// so this asserts a session opens, and profiles, without ever reasoning.
+    #[test]
+    fn opening_a_session_does_not_build_a_knowledge_base() {
+        let session = ReasonerSession::open(SCHEMA, 0).expect("parses");
+        assert!(
+            session.reasoner.is_none(),
+            "open must not reverse-map: `profile` answers for documents whose knowledge \
+             base cannot be built, and eager construction would take that away"
+        );
+        let _ = session.profile();
+        assert!(
+            session.reasoner.is_none(),
+            "`profile` is purely syntactic and must never build a knowledge base"
+        );
+    }
 
     /// `A ⊑ B ⊑ C`, `p` with a domain and a range, and one typed instance.
     const SCHEMA: &str = "\
