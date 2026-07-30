@@ -1431,6 +1431,16 @@ fn goldens_match_owlrl_reference() {
 
 /// The ledger's size is pinned to a literal constant, so growing or shrinking the set of
 /// allowed divergences is a reviewed edit rather than something that creeps in unnoticed.
+/// How many individual triples the two engines differ on, across the whole corpus.
+///
+/// Pinned for the same reason [`EXPECTED_DIVERGENCE_COUNT`] is, and against a specific
+/// hazard: the divergence artifact has a regeneration path, so a real regression whose triple
+/// happens to match one of the classifier's shapes could be absorbed by regenerating. It
+/// cannot be absorbed silently — the count is a literal in this file, so regenerating a
+/// changed set requires a second, deliberate edit that shows up beside the artifact's diff in
+/// review. A number that moves without a reason in the same commit is the thing to ask about.
+const EXPECTED_DIVERGENCE_TRIPLES: usize = 146;
+
 const EXPECTED_DIVERGENCE_COUNT: usize = 8;
 
 #[test]
@@ -1440,6 +1450,22 @@ fn ledger_entry_count_is_pinned() {
         EXPECTED_DIVERGENCE_COUNT,
         "crates/entail/tests/owlrl-divergences.toml gained or lost an entry — update \
          EXPECTED_DIVERGENCE_COUNT deliberately if the change is reviewed"
+    );
+}
+
+/// The recorded divergence set holds exactly the number of triples this file pins.
+#[test]
+fn divergence_triple_count_is_pinned() {
+    let recorded = read_expected_diff();
+    assert_eq!(
+        recorded.len(),
+        EXPECTED_DIVERGENCE_TRIPLES,
+        "owlrl-divergence-triples.txt records {} triple(s), not the {} pinned in \
+         owlrl_oracle.rs. If a divergence genuinely appeared or closed, move the constant in \
+         the SAME commit that regenerates the artifact and say why — that pairing is what \
+         stops a regeneration from absorbing a regression quietly.",
+        recorded.len(),
+        EXPECTED_DIVERGENCE_TRIPLES
     );
 }
 
