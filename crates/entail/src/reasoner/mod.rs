@@ -56,9 +56,9 @@ use purrdf_core::{RdfDataset, TermValue};
 
 use crate::EntailError;
 use crate::owl_dl::concept::Concept;
+use crate::owl_dl::graph::{Assumptions, step_cap};
 use crate::owl_dl::parser::Vocab;
 use crate::owl_dl::query::{build_data_index, collect_named_classes};
-use crate::owl_dl::tableau::{Assumptions, step_cap};
 use crate::owl_dl::{Kb, class_concept};
 use crate::report::Construct;
 

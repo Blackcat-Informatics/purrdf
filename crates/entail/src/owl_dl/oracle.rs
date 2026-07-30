@@ -1,15 +1,33 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! A differential test of the [`tableau`](crate::owl_dl::tableau) against a naive
-//! model-enumeration oracle.
+//! A differential test of the [`hyper`](crate::owl_dl::hyper) hypertableau against a naive
+//! model-enumeration oracle AND against the concept-tree
+//! [`tableau`](crate::owl_dl::tableau) it replaced.
 //!
-//! The tableau's own corpus pins VERDICTS: a hand-built knowledge base, a hand-derived
+//! The decision core's own corpus pins VERDICTS: a hand-built knowledge base, a hand-derived
 //! answer, one assertion. That validates the answers somebody thought to write down. This
 //! module validates the SEARCH: it generates small knowledge bases over a tiny signature and
-//! compares the tableau's verdict against an oracle that decides satisfiability by
+//! compares the hypertableau's verdict against an oracle that decides satisfiability by
 //! enumerating every interpretation over a bounded domain and evaluating each axiom directly
 //! against the Description-Logic semantics.
+//!
+//! # Two references, because they fail differently
+//!
+//! Every generated knowledge base is decided THREE times: by the hypertableau, by the
+//! hypertableau again (determinism), and by the concept-tree tableau. The oracle is exact and
+//! shares nothing with either calculus, but it is bounded — over a knowledge base that can
+//! force an element beyond the named individuals it can only ever exhibit a model, never rule
+//! one out (see [`bounded_domain`]). The concept-tree tableau is not exact, but it is
+//! UNBOUNDED: it decides the same fragment by a completely different rule set — concept
+//! structure read at search time, ancestor blocking, four separate clash triggers — so it
+//! checks the direction the oracle is silent about. The two together are what make a
+//! `consistent` verdict over a successor-generating knowledge base checked rather than merely
+//! unrefuted.
+//!
+//! A DIVERGENCE between the two calculi fails the run. It is not a tolerance and not a
+//! ledger entry: both decide `SHOIQ(D)`, so exactly one of them is wrong about the semantics
+//! and which one has to be established from the axioms.
 //!
 //! The oracle is deliberately the stupidest possible program that answers the question. It
 //! guesses; it does not reason. Nothing in it is shared with the thing it checks: it never
@@ -133,9 +151,9 @@
 //!
 //! Each property runs its own [`TestRunner`] over a FIXED [`RngAlgorithm::ChaCha`] seed, so
 //! the same knowledge bases are generated on every run, on every machine, and a failure
-//! reproduces. Nothing here reads a clock or a `HashMap`. The tableau's own determinism is
-//! itself asserted: every generated knowledge base is decided twice and the two
-//! [`Decision`](tableau::Decision)s must agree on `consistent`, on `steps`, and on
+//! reproduces. Nothing here reads a clock or a `HashMap`. The hypertableau's own determinism
+//! is itself asserted: every generated knowledge base is decided twice and the two
+//! [`Decision`](graph::Decision)s must agree on `consistent`, on `steps`, and on
 //! `exhausted`.
 
 use std::cell::RefCell;
@@ -146,7 +164,8 @@ use proptest::test_runner::{Config, RngAlgorithm, TestCaseError, TestRng, TestRu
 
 use crate::owl_dl::Kb;
 use crate::owl_dl::concept::{Concept, Decomp, Role};
-use crate::owl_dl::tableau::{self, Assumptions};
+use crate::owl_dl::graph::{self, Assumptions};
+use crate::owl_dl::{hyper, tableau};
 
 // ── The signature ───────────────────────────────────────────────────────────────
 
@@ -822,6 +841,12 @@ struct Tally {
     /// Reported and floored per property, because a direction that binds zero times is not
     /// being checked — and an assertion that never fires reads exactly like one that passes.
     bound_asserted: u32,
+    /// Cases where BOTH decision cores finished, so their verdicts were compared and agreed.
+    ///
+    /// Reported and floored for the same reason `bound_asserted` is: a differential that
+    /// compares nothing passes silently. This is the population over which zero divergence
+    /// between the hypertableau and the concept-tree tableau is asserted.
+    differential: u32,
 }
 
 impl Tally {
@@ -887,24 +912,45 @@ fn forces_unnamed_element(c: &Concept) -> bool {
 
 /// Check one generated knowledge base, recording how it resolved.
 ///
-/// Four things happen here: the tableau is asked twice and must answer identically; a case it
-/// could not finish is skipped; where the oracle exhibits a model the tableau's `consistent`
+/// Five things happen here: the hypertableau is asked twice and must answer identically; its
+/// verdict is compared against the concept-tree tableau's, which must AGREE; a case neither
+/// could finish is skipped; where the oracle exhibits a model the hypertableau's `consistent`
 /// is asserted unconditionally; and where the oracle finds NO model and
-/// [`forces_unnamed_element`] says the bound was sufficient, the tableau's `consistent` is
-/// asserted to be false.
+/// [`forces_unnamed_element`] says the bound was sufficient, `consistent` is asserted to be
+/// false.
 fn check(sig: Signature, axioms: &[Axiom], tally: &RefCell<Tally>) -> Result<(), TestCaseError> {
     let case = Case::assemble(sig, axioms);
-    let cap = tableau::step_cap(&case.kb).min(STEP_CAP);
-    let first = tableau::decide(&case.kb, &Assumptions::of_kb(), cap);
-    let again = tableau::decide(&case.kb, &Assumptions::of_kb(), cap);
+    let cap = graph::step_cap(&case.kb).min(STEP_CAP);
+    let first = hyper::decide(&case.kb, &Assumptions::of_kb(), cap);
+    let again = hyper::decide(&case.kb, &Assumptions::of_kb(), cap);
     if (first.consistent, first.steps, first.exhausted)
         != (again.consistent, again.steps, again.exhausted)
     {
         return Err(TestCaseError::fail(format!(
-            "the tableau decided the same knowledge base two different ways:\n\
+            "the hypertableau decided the same knowledge base two different ways:\n\
              {first:?}\nthen\n{again:?}\naxioms:\n{}",
             case.axioms_text()
         )));
+    }
+    // THE DIFFERENTIAL. The concept-tree tableau decides the same fragment by a different
+    // rule set, so where both finish their verdicts must be the same verdict. A divergence is
+    // a soundness or completeness bug in one of the two — never a recorded difference.
+    let reference = tableau::decide(&case.kb, &Assumptions::of_kb(), cap);
+    if !first.exhausted && !reference.exhausted {
+        if first.consistent != reference.consistent {
+            return Err(TestCaseError::fail(format!(
+                "the hypertableau and the concept-tree tableau disagree: hypertableau says \
+                 {}, concept-tree tableau says {}\naxioms:\n{}\n{}",
+                first.consistent,
+                reference.consistent,
+                case.axioms_text(),
+                case.smallest_model().map_or_else(
+                    || "the oracle found no model up to the signature's bound".to_owned(),
+                    |model| format!("oracle model:\n{}", case.model_text(&model))
+                )
+            )));
+        }
+        tally.borrow_mut().differential += 1;
     }
     if first.exhausted {
         tally.borrow_mut().exhausted += 1;
@@ -914,7 +960,7 @@ fn check(sig: Signature, axioms: &[Axiom], tally: &RefCell<Tally>) -> Result<(),
         Some(model) => {
             if !first.consistent {
                 return Err(TestCaseError::fail(format!(
-                    "the tableau rejected a knowledge base the oracle exhibits a model of\n\
+                    "the hypertableau rejected a knowledge base the oracle exhibits a model of\n\
                      axioms:\n{}\nmodel:\n{}",
                     case.axioms_text(),
                     case.model_text(&model)
@@ -926,7 +972,7 @@ fn check(sig: Signature, axioms: &[Axiom], tally: &RefCell<Tally>) -> Result<(),
             // The oracle found no model up to its bound. For a knowledge base that can
             // force an element beyond the named individuals, that is silent — `≥3 r.⊤` is
             // consistent and has no model over two elements — and the case is only
-            // counted. But when NOTHING in the axiom set can force such an element, a
+            // counted (the concept-tree tableau above is what checks it instead). But when NOTHING in the axiom set can force such an element, a
             // model, if one exists, restricts to the individuals' own equivalence classes:
             // removing elements can only make `∀`, `≤n` and `¬` easier, and there is no
             // `∃`/`≥n` left to break. So provided the enumeration is wide enough to give
@@ -936,7 +982,7 @@ fn check(sig: Signature, axioms: &[Axiom], tally: &RefCell<Tally>) -> Result<(),
             if bounded_domain(sig, axioms) {
                 tally.borrow_mut().bound_asserted += 1;
                 return Err(TestCaseError::fail(format!(
-                    "the tableau accepted a knowledge base with NO model, and nothing in \
+                    "the hypertableau accepted a knowledge base with NO model, and nothing in \
                      it can force an element beyond the {} named individuals, so every \
                      interpretation up to {} elements was checked and none is a model \
                      — this is an unsoundness\naxioms:\n{}",
@@ -1000,7 +1046,15 @@ fn run_property(
     assert!(
         tally.exhausted * 20 <= cases,
         "{name} skipped more than 5% of its cases on the step cap, so it is no longer \
-         checking the tableau: {tally:?}"
+         checking the decision core: {tally:?}"
+    );
+    // The DIFFERENTIAL population. Both cores decide almost every generated case inside the
+    // narrowed cap, so a share that collapses means the two are no longer being compared —
+    // which is the one way a zero-divergence claim can pass by asserting nothing.
+    assert!(
+        tally.differential * 20 >= cases * 19,
+        "{name} compared the two decision cores on fewer than 95% of its cases, so the \
+         zero-divergence claim rests on almost nothing: {tally:?}"
     );
     assert!(
         tally.modelled * 4 >= cases,
@@ -1649,14 +1703,16 @@ fn the_enumerated_search_spaces_are_pinned() {
 
 // ── Hand-written regressions ───────────────────────────────────────────────────
 
-/// Check one hand-written case against BOTH sides: the oracle must agree with the verdict
-/// derived in the case's own comment, and so must the tableau. A regression that only
-/// compared the two implementations could be wrong twice over.
+/// Check one hand-written case against ALL THREE sides: the oracle must agree with the verdict
+/// derived in the case's own comment, and so must both decision cores. A regression that only
+/// compared two implementations could be wrong twice over.
 fn assert_verdict(axioms: &[Axiom], satisfiable: bool) {
     let case = Case::assemble(HAND, axioms);
-    let decision = tableau::decide(&case.kb, &Assumptions::of_kb(), tableau::step_cap(&case.kb));
+    let cap = graph::step_cap(&case.kb);
+    let decision = hyper::decide(&case.kb, &Assumptions::of_kb(), cap);
+    let reference = tableau::decide(&case.kb, &Assumptions::of_kb(), cap);
     assert!(
-        !decision.exhausted,
+        !decision.exhausted && !reference.exhausted,
         "a hand-written regression must be decidable inside the step cap:\n{}",
         case.axioms_text()
     );
@@ -1667,12 +1723,18 @@ fn assert_verdict(axioms: &[Axiom], satisfiable: bool) {
         "the oracle disagrees with the derived verdict:\n{}",
         case.axioms_text()
     );
+    let rendered = model.map_or_else(String::new, |m| format!("model:\n{}", case.model_text(&m)));
     assert_eq!(
         decision.consistent,
         satisfiable,
-        "the tableau disagrees with the derived verdict:\n{}\n{}",
+        "the hypertableau disagrees with the derived verdict:\n{}\n{rendered}",
         case.axioms_text(),
-        model.map_or_else(String::new, |m| format!("model:\n{}", case.model_text(&m)))
+    );
+    assert_eq!(
+        reference.consistent,
+        satisfiable,
+        "the concept-tree tableau disagrees with the derived verdict:\n{}\n{rendered}",
+        case.axioms_text(),
     );
 }
 

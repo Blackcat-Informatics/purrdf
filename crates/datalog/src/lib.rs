@@ -84,10 +84,13 @@
 //!   them needs no second IR. Only the atomic form has evaluation semantics in the
 //!   semi-naive evaluator; [`chase`] consumes the existential and conjunctive forms, and
 //!   the disjunctive and inconsistency forms are REFUSED BY NAME at the plan pipeline's
-//!   entrance — never silently accepted and never silently dropped. Nothing in this
-//!   workspace case-splits over these clauses; `purrdf-entail`'s OWL-Direct tableau does
-//!   that over its own concept representation. Classifying a form this crate declines is
-//!   what makes the refusal precise rather than a parse failure.
+//!   entrance — never silently accepted and never silently dropped. No evaluator here
+//!   case-splits, because a case split is not a least fixpoint; the consumer of the
+//!   disjunctive form is `purrdf-entail`'s OWL-Direct HYPERTABLEAU, which classifies its own
+//!   `SHOIQ(D)` DL-clauses through [`clause::HeadForm`] and branches on exactly that form
+//!   over concept-id atoms — two of which (`≥n r.C(x)` and the equality `x ≈ y`) no arity-4
+//!   quad can express without minting a predicate IRI. Classifying a form this crate declines
+//!   is what makes the refusal precise rather than a parse failure.
 //!
 //! # Planning
 //!

@@ -42,7 +42,7 @@ use purrdf_core::TermValue;
 use super::certificate::{Session, Verdict};
 use crate::interner::Interner;
 use crate::owl_dl::concept::{Concept, Role};
-use crate::owl_dl::tableau::Assumptions;
+use crate::owl_dl::graph::Assumptions;
 
 /// An axiom whose entailment the reasoner decides by refutation.
 ///

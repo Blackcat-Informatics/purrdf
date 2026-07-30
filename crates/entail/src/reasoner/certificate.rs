@@ -8,18 +8,21 @@
 //!
 //! [`Completeness::for_regime`](crate::Completeness::for_regime) is
 //! [`rules`](crate::rules) minus [`implemented`](crate::implemented): a difference of two
-//! rule tables. The DL lane has no rule table. `rules(Regime::OwlDirect)` and
+//! rule tables. The DL lane has no FIXED rule table — its clause set is derived per
+//! knowledge base. `rules(Regime::OwlDirect)` and
 //! `implemented(Regime::OwlDirect)` are both empty, so that subtraction is `∅ ∖ ∅ = ∅` and
-//! reports [`Completeness::Exact`](crate::Completeness::Exact) — for a tableau, for every
+//! reports [`Completeness::Exact`](crate::Completeness::Exact) — for a hypertableau, for every
 //! input, including one whose axioms it could not read. Reusing it here would manufacture
 //! an overclaim out of a vacuous truth, which is why the DL services report [`DlCertificate`]
 //! instead.
 //!
 //! # What this measures instead
 //!
-//! A tableau's answer is complete for the clause set it was actually handed, inside the
-//! search budget it actually ran in. Both halves can fail, and this certificate can report
-//! either:
+//! A hypertableau's answer is complete for the DL-clause set it was actually handed, inside
+//! the search budget it actually ran in — and with this decision core the phrase is literal
+//! rather than figurative: `owl_dl::clause` derives that clause set, and a bounded construct
+//! is an axiom that never became one of its clauses. Both halves can fail, and this
+//! certificate can report either:
 //!
 //! * **The clause set.** The OWL-2-RDF reverse mapping is a total function over the
 //!   reserved vocabulary — this crate's OWL 2 construct registry marks each of its terms handled,
@@ -35,7 +38,7 @@
 //!
 //! There is deliberately no fourth state and no way to construct a certificate that omits
 //! both signals: the crate-internal session type is the only producer, and it derives the
-//! verdict from what the tableau reported.
+//! verdict from what the decision core reported.
 //!
 //! # There is no overclaim, because there is no field to disagree with
 //!
@@ -61,12 +64,13 @@
 use std::collections::BTreeSet;
 
 use crate::owl_dl::Kb;
-use crate::owl_dl::tableau::{Assumptions, Decision, decide};
+use crate::owl_dl::graph::{Assumptions, Decision};
+use crate::owl_dl::hyper::decide;
 use crate::report::{Boundary, Construct};
 
 /// A three-valued answer from a step-bounded decision procedure.
 ///
-/// The third value is not hedging: a tableau that stops at its step cap has explored part
+/// The third value is not hedging: a search that stops at its round cap has explored part
 /// of a search tree, and both `True` and `False` would be claims that part does not
 /// support. Every boolean DL service answers this rather than `bool`, and the certificate
 /// beside it says why an `Unknown` happened.
@@ -76,7 +80,7 @@ pub enum Verdict {
     True,
     /// The question is answered no: a clash-free completion witnesses a counter-model.
     False,
-    /// The search stopped at its step cap before deciding. See
+    /// The search stopped at its round cap before deciding. See
     /// [`DlCertificate::steps`] and [`DlCertificate::budget`].
     Unknown,
 }
@@ -108,21 +112,21 @@ impl std::fmt::Display for Verdict {
     }
 }
 
-/// How complete a DL service's answer is, w.r.t. the clause set the tableau decided.
+/// How complete a DL service's answer is, w.r.t. the DL-clause set the hypertableau decided.
 ///
 /// See the [module docs](self) for why this is a separate notion from the chase's
 /// [`Completeness`](crate::Completeness) rather than a reuse of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DlCompleteness {
-    /// Every axiom of the ontology became a DL clause, and every tableau run this service
-    /// made saturated inside its step cap.
+    /// Every axiom of the ontology became a DL-clause, and every hypertableau run this
+    /// service made saturated inside its round cap.
     ///
     /// The strongest thing the DL lane can say: the answer is the OWL 2 Direct-Semantics
     /// answer for the ontology as supplied. [`DlCertificate::completeness`] returns this
     /// variant only when [`DlCertificate::boundaries`] is empty, so a certificate reporting
     /// it beside a non-empty boundary list is not a state anything can construct.
     Decided,
-    /// Every tableau run saturated, and the ontology ALSO carried at least one construct
+    /// Every hypertableau run saturated, and the ontology ALSO carried at least one construct
     /// the reverse mapping bounds.
     ///
     /// The answer is sound and complete for the sub-ontology that was read. The bounded
@@ -130,7 +134,7 @@ pub enum DlCompleteness {
     /// so a `True` here stays true for the full ontology, while a `False` means only "not
     /// entailed by what was read". [`DlCertificate::boundaries`] names each one.
     DecidedWithinBoundaries,
-    /// At least one tableau run reached its step cap before deciding.
+    /// At least one hypertableau run reached its round cap before deciding.
     ///
     /// Strictly the weakest state, and it takes precedence over the other two: a service
     /// that could not decide one sub-question has not decided the aggregate either. Every
@@ -141,7 +145,7 @@ pub enum DlCompleteness {
 }
 
 impl DlCompleteness {
-    /// Whether every tableau run decided its question.
+    /// Whether every hypertableau run decided its question.
     ///
     /// True for [`Self::Decided`] AND [`Self::DecidedWithinBoundaries`]: both say the
     /// SEARCH finished, and they differ only in whether the clause set was the whole
@@ -180,11 +184,11 @@ pub struct DlCertificate {
     exhausted: bool,
     /// The constructs the reverse mapping could not turn into DL clauses.
     boundaries: Vec<Boundary>,
-    /// Saturation rounds consumed, summed over every tableau run the service made.
+    /// Derivation rounds consumed, summed over every hypertableau run the service made.
     steps: u64,
-    /// The per-decision step cap each of those runs ran under.
+    /// The per-decision round cap each of those runs ran under.
     budget: u64,
-    /// How many tableau runs the service made.
+    /// How many hypertableau runs the service made.
     decisions: u64,
 }
 
@@ -218,18 +222,22 @@ impl DlCertificate {
         &self.boundaries
     }
 
-    /// Saturation rounds consumed, summed over every tableau run this service made.
+    /// DERIVATION ROUNDS consumed, summed over every hypertableau run this service made.
     ///
-    /// A MEASUREMENT, in the units the cap is denominated in, so a caller can see how
-    /// close a run came to [`Self::budget`] without changing anything. It is a step count
-    /// rather than an elapsed time: a clock reading is neither reproducible nor available
-    /// on `wasm32`.
+    /// One round is one pass of hyperresolution and the `≥`-rule over the whole completion
+    /// graph — the unit the cap is denominated in, unchanged in NAME and in units from when
+    /// the decision core was a concept-tree tableau and a round was one pass of its
+    /// completion rules. The two calculi reach their fixpoints by different routes, so a
+    /// count for one ontology is not comparable across that change; what it remains is a
+    /// MEASUREMENT in the cap's own units, letting a caller see how close a run came to
+    /// [`Self::budget`] without changing anything. It is a round count rather than an elapsed
+    /// time: a clock reading is neither reproducible nor available on `wasm32`.
     #[must_use]
     pub const fn steps(&self) -> u64 {
         self.steps
     }
 
-    /// The per-decision step cap every run of this service ran under.
+    /// The per-decision round cap every run of this service ran under.
     ///
     /// Per DECISION, not per service call: a service may ask several questions — realization
     /// asks one per (individual, class) pair — and a budget shared across them would turn a
@@ -240,10 +248,11 @@ impl DlCertificate {
         self.budget
     }
 
-    /// How many tableau runs this service made.
+    /// How many hypertableau runs this service made.
     ///
-    /// The denominator for [`Self::steps`], and the thing that makes a service's cost
-    /// legible. It counts REFUTATIONS, so a service whose answer is derived rather than
+    /// Unchanged in meaning: one per question a service put to the decision core, whichever
+    /// calculus that core runs. The denominator for [`Self::steps`], and the thing that makes
+    /// a service's cost legible. It counts REFUTATIONS, so a service whose answer is derived rather than
     /// refuted reports a small number: `classify` used to make `n² + 1` of these and now
     /// makes exactly ONE on an ontology inside the classifying saturation's fragment, plus
     /// one per pair that saturation left underived on an ontology outside it. A number that
@@ -300,9 +309,9 @@ impl<T> Certified<T> {
     }
 }
 
-/// One service call's tableau budget, tally, and boundary list.
+/// One service call's decision budget, tally, and boundary list.
 ///
-/// The single seam between a service and the tableau. Every decision goes through
+/// The single seam between a service and the hypertableau. Every decision goes through
 /// [`Session::refutes`] or [`Session::decide`], so the step tally and the exhausted flag
 /// cannot be bypassed, and [`Session::certificate`] is the only producer of a
 /// [`DlCertificate`] — which is what makes a certificate that omits an exhausted run
@@ -337,7 +346,7 @@ impl<'a> Session<'a> {
         self.kb
     }
 
-    /// Run one tableau decision, tallying its cost.
+    /// Run one hypertableau decision, tallying its cost.
     pub(crate) fn decide(&mut self, assumptions: &Assumptions<'_>) -> Decision {
         let decision = decide(self.kb, assumptions, self.cap);
         self.steps = self.steps.saturating_add(decision.steps);

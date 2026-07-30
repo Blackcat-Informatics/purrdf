@@ -3,24 +3,26 @@
 
 //! The native OWL-Direct (Description-Logic) reasoner core.
 //!
-//! Five layers compose here: [`concept`] is the DL syntax and its structural
+//! Seven layers compose here: [`concept`] is the DL syntax and its structural
 //! interner; [`data`] is the CONCRETE domain — the data ranges and literal values a
 //! datatype map fixes rather than the ontology; [`parser`] reverse-maps an [`RdfDataset`]
-//! into a [`Kb`] (TBox, RBox,
-//! ABox, plus anonymous class expressions); [`tableau`] is the `SHOIQ(D)` completion
-//! procedure that decides consistency; and [`saturate`] is the consequence-based
+//! into a [`Kb`] (TBox, RBox, ABox, plus anonymous class expressions); [`clause`] compiles
+//! the concept table into DL-clauses; [`graph`] is the completion graph and the two-domain
+//! semantics of a node; [`hyper`] is the `SHOIQ(D)` HYPERTABLEAU that decides consistency
+//! over those clauses; and [`saturate`] is the consequence-based
 //! calculus that derives the WHOLE named-class subsumption relation in one fixpoint,
-//! so classification is not a loop over the tableau. [`Kb`] ties them together and exposes the
-//! internal reasoning seams — [`Kb::is_consistent`], [`Kb::entails_instance`],
+//! so classification is not a loop over the decision procedure. [`Kb`] ties them together and
+//! exposes the internal reasoning seams — [`Kb::is_consistent`], [`Kb::entails_instance`],
 //! [`Kb::entails_subclass`], and [`Kb::instances_of`] — which the query-answering layer
 //! ([`crate::owl_dl::query`]) drives. Those seams are internal: the public one is
 //! [`crate::materialize_dl_reported`], which is where an answer acquires the
 //! [`ReasoningReport`](crate::ReasoningReport) naming the constructs this layer could not
 //! fully handle.
 //!
-//! Every derived answer is deterministic: concept ids are assigned in parse order,
-//! all working sets are `BTreeSet`/`BTreeMap` or insertion-ordered `Vec`s, and the
-//! tableau branches in a fixed order — nothing is ever read out of a `HashMap`.
+//! Every derived answer is deterministic: concept ids are assigned in parse order, the
+//! clause set is derived in that order, all working sets are `BTreeSet`/`BTreeMap` or
+//! insertion-ordered `Vec`s, and the hypertableau branches in a fixed order — nothing is ever
+//! read out of a `HashMap`.
 //!
 //! The reasoning entry points are exercised by the module's own tests and by the
 //! query-answering layer ([`crate::owl_dl::query`]), which wires them into the public
@@ -34,17 +36,27 @@ use crate::EntailError;
 use crate::interner::Interner;
 use crate::owl_dl::concept::Concept;
 use crate::owl_dl::concept::ConceptTable;
+use crate::owl_dl::graph::Assumptions;
 use crate::report::Construct;
 
+pub(crate) mod clause;
 pub(crate) mod concept;
 pub(crate) mod constructs;
 pub(crate) mod data;
-/// The differential test of [`tableau`] against a naive model-enumeration oracle.
+pub(crate) mod graph;
+pub(crate) mod hyper;
+/// The differential test of [`hyper`] against a naive model-enumeration oracle AND against
+/// the concept-tree [`tableau`] it replaced.
 #[cfg(test)]
 mod oracle;
 pub(crate) mod parser;
 pub(crate) mod query;
 pub(crate) mod saturate;
+/// The concept-tree tableau [`hyper`] replaced, kept as its differential reference.
+///
+/// Compiled only under `cfg(test)`: it decides no question this crate asks, so shipping it
+/// would put a second decision procedure in every artifact for the benefit of a test.
+#[cfg(test)]
 pub(crate) mod tableau;
 
 /// The concept a named class IRI denotes: `⊤` for `owl:Thing`, `⊥` for `owl:Nothing`, else
@@ -295,9 +307,26 @@ impl Kb {
     ///
     /// # Errors
     ///
-    /// [`EntailError::Build`] if the tableau exceeds its step cap.
+    /// [`EntailError::Build`] if the hypertableau exceeds its step cap.
     pub(crate) fn is_consistent(&self) -> Result<bool, EntailError> {
-        tableau::consistent(self, &tableau::Assumptions::of_kb())
+        hyper::consistent(self, &Assumptions::of_kb())
+    }
+
+    /// The same question decided by the CONCEPT-TREE tableau — the differential reference.
+    ///
+    /// Kept reachable for exactly the reason
+    /// [`Subsumptions::decide_by_tableau`](crate::reasoner::classify::Subsumptions::decide_by_tableau)
+    /// is: a differential test needs both sides to exist, and a deleted reference
+    /// implementation is a test that can only assert the new code agrees with itself. Every
+    /// knowledge base this module's tests build is decided by both, and a divergence is a bug
+    /// in one of them rather than a difference to be recorded.
+    ///
+    /// # Errors
+    ///
+    /// [`EntailError::Build`] if the tableau exceeds its step cap.
+    #[cfg(test)]
+    pub(crate) fn is_consistent_by_concept_tree(&self) -> Result<bool, EntailError> {
+        tableau::consistent(self, &Assumptions::of_kb())
     }
 
     /// Whether `individual : concept_id` is entailed — i.e. the knowledge base with
@@ -316,11 +345,11 @@ impl Kb {
             return Err(EntailError::Unsatisfiable);
         }
         let neg = self.table.negate(concept_id);
-        let consistent = tableau::consistent(
+        let consistent = hyper::consistent(
             self,
-            &tableau::Assumptions {
+            &Assumptions {
                 types: &[(individual, neg)],
-                ..tableau::Assumptions::of_kb()
+                ..Assumptions::of_kb()
             },
         )?;
         Ok(!consistent)
@@ -348,11 +377,43 @@ impl Kb {
             return Err(EntailError::Unsatisfiable);
         }
         let neg_sup = self.table.negate(sup_id);
+        let consistent = hyper::consistent(
+            self,
+            &Assumptions {
+                fresh_types: &[sub_id, neg_sup],
+                ..Assumptions::of_kb()
+            },
+        )?;
+        Ok(!consistent)
+    }
+
+    /// Whether `sub_id ⊑ sup_id` is entailed, decided by the CONCEPT-TREE tableau.
+    ///
+    /// The subsumption sibling of [`Kb::is_consistent_by_concept_tree`], and the reference the
+    /// differential over the reverse-mapped fixture corpus reads: those fixtures reach the
+    /// decision core through the RDF parser rather than through a hand-assembled knowledge
+    /// base, so they are where a clause derived from a REVERSE-MAPPED class expression is
+    /// compared against the calculus that reads the expression's structure directly.
+    ///
+    /// # Errors
+    ///
+    /// [`EntailError::Unsatisfiable`] if the base knowledge base is already unsatisfiable;
+    /// [`EntailError::Build`] on step-cap exhaustion.
+    #[cfg(test)]
+    pub(crate) fn entails_subclass_by_concept_tree(
+        &self,
+        sub_id: u32,
+        sup_id: u32,
+    ) -> Result<bool, EntailError> {
+        if !self.is_consistent_by_concept_tree()? {
+            return Err(EntailError::Unsatisfiable);
+        }
+        let neg_sup = self.table.negate(sup_id);
         let consistent = tableau::consistent(
             self,
-            &tableau::Assumptions {
+            &Assumptions {
                 fresh_types: &[sub_id, neg_sup],
-                ..tableau::Assumptions::of_kb()
+                ..Assumptions::of_kb()
             },
         )?;
         Ok(!consistent)

@@ -39,7 +39,11 @@ ran instead of a claim about which rules were meant to.
   The semi-naive evaluator runs the atomic form; the chase consumes the
   existential and conjunctive forms; the disjunctive and inconsistency forms
   are refused **by name** at the plan pipeline's entrance: never silently
-  accepted, never silently dropped.
+  accepted, never silently dropped. No evaluator here case-splits — a case
+  split is not a least fixpoint — and the consumer of the disjunctive form is
+  [`purrdf-entail`](https://crates.io/crates/purrdf-entail)'s OWL-Direct
+  hypertableau, which classifies its own `SHOIQ(D)` DL-clauses through this
+  crate's `HeadForm` and branches on exactly that form.
 * **Plans are content-addressed.** A compiled program is keyed by a BLAKE3
   digest over the planner version, the caller's contract hash and a canonical
   digest of the clause program. The cache is owned by the caller, never a

@@ -265,8 +265,10 @@ pub enum EvalError {
     ///
     /// The DL-clause IR ([`crate::clause`]) represents all five head forms in one type, so a
     /// consumer of any of them needs no second IR: [`crate::chase`] takes the existential and
-    /// conjunctive forms, and the remaining two are refused by name rather than parsed away.
-    /// A semi-naive least-fixpoint evaluator, however, computes the
+    /// conjunctive forms, `purrdf-entail`'s OWL-Direct hypertableau case-splits the
+    /// disjunctive one (over its own concept-id atoms, through this crate's
+    /// [`crate::clause::HeadForm`]), and both are refused by name HERE rather than
+    /// parsed away. A semi-naive least-fixpoint evaluator computes the
     /// least model of a set of DEFINITE clauses — exactly one head atom, no quantifier: an
     /// existential mints witnesses, a disjunction has no single least model, a conjunction
     /// abbreviates several clauses at once, and `false` derives nothing while asserting
@@ -2916,7 +2918,10 @@ mod tests {
     ///
     /// `q(?x, ?y) ∨ r(?x, ?y) :- p(?x, ?y)` has no single least model — a case split has
     /// to choose — so there is nothing for a least-fixpoint evaluator to compute. Deriving
-    /// the first disjunct, or all of them, would both be wrong answers.
+    /// the first disjunct, or all of them, would both be wrong answers. The form HAS a
+    /// consumer in the workspace (`purrdf-entail`'s OWL-Direct hypertableau branches on it);
+    /// what this asserts is that the consumer is not this evaluator, and that the refusal
+    /// names the form instead of failing to parse it.
     #[test]
     fn a_disjunctive_head_is_refused_by_name() {
         let rules = vec![DlClause::new(

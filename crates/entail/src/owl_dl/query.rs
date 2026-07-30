@@ -83,9 +83,10 @@ use crate::EntailError;
 use crate::interner::{Interner, intern_into};
 use crate::owl_dl::concept::{Concept, Role};
 use crate::owl_dl::data::DataRangeTable;
+use crate::owl_dl::graph::Assumptions;
 use crate::owl_dl::parser::{CeExtractor, TripleIndex, Vocab, index_insert};
 use crate::owl_dl::saturate::{Taxonomy, saturate};
-use crate::owl_dl::{Kb, class_concept, tableau};
+use crate::owl_dl::{Kb, class_concept, hyper};
 use crate::report::{Construct, ReasoningReport};
 use crate::vocab::{OWL_SAMEAS, RDF_TYPE, RDFS_DOMAIN, RDFS_RANGE, RDFS_SUBCLASSOF};
 
@@ -524,11 +525,11 @@ fn inject_roles(
                     continue;
                 }
                 let negated = kb.table.negate(reach);
-                if tableau::consistent(
+                if hyper::consistent(
                     kb,
-                    &tableau::Assumptions {
+                    &Assumptions {
                         types: &[(subject, negated)],
-                        ..tableau::Assumptions::of_kb()
+                        ..Assumptions::of_kb()
                     },
                 )? {
                     continue;

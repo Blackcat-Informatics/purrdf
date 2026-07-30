@@ -38,7 +38,7 @@ BINARYEN_VERSION := 130
 # context/options/registry engine, validation-scoped asserted-subclass
 # membership shared by native SHACL and SHACL-SPARQL, and now the entailment
 # engine, the nine OWL reasoner services AND the concrete domain — measures
-# 9_396_718 bytes against the 9_690_000 ceiling, which is 3.03% headroom. That
+# 9_393_818 bytes against the 9_690_000 ceiling, which is 3.06% headroom. That
 # figure is RECORDED AS A GATED CONSTANT below (WASM_SIZE_MEASURED_BYTES), not as
 # prose: it had already drifted 139_211 bytes behind the build once, because a
 # comment is the one part of this file nothing checks.
@@ -114,7 +114,7 @@ WASM_SIZE_BUDGET_BYTES := 9690000
 # capability, and did not move the ceiling; the concrete domain, which followed
 # it, is what moved the ceiling to 9_690_000.
 #
-# The 267-byte DECREASE to 9_396_718 is the combined approach
+# The decrease 9_396_985 -> 9_396_718 is the combined approach
 # (crates/entail/src/combined.rs) and the goal-directed backward-resolution
 # modules under crates/datalog/src/{term,unify,resolve_fol}.rs: neither is
 # reachable from any symbol crates/rdf-wasm/src/entail.rs exports, so both are
@@ -122,8 +122,16 @@ WASM_SIZE_BUDGET_BYTES := 9690000
 # ordinary codegen jitter from the touched-but-still-linked `Construct` enum
 # and id-brand additions rather than a capability moving the artifact at all.
 #
+# The decrease 9_396_718 -> 9_393_818 is the OWL-Direct decision core becoming a
+# hypertableau over DL-clauses (crates/entail/src/owl_dl/{clause,graph,hyper}.rs).
+# It is a REPLACEMENT, not an addition: the concept-tree tableau it supersedes is
+# now compiled under cfg(test) as the new core's differential reference, so it
+# leaves the artifact entirely, and the clause compiler plus the three-rule search
+# that replace it come to slightly less than it cost. The completion graph itself
+# is shared by both, so it is linked exactly once either way.
+#
 # The measured constant below is the CURRENT size, not that intermediate figure.
-WASM_SIZE_MEASURED_BYTES := 9396718
+WASM_SIZE_MEASURED_BYTES := 9393818
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'

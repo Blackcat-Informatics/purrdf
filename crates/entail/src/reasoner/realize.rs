@@ -21,7 +21,7 @@ use purrdf_core::TermValue;
 use super::certificate::{Session, Verdict};
 use super::classify::Subsumptions;
 use super::term_key;
-use crate::owl_dl::tableau::Assumptions;
+use crate::owl_dl::graph::Assumptions;
 
 /// Whether `KB ⊨ individual : concept`, by refuting `individual : ¬concept`.
 ///

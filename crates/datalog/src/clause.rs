@@ -20,7 +20,7 @@
 //! | [`Existential`](HeadForm::Existential) | `ȳ ≠ ∅` | [`crate::chase`], a restricted chase with frontier-addressed Skolem witnesses |
 //! | [`Conjunctive`](HeadForm::Conjunctive) | `m = 1`, `C₁` is several atoms, `ȳ = ∅` | [`crate::chase`], which asserts a conjunction atomically |
 //! | [`Inconsistency`](HeadForm::Inconsistency) | `m = 0` (the head is `false`) | a hard error carrying a witness |
-//! | [`Disjunctive`](HeadForm::Disjunctive) | `m > 1`, `ȳ = ∅` | **nothing here — it is REFUSED by name** |
+//! | [`Disjunctive`](HeadForm::Disjunctive) | `m > 1`, `ȳ = ∅` | **refused by name here**; case-split by `purrdf-entail`'s `SHOIQ(D)` hypertableau |
 //!
 //! The last row is the load-bearing one. A disjunctive head needs a case split, and no
 //! evaluator in this crate performs one, so [`crate::chase`] returns
@@ -29,10 +29,18 @@
 //! is CLASSIFIED here so that refusal can name it, which is the difference between a
 //! rejected input and a silently dropped one.
 //!
-//! Case splitting over OWL 2 DL happens in `purrdf-entail`'s OWL-Direct tableau, over that
-//! module's own concept representation rather than over these clauses. So this row records a
-//! deliberate boundary of this IR's evaluators, not a gap waiting on a component: the shape
-//! is representable, and representing it is what lets the refusal be precise.
+//! The case split itself has a consumer, and it is named: `purrdf-entail`'s OWL-Direct
+//! decision core is a HYPERTABLEAU over DL-clauses, and [`HeadForm`] — this taxonomy, this
+//! type — is what it dispatches on. Its own clauses carry two atoms no arity-4 quad can be
+//! (`≥n r.C(x)`, whose number and filler are part of the atom, and the equality `x ≈ y`,
+//! whose assertion merges two nodes of a completion graph), so its ATOMS are concept ids over
+//! graph nodes rather than [`ClauseAtom`]s — encoding either atom as a triple would mean
+//! minting a predicate IRI, and PurRDF mints no vocabulary. What is shared is the
+//! classification: [`Disjunctive`](HeadForm::Disjunctive) is exactly the form that calculus
+//! branches over, [`Inconsistency`](HeadForm::Inconsistency) is exactly the form that closes
+//! a branch, and the precedence documented on [`HeadForm`] is the precedence it reads. So
+//! this row records a deliberate boundary of THIS crate's evaluators — a case split is not a
+//! least fixpoint — rather than a gap waiting on a component.
 //!
 //! # Every atom is an arity-4 quad, and the predicate is DATA
 //!
@@ -67,6 +75,15 @@
 //! EMPTY surface — "no name" stated as no name, rather than as a fabricated IRI a caller
 //! would then have to agree with. It is legal in the graph position only;
 //! [`ClauseAtom::quad`] refuses it anywhere else.
+//!
+//! One mapping contract for consumers arriving from a WORLD-scoped encoding (the sister
+//! project's evaluator uses the same arity-4 shape with its fourth position denoting a
+//! *world* under its own semantics): the fourth position here is the **RDF graph name**,
+//! with the entailment layer's documented dataset semantics — each named graph closes
+//! against the union of itself and the default graph. A port states its world→graph
+//! mapping explicitly (which world becomes the default graph, which become named graphs)
+//! or flattens to the default graph before closing; leaving the mapping implicit silently
+//! changes which premises can meet which.
 //!
 //! An atom that does not mention a graph — the [`ClauseAtom::positive`] /
 //! [`ClauseAtom::negated`] convenience, which also fixes the predicate to a constant IRI —
@@ -464,7 +481,10 @@ pub enum HeadForm {
     /// chase with frontier-addressed Skolem witnesses consumes this form.
     Existential,
     /// `m > 1` with `ȳ = ∅` — a head disjunction. A hypertableau case split consumes this
-    /// form.
+    /// form: `purrdf-entail`'s OWL-Direct core classifies its own `SHOIQ(D)` DL-clauses
+    /// through this very enum and branches, depth-first in authored disjunct order, on
+    /// exactly the clauses that land here. No evaluator in THIS crate case-splits, so both
+    /// [`crate::seminaive`] and [`crate::chase`] refuse the form by this name.
     Disjunctive,
     /// `m = 1` with `ȳ = ∅`, that one disjunct being a conjunction of two or more atoms —
     /// `→ p(x) ∧ q(x)`. There is no disjunction here and no witness to mint, so naming it

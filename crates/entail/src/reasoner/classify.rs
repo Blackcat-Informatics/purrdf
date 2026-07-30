@@ -57,8 +57,8 @@ use purrdf_core::TermValue;
 use super::certificate::{Session, Verdict};
 use super::term_key;
 use crate::owl_dl::Kb;
+use crate::owl_dl::graph::Assumptions;
 use crate::owl_dl::saturate::saturate;
-use crate::owl_dl::tableau::Assumptions;
 
 /// The entailed subsumption relation over a fixed, ordered list of named classes.
 ///
@@ -677,6 +677,55 @@ mod tests {
                 "{name}: the saturation and the tableau disagree about the subsumption matrix"
             );
         }
+    }
+
+    /// THE TWO DECISION CORES AGREE ON EVERY PAIR OF EVERY REVERSE-MAPPED FIXTURE.
+    ///
+    /// The hypertableau (`owl_dl::hyper`) is the production core; the concept-tree tableau
+    /// (`owl_dl::tableau`) is kept as its reference. `owl_dl::oracle` compares them over 5,700
+    /// GENERATED knowledge bases, but those are assembled axiom-by-axiom in memory; this
+    /// corpus reaches the core through the OWL-2-RDF reverse mapping instead, so it is where a
+    /// clause derived from a parsed class expression — a `owl:unionOf`, an
+    /// `owl:allValuesFrom`, an `owl:oneOf`, an `owl:maxCardinality`, an `owl:inverseOf` — is
+    /// held against the calculus that reads that expression's structure directly. Six of the
+    /// twelve fixtures are outside the classifying saturation's fragment, which is exactly the
+    /// non-Horn residue the two calculi handle differently.
+    ///
+    /// ZERO divergence is the contract. A disagreement is a soundness or completeness bug in
+    /// one of the two, not a difference to record.
+    #[test]
+    fn the_two_decision_cores_agree_on_every_subsumption_of_every_fixture() {
+        let mut compared = 0usize;
+        for (name, dataset, _) in corpus() {
+            let reasoner = Reasoner::new(&dataset).expect("reverse-map");
+            assert_eq!(
+                reasoner.kb.is_consistent().expect("decided"),
+                reasoner
+                    .kb
+                    .is_consistent_by_concept_tree()
+                    .expect("decided"),
+                "{name}: the two decision cores disagree about consistency"
+            );
+            for &(_, sub) in &reasoner.classes {
+                for &(_, sup) in &reasoner.classes {
+                    let hyper = reasoner.kb.entails_subclass(sub, sup).expect("decided");
+                    let concept_tree = reasoner
+                        .kb
+                        .entails_subclass_by_concept_tree(sub, sup)
+                        .expect("decided");
+                    assert_eq!(
+                        hyper, concept_tree,
+                        "{name}: the two decision cores disagree about {sub} ⊑ {sup}: \
+                         hypertableau {hyper}, concept-tree tableau {concept_tree}"
+                    );
+                    compared += 1;
+                }
+            }
+        }
+        // The population, printed rather than asserted at a magic number: it is a function of
+        // the corpus, and the assertion that matters is the zero divergence above.
+        eprintln!("{compared} ordered class pairs decided by BOTH cores, zero divergence");
+        assert!(compared > 100, "the differential compared almost nothing");
     }
 
     /// …and the same agreement holds at the seam the query-directed augmentation reads,

@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! A `SHOIQ(D)` tableau consistency procedure (the OWL-Direct decision core).
+//! The CONCEPT-TREE `SHOIQ(D)` tableau — the hypertableau's differential reference.
 //!
-//! This is a from-scratch implementation of the standard completion-graph algorithm
+//! A from-scratch implementation of the standard completion-graph algorithm
 //! (Horrocks & Sattler, "A Tableau Decision Procedure for SHOIQ", 2007; Baader et
 //! al., "The Description Logic Handbook", ch. 3) over the `SHOIQ(D)` fragment: the
 //! boolean connectives, existential/universal restrictions, transitive roles (`S`),
@@ -15,20 +15,23 @@
 //! named [`Construct::PropertyChain`](crate::report::Construct) boundary rather than
 //! a silent drop. Algorithms are not copyrightable; this code is original.
 //!
-//! ## Two domains, not one
+//! # Why it is still here
 //!
-//! OWL 2 interprets an ontology over an object domain `Δ_I` — what `owl:Thing` denotes — and
-//! a disjoint data domain `Δ_D` of literal values. A node of the completion graph inhabits
-//! one or the other ([`Node::concrete`]), and the difference is load-bearing in two places: a
-//! concrete node is NOT seeded with the internalized TBox, because a general concept inclusion
-//! quantifies over `Δ_I` alone; and a concrete node's constraints are decided by
-//! [`crate::owl_dl::data`] against the XSD value spaces rather than by the abstract rules.
-//! Two literals are one element of `Δ_D` exactly when they denote one VALUE — the data domain
-//! has no unique-name freedom to spend — which is what lets a functional data property clash
-//! on `"1"^^xsd:integer` and `"2"^^xsd:integer` while accepting `"1"^^xsd:integer` and
-//! `"01"^^xsd:integer`.
+//! [`crate::owl_dl::hyper`] decides every question this crate asks; this module decides
+//! none of them. It is kept, compiled under `cfg(test)`, as the DIFFERENTIAL REFERENCE
+//! for that calculus — the same pattern as
+//! [`Subsumptions::decide_by_tableau`](crate::reasoner::classify::Subsumptions::decide_by_tableau).
+//! Two implementations of one contract can be held against each other; one
+//! implementation can only be held against itself. The two read the SAME clause-free
+//! input (the concept table, the internalized TBox [`Kb::meta`], the absorbed
+//! [`Kb::unfold`]) and build the SAME completion graph through [`Graph`], so a verdict
+//! difference between them is a difference of CALCULUS — which is exactly what the
+//! differential test exists to find, and why no divergence may be ledgered.
 //!
-//! ## Shape of the search
+//! Every generated knowledge base of [`crate::owl_dl::oracle`] (5,700 per run) and every
+//! hand-written knowledge base in this module is decided by both.
+//!
+//! # Shape of the search
 //!
 //! A [`State`] is a completion graph: nodes carry a `BTreeSet` label of concept ids,
 //! directed role edges connect them, and a `≠` (distinctness) relation records forced
@@ -40,98 +43,40 @@
 //! multi-member `o`-rule), cloning the state per branch. A branch that reaches a
 //! clash-free fixpoint witnesses consistency.
 //!
-//! ## No unique name assumption
+//! Each rule reads the STRUCTURE of the concepts in a label at search time, which is the
+//! difference the hypertableau removes: there, the structure is compiled into DL-clauses
+//! once and a rule instance is a clause body matching the graph. The two rule sets decide
+//! the same fragment, and the module documentation of [`crate::owl_dl::hyper`] maps each of
+//! these rules onto the clause form that replaced it.
+//!
+//! # Termination
+//!
+//! Tree nodes are subject to **pairwise (double) ANCESTOR blocking**: a tree node is
+//! blocked by an ancestor when their labels *and* their predecessors' labels *and* the
+//! connecting edge roles all coincide. Nominal/root nodes (one per named individual) are
+//! never blocked. The hypertableau relaxes the ancestor requirement to ANYWHERE blocking,
+//! which blocks strictly more; see its module docs for why that is sound and why it is
+//! sufficient here. A generous per-run step cap is a hard backstop: a termination bug
+//! surfaces as an [`EntailError::Build`] rather than a hang.
+//!
+//! # No unique name assumption
 //!
 //! OWL 2 does not assume distinct names denote distinct elements. Nominals are
 //! therefore handled by *identification*, never by name comparison: `{a} ∈ L(x)` merges
 //! `x` with `a`'s root whatever `x` is already called, and a nominal set with more than
 //! one member branches over the members. Two named individuals become distinct only
 //! when something forces it — an explicit `≠` recorded by the `≥`-rule, or a `¬{a}` in
-//! a label — and only then can a nominal constraint clash.
-//!
-//! ## Termination
-//!
-//! Tree nodes are subject to **pairwise (double) blocking** — the sound blocking
-//! discipline for logics with inverse roles: a tree node is blocked by an ancestor
-//! when their labels *and* their predecessors' labels *and* the connecting edge roles
-//! all coincide. Nominal/root nodes (one per named individual) are never blocked. A
-//! generous per-run step cap is a hard backstop: a termination bug surfaces as an
-//! [`EntailError::Build`] rather than a hang.
-//!
-//! ## Two ways to ask
-//!
-//! [`consistent`] answers `bool` and turns an exhausted cap into [`EntailError::Build`] —
-//! the shape the query-directed materialization layer wants, where a truncated search has
-//! no honest answer to return. [`decide`] answers a [`Decision`], which carries the step
-//! count and an `exhausted` flag instead of throwing one; that is what the reasoner
-//! services need, because a service that ran a thousand sub-questions must be able to
-//! report "these are decided, that one ran out" rather than lose the whole run to one
-//! hard instance. Both are one code path: `consistent` is `decide` plus a conversion.
-//!
-//! The cap itself is [`step_cap`], a pure function of the knowledge base's size. A caller
-//! may narrow it (which is how the exhausted path is tested) and may never widen it.
-
-use std::collections::{BTreeMap, BTreeSet};
+//! a label — and only then can a nominal constraint clash. The merge itself is
+//! [`Graph::merge_nodes`], shared with the hypertableau, so neither calculus can grow a
+//! second answer to the identity question.
 
 use crate::EntailError;
 use crate::owl_dl::Kb;
 use crate::owl_dl::concept::{Decomp, Role};
-
-/// A single completion-graph node.
-#[derive(Clone)]
-struct Node {
-    /// The concept-id label set (ordered; drives no result via hash iteration).
-    label: BTreeSet<u32>,
-    /// The generating predecessor (tree parent); `None` for root/nominal nodes.
-    parent: Option<usize>,
-    /// The role `(property, inverted)` on the edge from `parent` to this node.
-    incoming: Option<(u32, bool)>,
-    /// Whether this is a root (named-individual / nominal) node — never blocked.
-    root: bool,
-    /// The individual term ids this node denotes.
-    ///
-    /// A root starts out denoting exactly the one individual it was created for, but
-    /// OWL 2 makes **no unique name assumption**: two names may denote the same
-    /// element, and the `o`-rule identifies them by merging the two nodes. A merge
-    /// therefore *unions* the two sets, so a node can end up denoting several names.
-    /// Empty for anonymous tree nodes.
-    nominals: BTreeSet<u32>,
-    /// Nodes this node is forced to be distinct from (`≠`), by node index.
-    neq: BTreeSet<usize>,
-    /// Union-find forward pointer once merged away (`None` while a representative).
-    merged: Option<usize>,
-    /// Whether this node inhabits the DATA domain (a literal value) rather than the object
-    /// domain.
-    ///
-    /// OWL 2 interprets an ontology over two domains, and `owl:Thing` denotes only the object
-    /// one. A concrete node is therefore NOT seeded with the internalized TBox: every general
-    /// concept inclusion is a statement about `Δ_I`, and placing `nnf(¬C ⊔ D)` on a literal's
-    /// node would let a TBox axiom close a branch over an element the axiom does not
-    /// quantify over — an inconsistency the ontology does not state.
-    concrete: bool,
-    /// The VALUE class this node denotes, when it denotes a literal whose value is known.
-    ///
-    /// The data domain admits no unique-name freedom: two literals denote one element exactly
-    /// when they denote one value. Two nodes carrying different classes are therefore
-    /// DISTINCT with nothing having said so, which is what lets a functional data property
-    /// clash on two disagreeing values; and two nodes carrying the same class can never be
-    /// counted as two, which is what stops `"1"^^xsd:integer` and `"01"^^xsd:integer` from
-    /// satisfying a `≥2` restriction between them.
-    value_class: Option<u32>,
-}
-
-/// A completion graph under construction.
-#[derive(Clone)]
-struct State {
-    /// All nodes ever created (merged-away ones remain, forwarded via `merged`).
-    nodes: Vec<Node>,
-    /// Directed role edges `(from, to, property)`; endpoints resolved via `find`.
-    edges: Vec<(usize, usize, u32)>,
-    /// Named individual term id → its root node index.
-    root_of: BTreeMap<u32, usize>,
-    /// A clash has been detected (e.g. a forced `≠` merge).
-    clash: bool,
-}
+use crate::owl_dl::graph::{
+    Assumptions, Decision, Exhausted, Graph, State, are_distinct, find, max_clique, set_distinct,
+    step_cap,
+};
 
 /// A non-deterministic expansion alternative.
 #[derive(Clone)]
@@ -145,89 +90,21 @@ enum Branch {
     MergeNominal(usize, u32),
 }
 
-/// The tableau driver: read-only knowledge base, the internalized TBox, a step cap.
+/// The tableau driver: the shared completion graph, and a step cap.
 struct Tableau<'a> {
-    /// The knowledge base (concept table, role hierarchy, inverses).
-    kb: &'a Kb,
-    /// The internalized TBox: meta-concept ids placed in every node's label.
-    meta: BTreeSet<u32>,
+    /// The completion-graph operations over the knowledge base and its internalized TBox.
+    g: Graph<'a>,
     /// Steps consumed so far.
     steps: u64,
     /// Hard step cap; exceeding it is a hard error (a termination-bug backstop).
     cap: u64,
 }
 
-/// What a decision is made *on top of* the knowledge base.
-///
-/// A refutation adds premises — the negated conclusion, and for a role axiom a pair of
-/// fresh individuals joined by the antecedent role — so every entry here is an assumption
-/// the caller injected, never something the ontology said. Gathering them into one struct
-/// rather than passing four positional slices is what keeps a fifth kind of assumption
-/// from being appended to a signature nobody can read.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Assumptions<'a> {
-    /// Whether to pull in the ABox (individual roots, role edges, `owl:sameAs` merges).
-    /// A pure subsumption check passes `false` and reasons over the TBox alone.
-    pub(crate) include_abox: bool,
-    /// Extra concept assertions `a : C`, as `(individual term id, concept id)`.
-    pub(crate) types: &'a [(u32, u32)],
-    /// Extra role assertions `a r b`, as `(subject, property, object)` term ids. The
-    /// endpoints need not be knowledge-base individuals: a fresh one gets a root node of
-    /// its own, which is exactly what a role-inclusion refutation needs.
-    pub(crate) roles: &'a [(u32, u32, u32)],
-    /// Concept ids placed on ONE fresh, anonymous, unnamed root — the witness a
-    /// satisfiability or subsumption question asks about.
-    pub(crate) fresh_types: &'a [u32],
-}
-
-impl Assumptions<'_> {
-    /// The bare "is this knowledge base consistent?" question: the whole ABox, nothing
-    /// added.
-    pub(crate) const fn of_kb() -> Self {
-        Self {
-            include_abox: true,
-            types: &[],
-            roles: &[],
-            fresh_types: &[],
-        }
-    }
-}
-
-/// What one tableau run decided, and what it consumed deciding it.
-///
-/// `consistent` is meaningful only when `exhausted` is false: a run that stopped at its
-/// cap has closed some branches and not others, and reporting the "no branch succeeded
-/// *yet*" state as `false` would turn a resource limit into an entailment. Every consumer
-/// in this crate reads `exhausted` first.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Decision {
-    /// Whether a clash-free completion was found. Only meaningful when `!exhausted`.
-    pub(crate) consistent: bool,
-    /// Saturation rounds consumed, summed over every branch the search explored.
-    pub(crate) steps: u64,
-    /// Whether the search stopped because it reached its step cap.
-    pub(crate) exhausted: bool,
-}
-
-/// The step cap for a knowledge base: generous and size-proportional.
-///
-/// Pairwise blocking bounds the real work far below this, so reaching it means a
-/// termination bug or an adversarial instance rather than an ordinary ontology. It is a
-/// pure function of the knowledge base — same input, same cap — so a `Decision` is
-/// reproducible run to run, and it is a STEP count rather than a clock reading, which is
-/// what keeps it reproducible on wasm32 (where there is no clock to read).
-pub(crate) fn step_cap(kb: &Kb) -> u64 {
-    let base =
-        (kb.abox_types.len() + kb.abox_roles.len() + kb.tbox.len() + kb.individuals.len() + 16)
-            as u64;
-    100_000 + base.saturating_mul(base).saturating_mul(64)
-}
-
 /// Decide whether the knowledge base plus `assumptions` has a consistent completion,
 /// spending at most `cap` steps.
 pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, cap: u64) -> Decision {
     let mut t = Tableau::new(kb, cap);
-    let st = t.init_state(assumptions);
+    let st = t.g.init_state(assumptions);
     match t.solve(st) {
         Ok(consistent) => Decision {
             consistent,
@@ -257,251 +134,14 @@ pub(crate) fn consistent(kb: &Kb, assumptions: &Assumptions<'_>) -> Result<bool,
     Ok(decision.consistent)
 }
 
-/// The search reached its step cap. A private marker rather than an [`EntailError`]: it is
-/// not a failure at this layer, it is one of the three things [`decide`] reports.
-struct Exhausted;
-
-/// Resolve a node index to its union-find representative.
-fn find(st: &State, mut x: usize) -> usize {
-    while let Some(n) = st.nodes[x].merged {
-        x = n;
-    }
-    x
-}
-
-/// Whether `a` and `b` are forced distinct (`a ≠ b`), resolving representatives.
-///
-/// Two kinds of force, and the second is not a recorded `≠`: an explicit inequality the
-/// `≥`-rule or an `owl:differentFrom` put on the graph, and a disagreement of VALUE CLASS.
-/// The data domain interprets a literal as its value, so two nodes denoting different values
-/// are different elements whether or not anything said so — that is not a unique-name
-/// assumption, it is the datatype map.
-fn are_distinct(st: &State, a: usize, b: usize) -> bool {
-    let a = find(st, a);
-    let b = find(st, b);
-    if a == b {
-        return false;
-    }
-    if let (Some(left), Some(right)) = (st.nodes[a].value_class, st.nodes[b].value_class)
-        && left != right
-    {
-        return true;
-    }
-    st.nodes[a].neq.iter().any(|&w| find(st, w) == b)
-        || st.nodes[b].neq.iter().any(|&w| find(st, w) == a)
-}
-
-/// Record `a ≠ b`.
-///
-/// Two nodes denoting ONE value cannot be distinct, so forcing an inequality between them is a
-/// clash for the same reason forcing one between a node and itself is.
-fn set_distinct(st: &mut State, a: usize, b: usize) {
-    let a = find(st, a);
-    let b = find(st, b);
-    if a == b {
-        st.clash = true;
-        return;
-    }
-    if let (Some(left), Some(right)) = (st.nodes[a].value_class, st.nodes[b].value_class)
-        && left == right
-    {
-        st.clash = true;
-        return;
-    }
-    st.nodes[a].neq.insert(b);
-    st.nodes[b].neq.insert(a);
-}
-
-/// Merge `discard` into `keep`, identifying the two nodes.
-///
-/// Orientation keeps a root over a tree node, else the lower index. A forced merge of
-/// a `≠` pair sets [`State::clash`].
-///
-/// # Why this is a method
-///
-/// Identifying an abstract node with a literal's node says the abstract node WAS that literal
-/// value all along, and every meta-concept the internalized TBox put on it therefore never
-/// applied: a general concept inclusion quantifies over `owl:Thing`, and no literal value is
-/// in it. Dropping them needs the internalized TBox in scope, which is what makes this a
-/// method on the driver rather than a free function over the state.
-fn merge_nodes(t: &Tableau<'_>, st: &mut State, keep: usize, discard: usize) {
-    let mut keep = find(st, keep);
-    let mut discard = find(st, discard);
-    if keep == discard {
-        return;
-    }
-    let kr = st.nodes[keep].root;
-    let dr = st.nodes[discard].root;
-    let swap = if kr != dr { dr } else { discard < keep };
-    if swap {
-        std::mem::swap(&mut keep, &mut discard);
-    }
-    if are_distinct(st, keep, discard) {
-        st.clash = true;
-        return;
-    }
-    // Fold the discarded node's label and distinctness into the keeper.
-    let disc_label = st.nodes[discard].label.clone();
-    st.nodes[keep].label.extend(disc_label);
-    let disc_neq: Vec<usize> = st.nodes[discard].neq.iter().copied().collect();
-    for w in disc_neq {
-        let w = find(st, w);
-        if w == keep {
-            st.clash = true;
-        }
-        st.nodes[keep].neq.insert(w);
-        st.nodes[w].neq.insert(keep);
-    }
-    // Carry every nominal identity onto the keeper; repoint the root map. The keeper
-    // now denotes *both* names, which is exactly what the absence of a unique name
-    // assumption permits.
-    let disc_nominals = st.nodes[discard].nominals.clone();
-    for &a in &disc_nominals {
-        st.root_of.insert(a, keep);
-    }
-    st.nodes[keep].nominals.extend(disc_nominals);
-    if st.nodes[discard].root {
-        st.nodes[keep].root = true;
-    }
-    // A node identified with a literal's node denotes that literal's value, and inherits both
-    // the domain it lives in and the value class that decides its identity. `are_distinct`
-    // above already refused the merge when the two classes disagree, so this cannot silently
-    // overwrite one value with another.
-    if st.nodes[discard].concrete {
-        st.nodes[keep].concrete = true;
-    }
-    if st.nodes[keep].value_class.is_none() {
-        st.nodes[keep].value_class = st.nodes[discard].value_class;
-    }
-    // The keeper is now known to inhabit the DATA domain, so the internalized TBox never
-    // constrained it. Withdrawing those meta-concepts can only remove a clash, never add one,
-    // which is the direction an identification is allowed to move the answer in.
-    if st.nodes[keep].concrete {
-        for meta in &t.meta {
-            st.nodes[keep].label.remove(meta);
-        }
-    }
-    st.nodes[discard].merged = Some(keep);
-}
-
 impl<'a> Tableau<'a> {
-    /// Build a driver over `kb` bounded by `cap` steps, snapshotting the internalized TBox.
+    /// Build a driver over `kb` bounded by `cap` steps.
     fn new(kb: &'a Kb, cap: u64) -> Self {
-        let meta: BTreeSet<u32> = kb.meta.iter().copied().collect();
         Self {
-            kb,
-            meta,
+            g: Graph::new(kb),
             steps: 0,
             cap,
         }
-    }
-
-    /// A fresh label seeded with the internalized TBox.
-    fn seed_label(&self) -> BTreeSet<u32> {
-        self.meta.clone()
-    }
-
-    /// Build the initial completion graph.
-    fn init_state(&self, assumptions: &Assumptions<'_>) -> State {
-        let Assumptions {
-            include_abox,
-            types: extra,
-            roles: extra_roles,
-            fresh_types,
-        } = *assumptions;
-        let mut st = State {
-            nodes: Vec::new(),
-            edges: Vec::new(),
-            root_of: BTreeMap::new(),
-            clash: false,
-        };
-        if include_abox {
-            for &ind in &self.kb.individuals {
-                self.root(&mut st, ind);
-            }
-            for &(a, c) in &self.kb.abox_types {
-                let ra = self.root(&mut st, a);
-                st.nodes[ra].label.insert(c);
-            }
-            for &(a, p, b) in &self.kb.abox_roles {
-                let ra = self.root(&mut st, a);
-                let rb = self.root(&mut st, b);
-                st.edges.push((ra, rb, p));
-            }
-            for &(a, b) in &self.kb.same_as {
-                let ra = self.root(&mut st, a);
-                let rb = self.root(&mut st, b);
-                merge_nodes(self, &mut st, ra, rb);
-            }
-            // `owl:differentFrom` / `owl:AllDifferent`, as recorded `≠` pairs. Without
-            // them no `≤n r.C` restriction can be violated, because the clash rule counts
-            // PAIRWISE-DISTINCT neighbours and OWL 2 makes no unique name assumption.
-            for &(a, b) in &self.kb.different_from {
-                let ra = self.root(&mut st, a);
-                let rb = self.root(&mut st, b);
-                set_distinct(&mut st, ra, rb);
-            }
-        }
-        for &(a, c) in extra {
-            let ra = self.root(&mut st, a);
-            st.nodes[ra].label.insert(c);
-        }
-        // An assumed role edge, whose endpoints may be individuals the ontology never
-        // mentions: `root` mints a node for one on demand, which is what lets a role-axiom
-        // refutation run over a pair of fresh symbols.
-        for &(a, p, b) in extra_roles {
-            let ra = self.root(&mut st, a);
-            let rb = self.root(&mut st, b);
-            st.edges.push((ra, rb, p));
-        }
-        if !fresh_types.is_empty() {
-            let mut label = self.seed_label();
-            label.extend(fresh_types.iter().copied());
-            st.nodes.push(Node {
-                label,
-                parent: None,
-                incoming: None,
-                root: true,
-                nominals: BTreeSet::new(),
-                neq: BTreeSet::new(),
-                merged: None,
-                concrete: false,
-                value_class: None,
-            });
-        }
-        st
-    }
-
-    /// Get or create the root node for individual term id `a`.
-    ///
-    /// A LITERAL gets a root here exactly as a named individual does — it is the object of a
-    /// data-property assertion and every rule that reads a neighbourhood must see it — but it
-    /// is a node of the DATA domain: it carries the literal's value class and it is not seeded
-    /// with the internalized TBox, because a general concept inclusion quantifies over
-    /// `owl:Thing` and a literal value is not in it.
-    fn root(&self, st: &mut State, a: u32) -> usize {
-        if let Some(&n) = st.root_of.get(&a) {
-            return find(st, n);
-        }
-        let idx = st.nodes.len();
-        let concrete = self.kb.interner.is_literal(a);
-        st.nodes.push(Node {
-            label: if concrete {
-                BTreeSet::new()
-            } else {
-                self.seed_label()
-            },
-            parent: None,
-            incoming: None,
-            root: true,
-            nominals: std::iter::once(a).collect(),
-            neq: BTreeSet::new(),
-            merged: None,
-            concrete,
-            value_class: self.kb.literal_class.get(&a).copied(),
-        });
-        st.root_of.insert(a, idx);
-        idx
     }
 
     /// The depth-first, deterministic search: saturate, then branch.
@@ -579,20 +219,20 @@ impl<'a> Tableau<'a> {
     /// inverse-role closure: a sub-role edge of an asymmetric role violates the axiom, which
     /// is what makes the check about the role's EXTENSION rather than about its spelling.
     fn role_axiom_clashes(&self, st: &State, x: usize) -> bool {
-        for &property in &self.kb.asymmetric {
+        for &property in &self.g.kb().asymmetric {
             let role = Role::Named(property);
-            for y in self.neighbors(st, x, role) {
-                if self.neighbors(st, y, role).contains(&x) {
+            for y in self.g.neighbors(st, x, role) {
+                if self.g.neighbors(st, y, role).contains(&x) {
                     return true;
                 }
             }
         }
-        for &(left, right) in &self.kb.disjoint_roles {
-            let shared = self.neighbors(st, x, Role::Named(left));
+        for &(left, right) in &self.g.kb().disjoint_roles {
+            let shared = self.g.neighbors(st, x, Role::Named(left));
             if shared.is_empty() {
                 continue;
             }
-            let other = self.neighbors(st, x, Role::Named(right));
+            let other = self.g.neighbors(st, x, Role::Named(right));
             if shared.iter().any(|y| other.contains(y)) {
                 return true;
             }
@@ -616,14 +256,14 @@ impl<'a> Tableau<'a> {
     /// blocked by a recorded `≠`.
     fn node_clashes(&self, st: &State, x: usize) -> bool {
         let node = &st.nodes[x];
-        if node.label.contains(&self.kb.bottom) {
+        if node.label.contains(&self.g.kb().bottom) {
             return true;
         }
         for &cid in &node.label {
-            if node.label.contains(&self.kb.table.negate(cid)) {
+            if node.label.contains(&self.g.kb().table.negate(cid)) {
                 return true;
             }
-            if let Decomp::NegNominal(w) = self.kb.table.decomp(cid)
+            if let Decomp::NegNominal(w) = self.g.kb().table.decomp(cid)
                 && w.iter().any(|a| node.nominals.contains(a))
             {
                 return true;
@@ -631,94 +271,25 @@ impl<'a> Tableau<'a> {
             // `¬∃r.Self` on a node that HAS an `r`-loop. This is the whole content of
             // `owl:IrreflexiveProperty` (`⊤ ⊑ ¬∃r.Self`) as well as of a negated
             // `owl:hasSelf`, so both are decided here rather than by a second mechanism.
-            if let Decomp::NegSelfRestriction(role) = *self.kb.table.decomp(cid)
-                && self.has_self_loop(st, x, role)
+            if let Decomp::NegSelfRestriction(role) = *self.g.kb().table.decomp(cid)
+                && self.g.has_self_loop(st, x, role)
             {
                 return true;
             }
         }
-        self.max_clash(st, x) || self.data_clashes(st, x)
-    }
-
-    /// Whether the CONCRETE-domain constraints on `x` have no solution.
-    ///
-    /// A node labelled `Data(r₁) … Data(rₘ) ¬Data(s₁) … ¬Data(sₖ)` denotes a literal value in
-    /// `r₁ ∩ … ∩ rₘ ∩ ¬s₁ ∩ … ∩ ¬sₖ`, and an EMPTY intersection has no such value. That is the
-    /// whole of the concrete-domain decision procedure at this layer, and it is
-    /// [`purrdf_xsd::range`]'s answer rather than a second datatype model written beside it.
-    ///
-    /// Only a PROVED emptiness closes the branch. A range the decision procedure cannot decide
-    /// answers "not provably empty" and is reported as a boundary instead, because inventing an
-    /// inconsistency is the one error a reasoner cannot recover from.
-    ///
-    /// The second half is the counting question a per-node emptiness check cannot see: `≥n r.DR`
-    /// demands `n` PAIRWISE-DISTINCT values of `DR`, and the data domain has no unique-name
-    /// freedom to supply them from, so a range holding fewer than `n` values refutes the
-    /// restriction outright. Every `∀r.DR′` on the same node narrows the range those witnesses
-    /// are drawn from, so the two are counted together.
-    ///
-    /// An ontology stating no data range and holding no literal skips all of it.
-    fn data_clashes(&self, st: &State, x: usize) -> bool {
-        if self.kb.data_ranges.is_empty() {
-            return false;
-        }
-        let mut positive: Vec<u32> = Vec::new();
-        let mut negative: Vec<u32> = Vec::new();
-        for &cid in &st.nodes[x].label {
-            match *self.kb.table.decomp(cid) {
-                Decomp::Data(range) => positive.push(range),
-                Decomp::NegData(range) => negative.push(range),
-                _ => {}
-            }
-        }
-        if (!positive.is_empty() || !negative.is_empty())
-            && self
-                .kb
-                .data_ranges
-                .conjunction_is_empty(&positive, &negative)
-        {
-            return true;
-        }
-        for &cid in &st.nodes[x].label {
-            let Decomp::Min(n, role, filler) = *self.kb.table.decomp(cid) else {
-                continue;
-            };
-            let Decomp::Data(range) = *self.kb.table.decomp(filler) else {
-                continue;
-            };
-            let mut demanded = vec![range];
-            for &other in &st.nodes[x].label {
-                if let Decomp::All(universal_role, universal_filler) = *self.kb.table.decomp(other)
-                    && universal_role == role
-                    && let Decomp::Data(narrowed) = *self.kb.table.decomp(universal_filler)
-                {
-                    demanded.push(narrowed);
-                }
-            }
-            if self.kb.data_ranges.provably_fewer_than(&demanded, n) {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Whether `x` has a `role`-edge to itself, read through the role hierarchy and the
-    /// inverse-role closure.
-    fn has_self_loop(&self, st: &State, x: usize, role: Role) -> bool {
-        let x = find(st, x);
-        self.neighbors(st, x, role).contains(&x)
+        self.max_clash(st, x) || self.g.data_clashes(st, x)
     }
 
     /// Whether some `≤n r.C` on node `x` is violated by `> n` pairwise-`≠` neighbours.
     fn max_clash(&self, st: &State, x: usize) -> bool {
         let cids: Vec<u32> = st.nodes[x].label.iter().copied().collect();
         for cid in cids {
-            if let Decomp::Max(n, role, c) = *self.kb.table.decomp(cid) {
+            if let Decomp::Max(n, role, c) = *self.g.kb().table.decomp(cid) {
                 let filler = c;
-                let neigh = self.neighbors(st, x, role);
+                let neigh = self.g.neighbors(st, x, role);
                 let with_c: Vec<usize> = neigh
                     .into_iter()
-                    .filter(|&y| self.has_concept(st, y, filler))
+                    .filter(|&y| self.g.has_concept(st, y, filler))
                     .collect();
                 let clique = max_clique(&with_c, &|a, b| are_distinct(st, a, b));
                 if clique.len() > n as usize {
@@ -759,7 +330,7 @@ impl<'a> Tableau<'a> {
     fn rule_unfold(&self, st: &mut State, x: usize) -> bool {
         let mut adds: Vec<u32> = Vec::new();
         for &cid in &st.nodes[x].label {
-            if let Some(sups) = self.kb.unfold.get(&cid) {
+            if let Some(sups) = self.g.kb().unfold.get(&cid) {
                 for &s in sups {
                     if !st.nodes[x].label.contains(&s) {
                         adds.push(s);
@@ -776,7 +347,7 @@ impl<'a> Tableau<'a> {
     fn rule_and(&self, st: &mut State, x: usize) -> bool {
         let mut adds: Vec<u32> = Vec::new();
         for &cid in &st.nodes[x].label {
-            if let Decomp::And(cs) = self.kb.table.decomp(cid) {
+            if let Decomp::And(cs) = self.g.kb().table.decomp(cid) {
                 for &c in cs {
                     if !st.nodes[x].label.contains(&c) {
                         adds.push(c);
@@ -794,15 +365,15 @@ impl<'a> Tableau<'a> {
         let alls: Vec<(Role, u32)> = st.nodes[x]
             .label
             .iter()
-            .filter_map(|&cid| match *self.kb.table.decomp(cid) {
+            .filter_map(|&cid| match *self.g.kb().table.decomp(cid) {
                 Decomp::All(role, c) => Some((role, c)),
                 _ => None,
             })
             .collect();
         let mut changed = false;
         for (role, c) in alls {
-            for y in self.neighbors(st, x, role) {
-                changed |= self.add_concept(st, y, c);
+            for y in self.g.neighbors(st, x, role) {
+                changed |= self.g.add_concept(st, y, c);
             }
         }
         changed
@@ -813,7 +384,7 @@ impl<'a> Tableau<'a> {
         let somes: Vec<(Role, u32)> = st.nodes[x]
             .label
             .iter()
-            .filter_map(|&cid| match *self.kb.table.decomp(cid) {
+            .filter_map(|&cid| match *self.g.kb().table.decomp(cid) {
                 Decomp::Some(role, c) => Some((role, c)),
                 _ => None,
             })
@@ -821,11 +392,12 @@ impl<'a> Tableau<'a> {
         let mut changed = false;
         for (role, c) in somes {
             let has = self
+                .g
                 .neighbors(st, x, role)
                 .into_iter()
-                .any(|y| self.has_concept(st, y, c));
+                .any(|y| self.g.has_concept(st, y, c));
             if !has {
-                self.new_successor(st, x, role, &[c]);
+                self.g.new_successor(st, x, role, &[c]);
                 changed = true;
             }
         }
@@ -837,7 +409,7 @@ impl<'a> Tableau<'a> {
         let mins: Vec<(u32, Role, u32)> = st.nodes[x]
             .label
             .iter()
-            .filter_map(|&cid| match *self.kb.table.decomp(cid) {
+            .filter_map(|&cid| match *self.g.kb().table.decomp(cid) {
                 Decomp::Min(n, role, c) => Some((n, role, c)),
                 _ => None,
             })
@@ -849,16 +421,17 @@ impl<'a> Tableau<'a> {
                 continue;
             }
             let with_c: Vec<usize> = self
+                .g
                 .neighbors(st, x, role)
                 .into_iter()
-                .filter(|&y| self.has_concept(st, y, c))
+                .filter(|&y| self.g.has_concept(st, y, c))
                 .collect();
             let mut clique = max_clique(&with_c, &|a, b| are_distinct(st, a, b));
             if clique.len() >= n {
                 continue;
             }
             while clique.len() < n {
-                let y = self.new_successor(st, x, role, &[c]);
+                let y = self.g.new_successor(st, x, role, &[c]);
                 clique.push(y);
             }
             // Force the whole witness set pairwise distinct.
@@ -884,7 +457,7 @@ impl<'a> Tableau<'a> {
         let singletons: Vec<u32> = st.nodes[x]
             .label
             .iter()
-            .filter_map(|&cid| match self.kb.table.decomp(cid) {
+            .filter_map(|&cid| match self.g.kb().table.decomp(cid) {
                 Decomp::Nominal(v) if v.len() == 1 => Some(v[0]),
                 _ => None,
             })
@@ -897,8 +470,8 @@ impl<'a> Tableau<'a> {
             if st.nodes[rx].nominals.contains(&a) {
                 continue;
             }
-            let ra = self.root(st, a);
-            merge_nodes(self, st, ra, rx);
+            let ra = self.g.root(st, a);
+            self.g.merge_nodes(st, ra, rx);
             changed = true;
             if st.clash {
                 return changed;
@@ -921,198 +494,16 @@ impl<'a> Tableau<'a> {
         let selves: Vec<Role> = st.nodes[x]
             .label
             .iter()
-            .filter_map(|&cid| match *self.kb.table.decomp(cid) {
+            .filter_map(|&cid| match *self.g.kb().table.decomp(cid) {
                 Decomp::SelfRestriction(role) => Some(role),
                 _ => None,
             })
             .collect();
         let mut changed = false;
         for role in selves {
-            if self.has_self_loop(st, x, role) {
-                continue;
-            }
-            let x = find(st, x);
-            // A loop is its own inverse, so the direction the edge is stored in does not
-            // matter; the named property is what the role hierarchy is closed over.
-            let (Role::Named(property) | Role::Inv(property)) = role;
-            st.edges.push((x, x, property));
-            changed = true;
+            changed |= self.g.add_self_loop(st, x, role);
         }
         changed
-    }
-
-    /// Whether a filler concept can only be satisfied by an element of the DATA domain.
-    ///
-    /// Two shapes say so: a data range, and a nominal naming a literal (which is how
-    /// `owl:hasValue` over a data property reads). Both are POSITIVE forms — `¬Data(r)` and
-    /// `¬{"cat"}` hold of every abstract element too, so neither says anything about which
-    /// domain a node inhabits.
-    fn is_concrete_filler(&self, c: u32) -> bool {
-        match self.kb.table.decomp(c) {
-            Decomp::Data(_) => true,
-            Decomp::Nominal(members) => members
-                .iter()
-                .any(|&member| self.kb.interner.is_literal(member)),
-            _ => false,
-        }
-    }
-
-    /// Add concept `c` to node `y`'s label; `⊤` is trivially present. Returns whether
-    /// the label grew.
-    fn add_concept(&self, st: &mut State, y: usize, c: u32) -> bool {
-        if matches!(self.kb.table.decomp(c), Decomp::Top) {
-            return false;
-        }
-        let y = find(st, y);
-        st.nodes[y].label.insert(c)
-    }
-
-    /// Whether node `y` satisfies concept `c` (with `⊤` always satisfied).
-    fn has_concept(&self, st: &State, y: usize, c: u32) -> bool {
-        matches!(self.kb.table.decomp(c), Decomp::Top) || st.nodes[find(st, y)].label.contains(&c)
-    }
-
-    /// Create a fresh tree successor of `x` under `role`, labelled with `fillers`.
-    ///
-    /// A successor whose filler is a DATA RANGE is a node of the data domain, and is therefore
-    /// created without the internalized TBox in its label — see [`Node::concrete`].
-    fn new_successor(&self, st: &mut State, x: usize, role: Role, fillers: &[u32]) -> usize {
-        let concrete = fillers.iter().any(|&c| self.is_concrete_filler(c));
-        let mut label = if concrete {
-            BTreeSet::new()
-        } else {
-            self.seed_label()
-        };
-        for &c in fillers {
-            if !matches!(self.kb.table.decomp(c), Decomp::Top) {
-                label.insert(c);
-            }
-        }
-        let idx = st.nodes.len();
-        let (prop, inverted) = match role {
-            Role::Named(p) => (p, false),
-            Role::Inv(p) => (p, true),
-        };
-        st.nodes.push(Node {
-            label,
-            parent: Some(x),
-            incoming: Some((prop, inverted)),
-            root: false,
-            nominals: BTreeSet::new(),
-            neq: BTreeSet::new(),
-            merged: None,
-            concrete,
-            value_class: None,
-        });
-        // A forward role stores `x → y`; an inverse role stores `y → x`.
-        if inverted {
-            st.edges.push((idx, x, prop));
-        } else {
-            st.edges.push((x, idx, prop));
-        }
-        idx
-    }
-
-    /// The `role`-neighbours of `x` (deterministic, first-seen edge order).
-    ///
-    /// # Transitivity is in the NEIGHBOURHOOD, not in a second rule
-    ///
-    /// A role declared `owl:TransitiveProperty` contributes its TRANSITIVE CLOSURE here, so
-    /// every rule that reads a neighbourhood — `∀`, `∃`, `≥`, the `≤` clash, the two role
-    /// axioms — sees the semantics of the transitive role without any of them being taught
-    /// about transitivity. `∀r.C` therefore propagates `C` along a whole `r`-path, which is
-    /// exactly what transitivity entails, and it does so without the `∀+` rule's habit of
-    /// interning a fresh `∀s.C` concept mid-search (this table is finalized before the
-    /// tableau starts, so there is no fresh concept to intern).
-    ///
-    /// The closure is taken per transitive achiever, never over the union: `q ⊑ r` with `q`
-    /// transitive and `r` not gives `r` every `q⁺`-pair, but two DIFFERENT sub-roles of `r`
-    /// do not compose into one — `r` itself is not transitive, and composing them would
-    /// invent pairs the ontology does not entail.
-    ///
-    /// Counting a transitive role's neighbours in a `≤n` restriction is only meaningful
-    /// because OWL 2 DL forbids exactly that combination; an ontology that states it is not
-    /// OWL 2 DL and the reverse mapping raises
-    /// [`Construct::NonSimpleRole`](crate::Construct::NonSimpleRole) for it.
-    fn neighbors(&self, st: &State, x: usize, role: Role) -> Vec<usize> {
-        let ach = self.achievers(role);
-        let x = find(st, x);
-        let mut out: Vec<usize> = Vec::new();
-        let mut seen: BTreeSet<usize> = BTreeSet::new();
-        self.step(st, x, &ach, &mut seen, &mut out);
-        for &(prop, dir) in &ach {
-            if !self.kb.transitive.contains(&prop) {
-                continue;
-            }
-            let single: BTreeSet<(u32, bool)> = std::iter::once((prop, dir)).collect();
-            // Breadth-first over this one transitive role, seeded from `x`'s own step.
-            let mut frontier: Vec<usize> = Vec::new();
-            self.step(st, x, &single, &mut BTreeSet::new(), &mut frontier);
-            let mut visited: BTreeSet<usize> = frontier.iter().copied().collect();
-            while let Some(y) = frontier.pop() {
-                if seen.insert(y) {
-                    out.push(y);
-                }
-                let mut next: Vec<usize> = Vec::new();
-                self.step(st, y, &single, &mut BTreeSet::new(), &mut next);
-                for z in next {
-                    if visited.insert(z) {
-                        frontier.push(z);
-                    }
-                }
-            }
-        }
-        out
-    }
-
-    /// One edge step from `x` over the `(property, forward?)` patterns `ach`, appending
-    /// newly seen endpoints to `out` in first-seen edge order.
-    fn step(
-        &self,
-        st: &State,
-        x: usize,
-        ach: &BTreeSet<(u32, bool)>,
-        seen: &mut BTreeSet<usize>,
-        out: &mut Vec<usize>,
-    ) {
-        let x = find(st, x);
-        for &(from, to, prop) in &st.edges {
-            let f = find(st, from);
-            let t = find(st, to);
-            if ach.contains(&(prop, true)) && f == x && seen.insert(t) {
-                out.push(t);
-            }
-            if ach.contains(&(prop, false)) && t == x && seen.insert(f) {
-                out.push(f);
-            }
-        }
-    }
-
-    /// The `(property, forward?)` edge patterns that realize `role`, closed under the
-    /// role hierarchy and inverse-role declarations.
-    fn achievers(&self, role: Role) -> BTreeSet<(u32, bool)> {
-        let start = match role {
-            Role::Named(p) => (p, true),
-            Role::Inv(p) => (p, false),
-        };
-        let mut set: BTreeSet<(u32, bool)> = BTreeSet::new();
-        let mut stack = vec![start];
-        while let Some((q, dir)) = stack.pop() {
-            if !set.insert((q, dir)) {
-                continue;
-            }
-            if let Some(subs) = self.kb.role_sub.get(&q) {
-                for &s in subs {
-                    stack.push((s, dir));
-                }
-            }
-            if let Some(invs) = self.kb.inverses.get(&q) {
-                for &s in invs {
-                    stack.push((s, !dir));
-                }
-            }
-        }
-        set
     }
 
     /// Whether tree node `x` is blocked (directly or via a blocked ancestor).
@@ -1171,7 +562,7 @@ impl<'a> Tableau<'a> {
             }
             let cids: Vec<u32> = st.nodes[i].label.iter().copied().collect();
             for cid in cids {
-                match *self.kb.table.decomp(cid) {
+                match *self.g.kb().table.decomp(cid) {
                     Decomp::Or(ref cs) => {
                         if !cs.iter().any(|c| st.nodes[i].label.contains(c)) {
                             return Some(cs.iter().map(|&c| Branch::AddConcept(i, c)).collect());
@@ -1190,22 +581,22 @@ impl<'a> Tableau<'a> {
                         }
                     }
                     Decomp::Max(nmax, role, filler) => {
-                        let neigh = self.neighbors(st, i, role);
+                        let neigh = self.g.neighbors(st, i, role);
                         // `≤`-choose rule: some neighbour lacks both `C` and `¬C`.
                         for &y in &neigh {
-                            if !self.has_concept(st, y, filler)
-                                && !self.has_concept(st, y, self.kb.table.negate(filler))
+                            if !self.g.has_concept(st, y, filler)
+                                && !self.g.has_concept(st, y, self.g.kb().table.negate(filler))
                             {
                                 return Some(vec![
                                     Branch::AddConcept(y, filler),
-                                    Branch::AddConcept(y, self.kb.table.negate(filler)),
+                                    Branch::AddConcept(y, self.g.kb().table.negate(filler)),
                                 ]);
                             }
                         }
                         // `≤`-merge rule: too many C-neighbours, some pair mergeable.
                         let with_c: Vec<usize> = neigh
                             .into_iter()
-                            .filter(|&y| self.has_concept(st, y, filler))
+                            .filter(|&y| self.g.has_concept(st, y, filler))
                             .collect();
                         if with_c.len() > nmax as usize {
                             let mut branches: Vec<Branch> = Vec::new();
@@ -1237,47 +628,15 @@ impl<'a> Tableau<'a> {
                 true
             }
             Branch::Merge(a, b) => {
-                merge_nodes(self, st, a, b);
+                self.g.merge_nodes(st, a, b);
                 !st.clash
             }
             Branch::MergeNominal(x, a) => {
                 let x = find(st, x);
-                let ra = self.root(st, a);
-                merge_nodes(self, st, ra, x);
+                let ra = self.g.root(st, a);
+                self.g.merge_nodes(st, ra, x);
                 !st.clash
             }
-        }
-    }
-}
-
-/// A maximum pairwise-compatible subset of `items` (a max clique under `compat`).
-///
-/// `compat(a, b)` is `true` when `a` and `b` may coexist (here: are forced `≠`).
-/// Deterministic: prefers lower-indexed members. `items` are tiny in practice.
-fn max_clique(items: &[usize], compat: &dyn Fn(usize, usize) -> bool) -> Vec<usize> {
-    let mut best: Vec<usize> = Vec::new();
-    let mut current: Vec<usize> = Vec::new();
-    rec_clique(items, compat, 0, &mut current, &mut best);
-    best
-}
-
-/// Backtracking helper for [`max_clique`].
-fn rec_clique(
-    items: &[usize],
-    compat: &dyn Fn(usize, usize) -> bool,
-    start: usize,
-    current: &mut Vec<usize>,
-    best: &mut Vec<usize>,
-) {
-    if current.len() > best.len() {
-        *best = current.clone();
-    }
-    for i in start..items.len() {
-        let cand = items[i];
-        if current.iter().all(|&m| compat(m, cand)) {
-            current.push(cand);
-            rec_clique(items, compat, i + 1, current, best);
-            current.pop();
         }
     }
 }
@@ -1329,6 +688,26 @@ mod tests {
         Role::Named(p)
     }
 
+    /// Whether `kb` is consistent, DECIDED BY BOTH cores, which must agree.
+    ///
+    /// Every hand-written knowledge base below is a differential case: the hypertableau is the
+    /// production answer and this module's concept-tree tableau is the reference, so a verdict
+    /// they disagree on fails here rather than being silently attributed to the newer calculus.
+    fn consistent_by_both(kb: &Kb) -> bool {
+        let hyper = kb
+            .is_consistent()
+            .expect("the hypertableau decides this fixture");
+        let concept_tree = kb
+            .is_consistent_by_concept_tree()
+            .expect("the concept-tree tableau decides this fixture");
+        assert_eq!(
+            hyper, concept_tree,
+            "the two decision cores disagree about this knowledge base: hypertableau {hyper}, \
+             concept-tree tableau {concept_tree}"
+        );
+        hyper
+    }
+
     #[test]
     fn atomic_contradiction_is_unsat() {
         let mut b = Builder::new();
@@ -1340,7 +719,7 @@ mod tests {
             ]),
         );
         let kb = b.finish();
-        assert!(!kb.is_consistent().unwrap(), "A ⊓ ¬A must be unsatisfiable");
+        assert!(!consistent_by_both(&kb), "A ⊓ ¬A must be unsatisfiable");
     }
 
     #[test]
@@ -1355,7 +734,7 @@ mod tests {
             ]),
         );
         let kb = b.finish();
-        assert!(!kb.is_consistent().unwrap(), "∃r.⊤ ⊓ ∀r.⊥ must be unsat");
+        assert!(!consistent_by_both(&kb), "∃r.⊤ ⊓ ∀r.⊥ must be unsat");
     }
 
     #[test]
@@ -1370,10 +749,7 @@ mod tests {
             ]),
         );
         let kb = b.finish();
-        assert!(
-            !kb.is_consistent().unwrap(),
-            "≥2 r.⊤ ⊓ ≤1 r.⊤ must be unsat"
-        );
+        assert!(!consistent_by_both(&kb), "≥2 r.⊤ ⊓ ≤1 r.⊤ must be unsat");
     }
 
     #[test]
@@ -1385,7 +761,7 @@ mod tests {
         b.ty(1, c);
         let kb = b.finish();
         assert!(
-            kb.is_consistent().unwrap(),
+            consistent_by_both(&kb),
             "cyclic C ⊑ ∃r.C is consistent (pairwise blocking terminates)"
         );
     }
@@ -1402,7 +778,7 @@ mod tests {
         b.ty(1, Concept::Named(11));
         let kb = b.finish();
         assert!(
-            !kb.is_consistent().unwrap(),
+            !consistent_by_both(&kb),
             "disjoint A,B with a common instance is unsat"
         );
     }
@@ -1417,7 +793,7 @@ mod tests {
         );
         let kb = b.finish();
         assert!(
-            !kb.is_consistent().unwrap(),
+            !consistent_by_both(&kb),
             "≥2 r.{{a}} must be unsat (one nominal)"
         );
     }
@@ -1431,7 +807,7 @@ mod tests {
             Concept::Min(1, role(5), Box::new(Concept::Nominal(vec![99]))),
         );
         let kb = b.finish();
-        assert!(kb.is_consistent().unwrap(), "≥1 r.{{a}} is satisfiable");
+        assert!(consistent_by_both(&kb), "≥1 r.{{a}} is satisfiable");
     }
 
     /// The `example.org` fixture namespace for the `owl:oneOf` regression pair below.
@@ -1509,7 +885,7 @@ mod tests {
         // the enumeration) is an unsoundness, not a missing feature.
         let kb = one_of_kb(&[]);
         assert!(
-            kb.is_consistent().unwrap(),
+            consistent_by_both(&kb),
             "an individual typed into an owl:oneOf it is not syntactically a member of \
              is satisfiable: it may denote a member under another name"
         );
@@ -1523,7 +899,7 @@ mod tests {
         // This is what separates the fix from simply deleting the rule.
         let kb = one_of_kb(&["small", "medium", "large"]);
         assert!(
-            !kb.is_consistent().unwrap(),
+            !consistent_by_both(&kb),
             "an individual known distinct from every enumeration member cannot be typed \
              into that enumeration"
         );
@@ -1539,7 +915,7 @@ mod tests {
         b.ty(1, Concept::Not(Box::new(Concept::Nominal(vec![98]))));
         let kb = b.finish();
         assert!(
-            kb.is_consistent().unwrap(),
+            consistent_by_both(&kb),
             "x : {{a,b}} with x ≠ a is satisfiable by identifying x with b"
         );
 
@@ -1550,7 +926,7 @@ mod tests {
         b.ty(1, Concept::Not(Box::new(Concept::Nominal(vec![99]))));
         let kb = b.finish();
         assert!(
-            !kb.is_consistent().unwrap(),
+            !consistent_by_both(&kb),
             "x : {{a,b}} with x ≠ a and x ≠ b is unsatisfiable"
         );
     }
