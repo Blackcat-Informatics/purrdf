@@ -301,17 +301,33 @@ impl Kb {
     /// axioms and assertions are in place.
     pub(crate) fn finalize(&mut self) {
         self.table.finalize();
-        // The NN/NI corner is a property of the finalized table, not of any one parsed
-        // axiom: an at-most restriction over an INVERSE role is the shape whose
-        // completeness can require the nominal-introduction rule neither decision core
-        // implements. Raised here so every certificate over such an ontology carries the
-        // limit instead of reading `decided` over a verdict the full calculus might refute.
-        for id in 0..self.table.len() as u32 {
-            if let Decomp::Max(_, Role::Inv(_), _) = self.table.decomp(id) {
-                self.boundaries.insert(Construct::CountingOnInverse);
-                break;
-            }
+        if self.counts_over_an_inverse() {
+            self.boundaries.insert(Construct::CountingOnInverse);
         }
+    }
+
+    /// Whether the ontology counts successors of a role that is SOMETHING's inverse — the
+    /// NN/NI corner neither decision core is complete for.
+    ///
+    /// Keyed on LOGICAL CONTENT, not on spelling. `≤n r⁻.C` written directly is the obvious
+    /// shape, but `q owl:inverseOf p` with `≤n q.C` denotes exactly the same thing, and an
+    /// earlier revision of this check saw only the first: two logically equivalent knowledge
+    /// bases disclosed the limit differently, which makes the disclosure a fact about syntax
+    /// rather than about the answer. Both spellings are the corner, so both raise it.
+    ///
+    /// `owl:InverseFunctionalProperty` is the everyday case in the first spelling — it IS
+    /// `⊤ ⊑ ≤1 p⁻.⊤` — and the second is how the same restriction reads when a caller names
+    /// the inverse. A counted role with no inverse partner is outside the corner and raises
+    /// nothing.
+    fn counts_over_an_inverse(&self) -> bool {
+        (0..self.table.len() as u32).any(|id| match self.table.decomp(id) {
+            // Counted directly over an inverse role.
+            Decomp::Max(_, Role::Inv(_), _) => true,
+            // Counted over a NAMED role that some `owl:inverseOf` axiom makes an inverse.
+            // The map is symmetric, so one membership test settles either direction.
+            Decomp::Max(_, Role::Named(p), _) => self.inverses.contains_key(p),
+            _ => false,
+        })
     }
 
     /// Whether the knowledge base (TBox + ABox) is consistent.

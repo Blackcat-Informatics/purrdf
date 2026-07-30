@@ -835,7 +835,9 @@ impl<'a> CeExtractor<'a> {
                 })?;
                 if n == u32::MAX {
                     return Err(EntailError::Parse(format!(
-                        "cardinality {n} exceeds this reasoner's representable bound                          ({} is the largest supported cardinality): refusing rather                          than deciding wrongly",
+                        "cardinality {n} exceeds this reasoner's representable bound \
+                         ({} is the largest supported cardinality): refusing rather \
+                         than deciding wrongly",
                         u32::MAX - 1
                     )));
                 }

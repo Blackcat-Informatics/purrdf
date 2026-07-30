@@ -2806,11 +2806,50 @@ mod tests {
             answer.certificate()
         );
 
+        // THE SPELLING-INDEPENDENCE CASE. `q owl:inverseOf p` with `⊤ ⊑ ≤1 q.⊤` denotes
+        // exactly what `owl:InverseFunctionalProperty p` denotes, so it must disclose the
+        // same limit: an earlier revision keyed on the syntactic `≤n r⁻` shape alone, and
+        // two logically equivalent ontologies then reported different completeness.
+        let named_inverse = "<http://example.org/q> \
+<http://www.w3.org/2002/07/owl#inverseOf> <http://example.org/p> .\n\
+<http://www.w3.org/2002/07/owl#Thing> \
+<http://www.w3.org/2000/01/rdf-schema#subClassOf> _:c .\n\
+_:c <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+<http://www.w3.org/2002/07/owl#Restriction> .\n\
+_:c <http://www.w3.org/2002/07/owl#onProperty> <http://example.org/q> .\n\
+_:c <http://www.w3.org/2002/07/owl#maxCardinality> \
+\"1\"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .\n\
+<http://example.org/a> <http://example.org/p> <http://example.org/b> .\n";
+        let answer = consistency_to_string(named_inverse, 0).expect("decides");
+        assert!(
+            answer
+                .certificate()
+                .contains("boundary counting-on-inverse"),
+            "counting a NAMED role that owl:inverseOf makes an inverse is the same corner: {}",
+            answer.certificate()
+        );
+
+        // A counted role with no inverse partner is OUTSIDE the corner.
+        let counted_only = "<http://www.w3.org/2002/07/owl#Thing> \
+<http://www.w3.org/2000/01/rdf-schema#subClassOf> _:c .\n\
+_:c <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+<http://www.w3.org/2002/07/owl#Restriction> .\n\
+_:c <http://www.w3.org/2002/07/owl#onProperty> <http://example.org/p> .\n\
+_:c <http://www.w3.org/2002/07/owl#maxCardinality> \
+\"1\"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .\n\
+<http://example.org/a> <http://example.org/p> <http://example.org/b> .\n";
+        let answer = consistency_to_string(counted_only, 0).expect("decides");
+        assert!(
+            !answer.certificate().contains("counting-on-inverse"),
+            "counting with no inverse partner anywhere is not the corner: {}",
+            answer.certificate()
+        );
+
         let plain = "<http://example.org/a> <http://example.org/p> <http://example.org/b> .\n";
         let answer = consistency_to_string(plain, 0).expect("decides");
         assert!(
             !answer.certificate().contains("counting-on-inverse"),
-            "no at-most-over-inverse, no boundary: {}",
+            "no counting at all, no boundary: {}",
             answer.certificate()
         );
     }
