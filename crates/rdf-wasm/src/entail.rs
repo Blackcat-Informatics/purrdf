@@ -548,6 +548,16 @@ pub struct Reasoner {
     session: ReasonerSession,
 }
 
+impl std::fmt::Debug for Reasoner {
+    /// Delegates to the session, which prints the SHAPE of the problem rather than a
+    /// dump of thousands of interned ids.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Reasoner")
+            .field("session", &self.session)
+            .finish()
+    }
+}
+
 #[wasm_bindgen]
 impl Reasoner {
     /// Parse `document` and open a session over it.
@@ -563,7 +573,7 @@ impl Reasoner {
     ///
     /// Throws if `document` fails to parse.
     #[wasm_bindgen(constructor)]
-    pub fn new(document: &str, step_cap: u32) -> Result<Reasoner, JsError> {
+    pub fn new(document: &str, step_cap: u32) -> Result<Self, JsError> {
         ReasonerSession::open(document, step_cap)
             .map(|session| Self { session })
             .map_err(|e| JsError::new(&e))
