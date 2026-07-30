@@ -209,7 +209,7 @@ def iter_scan_paths(root: Path) -> Iterator[Path]:
     ).stdout
     for rel in sorted(part for part in out.split("\0") if part):
         suffix = Path(rel).suffix
-        if suffix not in (".rs", ".md", ".toml", ".py", ".yaml", ".yml"):
+        if suffix not in (".rs", ".md", ".toml", ".py", ".pyi", ".yaml", ".yml"):
             continue
         segments = rel.split("/")
         top = segments[0]
@@ -220,7 +220,11 @@ def iter_scan_paths(root: Path) -> Iterator[Path]:
             )
             if not (in_scan_dir or root_file):
                 continue
-        elif suffix == ".py":
+        elif suffix in (".py", ".pyi"):
+            # `.pyi` is SHIPPED: it is the PEP 561 stub inside every published wheel,
+            # so a process reference in it is published to PyPI. It was outside this
+            # scan while `.py` was inside, which is how eight of them accumulated in
+            # the one file a typing consumer reads most.
             if top not in PY_SCAN_DIRS:
                 continue
         else:  # .yaml / .yml
@@ -746,7 +750,11 @@ def scan_path(path: Path) -> list[tuple[int, int, str, str, str]]:
         return scan_markdown(path)
     if path.suffix == ".toml":
         return scan_toml(path)
-    if path.suffix == ".py":
+    if path.suffix in (".py", ".pyi"):
+        # A stub is Python syntax, so the Python scanner reads its comments correctly.
+        # Listing `.pyi` in the path iterator without adding it HERE would extend the
+        # gate's apparent scope while it inspected nothing — the same silent no-op this
+        # script exists to prevent in prose.
         return scan_python(path)
     if path.suffix in (".yaml", ".yml"):
         return scan_yaml(path)

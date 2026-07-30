@@ -4,10 +4,10 @@
 # Type stub for the purrdf PyO3 extension. The signatures are transcribed
 # verbatim from bindings/python/src/rdf.rs (the statement codec) and
 # bindings/python/src/py_store.rs (the native Store / SPARQL / parse /
-# canonicalize surface, #667) — keep them in lockstep with those files (they are
+# canonicalize surface) — keep them in lockstep with those files (they are
 # the ABI source of truth). This stub describes the native `purrdf` term /
 # result / store surface — the in-repo binding that replaced the external RDF
-# package removed in #667.
+# package that no longer exists.
 
 from __future__ import annotations
 
@@ -462,11 +462,11 @@ def serialize_sparql_boolean(format: str, value: bool) -> bytes: ...
 # — a heterogeneous tuple discriminated by its first element.
 def parse_sparql_results(format: str, data: bytes) -> tuple[Any, ...]: ...
 
-# ── RDF → GTS producer (bindings/python/src/py_gts.rs, #819 Task 8) ──────────────
+# ── RDF → GTS producer (bindings/python/src/py_gts.rs) ──────────────────────────
 
 #: A `(data, media_type, rep)` content-addressed blob row.
 _BlobRow = tuple[bytes, str, str]
-#: A `(slice_iri, slice_name, role, logical_path, content)` row (#820 S3).
+#: A `(slice_iri, slice_name, role, logical_path, content)` row.
 _SliceArtifactRow = tuple[str, str, str, str, bytes]
 #: A `(data, format, graph_name, scope)` named-graph ingest row.
 _NamedGraphRow = tuple[bytes, RdfFormat, str | None, str | None]
@@ -506,7 +506,7 @@ def compile_gts_native(
 ) -> bytes: ...
 def snapshot_content_id_native(data: bytes, *, format: RdfFormat) -> str: ...
 
-# ── Text-format codecs via purrdf-gts (JSON-LD-star + RDF/XML, #834) ──────────────
+# ── Text-format codecs via purrdf-gts (JSON-LD-star + RDF/XML) ─────────────────
 # RDF bytes ↔ JSON-LD-star / RDF/XML through the purrdf-gts codec set. The compat
 # `Graph.serialize`/`parse` route these formats here; serialize takes RDF bytes in
 # `format` and returns the text form, parse takes the text and returns N-Quads bytes.
@@ -635,7 +635,7 @@ def gts_to_sqlite(data: bytes, path: str) -> str: ...
 def gts_to_duckdb(data: bytes, path: str) -> str: ...
 def gts_to_parquet(data: bytes, out_dir: str) -> list[str]: ...
 
-# A Python handle to a frozen, immutable RDF 1.2 dataset (#819 C7 foundation).
+# A Python handle to a frozen, immutable RDF 1.2 dataset.
 class RdfDataset:
     def __init__(self, data: bytes | str, format: RdfFormat) -> None: ...
     def quad_count(self) -> int: ...
@@ -657,7 +657,7 @@ class RdfDataset:
     ) -> str: ...
     def to_gts(self, profile: str = ...) -> bytes: ...
 
-# ── Native SSSOM codec (bindings/python/src/py_sssom.rs, #848) ──────────────────
+# ── Native SSSOM codec (bindings/python/src/py_sssom.rs) ───────────────────────
 # Parse + validate + RDF serialize for PurRDF SSSOM TSV mapping artifacts — the
 # in-repo replacement for the external `sssom` package. `validate_sssom` returns
 # one `SssomDiagnostic` dict per diagnostic (a parse failure surfaces as a single

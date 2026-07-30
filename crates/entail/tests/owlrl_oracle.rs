@@ -1100,7 +1100,10 @@ const DIFF_HEADER: &str = "\
 # `classify_divergence` recognizes a shape and would absorb any triple that merely looks
 # like a known divergence.
 #
-# Regenerate with PURRDF_WRITE_OWLRL_DIFF=1 after confirming every change is intended.
+# Regenerate deliberately with:
+#   cargo test -p purrdf-entail --test owlrl_oracle -- --ignored --exact \\
+#       rewrite_owlrl_divergence_artifact
+# then move EXPECTED_DIVERGENCE_TRIPLES in the same commit and say why the set changed.
 ";
 
 /// The committed divergence artifact's path.
@@ -1116,7 +1119,7 @@ fn read_expected_diff() -> BTreeSet<String> {
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
         panic!(
             "cannot read {}: {e}. It records the exact set of triples the two engines \
-             differ on; regenerate with PURRDF_WRITE_OWLRL_DIFF=1.",
+             differ on; regenerate with the ignored rewrite_owlrl_divergence_artifact test.",
             path.display()
         )
     });
@@ -1375,14 +1378,15 @@ fn goldens_match_owlrl_reference() {
         }
     }
 
-    if std::env::var_os("PURRDF_WRITE_OWLRL_DIFF").is_some() {
-        let mut out = String::from(DIFF_HEADER);
-        for line in &observed_diff {
-            out.push_str(line);
-            out.push('\n');
-        }
-        std::fs::write(diff_artifact_path(), out).expect("write the divergence artifact");
-    }
+    // The observed count is pinned as well as the artifact's, so a regression that swaps one
+    // divergent triple for another cannot slip through on cardinality alone.
+    assert_eq!(
+        observed_diff.len(),
+        EXPECTED_DIVERGENCE_TRIPLES,
+        "the two engines differ on {} triple(s), not the {} pinned in this file",
+        observed_diff.len(),
+        EXPECTED_DIVERGENCE_TRIPLES
+    );
 
     let expected_diff = read_expected_diff();
     let appeared: Vec<&String> = observed_diff.difference(&expected_diff).collect();
@@ -1392,7 +1396,8 @@ fn goldens_match_owlrl_reference() {
         "the two engines no longer differ on exactly the recorded triples.\n\
          {} newly divergent (PurRDF changed, or a golden was edited):\n{}\n\
          {} no longer divergent (a divergence closed — record the gain):\n{}\n\
-         Regenerate with PURRDF_WRITE_OWLRL_DIFF=1 after confirming each change is intended.",
+         Regenerate with the ignored rewrite_owlrl_divergence_artifact test, and move \
+         EXPECTED_DIVERGENCE_TRIPLES in the same commit.",
         appeared.len(),
         appeared
             .iter()
@@ -1450,6 +1455,50 @@ fn ledger_entry_count_is_pinned() {
         EXPECTED_DIVERGENCE_COUNT,
         "crates/entail/tests/owlrl-divergences.toml gained or lost an entry — update \
          EXPECTED_DIVERGENCE_COUNT deliberately if the change is reviewed"
+    );
+}
+
+/// Rewrite `owlrl-divergence-triples.txt` from what the two engines do TODAY.
+///
+/// `#[ignore]`, and deliberately not reachable from the asserting test. An earlier revision
+/// wrote the artifact from inside `goldens_match_owlrl_reference`, immediately before its
+/// assertion, behind an environment variable — so a single command re-blessed whatever PurRDF
+/// currently did and the suite went green with a regression still in place. A regeneration
+/// path has to exist, or a golden becomes something people work around; it must not be
+/// reachable from the run that checks it.
+///
+/// Regenerate with:
+///
+/// ```text
+/// cargo test -p purrdf-entail --test owlrl_oracle -- --ignored --exact \
+///     rewrite_owlrl_divergence_artifact
+/// ```
+///
+/// Then update [`EXPECTED_DIVERGENCE_TRIPLES`] in the SAME commit and say why the set moved.
+#[test]
+#[ignore = "regenerates a committed artifact; run deliberately, never as part of the suite"]
+fn rewrite_owlrl_divergence_artifact() {
+    let mut observed: BTreeSet<String> = BTreeSet::new();
+    for fixture in CORPUS {
+        let ours = purrdf_closure_lines(fixture);
+        let theirs = read_golden_closure(fixture.name);
+        for only_ours in ours.difference(&theirs) {
+            observed.insert(format!("{} purrdf-only {only_ours}", fixture.name));
+        }
+        for only_theirs in theirs.difference(&ours) {
+            observed.insert(format!("{} owlrl-only {only_theirs}", fixture.name));
+        }
+    }
+    let mut out = String::from(DIFF_HEADER);
+    for line in &observed {
+        out.push_str(line);
+        out.push('\n');
+    }
+    std::fs::write(diff_artifact_path(), out).expect("write the divergence artifact");
+    println!(
+        "wrote {} divergent triple(s); set EXPECTED_DIVERGENCE_TRIPLES to {}",
+        observed.len(),
+        observed.len()
     );
 }
 

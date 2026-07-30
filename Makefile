@@ -67,7 +67,9 @@ BINARYEN_VERSION := 130
 # reachable from no host at all; leaving them Rust-only would have been a
 # producer with no consumer, and dropping the three largest from wasm alone
 # would have left one of the four hosts unable to reach what the other three
-# can. Attributed by ablation, three full builds on the pinned toolchain:
+# can. Attributed by ablation, three full builds on the pinned toolchain. The rows below
+# are HISTORICAL-MEASUREMENTS: each is what the artifact measured when that capability
+# landed, not what it measures today.
 #
 #   baseline (materialize + inventories)          8_779_131
 #   + six tableau services                        9_011_119   (+231_988)
@@ -76,7 +78,8 @@ BINARYEN_VERSION := 130
 #
 # Those four rows are the ATTRIBUTION measured when the services landed; the
 # deltas are what they cost, and the last row is not the current artifact. The
-# 139_211 bytes between it and 9_288_106 are the extension rule family, the
+# END-HISTORICAL. The 139_211 bytes between that last row and 9_288_106 are the
+# extension rule family, the
 # call-scoped plan cache, the surfaced termination certificate and the
 # extension inventory binding, all of which reached wasm afterwards.
 #

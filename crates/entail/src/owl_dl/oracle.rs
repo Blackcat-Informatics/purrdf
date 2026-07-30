@@ -93,13 +93,29 @@
 //! property makes, and the failure message prints the model so the refutation is checkable
 //! by hand.
 //!
-//! **Qualified, and only counted:** the oracle finds no model over any domain up to its
-//! bound while the tableau answers consistent. This is NOT a divergence. `ALCHOIQ` has no
-//! bounded-model property — `≥3 r.⊤` alone has no model over a two-element domain and is
-//! perfectly consistent — so "no model of size ≤ k" is silent about satisfiability. Such a
-//! case is tallied as `unbounded` and asserts nothing; a property that produced only these
-//! would be asserting nothing at all, which is why each property also asserts that a
-//! substantial share of its cases were decided by an exhibited model.
+//! **Asserted where the bound is sufficient, counted where it is not:** the oracle finds no
+//! model over any domain up to its bound while the tableau answers consistent. In general
+//! this is NOT a divergence. `ALCHOIQ` has no bounded-model property — `≥3 r.⊤` alone has no
+//! model over a two-element domain and is perfectly consistent — so "no model of size ≤ k"
+//! is usually silent about satisfiability, and such a case is tallied as `unbounded`.
+//!
+//! It is not silent for every knowledge base, and the exception is asserted. When nothing in
+//! the axiom set can force an element beyond the named individuals — see
+//! [`forces_unnamed_element`] — a model that exists restricts to the individuals' own
+//! equivalence classes, because dropping elements only makes `∀`, `≤n` and `¬` easier and no
+//! `∃`/`≥n` remains to break. Provided the signature's bound is wide enough to give every
+//! individual its own element, "no model up to the bound" IS "no model", and a consistent
+//! verdict is an UNSOUNDNESS — the direction that asserts something false rather than
+//! withholding something true. That case fails.
+//!
+//! Two limits of that assertion, stated because the coverage claim depends on them.
+//! `forces_unnamed_element` disqualifies any axiom set mentioning `∃`, `∀`, `≥n` or `≤n` at
+//! all, so the asserted direction covers the QUANTIFIER-FREE fragment — boolean combinations,
+//! nominals and self-restrictions — and not the counting or successor-generating machinery.
+//! And the two signatures whose individuals outnumber their domain bound are excluded
+//! entirely. A property that produced only `unbounded` cases would be asserting nothing in
+//! this direction, which is why each property also asserts that a substantial share of its
+//! cases were decided by an exhibited model.
 //!
 //! What the tableau's `false` does get checked against is the strongest thing available:
 //! [`Case::smallest_model`] searches EVERY domain size from 1 up to the signature's bound, so
@@ -793,11 +809,19 @@ struct Tally {
     /// The tableau answered inconsistent and the oracle found no model over any domain up to
     /// the signature's bound — agreement, as far as a bounded domain can show it.
     refuted: u32,
-    /// The tableau answered consistent and the oracle found no bounded model. `ALCHOIQ` has
-    /// no bounded-model property, so this asserts nothing.
+    /// The tableau answered consistent, the oracle found no bounded model, and the knowledge
+    /// base COULD force an element beyond the named individuals — so the bound is silent and
+    /// nothing is asserted. A case where nothing can force such an element never lands here:
+    /// it is asserted instead, and a consistent verdict there is a failure.
     unbounded: u32,
     /// The tableau ran out of steps, so there was no verdict to compare.
     exhausted: u32,
+    /// Cases where the oracle found NO model AND the bound was sufficient, so the
+    /// over-permissive direction was genuinely asserted rather than counted.
+    ///
+    /// Reported and floored per property, because a direction that binds zero times is not
+    /// being checked — and an assertion that never fires reads exactly like one that passes.
+    bound_asserted: u32,
 }
 
 impl Tally {
@@ -824,11 +848,21 @@ impl Tally {
 /// cannot quietly become a way of not testing anything.
 const STEP_CAP: u64 = 400;
 
-/// Check one generated knowledge base, recording how it resolved.
+/// Whether "no model up to the signature's bound" means "no model" for this knowledge base.
 ///
-/// Three things happen here: the tableau is asked twice and must answer identically; a case
-/// it could not finish is skipped; and where the oracle exhibits a model the tableau's
-/// `consistent` is asserted unconditionally.
+/// Two conditions, both necessary. Nothing in the axioms may force an element beyond the named
+/// individuals (see [`forces_unnamed_element`]), and the enumeration must be wide enough to
+/// give every individual its own element — three individuals forced apart need three, and two
+/// of the signatures enumerate only two.
+fn bounded_domain(sig: Signature, axioms: &[Axiom]) -> bool {
+    sig.individuals <= sig.max_domain
+        && axioms.iter().all(|axiom| match axiom {
+            Axiom::Gci(sub, sup) => !forces_unnamed_element(sub) && !forces_unnamed_element(sup),
+            Axiom::Type(_, c) => !forces_unnamed_element(c),
+            _ => true,
+        })
+}
+
 /// Whether `c` can force the domain to hold an element none of the named individuals
 /// denotes.
 ///
@@ -851,6 +885,13 @@ fn forces_unnamed_element(c: &Concept) -> bool {
     }
 }
 
+/// Check one generated knowledge base, recording how it resolved.
+///
+/// Four things happen here: the tableau is asked twice and must answer identically; a case it
+/// could not finish is skipped; where the oracle exhibits a model the tableau's `consistent`
+/// is asserted unconditionally; and where the oracle finds NO model and
+/// [`forces_unnamed_element`] says the bound was sufficient, the tableau's `consistent` is
+/// asserted to be false.
 fn check(sig: Signature, axioms: &[Axiom], tally: &RefCell<Tally>) -> Result<(), TestCaseError> {
     let case = Case::assemble(sig, axioms);
     let cap = tableau::step_cap(&case.kb).min(STEP_CAP);
@@ -892,15 +933,8 @@ fn check(sig: Signature, axioms: &[Axiom], tally: &RefCell<Tally>) -> Result<(),
             // every individual its own element, "no model up to the bound" IS "no model",
             // and a consistent verdict is an UNSOUNDNESS — the direction that asserts
             // something false rather than withholding something true.
-            let bounded = sig.individuals <= sig.max_domain
-                && axioms.iter().all(|axiom| match axiom {
-                    Axiom::Gci(sub, sup) => {
-                        !forces_unnamed_element(sub) && !forces_unnamed_element(sup)
-                    }
-                    Axiom::Type(_, c) => !forces_unnamed_element(c),
-                    _ => true,
-                });
-            if bounded {
+            if bounded_domain(sig, axioms) {
+                tally.borrow_mut().bound_asserted += 1;
                 return Err(TestCaseError::fail(format!(
                     "the tableau accepted a knowledge base with NO model, and nothing in \
                      it can force an element beyond the {} named individuals, so every \
@@ -913,7 +947,13 @@ fn check(sig: Signature, axioms: &[Axiom], tally: &RefCell<Tally>) -> Result<(),
             }
             tally.borrow_mut().unbounded += 1;
         }
-        None => tally.borrow_mut().refuted += 1,
+        None => {
+            let mut t = tally.borrow_mut();
+            t.refuted += 1;
+            if bounded_domain(sig, axioms) {
+                t.bound_asserted += 1;
+            }
+        }
     }
     Ok(())
 }
@@ -935,6 +975,7 @@ fn run_property(
     sig: Signature,
     cases: u32,
     tag: u8,
+    bound_floor: u32,
     strategy: &BoxedStrategy<Vec<Axiom>>,
 ) {
     let config = Config {
@@ -966,6 +1007,29 @@ fn run_property(
         "{name} decided fewer than a quarter of its cases by an exhibited model, so the \
          unconditional direction is barely being asserted: {tally:?}"
     );
+    // The OVER-PERMISSIVE direction, floored per property. An assertion that never fires
+    // reads exactly like one that passes, so each property states how often its bound was
+    // sufficient. Two properties state ZERO, and that is asserted as an equality rather than
+    // waved past: their signatures name more individuals than their enumeration has elements,
+    // so `bounded_domain` can never hold for them, and widening either signature must force
+    // this number to be revisited rather than silently starting to mean something.
+    if bound_floor == 0 {
+        assert_eq!(
+            tally.bound_asserted, 0,
+            "{name} now asserts the over-permissive direction {} time(s) where its signature \
+             made that impossible — its individuals used to outnumber its domain bound. Give \
+             it a real floor: {tally:?}",
+            tally.bound_asserted
+        );
+    } else {
+        assert!(
+            tally.bound_asserted >= bound_floor,
+            "{name} asserted the over-permissive direction only {} time(s), below its floor \
+             of {bound_floor}. A generator change has narrowed what this property checks: \
+             {tally:?}",
+            tally.bound_asserted
+        );
+    }
 }
 
 // ── The generators ──────────────────────────────────────────────────────────────
@@ -1206,14 +1270,21 @@ const DEEP_CASES: u32 = 300;
 /// individuals, models up to two elements.
 #[test]
 fn a_random_knowledge_base_is_consistent_whenever_the_oracle_exhibits_a_model() {
-    run_property("wide", WIDE, WIDE_CASES, 1, &arb_axioms(arb_axiom(WIDE)));
+    run_property("wide", WIDE, WIDE_CASES, 1, 0, &arb_axioms(arb_axiom(WIDE)));
 }
 
 /// The same property one domain element deeper: with a single role name a third element is
 /// affordable, so a tableau `false` is matched by the oracle failing at sizes 1, 2 AND 3.
 #[test]
 fn a_random_knowledge_base_agrees_with_the_oracle_over_a_three_element_domain() {
-    run_property("deep", DEEP, DEEP_CASES, 2, &arb_axioms(arb_axiom(DEEP)));
+    run_property(
+        "deep",
+        DEEP,
+        DEEP_CASES,
+        2,
+        20,
+        &arb_axioms(arb_axiom(DEEP)),
+    );
 }
 
 // ── The four interaction properties ─────────────────────────────────────────────
@@ -1308,6 +1379,7 @@ fn nominals_under_inverse_roles_and_cardinality_agree_with_the_oracle() {
         sig,
         NOMINAL_INVERSE_CASES,
         3,
+        10,
         &arb_axioms(axiom),
     );
 }
@@ -1380,6 +1452,7 @@ fn multi_member_nominals_against_distinctness_agree_with_the_oracle() {
         sig,
         ONE_OF_CASES,
         4,
+        250,
         &arb_axioms(axiom),
     );
 }
@@ -1460,6 +1533,7 @@ fn qualified_cardinality_under_a_role_hierarchy_agrees_with_the_oracle() {
         sig,
         ROLE_HIERARCHY_CASES,
         5,
+        0,
         &arb_axioms(axiom),
     );
 }
@@ -1530,6 +1604,7 @@ fn complement_against_disjunction_agrees_with_the_oracle() {
         sig,
         BOOLEAN_CASES,
         6,
+        700,
         &arb_axioms(axiom),
     );
 }
@@ -1779,6 +1854,41 @@ fn asymmetry_forbids_a_self_loop() {
             ),
         ],
         false,
+    );
+}
+
+/// `⊤ ⊑ ¬∃r.Self` with an asserted self-loop `a r a`.
+///
+/// UNSATISFIABLE, and separated by the negated-self-restriction clash alone. This is the whole
+/// content of `owl:IrreflexiveProperty`, and `asymmetry_forbids_a_self_loop` above does NOT
+/// reach it: asymmetry is a role axiom checked over the edge set, while this is a CONCEPT in a
+/// node's label checked against that node's own edges. Deleting the `¬∃r.Self` clash left
+/// every other test in this workspace passing, and the generators effectively never produce a
+/// negated self-restriction beside a matching loop, so this case has to be written down.
+#[test]
+fn an_irreflexive_role_forbids_an_asserted_self_loop() {
+    assert_verdict(
+        &[
+            Axiom::Gci(
+                Concept::Top,
+                Concept::Not(Box::new(Concept::SelfRestriction(Role::Named(role(0))))),
+            ),
+            Axiom::RoleAssertion(individual(0), role(0), individual(0)),
+        ],
+        false,
+    );
+
+    // The same axiom without the loop is satisfiable, so the assertion above turns on the
+    // clash rather than on `¬∃r.Self` being unsatisfiable on sight.
+    assert_verdict(
+        &[
+            Axiom::Gci(
+                Concept::Top,
+                Concept::Not(Box::new(Concept::SelfRestriction(Role::Named(role(0))))),
+            ),
+            Axiom::RoleAssertion(individual(0), role(0), individual(1)),
+        ],
+        true,
     );
 }
 
