@@ -434,13 +434,6 @@ fn distinct_metas(dag: &TermDag, nodes: &[NodeId]) -> Vec<MetaId> {
     acc
 }
 
-/// Freshen `clause`: mint a brand-new metavariable for every distinct
-/// metavariable its head and body mention, and return the renamed head and body.
-///
-/// Every clause firing needs its own fresh variables — two simultaneous uses of
-/// the same authored clause must not share a binding just because they share
-/// authored variable names.
-
 /// Can `head` possibly unify with `call`, judged WITHOUT freshening either?
 ///
 /// A cheap, SOUND pre-filter. [`expand_round`] freshens every clause against every
@@ -469,21 +462,27 @@ fn may_unify(dag: &TermDag, head: NodeId, call: NodeId) -> bool {
     if hargs.len() != cargs.len() {
         return false;
     }
-    if let (NodeData::Leaf(h), NodeData::Leaf(c)) = (dag.data(*hop), dag.data(*cop)) {
-        if h != c {
-            return false;
-        }
+    if let (NodeData::Leaf(h), NodeData::Leaf(c)) = (dag.data(*hop), dag.data(*cop))
+        && h != c
+    {
+        return false;
     }
     for (&h, &c) in hargs.iter().zip(cargs.iter()) {
-        if let (NodeData::Leaf(hs), NodeData::Leaf(cs)) = (dag.data(h), dag.data(c)) {
-            if hs != cs {
-                return false;
-            }
+        if let (NodeData::Leaf(hs), NodeData::Leaf(cs)) = (dag.data(h), dag.data(c))
+            && hs != cs
+        {
+            return false;
         }
     }
     true
 }
 
+/// Freshen `clause`: mint a brand-new metavariable for every distinct
+/// metavariable its head and body mention, and return the renamed head and body.
+///
+/// Every clause firing needs its own fresh variables — two simultaneous uses of
+/// the same authored clause must not share a binding just because they share
+/// authored variable names.
 fn freshen_clause(dag: &mut TermDag, clause: &FolClause) -> (NodeId, Vec<FolLit>) {
     let mut nodes: Vec<NodeId> = vec![clause.head];
     nodes.extend(clause.body.iter().map(|lit| lit.atom()));
