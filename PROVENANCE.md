@@ -274,15 +274,18 @@ lowering, proof-checking, and a projection — is instead provided by
 `ClauseAtom` Datalog IR (not from an RDF-authored program the way upstream's
 lowering was), exactly as `goal_directed.rs` was for gmeow's data.
 
-It has no in-repo caller. That is a measured limit, not an oversight: backward
-resolution can only refute a goal once its search reaches a fixpoint, and a
-regime rule table carries the predicate as DATA, so every meta-rule head matches
-every goal and relevance slicing prunes nothing (75 of 75 clauses for RDFS, 138
-of 138 for OWL 2 RL). Where a fixpoint is reachable at all it costs seconds per
-goal, so a cross-check wired into the explanation path could only ever report
-"budget spent" — a check that cannot fail. The port is kept faithful because it
-is the receiving surface for the sister project's own goal-directed layer, whose
-programs are not schema-agnostic in this way.
+`purrdf-entail`'s chase explanation calls it: every `explain_conclusion` re-derives
+its conclusion BACKWARD over the same clause program, so a proof is reached by two
+engines sharing only that program and a disagreement fails the call.
+
+Whether the backward search can REFUTE depends on the rule table's shape, since a
+refutation needs a fixpoint and a confirmation does not. `Simple`, `Rdf` and `D`
+reach one in microseconds (`Rdf` 196us, `D` 310us). `Rdfs` and `OwlRl` carry
+meta-rules whose predicate is a variable, so a head matches every goal, relevance
+slicing prunes nothing (75 of 75 clauses for RDFS, 138 of 138 for OWL 2 RL) and the
+search returns `Partial` after ~390ms and ~6.2s; those two are skipped and the
+certificate reports `backward skipped`. The port is kept faithful because it is also
+the receiving surface for the sister project's goal-directed layer.
 
 ## The combined approach (`purrdf-entail::combined`)
 

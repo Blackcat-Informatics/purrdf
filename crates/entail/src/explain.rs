@@ -77,9 +77,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
-use purrdf_datalog::clause::{DlClause, HeadForm};
+use purrdf_datalog::clause::{ClauseAtom, ClauseTerm, DlClause, HeadForm};
 use purrdf_datalog::id::ProofId;
 use purrdf_datalog::proof::{EvaluationProofs, ProofArena, ProofContext, ProofError};
+use purrdf_datalog::resolve_fol::{FolBudget, FolControl, FolStatus, solve_datalog_goal};
 use purrdf_datalog::seminaive::{compile, evaluate};
 use purrdf_datalog::store::{Fact, RelationStore};
 
@@ -103,6 +104,15 @@ pub enum ExplainError {
     /// derivation to hand back, so an explanation of it would have to be invented.
     NotDerived {
         /// The triple that has no derivation, rendered as canonical N-Quads terms.
+        conclusion: String,
+    },
+    /// The forward chase and the backward resolver disagree about the conclusion.
+    ///
+    /// Two independent engines answered the same question over the same clause program and
+    /// reached opposite verdicts. Which one is wrong is exactly what is not known here, so
+    /// the chase's proof is not handed back.
+    BackwardDisagreement {
+        /// The conclusion the chase derived and the resolver refuted.
         conclusion: String,
     },
     /// The ontology does not entail the axiom, so it has no justification.
@@ -148,6 +158,12 @@ impl std::fmt::Display for ExplainError {
                     "no derivation for {conclusion}: it is neither asserted nor inferred"
                 )
             }
+            Self::BackwardDisagreement { conclusion } => write!(
+                f,
+                "the forward chase derived `{conclusion}` but backward SLG resolution \
+                 searched the same clause program to a fixpoint and found no support for \
+                 it; the two engines disagree and neither answer can be trusted"
+            ),
             Self::NotEntailed => {
                 write!(
                     f,
@@ -224,6 +240,8 @@ pub struct ChaseProof {
     edb: RelationStore,
     /// The saturated store a negated body atom is re-decided against.
     model: RelationStore,
+    /// What the independent backward re-derivation concluded.
+    backward: BackwardCheck,
 }
 
 impl ChaseProof {
@@ -263,6 +281,16 @@ impl ChaseProof {
     #[must_use]
     pub fn steps(&self) -> usize {
         self.arena.len()
+    }
+
+    /// What the independent backward re-derivation concluded about this proof.
+    ///
+    /// Reported on the certificate so a corroborated conclusion is distinguishable from an
+    /// unexamined one. A [`BackwardCheck::Confirmed`] proof was derived twice, forward and
+    /// backward, by engines sharing only the clause program.
+    #[must_use]
+    pub fn backward(&self) -> BackwardCheck {
+        self.backward
     }
 
     /// Every rule the proof cites, in specification table order, deduplicated.
@@ -340,6 +368,131 @@ impl ChaseProof {
             .check(self.root, &ctx)
             .map_err(ExplainError::Unchecked)
     }
+}
+
+/// What the independent backward re-derivation concluded about a chase proof.
+///
+/// Reported on the certificate rather than kept internal, so a caller can tell a
+/// corroborated conclusion from an unexamined one instead of assuming.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackwardCheck {
+    /// SLG resolution found its own derivation of the conclusion.
+    Confirmed,
+    /// The search did not reach its fixpoint, so it has no opinion. `Partial` cannot
+    /// support a refutation: "no answer yet" is not "no answer".
+    Abstained,
+    /// Not attempted, because this regime's rule table is not one the backward search
+    /// completes over in interactive time: `Rdfs` and `OwlRl` carry meta-rules whose
+    /// predicate is a variable, so the backward search returns `Partial` rather than
+    /// reaching the fixpoint a refutation needs.
+    Skipped,
+}
+
+impl BackwardCheck {
+    /// The certificate's word for this outcome.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Confirmed => "confirmed",
+            Self::Abstained => "abstained",
+            Self::Skipped => "skipped",
+        }
+    }
+}
+
+/// The work budget the backward cross-check is charged against.
+const BACKWARD_CROSS_CHECK_STEPS: u64 = 200_000;
+
+/// One store surface string as the clause term that renders back to it.
+fn clause_term_of(surface: &str) -> ClauseTerm {
+    if surface.is_empty() {
+        return ClauseTerm::default_graph();
+    }
+    match surface.strip_prefix('<').and_then(|s| s.strip_suffix('>')) {
+        Some(iri) => ClauseTerm::iri(iri),
+        None => ClauseTerm::literal(surface),
+    }
+}
+
+/// Re-derive `goal` BACKWARD and refuse if the two engines disagree.
+///
+/// The semi-naive chase reaches this conclusion forward from the seeded facts; SLG
+/// resolution reaches it backward from the goal. They share the clause program and nothing
+/// else — different algorithms, different data structures, different termination arguments
+/// — so agreement is evidence and disagreement is a defect in one of them.
+///
+/// # Confirmation and refutation are not symmetric
+///
+/// A non-empty answer set CONFIRMS whatever the budget did: a derivation that was found
+/// cannot be un-found by truncating the search. "No answer" means nothing until the search
+/// has reached its fixpoint, so a truncated search abstains rather than manufacturing a
+/// disagreement out of its own impatience.
+///
+/// # Which regimes are checked, and why not all of them
+///
+/// Whether the search completes depends on the rule table's SHAPE. `Simple`, `Rdf` and `D`
+/// have small, largely schema-specific tables and reach their fixpoint in microseconds —
+/// measured over a seeded store: `Rdf` (4 rules) 196µs, `D` (36 rules) 310µs, both
+/// `Complete`. `Rdfs` and `OwlRl` carry meta-rules whose predicate is a VARIABLE, so a head
+/// matches every goal and its body demands everything; relevance analysis prunes nothing
+/// there (sliced against a ground goal, RDFS keeps 75 of 75 clauses and OWL 2 RL 138 of
+/// 138) and the search returns `Partial` after ~390ms and ~6.2s respectively. Paying
+/// seconds for an outcome that can only ever be `Abstained` buys nothing, so those two are
+/// [`BackwardCheck::Skipped`] and the certificate says so.
+///
+/// The backward resolver has NO separate EDB channel — a clause program is the whole story
+/// for it — so seeded facts are appended as empty-bodied clauses.
+///
+/// # Errors
+///
+/// [`ExplainError::BackwardDisagreement`] when the search reaches its fixpoint and finds no
+/// support for a goal the chase derived.
+fn confirm_backward(
+    regime: Regime,
+    program: &[DlClause],
+    seeded: &RelationStore,
+    goal: &Fact,
+) -> Result<BackwardCheck, ExplainError> {
+    if matches!(regime, Regime::Rdfs | Regime::OwlRl) {
+        return Ok(BackwardCheck::Skipped);
+    }
+    let mut clauses = program.to_vec();
+    for fact in seeded.facts_sorted() {
+        clauses.push(DlClause::datalog(
+            ClauseAtom::quad(
+                clause_term_of(&fact.subject),
+                clause_term_of(&fact.predicate),
+                clause_term_of(&fact.object),
+                clause_term_of(&fact.graph),
+            ),
+            vec![],
+        ));
+    }
+    let atom = ClauseAtom::quad(
+        clause_term_of(&goal.subject),
+        clause_term_of(&goal.predicate),
+        clause_term_of(&goal.object),
+        clause_term_of(&goal.graph),
+    );
+    let budget = FolBudget {
+        max_steps: BACKWARD_CROSS_CHECK_STEPS,
+    };
+    // A program this resolver cannot lower is an abstention, not a disagreement.
+    let Ok((_dag, control)) = solve_datalog_goal(&clauses, &atom, &budget) else {
+        return Ok(BackwardCheck::Abstained);
+    };
+    let FolControl::Decided(outcome) = control else {
+        return Ok(BackwardCheck::Abstained);
+    };
+    if !outcome.answers.is_empty() {
+        return Ok(BackwardCheck::Confirmed);
+    }
+    if outcome.status == FolStatus::Complete {
+        return Err(ExplainError::BackwardDisagreement {
+            conclusion: format!("{} {} {}", goal.subject, goal.predicate, goal.object),
+        });
+    }
+    Ok(BackwardCheck::Abstained)
 }
 
 /// Explain ONE triple of `regime`'s closure over `graph`: which rules, from which premises.
@@ -457,6 +610,10 @@ pub fn explain_conclusion(
         }
     };
 
+    // INDEPENDENT RE-DERIVATION. The chase says this holds; a different engine — SLG
+    // resolution over the same clause program — is asked the same question.
+    let backward = confirm_backward(regime, &program, &seeded, &goal)?;
+
     let proof = ChaseProof {
         regime,
         graph: graph.cloned(),
@@ -467,6 +624,7 @@ pub fn explain_conclusion(
         attribution,
         edb: seeded,
         model: evaluation.into_facts(),
+        backward,
     };
     // CHECKED BEFORE IT ESCAPES. There is no constructor that skips this, so a `ChaseProof`
     // a caller holds is one whose conclusion has been re-derived at least once.

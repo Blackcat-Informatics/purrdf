@@ -38,7 +38,7 @@ BINARYEN_VERSION := 130
 # context/options/registry engine, validation-scoped asserted-subclass
 # membership shared by native SHACL and SHACL-SPARQL, and now the entailment
 # engine, the nine OWL reasoner services AND the concrete domain — measures
-# 9_405_331 bytes against the 9_690_000 ceiling, which is 2.94% headroom. That
+# 9_506_455 bytes against the 9_690_000 ceiling, which is 1.89% headroom. That
 # figure is RECORDED AS A GATED CONSTANT below (WASM_SIZE_MEASURED_BYTES), not as
 # prose: it had already drifted 139_211 bytes behind the build once, because a
 # comment is the one part of this file nothing checks.
@@ -122,6 +122,13 @@ WASM_SIZE_BUDGET_BYTES := 9690000
 # ordinary codegen jitter from the touched-but-still-linked `Construct` enum
 # and id-brand additions rather than a capability moving the artifact at all.
 #
+# The increase 9_405_331 -> 9_506_455 is the backward cross-check reaching the
+# artifact: every chase explanation is now re-derived by SLG resolution over the same
+# clause program, so `resolve_fol` and `unify` link in. It is the largest single
+# addition on this branch and it buys a second, independent derivation of every
+# conclusion the explanation path reports — a disagreement fails the call rather than
+# being handed back as a proof. Still under WASM_SIZE_BUDGET_BYTES, so this is a
+# measurement update and not a ceiling raise.
 # The increase 9_396_449 -> 9_405_331 is the reasoning session reaching the
 # artifact: a `Reasoner` class over the shared boundary's `ReasonerSession`, so a
 # browser pays one parse and one reverse mapping for N questions instead of N of
@@ -143,7 +150,7 @@ WASM_SIZE_BUDGET_BYTES := 9690000
 # is shared by both, so it is linked exactly once either way.
 #
 # The measured constant below is the CURRENT size, not that intermediate figure.
-WASM_SIZE_MEASURED_BYTES := 9405331
+WASM_SIZE_MEASURED_BYTES := 9506455
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'

@@ -147,19 +147,21 @@
 //!   layer built on this receiving surface will need genuinely compound concept
 //!   terms. [`resolve_fol::solve_datalog_goal`] bridges the two worlds: it lowers
 //!   this crate's own [`clause::DlClause`] program into the compound-term IR and
-//!   answers one goal by SLG resolution.
+//!   answers one goal by SLG resolution. `purrdf-entail`'s chase explanation calls
+//!   it to RE-DERIVE its conclusion backward, so every explanation is reached by
+//!   two engines that share the clause program and nothing else, and a
+//!   disagreement fails the call rather than being reported as a proof.
 //!
-//!   **Nothing in this workspace calls it yet, and the reason is measured rather
-//!   than incidental.** Backward resolution can only REFUTE a goal once its search
-//!   reaches a fixpoint, and over a regime rule table it does not: the predicate is
-//!   carried as DATA, so a meta-rule's head matches every goal and its body demands
-//!   everything, which makes the search space schema-agnostic by construction.
-//!   Goal-directed relevance analysis therefore prunes nothing — sliced against a
-//!   concrete goal, an 18-rule RDFS program keeps 75 of 75 clauses and OWL 2 RL 138
-//!   of 138 — and reaching a fixpoint costs seconds per goal where it is reachable
-//!   at all. A caller that could only ever report "budget spent" would be a check
-//!   that cannot fail, so none was wired. What would change this is a resolver whose
-//!   completion does not require exhausting a schema-agnostic program.
+//!   Whether the backward search can REFUTE depends on the rule table's shape,
+//!   because a refutation needs a fixpoint while a confirmation does not. `Simple`,
+//!   `Rdf` and `D` reach one in microseconds (measured over a seeded store: `Rdf`
+//!   196µs, `D` 310µs). `Rdfs` and `OwlRl` carry meta-rules whose predicate is a
+//!   VARIABLE — the shape that lets one variable bind a predicate in one atom and a
+//!   subject in another — so a head matches every goal, relevance analysis prunes
+//!   nothing (sliced against a ground goal, RDFS keeps 75 of 75 clauses and OWL 2
+//!   RL 138 of 138), and the search returns `Partial` after ~390ms and ~6.2s. The
+//!   explanation path therefore skips those two and says `backward skipped` on the
+//!   certificate rather than paying seconds for an outcome that could only abstain.
 //!
 //! # Reuse
 //!

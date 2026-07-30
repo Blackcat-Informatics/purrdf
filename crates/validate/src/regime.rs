@@ -2276,6 +2276,7 @@ fn render_chase_proof_certificate(proof: &ChaseProof) -> String {
     // RE-DERIVED, not re-read: `check` walks the premises to the facts they
     // establish, matches the cited clause's body against them, and instantiates the
     // head. The proof's stated conclusion is not an input to that computation.
+    let _ = writeln!(out, "backward {}", proof.backward().as_str());
     let checked = proof.check();
     match &checked {
         Ok(fact) => {
@@ -2299,6 +2300,52 @@ fn render_chase_proof_certificate(proof: &ChaseProof) -> String {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    /// The backward re-derivation runs on the PRODUCTION surface and says so.
+    ///
+    /// `rdf` and `d` carry small, largely schema-specific rule tables, so SLG resolution
+    /// reaches its fixpoint over them in microseconds and the cross-check reports
+    /// `confirmed` — a conclusion derived twice, forward by the chase and backward by an
+    /// engine sharing only the clause program. This drives the same entry point Python's
+    /// `Reasoner`, the WASM `Reasoner` and the C ABI all call, so it fails the moment the
+    /// resolver stops completing rather than passing quietly.
+    #[test]
+    fn the_backward_check_confirms_on_the_regimes_it_completes_over() {
+        let data = "<http://example.org/x> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .\n";
+        let conclusion = data;
+        for regime in ["rdf", "d"] {
+            let answer = explain_conclusion_to_string(data, regime, conclusion)
+                .unwrap_or_else(|e| panic!("{regime} explains an asserted triple: {e}"));
+            assert!(
+                answer.certificate().contains("\nbackward confirmed\n"),
+                "{regime} completes its backward search, so the certificate must report \
+                 the corroboration rather than leave it assumed:\n{}",
+                answer.certificate()
+            );
+        }
+    }
+
+    /// The regimes whose search cannot complete say `skipped`, not `confirmed`.
+    ///
+    /// The other half of the honesty gate. `rdfs` and `owl-rl` carry meta-rules whose
+    /// predicate is a variable, so the backward search cannot reach a fixpoint in
+    /// interactive time; reporting anything but `skipped` there would claim a
+    /// corroboration that never happened.
+    #[test]
+    fn the_backward_check_reports_skipped_where_it_does_not_run() {
+        let data = "<http://example.org/x> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .\n";
+        for regime in ["rdfs", "owl-rl"] {
+            let answer = explain_conclusion_to_string(data, regime, data)
+                .unwrap_or_else(|e| panic!("{regime} explains an asserted triple: {e}"));
+            assert!(
+                answer.certificate().contains("\nbackward skipped\n"),
+                "{regime} must not claim a corroboration it never attempted:\n{}",
+                answer.certificate()
+            );
+        }
+    }
 
     /// A session's answers do not depend on what was asked before them.
     ///
