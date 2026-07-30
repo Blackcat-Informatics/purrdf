@@ -440,6 +440,50 @@ fn distinct_metas(dag: &TermDag, nodes: &[NodeId]) -> Vec<MetaId> {
 /// Every clause firing needs its own fresh variables — two simultaneous uses of
 /// the same authored clause must not share a binding just because they share
 /// authored variable names.
+
+/// Can `head` possibly unify with `call`, judged WITHOUT freshening either?
+///
+/// A cheap, SOUND pre-filter. [`expand_round`] freshens every clause against every
+/// demanded call before trying to unify, and freshening mints a metavariable per distinct
+/// variable and rebuilds the clause's nodes — so on a rule table it is the dominant cost,
+/// paid in full for pairs that could never have matched.
+///
+/// Two distinct interned constants never unify, so comparing argument positions where BOTH
+/// sides are already `Leaf` rejects a pair for free. Anything else — a metavariable on
+/// either side, a nested application, a differing arity — returns `true` and is decided by
+/// the real unifier, so this can only skip work, never an answer.
+fn may_unify(dag: &TermDag, head: NodeId, call: NodeId) -> bool {
+    let (
+        NodeData::App {
+            op: hop,
+            args: hargs,
+        },
+        NodeData::App {
+            op: cop,
+            args: cargs,
+        },
+    ) = (dag.data(head), dag.data(call))
+    else {
+        return true;
+    };
+    if hargs.len() != cargs.len() {
+        return false;
+    }
+    if let (NodeData::Leaf(h), NodeData::Leaf(c)) = (dag.data(*hop), dag.data(*cop)) {
+        if h != c {
+            return false;
+        }
+    }
+    for (&h, &c) in hargs.iter().zip(cargs.iter()) {
+        if let (NodeData::Leaf(hs), NodeData::Leaf(cs)) = (dag.data(h), dag.data(c)) {
+            if hs != cs {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 fn freshen_clause(dag: &mut TermDag, clause: &FolClause) -> (NodeId, Vec<FolLit>) {
     let mut nodes: Vec<NodeId> = vec![clause.head];
     nodes.extend(clause.body.iter().map(|lit| lit.atom()));
@@ -591,6 +635,11 @@ fn expand_round(
         for (rule_idx, clause) in program.clauses.iter().enumerate() {
             if engine.exhausted {
                 break;
+            }
+            // Reject impossible pairs BEFORE paying for freshening — the dominant cost on
+            // a rule table, and pure waste for a clause whose head cannot match this call.
+            if !may_unify(dag, clause.head, call_node) {
+                continue;
             }
             let (head, body) = freshen_clause(dag, clause);
             let mut base = Subst::new();
