@@ -21,6 +21,32 @@ use purrdf_sparql_algebra::{
 };
 use purrdf_sparql_eval::{NativeSparqlEngine, PreparedQuery};
 
+/// A reasoning session over one ontology — the OWL 2 Direct-Semantics services, held
+/// open so that asking N questions costs one parse and one reverse mapping.
+///
+/// Re-exported here because this is the module a Rust caller looks in for reasoning.
+/// Reachable before this existed only as `purrdf::validate::regime::ReasonerSession`,
+/// which is a truthful path and a misleading one: the type is not about validation, and
+/// the three other hosts (`purrdf.entail.Reasoner`, `new Reasoner(…)`,
+/// `purrdf_reasoner_open`) all name it where the reasoning surface is.
+///
+/// Distinct from [`purrdf_entail::Reasoner`], which is the knowledge base itself and
+/// answers in DL terms. This is the STRING boundary over it — the one every non-Rust
+/// host calls — so a Rust caller gets byte-identical answers and certificates to what
+/// Python, WASM and C see.
+///
+/// ```
+/// use purrdf::reasoning::ReasonerSession;
+///
+/// let data = "<http://example.org/tom> \
+///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .\n";
+/// let mut session = ReasonerSession::open(data, 0).expect("parses");
+/// assert_eq!(session.consistency().expect("decides").answer(), "consistency true\n");
+/// let hierarchy = session.classify().expect("decides"); // no second parse
+/// assert!(hierarchy.certificate().starts_with("purrdf-dl-certificate 1\n"));
+/// ```
+pub use purrdf_validate::regime::ReasonerSession;
+
 /// Entailment behavior applied before evaluating one SPARQL query.
 ///
 /// Every W3C `sparql:entailmentRegime` this repository implements is here, because a

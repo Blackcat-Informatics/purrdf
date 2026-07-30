@@ -430,6 +430,94 @@ def codec_listings(text: str) -> list[tuple[str, str]]:
     return listings
 
 
+def reasoning_session_hosts_claim() -> list[str]:
+    """The reasoning session must be reachable from every host, with the same services.
+
+    A capability that exists, is reachable one way and not another, and looks complete
+    from each surface on its own is the defect this session was built to remove — the DL
+    services were reachable one-shot from four hosts and as a session from none. Fixing it
+    on one host would have recreated the same shape one level down.
+
+    So the service set is derived from the shared boundary's own `impl ReasonerSession`
+    and required of all four hosts: Rust (the facade re-export), Python (`entail.Reasoner`),
+    WASM (the `#[wasm_bindgen] impl` and the published `.d.ts`) and C (the committed ABI
+    header). A service added to the boundary and wired to three hosts fails here.
+    """
+    problems: list[str] = []
+    boundary = (_REPO / "crates" / "validate" / "src" / "regime.rs").read_text()
+
+    # The service methods of `impl ReasonerSession`, taken from the block that defines
+    # them rather than from a list, so this cannot go stale against the boundary.
+    start = boundary.index("impl ReasonerSession {\n    /// See [`consistency_to_string`]")
+    end = boundary.index("// \u2500\u2500 The services", start)
+    services = sorted(set(re.findall(r"\n    pub fn ([a-z_]+)\(", boundary[start:end])))
+    if len(services) < 5:
+        raise SystemExit(
+            "reasoning_session_hosts_claim found only "
+            f"{len(services)} session services, so it is not reading the boundary and "
+            "would pass no matter which host omitted one"
+        )
+
+    def camel(name: str) -> str:
+        head, *rest = name.split("_")
+        return head + "".join(part.title() for part in rest)
+
+    def block(text: str, opener: str, closer: str) -> str:
+        """The text between `opener` and the next `closer`.
+
+        Every needle below is scoped to the host's session BLOCK rather than run over the
+        whole file. Unscoped, a service that exists as a free function and NOT as a method
+        would satisfy its own check — which is precisely the defect this claim exists to
+        catch, so an unscoped needle would make the gate dark.
+        """
+        start = text.index(opener)
+        return text[start : text.index(closer, start + len(opener))]
+
+    py_native = (_REPO / "bindings" / "python" / "src" / "py_entail.rs").read_text()
+    py_stub = (
+        _REPO / "bindings" / "python" / "python" / "src" / "purrdf" / "__init__.pyi"
+    ).read_text()
+    wasm = (_REPO / "crates" / "rdf-wasm" / "src" / "entail.rs").read_text()
+    dts = (_REPO / "crates" / "rdf-wasm" / "js" / "index.d.ts").read_text()
+
+    hosts = {
+        "Rust facade (crates/purrdf/src/reasoning.rs)": (
+            (_REPO / "crates" / "purrdf" / "src" / "reasoning.rs").read_text(),
+            lambda n: "pub use purrdf_validate::regime::ReasonerSession;",
+        ),
+        "Python (bindings/python/src/py_entail.rs)": (
+            block(py_native, "impl PyReasoner {", "\n}\n"),
+            lambda n: f"fn {n}(",
+        ),
+        "Python stub (__init__.pyi)": (
+            block(py_stub, "class Reasoner:", "\n# "),
+            lambda n: f"def {n}(",
+        ),
+        "WASM (crates/rdf-wasm/src/entail.rs)": (
+            block(wasm, "impl Reasoner {", "\n}\n"),
+            lambda n: f"fn {n}(",
+        ),
+        "WASM types (crates/rdf-wasm/js/index.d.ts)": (
+            block(dts, "export class Reasoner {", "\n}\n"),
+            lambda n: f"{camel(n)}(",
+        ),
+        "C ABI header (crates/rdf-capi/include/purrdf.h)": (
+            (_REPO / "crates" / "rdf-capi" / "include" / "purrdf.h").read_text(),
+            lambda n: f"purrdf_reasoner_{n}(",
+        ),
+    }
+
+    for host, (text, needle) in hosts.items():
+        missing = [service for service in services if needle(service) not in text]
+        if missing:
+            problems.append(
+                f"{host}: the reasoning session omits {missing} — every host must reach "
+                f"every service the shared boundary defines ({services}), or the capability "
+                "is reachable from one caller shape and dark from another"
+            )
+    return problems
+
+
 def codec_table_claim() -> tuple[list[str], int]:
     """Every document that spells out the codec list must list every `NativeRdfFormat`.
 
@@ -2139,6 +2227,8 @@ def main() -> int:
     problems.extend(profile_count_claim())
     checked += 1
     problems.extend(program_regime_dts_claim())
+    checked += 1
+    problems.extend(reasoning_session_hosts_claim())
     checked += 1
     # The ban walk reports how many files it scanned, which is COVERAGE, not a claim
     # count — folding ~1,900 scanned files into the "documented claims" headline would
