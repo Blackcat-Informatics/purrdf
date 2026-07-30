@@ -3,7 +3,7 @@
 # Expected: exactly gmeow:axisDiscourseTime (syuzhet — the order of telling)
 # and gmeow:axisStoryTime (fabula — the order of happening in-universe).
 # The chapter sequence is the syuzhet projection of frame-relative story
-# content (#359, EPIC #358); neither axis is the truth of the other.
+# content; neither axis is the truth of the other.
 
 PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 

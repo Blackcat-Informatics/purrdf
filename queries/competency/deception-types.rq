@@ -4,7 +4,6 @@
 #           eventTypeFabrication, eventTypeForgery, eventTypeImpersonation,
 #           eventTypeDisinformation,
 #           ClaimVeridicality, veridicalityUntrue, veridicalityLicensedFalsehood.
-# Issues #215, #216, #217.
 
 PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 

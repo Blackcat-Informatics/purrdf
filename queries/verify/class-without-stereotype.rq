@@ -1,7 +1,7 @@
-# ROBOT verify QC (#39) — reasoning-centric meta-grounding (CONSTITUTION P8).
+# ROBOT verify QC — reasoning-centric meta-grounding (CONSTITUTION P8).
 # Every GMEOW class must be punned with a meta-class in EITHER the gUFO namespace
 # (gufo:Kind / SubKind / Role / Phase / Category / EventType / …) OR the canonical
-# logic: namespace it migrates to (logic:Kind / …, #663/#694). The reasoned-graph
+# logic: namespace it migrates to (logic:Kind / …). The reasoned-graph
 # dual of the exactly_one_stereotype check in crates/validate/src/gufo.rs. A
 # non-empty result set is a FAILURE: run with `robot ... verify --queries …`.
 

@@ -2,9 +2,9 @@
 # the DraCor character-network primitive?"
 # Expected over instance data: unordered pairs sharing a carrying segment,
 # reachable through EITHER seam orientation (flat narrates, flat narratedIn,
-# or a promoted NarrationUsage) — the three forms are one seam (#360, EPIC #358).
+# or a promoted NarrationUsage) — the three forms are one seam.
 # Over the bare ontology this returns no rows (the seam carries no instance
-# data of its own); the consumer child (#364) gates it against the corpus.
+# data of its own); the consumer child gates it against the corpus.
 
 PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 

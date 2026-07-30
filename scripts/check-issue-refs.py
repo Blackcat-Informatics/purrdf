@@ -209,7 +209,7 @@ def iter_scan_paths(root: Path) -> Iterator[Path]:
     ).stdout
     for rel in sorted(part for part in out.split("\0") if part):
         suffix = Path(rel).suffix
-        if suffix not in (".rs", ".md", ".toml", ".py", ".pyi", ".yaml", ".yml"):
+        if suffix not in (".rs", ".md", ".toml", ".py", ".pyi", ".rq", ".yaml", ".yml"):
             continue
         segments = rel.split("/")
         top = segments[0]
@@ -219,6 +219,13 @@ def iter_scan_paths(root: Path) -> Iterator[Path]:
                 rel.endswith(".md") or rel.endswith(".toml")
             )
             if not (in_scan_dir or root_file):
+                continue
+        elif suffix == ".rq":
+            # SPARQL is SHIPPED text wherever it lives: a tracker token in a committed
+            # query is published exactly as one in a printed string is, and six of these
+            # carried one while every gate reported clean. `generated/` holds emitted
+            # artifacts, `queries/` first-party ones; both are read by users.
+            if top not in ("generated", "queries"):
                 continue
         elif suffix in (".py", ".pyi"):
             # `.pyi` is SHIPPED: it is the PEP 561 stub inside every published wheel,
@@ -254,7 +261,28 @@ def snippet(text: str, start: int, end: int, window: int = 24) -> str:
 
 
 def rust_comments(src: str) -> list[tuple[int, int, str]]:
-    """Extract Rust comments as ``(start_line, start_col, comment_text)``.
+    """Extract Rust comments as ``(start_line, start_col, comment_text)``."""
+    return rust_comments_and_literals(src)[0]
+
+
+def rust_string_literals(src: str) -> list[tuple[int, int, str]]:
+    """Extract Rust string-literal CONTENTS as ``(start_line, start_col, text)``.
+
+    A literal is not a comment, and for most lints that is the end of it — but an
+    issue-reference token inside one is not a note to a developer, it is text the
+    program PRINTS or RETURNS. Three shipped surfaces carried such tokens while this
+    lint reported clean, because the lexer that avoids reading ``//`` inside
+    ``"http://…"`` as a comment discarded the literal instead of scanning it. They are
+    scanned now; the URL exemption is unaffected, because it is the ``//`` that is
+    exempt, not the ``#NNN``.
+    """
+    return rust_comments_and_literals(src)[1]
+
+
+def rust_comments_and_literals(
+    src: str,
+) -> tuple[list[tuple[int, int, str]], list[tuple[int, int, str]]]:
+    """One pass over Rust source, returning its comments and its string literals.
 
     The scanner is deliberately conservative: it only needs to avoid treating
     ``//`` or ``/*`` inside string/char/raw-string literals as comment
@@ -263,6 +291,7 @@ def rust_comments(src: str) -> list[tuple[int, int, str]]:
     and raw strings with arbitrary hash counts.
     """
     comments: list[tuple[int, int, str]] = []
+    literals: list[tuple[int, int, str]] = []
     n = len(src)
     i = 0
 
@@ -302,11 +331,14 @@ def rust_comments(src: str) -> list[tuple[int, int, str]]:
             if c == "b":
                 i += 1
             i += 1  # skip opening quote
+            start_line, start_col = line, col
+            start = i
             while i < n and src[i] != '"':
                 if src[i] == "\\":
                     i += 2
                 else:
                     i += 1
+            literals.append((start_line, start_col, src[start:i]))
             if i < n:
                 i += 1  # skip closing quote
             continue
@@ -371,7 +403,7 @@ def rust_comments(src: str) -> list[tuple[int, int, str]]:
 
         i += 1
 
-    return comments
+    return comments, literals
 
 
 def is_rust_doc_comment(text: str) -> bool:
@@ -439,6 +471,34 @@ def scan_comments(
     return violations
 
 
+def literal_token_is_a_reference(text: str, token: str) -> bool:
+    """Whether a ``#NNN`` inside a Rust string literal is an ISSUE reference.
+
+    Two shapes are legitimately `#`-with-digits inside a string and are not tracker
+    references, so scanning literals without distinguishing them would trade a real
+    hole for false positives:
+
+    * a format specifier — ``{value:#04x}``, ``{n:#b}`` — where the `#` is the
+      alternate-form flag and the digits are a width;
+    * an identifier or IRI fragment where the `#` is preceded by a word character,
+      as in ``unit#7`` or ``origin-set#5``.
+
+    A tracker reference stands as its own word: preceded by nothing, whitespace, or an
+    opening delimiter. That is the only shape flagged here.
+    """
+    index = text.find(token)
+    while index != -1:
+        before = text[index - 1] if index > 0 else " "
+        after_pos = index + len(token)
+        after = text[after_pos] if after_pos < len(text) else " "
+        standalone = not (before.isalnum() or before == "_")
+        format_flag = after in "xXbBoOeE?}" or before == ":"
+        if standalone and not format_flag:
+            return True
+        index = text.find(token, index + 1)
+    return False
+
+
 def scan_rust(path: Path) -> list[tuple[int, int, str, str, str]]:
     """Return violations found in a Rust source file.
 
@@ -449,7 +509,20 @@ def scan_rust(path: Path) -> list[tuple[int, int, str, str, str]]:
     not Markdown, so a ``#NNN`` inside backticks there is still flagged.
     """
     src = path.read_text(encoding="utf-8")
-    return scan_comments(rust_comments(src), exclude_inline_code=True)
+    comments, literals = rust_comments_and_literals(src)
+    found = scan_comments(comments, exclude_inline_code=True)
+    # String literals are scanned for ISSUE tokens only. A process reference like
+    # "this branch" is ordinary prose a program may legitimately print, whereas a
+    # `#NNN` in a printed or returned string publishes a tracker id to a caller —
+    # which `.baseline` bans outright, and which three shipped surfaces carried while
+    # this lint reported clean.
+    found.extend(
+        hit
+        for hit in scan_comments(literals, exclude_inline_code=False)
+        if hit[4] == "issue" and literal_token_is_a_reference(hit[3], hit[2])
+    )
+    found.sort(key=lambda hit: (hit[0], hit[1]))
+    return found
 
 
 def skip_py_string(src: str, i: int, n: int) -> int:
@@ -750,6 +823,16 @@ def scan_path(path: Path) -> list[tuple[int, int, str, str, str]]:
         return scan_markdown(path)
     if path.suffix == ".toml":
         return scan_toml(path)
+    if path.suffix == ".rq":
+        # A `#` opens a comment in SPARQL, so the comment scanner reads these directly.
+        return scan_comments(
+            [
+                (n + 1, line.index("#") + 1, line[line.index("#") :])
+                for n, line in enumerate(path.read_text(encoding="utf-8").splitlines())
+                if "#" in line
+            ],
+            exclude_inline_code=False,
+        )
     if path.suffix in (".py", ".pyi"):
         # A stub is Python syntax, so the Python scanner reads its comments correctly.
         # Listing `.pyi` in the path iterator without adding it HERE would extend the

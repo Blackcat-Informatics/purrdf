@@ -3,7 +3,7 @@
 # quoted statement, target = its subject, creator = the standpoint). Every
 # standpoint retained, none privileged; lossy-drop: belief value (modality)
 # and confidence dropped — carried by standpoint-crminf.rq / -owl2.rq.
-# Branches B/C (#127): StandpointClaim with reified-statement or
+# Branches B/C: StandpointClaim with reified-statement or
 # generic-entity observedFeature. Generic-entity branch uses ?feature as
 # oa:hasTarget.
 PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>

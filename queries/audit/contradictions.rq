@@ -1,4 +1,4 @@
-# Audit (#55): every surfaced contradiction with its kind and detector —
+# Audit: every surfaced contradiction with its kind and detector —
 # the conflicts, visible, never resolved by rank (P9).
 PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 SELECT ?contradiction ?kind ?detector ?claim WHERE {

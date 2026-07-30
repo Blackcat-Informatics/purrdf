@@ -3,7 +3,7 @@
 # gmeow:standpointModality as the cl-tud/standpoint-owl2 standpointLabel
 # encoding (Box=□ settled, Diamond=◊ possible/probable, name=* universal).
 # Refuted (denied) claims are excluded — carried by standpoint-crminf.rq.
-# Branch B (#127): StandpointClaim with reified-statement observedFeature.
+# Branch B: StandpointClaim with reified-statement observedFeature.
 # Branch C (generic-entity observedFeature) is excluded by design — the
 # translator matches only owl:Axiom individuals.
 PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>

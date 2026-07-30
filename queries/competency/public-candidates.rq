@@ -1,4 +1,4 @@
-# public-candidates.rq (#225)
+# public-candidates.rq
 # SELECT facts that are safe candidates for projection to a given public consumer.
 # ?consumer is an optional filter parameter: if left unbound the query returns
 # candidates for all consumers; callers may restrict results by binding ?consumer

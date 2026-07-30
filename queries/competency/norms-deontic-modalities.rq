@@ -2,7 +2,7 @@
 # the vocabulary open?"
 # Expected: at least obligation (must), prohibition (must not), permission
 # (may), and recommendation (should) — the seeds of the OPEN DeonticModality
-# vocabulary (#351, EPIC #348). There is no ought, only ought-according-to:
+# vocabulary. There is no ought, only ought-according-to:
 # every modality-bearing norm names its issuer (SHACL-enforced).
 
 PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>

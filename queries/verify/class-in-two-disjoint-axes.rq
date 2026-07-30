@@ -1,4 +1,4 @@
-# ROBOT verify QC (#39) — anti-overtyping on the reasoned graph (CONSTITUTION P9).
+# ROBOT verify QC — anti-overtyping on the reasoned graph (CONSTITUTION P9).
 # No class may be a subclass — ASSERTED OR INFERRED — of two axes that the
 # ontology DECLARES disjoint (co-members of an owl:AllDisjointClasses set). The
 # disjointness is read from the matrix itself, not assumed from a hardcoded list,

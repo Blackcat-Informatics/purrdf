@@ -1,4 +1,4 @@
-# Audit (#55): show claims whose source is stale — the evidentiary bytes may
+# Audit: show claims whose source is stale — the evidentiary bytes may
 # no longer say what they said when the claim was asserted: the chunk's
 # source was modified AFTER the claim's assertion time.
 PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>

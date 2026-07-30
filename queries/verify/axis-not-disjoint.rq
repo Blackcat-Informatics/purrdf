@@ -1,4 +1,4 @@
-# ROBOT verify QC (#39) — orthogonality matrix integrity (CONSTITUTION P9).
+# ROBOT verify QC — orthogonality matrix integrity (CONSTITUTION P9).
 # Each of the seven orthogonal identity axes MUST be a member of an
 # owl:AllDisjointClasses set, so the reasoner can reject an individual placed in
 # two of them (see ontology/modules/gender.ttl and

@@ -1,4 +1,4 @@
-# Audit (#55): claims grouped by the model vantage and generating invocation —
+# Audit: claims grouped by the model vantage and generating invocation —
 # 'which model said this, under which call?' as one query.
 PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 SELECT ?model ?invocation (COUNT(?claim) AS ?claims) WHERE {

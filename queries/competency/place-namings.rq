@@ -1,6 +1,6 @@
 # Competency question: "How does GMEOW model the naming of places?"
 # Expected: gmeow:PlaceNaming — a DEFINED subclass of gmeow:NameUsage
-# (≡ NameUsage ⊓ ∃usageNamed.Place, issue #105). Place names are gmeow:PlaceName
+# (≡ NameUsage ⊓ ∃usageNamed.Place). Place names are gmeow:PlaceName
 # appellations borne via gmeow:hasPlaceName; a name-usage that names a gmeow:Place
 # is ENTAILED to be a PlaceNaming (proven by test_place_naming_is_entailed_not_asserted).
 # Reuse over redundancy (Principle 6): no parallel place-naming relator is minted.

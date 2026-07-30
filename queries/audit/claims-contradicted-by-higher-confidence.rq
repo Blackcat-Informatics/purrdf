@@ -1,4 +1,4 @@
-# Audit (#55): show claims contradicted by a higher-confidence claim.
+# Audit: show claims contradicted by a higher-confidence claim.
 # The Contradiction relator SURFACES the conflict; this query ranks NOTHING —
 # it reports which side carries less stated confidence so a consumer can
 # investigate. Both claims remain (P9: no single winner).

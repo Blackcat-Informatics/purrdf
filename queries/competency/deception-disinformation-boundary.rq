@@ -4,7 +4,6 @@
 # Disinformation = held ≠ projected at this node (divergence + intent claim).
 # Misinformation  = held ≈ projected at this node (no divergence) + veridicalityUntrue.
 # The boundary is local to each propagation hop, not a global label.
-# Issue #217.
 
 PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 PREFIX prov:  <http://www.w3.org/ns/prov#>

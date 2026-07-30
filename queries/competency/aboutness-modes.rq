@@ -3,7 +3,7 @@
 # winner?"
 # Expected: exactly gmeow:aboutnessDescribes (mention: reports, quotes, depicts,
 # analyzes) and gmeow:aboutnessEnacts (use: performs, demands, exemplifies,
-# embodies) — the fourth domain-free epistemic axis (#349, EPIC #348). Text
+# embodies) — the fourth domain-free epistemic axis. Text
 # about deception is not text that deceives.
 
 PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
