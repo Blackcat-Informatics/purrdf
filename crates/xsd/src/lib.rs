@@ -145,6 +145,7 @@ pub mod datatype;
 pub mod numeric;
 pub mod ops;
 pub mod range;
+pub mod rational;
 pub mod simple;
 pub mod temporal;
 pub mod value;
