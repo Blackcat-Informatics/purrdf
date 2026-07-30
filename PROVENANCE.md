@@ -30,10 +30,11 @@ Copied from `gmeow-ontology`:
   `CompiledSchema` in memory, takes package prose from the caller, and records
   runtime projection gaps on the shared closed loss ledger. The verified
   `import_pydantic_package` reverse path retains the exact source schema and
-  rejects artifact/model-map drift. The legacy implementation is disposable
-  migration material, intended for deletion when gmeow integrates this
-  replacement; the consumer cutover is not yet complete and no downstream type
-  contract is preserved.
+  rejects artifact/model-map drift. The legacy implementation was disposable
+  migration material; gmeow has since integrated this replacement (its stage
+  renders through `purrdf::shapes::pydantic::emit_pydantic`, keeping only
+  caller-owned identity and prose), and no downstream type contract was
+  preserved.
 - The legacy LinkML YAML model in
   `crates/pipeline/src/stages/schemas.rs` at
   `c91195e0c300cad9c9a32c8580c2910a6fd48fc1` was used solely as migration
@@ -43,9 +44,9 @@ Copied from `gmeow-ontology`:
   `purrdf-shapes::linkml` API consumes `CompiledSchema`, requires all identity
   and vocabulary from the caller, preserves a canonical LinkML 1.11 document,
   reads native LinkML back into SHACL, verifies emitted packages, and records
-  projection/import gaps through direction-specific closed loss ledgers. The
-  legacy model is intended for deletion once this replacement is integrated,
-  not preservation as a downstream contract.
+  projection/import gaps through direction-specific closed loss ledgers. gmeow
+  has since integrated this replacement; the legacy model is a deletion
+  candidate on the gmeow side, not a downstream contract.
 - The legacy `render_typescript` path in
   `crates/pipeline/src/stages/schemas.rs` at
   `c91195e0c300cad9c9a32c8580c2910a6fd48fc1` was used only as evidence of the
@@ -56,9 +57,10 @@ Copied from `gmeow-ontology`:
   `CompiledSchema`, preserves exact JSON property names and requiredness,
   requires caller-owned package identity and prose, exposes a reversible type
   map, verifies intact packages before reverse SHACL import, and locates every
-  non-projectable assertion on a closed loss ledger. The old renderer and its
-  shared private schema model are intended for deletion once this replacement
-  is integrated; no downstream type contract is being preserved.
+  non-projectable assertion on a closed loss ledger. gmeow has since integrated this
+  replacement; the old renderer and its shared private schema model are
+  deletion candidates on the gmeow side, and no downstream type contract was
+  preserved.
 - The legacy `render_graphql` path in
   `crates/pipeline/src/stages/schemas.rs` at
   `c91195e0c300cad9c9a32c8580c2910a6fd48fc1` was likewise used only as
@@ -71,9 +73,9 @@ Copied from `gmeow-ontology`:
   output/input GraphQL September 2025 SDL, retains a canonical reversible name
   map and value codec, verifies intact packages before reverse SHACL import, and
   locates every coercion difference on a closed loss ledger verified against
-  GraphQL.js. The old renderer and shared legacy model are intended for deletion
-  when gmeow integrates this replacement; that consumer cutover is not yet
-  complete and no downstream type contract is being preserved.
+  GraphQL.js. gmeow has since integrated this replacement (one
+  `CompiledSchema`-driven schemas stage; the hand-rolled OWL-reading emitters
+  are deleted), and no downstream type contract was preserved.
 
 The five schema-language reverse paths are therefore PurRDF replacements, not
 compatibility layers around gmeow's private models. They share one deterministic
@@ -91,9 +93,10 @@ schema-to-SHACL engine and caller-owned vocabulary boundary.
   CSVW engine plus exact RDF 1.2 profile, and typed OBO Graphs 0.3.2 and SKOS
   views. It requires caller-owned identity, vocabulary, limits, and policy;
   produces deterministic bounded archives; and computes closed located loss
-  ledgers on every path. The legacy types and writers are intended for deletion
-  when gmeow integrates these replacements. That consumer cutover is not yet
-  complete, and no downstream type or byte-layout contract is being preserved.
+  ledgers on every path. gmeow has since integrated these replacements
+  (its lpg and export stages call the four LPG adapters, `project_csvw_exact`,
+  `project_skos` and `project_obo_graphs`, keeping caller-owned configuration
+  only), and no downstream type or byte-layout contract was preserved.
 - The legacy research-object stage in
   `crates/pipeline/src/stages/research_objects.rs` at
   `154921ddce1797b220877598f75d838e2075dc42` was used solely as migration
@@ -107,8 +110,11 @@ schema-to-SHACL engine and caller-owned vocabulary boundary.
   versioned codecs, offline JSON-LD interpretation, deterministic bounded USTAR
   carriers, and closed located runtime loss ledgers. The legacy types and stage
   are intended for deletion when gmeow integrates the replacement; that
-  consumer cutover is not yet complete, and no legacy type or byte-layout
-  contract is preserved.
+  consumer cutover is not yet complete — the gmeow stage's contract is
+  byte-parity with rdflib/`json.dumps`/`ElementTree` output, which these codecs
+  deliberately discard, so integrating them re-blesses gmeow's committed
+  research-object goldens — and no legacy type or byte-layout contract is
+  preserved.
 
 Copied from `gmeow-gts`:
 
@@ -136,13 +142,15 @@ Extraction policy:
 
 Cutover staging:
 
-- `../gmeow-ontology/.worktrees/purrdf-cutover` exists on branch
-  `paudley/purrdf-cutover`.
-- The downstream cutover is still in progress. Legacy consumer models and
-  renderers are migration evidence to delete as their PurRDF replacements are
-  integrated, not compatibility surfaces to preserve.
-- See `docs/CUTOVER.md` for the publish order, local gates, and dependency
-  replacement rules.
+- The carrier-layer cutover is COMPLETE on the gmeow side except the
+  research-object stage: gmeow deleted its thirteen RDF-kernel crates and
+  consumes the `purrdf` facade; the schema, LPG/tabular and SHACL surfaces run
+  on their PurRDF replacements, and the parquet consumer was retired outright.
+- The reasoning-substrate cutover has not begun: gmeow's `crates/logic` remains
+  fully native, by its own single-authority policy.
+- See [`docs/CUTOVER.md`](docs/CUTOVER.md) for the full dated record, the
+  prerequisites (including the `purrdf-datalog` crates.io bootstrap), and the
+  per-layer port order with its seams.
 
 ## Datalog physical primitives
 
@@ -189,8 +197,10 @@ file carries a fresh SPDX header and no upstream licence text survives.
 The port is not a transcription. Three couplings were removed rather than
 vendored: the sister project's error and arbitrary-precision crates (unused by
 these modules), its shared term arena (the branded `Id<C>` is now defined here),
-and `smallvec` (replaced by a fixed-capacity inline tuple, so the crate keeps its
-two-dependency budget and its handles become `Copy`). Ordering was tightened
+and `smallvec` (replaced by a fixed-capacity inline tuple, so the port added no
+dependency of its own and the handles become `Copy`; the crate's runtime
+dependency set is deliberately small and is checked from its manifest, not from
+this sentence). Ordering was tightened
 beyond the source — `BindingPattern` and `TermRef` gained a total order so index
 selection can key an ordered map rather than a hash map, because in this crate no
 map iteration order may reach an output path. Nightly `portable_simd` and
@@ -280,3 +290,30 @@ license, and a caller filters out any answer that would bind a distinguished
 query variable to one — see that module's own doc for the full account of the
 gap it closes in `owl_dl::query::materialize_dl_reported`'s query-independent
 augmentation.
+
+## Locality-based module extraction
+
+`crates/entail/src/reasoner/module.rs` (syntactic locality module extraction —
+`BOT`, `TOP`, `STAR`) is ported from the same later snapshot as the datalog
+physical primitives: `../gmeow-ontology` at
+`8906e41b15d5adaeccede35dab7e36c7eab86147`, upstream module
+`crates/logic/src/slme/mod.rs` (+ `slme/tests.rs`). The same relicensing basis
+applies: the source is `AGPL-3.0-only`, the port is relicensed
+`MIT OR Apache-2.0` under common ownership by the copyright holder, every ported
+file carries a fresh SPDX header, and no upstream licence text survives. An
+earlier revision of this file omitted this row; the omission is exactly the
+provenance error the datalog section's own correction note warns about, and the
+record now covers it.
+
+## Source-revision reachability
+
+The five per-surface source revisions cited in the extraction section above
+(`2e613ac3…`, `6cfd86d0…`, `c91195e0…`, `d7745068…`, `154921dd…`) were branch
+commits in the sister repository, whose history squash-merges; they are no
+longer reachable there. The migration evidence they anchored is preserved on
+THIS repository's side: the extraction branch's own import commits carry the
+copied file contents byte-for-byte, so content identity is attested by this
+history even where the upstream commit ids no longer resolve. The later
+snapshot used for the datalog, module-extraction and unify/SLG ports —
+`8906e41b15d5adaeccede35dab7e36c7eab86147` — is reachable: it is a mainline
+commit in the sister repository.
