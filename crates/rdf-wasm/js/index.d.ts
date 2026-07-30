@@ -511,6 +511,44 @@ export class ReasoningAnswer {
   free(): void;
 }
 
+/**
+ * A reasoning session over one ontology.
+ *
+ * Every `entail*` function takes the document as a string and rebuilds everything it
+ * needs, so asking three questions parses and reverse-maps the ontology three times.
+ * This class holds the parsed document instead: constructing it parses once, the first
+ * question needing a knowledge base reverse-maps once, and later questions reuse both.
+ * That matters more in a browser than anywhere else — this cost lands on the main
+ * thread.
+ *
+ * The methods answer exactly what the same-named functions answer; they are the same
+ * shared boundary session those functions now wrap.
+ *
+ * The constructor does NOT reason. `profile` answers for any parseable document, so
+ * building the knowledge base eagerly would make it inherit every way that can fail;
+ * an ontology whose knowledge base cannot be built still constructs and throws on the
+ * first question that needs one.
+ */
+export class Reasoner {
+  /**
+   * @param document N-Quads (or N-Triples).
+   * @param stepCap Narrows the per-decision tableau step cap for every question asked
+   *   through this session. 0 means the knowledge base's own cap, NOT a cap of zero
+   *   steps, and it can only narrow.
+   */
+  constructor(document: string, stepCap: number);
+  consistency(): ReasoningAnswer;
+  classify(): ReasoningAnswer;
+  realize(): ReasoningAnswer;
+  instances(class_: string): ReasoningAnswer;
+  entails(axiom: string): ReasoningAnswer;
+  profile(): ReasoningAnswer;
+  extractModule(signature: string, method: string): ReasoningAnswer;
+  justify(axiom: string): ReasoningAnswer;
+  explainConclusion(regime: string, conclusion: string): ReasoningAnswer;
+  free(): void;
+}
+
 export class QueryEngine {
   constructor();
   query(dataset: Dataset, sparql: string, options?: QueryOptions | null): QueryResult;

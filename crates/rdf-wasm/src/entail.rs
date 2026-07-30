@@ -39,7 +39,7 @@
 //! unchanged.
 
 use purrdf_validate::regime::{
-    ReasoningAnswer as BoundaryAnswer, RegimeClosure as BoundaryClosure,
+    ReasonerSession, ReasoningAnswer as BoundaryAnswer, RegimeClosure as BoundaryClosure,
     check_inconsistent_refusal, check_regime_golden_vectors, classify_to_string,
     consistency_to_string, entails_to_string, explain_conclusion_to_string, extension_rules_string,
     extract_module_to_string, implemented_rules_string, instances_to_string, justify_to_string,
@@ -522,9 +522,186 @@ pub fn entail_explain_conclusion(
     explain_conclusion_impl(document, regime, conclusion).map_err(|e| JsError::new(&e))
 }
 
+// ── The session ─────────────────────────────────────────────────────────────────
+
+/// A reasoning session over one ontology — `new Reasoner(document, stepCap)`.
+///
+/// Every `entail*` function above takes the document as a string and rebuilds
+/// everything it needs, so asking three questions parses and reverse-maps the ontology
+/// three times. This class holds the parsed document instead: constructing it parses
+/// once, the first question needing a knowledge base reverse-maps once, and later
+/// questions reuse both. That matters more here than on any other host — the browser
+/// pays this cost on the main thread.
+///
+/// The methods answer exactly what the same-named functions answer: they are the
+/// `purrdf_validate::regime` session those functions now wrap.
+///
+/// ```js
+/// const r = new Reasoner(document, 0);
+/// const consistent = r.consistency();
+/// const hierarchy = r.classify();   // no second parse
+/// r.free();                         // wasm objects are not garbage-collected for you
+/// ```
+#[wasm_bindgen]
+pub struct Reasoner {
+    /// The shared boundary's session. Every method is a thin call onto it.
+    session: ReasonerSession,
+}
+
+#[wasm_bindgen]
+impl Reasoner {
+    /// Parse `document` and open a session over it.
+    ///
+    /// `stepCap` narrows the per-decision tableau step cap for every question asked
+    /// through this session; **0 means the knowledge base's own cap**, not a cap of zero
+    /// steps, and it can only NARROW.
+    ///
+    /// Nothing is reverse-mapped here, so an ontology whose knowledge base cannot be
+    /// built still constructs — and throws on the first question that needs one. That is
+    /// deliberate: `profile`, `extractModule`, `justify` and `explainConclusion` never
+    /// reason, and `profile` answers for any parseable document.
+    ///
+    /// Throws if `document` fails to parse.
+    #[wasm_bindgen(constructor)]
+    pub fn new(document: &str, step_cap: u32) -> Result<Reasoner, JsError> {
+        ReasonerSession::open(document, step_cap)
+            .map(|session| Self { session })
+            .map_err(|e| JsError::new(&e))
+    }
+
+    /// Is the knowledge base consistent? See `entailConsistency`.
+    pub fn consistency(&mut self) -> Result<ReasoningAnswer, JsError> {
+        self.session
+            .consistency()
+            .map(ReasoningAnswer::from)
+            .map_err(|e| JsError::new(&e))
+    }
+
+    /// The entailed subsumption hierarchy. See `entailClassify`.
+    pub fn classify(&mut self) -> Result<ReasoningAnswer, JsError> {
+        self.session
+            .classify()
+            .map(ReasoningAnswer::from)
+            .map_err(|e| JsError::new(&e))
+    }
+
+    /// The entailed types of the named individuals. See `entailRealize`.
+    pub fn realize(&mut self) -> Result<ReasoningAnswer, JsError> {
+        self.session
+            .realize()
+            .map(ReasoningAnswer::from)
+            .map_err(|e| JsError::new(&e))
+    }
+
+    /// The individuals entailed to be instances of `class`. See `entailInstances`.
+    pub fn instances(&mut self, class: &str) -> Result<ReasoningAnswer, JsError> {
+        self.session
+            .instances(class)
+            .map(ReasoningAnswer::from)
+            .map_err(|e| JsError::new(&e))
+    }
+
+    /// Does the ontology entail `axiom`? See `entailEntails`.
+    pub fn entails(&mut self, axiom: &str) -> Result<ReasoningAnswer, JsError> {
+        self.session
+            .entails(axiom)
+            .map(ReasoningAnswer::from)
+            .map_err(|e| JsError::new(&e))
+    }
+
+    /// Which OWL 2 profiles the ontology is provably in. See `entailProfile`.
+    ///
+    /// Purely syntactic: never builds a knowledge base, so it answers even for an
+    /// ontology whose other services would throw.
+    #[must_use]
+    pub fn profile(&self) -> ReasoningAnswer {
+        ReasoningAnswer::from(self.session.profile())
+    }
+
+    /// A module for `signature`. See `entailExtractModule`.
+    #[wasm_bindgen(js_name = extractModule)]
+    pub fn extract_module(
+        &self,
+        signature: &str,
+        method: &str,
+    ) -> Result<ReasoningAnswer, JsError> {
+        self.session
+            .extract_module(signature, method)
+            .map(ReasoningAnswer::from)
+            .map_err(|e| JsError::new(&e))
+    }
+
+    /// A justification for `axiom`. See `entailJustify`.
+    pub fn justify(&self, axiom: &str) -> Result<ReasoningAnswer, JsError> {
+        self.session
+            .justify(axiom)
+            .map(ReasoningAnswer::from)
+            .map_err(|e| JsError::new(&e))
+    }
+
+    /// Why `conclusion` holds under `regime`. See `entailExplainConclusion`.
+    #[wasm_bindgen(js_name = explainConclusion)]
+    pub fn explain_conclusion(
+        &self,
+        regime: &str,
+        conclusion: &str,
+    ) -> Result<ReasoningAnswer, JsError> {
+        self.session
+            .explain_conclusion(regime, conclusion)
+            .map(ReasoningAnswer::from)
+            .map_err(|e| JsError::new(&e))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The session answers exactly what the one-shot functions answer.
+    ///
+    /// `Reasoner` exists so a browser pays one parse for N questions, and the ONE thing
+    /// that must not change is the result. Both halves of the pair are compared: an
+    /// answer that matched while its certificate reported different `steps` would mean
+    /// the session had carried work forward between questions.
+    ///
+    /// The `_impl` forms are compared rather than the `#[wasm_bindgen]` ones because
+    /// constructing a `JsError` calls a wasm-only import that panics off wasm — the same
+    /// reason `codec::resolve_media_type` returns a `String` error.
+    #[test]
+    fn the_session_answers_what_the_one_shot_functions_answer() {
+        let mut session = ReasonerSession::open(SCHEMA, 0).expect("parses");
+        let class = "<http://example.org/B>";
+        for (service, from_session, one_shot) in [
+            (
+                "consistency",
+                session.consistency().expect("decides"),
+                consistency_impl(SCHEMA, 0).expect("decides"),
+            ),
+            (
+                "classify",
+                session.classify().expect("decides"),
+                classify_impl(SCHEMA, 0).expect("decides"),
+            ),
+            (
+                "realize",
+                session.realize().expect("decides"),
+                realize_impl(SCHEMA, 0).expect("decides"),
+            ),
+            (
+                "instances",
+                session.instances(class).expect("decides"),
+                instances_impl(SCHEMA, class, 0).expect("decides"),
+            ),
+        ] {
+            let from_session = ReasoningAnswer::from(from_session);
+            assert_eq!(from_session.answer(), one_shot.answer(), "{service} answer");
+            assert_eq!(
+                from_session.certificate(),
+                one_shot.certificate(),
+                "{service} certificate"
+            );
+        }
+    }
 
     /// `A ⊑ B` and one typed instance — enough for `rdfs9` to re-type it.
     const SCHEMA: &str = "\
