@@ -141,6 +141,50 @@ def index_mjs_export_names() -> set[str]:
     return names
 
 
+def index_mjs_bound_names() -> set[str]:
+    """Every name BOUND in `index.mjs`'s module scope — imported or declared locally.
+
+    An export block only names what the module offers; it does not make the name exist.
+    A name exported but never bound makes the whole module fail to load — ES modules
+    resolve exports at link time, so `Export 'X' is not defined in module` takes down the
+    package root entirely, not just that one symbol.
+
+    This gate's own docstring promised to catch "a JS export whose Rust function no longer
+    exists ... a name that throws at import time", and its remediation text tells a reader
+    to fix "both the `import` block and the trailing `export` block" — while it read only
+    the second. Deleting one name from the import block left it reporting OK against a
+    package root that would not load at all.
+    """
+    text = _read(_INDEX_MJS)
+    names: set[str] = set()
+    # The `import init, { A, B as C, ... } from "..."` block.
+    for block in re.findall(r"^import\s+[\s\S]*?\{([\s\S]*?)\}\s*from\s", text, re.MULTILINE):
+        for item in block.split(","):
+            item = item.strip()
+            if item:
+                # `X as Y` binds Y; a bare `X` binds X.
+                names.add(item.split(" as ")[-1].strip())
+    # The default binding (`import init, {...}`) and any bare default import.
+    names.update(re.findall(r"^import\s+(\w+)\s*,", text, re.MULTILINE))
+    # Anything declared in the module itself.
+    names.update(
+        re.findall(
+            r"^(?:export\s+)?(?:async\s+)?function\s+(\w+)", text, re.MULTILINE
+        )
+    )
+    names.update(re.findall(r"^(?:export\s+)?class\s+(\w+)", text, re.MULTILINE))
+    names.update(
+        re.findall(r"^(?:export\s+)?(?:const|let|var)\s+(\w+)", text, re.MULTILINE)
+    )
+    if not names:
+        raise SystemExit(
+            f"check-wasm-js-exports: found no bound name in "
+            f"{_INDEX_MJS.relative_to(_REPO)} at all — the file was rewritten in a "
+            f"way this script's parser does not recognize"
+        )
+    return names
+
+
 def class_exports() -> set[str]:
     """Every `#[wasm_bindgen] pub struct` name — a CLASS, reached through an instance.
 
@@ -248,6 +292,22 @@ def main() -> int:
             f"root throws `ReferenceError` on a stale name, taking the whole module "
             f"with it. Either the Rust export was renamed or removed without updating "
             f"the wrapper, or the name is a leftover"
+        )
+
+    # THE BINDING CHECK. The two directions above compare the export block against the
+    # RUST surface, so a name deleted from the wrapper's `import` block stays "legitimate"
+    # — it still exists in Rust — while the module it is exported from can no longer
+    # resolve it. ES modules link exports eagerly, so that single missing import makes the
+    # ENTIRE package root fail to load, which is strictly worse than one dark symbol and
+    # was invisible to this gate until it read the import block too.
+    bound = index_mjs_bound_names()
+    for name in sorted(js_exports - bound):
+        problems.append(
+            f"{rel_index}: exports `{name}` but never binds it — the name is in no "
+            f"`import {{ ... }} from` block and is declared nowhere in the wrapper. An ES "
+            f"module resolves its exports at link time, so this does not merely hide "
+            f"`{name}`: importing the package root fails outright with `Export '{name}' "
+            f"is not defined in module`, and every other export goes down with it"
         )
 
     # And the TypeScript surface, which the remediation text below already promises.
