@@ -63,7 +63,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use purrdf_validate::regime::{
-    REGIME_NAMES, classify_to_string, consistency_to_string, entails_to_string,
+    REGIME_NAMES, ReasonerSession, classify_to_string, consistency_to_string, entails_to_string,
     explain_conclusion_to_string, extension_rules_string, extract_module_to_string,
     implemented_rules_string, instances_to_string, justify_to_string, materialize_to_nquads_string,
     parse_regime, profile_to_string, realize_to_string, regime_name, regime_plan, regime_rule_set,
@@ -556,6 +556,148 @@ fn explain_conclusion(
     Ok(answer.into_parts())
 }
 
+// ── The session ─────────────────────────────────────────────────────────────────
+
+/// A reasoning session over one ontology — `purrdf.entail.Reasoner`.
+///
+/// Every free function above takes the document as a string and rebuilds everything it
+/// needs, so asking three questions parses and reverse-maps the ontology three times.
+/// This class holds the parsed document instead: constructing it parses once, the first
+/// question needing a knowledge base reverse-maps once, and later questions reuse both.
+///
+/// The methods answer exactly what the free functions of the same name answer — they are
+/// the same `purrdf_validate::regime` session those functions now wrap — so moving from
+/// one to the other cannot change an answer or a certificate.
+///
+/// ```python
+/// r = purrdf.entail.Reasoner(data)
+/// answer, certificate = r.consistency()
+/// hierarchy, _ = r.classify()          # no second parse
+/// ```
+#[pyclass(name = "Reasoner")]
+pub(crate) struct PyReasoner {
+    /// The shared boundary's session. Every method is a thin call onto it.
+    session: ReasonerSession,
+}
+
+#[pymethods]
+impl PyReasoner {
+    /// Parse `data` and open a session over it.
+    ///
+    /// `data` is an N-Quads (or N-Triples) document. `step_cap` narrows the per-decision
+    /// tableau step cap for every question asked through this session; **0 (the default)
+    /// means the knowledge base's own cap**, not a cap of zero steps, and it can only
+    /// NARROW.
+    ///
+    /// Nothing is reverse-mapped here, so an ontology whose knowledge base cannot be
+    /// built still constructs — and raises on the first question that needs one. That is
+    /// deliberate: `profile`, `extract_module`, `justify` and `explain_conclusion` never
+    /// reason, and `profile` answers for any parseable document.
+    ///
+    /// Raises `ValueError` on a malformed document.
+    #[new]
+    #[pyo3(signature = (data, step_cap = 0))]
+    fn new(py: Python<'_>, data: &str, step_cap: u32) -> PyResult<Self> {
+        let session = py
+            .detach(|| ReasonerSession::open(data, step_cap))
+            .map_err(PyValueError::new_err)?;
+        Ok(Self { session })
+    }
+
+    /// Is the knowledge base consistent? See `purrdf.entail.consistency`.
+    fn consistency(&mut self, py: Python<'_>) -> PyResult<(String, String)> {
+        let answer = py
+            .detach(|| self.session.consistency())
+            .map_err(PyValueError::new_err)?;
+        Ok(answer.into_parts())
+    }
+
+    /// The entailed subsumption hierarchy. See `purrdf.entail.classify`.
+    fn classify(&mut self, py: Python<'_>) -> PyResult<(String, String)> {
+        let answer = py
+            .detach(|| self.session.classify())
+            .map_err(PyValueError::new_err)?;
+        Ok(answer.into_parts())
+    }
+
+    /// The entailed types of the named individuals. See `purrdf.entail.realize`.
+    fn realize(&mut self, py: Python<'_>) -> PyResult<(String, String)> {
+        let answer = py
+            .detach(|| self.session.realize())
+            .map_err(PyValueError::new_err)?;
+        Ok(answer.into_parts())
+    }
+
+    /// The individuals entailed to be instances of `class_`. See `purrdf.entail.instances`.
+    #[pyo3(signature = (class_))]
+    fn instances(&mut self, py: Python<'_>, class_: &str) -> PyResult<(String, String)> {
+        let answer = py
+            .detach(|| self.session.instances(class_))
+            .map_err(PyValueError::new_err)?;
+        Ok(answer.into_parts())
+    }
+
+    /// Does the ontology entail `axiom`? See `purrdf.entail.entails`.
+    #[pyo3(signature = (axiom))]
+    fn entails(&mut self, py: Python<'_>, axiom: &str) -> PyResult<(String, String)> {
+        let answer = py
+            .detach(|| self.session.entails(axiom))
+            .map_err(PyValueError::new_err)?;
+        Ok(answer.into_parts())
+    }
+
+    /// Which OWL 2 profiles the ontology is provably in. See `purrdf.entail.profile`.
+    ///
+    /// Purely syntactic: this never builds a knowledge base, so it answers even for an
+    /// ontology whose other services would raise.
+    fn profile(&self, py: Python<'_>) -> (String, String) {
+        py.detach(|| self.session.profile()).into_parts()
+    }
+
+    /// A module for `signature`. See `purrdf.entail.extract_module`.
+    #[pyo3(signature = (signature, method))]
+    fn extract_module(
+        &self,
+        py: Python<'_>,
+        signature: &str,
+        method: &str,
+    ) -> PyResult<(String, String)> {
+        let answer = py
+            .detach(|| self.session.extract_module(signature, method))
+            .map_err(PyValueError::new_err)?;
+        Ok(answer.into_parts())
+    }
+
+    /// A justification for `axiom`. See `purrdf.entail.justify`.
+    #[pyo3(signature = (axiom))]
+    fn justify(&self, py: Python<'_>, axiom: &str) -> PyResult<(String, String)> {
+        let answer = py
+            .detach(|| self.session.justify(axiom))
+            .map_err(PyValueError::new_err)?;
+        Ok(answer.into_parts())
+    }
+
+    /// Why `conclusion` holds under `regime`. See `purrdf.entail.explain_conclusion`.
+    #[pyo3(signature = (regime, conclusion))]
+    fn explain_conclusion(
+        &self,
+        py: Python<'_>,
+        regime: &Bound<'_, PyAny>,
+        conclusion: &str,
+    ) -> PyResult<(String, String)> {
+        let name = regime_name(native_regime(regime)?);
+        let answer = py
+            .detach(|| self.session.explain_conclusion(name, conclusion))
+            .map_err(PyValueError::new_err)?;
+        Ok(answer.into_parts())
+    }
+
+    /// The session's shape — how big the document is and whether it has reasoned yet.
+    fn __repr__(&self) -> String {
+        format!("{:?}", self.session)
+    }
+}
+
 /// Register the entailment-regime surface on a Python module.
 ///
 /// Called by the unified `purrdf_native` cdylib to populate the
@@ -563,6 +705,7 @@ fn explain_conclusion(
 /// `purrdf.entail` (mirroring [`crate::py_shex::register`]).
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRegime>()?;
+    m.add_class::<PyReasoner>()?;
     m.add_function(wrap_pyfunction!(materialize, m)?)?;
     m.add_function(wrap_pyfunction!(materialize_nt, m)?)?;
     m.add_function(wrap_pyfunction!(rules, m)?)?;

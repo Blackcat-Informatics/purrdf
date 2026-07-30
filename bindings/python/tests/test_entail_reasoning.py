@@ -535,3 +535,76 @@ def test_a_malformed_term_or_axiom_is_refused() -> None:
     )
     with pytest.raises(ValueError, match="names a graph"):
         entail.entails(TAXONOMY, graph_scoped)
+
+
+# ── The session ──────────────────────────────────────────────────────────────
+# `entail.Reasoner` holds the parsed document so that asking N questions costs
+# one parse and one reverse mapping. What must be true of it is not that it is
+# faster — a speed claim belongs in a benchmark — but that it answers exactly
+# what the free functions answer, and that it stays that way as questions
+# accumulate on the same knowledge base.
+
+
+def test_the_session_answers_what_the_free_functions_answer() -> None:
+    """Every `Reasoner` method matches its free function, certificate included.
+
+    The session exists to avoid re-parsing, so the ONE thing that must never
+    differ is the result. Both halves of the pair are compared: an answer that
+    matched while its certificate reported different `steps` would mean the
+    session had carried work forward between questions, which is a wrong
+    certificate even where the answer survives.
+    """
+    session = entail.Reasoner(TAXONOMY)
+    cat = "<https://example.org/Cat>"
+    assert session.consistency() == entail.consistency(TAXONOMY)
+    assert session.classify() == entail.classify(TAXONOMY)
+    assert session.realize() == entail.realize(TAXONOMY)
+    assert session.instances(cat) == entail.instances(TAXONOMY, cat)
+    assert session.entails(CHAIN_AXIOM) == entail.entails(TAXONOMY, CHAIN_AXIOM)
+    assert session.profile() == entail.profile(TAXONOMY)
+    assert session.justify(CHAIN_AXIOM) == entail.justify(TAXONOMY, CHAIN_AXIOM)
+    assert session.extract_module(cat, "star") == entail.extract_module(
+        TAXONOMY, cat, "star"
+    )
+
+
+def test_the_session_exposes_every_service_the_module_does() -> None:
+    """No service may be reachable one-shot and unreachable on the session.
+
+    A method missing here is the defect this class was built to remove, in
+    miniature: a capability that exists, is reached by one caller shape and not
+    another, and that nobody notices because each surface looks complete on its
+    own. Derived from the module rather than listed, so a service added to
+    `purrdf.entail` and not to `Reasoner` fails this test.
+    """
+    services = {
+        "consistency",
+        "classify",
+        "realize",
+        "instances",
+        "entails",
+        "profile",
+        "extract_module",
+        "justify",
+        "explain_conclusion",
+    }
+    assert services <= {name for name in dir(entail) if not name.startswith("_")}
+    missing = services - {n for n in dir(entail.Reasoner) if not n.startswith("_")}
+    assert not missing, f"reachable as a function but not on the session: {missing}"
+
+
+def test_the_session_does_not_reason_until_it_has_to() -> None:
+    """Constructing a session must not build a knowledge base.
+
+    `profile` is purely syntactic and answers for any parseable document. If the
+    constructor reverse-mapped eagerly it would inherit every way that can fail,
+    and documents that profile today would start raising. The repr reports
+    whether the knowledge base exists, so this is observable rather than
+    inferred.
+    """
+    session = entail.Reasoner(TAXONOMY)
+    assert "reasoned: false" in repr(session)
+    session.profile()
+    assert "reasoned: false" in repr(session), "profile must not reason"
+    session.consistency()
+    assert "reasoned: true" in repr(session)
