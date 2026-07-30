@@ -38,7 +38,7 @@ BINARYEN_VERSION := 130
 # context/options/registry engine, validation-scoped asserted-subclass
 # membership shared by native SHACL and SHACL-SPARQL, and now the entailment
 # engine, the nine OWL reasoner services AND the concrete domain — measures
-# 9_396_449 bytes against the 9_690_000 ceiling, which is 3.03% headroom. That
+# 9_405_331 bytes against the 9_690_000 ceiling, which is 2.94% headroom. That
 # figure is RECORDED AS A GATED CONSTANT below (WASM_SIZE_MEASURED_BYTES), not as
 # prose: it had already drifted 139_211 bytes behind the build once, because a
 # comment is the one part of this file nothing checks.
