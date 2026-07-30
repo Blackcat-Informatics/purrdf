@@ -25,6 +25,7 @@
 
 use std::path::Path;
 
+use purrdf::QueryEntailment;
 use purrdf_entail::{Materialization, Regime, RuleSet, parse_rif_xml};
 use purrdf_rdf::JsonLdSerializeOptions;
 
@@ -97,6 +98,32 @@ impl EntailmentPlan {
             Regime::D => Materialization::D,
             Regime::OwlDirect => Materialization::OwlDirect(&[]),
             Regime::Rif => Materialization::Rif(&self.rules),
+        }
+    }
+
+    /// The same resolved plan as a [`QueryEntailment`], for the lane that has a QUERY.
+    ///
+    /// [`Self::materialization`] is the document-transforming plan: `reason` and `convert`
+    /// have no query, so `owl-direct` there is the query-INDEPENDENT augmentation over an
+    /// empty basic graph pattern. `query --entailment` does have one, and handing that same
+    /// empty pattern to `materialize` was a capability the CLI threw away — the combined
+    /// approach is directed BY the query, so a lane that passes it no query cannot run it and
+    /// answers a query whose certain answer the library computes with an empty result set.
+    /// This is the plan `purrdf::query_with_entailment` takes, and the reason `query` no
+    /// longer open-codes "materialize, then evaluate".
+    ///
+    /// The mapping is total over the seven regimes, exactly as [`Self::materialization`] is:
+    /// there is no regime the query lane serves that the document lane does not, or the
+    /// reverse.
+    pub(crate) fn query_entailment(&self) -> QueryEntailment<'_> {
+        match self.regime {
+            Regime::Simple => QueryEntailment::Simple,
+            Regime::Rdf => QueryEntailment::Rdf,
+            Regime::Rdfs => QueryEntailment::Rdfs,
+            Regime::OwlRl => QueryEntailment::OwlRl,
+            Regime::D => QueryEntailment::D,
+            Regime::OwlDirect => QueryEntailment::OwlDirect,
+            Regime::Rif => QueryEntailment::Rif(&self.rules),
         }
     }
 }

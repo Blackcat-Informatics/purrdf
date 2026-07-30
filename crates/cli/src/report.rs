@@ -88,7 +88,12 @@ pub(crate) fn materialize_reported(
 /// * [`ReportTarget::Stderr`] — write the rendering to stderr, leaving stdout for the data
 ///   (so `purrdf reason … - --report` still pipes cleanly).
 /// * [`ReportTarget::File`] — write the rendering to the given path.
-fn surface(target: &ReportTarget, report: &ReasoningReport) -> Result<(), CliError> {
+///
+/// Reachable from the `query` lane as well as from [`materialize_reported`]: that lane
+/// materializes THROUGH `purrdf::query_with_entailment` (the only entry point that runs the
+/// query-directed combined approach), so it holds the report rather than obtaining it here,
+/// and it surfaces it through this one function so the two lanes cannot render differently.
+pub(crate) fn surface(target: &ReportTarget, report: &ReasoningReport) -> Result<(), CliError> {
     match target {
         ReportTarget::Silent => Ok(()),
         ReportTarget::Stderr => {

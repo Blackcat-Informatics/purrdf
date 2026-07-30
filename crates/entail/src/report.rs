@@ -285,8 +285,27 @@ impl Completeness {
 /// first (the input held the construct, or a conclusion was actually abandoned because of
 /// it), then the two that are INHERENT to a chase lane and hold for every input, then the
 /// six the OWL-Direct reverse mapping raises when an axiom it cannot fully handle is read,
-/// and last the one the OWL-Direct QUERY layer raises — about the shape of the question
-/// rather than about the ontology. The derived [`Ord`] follows that declaration order.
+/// and last the two the OWL-Direct QUERY layer raises — about the shape of the question,
+/// and about which of the two answering lanes could take it, rather than about the ontology
+/// alone. The derived [`Ord`] follows that declaration order.
+///
+/// # Every variant has a NAMED producer
+///
+/// A boundary no code path can raise is a promise the report never keeps, so each variant's
+/// producer is named here and reached by a test:
+///
+/// * the five chase constructs — this module's own `boundaries`, from the `DatasetSurvey` of
+///   the input and the run's own drop counts;
+/// * the six reverse-mapping constructs — `Kb::boundaries`, driven per construct by
+///   `every_owl2_construct_is_handled_or_bounded`;
+/// * [`Construct::NonDistinguishedVariable`] — the OWL-Direct query layer, when the basic
+///   graph pattern it was handed carries a blank node that is not class-expression scaffold;
+/// * [`Construct::NonHornTBox`] — the CALLER of
+///   [`materialize_combined`](crate::materialize_combined), through
+///   [`ReasoningReport::with_boundary`], when that call answered "not applicable" and the
+///   run fell back to the whole-vocabulary augmentation. It is the only one raised from
+///   outside this crate, because it is the only one that is a fact about which LANE
+///   answered rather than about what a lane read.
 ///
 /// # The OWL-Direct block exists so an axiom is never SILENTLY dropped
 ///
@@ -615,21 +634,32 @@ impl Construct {
             Self::NonHornTBox => {
                 "the combined approach answers a basic graph pattern with a non-distinguished \
                  variable by lowering the TBox's SIMPLE existential shape — `A ⊑ B` and \
-                 `A ⊑ ∃r.B` over named classes and a named role — into `purrdf-datalog`'s \
-                 DL-clause IR, running the RESTRICTED CHASE to mint a frontier-Skolem witness \
-                 for every existential, and filtering any answer that would bind a \
-                 DISTINGUISHED (projected) variable to a minted witness. That lowering \
-                 recognizes exactly two axiom shapes; an ontology whose TBox holds anything \
-                 else reachable from a `rdfs:subClassOf` triple — an equivalence, a \
-                 disjointness, a class expression on the SUBCLASS side, a restriction that is \
-                 not a plain `owl:someValuesFrom` of a named class over a named property, or \
-                 any of the other OWL 2 constructs the reverse mapping's own boundaries name \
-                 — falls outside it, and so does a Horn-shaped TBox whose existentials the \
-                 chase cannot certify terminating (a genuine schema-level cycle through the \
-                 existential positions). Either way the run falls back to the pre-existing \
-                 query-directed whole-vocabulary augmentation and its own — narrower — \
-                 guarantees, which is sound but may miss a certain answer that only a \
-                 non-distinguished variable's binding to a chase witness would have found"
+                 `A ⊑ ∃r.B` over classes and a role of the caller's own vocabulary — into \
+                 `purrdf-datalog`'s DL-clause IR, running the RESTRICTED CHASE to mint a \
+                 frontier-Skolem witness for every existential, and forbidding any OBSERVABLE \
+                 variable — one whose binding is projected, or is read by an aggregate, a \
+                 `BIND` or a `CONSTRUCT` template — from binding a minted witness. \
+                 \
+                 Applicability is a WHITELIST decision, so this boundary is raised by anything \
+                 the lowering does not itself express, not by a list of constructs someone \
+                 enumerated: a class axiom other than `rdfs:subClassOf`, a class expression on \
+                 either side of one, a restriction that is not a plain `owl:someValuesFrom` of \
+                 a named class over a named property, ANY property axiom or characteristic \
+                 (`rdfs:subPropertyOf`, `rdfs:domain`/`rdfs:range`, `owl:equivalentProperty`, \
+                 `owl:inverseOf`, `owl:propertyDisjointWith`, `owl:TransitiveProperty` and its \
+                 six siblings), an equality or difference assertion, an `owl:members`-based \
+                 axiom, a built-in class or role in a lowered position, a quad outside the \
+                 default graph, or a reserved term the vocabulary gained after this lowering \
+                 was written. So does a Horn-shaped TBox whose existentials the chase cannot \
+                 certify terminating (a genuine schema-level cycle through the existential \
+                 positions). \
+                 \
+                 Either way the run falls back to the pre-existing query-directed \
+                 whole-vocabulary augmentation and its own — narrower — guarantees, which is \
+                 sound but may miss a certain answer that only a non-distinguished variable's \
+                 binding to a chase witness would have found. The fallback is not a refusal: \
+                 the augmentation reads constructs the lowering does not, so the answer this \
+                 boundary accompanies may well be the complete one"
             }
         }
     }
@@ -1264,6 +1294,56 @@ impl ReasoningReport {
         &self.boundaries
     }
 
+    /// This report with `construct`'s boundary added, in [`Construct`] declaration order.
+    ///
+    /// The one way a boundary is attached to a report that has ALREADY been assembled, and
+    /// it exists because one boundary is not a property of the run that produced the report:
+    /// [`Construct::NonHornTBox`] is raised by the CALLER that asked for the combined
+    /// approach, learned from [`materialize_combined`](crate::materialize_combined) that the
+    /// TBox is outside the Horn fragment, and then answered through the whole-vocabulary
+    /// augmentation instead. The augmentation's own report is complete about the run IT
+    /// made; what it cannot know is that a stronger lane was tried first and declined. So
+    /// the caller says it, here, rather than the boundary having no producer at all.
+    ///
+    /// Idempotent, and order-preserving: a boundary already present is not repeated, and the
+    /// list comes back in [`Construct`] declaration order, which is the order every report
+    /// lists boundaries in — so two identical runs still render byte-identically.
+    ///
+    /// Adding a boundary can only narrow [`Self::completeness`], never widen it, because
+    /// completeness is computed from this list rather than stored beside it.
+    ///
+    /// ```
+    /// use purrdf_datalog::seminaive::BudgetReport;
+    /// use purrdf_entail::{Completeness, Construct, ReasoningReport, Regime};
+    ///
+    /// let report = ReasoningReport::new(
+    ///     Regime::OwlDirect,
+    ///     Vec::new(),
+    ///     Vec::new(),
+    ///     BudgetReport::new(0, 0, 0),
+    ///     None,
+    ///     0,
+    ///     None,
+    /// );
+    /// assert_eq!(report.completeness(), Completeness::Exact);
+    /// let bounded = report.with_boundary(Construct::NonHornTBox);
+    /// assert_eq!(bounded.completeness(), Completeness::ExactWithinBoundaries);
+    /// // Idempotent: the second call adds nothing.
+    /// let twice = bounded.clone().with_boundary(Construct::NonHornTBox);
+    /// assert_eq!(twice.boundaries(), bounded.boundaries());
+    /// ```
+    #[must_use]
+    pub fn with_boundary(mut self, construct: Construct) -> Self {
+        let boundary = Boundary::of(construct);
+        if !self.boundaries.contains(&boundary) {
+            self.boundaries.push(boundary);
+            // `Boundary`'s derived `Ord` is its construct's, which is `Construct`'s
+            // declaration order — the same order `of_dl_run` and `boundaries` emit.
+            self.boundaries.sort_unstable();
+        }
+        self
+    }
+
     /// The rules the run's calculus states that NO specification table does — exactly what
     /// [`extensions`] answers for this report's own regime.
     ///
@@ -1456,4 +1536,91 @@ fn boundaries(ds: &RdfDataset, regime: Regime, stats: &RunStats) -> Vec<Boundary
         })
         .map(Boundary::of)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use purrdf_datalog::seminaive::BudgetReport;
+
+    use super::{Boundary, Completeness, Construct, ReasoningReport, Regime};
+
+    /// A report with no boundary at all — the state the whole-vocabulary augmentation hands
+    /// back for an ontology it read cleanly.
+    fn clean() -> ReasoningReport {
+        ReasoningReport::new(
+            Regime::OwlDirect,
+            Vec::new(),
+            Vec::new(),
+            BudgetReport::new(0, 0, 0),
+            None,
+            0,
+            None,
+        )
+    }
+
+    /// `NonHornTBox` HAS A PRODUCER, and this is its contract: attaching it to a report the
+    /// augmentation already assembled narrows that report's completeness.
+    ///
+    /// The variant used to exist with no code path anywhere that constructed it, so every
+    /// fallback run reported an empty boundary list while three prose sites promised the
+    /// disclosure. [`ReasoningReport::with_boundary`] is the producer; the production-surface
+    /// end of the same claim is asserted in `purrdf`'s `reasoning` module, where the caller
+    /// that learns of the fallback actually attaches it.
+    #[test]
+    fn the_non_horn_tbox_boundary_narrows_the_report_it_is_attached_to() {
+        let report = clean();
+        assert_eq!(report.completeness(), Completeness::Exact);
+        let bounded = report.with_boundary(Construct::NonHornTBox);
+        assert_eq!(
+            bounded.boundaries(),
+            &[Boundary::of(Construct::NonHornTBox)]
+        );
+        assert_eq!(bounded.completeness(), Completeness::ExactWithinBoundaries);
+    }
+
+    /// Attaching the same boundary twice is attaching it once: a report renders
+    /// byte-identically however many times a caller says the same true thing.
+    #[test]
+    fn attaching_a_boundary_is_idempotent() {
+        let once = clean().with_boundary(Construct::NonHornTBox);
+        let twice = once.clone().with_boundary(Construct::NonHornTBox);
+        assert_eq!(once.boundaries(), twice.boundaries());
+    }
+
+    /// The list comes back in [`Construct`] DECLARATION order whatever order the caller
+    /// attached in — the order every other emission path uses, so a report assembled by
+    /// `of_dl_run` and one finished by [`ReasoningReport::with_boundary`] list the same
+    /// constructs the same way.
+    #[test]
+    fn an_attached_boundary_lands_in_declaration_order() {
+        let report = clean()
+            .with_boundary(Construct::NonHornTBox)
+            .with_boundary(Construct::PropertyChain)
+            .with_boundary(Construct::NonDistinguishedVariable);
+        let constructs: Vec<Construct> =
+            report.boundaries().iter().map(|b| b.construct()).collect();
+        assert_eq!(
+            constructs,
+            vec![
+                Construct::PropertyChain,
+                Construct::NonDistinguishedVariable,
+                Construct::NonHornTBox,
+            ]
+        );
+    }
+
+    /// EVERY construct is attachable and every one of them narrows completeness — the
+    /// property that keeps `with_boundary` from being a `NonHornTBox`-shaped special case.
+    #[test]
+    fn every_construct_is_attachable_and_narrows_completeness() {
+        for construct in Construct::ALL {
+            let report = clean().with_boundary(construct);
+            assert_eq!(
+                report.boundaries(),
+                &[Boundary::of(construct)],
+                "{construct}"
+            );
+            assert_ne!(report.completeness(), Completeness::Exact, "{construct}");
+        }
+    }
 }

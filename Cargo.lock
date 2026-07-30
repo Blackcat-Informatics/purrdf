@@ -1297,6 +1297,7 @@ version = "0.9.0"
 dependencies = [
  "clap",
  "memmap2",
+ "purrdf",
  "purrdf-core",
  "purrdf-entail",
  "purrdf-rdf",

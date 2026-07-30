@@ -567,3 +567,283 @@ fn configured_jsonld_options_reach_graph_results_and_reject_select_results() {
     assert_eq!(select.status.code(), Some(2));
     assert!(stderr(&select).contains("requires an RDF graph result"));
 }
+
+/// The `A ⊑ ∃r.B`, `a : A` ontology: the shape whose certain answer NO query-independent
+/// augmentation over named terms can find, because no NAMED individual need be `r`-related to
+/// anything — the axiom only entails that SOME element is.
+const SOME_VALUES_FROM_TTL: &str = concat!(
+    "@prefix ex: <http://example.org/> .\n",
+    "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+    "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+    "ex:A a owl:Class .\n",
+    "ex:B a owl:Class .\n",
+    "ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:r ; owl:someValuesFrom ex:B ] .\n",
+    "ex:a a ex:A .\n",
+);
+
+/// An ontology OUTSIDE the combined approach's Horn fragment: `owl:equivalentClass` is a class
+/// axiom the TBox lowering does not express.
+const EQUIVALENT_CLASS_TTL: &str = concat!(
+    "@prefix ex: <http://example.org/> .\n",
+    "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+    "ex:A a owl:Class .\n",
+    "ex:B a owl:Class .\n",
+    "ex:A owl:equivalentClass ex:B .\n",
+    "ex:a a ex:A .\n",
+);
+
+/// THE COMBINED APPROACH IS REACHABLE FROM THE COMMAND LINE.
+///
+/// `SELECT ?x WHERE { ?x ex:r ?y . ?y a ex:B }` has the certain answer `ex:a`: every model of
+/// the ontology has SOME `r`-successor of `ex:a` typed `ex:B`, so `ex:a` satisfies the pattern
+/// under OWL Direct-Semantics entailment even though no triple — asserted or in the
+/// whole-vocabulary augmentation — ever says any named individual is `r`-related to anything.
+///
+/// Falsifiable against the old behavior: this exact command returned an EMPTY binding list.
+/// `query --entailment` open-coded "materialize the closure, then evaluate", and
+/// `Materialization::OwlDirect(&[])` is the query-INDEPENDENT augmentation — so the binary
+/// could not reach the query-directed combined approach the library implements, and a
+/// capability with exactly one caller in the whole repository (its own test) was dark from
+/// every host. The lane routes through `purrdf::query_with_entailment` now.
+#[test]
+fn entailment_owl_direct_answers_through_the_combined_approach() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "onto.ttl", SOME_VALUES_FROM_TTL);
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--entailment",
+        "owl-direct",
+        "--results-format",
+        "json",
+        "SELECT ?x WHERE { ?x <http://example.org/r> ?y . ?y a <http://example.org/B> }",
+    ]);
+    assert!(
+        out.status.success(),
+        "the query must answer; stderr:\n{}",
+        stderr(&out)
+    );
+    let body = stdout(&out);
+    assert!(
+        body.contains("\"value\":\"http://example.org/a\""),
+        "ex:a is a certain answer and must be returned:\n{body}"
+    );
+    // And the internal chase witness is not in the answer.
+    assert!(
+        !body.contains("purrdfCombinedWitness"),
+        "a chase witness leaked into the CLI's answer:\n{body}"
+    );
+
+    // The same pattern with `?y` PROJECTED has no certain answer, because the witness is not a
+    // term of the scoping graph — so the rows are empty rather than carrying the witness.
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--entailment",
+        "owl-direct",
+        "--results-format",
+        "json",
+        "SELECT ?y WHERE { ?x <http://example.org/r> ?y . ?y a <http://example.org/B> }",
+    ]);
+    let body = stdout(&out);
+    assert!(
+        body.contains("\"bindings\":[]"),
+        "a witness must not bind a projected variable:\n{body}"
+    );
+}
+
+/// The OPTIONAL whose only match is a witness leaves the row STANDING with `?y` unbound, and a
+/// `CONSTRUCT` template never emits the witness label. Both over the shipped binary.
+#[test]
+fn entailment_owl_direct_keeps_the_optional_row_and_constructs_no_witness() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "onto.ttl", SOME_VALUES_FROM_TTL);
+    let ask = |format: &str, query: &str| {
+        run(&[
+            "query",
+            "--data",
+            &ttl,
+            "--entailment",
+            "owl-direct",
+            "--results-format",
+            format,
+            query,
+        ])
+    };
+
+    // `ex:a a ex:A` is ASSERTED, so the row is an answer under any reading. A filter that
+    // dropped the whole row because the OPTIONAL matched a witness returned nothing here.
+    let out = ask(
+        "json",
+        "SELECT ?x ?y WHERE { ?x a <http://example.org/A> . \
+         OPTIONAL { ?x <http://example.org/r> ?y . ?y a <http://example.org/B> } }",
+    );
+    let body = stdout(&out);
+    assert!(
+        body.contains("\"value\":\"http://example.org/a\""),
+        "the OPTIONAL's row must survive with ?x bound:\n{body}"
+    );
+    // `?y` is in the header (it is projected) and absent from the binding object, which is
+    // exactly how the W3C results serialization spells an UNBOUND cell.
+    assert!(
+        body.contains("\"vars\":[\"x\",\"y\"]"),
+        "?y stays a projected variable:\n{body}"
+    );
+    assert!(
+        !body.contains("\"y\":{"),
+        "?y must be UNBOUND in the returned row, not a witness:\n{body}"
+    );
+
+    // A CONSTRUCT template variable is observable, so no solution supplies it and the emitted
+    // graph is empty — rather than carrying a triple whose object is the internal label.
+    let out = ask(
+        "ntriples",
+        "CONSTRUCT { ?x <http://example.org/saw> ?y } \
+         WHERE { ?x <http://example.org/r> ?y . ?y a <http://example.org/B> }",
+    );
+    let body = stdout(&out);
+    assert!(
+        !body.contains("purrdfCombinedWitness"),
+        "a witness label reached CONSTRUCT output:\n{body}"
+    );
+    assert!(body.trim().is_empty(), "expected no triples:\n{body}");
+
+    // A `DESCRIBE` reaches dataset triples no variable names, so its graph is scrubbed: the
+    // asserted type survives and the chase's witness-bearing role assertion does not.
+    let out = ask("ntriples", "DESCRIBE <http://example.org/a>");
+    let body = stdout(&out);
+    assert!(
+        !body.contains("purrdfCombinedWitness"),
+        "a witness label reached DESCRIBE output:\n{body}"
+    );
+    assert!(
+        body.contains("<http://example.org/A>"),
+        "the description must not be empty:\n{body}"
+    );
+    assert!(
+        !body.contains("<http://example.org/r>"),
+        "the witness-bearing role assertion must be scrubbed:\n{body}"
+    );
+
+    // An aggregate is computed INSIDE the engine, so it sees the restricted sequence.
+    let out = ask(
+        "json",
+        "SELECT (COUNT(?y) AS ?n) WHERE { ?x <http://example.org/r> ?y . ?y a <http://example.org/B> }",
+    );
+    let body = stdout(&out);
+    assert!(
+        body.contains("\"value\":\"0\""),
+        "COUNT must not count chase witnesses:\n{body}"
+    );
+}
+
+/// AN ONTOLOGY OUTSIDE THE HORN FRAGMENT SAYS SO, on the `--report` the operator reads.
+///
+/// Falsifiable against the old behavior: `Construct::NonHornTBox` had no producer anywhere, so
+/// every fallback run reported an empty boundary list and `completeness exact` while three
+/// prose sites promised the disclosure. The fallback still ANSWERS — the boundary is a
+/// disclosure of which lane answered, not a refusal.
+#[test]
+fn entailment_owl_direct_reports_the_non_horn_tbox_boundary_on_the_fallback() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let equivalent = write_file(dir, "equivalent.ttl", EQUIVALENT_CLASS_TTL);
+    let out = run(&[
+        "query",
+        "--data",
+        &equivalent,
+        "--entailment",
+        "owl-direct",
+        "--results-format",
+        "json",
+        "--report",
+        "ASK { <http://example.org/a> a <http://example.org/B> }",
+    ]);
+    assert!(
+        out.status.success(),
+        "the fallback must still answer; stderr:\n{}",
+        stderr(&out)
+    );
+    assert!(
+        stdout(&out).contains("\"boolean\":true"),
+        "the augmentation reads owl:equivalentClass and must answer true:\n{}",
+        stdout(&out)
+    );
+    let report = stderr(&out);
+    assert!(
+        report.contains("\nboundary non-horn-tbox "),
+        "the fallback must disclose the boundary:\n{report}"
+    );
+    assert!(
+        report.contains("\ncompleteness exact-within-boundaries\n"),
+        "naming a boundary narrows completeness:\n{report}"
+    );
+
+    // A run that STAYS in the fragment names it nowhere.
+    let in_fragment = write_file(dir, "onto.ttl", SOME_VALUES_FROM_TTL);
+    let out = run(&[
+        "query",
+        "--data",
+        &in_fragment,
+        "--entailment",
+        "owl-direct",
+        "--results-format",
+        "json",
+        "--report",
+        "ASK { <http://example.org/a> a <http://example.org/A> }",
+    ]);
+    let report = stderr(&out);
+    assert!(
+        !report.contains("non-horn-tbox"),
+        "the combined approach applied, so nothing fell back:\n{report}"
+    );
+}
+
+/// `rdfs:subPropertyOf` — the axiom the applicability check used to IGNORE rather than lower or
+/// refuse — disqualifies the combined approach, and the certain answer it licenses arrives
+/// through the fallback's augmentation. Both halves on the shipped binary.
+#[test]
+fn a_sub_property_axiom_falls_back_and_still_answers() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(
+        dir,
+        "subprop.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+            "ex:r rdfs:subPropertyOf ex:q .\n",
+            "ex:a ex:r ex:b .\n",
+        ),
+    );
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--entailment",
+        "owl-direct",
+        "--results-format",
+        "json",
+        "--report",
+        "SELECT ?x WHERE { ?x <http://example.org/q> ?y }",
+    ]);
+    assert!(
+        out.status.success(),
+        "the query must answer; stderr:\n{}",
+        stderr(&out)
+    );
+    assert!(
+        stdout(&out).contains("\"value\":\"http://example.org/a\""),
+        "ex:a is a certain answer through ex:q:\n{}",
+        stdout(&out)
+    );
+    assert!(
+        stderr(&out).contains("\nboundary non-horn-tbox "),
+        "a property axiom the lowering does not express must disqualify it:\n{}",
+        stderr(&out)
+    );
+}

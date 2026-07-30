@@ -36,6 +36,17 @@ purrdf-sparql-eval = { workspace = true }
 purrdf-sparql-results = { workspace = true }
 # The entailment regimes driving the `reason` subcommand's closure materialization.
 purrdf-entail = { workspace = true }
+# The umbrella's ENTAILMENT-AWARE QUERY lane: `query_with_entailment` is the one
+# entry point that runs the combined approach (query-directed OWL-Direct answering
+# over a restricted chase) and filters its witnesses. `query --entailment` calls it
+# rather than reimplementing "materialize, then evaluate", because the lane that
+# open-codes those two steps silently skips the combined approach — which is how
+# `--entailment owl-direct` came to answer `[]` for a query whose certain answer the
+# library already computed. Depending on the umbrella (rather than on
+# `purrdf-sparql-eval` plus `purrdf-entail` and re-deriving the orchestration) is
+# what makes the CLI a CONSUMER of the published surface instead of a second
+# implementation of it.
+purrdf = { workspace = true }
 # The ONE rendered form of a `ReasoningReport`. `--report` writes exactly what the
 # Python, WASM and C-ABI hosts read, because it is the same function rather than a
 # second renderer described as equivalent; `regime_name` is the same regime
