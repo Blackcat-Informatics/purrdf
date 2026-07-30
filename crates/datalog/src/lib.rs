@@ -147,9 +147,19 @@
 //!   layer built on this receiving surface will need genuinely compound concept
 //!   terms. [`resolve_fol::solve_datalog_goal`] bridges the two worlds: it lowers
 //!   this crate's own [`clause::DlClause`] program into the compound-term IR and
-//!   answers one goal by SLG resolution, so the capability is real, tested
-//!   machinery over the crate's actual data rather than a standalone algorithm
-//!   nobody calls.
+//!   answers one goal by SLG resolution.
+//!
+//!   **Nothing in this workspace calls it yet, and the reason is measured rather
+//!   than incidental.** Backward resolution can only REFUTE a goal once its search
+//!   reaches a fixpoint, and over a regime rule table it does not: the predicate is
+//!   carried as DATA, so a meta-rule's head matches every goal and its body demands
+//!   everything, which makes the search space schema-agnostic by construction.
+//!   Goal-directed relevance analysis therefore prunes nothing — sliced against a
+//!   concrete goal, an 18-rule RDFS program keeps 75 of 75 clauses and OWL 2 RL 138
+//!   of 138 — and reaching a fixpoint costs seconds per goal where it is reachable
+//!   at all. A caller that could only ever report "budget spent" would be a check
+//!   that cannot fail, so none was wired. What would change this is a resolver whose
+//!   completion does not require exhausting a schema-agnostic program.
 //!
 //! # Reuse
 //!

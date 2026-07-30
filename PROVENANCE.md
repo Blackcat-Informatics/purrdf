@@ -272,9 +272,17 @@ port alone; what `goal_directed.rs` would have added on top — a program
 lowering, proof-checking, and a projection — is instead provided by
 `resolve_fol::solve_datalog_goal`, a lowering FROM this crate's own `DlClause`/
 `ClauseAtom` Datalog IR (not from an RDF-authored program the way upstream's
-lowering was), so the capability is real, tested machinery over the crate's own
-data rather than a standalone engine nobody calls, exactly as `goal_directed.rs`
-was for gmeow's data.
+lowering was), exactly as `goal_directed.rs` was for gmeow's data.
+
+It has no in-repo caller. That is a measured limit, not an oversight: backward
+resolution can only refute a goal once its search reaches a fixpoint, and a
+regime rule table carries the predicate as DATA, so every meta-rule head matches
+every goal and relevance slicing prunes nothing (75 of 75 clauses for RDFS, 138
+of 138 for OWL 2 RL). Where a fixpoint is reachable at all it costs seconds per
+goal, so a cross-check wired into the explanation path could only ever report
+"budget spent" — a check that cannot fail. The port is kept faithful because it
+is the receiving surface for the sister project's own goal-directed layer, whose
+programs are not schema-agnostic in this way.
 
 ## The combined approach (`purrdf-entail::combined`)
 
