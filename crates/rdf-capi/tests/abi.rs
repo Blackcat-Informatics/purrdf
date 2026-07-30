@@ -1587,3 +1587,74 @@ fn invalid_graph_match_kind_yields_invalid_argument() {
         purrdf_dataset_free(dataset);
     }
 }
+
+/// Every exported entry point must appear in the committed header.
+///
+/// THE GATE FOR A DEFECT THIS SUITE ALREADY HIT. Six session services were first written
+/// with a Rust macro. They compiled, they were `#[unsafe(no_mangle)]`, and they were
+/// exported from the cdylib — but **cbindgen does not expand macros**, so none of them
+/// reached `include/purrdf.h`. Every Rust-side test passed while no C caller could name
+/// them: an exported symbol nobody can reach is exactly the dark capability the session
+/// work exists to remove, and `make capi-check` could not see it because the header it
+/// compares against was itself missing them.
+///
+/// Scans the crate source for `no_mangle` entry points rather than listing them, so a new
+/// one written in a way cbindgen cannot see fails here on the day it lands.
+#[test]
+fn every_exported_entry_point_is_declared_in_the_committed_header() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let header = std::fs::read_to_string(root.join("include/purrdf.h")).expect("committed header");
+
+    let mut exported = Vec::new();
+    let mut stack = vec![root.join("src")];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir)
+            .expect("readable source dir")
+            .flatten()
+        {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).expect("readable source");
+            // `no_mangle` marks the ABI surface; the name follows on the same or next line.
+            for (index, line) in source.lines().enumerate() {
+                if !line.contains("no_mangle") {
+                    continue;
+                }
+                let Some(signature) = source.lines().nth(index + 1) else {
+                    continue;
+                };
+                let Some(rest) = signature.split("extern \"C\" fn ").nth(1) else {
+                    continue;
+                };
+                let name = rest.split('(').next().unwrap_or_default().trim();
+                if name.starts_with("purrdf_") {
+                    exported.push(name.to_owned());
+                }
+            }
+        }
+    }
+
+    assert!(
+        exported.len() > 30,
+        "the scan found only {} entry points, so it is not reading the ABI surface and \
+         would pass no matter what the header omitted",
+        exported.len()
+    );
+
+    let undeclared: Vec<&String> = exported
+        .iter()
+        .filter(|name| !header.contains(&format!("{name}(")))
+        .collect();
+    assert!(
+        undeclared.is_empty(),
+        "exported from the cdylib but absent from include/purrdf.h, so unreachable from C: \
+         {undeclared:?} — if these were written with a macro, write them out: cbindgen does \
+         not expand macros"
+    );
+}

@@ -154,6 +154,7 @@ executes that example against the generated shared library and committed header.
 | `PurrdfJsonLdContext` | `Send + Sync` — immutable compiled context; may be reused concurrently |
 | `PurrdfGraph` | single-threaded mutable (COW delta); external locking required to share |
 | `PurrdfCursor` / `PurrdfRowCursor` | single-threaded |
+| `PurrdfReasoner` | `Send`, **not `Sync`** — answering mutates the shared knowledge base, so one handle may move between threads but not be used by two at once; open one per thread |
 | `PurrdfBuffer` / `PurrdfError` | immutable once returned; read from any thread, free once |
 
 ## Term crossing
