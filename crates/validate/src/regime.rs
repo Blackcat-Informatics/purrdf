@@ -3220,17 +3220,28 @@ mod tests {
         assert!(given.certificate().contains("\nchecked true\n"));
     }
 
-    /// The two lanes whose rules mint a fresh blank node are refused BY NAME, and
-    /// an underivable conclusion is a hard error rather than an empty explanation.
+    /// The existential refusal is per CONCLUSION, not per regime — and an
+    /// underivable conclusion is a hard error rather than an empty explanation.
+    ///
+    /// `rdfs` carries four existential rules beside fourteen Datalog ones, so a
+    /// conclusion the Datalog subset derives EXPLAINS (with a proof the checker
+    /// re-derives), while the same conclusion under `rdf` — whose three-rule
+    /// table cannot reach it — refuses by name: one of the existential rules may
+    /// be what derives it there, and "no derivation" would be a false answer.
     #[test]
     fn an_unexplainable_conclusion_is_refused_by_name() {
         let derived = "<http://example.org/x> \
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .\n";
-        for regime in ["rdf", "rdfs"] {
-            let error = explain_conclusion_to_string(TAXONOMY, regime, derived)
-                .expect_err("existential heads");
-            assert!(error.contains("existential"), "{error}");
-        }
+        let explained = explain_conclusion_to_string(TAXONOMY, "rdfs", derived)
+            .expect("rdfs9 derives it, and rdfs9 is a Datalog rule");
+        assert!(
+            explained.certificate().contains("\nchecked true\n"),
+            "the returned proof must re-derive"
+        );
+        let error = explain_conclusion_to_string(TAXONOMY, "rdf", derived)
+            .expect_err("rdf's three-rule table cannot derive it");
+        assert!(error.contains("existential"), "{error}");
+
         let absent = "<http://example.org/nobody> \
 <http://example.org/nothing> <http://example.org/nowhere> .\n";
         let error =

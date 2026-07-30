@@ -438,9 +438,15 @@ test("entailExplainConclusion derives a chase conclusion never asserted ON WASM"
   assert.ok(proof.certificate.endsWith("checked true\n"));
 });
 
-test("entailExplainConclusion refuses rdf/rdfs for an existential rule's conclusion", () => {
+test("the existential refusal is per conclusion, not per regime ON WASM", () => {
+  // `rdfs` derives the chain axiom through plain Datalog rules, so it explains —
+  // even though four of its eighteen rules are existential. `rdf`, whose
+  // three-rule table cannot reach the same conclusion beside two existential
+  // rules that might, refuses by name.
+  const proof = entailExplainConclusion(TAXONOMY, "rdfs", CHAIN_AXIOM);
+  assert.ok(proof.certificate.endsWith("checked true\n"));
   assert.throws(
-    () => entailExplainConclusion(TAXONOMY, "rdfs", CHAIN_AXIOM),
+    () => entailExplainConclusion(TAXONOMY, "rdf", CHAIN_AXIOM),
     /existential/,
   );
 });

@@ -789,8 +789,14 @@ mod tests {
         assert!(instances_impl(TAXONOMY, "not a term", 0).is_err());
         let error = extract_module_impl(TAXONOMY, "", "nested").expect_err("unknown method");
         assert!(error.contains("bot, top, star"), "{error}");
-        let error =
-            explain_conclusion_impl(TAXONOMY, "rdfs", CHAIN_AXIOM).expect_err("existential");
+        // The existential refusal is per CONCLUSION, not per regime: `rdfs`
+        // derives the chain axiom through plain Datalog rules and explains it,
+        // while `rdf` — whose three-rule table cannot reach it, beside two
+        // existential rules that might — refuses by name.
+        let proof = explain_conclusion_impl(TAXONOMY, "rdfs", CHAIN_AXIOM)
+            .expect("rdfs derives the chain axiom by Datalog rules");
+        assert!(proof.certificate().contains("\nchecked true\n"));
+        let error = explain_conclusion_impl(TAXONOMY, "rdf", CHAIN_AXIOM).expect_err("existential");
         assert!(error.contains("existential"), "{error}");
     }
 }
