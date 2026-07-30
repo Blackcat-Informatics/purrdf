@@ -40,8 +40,8 @@ const PACKAGE_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 // say so. Raise the ceilings deliberately, the same way the Makefile's are
 // raised: rebuild, read the printed size, restore a few percent of headroom, and
 // state in the commit which capability grew the package.
-const MEASURED_TARBALL_BYTES = 3_204_593;
-const MEASURED_UNPACKED_BYTES = 9_614_698;
+const MEASURED_TARBALL_BYTES = 3_205_157;
+const MEASURED_UNPACKED_BYTES = 9_612_032;
 const MAX_TARBALL_BYTES = 3_310_000;
 const MAX_UNPACKED_BYTES = 9_920_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
