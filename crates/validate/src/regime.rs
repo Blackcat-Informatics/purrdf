@@ -2771,6 +2771,65 @@ mod tests {
         ]
     }
 
+    /// The counting boundaries answer HONESTLY: an unrepresentable cardinality is a
+    /// named refusal, an unpayable one is `unknown`, and neither is ever a verdict.
+    ///
+    /// Both cliffs were live on the Python surface: `owl:maxCardinality` at `u32::MAX`
+    /// wrapped the `n + 1` both calculi need — a trivially consistent ontology answered
+    /// `false` under a certificate reading `decided` in release builds and PANICKED in
+    /// debug builds — and `owl:minCardinality "30"` disappeared into an exponential
+    /// clique search that the round cap could not see, because the work was inside one
+    /// round. The fixes are a parse-time refusal, a branch-and-bound prune with a work
+    /// budget on the clique search, and a witness-minting ceiling; all three degrade to
+    /// named errors or `unknown`, never to a wrong answer or a hang.
+    #[test]
+    fn counting_boundaries_refuse_or_exhaust_but_never_answer_wrongly() {
+        let restriction = |kind: &str, n: &str| {
+            format!(
+                "_:r <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+<http://www.w3.org/2002/07/owl#Restriction> .\n\
+_:r <http://www.w3.org/2002/07/owl#onProperty> <http://example.org/r> .\n\
+_:r <http://www.w3.org/2002/07/owl#{kind}> \
+\"{n}\"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .\n\
+<http://example.org/a> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> _:r .\n"
+            )
+        };
+
+        // u32::MAX cannot be incremented in this representation: refused BY NAME at
+        // parse, for every counting construct, never decided.
+        for kind in ["maxCardinality", "minCardinality", "cardinality"] {
+            let error = consistency_to_string(&restriction(kind, "4294967295"), 0)
+                .expect_err("an unrepresentable cardinality is a refusal");
+            assert!(error.contains("representable"), "{kind}: {error}");
+        }
+        // One below the bound is representable and trivially satisfiable.
+        let answer = consistency_to_string(&restriction("maxCardinality", "4294967294"), 0)
+            .expect("representable");
+        assert!(
+            answer.answer().starts_with("consistency true"),
+            "{answer:?}"
+        );
+
+        // The clique cliff: n=30 hung for over forty-five seconds before the
+        // branch-and-bound prune; it must now decide immediately.
+        let answer = consistency_to_string(&restriction("minCardinality", "30"), 0)
+            .expect("well inside every budget");
+        assert!(
+            answer.answer().starts_with("consistency true"),
+            "{answer:?}"
+        );
+
+        // Past the witness-minting ceiling the decision is UNKNOWN — three-valued
+        // honesty, the same shape as every other exhausted budget — not a hang and
+        // not a verdict.
+        let answer = consistency_to_string(&restriction("minCardinality", "100000"), 0)
+            .expect("exhaustion is an answer, not an error");
+        assert!(
+            answer.answer().starts_with("consistency unknown"),
+            "{answer:?}"
+        );
+    }
+
     /// EVERY service carries a certificate, and every certificate names its own
     /// service and ends with its own honesty gate.
     ///

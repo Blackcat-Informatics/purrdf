@@ -104,6 +104,18 @@
 //! (3) prevents a cycle of nodes justifying one another with no expanded representative, and
 //! (1) makes the "not blocked" test well-founded.
 //!
+//! One empirical honesty about condition (4)'s predecessor-label half: no knowledge base is
+//! KNOWN that separates it from label-only blocking in this rule set. A deliberate hunt —
+//! the generated corpora run under a label-only mutation, plus a hand-targeted family of
+//! inverse-role/∀⁻ chains (kept as a permanent differential test in the oracle) — changed
+//! tallies but never a verdict. The structural reason narrows the classic separation:
+//! blocking here withholds ONLY `≥`-rule applications, while every clause body — including
+//! the `∀r⁻` back-propagation whose obligations the pairwise condition guards in the
+//! published calculus — keeps matching blocked nodes, and blocking is recomputed every
+//! round as labels grow. The condition is kept because it is the published calculus's and
+//! costs one comparison; what must not be claimed is that the test corpus DEMONSTRATES its
+//! necessity, and this paragraph is that claim's replacement.
+//!
 //! Termination follows from (1) and (4) alone: a node's blocking signature is
 //! `(L(x), L(pred(x)), incoming(x))`, drawn from the FIXED, finalized concept table, so there
 //! are finitely many signatures; the first node with a given signature is unblocked and every
@@ -117,9 +129,12 @@
 //! `SHOIQ`'s interaction of nominals, inverse roles and number restrictions can require a
 //! nominal-introduction rule (Horrocks & Sattler's `NN`-rule) to be complete for knowledge
 //! bases where a `≤n r⁻` restriction on a NAMED individual bounds how many anonymous
-//! predecessors it may have. This calculus has no such rule, exactly as the incumbent
-//! concept-tree tableau has none, so the two agree on every input and both may report
-//! `consistent` for such a knowledge base where the full calculus refutes it. It is recorded
+//! predecessors it may have. This calculus has no such rule, and neither does the incumbent
+//! concept-tree tableau — a SHARED absence, which means both may report `consistent` for
+//! such a knowledge base where the full calculus refutes it, and the differential between
+//! them is structurally blind to exactly this corner: two calculi missing the same rule do
+//! not disagree about its consequences. What the differential establishes is zero divergence
+//! over its corpora, not agreement on every input. It is recorded
 //! here as the honest limit of the decision core rather than presented as decided; nothing in
 //! this crate reports a subsumption on the strength of a `consistent` verdict alone that the
 //! incumbent would not report too.
@@ -257,6 +272,7 @@ impl<'a> Hyper<'a> {
                 return Ok(false);
             }
             let changed = self.round(st);
+            Self::check_clique(st)?;
             if st.clash {
                 return Ok(false);
             }
@@ -267,6 +283,14 @@ impl<'a> Hyper<'a> {
     }
 
     /// Consume one round against the cap.
+    /// Convert a mid-rule clique-budget exhaustion into the search's own exhaustion.
+    fn check_clique(st: &State) -> Result<(), Exhausted> {
+        if st.clique_exhausted.get() {
+            return Err(Exhausted);
+        }
+        Ok(())
+    }
+
     fn tick(&mut self) -> Result<(), Exhausted> {
         if self.steps >= self.cap {
             return Err(Exhausted);

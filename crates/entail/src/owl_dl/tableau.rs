@@ -172,6 +172,9 @@ impl<'a> Tableau<'a> {
                 return Ok(false);
             }
             let changed = self.apply_deterministic(st);
+            if st.clique_exhausted.get() {
+                return Err(Exhausted);
+            }
             if st.clash {
                 return Ok(false);
             }
@@ -291,7 +294,12 @@ impl<'a> Tableau<'a> {
                     .into_iter()
                     .filter(|&y| self.g.has_concept(st, y, filler))
                     .collect();
-                let clique = max_clique(&with_c, &|a, b| are_distinct(st, a, b));
+                // Budget exhaustion is recorded on the state; the driver's saturate
+                // loop converts it to `Exhausted`, so a `None` here only withholds.
+                let Some(clique) = max_clique(&with_c, &|a, b| are_distinct(st, a, b)) else {
+                    st.clique_exhausted.set(true);
+                    continue;
+                };
                 if clique.len() > n as usize {
                     return true;
                 }
@@ -426,8 +434,18 @@ impl<'a> Tableau<'a> {
                 .into_iter()
                 .filter(|&y| self.g.has_concept(st, y, c))
                 .collect();
-            let mut clique = max_clique(&with_c, &|a, b| are_distinct(st, a, b));
+            let Some(mut clique) = max_clique(&with_c, &|a, b| are_distinct(st, a, b)) else {
+                st.clique_exhausted.set(true);
+                continue;
+            };
             if clique.len() >= n {
+                continue;
+            }
+            // Same witness-minting ceiling as the hypertableau's `ensure_at_least`, for
+            // the same reason: pairwise distinctness is quadratic bookkeeping, and past
+            // the ceiling the honest answer is exhaustion, not a hang.
+            if n > crate::owl_dl::graph::MAX_COUNTING_WITNESSES {
+                st.clique_exhausted.set(true);
                 continue;
             }
             while clique.len() < n {

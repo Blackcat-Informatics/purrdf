@@ -1978,3 +1978,121 @@ fn disjoint_roles_reject_a_shared_pair() {
         false,
     );
 }
+
+/// The inverse-role/∀⁻ family the generated corpus reaches thinly: chains under
+/// `X ⊑ ∃r.X` with universal obligations flowing back through `r⁻` across two and three
+/// levels, where blocking-discipline differences would live if this rule set could
+/// exhibit one.
+///
+/// Both cores decide every case and must agree; the satisfiable ones are additionally
+/// confirmed by a looping bounded model. These shapes were first written as a deliberate
+/// hunt for a knowledge base separating pairwise from label-only blocking (see the
+/// blocking notes in [`crate::owl_dl::hyper`]); none separated, and the family is kept
+/// so the differential's reach over this corner is a fixture, not an accident of the
+/// generators.
+#[test]
+fn inverse_universal_chains_decide_identically_in_both_cores() {
+    use crate::owl_dl::{graph, hyper, tableau};
+    let x = HAND.concept_names()[0];
+    let a = HAND.concept_names()[1];
+    let b = *HAND.concept_names().get(2).unwrap_or(&a);
+    let r = HAND.role_names()[0];
+    let i0 = HAND.individual_names()[0];
+    let named = |c: u32| Concept::Named(c);
+    let some = |ro, c: Concept| Concept::Some(Role::Named(ro), Box::new(c));
+    let all_inv = |ro, c: Concept| Concept::All(Role::Inv(ro), Box::new(c));
+    let all = |ro, c: Concept| Concept::All(Role::Named(ro), Box::new(c));
+    let not = |c: Concept| Concept::Not(Box::new(c));
+    let and = |l: Concept, rr: Concept| Concept::And(vec![l, rr]);
+
+    // (extra axioms, expected satisfiability, has a model within the 2-element bound) —
+    // expectations follow from the semantics: a chain rooted in X∧A where an obligation
+    // eventually forces ¬A back onto a node that must carry A is unsatisfiable; one whose
+    // obligations are absorbable by a small loop model is satisfiable, and where the
+    // smallest such loop needs more elements than the oracle's bound the third flag is
+    // false — the bounded enumeration is then silent, which is its documented limit, and
+    // the verdict rests on the two calculi agreeing.
+    let cases: Vec<(Vec<Axiom>, bool, bool)> = vec![
+        (
+            vec![Axiom::Gci(named(x), all(r, all_inv(r, not(named(a)))))],
+            false,
+            false,
+        ),
+        (
+            vec![Axiom::Gci(named(x), all_inv(r, not(named(a))))],
+            false,
+            false,
+        ),
+        (
+            vec![
+                Axiom::Gci(named(x), some(r, all_inv(r, named(b)))),
+                Axiom::Gci(named(b), not(named(a))),
+            ],
+            false,
+            false,
+        ),
+        (
+            vec![Axiom::Gci(
+                named(x),
+                all(r, some(r, all_inv(r, not(named(a))))),
+            )],
+            true,
+            false,
+        ),
+        (
+            vec![Axiom::Gci(
+                named(x),
+                all(r, all(r, all_inv(r, all_inv(r, not(named(a)))))),
+            )],
+            false,
+            false,
+        ),
+        (
+            vec![
+                Axiom::Gci(and(named(x), named(a)), all(r, not(named(a)))),
+                Axiom::Gci(named(x), all(r, some(r, named(x)))),
+            ],
+            true,
+            true,
+        ),
+        (
+            vec![Axiom::Gci(
+                named(x),
+                some(r, and(named(x), all_inv(r, named(a)))),
+            )],
+            true,
+            true,
+        ),
+        (
+            vec![Axiom::Gci(
+                named(x),
+                all(
+                    r,
+                    all_inv(r, and(named(a), all(r, all_inv(r, not(named(a)))))),
+                ),
+            )],
+            false,
+            false,
+        ),
+    ];
+    for (k, (extra, satisfiable, bounded_model)) in cases.iter().enumerate() {
+        let mut axioms = vec![
+            Axiom::Type(i0, and(named(x), named(a))),
+            Axiom::Gci(named(x), some(r, named(x))),
+        ];
+        axioms.extend(extra.iter().cloned());
+        let case = Case::assemble(HAND, &axioms);
+        let cap = graph::step_cap(&case.kb);
+        let h = hyper::decide(&case.kb, &Assumptions::of_kb(), cap);
+        let t = tableau::decide(&case.kb, &Assumptions::of_kb(), cap);
+        assert!(!h.exhausted && !t.exhausted, "case {k} must decide");
+        assert_eq!(h.consistent, t.consistent, "case {k}: the cores diverge");
+        assert_eq!(h.consistent, *satisfiable, "case {k}: wrong verdict");
+        if *bounded_model {
+            assert!(
+                case.smallest_model().is_some(),
+                "case {k}: this satisfiable chain has a loop model inside the bound"
+            );
+        }
+    }
+}

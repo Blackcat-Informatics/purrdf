@@ -819,12 +819,27 @@ impl<'a> CeExtractor<'a> {
     }
 
     /// Parse a cardinality literal (an `xsd:nonNegativeInteger`/`integer`) as `u32`.
+    ///
+    /// `u32::MAX` itself is REFUSED, not represented: both calculi need `n + 1` (the
+    /// NNF of `¬(≤n r.C)` is `≥(n+1) r.C`, and the schematic counting clause fires on
+    /// `n + 1` successors), so a bound that cannot be incremented in this representation
+    /// would wrap in release builds — turning `owl:maxCardinality u32::MAX` over an
+    /// individual with NO successors into a derived `false` under a certificate reading
+    /// `decided` — and panic in debug builds. A legal-but-unrepresentable input is a
+    /// named hard error, never a wrong verdict.
     fn card(&self, lit: u32) -> Result<u32, EntailError> {
         match self.interner.value(lit) {
             TermValue::Literal { lexical_form, .. } => {
-                lexical_form.trim().parse::<u32>().map_err(|_| {
+                let n = lexical_form.trim().parse::<u32>().map_err(|_| {
                     EntailError::Parse(format!("non-integer cardinality literal: {lexical_form:?}"))
-                })
+                })?;
+                if n == u32::MAX {
+                    return Err(EntailError::Parse(format!(
+                        "cardinality {n} exceeds this reasoner's representable bound                          ({} is the largest supported cardinality): refusing rather                          than deciding wrongly",
+                        u32::MAX - 1
+                    )));
+                }
+                Ok(n)
             }
             other => Err(EntailError::Parse(format!(
                 "cardinality value is not a literal: {other:?}"

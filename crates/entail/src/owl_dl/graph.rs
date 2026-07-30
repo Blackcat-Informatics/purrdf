@@ -94,6 +94,11 @@ pub(crate) struct State {
     pub(crate) root_of: BTreeMap<u32, usize>,
     /// A clash has been detected (e.g. a forced `≠` merge).
     pub(crate) clash: bool,
+    /// A clique-work budget ran out mid-rule ([`max_clique`] returned `None`), so this
+    /// state's counting answers are incomplete: the driver must surface the decision as
+    /// EXHAUSTED, never as a verdict. A `Cell` because the read-only satisfaction check
+    /// (`has_at_least`) can hit the budget through `&State`.
+    pub(crate) clique_exhausted: std::cell::Cell<bool>,
 }
 
 /// What a decision is made *on top of* the knowledge base.
@@ -218,36 +223,88 @@ pub(crate) fn set_distinct(st: &mut State, a: usize, b: usize) {
     st.nodes[b].neq.insert(a);
 }
 
-/// A maximum pairwise-compatible subset of `items` (a max clique under `compat`).
+/// A maximum pairwise-compatible subset of `items` (a max clique under `compat`), or
+/// `None` when the search exceeded its work budget.
 ///
 /// `compat(a, b)` is `true` when `a` and `b` may coexist (here: are forced `≠`).
-/// Deterministic: prefers lower-indexed members. `items` are tiny in practice.
-pub(crate) fn max_clique(items: &[usize], compat: &dyn Fn(usize, usize) -> bool) -> Vec<usize> {
+/// Deterministic: prefers lower-indexed members.
+///
+/// Two disciplines keep this from being the exponential cliff a naive backtracking
+/// search is. A BRANCH-AND-BOUND prune abandons any partial clique that cannot beat the
+/// best found even if every remaining item joins it — on the `≥`-rule's own witness
+/// sets, which are pairwise-`≠` BY CONSTRUCTION, the first depth-first descent collects
+/// the whole set and the bound then prunes every backtrack, so the common case is
+/// quadratic in `n` rather than `2^n`. And a WORK BUDGET bounds the adversarial case —
+/// a mixed `≠`-graph the prune does not tame — so exhaustion surfaces as `None`, which
+/// callers report as a budget-exhausted decision (`Verdict::Unknown` upstream), never
+/// as a hang and never as a guessed verdict. A search cap that counts rounds cannot see
+/// work INSIDE a round; this one counts the work itself.
+pub(crate) fn max_clique(
+    items: &[usize],
+    compat: &dyn Fn(usize, usize) -> bool,
+) -> Option<Vec<usize>> {
     let mut best: Vec<usize> = Vec::new();
     let mut current: Vec<usize> = Vec::new();
-    rec_clique(items, compat, 0, &mut current, &mut best);
-    best
+    let mut work: u64 = 0;
+    if rec_clique(items, compat, 0, &mut current, &mut best, &mut work) {
+        Some(best)
+    } else {
+        None
+    }
 }
 
-/// Backtracking helper for [`max_clique`].
+/// Expansion-count ceiling for one [`max_clique`] search.
+///
+/// A pure work bound, not a semantic knob: it changes WHETHER a search finishes inside
+/// the budget, never what a finished search answers. Sized far above anything the
+/// pruned common case reaches (quadratic in the successor count) while bounding the
+/// adversarial mixed-graph case to well under a second.
+const MAX_CLIQUE_WORK: u64 = 1 << 20;
+
+/// The most successors one `≥`-rule application will materialize.
+///
+/// Pairwise distinctness records `n·(n-1)/2` pairs, so the cost of minting is quadratic
+/// in the bound whatever the search does; 4,096 witnesses is ~8.4 million pairs, decided
+/// exactly and quickly, while a bound beyond it exhausts the decision honestly instead
+/// of hanging on gigabytes of bookkeeping. A resource ceiling, not a semantic knob: it
+/// never changes a verdict, only whether one is reached inside the budget.
+pub(crate) const MAX_COUNTING_WITNESSES: usize = 4096;
+
+/// Backtracking helper for [`max_clique`]; `false` means the work budget ran out.
 fn rec_clique(
     items: &[usize],
     compat: &dyn Fn(usize, usize) -> bool,
     start: usize,
     current: &mut Vec<usize>,
     best: &mut Vec<usize>,
-) {
+    work: &mut u64,
+) -> bool {
+    *work += 1;
+    if *work > MAX_CLIQUE_WORK {
+        return false;
+    }
     if current.len() > best.len() {
         *best = current.clone();
+    }
+    // Bound: even taking every remaining item, this branch cannot beat `best`.
+    if current.len() + (items.len() - start) <= best.len() {
+        return true;
     }
     for i in start..items.len() {
         let cand = items[i];
         if current.iter().all(|&m| compat(m, cand)) {
             current.push(cand);
-            rec_clique(items, compat, i + 1, current, best);
+            if !rec_clique(items, compat, i + 1, current, best, work) {
+                return false;
+            }
             current.pop();
         }
+        // Re-check the bound as the window shrinks.
+        if current.len() + (items.len() - i - 1) <= best.len() {
+            return true;
+        }
     }
+    true
 }
 
 /// The knowledge base plus the internalized TBox, and every operation on a completion graph
@@ -295,6 +352,7 @@ impl<'a> Graph<'a> {
             edges: Vec::new(),
             root_of: BTreeMap::new(),
             clash: false,
+            clique_exhausted: std::cell::Cell::new(false),
         };
         if include_abox {
             for &ind in &self.kb.individuals {
@@ -749,8 +807,21 @@ impl<'a> Graph<'a> {
             .into_iter()
             .filter(|&y| self.has_concept(st, y, filler))
             .collect();
-        let mut clique = max_clique(&with_filler, &|a, b| are_distinct(st, a, b));
+        let Some(mut clique) = max_clique(&with_filler, &|a, b| are_distinct(st, a, b)) else {
+            // Clique-work exhaustion: surface as search exhaustion, never as a guess.
+            st.clique_exhausted.set(true);
+            return false;
+        };
         if clique.len() >= n {
+            return false;
+        }
+        // The witnesses to mint are pairwise-`≠`, which is quadratically many recorded
+        // pairs: a bound that large is a resource statement, not a logical one, so past
+        // this ceiling the decision degrades to EXHAUSTED (Unknown upstream) — the same
+        // honest three-valued answer every other budget produces — rather than spending
+        // gigabytes of `≠`-pairs or answering wrongly.
+        if n > MAX_COUNTING_WITNESSES {
+            st.clique_exhausted.set(true);
             return false;
         }
         while clique.len() < n {
@@ -782,6 +853,15 @@ impl<'a> Graph<'a> {
             .into_iter()
             .filter(|&y| self.has_concept(st, y, filler))
             .collect();
-        max_clique(&with_filler, &|a, b| are_distinct(st, a, b)).len() >= n as usize
+        match max_clique(&with_filler, &|a, b| are_distinct(st, a, b)) {
+            Some(clique) => clique.len() >= n as usize,
+            None => {
+                // Exhaustion is recorded on the state the caller already consults; a
+                // `false` here only ever WITHHOLDS a satisfaction claim, which the
+                // exhausted decision then reports as Unknown rather than as an answer.
+                st.clique_exhausted.set(true);
+                false
+            }
+        }
     }
 }
