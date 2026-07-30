@@ -5,10 +5,12 @@
 //!
 //! # Why this file exists
 //!
-//! `purrdf-entail`'s closure is produced by a hand-written forward chase
-//! (`crates/entail/src/rdfs.rs`). A later change replaces that chase with the DL-clause
-//! program `calculus_program(regime)` already declares. That is an engine swap on a live
-//! calculus, and the only way to make it reviewable is to know — byte for byte, before the
+//! `purrdf-entail`'s closure is produced by evaluating the DL-clause program
+//! `calculus_program(regime)` (`crates/entail/src/calculus/mod.rs`) through
+//! `purrdf-datalog`'s semi-naive fixpoint, wired together in
+//! `crates/entail/src/engine.rs`. A later change may replace that evaluation strategy —
+//! a different chase algorithm, a different substrate — and that is an engine swap on a
+//! live calculus. The only way to make it reviewable is to know — byte for byte, before the
 //! swap — what the current engine answers for a corpus that reaches every rule it fires.
 //!
 //! The oracle is **committed golden files**, not a retained copy of the old chase. A second
@@ -19,8 +21,11 @@
 //!
 //! # What is captured, and what deliberately is not
 //!
-//! Each golden holds, for one fixture and for each of the five regimes `materialize` can
-//! run: the closure as **canonical N-Quads** (`purrdf_core::canonicalize` — the repository's
+//! Each golden holds, for one fixture and for each of the five (of the seven [`Regime`]s
+//! `materialize` can run) that take no extra input beyond the dataset — `OWL-Direct` needs
+//! a query's basic graph pattern and `RIF` a parsed rule set, so an oracle keyed on a
+//! fixture alone cannot and must not include them (see [`ORACLE_REGIMES`]): the closure as
+//! **canonical N-Quads** (`purrdf_core::canonicalize` — the repository's
 //! RDFC-1.0 canonicalizer, not a serializer written here) and the [`ReasoningReport`]
 //! rendered field by field in the report's own documented order.
 //!

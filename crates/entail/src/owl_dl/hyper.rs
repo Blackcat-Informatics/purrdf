@@ -29,7 +29,7 @@
 //! | **`≥`-rule** | an at-least head atom is unsatisfied at an UNBLOCKED node | mints anonymous witnesses, pairwise distinct |
 //! | **`⊔`-rule** | a derived head has more than one disjunct, none satisfied | branches, depth-first, in clause-and-disjunct order |
 //!
-//! Everything the incumbent spread over eight rules and four clash triggers is one of those
+//! Everything the incumbent spread over ten rules and eight clash triggers is one of those
 //! three, because the clause set carries the difference:
 //!
 //! * `⊓`, absorption and the `∀`-propagation are hyperresolution with an

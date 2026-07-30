@@ -282,7 +282,7 @@ def _suite_sparql() -> SuiteResult:
 
 
 def _suite_entailment() -> SuiteResult:
-    """W3C OWL 2 suite graded against the native `OWL-Direct` ALCOIQ tableau.
+    """W3C OWL 2 suite graded against the native `OWL-Direct` SHOIQ(D) tableau.
 
     This row is CONSISTENCY-shaped and says so: all 261 vendored cases are
     `otest:ConsistencyTest` / `otest:InconsistencyTest`, so it measures the

@@ -118,10 +118,10 @@ rule with no conclusion can do.
   a different rule set can be refused rather than trusted. A report that claims
   `Exact` while naming a boundary is a test failure.
 * **wasm-clean and dependency-lean.** Dependencies are `purrdf-core`,
-  `purrdf-datalog`, `purrdf-xsd`, `roxmltree` and two fixed-key hashers (`ahash`
-  and `hashbrown`) — all `wasm32-unknown-unknown`-clean, so this crate carries
-  into Rust, Python, WebAssembly, and C without a threads/filesystem/RNG
-  dependency.
+  `purrdf-datalog`, `purrdf-xsd`, `roxmltree`, `blake3`, and two fixed-key
+  hashers (`ahash` and `hashbrown`) — all `wasm32-unknown-unknown`-clean, so
+  this crate carries into Rust, Python, WebAssembly, and C without a
+  threads/filesystem/RNG dependency.
 * **Determinism.** The chase is a fixpoint over the frozen IR; a given input and
   regime always yields the same closure — and the same report, byte for byte.
 

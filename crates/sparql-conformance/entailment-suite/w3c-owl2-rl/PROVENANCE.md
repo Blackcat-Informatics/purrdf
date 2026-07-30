@@ -204,7 +204,7 @@ slug. Columns:
 
 `dl_probe` is a **measurement**, not an inherited claim. Every one of the 198
 excluded consistency-shaped cases that carries an RDF/XML premise was run through
-`purrdf_entail::materialize_dl` on **2026-07-29**, in a debug build, one process
+`purrdf_entail::materialize_dl_reported` on **2026-07-29**, in a debug build, one process
 per case, four at a time, with a **40 s wall-clock ceiling** per case:
 
 | `dl_probe` | Cases | Meaning |

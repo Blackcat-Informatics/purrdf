@@ -105,13 +105,16 @@ ownership/free order. Profiles and configuration are described in
   many threads. `PurrdfGraph` (the copy-on-write mutable delta) and cursors
   are single-threaded.
 
-## Known limitation
+## GTS star-layer round-trip
 
 The GTS **star layer** round-trip (`purrdf_to_gts` → `purrdf_from_gts` of a
-dataset containing quoted triples / reifier bindings) currently fails with
-`PURRDF_STATUS_GTS_ERROR`. This is a pre-existing gap in the kernel path, not
-in the C ABI; star-free GTS round-trips are lossless, and a characterization
-test pins the current behavior so a kernel fix will flip it.
+dataset containing quoted triples / reifier bindings) succeeds with
+`PURRDF_STATUS_OK`, the same as a star-free round-trip. The C ABI calls the
+canonical kernel path (`to_gts` → `read_graph` → `import_gts_graph`); a
+characterization test,
+`gts_star_roundtrip_preserves_the_statement_layer` in
+`crates/rdf-capi/tests/abi.rs`, pins the restored dataset's quoted triple and
+reifier binding so a regression in either layer fails there.
 
 Full contract details — status codes, term crossing representations,
 thread-safety per handle — are in the

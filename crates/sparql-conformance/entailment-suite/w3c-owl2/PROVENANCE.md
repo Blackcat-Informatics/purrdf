@@ -18,7 +18,7 @@ against the verdict the W3C published for it.
 
 Every one of the 261 vendored cases is a `otest:ConsistencyTest` or an
 `otest:InconsistencyTest`: the published ground truth is a *satisfiability*
-verdict over an ontology, decided here by `purrdf_entail::materialize_dl`. There
+verdict over an ontology, decided here by `purrdf_entail::materialize_dl_reported`. There
 is not one `otest:PositiveEntailmentTest` or `otest:NegativeEntailmentTest` in
 **this tree** — because none was vendored into it, *not* because the W3C material
 lacks them (see *Correction* below).

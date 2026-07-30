@@ -17,7 +17,7 @@ no async runtime, and no string round-trip.
 | Entry point | Regime(s) | Engine |
 | --- | --- | --- |
 | `materialize(ds, regime)` | `Simple`, `RDF`, `RDFS`, `OWL-RL`, `D` | Forward materialization ("chase") of the regime's declared clause program via a native semi-naive fixpoint. Returns `(closure, ReasoningReport)`; the report is not optional. |
-| `materialize_dl(...)` | `OWL-Direct` | Open-world OWL DL over a SHOIQ(D) tableau — it needs the query's class expressions, so it is not reachable through the plain `materialize` facade. |
+| `materialize_dl_reported(...)`, or `materialize(ds, Materialization::OwlDirect(bgp))` | `OWL-Direct` | Open-world OWL DL over a SHOIQ(D) tableau, directed by the query's basic graph pattern `bgp`; `materialize` delegates to it for this regime rather than restating it. |
 | `materialize_rif(...)` | `RIF` | RIF-Core rule entailment over a parsed `RuleSet`. |
 | `parse_rif_xml(...)` / `resolve_rif_imports(...)` | `RIF` | RIF-XML parsing with caller-owned, I/O-free import resolution. |
 | `rules(regime)` / `implemented(regime)` | — | The rule table a regime is *defined by*, and the subset this workspace fires. Their difference is the measurable gap. |
@@ -171,11 +171,12 @@ the same report text as Rust for the same input.
 ## OWL-Direct: the tableau
 
 `OWL-Direct` semantics is open-world Description Logic, which a forward chase
-cannot answer. `materialize_dl` runs an **SHOIQ(D) tableau** instead — answering
-instance and subsumption queries via classification, realization, and
-query-directed materialization. Because it needs the query's class
-expressions, it has its own entry point rather than hiding behind
-`materialize`.
+cannot answer. `materialize_dl_reported` runs an **SHOIQ(D) tableau** instead —
+answering instance and subsumption queries via classification, realization,
+and query-directed materialization. Because it needs the query's class
+expressions, it takes them as its own `query_bgp` parameter; `materialize`
+reaches the same tableau by delegating to it for `Materialization::OwlDirect`
+rather than restating it.
 
 ## RIF
 
@@ -210,8 +211,8 @@ cannot hand the function a value it accepts and get a refusal instead of an answ
   themselves — the crate fabricates none, per the
   [toolkit-not-ontology rule](project/design-rules.md).
 - **Dependency-lean and wasm-clean.** The dependencies are `purrdf-core`,
-  [`purrdf-datalog`](datalog.md), `purrdf-xsd`, `roxmltree`, and two fixed-key
-  hashers (`ahash`, `hashbrown`) — every one of them
+  [`purrdf-datalog`](datalog.md), `purrdf-xsd`, `roxmltree`, `blake3`, and two
+  fixed-key hashers (`ahash`, `hashbrown`) — every one of them
   `wasm32-unknown-unknown`-clean, so the engines carry into Rust, Python,
   WebAssembly, and C unchanged, with no threads, filesystem, or RNG dependency.
 - **Deterministic.** Same input + regime → same closure, always — and the same

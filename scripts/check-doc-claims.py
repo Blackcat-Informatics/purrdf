@@ -322,21 +322,29 @@ def program_regime_dts_claim() -> list[str]:
     return problems
 
 
-def banned_stale_fragment_names() -> list[str]:
+def banned_stale_fragment_names() -> tuple[list[str], int]:
     """The DL fragment has ONE published name; its two superseded spellings are banned.
 
     The decision core was published as ALCOIQ on nineteen sites and ALCHOIQ in the
     oracle, and both understated what the code decides. The settled name is SHOIQ(D);
     a superseded spelling reappearing anywhere in the documented surface is a
     regression to the two-name state, caught here by name.
+
+    The walk covers ``crates``, ``bindings``, and ``docs`` prose plus ``scripts``' own
+    ``.py``/``.json`` — the conformance harness and its ratchet baseline restate the
+    same fragment name in their own prose, and a superseded spelling regressed there
+    silently until this walk was extended to include it. Returns the problems and the
+    number of files scanned, so the script's claim count reports what it really read.
     """
     problems: list[str] = []
+    checked = 0
     for root in ("crates", "bindings", "docs"):
         for path in sorted((_REPO / root).rglob("*")):
             if path.suffix not in {".rs", ".md", ".pyi", ".mjs", ".ts"}:
                 continue
             if "/pkg/" in str(path) or "node_modules" in str(path):
                 continue
+            checked += 1
             text = _read(path)
             for match in re.finditer(r"\bALCH?OIQ\b", text):
                 line = text.count("\n", 0, match.start()) + 1
@@ -345,38 +353,107 @@ def banned_stale_fragment_names() -> list[str]:
                     f"`{match.group(0)}` — the decision core's one published name is "
                     f"SHOIQ(D)"
                 )
+    for path in sorted((_REPO / "scripts").rglob("*")):
+        if path.suffix not in {".py", ".json"}:
+            continue
+        if path.name == "check-doc-claims.py":
+            # Names both superseded spellings in its own docstrings/pattern to
+            # explain what it bans; that is the ban's definition, not a regression.
+            continue
+        checked += 1
+        text = _read(path)
+        for match in re.finditer(r"\bALCH?OIQ\b", text):
+            line = text.count("\n", 0, match.start()) + 1
+            problems.append(
+                f"{path.relative_to(_REPO)}:{line}: superseded fragment spelling "
+                f"`{match.group(0)}` — the decision core's one published name is "
+                f"SHOIQ(D)"
+            )
+    checked += 1
     readme = _read(_README)
     for match in re.finditer(r"\bALCH?OIQ\b", readme):
         problems.append(
             f"README.md: superseded fragment spelling `{match.group(0)}`"
         )
-    return problems
+    return problems, checked
 
 
-def codec_table_claim() -> list[str]:
-    """The book's codec table must list every `NativeRdfFormat`, with its real media type.
+# The codec's own short `id` has no fixed relationship to the prose name a front page
+# uses, so the mapping is spelled out once here rather than guessed per document. A new
+# `FormatDescriptor` whose `id` is missing from this map is a `KeyError` in
+# `codec_table_claim`, not a silently-ungated format — the same "a tenth format fails this
+# on the day it is added" property the media-type table already has.
+_CODEC_DISPLAY_NAMES = {
+    "turtle": "Turtle",
+    "trig": "TriG",
+    "ntriples": "N-Triples",
+    "nquads": "N-Quads",
+    "rdfxml": "RDF/XML",
+    "trix": "TriX",
+    "hextuples": "HexTuples",
+    "jsonld": "JSON-LD",
+    "yamlld": "YAML-LD",
+}
 
-    The table listed seven of nine, omitting TriX and HexTuples, and its prose said "seven" —
-    internally consistent and wrong about the code. Both are full codecs with media types,
-    `classify` aliases and dispatch entries. Derived from `FormatDescriptor`'s own table rather
-    than from a count, so a tenth format fails this on the day it is added.
+# The document set `codec_table_claim` gates, the way `extension_disclosure_claim` gates
+# the union of rule-coverage documents: the codecs chapter carries the full per-format
+# table, and these four front pages restate the format list in prose without a table. All
+# four said "seven" (Turtle, TriG, N-Triples, N-Quads, RDF/XML, JSON-LD, YAML-LD) while
+# TriX and HexTuples were both full codecs already, which is how a reader could read any
+# of the highest-traffic pages in the repository and come away thinking of nine formats
+# as seven.
+_CODEC_FRONT_PAGES = (
+    _README,
+    _PURRDF_README,
+    _REPO / "crates" / "rdf" / "README.md",
+    _INTRODUCTION,
+)
+
+
+def codec_table_claim() -> tuple[list[str], int]:
+    """Every document that spells out the codec list must list every `NativeRdfFormat`.
+
+    The book's codec table listed seven of nine, omitting TriX and HexTuples, and its
+    prose said "seven" — internally consistent and wrong about the code. Both are full
+    codecs with media types, `classify` aliases and dispatch entries. Derived from
+    `FormatDescriptor`'s own table rather than from a count, so a tenth format fails this
+    on the day it is added.
+
+    That was one document. Four more front pages (`README.md`, `crates/purrdf/README.md`,
+    `crates/rdf/README.md`, `docs/book/src/introduction.md`) enumerate the same list in
+    prose, by name rather than by media type, and none of them was checked — so all four
+    went stale identically. This walks the whole document SET, the way
+    `extension_disclosure_claim` does for the rule-coverage front pages: the codecs
+    chapter is checked against the full table (media type presence and star capability),
+    and the front pages are checked for the display name of every registered format plus
+    any spelled-out format count.
     """
     problems: list[str] = []
     source = _read(
         _REPO / "crates" / "rdf" / "src" / "native_codecs" / "media_type.rs"
     )
-    # Each descriptor's media type paired with its star capability, so the table's CONTENT is
-    # checked and not merely its row set. Listing every format while mislabelling one is a
-    # document that satisfies a presence check and still tells a reader something false.
+    # Each descriptor's id, media type and star capability together, so the table's
+    # CONTENT is checked and not merely its row set. Listing every format while
+    # mislabelling one is a document that satisfies a presence check and still tells a
+    # reader something false.
     descriptors = re.findall(
-        r'media_type: "([^"]+)",[\s\S]*?carries_star: (true|false),', source
+        r'id: "([^"]+)",[\s\S]*?media_type: "([^"]+)",[\s\S]*?carries_star: (true|false),',
+        source,
     )
-    media = [media_type for media_type, _ in descriptors]
-    if not media:
+    if not descriptors:
         raise SystemExit(
-            "check-doc-claims: no media_type entries found in media_type.rs; the codec-table "
-            "claim cannot be checked, so do not leave it unchecked"
+            "check-doc-claims: no FormatDescriptor entries found in media_type.rs; the "
+            "codec-table claim cannot be checked, so do not leave it unchecked"
         )
+    media = [media_type for _, media_type, _ in descriptors]
+    unknown_ids = [fid for fid, _, _ in descriptors if fid not in _CODEC_DISPLAY_NAMES]
+    if unknown_ids:
+        raise SystemExit(
+            f"check-doc-claims: media_type.rs registers format id(s) {unknown_ids} with "
+            f"no entry in _CODEC_DISPLAY_NAMES — add the prose name a front page uses "
+            f"before this claim can check them"
+        )
+
     path = _REPO / "docs" / "book" / "src" / "concepts" / "codecs.md"
     text = _read(path)
     rel = path.relative_to(_REPO)
@@ -388,7 +465,7 @@ def codec_table_claim() -> list[str]:
                 f"format with its own codec and `classify` aliases"
             )
     # The row's own star column, read from the table and compared with the descriptor.
-    for media_type, star in descriptors:
+    for _, media_type, star in descriptors:
         row = re.search(
             r"^\|[^|]*\|\s*`" + re.escape(media_type) + r"`\s*\|\s*([^|]+?)\s*\|$",
             text,
@@ -407,13 +484,31 @@ def codec_table_claim() -> list[str]:
     spelled = {
         7: "seven", 8: "eight", 9: "nine", 10: "ten", 11: "eleven", 12: "twelve",
     }.get(len(set(media)))
-    for claim_match in re.finditer(r"for ([a-z]+) formats", text):
-        if spelled and claim_match.group(1) != spelled:
-            problems.append(
-                f"{rel}: says `{claim_match.group(0)}`, but media_type.rs registers "
-                f"{len(set(media))} ({spelled})"
-            )
-    return problems
+
+    def _check_spelled_count(doc_text: str, doc_rel: Path) -> None:
+        for claim_match in re.finditer(r"for ([a-z]+) formats", doc_text):
+            if spelled and claim_match.group(1) != spelled:
+                problems.append(
+                    f"{doc_rel}: says `{claim_match.group(0)}`, but media_type.rs "
+                    f"registers {len(set(media))} ({spelled})"
+                )
+
+    _check_spelled_count(text, rel)
+    checked = 1
+
+    display_names = sorted({_CODEC_DISPLAY_NAMES[fid] for fid, _, _ in descriptors})
+    for front_page in _CODEC_FRONT_PAGES:
+        front_text = _read(front_page)
+        front_rel = front_page.relative_to(_REPO)
+        checked += 1
+        for name in display_names:
+            if name not in front_text:
+                problems.append(
+                    f"{front_rel}: never names `{name}`, a first-party format "
+                    f"crates/rdf/src/native_codecs/media_type.rs registers"
+                )
+        _check_spelled_count(front_text, front_rel)
+    return problems, checked
 
 
 
@@ -1996,15 +2091,21 @@ def main() -> int:
     checked += 1
     problems.extend(regime_count_claim())
     checked += 1
-    problems.extend(codec_table_claim())
-    checked += 1
+    codec_problems, codec_checked = codec_table_claim()
+    problems.extend(codec_problems)
+    checked += codec_checked
     problems.extend(never_published_claim())
     checked += 1
     problems.extend(profile_count_claim())
     checked += 1
     problems.extend(program_regime_dts_claim())
     checked += 1
-    problems.extend(banned_stale_fragment_names())
+    # The ban walk reports how many files it scanned, which is COVERAGE, not a claim
+    # count — folding ~1,900 scanned files into the "documented claims" headline would
+    # inflate a number readers take as the count of gated statements. The ban is one
+    # claim; its reach is printed separately.
+    fragment_problems, fragment_files = banned_stale_fragment_names()
+    problems.extend(fragment_problems)
     checked += 1
 
     for claim in build_claims(inventory, matrix, census, lanes):
@@ -2029,7 +2130,10 @@ def main() -> int:
         )
         return 1
 
-    print(f"OK: {checked} documented claim(s) agree with their generated source.")
+    print(
+        f"OK: {checked} documented claim(s) agree with their generated source "
+        f"(stale-name ban swept {fragment_files} file(s))."
+    )
     return 0
 
 

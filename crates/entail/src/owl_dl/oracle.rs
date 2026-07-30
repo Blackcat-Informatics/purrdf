@@ -20,7 +20,7 @@
 //! force an element beyond the named individuals it can only ever exhibit a model, never rule
 //! one out (see [`bounded_domain`]). The concept-tree tableau is not exact, but it is
 //! UNBOUNDED: it decides the same fragment by a completely different rule set — concept
-//! structure read at search time, ancestor blocking, four separate clash triggers — so it
+//! structure read at search time, ancestor blocking, eight separate clash triggers — so it
 //! checks the direction the oracle is silent about. The two together are what make a
 //! `consistent` verdict over a successor-generating knowledge base checked rather than merely
 //! unrefuted.

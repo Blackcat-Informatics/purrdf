@@ -163,15 +163,16 @@ path): structured borrowed term views (`PurrdfTermView`), a cursor-scoped opaque
 `term_id` for re-addressing a term (notably a quoted triple, whose components do
 not fit a flat view), and the `purrdf_term_to_ntriples` convenience function.
 
-## Known limitation
+## GTS star-layer round-trip
 
 The GTS **star layer** round-trip (`purrdf_to_gts` → `purrdf_from_gts` of a
-dataset containing quoted triples / reifier bindings) currently fails with
-`PURRDF_STATUS_GTS_ERROR` (`gts-missing-reifier-binding`). This is a pre-existing
-gap in the kernel `to_gts` → `read_graph` → `import_gts_graph` path (reifier
-binding rows are dropped on read-back), not in the C-ABI, which calls the
-canonical kernel path. Star-free GTS round-trips are lossless. A characterization
-test pins the current behavior so a kernel fix will flip it.
+dataset containing quoted triples / reifier bindings) succeeds with
+`PURRDF_STATUS_OK`, the same as a star-free round-trip. The C ABI calls the
+canonical kernel `to_gts` → `read_graph` → `import_gts_graph` path; the
+reifier-binding gap that once dropped those rows on read-back is closed. A
+characterization test, `gts_star_roundtrip_preserves_the_statement_layer` in
+`tests/abi.rs`, pins the restored dataset's quoted triple and reifier
+binding so a regression in either layer fails there.
 
 ## License
 

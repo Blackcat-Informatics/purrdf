@@ -37,8 +37,8 @@ reimplemented per language.
   position, reifier/annotation side-tables, and base-direction literals.
   See [The Interned Dataset IR](concepts/interned-dataset.md).
 - **Native codecs** — first-party parsers/serializers for Turtle, TriG,
-  N-Triples, N-Quads, RDF/XML, JSON-LD (star), and YAML-LD, with
-  byte-deterministic output. See [Codecs & Determinism](concepts/codecs.md).
+  N-Triples, N-Quads, RDF/XML, TriX, HexTuples, JSON-LD (star), and YAML-LD,
+  with byte-deterministic output. See [Codecs & Determinism](concepts/codecs.md).
 - **Canonicalization** — W3C RDFC-1.0 plus dataset diff and isomorphism.
   See [Canonicalization & Diff](concepts/canonicalization.md).
 - **SPARQL 1.1/1.2** — native parser → algebra → multiset evaluator, gated by

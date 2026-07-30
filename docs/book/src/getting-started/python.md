@@ -68,8 +68,9 @@ is the text-in/text-out twin for callers holding an N-Triples/N-Quads document.
 Coverage is measurable rather than asserted: `entail.rules(regime)` is the rule
 table the specification defines the regime by, and
 `entail.implemented_rules(regime)` is the subset that fires. `"owl-direct"` and
-`"rif"` raise `ValueError` here, because they need the query's class expressions
-and a parsed rule set respectively. See [Entailment](../entailment.md) for the
+`"rif"` return `[]` here — neither has a specification rule table of its own,
+since one decides through the tableau and the other entails under the caller's
+own rules — not a raised error. See [Entailment](../entailment.md) for the
 full picture and the [rule inventory](../entailment-rules.md) for the per-rule
 table.
 

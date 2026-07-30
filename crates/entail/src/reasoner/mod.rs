@@ -20,7 +20,7 @@
 //! | profile certification | [`mod@profile`] | which OWL 2 profiles the ontology is provably in |
 //!
 //! Query-directed materialization ([`materialize_dl_reported`](crate::materialize_dl_reported)) is the
-//! seventh service and keeps its own entry point: it answers with a DATASET rather than a
+//! ninth service and keeps its own entry point: it answers with a DATASET rather than a
 //! verdict, and folding a dataset-returning call into this surface would make the façade
 //! two things.
 //!

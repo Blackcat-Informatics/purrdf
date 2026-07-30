@@ -23,7 +23,11 @@ There are two benchmark layers:
 The Rust benches are the source of truth for engine-level layout and algorithm
 choices — the shipped design is whichever the criterion numbers pick, not
 whichever sounds fast (see README, "Fast by measurement, not by assertion").
-They live under `crates/*/benches/`:
+They live under `crates/*/benches/`. The workspace registers 36 `[[bench]]`
+targets in total; this section and the inventory table below document 20 of
+them — the ones with a story worth telling about a hot path or a design
+trade-off. The rest run under `make bench` like any other target and are
+simply not narrated here:
 
 - `crates/rdf-core/benches/ir_layout.rs` — AoS vs. SoA vs. predicate-adjacency
   IR layouts (allocation counts, high-water mark, end-to-end latency).
@@ -65,6 +69,9 @@ They live under `crates/*/benches/`:
 - `crates/entail/benches/chase.rs` — RDFS forward-materialization chase scaling
   (`materialize(ds, Regime::Rdfs)` end to end, so the declared clause program and
   `purrdf-datalog`'s semi-naive fixpoint are both inside the timed loop).
+- `crates/entail/benches/classify.rs` — OWL-Direct classification latency over
+  a synthetic `EL` terminology at three signature sizes, since classification
+  cost is superlinear in the signature rather than in the axiom count.
 - `crates/gts/benches/authoring.rs` — GTS container authoring.
 - `crates/rdf-wasm/benches/query_engine_reuse.rs` — package-root
   `QueryEngine` reuse vs. fresh-engine construction.
@@ -80,6 +87,12 @@ Additional benches are run package-by-package, e.g.
 `cargo bench -p purrdf-iri --bench parse`.
 
 ### Native criterion benchmark inventory
+
+This table documents 20 of the 36 `[[bench]]` targets registered across the
+workspace's `Cargo.toml` files — the subset narrated in the prose list above,
+in the same order. It is not a claim of completeness: `cargo bench -p <crate>
+--bench <name>` reaches every registered target whether or not it has a row
+here.
 
 | Bench | What it measures |
 | --- | --- |
@@ -99,6 +112,7 @@ Additional benches are run package-by-package, e.g.
 | `crates/shapes/benches/validate.rs` | SHACL Core validation latency plus JSON Schema/LinkML → SHACL import/lowering throughput and allocation traffic on deterministic fixtures. |
 | `crates/shapes/benches/schema_surface.rs` | RDFC-keyed shaped-only compilation and sparse/dense ontology-complete class/property relation plus JSON Schema/OpenAPI emission. |
 | `crates/entail/benches/chase.rs` | RDFS materialization scaling on subclass chains, measured through the whole `materialize` path: clause-program lowering plus `purrdf-datalog`'s semi-naive fixpoint. |
+| `crates/entail/benches/classify.rs` | OWL-Direct classification latency over a synthetic `EL` terminology at three signature sizes; classification cost is superlinear in the signature rather than the axiom count. |
 | `crates/gts/benches/authoring.rs` | GTS container authoring: append, hash, and CBOR-log construction throughput. |
 | `crates/rdf-wasm/benches/query_engine_reuse.rs` | Binding-level SELECT overhead for reused package-root `QueryEngine` instances vs. fresh construction. |
 | `crates/iri/benches/parse.rs` | `purrdf_iri::parse` component validation across scheme, authority, path, query, and fragment classes. |

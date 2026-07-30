@@ -52,7 +52,8 @@ caller-supplied configuration.
   string arena, copy-on-write mutation) with triple terms, reifier/annotation
   side-tables, and base-direction literals.
 - **Native codecs** — first-party parsers/serializers for Turtle, TriG, N-Triples,
-  N-Quads, RDF/XML, JSON-LD (star), and YAML-LD; byte-deterministic output.
+  N-Quads, RDF/XML, TriX, HexTuples, JSON-LD (star), and YAML-LD; byte-deterministic
+  output.
 - **Canonicalization** — W3C RDFC-1.0, tested against the W3C fixture suite.
 - **SPARQL 1.1/1.2** — native parser → algebra → multiset evaluator (property
   paths, aggregates, EXISTS decorrelation, cost-based BGP planning), gated by the

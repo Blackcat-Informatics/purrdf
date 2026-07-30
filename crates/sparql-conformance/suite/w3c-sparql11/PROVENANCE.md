@@ -35,20 +35,28 @@ typed reason — nothing is silently skipped.
 | Group | Cases | Green | Ledgered (reason) |
 |-------|------:|------:|-------------------|
 | bind | 10 | 10 | — |
-| bindings | 11 | 10 | 1 result-format (Turtle `rs:ResultSet`) |
-| cast | 6 | 0 | 6 value-mismatch (XSD cast lexical/datatype) |
-| construct | 7 | 2 | 1 parse-unsupported, 4 unsupported-construct (CONSTRUCT WHERE) |
-| exists | 6 | 5 | 1 unsupported-construct (EXISTS over GRAPH var) |
-| functions | 75 | 59 | 14 value-mismatch, 2 non-deterministic (BNODE labels) |
-| grouping | 6 | 4 | 2 unsupported-construct (missing non-grouped-var rejection) |
+| bindings | 11 | 11 | — |
+| cast | 6 | 3 | 3 upstream-erratum (`cast-decimal`, `cast-double`, `cast-float`) |
+| construct | 7 | 7 | — |
+| exists | 6 | 6 | — |
+| functions | 75 | 73 | 2 upstream-erratum (`coalesce01`, `plus-1-corrected`) |
+| grouping | 6 | 6 | — |
 | negation | 12 | 12 | — |
 | project-expression | 7 | 7 | — |
-| property-path | 33 | 24 | 9 property-path (inverse-in-NPS, `*`/`?` over sets) |
+| property-path | 33 | 33 | — |
 
-The ledgered gaps are genuine (the curated subset simply never exercised these
-surfaces). The trailing-`VALUES` parser fix (§18.2.4.3) cleared the 9 `bindings`
-VALUES cases and the `service` group's `service4a`; `value-mismatch` marks real
-evaluation-correctness gaps still to close.
+This table is derived from `crates/sparql-conformance/src/xfail.rs::XFAIL`, the
+same registry `run_manifest` honors, not maintained separately from it: every
+row's ledgered count is that registry's live count for the group, not a count
+that can drift out from under it. The 5 ledgered cases above are the entire
+`XFAIL` registry, and every one of them is `XfailReason::UpstreamErratum` — a
+fixture whose expected lexical form the W3C manifest itself states
+inconsistently (see the reasons recorded alongside each entry in `xfail.rs`),
+not a native-engine gap. `construct`, `exists`, `grouping`, and `property-path`
+each once ledgered several `unsupported-construct`/`property-path` gaps
+(CONSTRUCT WHERE, EXISTS over a GRAPH variable, non-grouped-variable
+rejection, inverse paths inside a negated property set); all of them are
+implemented now and none is ledgered.
 
 ## Full W3C UPDATE-eval groups (commit `426c7df`)
 
@@ -105,7 +113,7 @@ template label legitimately recurs across `INSERT … WHERE` operations.
 The `entailment/` group's `sd:entailmentRegime` is read by the harness, which
 answers each case under the regime the manifest names: forward materialization via
 the native `purrdf-entail` reasoner for the RDF/RDFS/D/OWL-RL regimes, a
-query-directed SHOIQ(D) tableau (`purrdf_entail::materialize_dl`) for OWL-Direct, and
+query-directed SHOIQ(D) tableau (`purrdf_entail::materialize_dl_reported`) for OWL-Direct, and
 a Horn forward chase over the referenced RIF-in-XML rule documents
 (`purrdf_entail::materialize_rif`) for RIF. **The entire group passes — 70 of 70,
 with zero ledgered residuals**, which the harness prints as

@@ -42,6 +42,26 @@ frozen, language-neutral conformance vectors, byte-exact. The format is
 specified in
 [`docs/GTS-SPEC.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/GTS-SPEC.md).
 
+### A note on `vectors/manifest*.json`'s `generated_by` field
+
+The four vector manifests at the corpus root (`vectors/manifest.json`,
+`manifest.core.json`, `manifest.profiles.json`, `manifest.transforms.json`)
+each carry `"generated_by": "scripts/check_vector_manifest.py --write"`. No
+such script exists in this repository, and `git log` over the manifests shows
+no commit ever added one — the field names a generator that was never built
+here. It is not corrected in place: `vectors/` is governed upstream by
+[`gmeow-gts`](https://github.com/Blackcat-Informatics/gmeow-gts) and carried
+into this repository verbatim, so it is hand-edited by nobody, in either
+direction — not regenerated to "fix" the field, and not resynced from
+upstream to match it. `scripts/check-corpus-frozen.py` does not byte-freeze
+this root either (its `GUARDED_ROOTS` covers `vectors/shacl` and
+`vectors/shexTest`, not the corpus root, by the same upstream-governance
+reasoning its own comment states for `vectors/*.gts`). The manifests are
+therefore maintained by hand upstream and carried here as-is; the only
+guarantee this repository makes over them is the review-time rule that
+nothing under `vectors/` is hand-edited locally (AGENTS.md/CLAUDE.md), not a
+machine-verified freeze gate.
+
 ## Usage
 
 ```sh

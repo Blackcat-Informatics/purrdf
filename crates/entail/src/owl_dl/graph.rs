@@ -286,7 +286,7 @@ fn rec_clique(
     if current.len() > best.len() {
         *best = current.clone();
     }
-    // Bound: even taking every remaining item, this branch cannot beat `best`.
+    // Bound: even taking every remaining item, this recursive case cannot beat `best`.
     if current.len() + (items.len() - start) <= best.len() {
         return true;
     }

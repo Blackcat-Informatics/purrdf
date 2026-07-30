@@ -15,9 +15,13 @@ as DL-clause programs and evaluates them here, which is what lets a reasoning
 report carry a **contract hash** of the exact program that ran instead of a claim
 about which rules were meant to run.
 
-Unlike the other engines in this book, `purrdf-datalog` is **not** re-exported by
-the umbrella `purrdf` crate. Depend on it directly
-(`purrdf-datalog = "…"`) when you want the fixpoint alone.
+`purrdf-datalog` is re-exported by the umbrella `purrdf` crate as the
+`purrdf::datalog` module — the entailment surface CARRIES its types (a
+[`ReasoningReport`](entailment.md) hands out a `datalog::cache::ContractHash`
+and a `datalog::seminaive::BudgetReport`), so a consumer that matches on them
+needs no second dependency on `purrdf-datalog`. Depend on the crate directly
+(`purrdf-datalog = "…"`) only when you want the fixpoint alone, with no other
+`purrdf` surface in the build.
 
 ## One rule IR: the DL-clause
 
