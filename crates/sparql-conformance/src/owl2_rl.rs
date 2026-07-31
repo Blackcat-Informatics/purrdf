@@ -17,6 +17,16 @@
 //! [`purrdf_entail::Regime::OwlRl`] closure against W3C's published entailment
 //! verdicts.
 //!
+//! # It grades the SHIPPED procedure, not a copy of it
+//!
+//! Every verdict below comes from one call to [`purrdf_entail::entails()`] — the
+//! library's conclusion-directed entailment service, which is what a caller gets.
+//! This harness parses two documents and compares an answer; it materializes
+//! nothing, matches nothing, and owns no blank-node matcher of its own. It used to
+//! own one, and that is precisely the failure mode a corpus is supposed to close: a
+//! grader with its own matcher grades a procedure no caller can invoke, and the two
+//! can drift without a single test going red.
+//!
 //! # What is graded, and how
 //!
 //! Two lanes, distinguished by which target file a case directory carries:
@@ -71,11 +81,20 @@
 //! Matching [`crate::owl2`]'s discipline, a run has three buckets ([`Grade`]):
 //!
 //! * **agree** — PurRDF's closure gave the published answer;
-//! * **withhold** — PurRDF *refused to decide*: the RDF/XML would not parse, the
-//!   chase returned an [`EntailError`](purrdf_entail::EntailError), or the
-//!   blank-node match exhausted its budget. A refusal is a capability gap and is
-//!   never scored as a pass;
+//! * **withhold** — PurRDF *refused to decide*: the RDF/XML would not parse, an
+//!   `owl:imports` could not be resolved, the chase returned an
+//!   [`EntailError`](purrdf_entail::EntailError), or — on a positive case — the
+//!   service answered [`Answer::Undecided`] because the premise is outside the OWL 2
+//!   RL syntax and Theorem PR1's completeness half therefore does not apply. A
+//!   refusal is a capability gap and is never scored as a pass;
 //! * **disagree** — PurRDF produced a closure and it gave the other answer.
+//!
+//! [`Answer`] itself has FOUR inhabitants, because the library distinguishes four
+//! things: a proof of entailment, a proof of non-entailment, "no mapping was found
+//! and I am not entitled to call that a refutation", and "there was no closure to
+//! test". [`grade`] is where the last two stop being interchangeable, and its own
+//! doc comment carries the argument for why the negative lane reads `Undecided` as
+//! the soundness observation it is while the positive lane reads it as a gap.
 //!
 //! Every withhold and every disagreement must appear in [`LEDGER`] with a typed
 //! [`RlGap`]. An unledgered one fails the harness, a ledgered one that starts
@@ -86,15 +105,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use purrdf_core::{RdfTextDirection, TermRef};
-
-/// The blank-node match budget, in candidate triples visited.
-///
-/// The conclusion graphs are tiny (the largest vendored one is 15 triples), so a
-/// budget this size is never reached by a well-formed case; it exists so that a
-/// pathological conclusion produces a **withhold** — an honest refusal that must
-/// be ledgered — instead of an unbounded search inside a required gate.
-const MATCH_BUDGET: u64 = 5_000_000;
+pub use purrdf_entail::{EntailmentOutcome, MissReason, UndecidedReason};
 
 /// What the W3C published for a case, which is also which target file it carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -403,14 +414,31 @@ pub struct RlCase {
 }
 
 /// What PurRDF answered for a case.
+///
+/// Four answers, because [`purrdf_entail::entails()`] distinguishes four things and
+/// collapsing any pair of them would put a claim in PurRDF's mouth that it did not make.
 #[derive(Debug)]
 pub enum Answer {
-    /// The OWL-RL closure of the premise simple-entails the target graph.
+    /// The OWL-RL closure of the premise entails the target graph, and the service
+    /// returned the blank-node mapping that proves it.
     Entailed,
-    /// The closure was computed and does **not** entail the target graph,
-    /// carrying the diagnosis of what was missing.
+    /// The closure was computed, does **not** contain the target graph, **and** the
+    /// premise is inside the OWL 2 RL syntax — so by Profiles Theorem PR1 this is a
+    /// refutation and not merely a failure to find something. Carries the diagnosis of
+    /// what was missing.
     NotEntailed(MissReason),
-    /// The run refused to answer, carrying the refusal's own message.
+    /// The closure was computed and does not contain the target graph, but the premise
+    /// is OUTSIDE the OWL 2 RL syntax, so Theorem PR1's completeness half does not apply
+    /// and nothing is proven either way.
+    ///
+    /// Distinct from [`Self::Withheld`] in the way that matters to this corpus: a
+    /// closure was computed and tested, so the *soundness* observation the negative lane
+    /// grades was actually made. What is missing is the entitlement to call the
+    /// observation a refutation.
+    Undecided(UndecidedReason),
+    /// The run produced no closure to test at all — the RDF/XML would not parse, an
+    /// `owl:imports` could not be resolved, the premise was inconsistent, or an
+    /// evaluation ceiling was reached. Carries the refusal's own message.
     Withheld(String),
 }
 
@@ -511,68 +539,6 @@ pub fn discover(root: &Path) -> Result<Vec<RlCase>, String> {
     Ok(cases)
 }
 
-/// An owned RDF term, comparable across two independently-parsed datasets.
-///
-/// [`TermRef`] borrows into one dataset's term table and carries the datatype as
-/// an interned id local to it, so it cannot be compared with a term from another
-/// dataset. This is the resolved, owned form used for matching. Blank nodes keep
-/// their scope because two blank nodes with the same label in different scopes are
-/// different nodes (`purrdf_core` C0.2).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum Term {
-    Iri(String),
-    Blank(String, u32),
-    Literal {
-        lexical: String,
-        datatype: String,
-        language: Option<String>,
-        direction: Option<RdfTextDirection>,
-    },
-    Triple(Box<[Self; 3]>),
-}
-
-/// A `(subject, predicate, object)` triple of owned terms.
-type Triple = [Term; 3];
-
-/// Resolve one [`TermRef`] into an owned [`Term`].
-fn own_term(ds: &purrdf_core::RdfDataset, term: TermRef<'_>) -> Term {
-    match term {
-        TermRef::Iri(iri) => Term::Iri(iri.to_owned()),
-        TermRef::Blank { label, scope } => Term::Blank(label.to_owned(), scope.ordinal()),
-        TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => Term::Literal {
-            lexical: lexical.to_owned(),
-            datatype: match ds.resolve(datatype) {
-                TermRef::Iri(iri) => iri.to_owned(),
-                other => format!("{other:?}"),
-            },
-            language: language.map(str::to_owned),
-            direction,
-        },
-        TermRef::Triple { s, p, o } => Term::Triple(Box::new([
-            own_term(ds, ds.resolve(s)),
-            own_term(ds, ds.resolve(p)),
-            own_term(ds, ds.resolve(o)),
-        ])),
-    }
-}
-
-/// Every default-graph triple of `ds`, as owned terms.
-///
-/// The RDF/XML codec puts a document's whole content in the default graph and the
-/// chase derives into it, so restricting to it loses nothing and keeps a stray
-/// named graph from being read as an entailment.
-fn owned_triples(ds: &purrdf_core::RdfDataset) -> Vec<Triple> {
-    ds.quad_refs()
-        .filter(|q| q.g.is_none())
-        .map(|q| [own_term(ds, q.s), own_term(ds, q.p), own_term(ds, q.o)])
-        .collect()
-}
-
 /// Parse an RDF/XML document with PurRDF's first-party codec.
 ///
 /// The base IRI is synthetic and `example.org`-scoped, per the repository's
@@ -585,201 +551,19 @@ fn parse(path: &Path, base: &str) -> Result<std::sync::Arc<purrdf_core::RdfDatas
         .map_err(|e| format!("RDF/XML parse of {}: {e}", path.display()))
 }
 
-/// A blank-node variable: `(label, scope)`.
-type VarKey = (String, u32);
-
-/// Whether `pat` unifies with `ground`, binding blank-node variables as it goes.
+/// Answer one case, through the library's conclusion-directed entailment service.
 ///
-/// Every key this newly binds is recorded on `trail`, so a caller whose later
-/// patterns fail can undo exactly the bindings this attempt introduced.
-fn try_unify(
-    pat: &Term,
-    ground: &Term,
-    bound: &mut BTreeMap<VarKey, Term>,
-    trail: &mut Vec<VarKey>,
-) -> bool {
-    match pat {
-        Term::Blank(label, scope) => {
-            let key = (label.clone(), *scope);
-            if let Some(prev) = bound.get(&key) {
-                return prev == ground;
-            }
-            bound.insert(key.clone(), ground.clone());
-            trail.push(key);
-            true
-        }
-        Term::Triple(inner) => match ground {
-            Term::Triple(g) => (0..3).all(|i| try_unify(&inner[i], &g[i], bound, trail)),
-            _ => false,
-        },
-        other => other == ground,
-    }
-}
-
-/// A closure indexed by predicate IRI — the only position that is always ground.
-type Index = BTreeMap<String, Vec<Triple>>;
-
-fn index_by_predicate(triples: Vec<Triple>) -> Index {
-    let mut index: Index = BTreeMap::new();
-    for triple in triples {
-        let key = match &triple[1] {
-            Term::Iri(iri) => iri.clone(),
-            // A non-IRI predicate cannot occur in RDF; keying it by its debug form
-            // simply means nothing will ever match it.
-            other => format!("{other:?}"),
-        };
-        index.entry(key).or_default().push(triple);
-    }
-    index
-}
-
-/// Solve patterns `pats[i..]` against `index`, backtracking over blank-node
-/// bindings.
+/// This harness owns **no** reasoning of its own. It parses two documents and hands
+/// them to [`purrdf_entail::entails()`], which resolves `owl:imports`, establishes the
+/// premise's consistency, runs the `OWL-RL` chase, checks Theorem PR1's syntactic
+/// precondition and matches the target graph into the closure. There is exactly one
+/// blank-node matcher in this workspace and it is that one — a second copy here is how
+/// a corpus comes to grade an implementation that is not the one callers get.
 ///
-/// # Errors
-///
-/// Returns a message when the candidate budget is exhausted, which the caller
-/// turns into a **withhold** rather than a verdict.
-fn solve(
-    pats: &[Triple],
-    index: &Index,
-    i: usize,
-    bound: &mut BTreeMap<VarKey, Term>,
-    budget: &mut u64,
-) -> Result<bool, String> {
-    let Some(pat) = pats.get(i) else {
-        return Ok(true);
-    };
-    let key = match &pat[1] {
-        Term::Iri(iri) => iri.clone(),
-        other => format!("{other:?}"),
-    };
-    let Some(candidates) = index.get(&key) else {
-        return Ok(false);
-    };
-    for candidate in candidates {
-        *budget = budget.checked_sub(1).ok_or_else(|| {
-            format!("blank-node match exceeded its {MATCH_BUDGET}-candidate budget")
-        })?;
-        let mut trail = Vec::new();
-        let matched = try_unify(&pat[0], &candidate[0], bound, &mut trail)
-            && try_unify(&pat[2], &candidate[2], bound, &mut trail);
-        if matched && solve(pats, index, i + 1, bound, budget)? {
-            return Ok(true);
-        }
-        for undo in trail {
-            bound.remove(&undo);
-        }
-    }
-    Ok(false)
-}
-
-/// How many blank-node variables a pattern triple mentions.
-fn var_count(term: &Term) -> usize {
-    match term {
-        Term::Blank(..) => 1,
-        Term::Triple(inner) => inner.iter().map(var_count).sum(),
-        _ => 0,
-    }
-}
-
-/// Render a term the way the diagnostic prints it.
-fn show(term: &Term) -> String {
-    match term {
-        Term::Iri(iri) => format!("<{iri}>"),
-        Term::Blank(label, scope) => format!("_:{label}#{scope}"),
-        Term::Literal {
-            lexical, language, ..
-        } => language.as_ref().map_or_else(
-            || format!("{lexical:?}"),
-            |lang| format!("{lexical:?}@{lang}"),
-        ),
-        Term::Triple(inner) => format!(
-            "<<{} {} {}>>",
-            show(&inner[0]),
-            show(&inner[1]),
-            show(&inner[2])
-        ),
-    }
-}
-
-/// Why a target graph did not map into a closure.
-///
-/// The distinction matters when writing a ledger entry: a target triple with no
-/// candidate at all names a conclusion the chase never produced, whereas a target
-/// whose triples are individually present but jointly unmappable names a
-/// blank-node identity the chase did not establish.
-#[derive(Debug)]
-pub enum MissReason {
-    /// These target triples have no candidate in the closure at all.
-    NoCandidate(Vec<String>),
-    /// Every target triple has a candidate, but no single blank-node mapping
-    /// satisfies them all at once.
-    NoConsistentMapping,
-}
-
-impl MissReason {
-    /// A one-line summary for the harness log and the ledger skeleton.
-    #[must_use]
-    pub fn summary(&self) -> String {
-        match self {
-            Self::NoCandidate(triples) => format!("closure lacks {}", triples.join(" ; ")),
-            Self::NoConsistentMapping => {
-                "every target triple is present but no consistent blank-node mapping exists"
-                    .to_owned()
-            }
-        }
-    }
-}
-
-/// Whether `closure` simple-entails `target`: does the target graph map into the
-/// closure with its blank nodes read as existentials?
-///
-/// `Ok(None)` means it does; `Ok(Some(reason))` means it does not, and carries the
-/// diagnosis a ledger entry needs.
-///
-/// # Errors
-///
-/// Returns a message when the search exhausts [`MATCH_BUDGET`].
-fn entails(closure: Vec<Triple>, mut target: Vec<Triple>) -> Result<Option<MissReason>, String> {
-    // Most-constrained-first: fully ground triples fail (or fix bindings) before
-    // the search branches. A stable sort keeps the order reproducible.
-    target.sort_by_key(|t| t.iter().map(var_count).sum::<usize>());
-    let index = index_by_predicate(closure);
-    let mut bound = BTreeMap::new();
-    let mut budget = MATCH_BUDGET;
-    if solve(&target, &index, 0, &mut bound, &mut budget)? {
-        return Ok(None);
-    }
-    // Diagnose: which target triples have no candidate at all, on their own?
-    let mut orphans = Vec::new();
-    for pat in &target {
-        let mut solo_bound = BTreeMap::new();
-        let mut solo_budget = MATCH_BUDGET;
-        if !solve(
-            std::slice::from_ref(pat),
-            &index,
-            0,
-            &mut solo_bound,
-            &mut solo_budget,
-        )? {
-            orphans.push(format!(
-                "{} {} {}",
-                show(&pat[0]),
-                show(&pat[1]),
-                show(&pat[2])
-            ));
-        }
-    }
-    Ok(Some(if orphans.is_empty() {
-        MissReason::NoConsistentMapping
-    } else {
-        MissReason::NoCandidate(orphans)
-    }))
-}
-
-/// Answer one case: materialize the premise under OWL 2 RL and test the target
-/// graph against the closure.
+/// The empty [`ImportMap`](purrdf_entail::ImportMap) is the honest configuration for
+/// this corpus: the upstream `all.rdf` export inlines no support document, so there is
+/// nothing to resolve an import to, and a premise that imports one refuses by name
+/// instead of being reasoned over as though the missing axioms said nothing.
 #[must_use]
 pub fn decide(case: &RlCase) -> Answer {
     let base = format!("http://example.org/w3c-owl2-rl/{}", case.name);
@@ -788,28 +572,55 @@ pub fn decide(case: &RlCase) -> Answer {
         Err(e) => return Answer::Withheld(e),
     };
     let target = match parse(&case.target, &base) {
-        Ok(dataset) => owned_triples(&dataset),
+        Ok(dataset) => dataset,
         Err(e) => return Answer::Withheld(e),
     };
-    let closure = match purrdf_entail::materialize(&premise, purrdf_entail::Materialization::OwlRl)
-    {
-        Ok((closure, _report)) => owned_triples(&closure),
-        Err(e) => return Answer::Withheld(format!("OWL-RL chase: {e}")),
-    };
-    match entails(closure, target) {
-        Ok(None) => Answer::Entailed,
-        Ok(Some(reason)) => Answer::NotEntailed(reason),
-        Err(e) => Answer::Withheld(e),
+    match purrdf_entail::entails(
+        &premise,
+        &target,
+        purrdf_entail::Regime::OwlRl,
+        &purrdf_entail::ImportMap::new(),
+    ) {
+        Ok(EntailmentOutcome::Entailed(_)) => Answer::Entailed,
+        Ok(EntailmentOutcome::NotEntailed(reason)) => Answer::NotEntailed(reason),
+        Ok(EntailmentOutcome::Undecided(reason)) => Answer::Undecided(reason),
+        Err(e) => Answer::Withheld(format!("OWL-RL entailment: {e}")),
     }
 }
 
 /// Answer `case` and grade the answer against its published direction.
+///
+/// # The two lanes ask different questions of the same answer
+///
+/// A **positive** case publishes an entailment, so PurRDF has to reach it: only
+/// [`Answer::Entailed`] agrees, and both a refutation and an
+/// [`Answer::Undecided`] are divergences that the ledger must name.
+///
+/// A **negative** case publishes a NON-entailment, and what this corpus can actually
+/// grade there is *soundness*: deriving the non-conclusion would be PurRDF asserting
+/// something W3C contradicts. Soundness is owed unconditionally — every rule of the
+/// OWL 2 RL/RDF table is a valid inference over arbitrary RDF graphs, whatever the
+/// premise's syntax — so the negative lane's pass condition is exactly "the closure was
+/// computed and does not contain the target". [`Answer::NotEntailed`] and
+/// [`Answer::Undecided`] both report precisely that, and they differ only in what they
+/// additionally CLAIM: `NotEntailed` claims a refutation (which needs Theorem PR1's
+/// precondition), `Undecided` claims nothing beyond the observation. So both agree here,
+/// and [`Answer::Withheld`] — where no closure was computed at all, and the observation
+/// was never made — does not.
+///
+/// That asymmetry is not a lenience introduced for the negative lane; it is the reason
+/// the module docs above call that lane "a soundness gate with weak discriminating
+/// power". The discrimination lives in the positive lane, where an `Undecided` is
+/// scored as the capability gap it is.
 #[must_use]
 pub fn grade(case: &RlCase) -> Grade {
     match decide(case) {
         Answer::Withheld(why) => Grade::Withhold(why),
         Answer::Entailed if case.direction.expects_match() => Grade::Agree,
-        Answer::NotEntailed(_) if !case.direction.expects_match() => Grade::Agree,
+        Answer::NotEntailed(_) | Answer::Undecided(_) if !case.direction.expects_match() => {
+            Grade::Agree
+        }
+        Answer::Undecided(reason) => Grade::Withhold(reason.to_string()),
         Answer::Entailed => Grade::Disagree {
             published: case.direction,
             miss: None,
@@ -1169,116 +980,6 @@ pub fn census_tally(rows: &[CensusRow], column: fn(&CensusRow) -> &str) -> Vec<(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn iri(s: &str) -> Term {
-        Term::Iri(s.to_owned())
-    }
-
-    fn blank(s: &str) -> Term {
-        Term::Blank(s.to_owned(), 0)
-    }
-
-    #[test]
-    fn ground_target_must_be_present() {
-        let closure = vec![[iri("s"), iri("p"), iri("o")]];
-        assert!(
-            entails(closure.clone(), vec![[iri("s"), iri("p"), iri("o")]])
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            entails(closure, vec![[iri("s"), iri("p"), iri("x")]])
-                .unwrap()
-                .is_some()
-        );
-    }
-
-    #[test]
-    fn blank_nodes_are_existentials() {
-        let closure = vec![[iri("s"), iri("p"), iri("o")]];
-        assert!(
-            entails(closure.clone(), vec![[blank("b"), iri("p"), iri("o")]])
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            entails(closure, vec![[blank("b"), iri("p"), blank("c")]])
-                .unwrap()
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn a_repeated_blank_must_map_consistently() {
-        // `_:b p o1 . _:b p o2` needs ONE node with both edges; the closure gives
-        // two different nodes with one edge each, so it must NOT match.
-        let closure = vec![
-            [iri("s1"), iri("p"), iri("o1")],
-            [iri("s2"), iri("p"), iri("o2")],
-        ];
-        let target = vec![
-            [blank("b"), iri("p"), iri("o1")],
-            [blank("b"), iri("p"), iri("o2")],
-        ];
-        assert!(entails(closure.clone(), target).unwrap().is_some());
-        let mut wider = closure;
-        wider.push([iri("s1"), iri("p"), iri("o2")]);
-        let target = vec![
-            [blank("b"), iri("p"), iri("o1")],
-            [blank("b"), iri("p"), iri("o2")],
-        ];
-        assert!(entails(wider, target).unwrap().is_none());
-    }
-
-    #[test]
-    fn matching_backtracks_over_a_bad_first_choice() {
-        // The first candidate for `_:b p ?` is `s1`, which cannot satisfy the
-        // second pattern; the search must undo it and try `s2`.
-        let closure = vec![
-            [iri("s1"), iri("p"), iri("o1")],
-            [iri("s2"), iri("p"), iri("o1")],
-            [iri("s2"), iri("q"), iri("o2")],
-        ];
-        let target = vec![
-            [blank("b"), iri("p"), iri("o1")],
-            [blank("b"), iri("q"), iri("o2")],
-        ];
-        assert!(entails(closure, target).unwrap().is_none());
-    }
-
-    #[test]
-    fn literals_compare_on_datatype_too() {
-        let lit = |lex: &str, dt: &str| Term::Literal {
-            lexical: lex.to_owned(),
-            datatype: dt.to_owned(),
-            language: None,
-            direction: None,
-        };
-        let closure = vec![[iri("s"), iri("p"), lit("1", "xsd:integer")]];
-        assert!(
-            entails(
-                closure.clone(),
-                vec![[iri("s"), iri("p"), lit("1", "xsd:integer")]]
-            )
-            .unwrap()
-            .is_none()
-        );
-        assert!(
-            entails(closure, vec![[iri("s"), iri("p"), lit("1", "xsd:string")]])
-                .unwrap()
-                .is_some()
-        );
-    }
-
-    #[test]
-    fn an_absent_predicate_short_circuits() {
-        let closure = vec![[iri("s"), iri("p"), iri("o")]];
-        assert!(
-            entails(closure, vec![[blank("b"), iri("absent"), blank("c")]])
-                .unwrap()
-                .is_some()
-        );
-    }
 
     #[test]
     fn ledger_has_no_duplicate_cases() {

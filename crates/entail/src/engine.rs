@@ -157,7 +157,7 @@ pub(crate) fn copy_of(ds: &RdfDataset) -> Result<Arc<RdfDataset>, EntailError> {
 /// The reifier and annotation SIDE TABLES ride along, because a closure that silently
 /// dropped them would delete every reifier in a caller's data the moment they asked for
 /// entailment, and no assertion about the quads would notice.
-fn copy_into(b: &mut RdfDatasetBuilder, ds: &RdfDataset) {
+pub(crate) fn copy_into(b: &mut RdfDatasetBuilder, ds: &RdfDataset) {
     for quad in ds.quads() {
         let s = intern_into(b, &ds.term_value(quad.s));
         let p = intern_into(b, &ds.term_value(quad.p));

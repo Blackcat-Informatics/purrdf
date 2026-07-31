@@ -34,7 +34,7 @@
 //!     --ignored --nocapture regenerate_rl_ledger
 //! ```
 
-use purrdf_sparql_conformance::owl2_rl::{self, Direction};
+use purrdf_sparql_conformance::owl2_rl::{self, Answer, Direction};
 
 /// Exactly what was vendored: the 27 positive plus 23 negative entailment cases.
 const EXPECTED_CASES: usize = 50;
@@ -255,6 +255,61 @@ fn census_accounts_for_every_upstream_case() {
     for (value, count) in owl2_rl::census_tally(&rows, |r| &r.dl_corpus) {
         eprintln!("[w3c-census]   dl_corpus {value:>24}  {count:>3}");
     }
+}
+
+/// The corpus's premises that are OUTSIDE the OWL 2 RL syntax, named — and the
+/// answer each one gets.
+///
+/// Theorem PR1's completeness half is conditional on the premise being an OWL 2 RL
+/// ontology, and this corpus does **not** consist only of such premises: W3C's
+/// `otest:profile RL` tag selects on the case, and six of the fifty carry a premise
+/// the RL grammar excludes. That fact is measured here rather than assumed anywhere,
+/// because it is the fact that makes `Answer::Undecided` reachable at all — without
+/// it the distinction between "refuted" and "not refutable" would be untested and
+/// could rot into a synonym.
+///
+/// The six are pinned by name, so a re-vendor that changes the set has to say so, and
+/// each is checked to get the answer its direction earns:
+///
+/// * `new-feature-reflexiveproperty-001` is POSITIVE, so an `Undecided` is a
+///   capability gap, and `LEDGER` carries it as `construct-outside-rl`;
+/// * the other five are NEGATIVE, where the graded claim is soundness — the closure
+///   was computed and does not contain the non-conclusion — which `Undecided` reports
+///   in full, so they agree without a ledger entry.
+#[test]
+fn the_non_rl_premises_are_named_and_answer_undecided() {
+    /// Every vendored case whose premise the OWL 2 RL grammar excludes, measured.
+    const OUTSIDE_RL: [&str; 6] = [
+        "new-feature-keys-007",
+        "new-feature-reflexiveproperty-001",
+        "webont-description-logic-209",
+        "webont-equivalentclass-005",
+        "webont-i5-8-005",
+        "webont-somevaluesfrom-002",
+    ];
+
+    let cases = owl2_rl::discover(&owl2_rl::suite_root()).expect("discover the corpus");
+    let mut measured: Vec<&str> = Vec::new();
+    for case in &cases {
+        if !matches!(owl2_rl::decide(case), Answer::Undecided(_)) {
+            continue;
+        }
+        measured.push(&case.name);
+        let ledgered = owl2_rl::ledger_lookup(&case.name).is_some();
+        assert_eq!(
+            case.direction == Direction::Positive,
+            ledgered,
+            "{}: an Undecided on a POSITIVE case is a capability gap and must be ledgered; on a \
+             NEGATIVE case it is the soundness observation the lane grades and must not be",
+            case.name
+        );
+    }
+    assert_eq!(
+        measured, OUTSIDE_RL,
+        "the set of premises outside the OWL 2 RL syntax changed; a case leaving it means the \
+         premise or the profile scanner moved, and a case joining it means a premise this corpus \
+         could previously refute can no longer be refuted — either way, say which and why"
+    );
 }
 
 /// Every ledgered case must still be a vendored case, and the ledger must not

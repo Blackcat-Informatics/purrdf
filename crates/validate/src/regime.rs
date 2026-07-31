@@ -588,8 +588,10 @@ pub fn render_reasoning_report(report: &ReasoningReport) -> String {
 /// than parsing prose.
 ///
 /// Every other variant is the ABSENCE of a run — an exhausted ceiling, a malformed
-/// document, an unsatisfiable tableau — and has no report to carry, so it renders as its
-/// own diagnostic and nothing is implied about a closure that was never assembled.
+/// document, an unsatisfiable tableau, a regime the conclusion-directed service is not
+/// total over, an unresolved `owl:imports`, an exhausted match budget — and has no report to
+/// carry, so it renders as its own diagnostic and nothing is implied about a closure that
+/// was never assembled.
 #[must_use]
 pub fn render_entail_error(regime: &str, error: &EntailError) -> String {
     let head = format!("entailment regime \"{regime}\": {error}");
@@ -602,6 +604,9 @@ pub fn render_entail_error(regime: &str, error: &EntailError) -> String {
         | EntailError::Evaluate(_)
         | EntailError::Chase(_)
         | EntailError::MalformedList(_)
+        | EntailError::UnsupportedRegime(_)
+        | EntailError::UnresolvedImport(_)
+        | EntailError::MatchBudget
         | EntailError::Unsatisfiable => head,
     }
 }
