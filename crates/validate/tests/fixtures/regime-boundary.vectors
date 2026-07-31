@@ -1,0 +1,934 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# The golden vector for the PurRDF entailment-regime string boundary
+# (`purrdf_validate::regime`). ONE artifact, consumed by every host: the Rust
+# test in `purrdf-validate`, and later the C-ABI and WASM crates, all call
+# `purrdf_validate::regime::check_regime_golden_vectors()` over these bytes, so a
+# host that diverges fails against the same expectations instead of against a
+# fixture that quietly stopped agreeing with the other two.
+#
+# Format (see `parse_regime_vectors`): a line starting with `@` is a directive;
+# every other line belongs to the body the last body-directive opened; outside a
+# body only blank lines and `#` comments are legal. A body line may therefore
+# never begin with `@` — neither N-Quads nor a rendered report ever does.
+#
+#   @case <name>      opens a case
+#   @regime <name>    the regime's CLI spelling
+#   @input            body: the N-Quads/N-Triples input document
+#   @program          body: the regime's own rule document; OPTIONAL, and absent
+#                     is the empty program, which is what every regime but `rif`
+#                     takes
+#   @closure          body: the canonical N-Quads the closure must serialize to
+#   @report           body: the report rendering the run must produce
+#   @end              closes the case
+#
+# Every IRI is under `example.org`: PurRDF mints no vocabulary, and the only
+# non-example.org IRIs below are the `rdf:`/`rdfs:`/`owl:` terms the entailment
+# specifications themselves define.
+#
+# WHY THIS ARTIFACT MOVED: THE REPORT GRAMMAR IS AT 3 — THE EXTENSION LIST AND THE
+# TERMINATION CERTIFICATE ARE IN IT.
+#
+# No closure changed by one byte; every change is in a `@report` body, and the banner
+# went from 2 to 3 so the two new lines are visible rather than silent.
+#
+# `extension <rule-id>` is NEW, and it is the mirror of `missing`. The OWL-RL lane now
+# states one rule that NO specification table states — `ext-eq-diff-sym`, symmetry of
+# `owl:differentFrom`, which is sound (inequality is symmetric) and which OWL 2
+# Profiles §4.3 Tables 4-9 do not contain, because the table's only
+# `owl:differentFrom` rules read it in a body and conclude `false`. `missing` says the
+# closure may be SMALLER than the regime requires; `extension` says it may be LARGER.
+# Without the line a caller reading `fired ext-eq-diff-sym 1` would have to know from
+# prose which ids on those lines are W3C's. Both `owl-rl` cases below carry it and
+# every other case reads no `extension` line at all. `rules(owl-rl)` and
+# `implemented(owl-rl)` are still exactly the same 78: the extension is in neither.
+#
+# `termination …` is NEW, and it is a proof this workspace was already computing and
+# then throwing away. `rdf` and `rdfs` state existentially quantified rules and are
+# evaluated by the restricted chase, which INVENTS terms — so their clause sets are
+# certified weakly acyclic before a round runs, and an uncertified one is refused
+# outright rather than run under a budget. The verdict reached no caller. It does now,
+# and it is not one constant: `rdf` reads `positions 10 existential-edges 4` and
+# `rdfs` reads `positions 27 existential-edges 8`, because the certificate is a
+# function of the CLAUSE SET (RDFS states `rdfs14`/`rdfs14a` besides
+# `rdfD1`/`rdfD1a`). It does not vary with the data. `simple`, `owl-rl`, `d`,
+# `owl-direct` and `rif` read `none`, which says their rules invent no term and so owe
+# no proof — not that termination is unknown.
+#
+# The `owl-rl` contract hash moved with the new clause (61a9a840… to 8f93a908…) and no
+# other lane's did, because the extension family is concatenated LAST: a rule that
+# concludes `false` is lowered into a clause naming a marker built from its
+# DECLARATION INDEX, so a family spliced earlier would renumber every marker after it
+# and move digests for lanes that fire none of the affected rules.
+#
+# AN EARLIER MOVE: THE REPORT GRAMMAR WENT TO 2, AND THE WITHHELD COUNT WENT IN IT.
+#
+# No closure changed by one byte; every change below is in a `@report` body. Three
+# things moved, and the banner went from 1 to 2 so they are visible rather than
+# silent.
+#
+# `withheld-surrogates <n>` is NEW here. The shared renderer — the one Python, WASM
+# and the C ABI all go through — never emitted it, while the CLI's own private
+# renderer did. So `rdfD1`, `rdfD1a`, `rdfs14` and `rdfs14a` were invisible from
+# every host but the command line, even though the count is the ONLY observable
+# those four rules have: all four fire, every conclusion they reach mentions a
+# minted blank node a SPARQL entailment regime may not answer with, so none of them
+# can ever appear in a `fired` line. The rdfs case below now says 11 and the rdf case
+# says 3, where a reader previously had a `boundary surrogate` paragraph saying the
+# conclusions were "counted here" and no number anywhere.
+#
+# The trailing `overclaims false` line is GONE. It was a rendered constant: a report
+# carries no completeness field to contradict its boundary list, because
+# `ReasoningReport::completeness` derives the value from that list. A line that could
+# only ever say `false` is a disclosure, not a gate, so the gate — and the
+# `EntailError::Overclaim` it was supposed to raise, which no run could reach — was
+# deleted rather than dressed up.
+#
+# An `inconsistency` witness now renders its GRAPH and its PREMISE TRIPLES
+# (`inconsistency-graph`, `inconsistency-premise`). No case here shows them, because
+# an inconsistent input has no closure and this artifact pairs an input with one;
+# `purrdf_validate::regime::check_inconsistent_refusal` is the tri-host assertion
+# that covers that path.
+#
+# AN EARLIER MOVE: THE BOUNDARY STOPPED REFUSING TWO REGIMES.
+#
+# No existing case changed by one byte. Two were ADDED, and the `@program`
+# directive with them. `owl-direct` and `rif` used to be refused here by name,
+# with a message listing the five spellings that were not — so this artifact,
+# the one thing all four hosts check themselves against, covered five sevenths
+# of the surface and the other two sevenths were pinned by an error string.
+# `purrdf_entail::materialize` now takes a `Materialization` rather than a
+# `Regime`, which carries each regime's own input, and this boundary passes
+# them: `owl-direct` gets the empty basic graph pattern (a document boundary has
+# no query, so what runs is the query-independent augmentation the tableau
+# decides about the ontology's own named terms) and `rif` gets the rule set
+# parsed from `@program`. Both now have a case, and the coverage check below
+# ranges over all seven spellings.
+#
+# AN EARLIER MOVE: TWO `boundary` REASONS SAID THE OPPOSITE OF A THIRD.
+#
+# No closure changed and no case was added, removed or renamed. What changed is
+# the prose of two `Construct::reason()` strings, which this artifact carries
+# verbatim and therefore shipped to every host.
+#
+# `boundary triple-term` and `boundary datatype-value-space` both said, of
+# rdfD1/rdfD1a and rdfs14/rdfs14a, "the evaluator mints no terms, so neither rule
+# fires" — six occurrences across the cases below. That was true before the
+# restricted chase landed and was never updated. `boundary surrogate`, in the
+# same rendered report, says "All four FIRE", so a reader of one report was told
+# both. It is the second sentence that is right: all four rules fire, the chase
+# mints each surrogate as a frontier-addressed Skolem witness, and what is
+# withheld is the SURROGATE TERM — a SPARQL entailment regime draws its answers
+# from the scoping graph and a minted blank node is not in it. The two reasons
+# now say that, and point at the surrogate boundary, which counts the withheld
+# conclusions.
+
+@case simple-copies-a-named-graph-verbatim
+@regime simple
+@input
+<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .
+<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .
+<http://example.org/x> <http://example.org/p> <http://example.org/y> <http://example.org/g> .
+@closure
+<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .
+<http://example.org/x> <http://example.org/p> <http://example.org/y> <http://example.org/g> .
+<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .
+@report
+purrdf-reasoning-report 3
+regime simple
+completeness exact
+budget join-steps 0
+budget stored-facts 0
+budget term-arena-bytes 0
+contract-hash 4151090ce6c2ecdae843e351420ddcf10f79e525c60b4c6d07bebeabaa07fbd5
+withheld-surrogates 0
+termination none
+inconsistency none
+@end
+
+@case rdf-types-every-predicate
+@regime rdf
+@input
+<http://example.org/x> <http://example.org/p> <http://example.org/y> .
+@closure
+<http://example.org/p> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://example.org/x> <http://example.org/p> <http://example.org/y> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+@report
+purrdf-reasoning-report 3
+regime rdf
+completeness exact-within-boundaries
+fired rdfD2 2
+boundary axiomatic-triples the FINITE part of the RDF and RDFS axiomatic triples — the fixed domain, range, type and sub-class statements about the RDF and RDFS vocabulary itself — is asserted as a premise, so every conclusion it licenses is drawn; two things are not. The container-membership family rdf:_1, rdf:_2, … is unbounded and no forward chase can materialize an infinite set, so rdfs12 fires only on a container property the graph itself types. And the asserted axioms are premises rather than conclusions, so the closure does not restate them: they are entailed but not emitted
+boundary datatype-value-space rdfD1 and rdfD1a conclude about a FRESH blank node standing for a datatyped literal, or for an inhabited value space, and both FIRE: the restricted chase evaluates their existentially quantified heads. What is withheld is the SURROGATE itself — a SPARQL entailment regime draws its answers from the scoping graph, which no minted blank node is in — and the surrogate boundary is where those withheld conclusions are counted. rdfs1 recognizes the datatypes RDF 1.2 Semantics §8 makes mandatory (rdf:langString, rdf:dirLangString, xsd:string) and no others. The OWL 2 RL rules quantified over value spaces (dt-type2, dt-eq, dt-diff) DO fire, over the literals the dataset holds rather than over the infinitely many a value space contains, and value-space membership is decided through the candidate datatype's LEXICAL space, so a value in a datatype's value space whose lexical form is not in that datatype's lexical space is not found: "1.0"^^xsd:decimal is not typed xsd:integer. A datatype purrdf-xsd does not model is not judged either way
+boundary surrogate rdfD1, rdfD1a, rdfs14 and rdfs14a all conclude about a FRESH blank node — the surrogate the specification writes `_:nnn`. All four FIRE: the restricted chase mints each surrogate as a frontier-addressed Skolem witness, so re-deriving the same obligation reuses the same witness and the fixpoint converges, and the closure is closed under everything the surrogate then licenses. What does not reach the answer is the surrogate ITSELF: every conclusion mentioning one is dropped at the materialization boundary and counted here. That is a requirement of SPARQL's entailment regimes, not a shortcut. The regime's answers are drawn from the SCOPING GRAPH, and a surrogate is not in it, so a solution binding a variable to one is not an answer the regime admits. The W3C case `rdfs13` is the proof: it asks `?L rdf:type rdfs:Literal` over a graph whose only literal is "foo" and requires ZERO rows, while rdfD1's surrogate gives `_:nnn rdf:type xsd:string` and hence `_:nnn rdf:type rdfs:Literal` through rdfs1, rdfs13 and rdfs9. Emitting that row would be WRONG, where withholding it is merely incomplete. Nothing surrogate-FREE is lost by the exclusion: replacing a term by a fresh blank node can only weaken a triple, so every conclusion that does not mention a surrogate was already licensed by the triple the surrogate stands for
+budget join-steps 25
+budget stored-facts 6
+budget term-arena-bytes 433
+contract-hash 9724540a02daf06f349ba8aecf52f9e3e21abf7042d1bfcc630172baa7f23ee3
+withheld-surrogates 3
+termination weakly-acyclic positions 10 existential-edges 4
+inconsistency none
+@end
+
+@case rdfs-subclass-domain-and-range
+@regime rdfs
+@input
+<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .
+<http://example.org/B> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .
+<http://example.org/p> <http://www.w3.org/2000/01/rdf-schema#domain> <http://example.org/A> .
+<http://example.org/p> <http://www.w3.org/2000/01/rdf-schema#range> <http://example.org/B> .
+<http://example.org/x> <http://example.org/p> <http://example.org/y> .
+<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .
+@closure
+<http://example.org/A> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://example.org/A> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/A> .
+<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .
+<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .
+<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://example.org/B> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://example.org/B> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://example.org/B> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .
+<http://example.org/B> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .
+<http://example.org/B> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://example.org/C> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://example.org/C> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://example.org/C> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .
+<http://example.org/C> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://example.org/p> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://example.org/p> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://example.org/p> <http://www.w3.org/2000/01/rdf-schema#domain> <http://example.org/A> .
+<http://example.org/p> <http://www.w3.org/2000/01/rdf-schema#range> <http://example.org/B> .
+<http://example.org/p> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://example.org/p> .
+<http://example.org/x> <http://example.org/p> <http://example.org/y> .
+<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .
+<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> .
+<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .
+<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://example.org/y> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> .
+<http://example.org/y> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .
+<http://example.org/y> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Alt> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Alt> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Alt> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Alt> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Alt> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Bag> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Bag> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Bag> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Bag> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Bag> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#List> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#List> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#List> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#List> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#List> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Seq> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Seq> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Seq> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Seq> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Seq> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Literal> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#langString> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#langString> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#langString> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#langString> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#langString> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#langString> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Literal> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#langString> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#object> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#object> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#object> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#predicate> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#predicate> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#predicate> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#subject> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#subject> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#subject> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#value> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#value> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#value> .
+<http://www.w3.org/2000/01/rdf-schema#Class> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/2000/01/rdf-schema#Class> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#Class> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/2000/01/rdf-schema#Class> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#Container> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/2000/01/rdf-schema#Container> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#Container> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Container> .
+<http://www.w3.org/2000/01/rdf-schema#Container> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#ContainerMembershipProperty> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/2000/01/rdf-schema#ContainerMembershipProperty> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#ContainerMembershipProperty> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#ContainerMembershipProperty> .
+<http://www.w3.org/2000/01/rdf-schema#ContainerMembershipProperty> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#Datatype> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/2000/01/rdf-schema#Datatype> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#Datatype> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2000/01/rdf-schema#Datatype> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#Literal> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/2000/01/rdf-schema#Literal> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#Literal> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Literal> .
+<http://www.w3.org/2000/01/rdf-schema#Literal> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#Proposition> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/2000/01/rdf-schema#Proposition> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#Proposition> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Proposition> .
+<http://www.w3.org/2000/01/rdf-schema#Proposition> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#Resource> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/2000/01/rdf-schema#Resource> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#Resource> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#comment> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://www.w3.org/2000/01/rdf-schema#comment> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#comment> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#comment> .
+<http://www.w3.org/2000/01/rdf-schema#domain> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://www.w3.org/2000/01/rdf-schema#domain> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#domain> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#domain> .
+<http://www.w3.org/2000/01/rdf-schema#isDefinedBy> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://www.w3.org/2000/01/rdf-schema#isDefinedBy> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#isDefinedBy> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#isDefinedBy> .
+<http://www.w3.org/2000/01/rdf-schema#label> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://www.w3.org/2000/01/rdf-schema#label> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#label> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#label> .
+<http://www.w3.org/2000/01/rdf-schema#member> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://www.w3.org/2000/01/rdf-schema#member> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#member> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#member> .
+<http://www.w3.org/2000/01/rdf-schema#range> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://www.w3.org/2000/01/rdf-schema#range> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#range> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#range> .
+<http://www.w3.org/2000/01/rdf-schema#seeAlso> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://www.w3.org/2000/01/rdf-schema#seeAlso> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#seeAlso> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#seeAlso> .
+<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#subClassOf> .
+<http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> .
+<http://www.w3.org/2001/XMLSchema#string> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/2001/XMLSchema#string> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#string> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2001/XMLSchema#string> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Literal> .
+<http://www.w3.org/2001/XMLSchema#string> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2001/XMLSchema#string> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2001/XMLSchema#string> .
+@report
+purrdf-reasoning-report 3
+regime rdfs
+completeness exact-within-boundaries
+fired rdfD2 5
+fired rdfs1 3
+fired rdfs2 25
+fired rdfs3 13
+fired rdfs4 27
+fired rdfs6 18
+fired rdfs8 19
+fired rdfs9 3
+fired rdfs10 18
+fired rdfs11 1
+fired rdfs13 3
+boundary axiomatic-triples the FINITE part of the RDF and RDFS axiomatic triples — the fixed domain, range, type and sub-class statements about the RDF and RDFS vocabulary itself — is asserted as a premise, so every conclusion it licenses is drawn; two things are not. The container-membership family rdf:_1, rdf:_2, … is unbounded and no forward chase can materialize an infinite set, so rdfs12 fires only on a container property the graph itself types. And the asserted axioms are premises rather than conclusions, so the closure does not restate them: they are entailed but not emitted
+boundary datatype-value-space rdfD1 and rdfD1a conclude about a FRESH blank node standing for a datatyped literal, or for an inhabited value space, and both FIRE: the restricted chase evaluates their existentially quantified heads. What is withheld is the SURROGATE itself — a SPARQL entailment regime draws its answers from the scoping graph, which no minted blank node is in — and the surrogate boundary is where those withheld conclusions are counted. rdfs1 recognizes the datatypes RDF 1.2 Semantics §8 makes mandatory (rdf:langString, rdf:dirLangString, xsd:string) and no others. The OWL 2 RL rules quantified over value spaces (dt-type2, dt-eq, dt-diff) DO fire, over the literals the dataset holds rather than over the infinitely many a value space contains, and value-space membership is decided through the candidate datatype's LEXICAL space, so a value in a datatype's value space whose lexical form is not in that datatype's lexical space is not found: "1.0"^^xsd:decimal is not typed xsd:integer. A datatype purrdf-xsd does not model is not judged either way
+boundary surrogate rdfD1, rdfD1a, rdfs14 and rdfs14a all conclude about a FRESH blank node — the surrogate the specification writes `_:nnn`. All four FIRE: the restricted chase mints each surrogate as a frontier-addressed Skolem witness, so re-deriving the same obligation reuses the same witness and the fixpoint converges, and the closure is closed under everything the surrogate then licenses. What does not reach the answer is the surrogate ITSELF: every conclusion mentioning one is dropped at the materialization boundary and counted here. That is a requirement of SPARQL's entailment regimes, not a shortcut. The regime's answers are drawn from the SCOPING GRAPH, and a surrogate is not in it, so a solution binding a variable to one is not an answer the regime admits. The W3C case `rdfs13` is the proof: it asks `?L rdf:type rdfs:Literal` over a graph whose only literal is "foo" and requires ZERO rows, while rdfD1's surrogate gives `_:nnn rdf:type xsd:string` and hence `_:nnn rdf:type rdfs:Literal` through rdfs1, rdfs13 and rdfs9. Emitting that row would be WRONG, where withholding it is merely incomplete. Nothing surrogate-FREE is lost by the exclusion: replacing a term by a fresh blank node can only weaken a triple, so every conclusion that does not mention a surrogate was already licensed by the triple the surrogate stands for
+budget join-steps 9455
+budget stored-facts 201
+budget term-arena-bytes 1958
+contract-hash f6a5eff90528f49ba8d3b83ae7feac8e3b71586f320fb478c6ddb60ca6dc979e
+withheld-surrogates 11
+termination weakly-acyclic positions 27 existential-edges 8
+inconsistency none
+@end
+
+# WHAT MOVED IN THIS CASE, AND WHY: the OWL-RL lane now states the whole of OWL 2
+# Profiles §4.3 Tables 5, 7 and 9, so `implemented(OWL-RL)` is 37 of 78 where it was
+# 12. Two things follow, and nothing else in this artifact moved. (1) The closure
+# gains nine triples that are NOT about this input at all: prp-ap is premise-free and
+# types each built-in annotation property of OWL 2 RL an owl:AnnotationProperty, so
+# those nine hold for every OWL-RL run including one over the empty graph. (2) The
+# report's `missing` list drops from 66 rules to 41 and the contract hash moves once,
+# because the calculus the digest names is a different one. The transitive, symmetric
+# and inverse conclusions this case exists for are byte-for-byte unchanged.
+@case owl-rl-transitive-symmetric-and-inverse
+@regime owl-rl
+@input
+<http://example.org/rel> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#TransitiveProperty> .
+<http://example.org/rel> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#SymmetricProperty> .
+<http://example.org/rel> <http://www.w3.org/2002/07/owl#inverseOf> <http://example.org/back> .
+<http://example.org/x> <http://example.org/rel> <http://example.org/y> .
+<http://example.org/y> <http://example.org/rel> <http://example.org/z> .
+@closure
+<http://example.org/back> <http://www.w3.org/2002/07/owl#sameAs> <http://example.org/back> .
+<http://example.org/rel> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#SymmetricProperty> .
+<http://example.org/rel> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#TransitiveProperty> .
+<http://example.org/rel> <http://www.w3.org/2002/07/owl#inverseOf> <http://example.org/back> .
+<http://example.org/rel> <http://www.w3.org/2002/07/owl#sameAs> <http://example.org/rel> .
+<http://example.org/x> <http://example.org/back> <http://example.org/x> .
+<http://example.org/x> <http://example.org/back> <http://example.org/y> .
+<http://example.org/x> <http://example.org/back> <http://example.org/z> .
+<http://example.org/x> <http://example.org/rel> <http://example.org/x> .
+<http://example.org/x> <http://example.org/rel> <http://example.org/y> .
+<http://example.org/x> <http://example.org/rel> <http://example.org/z> .
+<http://example.org/x> <http://www.w3.org/2002/07/owl#sameAs> <http://example.org/x> .
+<http://example.org/y> <http://example.org/back> <http://example.org/x> .
+<http://example.org/y> <http://example.org/back> <http://example.org/y> .
+<http://example.org/y> <http://example.org/back> <http://example.org/z> .
+<http://example.org/y> <http://example.org/rel> <http://example.org/x> .
+<http://example.org/y> <http://example.org/rel> <http://example.org/y> .
+<http://example.org/y> <http://example.org/rel> <http://example.org/z> .
+<http://example.org/y> <http://www.w3.org/2002/07/owl#sameAs> <http://example.org/y> .
+<http://example.org/z> <http://example.org/back> <http://example.org/x> .
+<http://example.org/z> <http://example.org/back> <http://example.org/y> .
+<http://example.org/z> <http://example.org/back> <http://example.org/z> .
+<http://example.org/z> <http://example.org/rel> <http://example.org/x> .
+<http://example.org/z> <http://example.org/rel> <http://example.org/y> .
+<http://example.org/z> <http://example.org/rel> <http://example.org/z> .
+<http://example.org/z> <http://www.w3.org/2002/07/owl#sameAs> <http://example.org/z> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#PlainLiteral> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#PlainLiteral> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/1999/02/22-rdf-syntax-ns#PlainLiteral> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#XMLLiteral> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#XMLLiteral> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/1999/02/22-rdf-syntax-ns#XMLLiteral> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> .
+<http://www.w3.org/2000/01/rdf-schema#Datatype> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2000/01/rdf-schema#Literal> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2000/01/rdf-schema#Literal> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2000/01/rdf-schema#Literal> .
+<http://www.w3.org/2000/01/rdf-schema#comment> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2000/01/rdf-schema#comment> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2000/01/rdf-schema#comment> .
+<http://www.w3.org/2000/01/rdf-schema#isDefinedBy> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2000/01/rdf-schema#isDefinedBy> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2000/01/rdf-schema#isDefinedBy> .
+<http://www.w3.org/2000/01/rdf-schema#label> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2000/01/rdf-schema#label> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2000/01/rdf-schema#label> .
+<http://www.w3.org/2000/01/rdf-schema#seeAlso> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2000/01/rdf-schema#seeAlso> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2000/01/rdf-schema#seeAlso> .
+<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2000/01/rdf-schema#subClassOf> .
+<http://www.w3.org/2001/XMLSchema#NCName> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#NCName> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#NCName> .
+<http://www.w3.org/2001/XMLSchema#NMTOKEN> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#NMTOKEN> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#NMTOKEN> .
+<http://www.w3.org/2001/XMLSchema#Name> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#Name> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#Name> .
+<http://www.w3.org/2001/XMLSchema#anyURI> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#anyURI> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#anyURI> .
+<http://www.w3.org/2001/XMLSchema#base64Binary> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#base64Binary> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#base64Binary> .
+<http://www.w3.org/2001/XMLSchema#boolean> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#boolean> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#boolean> .
+<http://www.w3.org/2001/XMLSchema#byte> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#byte> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#byte> .
+<http://www.w3.org/2001/XMLSchema#dateTime> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#dateTime> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#dateTime> .
+<http://www.w3.org/2001/XMLSchema#dateTimeStamp> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#dateTimeStamp> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#dateTimeStamp> .
+<http://www.w3.org/2001/XMLSchema#decimal> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#decimal> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#decimal> .
+<http://www.w3.org/2001/XMLSchema#double> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#double> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#double> .
+<http://www.w3.org/2001/XMLSchema#float> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#float> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#float> .
+<http://www.w3.org/2001/XMLSchema#hexBinary> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#hexBinary> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#hexBinary> .
+<http://www.w3.org/2001/XMLSchema#int> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#int> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#int> .
+<http://www.w3.org/2001/XMLSchema#integer> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#integer> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#integer> .
+<http://www.w3.org/2001/XMLSchema#language> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#language> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#language> .
+<http://www.w3.org/2001/XMLSchema#long> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#long> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#long> .
+<http://www.w3.org/2001/XMLSchema#negativeInteger> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#negativeInteger> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#negativeInteger> .
+<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<http://www.w3.org/2001/XMLSchema#nonPositiveInteger> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#nonPositiveInteger> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#nonPositiveInteger> .
+<http://www.w3.org/2001/XMLSchema#normalizedString> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#normalizedString> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#normalizedString> .
+<http://www.w3.org/2001/XMLSchema#positiveInteger> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#positiveInteger> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#positiveInteger> .
+<http://www.w3.org/2001/XMLSchema#short> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#short> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#short> .
+<http://www.w3.org/2001/XMLSchema#string> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#string> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#string> .
+<http://www.w3.org/2001/XMLSchema#token> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#token> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#token> .
+<http://www.w3.org/2001/XMLSchema#unsignedByte> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#unsignedByte> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#unsignedByte> .
+<http://www.w3.org/2001/XMLSchema#unsignedInt> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#unsignedInt> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#unsignedInt> .
+<http://www.w3.org/2001/XMLSchema#unsignedLong> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#unsignedLong> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#unsignedLong> .
+<http://www.w3.org/2001/XMLSchema#unsignedShort> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#unsignedShort> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#unsignedShort> .
+<http://www.w3.org/2002/07/owl#AnnotationProperty> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2002/07/owl#Class> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#Class> .
+<http://www.w3.org/2002/07/owl#Nothing> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Class> .
+<http://www.w3.org/2002/07/owl#Nothing> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2002/07/owl#Nothing> .
+<http://www.w3.org/2002/07/owl#Nothing> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2002/07/owl#Thing> .
+<http://www.w3.org/2002/07/owl#Nothing> <http://www.w3.org/2002/07/owl#equivalentClass> <http://www.w3.org/2002/07/owl#Nothing> .
+<http://www.w3.org/2002/07/owl#Nothing> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#Nothing> .
+<http://www.w3.org/2002/07/owl#SymmetricProperty> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#SymmetricProperty> .
+<http://www.w3.org/2002/07/owl#Thing> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Class> .
+<http://www.w3.org/2002/07/owl#Thing> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2002/07/owl#Thing> .
+<http://www.w3.org/2002/07/owl#Thing> <http://www.w3.org/2002/07/owl#equivalentClass> <http://www.w3.org/2002/07/owl#Thing> .
+<http://www.w3.org/2002/07/owl#Thing> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#Thing> .
+<http://www.w3.org/2002/07/owl#TransitiveProperty> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#TransitiveProperty> .
+<http://www.w3.org/2002/07/owl#backwardCompatibleWith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2002/07/owl#backwardCompatibleWith> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#backwardCompatibleWith> .
+<http://www.w3.org/2002/07/owl#deprecated> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2002/07/owl#deprecated> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#deprecated> .
+<http://www.w3.org/2002/07/owl#equivalentClass> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#equivalentClass> .
+<http://www.w3.org/2002/07/owl#incompatibleWith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2002/07/owl#incompatibleWith> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#incompatibleWith> .
+<http://www.w3.org/2002/07/owl#inverseOf> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#inverseOf> .
+<http://www.w3.org/2002/07/owl#priorVersion> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2002/07/owl#priorVersion> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#priorVersion> .
+<http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#sameAs> .
+<http://www.w3.org/2002/07/owl#versionInfo> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2002/07/owl#versionInfo> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#versionInfo> .
+@report
+purrdf-reasoning-report 3
+regime owl-rl
+completeness exact-within-boundaries
+extension ext-eq-diff-sym
+fired eq-ref 58
+fired prp-ap 9
+fired prp-symp 3
+fired prp-trp 4
+fired prp-inv1 9
+fired cls-thing 1
+fired cls-nothing1 1
+fired dt-type1 32
+fired scm-cls 5
+boundary datatype-value-space rdfD1 and rdfD1a conclude about a FRESH blank node standing for a datatyped literal, or for an inhabited value space, and both FIRE: the restricted chase evaluates their existentially quantified heads. What is withheld is the SURROGATE itself — a SPARQL entailment regime draws its answers from the scoping graph, which no minted blank node is in — and the surrogate boundary is where those withheld conclusions are counted. rdfs1 recognizes the datatypes RDF 1.2 Semantics §8 makes mandatory (rdf:langString, rdf:dirLangString, xsd:string) and no others. The OWL 2 RL rules quantified over value spaces (dt-type2, dt-eq, dt-diff) DO fire, over the literals the dataset holds rather than over the infinitely many a value space contains, and value-space membership is decided through the candidate datatype's LEXICAL space, so a value in a datatype's value space whose lexical form is not in that datatype's lexical space is not found: "1.0"^^xsd:decimal is not typed xsd:integer. A datatype purrdf-xsd does not model is not judged either way
+budget join-steps 2133
+budget stored-facts 127
+budget term-arena-bytes 2500
+contract-hash 8f93a9083fda8e971f558750cf5291b38b6f4838c82148a3b67e3ce7c5dc9c09
+withheld-surrogates 0
+termination none
+inconsistency none
+@end
+
+@case rdfs-abandons-a-generalized-conclusion
+@regime rdfs
+@input
+<http://example.org/label> <http://www.w3.org/2000/01/rdf-schema#range> <http://example.org/A> .
+<http://example.org/x> <http://example.org/label> "cat"^^<http://www.w3.org/2001/XMLSchema#string> .
+@closure
+<http://example.org/A> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://example.org/A> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/A> .
+<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://example.org/label> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://example.org/label> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://example.org/label> <http://www.w3.org/2000/01/rdf-schema#range> <http://example.org/A> .
+<http://example.org/label> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://example.org/label> .
+<http://example.org/x> <http://example.org/label> "cat" .
+<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Alt> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Alt> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Alt> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Alt> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Alt> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Bag> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Bag> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Bag> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Bag> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Bag> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#List> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#List> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#List> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#List> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#List> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Seq> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Seq> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Seq> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Seq> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Seq> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Literal> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#langString> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#langString> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#langString> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#langString> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#langString> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#langString> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Literal> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#langString> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#object> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#object> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#object> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#predicate> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#predicate> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#predicate> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#subject> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#subject> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#subject> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#value> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#value> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#value> .
+<http://www.w3.org/2000/01/rdf-schema#Class> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/2000/01/rdf-schema#Class> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#Class> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/2000/01/rdf-schema#Class> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#Container> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/2000/01/rdf-schema#Container> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#Container> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Container> .
+<http://www.w3.org/2000/01/rdf-schema#Container> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#ContainerMembershipProperty> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/2000/01/rdf-schema#ContainerMembershipProperty> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#ContainerMembershipProperty> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#ContainerMembershipProperty> .
+<http://www.w3.org/2000/01/rdf-schema#ContainerMembershipProperty> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#Datatype> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/2000/01/rdf-schema#Datatype> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#Datatype> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2000/01/rdf-schema#Datatype> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#Literal> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/2000/01/rdf-schema#Literal> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#Literal> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Literal> .
+<http://www.w3.org/2000/01/rdf-schema#Literal> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#Proposition> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/2000/01/rdf-schema#Proposition> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#Proposition> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Proposition> .
+<http://www.w3.org/2000/01/rdf-schema#Proposition> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#Resource> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/2000/01/rdf-schema#Resource> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#Resource> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#comment> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://www.w3.org/2000/01/rdf-schema#comment> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#comment> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#comment> .
+<http://www.w3.org/2000/01/rdf-schema#domain> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://www.w3.org/2000/01/rdf-schema#domain> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#domain> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#domain> .
+<http://www.w3.org/2000/01/rdf-schema#isDefinedBy> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://www.w3.org/2000/01/rdf-schema#isDefinedBy> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#isDefinedBy> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#isDefinedBy> .
+<http://www.w3.org/2000/01/rdf-schema#label> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://www.w3.org/2000/01/rdf-schema#label> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#label> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#label> .
+<http://www.w3.org/2000/01/rdf-schema#member> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://www.w3.org/2000/01/rdf-schema#member> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#member> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#member> .
+<http://www.w3.org/2000/01/rdf-schema#range> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://www.w3.org/2000/01/rdf-schema#range> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#range> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#range> .
+<http://www.w3.org/2000/01/rdf-schema#seeAlso> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://www.w3.org/2000/01/rdf-schema#seeAlso> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#seeAlso> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#seeAlso> .
+<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#subClassOf> .
+<http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> .
+<http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> .
+<http://www.w3.org/2001/XMLSchema#string> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .
+<http://www.w3.org/2001/XMLSchema#string> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#string> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2001/XMLSchema#string> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Literal> .
+<http://www.w3.org/2001/XMLSchema#string> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2000/01/rdf-schema#Resource> .
+<http://www.w3.org/2001/XMLSchema#string> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2001/XMLSchema#string> .
+@report
+purrdf-reasoning-report 3
+regime rdfs
+completeness exact-within-boundaries
+fired rdfD2 5
+fired rdfs1 3
+fired rdfs2 22
+fired rdfs3 12
+fired rdfs4 25
+fired rdfs6 18
+fired rdfs8 17
+fired rdfs10 16
+fired rdfs13 3
+boundary generalized-rdf a conclusion whose subject position would hold a literal or a triple term, or whose predicate position would hold anything but an IRI, is a generalized-RDF triple, which the RDF 1.2 dataset IR cannot represent; such a conclusion is derived in the evaluator's own term space and then abandoned when the answer is materialized, rather than a term being fabricated for it. It is still a PREMISE, so nothing downstream is lost. Rules that can conclude into subject position (rdfs3 / prp-rng, prp-symp, prp-inv1, prp-inv2, eq-ref, eq-rep-p) are therefore incomplete over literal objects, and every conclusion of dt-type2, dt-eq and dt-diff is unrepresentable by construction, because each of the three puts a literal in subject position
+boundary axiomatic-triples the FINITE part of the RDF and RDFS axiomatic triples — the fixed domain, range, type and sub-class statements about the RDF and RDFS vocabulary itself — is asserted as a premise, so every conclusion it licenses is drawn; two things are not. The container-membership family rdf:_1, rdf:_2, … is unbounded and no forward chase can materialize an infinite set, so rdfs12 fires only on a container property the graph itself types. And the asserted axioms are premises rather than conclusions, so the closure does not restate them: they are entailed but not emitted
+boundary datatype-value-space rdfD1 and rdfD1a conclude about a FRESH blank node standing for a datatyped literal, or for an inhabited value space, and both FIRE: the restricted chase evaluates their existentially quantified heads. What is withheld is the SURROGATE itself — a SPARQL entailment regime draws its answers from the scoping graph, which no minted blank node is in — and the surrogate boundary is where those withheld conclusions are counted. rdfs1 recognizes the datatypes RDF 1.2 Semantics §8 makes mandatory (rdf:langString, rdf:dirLangString, xsd:string) and no others. The OWL 2 RL rules quantified over value spaces (dt-type2, dt-eq, dt-diff) DO fire, over the literals the dataset holds rather than over the infinitely many a value space contains, and value-space membership is decided through the candidate datatype's LEXICAL space, so a value in a datatype's value space whose lexical form is not in that datatype's lexical space is not found: "1.0"^^xsd:decimal is not typed xsd:integer. A datatype purrdf-xsd does not model is not judged either way
+boundary surrogate rdfD1, rdfD1a, rdfs14 and rdfs14a all conclude about a FRESH blank node — the surrogate the specification writes `_:nnn`. All four FIRE: the restricted chase mints each surrogate as a frontier-addressed Skolem witness, so re-deriving the same obligation reuses the same witness and the fixpoint converges, and the closure is closed under everything the surrogate then licenses. What does not reach the answer is the surrogate ITSELF: every conclusion mentioning one is dropped at the materialization boundary and counted here. That is a requirement of SPARQL's entailment regimes, not a shortcut. The regime's answers are drawn from the SCOPING GRAPH, and a surrogate is not in it, so a solution binding a variable to one is not an answer the regime admits. The W3C case `rdfs13` is the proof: it asks `?L rdf:type rdfs:Literal` over a graph whose only literal is "foo" and requires ZERO rows, while rdfD1's surrogate gives `_:nnn rdf:type xsd:string` and hence `_:nnn rdf:type rdfs:Literal` through rdfs1, rdfs13 and rdfs9. Emitting that row would be WRONG, where withholding it is merely incomplete. Nothing surrogate-FREE is lost by the exclusion: replacing a term by a fresh blank node can only weaken a triple, so every conclusion that does not mention a surrogate was already licensed by the triple the surrogate stands for
+budget join-steps 8827
+budget stored-facts 192
+budget term-arena-bytes 1966
+contract-hash f6a5eff90528f49ba8d3b83ae7feac8e3b71586f320fb478c6ddb60ca6dc979e
+withheld-surrogates 16
+termination weakly-acyclic positions 27 existential-edges 8
+inconsistency none
+@end
+
+@case d-types-every-supported-datatype
+@regime d
+@input
+<http://example.org/x> <http://example.org/age> "7"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<http://example.org/x> <http://example.org/also> "07"^^<http://www.w3.org/2001/XMLSchema#integer> .
+@closure
+<http://example.org/x> <http://example.org/age> "7"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<http://example.org/x> <http://example.org/also> "07"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#PlainLiteral> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#XMLLiteral> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2000/01/rdf-schema#Literal> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#NCName> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#NMTOKEN> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#Name> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#anyURI> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#base64Binary> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#boolean> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#byte> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#dateTime> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#dateTimeStamp> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#decimal> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#double> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#float> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#hexBinary> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#int> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#integer> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#language> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#long> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#negativeInteger> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#nonPositiveInteger> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#normalizedString> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#positiveInteger> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#short> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#string> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#token> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#unsignedByte> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#unsignedInt> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#unsignedLong> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#unsignedShort> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+@report
+purrdf-reasoning-report 3
+regime d
+completeness exact-within-boundaries
+fired dt-type1 32
+boundary generalized-rdf a conclusion whose subject position would hold a literal or a triple term, or whose predicate position would hold anything but an IRI, is a generalized-RDF triple, which the RDF 1.2 dataset IR cannot represent; such a conclusion is derived in the evaluator's own term space and then abandoned when the answer is materialized, rather than a term being fabricated for it. It is still a PREMISE, so nothing downstream is lost. Rules that can conclude into subject position (rdfs3 / prp-rng, prp-symp, prp-inv1, prp-inv2, eq-ref, eq-rep-p) are therefore incomplete over literal objects, and every conclusion of dt-type2, dt-eq and dt-diff is unrepresentable by construction, because each of the three puts a literal in subject position
+boundary datatype-value-space rdfD1 and rdfD1a conclude about a FRESH blank node standing for a datatyped literal, or for an inhabited value space, and both FIRE: the restricted chase evaluates their existentially quantified heads. What is withheld is the SURROGATE itself — a SPARQL entailment regime draws its answers from the scoping graph, which no minted blank node is in — and the surrogate boundary is where those withheld conclusions are counted. rdfs1 recognizes the datatypes RDF 1.2 Semantics §8 makes mandatory (rdf:langString, rdf:dirLangString, xsd:string) and no others. The OWL 2 RL rules quantified over value spaces (dt-type2, dt-eq, dt-diff) DO fire, over the literals the dataset holds rather than over the infinitely many a value space contains, and value-space membership is decided through the candidate datatype's LEXICAL space, so a value in a datatype's value space whose lexical form is not in that datatype's lexical space is not found: "1.0"^^xsd:decimal is not typed xsd:integer. A datatype purrdf-xsd does not model is not judged either way
+budget join-steps 40
+budget stored-facts 98
+budget term-arena-bytes 1759
+contract-hash 20ac9aa48ce8dd9b25bc7239798566da2d1559458c6ed12befa520c3fdb16cb7
+withheld-surrogates 0
+termination none
+inconsistency none
+@end
+
+@case owl-rl-class-expressions-and-equality
+@regime owl-rl
+@input
+<http://example.org/R> <http://www.w3.org/2002/07/owl#onProperty> <http://example.org/p> .
+<http://example.org/R> <http://www.w3.org/2002/07/owl#someValuesFrom> <http://example.org/B> .
+<http://example.org/y> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> .
+<http://example.org/x> <http://example.org/p> <http://example.org/y> .
+<http://example.org/x> <http://www.w3.org/2002/07/owl#sameAs> <http://example.org/x2> .
+@closure
+<http://example.org/B> <http://www.w3.org/2002/07/owl#sameAs> <http://example.org/B> .
+<http://example.org/R> <http://www.w3.org/2002/07/owl#onProperty> <http://example.org/p> .
+<http://example.org/R> <http://www.w3.org/2002/07/owl#sameAs> <http://example.org/R> .
+<http://example.org/R> <http://www.w3.org/2002/07/owl#someValuesFrom> <http://example.org/B> .
+<http://example.org/p> <http://www.w3.org/2002/07/owl#sameAs> <http://example.org/p> .
+<http://example.org/x2> <http://example.org/p> <http://example.org/y> .
+<http://example.org/x2> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/R> .
+<http://example.org/x2> <http://www.w3.org/2002/07/owl#sameAs> <http://example.org/x2> .
+<http://example.org/x2> <http://www.w3.org/2002/07/owl#sameAs> <http://example.org/x> .
+<http://example.org/x> <http://example.org/p> <http://example.org/y> .
+<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/R> .
+<http://example.org/x> <http://www.w3.org/2002/07/owl#sameAs> <http://example.org/x2> .
+<http://example.org/x> <http://www.w3.org/2002/07/owl#sameAs> <http://example.org/x> .
+<http://example.org/y> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> .
+<http://example.org/y> <http://www.w3.org/2002/07/owl#sameAs> <http://example.org/y> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#PlainLiteral> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#PlainLiteral> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/1999/02/22-rdf-syntax-ns#PlainLiteral> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#XMLLiteral> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#XMLLiteral> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/1999/02/22-rdf-syntax-ns#XMLLiteral> .
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> .
+<http://www.w3.org/2000/01/rdf-schema#Datatype> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2000/01/rdf-schema#Literal> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2000/01/rdf-schema#Literal> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2000/01/rdf-schema#Literal> .
+<http://www.w3.org/2000/01/rdf-schema#comment> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2000/01/rdf-schema#comment> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2000/01/rdf-schema#comment> .
+<http://www.w3.org/2000/01/rdf-schema#isDefinedBy> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2000/01/rdf-schema#isDefinedBy> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2000/01/rdf-schema#isDefinedBy> .
+<http://www.w3.org/2000/01/rdf-schema#label> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2000/01/rdf-schema#label> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2000/01/rdf-schema#label> .
+<http://www.w3.org/2000/01/rdf-schema#seeAlso> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2000/01/rdf-schema#seeAlso> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2000/01/rdf-schema#seeAlso> .
+<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2000/01/rdf-schema#subClassOf> .
+<http://www.w3.org/2001/XMLSchema#NCName> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#NCName> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#NCName> .
+<http://www.w3.org/2001/XMLSchema#NMTOKEN> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#NMTOKEN> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#NMTOKEN> .
+<http://www.w3.org/2001/XMLSchema#Name> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#Name> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#Name> .
+<http://www.w3.org/2001/XMLSchema#anyURI> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#anyURI> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#anyURI> .
+<http://www.w3.org/2001/XMLSchema#base64Binary> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#base64Binary> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#base64Binary> .
+<http://www.w3.org/2001/XMLSchema#boolean> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#boolean> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#boolean> .
+<http://www.w3.org/2001/XMLSchema#byte> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#byte> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#byte> .
+<http://www.w3.org/2001/XMLSchema#dateTime> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#dateTime> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#dateTime> .
+<http://www.w3.org/2001/XMLSchema#dateTimeStamp> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#dateTimeStamp> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#dateTimeStamp> .
+<http://www.w3.org/2001/XMLSchema#decimal> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#decimal> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#decimal> .
+<http://www.w3.org/2001/XMLSchema#double> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#double> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#double> .
+<http://www.w3.org/2001/XMLSchema#float> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#float> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#float> .
+<http://www.w3.org/2001/XMLSchema#hexBinary> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#hexBinary> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#hexBinary> .
+<http://www.w3.org/2001/XMLSchema#int> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#int> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#int> .
+<http://www.w3.org/2001/XMLSchema#integer> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#integer> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#integer> .
+<http://www.w3.org/2001/XMLSchema#language> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#language> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#language> .
+<http://www.w3.org/2001/XMLSchema#long> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#long> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#long> .
+<http://www.w3.org/2001/XMLSchema#negativeInteger> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#negativeInteger> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#negativeInteger> .
+<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<http://www.w3.org/2001/XMLSchema#nonPositiveInteger> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#nonPositiveInteger> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#nonPositiveInteger> .
+<http://www.w3.org/2001/XMLSchema#normalizedString> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#normalizedString> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#normalizedString> .
+<http://www.w3.org/2001/XMLSchema#positiveInteger> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#positiveInteger> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#positiveInteger> .
+<http://www.w3.org/2001/XMLSchema#short> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#short> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#short> .
+<http://www.w3.org/2001/XMLSchema#string> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#string> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#string> .
+<http://www.w3.org/2001/XMLSchema#token> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#token> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#token> .
+<http://www.w3.org/2001/XMLSchema#unsignedByte> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#unsignedByte> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#unsignedByte> .
+<http://www.w3.org/2001/XMLSchema#unsignedInt> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#unsignedInt> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#unsignedInt> .
+<http://www.w3.org/2001/XMLSchema#unsignedLong> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#unsignedLong> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#unsignedLong> .
+<http://www.w3.org/2001/XMLSchema#unsignedShort> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Datatype> .
+<http://www.w3.org/2001/XMLSchema#unsignedShort> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2001/XMLSchema#unsignedShort> .
+<http://www.w3.org/2002/07/owl#AnnotationProperty> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2002/07/owl#Class> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#Class> .
+<http://www.w3.org/2002/07/owl#Nothing> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Class> .
+<http://www.w3.org/2002/07/owl#Nothing> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2002/07/owl#Nothing> .
+<http://www.w3.org/2002/07/owl#Nothing> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2002/07/owl#Thing> .
+<http://www.w3.org/2002/07/owl#Nothing> <http://www.w3.org/2002/07/owl#equivalentClass> <http://www.w3.org/2002/07/owl#Nothing> .
+<http://www.w3.org/2002/07/owl#Nothing> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#Nothing> .
+<http://www.w3.org/2002/07/owl#Thing> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Class> .
+<http://www.w3.org/2002/07/owl#Thing> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2002/07/owl#Thing> .
+<http://www.w3.org/2002/07/owl#Thing> <http://www.w3.org/2002/07/owl#equivalentClass> <http://www.w3.org/2002/07/owl#Thing> .
+<http://www.w3.org/2002/07/owl#Thing> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#Thing> .
+<http://www.w3.org/2002/07/owl#backwardCompatibleWith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2002/07/owl#backwardCompatibleWith> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#backwardCompatibleWith> .
+<http://www.w3.org/2002/07/owl#deprecated> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2002/07/owl#deprecated> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#deprecated> .
+<http://www.w3.org/2002/07/owl#equivalentClass> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#equivalentClass> .
+<http://www.w3.org/2002/07/owl#incompatibleWith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2002/07/owl#incompatibleWith> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#incompatibleWith> .
+<http://www.w3.org/2002/07/owl#onProperty> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#onProperty> .
+<http://www.w3.org/2002/07/owl#priorVersion> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2002/07/owl#priorVersion> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#priorVersion> .
+<http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#sameAs> .
+<http://www.w3.org/2002/07/owl#someValuesFrom> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#someValuesFrom> .
+<http://www.w3.org/2002/07/owl#versionInfo> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#AnnotationProperty> .
+<http://www.w3.org/2002/07/owl#versionInfo> <http://www.w3.org/2002/07/owl#sameAs> <http://www.w3.org/2002/07/owl#versionInfo> .
+@report
+purrdf-reasoning-report 3
+regime owl-rl
+completeness exact-within-boundaries
+extension ext-eq-diff-sym
+fired eq-ref 58
+fired eq-sym 1
+fired eq-rep-s 1
+fired prp-ap 9
+fired cls-thing 1
+fired cls-nothing1 1
+fired cls-svf1 2
+fired dt-type1 32
+fired scm-cls 5
+boundary datatype-value-space rdfD1 and rdfD1a conclude about a FRESH blank node standing for a datatyped literal, or for an inhabited value space, and both FIRE: the restricted chase evaluates their existentially quantified heads. What is withheld is the SURROGATE itself — a SPARQL entailment regime draws its answers from the scoping graph, which no minted blank node is in — and the surrogate boundary is where those withheld conclusions are counted. rdfs1 recognizes the datatypes RDF 1.2 Semantics §8 makes mandatory (rdf:langString, rdf:dirLangString, xsd:string) and no others. The OWL 2 RL rules quantified over value spaces (dt-type2, dt-eq, dt-diff) DO fire, over the literals the dataset holds rather than over the infinitely many a value space contains, and value-space membership is decided through the candidate datatype's LEXICAL space, so a value in a datatype's value space whose lexical form is not in that datatype's lexical space is not found: "1.0"^^xsd:decimal is not typed xsd:integer. A datatype purrdf-xsd does not model is not judged either way
+budget join-steps 2058
+budget stored-facts 115
+budget term-arena-bytes 2466
+contract-hash 8f93a9083fda8e971f558750cf5291b38b6f4838c82148a3b67e3ce7c5dc9c09
+withheld-surrogates 0
+termination none
+inconsistency none
+@end
+
+@case owl-direct-augments-with-what-the-tableau-decides
+@regime owl-direct
+@input
+<http://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
+<http://example.org/lillith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .
+@closure
+<http://example.org/Animal> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
+<http://example.org/Animal> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2002/07/owl#Thing> .
+<http://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
+<http://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Cat> .
+<http://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2002/07/owl#Thing> .
+<http://example.org/lillith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Animal> .
+<http://example.org/lillith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .
+<http://example.org/lillith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Thing> .
+<http://example.org/lillith> <http://www.w3.org/2002/07/owl#sameAs> <http://example.org/lillith> .
+<http://www.w3.org/2002/07/owl#Nothing> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
+<http://www.w3.org/2002/07/owl#Nothing> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Cat> .
+<http://www.w3.org/2002/07/owl#Nothing> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2002/07/owl#Nothing> .
+<http://www.w3.org/2002/07/owl#Nothing> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2002/07/owl#Thing> .
+<http://www.w3.org/2002/07/owl#Thing> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2002/07/owl#Thing> .
+@report
+purrdf-reasoning-report 3
+regime owl-direct
+completeness exact
+budget join-steps 0
+budget stored-facts 0
+budget term-arena-bytes 0
+contract-hash 4151090ce6c2ecdae843e351420ddcf10f79e525c60b4c6d07bebeabaa07fbd5
+withheld-surrogates 0
+termination none
+inconsistency none
+@end
+
+@case rif-entails-under-the-supplied-rule-set
+@regime rif
+@input
+<http://example.org/lillith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .
+@program
+<Document xmlns="http://www.w3.org/2007/rif#"><payload><Group><sentence><Forall><declare><Var>x</Var></declare><formula><Implies><if><Frame><object><Var>x</Var></object><slot><Const type="http://www.w3.org/2007/rif#iri">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type="http://www.w3.org/2007/rif#iri">http://example.org/Cat</Const></slot></Frame></if><then><Frame><object><Var>x</Var></object><slot><Const type="http://www.w3.org/2007/rif#iri">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type="http://www.w3.org/2007/rif#iri">http://example.org/Animal</Const></slot></Frame></then></Implies></formula></Forall></sentence></Group></payload></Document>
+@closure
+<http://example.org/lillith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Animal> .
+<http://example.org/lillith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .
+@report
+purrdf-reasoning-report 3
+regime rif
+completeness exact
+budget join-steps 1
+budget stored-facts 2
+budget term-arena-bytes 128
+contract-hash 4151090ce6c2ecdae843e351420ddcf10f79e525c60b4c6d07bebeabaa07fbd5
+withheld-surrogates 0
+termination none
+inconsistency none
+@end

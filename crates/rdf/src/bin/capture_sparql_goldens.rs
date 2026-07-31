@@ -73,7 +73,7 @@ fn main() {
     // -----------------------------------------------------------------------
     // Tally + hard-fail on any UNEXPECTED capture failure.
     // -----------------------------------------------------------------------
-    println!("---- corpus golden capture (EPIC #906 Task 2/8, native engine) ----");
+    println!("---- corpus golden capture (native engine) ----");
     println!("corpus files (.rq):        {}", corpus_tally.total);
     println!("  goldens .nq  (CONSTRUCT): {}", corpus_tally.nq);
     println!("  goldens .rows (SELECT):   {}", corpus_tally.rows);

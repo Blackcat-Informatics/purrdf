@@ -9,15 +9,25 @@
 //! # GIL release on heavy operations
 //!
 //! Every heavy compute entry point (parsing, serialization, canonicalization,
-//! GTS fold/emit, SPARQL query/update evaluation, SHACL/ShEx validation, slice
-//! discovery/analysis, SSSOM parse/validate) releases the GIL while the engine
-//! runs, via [`pyo3::Python::detach`]: Python-side arguments are converted to
-//! plain Rust data first, the engine call runs without the GIL, and Python
-//! result objects are built after the GIL is reacquired. Other Python threads
-//! therefore make progress during long-running native calls.
+//! GTS fold/emit, SPARQL query/update evaluation, SHACL/ShEx validation,
+//! entailment-regime materialization, slice discovery/analysis, SSSOM
+//! parse/validate) releases the GIL while the engine runs, via
+//! [`pyo3::Python::detach`]: Python-side arguments are converted to plain Rust
+//! data first, the engine call runs without the GIL, and Python result objects
+//! are built after the GIL is reacquired. Other Python threads therefore make
+//! progress during long-running native calls.
+//!
+//! Entailment is the newest member of that list and the clearest case for it: an
+//! RDFS or OWL-RL chase over a real ontology is the longest-running call this
+//! extension offers, so `entail.materialize` converts its arguments to an owned
+//! `Arc<RdfDataset>` and a native `Regime` first, runs the chase AND the report
+//! rendering detached, and only then builds the returned pair. A rule-inventory
+//! lookup (`entail.rules`) is a `&'static` table read, not a compute path, and
+//! deliberately does not release the GIL.
 
 pub use purrdf::*;
 
+mod py_entail;
 mod py_gts;
 mod py_gts_dataset;
 mod py_gts_view;
@@ -41,6 +51,10 @@ fn purrdf_native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     let shacl_module = PyModule::new(py, "shacl")?;
     shacl::register(&shacl_module)?;
     m.add_submodule(&shacl_module)?;
+
+    let entail_module = PyModule::new(py, "entail")?;
+    py_entail::register(&entail_module)?;
+    m.add_submodule(&entail_module)?;
 
     let shex_module = PyModule::new(py, "shex")?;
     py_shex::register(&shex_module)?;

@@ -94,14 +94,22 @@ fn validate(py: Python<'_>, shapes_ttl: &str, data_nt: &str) -> PyResult<Py<PyAn
 /// Raises `ValueError` if either graph fails to parse or if rule application
 /// fails (an illegal head term, an unresolvable `sh:condition`, or a rule set that
 /// does not reach a fixpoint).
+///
+/// # One boundary, three bindings
+///
+/// The parse→entail→serialize sequence is NOT reimplemented here: it is
+/// [`purrdf_validate::entail_to_ntriples_string`], the same function the C-ABI
+/// (`purrdf_shacl_entail_to_ntriples`) and WASM (`shacl_entail`) bindings call.
+/// This binding used to inline the two-line body, which made that crate's
+/// "the shared boundary the language bindings all route through" claim false and
+/// left a third copy free to drift. Everything Python-specific — releasing the
+/// GIL, mapping the error string to `ValueError` — stays here; the RDF work does
+/// not.
 #[pyfunction]
 fn entail(py: Python<'_>, shapes_ttl: &str, data_nt: &str) -> PyResult<String> {
     // Parse + entailment + serialization run detached (GIL released).
-    py.detach(|| {
-        let dataset = engine::entail_graphs(data_nt, shapes_ttl)?;
-        ::purrdf::canonical_flat_nquads(dataset.as_ref())
-    })
-    .map_err(pyo3::exceptions::PyValueError::new_err)
+    py.detach(|| purrdf_validate::entail_to_ntriples_string(shapes_ttl, data_nt))
+        .map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
 /// Parsed SHACL shapes that can be reused to validate multiple data graphs.

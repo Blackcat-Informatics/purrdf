@@ -61,10 +61,10 @@ collection / list API, with no dependency on rdflib's private `test.utils` /
 
 ## Scoreboard (rdflib 7.6.0 vs purrdf shim, live)
 
-**62 passed / 24 xfailed** (0 xpassed, 0 failed, 0 collection errors; ledger
-24/24 applied, 0 stale).
+**85 passed / 1 xfailed** (0 xpassed, 0 failed, 0 collection errors; ledger
+1/1 applied, 0 stale).
 
-Every one of the 24 xfails has a concrete, self-describing reason in
+Every one of the xfails has a concrete, self-describing reason in
 `../xfail_ledger.toml`, applied as a **strict** xfail (an XPASS or stale key
 fails the gate → the ledger only shrinks). Themes: Graph subclass identity
 through set operators (3), rdf:List parse + Collection mutation (3),

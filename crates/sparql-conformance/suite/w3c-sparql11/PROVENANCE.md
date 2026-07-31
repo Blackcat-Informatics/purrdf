@@ -35,33 +35,42 @@ typed reason — nothing is silently skipped.
 | Group | Cases | Green | Ledgered (reason) |
 |-------|------:|------:|-------------------|
 | bind | 10 | 10 | — |
-| bindings | 11 | 10 | 1 result-format (Turtle `rs:ResultSet`) |
-| cast | 6 | 0 | 6 value-mismatch (XSD cast lexical/datatype) |
-| construct | 7 | 2 | 1 parse-unsupported, 4 unsupported-construct (CONSTRUCT WHERE) |
-| exists | 6 | 5 | 1 unsupported-construct (EXISTS over GRAPH var) |
-| functions | 75 | 59 | 14 value-mismatch, 2 non-deterministic (BNODE labels) |
-| grouping | 6 | 4 | 2 unsupported-construct (missing non-grouped-var rejection) |
+| bindings | 11 | 11 | — |
+| cast | 6 | 3 | 3 upstream-erratum (`cast-decimal`, `cast-double`, `cast-float`) |
+| construct | 7 | 7 | — |
+| exists | 6 | 6 | — |
+| functions | 75 | 73 | 2 upstream-erratum (`coalesce01`, `plus-1-corrected`) |
+| grouping | 6 | 6 | — |
 | negation | 12 | 12 | — |
 | project-expression | 7 | 7 | — |
-| property-path | 33 | 24 | 9 property-path (inverse-in-NPS, `*`/`?` over sets) |
+| property-path | 33 | 33 | — |
 
-The ledgered gaps are genuine (the curated subset simply never exercised these
-surfaces). The trailing-`VALUES` parser fix (§18.2.4.3) cleared the 9 `bindings`
-VALUES cases and the `service` group's `service4a`; `value-mismatch` marks real
-evaluation-correctness gaps still to close.
+This table is derived from `crates/sparql-conformance/src/xfail.rs::XFAIL`, the
+same registry `run_manifest` honors, not maintained separately from it: every
+row's ledgered count is that registry's live count for the group, not a count
+that can drift out from under it. The 5 ledgered cases above are the entire
+`XFAIL` registry, and every one of them is `XfailReason::UpstreamErratum` — a
+fixture whose expected lexical form the W3C manifest itself states
+inconsistently (see the reasons recorded alongside each entry in `xfail.rs`),
+not a native-engine gap. `construct`, `exists`, `grouping`, and `property-path`
+each once ledgered several `unsupported-construct`/`property-path` gaps
+(CONSTRUCT WHERE, EXISTS over a GRAPH variable, non-grouped-variable
+rejection, inverse paths inside a negated property set); all of them are
+implemented now and none is ledgered.
 
 ## Full W3C UPDATE-eval groups (commit `426c7df`)
 
 Eleven update groups are vendored verbatim and run through the harness's
 UPDATE-eval path (`SparqlEngine::update` → RDFC-1.0 canonical post-state diff).
-The engine's UPDATE implementation is strong: 97 of 102 cases pass outright.
+All 102 UPDATE-eval cases pass outright; the ledger holds no `update-semantics`
+entry.
 
 | Group | Cases | Green | Ledgered (reason) |
 |-------|------:|------:|-------------------|
-| add | 8 | 7 | 1 update-semantics |
-| basic-update | 13 | 11 | 2 update-semantics (cross-op bnode scoping) |
+| add | 8 | 8 | — |
+| basic-update | 13 | 13 | — |
 | clear | 4 | 4 | — |
-| copy | 6 | 4 | 2 update-semantics |
+| copy | 6 | 6 | — |
 | delete | 19 | 19 | — |
 | delete-data | 6 | 6 | — |
 | delete-insert | 17 | 17 | — |
@@ -70,8 +79,10 @@ The engine's UPDATE implementation is strong: 97 of 102 cases pass outright.
 | move | 6 | 6 | — |
 | update-silent | 13 | 13 | — |
 
-The 5 `update-semantics` residuals are genuine post-state divergences (COPY/ADD
-graph edge cases; blank-node scoping across separate INSERT operations).
+The five `update-semantics` divergences these groups once ledgered (COPY/ADD
+graph edge cases; blank-node scoping across separate INSERT operations) are
+fixed: the ledger is asserted with XPASS discipline, so a case that starts
+passing must leave it, and all five did.
 
 ## Full W3C syntax groups (commit `426c7df`)
 
@@ -90,8 +101,8 @@ zero ledgered residuals.**
 | syntax-update-2 | 1 | 1 | — |
 | syntax-fed | 3 | 3 | — |
 
-Six genuine parser gaps surfaced by these groups were fixed in-branch (not
-ledgered): two relative-IRI positives (resolved via the per-file `BASE` above);
+Five genuine parser gaps these groups surfaced are fixed rather than
+ledgered: two relative-IRI positives (resolved via the per-file `BASE` above);
 `SELECT *` in an aggregate query is now rejected (§11.1); a `BIND(… AS ?v)`
 whose target is already in scope is rejected (§19.6); and reuse of a blank-node
 label across two `INSERT DATA` operations is rejected (§4.1.1) — while the same
@@ -100,14 +111,19 @@ template label legitimately recurs across `INSERT … WHERE` operations.
 ## W3C entailment-regime group (commit `426c7df`)
 
 The `entailment/` group's `sd:entailmentRegime` is read by the harness, which
-materializes the dataset's closure via the native `purrdf-entail` reasoner
-(RDFS + OWL-RL-shaped) before the query runs. **40 of 70 cases pass** — every
-`rdf*`/`rdfs*`/`lang`/`plainLit`/`bind*` case and many OWL cases. The 30
-residuals are ledgered `Entailment`: OWL-Direct-only (`parent*`, `simple*`) and
-OWL-DL query answering (`sparqldl-*`, `paper-sparqldl-Q*`) — full DL
-is not a materialize-and-match affair; RIF-rule entailment (`rif*`); and RDF
-axiomatic-triple entailment under the bare RDF regime (`rdf01`). These are
-spec-inherent boundaries of a forward-materialization reasoner, not silent skips.
+answers each case under the regime the manifest names: forward materialization via
+the native `purrdf-entail` reasoner for the RDF/RDFS/D/OWL-RL regimes, a
+query-directed SHOIQ(D) tableau (`purrdf_entail::materialize_dl_reported`) for OWL-Direct, and
+a Horn forward chase over the referenced RIF-in-XML rule documents
+(`purrdf_entail::materialize_rif`) for RIF. **The entire group passes — 70 of 70,
+with zero ledgered residuals**, which the harness prints as
+`70 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled`.
+
+That covers every `rdf*`/`rdfs*`/`lang`/`plainLit`/`bind*` case, the
+`parent*`/`simple*`/`owlds*` OWL-Direct cases, the full `sparqldl-*` /
+`paper-sparqldl-Q*` OWL-DL query-answering set, and all four `rif*` cases;
+`crates/sparql-conformance/src/xfail.rs` records the same fact on the ledger side,
+where this group has no `Entailment` entry at all.
 
 ### RIF rule-document sub-corpus (distinct upstream)
 

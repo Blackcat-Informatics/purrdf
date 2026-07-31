@@ -249,6 +249,24 @@ typedef struct PurrdfGraph PurrdfGraph;
 typedef struct PurrdfJsonLdContext PurrdfJsonLdContext;
 
 /**
+ * A reasoning session over one ontology. Release with [`purrdf_reasoner_free`].
+ *
+ * Every `purrdf_entail_*` function above takes the document as a C string and rebuilds
+ * everything it needs, so asking three questions parses and reverse-maps the ontology
+ * three times. This handle holds the parsed document instead: [`purrdf_reasoner_open`]
+ * parses once, the first question needing a knowledge base reverse-maps once, and later
+ * questions reuse both.
+ *
+ * # Thread safety — UNLIKE [`PurrdfDataset`](crate::handles::PurrdfDataset)
+ *
+ * This handle is `Send` but **NOT `Sync`**: answering a question MUTATES the shared
+ * knowledge base, so two threads may not use one handle concurrently. A frozen dataset
+ * may be read from many threads; a session may not. Move it between threads, or open
+ * one per thread — the README's thread-safety table says the same.
+ */
+typedef struct PurrdfReasoner PurrdfReasoner;
+
+/**
  * A SPARQL SELECT result cursor. Owns its variable names and solution rows
  * (dataset-independent `TermValue`s).
  *
@@ -466,6 +484,506 @@ int32_t purrdf_cursor_next(PurrdfCursor *cursor,
  * `cursor` must be null or a live cursor not already freed.
  */
 void purrdf_cursor_free(PurrdfCursor *cursor);
+
+/**
+ * Materialize an RDF document under a SPARQL entailment regime.
+ *
+ * `document` is parsed as N-Quads, which accepts an N-Triples document
+ * unchanged, so a document that names a graph keeps naming it. `regime` is one
+ * of `simple`, `rdf`, `rdfs`, `owl-rl`, `owl-direct`, `rif`, `d` — the same
+ * spellings the CLI, WASM and the Python surface accept — and ALL SEVEN
+ * materialize; none is refused for being the regime it is.
+ *
+ * `program` is the regime's own rule document. `rif` entails under the CALLER's
+ * rules, so for that spelling `program` is a normative RIF-in-XML document (an
+ * `Import` is refused: resolving one is I/O this boundary does not perform).
+ * Every other regime's rule table is the specification's, so `program` must be
+ * the empty string `""` — a non-empty one is an ERROR rather than a silently
+ * discarded argument, because a caller who passed rules to `rdfs` believes they
+ * ran.
+ *
+ * On success `*out_nquads` receives the canonical (RDFC-1.0) N-Quads closure —
+ * every input quad plus every triple the regime's implemented rules infer — and
+ * `*out_report` receives the byte-stable rendered reasoning report, which names
+ * which rules fired and how often, which specification rules did NOT fire, which
+ * constructs were left at a boundary, the evaluation budget, and the calculus's
+ * contract hash. **Free BOTH with `purrdf_buffer_free`.** The report is not
+ * optional: all seventy-eight OWL 2 RL rules now run, so a caller that reported
+ * "OWL-RL entailment" without saying which CONSTRUCTS were left at a boundary
+ * would be making exactly the overclaim the report exists to prevent — a
+ * complete rule table is not a complete closure.
+ *
+ * On any error neither out-param is written, so there is nothing to free.
+ *
+ * # Safety
+ * `document`, `regime` and `program` must be non-null, NUL-terminated C strings;
+ * `out_nquads` and `out_report` must be writable pointers; `out_error` must be
+ * null or writable.
+ */
+int32_t purrdf_entail_materialize_to_nquads(const char *document,
+                                            const char *regime,
+                                            const char *program,
+                                            PurrdfBuffer **out_nquads,
+                                            PurrdfBuffer **out_report,
+                                            PurrdfError **out_error);
+
+/**
+ * Write the rule table the specification *defines* `regime` by — one canonical
+ * rule name per newline-terminated line, in specification table order — to
+ * `*out_buffer` (free with `purrdf_buffer_free`).
+ *
+ * An empty buffer for a regime with no rule table of its own (`simple`, plus
+ * `owl-direct`, which decides through the tableau, and `rif`, which entails under the
+ * caller's rules — all three still MATERIALIZE). `owl-rl` yields all 78 rules of OWL 2
+ * Profiles §4.3 Tables 4–9 whether or not this build fires them — that is the
+ * point: diff it against `purrdf_entail_implemented_rules` to measure the gap.
+ *
+ * # Safety
+ * `regime` must be a non-null, NUL-terminated C string; `out_buffer` must be a
+ * writable pointer; `out_error` must be null or writable.
+ */
+int32_t purrdf_entail_rules(const char *regime, PurrdfBuffer **out_buffer, PurrdfError **out_error);
+
+/**
+ * Write the subset of `purrdf_entail_rules(regime)` this build's chase actually
+ * fires today to `*out_buffer` (free with `purrdf_buffer_free`).
+ *
+ * `purrdf_entail_rules(r)` minus `purrdf_entail_implemented_rules(r)` is the
+ * regime's measurable gap — the same set the rendered report's `missing` lines
+ * name.
+ *
+ * # Safety
+ * `regime` must be a non-null, NUL-terminated C string; `out_buffer` must be a
+ * writable pointer; `out_error` must be null or writable.
+ */
+int32_t purrdf_entail_implemented_rules(const char *regime,
+                                        PurrdfBuffer **out_buffer,
+                                        PurrdfError **out_error);
+
+/**
+ * Write the rules this build fires BEYOND `regime`'s specification table to
+ * `*out_buffer` (free with `purrdf_buffer_free`).
+ *
+ * Disjoint from both `purrdf_entail_rules(regime)` and
+ * `purrdf_entail_implemented_rules(regime)`: the normative table is a statement
+ * about the specification and does not move because this build fires a sound rule
+ * the table happens not to list. A rendered report names the same rules on its
+ * `extension` line — this answers the question without materializing a dataset
+ * first. Empty for a lane with nothing added to it.
+ *
+ * # Safety
+ * `regime` must be a non-null, NUL-terminated C string; `out_buffer` must be a
+ * writable pointer; `out_error` must be null or writable.
+ */
+int32_t purrdf_entail_extensions(const char *regime,
+                                 PurrdfBuffer **out_buffer,
+                                 PurrdfError **out_error);
+
+/**
+ * Decide whether an ontology has a model at all.
+ *
+ * `document` is parsed as N-Quads (which accepts N-Triples). `step_cap` narrows
+ * the per-decision tableau step cap; **0 means the knowledge base's own cap**, not
+ * a cap of zero steps. The cap can only NARROW — a value above the knowledge
+ * base's own ceiling has no effect — so this cannot be used to make a hard
+ * instance answerable, only to make the `budget-exhausted` certificate reachable.
+ *
+ * On success `*out_answer` receives `consistency true|false|unknown` and
+ * `*out_certificate` the rendered `purrdf-dl-certificate 1` block, which says
+ * whether the search was `decided`, `decided-within-boundaries` (some axiom of the
+ * supplied ontology never became a DL clause — the certificate names each
+ * construct) or `budget-exhausted`. **Free BOTH with `purrdf_buffer_free`.**
+ *
+ * This is the only DL service that answers for an unsatisfiable ontology, because
+ * it is the one that detects one; every other refuses rather than returning the
+ * vacuous answer an ontology with no model gives.
+ *
+ * # Safety
+ * `document` must be a non-null, NUL-terminated C string; `out_answer` and
+ * `out_certificate` must be writable pointers; `out_error` must be null or
+ * writable.
+ */
+int32_t purrdf_entail_consistency(const char *document,
+                                  uint32_t step_cap,
+                                  PurrdfBuffer **out_answer,
+                                  PurrdfBuffer **out_certificate,
+                                  PurrdfError **out_error);
+
+/**
+ * Classify: the entailed subsumption hierarchy over the ontology's named classes.
+ *
+ * `*out_answer` receives `equivalent`, `subclass`, `direct` and `unsatisfiable`
+ * lines (in that block order); `*out_certificate` the `purrdf-dl-certificate 1`
+ * block. **Free BOTH with `purrdf_buffer_free`.** `step_cap` behaves exactly as in
+ * [`purrdf_entail_consistency`].
+ *
+ * Costs one tableau decision per ORDERED pair of named classes plus the
+ * consistency check, which the certificate's `decisions` line reports so the cost
+ * is a measurement rather than a surprise.
+ *
+ * # Safety
+ * As [`purrdf_entail_consistency`].
+ */
+int32_t purrdf_entail_classify(const char *document,
+                               uint32_t step_cap,
+                               PurrdfBuffer **out_answer,
+                               PurrdfBuffer **out_certificate,
+                               PurrdfError **out_error);
+
+/**
+ * Realize: the entailed types of the ontology's named individuals, and the most
+ * specific of them.
+ *
+ * `*out_answer` receives `type` lines followed by `direct-type` lines;
+ * `*out_certificate` the `purrdf-dl-certificate 1` block. **Free BOTH with
+ * `purrdf_buffer_free`.**
+ *
+ * # Safety
+ * As [`purrdf_entail_consistency`].
+ */
+int32_t purrdf_entail_realize(const char *document,
+                              uint32_t step_cap,
+                              PurrdfBuffer **out_answer,
+                              PurrdfBuffer **out_certificate,
+                              PurrdfError **out_error);
+
+/**
+ * Instance retrieval: the named individuals entailed to be instances of `class`.
+ *
+ * `class` is ONE N-Triples term — `<iri>` or `_:label`, angle brackets included. A
+ * class the ontology never mentions is not an error: nothing constrains it, so the
+ * empty answer for it is a real answer.
+ *
+ * `*out_answer` receives `instance <term>` lines; `*out_certificate` the
+ * `purrdf-dl-certificate 1` block. **Free BOTH with `purrdf_buffer_free`.**
+ *
+ * # Safety
+ * `document` and `class` must be non-null, NUL-terminated C strings; `out_answer`
+ * and `out_certificate` must be writable pointers; `out_error` must be null or
+ * writable.
+ */
+int32_t purrdf_entail_instances(const char *document,
+                                const char *class_,
+                                uint32_t step_cap,
+                                PurrdfBuffer **out_answer,
+                                PurrdfBuffer **out_certificate,
+                                PurrdfError **out_error);
+
+/**
+ * Axiom entailment: does the ontology entail `axiom`?
+ *
+ * `axiom` is ONE triple of the OWL 2 RDF mapping, in N-Triples syntax. Seven
+ * reserved predicates select the seven named axiom kinds — `rdfs:subClassOf`,
+ * `owl:equivalentClass`, `owl:disjointWith`, `rdf:type`, `owl:sameAs`,
+ * `owl:differentFrom`, `rdfs:subPropertyOf` — and any other predicate is an
+ * object-property assertion. No encoding is invented: this is the mapping the
+ * reasoner's own reverse mapping reads.
+ *
+ * `*out_answer` receives `entails true|false|unknown` and then the axiom as it was
+ * READ (`axiom <kind>` plus one `term` line each), so a caller can see which axiom
+ * its predicate selected. `*out_certificate` receives the
+ * `purrdf-dl-certificate 1` block. **Free BOTH with `purrdf_buffer_free`.**
+ *
+ * # Safety
+ * `document` and `axiom` must be non-null, NUL-terminated C strings; `out_answer`
+ * and `out_certificate` must be writable pointers; `out_error` must be null or
+ * writable.
+ */
+int32_t purrdf_entail_entails(const char *document,
+                              const char *axiom,
+                              uint32_t step_cap,
+                              PurrdfBuffer **out_answer,
+                              PurrdfBuffer **out_certificate,
+                              PurrdfError **out_error);
+
+/**
+ * Certify the ontology against the OWL 2 profiles.
+ *
+ * Purely syntactic — no tableau, no closure, no budget — so this is the one
+ * reasoning service whose certificate is NOT a `purrdf-dl-certificate`: there is
+ * no search whose completeness could be reported, and rendering a fabricated one
+ * would be exactly the overclaim the certificates exist to prevent.
+ *
+ * `*out_answer` receives `certified <profile>` lines, most restrictive first (EL,
+ * QL, RL, DL, Full). `*out_certificate` receives the
+ * `purrdf-owl-profile-certificate 1` block: every violation with its blocking
+ * term, the node it was written on and the reason, a dense `certifies-<profile>`
+ * line per profile, and the `one-directional true` gate — a certification PROVES
+ * membership, a violation does NOT prove non-membership. **Free BOTH with
+ * `purrdf_buffer_free`.**
+ *
+ * # Safety
+ * `document` must be a non-null, NUL-terminated C string; `out_answer` and
+ * `out_certificate` must be writable pointers; `out_error` must be null or
+ * writable.
+ */
+int32_t purrdf_entail_profile(const char *document,
+                              PurrdfBuffer **out_answer,
+                              PurrdfBuffer **out_certificate,
+                              PurrdfError **out_error);
+
+/**
+ * Extract the locality module of the ontology for a seed signature.
+ *
+ * `signature` is one N-Triples term per line (blank lines ignored). `method` is
+ * `bot`, `top` or `star`; an unknown spelling is refused with the accepted set
+ * named.
+ *
+ * `*out_answer` receives the extracted module as canonical (RDFC-1.0) N-Quads —
+ * the same serializer `purrdf_entail_materialize_to_nquads` uses.
+ * `*out_certificate` receives the `purrdf-module-extraction 1` block: the method,
+ * the axiom count, the signature the fixpoint CLOSED to, every triple kept
+ * conservatively, and the `conservative` gate that says whether the module is the
+ * minimal one or a sound superset. **Free BOTH with `purrdf_buffer_free`.**
+ *
+ * # Safety
+ * `document`, `signature` and `method` must be non-null, NUL-terminated C strings;
+ * `out_answer` and `out_certificate` must be writable pointers; `out_error` must
+ * be null or writable.
+ */
+int32_t purrdf_entail_extract_module(const char *document,
+                                     const char *signature,
+                                     const char *method,
+                                     PurrdfBuffer **out_answer,
+                                     PurrdfBuffer **out_certificate,
+                                     PurrdfError **out_error);
+
+/**
+ * Justify a Description-Logic axiom: a minimal subset of the ontology that still
+ * entails it.
+ *
+ * A tableau performs no derivation steps, so this is a JUSTIFICATION and
+ * deliberately not called a proof; `purrdf_entail_explain_conclusion` is the chase
+ * lane's genuinely derivational explanation, and the two are different kinds of
+ * thing rather than two spellings of one.
+ *
+ * `axiom` is read exactly as `purrdf_entail_entails` reads it.
+ *
+ * `*out_answer` receives the justification's axioms as canonical (RDFC-1.0)
+ * N-Quads — a justification introduces no term, so it is an ordinary RDF 1.2
+ * dataset of axioms already present in the input. `*out_certificate` receives the
+ * `purrdf-justification 1` block, whose `sufficient` and `minimal` lines are
+ * **re-decided** over the justification alone and over each of its
+ * one-axiom-smaller subsets, so they check the answer rather than restate it.
+ * **Free BOTH with `purrdf_buffer_free`.**
+ *
+ * An ontology that does not entail the axiom is an error, not an empty
+ * justification: the empty set reads as "nothing is needed" and means the
+ * opposite.
+ *
+ * # Safety
+ * `document` and `axiom` must be non-null, NUL-terminated C strings; `out_answer`
+ * and `out_certificate` must be writable pointers; `out_error` must be null or
+ * writable.
+ */
+int32_t purrdf_entail_justify(const char *document,
+                              const char *axiom,
+                              PurrdfBuffer **out_answer,
+                              PurrdfBuffer **out_certificate,
+                              PurrdfError **out_error);
+
+/**
+ * Explain one triple of a chase closure: which rules, from which premises.
+ *
+ * `regime` is one of the same spellings every other entry point accepts.
+ * `conclusion` is ONE N-Quads statement; its graph, if it names one, selects the
+ * closure to explain.
+ *
+ * `*out_answer` receives `asserted`, `steps` and one `rule` line per cited rule.
+ * `*out_certificate` receives the `purrdf-chase-proof 1` block, whose `derived-*`
+ * lines are what the CHECKER re-derived from the proof term and the clause
+ * program — not what the proof claims — so a proof whose stated conclusion its own
+ * premises do not license shows up as differing lines rather than a silent
+ * `checked true`. **Free BOTH with `purrdf_buffer_free`.**
+ *
+ * `rdf` and `rdfs` are refused by name: four of their rules conclude about a FRESH
+ * blank node, an existential head has no Datalog semantics, and a "proof" of such
+ * a step could only be believed.
+ *
+ * # Safety
+ * `document`, `regime` and `conclusion` must be non-null, NUL-terminated C
+ * strings; `out_answer` and `out_certificate` must be writable pointers;
+ * `out_error` must be null or writable.
+ */
+int32_t purrdf_entail_explain_conclusion(const char *document,
+                                         const char *regime,
+                                         const char *conclusion,
+                                         PurrdfBuffer **out_answer,
+                                         PurrdfBuffer **out_certificate,
+                                         PurrdfError **out_error);
+
+/**
+ * Open a reasoning session over `document`.
+ *
+ * `step_cap` narrows the per-decision tableau step cap for every question asked through
+ * this session, and behaves exactly as in [`purrdf_entail_consistency`]: **0 means the
+ * knowledge base's own cap**, not a cap of zero steps, and it can only NARROW.
+ *
+ * On success `*out_reasoner` receives a handle to free with [`purrdf_reasoner_free`].
+ *
+ * Nothing is reverse-mapped here, so an ontology whose knowledge base cannot be built
+ * still opens — and fails on the first question that needs one, with that question's own
+ * error. That is deliberate: `profile`, `extract_module`, `justify` and
+ * `explain_conclusion` never reason, and `profile` answers for any parseable document.
+ *
+ * # Safety
+ * `document` must be a non-null, NUL-terminated C string; `out_reasoner` must be a
+ * writable pointer; `out_error` must be null or writable.
+ */
+int32_t purrdf_reasoner_open(const char *document,
+                             uint32_t step_cap,
+                             PurrdfReasoner **out_reasoner,
+                             PurrdfError **out_error);
+
+/**
+ * Release a reasoning session. No-op on null.
+ *
+ * # Safety
+ * `reasoner` must be null or a live session handle not already freed.
+ */
+void purrdf_reasoner_free(PurrdfReasoner *reasoner);
+
+/**
+ * Is the knowledge base consistent? See [`purrdf_entail_consistency`].
+ *
+ * `*out_answer` and `*out_certificate` are exactly what [`purrdf_entail_consistency`] writes
+ * for the same document. **Free BOTH with `purrdf_buffer_free`.**
+ *
+ * # Safety
+ * `reasoner` must be a live session handle; `out_answer` and `out_certificate` must be
+ * writable pointers; `out_error` must be null or writable.
+ */
+int32_t purrdf_reasoner_consistency(PurrdfReasoner *reasoner,
+                                    PurrdfBuffer **out_answer,
+                                    PurrdfBuffer **out_certificate,
+                                    PurrdfError **out_error);
+
+/**
+ * The entailed subsumption hierarchy. See [`purrdf_entail_classify`].
+ *
+ * `*out_answer` and `*out_certificate` are exactly what [`purrdf_entail_classify`] writes
+ * for the same document. **Free BOTH with `purrdf_buffer_free`.**
+ *
+ * # Safety
+ * `reasoner` must be a live session handle; `out_answer` and `out_certificate` must be
+ * writable pointers; `out_error` must be null or writable.
+ */
+int32_t purrdf_reasoner_classify(PurrdfReasoner *reasoner,
+                                 PurrdfBuffer **out_answer,
+                                 PurrdfBuffer **out_certificate,
+                                 PurrdfError **out_error);
+
+/**
+ * The entailed types of the named individuals. See [`purrdf_entail_realize`].
+ *
+ * `*out_answer` and `*out_certificate` are exactly what [`purrdf_entail_realize`] writes
+ * for the same document. **Free BOTH with `purrdf_buffer_free`.**
+ *
+ * # Safety
+ * `reasoner` must be a live session handle; `out_answer` and `out_certificate` must be
+ * writable pointers; `out_error` must be null or writable.
+ */
+int32_t purrdf_reasoner_realize(PurrdfReasoner *reasoner,
+                                PurrdfBuffer **out_answer,
+                                PurrdfBuffer **out_certificate,
+                                PurrdfError **out_error);
+
+/**
+ * The individuals entailed to be instances of `class`. See [`purrdf_entail_instances`].
+ *
+ * `*out_answer` and `*out_certificate` are exactly what [`purrdf_entail_instances`] writes for
+ * the same document and `class`. **Free BOTH with `purrdf_buffer_free`.**
+ *
+ * # Safety
+ * `reasoner` must be a live session handle; `class` must be a non-null, NUL-terminated C
+ * string; `out_answer` and `out_certificate` must be writable pointers; `out_error` must
+ * be null or writable.
+ */
+int32_t purrdf_reasoner_instances(PurrdfReasoner *reasoner,
+                                  const char *class_,
+                                  PurrdfBuffer **out_answer,
+                                  PurrdfBuffer **out_certificate,
+                                  PurrdfError **out_error);
+
+/**
+ * Does the ontology entail `axiom`? See [`purrdf_entail_entails`].
+ *
+ * `*out_answer` and `*out_certificate` are exactly what [`purrdf_entail_entails`] writes for
+ * the same document and `axiom`. **Free BOTH with `purrdf_buffer_free`.**
+ *
+ * # Safety
+ * `reasoner` must be a live session handle; `axiom` must be a non-null, NUL-terminated C
+ * string; `out_answer` and `out_certificate` must be writable pointers; `out_error` must
+ * be null or writable.
+ */
+int32_t purrdf_reasoner_entails(PurrdfReasoner *reasoner,
+                                const char *axiom,
+                                PurrdfBuffer **out_answer,
+                                PurrdfBuffer **out_certificate,
+                                PurrdfError **out_error);
+
+/**
+ * A justification for `axiom`. See [`purrdf_entail_justify`].
+ *
+ * `*out_answer` and `*out_certificate` are exactly what [`purrdf_entail_justify`] writes for
+ * the same document and `axiom`. **Free BOTH with `purrdf_buffer_free`.**
+ *
+ * # Safety
+ * `reasoner` must be a live session handle; `axiom` must be a non-null, NUL-terminated C
+ * string; `out_answer` and `out_certificate` must be writable pointers; `out_error` must
+ * be null or writable.
+ */
+int32_t purrdf_reasoner_justify(PurrdfReasoner *reasoner,
+                                const char *axiom,
+                                PurrdfBuffer **out_answer,
+                                PurrdfBuffer **out_certificate,
+                                PurrdfError **out_error);
+
+/**
+ * Which OWL 2 profiles the ontology is provably in. See [`purrdf_entail_profile`].
+ *
+ * Purely syntactic: never builds a knowledge base, so it answers even for an ontology
+ * whose other services would fail. **Free BOTH buffers with `purrdf_buffer_free`.**
+ *
+ * # Safety
+ * As the other session services.
+ */
+int32_t purrdf_reasoner_profile(const PurrdfReasoner *reasoner,
+                                PurrdfBuffer **out_answer,
+                                PurrdfBuffer **out_certificate,
+                                PurrdfError **out_error);
+
+/**
+ * A module for `signature` under `method`. See [`purrdf_entail_extract_module`].
+ *
+ * **Free BOTH buffers with `purrdf_buffer_free`.**
+ *
+ * # Safety
+ * `reasoner` must be a live session handle; `signature` and `method` must be non-null,
+ * NUL-terminated C strings; the out-params must be writable.
+ */
+int32_t purrdf_reasoner_extract_module(const PurrdfReasoner *reasoner,
+                                       const char *signature,
+                                       const char *method,
+                                       PurrdfBuffer **out_answer,
+                                       PurrdfBuffer **out_certificate,
+                                       PurrdfError **out_error);
+
+/**
+ * Why `conclusion` holds under `regime`. See [`purrdf_entail_explain_conclusion`].
+ *
+ * **Free BOTH buffers with `purrdf_buffer_free`.**
+ *
+ * # Safety
+ * `reasoner` must be a live session handle; `regime` and `conclusion` must be non-null,
+ * NUL-terminated C strings; the out-params must be writable.
+ */
+int32_t purrdf_reasoner_explain_conclusion(const PurrdfReasoner *reasoner,
+                                           const char *regime,
+                                           const char *conclusion,
+                                           PurrdfBuffer **out_answer,
+                                           PurrdfBuffer **out_certificate,
+                                           PurrdfError **out_error);
 
 /**
  * Return the status code carried by an error, or `Panic` if `err` is null.

@@ -21,6 +21,22 @@
 //! Hosting the writer in this leaf keeps the kernel ring-fence intact: `purrdf-core`
 //! and `purrdf-shapes` never gain a SARIF or serde-derive concern.
 //!
+//! # The shared string boundary
+//!
+//! SARIF is the crate's origin, not the whole of it. This is also where the
+//! language bindings' **string-in / string-out** entry points live, so the C-ABI,
+//! WASM and PyO3 callers share one implementation instead of three:
+//!
+//! * [`shacl::validate_to_sarif_string`] — SHACL validation → SARIF JSON.
+//! * [`entail::entail_to_ntriples_string`] — SHACL-AF `sh:rule` entailment →
+//!   canonical N-Triples.
+//! * [`regime`] — SPARQL entailment-regime materialization → canonical N-Quads
+//!   plus a deterministically rendered [`ReasoningReport`]. Despite the name, this
+//!   is *not* the same thing as [`entail`]; that module's docs spell the
+//!   difference out.
+//!
+//! [`ReasoningReport`]: purrdf_entail::ReasoningReport
+//!
 //! # Portability
 //!
 //! Pure serde over the report types — no PyO3, no oxigraph-family edge, no ambient
@@ -40,6 +56,7 @@ pub mod build;
 pub mod entail;
 pub mod model;
 pub mod path_syntax;
+pub mod regime;
 pub mod rules;
 pub mod shacl;
 
@@ -49,4 +66,11 @@ pub use build::{
 };
 pub use entail::entail_to_ntriples_string;
 pub use model::{Level, SARIF_SCHEMA, SARIF_VERSION, SarifLog, to_json_pretty};
+pub use regime::{
+    INCONSISTENT_DOCUMENT, PROGRAM_REGIME_NAMES, REGIME_GOLDEN_VECTORS, REGIME_NAMES,
+    REPORT_FORMAT_BANNER, RegimeClosure, RegimeVector, check_inconsistent_refusal,
+    check_regime_golden_vectors, implemented_rules_string, materialize_to_nquads_string,
+    parse_regime, regime_golden_vectors, regime_name, regime_plan, regime_rule_set,
+    render_entail_error, render_reasoning_report, rules_string,
+};
 pub use shacl::validate_to_sarif_string;

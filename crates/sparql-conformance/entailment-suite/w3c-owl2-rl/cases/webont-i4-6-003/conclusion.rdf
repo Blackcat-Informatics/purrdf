@@ -1,0 +1,13 @@
+<rdf:RDF
+    xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+    xmlns:owl="http://www.w3.org/2002/07/owl#"
+    xml:base="http://www.w3.org/2002/03owlt/I4.6/conclusions003" >
+    <owl:Ontology/>
+    <owl:Class rdf:about="premises003#C1">
+       <owl:equivalentClass>
+           <owl:Class rdf:about="premises003#C2"/>
+       </owl:equivalentClass>
+    </owl:Class>
+
+
+</rdf:RDF>

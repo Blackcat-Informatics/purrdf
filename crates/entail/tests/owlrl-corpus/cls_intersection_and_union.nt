@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# GENERATED — by crates/entail/tests/owlrl_oracle.rs's write_owlrl_corpus_inputs. Do not
+# hand-edit; see that test's doc comment to regenerate.
+#
+# fixture: cls_intersection_and_union
+# canonical N-Triples input fed to the owlrl reference engine.
+<http://example.org/IntAB> <http://www.w3.org/2002/07/owl#intersectionOf> <http://example.org/intlist0> .
+<http://example.org/UniAB> <http://www.w3.org/2002/07/owl#unionOf> <http://example.org/unilist0> .
+<http://example.org/heidi> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .
+<http://example.org/heidi> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> .
+<http://example.org/intlist0> <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://example.org/A> .
+<http://example.org/intlist0> <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://example.org/intlist1> .
+<http://example.org/intlist1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://example.org/B> .
+<http://example.org/intlist1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .
+<http://example.org/unilist0> <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://example.org/A> .
+<http://example.org/unilist0> <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://example.org/unilist1> .
+<http://example.org/unilist1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://example.org/B> .
+<http://example.org/unilist1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .

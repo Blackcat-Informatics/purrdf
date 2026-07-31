@@ -1,4 +1,4 @@
-# ROBOT verify QC (#211) — Every CitationAct must have exactly one
+# ROBOT verify QC — Every CitationAct must have exactly one
 # citingEntity, one citedEntity, and one citationIntent.
 # Any returned row is a FAILURE.
 

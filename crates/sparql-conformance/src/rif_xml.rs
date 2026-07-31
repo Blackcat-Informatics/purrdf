@@ -19,7 +19,7 @@
 use std::path::{Path, PathBuf};
 
 use purrdf_core::{RdfDataset, TermValue};
-use purrdf_entail::{Atom, Regime, RifTerm, Rule, RuleSet};
+use purrdf_entail::{Atom, Materialization, Regime, RifTerm, Rule, RuleSet};
 use roxmltree::{Document, Node, ParsingOptions};
 
 /// An `Import` directive: the external RDF graph's location and its entailment
@@ -311,21 +311,25 @@ fn load_import(dir: &Path, import: &Import) -> Result<Vec<purrdf_entail::Fact>, 
     };
     let ds = purrdf::parse_dataset(&bytes, media_type, Some(location))
         .map_err(|e| format!("parse import {}: {e}", path.display()))?;
-    let closed = purrdf_entail::materialize(&ds, import_regime(import.profile.as_deref()))
+    // The import contributes FACTS to a RIF rule set; the closure's reasoning report
+    // describes the RDFS / OWL-RL run that produced them and is bound and dropped here
+    // rather than being folded into a claim about the rule set.
+    let (closed, _report) = purrdf_entail::materialize(&ds, import_plan(import.profile.as_deref()))
         .map_err(|e| format!("close import {}: {e}", path.display()))?;
     Ok(dataset_facts(&closed))
 }
 
-/// Map an `Import` profile IRI to the forward-materializable regime under which
-/// its graph is closed. `OWL-Direct` folds to the OWL-RL closure (query-directed
-/// DL is not a materialize-and-combine affair, and OWL-RL is a sound subset for
-/// the atomic combination facts); an unrecognized/absent profile is the identity.
-fn import_regime(profile: Option<&str>) -> Regime {
+/// Map an `Import` profile IRI to the rule-table lane under which its graph is
+/// closed. `OWL-Direct` folds to the OWL-RL closure (query-directed DL is not a
+/// materialize-and-combine affair, and OWL-RL is a sound subset for the atomic
+/// combination facts); an unrecognized/absent profile — including `RIF` itself,
+/// whose rules this directive does not carry — is the identity.
+fn import_plan(profile: Option<&str>) -> Materialization<'static> {
     match profile.and_then(Regime::from_iri) {
-        Some(Regime::OwlDirect | Regime::OwlRl) => Regime::OwlRl,
-        Some(Regime::Rdfs) => Regime::Rdfs,
-        Some(Regime::Rdf) => Regime::Rdf,
-        _ => Regime::Simple,
+        Some(Regime::OwlDirect | Regime::OwlRl) => Materialization::OwlRl,
+        Some(Regime::Rdfs) => Materialization::Rdfs,
+        Some(Regime::Rdf) => Materialization::Rdf,
+        _ => Materialization::Simple,
     }
 }
 

@@ -64,8 +64,8 @@ but it assumes nothing about your ontology or application.
   string arena, copy-on-write mutation), with triple terms in object position,
   reifier/annotation side-tables, and base-direction literals (`rdf:dirLangString`).
 - **Native codecs** — first-party parsers/serializers for **Turtle, TriG, N-Triples,
-  N-Quads, RDF/XML, JSON-LD (star), and YAML-LD**, plus bidirectional OKF Markdown
-  bundles with caller-supplied vocabulary; byte-deterministic output.
+  N-Quads, RDF/XML, TriX, HexTuples, JSON-LD (star), and YAML-LD**, plus bidirectional
+  OKF Markdown bundles with caller-supplied vocabulary; byte-deterministic output.
 - **Canonicalization** — W3C **RDFC-1.0** dataset canonicalization, tested against the
   W3C fixture suite.
 - **SPARQL 1.1/1.2** — native parser → algebra → multiset evaluator over the interned
@@ -81,6 +81,23 @@ but it assumes nothing about your ontology or application.
   against the official shexTest suite: **1,105/1,105 attempted validation tests,
   zero expected-failures** (imports and semantic actions included), 99/99 negative
   syntax, 14/14 negative structure. See [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md).
+- **Entailment** — Simple/RDF/RDFS/OWL-RL/D forward materialization over a
+  deterministic semi-naive fixpoint (**all 78 OWL 2 RL rules** of OWL 2 Profiles
+  §4.3 Tables 4–9 — *rule-table coverage*, which is not the same claim as
+  entailment conformance: on W3C's own OWL 2 RL entailment tests the chase
+  scores **11 of 27 positive and 23 of 23 negative**, the latter meaning no
+  unsoundness was found; all 18 RDF + RDFS patterns, the four existential ones
+  firing through the restricted chase with their surrogate blank nodes withheld at
+  the materialization boundary), an open-world OWL-Direct
+  SHOIQ(D) hypertableau, and RIF-Core rules. **Every closure comes back with a reasoning
+  report** naming what fired, what did not, the boundaries met, the budget
+  consumed, and the contract hash of the calculus that ran — so an incomplete
+  answer can never be delivered as a complete one. One rule fires that no
+  specification table states — `ext-eq-diff-sym`, symmetry of `owl:differentFrom`
+  under `owl-rl` — and it is in neither rule count above; `extensions(regime)`
+  names it, and every report discloses it on an `extension` line. Per-rule
+  inventory:
+  [`docs/book/src/entailment-rules.md`](./docs/book/src/entailment-rules.md).
 - **GTS graph transport** — a single-file, content-addressed, append-only container
   for RDF 1.2 graphs and the binaries they reference: BLAKE3-chained CBOR segments,
   deterministic fold, COSE signing/encryption, pure-Rust crypto (wasm-friendly).
@@ -213,13 +230,17 @@ for drift. Built with cargo-c: `make capi-build`.
 | [`purrdf-sparql-results`](./crates/sparql-results/) | SPARQL results JSON/XML/CSV/TSV, plus a provenance-carrying extension. |
 | [`purrdf-shapes`](./crates/shapes/) | SHACL validation engine (full Core + SHACL-SPARQL). |
 | [`purrdf-shex`](./crates/shex/) | ShEx 2.1: ShExC/ShExJ schemas and validation. |
+| [`purrdf-entail`](./crates/entail/) | Entailment regimes: the RDF/RDFS/OWL-RL/D chase, an OWL-Direct tableau, and RIF-Core rules — each closure returned with a reasoning report. |
+| [`purrdf-datalog`](./crates/datalog/) | The fixpoint substrate beneath the chase: a columnar relation store and a deterministic semi-naive evaluator over the DL-clause IR. Not re-exported by the umbrella. |
+| [`purrdf-validate`](./crates/validate/) | The shared host boundary: SARIF 2.1.0 diagnostics and the entailment-regime string surface the Python/wasm/C bindings call. |
 | [`purrdf-slice`](./crates/slice/) | Slice catalog: manifests, typed artifacts, ownership/dependency analysis. |
 | [`purrdf-iri`](./crates/iri/) | Zero-dependency IRI/URI parsing, resolution, normalization, CURIEs. |
 | [`purrdf-xsd`](./crates/xsd/) | Zero-dependency XSD 1.1 value space with SPARQL numeric promotion. |
 | [`purrdf-events`](./crates/rdf-events/) | Zero-dependency object-safe RDF event sink/source seam. |
 | [`purrdf-wasm`](./crates/rdf-wasm/) | The wasm32 engine behind the `purrdf` ESM package. |
 | [`purrdf-capi`](./crates/rdf-capi/) | `libpurrdf` C ABI (unpublished; built via cargo-c). |
-| [`purrdf-sparql-conformance`](./crates/sparql-conformance/) | W3C SPARQL conformance harness (unpublished). |
+| [`purrdf-cli`](./crates/cli/) | The `purrdf` command-line tool: `convert`, `query`, `reason`, `project`, `lift` (unpublished). |
+| [`purrdf-sparql-conformance`](./crates/sparql-conformance/) | W3C SPARQL, entailment-regime, and OWL 2 conformance harnesses (unpublished). |
 
 ## Documentation
 
@@ -263,8 +284,11 @@ full scoreboard and how-to-run in [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md)
 | ShEx 2.1 validation | shexTest v2.1.0 (`vectors/shexTest/`) | **1,105 / 1,105** attempted, 0 xfail |
 | ShEx schemas / negative syntax / structure | shexTest v2.1.0 | **425/425 · 99/99 · 14/14** |
 | SHACL | W3C data-shapes (`vectors/shacl/`) | **126 / 126**, 0 ledgered |
-| SHACL (first-party frozen corpus) | `crates/shapes/corpus/` | **48 / 48** |
+| SHACL (first-party frozen corpus) | `crates/shapes/corpus/` | **70 / 70** |
 | SPARQL 1.1 | W3C suite via `purrdf-sparql-conformance` | green, xfail-ledgered |
+| Entailment (SPARQL regimes) | W3C sparql11 `entailment/` group | **70 / 70**, 0 ledgered |
+| Entailment (OWL 2 DL consistency) | vendored W3C OWL 2 suite | **257 / 261** agreeing, 4 ledgered, 0 unledgered |
+| Entailment (OWL 2 RL, W3C entailment tests) | vendored W3C OWL 2 entailment suite | **34 / 50** agreeing, 16 ledgered, 0 unledgered — negative lane **23 / 23** (no unsoundness), positive lane **11 / 27** |
 | RDFC-1.0 | W3C canonicalization fixtures | green |
 | GTS | frozen cross-language vectors (`vectors/`) | byte-exact |
 

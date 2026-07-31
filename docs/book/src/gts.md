@@ -79,12 +79,14 @@ sibling GTS engines in other languages. The vectors are never regenerated or
 [`gmeow-gts`](https://github.com/Blackcat-Informatics/gmeow-gts) project,
 alongside the specification and the other reference engines.
 
-## Known limitation at the C ABI
+## The C ABI's star-layer round-trip
 
 The GTS star-layer round-trip of a dataset containing quoted triples /
-reifier bindings currently fails through the kernel
-`to_gts` → `read_graph` → `import_gts_graph` path (star-free round-trips are
-lossless). See [Getting Started: C](getting-started/c.md#known-limitation).
+reifier bindings succeeds through the kernel
+`to_gts` → `read_graph` → `import_gts_graph` path, the same as a star-free
+round-trip; `crates/rdf-capi/tests/abi.rs`'s
+`gts_star_roundtrip_preserves_the_statement_layer` pins it. See
+[Getting Started: C](getting-started/c.md#gts-star-layer-round-trip).
 
 ## Related
 

@@ -95,8 +95,9 @@ Transcode a source into a target syntax or the pack container.
 - `--base <IRI>` — base IRI for resolving relative IRIs while parsing, also
   threaded into the serializer as its base.
 - `--entailment <R>` — materialize a regime's closure **in memory** before
-  serializing (see [`reason`](#reason) for the supported regimes and the exit-3
-  boundary; the two lanes reject identically).
+  serializing (see [`reason`](#reason) for the seven regimes and their inputs).
+- `--rules <FILE>` — the RIF-in-XML rule document `--entailment rif` runs;
+  required by that regime and a usage error for any other.
 - `--canonical` — emit the RDFC-1.0 canonical N-Quads document instead of `--to`.
   Canonical output is **always** N-Quads, so `--canonical` overrides (and lets you
   omit) `--to`.
@@ -139,6 +140,8 @@ relative IRIs against `--base`.
 - `--entailment <R>` — reconstruct an owned dataset, materialize the regime's
   closure in memory, and run the query over **the closure** (a pack is rebuilt for
   this; the zero-copy path is used only without `--entailment`).
+- `--rules <FILE>` — the RIF-in-XML rule document `--entailment rif` runs;
+  required by that regime and a usage error for any other.
 - `--results-format <FMT>` — the result serialization (default `json`).
 
 The **result shape** selects which half of `--results-format` is legal:
@@ -177,36 +180,62 @@ purrdf query --data people.ttl --entailment rdfs \
 ## `reason`
 
 ```text
-purrdf reason --regime <R> [--from <F>] [--to <F>] [--base <IRI>] [IN] [OUT]
+purrdf reason --regime <R> [--rules <FILE>] [--from <F>] [--to <F>] [--base <IRI>] [IN] [OUT]
 ```
 
 Materialize an entailment regime's closure over the source graph and write it out.
 
 - `--regime <R>` — the entailment regime to close under.
+- `--rules <FILE>` — the RIF-in-XML rule document `--regime rif` runs; required by
+  that regime and a usage error for any other (see below).
 - `--from <F>` / `--to <F>` — input/output format overrides; inferred from the
   `IN`/`OUT` extension when omitted. `IN`/`OUT` default to `-` (stdin/stdout); a
   path of `-` has no extension, so it **requires** the matching explicit
   `--from`/`--to`.
 - `--base <IRI>` — base IRI for the input parse, also threaded into the serializer.
 
-**Supported (materializable) regimes:**
+**Regimes the CLI materializes — all seven. None is refused.**
 
-| `--regime` | Meaning |
-|---|---|
-| `simple` | Simple entailment (a faithful copy of the source) |
-| `rdf` | RDF entailment |
-| `rdfs` | RDFS entailment |
-| `owl-rl` | OWL 2 RL entailment |
+| `--regime` | Meaning | `--rules` |
+|---|---|---|
+| `simple` | Simple entailment (a faithful copy of the source) | — |
+| `rdf` | RDF entailment | — |
+| `rdfs` | RDFS entailment | — |
+| `owl-rl` | OWL 2 RL entailment | — |
+| `d` | Datatype entailment: Simple plus the five `dt-*` rules of OWL 2 Profiles §4.3 Table 8 | — |
+| `owl-direct` | The SHOIQ(D) hypertableau's query-independent augmentation | — |
+| `rif` | RIF-Core entailment under the rule document `--rules` names | **required** |
 
-**The unsupported boundary (exit code 3).** Three regimes cannot be materialized
-by the CLI because they need inputs it has no way to supply, and each is rejected
-with a distinct diagnostic:
+`rdfs` fires 18 of the 18 RDF + RDFS patterns; `owl-rl` fires all 78 rules of
+OWL 2 Profiles §4.3 Tables 4–9. That is *rule-table coverage*, which is not
+entailment conformance: on W3C's own OWL 2 RL entailment tests this chase scores
+**11 of 27 positive and 23 of 23 negative**, the latter meaning no unsoundness was
+found. Both numbers are true and stating only the first is an overclaim; see
+[`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md).
 
-- `owl-direct` — OWL Direct (DL) needs the query's class expressions;
-- `rif` — RIF-Core needs a parsed rule set;
-- `d` — datatype (D) entailment is a spec-inherent materialization boundary.
+One further rule fires under `owl-rl` that no specification table states:
+`ext-eq-diff-sym`, symmetry of `owl:differentFrom`. It is counted in neither
+number above, and every report names it on an `extension` line, so a run whose
+conclusions must be strictly normative can be filtered from the report itself.
+The per-rule table is generated from the library's own API and drift-guarded:
+[`docs/book/src/entailment-rules.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/book/src/entailment-rules.md).
 
-`convert --entailment` shares this boundary and rejects identically.
+**`--rules <FILE>` is a regime's own input, not an option.** `rif` entails under
+the *caller's* rule set, which PurRDF does not declare, so it requires a normative
+RIF-in-XML rule document; every other regime's rule table is the specification's,
+so passing `--rules` to one is a **usage error** (exit 2) rather than a silently
+discarded argument. An `Import` directive inside the document is refused by name:
+this pipeline fetches nothing the operator did not name.
+
+`owl-direct` needs no flag, and that is a statement rather than an omission. Its
+extra input is a *query's* class expressions; `reason` and `convert` transform a
+document and have no query, so what runs is the query-independent augmentation —
+the classification, the realization, the entailed role assertions and the
+`owl:sameAs` identifications the tableau decides about the ontology's own named
+terms.
+
+`convert --entailment` and `query --entailment` share this resolver and accept
+`--rules` identically.
 
 ```sh
 # Materialize the RDFS closure and write it as N-Triples.
@@ -215,7 +244,7 @@ purrdf reason --regime rdfs people.ttl closure.nt
 # OWL 2 RL closure from stdin to stdout (explicit formats required for `-`).
 cat ontology.ttl | purrdf reason --regime owl-rl --from ttl --to nt - -
 
-# The unsupported boundary: exits 3 with an explanatory message.
+# A refused regime: exits 3 with an explanatory message.
 purrdf reason --regime owl-direct people.ttl out.ttl
 echo $?   # 3
 ```
@@ -367,11 +396,16 @@ purrdf --loss-ledger=convert.loss.json convert star-data.ttl plain.trix
 |---|---|
 | `0` | success |
 | `1` | runtime failure — a parse/serialize diagnostic, a pack-integrity failure, an I/O error, or a result/shape mismatch |
-| `2` | usage error — a malformed command line (clap), or a pipeline usage error such as `-` without an explicit format |
-| `3` | unsupported entailment regime — `owl-direct` / `rif` / `d` cannot be materialized by the CLI |
+| `2` | usage error — a malformed command line (clap), or a pipeline usage error such as `-` without an explicit format, or `--regime rif` without `--rules` |
 
 On any failure the error's message is printed to stderr and its category becomes
 the process exit code; nothing is swallowed.
+
+There is **no unsupported-regime exit code**, because there is no unsupported
+regime. A third code (`3`) used to classify the entailment-regime boundary the CLI
+could not cross; `purrdf-entail`'s `materialize` takes a `Materialization` — which
+carries each regime's own input — so all seven run and the classification has
+nothing left to classify.
 
 ## License
 

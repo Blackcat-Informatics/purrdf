@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# GENERATED — by crates/entail/tests/owlrl_oracle.rs's write_owlrl_corpus_inputs. Do not
+# hand-edit; see that test's doc comment to regenerate.
+#
+# fixture: cls_restrictions
+# canonical N-Triples input fed to the owlrl reference engine.
+<http://example.org/R1> <http://www.w3.org/2002/07/owl#onProperty> <http://example.org/hasFriend> .
+<http://example.org/R1> <http://www.w3.org/2002/07/owl#someValuesFrom> <http://example.org/Person> .
+<http://example.org/R2> <http://www.w3.org/2002/07/owl#allValuesFrom> <http://example.org/Trusted> .
+<http://example.org/R2> <http://www.w3.org/2002/07/owl#onProperty> <http://example.org/hasFriend2> .
+<http://example.org/R3> <http://www.w3.org/2002/07/owl#hasValue> <http://example.org/Active> .
+<http://example.org/R3> <http://www.w3.org/2002/07/owl#onProperty> <http://example.org/hasStatus> .
+<http://example.org/ivan> <http://example.org/hasFriend> <http://example.org/judy> .
+<http://example.org/judy> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .
+<http://example.org/kevin> <http://example.org/hasFriend2> <http://example.org/linda> .
+<http://example.org/kevin> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/R2> .
+<http://example.org/mallory> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/R3> .
+<http://example.org/nick> <http://example.org/hasStatus> <http://example.org/Active> .

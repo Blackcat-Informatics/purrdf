@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# GENERATED — by crates/entail/tests/owlrl_oracle.rs's write_owlrl_corpus_inputs. Do not
+# hand-edit; see that test's doc comment to regenerate.
+#
+# fixture: prp_inverse
+# canonical N-Triples input fed to the owlrl reference engine.
+<http://example.org/a> <http://example.org/p> <http://example.org/b> .
+<http://example.org/c> <http://example.org/q> <http://example.org/d> .
+<http://example.org/p> <http://www.w3.org/2002/07/owl#inverseOf> <http://example.org/q> .

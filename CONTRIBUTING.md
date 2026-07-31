@@ -48,9 +48,10 @@ make capi-build # build libpurrdf via cargo-c
 
 **Pre-1.0 semver.** While the version is `0.x`, a **minor** bump may carry breaking
 API changes; a **patch** bump is bugfix-only and API-compatible. The crates.io crate
-suite, the PyPI `purrdf` package, and the npm `@blackcatinformatics/purrdf` package
-share **one** workspace version and ship in lockstep — CI runs a version-coherence
-check that fails if the three sources disagree.
+suite, the PyPI `purrdf` package, the npm `@blackcatinformatics/purrdf` package,
+and the `CITATION.cff` citation record share **one** workspace version and ship in
+lockstep — CI runs a version-coherence check that fails if the four sources
+disagree.
 
 **MSRV.** The workspace pins **stable** in `rust-toolchain.toml` and is nightly-free
 by policy; the supported floor is `rust-version` in `Cargo.toml` (currently **1.96**),

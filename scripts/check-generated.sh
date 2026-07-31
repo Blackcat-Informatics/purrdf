@@ -27,6 +27,11 @@ cargo run -p purrdf-rdf --example gen_loss_matrix --locked -- rdf \
   > "$tmp/rdf-loss-matrix.json"
 cargo run -p purrdf-rdf --example gen_loss_matrix --locked -- transcode \
   > "$tmp/transcode-loss-matrix.json"
+# The entailment rule inventory, read out of `RuleId` / `rules()` / `implemented()`
+# rather than transcribed. Guarding it here is what keeps a coverage claim in the
+# book a build artifact instead of a sentence someone has to remember to update.
+cargo run -p purrdf-entail --example gen_rule_inventory --locked \
+  > "$tmp/entailment-rules.md"
 
 check_file() {
   local generated="$1"
@@ -49,6 +54,14 @@ sync_file() {
 
 sync_file "$tmp/rdf-loss-matrix.json" generated/rdf-loss-matrix.json
 sync_file "$tmp/transcode-loss-matrix.json" generated/transcode-loss-matrix.json
+sync_file "$tmp/entailment-rules.md" docs/book/src/entailment-rules.md
+
+# The inventory above is now known-current. Prose elsewhere RESTATES its numbers
+# (and the conformance matrix's), and prose is not covered by any byte-diff — a
+# coverage table sat at `RDFS 14 / 18` for exactly that reason, three lines under
+# a sentence promising it could not fall behind. This gate machine-checks every
+# such restatement against the generated artifact it claims to summarize.
+python3 scripts/check-doc-claims.py
 
 viz_tmp="$tmp/visualization"
 viz_committed="docs/book/src/assets/visualization"

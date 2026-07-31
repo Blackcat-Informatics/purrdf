@@ -7,6 +7,7 @@ members = [
     "bindings/python",
     "crates/cli",
     "crates/columnar",
+    "crates/datalog",
     "crates/entail",
     "crates/gts",
     "crates/iri",
@@ -48,6 +49,7 @@ homepage = "https://blackcatinformatics.ca/purrdf/"
 purrdf = { path = "crates/purrdf", version = "0.9.0" }
 purrdf-columnar = { path = "crates/columnar", version = "0.9.0" }
 purrdf-core = { path = "crates/rdf-core", version = "0.9.0" }
+purrdf-datalog = { path = "crates/datalog", version = "0.9.0" }
 purrdf-entail = { path = "crates/entail", version = "0.9.0" }
 purrdf-events = { path = "crates/rdf-events", version = "0.9.0" }
 purrdf-gts = { path = "crates/gts", version = "0.9.0" }
@@ -215,4 +217,13 @@ opt-level = 2
 opt-level = 2
 
 [profile.dev.package.purrdf-core]
+opt-level = 2
+
+# Same argument, different hot loop: the OWL-Direct tableau is checked against a naive
+# model-enumeration oracle (`owl_dl::oracle`) that decides satisfiability by enumerating
+# EVERY interpretation over a bounded domain. That is exponential on purpose — the oracle's
+# whole value is being too simple to be wrong — so the suite's cost is a bitmask inner loop
+# run hundreds of millions of times, which un-inlined dev codegen makes roughly 15x slower
+# and pushes the module past a reasonable test budget.
+[profile.dev.package.purrdf-entail]
 opt-level = 2

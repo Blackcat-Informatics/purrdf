@@ -162,7 +162,7 @@ pub const XFAIL: &[Xfail] = &[
     //
     // The native reasoner (purrdf-entail) materializes RDF/RDFS + OWL-RL-shaped
     // closure for the forward-materializable regimes, answers the OWL-Direct
-    // regime query-directed via `purrdf_entail::materialize_dl` (an ALCOIQ tableau
+    // regime query-directed via `purrdf_entail::materialize_dl_reported` (a SHOIQ(D) tableau
     // over the query's class expressions), and forward-chains the RIF-Core Horn
     // rule sets via `purrdf_entail::materialize_rif` (the RIF-in-XML documents the
     // `qt:data` graphs reference, plus their RDF imports). So every

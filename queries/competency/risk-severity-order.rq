@@ -2,7 +2,7 @@
 # transitively — is catastrophic graver than minor through the chain?"
 # Expected: one row binding ?top = gmeow:severityCatastrophic, reached from
 # gmeow:severityMinor through the moreSevereThan+ property path (the kernel
-# GranularityLevel ordered-vocabulary pattern, fourth use — #354). Cascades
+# GranularityLevel ordered-vocabulary pattern, fourth use). Cascades
 # themselves are NEVER ordered transitively: severity orders LEVELS, and
 # propagation arithmetic is solver work (Principle 12).
 

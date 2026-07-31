@@ -1,4 +1,4 @@
-# Music EPIC (#306/#320) competency query bundle.
+# Music competency query bundle.
 # Each UNION branch answers one competency question and binds:
 #   ?question   — the question label
 #   ?work       — the MusicalWork individual that is the primary answer

@@ -126,7 +126,7 @@ fn emit_owl2(vocab: &SliceVocab) -> String {
          # purrdf:standpointModality as the cl-tud/standpoint-owl2 standpointLabel\n\
          # encoding (Box=□ settled, Diamond=◊ possible/probable, name=* universal).\n\
          # Refuted (denied) claims are excluded — carried by standpoint-crminf.rq.\n\
-         # Branch B (#127): StandpointClaim with reified-statement observedFeature.\n\
+         # Branch B: StandpointClaim with reified-statement observedFeature.\n\
          # Branch C (generic-entity observedFeature) is excluded by design — the\n\
          # translator matches only owl:Axiom individuals.\n"
     );
@@ -186,7 +186,7 @@ fn emit_crminf(vocab: &SliceVocab) -> String {
          # J4 that an I4 Proposition Set J5 holds to be true/probable/possible/false.\n\
          # The explicit belief value carries DENIAL faithfully (≥ CRMinf); the\n\
          # proposition is referred to, never asserted as fact.\n\
-         # Branches B/C (#127): StandpointClaim with reified-statement or\n\
+         # Branches B/C: StandpointClaim with reified-statement or\n\
          # generic-entity observedFeature. Generic entities use ?feature as the\n\
          # referred-to subject.\n"
     );
@@ -239,7 +239,7 @@ fn emit_prov(vocab: &SliceVocab) -> String {
          # attributed to its standpoint agent (prov:qualifiedAttribution). Every\n\
          # standpoint retained, none privileged; lossy-drop: belief value (modality)\n\
          # and confidence dropped — carried by standpoint-crminf.rq / -owl2.rq.\n\
-         # Branches B/C (#127): StandpointClaim with reified-statement or\n\
+         # Branches B/C: StandpointClaim with reified-statement or\n\
          # generic-entity observedFeature. Generic-entity branch omits\n\
          # owl:annotated* (unbound, skipped).\n"
     );
@@ -292,7 +292,7 @@ fn emit_oa(vocab: &SliceVocab) -> String {
          # quoted statement, target = its subject, creator = the standpoint). Every\n\
          # standpoint retained, none privileged; lossy-drop: belief value (modality)\n\
          # and confidence dropped — carried by standpoint-crminf.rq / -owl2.rq.\n\
-         # Branches B/C (#127): StandpointClaim with reified-statement or\n\
+         # Branches B/C: StandpointClaim with reified-statement or\n\
          # generic-entity observedFeature. Generic-entity branch uses ?feature as\n\
          # oa:hasTarget.\n"
     );
@@ -342,7 +342,7 @@ fn emit_schema(vocab: &SliceVocab) -> String {
          # authored by its standpoint; per-standpoint claims coexist (no single\n\
          # ClaimReview verdict). Refuted/denied claims excluded (carried by\n\
          # standpoint-crminf.rq); lossy-drop: belief value (modality) + confidence.\n\
-         # Branches B/C (#127): StandpointClaim with reified-statement or\n\
+         # Branches B/C: StandpointClaim with reified-statement or\n\
          # generic-entity observedFeature. Generic-entity branch renders ?feature\n\
          # IRI as schema:text.\n"
     );

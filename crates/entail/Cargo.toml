@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-entail"
-description = "PurRDF native entailment: wasm-clean forward-materialization RDFS + OWL-RL closure over the RdfDataset IR"
+description = "PurRDF native entailment: wasm-clean RDF/RDFS/OWL 2 RL/D forward materialization over the RdfDataset IR, with a reasoning report on every closure"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -31,7 +31,27 @@ path = "src/lib.rs"
 # string round-trip. purrdf-core is wasm32-unknown-unknown-clean, keeping this
 # crate wasm-clean (MAXIMAL PORTABILITY).
 purrdf-core = { workspace = true }
+# The DL-clause IR, the contract hash and the budget report. The reasoning report
+# names the calculus a closure was minted under with purrdf-datalog's own
+# `contract_hash`, so a consumer can refuse a cached verdict from another calculus
+# instead of comparing two prose claims. wasm32-unknown-unknown-clean, so this
+# crate stays in the workspace wasm gate.
+purrdf-datalog = { workspace = true }
+# The XSD value space. OWL 2 Profiles §4.3 Table 8 quantifies over "the data value of a
+# literal", which is arithmetic over values rather than a join over triples, so the chase
+# decides it with the repository's own zero-dependency, wasm-clean kernel crate instead of
+# comparing lexical forms and calling it datatype reasoning. purrdf-xsd is already a
+# transitive dependency of every artifact that ships this crate, so the edge costs
+# essentially nothing, and it stays wasm32-unknown-unknown-clean.
+purrdf-xsd = { workspace = true }
 roxmltree = { workspace = true }
+# The content digest a justification is IDENTIFIED by. PurRDF mints no vocabulary, so a
+# derivation is not named by a fabricated IRI: it is addressed by BLAKE3 over the canonical
+# N-Quads of the axiom set, which is version-stable across releases and across targets in a
+# way `ahash` deliberately is not. Already a transitive dependency of this crate through
+# purrdf-datalog — whose own proof terms are digested the same way — so the declared edge
+# adds nothing to any artifact, and blake3 is wasm32-unknown-unknown-clean.
+blake3 = { workspace = true }
 # Fixed-key store-once interners and RIF posting-list indexes.
 ahash = { workspace = true }
 hashbrown = { workspace = true }
@@ -39,9 +59,21 @@ hashbrown = { workspace = true }
 [dev-dependencies]
 # Report-only chase microbenchmark; `make bench` lane, excluded from `make check`.
 criterion = { workspace = true }
+# Generates the random small knowledge bases the OWL-Direct tableau is checked against in
+# `owl_dl::oracle`, where every generated verdict is compared with a naive exponential
+# model-enumeration oracle. Driven from a FIXED ChaCha seed, so the corpus is identical on
+# every run and a failure reproduces; test-only, so it reaches no shipped artifact.
+proptest = { workspace = true }
 
 [[bench]]
 # Forward-materialization chase latency over a synthetic subclass hierarchy at two
 # depths — a regression watch on the semi-naive fixpoint. Report-only.
 name = "chase"
+harness = false
+
+[[bench]]
+# OWL-Direct classification latency over a synthetic EL terminology at three signature
+# sizes — a regression watch on the consequence-based classifier, whose cost is superlinear
+# in the signature rather than in the axiom count. Report-only.
+name = "classify"
 harness = false

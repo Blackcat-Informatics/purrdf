@@ -3,12 +3,19 @@
 
 // purrdf — the idiomatic RDF/JS surface over the wasm engine.
 //
-// The wasm-bindgen-generated classes (DataFactory/Dataset/Quad/Sink/Term) and the
-// free functions (version, shaclValidateToSarif, shaclEntail) are re-exported as-is —
-// the whole `#[wasm_bindgen]` surface is reachable from the package root, so
-// SHACL validation/entailment and Dataset.canonicalize()/isomorphic() need no deep
-// `./pkg/` import. This wrapper adds the isomorphic glue that the synchronous
-// wasm boundary cannot express in Rust:
+// The wasm-bindgen-generated classes (DataFactory/Dataset/Quad/Sink/Term,
+// RegimeClosure, ReasoningAnswer) and the free functions (version,
+// shaclValidateToSarif, shaclEntail, entailMaterialize, entailRules,
+// entailImplementedRules, entailCheckGoldenVectors,
+// entailCheckInconsistentRefusal, entailConsistency, entailClassify,
+// entailRealize, entailInstances, entailEntails, entailProfile,
+// entailExtensions, entailExtractModule, entailJustify,
+// entailExplainConclusion) are re-exported
+// as-is — the whole `#[wasm_bindgen]` surface is reachable from the package
+// root, so SHACL validation/entailment, the DL reasoning services, and
+// Dataset.canonicalize()/isomorphic() need no deep `./pkg/` import. This
+// wrapper adds the isomorphic glue that the synchronous wasm boundary cannot
+// express in Rust:
 //   * `ready()` — one-time async wasm instantiation (required for the `web` target).
 //   * the polymorphic RDF/JS `DataFactory.literal(value, languageOrDatatype)` —
 //     dispatching a NamedNode datatype argument to `typedLiteral` and a
@@ -22,11 +29,28 @@ import init, {
   CompiledJsonLdContext,
   DataFactory,
   Dataset,
+  entailCheckGoldenVectors,
+  entailCheckInconsistentRefusal,
+  entailClassify,
+  entailConsistency,
+  entailEntails,
+  entailExplainConclusion,
+  entailExtensions,
+  entailExtractModule,
+  entailImplementedRules,
+  entailInstances,
+  entailJustify,
+  entailMaterialize,
+  entailProfile,
+  entailRealize,
+  entailRules,
   liftProjection,
   ProjectionLift,
   ProjectionPackage,
   Quad,
   QueryEngine,
+  ReasoningAnswer,
+  RegimeClosure,
   shaclEntail,
   shaclValidateToSarif,
   Sink,
@@ -335,11 +359,28 @@ export {
   CompiledJsonLdContext,
   DataFactory,
   Dataset,
+  entailCheckGoldenVectors,
+  entailCheckInconsistentRefusal,
+  entailClassify,
+  entailConsistency,
+  entailEntails,
+  entailExplainConclusion,
+  entailExtensions,
+  entailExtractModule,
+  entailImplementedRules,
+  entailInstances,
+  entailJustify,
+  entailMaterialize,
+  entailProfile,
+  entailRealize,
+  entailRules,
   liftProjection,
   ProjectionLift,
   ProjectionPackage,
   Quad,
   QueryEngine,
+  ReasoningAnswer,
+  RegimeClosure,
   shaclEntail,
   shaclValidateToSarif,
   Sink,

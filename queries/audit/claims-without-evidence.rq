@@ -1,4 +1,4 @@
-# Audit (#55): show claims with no evidence — the flagged hallucinations.
+# Audit: show claims with no evidence — the flagged hallucinations.
 # An LLM-extracted claim (observationMethod methodLlmExtraction) with no
 # gmeow:groundedIn span is retained and FLAGGED, never deleted (P10).
 PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>

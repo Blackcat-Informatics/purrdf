@@ -71,6 +71,12 @@ const FORMATS: [&str; 9] = [
 /// EVERY one of the nine formats represents losslessly: IRIs, a blank node, and plain /
 /// typed / language-tagged literals. (A directional literal is deliberately excluded —
 /// see the module docs.)
+/// A normative RIF-in-XML rule document: `?x a ex:Cat` ⟹ `?x a ex:Animal`.
+///
+/// It concludes nothing over `SEED_A`, which is the point: what is under test is that
+/// the `rif` lane RUNS, not what it derives (`reason_cli.rs` pins that).
+const RIF_RULES: &str = "<Document xmlns=\"http://www.w3.org/2007/rif#\"><payload><Group><sentence><Forall><declare><Var>x</Var></declare><formula><Implies><if><Frame><object><Var>x</Var></object><slot><Const type=\"http://www.w3.org/2007/rif#iri\">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type=\"http://www.w3.org/2007/rif#iri\">http://example.org/Cat</Const></slot></Frame></if><then><Frame><object><Var>x</Var></object><slot><Const type=\"http://www.w3.org/2007/rif#iri\">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type=\"http://www.w3.org/2007/rif#iri\">http://example.org/Animal</Const></slot></Frame></then></Implies></formula></Forall></sentence></Group></payload></Document>";
+
 const SEED_A: &str = concat!(
     "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n",
     "<http://example.org/s> <http://example.org/name> \"Alice\" .\n",
@@ -1297,33 +1303,49 @@ fn entailment_then_canonical_composes() {
     );
 }
 
-/// An unsupported entailment regime (`d` / `owl-direct` / `rif`) is the exit-3 boundary,
-/// matching `reason`'s classification.
+/// EVERY entailment regime materializes under `convert`, exactly as under `reason`.
+///
+/// Falsifiable against the old behavior: `owl-direct` and `rif` exited 3 here with an
+/// "unsupported" diagnostic. `--rules` is `rif`'s own input and is a usage error (exit 2)
+/// anywhere else, which the tail asserts — an ignored argument would be the failure this
+/// replaced, in a quieter form.
 #[test]
-fn unsupported_entailment_regime_exits_three() {
+fn every_entailment_regime_materializes() {
     let dir = tempfile::tempdir().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedA.nq", SEED_A);
+    let rules = write_file(dir, "seedA.rif", RIF_RULES);
     let out = path(dir, "out.nq");
-    for regime in ["d", "owl-direct", "rif"] {
-        let o = run(&[
-            "convert",
-            "--from",
-            "nquads",
-            "--to",
-            "nquads",
-            "--entailment",
-            regime,
-            &seed,
-            &out,
-        ]);
-        assert_eq!(
-            o.status.code(),
-            Some(3),
-            "regime {regime} must exit 3 (unsupported); stderr: {}",
+    let convert = |extra: &[&str]| {
+        let mut args = vec!["convert", "--from", "nquads", "--to", "nquads"];
+        args.extend_from_slice(extra);
+        args.push(&seed);
+        args.push(&out);
+        run(&args)
+    };
+    for regime in ["simple", "rdf", "rdfs", "owl-rl", "owl-direct", "d"] {
+        let o = convert(&["--entailment", regime]);
+        assert!(
+            o.status.success(),
+            "regime {regime} must materialize; stderr: {}",
             stderr(&o)
         );
     }
+    let o = convert(&["--entailment", "rif", "--rules", &rules]);
+    assert!(
+        o.status.success(),
+        "rif must materialize under --rules; stderr: {}",
+        stderr(&o)
+    );
+    // A rule document belongs to exactly one regime, and passing it to another is
+    // refused rather than discarded.
+    let o = convert(&["--entailment", "rdfs", "--rules", &rules]);
+    assert_eq!(
+        o.status.code(),
+        Some(2),
+        "--rules for rdfs must be refused; stderr: {}",
+        stderr(&o)
+    );
 }
 
 /// A downstream consumer closing its end of the stdout pipe early (the ubiquitous

@@ -1,0 +1,21 @@
+W3C Test Suite License
+======================
+
+The vendored W3C OWL 2 test files in this tree (`cases/*/source/premise.rdf`
+RDF/XML premise ontologies and the `cases/*/profile.json` published-verdict
+records derived from the suite's own manifest, both marked
+`SPDX-License-Identifier: LicenseRef-W3C-Test-Suite` by this tree's REUSE.toml)
+are part of the W3C OWL 2 test suite and are published by the W3C under the
+
+    W3C Software and Document License (W3C Test Suite License)
+
+The canonical, authoritative license text is published at:
+
+    https://www.w3.org/Consortium/Legal/2015/copyright-software-and-document
+
+The premise ontologies are vendored verbatim and are NOT relicensed. See
+PROVENANCE.md in the parent directory for the exact upstream source
+(https://www.w3.org/2009/11/owl-test/all.rdf), the pinned archive revision, the
+fetch date, and the per-file fidelity statement. The PurRDF-authored harness that
+reads this tree (`crates/sparql-conformance/src/owl2.rs`) is licensed
+MIT OR Apache-2.0 (see its SPDX header).

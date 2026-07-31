@@ -3,21 +3,30 @@
 
 //! The native OWL-Direct (Description-Logic) reasoner core.
 //!
-//! Three layers compose here: [`concept`] is the DL syntax and its structural
-//! interner; [`parser`] reverse-maps an [`RdfDataset`] into a [`Kb`] (TBox, RBox,
-//! ABox, plus anonymous class expressions); [`tableau`] is the `ALCOIQ` completion
-//! procedure that decides consistency. [`Kb`] ties them together and exposes the
-//! internal reasoning seams — [`Kb::is_consistent`], [`Kb::entails_instance`],
-//! [`Kb::entails_subclass`], and [`Kb::instances_of`] — used by the query-answering
-//! layer wired up in a subsequent task. There is no public `materialize` seam yet.
+//! Seven layers compose here: [`concept`] is the DL syntax and its structural
+//! interner; [`data`] is the CONCRETE domain — the data ranges and literal values a
+//! datatype map fixes rather than the ontology; [`parser`] reverse-maps an [`RdfDataset`]
+//! into a [`Kb`] (TBox, RBox, ABox, plus anonymous class expressions); [`clause`] compiles
+//! the concept table into DL-clauses; [`graph`] is the completion graph and the two-domain
+//! semantics of a node; [`hyper`] is the `SHOIQ(D)` HYPERTABLEAU that decides consistency
+//! over those clauses; and [`saturate`] is the consequence-based
+//! calculus that derives the WHOLE named-class subsumption relation in one fixpoint,
+//! so classification is not a loop over the decision procedure. [`Kb`] ties them together and
+//! exposes the internal reasoning seams — [`Kb::is_consistent`], [`Kb::entails_instance`],
+//! [`Kb::entails_subclass`], and [`Kb::instances_of`] — which the query-answering layer
+//! ([`crate::owl_dl::query`]) drives. Those seams are internal: the public one is
+//! [`crate::materialize_dl_reported`], which is where an answer acquires the
+//! [`ReasoningReport`](crate::ReasoningReport) naming the constructs this layer could not
+//! fully handle.
 //!
-//! Every derived answer is deterministic: concept ids are assigned in parse order,
-//! all working sets are `BTreeSet`/`BTreeMap` or insertion-ordered `Vec`s, and the
-//! tableau branches in a fixed order — nothing is ever read out of a `HashMap`.
+//! Every derived answer is deterministic: concept ids are assigned in parse order, the
+//! clause set is derived in that order, all working sets are `BTreeSet`/`BTreeMap` or
+//! insertion-ordered `Vec`s, and the hypertableau branches in a fixed order — nothing is ever
+//! read out of a `HashMap`.
 //!
 //! The reasoning entry points are exercised by the module's own tests and by the
 //! query-answering layer ([`crate::owl_dl::query`]), which wires them into the public
-//! [`crate::materialize_dl`] seam.
+//! [`crate::materialize_dl_reported`] seam.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -25,14 +34,47 @@ use purrdf_core::RdfDataset;
 
 use crate::EntailError;
 use crate::interner::Interner;
-#[cfg(test)]
-use crate::owl_dl::concept::Concept;
 use crate::owl_dl::concept::ConceptTable;
+use crate::owl_dl::concept::{Concept, Decomp, Role};
+use crate::owl_dl::graph::Assumptions;
+use crate::report::Construct;
 
+pub(crate) mod clause;
 pub(crate) mod concept;
+pub(crate) mod constructs;
+pub(crate) mod data;
+pub(crate) mod graph;
+pub(crate) mod hyper;
+/// The differential test of [`hyper`] against a naive model-enumeration oracle AND against
+/// the concept-tree [`tableau`] it replaced.
+#[cfg(test)]
+mod oracle;
 pub(crate) mod parser;
 pub(crate) mod query;
+pub(crate) mod saturate;
+/// The concept-tree tableau [`hyper`] replaced, kept as its differential reference.
+///
+/// Compiled only under `cfg(test)`: it decides no question this crate asks, so shipping it
+/// would put a second decision procedure in every artifact for the benefit of a test.
+#[cfg(test)]
 pub(crate) mod tableau;
+
+/// The concept a named class IRI denotes: `⊤` for `owl:Thing`, `⊥` for `owl:Nothing`, else
+/// the atomic named class.
+///
+/// Shared by every layer that turns a class NAME into something the tableau can reason
+/// over — the query-directed materialization and each reasoner service — because reading
+/// `owl:Thing` as an opaque atomic class instead of `⊤` would make `C ⊑ owl:Thing`
+/// undecidable-looking and `owl:Nothing`'s emptiness a fact nobody stated.
+pub(crate) fn class_concept(v: &parser::Vocab, class: u32) -> Concept {
+    if class == v.thing {
+        Concept::Top
+    } else if class == v.nothing {
+        Concept::Bottom
+    } else {
+        Concept::Named(class)
+    }
+}
 
 /// A Description-Logic knowledge base: the interned TBox/RBox/ABox plus the concept
 /// table needed to reason over it.
@@ -65,8 +107,43 @@ pub(crate) struct Kb {
     pub(crate) abox_roles: Vec<(u32, u32, u32)>,
     /// Equality assertions `a owl:sameAs b` — term id pairs.
     pub(crate) same_as: Vec<(u32, u32)>,
+    /// Inequality assertions `a owl:differentFrom b` (and every pair of an
+    /// `owl:AllDifferent` list) — term id pairs, recorded as `≠` on the completion graph.
+    ///
+    /// Without them a `≤n r.C` restriction can never be violated: the clash rule counts
+    /// PAIRWISE-DISTINCT neighbours, and OWL 2 makes no unique name assumption, so two
+    /// names are distinct only when something says so.
+    pub(crate) different_from: Vec<(u32, u32)>,
     /// All named individual term ids.
+    ///
+    /// A LITERAL is deliberately absent even when it is the object of a data-property
+    /// assertion: it is a term of the completion graph (so `∀p.C` and `≤n p.C` see it) but
+    /// not a realization candidate, because `i rdf:type C` with a literal `i` is a
+    /// generalized-RDF triple the dataset IR cannot hold.
     pub(crate) individuals: BTreeSet<u32>,
+    /// Property term ids declared `owl:TransitiveProperty`.
+    pub(crate) transitive: BTreeSet<u32>,
+    /// Property term ids declared `owl:AsymmetricProperty`.
+    pub(crate) asymmetric: BTreeSet<u32>,
+    /// Disjoint role pairs, held in BOTH orders so a lookup needs no normalization.
+    pub(crate) disjoint_roles: BTreeSet<(u32, u32)>,
+    /// `owl:hasKey` axioms: the keyed class's concept id and its key property term ids.
+    pub(crate) keys: Vec<(u32, Vec<u32>)>,
+    /// The CONCRETE domain: every data range the ontology states, decided once.
+    ///
+    /// A [`Concept::Data`] leaf indexes this table. It is empty for an ontology that states
+    /// no data range and no literal, and the tableau's concrete-domain rules are skipped
+    /// wholesale in that case.
+    pub(crate) data_ranges: data::DataRangeTable,
+    /// Literal term id → its VALUE class, for the literals that reach the knowledge base.
+    ///
+    /// The data domain admits no unique-name freedom: two literals denote one element exactly
+    /// when they denote one value. Sharing a class is therefore identity and differing in
+    /// class is distinctness — neither is a name comparison, and a literal whose value cannot
+    /// be examined is simply absent here rather than guessed either way.
+    pub(crate) literal_class: BTreeMap<u32, u32>,
+    /// The constructs this knowledge base could not fully handle, in `Construct` order.
+    pub(crate) boundaries: BTreeSet<Construct>,
 }
 
 impl Kb {
@@ -90,7 +167,15 @@ impl Kb {
             abox_types: Vec::new(),
             abox_roles: Vec::new(),
             same_as: Vec::new(),
+            different_from: Vec::new(),
             individuals: BTreeSet::new(),
+            transitive: BTreeSet::new(),
+            asymmetric: BTreeSet::new(),
+            disjoint_roles: BTreeSet::new(),
+            keys: Vec::new(),
+            data_ranges: data::DataRangeTable::default(),
+            literal_class: BTreeMap::new(),
+            boundaries: BTreeSet::new(),
         }
     }
 
@@ -98,9 +183,90 @@ impl Kb {
     ///
     /// # Errors
     ///
-    /// [`EntailError::Parse`] on a malformed OWL class-expression graph.
+    /// [`EntailError::Parse`] on a malformed OWL class-expression graph;
+    /// [`EntailError::Build`] if applying an `owl:hasKey` axiom exhausts the tableau's step
+    /// cap; [`EntailError::Unsatisfiable`] if a key axiom is present over a knowledge base
+    /// that is already unsatisfiable (every identification would then be entailed, so the
+    /// key says nothing).
     pub(crate) fn from_dataset(ds: &RdfDataset) -> Result<Self, EntailError> {
-        parser::build(ds)
+        let mut kb = parser::build(ds)?;
+        kb.apply_keys()?;
+        Ok(kb)
+    }
+
+    /// Apply every `owl:hasKey` axiom, recording the identifications it forces.
+    ///
+    /// OWL 2's key semantics is DL-SAFE: `C owl:hasKey (p₁ … pₙ)` identifies two
+    /// individuals only when both are NAMED, both are instances of `C`, and both have the
+    /// same value for every `pᵢ`. The named-individual restriction is what keeps keys
+    /// decidable, and it is the reason this is a pass over [`Kb::individuals`] rather than
+    /// a completion rule the tableau could apply to an anonymous witness.
+    ///
+    /// "Instance of `C`" is decided by [`Kb::entails_instance`] rather than read off the
+    /// asserted type triples, so a class membership the TBox entails — `a : Male ⊓ Parent`
+    /// with `Father ≡ Male ⊓ Parent` — triggers the key exactly as an asserted
+    /// `a rdf:type Father` would. The pass runs only when the ontology actually states a
+    /// key, so an ontology without one pays nothing for it.
+    ///
+    /// The key values compared are the ASSERTED role assertions, which is what a key is
+    /// about: `p₁` values that only an existential restriction entails are anonymous, and
+    /// an anonymous value is outside the DL-safe fragment by the same argument that
+    /// excludes an anonymous individual.
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`Kb::entails_instance`]'s failures.
+    fn apply_keys(&mut self) -> Result<(), EntailError> {
+        if self.keys.is_empty() {
+            return Ok(());
+        }
+        self.finalize();
+        let named: Vec<u32> = self.individuals.iter().copied().collect();
+        let mut forced: Vec<(u32, u32)> = Vec::new();
+        for (class, properties) in &self.keys {
+            // The individuals this key ranges over, in ascending id order.
+            let mut members: Vec<u32> = Vec::new();
+            for &individual in &named {
+                if self.entails_instance(individual, *class)? {
+                    members.push(individual);
+                }
+            }
+            for (index, &left) in members.iter().enumerate() {
+                for &right in &members[index + 1..] {
+                    if properties
+                        .iter()
+                        .all(|&property| self.agrees_on(left, right, property))
+                    {
+                        forced.push((left, right));
+                    }
+                }
+            }
+        }
+        self.same_as.extend(forced);
+        Ok(())
+    }
+
+    /// Whether `left` and `right` share at least one asserted `property` value, and neither
+    /// is without one.
+    ///
+    /// A key property with no value on one of the two individuals does not identify them —
+    /// OWL 2 requires the key values to EXIST and to coincide — so an absent value answers
+    /// `false` rather than vacuously `true`.
+    fn agrees_on(&self, left: u32, right: u32, property: u32) -> bool {
+        let values = |individual: u32| -> BTreeSet<u32> {
+            self.abox_roles
+                .iter()
+                .filter(|&&(subject, predicate, _)| subject == individual && predicate == property)
+                .map(|&(_, _, object)| object)
+                .collect()
+        };
+        let left = values(left);
+        !left.is_empty() && values(right).intersection(&left).next().is_some()
+    }
+
+    /// The constructs this knowledge base could not fully handle.
+    pub(crate) fn boundaries(&self) -> &BTreeSet<Construct> {
+        &self.boundaries
     }
 
     /// Record a general concept inclusion `sub ⊑ sup`, absorbing it into the lazy
@@ -135,15 +301,59 @@ impl Kb {
     /// axioms and assertions are in place.
     pub(crate) fn finalize(&mut self) {
         self.table.finalize();
+        if self.counts_over_an_inverse() {
+            self.boundaries.insert(Construct::CountingOnInverse);
+        }
+    }
+
+    /// Whether the ontology counts successors of a role that is SOMETHING's inverse — the
+    /// NN/NI corner neither decision core is complete for.
+    ///
+    /// Keyed on LOGICAL CONTENT, not on spelling. `≤n r⁻.C` written directly is the obvious
+    /// shape, but `q owl:inverseOf p` with `≤n q.C` denotes exactly the same thing, and an
+    /// earlier revision of this check saw only the first: two logically equivalent knowledge
+    /// bases disclosed the limit differently, which makes the disclosure a fact about syntax
+    /// rather than about the answer. Both spellings are the corner, so both raise it.
+    ///
+    /// `owl:InverseFunctionalProperty` is the everyday case in the first spelling — it IS
+    /// `⊤ ⊑ ≤1 p⁻.⊤` — and the second is how the same restriction reads when a caller names
+    /// the inverse. A counted role with no inverse partner is outside the corner and raises
+    /// nothing.
+    fn counts_over_an_inverse(&self) -> bool {
+        (0..self.table.len() as u32).any(|id| match self.table.decomp(id) {
+            // Counted directly over an inverse role.
+            Decomp::Max(_, Role::Inv(_), _) => true,
+            // Counted over a NAMED role that some `owl:inverseOf` axiom makes an inverse.
+            // The map is symmetric, so one membership test settles either direction.
+            Decomp::Max(_, Role::Named(p), _) => self.inverses.contains_key(p),
+            _ => false,
+        })
     }
 
     /// Whether the knowledge base (TBox + ABox) is consistent.
     ///
     /// # Errors
     ///
-    /// [`EntailError::Build`] if the tableau exceeds its step cap.
+    /// [`EntailError::Build`] if the hypertableau exceeds its step cap.
     pub(crate) fn is_consistent(&self) -> Result<bool, EntailError> {
-        tableau::consistent(self, true, &[], &[])
+        hyper::consistent(self, &Assumptions::of_kb())
+    }
+
+    /// The same question decided by the CONCEPT-TREE tableau — the differential reference.
+    ///
+    /// Kept reachable for exactly the reason
+    /// [`Subsumptions::decide_by_tableau`](crate::reasoner::classify::Subsumptions::decide_by_tableau)
+    /// is: a differential test needs both sides to exist, and a deleted reference
+    /// implementation is a test that can only assert the new code agrees with itself. Every
+    /// knowledge base this module's tests build is decided by both, and a divergence is a bug
+    /// in one of them rather than a difference to be recorded.
+    ///
+    /// # Errors
+    ///
+    /// [`EntailError::Build`] if the tableau exceeds its step cap.
+    #[cfg(test)]
+    pub(crate) fn is_consistent_by_concept_tree(&self) -> Result<bool, EntailError> {
+        tableau::consistent(self, &Assumptions::of_kb())
     }
 
     /// Whether `individual : concept_id` is entailed — i.e. the knowledge base with
@@ -151,34 +361,88 @@ impl Kb {
     ///
     /// # Errors
     ///
-    /// [`EntailError::Inconsistent`] if the base knowledge base is already
-    /// inconsistent; [`EntailError::Build`] on step-cap exhaustion.
+    /// [`EntailError::Unsatisfiable`] if the base knowledge base is already
+    /// unsatisfiable; [`EntailError::Build`] on step-cap exhaustion.
     pub(crate) fn entails_instance(
         &self,
         individual: u32,
         concept_id: u32,
     ) -> Result<bool, EntailError> {
         if !self.is_consistent()? {
-            return Err(EntailError::Inconsistent);
+            return Err(EntailError::Unsatisfiable);
         }
         let neg = self.table.negate(concept_id);
-        let consistent = tableau::consistent(self, true, &[(individual, neg)], &[])?;
+        let consistent = hyper::consistent(
+            self,
+            &Assumptions {
+                types: &[(individual, neg)],
+                ..Assumptions::of_kb()
+            },
+        )?;
         Ok(!consistent)
     }
 
-    /// Whether `sub_id ⊑ sup_id` holds w.r.t. the TBox — i.e. `sub ⊓ ¬sup` is
-    /// unsatisfiable. Yields `⊥ ⊑ X` and reflexive `X ⊑ X`.
+    /// Whether `sub_id ⊑ sup_id` is entailed — i.e. a fresh witness in `sub ⊓ ¬sup` has no
+    /// model. Yields `⊥ ⊑ X` and reflexive `X ⊑ X`.
+    ///
+    /// # The ABox is loaded, and that is not an optimization to undo
+    ///
+    /// Subsumption is decided against the WHOLE knowledge base, assertions included,
+    /// because with nominals an assertion changes the class hierarchy: `Only ≡ {alice}`
+    /// together with `alice : Female` entails `Only ⊑ Female`, and a TBox-only test — which
+    /// this used to be — cannot see it. Reasoning over the TBox alone is cheaper and
+    /// answers a different question, and the query-directed materialization that consumes
+    /// this is claiming to hold every entailed ground atom over the query's vocabulary, so
+    /// the different question is the wrong one.
     ///
     /// # Errors
     ///
-    /// [`EntailError::Inconsistent`] if the base knowledge base is already
-    /// inconsistent; [`EntailError::Build`] on step-cap exhaustion.
+    /// [`EntailError::Unsatisfiable`] if the base knowledge base is already
+    /// unsatisfiable; [`EntailError::Build`] on step-cap exhaustion.
     pub(crate) fn entails_subclass(&self, sub_id: u32, sup_id: u32) -> Result<bool, EntailError> {
         if !self.is_consistent()? {
-            return Err(EntailError::Inconsistent);
+            return Err(EntailError::Unsatisfiable);
         }
         let neg_sup = self.table.negate(sup_id);
-        let consistent = tableau::consistent(self, false, &[], &[sub_id, neg_sup])?;
+        let consistent = hyper::consistent(
+            self,
+            &Assumptions {
+                fresh_types: &[sub_id, neg_sup],
+                ..Assumptions::of_kb()
+            },
+        )?;
+        Ok(!consistent)
+    }
+
+    /// Whether `sub_id ⊑ sup_id` is entailed, decided by the CONCEPT-TREE tableau.
+    ///
+    /// The subsumption sibling of [`Kb::is_consistent_by_concept_tree`], and the reference the
+    /// differential over the reverse-mapped fixture corpus reads: those fixtures reach the
+    /// decision core through the RDF parser rather than through a hand-assembled knowledge
+    /// base, so they are where a clause derived from a REVERSE-MAPPED class expression is
+    /// compared against the calculus that reads the expression's structure directly.
+    ///
+    /// # Errors
+    ///
+    /// [`EntailError::Unsatisfiable`] if the base knowledge base is already unsatisfiable;
+    /// [`EntailError::Build`] on step-cap exhaustion.
+    #[cfg(test)]
+    pub(crate) fn entails_subclass_by_concept_tree(
+        &self,
+        sub_id: u32,
+        sup_id: u32,
+    ) -> Result<bool, EntailError> {
+        if !self.is_consistent_by_concept_tree()? {
+            return Err(EntailError::Unsatisfiable);
+        }
+        let neg_sup = self.table.negate(sup_id);
+        let consistent = tableau::consistent(
+            self,
+            &Assumptions {
+                fresh_types: &[sub_id, neg_sup],
+                ..Assumptions::of_kb()
+            },
+        )?;
         Ok(!consistent)
     }
 
@@ -423,5 +687,185 @@ mod tests {
         assert!(kb.entails_subclass(bottom, parent_id).unwrap());
         // Parent ⋢ Father (not every parent is male).
         assert!(!kb.entails_subclass(parent_id, father_id).unwrap());
+    }
+}
+
+#[cfg(test)]
+mod boundary_tests {
+    use crate::owl_dl::Kb;
+    use crate::report::Construct;
+    use crate::vocab::{
+        OWL_PROPERTYCHAINAXIOM, OWL_TRANSITIVEPROPERTY, RDF_FIRST, RDF_NIL, RDF_REST, RDF_TYPE,
+        RDFS_SUBCLASSOF, XSD_NONNEGATIVEINTEGER,
+    };
+    use crate::{Completeness, QTriple, materialize_dl_reported};
+    use purrdf_core::{BlankScope, RdfDatasetBuilder, TermId, TermValue};
+
+    /// A fixture property that a chain axiom composes into.
+    const EX_CHAINED: &str = "http://example.org/chained";
+    /// The first property of the chain.
+    const EX_Q: &str = "http://example.org/q";
+    /// The second property of the chain.
+    const EX_R: &str = "http://example.org/r";
+    /// A fixture class.
+    const EX_C: &str = "http://example.org/C";
+    /// A fixture individual.
+    const EX_A: &str = "http://example.org/a";
+
+    /// `owl:propertyChainAxiom` is the construct that was not merely dropped but MIS-READ:
+    /// the reverse mapping's catch-all ingested it as a role assertion whose object was the
+    /// axiom's RDF list head, so the knowledge base held `chained(chained, _:cell0)` — a
+    /// statement the ontology does not make, about an individual that does not exist.
+    ///
+    /// This asserts all three halves of the repair: the boundary is RAISED, the list head
+    /// is NOT an individual, and no role assertion was invented.
+    #[test]
+    fn a_property_chain_is_bounded_rather_than_ingested_as_a_role_assertion() {
+        let mut b = RdfDatasetBuilder::new();
+        let chained = b.intern_iri(EX_CHAINED);
+        let chain = b.intern_iri(OWL_PROPERTYCHAINAXIOM);
+        let first = b.intern_iri(RDF_FIRST);
+        let rest = b.intern_iri(RDF_REST);
+        let nil = b.intern_iri(RDF_NIL);
+        let q = b.intern_iri(EX_Q);
+        let r = b.intern_iri(EX_R);
+        let cell1 = b.intern_blank("cell1", BlankScope::DEFAULT);
+        let cell0 = b.intern_blank("cell0", BlankScope::DEFAULT);
+        b.push_quad(cell1, first, r, None);
+        b.push_quad(cell1, rest, nil, None);
+        b.push_quad(cell0, first, q, None);
+        b.push_quad(cell0, rest, cell1, None);
+        b.push_quad(chained, chain, cell0, None);
+        let ds = b.freeze().expect("freeze");
+
+        let kb = Kb::from_dataset(&ds).expect("the chain axiom parses");
+        assert!(
+            kb.boundaries().contains(&Construct::PropertyChain),
+            "a chain axiom must raise its boundary: {:?}",
+            kb.boundaries()
+        );
+        assert!(
+            kb.abox_roles.is_empty(),
+            "a chain axiom must not become a role assertion: {:?}",
+            kb.abox_roles
+        );
+        assert!(
+            kb.individuals.is_empty(),
+            "the chain's RDF list head must not become an individual: {:?}",
+            kb.individuals
+        );
+
+        // …and the boundary reaches the caller, with the completeness narrowed to match.
+        let (_, report) = materialize_dl_reported(&ds, &[] as &[QTriple]).expect("consistent");
+        assert_eq!(
+            report.completeness(),
+            Completeness::ExactWithinBoundaries,
+            "a run that met a boundary is not exact"
+        );
+        let constructs: Vec<Construct> = report
+            .boundaries()
+            .iter()
+            .map(|boundary| boundary.construct())
+            .collect();
+        assert_eq!(constructs, vec![Construct::PropertyChain]);
+        assert!(
+            report.boundaries()[0].reason().contains("REGULARITY"),
+            "the reason must name the check that is missing"
+        );
+    }
+
+    /// OWL 2 DL forbids a number restriction over a NON-SIMPLE role, and the condition is
+    /// only decidable once every transitivity axiom has been read — so it is checked after
+    /// the scan, not while the restriction is being decoded.
+    #[test]
+    fn a_number_restriction_over_a_transitive_role_is_bounded() {
+        let build = |transitive: bool| {
+            let mut b = RdfDatasetBuilder::new();
+            let ty = b.intern_iri(RDF_TYPE);
+            let sub_class = b.intern_iri(RDFS_SUBCLASSOF);
+            let restriction = b.intern_iri(crate::vocab::OWL_RESTRICTION);
+            let on_property = b.intern_iri(crate::vocab::OWL_ONPROPERTY);
+            let max_card = b.intern_iri(crate::vocab::OWL_MAXCARDINALITY);
+            let c = b.intern_iri(EX_C);
+            let r = b.intern_iri(EX_R);
+            let node = b.intern_blank("restriction", BlankScope::DEFAULT);
+            let one: TermId = crate::interner::intern_into(
+                &mut b,
+                &TermValue::typed_literal("1", XSD_NONNEGATIVEINTEGER),
+            );
+            b.push_quad(c, sub_class, node, None);
+            b.push_quad(node, ty, restriction, None);
+            b.push_quad(node, on_property, r, None);
+            b.push_quad(node, max_card, one, None);
+            if transitive {
+                let trans = b.intern_iri(OWL_TRANSITIVEPROPERTY);
+                b.push_quad(r, ty, trans, None);
+            }
+            b.freeze().expect("freeze")
+        };
+
+        let simple = Kb::from_dataset(&build(false)).expect("parse");
+        assert!(
+            simple.boundaries().is_empty(),
+            "a SIMPLE role counted by a number restriction is ordinary OWL 2 DL: {:?}",
+            simple.boundaries()
+        );
+        let non_simple = Kb::from_dataset(&build(true)).expect("parse");
+        assert!(
+            non_simple.boundaries().contains(&Construct::NonSimpleRole),
+            "counting a transitive role is outside OWL 2 DL: {:?}",
+            non_simple.boundaries()
+        );
+    }
+
+    /// The role characteristics REACH the knowledge base rather than being dropped, and
+    /// each lands where its DL reading says it should.
+    #[test]
+    fn the_role_characteristics_reach_the_knowledge_base() {
+        let mut b = RdfDatasetBuilder::new();
+        let ty = b.intern_iri(RDF_TYPE);
+        let r = b.intern_iri(EX_R);
+        let q = b.intern_iri(EX_Q);
+        let transitive = b.intern_iri(OWL_TRANSITIVEPROPERTY);
+        let symmetric = b.intern_iri(crate::vocab::OWL_SYMMETRICPROPERTY);
+        let asymmetric = b.intern_iri(crate::vocab::OWL_ASYMMETRICPROPERTY);
+        b.push_quad(r, ty, transitive, None);
+        b.push_quad(r, ty, symmetric, None);
+        b.push_quad(q, ty, asymmetric, None);
+        let ds = b.freeze().expect("freeze");
+        let kb = Kb::from_dataset(&ds).expect("parse");
+        assert!(kb.boundaries().is_empty(), "{:?}", kb.boundaries());
+        let r_id = kb.iri_id(EX_R).expect("the property was interned");
+        let q_id = kb.iri_id(EX_Q).expect("the property was interned");
+        assert!(kb.transitive.contains(&r_id), "owl:TransitiveProperty");
+        assert!(
+            kb.inverses
+                .get(&r_id)
+                .is_some_and(|set| set.contains(&r_id)),
+            "owl:SymmetricProperty is r ≡ r⁻"
+        );
+        assert!(kb.asymmetric.contains(&q_id), "owl:AsymmetricProperty");
+    }
+
+    /// A DATA-property assertion is ingested (its literal object is an opaque abstract
+    /// term), and the literal is NOT a realization candidate — a type triple with a literal
+    /// subject is a generalized-RDF triple the dataset IR cannot hold.
+    #[test]
+    fn a_data_property_assertion_is_ingested_without_naming_its_literal() {
+        let mut b = RdfDatasetBuilder::new();
+        let a = b.intern_iri(EX_A);
+        let r = b.intern_iri(EX_R);
+        let value = crate::interner::intern_into(&mut b, &TermValue::simple_literal("cat"));
+        b.push_quad(a, r, value, None);
+        let ds = b.freeze().expect("freeze");
+        let kb = Kb::from_dataset(&ds).expect("parse");
+        assert_eq!(kb.abox_roles.len(), 1, "the assertion is ingested");
+        assert_eq!(
+            kb.individuals.len(),
+            1,
+            "only the subject is a named individual: {:?}",
+            kb.individuals
+        );
+        assert!(kb.boundaries().is_empty(), "{:?}", kb.boundaries());
     }
 }

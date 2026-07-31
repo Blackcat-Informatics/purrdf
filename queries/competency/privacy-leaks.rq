@@ -1,4 +1,4 @@
-# privacy-leaks.rq (#225)
+# privacy-leaks.rq
 # SELECT facts that are configured to leak: a neverPublic or internalOnly fact
 # that is nevertheless eligible for a public consumer.
 # Public consumers are explicitly enumerated below (allowlist): consumerPublicSite,

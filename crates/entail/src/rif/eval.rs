@@ -4,8 +4,7 @@
 //! The RIF-Core forward-chaining ("bottom-up") rule evaluator.
 //!
 //! A definite Horn rule set is materialized to its least fixpoint by a
-//! deterministic semi-naive chase over interned `u32` triple ids, mirroring the
-//! frontier/delta discipline of `crate::rdfs`. The seed fact set is the source
+//! deterministic semi-naive chase over interned `u32` triple ids. The seed fact set is the source
 //! dataset's default-graph triples plus the rule set's ground facts; each round
 //! fires every rule where at least one body atom can bind a *frontier* (newly
 //! derived) fact, joining the remaining atoms against the whole accumulated set.
@@ -13,14 +12,29 @@
 //! the frontier empties. Blank nodes are preserved by identity (interned by their
 //! `(label, scope)` value), never skolemized. Output is `original + derived`,
 //! frozen into a fresh dataset — fully deterministic.
+//!
+//! # This lane reads the DEFAULT GRAPH, and says so
+//!
+//! A quad outside the default graph is copied into the answer verbatim and is not a
+//! PREMISE: it seeds no rule and licenses no conclusion. That is a defined reading rather
+//! than an oversight — RDF has no standard entailment relation for a dataset — and it is
+//! narrower than the reading the chase engine gives its lanes, which close each
+//! named graph against the union of itself and the default graph. The difference is
+//! exactly the kind of thing that must not live in prose alone, so
+//! [`materialize_rif`] raises [`Construct::NamedGraph`] on the run's
+//! [`ReasoningReport`] whenever the input holds such a quad: the caller is told, in data,
+//! that part of their input was not reasoned over.
 
 use std::sync::Arc;
 
-use purrdf_core::{FastMap, FastSet, RdfDataset, RdfDatasetBuilder};
+use purrdf_core::{FastMap, FastSet, RdfDataset, RdfDatasetBuilder, TermValue};
+use purrdf_datalog::seminaive::BudgetReport;
 
-use crate::EntailError;
+use crate::engine::surface_of;
 use crate::interner::{Interner, intern_into};
+use crate::report::{Boundary, Construct, ReasoningReport};
 use crate::rif::model::{Atom, RifTerm, RuleSet};
+use crate::{EntailError, Regime};
 
 /// One triple-pattern slot compiled against a rule's local variable table: a
 /// bound term id, or a variable's dense local index.
@@ -124,39 +138,117 @@ struct ChaseStats {
     candidate_facts_examined: usize,
 }
 
+/// The evaluator's term table, plus the one occupancy figure the report must state.
+///
+/// A thin wrapper over [`Interner`] rather than a second interner: every id still comes
+/// from the same table in the same first-seen order, so nothing about the evaluation
+/// moves. What it adds is the byte tally
+/// [`BudgetReport::term_arena_bytes`] is defined as — interned term SURFACE bytes, under
+/// `purrdf-datalog`'s own definition of the coordinate, measured with the same
+/// [`surface_of`] rendering the chase lanes' store uses. Reporting a zero there would be a
+/// misreport rather than a modest one: this lane really does hold interned terms.
+///
+/// The surface is rendered only when the id is NEW (ids are dense and assigned in
+/// first-seen order, so `id >= interned` is exactly the first-sighting test), so a repeated
+/// term costs a hash lookup and nothing else.
+#[derive(Default)]
+struct Terms {
+    /// The shared `TermValue → u32` table.
+    interner: Interner,
+    /// How many ids have been handed out.
+    interned: u32,
+    /// Interned term surface bytes.
+    surface_bytes: usize,
+}
+
+impl Terms {
+    /// Intern `value`, returning its dense id and tallying its surface on first sight.
+    fn intern(&mut self, value: TermValue) -> u32 {
+        let id = self.interner.intern(value);
+        if id >= self.interned {
+            self.interned = id + 1;
+            self.surface_bytes += surface_of(self.interner.value(id)).len();
+        }
+        id
+    }
+
+    /// The `TermValue` behind an id.
+    fn value(&self, id: u32) -> &TermValue {
+        self.interner.value(id)
+    }
+}
+
 /// Materialize the RIF rule set over `ds`, returning `original quads + derived
-/// triples`.
+/// triples` AND the [`ReasoningReport`] for the run.
 ///
 /// The seed facts are `ds`'s default-graph triples plus `rules.facts`; the Horn
 /// rules are forward-chained to a fixpoint. The result holds every original quad
 /// (all graphs) plus every seeded or derived fact not already an original
 /// default-graph triple, frozen into a new dataset.
 ///
+/// # The report is not optional here either
+///
+/// There is no report-free variant of this function, for the reason
+/// [`materialize`](crate::materialize) has none: a quad outside the default graph is
+/// copied to the answer and reasoned over by NOTHING, and a signature with nowhere to say
+/// so turns that into silence. [`Construct::NamedGraph`] is raised whenever the input holds
+/// such a quad, so "the closure of this dataset" and "the closure of this dataset's default
+/// graph, with the rest carried through untouched" stop being the same return value.
+///
+/// A triple term is NOT a boundary of this lane. The chase lanes raise
+/// [`Construct::TripleTerm`] because `rdfs14`/`rdfs14a` are rules they state and cannot
+/// fire; this evaluator states no rule of its own, and a caller's rule that names a triple
+/// term as a constant matches it exactly like any other term.
+///
+/// # What the report can and cannot say about the RULES
+///
+/// [`ReasoningReport::rules_fired`] is empty for every RIF run, and
+/// [`ReasoningReport::contract_hash`] is the hash of `calculus_program(Regime::Rif)` — the
+/// EMPTY declared program — rather than a digest of `rules`. Both follow from the same
+/// fact: the rule set is the CALLER's, and this crate mints neither a [`RuleId`](crate::RuleId)
+/// for a rule it did not declare nor an identity for a document it did not author. So the
+/// contract hash of a RIF run identifies the LANE, not the rule set, and two runs under
+/// different rule sets carry the same hash; a consumer who needs to refuse a closure minted
+/// under different rules must digest the rule document they supplied.
+/// [`ReasoningReport::budget`] is measured rather than stubbed: candidate facts enumerated
+/// by the joins, facts held at the fixpoint, and interned term surface bytes.
+///
 /// # Errors
 ///
-/// [`EntailError::Build`] if the derived dataset cannot be frozen.
-pub fn materialize_rif(ds: &RdfDataset, rules: &RuleSet) -> Result<Arc<RdfDataset>, EntailError> {
-    let mut interner = Interner::default();
+/// [`EntailError::Parse`] if a rule is not range-restricted, and [`EntailError::Build`] if
+/// the derived dataset cannot be frozen. Those are the only two: this lane's rule set is
+/// definite Horn, so nothing in it can derive an inconsistency, and a report that
+/// contradicts its own evidence is unrepresentable rather than refused — completeness is
+/// computed from the boundary list by [`ReasoningReport::completeness`] and is not a field
+/// that could disagree with it.
+pub fn materialize_rif(
+    ds: &RdfDataset,
+    rules: &RuleSet,
+) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
+    let mut terms = Terms::default();
 
-    // Seed: the source dataset's default-graph triples, in dataset order.
+    // Seed: the source dataset's default-graph triples, in dataset order. A quad outside
+    // it is not a premise, and the boundary below is where the run says so.
+    let mut named_graph = false;
     let mut facts: FastSet<[u32; 3]> = FastSet::default();
     let mut seed: Vec<[u32; 3]> = Vec::new();
     for q in ds.quads() {
         if q.g.is_some() {
+            named_graph = true;
             continue; // entailment operates over the default graph
         }
-        let s = interner.intern(ds.term_value(q.s));
-        let p = interner.intern(ds.term_value(q.p));
-        let o = interner.intern(ds.term_value(q.o));
+        let s = terms.intern(ds.term_value(q.s));
+        let p = terms.intern(ds.term_value(q.p));
+        let o = terms.intern(ds.term_value(q.o));
         push_fact(&mut facts, &mut seed, [s, p, o]);
     }
     let original: FastSet<[u32; 3]> = facts.clone();
 
     // Seed: the rule set's ground facts (imported RDF + ground frames).
     for (s, p, o) in &rules.facts {
-        let s = interner.intern(s.clone());
-        let p = interner.intern(p.clone());
-        let o = interner.intern(o.clone());
+        let s = terms.intern(s.clone());
+        let p = terms.intern(p.clone());
+        let o = terms.intern(o.clone());
         push_fact(&mut facts, &mut seed, [s, p, o]);
     }
 
@@ -164,10 +256,10 @@ pub fn materialize_rif(ds: &RdfDataset, rules: &RuleSet) -> Result<Arc<RdfDatase
     let compiled: Vec<CompiledRule> = rules
         .rules
         .iter()
-        .map(|r| compile_rule(r, &mut interner))
+        .map(|r| compile_rule(r, &mut terms))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let _stats = chase(&mut facts, seed, &compiled);
+    let stats = chase(&mut facts, seed, &compiled);
 
     // Emit: original quads (all graphs) + every seeded/derived fact that is not an
     // original default-graph triple, in a deterministic order.
@@ -182,12 +274,49 @@ pub fn materialize_rif(ds: &RdfDataset, rules: &RuleSet) -> Result<Arc<RdfDatase
         if original.contains(&t) {
             continue;
         }
-        let s = intern_into(&mut b, interner.value(t[0]));
-        let p = intern_into(&mut b, interner.value(t[1]));
-        let o = intern_into(&mut b, interner.value(t[2]));
+        let s = intern_into(&mut b, terms.value(t[0]));
+        let p = intern_into(&mut b, terms.value(t[1]));
+        let o = intern_into(&mut b, terms.value(t[2]));
         b.push_quad(s, p, o, None);
     }
-    b.freeze().map_err(|e| EntailError::Build(e.to_string()))
+    let closure = b.freeze().map_err(|e| EntailError::Build(e.to_string()))?;
+    Ok((closure, rif_report(named_graph, &facts, &terms, &stats)))
+}
+
+/// Assemble the report for a RIF run that held `facts` and consumed `stats`.
+fn rif_report(
+    named_graph: bool,
+    facts: &FastSet<[u32; 3]>,
+    terms: &Terms,
+    stats: &ChaseStats,
+) -> ReasoningReport {
+    let boundaries: Vec<Boundary> = if named_graph {
+        vec![Boundary::of(Construct::NamedGraph)]
+    } else {
+        Vec::new()
+    };
+    ReasoningReport::new(
+        Regime::Rif,
+        // The rules are the caller's and carry no `RuleId` this crate declares.
+        Vec::new(),
+        boundaries,
+        BudgetReport::new(
+            u64::try_from(stats.candidate_facts_examined).expect("candidate count fits u64"),
+            facts.len(),
+            terms.surface_bytes,
+        ),
+        // A definite Horn rule set has no `false` head: nothing in this lane can derive an
+        // inconsistency, so `None` here is a statement about the fragment rather than an
+        // unfilled field.
+        None,
+        // The evaluator mints no term — a head variable not bound by the body is refused at
+        // compile time — so there is no surrogate to withhold.
+        0,
+        // …and a rule set that invents no term needs no termination proof: this lane's
+        // fixpoint is bounded by the active domain, so there is no acyclicity analysis to
+        // report the verdict of.
+        None,
+    )
 }
 
 /// Insert `t` into the accumulated set and, if new, the ordered frontier seed.
@@ -207,7 +336,7 @@ fn push_fact(facts: &mut FastSet<[u32; 3]>, order: &mut Vec<[u32; 3]>, t: [u32; 
 /// rule is malformed rather than silently deriving an unbound term.
 fn compile_rule(
     rule: &crate::rif::model::Rule,
-    interner: &mut Interner,
+    terms: &mut Terms,
 ) -> Result<CompiledRule, EntailError> {
     // Range-restriction (safety) check up front: every head variable must be
     // bound by some body atom. Walk the model terms directly so that valid-rule
@@ -226,12 +355,12 @@ fn compile_rule(
     let body: Vec<PatternAtom> = rule
         .body
         .iter()
-        .map(|a| compile_atom(a, interner, &mut vars))
+        .map(|a| compile_atom(a, terms, &mut vars))
         .collect();
     let head: Vec<PatternAtom> = rule
         .head
         .iter()
-        .map(|a| compile_atom(a, interner, &mut vars))
+        .map(|a| compile_atom(a, terms, &mut vars))
         .collect();
     Ok(CompiledRule {
         body,
@@ -251,19 +380,19 @@ fn atom_var_names(atom: &Atom) -> impl Iterator<Item = &str> {
 }
 
 /// Compile one atom, interning constants and mapping variables to local indices.
-fn compile_atom(atom: &Atom, interner: &mut Interner, vars: &mut Vec<String>) -> PatternAtom {
+fn compile_atom(atom: &Atom, terms: &mut Terms, vars: &mut Vec<String>) -> PatternAtom {
     PatternAtom {
-        s: compile_slot(&atom.s, interner, vars),
-        p: compile_slot(&atom.p, interner, vars),
-        o: compile_slot(&atom.o, interner, vars),
+        s: compile_slot(&atom.s, terms, vars),
+        p: compile_slot(&atom.p, terms, vars),
+        o: compile_slot(&atom.o, terms, vars),
     }
 }
 
 /// Compile one slot: a ground term interns to [`Slot::Const`]; a variable maps to
 /// its local index (allocated on first sight) as [`Slot::Var`].
-fn compile_slot(term: &RifTerm, interner: &mut Interner, vars: &mut Vec<String>) -> Slot {
+fn compile_slot(term: &RifTerm, terms: &mut Terms, vars: &mut Vec<String>) -> Slot {
     match term {
-        RifTerm::Const(v) => Slot::Const(interner.intern(v.clone())),
+        RifTerm::Const(v) => Slot::Const(terms.intern(v.clone())),
         RifTerm::Var(name) => {
             let idx = vars.iter().position(|v| v == name).unwrap_or_else(|| {
                 vars.push(name.clone());
@@ -554,11 +683,17 @@ mod tests {
             ],
             rules: vec![rule],
         };
-        let out = materialize_rif(&empty_ds(), &rules).expect("materialize");
+        let (out, report) = materialize_rif(&empty_ds(), &rules).expect("materialize");
         assert!(
             has(&out, &iri("Emeka"), &iri("uncle"), &iri("Chijoke")),
             "derived Emeka uncle Chijoke"
         );
+        // The report is a measurement of THIS run, not a template: the joins enumerated
+        // candidates, the store held facts, and the terms occupy bytes.
+        assert_eq!(report.regime(), Regime::Rif);
+        assert!(report.budget().join_steps() > 0);
+        assert!(report.budget().stored_facts() >= 3);
+        assert!(report.budget().term_arena_bytes() > 0);
     }
 
     #[test]
@@ -583,7 +718,7 @@ mod tests {
                 },
             ],
         };
-        let out = materialize_rif(&empty_ds(), &rules).expect("materialize");
+        let (out, report) = materialize_rif(&empty_ds(), &rules).expect("materialize");
         assert!(
             has(&out, &iri("customer017"), &iri("discount"), &ten),
             "gold ⇒ discount 10"
@@ -592,6 +727,83 @@ mod tests {
             !has(&out, &iri("customer017"), &iri("discount"), &five),
             "silver rule must not fire"
         );
+        // A default-graph-only input met no construct this lane could not handle.
+        assert!(report.boundaries().is_empty());
+        assert_eq!(report.completeness(), crate::Completeness::Exact);
+    }
+
+    /// A QUAD OUTSIDE THE DEFAULT GRAPH IS NO LONGER DISCARDED IN SILENCE.
+    ///
+    /// It is still not a premise — this lane reads the default graph — and that is now a
+    /// fact the caller can read off the run rather than one buried in a `continue`. The
+    /// closure still carries the quad verbatim, so the boundary is about what was REASONED
+    /// OVER, not about what was kept.
+    #[test]
+    fn a_named_graph_quad_raises_the_boundary_rather_than_vanishing() {
+        let mut b = RdfDatasetBuilder::new();
+        let emeka = b.intern_iri(&format!("{EX}Emeka"));
+        let parent = b.intern_iri(&format!("{EX}parent"));
+        let oke = b.intern_iri(&format!("{EX}Okechukwu"));
+        let brother = b.intern_iri(&format!("{EX}brother"));
+        let chijoke = b.intern_iri(&format!("{EX}Chijoke"));
+        let g = b.intern_iri(&format!("{EX}g"));
+        b.push_quad(emeka, parent, oke, None);
+        b.push_quad(oke, brother, chijoke, Some(g));
+        let ds = b.freeze().expect("freeze");
+
+        let rules = RuleSet {
+            facts: Vec::new(),
+            rules: vec![Rule {
+                body: vec![
+                    atom(var("x"), con(iri("parent")), var("y")),
+                    atom(var("y"), con(iri("brother")), var("z")),
+                ],
+                head: vec![atom(var("x"), con(iri("uncle")), var("z"))],
+            }],
+        };
+        let (out, report) = materialize_rif(&ds, &rules).expect("materialize");
+
+        // The premise in the named graph did not license the conclusion…
+        assert!(
+            !has(&out, &iri("Emeka"), &iri("uncle"), &iri("Chijoke")),
+            "a named-graph quad is not a premise of this lane"
+        );
+        // …and the run SAYS so, naming the construct and carrying its reason.
+        let constructs: Vec<Construct> = report
+            .boundaries()
+            .iter()
+            .map(|boundary| boundary.construct())
+            .collect();
+        assert_eq!(constructs, vec![Construct::NamedGraph]);
+        assert!(!report.boundaries()[0].reason().is_empty());
+        // A boundary beside a rule table that has nothing missing is
+        // `ExactWithinBoundaries`, never plain `Exact`: the completeness is DERIVED from
+        // this very boundary list, so the two cannot come apart.
+        assert_eq!(
+            report.completeness(),
+            crate::Completeness::ExactWithinBoundaries
+        );
+        // The quad itself is still in the answer: the boundary is about premises.
+        assert!(
+            out.quads()
+                .any(|q| q.g.is_some() && out.term_value(q.p) == iri("brother")),
+            "the named-graph quad is carried through"
+        );
+        // Determinism: the same input renders the same report, field for field.
+        let (_, again) = materialize_rif(&ds, &rules).expect("materialize");
+        assert_eq!(format!("{report:?}"), format!("{again:?}"));
+    }
+
+    /// A default-graph-only run raises NOTHING — the boundary is evidence about an input,
+    /// not a standing disclaimer.
+    #[test]
+    fn a_default_graph_run_raises_no_boundary() {
+        let rules = RuleSet {
+            facts: vec![(iri("Emeka"), iri("parent"), iri("Okechukwu"))],
+            rules: Vec::new(),
+        };
+        let (_, report) = materialize_rif(&empty_ds(), &rules).expect("materialize");
+        assert!(report.boundaries().is_empty());
     }
 
     #[test]
@@ -608,6 +820,8 @@ mod tests {
             rules: vec![rule],
         };
         let err = materialize_rif(&empty_ds(), &rules).expect_err("unbound head variable");
+        // The refusal is typed; nothing is materialized and nothing is reported, because
+        // there was no run.
         match err {
             EntailError::Parse(msg) => {
                 assert!(

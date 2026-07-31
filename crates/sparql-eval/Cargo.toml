@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-sparql-eval"
-description = "Native, RDF-1.2-first multiset SPARQL evaluator over the DatasetView read trait in interned TermId space — the runtime that consumes purrdf-sparql-algebra (S5) and replaces the oxigraph-family spareval on the query path"
+description = "Native, RDF-1.2-first multiset SPARQL evaluator over the DatasetView read trait in interned TermId space — the runtime that consumes purrdf-sparql-algebra and replaces the oxigraph-family spareval on the query path"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true

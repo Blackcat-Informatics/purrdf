@@ -4,6 +4,15 @@
 //! SHACL rule entailment → canonical N-Triples in one call — the shared boundary
 //! the language bindings (C-ABI, WASM, and the Python caller) all route through.
 //!
+//! That claim is checkable, not decorative: `purrdf-rdf-capi`'s
+//! `purrdf_shacl_entail_to_ntriples`, `purrdf-wasm`'s `shacl_entail`, and
+//! `purrdf-python`'s `shacl.entail` each call
+//! [`entail_to_ntriples_string`] and add only their own platform wrapping (a
+//! caller-owned buffer, a `JsError`, a GIL release plus a `ValueError`). The
+//! Python binding used to inline the two-line body instead; the golden in
+//! [`PYTHON_BINDING_GOLDEN`] pins the bytes that inline copy produced, so the
+//! re-point is provably byte-identical rather than merely believed to be.
+//!
 //! The entailment twin of [`crate::shacl::validate_to_sarif_string`]: where the
 //! validation boundary runs the SHACL engine and renders a
 //! [`ValidationReport`](purrdf_shapes::report::ValidationReport) to SARIF, this
@@ -58,6 +67,42 @@ pub fn entail_to_ntriples_string(shapes_ttl: &str, data_nt: &str) -> Result<Stri
     purrdf_rdf::canonical_flat_nquads(dataset.as_ref())
 }
 
+/// The shapes graph of the Python-binding byte-identity golden.
+///
+/// A `sh:TripleRule` that types every `ex:Person` as `ex:adult`.
+pub const PYTHON_BINDING_GOLDEN_SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+    @prefix ex: <http://example.org/> .\n\
+    ex:PersonRule a sh:NodeShape ;\n\
+      sh:targetClass ex:Person ;\n\
+      sh:rule [ a sh:TripleRule ;\n\
+        sh:subject sh:this ; sh:predicate ex:adult ; sh:object ex:yes ] .\n";
+
+/// The data graph of the Python-binding byte-identity golden.
+///
+/// Two targets (so the rule fires more than once) and a blank node (so the
+/// RDFC-1.0 canonical relabelling is exercised, which is the part of the output
+/// most likely to move if the two spellings ever stopped agreeing).
+pub const PYTHON_BINDING_GOLDEN_DATA: &str = "<http://example.org/alice> \
+    <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n\
+    <http://example.org/bob> \
+    <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n\
+    <http://example.org/bob> <http://example.org/knows> _:b0 .\n";
+
+/// The exact bytes `purrdf-python`'s `shacl.entail` produced for
+/// [`PYTHON_BINDING_GOLDEN_SHAPES`] / [`PYTHON_BINDING_GOLDEN_DATA`] while it
+/// still inlined `engine::entail_graphs` + `canonical_flat_nquads` itself.
+///
+/// Captured by running that inline sequence verbatim *before* the binding was
+/// re-pointed at [`entail_to_ntriples_string`], so the equality test below is a
+/// before/after comparison rather than a restatement of the current code.
+pub const PYTHON_BINDING_GOLDEN: &str = "\
+<http://example.org/alice> <http://example.org/adult> <http://example.org/yes> .
+<http://example.org/alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .
+<http://example.org/bob> <http://example.org/adult> <http://example.org/yes> .
+<http://example.org/bob> <http://example.org/knows> _:c14n0 .
+<http://example.org/bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .
+";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,5 +142,27 @@ mod tests {
     #[test]
     fn malformed_shapes_is_an_error() {
         assert!(entail_to_ntriples_string("@@@ not turtle", DATA).is_err());
+    }
+
+    /// Re-pointing `purrdf-python`'s `shacl.entail` at this function changed no
+    /// bytes.
+    ///
+    /// [`PYTHON_BINDING_GOLDEN`] was captured by running the binding's OLD inline
+    /// body — `purrdf_shapes::engine::entail_graphs(data, shapes)` followed by
+    /// `purrdf_rdf::canonical_flat_nquads(dataset.as_ref())`, in that order —
+    /// against these two fixtures before the edit. Asserting the shared function
+    /// reproduces it is therefore a before/after equality, and it is the fixture
+    /// a later refactor of either spelling has to keep satisfying.
+    #[test]
+    fn the_python_binding_repoint_is_byte_identical() {
+        let produced =
+            entail_to_ntriples_string(PYTHON_BINDING_GOLDEN_SHAPES, PYTHON_BINDING_GOLDEN_DATA)
+                .expect("entailment produced");
+        assert_eq!(produced, PYTHON_BINDING_GOLDEN);
+        // The golden is not vacuous: the rule fired for both targets, and the
+        // blank node really was canonically relabelled.
+        assert_eq!(produced.matches("<http://example.org/adult>").count(), 2);
+        assert!(produced.contains("_:c14n0"));
+        assert!(!produced.contains("_:b0"));
     }
 }

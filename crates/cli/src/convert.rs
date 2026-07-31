@@ -18,8 +18,9 @@
 //! parsed, a pack source is rebuilt via [`source::load_dataset`]) instead of taking
 //! the zero-copy view path:
 //!
-//! * `--entailment REGIME` materializes the regime's closure in memory (rejecting
-//!   the non-materializable regimes on the same exit-3 path as `reason`).
+//! * `--entailment REGIME` materializes the regime's closure in memory (through the
+//!   same `EntailmentPlan` `reason` resolves, so `--rules` means the same thing
+//!   here), and its reasoning report is surfaced under `--report`.
 //! * `--canonical` emits the RDFC-1.0 canonical N-Quads document
 //!   ([`canonical_flat_nquads`]) rather than the `--to` format. Canonical output is
 //!   always N-Quads, so `--canonical` OVERRIDES (and lets you omit) `--to`.
@@ -27,15 +28,15 @@
 use std::sync::Arc;
 
 use purrdf_core::{DatasetView, LossLedger, RdfDataset, verify_pack};
-use purrdf_entail::materialize;
 use purrdf_rdf::JsonLdSerializeOptions;
 use purrdf_rdf::canonical_flat_nquads;
 
-use crate::cli::{CliRdfFormat, CliRegime, LedgerTarget};
+use crate::cli::{CliRdfFormat, CliRegime, LedgerTarget, ReportTarget};
 use crate::error::CliError;
 use crate::format::{self, CliFormat};
 use crate::ledger;
 use crate::reason;
+use crate::report;
 use crate::sink;
 use crate::source::{self, ViewOp};
 
@@ -76,6 +77,8 @@ pub(crate) struct ConvertOptions<'a> {
     pub(crate) base: Option<&'a str>,
     /// The `--entailment` regime to materialize before serializing.
     pub(crate) entailment: Option<CliRegime>,
+    /// `--rules`: the RIF-in-XML rule document `--entailment rif` runs.
+    pub(crate) rules: Option<&'a std::path::Path>,
     /// Whether `--canonical` was set (emit RDFC-1.0 canonical N-Quads).
     pub(crate) canonical: bool,
     /// Explicit JSON-LD/YAML-LD serialization configuration.
@@ -88,6 +91,7 @@ pub(crate) fn run(
     input: &str,
     output: &str,
     ledger_target: &LedgerTarget,
+    report_target: &ReportTarget,
 ) -> Result<(), CliError> {
     let source_format = format::resolve(options.from, input)?;
     if options.canonical && options.jsonld_options.is_some() {
@@ -95,11 +99,24 @@ pub(crate) fn run(
             "--jsonld-options cannot be combined with --canonical".to_owned(),
         ));
     }
+    // `--report` names the certificate of a reasoning run; without `--entailment` there is
+    // no run to certify, and answering that with silence is the shape this pipeline
+    // refuses everywhere else.
+    if report_target.is_requested() && options.entailment.is_none() {
+        return Err(report::requires_entailment("convert"));
+    }
 
     // The transform lane: either `--entailment` or `--canonical` needs a concrete
     // owned dataset, so reconstruct one and apply the transforms in order.
     if options.canonical || options.entailment.is_some() {
-        return run_with_transforms(source_format, options, input, output, ledger_target);
+        return run_with_transforms(
+            source_format,
+            options,
+            input,
+            output,
+            ledger_target,
+            report_target,
+        );
     }
 
     // Pack → pack: a verified byte passthrough (no decode/re-encode churn). A DISK
@@ -144,6 +161,7 @@ fn run_with_transforms(
     input: &str,
     output: &str,
     ledger_target: &LedgerTarget,
+    report_target: &ReportTarget,
 ) -> Result<(), CliError> {
     let target_format = if options.canonical {
         None
@@ -154,12 +172,14 @@ fn run_with_transforms(
     };
     let dataset = source::load_dataset(input, source_format, options.base)?;
 
-    // Entail first: materialize the regime's closure (rejecting the
-    // non-materializable regimes on the same exit-3 path `reason` uses).
+    // Entail first: materialize the regime's closure, through the same
+    // `EntailmentPlan` `reason` resolves — so `--rules` means the same thing here.
     let dataset: Arc<RdfDataset> = match options.entailment {
         Some(regime) => {
-            let regime = reason::resolve_materializable_regime(regime)?;
-            materialize(&dataset, regime)?
+            let plan = reason::EntailmentPlan::resolve(regime, options.rules)?;
+            // The closure is what gets serialized; the report is what `--report` carries,
+            // so a converted document can be traced back to the run that derived it.
+            report::materialize_reported(&dataset, plan.materialization(), report_target)?
         }
         None => dataset,
     };

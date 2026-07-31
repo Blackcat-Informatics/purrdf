@@ -69,6 +69,23 @@ jobs:
               sys.exit(1)
           PY
 
+      # THE POINT OF NO RETURN IS THE PUBLISH LOOP, AND IT IS NOT ATOMIC.
+      # `cargo publish` runs once per crate, in dependency order, and cannot be
+      # undone. If any crate in the release set has no crates.io record, the loop
+      # irreversibly publishes every crate ahead of it and only then fails — and
+      # the OIDC token this lane uses cannot create the record, because crates.io
+      # requires a crate to exist before a Trusted Publisher can be configured for
+      # it. So the existence of the whole set is settled HERE, before anything
+      # leaves the runner: a missing record becomes a clean refusal naming the
+      # crate and the bootstrap command, not a half-published release.
+      #
+      # The preflight reads the same scripts/release-crates.sh the publish step
+      # below sources, so it cannot check a different list than the one published.
+      - name: Preflight — every release crate has a crates.io record
+        env:
+          PURRDF_RELEASE_VERSION: ${{ github.ref_name }}
+        run: bash scripts/check-crates-io-records.sh
+
       - name: Verify workspace
         run: |
           cargo fmt --all --check
@@ -80,24 +97,15 @@ jobs:
           # requirements. This catches a partial bump (a stale ^x.y.z internal pin)
           # before any crate is irreversibly published.
           python3 scripts/check-versions.py
-          cargo check --locked --target wasm32-unknown-unknown --lib \
-            -p purrdf-events \
-            -p purrdf-iri \
-            -p purrdf-xsd \
-            -p purrdf-gts \
-            -p purrdf-core \
-            -p purrdf-columnar \
-            -p purrdf-entail \
-            -p purrdf-sparql-algebra \
-            -p purrdf-sparql-results \
-            -p purrdf-sparql-eval \
-            -p purrdf-rdf \
-            -p purrdf-slice \
-            -p purrdf-shapes \
-            -p purrdf-shex \
-            -p purrdf-validate \
-            -p purrdf \
-            -p purrdf-wasm
+          # The wasm gate covers exactly the crates that get published — read
+          # from the one release-set definition rather than a second copy.
+          # shellcheck source=scripts/release-crates.sh
+          source scripts/release-crates.sh
+          wasm_args=()
+          for crate in "${PURRDF_RELEASE_CRATES[@]}"; do
+            wasm_args+=("-p" "$crate")
+          done
+          cargo check --locked --target wasm32-unknown-unknown --lib "${wasm_args[@]}"
           cargo build --locked --release --target wasm32-unknown-unknown \
             -p purrdf-wasm --lib
           test -s target/wasm32-unknown-unknown/release/purrdf_wasm.wasm
@@ -153,25 +161,11 @@ jobs:
           set -euo pipefail
 
           version="${VERSION#rust-v}"
-          crates=(
-            purrdf-events
-            purrdf-iri
-            purrdf-xsd
-            purrdf-gts
-            purrdf-core
-            purrdf-columnar
-            purrdf-entail
-            purrdf-sparql-algebra
-            purrdf-sparql-results
-            purrdf-sparql-eval
-            purrdf-rdf
-            purrdf-slice
-            purrdf-shapes
-            purrdf-shex
-            purrdf-validate
-            purrdf
-            purrdf-wasm
-          )
+          # One definition of the release set, shared with the preflight above
+          # and with scripts/bootstrap-crates-io.sh.
+          # shellcheck source=scripts/release-crates.sh
+          source scripts/release-crates.sh
+          crates=("${PURRDF_RELEASE_CRATES[@]}")
 
           crate_version_exists() {
             local crate="$1"

@@ -28,8 +28,12 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-shapes` (`crates/shapes`) | SHACL validation (full Core + SHACL-SPARQL + SHACL-AF) and SHACL Rules (`sh:rule` inference) |
 | `purrdf-shex` (`crates/shex`) | ShEx 2.1 schemas + validation |
 | `purrdf-slice` (`crates/slice`) | Slice catalog, artifacts, ownership analysis |
+| `purrdf-datalog` (`crates/datalog`) | Deterministic semi-naive Datalog substrate beneath every rule-driven engine |
+| `purrdf-entail` (`crates/entail`) | Entailment regimes: RDF/RDFS/OWL 2 RL/D materialization, OWL-Direct, RIF |
+| `purrdf-validate` (`crates/validate`) | Shared string boundary every language binding routes through |
 | `purrdf-iri`, `purrdf-xsd`, `purrdf-events` | Zero-dependency foundations |
 | `purrdf-wasm`, `purrdf-capi`, `bindings/python` | WASM, C-ABI, and PyO3 bindings |
+| `purrdf-cli` (`crates/cli`) | The `purrdf` command-line surface (`publish = false`) |
 
 ## 2. Hard constraints (violating these fails CI or review)
 
@@ -42,7 +46,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 * **Kernel ring-fence.** `purrdf-core` must never depend on oxigraph or PyO3.
   `purrdf-iri`, `purrdf-xsd`, and `purrdf-events` must keep **zero runtime
   dependencies**.
-* **Everything is wasm-able.** Every release crate (all 17 published crates,
+* **Everything is wasm-able.** Every release crate (all 18 published crates,
   `purrdf-wasm` included) must build for `wasm32-unknown-unknown` — CI
   hard-fails otherwise (`make wasm` locally). Never add a dependency that
   drags in threads, the filesystem, C toolchains, or wall-clock/RNG syscalls
@@ -132,10 +136,11 @@ black-cat family system — `#cat-head-core` is shared verbatim; only the
 
 ## 6. Releases
 
-Tag-driven trusted publishing: `rust-v*` → crates.io (17 crates, ordered),
+Tag-driven trusted publishing: `rust-v*` → crates.io (18 crates, ordered),
 `py-v*` → PyPI (`purrdf`). See [`docs/RELEASE.md`](./docs/RELEASE.md). Version
-is single-sourced in `[workspace.package]`. `purrdf-capi` and
-`purrdf-sparql-conformance` are never published.
+is single-sourced in `[workspace.package]`. Four members never reach
+crates.io: `purrdf-capi`, `purrdf-sparql-conformance`, `purrdf-cli`, and
+`purrdf-python` (PyPI via maturin instead).
 
 ## 7. Provenance
 

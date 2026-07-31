@@ -1,0 +1,610 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+"""`purrdf.entail` — the OWL 2 Direct-Semantics reasoning services from Python.
+
+A different LANE from `test_entail_regimes.py`. That file covers the **chase**:
+`materialize`/`materialize_nt` close a document under a regime's rule table and
+report `completeness exact | sound-incomplete <n>`, which is a difference of two
+rule tables. This file covers the **tableau**: nine services that each answer a
+Description-Logic question and each carry a certificate whose completeness is
+`decided | decided-within-boundaries | budget-exhausted`.
+
+The distinction is the point. The DL lane has no rule table to subtract, so
+reusing the chase's completeness notion would report "exact" for a search that
+ran out of budget. The two renderings therefore carry different banners, and a
+test here asserts that neither can be parsed as the other.
+
+What is asserted, and why:
+
+* **Every service is reachable, and none of them can drop its certificate.**
+  Each returns `(answer, certificate)`, so a caller must unpack the evidence.
+* **A certificate names its own service, and a tableau service's names its own
+  honesty by construction rather than by a trailing literal.** A `purrdf-dl-certificate
+  1` block (`consistency`, `classify`, `realize`, `instances`, `entails`) can never read
+  `completeness decided` beside a non-empty `boundary` list — the value is derived from
+  the boundary list on every render, so there is nothing stored for the two to
+  disagree with. The services whose gate literal reports something their other lines do
+  not already contain still carry it: `checked` for `explain-conclusion`,
+  `one-directional true` for the purely syntactic profile certification, `conservative`
+  for a module extraction. `justify` ends on `minimal` instead, because a combined
+  literal would be `!(sufficient && minimal)` — a function of the two lines above it,
+  which reads like independent evidence and is not.
+* **`unknown` is never collapsed to `false`.** A narrowed step cap drives the
+  third completeness state, and the answer says `unknown` — reporting a resource
+  limit as an entailment is the defect the third value exists to prevent.
+* **The explanations are CHECKED, not asserted.** A justification's sufficiency
+  and minimality are re-decided over the justification alone; a chase proof's
+  conclusion is re-derived from the clause program and reported beside the one
+  the proof claims.
+* **Byte determinism.** Every service is a function of its input alone, so
+  repeated calls produce identical bytes.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from purrdf import entail
+
+# ── Fixtures (example.org, per the repository's vocabulary rule) ────────────────
+
+RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+RDFS_SUB_CLASS_OF = "http://www.w3.org/2000/01/rdf-schema#subClassOf"
+OWL_DISJOINT_WITH = "http://www.w3.org/2002/07/owl#disjointWith"
+OWL_COMPLEMENT_OF = "http://www.w3.org/2002/07/owl#complementOf"
+OWL_THING = "http://www.w3.org/2002/07/owl#Thing"
+OWL_NOTHING = "http://www.w3.org/2002/07/owl#Nothing"
+
+# `Cat ⊑ Mammal ⊑ Animal`, the sibling `Fish ⊑ Animal`, and one cat.
+TAXONOMY = (
+    f"<https://example.org/Cat> <{RDFS_SUB_CLASS_OF}> <https://example.org/Mammal> .\n"
+    f"<https://example.org/Mammal> <{RDFS_SUB_CLASS_OF}> <https://example.org/Animal> .\n"
+    f"<https://example.org/Fish> <{RDFS_SUB_CLASS_OF}> <https://example.org/Animal> .\n"
+    f"<https://example.org/tom> <{RDF_TYPE}> <https://example.org/Cat> .\n"
+)
+
+# `Cat ⊑ Animal` — entailed by the chain, asserted nowhere.
+CHAIN_AXIOM = (
+    f"<https://example.org/Cat> <{RDFS_SUB_CLASS_OF}> <https://example.org/Animal> .\n"
+)
+# The other direction, which nothing entails.
+REVERSED_AXIOM = (
+    f"<https://example.org/Animal> <{RDFS_SUB_CLASS_OF}> <https://example.org/Cat> .\n"
+)
+# `tom a Animal` — derived by the chase, not asserted.
+DERIVED_TRIPLE = (
+    f"<https://example.org/tom> <{RDF_TYPE}> <https://example.org/Animal> .\n"
+)
+
+# `Cat` and `Fish` are disjoint and `nemo` is in both: an ontology with NO model.
+UNSATISFIABLE = (
+    f"<https://example.org/Cat> <{OWL_DISJOINT_WITH}> <https://example.org/Fish> .\n"
+    f"<https://example.org/nemo> <{RDF_TYPE}> <https://example.org/Cat> .\n"
+    f"<https://example.org/nemo> <{RDF_TYPE}> <https://example.org/Fish> .\n"
+)
+
+
+def _every_service(data: str = TAXONOMY) -> list[tuple[str, tuple[str, str]]]:
+    """Call every DL service over `data`, as `(service name, (answer, certificate))`.
+
+    One list, so a service added to the surface without certificate coverage is a
+    missing entry a reader can see rather than an omission nobody notices.
+    """
+    return [
+        ("consistency", entail.consistency(data)),
+        ("classify", entail.classify(data)),
+        ("realize", entail.realize(data)),
+        ("instances", entail.instances(data, "<https://example.org/Animal>")),
+        ("entails", entail.entails(data, CHAIN_AXIOM)),
+        ("profile", entail.profile(data)),
+        (
+            "extract-module",
+            entail.extract_module(data, "<https://example.org/Cat>\n", "star"),
+        ),
+        ("justify", entail.justify(data, CHAIN_AXIOM)),
+        (
+            "explain-conclusion",
+            entail.explain_conclusion(data, entail.Regime.OWL_RL, DERIVED_TRIPLE),
+        ),
+    ]
+
+
+# The gate each NON-tableau certificate grammar ends with. `justify` reports whether
+# its re-decided claim is sufficient and minimal, `explain-conclusion` whether its
+# proof re-derived, and the two services that run no tableau at all report their own
+# honesty property instead of a fabricated completeness.
+#
+# The five tableau services (`consistency`, `classify`, `realize`, `instances`,
+# `entails`) are NOT in this set: their `purrdf-dl-certificate 1` block has no
+# trailing gate literal, because `completeness` is derived from `boundary` on every
+# render rather than stored beside it — see
+# `test_every_certificate_names_its_service_and_ends_with_its_gate` for how those are
+# checked instead.
+GATES = frozenset(
+    {
+        "minimal true",
+        "minimal false",
+        "checked true",
+        "checked false",
+        "one-directional true",
+        "conservative false",
+        "conservative true",
+    }
+)
+
+
+# ── Every service is reachable, and carries its certificate ─────────────────────
+
+
+def test_every_service_is_reachable_from_python() -> None:
+    """All nine DL services exist on `purrdf.entail` and run."""
+    services = _every_service()
+    assert len(services) == 9
+    for name, (answer, certificate) in services:
+        assert isinstance(answer, str), name
+        assert isinstance(certificate, str), name
+        assert certificate, f"{name} returned no certificate"
+
+
+def test_every_certificate_names_its_service_and_ends_with_its_gate() -> None:
+    """A service that answered without saying how completely fails here.
+
+    This is the invariant the whole surface exists for: an answer with no
+    statement of how completely it was decided is the defect, not the missing
+    feature.
+
+    The tableau services' certificates have no gate literal to look up in `GATES`:
+    for those this test exercises the derivation itself — `completeness` may read
+    `decided` only when no `boundary` line is present — which is what
+    `purrdf_entail::reasoner::certificate::DlCertificate::completeness` computes on
+    every call rather than a constant this test would otherwise just be repeating.
+    """
+    for name, (_answer, certificate) in _every_service():
+        assert f"\nservice {name}\n" in certificate, f"{name}: {certificate}"
+        assert certificate.endswith("\n"), name
+        if certificate.startswith("purrdf-dl-certificate 1\n"):
+            lines = certificate.splitlines()
+            completeness = next(
+                line.removeprefix("completeness ")
+                for line in lines
+                if line.startswith("completeness ")
+            )
+            has_boundaries = any(line.startswith("boundary ") for line in lines)
+            if completeness == "decided":
+                assert not has_boundaries, f"{name}: {certificate}"
+            elif completeness == "decided-within-boundaries":
+                assert has_boundaries, f"{name}: {certificate}"
+            elif completeness != "budget-exhausted":
+                pytest.fail(f"{name}: unknown completeness {completeness}")
+        else:
+            assert certificate.splitlines()[-1] in GATES, f"{name}: {certificate}"
+
+
+def test_the_dl_certificate_is_not_the_chase_report() -> None:
+    """Two lanes, two completeness notions, two banners — never interchanged."""
+    _closure, report = entail.materialize_nt(TAXONOMY, entail.Regime.OWL_RL, "")
+    _answer, certificate = entail.consistency(TAXONOMY)
+    assert report.startswith("purrdf-reasoning-report 3\n")
+    assert certificate.startswith("purrdf-dl-certificate 1\n")
+    # The chase says `exact`/`sound-incomplete`; the tableau says
+    # `decided`/`decided-within-boundaries`/`budget-exhausted`. Neither
+    # vocabulary appears in the other's rendering.
+    assert "completeness decided" not in report
+    assert "completeness exact" not in certificate
+
+
+@pytest.mark.parametrize(
+    "name", [name for name, _ in _every_service()], ids=lambda name: str(name)
+)
+def test_every_service_is_byte_stable(name: str) -> None:
+    """Repeated calls produce identical bytes.
+
+    Each call reverse-maps a freshly-interned knowledge base, so a service that
+    leaked interner order, a clock or an address would diverge here.
+    """
+    first = dict(_every_service())[name]
+    for _ in range(4):
+        assert dict(_every_service())[name] == first
+
+
+# ── The individual services ─────────────────────────────────────────────────────
+
+
+def test_consistency_answers_both_ways() -> None:
+    """The one service that answers for an ontology with no model."""
+    answer, certificate = entail.consistency(TAXONOMY)
+    assert answer == "consistency true\n"
+    assert "\ncompleteness decided\n" in certificate
+
+    answer, certificate = entail.consistency(UNSATISFIABLE)
+    assert answer == "consistency false\n"
+    # A decided `false` met no boundary either: nothing here to overclaim.
+    assert "\ncompleteness decided\n" in certificate
+    assert "\nboundary " not in certificate
+
+
+def test_classify_emits_the_closure_and_its_reduction() -> None:
+    """`subclass` is the full relation; `direct` is its transitive reduction."""
+    answer, _certificate = entail.classify(TAXONOMY)
+    # Cat ⊑ Animal is entailed but not asserted…
+    assert (
+        "subclass <https://example.org/Cat> <https://example.org/Animal>\n" in answer
+    )
+    # …and it is NOT direct: Mammal sits between them.
+    assert "direct <https://example.org/Cat> <https://example.org/Animal>\n" not in answer
+    assert "direct <https://example.org/Cat> <https://example.org/Mammal>\n" in answer
+    # `owl:Nothing` is read as ⊥ rather than as an opaque atomic class, so it is
+    # unsatisfiable — the answer the semantics gives.
+    assert f"unsatisfiable <{OWL_NOTHING}>\n" in answer
+
+
+def test_realize_marks_the_most_specific_type() -> None:
+    """Every entailed type is listed; exactly one of tom's is most specific."""
+    answer, _certificate = entail.realize(TAXONOMY)
+    for klass in ("Cat", "Mammal", "Animal"):
+        assert f"type <https://example.org/tom> <https://example.org/{klass}>\n" in answer
+    # `owl:Thing` is a type of every individual and IS listed: an entailed answer
+    # omitted for being obvious is an answer set that is not one.
+    assert f"type <https://example.org/tom> <{OWL_THING}>\n" in answer
+    direct = [line for line in answer.splitlines() if line.startswith("direct-type ")]
+    assert direct == ["direct-type <https://example.org/tom> <https://example.org/Cat>"]
+
+
+def test_instances_retrieves_through_the_hierarchy() -> None:
+    """Retrieval reaches through subsumption, and an unmentioned class is empty."""
+    answer, _certificate = entail.instances(TAXONOMY, "<https://example.org/Animal>")
+    assert answer == "instance <https://example.org/tom>\n"
+    # A class no axiom constrains is a real question with a real, empty answer —
+    # which is what the Direct Semantics says an unconstrained name is.
+    answer, certificate = entail.instances(TAXONOMY, "<https://example.org/Unmentioned>")
+    assert answer == ""
+    # An empty answer is still a DECIDED one: no boundary was met deciding it.
+    assert "\ncompleteness decided\n" in certificate
+    assert "\nboundary " not in certificate
+
+
+@pytest.mark.parametrize(
+    ("predicate", "kind"),
+    [
+        (RDFS_SUB_CLASS_OF, "SubClassOf"),
+        ("http://www.w3.org/2002/07/owl#equivalentClass", "EquivalentClasses"),
+        (OWL_DISJOINT_WITH, "DisjointClasses"),
+        (RDF_TYPE, "ClassAssertion"),
+        ("http://www.w3.org/2002/07/owl#sameAs", "SameIndividual"),
+        ("http://www.w3.org/2002/07/owl#differentFrom", "DifferentIndividuals"),
+        ("http://www.w3.org/2000/01/rdf-schema#subPropertyOf", "SubObjectPropertyOf"),
+        ("https://example.org/knows", "ObjectPropertyAssertion"),
+    ],
+)
+def test_the_axiom_encoding_is_the_owl_2_rdf_mapping(predicate: str, kind: str) -> None:
+    """An axiom crosses the boundary as ONE triple of the OWL 2 RDF mapping.
+
+    No mini-language is invented: every axiom kind already HAS an RDF spelling,
+    and it is the one the reasoner's own reverse mapping reads. The answer echoes
+    which kind the predicate selected, because the predicate DISPATCHES.
+    """
+    statement = f"<https://example.org/s> <{predicate}> <https://example.org/o> .\n"
+    answer, _certificate = entail.entails(TAXONOMY, statement)
+    assert f"\naxiom {kind}\n" in answer, answer
+    assert answer.count("\nterm <") in (2, 3)
+
+
+def test_entails_decides_both_directions() -> None:
+    """`Cat ⊑ Animal` follows from the chain; `Animal ⊑ Cat` does not."""
+    answer, _certificate = entail.entails(TAXONOMY, CHAIN_AXIOM)
+    assert answer.startswith("entails true\n")
+    answer, _certificate = entail.entails(TAXONOMY, REVERSED_AXIOM)
+    assert answer.startswith("entails false\n")
+
+
+def test_an_exhausted_budget_is_unknown_and_never_false() -> None:
+    """A resource limit is reported as a resource limit, not as an entailment.
+
+    `step_cap` can only NARROW the knowledge base's own ceiling, so it cannot be
+    used to make a hard instance answerable — only to make this branch, the third
+    completeness state, reachable from a test.
+    """
+    answer, certificate = entail.entails(TAXONOMY, CHAIN_AXIOM, 1)
+    assert answer.splitlines()[0] == "entails unknown"
+    assert "\ncompleteness budget-exhausted\n" in certificate
+    assert "\nbudget 1\n" in certificate
+    # No boundary was met either — this is a plain RDFS taxonomy — and
+    # `completeness` STILL reads `budget-exhausted` rather than collapsing to
+    # `decided`: the exhausted flag takes precedence over an empty boundary list.
+    assert "\nboundary " not in certificate
+    # …and 0 means the knowledge base's own cap, not a cap of zero steps.
+    answer, certificate = entail.entails(TAXONOMY, CHAIN_AXIOM, 0)
+    assert answer.startswith("entails true\n")
+    assert "\ncompleteness decided\n" in certificate
+
+
+def test_an_unsatisfiable_ontology_is_refused_rather_than_answered_vacuously() -> None:
+    """Every class subsumes every other with no model, so no answer is given."""
+    for call in (
+        lambda: entail.classify(UNSATISFIABLE),
+        lambda: entail.realize(UNSATISFIABLE),
+        lambda: entail.instances(UNSATISFIABLE, "<https://example.org/Cat>"),
+    ):
+        with pytest.raises(ValueError, match="no model"):
+            call()
+
+
+def test_profile_certifies_most_restrictive_first() -> None:
+    """A bare sub-class taxonomy is in every OWL 2 profile."""
+    answer, certificate = entail.profile(TAXONOMY)
+    assert answer.splitlines() == [
+        "certified EL",
+        "certified QL",
+        "certified RL",
+        "certified DL",
+        "certified Full",
+    ]
+    # The most restrictive certified profile, which is what a caller asking
+    # "what is this ontology?" wants.
+    assert answer.splitlines()[0].removeprefix("certified ") == "EL"
+    for profile in ("el", "ql", "rl", "dl", "full"):
+        assert f"\ncertifies-{profile} true\n" in certificate
+    # A certification PROVES membership; a violation does NOT prove exclusion.
+    # Stated on the certificate rather than only in prose a consumer may not read.
+    assert certificate.endswith("one-directional true\n")
+
+
+def test_a_profile_violation_names_its_term_and_reason() -> None:
+    """`owl:complementOf` is outside the EL grammar, and the certificate says so."""
+    complement = (
+        f"<https://example.org/NotCat> <{OWL_COMPLEMENT_OF}> <https://example.org/Cat> .\n"
+    )
+    answer, certificate = entail.profile(complement)
+    violations = [
+        line.removeprefix("violation ")
+        for line in certificate.splitlines()
+        if line.startswith("violation ")
+    ]
+    assert violations, certificate
+    for violation in violations:
+        profile, term, subject, reason = violation.split(" ", 3)
+        assert profile in {"EL", "QL", "RL", "DL", "Full"}
+        assert term.startswith("<")
+        assert subject
+        assert len(reason) > 4
+    # Full is every RDF graph under the RDF-Based Semantics, so it never fails.
+    assert answer.endswith("certified Full\n")
+
+
+def test_extract_module_is_smaller_than_the_ontology() -> None:
+    """The ⊥-module for {Cat} follows the chain up and leaves the sibling behind."""
+    answer, certificate = entail.extract_module(
+        TAXONOMY, "<https://example.org/Cat>\n", "bot"
+    )
+    assert "<https://example.org/Cat>" in answer
+    assert "<https://example.org/Fish>" not in answer, answer
+    assert "\nmethod BOT\n" in certificate
+    # Every keep was decided by the locality rules, which is the strongest thing
+    # an extraction can say; `conservative true` would mean a sound SUPERSET.
+    assert certificate.endswith("conservative false\n")
+
+
+@pytest.mark.parametrize("method", ["bot", "top", "star"])
+def test_every_module_method_is_reachable(method: str) -> None:
+    """All three locality notions cross the boundary and name themselves."""
+    _answer, certificate = entail.extract_module(
+        TAXONOMY, "<https://example.org/Cat>\n", method
+    )
+    assert f"\nmethod {method.upper()}\n" in certificate
+
+
+def test_an_unknown_module_method_names_the_accepted_set() -> None:
+    """The error a caller three language boundaries away has to act on."""
+    with pytest.raises(ValueError) as raised:
+        entail.extract_module(TAXONOMY, "", "nested")
+    message = str(raised.value)
+    assert "nested" in message
+    for method in ("bot", "top", "star"):
+        assert method in message
+
+
+def test_justify_re_decides_both_halves_of_its_claim() -> None:
+    """A justification is sufficient AND minimal, and both are re-decided here."""
+    answer, certificate = entail.justify(TAXONOMY, CHAIN_AXIOM)
+    # The chain, and NOT the sibling: two axioms of the four.
+    assert len(answer.splitlines()) == 2, answer
+    assert "<https://example.org/Fish>" not in answer
+    assert "\nsufficient true\n" in certificate
+    assert "\nminimal true\n" in certificate
+    assert certificate.endswith("minimal true\n")
+    # The identity is a CONTENT digest, never an IRI: PurRDF mints no vocabulary.
+    digest = next(
+        line.removeprefix("digest ")
+        for line in certificate.splitlines()
+        if line.startswith("digest ")
+    )
+    assert len(digest) == 64
+    assert digest == digest.lower()
+    assert all(character in "0123456789abcdef" for character in digest)
+
+
+def test_an_unentailed_axiom_has_no_justification() -> None:
+    """A refusal, not an empty set — which reads as "nothing is needed"."""
+    with pytest.raises(ValueError, match="does not entail"):
+        entail.justify(TAXONOMY, REVERSED_AXIOM)
+
+
+def test_explain_conclusion_re_derives_rather_than_re_reads() -> None:
+    """The certificate reports what the CHECKER computed, not what the proof says."""
+    answer, certificate = entail.explain_conclusion(
+        TAXONOMY, entail.Regime.OWL_RL, DERIVED_TRIPLE
+    )
+    assert answer.startswith("asserted false\n")
+    assert "\nrule cax-sco\n" in answer, answer
+    assert "\nchecked true\n" in certificate
+    # `checked` is the certificate's own last line: no redundant `overclaims !checked`
+    # restating the same bit under a different name follows it.
+    assert certificate.endswith("checked true\n")
+
+    def field(key: str) -> str:
+        return next(
+            line.removeprefix(key)
+            for line in certificate.splitlines()
+            if line.startswith(key)
+        )
+
+    for part in ("subject", "predicate", "object"):
+        assert field(f"conclusion-{part} ") == field(f"derived-{part} ")
+
+
+def test_an_asserted_conclusion_is_explained_by_being_asserted() -> None:
+    """A given triple has a real, checkable explanation: that it is given."""
+    asserted = f"<https://example.org/tom> <{RDF_TYPE}> <https://example.org/Cat> .\n"
+    answer, certificate = entail.explain_conclusion(
+        TAXONOMY, entail.Regime.OWL_RL, asserted
+    )
+    assert answer.startswith("asserted true\n")
+    # Checked against the SEEDED store, so a derived fact cannot pass as a given.
+    assert "\nchecked true\n" in certificate
+
+
+def test_an_existential_rule_elsewhere_does_not_refuse_the_conclusion() -> None:
+    """The existential refusal is per CONCLUSION, not per regime.
+
+    Four RDF/RDFS rules conclude about a fresh blank node, and an existentially
+    quantified head has no Datalog semantics — there is no head for the checker
+    to instantiate. That refuses the conclusions that NEED such a rule, not the
+    regime that merely contains one: `tom rdf:type Animal` is derived purely by
+    the subclass chain, an ordinary Datalog derivation, so `RDFS` explains it
+    with a proof the checker re-derives.
+    """
+    answer, certificate = entail.explain_conclusion(
+        TAXONOMY, entail.Regime.RDFS, DERIVED_TRIPLE
+    )
+    # `asserted false`: the conclusion is DERIVED, not a given axiom — and the
+    # rules that derived it are ordinary Datalog rules, named in the answer.
+    assert answer.startswith("asserted false\n")
+    assert "rule rdfs" in answer
+    assert "\nchecked true\n" in certificate
+
+
+def test_a_goal_only_an_existential_rule_could_reach_refuses_by_name() -> None:
+    """Where the Datalog subset neither derives nor finds the goal given, and the
+    regime HAS existential rules, "not entailed" would be a false answer — one of
+    those rules may be what derives it, and this checker cannot produce a term
+    for such a step. `RDF`'s three-rule table cannot derive the subclass-chain
+    conclusion, so the same triple that `RDFS` explains refuses here, naming the
+    reason."""
+    with pytest.raises(ValueError, match="existential"):
+        entail.explain_conclusion(TAXONOMY, entail.Regime.RDF, DERIVED_TRIPLE)
+
+
+def test_an_underivable_conclusion_is_a_hard_error() -> None:
+    """An empty explanation would read as "there is nothing to explain"."""
+    absent = (
+        "<https://example.org/nobody> <https://example.org/nothing> "
+        "<https://example.org/nowhere> .\n"
+    )
+    with pytest.raises(ValueError, match="no derivation"):
+        entail.explain_conclusion(TAXONOMY, entail.Regime.OWL_RL, absent)
+
+
+# ── Refusals ────────────────────────────────────────────────────────────────────
+
+
+def test_a_malformed_document_is_an_error_not_an_empty_answer() -> None:
+    """Every service refuses a document it cannot parse."""
+    for call in (
+        lambda: entail.consistency("this is not n-quads\n"),
+        lambda: entail.classify("this is not n-quads\n"),
+        lambda: entail.realize("this is not n-quads\n"),
+        lambda: entail.profile("this is not n-quads\n"),
+        lambda: entail.extract_module("this is not n-quads\n", "", "bot"),
+    ):
+        with pytest.raises(ValueError):
+            call()
+
+
+def test_a_malformed_term_or_axiom_is_refused() -> None:
+    """A class is ONE N-Triples term; an axiom is ONE ungraphed triple."""
+    with pytest.raises(ValueError, match="N-Triples term"):
+        entail.instances(TAXONOMY, "not a term")
+    with pytest.raises(ValueError, match="N-Triples term"):
+        entail.instances(TAXONOMY, "<https://example.org/A> <https://example.org/B>")
+    # A literal is not a name, so it is not a class, an individual or a property.
+    with pytest.raises(ValueError):
+        entail.instances(TAXONOMY, '"Cat"')
+    graph_scoped = (
+        f"<https://example.org/Cat> <{RDFS_SUB_CLASS_OF}> <https://example.org/Animal> "
+        "<https://example.org/g> .\n"
+    )
+    with pytest.raises(ValueError, match="names a graph"):
+        entail.entails(TAXONOMY, graph_scoped)
+
+
+# ── The session ──────────────────────────────────────────────────────────────
+# `entail.Reasoner` holds the parsed document so that asking N questions costs
+# one parse and one reverse mapping. What must be true of it is not that it is
+# faster — a speed claim belongs in a benchmark — but that it answers exactly
+# what the free functions answer, and that it stays that way as questions
+# accumulate on the same knowledge base.
+
+
+def test_the_session_answers_what_the_free_functions_answer() -> None:
+    """Every `Reasoner` method matches its free function, certificate included.
+
+    The session exists to avoid re-parsing, so the ONE thing that must never
+    differ is the result. Both halves of the pair are compared: an answer that
+    matched while its certificate reported different `steps` would mean the
+    session had carried work forward between questions, which is a wrong
+    certificate even where the answer survives.
+    """
+    session = entail.Reasoner(TAXONOMY)
+    cat = "<https://example.org/Cat>"
+    assert session.consistency() == entail.consistency(TAXONOMY)
+    assert session.classify() == entail.classify(TAXONOMY)
+    assert session.realize() == entail.realize(TAXONOMY)
+    assert session.instances(cat) == entail.instances(TAXONOMY, cat)
+    assert session.entails(CHAIN_AXIOM) == entail.entails(TAXONOMY, CHAIN_AXIOM)
+    assert session.profile() == entail.profile(TAXONOMY)
+    assert session.justify(CHAIN_AXIOM) == entail.justify(TAXONOMY, CHAIN_AXIOM)
+    assert session.extract_module(cat, "star") == entail.extract_module(
+        TAXONOMY, cat, "star"
+    )
+
+
+def test_the_session_exposes_every_service_the_module_does() -> None:
+    """No service may be reachable one-shot and unreachable on the session.
+
+    A method missing here is the defect this class was built to remove, in
+    miniature: a capability that exists, is reached by one caller shape and not
+    another, and that nobody notices because each surface looks complete on its
+    own. Derived from the module rather than listed, so a service added to
+    `purrdf.entail` and not to `Reasoner` fails this test.
+    """
+    services = {
+        "consistency",
+        "classify",
+        "realize",
+        "instances",
+        "entails",
+        "profile",
+        "extract_module",
+        "justify",
+        "explain_conclusion",
+    }
+    assert services <= {name for name in dir(entail) if not name.startswith("_")}
+    missing = services - {n for n in dir(entail.Reasoner) if not n.startswith("_")}
+    assert not missing, f"reachable as a function but not on the session: {missing}"
+
+
+def test_the_session_does_not_reason_until_it_has_to() -> None:
+    """Constructing a session must not build a knowledge base.
+
+    `profile` is purely syntactic and answers for any parseable document. If the
+    constructor reverse-mapped eagerly it would inherit every way that can fail,
+    and documents that profile today would start raising. The repr reports
+    whether the knowledge base exists, so this is observable rather than
+    inferred.
+    """
+    session = entail.Reasoner(TAXONOMY)
+    assert "reasoned: false" in repr(session)
+    session.profile()
+    assert "reasoned: false" in repr(session), "profile must not reason"
+    session.consistency()
+    assert "reasoned: true" in repr(session)

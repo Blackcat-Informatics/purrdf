@@ -416,7 +416,7 @@ fn ownership_error_string(diag: &OwnershipDiagnostic) -> Option<String> {
     match diag {
         OwnershipDiagnostic::Conflict { term, claimants } => Some(format!(
             "{term} rdfs:isDefinedBy is claimed by multiple slices {claimants:?} — \
-             a term must have exactly one owning slice (#329)",
+             a term must have exactly one owning slice",
             term = term.as_str(),
         )),
         OwnershipDiagnostic::Mismatch {
@@ -425,7 +425,7 @@ fn ownership_error_string(diag: &OwnershipDiagnostic) -> Option<String> {
             physical,
         } => Some(format!(
             "{term} rdfs:isDefinedBy {declared} — must equal the owning slice IRI \
-             {physical} (#329)",
+             {physical}",
             term = term.as_str(),
         )),
         // Undeclared / stale dependencies and unparsable queries are dependency
@@ -466,7 +466,7 @@ impl PyOwnershipReport {
             if owner.status == OwnershipStatus::Unowned {
                 out.push(format!(
                     "{term} rdfs:isDefinedBy {declared} — no slice physically \
-                     defines this term (#329)",
+                     defines this term",
                     term = owner.term.as_str(),
                     declared = owner.declared_owner,
                 ));

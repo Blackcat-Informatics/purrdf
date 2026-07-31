@@ -37,16 +37,20 @@ reimplemented per language.
   position, reifier/annotation side-tables, and base-direction literals.
   See [The Interned Dataset IR](concepts/interned-dataset.md).
 - **Native codecs** — first-party parsers/serializers for Turtle, TriG,
-  N-Triples, N-Quads, RDF/XML, JSON-LD (star), and YAML-LD, with
-  byte-deterministic output. See [Codecs & Determinism](concepts/codecs.md).
+  N-Triples, N-Quads, RDF/XML, TriX, HexTuples, JSON-LD (star), and YAML-LD,
+  with byte-deterministic output. See [Codecs & Determinism](concepts/codecs.md).
 - **Canonicalization** — W3C RDFC-1.0 plus dataset diff and isomorphism.
   See [Canonicalization & Diff](concepts/canonicalization.md).
 - **SPARQL 1.1/1.2** — native parser → algebra → multiset evaluator, gated by
   the W3C conformance suites. See [SPARQL](sparql/querying.md).
 - **SHACL and ShEx** — native validators for both shape languages.
   See [Validation](validation/shacl.md).
-- **Entailment** — Simple/RDF/RDFS/OWL-RL materialization, an OWL-Direct
-  tableau, and RIF-Core rules. See [Entailment](entailment.md).
+- **Entailment** — Simple/RDF/RDFS/OWL-RL/D materialization (all 78 OWL 2 RL
+  rules implemented — rule-table coverage, distinct from entailment
+  conformance, where W3C's own OWL 2 RL tests score 11 of 27 positive and 23 of
+  23 negative), an OWL-Direct tableau, and RIF-Core rules, with a reasoning
+  report on every closure. See [Entailment](entailment.md), evaluated on the
+  [Datalog fixpoint engine](datalog.md).
 - **GTS graph transport** — a single-file, content-addressed, append-only
   container for RDF 1.2 graphs and binary payloads.
   See [GTS Graph Transport](gts.md).

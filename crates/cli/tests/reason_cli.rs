@@ -20,17 +20,26 @@
 //!   and `subPropertyOf` triple propagation.
 //! * **owl-rl** — OWL 2 RL beyond RDFS: `owl:SymmetricProperty` and
 //!   `owl:TransitiveProperty` closure.
+//! * **d** — datatype entailment as OWL 2 Profiles §4.3 Table 8: `dt-type1` types
+//!   every datatype of the OWL 2 RL datatype map an `rdfs:Datatype`.
 //!
-//! The three non-materializable regimes (`owl-direct`, `rif`, `d`) are the exit-3
-//! boundary (they need query class expressions or a rule set the CLI cannot supply), and
-//! a `.purrpck` pack source exercises the pack→dataset reconstruction path inside
-//! `reason`.
+//! * **owl-direct** — the tableau augmentation: `reason` transforms a document and has
+//!   no query, so what runs is the query-independent augmentation (classification,
+//!   realization, entailed role assertions, `owl:sameAs`).
+//! * **rif** — the rule set `--rules` names, forward-chained to a fixpoint.
+//!
+//! No regime is refused. `--rules` is required by `rif` and refused for every other
+//! regime, and both of those are ordinary usage errors (exit 2). A `.purrpck` pack
+//! source exercises the pack→dataset reconstruction path inside `reason`.
 
 use std::path::Path;
 use std::process::{Command, Output};
 
 /// The rdf:type IRI, spelled out (the inferred-triple assertions key on it).
 const RDF_TYPE: &str = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>";
+
+/// A normative RIF-in-XML rule document: `?x a ex:Cat` ⟹ `?x a ex:Animal`.
+const RIF_RULES: &str = "<Document xmlns=\"http://www.w3.org/2007/rif#\"><payload><Group><sentence><Forall><declare><Var>x</Var></declare><formula><Implies><if><Frame><object><Var>x</Var></object><slot><Const type=\"http://www.w3.org/2007/rif#iri\">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type=\"http://www.w3.org/2007/rif#iri\">http://example.org/Cat</Const></slot></Frame></if><then><Frame><object><Var>x</Var></object><slot><Const type=\"http://www.w3.org/2007/rif#iri\">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type=\"http://www.w3.org/2007/rif#iri\">http://example.org/Animal</Const></slot></Frame></then></Implies></formula></Forall></sentence></Group></payload></Document>";
 
 /// A `Command` for the built `purrdf` binary.
 fn purrdf() -> Command {
@@ -235,11 +244,116 @@ fn owl_rl_infers_symmetric_and_transitive() {
     );
 }
 
-/// The three non-materializable regimes (`owl-direct`, `rif`, `d`) each exit with code 3
-/// and print a diagnostic to stderr naming why: they need query class expressions or a
-/// rule set the CLI has no way to supply.
+/// `reason --regime d` is datatype entailment, and it MATERIALIZES: the library
+/// realizes `entailment/D` as the five `dt-*` rules of OWL 2 Profiles §4.3 Table 8,
+/// so the CLI runs them rather than refusing. `dt-type1` types every datatype of the
+/// OWL 2 RL datatype map an `rdfs:Datatype`, and the input triples survive.
+///
+/// Falsifiable against the old behavior: this exited 3 with "cannot be materialized"
+/// while the CLI still refused a regime the library, Python, wasm and C ABI all close.
 #[test]
-fn boundary_regimes_exit_three_with_diagnostic() {
+fn d_materializes_the_datatype_map() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "d.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+            "ex:x ex:age \"1\"^^xsd:integer .\n",
+        ),
+    );
+    let out = path(dir, "out.nt");
+
+    let o = run(&["reason", "--regime", "d", &seed, &out]);
+    assert!(o.status.success(), "d reason failed: {}", stderr(&o));
+    let text = std::fs::read_to_string(&out).expect("read output");
+
+    // dt-type1: a datatype of the map is an rdfs:Datatype.
+    assert!(
+        text.contains(&format!(
+            "<http://www.w3.org/2001/XMLSchema#integer> {RDF_TYPE} \
+             <http://www.w3.org/2000/01/rdf-schema#Datatype>"
+        )),
+        "d must type xsd:integer an rdfs:Datatype via dt-type1; got: {text}"
+    );
+    // …and the asserted triple survives into the closure.
+    assert!(
+        text.contains(
+            "<http://example.org/x> <http://example.org/age> \
+             \"1\"^^<http://www.w3.org/2001/XMLSchema#integer>"
+        ),
+        "the original triple must be preserved; got: {text}"
+    );
+}
+
+/// `reason --regime owl-direct` MATERIALIZES: the tableau states what it decides about
+/// the ontology's own named terms.
+///
+/// Falsifiable against the old behavior: this exited 3 with "cannot be materialized",
+/// on this same input.
+#[test]
+fn owl_direct_materializes_the_tableau_augmentation() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "dl.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+            "ex:Cat rdfs:subClassOf ex:Animal .\n",
+            "ex:lillith a ex:Cat .\n",
+        ),
+    );
+    let out = path(dir, "out.nt");
+
+    let o = run(&["reason", "--regime", "owl-direct", &seed, &out]);
+    assert!(
+        o.status.success(),
+        "owl-direct reason failed: {}",
+        stderr(&o)
+    );
+    let text = std::fs::read_to_string(&out).expect("read output");
+    assert!(
+        text.contains(&format!(
+            "<http://example.org/lillith> {RDF_TYPE} <http://example.org/Animal>"
+        )),
+        "the realization must state the entailed type; got: {text}"
+    );
+}
+
+/// `reason --regime rif` MATERIALIZES under the rule document `--rules` names.
+///
+/// Falsifiable against the old behavior: this exited 3 with "cannot be materialized".
+#[test]
+fn rif_materializes_under_the_supplied_rule_document() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "cats.ttl",
+        "@prefix ex: <http://example.org/> .\nex:lillith a ex:Cat .\n",
+    );
+    let rules = write_file(dir, "cats.rif", RIF_RULES);
+    let out = path(dir, "out.nt");
+
+    let o = run(&["reason", "--regime", "rif", "--rules", &rules, &seed, &out]);
+    assert!(o.status.success(), "rif reason failed: {}", stderr(&o));
+    let text = std::fs::read_to_string(&out).expect("read output");
+    assert!(
+        text.contains(&format!(
+            "<http://example.org/lillith> {RDF_TYPE} <http://example.org/Animal>"
+        )),
+        "the caller's rule must have fired; got: {text}"
+    );
+}
+
+/// `--regime` and `--rules` are ONE input, so an incomplete or contradictory pair is a
+/// usage error (exit 2) — never a silently-ignored argument and never a refused regime.
+#[test]
+fn a_rule_document_is_required_by_rif_and_refused_by_everything_else() {
     let dir = tempfile::tempdir().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(
@@ -247,30 +361,34 @@ fn boundary_regimes_exit_three_with_diagnostic() {
         "seed.nt",
         "<http://example.org/a> <http://example.org/knows> <http://example.org/b> .\n",
     );
+    let rules = write_file(dir, "cats.rif", RIF_RULES);
     let out = path(dir, "out.nt");
 
-    // Each boundary regime is unsupported for a DISTINCT spec-inherent reason; the
-    // diagnostic must name that specific reason, not a generic catch-all.
-    for (regime, expected_reason) in [
-        ("owl-direct", "class expressions"),
-        ("rif", "rule set"),
-        ("d", "datatype"),
-    ] {
-        let o = run(&["reason", "--regime", regime, &seed, &out]);
+    let missing = run(&["reason", "--regime", "rif", &seed, &out]);
+    assert_eq!(
+        missing.status.code(),
+        Some(2),
+        "rif without --rules is an incomplete command line; stderr: {}",
+        stderr(&missing)
+    );
+    assert!(
+        stderr(&missing).contains("--rules"),
+        "the usage error must name the missing flag; got: {}",
+        stderr(&missing)
+    );
+
+    for regime in ["simple", "rdf", "rdfs", "owl-rl", "owl-direct", "d"] {
+        let o = run(&["reason", "--regime", regime, "--rules", &rules, &seed, &out]);
         assert_eq!(
             o.status.code(),
-            Some(3),
-            "regime {regime} must exit 3 (unsupported boundary); stderr: {}",
+            Some(2),
+            "--rules for {regime} must be refused, not ignored; stderr: {}",
             stderr(&o)
         );
-        let err = stderr(&o);
         assert!(
-            err.contains("cannot be materialized"),
-            "regime {regime} must explain it cannot be materialized; got: {err}"
-        );
-        assert!(
-            err.contains(expected_reason),
-            "regime {regime} must name its specific reason ({expected_reason:?}); got: {err}"
+            stderr(&o).contains("only `rif` takes a rule document"),
+            "regime {regime}: {}",
+            stderr(&o)
         );
     }
 }
@@ -545,4 +663,257 @@ fn configured_jsonld_options_reach_reason_output() {
     let text = std::fs::read_to_string(output).expect("configured output");
     assert!(text.contains("ex:a"));
     assert!(text.contains("ex:knows"));
+}
+
+// ── `--report`: the reasoning certificate an operator can read ──────────────────
+
+/// `reason --report` WRITES THE CERTIFICATE, and it is not a stub.
+///
+/// The closure still goes to the sink; the report goes to stderr, so the two never mix
+/// even when `OUT` is `-`. Every line asserted here is evidence the operator could not
+/// obtain before: which regime ran, which rules fired and how many conclusions each
+/// contributed, which constructs the run could not fully handle and WHY, what it cost, the
+/// contract hash of the calculus, the count of the conclusions it WITHHELD, and whether the
+/// seventeen `false`-headed rules found anything.
+#[test]
+fn report_bare_writes_the_certificate_to_stderr() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "rdfs.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+            "ex:Dog rdfs:subClassOf ex:Animal .\n",
+            "ex:rex a ex:Dog .\n",
+        ),
+    );
+    let out = path(dir, "out.nt");
+
+    let o = run(&["reason", "--regime", "rdfs", "--report", &seed, &out]);
+    assert!(o.status.success(), "reason --report failed: {}", stderr(&o));
+    let err = stderr(&o);
+
+    assert!(err.contains("regime rdfs\n"), "{err}");
+    assert!(err.contains("completeness "), "{err}");
+    // rdfs9 is the rule that re-typed the instance, and the count is a real one.
+    assert!(err.contains("\nfired rdfs9 "), "{err}");
+    // A boundary line carries the construct AND the technical reason it is a boundary.
+    assert!(err.contains("\nboundary datatype-value-space "), "{err}");
+    assert!(err.contains("\nbudget join-steps "), "{err}");
+    assert!(err.contains("\ncontract-hash "), "{err}");
+    assert!(err.contains("\nwithheld-surrogates "), "{err}");
+    assert!(err.ends_with("inconsistency none\n"), "{err}");
+    // The SHARED renderer's banner. Its presence is what says the CLI stopped keeping a
+    // private renderer of its own, whose grammar nothing compared against this one.
+    assert!(err.starts_with("purrdf-reasoning-report 3\n"), "{err}");
+
+    // stdout carried no report: the data channel is untouched.
+    assert!(String::from_utf8_lossy(&o.stdout).is_empty());
+    // …and the closure itself was still written.
+    let text = std::fs::read_to_string(&out).expect("read output");
+    assert!(text.contains("<http://example.org/rex>"), "{text}");
+}
+
+/// `--report=PATH` writes the SAME bytes to a file, and two runs agree byte for byte.
+#[test]
+fn report_to_a_path_is_byte_identical_across_runs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "rdfs.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+            "ex:Dog rdfs:subClassOf ex:Animal .\n",
+            "ex:rex a ex:Dog .\n",
+        ),
+    );
+    let out = path(dir, "out.nt");
+    let first = path(dir, "first.report");
+    let second = path(dir, "second.report");
+
+    for target in [&first, &second] {
+        let flag = format!("--report={target}");
+        let o = run(&["reason", "--regime", "rdfs", &flag, &seed, &out]);
+        assert!(o.status.success(), "reason --report=PATH: {}", stderr(&o));
+        // The file target puts NOTHING on stderr.
+        assert!(stderr(&o).is_empty(), "{}", stderr(&o));
+    }
+    let a = std::fs::read(&first).expect("read first report");
+    assert_eq!(a, std::fs::read(&second).expect("read second report"));
+    assert!(String::from_utf8_lossy(&a).starts_with("purrdf-reasoning-report 3\nregime rdfs\n"));
+}
+
+/// AN INCONSISTENT INPUT STILL WRITES ITS REPORT, and the report names the witness.
+///
+/// The refusal used to produce an exit code and a one-line message: `--report` wrote
+/// nothing at all, so the one operator who most needed the certificate — which rule
+/// refused, on which triples, after how much work — was the only one who got none of it.
+#[test]
+fn an_inconsistent_run_writes_the_report_and_still_fails() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "clash.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+            "ex:A owl:disjointWith ex:B .\n",
+            "ex:x a ex:A .\n",
+            "ex:x a ex:B .\n",
+        ),
+    );
+    let out = path(dir, "out.nt");
+    let report = path(dir, "clash.report");
+    let flag = format!("--report={report}");
+
+    let o = run(&["reason", "--regime", "owl-rl", &flag, &seed, &out]);
+    assert!(!o.status.success(), "an inconsistent KB has no closure");
+    assert!(stderr(&o).contains("cax-dw"), "{}", stderr(&o));
+
+    let written = std::fs::read_to_string(&report).expect("--report was written anyway");
+    assert!(
+        written.starts_with("purrdf-reasoning-report 3\nregime owl-rl\n"),
+        "{written}"
+    );
+    assert!(
+        written.contains("\ninconsistency cax-dw premises 3\n"),
+        "{written}"
+    );
+    assert!(
+        written.contains("\ninconsistency-graph default\n"),
+        "{written}"
+    );
+    // The three asserted triples that satisfied the rule, in the rule's premise order.
+    assert!(
+        written.contains(
+            "\ninconsistency-premise <http://example.org/A> \
+             <http://www.w3.org/2002/07/owl#disjointWith> <http://example.org/B>\n"
+        ),
+        "{written}"
+    );
+    assert_eq!(
+        written.matches("\ninconsistency-premise ").count(),
+        3,
+        "{written}"
+    );
+    // The run is described rather than merely refused: it cost a budget and named a
+    // calculus before it stopped.
+    assert!(written.contains("\nbudget join-steps "), "{written}");
+    assert!(written.contains("\ncontract-hash "), "{written}");
+}
+
+/// A NAMED GRAPH IS NAMED IN THE REPORT, not silently reasoned around.
+///
+/// The dataset semantics is a defined choice rather than a derived one, and `--report` is
+/// where the CLI states which choice a run made.
+#[test]
+fn the_report_names_the_named_graph_boundary() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "graphs.trig",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+            "ex:Dog rdfs:subClassOf ex:Animal .\n",
+            "ex:g { ex:rex a ex:Dog . }\n",
+        ),
+    );
+    let out = path(dir, "out.nq");
+
+    let o = run(&["reason", "--regime", "rdfs", "--report", &seed, &out]);
+    assert!(o.status.success(), "reason --report failed: {}", stderr(&o));
+    let err = stderr(&o);
+    assert!(err.contains("\nboundary named-graph "), "{err}");
+    // The boundary is not a bare label: it carries the reason, which states the choice.
+    assert!(err.contains("DEFINED CHOICE"), "{err}");
+    // A complete rule table beside a boundary is `exact-within-boundaries`, never `exact`.
+    assert!(
+        err.contains("completeness exact-within-boundaries\n"),
+        "{err}"
+    );
+}
+
+/// `convert --entailment … --report` and `query --entailment … --report` carry the same
+/// certificate, so the flag is not a `reason`-only afterthought.
+#[test]
+fn convert_and_query_surface_the_report_too() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "rdfs.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+            "ex:Dog rdfs:subClassOf ex:Animal .\n",
+            "ex:rex a ex:Dog .\n",
+        ),
+    );
+    let out = path(dir, "out.nt");
+
+    let o = run(&[
+        "convert",
+        "--entailment",
+        "rdfs",
+        "--report",
+        "--to",
+        "ntriples",
+        &seed,
+        &out,
+    ]);
+    assert!(o.status.success(), "convert --report: {}", stderr(&o));
+    assert!(stderr(&o).contains("regime rdfs\n"), "{}", stderr(&o));
+
+    let o = run(&[
+        "query",
+        "--data",
+        &seed,
+        "--entailment",
+        "rdfs",
+        "--report",
+        "ASK { <http://example.org/rex> a <http://example.org/Animal> }",
+    ]);
+    assert!(o.status.success(), "query --report: {}", stderr(&o));
+    assert!(stderr(&o).contains("regime rdfs\n"), "{}", stderr(&o));
+    // The answer still went to stdout, and it is the entailed one.
+    assert!(String::from_utf8_lossy(&o.stdout).contains("true"));
+}
+
+/// `--report` WITHOUT `--entailment` is a usage error (exit 2), not an empty file and not
+/// a flag that quietly does nothing.
+#[test]
+fn report_without_entailment_is_a_usage_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "plain.nt",
+        "<http://example.org/a> <http://example.org/knows> <http://example.org/b> .\n",
+    );
+    let out = path(dir, "out.nt");
+
+    for args in [
+        vec!["convert", "--report", "--to", "ntriples", &seed, &out],
+        vec!["query", "--data", &seed, "--report", "ASK { ?s ?p ?o }"],
+    ] {
+        let o = run(&args);
+        assert_eq!(
+            o.status.code(),
+            Some(2),
+            "{args:?} must be a usage error; stderr: {}",
+            stderr(&o)
+        );
+        assert!(
+            stderr(&o).contains("--entailment"),
+            "the refusal must name the missing flag; got: {}",
+            stderr(&o)
+        );
+    }
 }

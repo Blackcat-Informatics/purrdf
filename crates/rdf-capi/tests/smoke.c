@@ -44,8 +44,196 @@ static uint8_t *read_file(const char *path, size_t *length) {
     return bytes;
 }
 
+/* A portable substring search over a byte buffer.
+ *
+ * `memmem` is a GNU extension and this program is compiled `-std=c11`, so the
+ * search is spelled out rather than reached for. */
+static int contains_bytes(const uint8_t *haystack, size_t haystack_len,
+                          const char *needle) {
+    size_t needle_len = strlen(needle);
+    if (needle_len > haystack_len) {
+        return 0;
+    }
+    for (size_t at = 0; at + needle_len <= haystack_len; at++) {
+        if (memcmp(haystack + at, needle, needle_len) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* ── The entailment golden vector, walked through the C ABI ──────────────────
+ *
+ * `crates/validate/tests/fixtures/regime-boundary.vectors` is the ONE artifact
+ * the Rust test, the WASM module and the Python suite all check. Reading it here
+ * is what makes the "one artifact, four hosts" claim true of the C ABI too: the
+ * cases below reach `purrdf_entail_materialize_to_nquads` and both of its
+ * out-buffers are compared byte for byte against the committed bodies.
+ *
+ * The format is line-oriented and deliberately dependency-free (see
+ * `parse_regime_vectors` in purrdf-validate): a line starting with '@' is a
+ * directive, every other line belongs to the body the last body-directive opened,
+ * and outside a body only blank lines and '#' comments are legal. */
+
+typedef struct {
+    const char *ptr;
+    size_t len;
+} Slice;
+
+/* A NUL-terminated copy of `s`; an unopened slice becomes the empty string. */
+static char *dup_slice(Slice s) {
+    char *out = malloc(s.len + 1);
+    if (out == NULL) {
+        return NULL;
+    }
+    if (s.len > 0) {
+        memcpy(out, s.ptr, s.len);
+    }
+    out[s.len] = '\0';
+    return out;
+}
+
+/* Extend `body` to cover the line `[start, end)`, opening it if it is unopened. */
+static void extend(Slice *body, const char *start, const char *end) {
+    if (body->ptr == NULL) {
+        body->ptr = start;
+    }
+    body->len = (size_t)(end - body->ptr);
+}
+
+/* Run one golden case through the C ABI. Returns 0 on a byte-for-byte match. */
+static int run_vector_case(const char *regime, Slice input, Slice program,
+                           Slice closure, Slice report) {
+    char *input_s = dup_slice(input);
+    char *program_s = dup_slice(program);
+    char *closure_s = dup_slice(closure);
+    char *report_s = dup_slice(report);
+    PurrdfBuffer *nquads = NULL;
+    PurrdfBuffer *rendered = NULL;
+    PurrdfError *error = NULL;
+    int failed = 1;
+
+    if (input_s == NULL || program_s == NULL || closure_s == NULL ||
+        report_s == NULL) {
+        goto done;
+    }
+    if (purrdf_entail_materialize_to_nquads(input_s, regime, program_s, &nquads,
+                                            &rendered,
+                                            &error) != PURRDF_STATUS_OK) {
+        fprintf(stderr, "golden case (%s) did not materialize: %s\n", regime,
+                error == NULL ? "(no error)" : purrdf_error_message(error));
+        goto done;
+    }
+    const uint8_t *bytes = NULL;
+    size_t len = 0;
+    purrdf_buffer_data(nquads, &bytes, &len);
+    if (len != strlen(closure_s) || memcmp(bytes, closure_s, len) != 0) {
+        fprintf(stderr, "golden case (%s): closure mismatch through the C ABI\n",
+                regime);
+        goto done;
+    }
+    purrdf_buffer_data(rendered, &bytes, &len);
+    if (len != strlen(report_s) || memcmp(bytes, report_s, len) != 0) {
+        fprintf(stderr, "golden case (%s): report mismatch through the C ABI\n",
+                regime);
+        goto done;
+    }
+    failed = 0;
+
+done:
+    if (error != NULL) {
+        purrdf_error_free(error);
+    }
+    /* Two buffers out, two frees — the ownership contract the header states. */
+    if (rendered != NULL) {
+        purrdf_buffer_free(rendered);
+    }
+    if (nquads != NULL) {
+        purrdf_buffer_free(nquads);
+    }
+    free(report_s);
+    free(closure_s);
+    free(program_s);
+    free(input_s);
+    return failed;
+}
+
+/* Walk every case of the committed artifact. Returns the number of cases run,
+ * or -1 on any mismatch or malformed input. */
+static int check_golden_vector(const char *path) {
+    size_t length = 0;
+    uint8_t *raw = read_file(path, &length);
+    if (raw == NULL) {
+        fprintf(stderr, "cannot read the golden vector at %s\n", path);
+        return -1;
+    }
+    const char *text = (const char *)raw;
+    const char *end = text + length;
+    char regime[128];
+    regime[0] = '\0';
+    Slice input = {NULL, 0};
+    Slice program = {NULL, 0};
+    Slice closure = {NULL, 0};
+    Slice report = {NULL, 0};
+    int section = 0; /* 0 none, 1 input, 2 closure, 3 report, 4 program */
+    int cases = 0;
+    int failed = 0;
+
+    for (const char *line = text; line < end;) {
+        const char *newline = memchr(line, '\n', (size_t)(end - line));
+        const char *stop = newline == NULL ? end : newline + 1;
+        if (line[0] != '@') {
+            if (section == 1) {
+                extend(&input, line, stop);
+            } else if (section == 2) {
+                extend(&closure, line, stop);
+            } else if (section == 3) {
+                extend(&report, line, stop);
+            } else if (section == 4) {
+                extend(&program, line, stop);
+            }
+            line = stop;
+            continue;
+        }
+        size_t span = (size_t)((newline == NULL ? end : newline) - line);
+        section = 0;
+        if (span >= 8 && memcmp(line, "@regime ", 8) == 0) {
+            size_t n = span - 8;
+            if (n >= sizeof regime) {
+                n = sizeof regime - 1;
+            }
+            memcpy(regime, line + 8, n);
+            regime[n] = '\0';
+        } else if (span == 6 && memcmp(line, "@input", 6) == 0) {
+            section = 1;
+        } else if (span == 8 && memcmp(line, "@closure", 8) == 0) {
+            section = 2;
+        } else if (span == 7 && memcmp(line, "@report", 7) == 0) {
+            section = 3;
+        } else if (span == 8 && memcmp(line, "@program", 8) == 0) {
+            section = 4;
+        } else if (span == 4 && memcmp(line, "@end", 4) == 0) {
+            failed |= run_vector_case(regime, input, program, closure, report);
+            cases += 1;
+            regime[0] = '\0';
+            input.ptr = NULL;
+            input.len = 0;
+            program.ptr = NULL;
+            program.len = 0;
+            closure.ptr = NULL;
+            closure.len = 0;
+            report.ptr = NULL;
+            report.len = 0;
+        }
+        line = stop;
+    }
+    free(raw);
+    return failed != 0 ? -1 : cases;
+}
+
 int main(int argc, char **argv) {
-    CHECK(argc == 3, "shared OKF fixture and config arguments");
+    CHECK(argc == 4,
+          "shared OKF fixture, OKF config, and entailment golden vector arguments");
     /* ABI version */
     PurrdfAbiVersion version;
     CHECK(purrdf_abi_version(&version) == PURRDF_STATUS_OK, "abi_version");
@@ -262,6 +450,262 @@ int main(int argc, char **argv) {
     CHECK(bad_dataset == NULL && bad_error != NULL, "error set");
     CHECK(purrdf_error_message(bad_error) != NULL, "error message present");
     purrdf_error_free(bad_error);
+
+    /* ── entailment: the tri-host golden vector, and the reasoning services ── */
+    int golden_cases = check_golden_vector(argv[3]);
+    CHECK(golden_cases > 0, "the committed entailment golden vector runs through the C ABI");
+    printf("entailment golden vector: %d case(s) matched through the C ABI\n",
+           golden_cases);
+
+    /* the rule inventories: the specification's counts, which do not move */
+    PurrdfBuffer *rule_table = NULL;
+    rc = purrdf_entail_rules("owl-rl", &rule_table, &error);
+    CHECK(rc == PURRDF_STATUS_OK && rule_table != NULL, "entail_rules(owl-rl)");
+    const uint8_t *rule_bytes = NULL;
+    size_t rule_len = 0;
+    purrdf_buffer_data(rule_table, &rule_bytes, &rule_len);
+    CHECK(rule_len > 0, "the OWL 2 RL rule table is not empty");
+    purrdf_buffer_free(rule_table);
+
+    /* what this build fires BEYOND that table — a third, disjoint inventory. The
+     * exact bytes, not merely non-emptiness: a caller filtering for strictly
+     * normative conclusions has to be able to read the name. */
+    PurrdfBuffer *added = NULL;
+    rc = purrdf_entail_extensions("owl-rl", &added, &error);
+    CHECK(rc == PURRDF_STATUS_OK && added != NULL, "entail_extensions(owl-rl)");
+    const uint8_t *added_bytes = NULL;
+    size_t added_len = 0;
+    purrdf_buffer_data(added, &added_bytes, &added_len);
+    CHECK(added_len == strlen("ext-eq-diff-sym\n") &&
+              memcmp(added_bytes, "ext-eq-diff-sym\n", added_len) == 0,
+          "the OWL 2 RL lane's one extension is named");
+    printf("entail_extensions(owl-rl): %.*s", (int)added_len, (const char *)added_bytes);
+    purrdf_buffer_free(added);
+
+    /* and a lane with nothing added to it is EMPTY, not absent */
+    PurrdfBuffer *none = NULL;
+    rc = purrdf_entail_extensions("rdfs", &none, &error);
+    CHECK(rc == PURRDF_STATUS_OK && none != NULL, "entail_extensions(rdfs)");
+    const uint8_t *none_bytes = NULL;
+    size_t none_len = 0;
+    purrdf_buffer_data(none, &none_bytes, &none_len);
+    CHECK(none_len == 0, "RDFS has had no extension taken for it");
+    purrdf_buffer_free(none);
+
+    /* the OWL 2 Direct-Semantics services: an answer AND its certificate.
+     * `A ⊑ B ⊑ C` with one instance of `A` — enough to entail `A ⊑ C`, which is
+     * asserted nowhere. */
+    const char *taxonomy =
+        "<http://example.org/A> "
+        "<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .\n"
+        "<http://example.org/B> "
+        "<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .\n"
+        "<http://example.org/x> "
+        "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .\n";
+    const char *chain_axiom =
+        "<http://example.org/A> "
+        "<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .\n";
+
+    PurrdfBuffer *answer = NULL;
+    PurrdfBuffer *certificate = NULL;
+    const uint8_t *abytes = NULL;
+    size_t alen = 0;
+    const uint8_t *cbytes = NULL;
+    size_t clen = 0;
+
+    rc = purrdf_entail_consistency(taxonomy, 0, &answer, &certificate, &error);
+    CHECK(rc == PURRDF_STATUS_OK && answer != NULL && certificate != NULL,
+          "entail_consistency");
+    purrdf_buffer_data(answer, &abytes, &alen);
+    CHECK(alen == strlen("consistency true\n") &&
+              memcmp(abytes, "consistency true\n", alen) == 0,
+          "the taxonomy has a model");
+    purrdf_buffer_data(certificate, &cbytes, &clen);
+    CHECK(clen > 0 && memcmp(cbytes, "purrdf-dl-certificate 1\n",
+                             strlen("purrdf-dl-certificate 1\n")) == 0,
+          "the DL certificate is not the chase report");
+    purrdf_buffer_free(certificate);
+    purrdf_buffer_free(answer);
+
+    rc = purrdf_entail_entails(taxonomy, chain_axiom, 0, &answer, &certificate, &error);
+    CHECK(rc == PURRDF_STATUS_OK, "entail_entails");
+    purrdf_buffer_data(answer, &abytes, &alen);
+    CHECK(alen > strlen("entails true\n") &&
+              memcmp(abytes, "entails true\n", strlen("entails true\n")) == 0,
+          "the chain entails A subClassOf C");
+    purrdf_buffer_free(certificate);
+    purrdf_buffer_free(answer);
+
+    /* a narrowed step cap answers `unknown`, never `false`: the third
+     * completeness state, reachable through the C ABI. */
+    rc = purrdf_entail_entails(taxonomy, chain_axiom, 1, &answer, &certificate, &error);
+    CHECK(rc == PURRDF_STATUS_OK, "entail_entails under a narrowed cap");
+    purrdf_buffer_data(answer, &abytes, &alen);
+    CHECK(memcmp(abytes, "entails unknown\n", strlen("entails unknown\n")) == 0,
+          "an exhausted search is unknown, not false");
+    purrdf_buffer_data(certificate, &cbytes, &clen);
+    CHECK(contains_bytes(cbytes, clen, "completeness budget-exhausted\n"),
+          "the certificate says the budget ran out");
+    purrdf_buffer_free(certificate);
+    purrdf_buffer_free(answer);
+
+    rc = purrdf_entail_classify(taxonomy, 0, &answer, &certificate, &error);
+    CHECK(rc == PURRDF_STATUS_OK, "entail_classify");
+    purrdf_buffer_data(answer, &abytes, &alen);
+    CHECK(contains_bytes(abytes, alen, "subclass <http://example.org/A> <http://example.org/C>\n"),
+          "classification derives the transitive subsumption");
+    purrdf_buffer_free(certificate);
+    purrdf_buffer_free(answer);
+
+    rc = purrdf_entail_realize(taxonomy, 0, &answer, &certificate, &error);
+    CHECK(rc == PURRDF_STATUS_OK, "entail_realize");
+    purrdf_buffer_free(certificate);
+    purrdf_buffer_free(answer);
+
+    rc = purrdf_entail_instances(taxonomy, "<http://example.org/C>", 0, &answer,
+                                 &certificate, &error);
+    CHECK(rc == PURRDF_STATUS_OK, "entail_instances");
+    purrdf_buffer_data(answer, &abytes, &alen);
+    CHECK(alen == strlen("instance <http://example.org/x>\n") &&
+              memcmp(abytes, "instance <http://example.org/x>\n", alen) == 0,
+          "instance retrieval reaches through the hierarchy");
+    purrdf_buffer_free(certificate);
+    purrdf_buffer_free(answer);
+
+    rc = purrdf_entail_profile(taxonomy, &answer, &certificate, &error);
+    CHECK(rc == PURRDF_STATUS_OK, "entail_profile");
+    purrdf_buffer_data(answer, &abytes, &alen);
+    CHECK(memcmp(abytes, "certified EL\n", strlen("certified EL\n")) == 0,
+          "a bare sub-class taxonomy is in every profile, most restrictive first");
+    purrdf_buffer_data(certificate, &cbytes, &clen);
+    CHECK(contains_bytes(cbytes, clen, "one-directional true\n"),
+          "a certification proves membership; a violation does not disprove it");
+    purrdf_buffer_free(certificate);
+    purrdf_buffer_free(answer);
+
+    rc = purrdf_entail_extract_module(taxonomy, "<http://example.org/A>\n", "bot",
+                                      &answer, &certificate, &error);
+    CHECK(rc == PURRDF_STATUS_OK, "entail_extract_module");
+    purrdf_buffer_data(certificate, &cbytes, &clen);
+    CHECK(contains_bytes(cbytes, clen, "method BOT\n"),
+          "the extraction names the locality notion it used");
+    purrdf_buffer_free(certificate);
+    purrdf_buffer_free(answer);
+
+    rc = purrdf_entail_justify(taxonomy, chain_axiom, &answer, &certificate, &error);
+    CHECK(rc == PURRDF_STATUS_OK, "entail_justify");
+    purrdf_buffer_data(certificate, &cbytes, &clen);
+    CHECK(contains_bytes(cbytes, clen, "sufficient true\n") &&
+              contains_bytes(cbytes, clen, "minimal true\n"),
+          "the justification re-decides both halves of its claim");
+    purrdf_buffer_free(certificate);
+    purrdf_buffer_free(answer);
+
+    rc = purrdf_entail_explain_conclusion(
+        taxonomy, "owl-rl",
+        "<http://example.org/x> "
+        "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .\n",
+        &answer, &certificate, &error);
+    CHECK(rc == PURRDF_STATUS_OK, "entail_explain_conclusion");
+    purrdf_buffer_data(certificate, &cbytes, &clen);
+    CHECK(contains_bytes(cbytes, clen, "checked true\n"),
+          "the proof term re-derives against the clause program");
+    purrdf_buffer_free(certificate);
+    purrdf_buffer_free(answer);
+
+    /* the refusal path: neither out-param is written, so nothing is leaked */
+    PurrdfError *dl_error = NULL;
+    answer = NULL;
+    certificate = NULL;
+    rc = purrdf_entail_instances(taxonomy, "not a term", 0, &answer, &certificate,
+                                 &dl_error);
+    CHECK(rc == PURRDF_STATUS_PARSE_ERROR, "a malformed class term is refused");
+    CHECK(answer == NULL && certificate == NULL, "a failing DL call frees nothing");
+    CHECK(dl_error != NULL && purrdf_error_message(dl_error) != NULL,
+          "the refusal carries a message");
+    purrdf_error_free(dl_error);
+
+    /* ── the reasoning session ────────────────────────────────────────────
+       The one-shot calls above each parse and reverse-map the ontology again.
+       A session holds it. What is checked here is that the C surface REACHES
+       the session at all — the six services were briefly generated by a Rust
+       macro, which compiled and exported from the cdylib while cbindgen left
+       them out of this header, so the code below would not have linked. */
+    PurrdfReasoner *session = NULL;
+    rc = purrdf_reasoner_open(taxonomy, 0, &session, &error);
+    CHECK(rc == PURRDF_STATUS_OK && session != NULL, "reasoner_open");
+
+    /* Every service, through the handle, reusing ONE session: `instances` and
+       `entails` mutate the shared knowledge base, so a later call answering
+       differently would be state leaking between questions. */
+    PurrdfBuffer *s_answer = NULL;
+    PurrdfBuffer *s_cert = NULL;
+
+    rc = purrdf_reasoner_consistency(session, &s_answer, &s_cert, &error);
+    CHECK(rc == PURRDF_STATUS_OK, "reasoner_consistency");
+    purrdf_buffer_data(s_answer, &cbytes, &clen);
+    CHECK(contains_bytes(cbytes, clen, "consistency true"), "the session decides");
+    purrdf_buffer_free(s_answer);
+    purrdf_buffer_free(s_cert);
+
+    rc = purrdf_reasoner_classify(session, &s_answer, &s_cert, &error);
+    CHECK(rc == PURRDF_STATUS_OK, "reasoner_classify");
+    purrdf_buffer_free(s_answer);
+    purrdf_buffer_free(s_cert);
+
+    rc = purrdf_reasoner_realize(session, &s_answer, &s_cert, &error);
+    CHECK(rc == PURRDF_STATUS_OK, "reasoner_realize");
+    purrdf_buffer_free(s_answer);
+    purrdf_buffer_free(s_cert);
+
+    rc = purrdf_reasoner_instances(session, "<http://example.org/C>", &s_answer,
+                                   &s_cert, &error);
+    CHECK(rc == PURRDF_STATUS_OK, "reasoner_instances");
+    purrdf_buffer_free(s_answer);
+    purrdf_buffer_free(s_cert);
+
+    rc = purrdf_reasoner_entails(session,
+        "<http://example.org/A> "
+        "<http://www.w3.org/2000/01/rdf-schema#subClassOf> "
+        "<http://example.org/C> .\n",
+        &s_answer, &s_cert, &error);
+    CHECK(rc == PURRDF_STATUS_OK, "reasoner_entails");
+    purrdf_buffer_free(s_answer);
+    purrdf_buffer_free(s_cert);
+
+    rc = purrdf_reasoner_profile(session, &s_answer, &s_cert, &error);
+    CHECK(rc == PURRDF_STATUS_OK, "reasoner_profile");
+    purrdf_buffer_free(s_answer);
+    purrdf_buffer_free(s_cert);
+
+    rc = purrdf_reasoner_extract_module(session, "<http://example.org/C>", "star",
+                                        &s_answer, &s_cert, &error);
+    CHECK(rc == PURRDF_STATUS_OK, "reasoner_extract_module");
+    purrdf_buffer_free(s_answer);
+    purrdf_buffer_free(s_cert);
+
+    /* The SAME question the first call answered, now after six siblings ran on
+       this handle: the session must still say `consistency true`. */
+    rc = purrdf_reasoner_consistency(session, &s_answer, &s_cert, &error);
+    CHECK(rc == PURRDF_STATUS_OK, "reasoner_consistency after siblings");
+    purrdf_buffer_data(s_answer, &cbytes, &clen);
+    CHECK(contains_bytes(cbytes, clen, "consistency true"),
+          "a reused session does not change its answer");
+    purrdf_buffer_free(s_answer);
+    purrdf_buffer_free(s_cert);
+
+    /* The refusal path through the handle writes neither out-param. */
+    PurrdfError *sess_error = NULL;
+    s_answer = NULL;
+    s_cert = NULL;
+    rc = purrdf_reasoner_instances(session, "not a term", &s_answer, &s_cert,
+                                   &sess_error);
+    CHECK(rc == PURRDF_STATUS_PARSE_ERROR, "the session refuses a malformed term");
+    CHECK(s_answer == NULL && s_cert == NULL, "a failing session call frees nothing");
+    purrdf_error_free(sess_error);
+
+    purrdf_reasoner_free(session);
+    purrdf_reasoner_free(NULL); /* documented no-op */
 
     purrdf_dataset_free(dataset);
     printf("C smoke OK\n");

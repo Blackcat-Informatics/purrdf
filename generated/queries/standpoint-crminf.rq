@@ -4,7 +4,7 @@
 # J4 that an I4 Proposition Set J5 holds to be true/probable/possible/false.
 # The explicit belief value carries DENIAL faithfully (≥ CRMinf); the
 # proposition is referred to, never asserted as fact.
-# Branches B/C (#127): StandpointClaim with reified-statement or
+# Branches B/C: StandpointClaim with reified-statement or
 # generic-entity observedFeature. Generic entities use ?feature as the
 # referred-to subject.
 PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>

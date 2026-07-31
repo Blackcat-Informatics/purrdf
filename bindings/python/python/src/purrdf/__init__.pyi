@@ -4,15 +4,21 @@
 # Type stub for the purrdf PyO3 extension. The signatures are transcribed
 # verbatim from bindings/python/src/rdf.rs (the statement codec) and
 # bindings/python/src/py_store.rs (the native Store / SPARQL / parse /
-# canonicalize surface, #667) — keep them in lockstep with those files (they are
+# canonicalize surface) — keep them in lockstep with those files (they are
 # the ABI source of truth). This stub describes the native `purrdf` term /
 # result / store surface — the in-repo binding that replaced the external RDF
-# package removed in #667.
+# package that no longer exists.
 
 from __future__ import annotations
 
 import builtins
-from typing import IO, Any, Callable, Literal, TypedDict, overload
+from typing import IO, Any, Callable, TypeAlias, TypedDict, overload
+
+# `Literal` is aliased because this package DEFINES an RDF `Literal` class below.
+# Importing typing's under its own name shadows it, and mypy then resolves the RDF
+# class in `_Term` to `typing.Literal` and demands type parameters for it. Same
+# reason `builtins` is imported qualified above.
+from typing import Literal as TypingLiteral
 
 # ── Statement codec (bindings/python/src/rdf.rs) ────────────────────────────────
 
@@ -26,7 +32,7 @@ def canonicalize_turtle(
 
 # ── Deterministic graph/tabular/research-object projection carriers ────────────
 
-type ProjectionProfile = Literal[
+type ProjectionProfile = TypingLiteral[
     "lpg-csv",
     "neo4j-csv",
     "open-cypher",
@@ -44,7 +50,7 @@ type ProjectionProfile = Literal[
     "void",
     "frictionless-data-package-1",
 ]
-type LiftProfile = Literal[
+type LiftProfile = TypingLiteral[
     "lpg-csv",
     "neo4j-csv",
     "open-cypher",
@@ -56,7 +62,7 @@ type LiftProfile = Literal[
     "dcat-3",
     "frictionless-data-package-1",
 ]
-type ArtifactEvent = Literal[
+type ArtifactEvent = TypingLiteral[
     "begin-package",
     "begin-artifact",
     "chunk",
@@ -136,7 +142,7 @@ def project_artifacts(
     data: bytes | str,
     *,
     format: RdfFormat,
-    profile: Literal["lpg-csv", "neo4j-csv", "open-cypher", "graphml"],
+    profile: TypingLiteral["lpg-csv", "neo4j-csv", "open-cypher", "graphml"],
     config: bytes | str,
     artifact_callback: Callable[[ArtifactEvent, str | None, bytes], None],
     progress_callback: Callable[[ProjectionProgress], None] | None = ...,
@@ -296,6 +302,7 @@ class Store:
         format: RdfFormat | None = ...,
         *,
         path: str | None = ...,
+        base: str | None = ...,
     ) -> None: ...
     def bulk_load(
         self,
@@ -358,6 +365,7 @@ class MutableDataset:
         format: RdfFormat | None = ...,
         *,
         path: str | None = ...,
+        base: str | None = ...,
     ) -> None: ...
     def add(self, quad: Quad) -> bool: ...
     def remove(self, quad: Quad) -> bool: ...
@@ -456,11 +464,11 @@ def serialize_sparql_boolean(format: str, value: bool) -> bytes: ...
 # — a heterogeneous tuple discriminated by its first element.
 def parse_sparql_results(format: str, data: bytes) -> tuple[Any, ...]: ...
 
-# ── RDF → GTS producer (bindings/python/src/py_gts.rs, #819 Task 8) ──────────────
+# ── RDF → GTS producer (bindings/python/src/py_gts.rs) ──────────────────────────
 
 #: A `(data, media_type, rep)` content-addressed blob row.
 _BlobRow = tuple[bytes, str, str]
-#: A `(slice_iri, slice_name, role, logical_path, content)` row (#820 S3).
+#: A `(slice_iri, slice_name, role, logical_path, content)` row.
 _SliceArtifactRow = tuple[str, str, str, str, bytes]
 #: A `(data, format, graph_name, scope)` named-graph ingest row.
 _NamedGraphRow = tuple[bytes, RdfFormat, str | None, str | None]
@@ -500,7 +508,7 @@ def compile_gts_native(
 ) -> bytes: ...
 def snapshot_content_id_native(data: bytes, *, format: RdfFormat) -> str: ...
 
-# ── Text-format codecs via purrdf-gts (JSON-LD-star + RDF/XML, #834) ──────────────
+# ── Text-format codecs via purrdf-gts (JSON-LD-star + RDF/XML) ─────────────────
 # RDF bytes ↔ JSON-LD-star / RDF/XML through the purrdf-gts codec set. The compat
 # `Graph.serialize`/`parse` route these formats here; serialize takes RDF bytes in
 # `format` and returns the text form, parse takes the text and returns N-Quads bytes.
@@ -629,12 +637,18 @@ def gts_to_sqlite(data: bytes, path: str) -> str: ...
 def gts_to_duckdb(data: bytes, path: str) -> str: ...
 def gts_to_parquet(data: bytes, out_dir: str) -> list[str]: ...
 
-# A Python handle to a frozen, immutable RDF 1.2 dataset (#819 C7 foundation).
+# A Python handle to a frozen, immutable RDF 1.2 dataset.
 class RdfDataset:
     def __init__(self, data: bytes | str, format: RdfFormat) -> None: ...
     def quad_count(self) -> int: ...
     def term_count(self) -> int: ...
     def __len__(self) -> int: ...
+    # Canonical (RDFC-1.0) flat N-Quads — the readable surface of a frozen
+    # dataset, and the same serializer the shared string boundary uses. N-Triples
+    # is a syntactic subset, so a default-graph-only dataset serializes to a valid
+    # N-Triples document; one that names graphs keeps the graph term. There is
+    # deliberately no `to_ntriples` alias: one serializer, one name.
+    def to_nquads(self) -> str: ...
     def serialize_jsonld(
         self,
         output_format: str,
@@ -645,7 +659,7 @@ class RdfDataset:
     ) -> str: ...
     def to_gts(self, profile: str = ...) -> bytes: ...
 
-# ── Native SSSOM codec (bindings/python/src/py_sssom.rs, #848) ──────────────────
+# ── Native SSSOM codec (bindings/python/src/py_sssom.rs) ───────────────────────
 # Parse + validate + RDF serialize for PurRDF SSSOM TSV mapping artifacts — the
 # in-repo replacement for the external `sssom` package. `validate_sssom` returns
 # one `SssomDiagnostic` dict per diagnostic (a parse failure surfaces as a single
@@ -744,6 +758,169 @@ class shapes:
 
 # Back-compat alias for the native submodule's own name.
 shacl = shapes
+
+# ── Entailment regimes (bindings/python/src/py_entail.rs, purrdf_native.entail) ──
+# SPARQL entailment-regime materialization, surfaced as `purrdf.entail`. NOT the
+# same mechanism as `shapes.entail` above: that one applies the SHACL-AF sh:rules
+# a shapes graph declares, this one closes a document under a regime's own
+# specification rule table (no shapes involved).
+
+class _Regime:
+    """A SPARQL entailment regime (`purrdf.entail.Regime.OWL_RL`)."""
+
+    SIMPLE: _Regime
+    RDF: _Regime
+    RDFS: _Regime
+    OWL_RL: _Regime
+    OWL_DIRECT: _Regime
+    RIF: _Regime
+    D: _Regime
+
+# Every entry point accepts either a `Regime` member or the regime's CLI spelling
+# ("simple", "rdf", "rdfs", "owl-rl", "owl-direct", "rif", "d"); anything else
+# raises ValueError naming the accepted set.
+type RegimeLike = _Regime | str
+
+class entail:
+    # Spelled with an explicit `TypeAlias` (rather than the bare `X = _X` the
+    # namespaces above use) because `purrdf.entail.Regime` is a *type* every call
+    # site annotates with; a plain assignment reads to mypy as a variable and is
+    # then rejected in annotation position.
+    Regime: TypeAlias = _Regime
+    # Close a frozen RdfDataset under `regime`, returning (closure, report). The
+    # report is never optional: it names which rules fired, which specification
+    # rules did not, and the calculus's contract hash. Read the closure with
+    # `closure.to_nquads()`. Raises ValueError for an unknown regime spelling
+    # and for a `program` that is wrong for the regime. EVERY regime
+    # materializes, including `owl-direct` and `rif`; `program` is the rule
+    # document `rif` entails under and must be `""` for every other regime,
+    # because a caller who passed rules to `rdfs` believes they ran.
+    @staticmethod
+    def materialize(
+        dataset: RdfDataset, regime: RegimeLike, program: str
+    ) -> tuple[RdfDataset, str]: ...
+    # The text-in/text-out twin of `materialize`: an N-Quads (or N-Triples)
+    # document in, canonical (RDFC-1.0) N-Quads plus the rendered report out.
+    @staticmethod
+    def materialize_nt(
+        data: str, regime: RegimeLike, program: str
+    ) -> tuple[str, str]: ...
+    # The rule table the specification DEFINES the regime by, in table order
+    # (78 rules for OWL-RL, 18 for RDFS, 5 for D, 3 for RDF; `simple`, `owl-direct`
+    # and `rif` have no specification table of their own, so `[]`).
+    @staticmethod
+    def rules(regime: RegimeLike) -> list[str]: ...
+    # The subset of `rules(regime)` this workspace's chase actually fires. The
+    # difference between the two is the regime's measurable gap.
+    @staticmethod
+    def implemented_rules(regime: RegimeLike) -> list[str]: ...
+    # The rules this build fires BEYOND the specification table, disjoint from
+    # both lists above. Non-normative and named, so a caller can tell what this
+    # build adds without materializing a dataset to read a report line.
+    @staticmethod
+    def extensions(regime: RegimeLike) -> list[str]: ...
+
+    # ── The OWL 2 Direct-Semantics reasoning services ────────────────────────
+    # A different LANE from the four above. `materialize*` is the chase, whose
+    # report reads `completeness exact | sound-incomplete <n>` — a difference of
+    # two rule tables. Everything below is the tableau, whose certificate reads
+    # `completeness decided | decided-within-boundaries | budget-exhausted`. The
+    # DL lane has no rule table to subtract, so reusing the chase's notion would
+    # report "exact" for a search that ran out of budget; the two renderings carry
+    # different banners so neither can be parsed as the other.
+    #
+    # Every service returns `(answer, certificate)`. The pair is a tuple, so a
+    # caller must UNPACK the evidence rather than being able to not ask for it.
+    #
+    # `step_cap` narrows the per-decision tableau step cap; 0 (the default) means
+    # the knowledge base's own cap, NOT a cap of zero steps. It can only narrow,
+    # so it cannot make a hard instance answerable — only make the
+    # `budget-exhausted` certificate reachable.
+
+    # Does the knowledge base have a model at all? The answer is one line,
+    # `consistency true|false|unknown`. The only DL service that answers for an
+    # unsatisfiable ontology, because it is the one that detects one.
+    @staticmethod
+    def consistency(data: str, step_cap: int = ...) -> tuple[str, str]: ...
+    # The entailed subsumption hierarchy over the named classes: `equivalent`,
+    # `subclass` (the full transitive closure), `direct` (its reduction) and
+    # `unsatisfiable` lines, in that block order. Raises ValueError for an
+    # ontology with no model, where every class subsumes every other.
+    @staticmethod
+    def classify(data: str, step_cap: int = ...) -> tuple[str, str]: ...
+    # The entailed types of the named individuals (`type` lines) and the most
+    # specific of them (`direct-type` lines).
+    @staticmethod
+    def realize(data: str, step_cap: int = ...) -> tuple[str, str]: ...
+    # The named individuals entailed to be instances of `class_`, as
+    # `instance <term>` lines. `class_` is ONE N-Triples term, angle brackets
+    # included. A class the ontology never mentions yields an empty answer, which
+    # is a real answer rather than an error.
+    @staticmethod
+    def instances(data: str, class_: str, step_cap: int = ...) -> tuple[str, str]: ...
+    # Does the ontology entail `axiom`? `axiom` is ONE triple of the OWL 2 RDF
+    # mapping: rdfs:subClassOf, owl:equivalentClass, owl:disjointWith, rdf:type,
+    # owl:sameAs, owl:differentFrom and rdfs:subPropertyOf select the seven named
+    # axiom kinds, and any other predicate is an object-property assertion. The
+    # answer is `entails true|false|unknown` followed by the axiom AS READ.
+    @staticmethod
+    def entails(data: str, axiom: str, step_cap: int = ...) -> tuple[str, str]: ...
+    # Which OWL 2 profiles the ontology is provably in (`certified <profile>`
+    # lines, most restrictive first: EL, QL, RL, DL, Full) and what blocked the
+    # others. Purely syntactic, so the certificate is an OWL profile certificate
+    # rather than a DL one — there is no search whose completeness to report.
+    @staticmethod
+    def profile(data: str) -> tuple[str, str]: ...
+    # The locality module for a seed signature (one N-Triples term per line) under
+    # `method` ("bot", "top" or "star"). The answer is the module as canonical
+    # N-Quads; the certificate's `conservative` line says whether it is the
+    # minimal module or a sound superset.
+    @staticmethod
+    def extract_module(data: str, signature: str, method: str) -> tuple[str, str]: ...
+    # WHY a DL axiom is entailed: a minimal subset of the ontology that still
+    # entails it, as canonical N-Quads. A tableau performs no derivation steps, so
+    # this is a JUSTIFICATION and deliberately not called a proof. The
+    # certificate's `sufficient` and `minimal` lines are RE-DECIDED here, so they
+    # check the answer rather than restate it.
+    @staticmethod
+    def justify(data: str, axiom: str) -> tuple[str, str]: ...
+    # WHY one triple of a chase closure holds: which rules, from which premises.
+    # `conclusion` is ONE N-Quads statement. The certificate's `derived-*` lines
+    # are what the CHECKER re-derived from the proof term and the clause program,
+    # not what the proof claims. Raises ValueError for RDF and RDFS, four of whose
+    # rules have existential heads with no checkable proof term.
+    @staticmethod
+    def explain_conclusion(
+        data: str, regime: RegimeLike, conclusion: str
+    ) -> tuple[str, str]: ...
+
+    # ── The session ──────────────────────────────────────────────────────────
+    # Every service above takes the document as a string and rebuilds everything
+    # it needs, so asking three questions parses and reverse-maps the ontology
+    # three times. `Reasoner` holds the parsed document: constructing it parses
+    # once, the first question needing a knowledge base reverse-maps once, and
+    # later questions reuse both. The methods answer exactly what the same-named
+    # functions answer — they ARE the session those functions now wrap — so
+    # moving between the two cannot change an answer or a certificate.
+    #
+    # The knowledge base is built lazily and NOT by the constructor: `profile`,
+    # `extract_module`, `justify` and `explain_conclusion` never reason, and
+    # `profile` answers for any parseable document — including one whose
+    # `owl:hasKey` axioms would exhaust the tableau while it was reverse-mapped.
+    class Reasoner:
+        def __init__(self, data: str, step_cap: int = ...) -> None: ...
+        def consistency(self) -> tuple[str, str]: ...
+        def classify(self) -> tuple[str, str]: ...
+        def realize(self) -> tuple[str, str]: ...
+        def instances(self, class_: str) -> tuple[str, str]: ...
+        def entails(self, axiom: str) -> tuple[str, str]: ...
+        def profile(self) -> tuple[str, str]: ...
+        def extract_module(self, signature: str, method: str) -> tuple[str, str]: ...
+        def justify(self, axiom: str) -> tuple[str, str]: ...
+        def explain_conclusion(
+            self, regime: RegimeLike, conclusion: str
+        ) -> tuple[str, str]: ...
+        def __repr__(self) -> str: ...
 
 # ── GTS surface grouping (purrdf.gts) ────────────────────────────────────────────
 # The GTS entry points are also present at the purrdf root (declared above); the

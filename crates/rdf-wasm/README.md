@@ -8,8 +8,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 `purrdf` is a `wasm32`, **in-memory** RDF 1.2 engine compiled from the oxigraph-free
 [`purrdf`](../purrdf) umbrella crate and surfaced to JavaScript/TypeScript through the
 [RDF/JS](https://rdf.js.org/) community spec (`DataFactory`, `DatasetCore`,
-`Stream`/`Sink`). It is parcel **P10** of the purrdf program
-([`docs/design/PurRDF-PLAN.md`](../../docs/design/PurRDF-PLAN.md)).
+`Stream`/`Sink`).
 
 This crate (`purrdf-wasm`) is the Rust cdylib; the published npm/ESM package lives
 in [`js/`](./js/) and is named **`@blackcatinformatics/purrdf`**.
@@ -58,8 +57,9 @@ const reparsed = Dataset.parse(nq, "nquads");
   `quotedTriple`, `fromTerm`, `fromQuad`.
 - **`Dataset`** (RDF/JS `DatasetCore`) — `Dataset.parse(input, format, base?)`,
   `serialize(format)`, `add`/`delete`/`has`/`match`/`quads`/`size`, and iteration
-  (`for (const quad of dataset)`). Formats: `turtle`, `ntriples`, `nquads`, `trig`,
-  `rdfxml` (or their media types); `serialize` additionally accepts `jsonld`.
+  (`for (const quad of dataset)`). Formats, for both `parse` and `serialize`:
+  `turtle`, `ntriples`, `nquads`, `trig`, `rdfxml`, `jsonld`, `yamlld` (or their
+  media types).
 - **Graph identity** — `Dataset.canonicalize()` returns the RDFC-1.0 canonical, flat
   N-Quads for the graph; `Dataset.isomorphic(other)` decides RDF graph equality under
   blank-node relabeling (an exact oracle backed by full RDFC-1.0 canonicalization).
@@ -72,6 +72,16 @@ const reparsed = Dataset.parse(nq, "nquads");
   graph against a Turtle shapes graph and returns a SARIF 2.1.0 report;
   `shaclEntail(shapesTtl, dataNt)` materializes the SHACL-AF `sh:rule` inferences as
   N-Triples.
+- **Entailment regimes** — `entailMaterialize(document, regime, program)` closes an N-Quads
+  (or N-Triples) document under any of the SEVEN SPARQL entailment regimes
+  (`simple` / `rdf` / `rdfs` / `owl-rl` / `d` / `owl-direct` / `rif`; none is
+  refused for being the regime it is) and returns both the canonical N-Quads closure and a
+  byte-stable reasoning report; `entailRules(regime)` /
+  `entailImplementedRules(regime)` expose the specification's rule table and the
+  subset this build fires, so the gap is measurable rather than asserted. Unlike
+  `shaclEntail` these take no shapes graph. `entailCheckGoldenVectors()` replays
+  the project's committed cross-host golden vector artifact through the loaded
+  wasm and throws on the first byte that differs from the native reference.
 - **`Sink`** — a streaming consumer (`push(quad)` / `finish() → Dataset`) over the
   `purrdf-events` ingestion protocol; **`datasetToStream`** / **`streamToDataset`**
   are the async RDF/JS Stream/Sink helpers.
@@ -99,8 +109,10 @@ triple is never rendered as asserted unless an assertion occurrence is present.
   `SERVICE` and `LOAD` fail explicitly.
 - Text codecs ride purrdf's native codecs — no Store dependency and no
   `purrdf-gts` RDF-codec feature.
-- A quoted-triple term as a quad **object** currently round-trips only through
-  **N-Quads** (a current native serializer limitation for the other formats).
+- A quoted-triple term as a quad **object** round-trips through every format
+  this surface accepts — `turtle`, `trig`, `ntriples`, `nquads`, `jsonld`,
+  `yamlld`, and `rdfxml` (via `rdf:parseType="Triple"`) — byte-identically
+  under RDFC-1.0 canonicalization.
 
 ## Building
 

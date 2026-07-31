@@ -1,4 +1,4 @@
-# Audit (#55): per-claim grounded-span counts by polarity — the mechanical
+# Audit: per-claim grounded-span counts by polarity — the mechanical
 # substrate of faithfulness (AIS: coverage over groundedIn links).
 PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 SELECT ?claim (COUNT(?span) AS ?spans) (SUM(IF(?polarity = gmeow:polarityRefutes, 1, 0)) AS ?refuting) WHERE {

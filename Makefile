@@ -35,13 +35,58 @@ BINARYEN_VERSION := 130
 # engines, the native format registry (now including JSON-LD/YAML-LD),
 # deterministic layout, SVG export, all sixteen graph/tabular/
 # dataset-description/research-object projection profiles, the compiled JSON-LD
-# context/options/registry engine, and validation-scoped asserted-subclass
-# membership shared by native SHACL and SHACL-SPARQL — measures 8_148_368 bytes;
-# 8_400_000 keeps 3.09% headroom. The always-on bounded CONSTRUCT engine, mapped
-# native DCAT RDF emitter, lossless native description serializer, VoID
-# statistics/partition/linkset generator, and shared class-membership view are
-# the capabilities responsible for this reviewed increase. The artifact's size
-# is a joint function of
+# context/options/registry engine, validation-scoped asserted-subclass
+# membership shared by native SHACL and SHACL-SPARQL, and now the entailment
+# engine, the nine OWL reasoner services AND the concrete domain — measures
+# 9_506_455 bytes against the 9_690_000 ceiling, which is 1.89% headroom. That
+# figure is RECORDED AS A GATED CONSTANT below (WASM_SIZE_MEASURED_BYTES), not as
+# prose: it had already drifted 139_211 bytes behind the build once, because a
+# comment is the one part of this file nothing checks.
+#
+# The ceiling moved 9_430_000 -> 9_690_000 here, and the reason is a capability
+# rather than a red gate: purrdf-xsd gained a datatype-range satisfiability
+# decider (facet intersection and complement over the XSD value space, deciding
+# whether a data range is EMPTY), and owl_dl wired it in so OWL 2 data ranges are
+# decided instead of being read and set aside at a boundary. The artifact fit the
+# old ceiling with 0.355% left, which is below the 'few percent' this procedure
+# asks for — and a ceiling that tight is one that gets raised under pressure by
+# whoever next adds anything, which is the failure this procedure exists to
+# prevent. Taking the raise here, with the capability that earned it named, is
+# the honest form of that decision.
+#
+# Two reviewed increases, in order. First, crates/rdf-wasm/src/entail.rs began
+# exporting regimes, rule inventories and materialization, so purrdf-entail and
+# the purrdf-datalog engine under it became reachable from an exported symbol
+# and linked in for the first time — the 78-rule OWL 2 RL table, the RDF/RDFS/D
+# tables, the existential chase, the 93-entry construct table and the OWL-Direct
+# tableau — taking 8_148_368 to 8_779_131.
+#
+# Second, the same module now exports the nine reasoner services (consistency,
+# classify, realize, instances, entails, profile, extract_module, justify,
+# explain_conclusion). Before them, roughly ten thousand lines of reasoning were
+# reachable from no host at all; leaving them Rust-only would have been a
+# producer with no consumer, and dropping the three largest from wasm alone
+# would have left one of the four hosts unable to reach what the other three
+# can. Attributed by ablation, three full builds on the pinned toolchain. The
+# rows below are HISTORICAL-MEASUREMENTS: each is what the artifact measured
+# when that capability landed, not what it measures today.
+#
+#   baseline (materialize + inventories)          8_779_131
+#   + six tableau services                        9_011_119   (+231_988)
+#   + profile, extract_module                     9_075_983   (+64_864)
+#   + explain_conclusion                          9_148_895   (+72_912)
+#
+# Those four rows are the attribution measured when the services landed; the
+# deltas are what they cost, and the last row is not the current artifact.
+# END-HISTORICAL. The 139_211 bytes between that last row and 9_288_106 are the
+# extension rule family, the call-scoped plan cache, the surfaced termination
+# certificate and the extension inventory binding, all of which reached wasm
+# afterwards.
+#
+# The largest single item is explain_conclusion: it is the only reachable
+# consumer of purrdf-datalog's proof terms, so the proof arena, its canonical
+# encoding and its re-deriving checker link in for the first time. The
+# artifact's size is a joint function of
 # rustc (tracks stable), wasm-bindgen (pinned in Cargo.toml), and binaryen
 # (pinned via BINARYEN_VERSION), so a moved number is attributable.
 #
@@ -51,7 +96,61 @@ BINARYEN_VERSION := 130
 # artifact grew: a new capability or dependency, or a routine rustc-stable /
 # binaryen bump (a valid, must-be-explained reason). Never raise it merely to
 # turn a red gate green.
-WASM_SIZE_BUDGET_BYTES := 8400000
+WASM_SIZE_BUDGET_BYTES := 9690000
+
+# The size the artifact ACTUALLY measures on the pinned toolchain, gated by
+# `wasm-pkg-size` so it cannot fall behind the build the way the comment above
+# once did. Unlike the ceiling this is not a limit: any change moves it, and the
+# gate fails until it is updated in the same commit that moved it. That is the
+# point — it converts "someone will notice the artifact grew" into a red gate,
+# and it is why the growth attribution above can be trusted.
+#
+# The 25_735 bytes between 9_288_106 and 9_313_841 were the
+# consequence-based classifier (crates/entail/src/owl_dl/saturate.rs): a
+# normalization pass over the concept table plus the saturation fixpoint that
+# derives the whole class taxonomy at once, which the exported `classify` and
+# `realize` services now reach instead of running one tableau refutation per
+# ordered pair of named classes. It replaced an algorithm rather than adding a
+# capability, and did not move the ceiling; the concrete domain, which followed
+# it, is what moved the ceiling to 9_690_000.
+#
+# The decrease 9_396_985 -> 9_396_718 is the combined approach
+# (crates/entail/src/combined.rs) and the goal-directed backward-resolution
+# modules under crates/datalog/src/{term,unify,resolve_fol}.rs: neither is
+# reachable from any symbol crates/rdf-wasm/src/entail.rs exports, so both are
+# dead-code-eliminated from this artifact entirely, and the byte delta is
+# ordinary codegen jitter from the touched-but-still-linked `Construct` enum
+# and id-brand additions rather than a capability moving the artifact at all.
+#
+# The increase 9_405_331 -> 9_506_455 is the backward cross-check reaching the
+# artifact: every chase explanation is now re-derived by SLG resolution over the same
+# clause program, so `resolve_fol` and `unify` link in. It is the largest single
+# addition on this branch and it buys a second, independent derivation of every
+# conclusion the explanation path reports — a disagreement fails the call rather than
+# being handed back as a proof. Still under WASM_SIZE_BUDGET_BYTES, so this is a
+# measurement update and not a ceiling raise.
+# The increase 9_396_449 -> 9_405_331 is the reasoning session reaching the
+# artifact: a `Reasoner` class over the shared boundary's `ReasonerSession`, so a
+# browser pays one parse and one reverse mapping for N questions instead of N of
+# each. It is nine methods and a handle over code the artifact already carried —
+# the services themselves did not change — which is why a whole new host-facing
+# class costs under nine kilobytes. Still far below WASM_SIZE_BUDGET_BYTES, so
+# this is a measurement update and not a ceiling raise.
+# The increase 9_393_818 -> 9_396_449 is the combined approach's algebra
+# restriction and witness scrub reaching the artifact through the umbrella's
+# query path, plus the counting-on-inverse boundary: the shared limit of both
+# decision cores carried on every certificate instead of stated in one module
+# doc.
+# The decrease 9_396_718 -> 9_393_818 is the OWL-Direct decision core becoming a
+# hypertableau over DL-clauses (crates/entail/src/owl_dl/{clause,graph,hyper}.rs).
+# It is a REPLACEMENT, not an addition: the concept-tree tableau it supersedes is
+# now compiled under cfg(test) as the new core's differential reference, so it
+# leaves the artifact entirely, and the clause compiler plus the three-rule search
+# that replace it come to slightly less than it cost. The completion graph itself
+# is shared by both, so it is linked exactly once either way.
+#
+# The measured constant below is the CURRENT size, not that intermediate figure.
+WASM_SIZE_MEASURED_BYTES := 9506455
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -73,6 +172,7 @@ check: ## The full local gate: fmt, clippy, build, tests, hygiene.
 	bash scripts/check-generated.sh
 	python3 scripts/check-issue-refs.py
 	python3 scripts/check-versions.py
+	python3 scripts/check-wasm-js-exports.py
 	cargo test --workspace --locked
 	$(MAKE) rdf-core-hygiene
 	$(MAKE) wasm
@@ -145,7 +245,7 @@ release-tags: ## Cut + push rust-v/py-v/npm-v tags for VERSION after coherence c
 test: ## Run the workspace test suite.
 	cargo test --workspace --locked
 
-doc: ## Build docs for the 17 publishable crates with rustdoc warnings denied.
+doc: ## Build docs for the 18 publishable crates with rustdoc warnings denied.
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance --exclude purrdf-cli
 
 book-samples: ## Regenerate deterministic SVG visualization samples embedded in The PurRDF Book.
@@ -170,7 +270,7 @@ book: book-samples ## Build The PurRDF Book (mdBook user guide) into docs/book/b
 	mdbook build docs/book
 
 bench: ## Run criterion benchmarks (report-only; never a gate).
-	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-sparql-eval -p purrdf-shapes -p purrdf-wasm
+	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-sparql-eval -p purrdf-shapes -p purrdf-wasm -p purrdf-entail
 
 columnar-oracle: ## Verify production Parquet files through the dev-only DuckDB oracle.
 	bash scripts/check-columnar-oracle.sh
@@ -230,6 +330,7 @@ wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if ta
 	@if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
 		cargo build --locked --release --target wasm32-unknown-unknown --lib \
 			-p purrdf-events -p purrdf-iri -p purrdf-xsd -p purrdf-gts -p purrdf-core -p purrdf-columnar \
+			-p purrdf-datalog \
 			-p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-sparql-eval \
 			-p purrdf-rdf -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf-entail \
 			-p purrdf-validate -p purrdf -p purrdf-wasm; \
@@ -291,6 +392,15 @@ wasm-pkg-size: wasm-pkg ## Gate the optimized wasm artifact byte size against WA
 	 size=$$(wc -c < "$$art" | awk '{print $$1}'); \
 	 gz=$$(gzip -9nc < "$$art" | wc -c | awk '{print $$1}'); \
 	 pct=$$(( size * 100 / budget )); \
+	 recorded=$(WASM_SIZE_MEASURED_BYTES); \
+	 if [ "$$size" != "$$recorded" ]; then \
+	   echo "ERROR: the artifact measures $$size bytes but WASM_SIZE_MEASURED_BYTES records $$recorded."; \
+	   echo "  The recorded size is not a ceiling — it is the measurement this repository publishes."; \
+	   echo "  Set WASM_SIZE_MEASURED_BYTES to $$size in the same commit that moved the artifact, and"; \
+	   echo "  say in that commit WHY it moved. If the move also crosses WASM_SIZE_BUDGET_BYTES, follow"; \
+	   echo "  the ceiling-raise procedure in the comment above rather than raising it to go green."; \
+	   exit 1; \
+	 fi; \
 	 raw="$(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/purrdf_wasm.wasm"; \
 	 if [ -s "$$raw" ]; then rawsz=$$(wc -c < "$$raw" | awk '{print $$1}'); reduc=$$(( (rawsz - size) * 100 / rawsz )); \
 	   ratio="cargo release wasm $$rawsz B -> optimized $$size B (-$$reduc%)"; \

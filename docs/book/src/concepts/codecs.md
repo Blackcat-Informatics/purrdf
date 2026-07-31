@@ -6,7 +6,7 @@ SPDX-License-Identifier: CC-BY-4.0
 # Codecs & Determinism
 
 PurRDF ships **first-party** parsers and serializers — no wrapped third-party
-codec — for seven formats:
+codec — for nine formats:
 
 | Format | Media type | Star-capable |
 | --- | --- | --- |
@@ -15,6 +15,8 @@ codec — for seven formats:
 | N-Triples | `application/n-triples` | yes |
 | N-Quads | `application/n-quads` | yes |
 | RDF/XML | `application/rdf+xml` | no |
+| TriX | `application/trix` | no |
+| HexTuples | `application/x-hextuples` | no |
 | JSON-LD (star) | `application/ld+json` | yes |
 | YAML-LD | `application/ld+yaml` | yes |
 

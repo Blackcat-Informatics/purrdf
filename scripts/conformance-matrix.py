@@ -281,6 +281,131 @@ def _suite_sparql() -> SuiteResult:
     )
 
 
+def _suite_entailment() -> SuiteResult:
+    """W3C OWL 2 suite graded against the native `OWL-Direct` SHOIQ(D) tableau.
+
+    This row is CONSISTENCY-shaped and says so: all 261 vendored cases are
+    `otest:ConsistencyTest` / `otest:InconsistencyTest`, so it measures the
+    DL/tableau lane's satisfiability verdicts. It does NOT measure the OWL 2 RL
+    rule table; that lane has its own row (`_suite_entailment_rl`), graded
+    against W3C's own entailment tests. Entailment used to fold silently into the
+    SPARQL row, where a regression in it was invisible.
+
+    The corpus is also a SUBSET of what W3C published — 261 of the 482
+    consistency-shaped upstream cases — so the harness emits a second line,
+    `OWL2-DL-EXCLUDED`, tallying what the other 221 would do. It is scraped into
+    this row's note so the pass count is never read as the whole upstream
+    material: most of the exclusions are cases the tableau decided when the
+    exclusion was probed (a recorded measurement in census.tsv's dl_probe
+    column, not a live run — the harness reads the column and cannot detect a
+    regression among the excluded cases).
+    """
+    cmd = [
+        "cargo", "test", "-p", "purrdf-sparql-conformance", "--locked",
+        "--test", "owl2_conformance", "--", "--nocapture",
+    ]
+    rc, out = _run(cmd, _REPO_ROOT)
+    _, _, cargo_failed = _cargo_tally(out)
+    m = re.search(
+        r"OWL2-ENTAILMENT: agreed (\d+) ledgered (\d+) unledgered (\d+) "
+        r"stale (\d+) total (\d+)",
+        out,
+    )
+    if m:
+        agreed, ledgered, unledgered, stale, total = (int(m.group(i)) for i in range(1, 6))
+        detail = f"{agreed}/{total} DL consistency verdicts · {ledgered} ledgered"
+        excluded = re.search(
+            r"OWL2-DL-EXCLUDED: total (\d+) non-terminating (\d+) decides (\d+) "
+            r"withholds (\d+) no-premise (\d+)",
+            out,
+        )
+        if excluded:
+            ex_total, non_term, decides, withholds, no_premise = (
+                int(excluded.group(i)) for i in range(1, 6)
+            )
+            detail = _augment(
+                detail,
+                f"corpus is a subset: {ex_total} more consistency-shaped cases "
+                f"upstream are NOT vendored ({decides} the tableau decided when "
+                f"probed, {non_term} non-terminating, {withholds} withheld, "
+                f"{no_premise} with no RDF/XML premise)",
+            )
+        else:
+            # The exclusion line is part of this harness's contract; losing it
+            # would silently restore "256 of 261" as an unqualified headline.
+            detail = _augment(detail, "NO OWL2-DL-EXCLUDED LINE: the exclusion tally went missing")
+            return SuiteResult(
+                "Entailment (OWL 2 DL consistency)", "W3C OWL 2 test suite",
+                passed=agreed, xskip=ledgered, failed=unledgered + stale,
+                detail=detail, ok=False, log=out,
+            )
+        return SuiteResult(
+            "Entailment (OWL 2 DL consistency)", "W3C OWL 2 test suite",
+            passed=agreed, xskip=ledgered, failed=unledgered + stale,
+            detail=detail,
+            ok=(rc == 0 and cargo_failed == 0 and unledgered == 0 and stale == 0),
+            log=out,
+        )
+    return _suite_cargo(
+        "Entailment (OWL 2 DL consistency)", "W3C OWL 2 test suite", cmd
+    )
+
+
+def _suite_entailment_rl() -> SuiteResult:
+    """W3C's own OWL 2 **entailment** tests, graded through the OWL 2 RL chase.
+
+    The independent oracle for the RL rule table. Until it existed, the table was
+    scored only by fixtures authored alongside the rules themselves, and the
+    `OWL-RL 78 / 78` rule-table headline stood in for entailment conformance.
+    They are different claims: this row measures the second one.
+
+    `Pass` is the agreeing verdicts across both lanes (positive: the closure
+    contains the published conclusion; negative: it does not), and `XFail/Skip`
+    is the typed divergence ledger in
+    `crates/sparql-conformance/src/owl2_rl.rs::LEDGER`. The scoreboard's
+    `actionable` count — divergences naming a sound rule of RL's own shape, as
+    opposed to a structural limit of the profile — is carried into the note so
+    the ledger's size is never mistaken for a defect count.
+    """
+    cmd = [
+        "cargo", "test", "-p", "purrdf-sparql-conformance", "--locked",
+        "--test", "owl2_rl_conformance", "--", "--nocapture",
+    ]
+    rc, out = _run(cmd, _REPO_ROOT)
+    _, _, cargo_failed = _cargo_tally(out)
+    name = "Entailment (OWL 2 RL, W3C entailment tests)"
+    source = "W3C OWL 2 entailment tests"
+    m = re.search(
+        r"OWL2-RL-ENTAILMENT: agreed (\d+) ledgered (\d+) unledgered (\d+) "
+        r"stale (\d+) total (\d+) actionable (\d+)",
+        out,
+    )
+    if not m:
+        return _suite_cargo(name, source, cmd)
+    agreed, ledgered, unledgered, stale, total, actionable = (
+        int(m.group(i)) for i in range(1, 7)
+    )
+    detail = f"{agreed}/{total} agreeing · {ledgered} ledgered · {actionable} actionable"
+    split = re.search(
+        r"\[w3c-owl2-rl\] (\d+) positive \+ (\d+) negative entailment cases", out
+    )
+    if split:
+        # The corpus composition only — NOT a per-lane agreement split, which
+        # this line does not report and which is therefore not invented here.
+        # The lane split is derived from the LEDGER and the census, and gated,
+        # in scripts/check-doc-claims.py.
+        detail = _augment(
+            detail, f"corpus: {split.group(1)} positive + {split.group(2)} negative"
+        )
+    return SuiteResult(
+        name, source,
+        passed=agreed, xskip=ledgered, failed=unledgered + stale,
+        detail=detail,
+        ok=(rc == 0 and cargo_failed == 0 and unledgered == 0 and stale == 0),
+        log=out,
+    )
+
+
 def _suite_py_rdflib_gate(build: bool) -> SuiteResult:
     """rdflib's OWN vendored tests run against the purrdf drop-in."""
     log = ""
@@ -325,7 +450,13 @@ def _suite_py_rdflib_gate(build: bool) -> SuiteResult:
 
 
 def _suite_py_compat(build: bool) -> SuiteResult:
-    """The full first-party compat parity pytest suite."""
+    """The whole Python binding pytest suite, compat-parity differential included.
+
+    Named for what it RUNS rather than for one of its parts: the command is
+    `pytest tests`, so the count covers every binding test — entailment, GTS,
+    projections, shapes — and not only the rdflib differential. A row labelled for
+    the differential alone reports a number that is not the differential's.
+    """
     log = ""
     if build:
         rc, bout = _run(
@@ -334,7 +465,7 @@ def _suite_py_compat(build: bool) -> SuiteResult:
         log += bout
         if rc != 0:
             return SuiteResult(
-                "purrdf.compat parity", "first-party (differential vs rdflib)",
+                "Python binding suite", "first-party (incl. compat differential vs rdflib)",
                 failed=-1, detail="maturin develop FAILED", ok=False, log=log,
             )
     rc, out = _run(
@@ -348,7 +479,7 @@ def _suite_py_compat(build: bool) -> SuiteResult:
     errors = _int(re.search(r"(\d+) error", out))
     detail = f"{passed} pass · {xfailed} strict-xfail (ledgered)"
     return SuiteResult(
-        "purrdf.compat parity", "first-party (differential vs rdflib)",
+        "Python binding suite", "first-party (incl. compat differential vs rdflib)",
         passed=passed, xskip=xfailed, failed=failed + xpassed + errors,
         detail=detail, ok=(rc == 0), log=log,
     )
@@ -383,10 +514,18 @@ def enforce_ratchet(results: list[SuiteResult], budget: dict[str, int]) -> None:
         the gap, do not raise the budget;
       * a count BELOW budget (a fixed gap) also fails RED until the budget is
         lowered here, which locks the gain in — this is the ratchet, by design;
-      * a run suite with no budget entry fails RED.
+      * a run suite with no budget entry fails RED;
+      * a budget entry NO SUITE PRODUCES fails RED — the reverse direction. The
+        loop below is over ``results``, so an orphan key is simply never read: it
+        would sit in the baseline forever, silently guarding nothing, and a suite
+        later renamed INTO that spelling would inherit a stale ceiling. Renaming a
+        suite is exactly when this happens, which is why it is checked rather than
+        trusted.
 
     Suites that could not emit a scoreboard (``failed < 0`` — a compile error or
-    aborted harness) keep their own failure and are not re-diagnosed here.
+    aborted harness) keep their own failure and are not re-diagnosed here; their
+    names still count as produced, so an aborted harness does not also read as an
+    orphan key.
     """
     for r in results:
         r.budget = budget.get(r.name)
@@ -413,6 +552,16 @@ def enforce_ratchet(results: list[SuiteResult], budget: dict[str, int]) -> None:
                 "scripts/conformance-baseline.json to lock the gain",
             )
 
+    orphans = sorted(set(budget) - {r.name for r in results})
+    if orphans:
+        raise SystemExit(
+            "conformance-matrix: scripts/conformance-baseline.json budgets a suite "
+            f"no run produced: {', '.join(orphans)}. A key nothing reads guards "
+            "nothing — either the suite was renamed and the key was not, or the "
+            "suite was removed and its budget outlived it. Fix the spelling or "
+            "delete the entry; do not leave a ceiling with no suite under it."
+        )
+
 
 # ---------------------------------------------------------------------------
 # Orchestration
@@ -434,6 +583,8 @@ def native_suites() -> list[SuiteResult]:
         ),
         _suite_codec(),
         _suite_sparql(),
+        _suite_entailment(),
+        _suite_entailment_rl(),
         _suite_shacl_w3c(),
         _suite_shapes_corpus(),
         _suite_shacl_rules(),
@@ -593,8 +744,8 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.write_doc and args.no_python:
-        # The committed doc block reflects the full 10-row matrix; a native-only
-        # run cannot reproduce it.
+        # The committed doc block reflects the full 13-row matrix (11 native Rust
+        # suites + the 2 Python gates); a native-only run cannot reproduce it.
         parser.error("--write-doc requires the full suite (do not pass --no-python)")
 
     results = native_suites()

@@ -16,23 +16,27 @@ import {
 
 const XSD_STRING = "http://www.w3.org/2001/XMLSchema#string";
 
-/** The 7 codecs that can PARSE (JSON-LD and YAML-LD are bidirectional codecs). */
+/** The 9 codecs that can PARSE — every format the engine registers. */
 const PARSE_FORMATS = [
   "turtle",
   "ntriples",
   "nquads",
   "trig",
   "rdfxml",
+  "trix",
+  "hextuples",
   "jsonld",
   "yamlld",
 ];
-/** The 7 codecs that can SERIALIZE. */
+/** The 9 codecs that can SERIALIZE — the same set; every codec here is bidirectional. */
 const SERIALIZE_FORMATS = [
   "turtle",
   "ntriples",
   "nquads",
   "trig",
   "rdfxml",
+  "trix",
+  "hextuples",
   "jsonld",
   "yamlld",
 ];

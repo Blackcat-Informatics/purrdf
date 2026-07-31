@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# GENERATED — by crates/entail/tests/owlrl_oracle.rs's write_owlrl_corpus_inputs. Do not
+# hand-edit; see that test's doc comment to regenerate.
+#
+# fixture: scm_hierarchy
+# canonical N-Triples input fed to the owlrl reference engine.
+<http://example.org/C1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Class> .
+<http://example.org/C1> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C2> .
+<http://example.org/C2> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Class> .
+<http://example.org/C2> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C3> .
+<http://example.org/C3> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Class> .
+<http://example.org/C4> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Class> .
+<http://example.org/C4> <http://www.w3.org/2002/07/owl#equivalentClass> <http://example.org/C5> .
+<http://example.org/C5> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Class> .
+<http://example.org/P1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#ObjectProperty> .
+<http://example.org/P1> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://example.org/P2> .
+<http://example.org/P2> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#ObjectProperty> .
+<http://example.org/P2> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://example.org/P3> .
+<http://example.org/P3> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#ObjectProperty> .
+<http://example.org/P4> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#ObjectProperty> .
+<http://example.org/P4> <http://www.w3.org/2002/07/owl#equivalentProperty> <http://example.org/P5> .
+<http://example.org/P5> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#ObjectProperty> .
+<http://example.org/P6> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#ObjectProperty> .
+<http://example.org/P6> <http://www.w3.org/2000/01/rdf-schema#domain> <http://example.org/C1> .
+<http://example.org/P7> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#ObjectProperty> .
+<http://example.org/P7> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://example.org/P6> .
+<http://example.org/P8> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#ObjectProperty> .
+<http://example.org/P8> <http://www.w3.org/2000/01/rdf-schema#range> <http://example.org/C1> .
+<http://example.org/P9> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#ObjectProperty> .
+<http://example.org/P9> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://example.org/P8> .

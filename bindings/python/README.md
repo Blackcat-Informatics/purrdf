@@ -184,8 +184,175 @@ results = shex.validate(
 print(all(entry["conformant"] for entry in results))
 ```
 
-The ShEx 2.1 validator passes 1,051/1,051 attempted validation tests of the official
+The ShEx 2.1 validator passes 1,105/1,105 attempted validation tests of the official
 shexTest suite (see the repo's `docs/CONFORMANCE.md`).
+
+## Entailment regimes
+
+The SPARQL entailment regimes live at `purrdf.entail` (mirroring the
+`purrdf-entail` Rust crate). It closes a dataset under a regime's own
+specification rule table and takes no shapes at all — not to be confused with
+`purrdf.shapes.entail(...)`, which applies the SHACL-AF `sh:rule`s a *shapes*
+graph declares.
+
+```python
+import purrdf
+from purrdf import entail
+
+dataset = purrdf.RdfDataset(my_turtle, purrdf.RdfFormat.TURTLE)
+closure, report = entail.materialize(dataset, "rdfs", "")
+print(closure.to_nquads())
+print(report)
+```
+
+For callers holding a document rather than a parsed dataset,
+`entail.materialize_nt(text, regime, program)` takes N-Triples/N-Quads and returns
+`(canonical_nquads, report)`. Both accept the regime as a plain string (`"simple"`,
+`"rdf"`, `"rdfs"`, `"owl-rl"`, `"owl-direct"`, `"rif"`, `"d"`) or as
+`entail.Regime.RDFS`.
+
+**All seven regimes close; none is refused.** The third argument is the regime's own
+rule document. Six regimes take none, so theirs is `""` — and a non-empty one raises
+rather than being silently discarded. `"rif"` is the exception: it entails under the
+*caller's* rules, which PurRDF does not declare, so its `program` is a normative
+RIF-in-XML document:
+
+```python
+closure, report = entail.materialize(dataset, "rif", my_rif_xml)
+```
+
+`"owl-direct"` takes no program either, and that is a statement rather than an
+omission: its extra input is a *query's* class expressions, and this surface closes a
+dataset rather than answering a query — so what it runs is the query-independent
+tableau augmentation (the classification, the realization, the entailed role
+assertions and the `owl:sameAs` identifications the tableau decides about the
+ontology's own named terms).
+
+**The report is the second return value and is never optional.** It is a
+byte-stable rendering naming which rules fired and how often, which specification
+rules did *not* fire, which constructs the run left at a boundary, what it
+consumed of the evaluator's fixed ceilings, and the contract hash of the calculus
+that ran — so a cached closure minted under a different rule set can be refused
+rather than trusted.
+
+The rule tables are readable directly, so coverage is something you measure
+rather than something you take on faith:
+
+```python
+defined = entail.rules("owl-rl")             # 78 — OWL 2 Profiles §4.3 Tables 4–9
+fired = entail.implemented_rules("owl-rl")   # 78
+missing = [rule for rule in entail.rules("rdfs") if rule not in entail.implemented_rules("rdfs")]
+# [] — RDFS fires 18 of its 18 rules; the gap is legitimately empty
+added = entail.extensions("owl-rl")          # ['ext-eq-diff-sym']
+```
+
+`extensions(regime)` is a third, disjoint inventory: the rules this build fires
+that **no specification table states**. `owl-rl` has one — `ext-eq-diff-sym`,
+symmetry of `owl:differentFrom`, sound and shaped exactly like `prp-symp` — and
+every other regime has none. It appears in neither `rules()` nor
+`implemented_rules()` for any regime, so the 78 above is unaffected by it: those
+two are statements about the specification, and firing a sound rule the table
+omits does not change what the table says. Asking is a question in its own right
+rather than something you learn by materializing a dataset and reading the
+report's `extension` line — though the report says the same thing, and the two
+cannot drift apart.
+
+`rdfD1`, `rdfD1a`, `rdfs14` and `rdfs14a` are in that fired set and each concludes
+about a *fresh* blank node. The restricted chase mints one as a frontier-addressed
+Skolem witness and closes under it, so the rules genuinely run — but every
+conclusion mentioning a witness is withheld when the closure is materialized back,
+because a SPARQL entailment regime draws its answers from the scoping graph and a
+minted blank node is not in it. The report says so with a `boundary surrogate`
+line rather than with a missing rule, and `completeness` reads
+`exact-within-boundaries` rather than `exact`.
+
+**78 / 78 is rule-table coverage, and rule-table coverage is not entailment
+conformance.** The two are measured separately and stating only the first is the
+overclaim the reasoning report exists to prevent: on W3C's own OWL 2 RL entailment
+tests this chase reaches 11 of 27 published positive entailments and correctly
+withholds on 23 of 23 negative ones — the latter meaning no unsoundness was found.
+Both numbers are true. The full scoreboard, the typed divergence ledger, and every
+other suite are in
+[`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md).
+
+`ValueError` is raised for an unknown regime spelling (the message names the
+accepted set), for a `program` that is wrong for the regime — a non-empty one for
+any regime but `"rif"`, or one `"rif"` cannot parse as a normative RIF-in-XML
+document — and for an exhausted evaluation ceiling. An exhausted ceiling is a
+refusal, never a truncated closure handed back as a complete one. Being
+`"owl-direct"` or `"rif"` is not itself a refusal: both materialize.
+
+## Description-Logic reasoning services
+
+Materialization is the chase. The OWL 2 Direct-Semantics *reasoner* is a second
+lane on the same module — a SHOIQ(D) hypertableau — and every one of its services is on
+`purrdf.entail`. Each takes an N-Triples (or N-Quads) document and returns
+`(answer, certificate)` as a tuple, so a caller unpacks the evidence rather than
+being able to not ask for it:
+
+| Service | Call | Answer |
+| --- | --- | --- |
+| Consistency | `entail.consistency(data)` | `consistency true` / `false` / `unknown` — `unknown` means the tableau reached its step cap, and is never collapsed to `false` |
+| Classification | `entail.classify(data)` | `equivalent`, `subclass` (transitively closed), `direct` (its reduction) and `unsatisfiable` lines |
+| Realization | `entail.realize(data)` | `type` lines for the named individuals, then the most specific `direct-type` lines |
+| Instance retrieval | `entail.instances(data, class_)` | `instance <term>` lines; `class_` is ONE N-Triples term, angle brackets included |
+| Axiom entailment | `entail.entails(data, axiom)` | `entails true` / `false` / `unknown`, then the axiom as it was *read*, so you can see which kind its predicate selected |
+| Profile certification | `entail.profile(data)` | `certified <profile>` lines, most restrictive first (`EL`, `QL`, `RL`, `DL`, `Full`) |
+| Module extraction | `entail.extract_module(data, signature, method)` | the locality module as canonical N-Quads; `method` is `"bot"`, `"top"` or `"star"` |
+| Justification | `entail.justify(data, axiom)` | a minimal subset of the ontology that still entails `axiom`, as canonical N-Quads |
+| Proof | `entail.explain_conclusion(data, regime, conclusion)` | `asserted`, `steps`, and one `rule` line per rule the derivation cited |
+
+```python
+from purrdf import entail
+
+ontology = (
+    "<https://example.org/Cat>"
+    " <http://www.w3.org/2000/01/rdf-schema#subClassOf>"
+    " <https://example.org/Animal> .\n"
+    "<https://example.org/felix>"
+    " <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>"
+    " <https://example.org/Cat> .\n"
+)
+
+answer, certificate = entail.consistency(ontology)
+assert answer.strip() == "consistency true"
+assert certificate.startswith("purrdf-dl-certificate 1")
+assert "completeness decided" in certificate
+
+answer, _ = entail.instances(ontology, "<https://example.org/Animal>")
+assert answer.strip() == "instance <https://example.org/felix>"
+
+answer, _ = entail.profile(ontology)
+assert answer.splitlines()[0] == "certified EL"
+```
+
+The certificate is the point, and there is a different one per kind of evidence.
+`consistency`, `classify`, `realize`, `instances` and `entails` render a
+`purrdf-dl-certificate 1` block carrying the DL lane's own completeness —
+`decided`, `decided-within-boundaries` (an axiom that never became a DL clause,
+with each such construct named) or `budget-exhausted`. That is a *different*
+notion from the chase report's, which subtracts two rule tables, and it is
+rendered under a different banner so neither can be parsed as the other.
+`profile` reports no search at all — it is purely syntactic — so it renders a
+`purrdf-owl-profile-certificate 1` block ending `one-directional true`: a
+certification proves membership, a violation does not prove non-membership.
+`extract_module` renders `purrdf-module-extraction 1`, whose `conservative` line
+says whether the module is minimal or a sound superset. `justify` renders
+`purrdf-justification 1` and `explain_conclusion` renders `purrdf-chase-proof 1`;
+both re-check their own answers rather than restating them — `sufficient` and
+`minimal` are re-decided over the justification and over each one-axiom-smaller
+subset, and a proof's `derived-*` lines are what the checker re-derived from the
+proof term, not what the proof claims.
+
+A tableau performs no derivation steps, so `justify` is a *justification* and
+deliberately not called a proof; `explain_conclusion` is the chase lane's
+genuinely derivational one. They are different kinds of thing rather than two
+spellings of one, which is why there is no single `explain`.
+
+Nothing here re-implements the reasoner: every entry point routes through the
+same shared boundary the WebAssembly and C hosts call, checked against one
+committed golden-vector artifact, so the four hosts return byte-identical results
+for the same input.
 
 ## rdflib compatibility layer
 

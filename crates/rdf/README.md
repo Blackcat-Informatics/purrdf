@@ -24,8 +24,9 @@ the ring-fenced [`purrdf-core`](https://crates.io/crates/purrdf-core) kernel
 loss ledger) and adds what the kernel deliberately leaves out:
 
 - **Native text codecs** — first-party parsers/serializers for Turtle, TriG,
-  N-Triples, N-Quads, and RDF/XML, plus JSON-LD (star) and YAML-LD; parsing
-  can optionally record a source-position span table for diagnostics.
+  N-Triples, N-Quads, RDF/XML, TriX, and HexTuples, plus JSON-LD (star) and
+  YAML-LD; parsing can optionally record a source-position span table for
+  diagnostics.
 - **Native OKF codec** — bidirectional Open Knowledge Format Markdown bundles
   over the RDF event seams, with caller-owned vocabulary, deterministic YAML,
   and an always-computed loss ledger.
@@ -141,7 +142,7 @@ entries; ambiguous profile data hard-fails.
 
 ### Graph, tabular, and research-object projection archives
 
-All fourteen profiles use the same canonical USTAR package surface and strict,
+All sixteen profiles use the same canonical USTAR package surface and strict,
 profile-tagged configuration. PurRDF does not choose vocabulary, identity,
 profile context, or resource limits for the caller.
 

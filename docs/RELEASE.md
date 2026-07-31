@@ -71,7 +71,10 @@ Configure one crates.io Trusted Publisher entry per crate:
 | Workflow | `release-cargo.yaml` |
 | Environment | `(none)` |
 
-Use that same publisher configuration for these crates:
+Use that same publisher configuration for these crates — the list below is the
+one in [`scripts/release-crates.sh`](../scripts/release-crates.sh), which the
+workflow, the bootstrap script and the crates.io preflight all source, and which
+`scripts/check-doc-claims.py` checks this list against:
 
 - `purrdf-events`
 - `purrdf-iri`
@@ -79,6 +82,7 @@ Use that same publisher configuration for these crates:
 - `purrdf-gts`
 - `purrdf-core`
 - `purrdf-columnar`
+- `purrdf-datalog`
 - `purrdf-entail`
 - `purrdf-sparql-algebra`
 - `purrdf-sparql-results`
@@ -96,6 +100,44 @@ be configured. Bootstrap publishes for new crate records therefore use an
 explicit token. After those crate records exist, enable the Trusted Publisher
 entries above and use the GitHub release workflow for future releases.
 
+### Outstanding bootstrap: `purrdf-datalog`
+
+`purrdf-datalog` is in the release set above but **has no crates.io record**
+(`https://crates.io/api/v1/crates/purrdf-datalog` answers 404 while every
+sibling answers 200). It is the seventh crate in publish order, so a `rust-v*`
+tag pushed before it is bootstrapped would irreversibly publish the six crates
+ahead of it and then fail — `cargo publish` cannot be undone.
+
+That is now a refusal instead of a partial publish. The release job runs
+[`scripts/check-crates-io-records.sh`](../scripts/check-crates-io-records.sh)
+**before any packaging or publishing**; it queries `/api/v1/crates/<name>` for
+every crate in the release set and fails the job naming the missing crate and
+the bootstrap command below. Run it locally at any time:
+
+```sh
+bash scripts/check-crates-io-records.sh
+```
+
+Only a literal 404 counts as missing: crates.io answers 403 to a default
+`User-Agent`, so the script sends the same `purrdf-release/<version>` agent the
+publish loop uses, retries transient statuses, and treats any other answer as a
+hard stop rather than as "missing".
+
+**The record itself can only be created by a maintainer**, because creating it
+is a token-authenticated, irreversible outward publish that a Trusted Publisher
+is not permitted to perform. Do it once, from a clean local checkout, before the
+next `rust-v*` tag:
+
+```sh
+CARGO_REGISTRY_TOKEN="${CARGO_TOKEN}" scripts/bootstrap-crates-io.sh 0.9.1
+```
+
+The bootstrap script prints its full plan — which crates it will skip, publish,
+and **create a record for** — before it runs any gate, so the irreversible part
+is visible while it is still stoppable. After it completes, add the Trusted
+Publisher entry for `purrdf-datalog` using the table above; the preflight then
+passes and the tag lane works unchanged.
+
 `purrdf-python`, `purrdf-sparql-conformance`, `purrdf-cli`, and `purrdf-capi`
 remain workspace crates, but they are not in this crates.io release lane.
 `purrdf-python` is the PyPI extension package under `bindings/python`, the
@@ -110,8 +152,10 @@ For the bootstrap publish from a clean local checkout:
 CARGO_REGISTRY_TOKEN="${CARGO_TOKEN}" scripts/bootstrap-crates-io.sh 0.1.1
 ```
 
-The script runs the local release gates, refuses dirty source by default, skips
-crate versions that already exist, and publishes crates in dependency order.
+The script states its crates.io plan first (skip / publish / **create record**,
+per crate), then runs the local release gates, refuses dirty source by default,
+skips crate versions that already exist, and publishes crates in dependency
+order.
 It also verifies the published crate set with `cargo check --target
 wasm32-unknown-unknown --lib`; if the target is not installed and `rustup` is
 available, the script installs it before checking.
@@ -162,9 +206,13 @@ git tag rust-v0.1.5
 git push origin rust-v0.1.5
 ```
 
-The workflow publishes crates in dependency order and skips any crate/version
-that already exists on crates.io, which keeps reruns safe after a partial
-publish.
+The workflow first refuses outright if any crate in the release set has no
+crates.io record (see [Outstanding
+bootstrap](#outstanding-bootstrap-purrdf-datalog)); that check runs before
+packaging, so a missing record costs a red job rather than a half-published
+release. It then publishes crates in dependency order and skips any
+crate/version that already exists on crates.io, which keeps reruns safe after a
+partial publish.
 
 ## PyPI Release
 

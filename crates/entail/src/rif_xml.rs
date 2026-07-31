@@ -8,7 +8,9 @@ use std::sync::Arc;
 use purrdf_core::{RdfDataset, TermValue};
 use roxmltree::{Document, Node};
 
-use crate::{Atom, EntailError, Fact, Regime, RifTerm, Rule, RuleSet, materialize};
+use crate::{
+    Atom, EntailError, Fact, Materialization, Regime, RifTerm, Rule, RuleSet, materialize,
+};
 
 const RIF_NS: &str = "http://www.w3.org/2007/rif#";
 const XSD_NS: &str = "http://www.w3.org/2001/XMLSchema#";
@@ -61,7 +63,10 @@ where
     let mut imported_facts = Vec::new();
     for import in &parsed.imports {
         let source = resolver(import)?;
-        let closed = materialize(&source, import_regime(import.profile.as_deref()))?;
+        // The import lane consumes the closure's FACTS; its report belongs to the RDFS /
+        // OWL-RL run that produced them, not to the RIF rule set being assembled here, so
+        // it is bound and dropped rather than folded into a claim about the rule set.
+        let (closed, _report) = materialize(&source, import_plan(import.profile.as_deref()))?;
         imported_facts.clear();
         fill_dataset_facts(&closed, &mut imported_facts);
         ruleset.facts.append(&mut imported_facts);
@@ -252,12 +257,19 @@ fn const_of(term: RifTerm) -> Result<TermValue, String> {
     }
 }
 
-fn import_regime(profile: Option<&str>) -> Regime {
+/// The plan an `Import` directive's graph is closed under.
+///
+/// Every arm is a rule-table lane, and that is the point: a RIF import is a
+/// materialize-and-combine step, so an `OWL-Direct` profile folds to the OWL-RL closure
+/// (a sound subset for the atomic combination facts) rather than starting a tableau with
+/// no query to direct it, and a `RIF` profile — a rule set this directive does not carry —
+/// folds to the identity, exactly as an absent profile does.
+fn import_plan(profile: Option<&str>) -> Materialization<'static> {
     match profile.and_then(Regime::from_iri) {
-        Some(Regime::OwlDirect | Regime::OwlRl) => Regime::OwlRl,
-        Some(Regime::Rdfs) => Regime::Rdfs,
-        Some(Regime::Rdf) => Regime::Rdf,
-        _ => Regime::Simple,
+        Some(Regime::OwlDirect | Regime::OwlRl) => Materialization::OwlRl,
+        Some(Regime::Rdfs) => Materialization::Rdfs,
+        Some(Regime::Rdf) => Materialization::Rdf,
+        _ => Materialization::Simple,
     }
 }
 
@@ -403,7 +415,7 @@ mod tests {
     }
 
     #[test]
-    fn maps_import_profiles_to_supported_materializers() {
+    fn maps_import_profiles_to_rule_table_lanes() {
         let profile = |name: &str| Some(format!("http://www.w3.org/ns/entailment/{name}"));
         for (name, expected) in [
             ("OWL-Direct", Regime::OwlRl),
@@ -414,8 +426,8 @@ mod tests {
             ("RIF", Regime::Simple),
         ] {
             let value = profile(name);
-            assert_eq!(import_regime(value.as_deref()), expected);
+            assert_eq!(import_plan(value.as_deref()).regime(), expected);
         }
-        assert_eq!(import_regime(None), Regime::Simple);
+        assert_eq!(import_plan(None).regime(), Regime::Simple);
     }
 }

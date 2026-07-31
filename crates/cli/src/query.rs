@@ -11,9 +11,17 @@
 //!
 //! Without `--entailment` the query runs over the raw view (text `RdfDataset` or a
 //! zero-copy `PackView`). With `--entailment REGIME` the pipeline reconstructs an
-//! owned `Arc<RdfDataset>` up front (a pack is rebuilt via [`source::load_dataset`]),
-//! materializes the regime's closure IN MEMORY (rejecting the non-materializable
-//! regimes on the same exit-3 path as `reason`), and queries the closure.
+//! owned `Arc<RdfDataset>` up front (a pack is rebuilt via [`source::load_dataset`])
+//! and answers the query UNDER the regime through [`purrdf::query_with_entailment`] —
+//! the library's own entailment-aware query entry point — using the same
+//! `EntailmentPlan` `reason` resolves, so `--rules` means the same thing here. The
+//! run's reasoning report is surfaced under `--report`, so a solution set drawn from a
+//! closure can be read beside the evidence of what closed it.
+//!
+//! Calling that entry point rather than open-coding "materialize the closure, then
+//! evaluate over it" is load-bearing and not a refactor: the OWL-Direct lane is
+//! QUERY-DIRECTED, and a pipeline that materializes first has no query to direct it
+//! with. See [`entailed_query`] for the answer that behaviour cost.
 //!
 //! ## The result-shape × format-kind dispatch
 //!
@@ -32,17 +40,18 @@
 //! * a shape/format-kind MISMATCH (solutions/boolean + an RDF syntax, or a graph +
 //!   a SPARQL-results format) is a hard runtime error (exit 1).
 
-use purrdf_core::{DatasetView, LossLedger, SparqlResult};
-use purrdf_entail::materialize;
+use purrdf_core::{DatasetView, LossLedger, SparqlRequest, SparqlResult};
+use purrdf_entail::EntailError;
 use purrdf_rdf::JsonLdSerializeOptions;
 use purrdf_sparql_eval::{NativeSparqlEngine, PreparedQuery};
 use purrdf_sparql_results::{ResultProvenance, serialize};
 
-use crate::cli::{CliRegime, LedgerTarget, QueryFormat};
+use crate::cli::{CliRegime, LedgerTarget, QueryFormat, ReportTarget};
 use crate::error::CliError;
 use crate::format::{self, CliFormat};
 use crate::ledger;
 use crate::reason;
+use crate::report;
 use crate::sink;
 use crate::source::{self, ViewOp};
 
@@ -127,29 +136,91 @@ fn emit_result(
     }
 }
 
+/// Answer `query` over `dataset` under the resolved entailment plan, surfacing the run's
+/// reasoning report to `--report` either way.
+///
+/// # Why this is not `materialize` + `query_prepared`
+///
+/// It used to be, and that cost the binary a whole capability. `purrdf_entail::materialize`
+/// takes a `Materialization`, and `Materialization::OwlDirect` takes the QUERY's basic graph
+/// pattern; a lane that has a query and hands over `&[]` anyway gets the query-independent
+/// whole-vocabulary augmentation, which cannot answer a basic graph pattern carrying a
+/// NON-DISTINGUISHED variable. `purrdf query --entailment owl-direct` therefore answered `[]`
+/// for `SELECT ?x WHERE { ?x r ?y . ?y a B }` over a TBox stating `A ⊑ ∃r.B` and an ABox
+/// stating `a : A` — a query whose certain answer is `ex:a`, and whose answer the library
+/// computes through [`purrdf::query_with_entailment`]'s combined-approach lane. That entry
+/// point collects the pattern from the parsed query, runs the restricted chase when the TBox
+/// is in the fragment it certifies, and filters the chase's witnesses out of every observable
+/// binding; it also returns the report, which is why the report is surfaced from here rather
+/// than by `report::materialize_reported`.
+///
+/// An INCONSISTENT knowledge base is handled exactly as `reason` handles it: it has no closure
+/// and it did have a run, so the report is written first and the refusal returned after.
+fn entailed_query(
+    engine: &NativeSparqlEngine,
+    dataset: &std::sync::Arc<purrdf_core::RdfDataset>,
+    query: &str,
+    base: Option<&str>,
+    plan: &reason::EntailmentPlan,
+    report_target: &ReportTarget,
+) -> Result<SparqlResult, CliError> {
+    let request = SparqlRequest {
+        query,
+        base_iri: base,
+        substitutions: &[],
+    };
+    match purrdf::query_with_entailment(engine, dataset, request, plan.query_entailment()) {
+        Ok((result, report)) => {
+            report::surface(report_target, &report)?;
+            Ok(result)
+        }
+        Err(purrdf::ReasoningError::Entailment(EntailError::Inconsistent(run))) => {
+            report::surface(report_target, run.report())?;
+            Err(CliError::Runtime(
+                EntailError::Inconsistent(run).to_string(),
+            ))
+        }
+        Err(purrdf::ReasoningError::Entailment(other)) => Err(other.into()),
+        Err(purrdf::ReasoningError::Query(diagnostic)) => Err(diagnostic.into()),
+    }
+}
+
 /// Run the `query` subcommand.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the CLI dispatcher passes the command fields and both surfacing targets explicitly"
+)]
 pub(crate) fn run(
     data: &str,
     base: Option<&str>,
     entailment: Option<CliRegime>,
+    rules: Option<&std::path::Path>,
     results_format: QueryFormat,
     query: &str,
     jsonld_options: Option<&JsonLdSerializeOptions>,
     ledger_target: &LedgerTarget,
+    report_target: &ReportTarget,
 ) -> Result<(), CliError> {
     let data_format = format::resolve(None, data)?;
+    // A report of a run that will not happen is a request the flag cannot honor, and
+    // honoring it with silence is what this pipeline refuses.
+    if report_target.is_requested() && entailment.is_none() {
+        return Err(report::requires_entailment("query"));
+    }
 
     let engine = NativeSparqlEngine::new();
     let prepared = engine.prepare_query(query, base)?;
 
     let result = match entailment {
         Some(regime) => {
-            // The `--entailment` lane: reconstruct an owned dataset (a pack is rebuilt),
-            // materialize the closure in memory, and query THAT.
-            let regime = reason::resolve_materializable_regime(regime)?;
+            // The `--entailment` lane: reconstruct an owned dataset (a pack is rebuilt) and
+            // answer the query UNDER the regime through the library's own entailment-aware
+            // query entry point.
+            let plan = reason::EntailmentPlan::resolve(regime, rules)?;
             let dataset = source::load_dataset(data, data_format, base)?;
-            let closure = materialize(&dataset, regime)?;
-            engine.query_prepared(&closure, &prepared, &[])?
+            // The rows go to stdout and the certificate to `--report`: a solution set that
+            // depends on a closure is not readable without knowing what closed it.
+            entailed_query(&engine, &dataset, query, base, &plan, report_target)?
         }
         None => source::run_over_input(
             data,

@@ -3,7 +3,7 @@
 # Expected: exactly gmeow:polarityPositive (emulate), gmeow:polarityNegative
 # (avoid), and gmeow:polarityCautionary (the boundary case that LOOKS
 # positive but redirects — the anti-pattern with a correct-criterion
-# redirect). Closed by design (#353, EPIC #348): finer judgement nuance
+# redirect). Closed by design: finer judgement nuance
 # belongs in the rationale and the anchored range, not in new polarities.
 
 PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>

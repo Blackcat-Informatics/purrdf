@@ -2,7 +2,7 @@
 # Expected: the open gmeow:EventType value vocabulary (eventTypeBirth, …Death,
 # …Marriage, …Burial, …Census, …). Life events are no longer a subclass taxonomy:
 # the kind of an event is a VALUE (gmeow:eventType), absorbed from the former
-# genealogy LifeEvent subclasses into the universal events module (#41).
+# genealogy LifeEvent subclasses into the universal events module.
 
 PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 

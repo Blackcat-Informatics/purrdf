@@ -54,6 +54,26 @@ pub(crate) enum Concept {
     Max(u32, Role, Box<Self>),
     /// `{a₁,…,aₙ}` — a nominal (`owl:oneOf`), interned individual ids (sorted, deduped).
     Nominal(Vec<u32>),
+    /// A DATA RANGE, by its id in the knowledge base's
+    /// [`DataRangeTable`](crate::owl_dl::data::DataRangeTable) — the concrete-domain
+    /// counterpart of a named class.
+    ///
+    /// It is an ATOMIC leaf, exactly like [`Concept::Named`]: it says the element is a
+    /// literal VALUE lying in a subset of the data domain, which is a statement about that
+    /// one element rather than a constraint that recurses into a sub-concept. What separates
+    /// it from a named class is that its extension is fixed by the datatype map rather than
+    /// by the ontology, so the tableau does not guess at it — it asks
+    /// [`purrdf_xsd::range`] whether the conjunction of the ranges on a node is empty.
+    Data(u32),
+    /// `∃r.Self` — the local reflexivity restriction (`owl:hasSelf`).
+    ///
+    /// It is an ATOMIC leaf rather than a quantifier: `∃r.Self` says the node has an
+    /// `r`-edge to ITSELF, which is a property of one node and its edges rather than a
+    /// constraint that recurses into a filler concept. That is why [`Concept::neg`] wraps
+    /// it in `Not` exactly as it does a named class, and why the two global role axioms
+    /// `owl:ReflexiveProperty` (`⊤ ⊑ ∃r.Self`) and `owl:IrreflexiveProperty`
+    /// (`⊤ ⊑ ¬∃r.Self`) are ordinary GCIs here rather than a second mechanism.
+    SelfRestriction(Role),
 }
 
 impl Concept {
@@ -68,7 +88,11 @@ impl Concept {
     /// (`Named` / `Nominal`) leaf.
     pub(crate) fn nnf(self) -> Self {
         match self {
-            Self::Top | Self::Bottom | Self::Named(_) => self,
+            Self::Top
+            | Self::Bottom
+            | Self::Named(_)
+            | Self::SelfRestriction(_)
+            | Self::Data(_) => self,
             Self::Nominal(ids) => Self::nominal(ids),
             Self::And(cs) => Self::And(cs.into_iter().map(Self::nnf).collect()),
             Self::Or(cs) => Self::Or(cs.into_iter().map(Self::nnf).collect()),
@@ -85,7 +109,7 @@ impl Concept {
         match c {
             Self::Top => Self::Bottom,
             Self::Bottom => Self::Top,
-            Self::Named(_) => Self::Not(Box::new(c)),
+            Self::Named(_) | Self::SelfRestriction(_) | Self::Data(_) => Self::Not(Box::new(c)),
             Self::Nominal(ids) => Self::Not(Box::new(Self::nominal(ids))),
             Self::Not(inner) => inner.nnf(),
             Self::And(cs) => Self::Or(cs.into_iter().map(Self::neg).collect()),
@@ -139,6 +163,16 @@ pub(crate) enum Decomp {
     Nominal(Vec<u32>),
     /// `¬{a₁,…,aₙ}`.
     NegNominal(Vec<u32>),
+    /// `∃r.Self` — an atomic positive leaf about the node's own `r`-loop.
+    SelfRestriction(Role),
+    /// `¬∃r.Self` — an atomic negative leaf about the node's own `r`-loop.
+    NegSelfRestriction(Role),
+    /// A data range, by its id in the knowledge base's data-range table (atomic positive
+    /// leaf). The id is carried here — unlike [`Decomp::Named`]'s class, which the indexing
+    /// concept id already identifies — because the tableau must reach the RANGE to decide it.
+    Data(u32),
+    /// The complement of a data range (atomic negative leaf).
+    NegData(u32),
 }
 
 /// A structural interning table mapping (NNF) concepts to dense concept ids.
@@ -184,9 +218,13 @@ impl ConceptTable {
             Concept::Bottom => Decomp::Bottom,
             Concept::Named(_) => Decomp::Named,
             Concept::Nominal(ids) => Decomp::Nominal(ids.clone()),
+            Concept::SelfRestriction(role) => Decomp::SelfRestriction(*role),
+            Concept::Data(range) => Decomp::Data(*range),
             Concept::Not(inner) => match inner.as_ref() {
                 Concept::Named(_) => Decomp::NegNamed,
                 Concept::Nominal(ids) => Decomp::NegNominal(ids.clone()),
+                Concept::SelfRestriction(role) => Decomp::NegSelfRestriction(*role),
+                Concept::Data(range) => Decomp::NegData(*range),
                 // NNF guarantees `Not` wraps only an atomic leaf.
                 other => unreachable!("non-atomic under Not in NNF: {other:?}"),
             },
@@ -216,6 +254,26 @@ impl ConceptTable {
     /// Requires [`ConceptTable::finalize`] to have populated the negation cache.
     pub(crate) fn negate(&self, id: u32) -> u32 {
         self.neg[id as usize].expect("negation cache populated by finalize()")
+    }
+
+    /// The id of the NNF of `¬c`, or `None` when the negation cache has no entry yet.
+    ///
+    /// The total sibling of [`ConceptTable::negate`], for the one caller that walks the
+    /// WHOLE table rather than a concept it just interned: a normalization pass over every
+    /// id cannot assume [`ConceptTable::finalize`] has run, and a missing negation there
+    /// means one fewer derived axiom rather than a panic.
+    pub(crate) fn negation(&self, id: u32) -> Option<u32> {
+        self.neg[id as usize]
+    }
+
+    /// How many concepts are interned — the exclusive upper bound of the valid ids.
+    ///
+    /// Read by the normalization pass that turns the whole table into a rule table: the
+    /// concept ids are dense and assigned in first-seen order, so `0..len()` enumerates
+    /// every concept exactly once, in a sequence that is a function of the parse order
+    /// alone.
+    pub(crate) fn len(&self) -> usize {
+        self.concepts.len()
     }
 
     /// Convenience concept-id lookups for common atoms.

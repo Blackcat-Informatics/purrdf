@@ -2,7 +2,7 @@
 # transitively — is absolute stronger than conditional through the chain?"
 # Expected: one row binding ?top = gmeow:authorityAbsolute, reached from
 # gmeow:authorityConditional through the strongerThan+ property path (the
-# kernel GranularityLevel ordered-vocabulary pattern, third use — #351).
+# kernel GranularityLevel ordered-vocabulary pattern, third use).
 # Norms themselves are NEVER ordered transitively: gmeow:overrides is
 # pairwise and defeasible; chains are solver work (Principle 12).
 

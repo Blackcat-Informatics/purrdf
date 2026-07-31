@@ -30,15 +30,25 @@ import sys
 from pathlib import Path
 
 # Each guarded root -> its manifest file (repo-relative). A root is frozen whole:
-# every file beneath it is hashed. These are the corpora the SHACL/shexTest
-# conformance runners consume, plus the first-party frozen SHACL corpus — all
-# declared byte-frozen. (The GTS `vectors/*.gts` corpus is governed separately in
-# gmeow-gts and is intentionally not policed here; adding a new root is a
-# deliberate edit to this map followed by `--update`.)
+# every payload file beneath it is hashed. These are the corpora the SHACL/shexTest
+# conformance runners consume, the first-party frozen SHACL corpus, the vendored
+# W3C OWL 2 suite the entailment (DL-consistency) row grades against, and the
+# vendored W3C OWL 2 *entailment* suite (premise + conclusion pairs, plus the
+# 489-row upstream `census.tsv`) the OWL 2 RL row grades against — all declared
+# byte-frozen. (The GTS `vectors/*.gts` corpus is governed separately
+# in gmeow-gts and is intentionally not policed here; adding a new root is a
+# deliberate edit to this map followed by `--update` — a corpus is NEVER guarded
+# until it appears here.)
 GUARDED_ROOTS: dict[str, str] = {
     "vectors/shacl": "scripts/conformance-frozen/vectors-shacl.sha256",
     "vectors/shexTest": "scripts/conformance-frozen/vectors-shexTest.sha256",
     "crates/shapes/corpus": "scripts/conformance-frozen/shapes-corpus.sha256",
+    "crates/sparql-conformance/entailment-suite/w3c-owl2": (
+        "scripts/conformance-frozen/sparql-conformance-w3c-owl2.sha256"
+    ),
+    "crates/sparql-conformance/entailment-suite/w3c-owl2-rl": (
+        "scripts/conformance-frozen/sparql-conformance-w3c-owl2-rl.sha256"
+    ),
 }
 
 
@@ -53,7 +63,7 @@ def _is_frozen_payload(rel: Path) -> bool:
     contaminates the manifest across contributors' platforms."""
     if rel.name.startswith("."):
         return False
-    if rel.name == "README.md":
+    if rel.name in {"README.md", "PROVENANCE.md", "REUSE.toml"}:
         return False
     if rel.suffix == ".license":
         return False

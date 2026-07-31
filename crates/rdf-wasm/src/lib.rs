@@ -58,6 +58,8 @@ use wasm_bindgen::prelude::*;
 //   * `convert` — Quad/Term ↔ engine value space (QuadValues/TermValue)
 //   * `dataset` — the mutable RDF/JS DatasetCore over `MutableDataset`/`DatasetMut`
 //                 (parse/serialize/size/add/delete/has/match/quads)
+//   * `entail`  — SPARQL entailment-regime materialization + the rule inventories
+//                 (`entailMaterialize`/`entailRules`/`entailImplementedRules`)
 //   * `query`   — the offline SPARQL surface (`Dataset.query`) over the native
 //                 evaluator
 //   * `shacl`   — SHACL validation to SARIF + SHACL-AF entailment
@@ -66,6 +68,7 @@ use wasm_bindgen::prelude::*;
 mod codec;
 mod convert;
 mod dataset;
+pub mod entail;
 mod factory;
 mod jsonld;
 mod projection;
@@ -75,6 +78,7 @@ mod stream;
 mod term;
 
 pub use dataset::Dataset;
+pub use entail::RegimeClosure;
 pub use factory::DataFactory;
 pub use jsonld::CompiledJsonLdContext;
 pub use projection::{ProjectionLift, ProjectionPackage, lift_projection};

@@ -253,7 +253,7 @@ fn load_entailment_regimes(
 }
 
 /// Choose the regime to materialize. `OWL-Direct` is preferred when declared: the
-/// native DL reasoner answers it query-directed (`purrdf_entail::materialize_dl`), which
+/// native DL reasoner answers it query-directed (`purrdf_entail::materialize_dl_reported`), which
 /// is the strongest regime and subsumes the RDFS / OWL-RL answers for these cases. Else
 /// prefer the weakest that still entails (RDFS), then OWL-RL, then the identity regimes.
 /// Boundaries the native reasoner cannot materialize (D) yield `None` — the case runs

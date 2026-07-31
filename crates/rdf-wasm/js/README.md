@@ -190,6 +190,22 @@ ownership, and all limits. Complete examples are in
   `Dataset.query(...)` remains as the compatibility raw-string helper.
 - `shaclValidateToSarif(shapesTtl, dataNt)` / `shaclEntail(shapesTtl, dataNt)` — SHACL
   validation to a SARIF 2.1.0 report and SHACL-AF `sh:rule` entailment to N-Triples.
+- `entailMaterialize(document, regime, program)` — SPARQL entailment-**regime**
+  materialization over all SEVEN regimes (`"simple"` / `"rdf"` / `"rdfs"` /
+  `"owl-rl"` / `"d"` / `"owl-direct"` / `"rif"` — none is refused), returning
+  `{ nquads, report }`: the canonical N-Quads closure and a byte-stable reasoning
+  report. Unlike `shaclEntail` it takes no shapes graph — it closes the document
+  under the regime's own specification rule table. The report is never optional:
+  it names which rules fired, which specification rules did **not**, which
+  constructs were left at a boundary, the evaluation budget and the calculus's
+  contract hash, so "OWL-RL entailment" can never be claimed without saying how
+  much of OWL-RL actually ran.
+- `entailRules(regime)` / `entailImplementedRules(regime)` — the rule table the
+  specification *defines* the regime by, and the subset this build fires. The
+  difference is the measurable gap, and is exactly the report's `missing` lines.
+- `entailCheckGoldenVectors()` — run the project's committed cross-host golden
+  vector artifact through the wasm you actually loaded and throw on the first
+  byte that differs from the reference (native Rust) implementation.
 - `Sink`, `datasetToStream`, `streamToDataset` — the async RDF/JS
   Stream/Sink primitives over the synchronous engine surface.
 - SPARQL evaluation over the in-memory dataset (no server required).

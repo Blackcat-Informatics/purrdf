@@ -71,6 +71,18 @@ testpaths = ["tests"]
 # mirroring the Rust conformance harnesses' XPASS discipline (AGENTS.md §2).
 xfail_strict = true
 
+[tool.mypy]
+# `uv run mypy` with no argument must CHECK something. Without a target it exits with
+# a usage error, which reads as "mypy is not part of this project's gates" — and the
+# shipped PEP 561 stub plus the rdflib compatibility layer are exactly the surfaces a
+# typing consumer sees, so they are what this checks by default.
+files = ["python/src/purrdf"]
+# The compiled extension has no stubs of its own: the package's `__init__.pyi` IS its
+# declaration, and `purrdf_native` is reached only through it.
+[[tool.mypy.overrides]]
+module = ["purrdf.purrdf_native", "purrdf.purrdf_native.*"]
+ignore_missing_imports = true
+
 [tool.maturin]
 manifest-path = "Cargo.toml"
 module-name = "purrdf.purrdf_native"

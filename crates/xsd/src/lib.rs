@@ -73,6 +73,29 @@
 //! `i128`-bounded (decimal scale ≤ 18); lexicals beyond that domain hard-fail on
 //! range rather than promoting to arbitrary precision.
 //!
+//! # Datatype-range satisfiability
+//!
+//! [`range`] answers a question the value spaces alone do not: **is this datatype range
+//! empty?** Given an OWL 2 data range over these datatypes — constraining facets,
+//! enumerations, complement, intersection, union — [`satisfiability`] reports `Empty` or
+//! `Inhabited` as a *proof*, [`contains`] tests one value against the range, and
+//! [`cardinality`] bounds how many distinct values it holds. Each answer is
+//! three-valued: what the module cannot prove is `Undecided`, never guessed, because a
+//! consuming reasoner reads `Empty` as an inconsistent ontology.
+//!
+//! The residue that answers `Undecided`: an opaque range (an unmodelled datatype, an
+//! `xsd:pattern` or `rdf:langRange` facet, an n-ary range); a bound facet over a
+//! temporal space that neither contradicts another bound nor exhibits an endpoint, and
+//! the complement of any temporal bound restriction (the XSD order there is partial);
+//! `xsd:dayTimeDuration`/`xsd:yearMonthDuration` as whole datatypes; an enumerated
+//! `xsd:float`/`xsd:double` zero; and a facet inapplicable to its base's value space.
+//! [`is_exactly_decided`] reports exactly which ranges are free of that residue.
+//!
+//! [`same_value`] is the third identity this crate names: XSD/OWL 2 value-space
+//! identity, which — unlike [`value_eq`] — holds `"NaN"^^xsd:double` identical to
+//! itself and keeps the `xsd:float`, `xsd:double` and `xsd:decimal` value spaces
+//! disjoint.
+//!
 //! # Hard-fail
 //!
 //! Malformed lexical input is a hard error ([`XsdError`]), never a silent default.
@@ -121,6 +144,8 @@ pub mod binary;
 pub mod datatype;
 pub mod numeric;
 pub mod ops;
+pub mod range;
+pub mod rational;
 pub mod simple;
 pub mod temporal;
 pub mod value;
@@ -133,6 +158,10 @@ pub use numeric::{
     parse_float_xsd10,
 };
 pub use ops::{effective_boolean_value, value_cmp, value_eq};
+pub use range::{
+    Cardinality, DataRange, Facet, Known, Satisfiability, cardinality, contains,
+    is_exactly_decided, same_value, satisfiability,
+};
 pub use simple::{normalize_whitespace_collapse, normalize_whitespace_replace};
 pub use temporal::{datetime_epoch, datetime_from_unix_seconds};
 pub use value::{XsdError, XsdValue, parse, parse_by_iri, parse_xsd10};

@@ -3,7 +3,7 @@
 # attributed to its standpoint agent (prov:qualifiedAttribution). Every
 # standpoint retained, none privileged; lossy-drop: belief value (modality)
 # and confidence dropped — carried by standpoint-crminf.rq / -owl2.rq.
-# Branches B/C (#127): StandpointClaim with reified-statement or
+# Branches B/C: StandpointClaim with reified-statement or
 # generic-entity observedFeature. Generic-entity branch omits
 # owl:annotated* (unbound, skipped).
 PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>

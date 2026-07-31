@@ -1,0 +1,14 @@
+<rdf:RDF
+    xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+    xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+    xmlns:owl="http://www.w3.org/2002/07/owl#"
+    xmlns:first="http://www.w3.org/2002/03owlt/equivalentProperty/premises002#"
+    xml:base="http://www.w3.org/2002/03owlt/equivalentProperty/conclusions002" >
+   <owl:Ontology/>
+   <owl:ObjectProperty rdf:about="premises002#hasHead">
+      <rdfs:subPropertyOf rdf:resource="premises002#hasLeader"/>
+   </owl:ObjectProperty>
+   <owl:ObjectProperty rdf:about="premises002#hasLeader">
+      <rdfs:subPropertyOf rdf:resource="premises002#hasHead"/>
+   </owl:ObjectProperty>
+</rdf:RDF>

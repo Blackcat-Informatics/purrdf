@@ -6,7 +6,7 @@
 PurRDF ships one logical version across three registries — crates.io (the Rust
 workspace), PyPI (``purrdf``), and npm (``@blackcatinformatics/purrdf``) — from
 three independent tag namespaces (``rust-v*`` / ``py-v*`` / ``npm-v*``). Nothing
-mechanically forces those three version sources to agree, and nothing forces the
+mechanically forces those four version sources to agree, and nothing forces the
 crates.io release lane to publish exactly the crates that are publishable. This
 lint closes both gaps as a hard, no-optionality gate:
 
@@ -19,13 +19,17 @@ lint closes both gaps as a hard, no-optionality gate:
    it drifted out of the lane between 0.2.1 and 0.5.0; pinning it here keeps the
    cited version honest for every future release.
 
-2. **Publish-list completeness.** The ordered crate list the crates.io release
-   lane publishes (the ``crates=( … )`` array in
-   ``.github/workflows/release-cargo.yaml`` and ``scripts/bootstrap-crates-io.sh``)
-   must equal the set of publishable workspace crates (every member whose
-   ``publish`` is not ``false``). A publishable crate missing from the lane is a
-   latent release break — e.g. a listed crate depending on an unlisted one makes
-   ``cargo publish`` fail on a missing dependency.
+2. **Publish-list completeness, from a single definition.** The ordered crate
+   list the crates.io release lane publishes lives in exactly one place —
+   ``scripts/release-crates.sh`` — and must equal the set of publishable
+   workspace crates (every member whose ``publish`` is not ``false``). A
+   publishable crate missing from the lane is a latent release break — e.g. a
+   listed crate depending on an unlisted one makes ``cargo publish`` fail on a
+   missing dependency. Its consumers (``.github/workflows/release-cargo.yaml``,
+   ``scripts/bootstrap-crates-io.sh`` and
+   ``scripts/check-crates-io-records.sh``) must *source* that file rather than
+   restate the list, so the crates.io record preflight can never be checking a
+   different set than the one the publisher walks.
 
 3. **Per-crate version coherence.** Every publishable workspace crate must
    resolve (via ``cargo metadata``) to exactly the canonical workspace version.
@@ -165,23 +169,35 @@ def internal_pin_violations(meta: dict, version: str) -> list[str]:
     return violations
 
 
-_CRATES_ARRAY_RE = re.compile(r"crates=\(\s*(.*?)\s*\)", re.DOTALL)
+_CRATES_ARRAY_RE = re.compile(
+    r"(?:PURRDF_RELEASE_CRATES|crates)=\(\s*(.*?)\s*\)", re.DOTALL
+)
 _CRATE_TOKEN_RE = re.compile(r"^purrdf(?:-[a-z]+)*$")
+
+# The one file the release set is defined in, and the files that must consume it
+# by sourcing rather than by restating it.
+_RELEASE_LIST = "scripts/release-crates.sh"
+_RELEASE_LIST_CONSUMERS = (
+    ".github/workflows/release-cargo.yaml",
+    "scripts/bootstrap-crates-io.sh",
+    "scripts/check-crates-io-records.sh",
+)
 
 
 def parse_publish_list(path: Path) -> list[str]:
-    """Extract the ordered ``crates=( … )`` array from a shell/YAML file.
+    """Extract the ordered crate array from a shell/YAML file.
 
-    The anchor is the literal ``crates=(`` assignment, so the ``-p purrdf-…``
-    wasm cross-check flags elsewhere in the same file are never picked up.
-    Shell ``#`` line-comments inside the array are stripped before tokenizing,
-    so a commented-out crate (``# purrdf-validate`` or ``purrdf-foo  # note``)
-    is not miscounted as listed.
+    The anchor is a literal ``PURRDF_RELEASE_CRATES=(`` / ``crates=(``
+    assignment, so the ``-p purrdf-…`` wasm cross-check flags elsewhere in the
+    same file are never picked up. Shell ``#`` line-comments inside the array
+    are stripped before tokenizing, so a commented-out crate
+    (``# purrdf-validate`` or ``purrdf-foo  # note``) is not miscounted as
+    listed.
     """
     text = path.read_text(encoding="utf-8")
     match = _CRATES_ARRAY_RE.search(text)
     if match is None:
-        raise ValueError(f"{path}: no crates=( … ) array found")
+        raise ValueError(f"{path}: no crate array found")
     crates: list[str] = []
     for line in match.group(1).splitlines():
         code = line.split("#", 1)[0]
@@ -189,6 +205,41 @@ def parse_publish_list(path: Path) -> list[str]:
             if _CRATE_TOKEN_RE.match(token):
                 crates.append(token)
     return crates
+
+
+def release_list_consumer_violations(root: Path) -> list[str]:
+    """Every consumer sources the release list instead of restating it.
+
+    A second copy of the crate array is precisely the failure mode that let a
+    crate reach the publish loop with no crates.io record and no preflight
+    covering it. Copies are therefore a hard error, not a style note.
+    """
+    violations: list[str] = []
+    for label in _RELEASE_LIST_CONSUMERS:
+        path = root / label
+        if not path.is_file():
+            violations.append(f"{label}: missing; it must source {_RELEASE_LIST}")
+            continue
+        text = path.read_text(encoding="utf-8")
+        if _RELEASE_LIST not in text:
+            violations.append(
+                f"{label}: does not reference {_RELEASE_LIST}; the release set "
+                "must be sourced from that one definition"
+            )
+        for match in _CRATES_ARRAY_RE.finditer(text):
+            literal = [
+                token
+                for line in match.group(1).splitlines()
+                for token in line.split("#", 1)[0].split()
+                if _CRATE_TOKEN_RE.match(token)
+            ]
+            if literal:
+                violations.append(
+                    f"{label}: restates the release set literally ({literal}); "
+                    f"source {_RELEASE_LIST} instead so the publish loop, the "
+                    "crates.io record preflight and the wasm gate cannot diverge"
+                )
+    return violations
 
 
 def main() -> int:
@@ -213,13 +264,8 @@ def main() -> int:
     meta = workspace_metadata(root)
     publishable_versions = publishable_crates(meta)
     publishable = set(publishable_versions)
-    lists = {
-        ".github/workflows/release-cargo.yaml": root
-        / ".github"
-        / "workflows"
-        / "release-cargo.yaml",
-        "scripts/bootstrap-crates-io.sh": root / "scripts" / "bootstrap-crates-io.sh",
-    }
+    lists = {_RELEASE_LIST: root / "scripts" / "release-crates.sh"}
+    failures.extend(release_list_consumer_violations(root))
     for label, path in lists.items():
         published = parse_publish_list(path)
         published_set = set(published)

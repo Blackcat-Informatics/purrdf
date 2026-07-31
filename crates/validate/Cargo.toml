@@ -43,6 +43,11 @@ purrdf-core = { workspace = true }
 purrdf-rdf = { workspace = true }
 # The shared source-position primitive (Position / LineIndex).
 purrdf-iri = { workspace = true }
+# The native, wasm-clean entailment-regime chase plus its ReasoningReport and
+# machine-readable rule inventory. `src/regime.rs` is the string boundary over it:
+# it renders the report the bindings carry across their host boundaries, so this
+# crate — not each binding — owns the one deterministic textual form.
+purrdf-entail = { workspace = true }
 # Hand-rolled SARIF serde model (no heavyweight SARIF crate). serde_json's default
 # BTreeMap-backed object keeps key order stable for byte-deterministic output.
 serde = { workspace = true }

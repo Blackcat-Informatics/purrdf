@@ -1,0 +1,40 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# GENERATED — by crates/entail/tests/owlrl_oracle.rs's write_owlrl_corpus_inputs. Do not
+# hand-edit; see that test's doc comment to regenerate.
+#
+# fixture: scm_restrictions
+# canonical N-Triples input fed to the owlrl reference engine.
+<http://example.org/AVF1> <http://www.w3.org/2002/07/owl#allValuesFrom> <http://example.org/C1> .
+<http://example.org/AVF1> <http://www.w3.org/2002/07/owl#onProperty> <http://example.org/p> .
+<http://example.org/AVF2> <http://www.w3.org/2002/07/owl#allValuesFrom> <http://example.org/C2> .
+<http://example.org/AVF2> <http://www.w3.org/2002/07/owl#onProperty> <http://example.org/p> .
+<http://example.org/AVF3> <http://www.w3.org/2002/07/owl#allValuesFrom> <http://example.org/C4> .
+<http://example.org/AVF3> <http://www.w3.org/2002/07/owl#onProperty> <http://example.org/q1> .
+<http://example.org/AVF4> <http://www.w3.org/2002/07/owl#allValuesFrom> <http://example.org/C4> .
+<http://example.org/AVF4> <http://www.w3.org/2002/07/owl#onProperty> <http://example.org/q2> .
+<http://example.org/C1> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C2> .
+<http://example.org/HV1> <http://www.w3.org/2002/07/owl#hasValue> <http://example.org/v> .
+<http://example.org/HV1> <http://www.w3.org/2002/07/owl#onProperty> <http://example.org/q1> .
+<http://example.org/HV2> <http://www.w3.org/2002/07/owl#hasValue> <http://example.org/v> .
+<http://example.org/HV2> <http://www.w3.org/2002/07/owl#onProperty> <http://example.org/q2> .
+<http://example.org/IntCD> <http://www.w3.org/2002/07/owl#intersectionOf> <http://example.org/scmintlist0> .
+<http://example.org/SVF1> <http://www.w3.org/2002/07/owl#onProperty> <http://example.org/p> .
+<http://example.org/SVF1> <http://www.w3.org/2002/07/owl#someValuesFrom> <http://example.org/C1> .
+<http://example.org/SVF2> <http://www.w3.org/2002/07/owl#onProperty> <http://example.org/p> .
+<http://example.org/SVF2> <http://www.w3.org/2002/07/owl#someValuesFrom> <http://example.org/C2> .
+<http://example.org/SVF3> <http://www.w3.org/2002/07/owl#onProperty> <http://example.org/q1> .
+<http://example.org/SVF3> <http://www.w3.org/2002/07/owl#someValuesFrom> <http://example.org/C3> .
+<http://example.org/SVF4> <http://www.w3.org/2002/07/owl#onProperty> <http://example.org/q2> .
+<http://example.org/SVF4> <http://www.w3.org/2002/07/owl#someValuesFrom> <http://example.org/C3> .
+<http://example.org/UniCD> <http://www.w3.org/2002/07/owl#unionOf> <http://example.org/scmunilist0> .
+<http://example.org/q1> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://example.org/q2> .
+<http://example.org/scmintlist0> <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://example.org/C1> .
+<http://example.org/scmintlist0> <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://example.org/scmintlist1> .
+<http://example.org/scmintlist1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://example.org/C2> .
+<http://example.org/scmintlist1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .
+<http://example.org/scmunilist0> <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://example.org/C1> .
+<http://example.org/scmunilist0> <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://example.org/scmunilist1> .
+<http://example.org/scmunilist1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://example.org/C2> .
+<http://example.org/scmunilist1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .

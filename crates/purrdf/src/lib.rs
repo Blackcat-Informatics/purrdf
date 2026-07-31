@@ -18,6 +18,7 @@
 //! | [`shapes`] | [`purrdf_shapes`] (SHACL) |
 //! | [`shex`] | [`purrdf_shex`] (ShEx 2.1) |
 //! | [`entail`] | [`purrdf_entail`] (RDFS / OWL-RL / OWL-Direct / RIF entailment) |
+//! | [`datalog`] | [`purrdf_datalog`] (the semi-naive engine [`entail`]'s public types carry) |
 //! | [`validate`](mod@validate) | [`purrdf_validate`] (SARIF 2.1.0 reporting boundary) |
 //! | [`slice`](mod@slice) | [`purrdf_slice`] |
 //! | [`viz`] | [`purrdf_rdf::viz`] |
@@ -157,6 +158,20 @@ pub mod shex {
 /// materialization plus the OWL-Direct and RIF entry points, over the frozen IR.
 pub mod entail {
     pub use purrdf_entail::*;
+}
+
+/// The deterministic semi-naive Datalog engine ([`purrdf_datalog`]) that
+/// [`entail`] evaluates its calculi on.
+///
+/// Re-exported because the entailment surface CARRIES its types, not merely uses
+/// them: [`entail::EntailError::Evaluate`] holds a
+/// [`datalog::seminaive::EvalError`], and [`entail::ReasoningReport`] hands out
+/// a [`datalog::cache::ContractHash`] and a [`datalog::seminaive::BudgetReport`].
+/// A consumer that matches on the error or stores the budget must be able to WRITE
+/// those type names, and this module is where it names them — never by adding a
+/// second dependency on `purrdf-datalog`.
+pub mod datalog {
+    pub use purrdf_datalog::*;
 }
 
 /// The SARIF 2.1.0 reporting boundary ([`purrdf_validate`]): validate a

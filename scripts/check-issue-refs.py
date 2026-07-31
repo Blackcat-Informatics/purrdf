@@ -1,11 +1,33 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
-"""Reject new ``#NNN`` GitHub issue-reference tokens in Rust comments and docs.
+"""Reject development-process references in PurRDF comments and docs.
 
-PurRDF issue references in comments and in-tree markdown documentation are a
-form of hidden TODO debt. Once an issue is closed the token becomes stale and
-misleading, so we do not allow new ones. This lint scans:
+Two token families are rejected, over exactly the same scanned surface.
+
+**Issue references** — ``#NNN``. Once an issue is closed the token becomes stale
+and misleading, so we do not allow new ones.
+
+**Process references** — ``Task 28``, ``EPIC``, ``this branch``. These name the
+*development effort* that produced the code rather than the code itself. They go
+stale the moment the branch merges: "this branch" has no referent in a merged
+history, and a reader who meets "task 29" in a test file cannot look it up.
+``#NNN`` was banned for exactly this reason and these are the same debt spelled
+differently — which is why ``// --- task 28: the reasoner façade ---`` sailed
+through a lint that was already meant to stop it.
+
+Process references carry two frozen registers, both of which may only SHRINK:
+
+* ``PRE_EXISTING_PROCESS_REFERENCES`` — the debt that predates this rule, one
+  entry per ``(file, token)``. A live occurrence with no entry is a hard failure,
+  and an entry with no live occurrence is *also* a hard failure, so paying the
+  debt down forces the register to be trimmed rather than left to rot.
+* ``AMBIGUOUS_BRANCH_PHRASES`` — the files where "this branch" means a
+  *control-flow* arm and not a git branch. English overloads the word; these
+  places are named so the ban can stay absolute. New code should say "this arm",
+  "this case", or "this match arm", which is clearer prose regardless.
+
+This lint scans:
 
 * ``.rs`` files under ``crates/`` and ``bindings/`` — only Rust comments are
   examined. A small Rust-aware lexer skips string, character, and raw-string
@@ -35,6 +57,11 @@ The issue token pattern is ``#`` followed by 1–5 decimal digits that is not
 followed by another digit, a hex letter, a hyphen, or a decimal fraction
 (so ``#3.1`` section numbers are not flagged). This avoids 6-digit hex colors
 and markdown anchors while still catching references like ``#16`` or ``#123``.
+
+The process token patterns are ``Task``/``task`` followed by an optional ``#``
+and a number, the bare uppercase acronym ``EPIC`` (so ``EPIC #906`` and
+``(EPIC \\`text_parse\\`)`` are both caught, while the ordinary English word
+"epic" in a changelog entry is not), and the phrase "this branch" in any case.
 """
 
 from __future__ import annotations
@@ -45,7 +72,98 @@ import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
-ISSUE_RE = re.compile(r"#\d{1,5}(?![\dA-Fa-f-])(?!\.\d)")
+ISSUE_PATTERN = r"#\d{1,5}(?![\dA-Fa-f-])(?!\.\d)"
+
+# Every rejected token family in ONE pattern, so a file is lexed once no matter
+# how many families there are. ``match.lastgroup`` names the family, which is what
+# separates an issue reference from a process reference in the report and what
+# keeps the inline-code exclusion applying to the former alone.
+TOKEN_RE = re.compile(
+    rf"(?P<issue>{ISSUE_PATTERN})"
+    r"|(?P<task>\b[Tt]ask\s+#?\d+\b)"
+    r"|(?P<epic>\bEPIC\b)"
+    r"|(?P<branch>(?i:\bthis\ branch\b))"
+)
+
+# The prose fix each process family's message suggests.
+PROCESS_REMEDY: dict[str, str] = {
+    "task": "name what the code does, not the work item that produced it",
+    "epic": "name the capability, not the work item that produced it",
+    "branch": (
+        'say "this arm" / "this case" for a control-flow branch, and state the '
+        "constraint itself rather than the branch that imposed it"
+    ),
+}
+
+# Process references that predate this rule, as ``(path, matched token)``. Every
+# occurrence of that token in that file is covered by one entry. THIS REGISTER
+# MAY ONLY SHRINK: an entry whose token no longer appears in its file is
+# reported as stale, so paying a debt down forces the line to be deleted here
+# rather than leaving a permanent licence behind.
+PRE_EXISTING_PROCESS_REFERENCES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("bindings/python/src/py_gts.rs", "Task 8"),
+        ("bindings/python/src/rdf.rs", "Task 8"),
+        ("bindings/python/src/rdf.rs", "Task 9"),
+        ("crates/gts/src/compact.rs", "Task 6"),
+        ("crates/gts/tests/compaction_signatures.rs", "Task 4"),
+        ("crates/rdf-core/benches/ir_layout.rs", "Task 7"),
+        ("crates/rdf-core/src/diagnostic.rs", "Task 12"),
+        ("crates/rdf-core/src/ir/global.rs", "Task 4"),
+        ("crates/rdf-core/src/sssom.rs", "Task 7"),
+        ("crates/rdf-wasm/src/dataset.rs", "Task 5"),
+        ("crates/rdf-wasm/src/factory.rs", "Task 5"),
+        ("crates/rdf/src/bin/capture_sparql_goldens.rs", "Task 2"),
+        ("crates/rdf/src/capture_support.rs", "Task 2"),
+        ("crates/rdf/src/gts.rs", "Task 4"),
+        ("crates/rdf/src/gts_certify.rs", "Task 5"),
+        ("crates/rdf/src/native_codecs/mod.rs", "EPIC"),
+        ("crates/rdf/src/native_codecs/mod.rs", "Task 1"),
+        ("crates/rdf/src/turtle_normalize.rs", "Task 5"),
+        ("crates/rdf/tests/gts_authorship_census.rs", "this branch"),
+        ("crates/rdf/tests/gts_certify.rs", "Task 5"),
+        ("crates/rdf/tests/gts_certify.rs", "Task 6"),
+        ("crates/shapes/src/engine.rs", "Task 4"),
+        ("crates/shapes/src/instance.rs", "Task 6"),
+        ("crates/shapes/src/json_schema.rs", "Task 3"),
+        ("crates/shapes/src/json_schema.rs", "Task 4"),
+        ("crates/shapes/src/json_schema.rs", "Task 6"),
+        ("crates/shapes/src/shapes.rs", "Task 2"),
+        ("crates/shapes/tests/rules_conformance.rs", "Task 6"),
+        ("crates/sparql-eval/src/binop.rs", "Task 6"),
+        ("crates/sparql-eval/src/construct.rs", "Task 1"),
+        ("crates/sparql-eval/src/eval.rs", "Task 4"),
+        ("crates/sparql-eval/src/eval.rs", "Task 5"),
+        ("crates/sparql-eval/src/eval.rs", "Task 7"),
+        ("crates/sparql-eval/src/eval.rs", "Task 9"),
+        ("crates/sparql-eval/src/expr.rs", "Task 5"),
+        ("crates/sparql-eval/src/expr.rs", "Task 6"),
+        ("crates/sparql-eval/src/modifier.rs", "Task 6"),
+        ("crates/sparql-eval/src/parallel.rs", "Task 7"),
+        ("crates/sparql-eval/src/parallel_determinism_gate.rs", "Task 7"),
+        ("crates/sparql-results/src/graph.rs", "Task 3"),
+        ("crates/sparql-results/src/json.rs", "Task 4"),
+        ("crates/xsd/src/ops.rs", "Task 4"),
+    }
+)
+
+# Files where "this branch" denotes a CONTROL-FLOW arm — an `if`/`match`
+# alternative — and not a git branch. The phrase is banned outright rather than
+# guessed at, because English gives no reliable signal: "it only appears on this
+# branch" is a match arm and "it moved on this branch" is a work item, and both
+# read identically to a regex. Naming the code-sense sites keeps the ban absolute
+# while costing nothing in precision. Like the register above, this may only
+# shrink: an entry whose file no longer says "this branch" is reported as stale.
+AMBIGUOUS_BRANCH_PHRASES: frozenset[str] = frozenset(
+    {
+        "bindings/python/python/src/purrdf/compat/rdflib/term.py",
+        "bindings/python/tests/test_entail_reasoning.py",
+        "crates/gts/tests/replication_diff.rs",
+        "crates/rdf-core/src/dataset_view.rs",
+        "crates/rdf-core/src/turtle_render.rs",
+        "crates/validate/src/regime.rs",
+    }
+)
 
 SCAN_DIRS = ("crates", "bindings", "docs")
 
@@ -91,7 +209,7 @@ def iter_scan_paths(root: Path) -> Iterator[Path]:
     ).stdout
     for rel in sorted(part for part in out.split("\0") if part):
         suffix = Path(rel).suffix
-        if suffix not in (".rs", ".md", ".toml", ".py", ".yaml", ".yml"):
+        if suffix not in (".rs", ".md", ".toml", ".py", ".pyi", ".rq", ".yaml", ".yml"):
             continue
         segments = rel.split("/")
         top = segments[0]
@@ -102,7 +220,18 @@ def iter_scan_paths(root: Path) -> Iterator[Path]:
             )
             if not (in_scan_dir or root_file):
                 continue
-        elif suffix == ".py":
+        elif suffix == ".rq":
+            # SPARQL is SHIPPED text wherever it lives: a tracker token in a committed
+            # query is published exactly as one in a printed string is, and six of these
+            # carried one while every gate reported clean. `generated/` holds emitted
+            # artifacts, `queries/` first-party ones; both are read by users.
+            if top not in ("generated", "queries"):
+                continue
+        elif suffix in (".py", ".pyi"):
+            # `.pyi` is SHIPPED: it is the PEP 561 stub inside every published wheel,
+            # so a process reference in it is published to PyPI. It was outside this
+            # scan while `.py` was inside, which is how eight of them accumulated in
+            # the one file a typing consumer reads most.
             if top not in PY_SCAN_DIRS:
                 continue
         else:  # .yaml / .yml
@@ -132,7 +261,28 @@ def snippet(text: str, start: int, end: int, window: int = 24) -> str:
 
 
 def rust_comments(src: str) -> list[tuple[int, int, str]]:
-    """Extract Rust comments as ``(start_line, start_col, comment_text)``.
+    """Extract Rust comments as ``(start_line, start_col, comment_text)``."""
+    return rust_comments_and_literals(src)[0]
+
+
+def rust_string_literals(src: str) -> list[tuple[int, int, str]]:
+    """Extract Rust string-literal CONTENTS as ``(start_line, start_col, text)``.
+
+    A literal is not a comment, and for most lints that is the end of it — but an
+    issue-reference token inside one is not a note to a developer, it is text the
+    program PRINTS or RETURNS. Three shipped surfaces carried such tokens while this
+    lint reported clean, because the lexer that avoids reading ``//`` inside
+    ``"http://…"`` as a comment discarded the literal instead of scanning it. They are
+    scanned now; the URL exemption is unaffected, because it is the ``//`` that is
+    exempt, not the ``#NNN``.
+    """
+    return rust_comments_and_literals(src)[1]
+
+
+def rust_comments_and_literals(
+    src: str,
+) -> tuple[list[tuple[int, int, str]], list[tuple[int, int, str]]]:
+    """One pass over Rust source, returning its comments and its string literals.
 
     The scanner is deliberately conservative: it only needs to avoid treating
     ``//`` or ``/*`` inside string/char/raw-string literals as comment
@@ -141,6 +291,7 @@ def rust_comments(src: str) -> list[tuple[int, int, str]]:
     and raw strings with arbitrary hash counts.
     """
     comments: list[tuple[int, int, str]] = []
+    literals: list[tuple[int, int, str]] = []
     n = len(src)
     i = 0
 
@@ -180,11 +331,14 @@ def rust_comments(src: str) -> list[tuple[int, int, str]]:
             if c == "b":
                 i += 1
             i += 1  # skip opening quote
+            start_line, start_col = line, col
+            start = i
             while i < n and src[i] != '"':
                 if src[i] == "\\":
                     i += 2
                 else:
                     i += 1
+            literals.append((start_line, start_col, src[start:i]))
             if i < n:
                 i += 1  # skip closing quote
             continue
@@ -249,7 +403,7 @@ def rust_comments(src: str) -> list[tuple[int, int, str]]:
 
         i += 1
 
-    return comments
+    return comments, literals
 
 
 def is_rust_doc_comment(text: str) -> bool:
@@ -276,7 +430,7 @@ def scan_comments(
     comments: list[tuple[int, int, str]],
     *,
     exclude_inline_code: bool = False,
-) -> list[tuple[int, int, str, str]]:
+) -> list[tuple[int, int, str, str, str]]:
     """Scan extracted ``(start_line, start_col, text)`` comments for tokens.
 
     Shared by every comment-based scanner (Rust, Python, YAML): each comment
@@ -292,17 +446,18 @@ def scan_comments(
     ``//``/``/* */`` comments are NOT Markdown, so backticks carry no special
     meaning there and a ``#NNN`` token inside them is still flagged.
     """
-    violations: list[tuple[int, int, str, str]] = []
+    violations: list[tuple[int, int, str, str, str]] = []
 
     for start_line, start_col, text in comments:
         text_lines = text.split("\n")
         doc_comment = exclude_inline_code and is_rust_doc_comment(text)
-        for match in ISSUE_RE.finditer(text):
+        for match in TOKEN_RE.finditer(text):
+            kind = match.lastgroup or "issue"
             offset = match.start()
             rel_line = text.count("\n", 0, offset) + 1
             last_nl = text.rfind("\n", 0, offset)
             rel_col = offset - last_nl
-            if doc_comment:
+            if doc_comment and kind == "issue":
                 col0 = rel_col - 1
                 spans = find_inline_code_spans(text_lines[rel_line - 1])
                 if any(s <= col0 < e for s, e in spans):
@@ -310,13 +465,41 @@ def scan_comments(
             line = start_line + rel_line - 1
             col = start_col + rel_col - 1 if rel_line == 1 else rel_col
             violations.append(
-                (line, col, match.group(), snippet(text, offset, match.end()))
+                (line, col, match.group(), snippet(text, offset, match.end()), kind)
             )
 
     return violations
 
 
-def scan_rust(path: Path) -> list[tuple[int, int, str, str]]:
+def literal_token_is_a_reference(text: str, token: str) -> bool:
+    """Whether a ``#NNN`` inside a Rust string literal is an ISSUE reference.
+
+    Two shapes are legitimately `#`-with-digits inside a string and are not tracker
+    references, so scanning literals without distinguishing them would trade a real
+    hole for false positives:
+
+    * a format specifier — ``{value:#04x}``, ``{n:#b}`` — where the `#` is the
+      alternate-form flag and the digits are a width;
+    * an identifier or IRI fragment where the `#` is preceded by a word character,
+      as in ``unit#7`` or ``origin-set#5``.
+
+    A tracker reference stands as its own word: preceded by nothing, whitespace, or an
+    opening delimiter. That is the only shape flagged here.
+    """
+    index = text.find(token)
+    while index != -1:
+        before = text[index - 1] if index > 0 else " "
+        after_pos = index + len(token)
+        after = text[after_pos] if after_pos < len(text) else " "
+        standalone = not (before.isalnum() or before == "_")
+        format_flag = after in "xXbBoOeE?}" or before == ":"
+        if standalone and not format_flag:
+            return True
+        index = text.find(token, index + 1)
+    return False
+
+
+def scan_rust(path: Path) -> list[tuple[int, int, str, str, str]]:
     """Return violations found in a Rust source file.
 
     ``exclude_inline_code`` is requested, but ``scan_comments`` applies the
@@ -326,7 +509,20 @@ def scan_rust(path: Path) -> list[tuple[int, int, str, str]]:
     not Markdown, so a ``#NNN`` inside backticks there is still flagged.
     """
     src = path.read_text(encoding="utf-8")
-    return scan_comments(rust_comments(src), exclude_inline_code=True)
+    comments, literals = rust_comments_and_literals(src)
+    found = scan_comments(comments, exclude_inline_code=True)
+    # String literals are scanned for ISSUE tokens only. A process reference like
+    # "this branch" is ordinary prose a program may legitimately print, whereas a
+    # `#NNN` in a printed or returned string publishes a tracker id to a caller —
+    # which `.baseline` bans outright, and which three shipped surfaces carried while
+    # this lint reported clean.
+    found.extend(
+        hit
+        for hit in scan_comments(literals, exclude_inline_code=False)
+        if hit[4] == "issue" and literal_token_is_a_reference(hit[3], hit[2])
+    )
+    found.sort(key=lambda hit: (hit[0], hit[1]))
+    return found
 
 
 def skip_py_string(src: str, i: int, n: int) -> int:
@@ -460,7 +656,7 @@ def python_docstrings(src: str) -> list[tuple[int, int, str]]:
     return docstrings
 
 
-def scan_python(path: Path) -> list[tuple[int, int, str, str]]:
+def scan_python(path: Path) -> list[tuple[int, int, str, str, str]]:
     """Return violations found in a Python source file.
 
     Both ``#`` line comments and documentation strings (module/class/function
@@ -516,7 +712,7 @@ def yaml_comments(src: str) -> list[tuple[int, int, str]]:
     return comments
 
 
-def scan_yaml(path: Path) -> list[tuple[int, int, str, str]]:
+def scan_yaml(path: Path) -> list[tuple[int, int, str, str, str]]:
     """Return violations found in a YAML source file."""
     src = path.read_text(encoding="utf-8")
     return scan_comments(yaml_comments(src))
@@ -555,10 +751,10 @@ def find_inline_code_spans(line: str) -> list[tuple[int, int]]:
     return spans
 
 
-def scan_markdown(path: Path) -> list[tuple[int, int, str, str]]:
+def scan_markdown(path: Path) -> list[tuple[int, int, str, str, str]]:
     """Return violations found in a Markdown file."""
     src = path.read_text(encoding="utf-8")
-    violations: list[tuple[int, int, str, str]] = []
+    violations: list[tuple[int, int, str, str, str]] = []
 
     in_fence = False
     for line_no, line in enumerate(src.splitlines(), start=1):
@@ -571,9 +767,12 @@ def scan_markdown(path: Path) -> list[tuple[int, int, str, str]]:
 
         code_spans = find_inline_code_spans(line)
 
-        for match in ISSUE_RE.finditer(line):
+        for match in TOKEN_RE.finditer(line):
+            kind = match.lastgroup or "issue"
             start = match.start()
-            if any(start >= s and start < e for s, e in code_spans):
+            if kind == "issue" and any(
+                start >= s and start < e for s, e in code_spans
+            ):
                 continue
             violations.append(
                 (
@@ -581,26 +780,27 @@ def scan_markdown(path: Path) -> list[tuple[int, int, str, str]]:
                     start + 1,
                     match.group(),
                     snippet(line, start, match.end()),
+                    kind,
                 )
             )
 
     return violations
 
 
-def scan_toml(path: Path) -> list[tuple[int, int, str, str]]:
+def scan_toml(path: Path) -> list[tuple[int, int, str, str, str]]:
     """Return violations found in a TOML file.
 
     TOML has no comment/string-lexer subtlety worth modelling here: manifest
     ``description`` strings and ``#`` dependency comments are both plain prose,
-    so every ``ISSUE_RE`` match is a real issue reference. Hex color codes are
+    so every ``TOKEN_RE`` match is a real reference. Hex color codes are
     already excluded by the token pattern, and after the cleanup there are no
     legitimate ``#NNN`` tokens in these files.
     """
     src = path.read_text(encoding="utf-8")
-    violations: list[tuple[int, int, str, str]] = []
+    violations: list[tuple[int, int, str, str, str]] = []
 
     for line_no, line in enumerate(src.splitlines(), start=1):
-        for match in ISSUE_RE.finditer(line):
+        for match in TOKEN_RE.finditer(line):
             start = match.start()
             violations.append(
                 (
@@ -608,40 +808,103 @@ def scan_toml(path: Path) -> list[tuple[int, int, str, str]]:
                     start + 1,
                     match.group(),
                     snippet(line, start, match.end()),
+                    match.lastgroup or "issue",
                 )
             )
 
     return violations
 
 
+def scan_path(path: Path) -> list[tuple[int, int, str, str, str]]:
+    """Scan one file with the scanner its suffix calls for."""
+    if path.suffix == ".rs":
+        return scan_rust(path)
+    if path.suffix == ".md":
+        return scan_markdown(path)
+    if path.suffix == ".toml":
+        return scan_toml(path)
+    if path.suffix == ".rq":
+        # A `#` opens a comment in SPARQL, so the comment scanner reads these directly.
+        return scan_comments(
+            [
+                (n + 1, line.index("#") + 1, line[line.index("#") :])
+                for n, line in enumerate(path.read_text(encoding="utf-8").splitlines())
+                if "#" in line
+            ],
+            exclude_inline_code=False,
+        )
+    if path.suffix in (".py", ".pyi"):
+        # A stub is Python syntax, so the Python scanner reads its comments correctly.
+        # Listing `.pyi` in the path iterator without adding it HERE would extend the
+        # gate's apparent scope while it inspected nothing — the same silent no-op this
+        # script exists to prevent in prose.
+        return scan_python(path)
+    if path.suffix in (".yaml", ".yml"):
+        return scan_yaml(path)
+    return []
+
+
 def main() -> int:
     root = repo_root()
-    violations: list[tuple[Path, int, int, str, str]] = []
+
+    issues: list[tuple[Path, int, int, str, str]] = []
+    process: list[tuple[Path, int, int, str, str, str]] = []
+    # Every ``(path, token)`` a register entry could be covering, so an entry
+    # that no longer has one can be reported as stale.
+    live_process: set[tuple[str, str]] = set()
+    live_branch_files: set[str] = set()
 
     for path in iter_scan_paths(root):
-        if path.suffix == ".rs":
-            for line, col, token, text in scan_rust(path):
-                violations.append((path, line, col, token, text))
-        elif path.suffix == ".md":
-            for line, col, token, text in scan_markdown(path):
-                violations.append((path, line, col, token, text))
-        elif path.suffix == ".toml":
-            for line, col, token, text in scan_toml(path):
-                violations.append((path, line, col, token, text))
-        elif path.suffix == ".py":
-            for line, col, token, text in scan_python(path):
-                violations.append((path, line, col, token, text))
-        elif path.suffix in (".yaml", ".yml"):
-            for line, col, token, text in scan_yaml(path):
-                violations.append((path, line, col, token, text))
+        rel = str(path.relative_to(root))
+        for line, col, token, text, kind in scan_path(path):
+            if kind == "issue":
+                issues.append((path, line, col, token, text))
+                continue
+            key = (rel, token)
+            live_process.add(key)
+            if kind == "branch" and rel in AMBIGUOUS_BRANCH_PHRASES:
+                live_branch_files.add(rel)
+                continue
+            if key in PRE_EXISTING_PROCESS_REFERENCES:
+                continue
+            process.append((path, line, col, token, text, PROCESS_REMEDY[kind]))
 
-    if violations:
-        for path, line, col, token, text in violations:
+    stale = sorted(
+        entry for entry in PRE_EXISTING_PROCESS_REFERENCES if entry not in live_process
+    )
+    stale_branch = sorted(AMBIGUOUS_BRANCH_PHRASES - live_branch_files)
+
+    if issues:
+        for path, line, col, token, text in issues:
+            print(f"{path.relative_to(root)}:{line}:{col}: {token} {text}")
+    if process:
+        for path, line, col, token, text, remedy in process:
             rel = path.relative_to(root)
-            print(f"{rel}:{line}:{col}: {token} {text}")
+            print(f"{rel}:{line}:{col}: process reference {token!r} — {remedy}")
+            print(f"    {text}")
+    for entry_path, token in stale:
+        print(
+            f"scripts/check-issue-refs.py: PRE_EXISTING_PROCESS_REFERENCES still "
+            f"lists {(entry_path, token)}, which no longer occurs — the debt was "
+            f"paid; delete the entry so the register keeps shrinking."
+        )
+    for entry_path in stale_branch:
+        print(
+            f"scripts/check-issue-refs.py: AMBIGUOUS_BRANCH_PHRASES still lists "
+            f"{entry_path!r}, which no longer says 'this branch' — delete the "
+            f"entry so the register keeps shrinking."
+        )
+
+    if issues or process or stale or stale_branch:
         return 1
 
-    print("OK: no #NNN issue-reference tokens found in comments or docs.")
+    print(
+        f"OK: no #NNN issue-reference tokens and no new process references in "
+        f"comments or docs "
+        f"({len(PRE_EXISTING_PROCESS_REFERENCES)} pre-existing process "
+        f"reference(s) and {len(AMBIGUOUS_BRANCH_PHRASES)} control-flow "
+        f"'this branch' site(s) registered)."
+    )
     return 0
 
 

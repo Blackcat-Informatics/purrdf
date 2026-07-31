@@ -21,6 +21,24 @@
 //! `require_equals` forces the `=PATH` spelling so the optional value never
 //! greedily swallows a following positional (e.g. a subcommand or a query string),
 //! keeping the three states unambiguous.
+//!
+//! ## `--report`, the same tri-state for the reasoning certificate
+//!
+//! Every entailment entry point in `purrdf-entail` hands back a
+//! [`ReasoningReport`](purrdf_entail::ReasoningReport) with its closure: which rules fired
+//! and how often, which constructs the run could not fully handle and why, what the run
+//! cost, and the contract hash of the calculus that produced it. `--report` is the surface
+//! that carries it to an operator, decoded exactly like `--loss-ledger` into a
+//! [`ReportTarget`]. Without it a CLI closure is a document with no provenance: nothing
+//! distinguishes "closed under every rule the regime defines" from "closed under a subset,
+//! over the default graph, with the named graphs untouched".
+//!
+//! It is a per-subcommand flag rather than a global one, because exactly three subcommands
+//! can reason (`reason` always, `convert` and `query` under `--entailment`). A global flag
+//! would be accepted by `project` and `lift`, which run no reasoner, and would then have to
+//! do nothing — a silent no-op being precisely the shape this repository refuses. For the
+//! same reason `convert --report` / `query --report` WITHOUT `--entailment` is a usage
+//! error rather than an empty file.
 
 use std::path::PathBuf;
 
@@ -80,6 +98,42 @@ pub(crate) enum LedgerTarget {
     File(PathBuf),
 }
 
+/// Where (if anywhere) the reasoning report should be surfaced — the decoded form of the
+/// `--report` tri-state flag, with the same three states as [`LedgerTarget`].
+#[derive(Debug, Clone)]
+pub(crate) enum ReportTarget {
+    /// The flag was absent: do not surface the report.
+    Silent,
+    /// Bare `--report`: render the report to stderr, leaving stdout for the data.
+    Stderr,
+    /// `--report=PATH`: write the report to PATH.
+    File(PathBuf),
+}
+
+impl ReportTarget {
+    /// Decode the raw `--report` tri-state.
+    ///
+    /// A free function over the flag rather than a method on [`Cli`], because `--report` is
+    /// carried by the three subcommands that can reason rather than globally by the root
+    /// command.
+    #[allow(
+        clippy::option_option,
+        reason = "clap's encoding of an optional-value flag; this is the one place it is decoded"
+    )]
+    pub(crate) fn decode(flag: Option<&Option<PathBuf>>) -> Self {
+        match flag {
+            None => Self::Silent,
+            Some(None) => Self::Stderr,
+            Some(Some(path)) => Self::File(path.clone()),
+        }
+    }
+
+    /// Whether the operator asked for a report at all.
+    pub(crate) const fn is_requested(&self) -> bool {
+        !matches!(self, Self::Silent)
+    }
+}
+
 impl Cli {
     /// Decode the raw `--loss-ledger` tri-state into a [`LedgerTarget`].
     pub(crate) fn ledger_target(&self) -> LedgerTarget {
@@ -110,6 +164,15 @@ pub(crate) enum Command {
         /// serializing (applied before `--canonical`).
         #[arg(long, value_enum, value_name = "REGIME")]
         entailment: Option<CliRegime>,
+        /// RIF-in-XML rule document for `rif`; required by that regime and
+        /// refused for every other (their rule table is the specification's).
+        #[arg(long, value_name = "FILE")]
+        rules: Option<PathBuf>,
+        /// Surface the reasoning report for `--entailment`: bare writes it to
+        /// stderr, `--report=PATH` writes it to PATH. Requires `--entailment`.
+        #[allow(clippy::option_option)]
+        #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
+        report: Option<Option<PathBuf>>,
         /// Emit RDFC-1.0 canonical N-Quads instead of `--to`. This overrides the
         /// target format (canonical output is always N-Quads), so `--to` may be
         /// omitted; combine with `--entailment` to canonicalize the closure.
@@ -136,6 +199,15 @@ pub(crate) enum Command {
         /// (the query then runs over the closure, not the raw view).
         #[arg(long, value_enum, value_name = "REGIME")]
         entailment: Option<CliRegime>,
+        /// RIF-in-XML rule document for `rif`; required by that regime and
+        /// refused for every other (their rule table is the specification's).
+        #[arg(long, value_name = "FILE")]
+        rules: Option<PathBuf>,
+        /// Surface the reasoning report for `--entailment`: bare writes it to
+        /// stderr, `--report=PATH` writes it to PATH. Requires `--entailment`.
+        #[allow(clippy::option_option)]
+        #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
+        report: Option<Option<PathBuf>>,
         /// Result serialization: a SPARQL-results format (json/xml/csv/tsv) for
         /// SELECT/ASK, or an RDF syntax (turtle/trig/…) for CONSTRUCT/DESCRIBE.
         #[arg(long, value_enum, default_value_t = QueryFormat::Json)]
@@ -148,6 +220,15 @@ pub(crate) enum Command {
         /// The entailment regime to close under.
         #[arg(long, value_enum)]
         regime: CliRegime,
+        /// RIF-in-XML rule document for `rif`; required by that regime and
+        /// refused for every other (their rule table is the specification's).
+        #[arg(long, value_name = "FILE")]
+        rules: Option<PathBuf>,
+        /// Surface the reasoning report: bare writes it to stderr,
+        /// `--report=PATH` writes it to PATH.
+        #[allow(clippy::option_option)]
+        #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
+        report: Option<Option<PathBuf>>,
         /// Input format override; inferred from the input extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
@@ -554,14 +635,14 @@ pub(crate) enum CliRegime {
     /// OWL 2 RL entailment.
     #[value(name = "owl-rl")]
     OwlRl,
-    /// OWL Direct (DL) entailment — not materializable without query class
-    /// expressions.
+    /// OWL Direct (DL) entailment via the tableau. A document pipeline has no
+    /// query to direct it, so it runs the query-independent augmentation.
     #[value(name = "owl-direct")]
     OwlDirect,
-    /// RIF-Core entailment — not materializable without a rule set.
+    /// RIF-Core entailment under the rule set `--rules` names.
     #[value(name = "rif")]
     Rif,
-    /// Datatype (D) entailment — a spec-inherent boundary for materialization.
+    /// Datatype (D) entailment — Simple plus OWL 2 Profiles §4.3 Table 8.
     #[value(name = "d")]
     D,
 }

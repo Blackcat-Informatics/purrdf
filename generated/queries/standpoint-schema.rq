@@ -3,7 +3,7 @@
 # authored by its standpoint; per-standpoint claims coexist (no single
 # ClaimReview verdict). Refuted/denied claims excluded (carried by
 # standpoint-crminf.rq); lossy-drop: belief value (modality) + confidence.
-# Branches B/C (#127): StandpointClaim with reified-statement or
+# Branches B/C: StandpointClaim with reified-statement or
 # generic-entity observedFeature. Generic-entity branch renders ?feature
 # IRI as schema:text.
 PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
