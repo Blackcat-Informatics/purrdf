@@ -38,7 +38,7 @@ BINARYEN_VERSION := 130
 # context/options/registry engine, validation-scoped asserted-subclass
 # membership shared by native SHACL and SHACL-SPARQL, and now the entailment
 # engine, the nine OWL reasoner services AND the concrete domain — measures
-# 9_504_607 bytes against the 9_690_000 ceiling, which is 1.91% headroom. That
+# 9_502_971 bytes against the 9_690_000 ceiling, which is 1.93% headroom. That
 # figure is RECORDED AS A GATED CONSTANT below (WASM_SIZE_MEASURED_BYTES), not as
 # prose: it had already drifted 139_211 bytes behind the build once, because a
 # comment is the one part of this file nothing checks.
@@ -122,6 +122,15 @@ WASM_SIZE_BUDGET_BYTES := 9690000
 # ordinary codegen jitter from the touched-but-still-linked `Construct` enum
 # and id-brand additions rather than a capability moving the artifact at all.
 #
+# The decrease 9_504_607 -> 9_502_971 is not a code change: the build now passes
+# --remap-path-prefix, so the artifact no longer embeds the absolute path it was
+# built at. It had carried 116 of them, all under the builder's home directory,
+# which made the byte size depend on the OPERATOR'S USERNAME — `paudley` is one
+# character longer than CI's `runner`, so the same commit measured 124 bytes
+# larger here than in CI and this equality gate could not be green in both places
+# at once. It was red in CI for two merges before anyone read it. The figure below
+# is now a property of the source rather than of who built it.
+#
 # The change 9_506_455 -> 9_504_607 is the 0.10.0 version bump alone: the version
 # string is embedded in the artifact and the crate metadata around it repacks
 # slightly smaller. No capability moved; the figure is re-recorded because this gate
@@ -154,7 +163,7 @@ WASM_SIZE_BUDGET_BYTES := 9690000
 # is shared by both, so it is linked exactly once either way.
 #
 # The measured constant below is the CURRENT size, not that intermediate figure.
-WASM_SIZE_MEASURED_BYTES := 9504607
+WASM_SIZE_MEASURED_BYTES := 9502971
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -353,7 +362,13 @@ wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web b
 	@# (all major browsers since ~2021; Node >= 18, the package's engine floor).
 	@# Append rather than overwrite so any env / .cargo/config.toml RUSTFLAGS
 	@# (sccache, linker args, extra target features) survive alongside +simd128.
-	RUSTFLAGS="$${RUSTFLAGS} -C target-feature=+simd128" \
+	@# --remap-path-prefix makes the artifact independent of WHERE it was built.
+	@# rustc embeds absolute source paths (panic locations, debug info); this
+	@# artifact carried 116 of them, all under the builder's home directory, so its
+	@# byte size depended on the operator's USERNAME. Both varying roots are
+	@# remapped onto fixed tokens. CARGO_HOME may be relocated, so its default is
+	@# only a fallback.
+	RUSTFLAGS="$${RUSTFLAGS} -C target-feature=+simd128 --remap-path-prefix=$(CURDIR)=/purrdf --remap-path-prefix=$${CARGO_HOME:-$$HOME/.cargo}=/cargo" \
 		cargo build -p purrdf-wasm --target wasm32-unknown-unknown --release --locked
 	@# wasm-bindgen-cli must match the crate's exact wasm-bindgen pin (see [workspace.dependencies]).
 	PATH="$$HOME/.cargo/bin:$$PATH" wasm-bindgen \
