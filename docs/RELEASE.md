@@ -129,7 +129,7 @@ is not permitted to perform. Do it once, from a clean local checkout, before the
 next `rust-v*` tag:
 
 ```sh
-CARGO_REGISTRY_TOKEN="${CARGO_TOKEN}" scripts/bootstrap-crates-io.sh 0.9.1
+CARGO_REGISTRY_TOKEN="${CARGO_TOKEN}" scripts/bootstrap-crates-io.sh 0.10.0
 ```
 
 The bootstrap script prints its full plan — which crates it will skip, publish,

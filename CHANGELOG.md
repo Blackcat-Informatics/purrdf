@@ -4,6 +4,120 @@ All notable changes to the PurRDF crate suite are recorded here. The suite
 ships one lockstep version across crates.io, PyPI, and npm; pre-1.0, a minor
 bump may carry breaking changes and a patch bump is bugfix-only.
 
+## [0.10.0] - 2026-07-31
+
+### Bug Fixes
+
+- **BREAKING** **datalog:** Carry the predicate as data so meta-rules are expressible
+- **entail:** Stop fabricating rdfs:Resource for a derived triple term
+- **entail:** Drop the tableau's unique name assumption for nominals
+- Accept D from the CLI, close the umbrella gap, correct shipped strings
+- **release,docs:** Refuse a half-publish, and make documented numbers checkable
+- **entail:** Make the certificate real, and grade the rules against W3C
+- **entail:** Make the overclaim state unrepresentable, and surface the certificate everywhere
+- **entail:** Derive the DL certificate's completeness instead of storing it
+- **wasm:** Reach every reasoner service from the npm package root
+- **docs:** Unbreak the rustdoc gate and name the Python suite row for what it runs
+- **bindings:** Make the shipped type stub match the extension, and gate what published numbers claim
+- **docs:** Gate the numbers that recurred, and stop promising a component this workspace does not have
+- Make three gates inspect what they claimed to, and cover a tableau clash nothing reached
+- **docs:** Correct eight published figures and gate the surfaces that carried them
+- **docs:** Close three ways this pass's own gates could be satisfied without checking anything
+- **entail:** Refuse explain-conclusion per conclusion, not per regime
+- **BREAKING** **docs:** Name the DL fragment SHOIQ(D), date the exclusion emitters, and correct three provenance claims
+- **docs:** A concept ledger over repo-wide facts, and twenty corrected figures
+- **BREAKING** **entail:** Refuse the unrepresentable cardinality, bound the counting search, and state what the blocking evidence shows
+- **BREAKING** **entail:** Make the combined approach reachable, sound on every result form, and honest about its fragment
+- **docs:** The figure sweep — thirty corrected claims, three gate holes closed
+- **hygiene:** The issue-reference ban could not see string literals or SPARQL
+- **playground:** The console offered seven codecs while the engine registers nine
+- **entail:** The counting/inverse limit keyed on spelling, not on meaning
+- **python:** `uv run mypy` checked nothing and exited on a usage error
+- **wasm:** The session handle needs Debug and Self, as the lint table requires
+- **hygiene:** The wasm export gate read the export block and not the imports
+- **datalog:** Make the SLG budget bound the work, not just the output
+- **datalog:** Keep freshen_clause's doc on freshen_clause, and collapse the filter's ifs
+
+### CI & Build
+
+- **wasm:** Record the session's 8,882 bytes
+
+### Documentation
+
+- **entail:** Generate the rule inventory and correct every stale claim
+- Fix two intra-doc links that failed the rustdoc gate
+- **conformance:** Grade the rules against W3C, and gate every number
+- Date the DL exclusion tally, which is a recorded measurement rather than a live one
+- **provenance:** Record the cutover as it stands, the slme port, and the revision reachability
+- Published text carried internal program codes
+- The session's three Python tests and its bytes reach the recorded figures
+- **conformance:** The prose scoreboard row lagged the generated block
+- **provenance:** Say which generated projections this repo can actually regenerate
+- Say why the backward resolver has no caller, and stop claiming it has one
+- State the backward check's boundary as the cost it is, with numbers that reproduce
+- **validate:** The skip test's own doc still told the story the code disproved
+
+### Features
+
+- **BREAKING** **datalog:** Add the purrdf-datalog crate and wire every release gate
+- **datalog:** Port the physical primitives — branded ids, arena, bitset, binding patterns
+- **datalog:** Port the relation store, cursors, and index-selection planner
+- **datalog:** Port the semi-naive evaluator with analytic goldens and hard budgets
+- **datalog:** Replace the provisional rule IR with the DL-clause IR
+- **entail:** Add the machine-readable rule inventory
+- **datalog:** Add checkable proof terms and a contract hash
+- **BREAKING** **entail:** Return a reasoning certificate from every materialize call
+- **validate:** Add the shared entailment-regime string boundary
+- **entail:** Seed the finite axiomatic triples and add four RDFS rules
+- **python:** Expose entailment regimes as purrdf.entail
+- **entail:** Add RDF-list materialization and the prp, cax and scm rules
+- **wasm,capi:** Expose entailment regimes to WebAssembly and the C ABI
+- **entail:** Complete OWL 2 RL — all 78 rules, and make D materializable
+- **entail:** Stop dropping OWL axioms silently, and add the existential chase
+- **entail:** Expose the DL reasoner services behind a certified facade
+- **entail:** Dataset semantics, reifier interactions, and explanations
+- **entail:** Reach every reasoner service from every host
+- **entail:** Close the last W3C entailment gap, wire the plan cache, report termination
+- **entail:** Bind the extension inventory on every host and gate its disclosure
+- **BREAKING** **entail:** Decide OWL 2 data ranges, and check the tableau against a model-enumeration oracle
+- **xsd:** Decide the rational-decimal identity exactly, and write the gmeow cutover guide
+- **BREAKING** **entail:** Certain answers by the combined approach, over a ported SLG-WFS resolver
+- **BREAKING** **entail:** A clause-based hypertableau is the OWL-Direct decision core
+- **entail:** The nominal/inverse/counting limit is a named boundary, not buried prose
+- **validate:** A reasoning session, so asking twice costs one parse
+- **python:** Expose the reasoning session as `entail.Reasoner`
+- **wasm:** Expose the reasoning session as `Reasoner`
+- **capi:** Expose the reasoning session as `PurrdfReasoner`
+- **purrdf:** Surface the reasoning session on the Rust facade, and gate all four hosts
+- **entail:** Cross-check every chase explanation against backward resolution
+- **entail:** Re-derive every chase explanation backward, and report the outcome
+- **BREAKING** **entail:** Complete the entailment surface — 78/78 OWL 2 RL, certified runs, four language hosts
+
+### Other
+
+- Revert "feat(entail): cross-check every chase explanation against backward resolution"
+
+### Performance
+
+- **BREAKING** **entail:** Classify by one saturation instead of a tableau run per class pair
+- **datalog:** Reject impossible clause/call pairs before freshening them
+
+### Refactor
+
+- **BREAKING** **entail:** Run the declared clause program instead of a hand-written chase
+- **entail:** Split the calculus into one module per rule family
+- **BREAKING** **entail:** Make materialization total over every regime
+
+### Testing
+
+- **entail:** Capture the chase's behaviour as a golden oracle
+- **conformance:** Vendor the W3C OWL 2 suite and give entailment its own row
+- **entail:** Check the OWL 2 RL closure against an independent second implementation
+- **entail:** Assert the tableau is not over-permissive where that is decidable
+- **entail:** Pin the owlrl divergence triples, and cover the value class that separates two language-tagged values
+- **entail:** Pin the divergence triple count so a regeneration cannot absorb a regression
+- Carry the per-conclusion explain contract to the remaining two hosts
+
 ## [0.9.0] - 2026-07-28
 
 ### Bug Fixes
