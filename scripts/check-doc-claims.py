@@ -750,10 +750,13 @@ def regime_count_claim() -> list[str]:
 def makefile_measured_size_claim() -> list[str]:
     r"""EVERY byte figure and percentage in the Makefile's budget comment must be current.
 
-    `WASM_SIZE_MEASURED_BYTES` is checked by equality against the build, so the CONSTANT
-    cannot drift. The prose around it can, and did: a "Currently 9_313_841" line outlived the
-    constant by 82,660 bytes, inside the very comment block that says "a comment is the one
-    part of this file nothing checks".
+    `WASM_SIZE_MEASURED_BYTES` is REPORTED by the build rather than enforced by it — an
+    exact byte count moved with the builder's username and path, so equality could not hold
+    locally and in CI at once. That makes this claim the only thing keeping the constant and
+    the prose around it honest, where before the equality gate backstopped it. The prose has
+    drifted before: a "Currently 9_313_841" line outlived the constant by 82,660 bytes,
+    inside the very comment block that says "a comment is the one part of this file nothing
+    checks".
 
     The first attempt at this claim keyed on the verbs "Currently" and "measures" followed by
     a figure. It inspected ZERO figures, because the comment wraps as `— measures` / newline /
