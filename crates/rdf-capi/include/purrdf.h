@@ -9,7 +9,7 @@
 
 /* WARNING: generated file — edit crates/rdf-capi instead. */
 #define PURRDF_MAJOR 0
-#define PURRDF_MINOR 9
+#define PURRDF_MINOR 10
 #define PURRDF_PATCH 0
 
 
