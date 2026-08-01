@@ -15,17 +15,29 @@
 //!   diagnostic, a pack-integrity failure, an I/O error, or a results-serialization
 //!   error.
 //!
-//! # There is no unsupported-regime exit code, because there is no unsupported regime
+//! # There is no unsupported-regime exit code, and a refused regime is still named
 //!
 //! A third code (**3**) used to classify an entailment-regime boundary the CLI could
 //! not cross: `owl-direct` and `rif` were refused because a `Regime` value carried
 //! neither the query's class expressions nor a rule set. `purrdf_entail::materialize`
 //! takes a `Materialization` now, which carries both, and
 //! [`EntailmentPlan`](crate::reason::EntailmentPlan) is where the CLI supplies them —
-//! so every one of the seven regimes runs and the code that classified their refusal
-//! has nothing left to classify. What remains is ordinary: `--regime rif` without
-//! `--rules` is an incomplete command line (exit 2), and an unreadable or malformed
-//! rule document is a runtime failure (exit 1), exactly like an unreadable input.
+//! so every one of the seven regimes MATERIALIZES and the code that classified their
+//! refusal has nothing left to classify. What remains is ordinary: `--regime rif`
+//! without `--rules` is an incomplete command line (exit 2), and an unreadable or
+//! malformed rule document is a runtime failure (exit 1), exactly like an unreadable
+//! input.
+//!
+//! [`entails`](crate::entails) asks a different question, and it is total over five of
+//! the seven rather than all of them: `owl-direct` is directed by a query's class
+//! expressions and `rif` entails under the caller's rule document, and "premise,
+//! conclusion, regime" carries neither. That refusal comes back from the shared
+//! `purrdf-validate` boundary as a message NAMING the regime, and it is a
+//! [`CliError::Runtime`] (exit 1) rather than a fourth code: the CLI does not keep its
+//! own list of which regimes that service serves, because a second list is a second
+//! opinion, and it prints the boundary's own diagnostic instead. What it never does is
+//! answer under a weaker regime and label the answer with the one the operator asked
+//! for.
 //!
 //! The `From` conversions below let the pipeline propagate library errors with `?`.
 

@@ -94,14 +94,25 @@ pub(crate) fn materialize_reported(
 /// query-directed combined approach), so it holds the report rather than obtaining it here,
 /// and it surfaces it through this one function so the two lanes cannot render differently.
 pub(crate) fn surface(target: &ReportTarget, report: &ReasoningReport) -> Result<(), CliError> {
+    surface_rendered(target, &render_reasoning_report(report))
+}
+
+/// Surface an ALREADY-RENDERED certificate per the decoded `--report` target.
+///
+/// The same three states [`surface`] decodes, one level lower. It exists because
+/// `purrdf-validate`'s conclusion-directed services hand back the certificate as the string
+/// they already rendered — the `entails` lane never holds a [`ReasoningReport`] value at all
+/// — and the alternative was a second `--report` convention for one subcommand. There is one
+/// convention, and both lanes end here.
+pub(crate) fn surface_rendered(target: &ReportTarget, rendered: &str) -> Result<(), CliError> {
     match target {
         ReportTarget::Silent => Ok(()),
         ReportTarget::Stderr => {
-            eprint!("{}", render_reasoning_report(report));
+            eprint!("{rendered}");
             Ok(())
         }
         ReportTarget::File(path) => {
-            std::fs::write(path, render_reasoning_report(report))?;
+            std::fs::write(path, rendered)?;
             Ok(())
         }
     }

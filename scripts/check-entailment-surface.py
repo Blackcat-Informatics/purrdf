@@ -3,14 +3,20 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
 """Hygiene gate: every conclusion-directed entailment service `purrdf-entail`
-publishes must be reachable from ALL FOUR host shapes — Rust, Python, WASM and the
-C ABI.
+publishes must be reachable from ALL FIVE host shapes — Rust, Python, WASM, the
+C ABI and the `purrdf` COMMAND LINE.
 
 A capability reachable from one caller shape and dark from another is a defect this
 repository has already paid for: nine Description-Logic reasoning services were
 compiled into the wasm artifact, budgeted for, and never re-exported from the npm
 package root, so they shipped as bytes no consumer could call. `check-wasm-js-exports.py`
-closes that hole for ONE host. This closes it across all four, for one surface.
+closes that hole for ONE host. This closes it across all five, for one surface.
+
+The command line is the fifth row because it was the host this gate's own first draft
+left out. `purrdf` is a shipped, first-class product surface, and while it grew
+`purrdf reason` — which MATERIALIZES a closure — it had no way to ask whether a premise
+entails a conclusion under any regime, by any mechanism. Four rows defined "every host"
+in a way that excluded the binary by construction, so nothing would ever have noticed.
 
 # The service set is DERIVED, not listed
 
@@ -44,6 +50,13 @@ capability callable —
   DECLARATION of `<sym>` in the committed `crates/rdf-capi/include/purrdf.h`, because
   cbindgen does not expand macros and a macro-generated entry point would link into the
   shared object and never reach the header.
+* the CLI: the FLAG that selects the service, declared on the `Entails` variant of the
+  clap command tree in `crates/cli/src/cli.rs`, AND the boundary function inside the
+  `use purrdf_validate::regime::{ … };` block of `crates/cli/src/entails.rs`, AND the
+  subcommand dispatched from `crates/cli/src/main.rs`. The `use` block is the load-bearing
+  needle rather than a call-site regex: this workspace builds with `-D warnings`, so an
+  imported name nothing calls does not compile, and a name in that block is therefore proof
+  of a call rather than of an import.
 
 # A NAME is not a CAPABILITY: the PARAMETER LIST is checked too
 
@@ -67,6 +80,16 @@ ABI has no pair, so an import table is `(import_iris, import_documents, import_c
 there, and wasm-bindgen has no nested string array, so it is two parallel arrays on
 that host too. Each host also declares whatever fixed plumbing it appends
 (`out_answer` / `out_certificate` / `out_error` on the C ABI), and nothing else.
+
+The CLI's analogue of a parameter list is its FLAG list, and it is checked in both
+directions with one asymmetry the other hosts do not have: three services share ONE
+subcommand there, so `purrdf entails` declares the UNION of the three parameter lists
+rather than any one of them. So the forward check is per service and a SUBSET one —
+every flag that service's boundary parameters spell must be declared — and the reverse
+check runs once over the whole variant: every flag it declares must be some service's
+parameter spelling, some service's selector, or one of the `_CLI_PLUMBING` names. A
+boundary parameter with no CLI flag therefore fails naming the CLI, and a CLI flag
+answering to nothing fails too.
 
 Pure text over committed files: no cargo build, no wasm build, no Node, no Python
 import. Run standalone or from `make check` / CI.
@@ -95,24 +118,34 @@ _SERVICE_SOURCES = (
 # different question of a different calculus and renders a different certificate.
 # `verify` is spelled `verify_entailment` because a bare `verify` says nothing about
 # what is being verified on a surface that also validates SHACL and ShEx.
+#
+# The `cli` spelling is not a function name but the FLAG that selects the service on
+# `purrdf entails`: one subcommand answers all three, because they are one question
+# asked three ways and three subcommands would have split the premise, the regime and
+# the import table across them. `--conclusion` asks for a verdict, `--conclusion
+# --verify` asks for a verdict whose warrant is then re-decided without a reasoner, and
+# `--pattern` asks for the certain answers of a basic graph pattern.
 _HOST_NAMES: dict[str, dict[str, str]] = {
     "certain_answers": {
         "boundary": "certain_answers_to_string",
         "python": "certain_answers",
         "wasm": "entailCertainAnswers",
         "capi": "purrdf_entail_certain_answers",
+        "cli": "--pattern",
     },
     "entails": {
         "boundary": "graph_entails_to_string",
         "python": "graph_entails",
         "wasm": "entailGraphEntails",
         "capi": "purrdf_entail_graph_entails",
+        "cli": "--conclusion",
     },
     "verify": {
         "boundary": "verify_entailment_to_string",
         "python": "verify_entailment",
         "wasm": "entailVerifyEntailment",
         "capi": "purrdf_entail_verify_entailment",
+        "cli": "--verify",
     },
 }
 
@@ -139,6 +172,7 @@ _PARAM_SPELLINGS: dict[str, dict[str, tuple[str, ...]]] = {
         "wasm": ("regime",),
         "dts": ("regime",),
         "capi": ("regime",),
+        "cli": ("--regime",),
     },
     # The premise, under the two names the boundary gives it: `document` for the
     # pattern-shaped question, `premise` for the conclusion-shaped one.
@@ -147,30 +181,35 @@ _PARAM_SPELLINGS: dict[str, dict[str, tuple[str, ...]]] = {
         "wasm": ("document",),
         "dts": ("document",),
         "capi": ("document",),
+        "cli": ("--premise",),
     },
     "premise": {
         "python": ("premise",),
         "wasm": ("premise",),
         "dts": ("premise",),
         "capi": ("premise",),
+        "cli": ("--premise",),
     },
     "pattern": {
         "python": ("pattern",),
         "wasm": ("pattern",),
         "dts": ("pattern",),
         "capi": ("pattern",),
+        "cli": ("--pattern",),
     },
     "conclusion": {
         "python": ("conclusion",),
         "wasm": ("conclusion",),
         "dts": ("conclusion",),
         "capi": ("conclusion",),
+        "cli": ("--conclusion",),
     },
     "imports": {
         "python": ("imports",),
         "wasm": ("import_iris", "import_documents"),
         "dts": ("importIris", "importDocuments"),
         "capi": ("import_iris", "import_documents", "import_count"),
+        "cli": ("--import",),
     },
 }
 
@@ -180,6 +219,22 @@ _PARAM_SPELLINGS: dict[str, dict[str, tuple[str, ...]]] = {
 _HOST_PLUMBING: dict[str, tuple[str, ...]] = {
     "capi": ("out_answer", "out_certificate", "out_error"),
 }
+
+# The `purrdf entails` flags that answer to no boundary parameter and to no service, and
+# are therefore the subcommand's own plumbing. `--report` is the certificate target every
+# reasoning subcommand carries; `--from` and `--base` are the CLI's own format resolution,
+# which runs in FRONT of a boundary that parses one media type; `OUT` is positional and so
+# is not a flag at all. A flag outside this list and outside the two tables above is a
+# capability with no boundary behind it, and fails the gate.
+_CLI_PLUMBING: frozenset[str] = frozenset({"--report", "--from", "--base"})
+
+# Where the CLI's three needles live.
+_CLI_COMMAND_TREE = Path("crates/cli/src/cli.rs")
+_CLI_MODULE = Path("crates/cli/src/entails.rs")
+_CLI_DISPATCH = Path("crates/cli/src/main.rs")
+
+# The clap variant that carries the conclusion-directed surface.
+_CLI_VARIANT = "Entails"
 
 # Matched pairs the parameter splitter must not split inside. Angle brackets are here
 # for `&ImportList<'_>` and `Vec<(String, String)>`; the splitter only ever runs over
@@ -293,6 +348,67 @@ def _wasm_params(text: str, js_name: str) -> list[str]:
     )
 
 
+def _braced_block(text: str, opener: str, what: str) -> str:
+    """The brace-balanced body that `opener` (which must end in `{`) introduces."""
+    start = text.find(opener)
+    if start < 0:
+        raise SystemExit(
+            f"check-entailment-surface: cannot find {opener!r} for {what}; the file's "
+            "layout moved — update this gate rather than leaving it vacuous"
+        )
+    depth = 0
+    for index in range(start + len(opener) - 1, len(text)):
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start + len(opener) : index]
+    raise SystemExit(
+        f"check-entailment-surface: the {what} block opened at {opener!r} is unterminated"
+    )
+
+
+def _cli_flags(command_tree: str) -> list[str]:
+    """Every long flag the `Entails` clap variant declares, in declaration order.
+
+    clap derives a long name from the field name unless the `#[arg]` attribute spells one,
+    so both forms are read: `long = "import"` on a field named `imports` is `--import`, and
+    a bare `long` on `regime` is `--regime`. A field with no `long` at all is positional
+    (`OUT`) and is not a flag.
+    """
+    block = _braced_block(
+        command_tree, f"    {_CLI_VARIANT} {{", f"the clap `{_CLI_VARIANT}` variant"
+    )
+    flags: list[str] = []
+    attributes = ""
+    for line in block.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#["):
+            attributes += stripped
+            continue
+        if stripped.startswith("///") or not stripped:
+            continue
+        field = re.match(r"^(\w+):", stripped)
+        if field is None:
+            # A continuation line of a multi-line attribute, or of a field's type.
+            if attributes:
+                attributes += stripped
+            continue
+        named = re.search(r'\blong\s*=\s*"([\w-]+)"', attributes)
+        if named:
+            flags.append(f"--{named.group(1)}")
+        elif re.search(r"\blong\b(?!\s*=)", attributes):
+            flags.append("--" + field.group(1).replace("_", "-"))
+        attributes = ""
+    if not flags:
+        raise SystemExit(
+            f"check-entailment-surface: the clap `{_CLI_VARIANT}` variant declares no long "
+            "flag; the file's layout moved — update this gate rather than leaving it vacuous"
+        )
+    return flags
+
+
 def _read(relative: str | Path) -> str:
     path = _REPO / relative
     if not path.is_file():
@@ -371,8 +487,16 @@ def missing_bindings(services: set[str]) -> list[str]:
     index_dts = _read("crates/rdf-wasm/js/index.d.ts")
     capi_source = _read("crates/rdf-capi/src/entail.rs")
     capi_header = _read("crates/rdf-capi/include/purrdf.h")
+    cli_tree = _read(_CLI_COMMAND_TREE)
+    cli_module = _read(_CLI_MODULE)
+    cli_dispatch = _read(_CLI_DISPATCH)
+    cli_flags = _cli_flags(cli_tree)
+    cli_imports = _block(
+        cli_module, "use purrdf_validate::regime::{", "};", "cli boundary import"
+    )
 
     problems: list[str] = []
+    problems.extend(_cli_wiring_problems(cli_tree, cli_dispatch, cli_flags))
     for service in sorted(services):
         names = _HOST_NAMES[service]
         checks = [
@@ -431,6 +555,16 @@ def missing_bindings(services: set[str]) -> list[str]:
                 "crates/rdf-capi/include/purrdf.h",
                 re.search(rf"^int32_t {names['capi']}\(", capi_header, re.MULTILINE) is not None,
             ),
+            (
+                "cli flag",
+                f"{_CLI_COMMAND_TREE}::{_CLI_VARIANT}",
+                names["cli"] in cli_flags,
+            ),
+            (
+                "cli boundary call",
+                f"{_CLI_MODULE}::use purrdf_validate::regime",
+                re.search(rf"\b{names['boundary']}\b", cli_imports) is not None,
+            ),
         ]
         crippled = False
         for host, where, present in checks:
@@ -453,8 +587,59 @@ def missing_bindings(services: set[str]) -> list[str]:
                     index_dts=index_dts,
                     capi_source=capi_source,
                     capi_header=capi_header,
+                    cli_flags=cli_flags,
                 )
             )
+    return problems
+
+
+def _cli_wiring_problems(
+    cli_tree: str, cli_dispatch: str, cli_flags: list[str]
+) -> list[str]:
+    """The CLI checks that are about the SUBCOMMAND rather than about one service.
+
+    Two of them. A variant clap parses and `main` never routes is a subcommand that
+    cannot run, so the dispatch arm and the module call are checked once. And every flag
+    the variant declares must answer to something — a boundary parameter, a service, or
+    the subcommand's own plumbing — which is the reverse of the per-service subset check
+    and is what stops a flag from existing with no boundary behind it.
+    """
+    problems: list[str] = []
+    for what, where, present in (
+        (
+            "dispatch arm",
+            f"{_CLI_DISPATCH}::Command::{_CLI_VARIANT}",
+            f"Command::{_CLI_VARIANT} {{" in cli_dispatch,
+        ),
+        (
+            "dispatch call",
+            f"{_CLI_DISPATCH}::entails::run",
+            "entails::run(" in cli_dispatch,
+        ),
+        (
+            "subcommand variant",
+            f"{_CLI_COMMAND_TREE}::Command::{_CLI_VARIANT}",
+            f"    {_CLI_VARIANT} {{" in cli_tree,
+        ),
+    ):
+        if not present:
+            problems.append(
+                f"  • the conclusion-directed CLI surface has NO {what} — expected it at "
+                f"{where}. A subcommand the binary does not route is a capability its "
+                "users cannot reach."
+            )
+    answerable = set(_CLI_PLUMBING)
+    answerable.update(names["cli"] for names in _HOST_NAMES.values())
+    for spellings in _PARAM_SPELLINGS.values():
+        answerable.update(spellings["cli"])
+    stray = [flag for flag in cli_flags if flag not in answerable]
+    if stray:
+        problems.append(
+            f"  • the `purrdf entails` subcommand declares {stray}, which is neither a "
+            "boundary parameter's CLI spelling, nor a service's selector, nor declared "
+            f"plumbing ({sorted(_CLI_PLUMBING)}). A flag with no boundary behind it is a "
+            "capability this gate cannot check: add a row, or drop the flag."
+        )
     return problems
 
 
@@ -469,6 +654,7 @@ def _arity_problems(
     index_dts: str,
     capi_source: str,
     capi_header: str,
+    cli_flags: list[str],
 ) -> list[str]:
     """One message per host whose parameter list is not the boundary's.
 
@@ -566,6 +752,19 @@ def _arity_problems(
                 f"{where} declares {declared}, and {names['boundary']}"
                 f"{boundary_params} means it must declare {wanted}"
             )
+
+    # The CLI is a SUBSET check rather than an equality one, and only here: `purrdf
+    # entails` answers all three services from one subcommand, so it declares the union
+    # of the three parameter lists. The reverse direction — a flag answering to nothing —
+    # is checked once, in `_cli_wiring_problems`.
+    wanted_flags = [flag for param in boundary_params for flag in _PARAM_SPELLINGS[param]["cli"]]
+    absent = [flag for flag in wanted_flags if flag not in cli_flags]
+    if absent:
+        problems.append(
+            f"  • {service}: the cli subcommand does NOT take the boundary's parameters — "
+            f"{_CLI_COMMAND_TREE}::{_CLI_VARIANT} declares {cli_flags}, and "
+            f"{names['boundary']}{boundary_params} means it must also declare {absent}"
+        )
     return problems
 
 
@@ -576,8 +775,8 @@ def main() -> int:
         print(
             "check-entailment-surface: purrdf-entail publishes "
             f"{sorted(unmapped)} with no host spellings. A capability reachable from Rust "
-            "and dark from Python, WASM and C is the defect this gate exists for: add the "
-            "four bindings and a row in _HOST_NAMES.",
+            "and dark from Python, WASM, C and the command line is the defect this gate "
+            "exists for: add the five bindings and a row in _HOST_NAMES.",
             file=sys.stderr,
         )
         return 1
@@ -602,8 +801,8 @@ def main() -> int:
 
     print(
         f"OK: all {len(services)} conclusion-directed entailment service(s) "
-        f"({', '.join(sorted(services))}) reach Rust, Python, WASM and the C ABI, "
-        "each with the boundary's whole parameter list."
+        f"({', '.join(sorted(services))}) reach Rust, Python, WASM, the C ABI and the "
+        "`purrdf` command line, each with the boundary's whole parameter list."
     )
     return 0
 

@@ -3,7 +3,7 @@
 
 //! The clap command tree: the `purrdf` binary's argument model.
 //!
-//! One pipeline, five subcommands ([`Command`]), and one global flag
+//! One pipeline, six subcommands ([`Command`]), and one global flag
 //! (`--loss-ledger`). The format / regime / results-format choices are modeled as
 //! [`clap::ValueEnum`] wrappers so `--help` enumerates the legal values and clap
 //! validates them at parse time, and each wrapper carries a total conversion into
@@ -33,12 +33,12 @@
 //! distinguishes "closed under every rule the regime defines" from "closed under a subset,
 //! over the default graph, with the named graphs untouched".
 //!
-//! It is a per-subcommand flag rather than a global one, because exactly three subcommands
-//! can reason (`reason` always, `convert` and `query` under `--entailment`). A global flag
-//! would be accepted by `project` and `lift`, which run no reasoner, and would then have to
-//! do nothing — a silent no-op being precisely the shape this repository refuses. For the
-//! same reason `convert --report` / `query --report` WITHOUT `--entailment` is a usage
-//! error rather than an empty file.
+//! It is a per-subcommand flag rather than a global one, because exactly four subcommands
+//! can reason (`reason` and `entails` always, `convert` and `query` under `--entailment`). A
+//! global flag would be accepted by `project` and `lift`, which run no reasoner, and would
+//! then have to do nothing — a silent no-op being precisely the shape this repository
+//! refuses. For the same reason `convert --report` / `query --report` WITHOUT `--entailment`
+//! is a usage error rather than an empty file.
 
 use std::path::PathBuf;
 
@@ -54,7 +54,7 @@ use crate::format::CliFormat;
 #[command(
     name = "purrdf",
     version,
-    about = "PurRDF: convert, query, reason, project, and lift RDF 1.2 data",
+    about = "PurRDF: convert, query, reason, decide entailment, project, and lift RDF 1.2 data",
     propagate_version = true
 )]
 pub(crate) struct Cli {
@@ -145,7 +145,7 @@ impl Cli {
     }
 }
 
-/// The five pipeline subcommands.
+/// The six pipeline subcommands.
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
     /// Convert RDF between syntaxes, and to/from the native pack container.
@@ -243,6 +243,55 @@ pub(crate) enum Command {
         #[arg(value_name = "IN", default_value = "-")]
         input: String,
         /// Output path `OUT`, or `-` for stdout (which requires `--to`).
+        #[arg(value_name = "OUT", default_value = "-")]
+        output: String,
+    },
+    /// Decide whether a premise entails a conclusion under an entailment regime.
+    Entails {
+        /// The entailment regime to decide under. Five of the seven are served;
+        /// `owl-direct` and `rif` are each defined by an input this question does
+        /// not carry, and the boundary refuses them by name.
+        #[arg(long, value_enum)]
+        regime: CliRegime,
+        /// The premise document `FILE`, or `-` for stdin (which requires `--from`).
+        #[arg(long, value_name = "FILE")]
+        premise: String,
+        /// The conclusion graph `FILE`, or `-` for stdin. The answer is a verdict:
+        /// `entailed`, `not-entailed` (a proof), or `undecided`.
+        #[arg(
+            long,
+            value_name = "FILE",
+            conflicts_with = "pattern",
+            required_unless_present = "pattern"
+        )]
+        conclusion: Option<String>,
+        /// A basic graph pattern `FILE` (N-Triples with `?name` in any position),
+        /// or `-` for stdin. The answer is its certain answers. Read verbatim: a
+        /// pattern is not an RDF document, so `--from` says nothing about it.
+        #[arg(long, value_name = "FILE")]
+        pattern: Option<String>,
+        /// Re-decide the warrant of an `entailed` verdict WITHOUT running a
+        /// reasoner, adding `warrant` and `verified` lines to the answer.
+        #[arg(long, conflicts_with = "pattern")]
+        verify: bool,
+        /// An `owl:imports` the premise declares, resolved to a local document:
+        /// repeatable, `IRI=FILE`. PurRDF fetches nothing, so an import no pair
+        /// resolves is refused by name rather than treated as an empty document.
+        #[arg(long = "import", value_name = "IRI=FILE")]
+        imports: Vec<String>,
+        /// Surface the reasoning certificate: bare writes it to stderr,
+        /// `--report=PATH` writes it to PATH.
+        #[allow(clippy::option_option)]
+        #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
+        report: Option<Option<PathBuf>>,
+        /// Input format override for the premise, the conclusion and every
+        /// `--import` document; inferred from each path's extension when omitted.
+        #[arg(long, value_enum)]
+        from: Option<CliRdfFormat>,
+        /// Base IRI for resolving relative IRIs while parsing those documents.
+        #[arg(long, value_name = "IRI")]
+        base: Option<String>,
+        /// Answer path `OUT`, or `-` for stdout.
         #[arg(value_name = "OUT", default_value = "-")]
         output: String,
     },

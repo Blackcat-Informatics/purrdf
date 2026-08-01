@@ -33,20 +33,21 @@ let (closed, report) = materialize(&ds, Materialization::Rdfs).expect("materiali
 assert_eq!(report.completeness(), Completeness::ExactWithinBoundaries);
 ```
 
-## The same engine in four hosts
+## The same engine in five hosts
 
-Entailment is not re-implemented per host. Python, WebAssembly, and the C ABI all
-route through one shared string boundary (`purrdf_validate::regime`) that wraps
-the Rust engine, and all four surfaces are checked against a single committed
-golden-vector artifact — so a divergence shows up as one vector failing rather
-than as three surfaces that quietly stopped agreeing. The regime spellings
+Entailment is not re-implemented per host. The `purrdf` command line, Python,
+WebAssembly, and the C ABI all route through one shared string boundary
+(`purrdf_validate::regime`) that wraps the Rust engine, and the surfaces are
+checked against a single committed golden-vector artifact — so a divergence shows
+up as one vector failing rather than as several surfaces that quietly stopped
+agreeing. The regime spellings
 (`simple`, `rdf`, `rdfs`, `owl-rl`, `owl-direct`, `rif`, `d`) are the same
 everywhere.
 
 | Host | Materialize | Defined rule table | Implemented rules |
 | --- | --- | --- | --- |
 | Rust | `materialize(&ds, Materialization::Rdfs)` | `rules(Regime::Rdfs)` | `implemented(Regime::Rdfs)` |
-| CLI | `purrdf reason --regime rdfs`, `purrdf convert --entailment rdfs`, `purrdf query --entailment rdfs` | — | — |
+| CLI | `purrdf reason --regime rdfs`, `purrdf convert --entailment rdfs`, `purrdf query --entailment rdfs` (and `purrdf entails` asks the [conclusion-directed question](#asking-a-question-instead-the-conclusion-directed-services)) | — | — |
 | Python | `purrdf.entail.materialize(dataset, "rdfs", "")`, `purrdf.entail.materialize_nt(text, "rdfs", "")` | `purrdf.entail.rules("rdfs")` | `purrdf.entail.implemented_rules("rdfs")` |
 | JavaScript / WebAssembly | `entailMaterialize(doc, "rdfs", "")` | `entailRules("rdfs")` | `entailImplementedRules("rdfs")` |
 | C | `purrdf_entail_materialize_to_nquads(...)` | `purrdf_entail_rules(...)` | `purrdf_entail_implemented_rules(...)` |
@@ -67,6 +68,51 @@ One host-specific note:
   replays the committed tri-host vector artifact inside the module a consumer
   actually loaded — so agreement with the reference implementation can be checked
   without trusting this repository's CI.
+
+## Asking a question instead: the conclusion-directed services
+
+Materializing answers "what does this premise entail?". The three services below
+answer "does this premise entail *that*?", which is a different question and not
+the membership test in a closure it looks like: a conclusion's blank nodes are
+existentials that have to be *mapped*, an inconsistent premise entails everything,
+a failure to find a mapping means nothing unless the rule set is complete for the
+premise it ran on — and a conclusion can be entailed while appearing nowhere in
+the closure at all, which is what the five mechanisms beyond the rule table exist
+for (see [Conformance](#conformance)).
+
+They run over the same shared boundary, on all **five** host shapes, and the
+`purrdf` command line is one of them. `scripts/check-entailment-surface.py` is the
+gate: it derives the service set from `purrdf-entail`'s own public entry points and
+fails until every one of them is reachable from every host *with the boundary's
+whole parameter list*, so a service or a parameter cannot land on four hosts and go
+dark on the fifth.
+
+| Host | Does P entail C? | Re-decide the warrant | Certain answers of a pattern |
+| --- | --- | --- | --- |
+| Rust | `entails(&p, &c, Regime::OwlRl, &imports)` | `verify(warrant, &p, &c)` | `certain_answers(&p, &bgp, Regime::OwlRl, &imports)` |
+| CLI | `purrdf entails --regime owl-rl --premise P --conclusion C` | `… --conclusion C --verify` | `… --pattern BGP` |
+| Python | `purrdf.entail.graph_entails("owl-rl", p, c, imports)` | `purrdf.entail.verify_entailment(...)` | `purrdf.entail.certain_answers("owl-rl", p, bgp, imports)` |
+| JavaScript / WebAssembly | `entailGraphEntails("owl-rl", p, c, iris, docs)` | `entailVerifyEntailment(...)` | `entailCertainAnswers(...)` |
+| C | `purrdf_entail_graph_entails(...)` | `purrdf_entail_verify_entailment(...)` | `purrdf_entail_certain_answers(...)` |
+
+Two things differ from the materializing table above, and both are consequences of
+the question rather than of any host:
+
+- **Five regimes, not seven.** `owl-direct` is directed by a *query's* class
+  expressions and `rif` entails under the *caller's* rule document, and "premise,
+  conclusion, regime" carries neither. Both are refused by name on every host —
+  never answered under a weaker regime and labelled with the one that was asked
+  for — and both still materialize.
+- **The import table is a parameter, on every host.** An ontology's imports closure
+  *is* the ontology, so a premise carrying an `owl:imports` the call was not handed
+  is a different premise. PurRDF fetches nothing, so the closure arrives as
+  caller-supplied configuration: an ordered list of `(ontology IRI, document)`
+  pairs, spelled `--import IRI=FILE` on the command line. An unresolved import is a
+  refusal naming the document, never a silently truncated premise.
+
+Every answer arrives with the certificate of the run underneath it — the same
+`purrdf-reasoning-report` block a materialization renders, plus a `mechanism` line
+naming which of the six reached the verdict.
 
 ## Rule coverage
 
