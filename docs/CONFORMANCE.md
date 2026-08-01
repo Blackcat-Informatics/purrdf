@@ -237,7 +237,7 @@ issue, so the matrix stays honest:
   grouping, EXISTS-over-GRAPH-var, and the SPARQL 1.2 triple-term / reifier /
   annotation surface (including graph-scoped reifiers) all pass. **All 7 W3C
   `service` federation cases pass** (via the lateral SERVICE seam). The only
-  remaining non-passes are the **4 ledgered xfails**: **upstream-errata
+  remaining non-passes are the **5 ledgered xfails**: **upstream-errata
   fixtures** (three `cast-decimal`/`-double`/`-float` cases with
   internally-inconsistent non-canonical XSD lexicals, and `coalesce01` /
   `plus-1-corrected` whose expected whole-valued `xsd:decimal` uses the legacy

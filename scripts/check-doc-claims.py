@@ -2257,6 +2257,21 @@ def build_claims(
             mat,
         ),
         Claim(
+            "the 'N ledgered xfails' sentence in the SPARQL known-gaps item",
+            _CONFORMANCE,
+            # Sentence-shaped, not line-anchored: a "5→4" typo drifted from every
+            # other count in this same document (the matrix row, the scoreboard
+            # row, and the sentence's own five-fixture enumeration) and nothing
+            # caught it because this specific sentence was never derived from
+            # anything. Matched by the "N ledgered xfails" shape rather than a
+            # fixed count, so a sixth xfail landing tomorrow fails this until the
+            # prose is updated, and re-wording elsewhere in the paragraph cannot
+            # silently widen the match.
+            _flow(r"remaining non-passes are the \*\*(?P<xfail>\d+) ledgered xfails\*\*"),
+            {"xfail": sparql_xfail},
+            mat,
+        ),
+        Claim(
             "the W3C SHACL scoreboard row",
             _CONFORMANCE,
             r"W3C data-shapes, `core/` \+ `sparql/` \+ `af/` \| "
