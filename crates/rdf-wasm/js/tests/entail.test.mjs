@@ -529,7 +529,12 @@ test("the two regimes defined by a missing input are refused by name", () => {
   const conclusion =
     "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .\n";
   for (const regime of ["owl-direct", "rif"]) {
-    assert.throws(() => entailGraphEntails(regime, SCHEMA, conclusion, [], []), new RegExp(regime));
+    // Literal substring, for the reason given at the unsupplied-import test below: a
+    // name compiled into a pattern is a weaker assertion than the name itself.
+    assert.throws(
+      () => entailGraphEntails(regime, SCHEMA, conclusion, [], []),
+      (error) => String(error.message).includes(regime),
+    );
   }
 });
 
@@ -597,9 +602,15 @@ test("an unsupplied import throws by name rather than reasoning without it", asy
   // that answer as though it were this one is what the refusal prevents.
   const premise = await corpusNquads("cases/webont-imports-011/premise.rdf");
   const conclusion = await corpusNquads("cases/webont-imports-011/conclusion.rdf");
+  // The IRI is matched as a LITERAL substring rather than compiled into a pattern.
+  // An IRI carries `.` and `?`, which a regexp reads as "any character" and "optional",
+  // so a pattern built from one is strictly WEAKER than the assertion it looks like: it
+  // would also accept a message naming a different document whose IRI happened to
+  // differ only where the dots are. Asserting the substring is both the stronger check
+  // and the one that does not build a regexp out of untrusted-shaped text.
   assert.throws(
     () => entailGraphEntails("owl-rl", premise, conclusion, [], []),
-    new RegExp(SUPPORT_011_A),
+    (error) => String(error.message).includes(SUPPORT_011_A),
   );
 });
 
