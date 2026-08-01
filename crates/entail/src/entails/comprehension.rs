@@ -957,6 +957,9 @@ pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
         }),
         discharged: BTreeSet::new(),
         minted: licensed.minted,
+        // Empty by construction, not by luck: [`read`] returns `Declined` for a conclusion
+        // with ANY refusal in it, so a reading that reached this point declined nothing.
+        declined: Vec::new(),
     })))
 }
 
@@ -1018,7 +1021,11 @@ pub(crate) fn verify_comprehension(
     {
         return None;
     }
-    if minted_labels.len() != w.witnesses.values().collect::<BTreeSet<_>>().len() {
+    // The KEYS are what is counted. Comparing the labels against the VALUES would compare two
+    // views of one collection — two scaffold nodes sharing a witness collapse on both sides
+    // and the test passes — so the map's own length is the only side that says how many
+    // distinct nodes were witnessed.
+    if minted_labels.len() != w.witnesses.len() {
         return None;
     }
 
@@ -1065,7 +1072,9 @@ mod tests {
 
     use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, TermValue};
 
-    use super::{Read, is_non_negative_integer, read};
+    use std::collections::BTreeSet;
+
+    use super::{Read, is_non_negative_integer, license, read, surface_of, verify_comprehension};
     use crate::entails::graph::default_graph_triples;
     use crate::entails::{EntailmentOutcome, EntailmentWarrant, ImportMap, entails, verify};
     use crate::vocab::{
@@ -1460,6 +1469,100 @@ mod tests {
             &premise,
             &graph(&[(A, RDF_TYPE, OWL_CLASS)])
         ));
+    }
+
+    /// TWO SCAFFOLD NODES SHARING ONE WITNESS DO NOT REPLAY, and it is the count of KEYS that
+    /// says so.
+    ///
+    /// The forgery is CONSTRUCTIBLE — here, and only here. [`mint_witnesses`] gives every
+    /// distinct scaffold surface its own fresh blank, so no run of `entails` produces this
+    /// warrant, and `ComprehensionWarrant`'s fields are private with no public constructor, so
+    /// no caller outside this crate can build one either. That is exactly why the check has to
+    /// be written to fail: [`verify`] is a re-decider of EVIDENCE, not a reader of provenance,
+    /// and a check whose two sides are two views of one collection —
+    /// `witnesses.values()` counted against `witnesses.values()` — collapses with the very
+    /// mutation it names and passes.
+    ///
+    /// Minimal on purpose: the genuine warrant with both scaffold nodes pointed at ONE witness
+    /// and `minted` / `licences` RECOMPUTED from that map, so every other test in
+    /// [`verify_comprehension`] agrees with it. Those are asserted below, so this test fails if
+    /// the rejection ever starts coming from somewhere else.
+    #[test]
+    fn two_scaffold_nodes_sharing_one_witness_do_not_replay() {
+        let premise = graph(&[(A, RDF_TYPE, OWL_CLASS), (B, RDF_TYPE, OWL_CLASS)]);
+        let conclusion = graph(&[
+            ("_c1", RDF_TYPE, OWL_CLASS),
+            ("_c1", OWL_UNIONOF, "_l1"),
+            ("_l1", RDF_TYPE, RDF_LIST),
+            ("_l1", RDF_FIRST, A),
+            ("_l1", RDF_REST, RDF_NIL),
+            ("_c2", RDF_TYPE, OWL_CLASS),
+            ("_c2", OWL_UNIONOF, "_m1"),
+            ("_m1", RDF_TYPE, RDF_LIST),
+            ("_m1", RDF_FIRST, B),
+            ("_m1", RDF_REST, RDF_NIL),
+        ]);
+        let EntailmentOutcome::Entailed(EntailmentWarrant::Comprehension(genuine)) =
+            decide(&premise, &conclusion)
+        else {
+            panic!("comprehension licenses both anonymous unions");
+        };
+        assert!(
+            genuine.witnesses.len() > 1,
+            "the conclusion states more than one scaffold node"
+        );
+        let shared = genuine
+            .witnesses
+            .values()
+            .next()
+            .expect("a witness per scaffold node")
+            .clone();
+        let mut forged = genuine;
+        for witness in forged.witnesses.values_mut() {
+            *witness = shared.clone();
+        }
+        let Read::Scaffolds(reading) = read(&conclusion) else {
+            panic!("two anonymous unions are two scaffolds");
+        };
+        let licensed = license(&reading, &forged.witnesses, &forged.closure)
+            .expect("the collapsed map licenses a mint of its own");
+        forged.minted = licensed.minted;
+        forged.licences = licensed.licences;
+
+        // Every OTHER check `verify_comprehension` makes agrees with the forgery…
+        assert!(
+            reading
+                .consumed_nodes
+                .iter()
+                .all(|node| forged.witnesses.contains_key(&surface_of(node))),
+            "every scaffold node still has a witness"
+        );
+        assert!(
+            matches!(shared, TermValue::Blank { .. }),
+            "the shared witness is still a blank node"
+        );
+        assert!(
+            forged
+                .licences
+                .iter()
+                .all(|triple| forged.closure.contains(triple)),
+            "every licence is still a closure triple"
+        );
+        assert_eq!(
+            license(&reading, &forged.witnesses, &forged.closure)
+                .expect("licensed")
+                .minted,
+            forged.minted,
+            "the mint is a function of the map, and recomputing it agrees"
+        );
+
+        // …so the count of KEYS is the only thing left to reject it, and it does.
+        let triples = default_graph_triples(&conclusion);
+        let pending: BTreeSet<usize> = (0..triples.len()).collect();
+        assert!(
+            verify_comprehension(&forged, &premise, &conclusion, &triples, &pending).is_none(),
+            "one witness for two scaffold nodes merges two classes the conclusion keeps apart"
+        );
     }
 
     /// The whole answer is a function of the inputs: two runs mint the same triples.

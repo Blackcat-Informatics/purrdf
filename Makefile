@@ -40,7 +40,7 @@ BINARYEN_VERSION := 130
 # nine OWL reasoner services, the concrete domain AND the conclusion-directed
 # entailment service with its seven mechanisms and its caller-supplied import
 # map — measures
-# 9_765_514 bytes against the 12_112_500 ceiling, which is 19.377% headroom. That
+# 9_758_312 bytes against the 12_112_500 ceiling, which is 19.436% headroom. That
 # figure is recorded below (WASM_SIZE_MEASURED_BYTES) and REPORTED rather than
 # enforced; the ceiling is the check that fails.
 #
@@ -207,8 +207,17 @@ WASM_SIZE_BUDGET_BYTES := 12112500
 # each other in no way. The growth is the escape expander and the extra node arm, and it is
 # a correctness fix rather than a capability, which is why well under a kilobyte buys it.
 #
+# The DECREASE 9_765_514 -> 9_758_312 is two conclusion-directed fixes, and the direction
+# is worth stating because a shrink is as much a moved number as a growth. The
+# comprehension warrant's witness check compared one collection against itself — two
+# scaffold nodes sharing a witness collapsed on both sides and passed — and now compares
+# the labels against the map's own length, which deletes a `BTreeSet<&TermValue>`
+# instantiation and its ordering code from the artifact. Beside it, a lane's evidence grew
+# a `declined` list so a construct it recognized and refused travels with a mint made in
+# the same pass instead of being dropped. The first removes more than the second adds.
+#
 # The measured constant below is the CURRENT size, not any intermediate figure.
-WASM_SIZE_MEASURED_BYTES := 9765514
+WASM_SIZE_MEASURED_BYTES := 9758312
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'

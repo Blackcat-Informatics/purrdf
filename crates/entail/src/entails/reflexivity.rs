@@ -326,6 +326,9 @@ pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
         }),
         discharged: BTreeSet::new(),
         minted: licensed.minted,
+        // One pass licenses both: a self-loop at a name is minted and one at an existential is
+        // declined, and the second travels WITH the first rather than being lost to it.
+        declined: licensed.declined,
     })))
 }
 
@@ -519,6 +522,38 @@ mod tests {
         assert_eq!(lane, crate::EntailmentMechanism::Reflexivity);
         assert!(
             constructs.iter().any(|why| why.contains("existential")),
+            "{constructs:?}"
+        );
+    }
+
+    /// …AND A MINT DOES NOT CANCEL AN ADMISSION MADE IN THE SAME PASS.
+    ///
+    /// Two reflexive properties, one self-loop at a name and one at an existential: the lane
+    /// mints the first and declines the second, in ONE call. The declined one is what a caller
+    /// must be told about, and the shape of the bug this test pins is that it was told only
+    /// when the lane minted NOTHING — add a mintable loop beside it and the sentence naming
+    /// the refusal disappeared, leaving the failed match to speak for a triple nothing tested.
+    #[test]
+    fn a_declined_self_loop_survives_a_mint_made_in_the_same_pass() {
+        let premise = graph(&[
+            (KNOWS, RDF_TYPE, OWL_REFLEXIVEPROPERTY),
+            (LIKES, RDF_TYPE, OWL_REFLEXIVEPROPERTY),
+        ]);
+        // `_:b likes _:b` cannot borrow the minted `Peter knows Peter`: nothing in the closure
+        // or the mint states `likes` of anything, so the residual really does fail and the
+        // answer really does turn on what the lane says about it.
+        let conclusion = graph(&[(PETER, KNOWS, PETER), ("_b", LIKES, "_b")]);
+        let EntailmentOutcome::Undecided(crate::UndecidedReason::ConstructNotRead {
+            lane,
+            constructs,
+        }) = decide(&premise, &conclusion)
+        else {
+            panic!("a recognized-and-declined self-loop is an ADMISSION, never a shrug");
+        };
+        assert_eq!(lane, crate::EntailmentMechanism::Reflexivity);
+        assert_eq!(constructs.len(), 1, "{constructs:?}");
+        assert!(
+            constructs[0].contains("existential") && constructs[0].contains(LIKES),
             "{constructs:?}"
         );
     }

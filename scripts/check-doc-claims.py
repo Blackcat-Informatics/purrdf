@@ -38,6 +38,15 @@ Both generalizations are load-bearing: ``crates/entail/README.md`` published
 ``RDF 3 | 1`` and ``RDFS 18 | 14`` while this script read only the book chapter
 and printed that every claim agreed.
 
+One check here compares prose against a RULE rather than against a generated
+number — ``banned_entailment_overclaims``, the ban on unbounded claims — so
+nothing else in this file would notice it answering wrongly, and it did, in both
+directions, for every claim that happened to wrap. It therefore SELF-TESTS before
+the claims run: ``overclaim_self_test`` injects each banned claim into each gated
+document on one line and wrapped, and asserts it is caught both times and exempt
+both times when the scope phrase is present, wherever the line breaks fall.
+``--self-test`` runs that alone.
+
 It is pure text-over-committed-files: no cargo, no network, no test run. The
 expensive gates prove the generated artifacts are current; this one proves the
 prose agrees with them. Run standalone, or as part of
@@ -50,6 +59,7 @@ import re
 import sys
 import tomllib
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parent.parent
@@ -92,7 +102,15 @@ _MATRIX_END = "<!-- END GENERATED: conformance-matrix -->"
 _RL_SUITE_ROW = "Entailment (OWL 2 RL, W3C entailment tests)"
 
 
+# The self-test's ONLY injection point: a document's text, substituted for the committed one
+# while one mutation runs. Empty on every ordinary run, so the gate reads the tree and nothing
+# else; an injected claim is written to a STRING and never to a tracked file.
+_OVERLAY: dict[str, str] = {}
+
+
 def _read(path: Path) -> str:
+    if str(path) in _OVERLAY:
+        return _OVERLAY[str(path)]
     return path.read_text(encoding="utf-8")
 
 
@@ -436,24 +454,104 @@ _BANNED_OVERCLAIMS: tuple[tuple[re.Pattern[str], str], ...] = (
 )
 
 
+# A line that opens a block of its OWN rather than continuing the one above it: a heading, a
+# list item, a table row, a fence. Two of those are two statements, not one reflowed one, so
+# joining them would let one line's scope phrase exempt the next line's claim — which is the
+# same defect as the line-scoped split, arriving from the other side.
+_BLOCK_OPENER = re.compile(r"^\s*(?:#{1,6}\s|[-*+]\s|\d+[.)]\s|\|)")
+_FENCE = re.compile(r"^\s*(?:```|~~~)")
+# The sentence terminator, and the whitespace after it that a paragraph join has already
+# normalized to one space.
+_TERMINATOR = re.compile(r"(?<=[.!?])\s+")
+
+
+def _paragraph_sentences(lines: list[tuple[int, str]]) -> list[tuple[int, str]]:
+    """The sentences of `lines` joined into one paragraph, each at the line it STARTS on.
+
+    The start line rather than the line the claim's banned phrase lands on, so a wrapped
+    claim is reported where a reader will find its first word.
+    """
+    joined = ""
+    starts: list[tuple[int, int]] = []
+    for number, piece in lines:
+        if joined:
+            joined += " "
+        starts.append((len(joined), number))
+        joined += piece.strip()
+
+    spans: list[tuple[int, int]] = []
+    opened = 0
+    for separator in _TERMINATOR.finditer(joined):
+        spans.append((opened, separator.start()))
+        opened = separator.end()
+    spans.append((opened, len(joined)))
+
+    out: list[tuple[int, str]] = []
+    for begin, end in spans:
+        sentence = joined[begin:end]
+        if not sentence.strip():
+            continue
+        number = next(number for offset, number in reversed(starts) if offset <= begin)
+        out.append((number, sentence))
+    return out
+
+
+# Memoized because the self-test re-reads the same eight unmutated documents once per
+# injected sentence, and a document's sentences are a pure function of its text. The returned
+# list is read and never mutated, here or by the ban walk.
+@lru_cache(maxsize=16)
 def _sentences(text: str) -> list[tuple[int, str]]:
-    """`(line number, sentence)` for every sentence of `text`.
+    """`(line number, sentence)` for every sentence of `text`, with WRAPPED LINES JOINED.
 
     Sentence-scoped rather than line-scoped because the exemption is: the SENTENCE
     carrying the claim also carries the scope phrase. A line-scoped check would exempt a
     claim whose scope sits on the previous wrapped line and refuse one whose scope sits on
     the next, which is a property of the paragraph reflow rather than of the prose.
 
+    Splitting each LINE on sentence terminators is line-scoped by another name, and that is
+    what this did: a sentence that wrapped became two half-sentences, neither of which was
+    the sentence anyone wrote. Both failure modes it was written to prevent were live —
+    ``the complete OWL 2 RDF-Based semantics.`` was caught and the same words wrapped after
+    ``RDF-Based`` were not, so every banned claim was one line wrap from being unsayable to
+    being invisible; and a correctly scoped claim whose ``on this vendored W3C corpus`` sat
+    on the next line was refused for a scope it did carry.
+
+    So the lines are joined into paragraphs FIRST. A blank line ends one, and so does any
+    line that opens a block of its own (see ``_BLOCK_OPENER``). Inside a fenced code block
+    nothing is joined at all: code is not reflowed prose, and two adjacent code lines are
+    two statements.
+
     Markdown table rows are one "sentence" per cell, because a table cell is a standalone
     statement and the row's other cells are not its context.
     """
     out: list[tuple[int, str]] = []
+    paragraph: list[tuple[int, str]] = []
+
+    def flush() -> None:
+        if paragraph:
+            out.extend(_paragraph_sentences(paragraph))
+            paragraph.clear()
+
+    fenced = False
     for offset, line in enumerate(text.splitlines(), start=1):
-        pieces = line.split("|") if line.lstrip().startswith("|") else [line]
-        for piece in pieces:
-            for sentence in re.split(r"(?<=[.!?])\s+", piece):
-                if sentence.strip():
-                    out.append((offset, sentence))
+        if _FENCE.match(line):
+            flush()
+            fenced = not fenced
+            continue
+        if fenced or not line.strip():
+            flush()
+            if line.strip():
+                out.extend(_paragraph_sentences([(offset, line)]))
+            continue
+        if line.lstrip().startswith("|"):
+            flush()
+            for cell in line.split("|"):
+                out.extend(_paragraph_sentences([(offset, cell)]))
+            continue
+        if _BLOCK_OPENER.match(line):
+            flush()
+        paragraph.append((offset, line))
+    flush()
     return out
 
 
@@ -476,6 +574,11 @@ def banned_entailment_overclaims() -> tuple[list[str], int]:
     ``on this vendored W3C corpus``. The exemption is a literal string rather than a
     pattern on purpose: a bounded claim has to say what it is bounded BY, and a phrase
     a writer must type verbatim is one a reader can search for.
+
+    The exemption is a property of the SENTENCE, so the sentence has to be the unit — which
+    means joining wrapped lines back into paragraphs before splitting on terminators; see
+    ``_sentences``, which did not, and ``overclaim_self_test``, which now injects every banned
+    claim into every gated document in both forms and asserts the answer in both directions.
 
     Returns the problems and the number of files scanned, so the script's headline
     reports what it really read.
@@ -501,6 +604,102 @@ def banned_entailment_overclaims() -> tuple[list[str], int]:
                         f"phrase {_CORPUS_SCOPE!r}, or say the bounded thing instead"
                     )
     return problems, len(_ENTAILMENT_CLAIM_DOCS)
+
+
+# One specimen sentence per banned claim, in two forms: on one line, and wrapped INSIDE the
+# banned phrase itself. The wrap is where the ban used to end — every one of these claims was
+# sayable by pressing return in the middle of it — so the pair is the falsifiable form of the
+# rule that the exemption is a property of the SENTENCE and not of the reflow.
+#
+# The last one wraps before the word rather than inside it: a one-word pattern cannot be split
+# by a line break, and what a wrap moves there is the SCOPE, which `_scoped` then tests.
+_OVERCLAIM_SPECIMENS: tuple[tuple[str, str], ...] = (
+    (
+        "PurRDF implements the complete OWL 2 RDF-Based semantics.",
+        "PurRDF implements the complete OWL 2 RDF-Based\nsemantics.",
+    ),
+    (
+        "PurRDF reaches complete OWL 2 conformance.",
+        "PurRDF reaches complete\nOWL 2 conformance.",
+    ),
+    (
+        "PurRDF has complete OWL 2 RL entailment.",
+        "PurRDF has complete OWL 2 RL\nentailment.",
+    ),
+    ("PurRDF is fully conformant.", "PurRDF is fully\nconformant."),
+    (
+        "PurRDF is faster than every alternative.",
+        "PurRDF is\nfaster than every alternative.",
+    ),
+)
+
+
+def _scoped(sentence: str) -> str:
+    """`sentence` with the scope phrase on the NEXT line — the claim the ban must permit.
+
+    The other half of the same defect: a line-scoped check refuses this, because the scope it
+    carries is one wrap away from the claim it scopes. Every correctly bounded claim in these
+    documents is one paragraph reflow from being rejected for saying exactly what it should.
+    """
+    return f"{sentence.rstrip('.')}\n{_CORPUS_SCOPE}."
+
+
+def overclaim_self_test(report: bool) -> list[str]:
+    """Every injected claim the ban does not answer correctly. Empty is the passing answer.
+
+    Two directions, over every gated document and every banned claim: the unscoped sentence
+    must be CAUGHT in both its forms, and the same sentence scoped — with the scope phrase on
+    the following line — must be exempt. The first commit to carry this ban verified it with
+    45 single-line injections; every one of them exercised the one case that worked, and both
+    of the cases that did not were live in the same file.
+
+    Nothing is written: the document is read once and the injected copy lives in `_OVERLAY`.
+    """
+    for sentence, wrapped in _OVERCLAIM_SPECIMENS:
+        if not any(pattern.search(sentence) for pattern, _ in _BANNED_OVERCLAIMS):
+            raise SystemExit(
+                f"check-doc-claims: the self-test's specimen {sentence!r} matches no banned "
+                "overclaim — the ban was reworded, so re-point the specimen rather than "
+                "leaving the self-test proving nothing."
+            )
+    committed = {
+        str(_REPO / relative): _read(_REPO / relative)
+        for relative in _ENTAILMENT_CLAIM_DOCS
+    }
+    wrong: list[str] = []
+    checked = 0
+    for relative in _ENTAILMENT_CLAIM_DOCS:
+        target = str(_REPO / relative)
+        for sentence, wrapped in _OVERCLAIM_SPECIMENS:
+            for form, injected, must_catch in (
+                ("one line", sentence, True),
+                ("wrapped", wrapped, True),
+                ("one line, scoped", _scoped(sentence).replace("\n", " "), False),
+                ("scope on the next line", _scoped(sentence), False),
+                ("wrapped, scoped", _scoped(wrapped), False),
+            ):
+                _OVERLAY.clear()
+                _OVERLAY.update(committed)
+                _OVERLAY[target] = f"{committed[target]}\n\n{injected}\n"
+                try:
+                    problems, _ = banned_entailment_overclaims()
+                finally:
+                    _OVERLAY.clear()
+                checked += 1
+                caught = any(problem.startswith(f"{relative}:") for problem in problems)
+                if caught is must_catch:
+                    continue
+                wrong.append(
+                    f"{relative}: {'NOT CAUGHT' if must_catch else 'FALSELY CAUGHT'} "
+                    f"({form}) — {injected!r}"
+                )
+    if report:
+        print(
+            f"check-doc-claims: the entailment-overclaim ban answered {checked} injected "
+            f"sentence(s) over {len(_ENTAILMENT_CLAIM_DOCS)} document(s) — "
+            f"{checked - len(wrong)} correctly, {len(wrong)} not."
+        )
+    return wrong
 
 
 # The codec's own short `id` has no fixed relationship to the prose name a front page
@@ -2331,7 +2530,32 @@ def build_claims(
     ]
 
 
-def main() -> int:
+def main(argv: list[str]) -> int:
+    unknown = [argument for argument in argv[1:] if argument != "--self-test"]
+    if unknown:
+        print(f"usage: {Path(argv[0]).name} [--self-test]", file=sys.stderr)
+        return 2
+    alone = "--self-test" in argv[1:]
+
+    # BEFORE the claims, on every run. The ban is the one check here that compares prose
+    # against a RULE rather than against a generated number, so nothing else in this file
+    # would notice it answering wrongly — and it answered wrongly in both directions for
+    # every claim that happened to wrap.
+    wrong = overclaim_self_test(report=alone)
+    if wrong:
+        print(
+            "check-doc-claims: the entailment-overclaim ban does not answer its own "
+            "injected sentences:\n"
+            + "\n".join(f"  - {entry}" for entry in wrong)
+            + "\n\nA claim it cannot see is a claim it does not ban, and a scoped claim it "
+            "refuses is a sentence a writer cannot say. Fix `_sentences`, not the "
+            "specimens.",
+            file=sys.stderr,
+        )
+        return 1
+    if alone:
+        return 0
+
     inventory = load_rule_inventory()
     matrix = load_matrix()
     crates = load_release_crates()
@@ -2412,4 +2636,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv))

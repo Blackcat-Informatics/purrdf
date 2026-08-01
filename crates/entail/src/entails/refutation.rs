@@ -511,6 +511,10 @@ pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
         }),
         discharged,
         minted: Vec::new(),
+        // Empty by construction, not by luck: [`negation::lower`] returns `Declined` for a
+        // conclusion with ANY refusal in it, so a lowering that reached this point declined
+        // nothing.
+        declined: Vec::new(),
     })))
 }
 

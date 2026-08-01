@@ -287,7 +287,7 @@ pub(crate) enum Attempt {
 
 /// What one mechanism CONTRIBUTED to a conclusion.
 ///
-/// The three parts are what makes the fold in [`entails`] possible. A lane that returned only
+/// The four parts are what makes the fold in [`entails`] possible. A lane that returned only
 /// a warrant would leave the caller unable to say which of the conclusion's obligations are
 /// still outstanding, which is exactly the information a second lane needs.
 pub(crate) struct Established {
@@ -302,6 +302,16 @@ pub(crate) struct Established {
     /// reflexivity's self-loops. Every one of them is entailed by the premise, so the final
     /// match may legitimately land in them.
     pub(crate) minted: Vec<Triple>,
+    /// Constructs this lane RECOGNIZED and declined to read while establishing something else,
+    /// rendered — the same strings its [`Attempt::Disqualified`] would have carried.
+    ///
+    /// One pass can do both: `p` is declared reflexive and the conclusion states a self-loop
+    /// at a name AND one at an existential, so the lane mints the first and declines the
+    /// second. A lane that could only report a refusal INSTEAD of a mint would drop the
+    /// second, and a dropped admission falls through to the final match and is reported as a
+    /// refutation — the exact substitution of a proof for an admission [`Attempt`]'s doc bans.
+    /// So it travels beside the evidence, and [`fold`] withholds on it.
+    pub(crate) declined: Vec<String>,
 }
 
 /// One conclusion-directed question, as a mechanism reads it.
@@ -1065,10 +1075,21 @@ fn fold(
                     warrant,
                     discharged,
                     minted: licensed,
+                    declined,
                 } = *established;
                 parts.push(warrant);
                 pending.retain(|index| !discharged.contains(index));
                 minted.extend(licensed);
+                // A lane that minted something may STILL have declined something else, and the
+                // admission is withheld exactly as a `Disqualified` one is: it is read only if
+                // the surviving residual does not map, and then it names the construct nothing
+                // tested rather than letting the failed match speak for it.
+                if !declined.is_empty() {
+                    withheld.push(UndecidedReason::ConstructNotRead {
+                        lane: lane.mechanism,
+                        constructs: declined,
+                    });
+                }
             }
             // "I stopped looking" and "I recognize this and decline to read it" are both
             // admissions, and an admission is never allowed to become a refutation.

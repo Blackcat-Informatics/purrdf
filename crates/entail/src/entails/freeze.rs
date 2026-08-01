@@ -878,6 +878,10 @@ pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
         }),
         discharged: reading.axioms.iter().map(|axiom| axiom.index).collect(),
         minted: Vec::new(),
+        // One reading yields both: this conclusion states a shape this lane establishes AND
+        // one it recognized and refused the terms of. The refusal is not cancelled by the
+        // establishment beside it, so it travels with the evidence.
+        declined: reading.declined,
     })))
 }
 
@@ -1242,6 +1246,39 @@ mod tests {
             assert!(reading.axioms.is_empty(), "{triples:?}");
             assert!(!reading.declined.is_empty(), "{triples:?}");
         }
+    }
+
+    /// …AND AN ESTABLISHMENT IN THE SAME READING DOES NOT CANCEL IT.
+    ///
+    /// `chain2trans1`'s conclusion with one existential axiom added: the reading holds an axiom
+    /// this lane freezes AND a shape it refused the terms of, and the two are independent
+    /// triples of one conclusion. The refusal is the answer a caller needs — nothing tested
+    /// `_:x rdf:type owl:TransitiveProperty` in either direction — and it was reachable only
+    /// while the lane established NOTHING, so establishing the axiom beside it silently
+    /// replaced an admission with a failed match.
+    #[test]
+    fn a_declined_shape_survives_an_axiom_established_in_the_same_reading() {
+        let premise = chain_premise();
+        // Nothing in the premise's closure is typed `owl:TransitiveProperty` — deriving that
+        // typing is what the frozen chase does, and it mints nothing — so the existential has
+        // nothing to bind to and the residual really does miss.
+        let conclusion = graph(&[
+            (ONT, RDF_TYPE, OWL_ONTOLOGY),
+            (P, RDF_TYPE, OWL_TRANSITIVEPROPERTY),
+            ("_x", RDF_TYPE, OWL_TRANSITIVEPROPERTY),
+        ]);
+        let reading = read(&default_graph_triples(&conclusion), &all_of(&conclusion));
+        assert_eq!(reading.axioms.len(), 1, "one axiom is established");
+        assert_eq!(reading.declined.len(), 1, "…beside one refusal");
+        let EntailmentOutcome::Undecided(crate::UndecidedReason::ConstructNotRead {
+            lane,
+            constructs,
+        }) = decide(&premise, &conclusion)
+        else {
+            panic!("a recognized-and-declined shape is an ADMISSION, never a shrug");
+        };
+        assert_eq!(lane, crate::EntailmentMechanism::Freeze);
+        assert_eq!(constructs, reading.declined, "{constructs:?}");
     }
 
     /// A conclusion this mechanism reads nothing in is NOT its business, and it does not

@@ -85,7 +85,9 @@ They run over the same shared boundary, on all **five** host shapes, and the
 gate: it derives the service set from `purrdf-entail`'s own public entry points and
 fails until every one of them is reachable from every host *with the boundary's
 whole parameter list*, so a service or a parameter cannot land on four hosts and go
-dark on the fifth.
+dark on the fifth. It also mutation-tests itself on every run — one edit per check,
+applied in memory over the committed tree, each of which must make the gate fail —
+because a check that cannot withhold a green light is not a check.
 
 | Host | Does P entail C? | Re-decide the warrant | Certain answers of a pattern |
 | --- | --- | --- | --- |

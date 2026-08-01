@@ -58,6 +58,40 @@ capability callable —
   imported name nothing calls does not compile, and a name in that block is therefore proof
   of a call rather than of an import.
 
+# An ATTRIBUTE is read against the FUNCTION, never against the file
+
+Two of those needles are attributes, and an attribute is what makes the entry point exist:
+without `#[pyfunction]` the Rust function is compiled and unimportable, and without
+`#[unsafe(no_mangle)]` the symbol lands in the shared object under a mangled name the
+committed header does not declare. Both were first written as `attribute in source` — and
+`#[pyfunction]` decorates eighteen functions of its file while `#[unsafe(no_mangle)]`
+decorates seventeen entry points of its own, so both tests were TRUE no matter what
+happened to the one service being checked. That is a green light with nothing behind it,
+which is worse than no gate at all, because the row it prints reads exactly like a check.
+
+So `_decorated` matches an attribute to the declaration it DECORATES: the run between them
+may hold further attributes, doc comments and blank lines, and stops at anything else, so
+an unrelated item in between is an unrelated item. Both lines must be at column 0, because
+every one of these entry points is a top-level item and an indented one is inside some
+`mod`.
+
+# The gate MUTATION-TESTS ITSELF, on every run
+
+`_MUTATIONS` is one mutation per arm at least — the construct that arm claims to read,
+removed or moved, applied to a STRING and never to a tracked file — and `self_test` re-runs
+the whole gate against each and requires it to FAIL. A mutation the gate SURVIVES is
+reported by name and is itself a failure of this script.
+
+It runs BEFORE the gate's own verdict rather than behind a flag, because a check that
+cannot withhold a green light is worth nothing and two such checks shipped here for a whole
+branch: the flag would have been the thing nobody ran. It is pure text over the same
+handful of files, so the whole suite costs a fraction of a second.
+
+A mutation that can no longer be APPLIED is a failure too: its needle is gone because the
+tree moved, and a self-test quietly testing nothing is the very defect it exists to
+prevent — the same discipline every `SystemExit` in this file enforces. `--self-test` runs
+the suite alone and prints one line per mutation.
+
 # A NAME is not a CAPABILITY: the PARAMETER LIST is checked too
 
 A binding can carry the right name and still be crippled. The `owl:imports` table is
@@ -99,6 +133,8 @@ from __future__ import annotations
 
 import re
 import sys
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parent.parent
@@ -300,6 +336,60 @@ def _named_params(text: str, opener: str, what: str, trailing: bool) -> list[str
     return names
 
 
+def _decorated(text: str, attribute: str, declaration: str) -> str | None:
+    """The declaration line beginning `declaration` that `attribute` DECORATES, or `None`.
+
+    Whether an attribute DECORATES a function is a different question from whether it OCCURS
+    in the function's file, and only the first one is about the function. `#[pyfunction]` sits
+    on every Python entry point of its file and `#[unsafe(no_mangle)]` on every C one, so an
+    `attribute in text` test is satisfied by any OTHER entry point and stays true whatever
+    becomes of this one — a gate that cannot fail, which is worse than no gate because the row
+    it prints reads exactly like a check. Both arms were written that way, and both mutations
+    — strip `#[pyfunction]` off one binding, strip every `#[unsafe(no_mangle)]` off the C ABI —
+    left this script exiting 0 while the service compiled and became unreachable.
+
+    Between the attribute and the item may sit further attributes — `#[pyo3(signature = …)]`,
+    the binding-ABI clippy waiver — doc comments and blank lines, and NOTHING else: the run
+    stops at the first line that is none of those, so an unrelated item in between is an
+    unrelated item and not a decoration. A multi-line attribute is followed to its closing
+    bracket rather than mistaken for one.
+
+    Both lines must start at COLUMN 0. Every entry point these arms are about is a top-level
+    item of its file; an indented one is inside some `mod`, and a `#[cfg(test)]` helper is not
+    a published surface.
+    """
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if line != attribute:
+            continue
+        found = _decorated_at(lines, index, declaration)
+        if found is not None:
+            return found
+    return None
+
+
+def _decorated_at(lines: list[str], index: int, declaration: str) -> str | None:
+    """What the attribute ON LINE `index` decorates, when that is a `declaration`.
+
+    One occurrence, not the file: [`_decorated`] walks the occurrences and this decides each,
+    so "does THIS attribute decorate it" stays a separate question from "does SOME attribute".
+    """
+    unclosed = 0
+    for following in lines[index + 1 :]:
+        if unclosed:
+            unclosed += following.count("[") - following.count("]")
+            continue
+        if following.startswith(declaration):
+            return following
+        if following.startswith("#["):
+            unclosed = following.count("[") - following.count("]")
+            continue
+        if not following.strip() or following.startswith("//"):
+            continue
+        break
+    return None
+
+
 def _pyo3_signature(text: str, function: str) -> list[str]:
     """The `#[pyo3(signature = (…))]` list attached to `fn <function>(`.
 
@@ -336,15 +426,17 @@ def _wasm_params(text: str, js_name: str) -> list[str]:
         raise SystemExit(
             f"check-entailment-surface: cannot find {attribute!r}; the file's layout moved"
         )
-    tail = text[start:]
-    found = re.search(r"pub fn (\w+)\(", tail)
-    if not found:
+    # The `pub fn` this attribute DECORATES, not the next one in the file: an attribute that
+    # had come adrift of its function would otherwise be read against whatever followed it.
+    declaration = _decorated(text, attribute, "pub fn ")
+    if declaration is None:
         raise SystemExit(
             f"check-entailment-surface: {attribute!r} decorates no `pub fn`; the file's "
             "layout moved — update this gate rather than leaving it vacuous"
         )
+    opener = declaration[: declaration.index("(") + 1]
     return _named_params(
-        tail, found.group(0), f"the wasm binding {js_name}", trailing=False
+        text[start:], opener, f"the wasm binding {js_name}", trailing=False
     )
 
 
@@ -409,11 +501,29 @@ def _cli_flags(command_tree: str) -> list[str]:
     return flags
 
 
+# The self-test's ONLY injection point: one file's text, substituted for the committed one
+# while a mutation runs. Empty on every ordinary run, so the gate reads the tree and nothing
+# else; a mutation is applied to a STRING and no tracked file is ever written.
+_OVERLAY: dict[str, str] = {}
+
+
 def _read(relative: str | Path) -> str:
+    if str(relative) in _OVERLAY:
+        return _OVERLAY[str(relative)]
     path = _REPO / relative
     if not path.is_file():
         raise SystemExit(f"check-entailment-surface: {relative} is missing")
     return path.read_text(encoding="utf-8")
+
+
+@contextmanager
+def _mutated(relative: str, text: str) -> Generator[None]:
+    """Run the body with `relative` reading as `text`, and restore the tree after."""
+    _OVERLAY[relative] = text
+    try:
+        yield
+    finally:
+        _OVERLAY.clear()
 
 
 def _block(text: str, opener: str, closer: str, what: str) -> str:
@@ -503,7 +613,10 @@ def missing_bindings(services: set[str]) -> list[str]:
             (
                 "rust boundary",
                 "crates/validate/src/regime.rs",
-                f"pub fn {names['boundary']}(" in boundary,
+                # Column 0, as the docstring says: a `pub fn` indented into some `mod` is that
+                # module's surface and not the crate's.
+                re.search(rf"^pub fn {names['boundary']}\(", boundary, re.MULTILINE)
+                is not None,
             ),
             (
                 "rust re-export",
@@ -513,7 +626,7 @@ def missing_bindings(services: set[str]) -> list[str]:
             (
                 "python function",
                 "bindings/python/src/py_entail.rs",
-                f"#[pyfunction]" in py_source and f"\nfn {names['python']}(" in py_source,
+                _decorated(py_source, "#[pyfunction]", f"fn {names['python']}(") is not None,
             ),
             (
                 "python registration",
@@ -528,7 +641,10 @@ def missing_bindings(services: set[str]) -> list[str]:
             (
                 "wasm binding",
                 "crates/rdf-wasm/src/entail.rs",
-                f"#[wasm_bindgen(js_name = {names['wasm']})]" in wasm_source,
+                _decorated(
+                    wasm_source, f"#[wasm_bindgen(js_name = {names['wasm']})]", "pub fn "
+                )
+                is not None,
             ),
             (
                 "npm import binding",
@@ -548,7 +664,15 @@ def missing_bindings(services: set[str]) -> list[str]:
             (
                 "c abi entry point",
                 "crates/rdf-capi/src/entail.rs",
-                f'pub unsafe extern "C" fn {names["capi"]}(' in capi_source,
+                # UNDER `#[unsafe(no_mangle)]`, which is what puts the symbol in the shared
+                # object under the name the header declares. A mangled entry point links as
+                # `_ZN…` and no consumer can find it.
+                _decorated(
+                    capi_source,
+                    "#[unsafe(no_mangle)]",
+                    f'pub unsafe extern "C" fn {names["capi"]}(',
+                )
+                is not None,
             ),
             (
                 "c abi header declaration",
@@ -614,7 +738,15 @@ def _cli_wiring_problems(
         (
             "dispatch call",
             f"{_CLI_DISPATCH}::entails::run",
-            "entails::run(" in cli_dispatch,
+            # The call must be THIS ARM's body — the variant's own destructuring followed by
+            # `=> entails::run(`. A bare `"entails::run(" in cli_dispatch` is satisfied by the
+            # name in a comment, or by an arm that routes something else, which is a
+            # subcommand clap parses and `main` sends elsewhere.
+            re.search(
+                rf"Command::{_CLI_VARIANT}\s*\{{[^{{}}]*\}}\s*=>\s*entails::run\(",
+                cli_dispatch,
+            )
+            is not None,
         ),
         (
             "subcommand variant",
@@ -768,29 +900,395 @@ def _arity_problems(
     return problems
 
 
-def main() -> int:
+def gate_problems() -> list[str]:
+    """Every reason the surface is not reachable from every host. Empty is the green answer.
+
+    Separate from [`main`] because the self-test runs it once per mutation and reads the
+    answer rather than an exit code.
+    """
     services = derived_services()
     unmapped = services - _HOST_NAMES.keys()
     if unmapped:
-        print(
-            "check-entailment-surface: purrdf-entail publishes "
+        return [
+            "  • purrdf-entail publishes "
             f"{sorted(unmapped)} with no host spellings. A capability reachable from Rust "
             "and dark from Python, WASM, C and the command line is the defect this gate "
-            "exists for: add the five bindings and a row in _HOST_NAMES.",
-            file=sys.stderr,
-        )
-        return 1
+            "exists for: add the five bindings and a row in _HOST_NAMES."
+        ]
     stale = _HOST_NAMES.keys() - services
     if stale:
-        print(
-            f"check-entailment-surface: _HOST_NAMES names {sorted(stale)}, which "
+        return [
+            f"  • _HOST_NAMES names {sorted(stale)}, which "
             "purrdf-entail no longer publishes — the host bindings are calling a service "
-            "that is gone, or the derivation moved.",
+            "that is gone, or the derivation moved."
+        ]
+    return missing_bindings(services)
+
+
+# ── The gate's own falsifiability ──────────────────────────────────────────────────────
+
+# The service every mutation below is written against. One specimen is enough because the
+# arms are a LOOP over the services: an arm that catches a mutation of one catches it for
+# all three, and an arm that catches none of them is the tautology this section exists to
+# make impossible.
+_SPECIMEN = "certain_answers"
+
+
+def _cut(text: str, needle: str) -> str:
+    """`text` with its first `needle` removed."""
+    if needle not in text:
+        raise SystemExit(f"{needle!r} is no longer there")
+    return text.replace(needle, "", 1)
+
+
+def _cut_last(text: str, needle: str) -> str:
+    """`text` with its LAST `needle` removed — the second of two identical name lists."""
+    at = text.rfind(needle)
+    if at < 0:
+        raise SystemExit(f"{needle!r} is no longer there")
+    return text[:at] + text[at + len(needle) :]
+
+
+def _swap(text: str, old: str, new: str) -> str:
+    """`text` with its first `old` replaced by `new`."""
+    if old not in text:
+        raise SystemExit(f"{old!r} is no longer there")
+    return text.replace(old, new, 1)
+
+
+def _undecorate(text: str, attribute: str, declaration: str) -> str:
+    """`text` with the ONE `attribute` line that decorates `declaration` removed.
+
+    The mutation the two named arms could not see: the attribute stays on every other item of
+    the file, so nothing that counts occurrences or searches the file notices.
+    """
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if line != attribute or _decorated_at(lines, index, declaration) is None:
+            continue
+        kept = lines[:index] + lines[index + 1 :]
+        return "\n".join(kept) + ("\n" if text.endswith("\n") else "")
+    raise SystemExit(f"{attribute!r} no longer decorates {declaration!r}")
+
+
+def _names(host: str) -> str:
+    """The specimen service's spelling on `host`."""
+    return _HOST_NAMES[_SPECIMEN][host]
+
+
+# One mutation per arm, at least: a construct exactly one check claims to read, removed or
+# moved, in memory. Each must make `gate_problems` non-empty — a mutation the gate SURVIVES
+# is a check that proves nothing, and is reported by name.
+#
+# A mutation that can no longer be APPLIED fails too, and loudly: its needle is gone because
+# the tree moved, and a self-test quietly testing nothing is the same defect one layer up.
+_MUTATIONS: tuple[tuple[str, str, Callable[[str], str]], ...] = (
+    # ── the derived service set ──
+    (
+        "a fourth service arrives with no host spellings",
+        "crates/entail/src/entails/mod.rs",
+        lambda text: text + "\npub fn a_service_with_no_bindings() {}\n",
+    ),
+    (
+        "the crate stops publishing a service the host bindings call",
+        "crates/entail/src/entails/mod.rs",
+        lambda text: _swap(
+            text, f"\npub fn {_SPECIMEN}(", f"\npub fn {_SPECIMEN}_renamed("
+        ),
+    ),
+    # ── the Rust boundary, and the crate surface it must be on ──
+    (
+        "the boundary function is renamed",
+        "crates/validate/src/regime.rs",
+        lambda text: _swap(
+            text, f"\npub fn {_names('boundary')}(", f"\npub fn {_names('boundary')}_gone("
+        ),
+    ),
+    (
+        "the boundary function is indented into a module",
+        "crates/validate/src/regime.rs",
+        lambda text: _swap(
+            text, f"\npub fn {_names('boundary')}(", f"\n    pub fn {_names('boundary')}("
+        ),
+    ),
+    (
+        "the boundary is no longer re-exported from the crate root",
+        "crates/validate/src/lib.rs",
+        lambda text: _cut(text, f"{_names('boundary')},\n    "),
+    ),
+    (
+        "the boundary grows a parameter no host spells",
+        "crates/validate/src/regime.rs",
+        lambda text: _swap(
+            text,
+            f"pub fn {_names('boundary')}(",
+            f"pub fn {_names('boundary')}(unspelled: &str,",
+        ),
+    ),
+    # ── Python ──
+    (
+        "the `#[pyfunction]` is stripped off ONE entry point",
+        "bindings/python/src/py_entail.rs",
+        lambda text: _undecorate(text, "#[pyfunction]", f"fn {_names('python')}("),
+    ),
+    (
+        "every `#[pyfunction]` is stripped",
+        "bindings/python/src/py_entail.rs",
+        lambda text: _cut(text, "#[pyfunction]\n").replace("#[pyfunction]\n", ""),
+    ),
+    (
+        "the Python entry point is renamed",
+        "bindings/python/src/py_entail.rs",
+        lambda text: _swap(
+            text, f"\nfn {_names('python')}(", f"\nfn {_names('python')}_renamed("
+        ),
+    ),
+    (
+        "the registration is moved out of `register`",
+        "bindings/python/src/py_entail.rs",
+        lambda text: _cut(
+            text, f"    m.add_function(wrap_pyfunction!({_names('python')}, m)?)?;\n"
+        )
+        + f"\n// wrap_pyfunction!({_names('python')}, m)\n",
+    ),
+    (
+        "the Python signature loses a parameter",
+        "bindings/python/src/py_entail.rs",
+        lambda text: _swap(
+            text,
+            "#[pyo3(signature = (regime, data, pattern, imports))]",
+            "#[pyo3(signature = (regime, data, pattern))]",
+        ),
+    ),
+    (
+        "the stub's `def` is moved out of `class entail:`",
+        "bindings/python/python/src/purrdf/__init__.pyi",
+        lambda text: _swap(
+            text, f"    def {_names('python')}(", f"def {_names('python')}("
+        ),
+    ),
+    (
+        "the stub's `def` loses a parameter",
+        "bindings/python/python/src/purrdf/__init__.pyi",
+        lambda text: _swap(
+            text,
+            f"    def {_names('python')}(\n        regime: RegimeLike,",
+            f"    def {_names('python')}(",
+        ),
+    ),
+    # ── WASM, and the two JS name lists ──
+    (
+        "the `js_name` attribute is stripped",
+        "crates/rdf-wasm/src/entail.rs",
+        lambda text: _cut(text, f"#[wasm_bindgen(js_name = {_names('wasm')})]\n"),
+    ),
+    (
+        "the `js_name` attribute comes adrift of its function",
+        "crates/rdf-wasm/src/entail.rs",
+        lambda text: _swap(
+            _cut(text, f"#[wasm_bindgen(js_name = {_names('wasm')})]\n"),
+            "\nuse ",
+            f"\n#[wasm_bindgen(js_name = {_names('wasm')})]\nuse ",
+        ),
+    ),
+    (
+        "the wasm binding loses a parameter",
+        "crates/rdf-wasm/src/entail.rs",
+        lambda text: _swap(text, "    import_documents: Vec<String>,\n", ""),
+    ),
+    (
+        "the name is dropped from the `import init, { … }` list",
+        "crates/rdf-wasm/js/index.mjs",
+        lambda text: _cut(text, f"  {_names('wasm')},\n"),
+    ),
+    (
+        "the name is dropped from the `export { … }` list",
+        "crates/rdf-wasm/js/index.mjs",
+        lambda text: _cut_last(text, f"  {_names('wasm')},\n"),
+    ),
+    (
+        "the `.d.ts` declaration is renamed",
+        "crates/rdf-wasm/js/index.d.ts",
+        lambda text: _swap(
+            text,
+            f"export function {_names('wasm')}(",
+            f"export function {_names('wasm')}Legacy(",
+        ),
+    ),
+    (
+        "the `.d.ts` declaration loses a parameter",
+        "crates/rdf-wasm/js/index.d.ts",
+        lambda text: _swap(text, "  importDocuments: readonly string[],\n", ""),
+    ),
+    # ── the C ABI, and the header cbindgen writes ──
+    (
+        "the `#[unsafe(no_mangle)]` is stripped off ONE entry point",
+        "crates/rdf-capi/src/entail.rs",
+        lambda text: _undecorate(
+            text, "#[unsafe(no_mangle)]", f'pub unsafe extern "C" fn {_names("capi")}('
+        ),
+    ),
+    (
+        "every `#[unsafe(no_mangle)]` is stripped",
+        "crates/rdf-capi/src/entail.rs",
+        lambda text: _cut(text, "#[unsafe(no_mangle)]\n").replace(
+            "#[unsafe(no_mangle)]\n", ""
+        ),
+    ),
+    (
+        "the C entry point is renamed",
+        "crates/rdf-capi/src/entail.rs",
+        lambda text: _swap(
+            text,
+            f'pub unsafe extern "C" fn {_names("capi")}(',
+            f'pub unsafe extern "C" fn {_names("capi")}_renamed(',
+        ),
+    ),
+    (
+        "the C entry point loses a parameter",
+        "crates/rdf-capi/src/entail.rs",
+        lambda text: _swap(
+            text,
+            "    pattern: *const c_char,\n    import_iris: *const *const c_char,",
+            "    pattern: *const c_char,",
+        ),
+    ),
+    (
+        "the header declaration is dropped",
+        "crates/rdf-capi/include/purrdf.h",
+        lambda text: _swap(
+            text, f"int32_t {_names('capi')}(", f"int32_t {_names('capi')}_absent("
+        ),
+    ),
+    (
+        "the header declaration loses a parameter",
+        "crates/rdf-capi/include/purrdf.h",
+        lambda text: _swap(text, "                                      size_t import_count,\n", ""),
+    ),
+    # ── the command line ──
+    (
+        "the selector flag loses its `long`",
+        "crates/cli/src/cli.rs",
+        lambda text: _swap(
+            text,
+            '#[arg(long, value_name = "FILE")]\n        pattern: Option<String>,',
+            '#[arg(value_name = "FILE")]\n        pattern: Option<String>,',
+        ),
+    ),
+    (
+        "a boundary parameter loses its CLI flag",
+        "crates/cli/src/cli.rs",
+        lambda text: _swap(
+            text,
+            '#[arg(long = "import", value_name = "IRI=FILE")]',
+            '#[arg(value_name = "IRI=FILE")]',
+        ),
+    ),
+    (
+        "the subcommand grows a flag that answers to nothing",
+        "crates/cli/src/cli.rs",
+        lambda text: _swap(
+            text,
+            "        /// Answer path `OUT`, or `-` for stdout.",
+            "        #[arg(long)]\n        unanswerable: bool,\n"
+            "        /// Answer path `OUT`, or `-` for stdout.",
+        ),
+    ),
+    (
+        "the boundary import is dropped from the CLI module",
+        "crates/cli/src/entails.rs",
+        lambda text: _cut(text, f"{_names('boundary')}, "),
+    ),
+    (
+        "the clap variant is renamed out from under `main`",
+        "crates/cli/src/main.rs",
+        lambda text: _swap(
+            text, f"Command::{_CLI_VARIANT} {{", f"Command::{_CLI_VARIANT}Legacy {{"
+        ),
+    ),
+    (
+        "the dispatch arm routes elsewhere, leaving the name in a comment",
+        "crates/cli/src/main.rs",
+        lambda text: _swap(text, "} => entails::run(", "} => elsewhere::run(")
+        + "\n// was: entails::run(\n",
+    ),
+    (
+        "the subcommand variant is dropped from the command tree",
+        "crates/cli/src/cli.rs",
+        lambda text: _swap(
+            text, f"    {_CLI_VARIANT} {{", f"    {_CLI_VARIANT}Withdrawn {{"
+        ),
+    ),
+)
+
+
+def self_test(report: bool) -> list[str]:
+    """Every mutation this gate does NOT catch. An empty list is the only passing answer."""
+    services = derived_services()
+    if _SPECIMEN not in services:
+        raise SystemExit(
+            f"check-entailment-surface: the self-test is written against {_SPECIMEN!r}, "
+            f"which purrdf-entail no longer publishes (it publishes {sorted(services)}) — "
+            "re-point the mutations rather than leaving the gate untested."
+        )
+    survived: list[str] = []
+    for what, relative, mutate in _MUTATIONS:
+        try:
+            text = mutate(_read(relative))
+        except SystemExit as stale:
+            raise SystemExit(
+                f"check-entailment-surface: the self-test cannot apply its mutation "
+                f"{what!r} to {relative}: {stale}. The tree moved — update the mutation "
+                "rather than leaving the self-test proving nothing."
+            ) from stale
+        with _mutated(relative, text):
+            try:
+                caught = "caught" if gate_problems() else ""
+            except SystemExit:
+                # A mutation the gate REFUSES to read is still a mutation the gate does not
+                # pass: it exits non-zero naming the file whose layout moved.
+                caught = "refused"
+        if report:
+            print(f"  {caught or 'SURVIVED':8}  {relative}: {what}")
+        if not caught:
+            survived.append(f"  • {relative}: {what}")
+    return survived
+
+
+def main(argv: list[str]) -> int:
+    unknown = [argument for argument in argv[1:] if argument != "--self-test"]
+    if unknown:
+        print(f"usage: {Path(argv[0]).name} [--self-test]", file=sys.stderr)
+        return 2
+    alone = "--self-test" in argv[1:]
+
+    if alone:
+        print(
+            f"check-entailment-surface: mutating the committed tree {len(_MUTATIONS)} ways, "
+            "each of which must fail this gate —"
+        )
+    # BEFORE the gate's own verdict, on every run: a green light this script cannot withhold
+    # is worth nothing, and the two arms that could not withhold it shipped for a whole
+    # branch. Pure text over strings, so it costs no build and no I/O beyond re-reading the
+    # same handful of files.
+    survived = self_test(report=alone)
+    if survived:
+        print(
+            "check-entailment-surface: this gate PASSES a tree it is written to refuse:\n"
+            + "\n".join(survived)
+            + "\n\nEach line above is a mutation that makes a capability unreachable and "
+            "leaves this script exiting 0 — a green light with nothing behind it. Fix the "
+            "check, not the mutation.",
             file=sys.stderr,
         )
         return 1
+    if alone:
+        print(
+            f"OK: all {len(_MUTATIONS)} mutations of the committed tree fail this gate."
+        )
+        return 0
 
-    problems = missing_bindings(services)
+    problems = gate_problems()
     if problems:
         print(
             "check-entailment-surface: the conclusion-directed entailment surface is not "
@@ -799,13 +1297,15 @@ def main() -> int:
         )
         return 1
 
+    services = derived_services()
     print(
         f"OK: all {len(services)} conclusion-directed entailment service(s) "
         f"({', '.join(sorted(services))}) reach Rust, Python, WASM, the C ABI and the "
-        "`purrdf` command line, each with the boundary's whole parameter list."
+        "`purrdf` command line, each with the boundary's whole parameter list; and all "
+        f"{len(_MUTATIONS)} mutations of that tree fail this gate."
     )
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv))

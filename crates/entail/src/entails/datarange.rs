@@ -393,6 +393,9 @@ pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
                 .collect(),
         }),
         minted: Vec::new(),
+        // Empty by construction, not by luck: this lane declines nothing by name — an
+        // unreadable target simply is not its question — exactly as [`recognizes`] says.
+        declined: Vec::new(),
     })))
 }
 
