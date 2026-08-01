@@ -67,22 +67,31 @@
 //! line naming it — so a reader of this scoreboard can tell which agreements the
 //! normative table reached on its own.
 //!
-//! # The chase is also measured with its REFUTATION lane, which adds no rule
+//! # The chase is also measured with its EXTRA MECHANISMS, which add no rule
 //!
-//! `purrdf_entail::entails()` reaches a conclusion two ways, and eight of the cases
-//! graded here are reached only the second way. Seventeen of the seventy-eight
-//! rules conclude `false`, which is to say the table carries its own inconsistency
-//! calculus; so a conclusion whose head no rule has — an `owl:differentFrom`, a
-//! membership in an `owl:complementOf` class, an `owl:AllDifferent` collection — is
-//! decided by asserting its negation into the premise and re-running the SAME
-//! table, over a premise whose consistency was established first.
+//! `purrdf_entail::entails()` reaches a conclusion three ways, and nine of the cases
+//! graded here are reached only by one of the two beyond matching.
 //!
-//! This is worth separating from the extension above because it is a different kind
-//! of thing. `ext-eq-diff-sym` is a rule PurRDF states that no specification does,
-//! and it is declared as such. Refutation states nothing: the rule inventory is
-//! byte-for-byte the same seventy-eight before and after, and
-//! `the_refutation_lane_adds_no_rule` in `purrdf-entail` asserts it. What changed is
-//! how many times the table is run and what the run's `false` is read as.
+//! * **Refutation.** Seventeen of the seventy-eight rules conclude `false`, which is
+//!   to say the table carries its own inconsistency calculus; so a conclusion whose
+//!   head no rule has — an `owl:differentFrom`, a membership in an
+//!   `owl:complementOf` class, an `owl:AllDifferent` collection — is decided by
+//!   asserting its negation into the premise and re-running the SAME table, over a
+//!   premise whose consistency was established first. Eight cases.
+//! * **Freeze-and-chase.** A schema axiom such as `p rdf:type
+//!   owl:TransitiveProperty` abbreviates a universally quantified Horn implication,
+//!   and such an implication is decided by generalisation on constants: freeze its
+//!   body over constants the premise does not mention, re-run the SAME table, and
+//!   look for its head. One case (`chain2trans1`), whose head arrives through
+//!   `prp-spo2`.
+//!
+//! Both are worth separating from the extension above because they are a different
+//! kind of thing. `ext-eq-diff-sym` is a rule PurRDF states that no specification
+//! does, and it is declared as such. Neither mechanism states anything: the rule
+//! inventory is byte-for-byte the same seventy-eight before and after, and
+//! `the_refutation_lane_adds_no_rule` / `the_freeze_lane_adds_no_rule` in
+//! `purrdf-entail` assert it. What changed is how many times the table is run, what
+//! it is run over, and what the run's `false` is read as.
 //!
 //! Grading a positive case is one-sided in the honest direction: matching proves
 //! entailment (the chase is sound), and failing to match is always a real,
@@ -207,6 +216,10 @@ pub enum RlGap {
     /// schema axiom and IS, by OWL 2's own definition, the conjunction of its
     /// `n(n−1)/2` pairwise inequalities — so it lowers to
     /// [`Self::NegativeConclusion`]'s shape and is reached by refuting every pair.
+    /// A property CHARACTERISTIC left the same way and for the same reason:
+    /// `p rdf:type owl:TransitiveProperty` is `p ∈ IOOP` conjoined with a
+    /// universally quantified Horn implication, and an implication is decided by
+    /// instantiating its body over fresh constants and re-running the table.
     /// A conclusion belongs here when nothing it can be decomposed into has a head
     /// in the table either.
     SchemaConclusion,
@@ -364,25 +377,33 @@ pub const LEDGER: &[LedgerEntry] = &[
     //     `ext-eq-diff-sym`. So these six agree through the normative table, run a
     //     second time.
     // --- SCHEMA CONCLUSION: the head shape does not exist in the rule table ---
-    //     `chain2trans1` concludes `p rdf:type owl:TransitiveProperty`;
     //     `webont-i5-26-010` concludes an anonymous `owl:Restriction`;
     //     `webont-i5-5-005` concludes an anonymous `owl:unionOf` class; the three
-    //     `webont-i5-8-*` cases conclude an `rdfs:range` narrowed to an XSD
-    //     datatype. Every head in OWL 2 RL/RDF's rule table is an assertional
-    //     triple over named terms or `false`; not one concludes an axiom, so these
-    //     are outside what the profile's rule set can produce rather than outside
-    //     what this implementation happens to do.
+    //     `webont-i5-8-*` cases conclude an `rdfs:range` WIDENED to a containing XSD
+    //     datatype (`xsd:byte ⊑ xsd:short`, which is why they are sound at all).
+    //     Every head in OWL 2 RL/RDF's rule table is an assertional triple over
+    //     named terms or `false`; not one concludes an axiom, so these are outside
+    //     what the profile's rule set can produce rather than outside what this
+    //     implementation happens to do.
     //
-    //     Two cases left this block with the six above:
+    //     Three cases have left this block. Two went with the six above:
     //     `new-feature-disjoint{data,object}properties-002` conclude an
     //     `owl:AllDifferent` collection, which reads as a schema axiom and IS the
     //     conjunction of its `n(n−1)/2` pairwise inequalities — so it lowers to the
     //     negative facts of the previous block and is reached the same way, one
     //     refutation per pair, all of them required.
-    LedgerEntry {
-        case: "chain2trans1",
-        gap: RlGap::SchemaConclusion,
-    },
+    //
+    //     The third is `chain2trans1`, which concludes `p rdf:type
+    //     owl:TransitiveProperty` from `p owl:propertyChainAxiom (p p)`. Still no
+    //     rule of Tables 4–9 has that head, and none ever will. But the axiom
+    //     ABBREVIATES a universally quantified Horn implication, and a Horn
+    //     implication is decided by GENERALISATION ON CONSTANTS: freeze
+    //     `_:a p _:b . _:b p _:c` over constants the premise does not mention, re-run
+    //     the SAME table, and `prp-spo2` — one of the seventy-eight — derives
+    //     `_:a p _:c`, which is transitivity's own condition. The membership conjunct
+    //     (`p ∈ IOOP`) is a lookup in the premise's own closure. So this agrees
+    //     through the normative table, run once more over two extra atoms, and the
+    //     rule inventory is untouched.
     LedgerEntry {
         case: "webont-i5-26-010",
         gap: RlGap::SchemaConclusion,

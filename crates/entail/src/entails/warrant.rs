@@ -28,7 +28,7 @@
 //! # ONE ARM PER MECHANISM, and each arrives with its producer
 //!
 //! [`EntailmentWarrant`] is an enum with exactly as many arms as this crate has mechanisms
-//! for reaching a `yes`, and it has never had one more than that. There are two:
+//! for reaching a `yes`, and it has never had one more than that. There are three:
 //!
 //! * [`Homomorphism`](EntailmentWarrant::Homomorphism) — the chase-and-graph-match procedure
 //!   OWL 2 Profiles §4.3 states the RL entailment relation in terms of, minted by
@@ -40,11 +40,17 @@
 //!   fact — the clash, the minimal premise subset that produces it, and the closure its rule
 //!   body instances lie in — beside the ordinary mapping for whatever part of the conclusion
 //!   was not negative.
+//! * [`Freeze`](EntailmentWarrant::Freeze) — instantiate a schema axiom's universally
+//!   quantified body over constants the premise does not mention, re-chase, and read the
+//!   derived head as the proof, minted by [`super::freeze`]. Its evidence is a
+//!   [`Generalization`](super::Generalization) per axiom — the closure triples establishing
+//!   the axiom's MEMBERSHIP half, and one frozen instance per implication carrying the
+//!   constants, the body, the head and the closure they lie in.
 //!
 //! An arm nothing constructs would be a state [`verify`] could not check and no caller could
 //! ever be handed, which is the same unrepresentable-contradiction discipline that keeps
 //! [`DlCertificate`](crate::DlCertificate) from storing a completeness beside the boundary
-//! list that contradicts it. A third mechanism brings its own arm and its own producer,
+//! list that contradicts it. A fourth mechanism brings its own arm and its own producer,
 //! together, or it does not arrive.
 //!
 //! # What `verify` actually checks, and why it needs the premise
@@ -71,6 +77,14 @@
 //! LOWERED again on the spot, so a warrant cannot be replayed against a conclusion whose
 //! negative facts are different ones.
 //!
+//! For the freeze arm it is again the same three over the residual triples, plus, per
+//! generalisation: the axiom's typings are triples of the premise closure; the constants are
+//! distinct blank nodes occurring in NEITHER the premise nor the conclusion — the hypothesis
+//! of the theorem on constants, re-decided against the caller's own documents rather than
+//! taken on the generator's word; the body and head are that shape's implication instantiated
+//! over exactly those constants; and each frozen closure holds the premise, the body and
+//! either the head or a `false`-concluding rule's satisfied body.
+//!
 //! # What `verify` does NOT check
 //!
 //! It does not re-derive any closure, and it therefore cannot detect a closure that never
@@ -82,6 +96,7 @@ use std::collections::BTreeSet;
 use purrdf_core::{RdfDataset, TermValue};
 
 use crate::Regime;
+use crate::entails::freeze::{FreezeWarrant, verify_freeze};
 use crate::entails::graph::{Triple, default_graph_triples};
 use crate::entails::homomorphism::{Binding, Closure, substitute};
 use crate::entails::pattern::conclusion_patterns;
@@ -90,13 +105,16 @@ use crate::entails::refutation::{RefutationWarrant, verify_refutation};
 /// The evidence that a premise entails a conclusion, tagged by the mechanism that produced
 /// it.
 ///
-/// See the [module docs](self) for why there are exactly two arms and what an arm owes.
+/// See the [module docs](self) for why there are exactly three arms and what an arm owes.
 #[derive(Debug, Clone)]
 pub enum EntailmentWarrant {
     /// The conclusion MAPPED into the closure of the premise.
     Homomorphism(HomomorphismWarrant),
     /// The conclusion's negative facts were REFUTED and the rest mapped.
     Refutation(RefutationWarrant),
+    /// The conclusion's schema axioms were FROZEN over fresh constants and chased, and the
+    /// rest mapped.
+    Freeze(FreezeWarrant),
 }
 
 impl EntailmentWarrant {
@@ -107,18 +125,21 @@ impl EntailmentWarrant {
         match self {
             Self::Homomorphism(w) => w.regime(),
             Self::Refutation(w) => w.regime(),
+            Self::Freeze(w) => w.regime(),
         }
     }
 
     /// The mapping: what each of the conclusion's existentials was bound to.
     ///
-    /// For the refutation arm this is the mapping of the conclusion's RESIDUAL triples
-    /// alone; the negative facts have no mapping, which is why they had to be refuted.
+    /// For the refutation and freeze arms this is the mapping of the conclusion's RESIDUAL
+    /// triples alone; a negative fact has no mapping, which is why it had to be refuted, and
+    /// a schema axiom has none either, which is why it had to be frozen.
     #[must_use]
     pub const fn binding(&self) -> &Binding {
         match self {
             Self::Homomorphism(w) => w.binding(),
             Self::Refutation(w) => w.binding(),
+            Self::Freeze(w) => w.binding(),
         }
     }
 
@@ -131,6 +152,7 @@ impl EntailmentWarrant {
         match self {
             Self::Homomorphism(w) => w.closure_size(),
             Self::Refutation(w) => w.closure_size(),
+            Self::Freeze(w) => w.closure_size(),
         }
     }
 }
@@ -255,5 +277,6 @@ pub fn verify(w: &EntailmentWarrant, premise: &RdfDataset, conclusion: &RdfDatas
     match w {
         EntailmentWarrant::Homomorphism(mapped) => mapped.check(premise, conclusion),
         EntailmentWarrant::Refutation(refuted) => verify_refutation(refuted, premise, conclusion),
+        EntailmentWarrant::Freeze(frozen) => verify_freeze(frozen, premise, conclusion),
     }
 }

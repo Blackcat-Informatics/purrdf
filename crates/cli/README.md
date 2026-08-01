@@ -209,7 +209,7 @@ Materialize an entailment regime's closure over the source graph and write it ou
 `rdfs` fires 18 of the 18 RDF + RDFS patterns; `owl-rl` fires all 78 rules of
 OWL 2 Profiles §4.3 Tables 4–9. That is *rule-table coverage*, which is not
 entailment conformance: on W3C's own OWL 2 RL entailment tests this chase scores
-**19 of 27 positive and 23 of 23 negative**, the latter meaning no unsoundness was
+**20 of 27 positive and 23 of 23 negative**, the latter meaning no unsoundness was
 found. Both numbers are true and stating only the first is an overclaim; see
 [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md).
 

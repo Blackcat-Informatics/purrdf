@@ -83,7 +83,7 @@
 //! Both are bounded by [`REFUTATION_BUDGET`], and the two phases are ordered so the bound
 //! can never change a VERDICT into a wrong one: every fact is established first, and only
 //! then is whatever budget is left spent on evidence quality. Exhausting the budget during
-//! establishment is [`UndecidedReason::RefutationBudget`](super::UndecidedReason::RefutationBudget),
+//! establishment is [`super::UndecidedReason::RefutationBudget`],
 //! never a refutation; exhausting it
 //! during shrinking leaves a subset that still entails and reports
 //! [`Refutation::is_irreducible`] as `false`, never a minimality claim the search did not
@@ -106,6 +106,8 @@ use crate::engine::Refuter;
 use crate::entails::graph::{Triple, default_graph_triples};
 use crate::entails::homomorphism::{Binding, Closure, find_one, substitute};
 use crate::entails::negation::{self, NegativeFact};
+use crate::entails::warrant::EntailmentWarrant;
+use crate::entails::{Attempt, UndecidedReason};
 use crate::explain::shrink_to_irreducible;
 use crate::report::InconsistencyWitness;
 use crate::{EntailError, Regime};
@@ -342,26 +344,6 @@ impl RefutationWarrant {
     }
 }
 
-/// What the refutation lane made of a conclusion.
-pub(crate) enum Attempt {
-    /// The lane does not apply: the regime is not `OWL-RL`, or the conclusion states no
-    /// negative fact this lane reads, or it states one it does not. The caller answers
-    /// exactly what it would have answered without this lane.
-    NotApplicable,
-    /// Every negative fact was refuted and every residual triple mapped.
-    Entailed(Box<RefutationWarrant>),
-    /// The lane applies and did NOT establish the conclusion — a residual triple did not
-    /// map, or a negation produced no clash. Handed back to the precondition, which decides
-    /// whether that is a refutation or an admission.
-    NotEstablished,
-    /// The lane applies and ran out of [`REFUTATION_BUDGET`] before every fact was
-    /// established, so it proved nothing in either direction.
-    Exhausted {
-        /// How many chase re-runs establishing the conclusion would have needed.
-        needed: u64,
-    },
-}
-
 /// Try to establish `conclusion` from `premise` by refutation.
 ///
 /// `closure` is the premise's own closure, already computed and indexed by
@@ -402,7 +384,9 @@ pub(crate) fn attempt(
     // shrinking can never be the reason a verdict came out differently.
     let needed = facts.len() as u64;
     if needed > budget {
-        return Ok(Attempt::Exhausted { needed });
+        return Ok(Attempt::Undecided(UndecidedReason::RefutationBudget(
+            needed,
+        )));
     }
 
     let mut refuter = Refuter::new(regime);
@@ -464,12 +448,14 @@ pub(crate) fn attempt(
         });
     }
 
-    Ok(Attempt::Entailed(Box::new(RefutationWarrant {
-        regime,
-        binding,
-        closure: closure.clone(),
-        refutations,
-    })))
+    Ok(Attempt::Entailed(Box::new(EntailmentWarrant::Refutation(
+        RefutationWarrant {
+            regime,
+            binding,
+            closure: closure.clone(),
+            refutations,
+        },
+    ))))
 }
 
 /// Re-decide a refutation warrant against the caller's own premise and conclusion.

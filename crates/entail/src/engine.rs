@@ -890,6 +890,25 @@ pub(crate) struct Clash {
     pub(crate) derived: Vec<[TermValue; 3]>,
 }
 
+/// What one re-closure over `premise ∪ added` produced: the derived triples, and whether a
+/// `false`-headed rule fired on the way.
+///
+/// The difference from [`Clash`] is which question the caller is asking. A refutation asks
+/// "did this clash?" and needs the derivation only when the answer is yes, so
+/// [`Refuter::refute`] returns early when nothing clashed and never pays to read the
+/// derivations back. [`crate::entails::freeze`] asks "what does this entail?", which needs
+/// the derivations in BOTH outcomes — the head it is looking for when the run is consistent,
+/// and the body instances of the clash when it is not, because an inconsistent frozen
+/// instance establishes the implication VACUOUSLY and still owes evidence for it.
+#[derive(Debug)]
+pub(crate) struct Closed {
+    /// The first `false`-headed rule that fired, if any.
+    pub(crate) clash: Option<InconsistencyWitness>,
+    /// Every RDF-1.2-representable triple the run DERIVED, in the evaluator's own total
+    /// derivation order. As [`Clash::derived`], the seeded facts are not repeated.
+    pub(crate) derived: Vec<[TermValue; 3]>,
+}
+
 impl Refuter {
     /// A refuter for `regime`'s calculus.
     ///
@@ -944,6 +963,63 @@ impl Refuter {
         seeded: &mut Seeded,
         added: &[[TermValue; 3]],
     ) -> Result<Option<Clash>, EntailError> {
+        let evaluation = self.evaluate_with(seeded, added)?;
+        let Some(witness) = first_clash(
+            &evaluation,
+            &self.attribution,
+            &seeded.terms,
+            self.regime,
+            None,
+        ) else {
+            // NOTHING CLASHED, so there is nothing to explain and the derivations are not
+            // read back at all. The shrinking search rejects most candidate subsets, so this
+            // is the common path and it must stay the cheap one.
+            return Ok(None);
+        };
+        Ok(Some(Clash {
+            witness,
+            derived: derived_triples(&evaluation, &seeded.terms),
+        }))
+    }
+
+    /// Run the calculus over `seeded`'s premise PLUS `added` and report EVERYTHING it drew,
+    /// clash or no clash.
+    ///
+    /// The same evaluation [`Self::refute`] performs, read out differently — see [`Closed`]
+    /// for which caller needs which reading, and [`Self::refute`] for the pre-pass whitelist
+    /// that makes reusing one seed across many `added` sets sound. That whitelist binds this
+    /// method identically: `added` must carry no `rdf:first`, `rdf:rest` or list-valued
+    /// predicate and no literal.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::refute`]: [`EntailError::Evaluate`] if the plan will not compile or the
+    /// evaluation passes one of `purrdf-datalog`'s three fixed ceilings.
+    pub(crate) fn close(
+        &mut self,
+        seeded: &mut Seeded,
+        added: &[[TermValue; 3]],
+    ) -> Result<Closed, EntailError> {
+        let evaluation = self.evaluate_with(seeded, added)?;
+        let clash = first_clash(
+            &evaluation,
+            &self.attribution,
+            &seeded.terms,
+            self.regime,
+            None,
+        );
+        Ok(Closed {
+            clash,
+            derived: derived_triples(&evaluation, &seeded.terms),
+        })
+    }
+
+    /// Evaluate the program over `seeded`'s arranged store plus `added` as an insert delta.
+    fn evaluate_with(
+        &mut self,
+        seeded: &mut Seeded,
+        added: &[[TermValue; 3]],
+    ) -> Result<purrdf_datalog::seminaive::Evaluation, EntailError> {
         // The insert DELTA: the seed's arrangement is cloned, and the assertion is the only
         // row that was not already in it.
         let mut edb = seeded.edb.clone();
@@ -960,40 +1036,37 @@ impl Refuter {
             .get_or_compile(&self.contract, program)
             .into_plan()
             .map_err(EntailError::Evaluate)?;
-        let evaluation = evaluate(&executable, edb).map_err(EntailError::Evaluate)?;
-
-        let Some(witness) = first_clash(
-            &evaluation,
-            &self.attribution,
-            &seeded.terms,
-            self.regime,
-            None,
-        ) else {
-            return Ok(None);
-        };
-
-        // Everything the run derived, read back through the same two filters [`close_graph`]
-        // applies: an internal relation is bookkeeping rather than a triple, and a
-        // conclusion the RDF 1.2 IR cannot hold is abandoned rather than fabricated around.
-        let mut derived = Vec::new();
-        for derivation in evaluation.derivations() {
-            let fact = derivation.fact();
-            if is_internal(&fact.predicate) {
-                continue;
-            }
-            let subject = seeded.terms.value(&fact.subject);
-            let predicate = seeded.terms.value(&fact.predicate);
-            if !admits_subject(subject) || !admits_predicate(predicate) {
-                continue;
-            }
-            derived.push([
-                subject.clone(),
-                predicate.clone(),
-                seeded.terms.value(&fact.object).clone(),
-            ]);
-        }
-        Ok(Some(Clash { witness, derived }))
+        evaluate(&executable, edb).map_err(EntailError::Evaluate)
     }
+}
+
+/// Everything `evaluation` DERIVED, as RDF 1.2 triples.
+///
+/// Read back through the same two filters [`close_graph`] applies: an internal relation is
+/// bookkeeping rather than a triple, and a conclusion the RDF 1.2 IR cannot hold is
+/// abandoned rather than fabricated around.
+fn derived_triples(
+    evaluation: &purrdf_datalog::seminaive::Evaluation,
+    terms: &Terms,
+) -> Vec<[TermValue; 3]> {
+    let mut derived = Vec::new();
+    for derivation in evaluation.derivations() {
+        let fact = derivation.fact();
+        if is_internal(&fact.predicate) {
+            continue;
+        }
+        let subject = terms.value(&fact.subject);
+        let predicate = terms.value(&fact.predicate);
+        if !admits_subject(subject) || !admits_predicate(predicate) {
+            continue;
+        }
+        derived.push([
+            subject.clone(),
+            predicate.clone(),
+            terms.value(&fact.object).clone(),
+        ]);
+    }
+    derived
 }
 
 /// Whether `value` may occupy a triple SUBJECT position in RDF 1.2 — an IRI or a blank

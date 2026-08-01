@@ -68,7 +68,7 @@
 //! is [`EntailError::UnresolvedImport`] naming the document — never a silently truncated
 //! premise. See [`imports`].
 //!
-//! # Two mechanisms, and both are named
+//! # Three mechanisms, and all of them are named
 //!
 //! * [`homomorphism`] — the chase-and-graph-match procedure OWL 2 Profiles §4.3 states the
 //!   RL entailment relation in terms of. It is complete for every conclusion the rule table
@@ -77,20 +77,39 @@
 //!   the profile's own seventeen `false`-concluding rules as the proof. It exists because
 //!   the rule table produces no NEGATIVE FACT at all: no head in Tables 4–9 is an
 //!   `owl:differentFrom` or a membership in an `owl:complementOf` class, so a premise can
-//!   entail one while a forward chase derives nothing to match against. It adds no rule —
-//!   `rules`, `implemented` and `extensions` are untouched — and it runs only after the
-//!   premise's consistency has been established, which is the hypothesis its whole soundness
-//!   argument rests on. See its module docs for that argument, written out.
+//!   entail one while a forward chase derives nothing to match against.
+//! * [`freeze`] — instantiate a schema axiom's universally quantified body over constants the
+//!   premise does not mention, re-chase, and read the derived head as the proof. It exists
+//!   because the rule table produces no SCHEMA AXIOM either: no head in Tables 4–9 is a
+//!   property characteristic or an inclusion, so `p owl:propertyChainAxiom (p p)` can entail
+//!   `p rdf:type owl:TransitiveProperty` while the chase derives nothing to match against.
 //!
-//! [`EntailmentWarrant`] therefore has exactly two arms, one per mechanism, each minted by
-//! the mechanism it names. A third arrives with its own producer, together — this crate does
+//! None of the two extra mechanisms adds a rule — `rules`, `implemented` and `extensions` are
+//! untouched by both — and each runs only after the premise's consistency has been
+//! established, which is the hypothesis both soundness arguments rest on. See their module
+//! docs for those arguments, written out.
+//!
+//! [`EntailmentWarrant`] therefore has exactly three arms, one per mechanism, each minted by
+//! the mechanism it names. A fourth arrives with its own producer, together — this crate does
 //! not pre-declare states that nothing constructs.
 //!
-//! The refutation lane is [`entails`]-only, and deliberately: it decides a ground negative
-//! fact, and a projected variable ranging over one is a different question — "which
+//! The two extra lanes are [`entails`]-only, and deliberately. Refutation decides a ground
+//! negative fact, and a projected variable ranging over one is a different question — "which
 //! individuals is `a` entailed to differ from?" would need a refutation per candidate over
 //! the whole domain, which is not what [`certain_answers`] computes and not what it would be
-//! honest to let it claim.
+//! honest to let it claim. Freeze-and-chase decides a ground SCHEMA AXIOM, and a projected
+//! variable there would be "which properties is the premise entailed to make transitive?",
+//! which needs one frozen chase per candidate property for the same reason.
+//!
+//! # A mechanism discharges the WHOLE conclusion or none of it
+//!
+//! Each of the two extra mechanisms splits the conclusion into the triples it establishes and
+//! the RESIDUAL triples, which keep their ordinary obligation to map into the premise's
+//! closure. A conclusion that would need TWO of them at once — a negative fact beside a
+//! schema axiom — is therefore established by neither, because each sees the other's half as
+//! a residual triple that does not map. That is a real limit and it is stated rather than
+//! papered over: the alternative, letting a mechanism report success for the part it read,
+//! would make `Entailed` mean "some of this follows", which is not a claim anyone can act on.
 //!
 //! # Determinism
 //!
@@ -109,6 +128,7 @@ use crate::report::ReasoningReport;
 use crate::{EntailError, Materialization, Regime, materialize};
 
 pub mod answers;
+pub mod freeze;
 pub mod homomorphism;
 pub mod imports;
 pub mod negation;
@@ -116,13 +136,16 @@ pub mod precondition;
 pub mod refutation;
 pub mod warrant;
 
-// Two support modules with no public items of their own: the owned triple view both sides
-// of a match are read through, and the pattern the question is compiled to. `VarKey` is the
-// one thing a caller sees out of either, and it is re-exported below.
+// Three support modules with no public items of their own: the owned triple view both sides
+// of a match are read through, the pattern the question is compiled to, and the generator of
+// names no input uses. `VarKey` is the one thing a caller sees out of any of them, and it is
+// re-exported below.
+mod fresh;
 mod graph;
 mod pattern;
 
 pub use answers::CertainAnswers;
+pub use freeze::{FREEZE_BUDGET, FreezeWarrant, FrozenInstance, FrozenOutcome, Generalization};
 pub use homomorphism::{Binding, MATCH_BUDGET, MissReason};
 pub use imports::ImportMap;
 pub use negation::NegativeFact;
@@ -150,6 +173,45 @@ pub enum EntailmentOutcome {
     /// is proven in either direction.
     Undecided(UndecidedReason),
 }
+
+/// What ONE mechanism made of a conclusion.
+///
+/// Every mechanism beyond [`homomorphism`] answers in these four states and no others, which
+/// is what lets [`MECHANISMS`] be a list rather than a nest of special cases. The two that
+/// look alike are not: `NotApplicable` says "this conclusion is not my question" and
+/// `NotEstablished` says "it is my question and I did not reach it". Both hand the verdict
+/// back unchanged — a mechanism never refutes, because refuting needs a completeness claim
+/// and [`precondition`] is where those live — so the distinction is for the reader rather
+/// than for the control flow, and it is kept because collapsing it would leave no way to tell
+/// a mechanism that ran from one that declined.
+pub(crate) enum Attempt {
+    /// The lane does not apply: the regime is not one it serves, or the conclusion states
+    /// nothing it reads, or it states something it does not read. The caller answers exactly
+    /// what it would have answered without this lane.
+    NotApplicable,
+    /// The conclusion is established, and here is the evidence.
+    ///
+    /// Boxed because a warrant carries whole closures and this enum is returned by value from
+    /// every mechanism, including the ones that almost always decline.
+    Entailed(Box<EntailmentWarrant>),
+    /// The lane applies and did NOT establish the conclusion. Handed back to the
+    /// precondition, which decides whether that is a refutation or an admission.
+    NotEstablished,
+    /// The lane applies and stopped early, so it proved nothing in either direction.
+    Undecided(UndecidedReason),
+}
+
+/// One mechanism's entry point.
+type Mechanism = fn(&RdfDataset, &RdfDataset, Regime, &Closure) -> Result<Attempt, EntailError>;
+
+/// The mechanisms beyond [`homomorphism`], in the order [`entails`] tries them.
+///
+/// Order is a COST ordering and never a correctness one: each mechanism reads a disjoint
+/// class of conclusion (a negative fact, a schema axiom), so at most one of them can apply to
+/// any conclusion and the answer does not depend on which runs first. What the order buys is
+/// that a conclusion no mechanism reads pays only the cheapest applicability tests before
+/// falling through.
+const MECHANISMS: [Mechanism; 2] = [refutation::attempt, freeze::attempt];
 
 /// The plan for a regime, or a refusal.
 ///
@@ -333,35 +395,38 @@ pub fn entails(
                 prepared.closure,
             )),
         )),
-        // No mapping. Before that is read as anything, the second mechanism gets its turn:
+        // No mapping. Before that is read as anything, the other mechanisms get their turn:
         // a conclusion the rule table has no head for is exactly the case a match cannot
-        // reach and a refutation can. It runs HERE and not earlier because it is strictly
-        // more expensive — one full re-chase per negative fact — and because the premise's
-        // consistency, which its soundness argument requires, is what `prepare` above has
-        // just established.
-        Err(miss) => match refutation::attempt(
-            prepared.effective(premise),
-            conclusion,
-            regime,
-            &prepared.closure,
-        )? {
-            refutation::Attempt::Entailed(warrant) => Ok(EntailmentOutcome::Entailed(
-                EntailmentWarrant::Refutation(*warrant),
-            )),
-            // The lane ran and stopped early. "I stopped looking" is not "there is nothing
-            // to find", so it is never allowed to become a refutation.
-            refutation::Attempt::Exhausted { needed } => Ok(EntailmentOutcome::Undecided(
-                UndecidedReason::RefutationBudget(needed),
-            )),
-            // Neither mechanism reached it. What that MEANS is the precondition's answer,
-            // not either search's.
-            refutation::Attempt::NotApplicable | refutation::Attempt::NotEstablished => {
-                Ok(match limits.into_iter().next() {
-                    Some(reason) => EntailmentOutcome::Undecided(reason),
-                    None => EntailmentOutcome::NotEntailed(miss),
-                })
+        // reach and one of them can. They run HERE and not earlier because each is strictly
+        // more expensive — a full re-chase per negative fact or per frozen implication — and
+        // because the premise's consistency, which both soundness arguments require, is what
+        // `prepare` above has just established.
+        Err(miss) => {
+            for mechanism in MECHANISMS {
+                match mechanism(
+                    prepared.effective(premise),
+                    conclusion,
+                    regime,
+                    &prepared.closure,
+                )? {
+                    Attempt::Entailed(warrant) => {
+                        return Ok(EntailmentOutcome::Entailed(*warrant));
+                    }
+                    // The lane ran and stopped early. "I stopped looking" is not "there is
+                    // nothing to find", so it is never allowed to become a refutation.
+                    Attempt::Undecided(reason) => {
+                        return Ok(EntailmentOutcome::Undecided(reason));
+                    }
+                    Attempt::NotApplicable | Attempt::NotEstablished => {}
+                }
             }
-        },
+            // No mechanism reached it. What that MEANS is the precondition's answer, not any
+            // search's.
+            Ok(match limits.into_iter().next() {
+                Some(reason) => EntailmentOutcome::Undecided(reason),
+                None => EntailmentOutcome::NotEntailed(miss),
+            })
+        }
     }
 }
 

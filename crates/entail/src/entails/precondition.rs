@@ -97,6 +97,14 @@ pub enum UndecidedReason {
     /// this into `NotEntailed` would turn "I stopped" into "there is nothing to find",
     /// which is the overclaim this whole enum exists to prevent.
     RefutationBudget(u64),
+    /// `OWL-RL`: the conclusion states schema axioms abbreviating this many Horn
+    /// implications, which is more frozen chases than
+    /// [`FREEZE_BUDGET`](super::FREEZE_BUDGET) allows, so the freeze-and-chase lane did not
+    /// finish.
+    ///
+    /// A sibling of [`Self::RefutationBudget`] and read the same way: the procedure was not
+    /// RUN to completion, which licenses exactly nothing.
+    FreezeBudget(u64),
 }
 
 impl std::fmt::Display for UndecidedReason {
@@ -135,6 +143,14 @@ impl std::fmt::Display for UndecidedReason {
                  re-chase, and the refutation budget of {} runs does not reach that far",
                 if *needed == 1 { "" } else { "s" },
                 super::REFUTATION_BUDGET,
+            ),
+            Self::FreezeBudget(needed) => write!(
+                f,
+                "the conclusion states schema axioms abbreviating {needed} Horn \
+                 implication{}, each of which needs its own frozen chase, and the freeze \
+                 budget of {} runs does not reach that far",
+                if *needed == 1 { "" } else { "s" },
+                super::FREEZE_BUDGET,
             ),
         }
     }
@@ -266,6 +282,7 @@ mod tests {
             UndecidedReason::AxiomaticSchema(vec!["rdf:_1".to_owned()]),
             UndecidedReason::DatatypeValueSpace,
             UndecidedReason::RefutationBudget(9_000),
+            UndecidedReason::FreezeBudget(9_000),
         ] {
             assert!(!reason.to_string().is_empty(), "{reason:?}");
         }
