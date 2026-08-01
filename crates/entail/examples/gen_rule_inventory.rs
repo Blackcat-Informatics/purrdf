@@ -127,7 +127,8 @@ fn render() -> Result<String, String> {
          `crates/sparql-conformance/entailment-suite/w3c-owl2-rl/`'s and is bounded by\n\
          what is vendored there — see `docs/CONFORMANCE.md`, which carries it beside the\n\
          corpus it was measured on.\n\n\
-         Fifteen of those 50 are reached by a mechanism the rule table has no head for:\n\
+         Fifteen of those 50 are reached by a mechanism that exists because the rule\n\
+         table DECIDES no conclusion of that shape:\n\
          refutation, freeze-and-chase, comprehension, reflexivity and datatype\n\
          containment, each documented on `purrdf_entail::EntailmentMechanism`. NONE of\n\
          them adds a rule, which is why this inventory is byte-for-byte what it was\n\

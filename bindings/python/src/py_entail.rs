@@ -650,7 +650,7 @@ fn certain_answers(
 /// Returns `(answer, certificate)`. The answer opens `mechanism <name>`: WHICH of the seven
 /// mechanisms reached the verdict. `strict-table` is the regime's own rule table, run
 /// once; `refutation`, `freeze`, `comprehension`, `reflexivity` and `data-range` each
-/// exist because no head in that table has the conclusion's shape at all; and `composite` is
+/// exist because that table DECIDES no conclusion of that shape; and `composite` is
 /// two or more of those folded over one conclusion.
 ///
 /// Then THREE verdicts, never two. `entailment not-entailed` is a PROOF — the procedure

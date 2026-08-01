@@ -157,22 +157,30 @@ pub enum UndecidedReason {
     /// that are outside it, rendered, so a caller learns WHICH statement made the question
     /// undecidable rather than that "something" did.
     ///
-    /// Every head in Profiles §4.3 Tables 4–9 is an assertional triple over named terms or
-    /// `false`. A conclusion stating a schema axiom, an anonymous class expression or an RDF
-    /// 1.2 triple term is therefore one the table could not have produced whatever the premise
-    /// said, and reading its absence from the closure as a refutation would be reading the
-    /// table's silence about a shape it has no head for as a statement about the caller's
+    /// Theorem PR1's conclusion hypothesis admits only ASSERTIONAL conclusions — a
+    /// `ClassAssertion`, an `ObjectPropertyAssertion`, a `DataPropertyAssertion` or a
+    /// `SameIndividual` over named individuals. A conclusion stating a schema axiom, an
+    /// anonymous class expression or an RDF 1.2 triple term is none of those, so the theorem
+    /// claims no completeness for it and reading its absence from the closure as a refutation
+    /// would be reading this library's own incapacity as a statement about the caller's
     /// ontology.
+    ///
+    /// The hypothesis is what the check reads, and it is NOT the weaker "the table has no
+    /// head of that shape": Table 9's `scm-*` rules conclude `rdfs:subClassOf`,
+    /// `owl:equivalentClass`, `rdfs:subPropertyOf`, `owl:equivalentProperty`, `rdfs:domain`
+    /// and `rdfs:range`, the chase fires all of them, and the derived schema triples do reach
+    /// the closure. RL is still not complete for them, which is the only thing a refutation
+    /// needs and the only thing this variant claims.
     ConclusionOutsideRl(Vec<String>),
     /// `OWL-RL`: the question leaves the PREDICATE open in these triples, rendered, so what it
     /// asks ranges over the whole predicate vocabulary rather than over one predicate.
     ///
     /// The other half of [`Self::ConclusionOutsideRl`], for the one position that can make the
-    /// check unable to run. That check reads the predicate to decide whether a triple is a
-    /// shape Tables 4–9 can conclude — a schema predicate is not, an assertional one is — and
-    /// an OPEN predicate is every predicate at once: it ranges over `rdfs:subClassOf` and
-    /// `owl:propertyChainAxiom` as readily as over an ordinary property, and it ranges over
-    /// `owl:differentFrom`, which no head of the table concludes and the
+    /// check unable to run. That check reads the predicate to decide whether a triple is
+    /// inside Theorem PR1's conclusion hypothesis — a schema predicate is not, an assertional
+    /// one is — and an OPEN predicate is every predicate at once: it ranges over
+    /// `rdfs:subClassOf` and `owl:propertyChainAxiom` as readily as over an ordinary property,
+    /// and it ranges over `owl:differentFrom`, which the hypothesis excludes as well and the
     /// [`refutation`](super::refutation) lane decides. So the closure this service enumerates
     /// from is smaller than the set of triples the question could be entailed under, and the
     /// row set says "none was found" rather than "there is none".
@@ -373,15 +381,36 @@ fn axiomatic_terms(pats: &[PatTriple]) -> Vec<String> {
 ///
 /// Every one of them writes an axiom about the caller's vocabulary — an inclusion, a
 /// characteristic, a constructor, a facet, a collection cell — rather than an assertion about
-/// an individual. No head in Profiles §4.3 Tables 4–9 is a triple with any of these as its
-/// predicate, so the closure's silence about one is the table having no head of that shape and
-/// never evidence about the premise.
+/// an individual, and THAT is the criterion for belonging on this list.
 ///
-/// `owl:sameAs` is deliberately absent: `eq-rep-*`, `prp-fp` and `prp-ifp` all conclude one, so
-/// it IS a head of the table. `owl:differentFrom` is absent too, and for a different reason —
-/// the table has no head for it, but [`refutation`](super::refutation) decides it under the
-/// same theorem, so [`limits`] is told which of the conclusion's triples that lane lowered
-/// rather than guessing from the predicate alone.
+/// # The criterion is PR1's conclusion hypothesis, not a claim about rule heads
+///
+/// Profiles Theorem PR1 — the completeness half, the one a refutation needs — admits only
+/// ASSERTIONAL conclusions: a `ClassAssertion`, an `ObjectPropertyAssertion`, a
+/// `DataPropertyAssertion` or a `SameIndividual` over named individuals. A schema axiom is
+/// none of those, so the theorem says nothing about it and the closure's silence about one is
+/// not evidence about the premise, whatever rules ran.
+///
+/// It would be WRONG to justify this list by "the table has no head of that shape", and the
+/// mistake is worth naming because it is the reading a future maintainer is likeliest to
+/// arrive at. Table 9 is full of schema heads: `scm-sco`, `scm-cls`, `scm-eqc1`, `scm-int`,
+/// `scm-uni`, `scm-hv` and the `scm-svf*`/`scm-avf*` pairs all conclude an
+/// `rdfs:subClassOf`; `scm-cls` and `scm-eqc2` conclude an `owl:equivalentClass`; `scm-spo`,
+/// `scm-op`, `scm-dp` and `scm-eqp1` conclude an `rdfs:subPropertyOf`; `scm-op`, `scm-dp` and
+/// `scm-eqp2` conclude an `owl:equivalentProperty`; `scm-dom1`/`scm-dom2` conclude an
+/// `rdfs:domain` and `scm-rng1`/`scm-rng2` an `rdfs:range` — six of the thirty-four
+/// predicates below. The chase fires every one of them and the derived triples DO reach the
+/// closure. They still do not make a missing schema triple a refutation, because
+/// completeness for schema conclusions is not what PR1 claims. So the question to ask of a
+/// candidate predicate is "does a triple with this predicate state an axiom rather than an
+/// assertion?" — never "does some rule conclude it?".
+///
+/// `owl:sameAs` is deliberately absent: a `SameIndividual` over named individuals IS inside
+/// PR1's conclusion hypothesis, so the table's completeness does cover it.
+/// `owl:differentFrom` is absent too, and for a different reason — it is not an assertional
+/// conclusion PR1 admits either, but [`refutation`](super::refutation) decides it under the
+/// theorem's INCONSISTENCY half, so [`limits`] is told which of the conclusion's triples that
+/// lane lowered rather than guessing from the predicate alone.
 const SCHEMA_PREDICATES: [&str; 34] = [
     RDFS_SUBCLASSOF,
     RDFS_SUBPROPERTYOF,
@@ -577,7 +606,8 @@ pub(crate) fn limits(
                 ));
             }
             // THE OTHER HALF OF PR1'S HYPOTHESIS. Checked here and nowhere else, so a
-            // conclusion the table has no head for cannot come out of the service as a proof.
+            // conclusion the theorem claims no completeness for cannot come out of the
+            // service as a proof.
             let outside = conclusion_outside_rl(pats, decided_by_refutation);
             if !outside.is_empty() {
                 limits.push(UndecidedReason::ConclusionOutsideRl(outside));

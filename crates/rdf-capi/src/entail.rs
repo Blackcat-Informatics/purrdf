@@ -895,8 +895,8 @@ pub unsafe extern "C" fn purrdf_entail_certain_answers(
 /// `*out_answer` opens `mechanism <name>`: WHICH of the seven mechanisms reached the
 /// verdict. `strict-table` is the regime's own rule table, run once, with the conclusion
 /// matched into (or proven absent from) its closure; the other five —  `refutation`,
-/// `freeze`, `comprehension`, `reflexivity`, `data-range` — exist because no head in that
-/// table has the conclusion's shape at all. `composite` is two or more of those folded over
+/// `freeze`, `comprehension`, `reflexivity`, `data-range` — exist because that table DECIDES
+/// no conclusion of that shape. `composite` is two or more of those folded over
 /// one conclusion, which a conjunction can need and which is spelled that way rather than by
 /// any one constituent's name. The name is the canonical spelling and never an enum ordinal,
 /// so an eighth mechanism cannot renumber a reading of an old one.

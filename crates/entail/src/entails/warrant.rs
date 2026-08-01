@@ -188,7 +188,9 @@ use crate::entails::refutation::{RefutationWarrant, verify_refutation};
 ///
 /// # [`Self::StrictTable`] is the answer, not the absence of one
 ///
-/// Five of the seven arms exist because the rule table has NO head of the conclusion's shape;
+/// Five of the seven arms exist because the rule table DECIDES no conclusion of that shape —
+/// Theorem PR1 claims completeness only for assertional conclusions over named individuals,
+/// and for several of them the table states no head of the shape at all;
 /// the sixth is the table itself and the seventh is two or more of them at once. A question the table decides — matched into its closure, or
 /// proven absent from it — is answered by [`Self::StrictTable`], and that is a positive claim:
 /// the seventy-eight rules of OWL 2 Profiles §4.3 (or the regime's own table) were run once

@@ -824,9 +824,12 @@ int32_t purrdf_entail_explain_conclusion(const char *document,
  * a rule document, and each is defined by an input this signature does not carry, so
  * both are refused by name rather than served by a weaker lane.
  *
- * `pattern` is N-Triples with `?name` in any position. A blank node in it is a
- * NON-DISTINGUISHED variable — constrained by the match, not projected, and not a
- * column — which is what SPARQL says a query blank node is.
+ * `pattern` is N-Triples with `?name` in any position, the PREDICATE included. A blank
+ * node in it is a NON-DISTINGUISHED variable — constrained by the match, not projected,
+ * and not a column — which is what SPARQL says a query blank node is. A predicate variable
+ * is projected like any other, and under `owl-rl` it also renders a `limit`: it ranges over
+ * the whole predicate vocabulary, including the schema predicates and the constructs the
+ * mechanisms beyond the rule table decide, and the closure holds neither.
  *
  * `*out_answer` receives `mechanism`, one `var` line per projected variable, one `row`
  * line per certain answer, and a `limit` line per reason the row set may not be
@@ -883,8 +886,8 @@ int32_t purrdf_entail_certain_answers(const char *regime,
  * `*out_answer` opens `mechanism <name>`: WHICH of the seven mechanisms reached the
  * verdict. `strict-table` is the regime's own rule table, run once, with the conclusion
  * matched into (or proven absent from) its closure; the other five —  `refutation`,
- * `freeze`, `comprehension`, `reflexivity`, `data-range` — exist because no head in that
- * table has the conclusion's shape at all. `composite` is two or more of those folded over
+ * `freeze`, `comprehension`, `reflexivity`, `data-range` — exist because that table DECIDES
+ * no conclusion of that shape. `composite` is two or more of those folded over
  * one conclusion, which a conjunction can need and which is spelled that way rather than by
  * any one constituent's name. The name is the canonical spelling and never an enum ordinal,
  * so an eighth mechanism cannot renumber a reading of an old one.

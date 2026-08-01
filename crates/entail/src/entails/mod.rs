@@ -43,7 +43,7 @@
 //! also the `D` lane's — and a body match on any of them makes [`materialize`] return
 //! [`EntailError::Inconsistent`] instead of a closure. So there is no closure for this
 //! module to match against, and the refusal propagates to the caller carrying the
-//! [`InconsistentRun`](crate::InconsistentRun) witness that says which rule fired on which
+//! [`InconsistentRun`] witness that says which rule fired on which
 //! asserted triples. `Simple`, `RDF` and `RDFS` state no rule whose head is `false`, so for
 //! those three the check is VACUOUS rather than skipped: there is no rule that could have
 //! detected an inconsistency, and this module does not pretend one ran.
@@ -91,9 +91,14 @@
 //!   entail one while a forward chase derives nothing to match against.
 //! * [`freeze`] — instantiate a schema axiom's universally quantified body over constants the
 //!   premise does not mention, re-chase, and read the derived head as the proof. It exists
-//!   because the rule table produces no SCHEMA AXIOM either: no head in Tables 4–9 is a
-//!   property characteristic or an inclusion, so `p owl:propertyChainAxiom (p p)` can entail
-//!   `p rdf:type owl:TransitiveProperty` while the chase derives nothing to match against.
+//!   because the rule table claims no completeness for a SCHEMA AXIOM: Theorem PR1's
+//!   conclusion hypothesis admits only assertional conclusions, so `p owl:propertyChainAxiom
+//!   (p p)` can entail `p rdf:type owl:TransitiveProperty` — a characteristic no head in
+//!   Tables 4–9 has the shape of — while the chase derives nothing to match against. The
+//!   lane covers inclusions on the same warrant, and there the table is not silent at all:
+//!   `scm-sco`, `scm-eqc1`/`scm-eqc2`, `scm-spo` and `scm-eqp1`/`scm-eqp2` conclude
+//!   `rdfs:subClassOf`, `owl:equivalentClass`, `rdfs:subPropertyOf` and
+//!   `owl:equivalentProperty` and all of them fire. Firing is not completeness.
 //! * [`comprehension`] — mint the anonymous class expressions the conclusion names, under the
 //!   typing side conditions the RDF-Based comprehension conditions impose. It exists because
 //!   a comprehension condition asserts the existence of a resource NOTHING NAMES, and a rule
@@ -183,7 +188,7 @@ use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 
 use crate::interner::intern_into;
 use crate::owl_dl::query::QTriple;
-use crate::report::ReasoningReport;
+use crate::report::{InconsistentRun, ReasoningReport};
 use crate::{EntailError, Materialization, Regime, materialize};
 
 pub mod answers;
@@ -449,6 +454,20 @@ impl Prepared {
 /// Everything that can refuse happens here, in the order the refusals have to happen in: an
 /// unresolvable import before the chase (because it changes what the premise IS), and the
 /// chase's own inconsistency refusal before any conclusion of it is readable.
+///
+/// # The report is corrected for the merge THIS function made
+///
+/// [`materialize`] surveys the dataset it is handed, and the dataset handed to it here is the
+/// MERGED premise — which still carries the `owl:imports` triples the merge resolved. So the
+/// chase raises [`Construct::UnresolvedOntologyImport`], which is the honest reading from
+/// where it stands and the wrong one from here: `imports::resolve` above refuses the whole
+/// call with [`EntailError::UnresolvedImport`] on any document its map does not resolve, so
+/// reaching this line at all proves every declared import was resolved and merged.
+///
+/// This is therefore the one place both facts are in scope, and it is where the boundary is
+/// restated as [`Construct::ResolvedOntologyImport`] — on the closure's report and on the
+/// report an inconsistent run refuses with, because a caller reading a refusal's certificate
+/// is owed the same true statement as a caller reading a verdict's.
 fn prepare(
     premise: &RdfDataset,
     regime: Regime,
@@ -456,12 +475,50 @@ fn prepare(
 ) -> Result<Prepared, EntailError> {
     let plan = plan_for(regime)?;
     let merged = imports::resolve(premise, imports)?;
-    let (closure, report) = materialize(merged.as_deref().unwrap_or(premise), plan)?;
+    // `resolve` answers `None` for a premise that names no document, and that premise's run
+    // has no import boundary to restate — so the correction is applied exactly when a merge
+    // actually happened.
+    let Some(merged) = merged else {
+        let (closure, report) = materialize(premise, plan)?;
+        return Ok(Prepared {
+            merged: None,
+            closure: Closure::of(default_graph_triples(&closure)),
+            report,
+        });
+    };
+    let (closure, report) = materialize(&merged, plan).map_err(resolved_imports_error)?;
     Ok(Prepared {
-        merged,
+        merged: Some(merged),
         closure: Closure::of(default_graph_triples(&closure)),
-        report,
+        report: report.with_resolved_imports(),
     })
+}
+
+/// `error`, with any REPORT it carries restated for a run whose imports were resolved.
+///
+/// Only [`EntailError::Inconsistent`] carries a [`ReasoningReport`]; every other variant is
+/// the absence of a run and has no boundary list to correct. Written as a total match so a
+/// later error that starts carrying a report has to decide here rather than silently ship the
+/// pre-merge boundary.
+fn resolved_imports_error(error: EntailError) -> EntailError {
+    match error {
+        EntailError::Inconsistent(run) => {
+            let (witness, report) = run.into_parts();
+            EntailError::Inconsistent(Box::new(InconsistentRun::new(
+                witness,
+                report.with_resolved_imports(),
+            )))
+        }
+        other @ (EntailError::Build(_)
+        | EntailError::Parse(_)
+        | EntailError::Evaluate(_)
+        | EntailError::Chase(_)
+        | EntailError::MalformedList(_)
+        | EntailError::UnsupportedRegime(_)
+        | EntailError::UnresolvedImport(_)
+        | EntailError::MatchBudget
+        | EntailError::Unsatisfiable) => other,
+    }
 }
 
 /// The certain answers of `bgp` over `premise` under `regime`.
@@ -2026,9 +2083,12 @@ mod tests {
     /// `?s ?p ?o` reads every triple of the closure, and reporting that as the whole relation
     /// is a claim about a question the closure does not answer. `p ∘ p ⊑ p` entails `p rdf:type
     /// owl:TransitiveProperty` — the freeze lane proves it, right below — and no head of Tables
-    /// 4–9 puts a schema triple in the closure, so the row is absent from an answer that used
+    /// 4–9 concludes a property CHARACTERISTIC, so the row is absent from an answer that used
     /// to render no `limit` line at all. It names the POSITION that costs it rather than a
-    /// lane, because every lane and every schema predicate is inside what a `?p` ranges over.
+    /// lane, because every lane and every schema predicate is inside what a `?p` ranges over —
+    /// including the schema predicates Table 9's `scm-*` rules DO conclude, for which the row
+    /// may be present and the enumeration still not exhaustive, since Theorem PR1 claims no
+    /// completeness for a schema conclusion whether or not some rule derives one.
     #[test]
     fn an_open_predicate_is_a_limit_naming_the_position() {
         let premise = three_lane_premise();
@@ -2050,7 +2110,7 @@ mod tests {
         ];
         assert!(
             !answers.rows().contains(&missed),
-            "no head of Tables 4-9 concludes a schema triple"
+            "no head of Tables 4-9 concludes a property characteristic"
         );
         // …is entailed, by a mechanism this service did not run.
         assert!(matches!(

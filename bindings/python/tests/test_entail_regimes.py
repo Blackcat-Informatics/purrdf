@@ -746,8 +746,8 @@ def test_an_open_predicate_is_a_named_limit_rather_than_a_short_answer() -> None
     """A `?p` ranges over predicates the rule table's closure does not hold.
 
     `p ∘ p ⊑ p` entails `p rdf:type owl:TransitiveProperty` — `graph_entails` proves
-    it, by the freeze mechanism — and no head of OWL 2 RL's Tables 4-9 puts a schema
-    triple in a closure. So `?s ?p ?o` cannot return that row, and the answer
+    it, by the freeze mechanism — and no head of OWL 2 RL's Tables 4-9 concludes a
+    property characteristic. So `?s ?p ?o` cannot return that row, and the answer
     discloses why instead of rendering an exhaustive-looking relation.
     """
     chain = (

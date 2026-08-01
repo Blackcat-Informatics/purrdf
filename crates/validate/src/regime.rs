@@ -131,7 +131,7 @@ pub const PROGRAM_REGIME_NAMES: [&str; 1] = ["rif"];
 ///   entailment service's seven mechanisms read an answer off this run, and the semantic
 ///   boundary of the rule table that mechanism crosses.
 ///   [`purrdf_entail::entails()`] reaches a conclusion six ways, and five of them exist
-///   because no head in the regime's rule table has the conclusion's shape at all — a
+///   because the regime's rule table decides no conclusion of that shape — a
 ///   negative fact, a schema axiom, an anonymous class expression, a self-loop over a
 ///   construct outside the syntax, a containment between value spaces. Without this line
 ///   "the rule table decided this" and "the table has no head of this shape and a second
@@ -558,8 +558,10 @@ fn rule_lines(rules: &[purrdf_entail::RuleId]) -> String {
 /// (or proven absent from) its closure — and it is the only spelling a `not entailed` can
 /// carry, because refuting needs the completeness half of a theorem and only the table has
 /// one. The other five (`refutation`, `freeze`, `comprehension`, `reflexivity`,
-/// `data-range`) each exist because NO head in Tables 4–9 has the conclusion's shape, and
-/// none of them adds a rule: `missing`, `extension` and `fired` above are byte-identical
+/// `data-range`) each exist because the table DECIDES no conclusion of that shape — Theorem
+/// PR1 claims completeness only for assertional conclusions over named individuals, and for
+/// several of them Tables 4–9 state no head of the shape at all — and none of them adds a
+/// rule: `missing`, `extension` and `fired` above are byte-identical
 /// whichever answered. `composite` is two or more of those five folded over one conclusion —
 /// a conclusion GRAPH is a conjunction, so it can need a lane per half — and it is spelled
 /// that way rather than by any constituent's name, which would tell a reader that one

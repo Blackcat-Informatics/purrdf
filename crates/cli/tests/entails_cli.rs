@@ -9,8 +9,8 @@
 //! ## What is asserted, and why each case is here
 //!
 //! The question this subcommand answers is not "is the conclusion in the closure": it is
-//! reached SIX ways, five of which exist because no head in the regime's rule table has the
-//! conclusion's shape at all. A test suite that only exercised the rule-table lane would
+//! reached SIX ways, five of which exist because the regime's rule table DECIDES no
+//! conclusion of that shape. A test suite that only exercised the rule-table lane would
 //! certify a binary that had none of the rest, so every mechanism the CLI can surface has a
 //! case, and each names the mechanism rather than only the verdict:
 //!
@@ -668,6 +668,97 @@ fn an_import_pair_answers_a_premise_that_imports() {
         stderr(&o)
     );
     assert_eq!(stdout(&o), "mechanism strict-table\nentailment entailed\n");
+}
+
+/// THE REPORT SAYS WHICH OF THE TWO IMPORT SITUATIONS THE RUN WAS IN.
+///
+/// `owl:imports` used to render ONE `boundary ontology-import` line whose text said the
+/// imported axioms were "premises this run did not have" — on `entails --import`, where the
+/// documents had been merged in and the conclusion was reached THROUGH them, exactly as on
+/// `reason`, where nothing had been resolved at all. One token, two meanings, and no
+/// consumer able to tell them apart.
+///
+/// This drives both paths over the SAME premise through the shipped binary and asserts the
+/// two tokens, because the split is only worth anything if it survives to the rendered line
+/// every host shares.
+#[test]
+fn the_report_distinguishes_a_resolved_import_from_an_unresolved_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(dir, "importing.ttl", IMPORTING_PREMISE);
+    let schema = write_file(dir, "schema.ttl", IMPORTED_SCHEMA);
+    let conclusion = write_file(dir, "animal.ttl", IMPORTED_CONCLUSION);
+    let pair = format!("http://example.org/schema={schema}");
+
+    // RESOLVED: the operator supplied the document, and the conclusion is reachable only
+    // through it — so the verdict itself proves the run HAD the imported axioms.
+    let resolved_report = path(dir, "resolved.report");
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise,
+        "--conclusion",
+        &conclusion,
+        "--import",
+        &pair,
+        &format!("--report={resolved_report}"),
+    ]);
+    assert!(o.status.success(), "entails --import: {}", stderr(&o));
+    assert_eq!(stdout(&o), "mechanism strict-table\nentailment entailed\n");
+    let resolved = std::fs::read_to_string(&resolved_report).expect("read the report");
+    assert!(
+        resolved.contains("\nboundary ontology-import-resolved "),
+        "a merged import closure must render the RESOLVED token: {resolved}"
+    );
+    assert!(
+        !resolved.contains("boundary ontology-import-unresolved"),
+        "…and never the one that says the axioms were missing: {resolved}"
+    );
+    assert!(
+        resolved.contains("THIS RUN HAD THAT CLOSURE"),
+        "the reason must say what is true of THIS token: {resolved}"
+    );
+
+    // UNRESOLVED: the same premise, materialized, where no import map exists at all.
+    let closure = path(dir, "closure.nt");
+    let unresolved_report = path(dir, "unresolved.report");
+    let o = run(&[
+        "reason",
+        "--regime",
+        "owl-rl",
+        &premise,
+        &closure,
+        &format!("--report={unresolved_report}"),
+    ]);
+    assert!(o.status.success(), "reason: {}", stderr(&o));
+    let unresolved = std::fs::read_to_string(&unresolved_report).expect("read the report");
+    assert!(
+        unresolved.contains("\nboundary ontology-import-unresolved "),
+        "a materialization resolved nothing and must say so: {unresolved}"
+    );
+    assert!(
+        !unresolved.contains("boundary ontology-import-resolved"),
+        "…and must not claim a merge it never made: {unresolved}"
+    );
+    assert!(
+        unresolved.contains("NOTHING RESOLVED THOSE DOCUMENTS FOR THIS RUN"),
+        "the reason must say what is true of THIS token: {unresolved}"
+    );
+
+    // RESOLVING THE IMPORTS DOES NOT NARROW THE ANSWER. An `owl-rl` chase always meets the
+    // datatype value space, so `exact-within-boundaries` is what both runs say — and the
+    // assertion is that the two AGREE rather than that either spells a particular word, so a
+    // later change that let the import boundary decide completeness would fail here.
+    let line = |report: &str| {
+        report
+            .lines()
+            .find(|l| l.starts_with("completeness "))
+            .expect("every report carries a completeness line")
+            .to_owned()
+    };
+    assert_eq!(line(&resolved), line(&unresolved));
 }
 
 // ── The refusals ────────────────────────────────────────────────────────────────

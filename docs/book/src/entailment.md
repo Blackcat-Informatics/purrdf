@@ -116,9 +116,10 @@ rewriting each variable to a term drawn from a namespace it has swept out of the
 caller's own text and mapping every occurrence back afterwards; nothing of that
 namespace reaches a row, a binding or a report. A predicate variable is projected
 like any other, and under `owl-rl` it also renders a `limit`: it ranges over the
-whole predicate vocabulary, so it ranges over the schema predicates no rule of the
-table concludes and over the constructs the mechanisms beyond the table decide, and
-the closure the rows are drawn from holds neither.
+whole predicate vocabulary, so it ranges over the schema predicates Theorem PR1's
+conclusion hypothesis excludes — the table claims no completeness for them, whether
+or not `scm-*` derives one — and over the constructs the mechanisms beyond the table
+decide, for which the closure the rows are drawn from holds nothing.
 
 Every answer arrives with the certificate of the run underneath it — the same
 `purrdf-reasoning-report` block a materialization renders, plus a `mechanism` line
@@ -161,8 +162,12 @@ Where the numbers stop:
   `Completeness::ExactWithinBoundaries` rather than `Exact`. The two claims are
   reported separately on purpose. Nor is a complete rule table entailment
   conformance: on this vendored W3C corpus of OWL 2 RL entailment tests
-  `entails()` reaches 27 of 27 published positive entailments and correctly withholds on 23 of 23
-  negative ones (see [Conformance](#conformance) below). 78 / 78 says every
+  `entails()` reaches 27 of 27 published positive entailments, and agrees with
+  W3C on 23 of 23 negative ones — 3 of those 23 *refuted*, a decided
+  non-entailment, and 20 *admitted*, the closure computed and observed not to
+  contain the non-conclusion. Read `23 of 23` as "no unsoundness found", never
+  as "23 non-entailments proved" (see [Conformance](#conformance) below). 78 /
+  78 says every
   rule of Tables 4–9 is implemented — and the one W3C-published entailment
   that is reachable only by a sound rule outside those tables is reached by an
   **extension**, `ext-eq-diff-sym`, which `extensions(Regime::OwlRl)` names,

@@ -269,9 +269,11 @@ line rather than with a missing rule, and `completeness` reads
 **78 / 78 is rule-table coverage, and rule-table coverage is not entailment
 conformance.** The two are measured separately and stating only the first is the
 overclaim the reasoning report exists to prevent: on this vendored W3C corpus of
-OWL 2 RL entailment tests this chase reaches 27 of 27 published positive entailments and correctly
-withholds on 23 of 23 negative ones — the latter meaning no unsoundness was found.
-Both numbers are true. The full scoreboard, the typed divergence ledger, and every
+OWL 2 RL entailment tests this chase reaches 27 of 27 published positive entailments, and agrees
+with W3C on 23 of 23 negative ones — 3 of those 23 *refuted*, a decided
+non-entailment, and 20 *admitted*, the closure computed and observed not to contain
+the non-conclusion. Read the negative figure as "no unsoundness found", never as
+"23 non-entailments proved". Both numbers are true. The full scoreboard, the typed divergence ledger, and every
 other suite are in
 [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md).
 
@@ -334,8 +336,8 @@ naming the lane, never as an exhaustive empty answer.
 
 `mechanism` says *which* of seven mechanisms reached the verdict. `strict-table` is the
 regime's own rule table, run once; `refutation`, `freeze`, `comprehension`,
-`reflexivity` and `data-range` each exist because no head in that table has the
-conclusion's shape at all, and none of them adds a rule to it. `composite` is two or
+`reflexivity` and `data-range` each exist because that table *decides* no conclusion
+of that shape, and none of them adds a rule to it. `composite` is two or
 more of those folded over one conclusion — each discharging the triples it reads and
 handing the rest on — and it is spelled that way rather than by any one constituent's
 name, which would say that one mechanism sufficed.

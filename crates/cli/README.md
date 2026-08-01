@@ -307,7 +307,7 @@ of every answer is `mechanism <name>`:
 |---|---|
 | `strict-table` | The regime's own rule table, run once. The only mechanism a `not-entailed` can carry: refuting needs the completeness half of a theorem, and only the table has one. |
 | `refutation` | A **negative fact** (`owl:differentFrom`, membership in an `owl:complementOf` class). No head in OWL 2 Profiles §4.3 Tables 4–9 has that shape, so the seventeen `false`-concluding rules decide it instead. |
-| `freeze` | A **schema axiom** (a property characteristic, an inclusion). No head in those tables has that shape either. |
+| `freeze` | A **schema axiom** (a property characteristic, an inclusion). Theorem PR1 claims completeness only for *assertional* conclusions, so an absent schema triple is not a fact about the premise — and that holds for an inclusion too, which Table 9's `scm-*` rules do conclude. |
 | `comprehension` | An **anonymous class expression** the conclusion names, under the RDF-Based comprehension conditions. |
 | `reflexivity` | A conclusion's **self-loops**, read off the premise's `owl:ReflexiveProperty` typings. `owl:ReflexiveProperty` is outside the OWL 2 RL syntax. |
 | `data-range` | A **containment between value spaces** (`xsd:byte ⊑ xsd:short`), which no join over triples can discover. |

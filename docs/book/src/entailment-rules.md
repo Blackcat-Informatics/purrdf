@@ -36,7 +36,8 @@ positive and 23 of 23 negative, with an empty divergence ledger. That figure is
 what is vendored there — see `docs/CONFORMANCE.md`, which carries it beside the
 corpus it was measured on.
 
-Fifteen of those 50 are reached by a mechanism the rule table has no head for:
+Fifteen of those 50 are reached by a mechanism that exists because the rule
+table DECIDES no conclusion of that shape:
 refutation, freeze-and-chase, comprehension, reflexivity and datatype
 containment, each documented on `purrdf_entail::EntailmentMechanism`. NONE of
 them adds a rule, which is why this inventory is byte-for-byte what it was

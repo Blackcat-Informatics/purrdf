@@ -10,10 +10,20 @@
 //! [`refutation`](super::refutation) decides a conclusion the table has no head for by
 //! reading its seventeen `false`-concluding rules as an inconsistency calculus. Neither
 //! reaches a SCHEMA AXIOM. `p rdf:type owl:TransitiveProperty` is not a negative fact, so
-//! there is nothing to refute; and no head in OWL 2 Profiles §4.3 Tables 4–9 is a property
-//! characteristic or an inclusion axiom, so a forward chase derives nothing to match. W3C's
-//! `chain2trans1` is exactly that case: `p owl:propertyChainAxiom (p p)` entails
-//! `p rdf:type owl:TransitiveProperty`, and every mechanism above misses it.
+//! there is nothing to refute; and OWL 2 Profiles Theorem PR1 claims completeness only for
+//! ASSERTIONAL conclusions — a `ClassAssertion`, an `ObjectPropertyAssertion`, a
+//! `DataPropertyAssertion` or a `SameIndividual` over named individuals — so a schema axiom
+//! missing from the closure is not a fact about the premise. W3C's `chain2trans1` is exactly
+//! that case: `p owl:propertyChainAxiom (p p)` entails `p rdf:type owl:TransitiveProperty`,
+//! and every mechanism above misses it.
+//!
+//! For a property CHARACTERISTIC the table has no head at all, so the miss is total. For an
+//! INCLUSION it is not: Table 9's `scm-sco`, `scm-eqc1`/`scm-eqc2`, `scm-spo` and
+//! `scm-eqp1`/`scm-eqp2` all conclude one, the chase fires them, and the derived edges do
+//! reach the closure — they just close the ASSERTED hierarchy under transitivity and
+//! equivalence rather than deriving an inclusion the ontology's other axioms force. So this
+//! lane is needed for both shapes, and for one reason: PR1 does not claim completeness for
+//! either, whatever `scm-*` happens to derive.
 //!
 //! # The mechanism, and the theorem it is an instance of
 //!
@@ -719,9 +729,10 @@ fn arity(implication: &Implication) -> usize {
 /// What this lane READS of a question, with nothing frozen and nothing chased.
 ///
 /// The same [`read`] the decision below opens with, run for its reading alone: an axiom this
-/// lane recognizes is a SCHEMA statement no head in Tables 4–9 concludes, and a declined shape
-/// is one whose predicate this lane reads over terms it cannot. Either way a service that does
-/// not run this lane has left something untested.
+/// lane recognizes is a SCHEMA statement, which Theorem PR1's conclusion hypothesis excludes
+/// and the rule table therefore claims no completeness for, and a declined shape is one whose
+/// predicate this lane reads over terms it cannot. Either way a service that does not run this
+/// lane has left something untested.
 pub(crate) fn recognizes(q: &Question<'_>) -> Recognized {
     if !matches!(q.regime, Regime::OwlRl) {
         return Recognized::default();

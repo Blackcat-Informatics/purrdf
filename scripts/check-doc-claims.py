@@ -1680,7 +1680,7 @@ def build_claims(
             _ENTAILMENT,
             _flow(
                 r"reaches (?P<pos_a>\d+) of (?P<pos_t>\d+) published positive "
-                r"entailments and correctly withholds on (?P<neg_a>\d+) of "
+                r"entailments, and agrees with W3C on (?P<neg_a>\d+) of "
                 r"(?P<neg_t>\d+) negative ones"
             ),
         ),
@@ -1742,7 +1742,7 @@ def build_claims(
             _PY_README,
             _flow(
                 r"reaches (?P<pos_a>\d+) of (?P<pos_t>\d+) published positive "
-                r"entailments and correctly withholds on (?P<neg_a>\d+) of "
+                r"entailments, and agrees with W3C on (?P<neg_a>\d+) of "
                 r"(?P<neg_t>\d+) negative ones"
             ),
         ),

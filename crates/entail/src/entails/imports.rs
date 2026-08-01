@@ -497,6 +497,107 @@ mod tests {
         assert_eq!(iri, "http://example.org/missing");
     }
 
+    /// A RESOLVED IMPORT IS NOT REPORTED AS AXIOMS THE RUN DID NOT HAVE.
+    ///
+    /// One boundary token used to mean both things: the report of an [`entails`] run whose
+    /// whole import closure had been merged in carried the same
+    /// `owl:imports … premises this run did not have` line as a materialization that had
+    /// resolved nothing, so no consumer could tell the two apart. They are two constructs
+    /// now, and this is the falsifiable form of the difference — the same premise, the same
+    /// regime, the two paths, the two tokens.
+    ///
+    /// It also pins the completeness half: resolving the imports must not NARROW the report.
+    /// A chase lane always meets [`Construct::DatatypeValueSpace`], so `exact-within-boundaries`
+    /// is what an `OWL-RL` run says with or without an import — and the assertion is against
+    /// the import-FREE run of the same regime rather than against a spelling, so a later
+    /// change that made the import boundary the deciding one would fail here.
+    #[test]
+    fn a_resolved_import_is_a_different_boundary_from_an_unresolved_one() {
+        use purrdf_core::RdfDatasetBuilder;
+
+        use crate::report::Construct;
+        use crate::{Materialization, Regime, entails, materialize};
+
+        const SUB_CLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+        const TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+
+        /// `ex:tom a ex:Cat`, plus `ex:o owl:imports ex:schema` when `imports` is set.
+        fn premise_graph(imports: bool) -> Arc<RdfDataset> {
+            let mut b = RdfDatasetBuilder::new();
+            let tom = b.intern_iri("http://example.org/tom");
+            let ty = b.intern_iri(TYPE);
+            let cat = b.intern_iri("http://example.org/Cat");
+            b.push_quad(tom, ty, cat, None);
+            if imports {
+                let ontology = b.intern_iri("http://example.org/o");
+                let predicate = b.intern_iri(OWL_IMPORTS);
+                let schema = b.intern_iri("http://example.org/schema");
+                b.push_quad(ontology, predicate, schema, None);
+            }
+            b.freeze().expect("freeze")
+        }
+
+        let premise = premise_graph(true);
+        let mut b = RdfDatasetBuilder::new();
+        let cat = b.intern_iri("http://example.org/Cat");
+        let sub = b.intern_iri(SUB_CLASS_OF);
+        let animal = b.intern_iri("http://example.org/Animal");
+        b.push_quad(cat, sub, animal, None);
+        let schema = b.freeze().expect("freeze");
+
+        let mut map = ImportMap::new();
+        map.insert("http://example.org/schema", schema);
+
+        // `ex:tom a ex:Animal` — reachable ONLY through the imported schema, so an entailed
+        // verdict is itself the proof that the run had the imported axioms.
+        let mut b = RdfDatasetBuilder::new();
+        let tom = b.intern_iri("http://example.org/tom");
+        let ty = b.intern_iri(TYPE);
+        let animal = b.intern_iri("http://example.org/Animal");
+        b.push_quad(tom, ty, animal, None);
+        let conclusion = b.freeze().expect("freeze");
+
+        let certificate = entails(&premise, &conclusion, Regime::OwlRl, &map)
+            .expect("every import resolves, and the premise is consistent");
+        let constructs: Vec<Construct> = certificate
+            .report()
+            .boundaries()
+            .iter()
+            .map(|boundary| boundary.construct())
+            .collect();
+        assert!(
+            constructs.contains(&Construct::ResolvedOntologyImport),
+            "a run whose imports were merged names the RESOLVED construct: {constructs:?}"
+        );
+        assert!(
+            !constructs.contains(&Construct::UnresolvedOntologyImport),
+            "…and never the one that says the axioms were missing: {constructs:?}"
+        );
+
+        // The same premise through `materialize`, which takes no map at all: the honest
+        // "this run did not have them" signal is exactly what must survive there.
+        let (_, report) = materialize(&premise, Materialization::OwlRl).expect("a closure");
+        let materialized: Vec<Construct> = report
+            .boundaries()
+            .iter()
+            .map(|boundary| boundary.construct())
+            .collect();
+        assert!(
+            materialized.contains(&Construct::UnresolvedOntologyImport),
+            "a materialization resolved nothing and must say so: {materialized:?}"
+        );
+        assert!(
+            !materialized.contains(&Construct::ResolvedOntologyImport),
+            "…and must not claim a merge it never made: {materialized:?}"
+        );
+
+        // Resolving the imports does not narrow the report: the completeness of the merged
+        // run is the completeness of a run of the same regime that imports nothing.
+        let (_, plain) = materialize(&premise_graph(false), Materialization::OwlRl)
+            .expect("a closure over an import-free premise");
+        assert_eq!(certificate.report().completeness(), plain.completeness());
+    }
+
     #[test]
     fn merged_documents_are_standardized_apart_and_the_premise_is_not_moved() {
         // Every document calls its blank node `_:b`. They are three different nodes, and the
