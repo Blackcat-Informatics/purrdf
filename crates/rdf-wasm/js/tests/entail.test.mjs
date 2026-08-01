@@ -668,9 +668,17 @@ test("an unsupplied import throws by name rather than reasoning without it", asy
   // that answer as though it were this one is what the refusal prevents.
   const premise = await corpusNquads("cases/webont-imports-011/premise.rdf");
   const conclusion = await corpusNquads("cases/webont-imports-011/conclusion.rdf");
+  // The WHOLE refusal is pinned, by equality. A pattern built from the IRI reads its own
+  // `.` as "any character", and an unanchored `includes` against a URL establishes less
+  // than it appears to; equality is neither, and it is the strongest of the three — it
+  // fails if the message gains, loses or reorders a single character, not merely if it
+  // stops naming the document. The IRI is interpolated so it stays declared once.
   assert.throws(
     () => entailGraphEntails("owl-rl", premise, conclusion, [], []),
-    exactly(SUPPORT_011_A),
+    (error) =>
+      error.message ===
+      `entailment regime "owl-rl": the premise owl:imports <${SUPPORT_011_A}>, ` +
+        "which the supplied import map does not resolve",
   );
 });
 
