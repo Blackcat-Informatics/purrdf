@@ -134,6 +134,155 @@ use crate::entails::pattern::conclusion_patterns;
 use crate::entails::reflexivity::{ReflexivityWarrant, verify_reflexivity};
 use crate::entails::refutation::{RefutationWarrant, verify_refutation};
 
+/// WHICH of this crate's six mechanisms answered a conclusion-directed question.
+///
+/// The NAME of the answer's provenance, separated from the answer's evidence so it can be
+/// carried where the evidence cannot: an [`EntailmentWarrant`] holds whole closures and only
+/// exists for a `yes`, whereas this is a `Copy` tag that exists for every outcome and crosses
+/// the C and WASM boundaries as [`Self::as_str`].
+///
+/// # It is a function of the OUTCOME, and it is never stored beside one
+///
+/// Every producer derives it: [`EntailmentWarrant::mechanism`] reads the warrant's own arm,
+/// [`UndecidedReason::mechanism`](super::UndecidedReason::mechanism) reads which lane stopped
+/// early, and a [`MissReason`](super::MissReason) is always [`Self::StrictTable`] because no
+/// mechanism ever refutes. So a mechanism that disagrees with the outcome beside it is not a
+/// state this crate detects and rejects — it is a state nothing constructs, which is the
+/// same discipline that keeps a completeness out of [`ReasoningReport`](crate::ReasoningReport)
+/// and out of [`DlCertificate`](crate::DlCertificate).
+///
+/// # [`Self::StrictTable`] is the answer, not the absence of one
+///
+/// Five of the six arms exist because the rule table has NO head of the conclusion's shape;
+/// the sixth is the table itself. A question the table decides — matched into its closure, or
+/// proven absent from it — is answered by [`Self::StrictTable`], and that is a positive claim:
+/// the seventy-eight rules of OWL 2 Profiles §4.3 (or the regime's own table) were run once
+/// over the premise and the conclusion was read off the result. It is the ONLY arm that can
+/// accompany a [`NotEntailed`](super::EntailmentOutcome::NotEntailed), because refuting needs
+/// a completeness claim and only the table has one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum EntailmentMechanism {
+    /// The regime's own rule table, run once over the premise, and the conclusion matched
+    /// into (or proven absent from) the closure.
+    StrictTable,
+    /// The conclusion's negation asserted into the premise and the table re-run, with a
+    /// `false`-concluding rule read as the proof.
+    Refutation,
+    /// A schema axiom's universally quantified body instantiated over fresh constants and
+    /// the table re-run, with the derived head read as the proof.
+    Freeze,
+    /// The anonymous class expressions the conclusion names, minted under the RDF-Based
+    /// comprehension conditions' typing side conditions.
+    Comprehension,
+    /// The conclusion's own self-loops read off the premise's `owl:ReflexiveProperty`
+    /// typings.
+    Reflexivity,
+    /// An `rdfs:range` axiom decided by containment between XSD value spaces.
+    DataRange,
+}
+
+impl EntailmentMechanism {
+    /// Every mechanism, in the order [`super::entails`] reaches for them — the table first,
+    /// then [`MECHANISMS`](super::MECHANISMS)' own cost order.
+    pub const ALL: [Self; 6] = [
+        Self::StrictTable,
+        Self::Refutation,
+        Self::Freeze,
+        Self::Comprehension,
+        Self::Reflexivity,
+        Self::DataRange,
+    ];
+
+    /// A short, stable name — the spelling every host renders and the C and WASM boundaries
+    /// carry.
+    ///
+    /// Never an enum ORDINAL across a boundary: an ordinal is a number whose meaning lives in
+    /// this file, so inserting a seventh arm would silently renumber every consumer's
+    /// interpretation of an old one.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::StrictTable => "strict-table",
+            Self::Refutation => "refutation",
+            Self::Freeze => "freeze",
+            Self::Comprehension => "comprehension",
+            Self::Reflexivity => "reflexivity",
+            Self::DataRange => "data-range",
+        }
+    }
+
+    /// The SEMANTIC BOUNDARY of the rule table this mechanism crosses — why the table alone
+    /// could not answer, in the table's own terms.
+    ///
+    /// A function of the mechanism exactly as [`Boundary::reason`](crate::Boundary::reason) is
+    /// a function of its construct, and for the same reason: a mechanism and a hand-written
+    /// explanation of it, stored separately, drift.
+    #[must_use]
+    pub const fn reason(self) -> &'static str {
+        match self {
+            Self::StrictTable => {
+                "no boundary was crossed: the conclusion was decided against the closure the \
+                 regime's own rule table produces, in one run, by the graph homomorphism OWL 2 \
+                 Profiles §4.3 states the entailment relation in terms of. This is the only \
+                 mechanism that can accompany a NOT-ENTAILED, because refuting needs the \
+                 completeness half of a theorem and only the table has one"
+            }
+            Self::Refutation => {
+                "NO HEAD IN TABLES 4-9 IS A NEGATIVE FACT. Not one rule of the OWL 2 RL/RDF \
+                 table concludes an owl:differentFrom or a membership in an owl:complementOf \
+                 class, so a premise can entail one while a forward chase derives nothing to \
+                 match against. Seventeen of the seventy-eight rules DO conclude false, which \
+                 is to say the table carries its own inconsistency calculus — so the \
+                 conclusion's negation is asserted into the premise and the SAME table is run \
+                 again, over a premise whose consistency was established first, and the clash \
+                 is the entailment"
+            }
+            Self::Freeze => {
+                "NO HEAD IN TABLES 4-9 IS A SCHEMA AXIOM. Every head is an assertional triple \
+                 over named terms or false, so a property characteristic such as \
+                 p rdf:type owl:TransitiveProperty is a conclusion no forward chase produces. \
+                 It ABBREVIATES a universally quantified Horn implication, and an implication \
+                 is decided by generalisation on constants: its body is instantiated over \
+                 constants occurring in neither document, the SAME table is run again, and the \
+                 derived head is the proof"
+            }
+            Self::Comprehension => {
+                "A COMPREHENSION CONDITION ASSERTS THE EXISTENCE OF A RESOURCE NOTHING NAMES. \
+                 OWL 2's RDF-Based Semantics licenses the anonymous class expressions a \
+                 conclusion describes outright, subject to a typing side condition on their \
+                 operands — and a rule set that produced one for every licensed shape would \
+                 produce infinitely many, which is why no table states it. The scaffolds the \
+                 conclusion names are minted over blank nodes checked absent from both \
+                 documents, and the side condition is established against the premise's own \
+                 closure first"
+            }
+            Self::Reflexivity => {
+                "owl:ReflexiveProperty IS OUTSIDE THE OWL 2 RL SYNTAX, so Profiles §4.3 states \
+                 no rule for it at all — and a rule that did state it would range over every \
+                 resource, an O(|terms|) closure widening in a lane every consumer runs by \
+                 default, to answer a question only a conclusion ever asks. The conclusion's \
+                 own self-loops x p x are instead read off the premise's reflexive typings, \
+                 one lookup per conclusion triple, which is a positive establishment and \
+                 therefore needs no completeness theorem and no profile membership"
+            }
+            Self::DataRange => {
+                "A RULE TABLE HAS NO ARITHMETIC. Deciding that an rdfs:range axiom follows \
+                 needs the XSD value spaces themselves — xsd:byte ⊑ xsd:short is not something \
+                 any join over triples can discover, and an intersection of several declared \
+                 ranges may be contained in a datatype the premise never mentions. The \
+                 containment is decided by purrdf-xsd over those value spaces, three-valued, so \
+                 that an undecidable facet reads as UNDECIDED rather than as a refutation"
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for EntailmentMechanism {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// The evidence that a premise entails a conclusion, tagged by the mechanism that produced
 /// it.
 ///
@@ -170,6 +319,24 @@ impl EntailmentWarrant {
             Self::Comprehension(w) => w.regime(),
             Self::Reflexivity(w) => w.regime(),
             Self::DataRange(w) => w.regime(),
+        }
+    }
+
+    /// WHICH mechanism minted this warrant.
+    ///
+    /// Read off the arm rather than stored beside it, so a warrant cannot name a mechanism
+    /// other than the one that built it. The homomorphism arm answers
+    /// [`EntailmentMechanism::StrictTable`]: its evidence IS the regime's own rule table,
+    /// run once, with the conclusion matched into the closure.
+    #[must_use]
+    pub const fn mechanism(&self) -> EntailmentMechanism {
+        match self {
+            Self::Homomorphism(_) => EntailmentMechanism::StrictTable,
+            Self::Refutation(_) => EntailmentMechanism::Refutation,
+            Self::Freeze(_) => EntailmentMechanism::Freeze,
+            Self::Comprehension(_) => EntailmentMechanism::Comprehension,
+            Self::Reflexivity(_) => EntailmentMechanism::Reflexivity,
+            Self::DataRange(_) => EntailmentMechanism::DataRange,
         }
     }
 
@@ -312,14 +479,14 @@ impl HomomorphismWarrant {
 /// c.push_quad(tom, ty, animal, None);
 /// let conclusion = c.freeze().expect("freeze");
 ///
-/// let EntailmentOutcome::Entailed(warrant) =
-///     entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::new()).expect("a consistent run")
-/// else {
+/// let certificate =
+///     entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::new()).expect("a consistent run");
+/// let EntailmentOutcome::Entailed(warrant) = certificate.outcome() else {
 ///     panic!("cax-sco derives it");
 /// };
-/// assert!(verify(&warrant, &premise, &conclusion));
+/// assert!(verify(warrant, &premise, &conclusion));
 /// // …and it says WHICH closure triple witnesses it.
-/// let purrdf_entail::EntailmentWarrant::Homomorphism(mapped) = &warrant else {
+/// let purrdf_entail::EntailmentWarrant::Homomorphism(mapped) = warrant else {
 ///     panic!("an ordinary conclusion is reached by matching");
 /// };
 /// assert_eq!(mapped.witnesses(&conclusion).expect("covered").len(), 1);
@@ -337,5 +504,67 @@ pub fn verify(w: &EntailmentWarrant, premise: &RdfDataset, conclusion: &RdfDatas
             verify_reflexivity(reflexive, premise, conclusion)
         }
         EntailmentWarrant::DataRange(ranged) => verify_datarange(ranged, premise, conclusion),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EntailmentMechanism;
+
+    /// EVERY mechanism has a name and a reason of its OWN.
+    ///
+    /// The name is what crosses the C and WASM boundaries and what a rendered report's
+    /// `mechanism` line carries, so two arms sharing one spelling would make a consumer
+    /// unable to tell which mechanism answered — the exact fact the line exists to state.
+    /// The reason is the semantic boundary of the rule table the mechanism crosses, and an
+    /// arm that borrowed another's would be describing a limit it does not have.
+    #[test]
+    fn every_mechanism_has_a_name_and_a_reason_of_its_own() {
+        let mut names: Vec<&str> = EntailmentMechanism::ALL
+            .into_iter()
+            .map(EntailmentMechanism::as_str)
+            .collect();
+        assert_eq!(names.len(), 6);
+        names.sort_unstable();
+        let count = names.len();
+        names.dedup();
+        assert_eq!(count, names.len(), "two mechanisms share a spelling");
+
+        let mut reasons: Vec<&str> = EntailmentMechanism::ALL
+            .into_iter()
+            .map(EntailmentMechanism::reason)
+            .collect();
+        for (mechanism, reason) in EntailmentMechanism::ALL.into_iter().zip(reasons.iter()) {
+            assert!(!reason.is_empty(), "{mechanism} states no reason");
+            // A rendered `mechanism` line is ONE line, so a reason holding a newline would
+            // split it into two facts a consumer would parse as one unknown and one
+            // malformed.
+            assert!(!reason.contains('\n'), "{mechanism}'s reason spans lines");
+            assert_eq!(mechanism.to_string(), mechanism.as_str());
+        }
+        reasons.sort_unstable();
+        let count = reasons.len();
+        reasons.dedup();
+        assert_eq!(count, reasons.len(), "two mechanisms share a reason");
+    }
+
+    /// The names are the SPELLINGS a host renders, pinned so a rename is a deliberate act.
+    ///
+    /// They cross the C ABI and the WASM boundary as these strings and never as an enum
+    /// ordinal, so a consumer's reading of `refutation` cannot be moved by a seventh arm
+    /// being inserted above it.
+    #[test]
+    fn the_mechanism_spellings_are_pinned() {
+        assert_eq!(
+            EntailmentMechanism::ALL.map(EntailmentMechanism::as_str),
+            [
+                "strict-table",
+                "refutation",
+                "freeze",
+                "comprehension",
+                "reflexivity",
+                "data-range",
+            ]
+        );
     }
 }

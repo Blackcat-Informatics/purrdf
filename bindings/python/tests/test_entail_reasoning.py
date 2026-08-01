@@ -184,7 +184,7 @@ def test_the_dl_certificate_is_not_the_chase_report() -> None:
     """Two lanes, two completeness notions, two banners — never interchanged."""
     _closure, report = entail.materialize_nt(TAXONOMY, entail.Regime.OWL_RL, "")
     _answer, certificate = entail.consistency(TAXONOMY)
-    assert report.startswith("purrdf-reasoning-report 3\n")
+    assert report.startswith("purrdf-reasoning-report 4\n")
     assert certificate.startswith("purrdf-dl-certificate 1\n")
     # The chase says `exact`/`sound-incomplete`; the tableau says
     # `decided`/`decided-within-boundaries`/`budget-exhausted`. Neither

@@ -838,21 +838,41 @@ fn parse(path: &Path, base: &str) -> Result<std::sync::Arc<purrdf_core::RdfDatas
 /// rather than being reasoned over as though the missing axioms said nothing.
 #[must_use]
 pub fn decide(case: &RlCase, imports: &purrdf_entail::ImportMap) -> Answer {
-    let base = format!("http://example.org/w3c-owl2-rl/{}", case.name);
-    let premise = match parse(&case.premise, &base) {
-        Ok(dataset) => dataset,
-        Err(e) => return Answer::Withheld(e),
-    };
-    let target = match parse(&case.target, &base) {
-        Ok(dataset) => dataset,
-        Err(e) => return Answer::Withheld(e),
-    };
-    match purrdf_entail::entails(&premise, &target, purrdf_entail::Regime::OwlRl, imports) {
-        Ok(EntailmentOutcome::Entailed(_)) => Answer::Entailed,
-        Ok(EntailmentOutcome::NotEntailed(reason)) => Answer::NotEntailed(reason),
-        Ok(EntailmentOutcome::Undecided(reason)) => Answer::Undecided(reason),
-        Err(e) => Answer::Withheld(format!("OWL-RL entailment: {e}")),
+    match certify(case, imports) {
+        Ok(certificate) => match certificate.into_parts().0 {
+            EntailmentOutcome::Entailed(_) => Answer::Entailed,
+            EntailmentOutcome::NotEntailed(reason) => Answer::NotEntailed(reason),
+            EntailmentOutcome::Undecided(reason) => Answer::Undecided(reason),
+        },
+        Err(why) => Answer::Withheld(why),
     }
+}
+
+/// Answer one case and hand back the WHOLE certificate — the verdict, the mechanism that
+/// reached it, and the report of the chase underneath.
+///
+/// [`decide`] is this with everything but the verdict thrown away, and it is the narrower
+/// call because most of the grading needs only the verdict. What this adds is the two facts
+/// the grading cannot see: WHICH of [`purrdf_entail::entails`]'s six mechanisms answered, and
+/// what the run that answered it did. A corpus that graded fifty verdicts without ever
+/// naming the mechanism would report the same green whether the profile's own rule table
+/// reached them or a second run over the premise's negation did, which is the distinction
+/// this whole entailment surface is about.
+///
+/// # Errors
+///
+/// Returns a message if either document fails to parse, or if the service refuses — an
+/// unresolvable `owl:imports`, an inconsistent premise, an exhausted ceiling. Those are the
+/// [`Answer::Withheld`] cases, and they have no certificate because no run completed.
+pub fn certify(
+    case: &RlCase,
+    imports: &purrdf_entail::ImportMap,
+) -> Result<purrdf_entail::EntailmentCertificate, String> {
+    let base = format!("http://example.org/w3c-owl2-rl/{}", case.name);
+    let premise = parse(&case.premise, &base)?;
+    let target = parse(&case.target, &base)?;
+    purrdf_entail::entails(&premise, &target, purrdf_entail::Regime::OwlRl, imports)
+        .map_err(|e| format!("OWL-RL entailment: {e}"))
 }
 
 /// Answer `case` and grade the answer against its published direction.

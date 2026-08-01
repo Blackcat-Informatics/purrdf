@@ -61,6 +61,7 @@ use purrdf_core::RdfDataset;
 
 use crate::Regime;
 use crate::entails::pattern::{Pat, PatTriple};
+use crate::entails::warrant::EntailmentMechanism;
 use crate::reasoner::{OwlProfile, ProfileViolation, profile};
 use crate::report::ReasoningReport;
 
@@ -114,6 +115,43 @@ pub enum UndecidedReason {
     /// three-valued, and the `bool`-shaped idiom it would otherwise be answered with reads
     /// "cannot say" as "not entailed".
     DataRangeContainment(Vec<String>),
+}
+
+impl UndecidedReason {
+    /// WHICH mechanism this reason came out of.
+    ///
+    /// Three of the seven name a lane that ran and stopped early; the other four are
+    /// PRECONDITIONS on the rule table's own completeness — a premise outside RL, a withheld
+    /// surrogate, an axiomatic schema, an infinite value space — and belong to
+    /// [`EntailmentMechanism::StrictTable`], because that is the mechanism whose refutation
+    /// they withhold. Written as a total match with no wildcard so an eighth reason has to
+    /// say which lane produced it rather than defaulting into the table's.
+    #[must_use]
+    pub const fn mechanism(&self) -> EntailmentMechanism {
+        match self {
+            Self::PremiseOutsideRl(_)
+            | Self::WithheldSurrogate(_)
+            | Self::AxiomaticSchema(_)
+            | Self::DatatypeValueSpace => EntailmentMechanism::StrictTable,
+            Self::RefutationBudget(_) => EntailmentMechanism::Refutation,
+            Self::FreezeBudget(_) => EntailmentMechanism::Freeze,
+            Self::DataRangeContainment(_) => EntailmentMechanism::DataRange,
+        }
+    }
+
+    /// Whether the lane stopped because a BUDGET ran out, rather than because the procedure
+    /// is not complete for this input.
+    ///
+    /// The distinction [`Self::RefutationBudget`] and [`Self::FreezeBudget`] are documented
+    /// on: the other five say the PROCEDURE is not complete here, and these two say it was
+    /// not RUN to completion. Both license exactly nothing, so they share an outcome — but a
+    /// caller deciding whether to retry with a larger question needs to tell them apart, and
+    /// [`EntailmentCertificate::is_budget_exhausted`](super::EntailmentCertificate::is_budget_exhausted)
+    /// is where that reaches a report.
+    #[must_use]
+    pub const fn is_budget_exhausted(&self) -> bool {
+        matches!(self, Self::RefutationBudget(_) | Self::FreezeBudget(_))
+    }
 }
 
 impl std::fmt::Display for UndecidedReason {

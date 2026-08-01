@@ -19,6 +19,11 @@
 //! * [`Boundary`] says which constructs the run could not fully handle, and why.
 //! * [`ReasoningReport::contract_hash`] names the calculus, so a cached verdict minted
 //!   under a different rule set can be refused rather than trusted.
+//! * [`ReasoningReport::mechanism`] says WHICH of the conclusion-directed service's six
+//!   mechanisms read an answer off this run — `None` for a plain materialization, which
+//!   answers no such question. Without it, "the rule table decided this" and "the rule table
+//!   has no head of this shape and a second run over the premise's negation did" were the
+//!   same rendered report.
 //!
 //! # There is no overclaim, because there is no field to disagree with
 //!
@@ -59,6 +64,7 @@ use purrdf_datalog::seminaive::BudgetReport;
 
 use crate::Regime;
 use crate::calculus::{ChaseRule, calculus_contract_hash};
+use crate::entails::EntailmentMechanism;
 use crate::rules::{RuleId, extensions, implemented, rules};
 
 /// A run's PROOF that the evaluation it describes had to stop.
@@ -1098,6 +1104,15 @@ pub struct ReasoningReport {
     withheld_surrogates: u64,
     /// The termination proof that admitted the program, for a lane the chase evaluated.
     termination: Option<TerminationCertificate>,
+    /// WHICH of the conclusion-directed service's six mechanisms read the answer off this
+    /// run; `None` for a run that answered no conclusion-directed question at all.
+    ///
+    /// Not a parameter of [`Self::new`], and not settable by a consumer: the ONE producer is
+    /// [`EntailmentCertificate`](crate::EntailmentCertificate)'s constructor, which derives it
+    /// from the outcome it is pairing with this report. So a report naming a mechanism other
+    /// than the one that answered is a value nothing can build, exactly as
+    /// [`Self::contract_hash`] cannot name a calculus other than its regime's.
+    mechanism: Option<EntailmentMechanism>,
 }
 
 impl ReasoningReport {
@@ -1114,7 +1129,9 @@ impl ReasoningReport {
     /// The contract hash is not a parameter either: it is
     /// `calculus_contract_hash(regime)` by definition, and a report naming a calculus other
     /// than the one its regime declares would be a second contradiction with no honest
-    /// reading.
+    /// reading. Neither is [`Self::mechanism`]: a materialization answers no
+    /// conclusion-directed question, so every report built here starts with `None`, and the
+    /// only thing that attaches one is the certificate that derives it from its own outcome.
     ///
     /// `rules_fired` and `boundaries` are stored in the order given; this crate supplies
     /// specification table order and [`Construct`] declaration order respectively, which is
@@ -1168,6 +1185,7 @@ impl ReasoningReport {
             inconsistency,
             withheld_surrogates,
             termination,
+            mechanism: None,
         }
     }
 
@@ -1494,6 +1512,36 @@ impl ReasoningReport {
     #[must_use]
     pub const fn termination(&self) -> Option<TerminationCertificate> {
         self.termination
+    }
+
+    /// WHICH of the six conclusion-directed mechanisms read an answer off this run.
+    ///
+    /// `None` for a report that accompanies a CLOSURE: [`materialize`](crate::materialize)
+    /// answers no conclusion-directed question, so there is no mechanism to name and this
+    /// crate does not invent one. `Some` exactly on the report an
+    /// [`EntailmentCertificate`](crate::EntailmentCertificate) carries, where it is
+    /// [`EntailmentMechanism::StrictTable`] when the regime's own rule table decided the
+    /// question and one of the other five when the table has no head of the conclusion's
+    /// shape at all.
+    ///
+    /// It is not an independent fact beside the certificate's outcome. The certificate's
+    /// constructor DERIVES it from that outcome and attaches it here, so the two cannot
+    /// disagree; see [`Self::with_mechanism`] for why there is no public setter.
+    #[must_use]
+    pub const fn mechanism(&self) -> Option<EntailmentMechanism> {
+        self.mechanism
+    }
+
+    /// This report with `mechanism` attached.
+    ///
+    /// Crate-internal and single-caller by design. A public setter would let a consumer pair
+    /// a report with a mechanism that did not answer its question, which is precisely the
+    /// self-contradicting certificate this whole type is arranged to make unbuildable — so
+    /// the only caller is [`EntailmentCertificate`](crate::EntailmentCertificate)'s
+    /// constructor, which computes the value from the outcome rather than accepting one.
+    pub(crate) const fn with_mechanism(mut self, mechanism: EntailmentMechanism) -> Self {
+        self.mechanism = Some(mechanism);
+        self
     }
 }
 

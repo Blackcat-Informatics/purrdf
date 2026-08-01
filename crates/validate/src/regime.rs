@@ -123,16 +123,29 @@ pub const PROGRAM_REGIME_NAMES: [&str; 1] = ["rif"];
 
 /// The version banner every rendered report opens with.
 ///
-/// `3` because the grammar moved, which is the whole reason a banner is emitted at all.
-/// Against `2`, two lines are new and nothing was removed:
+/// `4` because the grammar moved, which is the whole reason a banner is emitted at all.
+/// Against `3`, ONE line is new and nothing was removed:
 ///
-/// * `extension <rule-id>` — the rules the run's calculus states that NO specification
-///   table does. Without it a caller reading `completeness exact-within-boundaries` and
-///   `fired ext-eq-diff-sym 1` had to know, from prose, that one of those ids is not in
-///   OWL 2 Profiles §4.3 and the other seventy-eight are.
-/// * `termination …` — the weak-acyclicity certificate the restricted chase computed to
-///   admit the program it then ran. It was computed on every `rdf` and `rdfs` run and read
-///   by nothing, so a proof the workspace had already paid for reached no caller.
+/// * `mechanism none | mechanism <name> <why>` — WHICH of the conclusion-directed
+///   entailment service's six mechanisms read an answer off this run, and the semantic
+///   boundary of the rule table that mechanism crosses.
+///   [`purrdf_entail::entails`] reaches a conclusion six ways, and five of them exist
+///   because no head in the regime's rule table has the conclusion's shape at all — a
+///   negative fact, a schema axiom, an anonymous class expression, a self-loop over a
+///   construct outside the syntax, a containment between value spaces. Without this line
+///   "the rule table decided this" and "the table has no head of this shape and a second
+///   run over the premise's negation did" rendered as the same report, so the one fact a
+///   reader most needs about a `yes` — how it was reached — was the one fact the report
+///   did not carry. `none` is a materialization: it answered no conclusion-directed
+///   question, and saying so is not the same as having no mechanism to name.
+///
+/// Against `2`, two lines were new: `extension <rule-id>` — the rules the run's calculus
+/// states that NO specification table does, without which a caller reading `completeness
+/// exact-within-boundaries` and `fired ext-eq-diff-sym 1` had to know from prose that one
+/// of those ids is not in OWL 2 Profiles §4.3 and the other seventy-eight are — and
+/// `termination …`, the weak-acyclicity certificate the restricted chase computed to admit
+/// the program it then ran, which was computed on every `rdf` and `rdfs` run and read by
+/// nothing.
 ///
 /// Against `1`: the `withheld-surrogates` count is rendered (it was reachable only
 /// from the CLI's private renderer, so the four existential rules were unobservable from
@@ -144,7 +157,7 @@ pub const PROGRAM_REGIME_NAMES: [&str; 1] = ["rif"];
 /// It is also the marker that lets a REFUSAL carry a report: an inconsistent run has no
 /// closure, so its certificate travels in the error message, beginning at the first line
 /// equal to this banner. See [`render_entail_error`].
-pub const REPORT_FORMAT_BANNER: &str = "purrdf-reasoning-report 3";
+pub const REPORT_FORMAT_BANNER: &str = "purrdf-reasoning-report 4";
 
 /// The media type this boundary parses its input document as.
 ///
@@ -496,13 +509,14 @@ fn rule_lines(rules: &[purrdf_entail::RuleId]) -> String {
 /// The grammar, in emission order — one fact per line, `\n`-terminated:
 ///
 /// ```text
-/// purrdf-reasoning-report 3
+/// purrdf-reasoning-report 4
 /// regime <cli-spelling>
 /// completeness exact | completeness exact-within-boundaries | completeness sound-incomplete <count>
 /// missing <rule-id>                       (0..n, specification table order)
 /// extension <rule-id>                     (0..n, declaration order)
 /// fired <rule-id> <conclusions>           (0..n, specification table order)
 /// boundary <construct> <reason>           (0..n, Construct declaration order)
+/// mechanism none | mechanism <name> <why>
 /// budget join-steps <n>
 /// budget stored-facts <n>
 /// budget term-arena-bytes <n>
@@ -534,6 +548,20 @@ fn rule_lines(rules: &[purrdf_entail::RuleId]) -> String {
 /// they differ between those two lanes and do not vary with the data. Every other regime
 /// renders `none`, which says its rules invent no term and so owe no proof — not that
 /// termination is unknown.
+///
+/// `mechanism` sits with the `boundary` lines above it because it answers the same question
+/// one step further out: those say what the RUN could not fully handle, and this says which
+/// of [`purrdf_entail::entails`]'s six mechanisms actually read the answer off it, together
+/// with the semantic boundary of the rule table that mechanism crosses. `strict-table` is a
+/// positive claim — the regime's own table was run once and the conclusion was matched into
+/// (or proven absent from) its closure — and it is the only spelling a `not entailed` can
+/// carry, because refuting needs the completeness half of a theorem and only the table has
+/// one. The other five (`refutation`, `freeze`, `comprehension`, `reflexivity`,
+/// `data-range`) each exist because NO head in Tables 4–9 has the conclusion's shape, and
+/// none of them adds a rule: `missing`, `extension` and `fired` above are byte-identical
+/// whichever answered. `none` is a materialization, which asked no conclusion-directed
+/// question at all. The name is the mechanism's own `as_str` spelling and never an enum
+/// ordinal, so a seventh arm cannot silently renumber a consumer's reading of an old one.
 ///
 /// `completeness` has three forms and the middle one is the interesting one:
 /// `exact-within-boundaries` says the rule TABLE was complete and the run still
@@ -655,6 +683,15 @@ impl fmt::Display for RenderedReport<'_> {
                 boundary.construct().as_str(),
                 boundary.reason()
             )?;
+        }
+        // Beside the boundaries, and one step further out: they say what the run could not
+        // fully handle, this says which mechanism read an answer off it and which semantic
+        // boundary of the rule table that mechanism crosses.
+        match report.mechanism() {
+            None => writeln!(f, "mechanism none")?,
+            Some(mechanism) => {
+                writeln!(f, "mechanism {} {}", mechanism.as_str(), mechanism.reason())?;
+            }
         }
         let budget = report.budget();
         writeln!(f, "budget join-steps {}", budget.join_steps())?;

@@ -1,0 +1,20 @@
+purrdf-reasoning-report 4
+regime owl-rl
+completeness exact-within-boundaries
+extension ext-eq-diff-sym
+fired eq-ref 56
+fired prp-ap 9
+fired cls-thing 1
+fired cls-nothing1 1
+fired cax-sco 1
+fired dt-type1 32
+fired scm-cls 13
+boundary datatype-value-space rdfD1 and rdfD1a conclude about a FRESH blank node standing for a datatyped literal, or for an inhabited value space, and both FIRE: the restricted chase evaluates their existentially quantified heads. What is withheld is the SURROGATE itself — a SPARQL entailment regime draws its answers from the scoping graph, which no minted blank node is in — and the surrogate boundary is where those withheld conclusions are counted. rdfs1 recognizes the datatypes RDF 1.2 Semantics §8 makes mandatory (rdf:langString, rdf:dirLangString, xsd:string) and no others. The OWL 2 RL rules quantified over value spaces (dt-type2, dt-eq, dt-diff) DO fire, over the literals the dataset holds rather than over the infinitely many a value space contains, and value-space membership is decided through the candidate datatype's LEXICAL space, so a value in a datatype's value space whose lexical form is not in that datatype's lexical space is not found: "1.0"^^xsd:decimal is not typed xsd:integer. A datatype purrdf-xsd does not model is not judged either way
+mechanism refutation NO HEAD IN TABLES 4-9 IS A NEGATIVE FACT. Not one rule of the OWL 2 RL/RDF table concludes an owl:differentFrom or a membership in an owl:complementOf class, so a premise can entail one while a forward chase derives nothing to match against. Seventeen of the seventy-eight rules DO conclude false, which is to say the table carries its own inconsistency calculus — so the conclusion's negation is asserted into the premise and the SAME table is run again, over a premise whose consistency was established first, and the clash is the entailment
+budget join-steps 1683
+budget stored-facts 118
+budget term-arena-bytes 2442
+contract-hash 8f93a9083fda8e971f558750cf5291b38b6f4838c82148a3b67e3ce7c5dc9c09
+withheld-surrogates 0
+termination none
+inconsistency none

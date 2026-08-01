@@ -68,7 +68,17 @@
 //! is [`EntailError::UnresolvedImport`] naming the document — never a silently truncated
 //! premise. See [`imports`].
 //!
-//! # Three mechanisms, and all of them are named
+//! # The answer arrives WITH the run that produced it
+//!
+//! [`entails`] returns an [`EntailmentCertificate`]: the outcome above, and the
+//! [`ReasoningReport`] of the chase underneath it. A verdict alone carries the MECHANISM's
+//! evidence and none of the chase's, so a caller reading `NotEntailed` could not ask whether
+//! the rule table it came out of was complete, which rules fired, or which calculus ran —
+//! and had to reconstruct all three from prose. The certificate also names the mechanism, on
+//! its report, so a rendered answer says which of the six below reached it. See
+//! [`certificate`].
+//!
+//! # Six mechanisms, and all of them are named
 //!
 //! * [`homomorphism`] — the chase-and-graph-match procedure OWL 2 Profiles §4.3 states the
 //!   RL entailment relation in terms of. It is complete for every conclusion the rule table
@@ -148,6 +158,7 @@ use crate::report::ReasoningReport;
 use crate::{EntailError, Materialization, Regime, materialize};
 
 pub mod answers;
+pub mod certificate;
 pub mod comprehension;
 pub mod datarange;
 pub mod freeze;
@@ -169,6 +180,7 @@ mod membership;
 mod pattern;
 
 pub use answers::CertainAnswers;
+pub use certificate::EntailmentCertificate;
 pub use comprehension::ComprehensionWarrant;
 pub use datarange::{DataRangeWarrant, RangeContainment};
 pub use freeze::{FREEZE_BUDGET, FreezeWarrant, FrozenInstance, FrozenOutcome, Generalization};
@@ -179,7 +191,7 @@ pub use pattern::VarKey;
 pub use precondition::UndecidedReason;
 pub use reflexivity::ReflexivityWarrant;
 pub use refutation::{REFUTATION_BUDGET, Refutation, RefutationWarrant};
-pub use warrant::{EntailmentWarrant, HomomorphismWarrant, verify};
+pub use warrant::{EntailmentMechanism, EntailmentWarrant, HomomorphismWarrant, verify};
 
 use graph::default_graph_triples;
 use homomorphism::Closure;
@@ -377,13 +389,23 @@ pub fn certain_answers(
 /// conditions; what differs is that the binding is read as the WARRANT for a yes rather
 /// than as an answer.
 ///
+/// # The verdict arrives WITH the run that produced it
+///
+/// The return is an [`EntailmentCertificate`], never a bare [`EntailmentOutcome`]. The
+/// outcome carries the MECHANISM's evidence — a mapping, a refutation, a frozen chase — and
+/// none of the chase's, so a caller reading `NotEntailed` had no way to ask whether the rule
+/// table underneath it was complete, which rules fired, or which calculus it ran under.
+/// [`EntailmentCertificate::report`] is that run, and it names the mechanism too. There is no
+/// certificate-free entry point to route around it; see [`certificate`] for why the answer and
+/// its provenance are one value.
+///
 /// # Errors
 ///
 /// As [`certain_answers`].
 ///
 /// ```
 /// use purrdf_core::RdfDatasetBuilder;
-/// use purrdf_entail::{EntailmentOutcome, ImportMap, Regime, entails};
+/// use purrdf_entail::{EntailmentMechanism, EntailmentOutcome, ImportMap, Regime, entails};
 ///
 /// let mut b = RdfDatasetBuilder::new();
 /// let p = b.intern_iri("http://example.org/p");
@@ -405,28 +427,37 @@ pub fn certain_answers(
 /// c.push_quad(x, p, z, None);
 /// let conclusion = c.freeze().expect("freeze");
 ///
-/// let outcome = entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::new())
+/// let certificate = entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::new())
 ///     .expect("a consistent premise");
-/// assert!(matches!(outcome, EntailmentOutcome::Entailed(_)));
+/// assert!(matches!(certificate.outcome(), EntailmentOutcome::Entailed(_)));
+/// // …and the certificate names the run that answered it.
+/// assert_eq!(certificate.mechanism(), EntailmentMechanism::StrictTable);
+/// assert_eq!(certificate.regime(), Regime::OwlRl);
+/// assert!(!certificate.is_budget_exhausted());
+/// assert!(certificate.report().rules_fired().iter().any(|&(rule, _)| rule.as_str() == "prp-trp"));
 /// ```
 pub fn entails(
     premise: &RdfDataset,
     conclusion: &RdfDataset,
     regime: Regime,
     imports: &ImportMap,
-) -> Result<EntailmentOutcome, EntailError> {
-    let prepared = prepare(premise, regime, imports)?;
+) -> Result<EntailmentCertificate, EntailError> {
+    // Destructured rather than held whole: the closure MOVES into a homomorphism warrant on
+    // the `Ok` arm below while the report moves into the certificate at the end, and two
+    // fields of one binding cannot be handed to two owners through a method call.
+    let Prepared {
+        merged,
+        closure,
+        report,
+    } = prepare(premise, regime, imports)?;
+    let effective = merged.as_deref().unwrap_or(premise);
     let pats: Vec<PatTriple> = conclusion_patterns(conclusion);
-    let limits = precondition::limits(regime, prepared.effective(premise), &prepared.report, &pats);
-    match homomorphism::find_one(pats, &prepared.closure)? {
+    let limits = precondition::limits(regime, effective, &report, &pats);
+    let outcome = match homomorphism::find_one(pats, &closure)? {
         // A found mapping is a proof, and it needs no precondition: the rule set is sound,
         // so a conclusion mapped into the closure is entailed whatever the premise's syntax.
-        Ok(binding) => Ok(EntailmentOutcome::Entailed(
-            EntailmentWarrant::Homomorphism(HomomorphismWarrant::new(
-                regime,
-                binding,
-                prepared.closure,
-            )),
+        Ok(binding) => EntailmentOutcome::Entailed(EntailmentWarrant::Homomorphism(
+            HomomorphismWarrant::new(regime, binding, closure),
         )),
         // No mapping. Before that is read as anything, the other mechanisms get their turn:
         // a conclusion the rule table has no head for is exactly the case a match cannot
@@ -435,32 +466,31 @@ pub fn entails(
         // because the premise's consistency, which both soundness arguments require, is what
         // `prepare` above has just established.
         Err(miss) => {
+            let mut answered = None;
             for mechanism in MECHANISMS {
-                match mechanism(
-                    prepared.effective(premise),
-                    conclusion,
-                    regime,
-                    &prepared.closure,
-                )? {
+                match mechanism(effective, conclusion, regime, &closure)? {
                     Attempt::Entailed(warrant) => {
-                        return Ok(EntailmentOutcome::Entailed(*warrant));
+                        answered = Some(EntailmentOutcome::Entailed(*warrant));
+                        break;
                     }
                     // The lane ran and stopped early. "I stopped looking" is not "there is
                     // nothing to find", so it is never allowed to become a refutation.
                     Attempt::Undecided(reason) => {
-                        return Ok(EntailmentOutcome::Undecided(reason));
+                        answered = Some(EntailmentOutcome::Undecided(reason));
+                        break;
                     }
                     Attempt::NotApplicable | Attempt::NotEstablished => {}
                 }
             }
             // No mechanism reached it. What that MEANS is the precondition's answer, not any
             // search's.
-            Ok(match limits.into_iter().next() {
+            answered.unwrap_or_else(|| match limits.into_iter().next() {
                 Some(reason) => EntailmentOutcome::Undecided(reason),
                 None => EntailmentOutcome::NotEntailed(miss),
             })
         }
-    }
+    };
+    Ok(EntailmentCertificate::new(outcome, report))
 }
 
 #[cfg(test)]
@@ -502,13 +532,21 @@ mod tests {
         ])
     }
 
+    /// The outcome of one question, with its certificate discarded — for the assertions
+    /// that are about the verdict alone.
+    fn outcome(premise: &RdfDataset, conclusion: &RdfDataset, regime: Regime) -> EntailmentOutcome {
+        entails(premise, conclusion, regime, &ImportMap::new())
+            .expect("consistent")
+            .into_parts()
+            .0
+    }
+
     /// A DERIVED conclusion is entailed, and the warrant re-checks.
     #[test]
     fn a_derived_conclusion_is_entailed_and_the_warrant_verifies() {
         let premise = subclass_premise();
         let conclusion = graph(&[("http://example.org/x", TYPE, "http://example.org/B")]);
-        let EntailmentOutcome::Entailed(warrant) =
-            entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::new()).expect("consistent")
+        let EntailmentOutcome::Entailed(warrant) = outcome(&premise, &conclusion, Regime::OwlRl)
         else {
             panic!("cax-sco derives it");
         };
@@ -530,7 +568,7 @@ mod tests {
         let premise = subclass_premise();
         let conclusion = graph(&[("http://example.org/x", TYPE, "http://example.org/Never")]);
         let EntailmentOutcome::NotEntailed(MissReason::NoCandidate(missing)) =
-            entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::new()).expect("consistent")
+            outcome(&premise, &conclusion, Regime::OwlRl)
         else {
             panic!("the closure of an RL premise refutes");
         };
@@ -567,7 +605,7 @@ mod tests {
 
         let conclusion = graph(&[("http://example.org/x", TYPE, "http://example.org/Never")]);
         let EntailmentOutcome::Undecided(UndecidedReason::PremiseOutsideRl(violations)) =
-            entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::new()).expect("consistent")
+            outcome(&premise, &conclusion, Regime::OwlRl)
         else {
             panic!("an existential in superclass position is outside OWL 2 RL");
         };
@@ -607,8 +645,7 @@ mod tests {
         c.push_quad(some, ty, bb, None);
         let conclusion = c.freeze().expect("freeze");
 
-        let EntailmentOutcome::Entailed(warrant) =
-            entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::new()).expect("consistent")
+        let EntailmentOutcome::Entailed(warrant) = outcome(&premise, &conclusion, Regime::OwlRl)
         else {
             panic!("`_:who a B` holds of `x`");
         };
@@ -655,13 +692,13 @@ mod tests {
         let premise = subclass_premise();
         let asserted = graph(&[("http://example.org/x", TYPE, "http://example.org/A")]);
         assert!(matches!(
-            entails(&premise, &asserted, Regime::Simple, &ImportMap::new()).expect("consistent"),
+            outcome(&premise, &asserted, Regime::Simple),
             EntailmentOutcome::Entailed(_)
         ));
         let derived = graph(&[("http://example.org/x", TYPE, "http://example.org/B")]);
         assert!(
             matches!(
-                entails(&premise, &derived, Regime::Simple, &ImportMap::new()).expect("consistent"),
+                outcome(&premise, &derived, Regime::Simple),
                 EntailmentOutcome::NotEntailed(_)
             ),
             "Simple entailment draws no conclusion, and says so as a PROOF"
@@ -674,7 +711,7 @@ mod tests {
         let premise = subclass_premise();
         let derived = graph(&[("http://example.org/x", TYPE, "http://example.org/B")]);
         assert!(matches!(
-            entails(&premise, &derived, Regime::D, &ImportMap::new()).expect("consistent"),
+            outcome(&premise, &derived, Regime::D),
             EntailmentOutcome::Undecided(UndecidedReason::DatatypeValueSpace)
         ));
     }
@@ -725,8 +762,7 @@ mod tests {
                 o: QNode::Term(TermValue::iri(object)),
             }];
             let verdict = matches!(
-                entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::new())
-                    .expect("consistent"),
+                outcome(&premise, &conclusion, Regime::OwlRl),
                 EntailmentOutcome::Entailed(_)
             );
             let answers = certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::new())

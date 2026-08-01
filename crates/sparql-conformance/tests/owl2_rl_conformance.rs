@@ -34,7 +34,7 @@
 //!     --ignored --nocapture regenerate_rl_ledger
 //! ```
 
-use purrdf_sparql_conformance::owl2_rl::{self, Answer, Direction};
+use purrdf_sparql_conformance::owl2_rl::{self, Answer, Direction, EntailmentOutcome};
 
 /// Exactly what was vendored: the 27 positive plus 23 negative entailment cases.
 const EXPECTED_CASES: usize = 50;
@@ -324,6 +324,277 @@ fn the_non_rl_premises_are_named_and_answer_undecided() {
          premise or the profile scanner moved, and a case joining it means a premise this corpus \
          could previously refute can no longer be refuted — either way, say which and why"
     );
+}
+
+/// Every case the ledger once held, and the mechanism that closed it — read off the
+/// RENDERED report a caller actually sees.
+///
+/// The sixteen entries below are the whole of what [`owl2_rl::LEDGER`] used to contain. An
+/// empty ledger is trivially green, so what makes the closure a claim rather than a
+/// tautology is naming, per case, WHICH of the six mechanisms answered it. Fifteen are
+/// answered by one of the five that exist because no head in Tables 4–9 has the
+/// conclusion's shape, and the assertion for those is exactly the plan's: not
+/// `strict-table`.
+///
+/// The sixteenth, `webont-imports-011`, IS `strict-table`, and pinning it as such is the
+/// point rather than an exception smuggled in. Its ledger entry was never a reasoning gap:
+/// the upstream export carries one document per case and its premise `owl:imports` a second
+/// one, so the vendored premise was not the whole premise and no reasoner could have reached
+/// the conclusion from it. Vendoring the support document under `imports/` made the premise
+/// whole, and the profile's own rule table then reached the conclusion in one run — which is
+/// what `strict-table` says. A test that demanded a non-`strict-table` mechanism here would
+/// be demanding that a corpus defect be answered by a reasoning mechanism.
+///
+/// The rendering is [`purrdf_validate::regime::render_reasoning_report`] — the one renderer
+/// Python, WASM, the C ABI and the CLI all read a report through — so this asserts what a
+/// CALLER sees rather than what an accessor returns. Beside the mechanism it requires a
+/// `boundary` line: the mechanism names the semantic boundary of the rule table it crossed,
+/// and the boundary lines name what the run underneath could not fully handle, and a report
+/// that carried the first without the second would be describing a run it never made.
+#[test]
+fn every_previously_ledgered_case_names_the_mechanism_that_closed_it() {
+    /// Every case `LEDGER` once held, and the mechanism that answers it now.
+    const CLOSED: [(&str, &str); 16] = [
+        // Eight negative conclusions — an `owl:differentFrom`, a membership in an
+        // `owl:complementOf` class, an `owl:AllDifferent` collection — reached by asserting
+        // the conclusion's negation into the premise and re-running the SAME table.
+        ("disjointclasses-001", "refutation"),
+        ("disjointclasses-003", "refutation"),
+        ("new-feature-disjointdataproperties-002", "refutation"),
+        ("new-feature-disjointobjectproperties-001", "refutation"),
+        ("new-feature-disjointobjectproperties-002", "refutation"),
+        ("new-feature-objectqcr-002", "refutation"),
+        ("owl2-rl-rules-fp-differentfrom", "refutation"),
+        ("owl2-rl-rules-ifp-differentfrom", "refutation"),
+        // One schema axiom that abbreviates a universally quantified Horn implication.
+        ("chain2trans1", "freeze"),
+        // Two anonymous class expressions the RDF-Based comprehension conditions license.
+        ("webont-i5-26-010", "comprehension"),
+        ("webont-i5-5-005", "comprehension"),
+        // One self-loop off a construct outside the OWL 2 RL syntax.
+        ("new-feature-reflexiveproperty-001", "reflexivity"),
+        // Three `rdfs:range` widenings decided over the XSD value spaces.
+        ("webont-i5-8-006", "data-range"),
+        ("webont-i5-8-008", "data-range"),
+        ("webont-i5-8-009", "data-range"),
+        // …and the one whose entry was a CORPUS defect rather than a reasoning gap. See this
+        // test's doc for why `strict-table` is the correct — and required — answer here.
+        ("webont-imports-011", "strict-table"),
+    ];
+
+    let root = owl2_rl::suite_root();
+    let cases = owl2_rl::discover(&root).expect("discover the corpus");
+    let imports = owl2_rl::vendored_imports(&root).expect("read the vendored support documents");
+    for (name, expected) in CLOSED {
+        let case = cases
+            .iter()
+            .find(|c| c.name == name)
+            .unwrap_or_else(|| panic!("{name} is no longer vendored"));
+        let certificate = owl2_rl::certify(case, &imports)
+            .unwrap_or_else(|e| panic!("{name} must answer rather than refuse: {e}"));
+        assert!(
+            matches!(certificate.outcome(), EntailmentOutcome::Entailed(_)),
+            "{name} is a published entailment and must be reached"
+        );
+        assert_eq!(
+            certificate.mechanism().as_str(),
+            expected,
+            "{name} changed the mechanism that answers it"
+        );
+        assert!(
+            !certificate.is_budget_exhausted(),
+            "{name} answered inside every budget, so the certificate must not report one \
+             exhausted"
+        );
+
+        // What a CALLER sees, through the shared renderer.
+        let rendered = purrdf_validate::regime::render_reasoning_report(certificate.report());
+        let mechanism_line = rendered
+            .lines()
+            .find(|line| line.starts_with("mechanism "))
+            .unwrap_or_else(|| panic!("{name}: the rendered report states no mechanism"));
+        assert!(
+            mechanism_line.starts_with(&format!("mechanism {expected} ")),
+            "{name}: {mechanism_line}"
+        );
+        // …and the semantic boundary the run crossed, beside it.
+        assert!(
+            rendered.lines().any(|line| line.starts_with("boundary ")),
+            "{name}: a report that names a mechanism and no boundary describes a run it did \
+             not make:\n{rendered}"
+        );
+    }
+
+    let mechanism_answered = CLOSED
+        .iter()
+        .filter(|(_, mechanism)| *mechanism != "strict-table")
+        .count();
+    assert_eq!(
+        mechanism_answered, 15,
+        "fifteen of the sixteen are reached by a mechanism the rule table has no head for; a \
+         change to that count is a change to what the profile's own table reaches"
+    );
+}
+
+/// Every negative case is answered under a certificate that is NOT budget-exhausted, and
+/// every one of them names its mechanism.
+///
+/// The negative lane is the soundness gate: deriving one of these non-conclusions would be
+/// PurRDF asserting something W3C contradicts. What this pins is that the lane actually RAN
+/// — a budget that ran out would produce the same "did not derive it" with none of the
+/// meaning, and that is exactly the failure a corpus reporting green cannot otherwise see.
+///
+/// Eighteen of the twenty-three are decided `NotEntailed`: the premise is inside the OWL 2
+/// RL syntax, so Theorem PR1's completeness half applies and the absence of a match IS a
+/// refutation. The other five are `Undecided(PremiseOutsideRl)` and are named here for the
+/// same reason `the_non_rl_premises_are_named_and_answer_undecided` names them: their
+/// premises are outside the syntax, so the observation the negative lane grades — the
+/// closure was computed and does not contain the non-conclusion — was still made in full,
+/// and what is missing is only the entitlement to call it a refutation. Demanding
+/// `NotEntailed` from all twenty-three would be demanding that this library claim a
+/// completeness theorem whose hypothesis those five premises break.
+///
+/// All twenty-three report `strict-table`, and that is the substantive claim rather than a
+/// formality: the five mechanisms beyond the table only ever ESTABLISH a conclusion, so a
+/// negative case reached by one of them would be an unsoundness, and this is the executable
+/// form of that argument.
+#[test]
+fn every_negative_case_is_decided_under_an_unexhausted_certificate() {
+    /// The negatives whose premise is outside the OWL 2 RL syntax, so PR1 does not apply.
+    const OUTSIDE_RL: [&str; 5] = [
+        "new-feature-keys-007",
+        "webont-description-logic-209",
+        "webont-equivalentclass-005",
+        "webont-i5-8-005",
+        "webont-somevaluesfrom-002",
+    ];
+
+    let root = owl2_rl::suite_root();
+    let cases = owl2_rl::discover(&root).expect("discover the corpus");
+    let imports = owl2_rl::vendored_imports(&root).expect("read the vendored support documents");
+    let mut refuted = 0_usize;
+    let mut undecided: Vec<&str> = Vec::new();
+    for case in cases.iter().filter(|c| c.direction == Direction::Negative) {
+        let certificate = owl2_rl::certify(case, &imports)
+            .unwrap_or_else(|e| panic!("{} must answer rather than refuse: {e}", case.name));
+        assert!(
+            !certificate.is_budget_exhausted(),
+            "{}: a negative case answered by an exhausted budget is not a soundness \
+             observation, it is a run that stopped",
+            case.name
+        );
+        assert_eq!(
+            certificate.mechanism().as_str(),
+            "strict-table",
+            "{}: the five mechanisms beyond the rule table only ever ESTABLISH a conclusion, \
+             so one of them answering a NEGATIVE case would be an unsoundness",
+            case.name
+        );
+        let rendered = purrdf_validate::regime::render_reasoning_report(certificate.report());
+        assert!(
+            rendered.contains("\nmechanism strict-table "),
+            "{}: the rendered report must name the mechanism a caller is reading:\n{rendered}",
+            case.name
+        );
+        match certificate.outcome() {
+            EntailmentOutcome::NotEntailed(_) => refuted += 1,
+            EntailmentOutcome::Undecided(_) => undecided.push(&case.name),
+            EntailmentOutcome::Entailed(_) => panic!(
+                "{}: W3C published a NEGATIVE entailment and the OWL-RL lane reached it — the \
+                 rule table is UNSOUND",
+                case.name
+            ),
+        }
+    }
+    assert_eq!(
+        undecided, OUTSIDE_RL,
+        "the set of negative premises outside the OWL 2 RL syntax changed; a case leaving it \
+         means the premise or the profile scanner moved, and a case joining it means a \
+         non-conclusion this corpus could previously REFUTE can now only be observed absent"
+    );
+    assert_eq!(
+        (refuted, undecided.len()),
+        (18, 5),
+        "the negative lane's split between a proven refutation and an observed absence changed"
+    );
+    assert_eq!(
+        refuted + undecided.len(),
+        EXPECTED_NEGATIVE,
+        "every negative case must be answered"
+    );
+}
+
+/// The committed golden render of one case's report — the bytes a caller sees.
+fn mechanism_golden_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/goldens/entailment/disjointclasses-001.report")
+}
+
+/// The rendered report of `disjointclasses-001`, byte for byte.
+///
+/// The two tests above assert PROPERTIES of a rendering — that it names this mechanism,
+/// that it carries a boundary. A property holds of many strings, and the one thing a
+/// property cannot tell anyone is what the report actually LOOKS like: the field order, the
+/// spelling of the mechanism, the fact that its reason travels on the same line. So one case
+/// is committed whole.
+///
+/// `disjointclasses-001` is the case chosen because it is the refutation lane's plainest
+/// shape — two disjoint classes, a shared instance, a conclusion the rule table has no head
+/// for — and because its report exercises everything the grammar can carry short of an
+/// inconsistency: the extension line, seven fired rules, a boundary, the mechanism, all
+/// three budget coordinates, the contract hash, and both `none` lines.
+///
+/// It is byte-stable by construction: every number in it is a count rather than a clock
+/// reading, and the contract hash is a digest of the CALCULUS rather than of a run. A diff
+/// here therefore means one of three things — the rendering moved, the calculus moved, or
+/// this case's chase does different work than it did — and all three are things to be told
+/// about rather than to absorb. Regenerate with `regenerate_mechanism_golden`.
+#[test]
+fn the_mechanism_golden_render_matches() {
+    let root = owl2_rl::suite_root();
+    let cases = owl2_rl::discover(&root).expect("discover the corpus");
+    let imports = owl2_rl::vendored_imports(&root).expect("read the vendored support documents");
+    let case = cases
+        .iter()
+        .find(|c| c.name == "disjointclasses-001")
+        .expect("disjointclasses-001 is vendored");
+    let certificate = owl2_rl::certify(case, &imports).expect("answers");
+    let rendered = purrdf_validate::regime::render_reasoning_report(certificate.report());
+    let golden = std::fs::read_to_string(mechanism_golden_path()).expect("read the golden");
+    assert_eq!(
+        rendered, golden,
+        "the rendered report moved; if that is intended, regenerate the golden with:\n  cargo \
+         test -p purrdf-sparql-conformance --locked --test owl2_rl_conformance -- --ignored \
+         regenerate_mechanism_golden"
+    );
+    // …and the line the golden exists for is in it, so a regeneration that lost the
+    // mechanism could not be committed green.
+    assert!(
+        golden.contains("\nmechanism refutation NO HEAD IN TABLES 4-9 IS A NEGATIVE FACT."),
+        "the golden must carry the mechanism line and the semantic boundary it names"
+    );
+}
+
+/// Regeneration path for [`the_mechanism_golden_render_matches`]. Ignored by default
+/// because it WRITES the committed artifact.
+#[test]
+#[ignore = "regeneration path: writes the committed golden render"]
+fn regenerate_mechanism_golden() {
+    let root = owl2_rl::suite_root();
+    let cases = owl2_rl::discover(&root).expect("discover the corpus");
+    let imports = owl2_rl::vendored_imports(&root).expect("read the vendored support documents");
+    let case = cases
+        .iter()
+        .find(|c| c.name == "disjointclasses-001")
+        .expect("disjointclasses-001 is vendored");
+    let certificate = owl2_rl::certify(case, &imports).expect("answers");
+    let path = mechanism_golden_path();
+    std::fs::write(
+        &path,
+        purrdf_validate::regime::render_reasoning_report(certificate.report()),
+    )
+    .expect("write the golden");
+    println!("wrote {}", path.display());
 }
 
 /// Every ledgered case must still be a vendored case, and the ledger must not

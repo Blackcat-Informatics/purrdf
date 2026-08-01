@@ -131,7 +131,7 @@ test("entailMaterialize closes under rdfs and always returns a report", () => {
     closed.nquads,
     /<http:\/\/example\.org\/x> <http:\/\/www\.w3\.org\/1999\/02\/22-rdf-syntax-ns#type> <http:\/\/example\.org\/C> \./,
   );
-  assert.ok(closed.report.startsWith("purrdf-reasoning-report 3\n"));
+  assert.ok(closed.report.startsWith("purrdf-reasoning-report 4\n"));
   assert.ok(closed.report.includes("\nregime rdfs\n"));
   // The report says what the run could NOT do, rather than claiming completeness
   // it does not have. Asserted as the invariant, not as a `sound-incomplete <n>`
@@ -190,7 +190,7 @@ test("entailMaterialize materializes every regime spelling", () => {
     ["d", ""],
   ]) {
     const closed = entailMaterialize(SCHEMA, regime, program);
-    assert.match(closed.report, /^purrdf-reasoning-report 3\n/);
+    assert.match(closed.report, /^purrdf-reasoning-report 4\n/);
     assert.ok(closed.report.includes(`\nregime ${regime}\n`), regime);
     assert.ok(closed.report.includes("\nwithheld-surrogates "), regime);
     assert.ok(closed.report.endsWith("inconsistency none\n"), regime);

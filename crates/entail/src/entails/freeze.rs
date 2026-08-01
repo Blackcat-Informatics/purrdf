@@ -964,6 +964,8 @@ mod tests {
     fn decide(premise: &RdfDataset, conclusion: &RdfDataset) -> EntailmentOutcome {
         entails(premise, conclusion, Regime::OwlRl, &ImportMap::new())
             .expect("a consistent premise")
+            .into_parts()
+            .0
     }
 
     // ── The mechanism reaches what the rule table cannot ───────────────────────────────
@@ -1192,7 +1194,9 @@ mod tests {
         for regime in [Regime::Simple, Regime::Rdf, Regime::Rdfs, Regime::D] {
             assert!(
                 !matches!(
-                    entails(&premise, &conclusion, regime, &ImportMap::new()).expect("consistent"),
+                    entails(&premise, &conclusion, regime, &ImportMap::new())
+                        .expect("consistent")
+                        .outcome(),
                     EntailmentOutcome::Entailed(_)
                 ),
                 "{regime:?} states no rule a frozen head could arrive through"

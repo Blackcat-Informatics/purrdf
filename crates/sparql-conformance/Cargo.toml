@@ -38,6 +38,11 @@ roxmltree = { workspace = true }
 
 [dev-dependencies]
 datatest-stable = { workspace = true }
+# The ONE renderer every host reads a reasoning report through. The OWL 2 RL entailment
+# harness asserts what a caller actually SEES for each graded case — the mechanism line
+# included — so it must render through the shared boundary rather than reach into the
+# report's accessors and build a second rendering that could agree with nothing.
+purrdf-validate = { workspace = true }
 
 [[test]]
 name = "sparql_conformance"

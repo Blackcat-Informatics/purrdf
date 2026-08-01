@@ -488,6 +488,8 @@ mod tests {
     fn decide(premise: &RdfDataset, conclusion: &RdfDataset) -> EntailmentOutcome {
         entails(premise, conclusion, Regime::OwlRl, &ImportMap::new())
             .expect("a consistent premise")
+            .into_parts()
+            .0
     }
 
     // ── The three W3C cases, by shape ──────────────────────────────────────────────────
@@ -664,7 +666,9 @@ mod tests {
         for regime in [Regime::Simple, Regime::Rdf, Regime::Rdfs, Regime::D] {
             assert!(
                 !matches!(
-                    entails(&premise, &conclusion, regime, &ImportMap::new()).expect("consistent"),
+                    entails(&premise, &conclusion, regime, &ImportMap::new())
+                        .expect("consistent")
+                        .outcome(),
                     EntailmentOutcome::Entailed(_)
                 ),
                 "{regime:?} interprets no datatype map this crate reads a closure against"

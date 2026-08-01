@@ -631,6 +631,8 @@ mod tests {
     fn decide(premise: &RdfDataset, conclusion: &RdfDataset) -> EntailmentOutcome {
         entails(premise, conclusion, Regime::OwlRl, &ImportMap::new())
             .expect("a consistent premise")
+            .into_parts()
+            .0
     }
 
     // ── The mechanism reaches what the rule table cannot ───────────────────────────────

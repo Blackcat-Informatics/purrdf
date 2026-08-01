@@ -8,7 +8,7 @@
 //! # Two lanes, two certificates
 //!
 //! [`purrdf_entail_materialize_to_nquads`] is the **chase**: it renders a
-//! `purrdf-reasoning-report 3` block whose completeness is `exact` /
+//! `purrdf-reasoning-report 4` block whose completeness is `exact` /
 //! `sound-incomplete <n>` — a difference of two rule tables.
 //!
 //! [`purrdf_entail_consistency`], [`purrdf_entail_classify`],
@@ -1159,7 +1159,7 @@ mod tests {
             "<http://example.org/x> \
              <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> ."
         ));
-        assert!(report.starts_with("purrdf-reasoning-report 3\n"));
+        assert!(report.starts_with("purrdf-reasoning-report 4\n"));
         // The report says what the run could NOT do. Asserted as the invariant
         // rather than as a `sound-incomplete <n>` literal: the count moves every
         // time a rule lands, and the honesty gate does not.
@@ -1284,7 +1284,7 @@ mod tests {
                 "<http://example.org/x> \
                  <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> ."
             ));
-            assert!(take(report).starts_with("purrdf-reasoning-report 3\n"));
+            assert!(take(report).starts_with("purrdf-reasoning-report 4\n"));
         }
     }
 

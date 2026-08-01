@@ -1528,6 +1528,7 @@ dependencies = [
  "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
+ "purrdf-validate",
  "roxmltree",
 ]
 
