@@ -155,7 +155,7 @@ impl CertainAnswers {
     /// comes to mean "there were no rules".
     ///
     /// Its [`ReasoningReport::mechanism`] is always
-    /// [`EntailmentMechanism::StrictTable`](super::EntailmentMechanism::StrictTable), and
+    /// [`super::EntailmentMechanism::StrictTable`], and
     /// that is a claim rather than a placeholder: the five mechanisms beyond the rule table
     /// are [`entails`](super::entails)-only, each because a projected variable over what it
     /// decides would be a different question than the one this service answers.

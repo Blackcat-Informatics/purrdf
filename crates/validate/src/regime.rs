@@ -130,7 +130,7 @@ pub const PROGRAM_REGIME_NAMES: [&str; 1] = ["rif"];
 /// * `mechanism none | mechanism <name> <why>` — WHICH of the conclusion-directed
 ///   entailment service's six mechanisms read an answer off this run, and the semantic
 ///   boundary of the rule table that mechanism crosses.
-///   [`purrdf_entail::entails`] reaches a conclusion six ways, and five of them exist
+///   [`purrdf_entail::entails()`] reaches a conclusion six ways, and five of them exist
 ///   because no head in the regime's rule table has the conclusion's shape at all — a
 ///   negative fact, a schema axiom, an anonymous class expression, a self-loop over a
 ///   construct outside the syntax, a containment between value spaces. Without this line
@@ -552,7 +552,7 @@ fn rule_lines(rules: &[purrdf_entail::RuleId]) -> String {
 ///
 /// `mechanism` sits with the `boundary` lines above it because it answers the same question
 /// one step further out: those say what the RUN could not fully handle, and this says which
-/// of [`purrdf_entail::entails`]'s six mechanisms actually read the answer off it, together
+/// of [`purrdf_entail::entails()`]'s six mechanisms actually read the answer off it, together
 /// with the semantic boundary of the rule table that mechanism crosses. `strict-table` is a
 /// positive claim — the regime's own table was run once and the conclusion was matched into
 /// (or proven absent from) its closure — and it is the only spelling a `not entailed` can

@@ -881,7 +881,7 @@ pub fn decide(case: &RlCase, imports: &purrdf_entail::ImportMap) -> Answer {
 ///
 /// [`decide`] is this with everything but the verdict thrown away, and it is the narrower
 /// call because most of the grading needs only the verdict. What this adds is the two facts
-/// the grading cannot see: WHICH of [`purrdf_entail::entails`]'s six mechanisms answered, and
+/// the grading cannot see: WHICH of [`purrdf_entail::entails()`]'s six mechanisms answered, and
 /// what the run that answered it did. A corpus that graded fifty verdicts without ever
 /// naming the mechanism would report the same green whether the profile's own rule table
 /// reached them or a second run over the premise's negation did, which is the distinction
@@ -969,7 +969,7 @@ pub struct GradedCase {
     pub grade: Grade,
     /// Its ledger entry, if it has one.
     pub ledgered: Option<RlGap>,
-    /// WHICH of [`purrdf_entail::entails`]'s six mechanisms answered it.
+    /// WHICH of [`purrdf_entail::entails()`]'s six mechanisms answered it.
     ///
     /// `None` only for a WITHHELD case, where no run completed and there is therefore no
     /// mechanism to name — an absence this corpus has none of today and which the type

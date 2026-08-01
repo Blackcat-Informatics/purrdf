@@ -1526,7 +1526,7 @@ impl ReasoningReport {
     ///
     /// It is not an independent fact beside the certificate's outcome. The certificate's
     /// constructor DERIVES it from that outcome and attaches it here, so the two cannot
-    /// disagree; see [`Self::with_mechanism`] for why there is no public setter.
+    /// disagree, and it is why this crate publishes no setter for it.
     #[must_use]
     pub const fn mechanism(&self) -> Option<EntailmentMechanism> {
         self.mechanism

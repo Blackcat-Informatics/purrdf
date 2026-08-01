@@ -30,11 +30,12 @@
 //!
 //! Three facts a naive shape would store as fields are functions of what is already present:
 //!
-//! * **The mechanism.** [`Self::mechanism`] reads the outcome — the warrant's arm for a
+//! * **The mechanism.** [`EntailmentCertificate::mechanism`] reads the outcome — the warrant's arm for a
 //!   `yes`, [`UndecidedReason::mechanism`] for an `undecided`, and
 //!   [`EntailmentMechanism::StrictTable`] for a `no`, because refuting needs a completeness
 //!   claim and only the rule table has one.
-//! * **Budget exhaustion.** [`Self::is_budget_exhausted`] reads the outcome too: a lane that
+//! * **Budget exhaustion.** [`EntailmentCertificate::is_budget_exhausted`] reads the outcome
+//!   too: a lane that
 //!   stopped early says so in its [`UndecidedReason`], and every other refusal to run is an
 //!   [`EntailError`](crate::EntailError) that produces no certificate at all.
 //! * **Completeness.** It is not a field of this type, of the report inside it, or of

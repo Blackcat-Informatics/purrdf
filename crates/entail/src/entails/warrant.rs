@@ -183,7 +183,7 @@ pub enum EntailmentMechanism {
 
 impl EntailmentMechanism {
     /// Every mechanism, in the order [`super::entails`] reaches for them — the table first,
-    /// then [`MECHANISMS`](super::MECHANISMS)' own cost order.
+    /// then the cost order [`super::entails`] tries the other five in.
     pub const ALL: [Self; 6] = [
         Self::StrictTable,
         Self::Refutation,
