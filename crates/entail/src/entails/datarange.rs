@@ -112,7 +112,7 @@ use std::collections::BTreeSet;
 use crate::entails::graph::{Triple, show};
 use crate::entails::homomorphism::{Binding, Closure};
 use crate::entails::warrant::{EntailmentWarrant, Replay};
-use crate::entails::{Attempt, Established, Question, UndecidedReason};
+use crate::entails::{Attempt, Established, Question, Recognized, UndecidedReason};
 use crate::vocab::{RDFS_LITERAL, RDFS_RANGE};
 use crate::{EntailError, Regime};
 
@@ -291,6 +291,26 @@ fn counterexample_of(axiom: &Axiom) -> DataRange {
         .map(|triple| range_of(&triple[2]))
         .collect();
     counterexample(&DataRange::And(declared), &range_of(&axiom.triple[2]))
+}
+
+/// What this lane READS of a question, with no containment decided.
+///
+/// The same [`read`] the decision below opens with, run for its reading alone: an
+/// `rdfs:range` axiom over a datatype the premise also declares a range for is one no join
+/// over triples can decide, so a service that does not run this lane has left it untested.
+/// This lane declines nothing by name — an unreadable target simply is not its question — so
+/// the `declined` half is always empty here.
+pub(crate) fn recognizes(q: &Question<'_>) -> Recognized {
+    if !matches!(q.regime, Regime::OwlRl) {
+        return Recognized::default();
+    }
+    Recognized {
+        read: read(q.triples, q.pending, q.closure)
+            .iter()
+            .map(|axiom| axiom.index)
+            .collect(),
+        declined: Vec::new(),
+    }
 }
 
 /// Try to establish `conclusion` from `premise` by datatype containment.

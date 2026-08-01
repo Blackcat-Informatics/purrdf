@@ -70,6 +70,16 @@ impl FreshBlanks {
         for ds in datasets {
             labels.extend(labels_of(ds));
         }
+        Self::avoiding_labels(&labels)
+    }
+
+    /// A generator whose labels are absent from `labels`.
+    ///
+    /// The primitive [`Self::avoiding`] is written in terms of, and the entry point for a
+    /// caller whose question is not a dataset yet: a BASIC GRAPH PATTERN's blank nodes are
+    /// labels with no graph to read them out of, and its projected variables have to become
+    /// terms before any mechanism can read the question at all.
+    pub(crate) fn avoiding_labels(labels: &BTreeSet<String>) -> Self {
         let mut prefix = FRESH_PREFIX.to_owned();
         while labels.iter().any(|label| label.starts_with(&prefix)) {
             prefix.push(LENGTHEN);

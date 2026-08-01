@@ -546,6 +546,15 @@ pub(crate) fn certain_answers_impl(
 /// unconditionally; what needs a precondition is the claim about a row that is NOT there,
 /// so no `limit` lines is the claim that the row set is complete.
 ///
+/// The answer opens `mechanism <name>`. A pattern with a projected variable is
+/// `strict-table`: the five mechanisms beyond the rule table are not run for one, because
+/// a projected variable over what any of them decides is a different question — and that
+/// one of them WOULD have been needed arrives as a `limit` line naming the lane, never as
+/// an exhaustive empty answer. A pattern with NO projected variable is a conclusion graph,
+/// is answered by the same fold `entailGraphEntails` runs, and names whichever of the seven
+/// reached it; such an answer is the relation with no columns, so a `yes` is one bare `row`
+/// line and a `no` is none.
+///
 /// Throws on an unknown regime, on `owl-direct` or `rif` (each defined by an input this
 /// signature does not carry), on a malformed document or pattern, on a pattern that names
 /// a graph, and on an inconsistent premise — whose refusal carries the full report.

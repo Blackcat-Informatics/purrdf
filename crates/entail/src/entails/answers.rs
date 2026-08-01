@@ -23,6 +23,23 @@
 //! cheap call wins, and a row set read as exhaustive when it is not is how an incomplete
 //! procedure comes to be described as a decision.
 //!
+//! # A LANE NOT RUN IS A LIMIT, NOT A SILENCE
+//!
+//! The limits are not only the rule table's own completeness conditions. A pattern with a
+//! projected variable is enumerated by matching the closure, and the five mechanisms beyond
+//! the table — refutation, freeze, comprehension, reflexivity, datatype containment — are not
+//! run for it, because a projected variable over what any of them decides is a different
+//! question: "which individuals is `a` entailed to differ from?" needs a refutation per
+//! candidate over the whole domain.
+//!
+//! That argument licenses not running them. It does NOT license reporting the resulting empty
+//! row set as exhaustive, which is what an empty limit list claims. So every lane is asked
+//! what it RECOGNIZES in the question — its own whitelist, over syntax and the closure's
+//! index, at no chase — and each that reads anything contributes an
+//! [`UndecidedReason::ConstructNotRead`] naming itself and the construct. `?x
+//! owl:differentFrom ex:Peter` is therefore an INCOMPLETE empty answer that names the
+//! refutation lane, rather than an exhaustive one that names nothing.
+//!
 //! # The rows arrive WITH the run that produced them
 //!
 //! [`CertainAnswers::report`] is the chase underneath, carried for exactly the reason
@@ -70,25 +87,49 @@ impl CertainAnswers {
     /// Assemble an answer set. Crate-internal: the only producer is the service that ran
     /// the mechanism, so a row cannot exist without the run that justifies it.
     ///
-    /// The mechanism attached to `report` is not a parameter and never could be: this
-    /// service runs the homomorphism and nothing else — the five lanes beyond it are
-    /// [`entails`](super::entails)-only, for the reasons that module's docs set out — so the
-    /// mechanism is [`EntailmentMechanism::StrictTable`] by definition, exactly as the
-    /// report's contract hash is its regime's calculus by definition.
+    /// `mechanism` is a parameter because it is now a MEASUREMENT rather than a definition. A
+    /// pattern with something to project is enumerated by matching the closure and nothing
+    /// else, so it is [`EntailmentMechanism::StrictTable`]; a pattern with NOTHING to project
+    /// is a conclusion graph and is routed through the same fold [`entails`](super::entails)
+    /// runs, so it can be answered by any of the seven — a `owl:differentFrom` between two
+    /// named individuals is `refutation`, and a conclusion needing two lanes is `composite`.
+    /// Hard-coding the table's name here is what let this service render `strict-table` beside
+    /// an answer the table had not reached.
+    ///
+    /// It is attached to `report` rather than stored beside it, so [`Self::mechanism`] and
+    /// [`Self::report`] read one value and cannot disagree.
     pub(crate) fn new(
         regime: Regime,
         vars: Vec<String>,
         rows: Vec<Vec<TermValue>>,
         limits: Vec<UndecidedReason>,
         report: ReasoningReport,
+        mechanism: EntailmentMechanism,
     ) -> Self {
         Self {
             regime,
             vars,
             rows,
             limits,
-            report: report.with_mechanism(EntailmentMechanism::StrictTable),
+            report: report.with_mechanism(mechanism),
         }
+    }
+
+    /// WHICH of the seven mechanisms answered.
+    ///
+    /// Read off [`Self::report`] rather than stored beside it. For a pattern with something to
+    /// project this is always [`EntailmentMechanism::StrictTable`]; for one with nothing to
+    /// project it is whichever mechanism [`entails`](super::entails)'s own fold reached, which
+    /// is what makes the two entry points render the same answer to the same question.
+    ///
+    /// # Panics
+    ///
+    /// Never: the crate-internal constructor is the only producer and it always attaches one.
+    #[must_use]
+    pub fn mechanism(&self) -> EntailmentMechanism {
+        self.report
+            .mechanism()
+            .expect("the one constructor attaches the mechanism that answered")
     }
 
     /// The regime these answers are certain under.
@@ -154,11 +195,14 @@ impl CertainAnswers {
     /// the alternative, an entry point that drops the report, is how "there are no answers"
     /// comes to mean "there were no rules".
     ///
-    /// Its [`ReasoningReport::mechanism`] is always
-    /// [`super::EntailmentMechanism::StrictTable`], and
-    /// that is a claim rather than a placeholder: the five mechanisms beyond the rule table
-    /// are [`entails`](super::entails)-only, each because a projected variable over what it
-    /// decides would be a different question than the one this service answers.
+    /// Its [`ReasoningReport::mechanism`] is [`Self::mechanism`] — the mechanism that actually
+    /// answered, which is a MEASUREMENT and not a constant. A pattern with something to
+    /// project is [`super::EntailmentMechanism::StrictTable`], because the five mechanisms
+    /// beyond the rule table are not run for one: a projected variable over what any of them
+    /// decides would be a different question than the one this service answers, and the fact
+    /// that one of them WOULD have been needed reaches the caller as a limit instead. A
+    /// pattern with nothing to project is a conclusion graph, is routed through the same fold
+    /// [`entails`](super::entails) runs, and names whichever of the seven reached it.
     #[must_use]
     pub const fn report(&self) -> &ReasoningReport {
         &self.report

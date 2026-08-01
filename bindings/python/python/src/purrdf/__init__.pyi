@@ -901,9 +901,13 @@ class entail:
     # the answers to a basic graph pattern to be. `pattern` is N-Triples with
     # `?name` in any position; a blank node in it is a NON-DISTINGUISHED
     # variable, constrained by the match and not projected. The answer opens
-    # `mechanism strict-table`, then `var` and `row` lines, then a `limit` line
+    # `mechanism <name>`, then `var` and `row` lines, then a `limit` line
     # per reason the row set may not be EXHAUSTIVE — no `limit` lines is the
-    # claim that it is. Raises ValueError for OWL_DIRECT and RIF, each defined by
+    # claim that it is. A pattern with a projected variable is `strict-table`,
+    # and a lane that would have been needed for it names itself in a `limit`;
+    # a pattern with NO projected variable is a conclusion graph, is answered by
+    # the same fold `graph_entails` runs, and names whichever of the seven
+    # reached it. Raises ValueError for OWL_DIRECT and RIF, each defined by
     # an input this signature does not carry.
     @staticmethod
     def certain_answers(

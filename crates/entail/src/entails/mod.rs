@@ -118,7 +118,12 @@
 //! producer: the fold below, which is the only thing that constructs one. This crate does not
 //! pre-declare states that nothing constructs.
 //!
-//! The five extra lanes are [`entails`]-only, and deliberately. Refutation decides a ground
+//! The five extra lanes are run for a question with NOTHING TO PROJECT, and not otherwise.
+//! That is a statement about the question rather than about the entry point: a basic graph
+//! pattern with no `?v` in it IS a conclusion graph, so [`certain_answers`] routes it through
+//! the same shared spine and reaches the same answer [`entails`] does.
+//!
+//! A PROJECTED variable is where they stop, and deliberately. Refutation decides a ground
 //! negative fact, and a projected variable ranging over one is a different question — "which
 //! individuals is `a` entailed to differ from?" would need a refutation per candidate over
 //! the whole domain, which is not what [`certain_answers`] computes and not what it would be
@@ -132,6 +137,15 @@
 //! closure widening this crate declines to perform in the materialization lane, arriving by
 //! another door. Datatype containment decides a ground `rdfs:range` AXIOM, and a projected
 //! variable there would range over the datatype map rather than over the premise's terms.
+//!
+//! Declining to answer is not the same as answering "there is none", so a lane that would have
+//! been needed and was not run reaches the caller as a LIMIT. Each lane therefore has a second
+//! entry point — a RECOGNITION, which runs its own whitelist over the question and decides
+//! nothing — and each non-empty recognition becomes an
+//! [`UndecidedReason::ConstructNotRead`], so [`CertainAnswers::is_complete`] is then `false`.
+//! Without it a question needing one of the five came back as an empty row set with an empty
+//! limit list — which renders as "no certain answers, exhaustively", about a question nothing
+//! had tested.
 //!
 //! # The mechanisms COMPOSE, because entailment is monotone over conjunction
 //!
@@ -162,11 +176,12 @@
 //! budget rather than a clock. Two runs over one premise and one question return the same
 //! verdict, the same binding, and the same diagnosis, on `wasm32` as on native.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use purrdf_core::{RdfDataset, TermValue};
+use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 
+use crate::interner::intern_into;
 use crate::owl_dl::query::QTriple;
 use crate::report::ReasoningReport;
 use crate::{EntailError, Materialization, Regime, materialize};
@@ -209,9 +224,10 @@ pub use warrant::{
     CompositeWarrant, EntailmentMechanism, EntailmentWarrant, HomomorphismWarrant, verify,
 };
 
-use graph::{Triple, default_graph_triples};
-use homomorphism::Closure;
-use pattern::{PatTriple, bgp_patterns, conclusion_patterns, patterns_at, projected_vars};
+use fresh::FreshBlanks;
+use graph::{Triple, default_graph_triples, show};
+use homomorphism::{Closure, show_pattern};
+use pattern::{Pat, PatTriple, bgp_patterns, conclusion_patterns, patterns_at, projected_vars};
 
 /// What a conclusion-directed question answered.
 ///
@@ -305,8 +321,50 @@ pub(crate) struct Question<'a> {
     pub(crate) pending: &'a BTreeSet<usize>,
 }
 
-/// One mechanism's entry point.
-type Mechanism = fn(&Question<'_>) -> Result<Attempt, EntailError>;
+/// What one mechanism READS of a question, with nothing decided either way.
+///
+/// The recognition half of a lane, split out from the decision half because the two questions
+/// have different answers and different costs. `attempt` asks "is this established?" and pays
+/// for a re-chase to find out; this asks "is this MINE?" and is the lane's own whitelist run
+/// over the question's syntax and the closure's index — no chase, no search.
+///
+/// [`certain_answers`] is the caller that needs the split. It runs the rule table and nothing
+/// else, so a question one of the five lanes reads is one whose answer set it cannot claim to
+/// have enumerated — and it has to say so WITHOUT running the lane, because a projected
+/// variable over what a lane decides is a different question than the lane answers. An empty
+/// recognition is therefore the whole claim that not running the lane cost nothing.
+#[derive(Default)]
+pub(crate) struct Recognized {
+    /// The question's triples this lane reads, by index into [`Question::triples`].
+    pub(crate) read: BTreeSet<usize>,
+    /// Constructs this lane NAMES and declines to read at all, rendered — the same strings
+    /// its [`Attempt::Disqualified`] would have carried.
+    pub(crate) declined: Vec<String>,
+}
+
+impl Recognized {
+    /// Whether this lane reads nothing here, which is the claim that a service declining to
+    /// run it has lost nothing by declining.
+    fn is_empty(&self) -> bool {
+        self.read.is_empty() && self.declined.is_empty()
+    }
+}
+
+/// One mechanism, with both of its entry points and the name it answers under.
+///
+/// A struct rather than three parallel arrays, because a lane that arrived with a decision
+/// procedure and no recognizer would be invisible to [`certain_answers`]'s completeness claim
+/// — which is exactly the defect the recognition half was added to close, re-introduced by a
+/// table that let the two halves be listed separately.
+struct Lane {
+    /// Which of the seven mechanisms this is — the name a limit or a warrant carries.
+    mechanism: EntailmentMechanism,
+    /// DECIDE: establish part or all of the conclusion, or say why not. The fold's entry
+    /// point.
+    attempt: fn(&Question<'_>) -> Result<Attempt, EntailError>,
+    /// RECOGNIZE: say what of the question this lane reads, deciding none of it.
+    recognizes: fn(&Question<'_>) -> Recognized,
+}
 
 /// The mechanisms beyond [`homomorphism`], in the order [`entails`] folds them.
 ///
@@ -321,12 +379,32 @@ type Mechanism = fn(&Question<'_>) -> Result<Attempt, EntailError>;
 /// filters what it recognizes through [`Question::pending`]: the earlier lane's discharge
 /// removes the triple from the later lane's question rather than leaving it to be decided
 /// twice, possibly two ways.
-const MECHANISMS: [Mechanism; 5] = [
-    refutation::attempt,
-    freeze::attempt,
-    comprehension::attempt,
-    reflexivity::attempt,
-    datarange::attempt,
+const MECHANISMS: [Lane; 5] = [
+    Lane {
+        mechanism: EntailmentMechanism::Refutation,
+        attempt: refutation::attempt,
+        recognizes: refutation::recognizes,
+    },
+    Lane {
+        mechanism: EntailmentMechanism::Freeze,
+        attempt: freeze::attempt,
+        recognizes: freeze::recognizes,
+    },
+    Lane {
+        mechanism: EntailmentMechanism::Comprehension,
+        attempt: comprehension::attempt,
+        recognizes: comprehension::recognizes,
+    },
+    Lane {
+        mechanism: EntailmentMechanism::Reflexivity,
+        attempt: reflexivity::attempt,
+        recognizes: reflexivity::recognizes,
+    },
+    Lane {
+        mechanism: EntailmentMechanism::DataRange,
+        attempt: datarange::attempt,
+        recognizes: datarange::recognizes,
+    },
 ];
 
 /// The plan for a regime, or a refusal.
@@ -398,6 +476,32 @@ fn prepare(
 /// of the pattern is a non-distinguished variable, constrained by the match and not
 /// projected, which is what SPARQL says a query blank node is.
 ///
+/// # NOTHING TO PROJECT IS [`entails`]'S QUESTION, AND IS ANSWERED BY [`entails`]'S FOLD
+///
+/// A pattern with no `?v` in it is a conclusion GRAPH — every position is a term or a blank
+/// node, which is exactly what an RDF graph is — so it is routed through the same shared spine
+/// [`entails`] runs, and reaches whichever of the seven mechanisms answers it. The two entry
+/// points cannot disagree about such a question because there is one implementation of it;
+/// what differs is the PRESENTATION, and only that. A `yes` is the one row over zero columns,
+/// a `no` is the empty relation, and an `undecided` is the empty relation WITH the reason as
+/// a limit.
+///
+/// # A PROJECTED VARIABLE OVER A LANE'S QUESTION IS A LIMIT, NEVER A SILENCE
+///
+/// With something to project the five lanes beyond the rule table are not run, and the
+/// [module docs](self) argue at length why: "which individuals is `a` entailed to differ
+/// from?" needs a refutation per candidate over the whole domain, and the same holds for
+/// freeze, comprehension, reflexivity and datatype containment. That argument licenses not
+/// RUNNING them. It does not license reporting an empty row set as EXHAUSTIVE when one of
+/// them would have been needed — which is a claim about the caller's data made out of this
+/// library's own incapacity.
+///
+/// So every lane is asked what it RECOGNIZES, which is its own whitelist over the
+/// question's syntax and costs no chase, and each lane that reads anything here
+/// contributes an [`UndecidedReason::ConstructNotRead`] naming itself and the constructs.
+/// [`CertainAnswers::is_complete`] is then `false`, and the row set says "none was found"
+/// rather than "there is none".
+///
 /// The run that produced the rows travels with them, as [`CertainAnswers::report`]. Rows
 /// without it are half an answer for the same reason a verdict without it is: a caller
 /// reading an empty row set beside [`CertainAnswers::is_complete`] needs to know which rule
@@ -444,17 +548,48 @@ pub fn certain_answers(
 ) -> Result<CertainAnswers, EntailError> {
     let prepared = prepare(premise, regime, imports)?;
     let pats = bgp_patterns(bgp);
-    // A basic graph pattern has no mechanism but the table, so nothing is decided elsewhere:
-    // the five conclusion-directed lanes are not reachable from here, and saying so with an
-    // empty set is what keeps the conclusion-side condition honest for this entry point too.
-    let limits = precondition::limits(
+    let names = projected_vars(&pats);
+    let question = as_graph(&pats, &names);
+
+    // NOTHING TO PROJECT: this is `entails`'s question, so it is `entails`'s fold that answers
+    // it. Routed rather than re-implemented — one implementation, two presentations.
+    if names.is_empty()
+        && let Some(question) = &question
+    {
+        let Prepared {
+            merged,
+            closure,
+            report,
+        } = prepared;
+        let outcome = decide(
+            merged.as_deref().unwrap_or(premise),
+            &question.graph,
+            regime,
+            closure,
+            &report,
+        )?;
+        return Ok(verdict_answers(regime, &outcome, report));
+    }
+
+    // The table's own completeness conditions. `decided_by_refutation` is EMPTY here and that
+    // is a claim rather than a default: the refutation lane is not run on this path, so no
+    // triple of the question is decided by the profile's inconsistency calculus — and every
+    // lane that would have read one contributes its own limit below instead.
+    let mut limits = precondition::limits(
         regime,
         prepared.effective(premise),
         &prepared.report,
         &pats,
         &BTreeSet::new(),
     );
-    let names = projected_vars(&pats);
+    if let Some(question) = &question {
+        limits.extend(unreachable_lanes(
+            prepared.effective(premise),
+            question,
+            regime,
+            &prepared.closure,
+        ));
+    }
     let vars: Vec<VarKey> = names.iter().cloned().map(VarKey::Projected).collect();
     let rows: BTreeSet<Vec<TermValue>> = homomorphism::find_all(pats, &prepared.closure, &vars)?;
     Ok(CertainAnswers::new(
@@ -463,7 +598,255 @@ pub fn certain_answers(
         rows.into_iter().collect(),
         limits,
         prepared.report,
+        // The rule table, and only the rule table: this path enumerates by matching the
+        // closure and nothing else ran. The zero-projected-variable path above names whichever
+        // of the seven actually answered.
+        EntailmentMechanism::StrictTable,
     ))
+}
+
+/// One verdict, presented as the relation SPARQL says an answer with nothing to project is.
+///
+/// The join identity, in both directions: a `yes` is the ONE row over zero columns — the empty
+/// substitution — and a `no` is the empty relation. So [`CertainAnswers::is_empty`] reads as
+/// the verdict and no caller has to learn a second convention.
+///
+/// The limit list is the third answer and ONLY the third answer, which is what keeps
+/// [`CertainAnswers::is_complete`] saying something true here. `Entailed` and `NotEntailed`
+/// are both DECIDED, and over zero columns the empty substitution is the only substitution
+/// there is — so in either case the row set holds every certain answer and IS exhaustive.
+/// `Undecided` carries its reason as the one limit, the same value [`entails`] renders.
+fn verdict_answers(
+    regime: Regime,
+    outcome: &EntailmentOutcome,
+    report: ReasoningReport,
+) -> CertainAnswers {
+    let (rows, limits) = match outcome {
+        EntailmentOutcome::Entailed(_) => (vec![Vec::new()], Vec::new()),
+        EntailmentOutcome::NotEntailed(_) => (Vec::new(), Vec::new()),
+        EntailmentOutcome::Undecided(reason) => (Vec::new(), vec![reason.clone()]),
+    };
+    CertainAnswers::new(
+        regime,
+        Vec::new(),
+        rows,
+        limits,
+        report,
+        certificate::mechanism_of(outcome),
+    )
+}
+
+/// The lanes [`certain_answers`] does not run that this question would have needed.
+///
+/// One [`UndecidedReason::ConstructNotRead`] per recognizing lane, in the fixed [`MECHANISMS`]
+/// cost order so the list is a function of the question rather than of a search. A lane that
+/// recognizes nothing contributes nothing, which is what keeps an ordinary assertional pattern
+/// [`complete`](CertainAnswers::is_complete) — making every answer incomplete would satisfy
+/// the honesty requirement and destroy the service.
+///
+/// No lane is RUN: [`Recognized`] is each lane's own whitelist over the question's syntax and
+/// the closure's index, so this costs no chase, no refutation and no frozen instance. That is
+/// the whole point — the [module docs](self) argue that a projected variable over what a lane
+/// decides is a different question, and this reports that fact instead of searching for its
+/// answer.
+fn unreachable_lanes(
+    premise: &RdfDataset,
+    question: &AsGraph,
+    regime: Regime,
+    closure: &Closure,
+) -> Vec<UndecidedReason> {
+    // Every triple is outstanding: nothing on this path discharged anything, so every lane is
+    // asked about the whole question.
+    let pending: BTreeSet<usize> = (0..question.triples.len()).collect();
+    let asked = Question {
+        premise,
+        conclusion: &question.graph,
+        regime,
+        closure,
+        triples: &question.triples,
+        pending: &pending,
+    };
+    let mut limits = Vec::new();
+    for lane in MECHANISMS {
+        let recognized = (lane.recognizes)(&asked);
+        if recognized.is_empty() {
+            continue;
+        }
+        let mut constructs: Vec<String> = recognized
+            .read
+            .iter()
+            .filter_map(|&index| question.rendered.get(index))
+            .map(|shown| {
+                format!(
+                    "{shown}: a projected variable over what this lane decides ranges over the \
+                     whole domain rather than over the premise's terms, and this service \
+                     enumerates over the rule table alone"
+                )
+            })
+            .collect();
+        constructs.extend(recognized.declined);
+        constructs.sort_unstable();
+        constructs.dedup();
+        limits.push(UndecidedReason::ConstructNotRead {
+            lane: lane.mechanism,
+            constructs,
+        });
+    }
+    limits
+}
+
+/// The question, as the GRAPH every mechanism beyond [`homomorphism`] reads it out of.
+///
+/// A basic graph pattern and a conclusion graph are the same object with one difference —
+/// whether the caller wants to SEE what a variable was bound to — so a pattern whose projected
+/// variables have been replaced by blank nodes IS an RDF graph. Building it is what lets
+/// [`certain_answers`] reach [`entails`]'s own fold rather than a second copy of it.
+struct AsGraph {
+    /// The graph itself.
+    graph: Arc<RdfDataset>,
+    /// Its own frozen triple order — the index space a [`Recognized`] speaks in, and NOT the
+    /// caller's pattern order, because freezing deduplicates and re-orders.
+    triples: Vec<Triple>,
+    /// One rendering per triple above, in the caller's OWN syntax: `?x` where a projected
+    /// variable was substituted away, so a limit names the construct the caller wrote rather
+    /// than the blank node this module minted to stand in for it.
+    rendered: Vec<String>,
+}
+
+/// `pats` with every projected variable replaced by a blank node no pattern names.
+///
+/// `None` when the substituted triples are not an RDF graph — a literal in subject position is
+/// the reachable case. Such a pattern has no solution in ANY graph and no [`entails`] question
+/// corresponds to it, so the ordinary match answers it with the empty relation it deserves;
+/// what a hard error here would add is a refusal the caller never asked for.
+fn as_graph(pats: &[PatTriple], names: &[String]) -> Option<AsGraph> {
+    let mut fresh = FreshBlanks::avoiding_labels(&blank_labels(pats));
+    // Minted in the pattern set's own first-occurrence variable order, so the substitution —
+    // and therefore the frozen graph and every limit read off it — is a function of the
+    // question alone.
+    let substitution: BTreeMap<String, TermValue> = names
+        .iter()
+        .map(|name| (name.clone(), fresh.mint()))
+        .collect();
+
+    let mut origin: BTreeMap<Triple, usize> = BTreeMap::new();
+    let mut builder = RdfDatasetBuilder::new();
+    for (index, pat) in pats.iter().enumerate() {
+        let triple = [
+            substituted(&pat[0], &substitution)?,
+            substituted(&pat[1], &substitution)?,
+            substituted(&pat[2], &substitution)?,
+        ];
+        let s = intern_into(&mut builder, &triple[0]);
+        let p = intern_into(&mut builder, &triple[1]);
+        let o = intern_into(&mut builder, &triple[2]);
+        builder.push_quad(s, p, o, None);
+        // FIRST occurrence wins: two identical patterns freeze to one triple, and the earlier
+        // is the one the caller would look for.
+        origin.entry(triple).or_insert(index);
+    }
+    let graph = builder.freeze().ok()?;
+    let triples = default_graph_triples(&graph);
+    let rendered = triples
+        .iter()
+        .map(|triple| {
+            origin.get(triple).map_or_else(
+                || {
+                    format!(
+                        "{} {} {}",
+                        show(&triple[0]),
+                        show(&triple[1]),
+                        show(&triple[2])
+                    )
+                },
+                |&index| show_pattern(&pats[index]),
+            )
+        })
+        .collect();
+    Some(AsGraph {
+        graph,
+        triples,
+        rendered,
+    })
+}
+
+/// Every blank-node label `pats` names, at any depth — what a substitution must avoid.
+fn blank_labels(pats: &[PatTriple]) -> BTreeSet<String> {
+    fn walk(pat: &Pat, out: &mut BTreeSet<String>) {
+        match pat {
+            Pat::Var(VarKey::Blank { label, .. }) => {
+                out.insert(label.clone());
+            }
+            Pat::Triple(inner) => {
+                for position in inner.iter() {
+                    walk(position, out);
+                }
+            }
+            Pat::Var(VarKey::Projected(_)) | Pat::Ground(_) => {}
+        }
+    }
+    let mut out = BTreeSet::new();
+    for triple in pats {
+        for position in triple {
+            walk(position, &mut out);
+        }
+    }
+    out
+}
+
+/// One pattern position as a TERM, under `substitution`.
+///
+/// `None` for a projected variable `substitution` does not name, which cannot happen for a
+/// substitution built from [`projected_vars`] of the same patterns and is refused rather than
+/// defaulted so it stays that way.
+fn substituted(pat: &Pat, substitution: &BTreeMap<String, TermValue>) -> Option<TermValue> {
+    Some(match pat {
+        Pat::Ground(term) => term.clone(),
+        Pat::Var(VarKey::Blank { label, scope }) => TermValue::Blank {
+            label: label.clone(),
+            scope: *scope,
+        },
+        Pat::Var(VarKey::Projected(name)) => substitution.get(name)?.clone(),
+        Pat::Triple(inner) => TermValue::Triple {
+            s: Box::new(substituted(&inner[0], substitution)?),
+            p: Box::new(substituted(&inner[1], substitution)?),
+            o: Box::new(substituted(&inner[2], substitution)?),
+        },
+    })
+}
+
+/// Decide one conclusion-directed question against a prepared run.
+///
+/// THE SHARED SPINE. Both public entry points reach their answer through this and neither
+/// carries a second copy of it, so [`entails`] and [`certain_answers`] cannot disagree about a
+/// question they can both be asked: the match first, because a found mapping is a proof that
+/// needs no precondition; then the [`fold`], because a conclusion the rule table has no head
+/// for is exactly the case a match cannot reach and one of the five lanes can.
+///
+/// # Errors
+///
+/// [`EntailError::MatchBudget`] from either match, and whatever the fold's own re-chases
+/// refuse with.
+fn decide(
+    premise: &RdfDataset,
+    conclusion: &RdfDataset,
+    regime: Regime,
+    closure: Closure,
+    report: &ReasoningReport,
+) -> Result<EntailmentOutcome, EntailError> {
+    let pats: Vec<PatTriple> = conclusion_patterns(conclusion);
+    Ok(match homomorphism::find_one(pats, &closure)? {
+        // A found mapping is a proof, and it needs no precondition: the rule set is sound, so
+        // a conclusion mapped into the closure is entailed whatever the premise's syntax.
+        Ok(binding) => EntailmentOutcome::Entailed(EntailmentWarrant::Homomorphism(
+            HomomorphismWarrant::new(regime, binding, closure),
+        )),
+        // No mapping. Before that is read as anything, the other mechanisms get their turn.
+        // They run HERE and not earlier because each is strictly more expensive — a full
+        // re-chase per negative fact or per frozen implication — and because the premise's
+        // consistency, which every soundness argument requires, is what `prepare` established.
+        Err(_) => fold(premise, conclusion, regime, closure, report)?,
+    })
 }
 
 /// Does `premise` entail `conclusion` under `regime`?
@@ -471,9 +854,23 @@ pub fn certain_answers(
 /// The zero-projected-variable specialisation of [`certain_answers`]: an RDF graph is a
 /// conjunction of triples whose blank nodes are existentially quantified, so a conclusion
 /// GRAPH is a basic graph pattern with nothing to project, and its answer is a verdict
-/// rather than a relation. It runs the same mechanism through the same completeness
-/// conditions; what differs is that the binding is read as the WARRANT for a yes rather
-/// than as an answer.
+/// rather than a relation.
+///
+/// # The specialisation is REAL: one spine, two presentations
+///
+/// Both entry points reach their answer through one shared spine — the match, then the fold over
+/// all five extra lanes, then the same [`precondition`] conditions — and neither carries a
+/// second copy of it. So `entails(P, C)` and `certain_answers(P, patterns(C))` cannot disagree
+/// about `C`: they are one call with two renderings of its result, and the test
+/// `entails_and_certain_answers_never_disagree` ranges over every mechanism to keep it that
+/// way. What differs is only that the binding is read as the WARRANT for a yes rather than as
+/// an answer.
+///
+/// The two do differ where a question separates them, which is a question `entails` cannot be
+/// asked: a PROJECTED variable. There the five extra lanes are not run, because "which
+/// individuals is `a` entailed to differ from?" is a different question from "is `a` entailed
+/// to differ from `b`?" — and [`certain_answers`] reports that as a named limit rather than as
+/// an exhaustive empty answer.
 ///
 /// # The verdict arrives WITH the run that produced it
 ///
@@ -528,30 +925,21 @@ pub fn entails(
     regime: Regime,
     imports: &ImportMap,
 ) -> Result<EntailmentCertificate, EntailError> {
-    // Destructured rather than held whole: the closure MOVES into a homomorphism warrant on
-    // the `Ok` arm below while the report moves into the certificate at the end, and two
-    // fields of one binding cannot be handed to two owners through a method call.
+    // Destructured rather than held whole: the closure MOVES into a homomorphism warrant
+    // inside `decide` while the report moves into the certificate at the end, and two fields
+    // of one binding cannot be handed to two owners through a method call.
     let Prepared {
         merged,
         closure,
         report,
     } = prepare(premise, regime, imports)?;
-    let effective = merged.as_deref().unwrap_or(premise);
-    let pats: Vec<PatTriple> = conclusion_patterns(conclusion);
-    let outcome = match homomorphism::find_one(pats, &closure)? {
-        // A found mapping is a proof, and it needs no precondition: the rule set is sound,
-        // so a conclusion mapped into the closure is entailed whatever the premise's syntax.
-        Ok(binding) => EntailmentOutcome::Entailed(EntailmentWarrant::Homomorphism(
-            HomomorphismWarrant::new(regime, binding, closure),
-        )),
-        // No mapping. Before that is read as anything, the other mechanisms get their turn:
-        // a conclusion the rule table has no head for is exactly the case a match cannot
-        // reach and one of them can. They run HERE and not earlier because each is strictly
-        // more expensive — a full re-chase per negative fact or per frozen implication — and
-        // because the premise's consistency, which both soundness arguments require, is what
-        // `prepare` above has just established.
-        Err(_) => fold(effective, conclusion, regime, closure, &report)?,
-    };
+    let outcome = decide(
+        merged.as_deref().unwrap_or(premise),
+        conclusion,
+        regime,
+        closure,
+        &report,
+    )?;
     Ok(EntailmentCertificate::new(outcome, report))
 }
 
@@ -577,7 +965,7 @@ fn fold(
     let mut minted: Vec<Triple> = Vec::new();
     let mut parts: Vec<EntailmentWarrant> = Vec::new();
     let mut withheld: Vec<UndecidedReason> = Vec::new();
-    for mechanism in MECHANISMS {
+    for lane in MECHANISMS {
         let question = Question {
             premise,
             conclusion,
@@ -586,7 +974,7 @@ fn fold(
             triples: &triples,
             pending: &pending,
         };
-        match mechanism(&question)? {
+        match (lane.attempt)(&question)? {
             Attempt::Entailed(established) => {
                 let Established {
                     warrant,
@@ -670,6 +1058,7 @@ fn compose(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::sync::Arc;
 
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
@@ -697,6 +1086,28 @@ mod tests {
             let o = b.intern_iri(o);
             b.push_quad(s, p, o, None);
         }
+        b.freeze().expect("freeze")
+    }
+
+    /// `A ⊑ ∃p.B`, `x a A` — an existential on the SUPERCLASS side, which is OUTSIDE the OWL
+    /// 2 RL syntax, so Theorem PR1's completeness half does not apply to it.
+    fn non_rl_premise() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let a = b.intern_iri("http://example.org/A");
+        let sub = b.intern_iri(SUBCLASS);
+        let restriction = b.intern_blank("r", purrdf_core::BlankScope::DEFAULT);
+        let ty = b.intern_iri(TYPE);
+        let class = b.intern_iri(RESTRICTION);
+        let on = b.intern_iri(ONPROPERTY);
+        let p = b.intern_iri("http://example.org/p");
+        let some = b.intern_iri(SOMEVALUES);
+        let bb = b.intern_iri("http://example.org/B");
+        b.push_quad(a, sub, restriction, None);
+        b.push_quad(restriction, ty, class, None);
+        b.push_quad(restriction, on, p, None);
+        b.push_quad(restriction, some, bb, None);
+        let x = b.intern_iri("http://example.org/x");
+        b.push_quad(x, ty, a, None);
         b.freeze().expect("freeze")
     }
 
@@ -760,25 +1171,7 @@ mod tests {
     /// PRECONDITION rather than about the conclusion.
     #[test]
     fn a_non_rl_premise_is_undecided_rather_than_refuted() {
-        // `A ⊑ ∃p.B` — an existential on the SUPERCLASS side.
-        let mut b = RdfDatasetBuilder::new();
-        let a = b.intern_iri("http://example.org/A");
-        let sub = b.intern_iri(SUBCLASS);
-        let restriction = b.intern_blank("r", purrdf_core::BlankScope::DEFAULT);
-        let ty = b.intern_iri(TYPE);
-        let class = b.intern_iri(RESTRICTION);
-        let on = b.intern_iri(ONPROPERTY);
-        let p = b.intern_iri("http://example.org/p");
-        let some = b.intern_iri(SOMEVALUES);
-        let bb = b.intern_iri("http://example.org/B");
-        b.push_quad(a, sub, restriction, None);
-        b.push_quad(restriction, ty, class, None);
-        b.push_quad(restriction, on, p, None);
-        b.push_quad(restriction, some, bb, None);
-        let x = b.intern_iri("http://example.org/x");
-        b.push_quad(x, ty, a, None);
-        let premise = b.freeze().expect("freeze");
-
+        let premise = non_rl_premise();
         let conclusion = graph(&[("http://example.org/x", TYPE, "http://example.org/Never")]);
         let EntailmentOutcome::Undecided(UndecidedReason::PremiseOutsideRl(violations)) =
             outcome(&premise, &conclusion, Regime::OwlRl)
@@ -1278,29 +1671,419 @@ mod tests {
         warrant.closure().clone()
     }
 
-    /// `entails` IS `certain_answers` with nothing to project: over the same premise and the
-    /// same question they agree about whether an answer exists.
+    // ── `entails` IS `certain_answers` WITH NOTHING TO PROJECT ───────────────────────────
+
+    const RANGE: &str = "http://www.w3.org/2000/01/rdf-schema#range";
+    const DATATYPE_PROPERTY: &str = "http://www.w3.org/2002/07/owl#DatatypeProperty";
+    const UNIONOF: &str = "http://www.w3.org/2002/07/owl#unionOf";
+    const RDF_LIST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#List";
+    const XSD_BYTE: &str = "http://www.w3.org/2001/XMLSchema#byte";
+    const XSD_SHORT: &str = "http://www.w3.org/2001/XMLSchema#short";
+    const IRREFLEXIVE: &str = "http://www.w3.org/2002/07/owl#IrreflexiveProperty";
+    const A: &str = "http://example.org/a";
+
+    /// The conclusion graph `ds` as the basic graph pattern `patterns(C)`.
+    ///
+    /// Every term is a term and every blank node stays a blank node — which SPARQL reads as a
+    /// non-distinguished variable and RDF 1.2 Semantics reads as an existential, the same
+    /// reading — so nothing is projected and the two questions are the SAME question.
+    fn patterns_of(ds: &RdfDataset) -> Vec<QTriple> {
+        crate::entails::graph::default_graph_triples(ds)
+            .into_iter()
+            .map(|[s, p, o]| QTriple {
+                s: QNode::Term(s),
+                p: QNode::Term(p),
+                o: QNode::Term(o),
+            })
+            .collect()
+    }
+
+    /// `_:c owl:unionOf (ex:a)` with `ex:a` a class — the comprehension lane's shape.
+    fn union_conclusion() -> Arc<RdfDataset> {
+        mixed(&[
+            ("_c", TYPE, OWL_CLASS),
+            ("_c", UNIONOF, "_l"),
+            ("_l", TYPE, RDF_LIST),
+            ("_l", FIRST, A),
+            (A, TYPE, OWL_CLASS),
+            ("_l", REST, NIL),
+        ])
+    }
+
+    /// `_:u owl:oneOf (ex:a)` — a class constructor the comprehension lane names and declines.
+    fn one_of_conclusion() -> Arc<RdfDataset> {
+        mixed(&[
+            ("_u", TYPE, OWL_CLASS),
+            ("_u", ONEOF, "_l1"),
+            ("_l1", FIRST, A),
+            ("_l1", REST, NIL),
+        ])
+    }
+
+    /// THE TWO ENTRY POINTS NEVER DISAGREE, over every mechanism there is.
+    ///
+    /// A conclusion GRAPH is a basic graph pattern with nothing to project, so
+    /// `entails(P, C)` and `certain_answers(P, patterns(C))` are one question — and this
+    /// ranges over every one of the seven mechanisms, `composite` included, plus a refutation,
+    /// plus all three shapes of `undecided`. Falsifiable against the exact defect it replaced:
+    /// `certain_answers` ran the homomorphism lane ALONE, so `ex:Stewie owl:differentFrom
+    /// ex:Peter` came back as an empty row set with an empty limit list — "no certain answers,
+    /// exhaustively" — while `entails` proved it by refutation on the byte-identical question.
+    ///
+    /// Four claims per case, because agreeing about the verdict alone would let the two
+    /// disagree about everything a caller reads beside it: the VERDICT, the MECHANISM, whether
+    /// the answer is DECIDED (which over zero columns is exactly whether the row set is
+    /// exhaustive, since the empty substitution is the only substitution there is), and the
+    /// REASON an undecided answer carries.
     #[test]
-    fn entails_is_the_zero_projected_variable_case() {
-        let premise = subclass_premise();
-        for (object, expected) in [
-            ("http://example.org/B", true),
-            ("http://example.org/Never", false),
-        ] {
-            let conclusion = graph(&[("http://example.org/x", TYPE, object)]);
-            let bgp = [QTriple {
-                s: QNode::Term(TermValue::iri("http://example.org/x")),
-                p: QNode::Term(TermValue::iri(TYPE)),
-                o: QNode::Term(TermValue::iri(object)),
-            }];
-            let verdict = matches!(
-                outcome(&premise, &conclusion, Regime::OwlRl),
-                EntailmentOutcome::Entailed(_)
+    fn entails_and_certain_answers_never_disagree() {
+        let ranges = mixed(&[(P, TYPE, DATATYPE_PROPERTY), (P, RANGE, XSD_BYTE)]);
+        let mut composite = COMPLEMENT_HALF.to_vec();
+        composite.push((P, TYPE, TRANSITIVE));
+        composite.push((GIRL, TYPE, OWL_CLASS));
+        let mut with_peter = default_disjoint();
+        with_peter.push((PETER, TYPE, GIRL));
+
+        let cases: [(&str, Arc<RdfDataset>, Arc<RdfDataset>, EntailmentMechanism); 11] = [
+            (
+                "the table derives it",
+                subclass_premise(),
+                graph(&[("http://example.org/x", TYPE, "http://example.org/B")]),
+                EntailmentMechanism::StrictTable,
+            ),
+            (
+                "the table refutes it",
+                subclass_premise(),
+                graph(&[("http://example.org/x", TYPE, "http://example.org/Never")]),
+                EntailmentMechanism::StrictTable,
+            ),
+            (
+                "a negative fact, by refutation",
+                mixed(&with_peter),
+                mixed(&[(STEWIE, DIFFERENTFROM, PETER)]),
+                EntailmentMechanism::Refutation,
+            ),
+            (
+                "a schema axiom, by freezing",
+                three_lane_premise(),
+                mixed(&[(P, TYPE, TRANSITIVE)]),
+                EntailmentMechanism::Freeze,
+            ),
+            (
+                "an anonymous class, by comprehension",
+                mixed(&[(A, TYPE, OWL_CLASS)]),
+                union_conclusion(),
+                EntailmentMechanism::Comprehension,
+            ),
+            (
+                "a self-loop, by reflexivity",
+                three_lane_premise(),
+                mixed(&[(STEWIE, KNOWS, STEWIE)]),
+                EntailmentMechanism::Reflexivity,
+            ),
+            (
+                "a range axiom, by datatype containment",
+                ranges,
+                mixed(&[(P, RANGE, XSD_SHORT)]),
+                EntailmentMechanism::DataRange,
+            ),
+            (
+                "two lanes and a residual, composed",
+                three_lane_premise(),
+                mixed(&composite),
+                EntailmentMechanism::Composite,
+            ),
+            (
+                "undecided: the premise is outside OWL 2 RL",
+                non_rl_premise(),
+                graph(&[("http://example.org/x", TYPE, "http://example.org/Never")]),
+                EntailmentMechanism::StrictTable,
+            ),
+            (
+                "undecided: the conclusion is outside OWL 2 RL",
+                mixed(&[(P, TYPE, OBJECT_PROPERTY)]),
+                mixed(&[(P, TYPE, IRREFLEXIVE)]),
+                EntailmentMechanism::StrictTable,
+            ),
+            (
+                "undecided: a lane recognizes a construct and declines it",
+                mixed(&[(A, TYPE, OWL_CLASS)]),
+                one_of_conclusion(),
+                EntailmentMechanism::Comprehension,
+            ),
+        ];
+
+        // Every one of the seven is exercised, so the table cannot decay into eleven cases
+        // that all take one path.
+        let covered: BTreeSet<EntailmentMechanism> =
+            cases.iter().map(|&(_, _, _, lane)| lane).collect();
+        assert_eq!(
+            covered.len(),
+            7,
+            "every mechanism must be represented: {covered:?}"
+        );
+
+        for (name, premise, conclusion, expected) in cases {
+            let certificate = entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::new())
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            let answers = certain_answers(
+                &premise,
+                &patterns_of(&conclusion),
+                Regime::OwlRl,
+                &ImportMap::new(),
+            )
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+
+            assert_eq!(certificate.mechanism(), expected, "{name}");
+            // THE VERDICT. A `yes` is the one row over zero columns; a `no` is no row at all.
+            assert_eq!(
+                matches!(certificate.outcome(), EntailmentOutcome::Entailed(_)),
+                !answers.is_empty(),
+                "{name}: {:?} against {:?}",
+                certificate.outcome(),
+                answers.rows()
             );
+            // THE MECHANISM, which a caller renders beside the verdict.
+            assert_eq!(certificate.mechanism(), answers.mechanism(), "{name}");
+            // DECIDED and EXHAUSTIVE are one claim here, and both entry points make it.
+            assert_eq!(certificate.is_decided(), answers.is_complete(), "{name}");
+            // …and an undecided answer carries the SAME reason, not merely the same shape.
+            if let EntailmentOutcome::Undecided(reason) = certificate.outcome() {
+                assert_eq!(answers.limits(), std::slice::from_ref(reason), "{name}");
+            }
+            assert!(answers.vars().is_empty(), "{name}");
+        }
+    }
+
+    /// …and they agree under every regime this service serves, not only `OWL-RL`.
+    #[test]
+    fn the_two_entry_points_agree_under_every_served_regime() {
+        let premise = subclass_premise();
+        for regime in [
+            Regime::Simple,
+            Regime::Rdf,
+            Regime::Rdfs,
+            Regime::OwlRl,
+            Regime::D,
+        ] {
+            for object in [
+                "http://example.org/A",
+                "http://example.org/B",
+                "http://example.org/Never",
+            ] {
+                let conclusion = graph(&[("http://example.org/x", TYPE, object)]);
+                let certificate = entails(&premise, &conclusion, regime, &ImportMap::new())
+                    .expect("a consistent premise");
+                let answers = certain_answers(
+                    &premise,
+                    &patterns_of(&conclusion),
+                    regime,
+                    &ImportMap::new(),
+                )
+                .expect("a consistent premise");
+                assert_eq!(
+                    matches!(certificate.outcome(), EntailmentOutcome::Entailed(_)),
+                    !answers.is_empty(),
+                    "{regime:?} {object}"
+                );
+                assert_eq!(
+                    certificate.is_decided(),
+                    answers.is_complete(),
+                    "{regime:?} {object}"
+                );
+                assert_eq!(
+                    certificate.mechanism(),
+                    answers.mechanism(),
+                    "{regime:?} {object}"
+                );
+            }
+        }
+    }
+
+    // ── A LANE NOT RUN IS A LIMIT, NOT A SILENCE ────────────────────────────────────────
+
+    /// A PROJECTED VARIABLE OVER A REFUTATION IS AN INCOMPLETE ANSWER THAT SAYS SO.
+    ///
+    /// `?x owl:differentFrom ex:Peter` asks which individuals are entailed different from
+    /// `Peter`, which needs a refutation per candidate over the whole domain — so this service
+    /// declines to answer it, exactly as the module docs argue it should. What it must not do
+    /// is render that as an EXHAUSTIVE empty answer: `ex:Stewie` demonstrably IS a certain
+    /// answer, because `entails` proves the ground question by refutation. Falsifiable against
+    /// the defect: before the limit existed this rendered `var x` and nothing else.
+    #[test]
+    fn a_projected_variable_over_a_refutation_is_a_named_limit() {
+        let mut triples = default_disjoint();
+        triples.push((PETER, TYPE, GIRL));
+        let premise = mixed(&triples);
+
+        // The GROUND question is decided, and `ex:Stewie` is the answer the projected one
+        // would have to contain.
+        assert!(matches!(
+            outcome(
+                &premise,
+                &mixed(&[(STEWIE, DIFFERENTFROM, PETER)]),
+                Regime::OwlRl
+            ),
+            EntailmentOutcome::Entailed(_)
+        ));
+
+        let bgp = [QTriple {
+            s: QNode::Var("x".to_owned()),
+            p: QNode::Term(TermValue::iri(DIFFERENTFROM)),
+            o: QNode::Term(TermValue::iri(PETER)),
+        }];
+        let answers =
+            certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::new()).expect("consistent");
+        assert_eq!(answers.vars(), ["x"]);
+        assert!(
+            answers.rows().is_empty(),
+            "this service does not search the domain for a witness: {:?}",
+            answers.rows()
+        );
+        assert!(
+            !answers.is_complete(),
+            "an empty row set beside an empty limit list claims `ex:Stewie` is not an answer"
+        );
+        let [UndecidedReason::ConstructNotRead { lane, constructs }] = answers.limits() else {
+            panic!("the limit must NAME the lane: {:?}", answers.limits());
+        };
+        assert_eq!(*lane, EntailmentMechanism::Refutation);
+        assert!(
+            constructs
+                .iter()
+                .any(|why| why.contains("differentFrom") || why.contains("witness")),
+            "{constructs:?}"
+        );
+    }
+
+    /// …AND AN ORDINARY ASSERTIONAL PATTERN IS STILL EXHAUSTIVE.
+    ///
+    /// The cheap way to pass the test above is to make every answer incomplete, which would
+    /// destroy the service rather than fix it. These are the patterns no lane reads anything
+    /// in — so nothing was left untested, the rule table's own conditions all hold, and
+    /// `is_complete` is a claim this service is entitled to make.
+    #[test]
+    fn a_pattern_no_lane_reads_is_still_exhaustive() {
+        for (premise, bgp) in [
+            (
+                subclass_premise(),
+                vec![QTriple {
+                    s: QNode::Term(TermValue::iri("http://example.org/x")),
+                    p: QNode::Term(TermValue::iri(TYPE)),
+                    o: QNode::Var("c".to_owned()),
+                }],
+            ),
+            (
+                subclass_premise(),
+                vec![QTriple {
+                    s: QNode::Var("s".to_owned()),
+                    p: QNode::Term(TermValue::iri(TYPE)),
+                    o: QNode::Term(TermValue::iri("http://example.org/B")),
+                }],
+            ),
+            (
+                mixed(&default_disjoint()),
+                vec![QTriple {
+                    s: QNode::Var("s".to_owned()),
+                    p: QNode::Var("p".to_owned()),
+                    o: QNode::Var("o".to_owned()),
+                }],
+            ),
+        ] {
             let answers = certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::new())
                 .expect("consistent");
-            assert_eq!(verdict, expected, "{object}");
-            assert_eq!(verdict, !answers.is_empty(), "{object}");
+            assert!(
+                answers.is_complete(),
+                "nothing beyond the table was needed: {:?}",
+                answers.limits()
+            );
+            assert!(!answers.rows().is_empty());
+            assert_eq!(answers.mechanism(), EntailmentMechanism::StrictTable);
+        }
+    }
+
+    /// Every lane that would have been needed names itself, not only the refutation one.
+    #[test]
+    fn each_unreachable_lane_names_itself_in_a_limit() {
+        let ranges = mixed(&[(P, TYPE, DATATYPE_PROPERTY), (P, RANGE, XSD_BYTE)]);
+        let cases: [(&str, Arc<RdfDataset>, Vec<QTriple>, EntailmentMechanism); 4] = [
+            (
+                "which properties is the premise entailed to make transitive?",
+                three_lane_premise(),
+                vec![QTriple {
+                    s: QNode::Var("p".to_owned()),
+                    p: QNode::Term(TermValue::iri(TYPE)),
+                    o: QNode::Term(TermValue::iri(TRANSITIVE)),
+                }],
+                EntailmentMechanism::Freeze,
+            ),
+            (
+                "which anonymous unions does the premise license?",
+                mixed(&[(A, TYPE, OWL_CLASS)]),
+                vec![
+                    QTriple {
+                        s: QNode::Var("c".to_owned()),
+                        p: QNode::Term(TermValue::iri(TYPE)),
+                        o: QNode::Term(TermValue::iri(OWL_CLASS)),
+                    },
+                    QTriple {
+                        s: QNode::Var("c".to_owned()),
+                        p: QNode::Term(TermValue::iri(UNIONOF)),
+                        o: QNode::Term(TermValue::blank("l")),
+                    },
+                    QTriple {
+                        s: QNode::Term(TermValue::blank("l")),
+                        p: QNode::Term(TermValue::iri(FIRST)),
+                        o: QNode::Term(TermValue::iri(A)),
+                    },
+                    QTriple {
+                        s: QNode::Term(TermValue::blank("l")),
+                        p: QNode::Term(TermValue::iri(REST)),
+                        o: QNode::Term(TermValue::iri(NIL)),
+                    },
+                ],
+                EntailmentMechanism::Comprehension,
+            ),
+            (
+                "which terms `knows` themselves?",
+                three_lane_premise(),
+                vec![QTriple {
+                    s: QNode::Var("x".to_owned()),
+                    p: QNode::Term(TermValue::iri(KNOWS)),
+                    o: QNode::Var("x".to_owned()),
+                }],
+                EntailmentMechanism::Reflexivity,
+            ),
+            (
+                "what is `p` declared as, GIVEN that its range widens to xsd:short?",
+                ranges,
+                vec![
+                    QTriple {
+                        s: QNode::Term(TermValue::iri(P)),
+                        p: QNode::Term(TermValue::iri(RANGE)),
+                        o: QNode::Term(TermValue::iri(XSD_SHORT)),
+                    },
+                    QTriple {
+                        s: QNode::Term(TermValue::iri(P)),
+                        p: QNode::Term(TermValue::iri(TYPE)),
+                        o: QNode::Var("t".to_owned()),
+                    },
+                ],
+                EntailmentMechanism::DataRange,
+            ),
+        ];
+        for (name, premise, bgp, lane) in cases {
+            let answers = certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::new())
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert!(
+                answers
+                    .limits()
+                    .iter()
+                    .any(|limit| limit.mechanism() == lane),
+                "{name}: {:?}",
+                answers.limits()
+            );
+            assert!(!answers.is_complete(), "{name}");
         }
     }
 }

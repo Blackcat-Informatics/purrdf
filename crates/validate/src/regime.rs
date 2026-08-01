@@ -2536,7 +2536,7 @@ fn with_premise<T>(
 /// The answer's grammar, in emission order:
 ///
 /// ```text
-/// mechanism strict-table
+/// mechanism <name>
 /// var <name>              (0..n, in the order the pattern first mentions each)
 /// row <term> …            (0..n, one per certain answer, positionally aligned to `var`)
 /// limit <reason>          (0..n)
@@ -2549,10 +2549,20 @@ fn with_premise<T>(
 /// true|false` line beside them: it would be a boolean function of lines already rendered,
 /// which this boundary omits rather than restates.
 ///
-/// `mechanism` is always `strict-table` here, and that is a claim rather than a placeholder:
-/// the five mechanisms beyond the rule table are conclusion-directed only, each because a
-/// projected variable over what it decides would be a different question. See
-/// [`graph_entails_to_string`], which is the same machinery with nothing to project.
+/// # `mechanism` is a MEASUREMENT, and a pattern with no `?var` is an entailment question
+///
+/// A pattern with something to project reads `mechanism strict-table`, and that is a claim
+/// rather than a placeholder: the five mechanisms beyond the rule table are not run for one,
+/// each because a projected variable over what it decides would be a different question. That
+/// they would have been NEEDED is not silence — it arrives as a `limit` line naming the lane
+/// and the construct, so an empty row set never reads as exhaustive when nothing tested it.
+///
+/// A pattern with NO projected variable is a conclusion graph — every position is a term or a
+/// blank node — so it is the question [`graph_entails_to_string`] asks, it is answered by the
+/// same fold, and it renders whichever of the seven mechanisms reached it. Such an answer is
+/// the relation with no columns: one bare `row` line for a `yes` (the empty substitution) and
+/// none for a `no`, which is what SPARQL says an answer with nothing to project is. The two
+/// entry points cannot disagree about such a question, because one call answers both.
 ///
 /// The certificate is the run's [`ReasoningReport`], rendered by
 /// [`render_reasoning_report`]. There is no answers-without-a-report entry point: an empty
@@ -2579,8 +2589,17 @@ fn with_premise<T>(
 /// assert!(answers.answer().starts_with("mechanism strict-table\nvar c\n"));
 /// // `?c` ranges over the ENTAILED types, not the asserted one.
 /// assert!(answers.answer().contains("\nrow <http://example.org/Animal>\n"));
+/// // Nothing beyond the rule table was needed, so the row set is exhaustive and says so by
+/// // rendering no `limit` line at all.
+/// assert!(!answers.answer().contains("\nlimit "));
 /// // The certificate's own line carries the semantic boundary beside the name.
 /// assert!(answers.certificate().contains("\nmechanism strict-table no boundary was crossed:"));
+///
+/// // The SAME call with nothing to project is an entailment question, and answers as one.
+/// let ground = "<http://example.org/tom> \
+///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Animal> .\n";
+/// let asked = certain_answers_to_string("owl-rl", data, ground).expect("answers");
+/// assert_eq!(asked.answer(), "mechanism strict-table\nrow\n");
 /// ```
 pub fn certain_answers_to_string(
     regime: &str,
@@ -2591,7 +2610,11 @@ pub fn certain_answers_to_string(
     let answers = with_premise(regime, document, |premise, parsed| {
         purrdf_entail::certain_answers(premise, &bgp, parsed, &ImportMap::new())
     })?;
-    let mut answer = render_mechanism(EntailmentMechanism::StrictTable);
+    // The mechanism that ANSWERED, read off the answer set rather than asserted here. A
+    // pattern with nothing to project routes through the same fold `graph_entails_to_string`
+    // does, so it can be reached by any of the seven — and a hard-coded `strict-table` beside
+    // such an answer told a consumer the rule table had decided a question it had not.
+    let mut answer = render_mechanism(answers.mechanism());
     for var in answers.vars() {
         let _ = writeln!(answer, "var {var}");
     }
@@ -4196,6 +4219,84 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
         let error =
             explain_conclusion_to_string(TAXONOMY, "owl-rl", absent).expect_err("not derived");
         assert!(error.contains("no derivation"), "{error}");
+    }
+
+    // ── The conclusion-directed service, at the string boundary ─────────────
+
+    /// `Boy ⊓ Girl = ⊥`, `Stewie : Boy`, `Peter : Girl` — enough for the profile's own
+    /// inconsistency calculus to refute `Stewie = Peter`, and for nothing else to reach it.
+    const DISJOINT: &str = "<http://example.org/Boy> \
+<http://www.w3.org/2002/07/owl#disjointWith> <http://example.org/Girl> .\n\
+<http://example.org/Stewie> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Boy> .\n\
+<http://example.org/Peter> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Girl> .\n";
+
+    /// AN ANSWER NOTHING TESTED RENDERS A `limit` LINE, AND SAYS WHICH LANE.
+    ///
+    /// `?x owl:differentFrom <Peter>` asks which individuals are entailed different from
+    /// `Peter`, which needs a refutation per candidate over the whole domain — a question this
+    /// service declines. Before the `limit` line it rendered `mechanism strict-table` and
+    /// `var x` and NOTHING ELSE, which a consumer reads as "no certain answers, exhaustively"
+    /// — about a question no mechanism had tested, and one whose ground form
+    /// [`graph_entails_to_string`] proves right below.
+    #[test]
+    fn a_declined_lane_renders_a_limit_line_naming_itself() {
+        let pattern = "?x <http://www.w3.org/2002/07/owl#differentFrom> \
+<http://example.org/Peter> .\n";
+        let answers = certain_answers_to_string("owl-rl", DISJOINT, pattern).expect("answers");
+        assert!(
+            answers
+                .answer()
+                .starts_with("mechanism strict-table\nvar x\n"),
+            "{}",
+            answers.answer()
+        );
+        assert!(
+            !answers.answer().contains("\nrow"),
+            "this service does not search the domain for a witness: {}",
+            answers.answer()
+        );
+        let limits: Vec<&str> = answers
+            .answer()
+            .lines()
+            .filter_map(|line| line.strip_prefix("limit "))
+            .collect();
+        assert_eq!(limits.len(), 1, "{}", answers.answer());
+        assert!(limits[0].starts_with("the refutation lane "), "{limits:?}");
+    }
+
+    /// …AND THE SAME QUESTION WITH NOTHING TO PROJECT AGREES WITH `graph_entails`, LINE
+    /// FOR LINE.
+    ///
+    /// A pattern with no `?var` is a conclusion graph, so the two entry points ask one
+    /// question and answer it through one fold: the mechanism is the mechanism that actually
+    /// reached it — `refutation`, not `strict-table` — and the verdict is the one bare `row`
+    /// line SPARQL says an answer over zero columns is. Before this they contradicted each
+    /// other on the byte-identical input: `graph_entails` rendered `entailment entailed` while
+    /// `certain_answers` rendered no row at all.
+    #[test]
+    fn nothing_to_project_answers_as_the_entailment_question_it_is() {
+        let ground = "<http://example.org/Stewie> \
+<http://www.w3.org/2002/07/owl#differentFrom> <http://example.org/Peter> .\n";
+        let answers = certain_answers_to_string("owl-rl", DISJOINT, ground).expect("answers");
+        let decided = graph_entails_to_string("owl-rl", DISJOINT, ground).expect("decides");
+        assert_eq!(answers.answer(), "mechanism refutation\nrow\n");
+        assert_eq!(
+            decided.answer(),
+            "mechanism refutation\nentailment entailed\n"
+        );
+        // Exhaustive, and it says so by rendering no `limit` line: over zero columns the
+        // empty substitution is the only substitution there is, and it is present.
+        assert!(!answers.answer().contains("\nlimit "));
+
+        // A ground question the table REFUTES is the empty relation, and exhaustively so.
+        let never = "<http://example.org/Stewie> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Girl> .\n";
+        let missing = certain_answers_to_string("owl-rl", DISJOINT, never).expect("answers");
+        assert_eq!(missing.answer(), "mechanism strict-table\n");
+        let refuted = graph_entails_to_string("owl-rl", DISJOINT, never).expect("decides");
+        assert!(refuted.answer().contains("\nentailment not-entailed\n"));
     }
 
     // ── The boundary's term syntax ──────────────────────────────────────────

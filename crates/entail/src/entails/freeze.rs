@@ -142,7 +142,7 @@ use crate::entails::graph::{Triple, default_graph_triples, show};
 use crate::entails::homomorphism::{Binding, Closure};
 use crate::entails::membership::Membership;
 use crate::entails::warrant::{EntailmentMechanism, EntailmentWarrant, Replay};
-use crate::entails::{Attempt, Established, Question, UndecidedReason};
+use crate::entails::{Attempt, Established, Question, Recognized, UndecidedReason};
 use crate::lists::LIST_VALUED;
 use crate::report::InconsistencyWitness;
 use crate::vocab::{
@@ -587,7 +587,7 @@ fn is(term: &TermValue, iri: &str) -> bool {
 }
 
 /// What this mechanism made of one conclusion triple.
-enum Recognized {
+enum ReadAs {
     /// Not a shape this lane reads at all — the triple is residual and keeps its ordinary
     /// obligation.
     No,
@@ -602,17 +602,17 @@ enum Recognized {
 }
 
 /// The shape `triple` states, if this mechanism reads one.
-fn recognize(triple: &Triple) -> Recognized {
+fn recognize(triple: &Triple) -> ReadAs {
     let [subject, predicate, object] = triple;
     let Some(shape) = SHAPES.iter().find(|shape| {
         is(predicate, shape.predicate)
             && shape.typed_as.is_none_or(|class| is(object, class))
             && (shape.typed_as.is_some() == shape.object_is.is_none())
     }) else {
-        return Recognized::No;
+        return ReadAs::No;
     };
     let declined = |why: &str| {
-        Recognized::Declined(format!(
+        ReadAs::Declined(format!(
             "{} {} {}: {why}",
             show(&triple[0]),
             show(&triple[1]),
@@ -657,7 +657,7 @@ fn recognize(triple: &Triple) -> Recognized {
             );
         }
     }
-    Recognized::Yes(shape)
+    ReadAs::Yes(shape)
 }
 
 /// Split `conclusion`'s still-outstanding triples into the schema axioms this mechanism
@@ -674,13 +674,13 @@ fn read(triples: &[Triple], pending: &BTreeSet<usize>) -> Reading {
             continue;
         }
         match recognize(triple) {
-            Recognized::Yes(shape) => axioms.push(Axiom {
+            ReadAs::Yes(shape) => axioms.push(Axiom {
                 index,
                 triple: triple.clone(),
                 shape,
             }),
-            Recognized::Declined(why) => declined.push(why),
-            Recognized::No => {}
+            ReadAs::Declined(why) => declined.push(why),
+            ReadAs::No => {}
         }
     }
     declined.sort_unstable();
@@ -715,6 +715,23 @@ fn arity(implication: &Implication) -> usize {
 }
 
 // ── The mechanism ──────────────────────────────────────────────────────────────────────
+
+/// What this lane READS of a question, with nothing frozen and nothing chased.
+///
+/// The same [`read`] the decision below opens with, run for its reading alone: an axiom this
+/// lane recognizes is a SCHEMA statement no head in Tables 4–9 concludes, and a declined shape
+/// is one whose predicate this lane reads over terms it cannot. Either way a service that does
+/// not run this lane has left something untested.
+pub(crate) fn recognizes(q: &Question<'_>) -> Recognized {
+    if !matches!(q.regime, Regime::OwlRl) {
+        return Recognized::default();
+    }
+    let reading = read(q.triples, q.pending);
+    Recognized {
+        read: reading.axioms.iter().map(|axiom| axiom.index).collect(),
+        declined: reading.declined,
+    }
+}
 
 /// Try to establish `conclusion` from `premise` by freezing and chasing.
 ///
@@ -937,7 +954,7 @@ mod tests {
     use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, TermValue};
 
     use super::{
-        Axiom, FREEZE_BUDGET, FrozenOutcome, Recognized, SHAPES, Slot, arity, read, recognize,
+        Axiom, FREEZE_BUDGET, FrozenOutcome, ReadAs, SHAPES, Slot, arity, read, recognize,
     };
     use crate::entails::fresh::mentions_any;
     use crate::entails::graph::default_graph_triples;
@@ -1184,7 +1201,7 @@ mod tests {
                 TermValue::iri(OWL_TRANSITIVEPROPERTY),
             ];
             assert!(
-                matches!(recognize(&triple), Recognized::Declined(_)),
+                matches!(recognize(&triple), ReadAs::Declined(_)),
                 "{predicate} would disturb the collection pre-pass, and declining it is an \
                  ADMISSION rather than a residual nobody would notice went untested"
             );
@@ -1195,7 +1212,7 @@ mod tests {
             TermValue::iri(RDF_TYPE),
             TermValue::iri(OWL_TRANSITIVEPROPERTY),
         ];
-        assert!(matches!(recognize(&ordinary), Recognized::Yes(_)));
+        assert!(matches!(recognize(&ordinary), ReadAs::Yes(_)));
     }
 
     /// AN EXISTENTIAL OVER PROPERTIES IS RECOGNIZED AND DECLINED, never quietly residual.

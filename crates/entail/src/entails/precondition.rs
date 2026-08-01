@@ -492,9 +492,14 @@ fn conclusion_outside_rl(
 /// which hypothesis to repair, and because two of them can hold at once.
 ///
 /// `decided_by_refutation` names the conclusion triples the [`refutation`](super::refutation)
-/// lane lowered, by index into `pats`. It is EMPTY for a basic graph pattern, and that is a
-/// claim rather than a default: the five conclusion-directed lanes are not reachable from
-/// [`certain_answers`](super::certain_answers), so nothing there is decided by any of them.
+/// lane lowered, by index into `pats`. It is EMPTY when the lane did not run, and that is a
+/// claim rather than a default: a basic graph pattern with something to PROJECT is enumerated
+/// by the table alone, so nothing in it is decided by the inconsistency calculus — and the
+/// lanes that would have read one contribute their own
+/// [`UndecidedReason::ConstructNotRead`] limits, in
+/// [`certain_answers`](super::certain_answers), rather than being silently absent here. A
+/// pattern with nothing to project is a conclusion graph and reaches this through the fold,
+/// which passes the lowering's own index set.
 pub(crate) fn limits(
     regime: Regime,
     premise: &RdfDataset,

@@ -569,12 +569,20 @@ fn explain_conclusion(
 /// NON-DISTINGUISHED variable: constrained by the match, not projected, and not a
 /// column, which is what SPARQL says a query blank node is.
 ///
-/// Returns `(answer, certificate)`. The answer opens `mechanism strict-table`, then one
+/// Returns `(answer, certificate)`. The answer opens `mechanism <name>`, then one
 /// `var` line per projected variable, one `row` line per certain answer positionally
 /// aligned to them, and a `limit` line per reason the row set may not be EXHAUSTIVE.
 /// Every row is sound unconditionally; what needs a precondition is the claim about a
 /// row that is NOT there, so no `limit` lines is the claim that the row set is complete.
 /// The certificate is the run's `purrdf-reasoning-report 4` block.
+///
+/// A pattern with a projected variable is `mechanism strict-table`: the five mechanisms
+/// beyond the rule table are not run for one, because a projected variable over what any
+/// of them decides is a different question. That one of them WOULD have been needed is
+/// not silence — it arrives as a `limit` line naming the lane. A pattern with NO
+/// projected variable is a conclusion graph, is answered by the same fold
+/// `graph_entails` runs, and names whichever of the seven reached it; such an answer is
+/// the relation with no columns, so a `yes` is one bare `row` line and a `no` is none.
 ///
 /// Raises `ValueError` on `OWL_DIRECT` or `RIF` — each is defined by an input this
 /// signature does not carry, so both are refused by name rather than served by a weaker

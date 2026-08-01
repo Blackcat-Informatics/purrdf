@@ -99,7 +99,7 @@ use std::collections::BTreeSet;
 use crate::entails::graph::{Triple, show};
 use crate::entails::homomorphism::{Binding, Closure};
 use crate::entails::warrant::{EntailmentMechanism, EntailmentWarrant, Replay};
-use crate::entails::{Attempt, Established, Question, UndecidedReason};
+use crate::entails::{Attempt, Established, Question, Recognized, UndecidedReason};
 use crate::vocab::{OWL_REFLEXIVEPROPERTY, RDF_TYPE};
 use crate::{EntailError, Regime};
 
@@ -195,6 +195,11 @@ impl std::fmt::Display for ReflexivityWarrant {
 struct Licensed {
     /// The self-loops.
     minted: Vec<Triple>,
+    /// Which conclusion triples the self-loops came off, by index into the conclusion's own
+    /// frozen triple order. This lane DISCHARGES none of them — it widens the closure and
+    /// leaves each its full obligation to map — so the set is not a discharge; it is what
+    /// [`recognizes`] answers with.
+    read: BTreeSet<usize>,
     /// The closure triple licensing each.
     licences: Vec<Triple>,
     /// Self-loops over an EXISTENTIAL — `_:b p _:b` for a `p` the closure declares reflexive.
@@ -211,9 +216,10 @@ struct Licensed {
 /// [`verify`](super::verify) recompute it and compare rather than trust the warrant's list.
 fn license(triples: &[Triple], closure: &Closure) -> Licensed {
     let mut minted = Vec::new();
+    let mut read = BTreeSet::new();
     let mut licences = Vec::new();
     let mut declined = Vec::new();
-    for triple in triples {
+    for (index, triple) in triples.iter().enumerate() {
         let [subject, predicate, object] = triple;
         // THE WHITELIST: the same NAMED term either side of a NAMED predicate. A literal
         // cannot be a subject at all, and a triple whose two sides differ is not a self-loop.
@@ -242,14 +248,33 @@ fn license(triples: &[Triple], closure: &Closure) -> Licensed {
             continue;
         }
         minted.push(triple.clone());
+        read.insert(index);
         licences.push(typing);
     }
     declined.sort_unstable();
     declined.dedup();
     Licensed {
         minted,
+        read,
         licences,
         declined,
+    }
+}
+
+/// What this lane READS of a question, with nothing minted.
+///
+/// The same [`license`] the decision below opens with, run for its reading alone: a self-loop
+/// the closure's reflexive typings license is one no rule of the table concludes, and a
+/// declined one is a self-loop over an existential this lane names and will not choose a
+/// witness for. Either way a service that does not run this lane has left something untested.
+pub(crate) fn recognizes(q: &Question<'_>) -> Recognized {
+    if !matches!(q.regime, Regime::OwlRl) {
+        return Recognized::default();
+    }
+    let licensed = license(q.triples, q.closure);
+    Recognized {
+        read: licensed.read,
+        declined: licensed.declined,
     }
 }
 

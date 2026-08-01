@@ -181,7 +181,13 @@ impl EntailmentCertificate {
 /// A free function rather than a method on [`EntailmentOutcome`] because it is this module's
 /// claim about the outcome, not the outcome's about itself: the enum is the three-way answer,
 /// and which lane produced it is a fact the certificate carries.
-const fn mechanism_of(outcome: &EntailmentOutcome) -> EntailmentMechanism {
+///
+/// Crate-visible for exactly one other caller:
+/// [`certain_answers`](super::certain_answers)'s zero-projected-variable path, which reaches
+/// the same outcome through the same [`decide`](super::decide) and must name it the same way.
+/// A second derivation there is precisely how the two entry points came to contradict each
+/// other about one question.
+pub(crate) const fn mechanism_of(outcome: &EntailmentOutcome) -> EntailmentMechanism {
     match outcome {
         EntailmentOutcome::Entailed(warrant) => warrant.mechanism(),
         // No mechanism ever refutes: each hands its verdict back unchanged and the

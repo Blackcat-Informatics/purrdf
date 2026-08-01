@@ -835,6 +835,15 @@ int32_t purrdf_entail_explain_conclusion(const char *document,
  * complete. `*out_certificate` receives the run's `purrdf-reasoning-report 4` block.
  * **Free BOTH with `purrdf_buffer_free`.**
  *
+ * A pattern with a projected variable is `mechanism strict-table`: the five mechanisms
+ * beyond the rule table are not run for one, because a projected variable over what any of
+ * them decides is a different question — and that one of them WOULD have been needed
+ * arrives as a `limit` line naming the lane, never as an exhaustive empty answer. A
+ * pattern with NO projected variable is a conclusion graph, is answered by the same fold
+ * `purrdf_entail_graph_entails` runs, and names whichever of the seven reached it; such an
+ * answer is the relation with no columns, so a `yes` is one bare `row` line and a `no` is
+ * none.
+ *
  * # Safety
  * `regime`, `document` and `pattern` must be non-null, NUL-terminated C strings;
  * `out_answer` and `out_certificate` must be writable pointers; `out_error` must be null

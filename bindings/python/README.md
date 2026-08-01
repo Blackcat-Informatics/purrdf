@@ -319,6 +319,14 @@ non-distinguished variable, constrained by the match and not projected, which is
 SPARQL says a query blank node is. A row is a substitution the knowledge base
 *entails* the pattern under — true in every model, not merely present in one closure.
 
+A pattern with **no** `?name` in it is a conclusion *graph*, so `certain_answers` and
+`graph_entails` are asking one question and answer it through one fold: the mechanism is
+whichever one actually reached it, and the relation has no columns — a `yes` is one bare
+`row` line, a `no` is none. With something to project the five mechanisms beyond the rule
+table are not run, because a projected variable over what any of them decides is a
+different question; that one of them *would* have been needed arrives as a `limit` line
+naming the lane, never as an exhaustive empty answer.
+
 `mechanism` says *which* of seven mechanisms reached the verdict. `strict-table` is the
 regime's own rule table, run once; `refutation`, `freeze`, `comprehension`,
 `reflexivity` and `data-range` each exist because no head in that table has the

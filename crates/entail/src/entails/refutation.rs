@@ -107,7 +107,7 @@ use crate::entails::graph::{Triple, default_graph_triples};
 use crate::entails::homomorphism::{Binding, Closure, substitute};
 use crate::entails::negation::{self, NegativeFact, Read};
 use crate::entails::warrant::{EntailmentMechanism, EntailmentWarrant, Replay};
-use crate::entails::{Attempt, Established, Question, UndecidedReason};
+use crate::entails::{Attempt, Established, Question, Recognized, UndecidedReason};
 use crate::explain::shrink_to_irreducible;
 use crate::report::InconsistencyWitness;
 use crate::{EntailError, Regime};
@@ -352,6 +352,30 @@ impl RefutationWarrant {
                 ])
             })
             .collect()
+    }
+}
+
+/// What this lane READS of a question, with nothing refuted.
+///
+/// The same [`negation::lower`] the decision below opens with, run for its reading alone: a
+/// conclusion that lowers states negative facts no rule of the table concludes, and one that
+/// is DECLINED states a negative construct this lane names and cannot read. Either way a
+/// service that does not run this lane has left something untested, and
+/// [`certain_answers`](super::certain_answers) is the caller that has to say so.
+pub(crate) fn recognizes(q: &Question<'_>) -> Recognized {
+    if !matches!(q.regime, Regime::OwlRl) {
+        return Recognized::default();
+    }
+    match negation::lower(q.conclusion) {
+        Read::Lowered(lowering) => Recognized {
+            read: lowering.consumed,
+            declined: Vec::new(),
+        },
+        Read::Declined(constructs) => Recognized {
+            read: BTreeSet::new(),
+            declined: constructs,
+        },
+        Read::NotApplicable => Recognized::default(),
     }
 }
 

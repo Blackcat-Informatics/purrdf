@@ -108,7 +108,7 @@ use crate::entails::graph::{Triple, default_graph_triples, show};
 use crate::entails::homomorphism::{Binding, Closure};
 use crate::entails::membership::Membership;
 use crate::entails::warrant::{EntailmentMechanism, EntailmentWarrant, Replay};
-use crate::entails::{Attempt, Established, Question, UndecidedReason};
+use crate::entails::{Attempt, Established, Question, Recognized, UndecidedReason};
 use crate::vocab::{
     OWL_ALLVALUESFROM, OWL_CARDINALITY, OWL_CLASS, OWL_DISJOINTUNIONOF, OWL_HASSELF, OWL_HASVALUE,
     OWL_INTERSECTIONOF, OWL_MAXCARDINALITY, OWL_MAXQUALIFIEDCARDINALITY, OWL_MINCARDINALITY,
@@ -255,6 +255,12 @@ struct Scaffold {
 struct Reading {
     /// The recognized scaffolds, in the conclusion's own triple order.
     scaffolds: Vec<Scaffold>,
+    /// Every conclusion triple a scaffold consumed, by index into the conclusion's own frozen
+    /// triple order. This lane DISCHARGES none of them — it widens the closure and leaves each
+    /// its full obligation to map — so the set is not a discharge; it is what
+    /// [`recognizes`] answers with, and it is the index space
+    /// [`certain_answers`](super::certain_answers) names a limit's constructs in.
+    consumed: BTreeSet<usize>,
     /// Every blank node any scaffold consumed, by surface.
     consumed_nodes: Vec<TermValue>,
 }
@@ -482,6 +488,7 @@ fn read(conclusion: &RdfDataset) -> Read {
 
     Read::Scaffolds(Reading {
         scaffolds,
+        consumed,
         consumed_nodes,
     })
 }
@@ -875,6 +882,29 @@ fn list_triples(
 }
 
 // ── The mechanism ──────────────────────────────────────────────────────────────────────
+
+/// What this lane READS of a question, with nothing minted.
+///
+/// The same [`read`] the decision below opens with, run for its reading alone: a scaffold this
+/// lane recognizes is an anonymous class expression the conclusion DESCRIBES, and a declined
+/// one is a class constructor this lane names and does not read. Either way a service that
+/// does not run this lane has left something untested.
+pub(crate) fn recognizes(q: &Question<'_>) -> Recognized {
+    if !matches!(q.regime, Regime::OwlRl) {
+        return Recognized::default();
+    }
+    match read(q.conclusion) {
+        Read::Scaffolds(reading) => Recognized {
+            read: reading.consumed,
+            declined: Vec::new(),
+        },
+        Read::Declined(constructs) => Recognized {
+            read: BTreeSet::new(),
+            declined: constructs,
+        },
+        Read::NotApplicable => Recognized::default(),
+    }
+}
 
 /// Try to establish `conclusion` from `premise` by comprehending the class expressions it
 /// names.
