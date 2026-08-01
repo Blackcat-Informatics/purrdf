@@ -69,8 +69,8 @@
 //!
 //! # The chase is also measured with its EXTRA MECHANISMS, which add no rule
 //!
-//! `purrdf_entail::entails()` reaches a conclusion five ways, and twelve of the cases
-//! graded here are reached only by one of the four beyond matching.
+//! `purrdf_entail::entails()` reaches a conclusion six ways, and fifteen of the cases
+//! graded here are reached only by one of the five beyond matching.
 //!
 //! * **Refutation.** Seventeen of the seventy-eight rules conclude `false`, which is
 //!   to say the table carries its own inconsistency calculus; so a conclusion whose
@@ -95,12 +95,17 @@
 //!   every resource. The conclusion's own self-loops `x p x` are instead read off the
 //!   premise's reflexive typings, one lookup per conclusion triple. One case
 //!   (`new-feature-reflexiveproperty-001`).
+//! * **Datatype containment.** A property's declared `rdfs:range` datatypes
+//!   INTERSECT, and the intersection may be contained in a datatype the premise
+//!   never mentions. Deciding that needs the XSD value spaces rather than a join
+//!   over triples. Three cases (`webont-i5-8-006`, `-008`, `-009`), all of them
+//!   WIDENINGS — `xsd:byte ⊑ xsd:short` — which is why they are sound.
 //!
-//! All four are worth separating from the extension above because they are a
+//! All five are worth separating from the extension above because they are a
 //! different kind of thing. `ext-eq-diff-sym` is a rule PurRDF states that no
 //! specification does, and it is declared as such. None of these mechanisms states
 //! anything: the rule inventory is byte-for-byte the same seventy-eight before and
-//! after, and the four `the_*_lane_adds_no_rule` tests in `purrdf-entail` assert it.
+//! after, and the five `the_*_lane_adds_no_rule` tests in `purrdf-entail` assert it.
 //! What changed is how many times the table is run, what it is run over, and what the
 //! run's `false` is read as.
 //!
@@ -233,8 +238,14 @@ pub enum RlGap {
     /// instantiating its body over fresh constants and re-running the table. So did
     /// an anonymous CLASS EXPRESSION, whose existence the RDF-Based semantics'
     /// comprehension conditions license outright given a typing side condition on its
-    /// operands. A conclusion belongs here when nothing it can be decomposed into has
-    /// a head in the table either, and nothing licenses it directly.
+    /// operands. So did an `rdfs:range` over a DATATYPE, which follows from the
+    /// containment of the intersection of the premise's own declared ranges — a
+    /// question about XSD value spaces rather than about triples.
+    ///
+    /// The ledger holds no entry of this kind today. The variant stays because a
+    /// conclusion belongs here when nothing it can be decomposed into has a head in
+    /// the table either, and nothing licenses it directly — which is still the right
+    /// classification for a schema shape none of the mechanisms above reads.
     SchemaConclusion,
     /// The conclusion is a **negative fact** — an `owl:differentFrom`, or
     /// membership in an `owl:complementOf` class. It follows from the premise only
@@ -401,22 +412,22 @@ pub const LEDGER: &[LedgerEntry] = &[
     //     are still exactly the 78 and `extensions(Regime::OwlRl)` is still the one
     //     `ext-eq-diff-sym`. So these six agree through the normative table, run a
     //     second time.
-    // --- SCHEMA CONCLUSION: the head shape does not exist in the rule table ---
-    //     The three `webont-i5-8-*` cases conclude an `rdfs:range` WIDENED to a
-    //     containing XSD datatype (`xsd:byte ⊑ xsd:short`, which is why they are
-    //     sound at all). Every head in OWL 2 RL/RDF's rule table is an assertional
-    //     triple over named terms or `false`; not one concludes an axiom, so these
-    //     are outside what the profile's rule set can produce rather than outside
-    //     what this implementation happens to do.
+    // --- NO SCHEMA CONCLUSION EITHER. That block is CLOSED, all eight of it. ---
+    //     Every head in OWL 2 RL/RDF's rule table is an assertional triple over
+    //     named terms or `false`; not one concludes an axiom, and that is still
+    //     true. What was too strong was the conclusion drawn from it — that a
+    //     conclusion of this shape is therefore unreachable. It is reachable when
+    //     the axiom DECOMPOSES into something the table does have a head for, or
+    //     when the semantics licenses it outright.
     //
-    //     Five cases have left this block. Two went with the six above:
+    //     Two went with the six above:
     //     `new-feature-disjoint{data,object}properties-002` conclude an
     //     `owl:AllDifferent` collection, which reads as a schema axiom and IS the
     //     conjunction of its `n(n−1)/2` pairwise inequalities — so it lowers to the
     //     negative facts of the previous block and is reached the same way, one
     //     refutation per pair, all of them required.
     //
-    //     The third is `chain2trans1`, which concludes `p rdf:type
+    //     `chain2trans1` concludes `p rdf:type
     //     owl:TransitiveProperty` from `p owl:propertyChainAxiom (p p)`. Still no
     //     rule of Tables 4–9 has that head, and none ever will. But the axiom
     //     ABBREVIATES a universally quantified Horn implication, and a Horn
@@ -428,7 +439,7 @@ pub const LEDGER: &[LedgerEntry] = &[
     //     through the normative table, run once more over two extra atoms, and the
     //     rule inventory is untouched.
     //
-    //     The other two are `webont-i5-5-005`, whose conclusion is an anonymous
+    //     Two more are `webont-i5-5-005`, whose conclusion is an anonymous
     //     `owl:unionOf` class, and `webont-i5-26-010`, whose conclusion is an
     //     anonymous `owl:Restriction`. Neither says anything about any individual;
     //     each says a CLASS EXISTS, and the RDF-Based semantics says so too, in its
@@ -441,18 +452,18 @@ pub const LEDGER: &[LedgerEntry] = &[
     //     documents. No rule could do this: a comprehension condition asserts a
     //     resource nothing names, and a rule set producing one per licensed shape
     //     would produce infinitely many.
-    LedgerEntry {
-        case: "webont-i5-8-006",
-        gap: RlGap::SchemaConclusion,
-    },
-    LedgerEntry {
-        case: "webont-i5-8-008",
-        gap: RlGap::SchemaConclusion,
-    },
-    LedgerEntry {
-        case: "webont-i5-8-009",
-        gap: RlGap::SchemaConclusion,
-    },
+    //
+    //     The last three are `webont-i5-8-006`, `-008` and `-009`, which conclude an
+    //     `rdfs:range` WIDENED to a containing XSD datatype. WIDENED, not narrowed:
+    //     `xsd:byte ⊑ xsd:short`, which is why they are sound at all — the narrowing
+    //     direction would be an unsoundness. A property's declared ranges INTERSECT,
+    //     so `-008` needs `short ⊓ unsignedInt ⊑ unsignedShort` and `-009` needs
+    //     `nonNegativeInteger ⊓ nonPositiveInteger = {0} ⊑ short`, neither of which
+    //     is a containment between any two of the datatypes named. Deciding that
+    //     needs the XSD value spaces, which a rule table has no arithmetic for, so
+    //     it is decided by `purrdf_xsd::range::containment` — three-valued, with the
+    //     NEGATIVE answer gated on the counterexample range being exactly decided,
+    //     because a `bool`-shaped answer would read "cannot say" as "not entailed".
     // --- NO CONSTRUCT OUTSIDE OWL 2 RL EITHER. That block is CLOSED. ----------
     //     `new-feature-reflexiveproperty-001` asserts `knows a owl:ReflexiveProperty`
     //     and concludes `Peter knows Peter`. `owl:ReflexiveProperty` is still outside

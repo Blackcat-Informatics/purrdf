@@ -92,17 +92,21 @@
 //!   the OWL 2 RL syntax so the profile states no rule for it at all, and because a rule that
 //!   DID state it would range over every resource — an `O(|terms|)` closure widening in a lane
 //!   every consumer runs by default, to answer a question only a conclusion ever asks.
+//! * [`datarange`] — intersect the premise's declared `rdfs:range` datatypes and ask whether
+//!   the intersection is CONTAINED in the conclusion's. It exists because deciding that needs
+//!   the XSD value spaces and a rule table has no arithmetic — `xsd:byte ⊑ xsd:short` is not
+//!   something any join over triples can discover.
 //!
-//! None of the four extra mechanisms adds a rule — `rules`, `implemented` and `extensions`
+//! None of the five extra mechanisms adds a rule — `rules`, `implemented` and `extensions`
 //! are untouched by all of them — and each runs only after the premise's consistency has been
 //! established, which is the hypothesis every one of the soundness arguments rests on. See
 //! their module docs for those arguments, written out.
 //!
-//! [`EntailmentWarrant`] therefore has exactly five arms, one per mechanism, each minted by
-//! the mechanism it names. A sixth arrives with its own producer, together — this crate does
+//! [`EntailmentWarrant`] therefore has exactly six arms, one per mechanism, each minted by
+//! the mechanism it names. A seventh arrives with its own producer, together — this crate does
 //! not pre-declare states that nothing constructs.
 //!
-//! The four extra lanes are [`entails`]-only, and deliberately. Refutation decides a ground
+//! The five extra lanes are [`entails`]-only, and deliberately. Refutation decides a ground
 //! negative fact, and a projected variable ranging over one is a different question — "which
 //! individuals is `a` entailed to differ from?" would need a refutation per candidate over
 //! the whole domain, which is not what [`certain_answers`] computes and not what it would be
@@ -114,7 +118,8 @@
 //! regime admits it as a binding. Reflexivity decides a self-loop over a term the CONCLUSION
 //! names, and a projected variable there would range over every resource — which is the
 //! closure widening this crate declines to perform in the materialization lane, arriving by
-//! another door.
+//! another door. Datatype containment decides a ground `rdfs:range` AXIOM, and a projected
+//! variable there would range over the datatype map rather than over the premise's terms.
 //!
 //! # A mechanism discharges the WHOLE conclusion or none of it
 //!
@@ -144,6 +149,7 @@ use crate::{EntailError, Materialization, Regime, materialize};
 
 pub mod answers;
 pub mod comprehension;
+pub mod datarange;
 pub mod freeze;
 pub mod homomorphism;
 pub mod imports;
@@ -164,6 +170,7 @@ mod pattern;
 
 pub use answers::CertainAnswers;
 pub use comprehension::ComprehensionWarrant;
+pub use datarange::{DataRangeWarrant, RangeContainment};
 pub use freeze::{FREEZE_BUDGET, FreezeWarrant, FrozenInstance, FrozenOutcome, Generalization};
 pub use homomorphism::{Binding, MATCH_BUDGET, MissReason};
 pub use imports::ImportMap;
@@ -231,11 +238,12 @@ type Mechanism = fn(&RdfDataset, &RdfDataset, Regime, &Closure) -> Result<Attemp
 /// any conclusion and the answer does not depend on which runs first. What the order buys is
 /// that a conclusion no mechanism reads pays only the cheapest applicability tests before
 /// falling through.
-const MECHANISMS: [Mechanism; 4] = [
+const MECHANISMS: [Mechanism; 5] = [
     refutation::attempt,
     freeze::attempt,
     comprehension::attempt,
     reflexivity::attempt,
+    datarange::attempt,
 ];
 
 /// The plan for a regime, or a refusal.

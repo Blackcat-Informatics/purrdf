@@ -1697,8 +1697,8 @@ def build_claims(
         (
             "the OWL 2 RL gap tally in the CONFORMANCE scoreboard row",
             _CONFORMANCE,
-            r"(?P<structural>\d+) of the (?P<ledgered>\d+) divergences are structural limits "
-            r"of OWL 2 RL itself \((?P<schema>\d+) schema-conclusion, (?P<neg>\d+) "
+            r"(?P<structural>\d+) of the (?P<ledgered>\d+) divergences? (?:is a|are) structural "
+            r"limits? of OWL 2 RL itself \((?P<schema>\d+) schema-conclusion, (?P<neg>\d+) "
             r"negative-conclusion, (?P<outside>\d+) construct-outside-rl, (?P<imports>\d+) "
             # `is`/`are` because the count moves: the ledger held exactly one
             # actionable divergence and now holds none, and a pattern that
@@ -1709,7 +1709,7 @@ def build_claims(
         (
             "the OWL 2 RL gap tally in the CONFORMANCE known-gaps item",
             _CONFORMANCE,
-            _flow(r"(?P<structural>\d+) are structural limits of OWL 2 RL")
+            _flow(r"(?P<structural>\d+) (?:is a|are) structural limits? of OWL 2 RL")
             + ANY
             + _flow(
                 r"schema axiom \((?P<schema>\d+) `schema-conclusion`\) or a negative "
@@ -1728,8 +1728,8 @@ def build_claims(
             "the OWL 2 RL gap tally in the entailment chapter",
             _ENTAILMENT,
             _flow(
-                r"(?P<structural>\d+) of the (?P<ledgered>\d+) divergences are "
-                r"structural limits of OWL 2 RL"
+                r"(?P<structural>\d+) of the (?P<ledgered>\d+) divergences? (?:is a|are) "
+                r"structural limits? of OWL 2 RL"
             )
             + ANY
             + _flow(
@@ -1818,7 +1818,7 @@ def build_claims(
             _CONFORMANCE,
             _flow(
                 r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* agreeing · "
-                r"(?P<ledgered>\d+) typed-ledger divergences"
+                r"(?P<ledgered>\d+) typed-ledger divergences?"
             ),
             {"passed": rl_pass, "total": rl_total, "ledgered": rl_ledger},
             mat,
@@ -2057,7 +2057,7 @@ def build_claims(
             "the OWL 2 DL-consistency scoreboard row",
             _CONFORMANCE,
             r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* agreeing verdicts · "
-            r"(?P<ledgered>\d+) typed-ledger divergences",
+            r"(?P<ledgered>\d+) typed-ledger divergences?",
             {"passed": owl2_pass, "total": owl2_total, "ledgered": owl2_ledger},
             mat,
         ),

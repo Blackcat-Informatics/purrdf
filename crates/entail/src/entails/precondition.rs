@@ -105,6 +105,15 @@ pub enum UndecidedReason {
     /// A sibling of [`Self::RefutationBudget`] and read the same way: the procedure was not
     /// RUN to completion, which licenses exactly nothing.
     FreezeBudget(u64),
+    /// `OWL-RL`: the conclusion states these `rdfs:range` axioms whose containment the
+    /// datatype decision procedure does not decide — an `xsd:pattern` facet, an unmodelled
+    /// datatype, a range that is not an atomic datatype at all.
+    ///
+    /// The reason this is a variant rather than a `NotEntailed` is the whole of
+    /// [`datarange`](super::datarange)'s discipline: the containment question is
+    /// three-valued, and the `bool`-shaped idiom it would otherwise be answered with reads
+    /// "cannot say" as "not entailed".
+    DataRangeContainment(Vec<String>),
 }
 
 impl std::fmt::Display for UndecidedReason {
@@ -151,6 +160,18 @@ impl std::fmt::Display for UndecidedReason {
                  budget of {} runs does not reach that far",
                 if *needed == 1 { "" } else { "s" },
                 super::FREEZE_BUDGET,
+            ),
+            Self::DataRangeContainment(axioms) => write!(
+                f,
+                "the datatype decision procedure does not decide the containment {} state{}: \
+                 {}",
+                if axioms.len() == 1 {
+                    "the range axiom"
+                } else {
+                    "the range axioms"
+                },
+                if axioms.len() == 1 { "s" } else { "" },
+                axioms.join(", ")
             ),
         }
     }
@@ -283,6 +304,7 @@ mod tests {
             UndecidedReason::DatatypeValueSpace,
             UndecidedReason::RefutationBudget(9_000),
             UndecidedReason::FreezeBudget(9_000),
+            UndecidedReason::DataRangeContainment(vec!["<p> rdfs:range <D>".to_owned()]),
         ] {
             assert!(!reason.to_string().is_empty(), "{reason:?}");
         }

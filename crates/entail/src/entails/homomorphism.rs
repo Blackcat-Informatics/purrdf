@@ -118,6 +118,17 @@ impl Closure {
         self.members.len()
     }
 
+    /// Every triple whose predicate is `iri`, in the closure's own frozen order.
+    ///
+    /// The index is already bucketed by predicate for candidate enumeration, so this is a
+    /// lookup rather than a scan — which matters because [`datarange`] asks it once per
+    /// recognized conclusion triple.
+    ///
+    /// [`datarange`]: super::datarange
+    pub(crate) fn with_predicate(&self, iri: &str) -> &[Triple] {
+        self.index.get(iri).map_or(&[][..], Vec::as_slice)
+    }
+
     /// This closure plus `extra`, as a new closure.
     ///
     /// The original is left alone because a warrant carries it: [`comprehension`] mints

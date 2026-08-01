@@ -139,8 +139,8 @@ pub(crate) mod vocab;
 pub use calculus::calculus_program;
 pub use combined::{CombinedMaterialization, materialize_combined};
 pub use entails::{
-    Binding, CertainAnswers, ComprehensionWarrant, EntailmentOutcome, EntailmentWarrant,
-    FREEZE_BUDGET, FreezeWarrant, FrozenInstance, FrozenOutcome, Generalization,
+    Binding, CertainAnswers, ComprehensionWarrant, DataRangeWarrant, EntailmentOutcome,
+    EntailmentWarrant, FREEZE_BUDGET, FreezeWarrant, FrozenInstance, FrozenOutcome, Generalization,
     HomomorphismWarrant, ImportMap, MATCH_BUDGET, MissReason, NegativeFact, REFUTATION_BUDGET,
     ReflexivityWarrant, Refutation, RefutationWarrant, UndecidedReason, VarKey, certain_answers,
     entails, verify,
