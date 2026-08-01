@@ -658,6 +658,144 @@ def test_certain_answers_enumerate_entailed_bindings_and_disclose_completeness()
     assert "\nmechanism strict-table " in certificate
 
 
+def test_a_variable_is_projected_from_every_position_including_the_predicate() -> None:
+    """`?name` in ANY position, which is what every host's documentation promises.
+
+    Falsifiable against what this replaced: a variable in PREDICATE position was
+    rewritten to a blank node before parsing, RDF forbids one there, and every
+    pattern below with a `?p` in it raised `ValueError: the basic graph pattern is
+    not N-Triples: ... predicate must be IRI` — a refusal naming a construct the
+    caller had not written. `?s <p> ?o` over the same premise answered fine.
+    """
+    one = "<https://example.org/s> <https://example.org/p> <https://example.org/o> .\n"
+    for pattern, expected in [
+        (
+            "<https://example.org/s> ?p <https://example.org/o> .\n",
+            "mechanism strict-table\nvar p\nrow <https://example.org/p>\n",
+        ),
+        (
+            "?s ?p <https://example.org/o> .\n",
+            "mechanism strict-table\nvar s\nvar p\n"
+            "row <https://example.org/s> <https://example.org/p>\n",
+        ),
+        (
+            "?s ?p ?o .\n",
+            "mechanism strict-table\nvar s\nvar p\nvar o\n"
+            "row <https://example.org/s> <https://example.org/p> <https://example.org/o>\n",
+        ),
+        # `$name` is the same variable syntax and reaches the predicate too.
+        (
+            "$s $p $o .\n",
+            "mechanism strict-table\nvar s\nvar p\nvar o\n"
+            "row <https://example.org/s> <https://example.org/p> <https://example.org/o>\n",
+        ),
+    ]:
+        answer, _ = entail.certain_answers(entail.Regime.SIMPLE, one, pattern, [])
+        assert answer == expected, pattern
+
+    # …and the predicate column ranges over what the CHASE entailed. No triple of
+    # `SCHEMA` states `x rdf:type B`; `cax-sco` is the only reason the row exists.
+    bridge = "<https://example.org/x> ?p <https://example.org/B> .\n"
+    answer, _ = entail.certain_answers(entail.Regime.OWL_RL, SCHEMA, bridge, [])
+    assert answer.startswith("mechanism strict-table\nvar p\n")
+    assert f"\nrow <{RDF_TYPE}>\n" in answer
+    asserted, _ = entail.certain_answers(entail.Regime.SIMPLE, SCHEMA, bridge, [])
+    assert asserted == "mechanism strict-table\nvar p\n"
+
+
+def test_a_question_mark_that_is_not_a_variable_is_not_read_as_one() -> None:
+    """A `?` inside an IRI, a literal or a comment is text, not a variable marker.
+
+    The property the whole rewrite is arranged around, asserted with the `?` in
+    PREDICATE position: each pattern writes `?zzz` in one of those three places, so
+    a scanner that read it would project a `zzz` column — and each answer is
+    asserted whole, with none.
+    """
+    query_string = (
+        "<https://example.org/s> <https://example.org/p?zzz=1> <https://example.org/o> .\n"
+    )
+    answer, _ = entail.certain_answers(
+        entail.Regime.SIMPLE,
+        query_string,
+        "<https://example.org/s> <https://example.org/p?zzz=1> ?o .\n",
+        [],
+    )
+    assert answer == "mechanism strict-table\nvar o\nrow <https://example.org/o>\n"
+
+    quoted = '<https://example.org/s> <https://example.org/p> "is ?zzz a variable" .\n'
+    answer, _ = entail.certain_answers(
+        entail.Regime.SIMPLE,
+        quoted,
+        '<https://example.org/s> ?p "is ?zzz a variable" .\n',
+        [],
+    )
+    assert answer == "mechanism strict-table\nvar p\nrow <https://example.org/p>\n"
+
+    one = "<https://example.org/s> <https://example.org/p> <https://example.org/o> .\n"
+    answer, _ = entail.certain_answers(
+        entail.Regime.SIMPLE,
+        one,
+        "# is ?zzz a variable? it is prose.\n"
+        "<https://example.org/s> ?p <https://example.org/o> .\n",
+        [],
+    )
+    assert answer == "mechanism strict-table\nvar p\nrow <https://example.org/p>\n"
+
+
+def test_an_open_predicate_is_a_named_limit_rather_than_a_short_answer() -> None:
+    """A `?p` ranges over predicates the rule table's closure does not hold.
+
+    `p ∘ p ⊑ p` entails `p rdf:type owl:TransitiveProperty` — `graph_entails` proves
+    it, by the freeze mechanism — and no head of OWL 2 RL's Tables 4-9 puts a schema
+    triple in a closure. So `?s ?p ?o` cannot return that row, and the answer
+    discloses why instead of rendering an exhaustive-looking relation.
+    """
+    chain = (
+        f"<https://example.org/p> <{RDF_TYPE}> "
+        "<http://www.w3.org/2002/07/owl#ObjectProperty> .\n"
+        "<https://example.org/p> <http://www.w3.org/2002/07/owl#propertyChainAxiom> "
+        "_:l1 .\n"
+        "_:l1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> "
+        "<https://example.org/p> .\n"
+        "_:l1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> _:l2 .\n"
+        "_:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> "
+        "<https://example.org/p> .\n"
+        "_:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> "
+        "<http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .\n"
+    )
+    transitive = (
+        f"<https://example.org/p> <{RDF_TYPE}> "
+        "<http://www.w3.org/2002/07/owl#TransitiveProperty> .\n"
+    )
+    verdict, _ = entail.graph_entails(entail.Regime.OWL_RL, chain, transitive, [])
+    assert verdict == "mechanism freeze\nentailment entailed\n"
+
+    answer, _ = entail.certain_answers(entail.Regime.OWL_RL, chain, "?s ?p ?o .\n", [])
+    assert "owl#TransitiveProperty" not in answer
+    limits = [line for line in answer.splitlines() if line.startswith("limit ")]
+    assert len(limits) == 1, answer
+    assert limits[0].startswith("limit the question leaves the predicate open in 1 triple")
+
+
+def test_the_variable_stand_in_never_reaches_a_python_caller() -> None:
+    """The name this boundary invents to get a `?p` past the parser stays inside it.
+
+    PurRDF mints no vocabulary, so a stand-in surfacing in a row, a limit or a report
+    would be the library's own scaffolding rendered to a caller as a term of their
+    data.
+    """
+    one = "<https://example.org/s> <https://example.org/p> <https://example.org/o> .\n"
+    for pattern in [
+        "?s ?p ?o .\n",
+        "<https://example.org/s> ?p ?o .\n",
+        "?s ?p ?o .\n?o ?p2 ?s .\n",
+    ]:
+        for regime in (entail.Regime.SIMPLE, entail.Regime.RDFS, entail.Regime.OWL_RL):
+            answer, certificate = entail.certain_answers(regime, one, pattern, [])
+            assert "urn:purrdf" not in answer + certificate
+            assert "purrdfQvar" not in answer + certificate
+
+
 def test_graph_entails_gives_three_verdicts_and_names_the_mechanism() -> None:
     """THREE verdicts, never two — and the answer says which mechanism reached one.
 

@@ -164,6 +164,23 @@ pub enum UndecidedReason {
     /// table's silence about a shape it has no head for as a statement about the caller's
     /// ontology.
     ConclusionOutsideRl(Vec<String>),
+    /// `OWL-RL`: the question leaves the PREDICATE open in these triples, rendered, so what it
+    /// asks ranges over the whole predicate vocabulary rather than over one predicate.
+    ///
+    /// The other half of [`Self::ConclusionOutsideRl`], for the one position that can make the
+    /// check unable to run. That check reads the predicate to decide whether a triple is a
+    /// shape Tables 4–9 can conclude — a schema predicate is not, an assertional one is — and
+    /// an OPEN predicate is every predicate at once: it ranges over `rdfs:subClassOf` and
+    /// `owl:propertyChainAxiom` as readily as over an ordinary property, and it ranges over
+    /// `owl:differentFrom`, which no head of the table concludes and the
+    /// [`refutation`](super::refutation) lane decides. So the closure this service enumerates
+    /// from is smaller than the set of triples the question could be entailed under, and the
+    /// row set says "none was found" rather than "there is none".
+    ///
+    /// Falsifiable, and it was false before this variant existed: `?p a owl:TransitiveProperty`
+    /// over a premise stating `p ∘ p ⊑ p` is entailed by the freeze lane, so `?s ?p ?o` over
+    /// that premise misses a certain answer — and reported the miss as an exhaustive row set.
+    OpenPredicate(Vec<String>),
     /// `OWL-RL`: a lane RECOGNIZED a construct of the conclusion and declined to read it, so
     /// nothing tested it in either direction. Carries the lane and what it declined.
     ///
@@ -183,18 +200,19 @@ pub enum UndecidedReason {
 impl UndecidedReason {
     /// WHICH mechanism this reason came out of.
     ///
-    /// Three of the nine name a lane that ran and stopped early, one names the lane that read
-    /// a construct and declined it, and the other five are PRECONDITIONS on the rule table's
-    /// own completeness — a premise outside RL, a conclusion outside it, a withheld surrogate,
-    /// an axiomatic schema, an infinite value space — and belong to
+    /// Three of the ten name a lane that ran and stopped early, one names the lane that read
+    /// a construct and declined it, and the other six are PRECONDITIONS on the rule table's
+    /// own completeness — a premise outside RL, a conclusion outside it, an open predicate, a
+    /// withheld surrogate, an axiomatic schema, an infinite value space — and belong to
     /// [`EntailmentMechanism::StrictTable`], because that is the mechanism whose refutation
-    /// they withhold. Written as a total match with no wildcard so a tenth reason has to
+    /// they withhold. Written as a total match with no wildcard so an eleventh reason has to
     /// say which lane produced it rather than defaulting into the table's.
     #[must_use]
     pub const fn mechanism(&self) -> EntailmentMechanism {
         match self {
             Self::PremiseOutsideRl(_)
             | Self::ConclusionOutsideRl(_)
+            | Self::OpenPredicate(_)
             | Self::WithheldSurrogate(_)
             | Self::AxiomaticSchema(_)
             | Self::DatatypeValueSpace => EntailmentMechanism::StrictTable,
@@ -282,6 +300,17 @@ impl std::fmt::Display for UndecidedReason {
                 "the conclusion is not an assertional graph over named terms ({} triple{} \
                  outside it, first: {}), so OWL 2 Profiles Theorem PR1 does not apply to it \
                  and the absence of a match refutes nothing",
+                triples.len(),
+                if triples.len() == 1 { "" } else { "s" },
+                triples.first().map_or("none", String::as_str),
+            ),
+            Self::OpenPredicate(triples) => write!(
+                f,
+                "the question leaves the predicate open in {} triple{} (first: {}), so it ranges \
+                 over the whole predicate vocabulary — over the schema predicates Theorem PR1's \
+                 conclusion hypothesis excludes, and over the constructs the mechanisms beyond \
+                 the rule table decide — and this service enumerates from the rule table's \
+                 closure alone",
                 triples.len(),
                 if triples.len() == 1 { "" } else { "s" },
                 triples.first().map_or("none", String::as_str),
@@ -467,6 +496,21 @@ fn is_assertional(triple: &PatTriple) -> bool {
     true
 }
 
+/// Every triple of the question whose PREDICATE is a variable, rendered.
+///
+/// BOTH kinds of variable, because the position and not the projection is what matters here:
+/// a projected `?p` and a non-distinguished blank both range over every predicate the closure
+/// could hold, and [`is_assertional`] can read neither to decide whether the triple is a shape
+/// Tables 4–9 conclude. A conclusion GRAPH reaches this too and never has one — RDF says a
+/// predicate is an IRI, so a parsed conclusion's predicates are all ground — which is why this
+/// costs an entailment question nothing.
+fn open_predicates(pats: &[PatTriple]) -> Vec<String> {
+    pats.iter()
+        .filter(|triple| matches!(triple[1], Pat::Var(_)))
+        .map(show_pattern)
+        .collect()
+}
+
 /// Every conclusion triple that is outside PR1's conclusion-side hypothesis, rendered.
 ///
 /// `decided_by_refutation` is the index set [`negation::lower`](super::negation::lower)
@@ -537,6 +581,14 @@ pub(crate) fn limits(
             let outside = conclusion_outside_rl(pats, decided_by_refutation);
             if !outside.is_empty() {
                 limits.push(UndecidedReason::ConclusionOutsideRl(outside));
+            }
+            // …AND THE POSITION THAT MAKES THAT CHECK UNABLE TO RUN. A triple whose predicate
+            // is open is not outside the hypothesis and is not inside it either: it is every
+            // predicate at once, so the check above reads nothing and the closure the rows are
+            // drawn from is smaller than what the question could be entailed under.
+            let open = open_predicates(pats);
+            if !open.is_empty() {
+                limits.push(UndecidedReason::OpenPredicate(open));
             }
         }
         Regime::D => limits.push(UndecidedReason::DatatypeValueSpace),

@@ -40,7 +40,7 @@ BINARYEN_VERSION := 130
 # nine OWL reasoner services, the concrete domain AND the conclusion-directed
 # entailment service with its seven mechanisms and its caller-supplied import
 # map — measures
-# 9_755_637 bytes against the 12_112_500 ceiling, which is 19.458% headroom. That
+# 9_760_335 bytes against the 12_112_500 ceiling, which is 19.419% headroom. That
 # figure is recorded below (WASM_SIZE_MEASURED_BYTES) and REPORTED rather than
 # enforced; the ceiling is the check that fails.
 #
@@ -190,7 +190,7 @@ WASM_SIZE_BUDGET_BYTES := 12112500
 # raise.
 #
 # The measured constant below is the CURRENT size, not any intermediate figure.
-WASM_SIZE_MEASURED_BYTES := 9755637
+WASM_SIZE_MEASURED_BYTES := 9760335
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'

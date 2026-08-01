@@ -802,9 +802,12 @@ unsafe fn import_pairs<'a>(
 /// a rule document, and each is defined by an input this signature does not carry, so
 /// both are refused by name rather than served by a weaker lane.
 ///
-/// `pattern` is N-Triples with `?name` in any position. A blank node in it is a
-/// NON-DISTINGUISHED variable — constrained by the match, not projected, and not a
-/// column — which is what SPARQL says a query blank node is.
+/// `pattern` is N-Triples with `?name` in any position, the PREDICATE included. A blank
+/// node in it is a NON-DISTINGUISHED variable — constrained by the match, not projected,
+/// and not a column — which is what SPARQL says a query blank node is. A predicate variable
+/// is projected like any other, and under `owl-rl` it also renders a `limit`: it ranges over
+/// the whole predicate vocabulary, including the schema predicates and the constructs the
+/// mechanisms beyond the rule table decide, and the closure holds neither.
 ///
 /// `*out_answer` receives `mechanism`, one `var` line per projected variable, one `row`
 /// line per certain answer, and a `limit` line per reason the row set may not be

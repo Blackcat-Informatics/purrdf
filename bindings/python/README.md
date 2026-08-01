@@ -314,10 +314,15 @@ table* whether a premise entails a conclusion *graph*.
 | Graph entailment | `entail.graph_entails(regime, premise, conclusion, imports)` | `mechanism <name>`, then `entailment entailed` / `not-entailed` / `undecided` — three verdicts, never two |
 | Verified entailment | `entail.verify_entailment(regime, premise, conclusion, imports)` | the above plus `warrant present`/`absent` and `verified true`/`false`/`not-applicable` |
 
-`pattern` is N-Triples with `?name` in any position; a blank node in it is a
-non-distinguished variable, constrained by the match and not projected, which is what
-SPARQL says a query blank node is. A row is a substitution the knowledge base
-*entails* the pattern under — true in every model, not merely present in one closure.
+`pattern` is N-Triples with `?name` in any position, the **predicate** included; a blank
+node in it is a non-distinguished variable, constrained by the match and not projected,
+which is what SPARQL says a query blank node is. A row is a substitution the knowledge
+base *entails* the pattern under — true in every model, not merely present in one closure.
+
+A predicate variable is projected like any other, and under `OWL_RL` it also renders a
+`limit`: it ranges over the whole predicate vocabulary, so it ranges over the schema
+predicates no rule of the table concludes and over the constructs the mechanisms beyond
+the table decide, and the closure the rows are drawn from holds neither.
 
 A pattern with **no** `?name` in it is a conclusion *graph*, so `certain_answers` and
 `graph_entails` are asking one question and answer it through one fold: the mechanism is

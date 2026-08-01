@@ -582,9 +582,12 @@ pub(crate) fn certain_answers_impl(
 /// A certain answer is true in every model, not merely present in one closure, which is
 /// what SPARQL's entailment regimes define the answers to a basic graph pattern to be.
 ///
-/// `pattern` is N-Triples with `?name` in any position. A blank node in it is a
-/// NON-DISTINGUISHED variable — constrained by the match, not projected, and not a column
-/// — which is what SPARQL says a query blank node is.
+/// `pattern` is N-Triples with `?name` in any position, the PREDICATE included. A blank
+/// node in it is a NON-DISTINGUISHED variable — constrained by the match, not projected, and
+/// not a column — which is what SPARQL says a query blank node is. A predicate variable is
+/// projected like any other, and under `owl-rl` it also renders a `limit`: it ranges over the
+/// whole predicate vocabulary, including the schema predicates and the constructs the
+/// mechanisms beyond the rule table decide, and the closure holds neither.
 ///
 /// A `limit` line says the row set may not be EXHAUSTIVE. Every row is sound
 /// unconditionally; what needs a precondition is the claim about a row that is NOT there,

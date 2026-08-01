@@ -900,8 +900,12 @@ class entail:
     # knowledge base ENTAILS the pattern under — true in every model, not merely
     # present in one closure, which is what SPARQL's entailment regimes define
     # the answers to a basic graph pattern to be. `pattern` is N-Triples with
-    # `?name` in any position; a blank node in it is a NON-DISTINGUISHED
-    # variable, constrained by the match and not projected. The answer opens
+    # `?name` in any position, the PREDICATE included; a blank node in it is a
+    # NON-DISTINGUISHED variable, constrained by the match and not projected. A
+    # predicate variable is projected like any other, and under OWL_RL it also
+    # renders a `limit`: it ranges over the whole predicate vocabulary, including
+    # the schema predicates and the constructs the mechanisms beyond the rule
+    # table decide, and the closure holds neither. The answer opens
     # `mechanism <name>`, then `var` and `row` lines, then a `limit` line
     # per reason the row set may not be EXHAUSTIVE — no `limit` lines is the
     # claim that it is. A pattern with a projected variable is `strict-table`,

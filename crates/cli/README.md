@@ -276,10 +276,14 @@ ran on. A conclusion can also be entailed while appearing nowhere in the closure
 - `--verify` — re-decide the warrant of an `entailed` verdict **without running a
   reasoner**, adding `warrant` and `verified` lines. Requires `--conclusion`.
 - `--pattern <FILE>` — a **basic graph pattern**: N-Triples with `?name` (or
-  `$name`) in any position. The answer is its *certain answers* — the
-  substitutions the premise entails the pattern under, not the ones that happen to
-  be in one closure. A pattern is not an RDF document, so it is read verbatim and
-  `--from` says nothing about it.
+  `$name`) in any position, the **predicate** included. The answer is its *certain
+  answers* — the substitutions the premise entails the pattern under, not the ones
+  that happen to be in one closure. A pattern is not an RDF document, so its bytes
+  go to the boundary untranscoded and `--from` says nothing about it. A predicate
+  variable is projected like any other, and under `owl-rl` it also renders a
+  `limit`: it ranges over the whole predicate vocabulary, including the schema
+  predicates and the constructs the mechanisms beyond the rule table decide, and the
+  closure the rows are drawn from holds neither.
 - `--import <IRI>=<FILE>` — repeatable; resolves one `owl:imports` the premise
   declares to one local document (see below).
 - `--report[=PATH]` — the reasoning certificate, as `reason --report`.

@@ -512,6 +512,61 @@ test("every conclusion-directed entailment service is reachable from the package
   }
 });
 
+test("a variable in PREDICATE position is projected like any other", () => {
+  // Falsifiable against what this replaced: a `?p` was rewritten to a blank node before
+  // parsing, RDF forbids one in predicate position, and this call threw
+  // `the basic graph pattern is not N-Triples: … predicate must be IRI` — a refusal
+  // naming a construct the caller had not written, while `?s <p> ?o` answered fine.
+  const one =
+    "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n";
+  const whole = entailCertainAnswers("simple", one, "?s ?p ?o .\n", [], []);
+  assert.equal(
+    whole.answer,
+    "mechanism strict-table\nvar s\nvar p\nvar o\n" +
+      "row <http://example.org/s> <http://example.org/p> <http://example.org/o>\n",
+  );
+
+  // The predicate column ranges over what the CHASE entailed: no triple of `SCHEMA`
+  // states `x rdf:type C`, so `cax-sco` is the only reason this row exists.
+  const bridge = "<http://example.org/x> ?p <http://example.org/C> .\n";
+  const derived = entailCertainAnswers("owl-rl", SCHEMA, bridge, [], []);
+  assert.ok(derived.answer.startsWith("mechanism strict-table\nvar p\n"), derived.answer);
+  assert.ok(
+    derived.answer.includes(
+      "\nrow <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>\n",
+    ),
+    derived.answer,
+  );
+  const asserted = entailCertainAnswers("simple", SCHEMA, bridge, [], []);
+  assert.equal(asserted.answer, "mechanism strict-table\nvar p\n");
+
+  // The stand-in the boundary rewrites a `?p` into is its own scaffolding. PurRDF mints
+  // no vocabulary, so it must reach no row, no limit and no report. Literal substrings,
+  // never a compiled pattern.
+  for (const produced of [whole, derived, asserted]) {
+    assert.ok(!produced.answer.includes("urn:purrdf"), produced.answer);
+    assert.ok(!produced.answer.includes("purrdfQvar"), produced.answer);
+    assert.ok(!produced.certificate.includes("urn:purrdf"), produced.certificate);
+    assert.ok(!produced.certificate.includes("purrdfQvar"), produced.certificate);
+  }
+
+  // A `?` inside an IRI's query string is TEXT, in predicate position too: a scanner
+  // that read it would project a `zzz` column, and this answer has only `o`.
+  const query =
+    "<http://example.org/s> <http://example.org/p?zzz=1> <http://example.org/o> .\n";
+  const safe = entailCertainAnswers(
+    "simple",
+    query,
+    "<http://example.org/s> <http://example.org/p?zzz=1> ?o .\n",
+    [],
+    [],
+  );
+  assert.equal(
+    safe.answer,
+    "mechanism strict-table\nvar o\nrow <http://example.org/o>\n",
+  );
+});
+
 test("a conclusion nothing derives has no warrant, and says so", () => {
   const never =
     "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Never> .\n";

@@ -417,8 +417,8 @@ fn a_pattern_answers_with_its_certain_answers() {
             "ex:tom a ex:Cat .\n",
         ),
     );
-    // A pattern is N-Triples with `?name` in a term position — not an RDF document, so it
-    // is read verbatim and `--from` says nothing about it.
+    // A pattern is N-Triples with `?name` in a term position — not an RDF document, so its
+    // bytes go to the boundary untranscoded and `--from` says nothing about it.
     let pattern = write_file(
         dir,
         "types.bgp",
@@ -451,6 +451,164 @@ fn a_pattern_answers_with_its_certain_answers() {
     assert!(
         !answer.contains("\nlimit "),
         "nothing beyond the rule table was needed, so the row set is exhaustive: {answer}"
+    );
+}
+
+/// `--pattern` PROJECTS A VARIABLE IN PREDICATE POSITION, LIKE ANY OTHER.
+///
+/// Falsifiable against what this replaced: `?s ?p ?o` — the most ordinary basic graph pattern
+/// there is — exited 1 with `the basic graph pattern is not N-Triples: … predicate must be
+/// IRI`, a refusal naming a construct the operator had not written, while `?s <p> ?o` over the
+/// same premise answered fine.
+#[test]
+fn a_pattern_projects_a_variable_in_predicate_position() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(
+        dir,
+        "cats.nt",
+        concat!(
+            "<http://example.org/Cat> \
+             <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .\n",
+            "<http://example.org/tom> \
+             <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .\n",
+        ),
+    );
+
+    // THE WHOLE CLOSURE, three columns wide. `simple` is the identity closure, so the two
+    // rows are the premise's own two triples and the answer can be asserted whole.
+    let open = write_file(dir, "open.bgp", "?s ?p ?o .\n");
+    let o = run(&[
+        "entails",
+        "--regime",
+        "simple",
+        "--premise",
+        &premise,
+        "--pattern",
+        &open,
+    ]);
+    assert!(o.status.success(), "`?s ?p ?o` failed: {}", stderr(&o));
+    assert_eq!(
+        stdout(&o),
+        concat!(
+            "mechanism strict-table\nvar s\nvar p\nvar o\n",
+            "row <http://example.org/Cat> \
+             <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal>\n",
+            "row <http://example.org/tom> \
+             <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat>\n",
+        )
+    );
+
+    // …AND THE PREDICATE COLUMN RANGES OVER WHAT THE CHASE ENTAILED. No triple of the premise
+    // states `tom rdf:type Animal`, so `rdfs9` is the only reason this row exists — which the
+    // same question under `simple` proves by answering with no row at all.
+    let bridge = write_file(
+        dir,
+        "bridge.bgp",
+        "<http://example.org/tom> ?p <http://example.org/Animal> .\n",
+    );
+    let o = run(&[
+        "entails",
+        "--regime",
+        "rdfs",
+        "--premise",
+        &premise,
+        "--pattern",
+        &bridge,
+    ]);
+    assert!(o.status.success(), "predicate variable: {}", stderr(&o));
+    let answer = stdout(&o);
+    assert!(
+        answer.starts_with("mechanism strict-table\nvar p\n"),
+        "{answer}"
+    );
+    assert!(
+        answer.contains("\nrow <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>\n"),
+        "{answer}"
+    );
+
+    let o = run(&[
+        "entails",
+        "--regime",
+        "simple",
+        "--premise",
+        &premise,
+        "--pattern",
+        &bridge,
+    ]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert_eq!(stdout(&o), "mechanism strict-table\nvar p\n");
+}
+
+/// AN OPEN PREDICATE UNDER `owl-rl` IS A `limit` LINE, NOT A SILENTLY SHORT ANSWER.
+///
+/// `p ∘ p ⊑ p` entails `p rdf:type owl:TransitiveProperty` — `--conclusion` proves it, by the
+/// freeze mechanism — and no rule of the OWL 2 RL table puts a schema triple in the closure.
+/// So `?s ?p ?o` cannot return that row, and the answer says why instead of looking complete.
+#[test]
+fn an_open_predicate_renders_the_limit_that_makes_the_answer_honest() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(
+        dir,
+        "chain.nt",
+        concat!(
+            "<http://example.org/p> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+             <http://www.w3.org/2002/07/owl#ObjectProperty> .\n",
+            "<http://example.org/p> <http://www.w3.org/2002/07/owl#propertyChainAxiom> _:l1 .\n",
+            "_:l1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://example.org/p> .\n",
+            "_:l1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> _:l2 .\n",
+            "_:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://example.org/p> .\n",
+            "_:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
+             <http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .\n",
+        ),
+    );
+    let transitive = write_file(
+        dir,
+        "transitive.nt",
+        "<http://example.org/p> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+         <http://www.w3.org/2002/07/owl#TransitiveProperty> .\n",
+    );
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise,
+        "--conclusion",
+        &transitive,
+    ]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert_eq!(
+        stdout(&o),
+        "mechanism freeze\nentailment entailed\n",
+        "the freeze lane proves it, and no rule of the table does"
+    );
+
+    let open = write_file(dir, "open.bgp", "?s ?p ?o .\n");
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise,
+        "--pattern",
+        &open,
+    ]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let answer = stdout(&o);
+    assert!(
+        !answer.contains("owl#TransitiveProperty"),
+        "the closure does not hold it: {answer}"
+    );
+    let limits: Vec<&str> = answer
+        .lines()
+        .filter(|line| line.starts_with("limit "))
+        .collect();
+    assert_eq!(limits.len(), 1, "{answer}");
+    assert!(
+        limits[0].starts_with("limit the question leaves the predicate open in 1 triple"),
+        "{limits:?}"
     );
 }
 

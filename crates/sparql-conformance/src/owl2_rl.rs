@@ -759,6 +759,15 @@ impl Disposition {
                 UndecidedReason::RefutationBudget(_) => Self::RefutationBudget,
                 UndecidedReason::FreezeBudget(_) => Self::FreezeBudget,
                 UndecidedReason::DataRangeContainment(_) => Self::DataRangeContainment,
+                other @ UndecidedReason::OpenPredicate(_) => {
+                    return Err(format!(
+                        "the OWL-RL lane answered Undecided({other}), which only a basic graph \
+                         PATTERN can state: a conclusion graph's predicates are all IRIs, and \
+                         this corpus asks conclusion-directed questions and projects nothing. \
+                         Classify it here deliberately rather than letting it be counted as an \
+                         admission this corpus measured"
+                    ));
+                }
                 other @ (UndecidedReason::WithheldSurrogate(_)
                 | UndecidedReason::AxiomaticSchema(_)
                 | UndecidedReason::DatatypeValueSpace) => {

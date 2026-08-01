@@ -265,9 +265,10 @@ pub(crate) enum Command {
             required_unless_present = "pattern"
         )]
         conclusion: Option<String>,
-        /// A basic graph pattern `FILE` (N-Triples with `?name` in any position),
-        /// or `-` for stdin. The answer is its certain answers. Read verbatim: a
-        /// pattern is not an RDF document, so `--from` says nothing about it.
+        /// A basic graph pattern `FILE` (N-Triples with `?name` in any position,
+        /// the predicate included), or `-` for stdin. The answer is its certain
+        /// answers. A pattern is not an RDF document, so its bytes are handed to
+        /// the boundary untranscoded and `--from` says nothing about it.
         #[arg(long, value_name = "FILE")]
         pattern: Option<String>,
         /// Re-decide the warrant of an `entailed` verdict WITHOUT running a

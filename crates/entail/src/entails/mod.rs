@@ -549,7 +549,26 @@ pub fn certain_answers(
     let prepared = prepare(premise, regime, imports)?;
     let pats = bgp_patterns(bgp);
     let names = projected_vars(&pats);
-    let question = as_graph(&pats, &names);
+    // THE LANE SURVEY READS A GRAPH, AND A TRIPLE WITH A PROJECTED PREDICATE IS NOT ONE.
+    //
+    // Every lane's whitelist is stated over an RDF graph, and RDF says a predicate is an IRI —
+    // so a `?p` has no term to substitute that a graph can hold, and [`as_graph`] would answer
+    // `None` for the whole question. That would cost the OTHER triples their survey: a pattern
+    // pairing `?s ?p ?o` with `?x owl:differentFrom ex:Peter` would lose the refutation lane's
+    // limit as well, which is the silence this crate spends its whole design preventing. So
+    // the open-predicate triples are withheld from the survey graph and nothing else is, and
+    // what their openness costs is disclosed BY NAME as `UndecidedReason::OpenPredicate` from
+    // the precondition below.
+    //
+    // Only a PROJECTED predicate is withheld. A conclusion graph reaches this function through
+    // the branch below and its predicates are all ground, so nothing is ever withheld from the
+    // graph a verdict is decided against.
+    let surveyed: Vec<PatTriple> = pats
+        .iter()
+        .filter(|triple| !matches!(triple[1], Pat::Var(VarKey::Projected(_))))
+        .cloned()
+        .collect();
+    let question = as_graph(&surveyed, &names);
 
     // NOTHING TO PROJECT: this is `entails`'s question, so it is `entails`'s fold that answers
     // it. Routed rather than re-implemented — one implementation, two presentations.
@@ -1985,7 +2004,7 @@ mod tests {
                 mixed(&default_disjoint()),
                 vec![QTriple {
                     s: QNode::Var("s".to_owned()),
-                    p: QNode::Var("p".to_owned()),
+                    p: QNode::Term(TermValue::iri(TYPE)),
                     o: QNode::Var("o".to_owned()),
                 }],
             ),
@@ -2000,6 +2019,101 @@ mod tests {
             assert!(!answers.rows().is_empty());
             assert_eq!(answers.mechanism(), EntailmentMechanism::StrictTable);
         }
+    }
+
+    /// AN OPEN PREDICATE IS A LIMIT, AND HERE IS THE ANSWER IT MISSES.
+    ///
+    /// `?s ?p ?o` reads every triple of the closure, and reporting that as the whole relation
+    /// is a claim about a question the closure does not answer. `p ∘ p ⊑ p` entails `p rdf:type
+    /// owl:TransitiveProperty` — the freeze lane proves it, right below — and no head of Tables
+    /// 4–9 puts a schema triple in the closure, so the row is absent from an answer that used
+    /// to render no `limit` line at all. It names the POSITION that costs it rather than a
+    /// lane, because every lane and every schema predicate is inside what a `?p` ranges over.
+    #[test]
+    fn an_open_predicate_is_a_limit_naming_the_position() {
+        let premise = three_lane_premise();
+        let bgp = [QTriple {
+            s: QNode::Var("s".to_owned()),
+            p: QNode::Var("p".to_owned()),
+            o: QNode::Var("o".to_owned()),
+        }];
+        let answers =
+            certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::new()).expect("consistent");
+        assert!(!answers.rows().is_empty(), "the closure is enumerated");
+        assert_eq!(answers.mechanism(), EntailmentMechanism::StrictTable);
+
+        // The certain answer the rule table's closure does not hold…
+        let missed = vec![
+            TermValue::iri(P),
+            TermValue::iri(TYPE),
+            TermValue::iri(TRANSITIVE),
+        ];
+        assert!(
+            !answers.rows().contains(&missed),
+            "no head of Tables 4-9 concludes a schema triple"
+        );
+        // …is entailed, by a mechanism this service did not run.
+        assert!(matches!(
+            outcome(&premise, &graph(&[(P, TYPE, TRANSITIVE)]), Regime::OwlRl),
+            EntailmentOutcome::Entailed(_)
+        ));
+        // So the row set is NOT exhaustive, and it says so naming the open position.
+        assert!(!answers.is_complete());
+        let open: Vec<&Vec<String>> = answers
+            .limits()
+            .iter()
+            .filter_map(|limit| match limit {
+                UndecidedReason::OpenPredicate(triples) => Some(triples),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            open,
+            [&vec!["?s ?p ?o".to_owned()]],
+            "{:?}",
+            answers.limits()
+        );
+    }
+
+    /// AN OPEN PREDICATE COSTS THE OTHER TRIPLES NOTHING.
+    ///
+    /// The lane survey is stated over an RDF graph and a `?p` has no term a graph can hold, so
+    /// the whole question used to lose the survey the moment one triple opened its predicate.
+    /// Only the open triples are withheld from it: the refutation lane still names itself for
+    /// the triple that is its own, beside the open-predicate limit.
+    #[test]
+    fn an_open_predicate_does_not_silence_the_survey_of_its_neighbours() {
+        let premise = three_lane_premise();
+        let bgp = [
+            QTriple {
+                s: QNode::Var("s".to_owned()),
+                p: QNode::Var("p".to_owned()),
+                o: QNode::Var("o".to_owned()),
+            },
+            QTriple {
+                s: QNode::Var("x".to_owned()),
+                p: QNode::Term(TermValue::iri(DIFFERENTFROM)),
+                o: QNode::Term(TermValue::iri(STEWIE)),
+            },
+        ];
+        let answers =
+            certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::new()).expect("consistent");
+        assert!(
+            answers
+                .limits()
+                .iter()
+                .any(|limit| limit.mechanism() == EntailmentMechanism::Refutation),
+            "the neighbour keeps its own lane's limit: {:?}",
+            answers.limits()
+        );
+        assert!(
+            answers
+                .limits()
+                .iter()
+                .any(|limit| matches!(limit, UndecidedReason::OpenPredicate(_))),
+            "{:?}",
+            answers.limits()
+        );
     }
 
     /// Every lane that would have been needed names itself, not only the refutation one.

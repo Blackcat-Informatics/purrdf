@@ -110,6 +110,16 @@ the question rather than of any host:
   pairs, spelled `--import IRI=FILE` on the command line. An unresolved import is a
   refusal naming the document, never a silently truncated premise.
 
+A pattern is N-Triples with `?name` (or `$name`) in any position, the **predicate**
+included. RDF reserves that position for an IRI, so the boundary reaches it by
+rewriting each variable to a term drawn from a namespace it has swept out of the
+caller's own text and mapping every occurrence back afterwards; nothing of that
+namespace reaches a row, a binding or a report. A predicate variable is projected
+like any other, and under `owl-rl` it also renders a `limit`: it ranges over the
+whole predicate vocabulary, so it ranges over the schema predicates no rule of the
+table concludes and over the constructs the mechanisms beyond the table decide, and
+the closure the rows are drawn from holds neither.
+
 Every answer arrives with the certificate of the run underneath it — the same
 `purrdf-reasoning-report` block a materialization renders, plus a `mechanism` line
 naming which of the six reached the verdict.

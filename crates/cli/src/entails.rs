@@ -65,8 +65,13 @@
 //! verdict would be about that other one.
 //!
 //! `--pattern` is the exception, and it is not an RDF document: it is N-Triples with `?name`
-//! (or `$name`) in any position, which no RDF parser accepts. It is therefore read
-//! VERBATIM, with no format resolution at all, and `--from` says nothing about it.
+//! (or `$name`) in any position, which no RDF parser accepts. It is therefore handed to the
+//! boundary as the BYTES the file holds, with no format resolution and no transcode at all,
+//! and `--from` says nothing about it. What the boundary then does with those bytes is not
+//! "read them verbatim": it rewrites each `?name` to a term it has swept out of the caller's
+//! own text, parses the result with the real N-Triples parser, and maps every such term back
+//! to a variable — which is how a `?name` reaches a position RDF reserves for an IRI. The
+//! rewrite is invisible on both sides, and [`purrdf_validate::regime`] states its full shape.
 //!
 //! # One stdin
 //!
