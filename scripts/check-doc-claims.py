@@ -67,6 +67,18 @@ matched by no arm, and the five hand-written wrapped specimens all happened to
 break somewhere else. The same held of a whitespace run WITHIN one line, which
 the sweep did not normalize at all.
 
+The guards AROUND that ban have the same problem the ban had: a conditional nothing
+ever satisfies is the same green light as the check it was written to protect. Five
+levers could be pulled with every gate green — a description field path re-pointed by
+one letter, a subject marker made OPTIONAL rather than deleted (which leaves the
+literal in the pattern's source, so a substring test passes it), either of two arms
+with its walk removed, one arm of the documented-surface walk dropped, which took that
+surface from 798 files to 785 without an error, and the one scoped specimen that
+crosses a line written on one line instead. Each guard is now a function that
+takes what it judges as an argument, and ``mutation_self_test`` hands each the shape
+the defect really had and requires it to fail (``_MUTATIONS``). It runs first, on every
+invocation.
+
 It is pure text-over-committed-files: no cargo, no network, no test run. The
 expensive gates prove the generated artifacts are current; this one proves the
 prose agrees with them. Run standalone, or as part of
@@ -80,6 +92,7 @@ import re
 import string
 import sys
 import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -450,13 +463,57 @@ _GATE_SCRIPT = Path(__file__).resolve()
 # `pkg-something` is not silently dropped.
 _UNDOCUMENTED_SEGMENTS = frozenset({"pkg", "node_modules", ".venv", "target"})
 
+# The ratchet baseline the conformance harness writes, and one of the two files that put
+# `scripts` on the documented surface in the first place: it restates the fragment name in
+# its own prose, which is where a superseded spelling once regressed unseen.
+_CONFORMANCE_BASELINE = _REPO / "scripts" / "conformance-baseline.json"
+
+# One file per ARM of the walk below, each of which must still be reached. An arm is a root
+# or a suffix, and a dropped arm narrows both bans at once while every count in this gate
+# stays plausible: removing `scripts` took the surface from 798 files to 785 with the gate
+# green, because a walk that returns fewer files returns no error. The coverage arm catches a
+# dropped ROOT — its registered documents live under `crates`, `bindings` and `docs` — and
+# caught nothing at all for `scripts`, which holds no Markdown.
+#
+# Landmarks rather than counts: a file this gate already depends on by name, so the failure
+# says which arm stopped running rather than that a number moved.
+_SURFACE_LANDMARKS: tuple[tuple[Path, str], ...] = (
+    (_ENTAIL_README, "the `crates` root"),
+    (_PY_README, "the `bindings` root"),
+    (_ENTAILMENT, "the `docs` root"),
+    (_GATE_SCRIPT, "the `scripts` arm's `.py` suffix"),
+    (_CONFORMANCE_BASELINE, "the `scripts` arm's `.json` suffix"),
+    (_AGENTS, "the repository-root Markdown arm"),
+)
+
+
+def _check_surface_landmarks(found: set[Path]) -> None:
+    """Every arm of the documented-surface walk must still reach its landmark.
+
+    Takes the walk's result rather than performing it, so :data:`_MUTATIONS` can hand it a
+    narrowed surface and require it to fail.
+    """
+    for path, arm in _SURFACE_LANDMARKS:
+        if path not in found:
+            raise SystemExit(
+                f"check-doc-claims: the documented surface no longer reaches "
+                f"{path.relative_to(_REPO)}, so {arm} contributes nothing. Both bans walk "
+                f"this one traversal, so an arm that stops running narrows the stale-name "
+                f"ban and the entailment-overclaim ban's reach together, silently and by "
+                f"however many files that arm carried. Restore the arm, or drop it "
+                f"deliberately in the same commit and say why"
+            )
+
 
 def _documented_surface() -> list[Path]:
     """Every file in this repository's own documented surface, in path order.
 
     ONE traversal, shared by both bans below, so neither can be narrowed without
     narrowing the other and neither can drift into covering a different tree than it
-    claims. It covers ``crates``, ``bindings`` and ``docs`` prose, ``scripts``' own
+    claims — and each ARM of it must reach a named landmark
+    (:func:`_check_surface_landmarks`), because a walk that stops running one arm returns
+    fewer files rather than an error. It covers ``crates``, ``bindings`` and ``docs``
+    prose, ``scripts``' own
     ``.py``/``.json`` — the conformance harness and its ratchet baseline restate the
     fragment name in their own prose, and a superseded spelling regressed there silently
     until this walk was extended to include it — and every Markdown file at the
@@ -495,23 +552,34 @@ def _documented_surface() -> list[Path]:
         if path.suffix in {".py", ".json"}:
             found.append(path)
     found.extend(sorted(_REPO.glob("*.md")))
-    if not found:
-        raise SystemExit(
-            "check-doc-claims: the documented surface walked to zero files, so both bans "
-            "below would sweep nothing and pass. Fix the traversal rather than leaving "
-            "the documentation unswept"
-        )
+    # Subsumes "the walk returned nothing": every arm must reach its landmark, so a walk
+    # that returns nothing fails by naming the first arm that stopped running rather than
+    # by reporting a zero that says nothing about which arm produced it.
+    _check_surface_landmarks(set(found))
     return sorted(found)
 
 
 # The manifest file names that carry registry metadata, and the table path to the one field
 # each of them PUBLISHES as prose. Three registries, because this repository releases to
 # three: crates.io, PyPI and npm.
+#
+# A field path is a bare tuple, and a tuple agrees with nothing on its own: re-pointed by
+# ONE LETTER — `("package", "descriptions")` — every `Cargo.toml` yields nothing, all 23
+# crates.io descriptions leave both the swept set and the reach arm, and the release-lane
+# cross-check below does not notice because it counts ENTRIES rather than what they read. So
+# each declared kind is required to yield, and to yield PROSE; see
+# :func:`_check_registry_yield`.
 _REGISTRY_DESCRIPTION: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Cargo.toml", ("package", "description")),
     ("pyproject.toml", ("project", "description")),
     ("package.json", ("description",)),
 )
+
+# A value with no whitespace in it: a crate name, a version, an SPDX expression, a URL.
+# Every OTHER field of the three tables above holds one of those, and every description this
+# workspace publishes is a sentence — so this is what separates "the field a registry
+# renders as prose" from "some neighbouring field the path landed on instead".
+_BARE_IDENTIFIER = re.compile(r"^\S+$")
 
 
 @lru_cache(maxsize=1)
@@ -583,6 +651,48 @@ def _manifest_data(name: str, text: str) -> object:
     return json.loads(text) if name.endswith(".json") else tomllib.loads(text)
 
 
+def _check_registry_yield(harvest: dict[str, list[tuple[str, str]]]) -> None:
+    """Every declared manifest KIND must publish a description, and it must read as prose.
+
+    The field path beside each manifest name in ``_REGISTRY_DESCRIPTION`` is a bare tuple,
+    and until this check existed nothing compared it with the manifests it reads. Re-pointed
+    by one letter — ``("package", "descriptions")`` — every ``Cargo.toml`` yielded nothing:
+    all 23 crates.io descriptions left the swept set AND the reach arm in one edit, with
+    every gate green, because the release-lane cross-check counts declared ENTRIES rather
+    than what they read and the emptiness test below only fired when all three kinds went
+    dark at once.
+
+    So the floor is PER KIND, which is the granularity the defect had. And the yielded text
+    must read as prose, because re-pointing the same path at ``("package", "name")`` yields
+    something for every manifest — the crate's identifier — and a gate that then swept 23
+    identifiers for banned sentences would be just as dark while looking twice as busy.
+
+    Takes the harvest rather than reading the tree, so :data:`_MUTATIONS` can hand it the
+    two shapes the defect took and require this to fail.
+    """
+    for name, keys in _REGISTRY_DESCRIPTION:
+        field = ".".join(keys)
+        published = harvest.get(name, [])
+        if not published:
+            raise SystemExit(
+                f"check-doc-claims: no `{name}` in this workspace yields a `{field}`, so "
+                f"every description that manifest kind publishes is outside the "
+                f"entailment-overclaim ban — neither swept nor reachable — while the ban "
+                f"still reports a green line about the kinds that remain. Re-point the "
+                f"field at what the manifest really spells, or drop the kind and say why "
+                f"in the same commit"
+            )
+        for label, prose in published:
+            if _BARE_IDENTIFIER.match(prose.strip()):
+                raise SystemExit(
+                    f"check-doc-claims: {label} reads {prose.strip()!r}, which is an "
+                    f"identifier rather than the sentence a registry renders. The "
+                    f"`{field}` path is pointing at a neighbouring field — a name, a "
+                    f"version, a licence, a URL — so the ban would sweep identifiers and "
+                    f"never see the prose it exists to read"
+                )
+
+
 def _registry_prose() -> list[tuple[str, str]]:
     """``(label, prose)`` for every registry description this workspace publishes.
 
@@ -605,21 +715,25 @@ def _registry_prose() -> list[tuple[str, str]]:
 
     No TOML writer and no new dependency: ``tomllib`` and ``json`` are both standard
     library, and this repository's Python floor is 3.13.
+
+    What each declared manifest KIND yielded is kept as it is read and handed to
+    :func:`_check_registry_yield`, which is where "the field path is the one a registry
+    renders" stops being a comment beside a tuple.
     """
     units: list[tuple[str, str]] = []
+    harvest: dict[str, list[tuple[str, str]]] = {}
     for path in _registry_manifest_paths():
         table = next(keys for name, keys in _REGISTRY_DESCRIPTION if name == path.name)
         data = _manifest_data(path.name, _read(path))
         for key in table:
             data = data.get(key, {}) if isinstance(data, dict) else {}
         if isinstance(data, str) and data.strip():
-            units.append((f"{path.relative_to(_REPO)} [{'.'.join(table)}]", data))
-    if not units:
-        raise SystemExit(
-            "check-doc-claims: no registry description was read from any manifest, so the "
-            "entailment-overclaim ban would sweep none of the three registry front pages "
-            "and pass. Fix the walk rather than leaving the published metadata unswept"
-        )
+            unit = (f"{path.relative_to(_REPO)} [{'.'.join(table)}]", data)
+            units.append(unit)
+            harvest.setdefault(path.name, []).append(unit)
+    # Subsumes "no description at all was read": a kind that yields nothing fails by NAME,
+    # and all three going dark is that failure three times rather than a different one.
+    _check_registry_yield(harvest)
     return units
 
 
@@ -755,13 +869,104 @@ _MARKER_PROBE = re.compile(
 )
 
 
+def _table_pairs() -> tuple[
+    tuple[tuple[re.Pattern[str], str | None, str], tuple[str, str]], ...
+]:
+    """``(banned claim, specimen)`` for the whole ban table, asserted index-aligned first.
+
+    The two tables are written apart — the ban beside its reason, the specimens beside the
+    wrap forms they exercise — and every reader of one wants the other. Pairing them in one
+    place is what lets the alignment be asserted ONCE for every reader rather than by
+    whichever of them remembered to: a `zip` over mismatched tables silently drops the tail,
+    and the tail is a banned claim with no specimen, which is a pattern whose marker
+    requirement and whose wrap forms both go untested while the self-test still prints a
+    number.
+
+    ``_OVERCLAIM_SPECIMENS`` is defined further down this file, beside the wrap forms it is
+    written to exercise; this is a function, so the name is resolved when it is CALLED and
+    the two tables can each sit where they read best.
+    """
+    if len(_OVERCLAIM_SPECIMENS) != len(_BANNED_OVERCLAIMS):
+        raise SystemExit(
+            f"check-doc-claims: {len(_OVERCLAIM_SPECIMENS)} specimen(s) for "
+            f"{len(_BANNED_OVERCLAIMS)} banned claim(s) — they are index-aligned, so a "
+            f"banned claim would go untested. Add the missing specimen"
+        )
+    return tuple(zip(_BANNED_OVERCLAIMS, _OVERCLAIM_SPECIMENS))
+
+
+def _check_marker_bounds(
+    pattern: re.Pattern[str], subject: str, specimen: str
+) -> None:
+    """`subject` must really BOUND `pattern` — spelling, and requirement.
+
+    Three assertions, and the third is the one the derivation rests on. A marker that does
+    not appear in its pattern's source proves nothing about which documents the pattern can
+    match; a marker the pattern does not REQUIRE proves the same nothing while still
+    appearing in it. That second shape is what a substring test cannot see: wrapping the
+    literal as ``(?:OWL 2 )?`` leaves it in ``pattern.pattern`` verbatim, so the source
+    check passes it — and a document saying ``complete RL entailment`` then carries no
+    marker, joins no swept set, fires no marker probe, and is reported by no arm of the ban.
+
+    So requirement is tested by BEHAVIOUR: delete the marker from the pattern's own specimen
+    and the pattern must stop matching. Deleted rather than corrupted, and from the specimen
+    rather than from the pattern, because "this pattern cannot match text without its
+    marker" is a statement about text.
+
+    Takes its three arguments rather than reading the table, so :data:`_MUTATIONS` can hand
+    it the optional-marker pattern and require it to fail.
+    """
+    if subject != subject.lower():
+        raise SystemExit(
+            f"check-doc-claims: the subject marker {subject!r} is not lower-cased, so "
+            f"the case-insensitive membership test below would miss documents"
+        )
+    if subject != _reflowed(subject):
+        raise SystemExit(
+            f"check-doc-claims: the subject marker {subject!r} does not survive "
+            f"`_reflowed`, so the membership test — which reads reflowed text — could "
+            f"never find it and the derived sweep would silently sweep nothing for "
+            f"this pattern. Spell the marker with single spaces"
+        )
+    if subject not in pattern.pattern.lower():
+        raise SystemExit(
+            f"check-doc-claims: the banned overclaim {pattern.pattern!r} does not "
+            f"contain its own subject marker {subject!r}, so a document without the "
+            f"marker could still match it and the derived sweep would not be total. "
+            f"Re-point the marker at what the pattern really requires"
+        )
+    # A space in place of the marker rather than nothing, so the deletion cannot glue two
+    # words into a third; reflowed afterwards, because reflowed text is what all three arms
+    # of the ban read.
+    without = _reflowed_stripped(
+        re.sub(re.escape(subject), " ", specimen, count=1, flags=re.I)
+    )
+    if pattern.search(without):
+        raise SystemExit(
+            f"check-doc-claims: the banned overclaim {pattern.pattern!r} still matches "
+            f"{without!r} — its own specimen with the subject marker {subject!r} deleted "
+            f"— so the pattern does not REQUIRE the marker it declares. The marker is "
+            f"what derives the swept set and what the reach arm's probe asks for first, "
+            f"so a claim written without it would join no set and be reported by no arm. "
+            f"Make the marker mandatory in the pattern, or re-point it at what the "
+            f"pattern really requires"
+        )
+
+
 def _check_ban_table() -> None:
     """The ban table must keep enough markers, and each must really bound its pattern.
 
     A marker that does not appear in its pattern's source is a marker that no longer
     proves anything about which documents the pattern can match, and the derived sweep
     would silently stop being total. Reworded the other way — a pattern edited so it no
-    longer requires its marker — this fails on the same line, in the same commit.
+    longer requires its marker, whether by deleting the literal or by wrapping it as
+    ``(?:OWL 2 )?`` — this fails on the same line, in the same commit, because
+    :func:`_check_marker_bounds` deletes the marker from the pattern's own specimen and
+    requires the match to stop.
+
+    The specimens are read through :func:`_table_pairs`, which is also what asserts the two
+    tables are still index-aligned; a pattern with no specimen beside it would otherwise be
+    a pattern whose marker requirement went untested.
     """
     marked = sum(1 for _, subject, _ in _BANNED_OVERCLAIMS if subject)
     if marked < 4:
@@ -772,28 +977,10 @@ def _check_ban_table() -> None:
             f"narrowing this ban already had to have removed once. Restore the marker, "
             f"or lower the floor deliberately in the same commit and say why"
         )
-    for pattern, subject, _ in _BANNED_OVERCLAIMS:
+    for (pattern, subject, _), (sentence, _wrapped) in _table_pairs():
         if subject is None:
             continue
-        if subject != subject.lower():
-            raise SystemExit(
-                f"check-doc-claims: the subject marker {subject!r} is not lower-cased, so "
-                f"the case-insensitive membership test below would miss documents"
-            )
-        if subject != _reflowed(subject):
-            raise SystemExit(
-                f"check-doc-claims: the subject marker {subject!r} does not survive "
-                f"`_reflowed`, so the membership test — which reads reflowed text — could "
-                f"never find it and the derived sweep would silently sweep nothing for "
-                f"this pattern. Spell the marker with single spaces"
-            )
-        if subject not in pattern.pattern.lower():
-            raise SystemExit(
-                f"check-doc-claims: the banned overclaim {pattern.pattern!r} does not "
-                f"contain its own subject marker {subject!r}, so a document without the "
-                f"marker could still match it and the derived sweep would not be total. "
-                f"Re-point the marker at what the pattern really requires"
-            )
+        _check_marker_bounds(pattern, subject, sentence)
 
 
 @lru_cache(maxsize=_MARKER_CACHE)
@@ -1049,6 +1236,26 @@ def _reach_arm(
     return problems, visited
 
 
+def _check_visited(arm: str, visited: int, expected: int, why: str) -> None:
+    """`arm` must really have WALKED the units it reports nothing about.
+
+    An arm whose loop is deleted reports zero problems, which reads exactly like a clean
+    tree. The reach arm has counted its visits since it was extracted; the sentence sweep
+    and the coverage arm did not, and either loop could be removed with every gate green —
+    the sweep because a swept set nobody sweeps yields no problems, the coverage arm because
+    a check nobody runs names no missing document. All three now count, against a total the
+    DERIVATION produced rather than against anything the loop itself computed.
+
+    Takes the two counts rather than deriving either, so :data:`_MUTATIONS` can hand it a
+    deleted loop's answer — zero visits of a non-empty set — and require it to fail.
+    """
+    if visited < expected:
+        raise SystemExit(
+            f"check-doc-claims: {arm} visited {visited} of the {expected} unit(s) it must "
+            f"read. It was narrowed or skipped — {why}"
+        )
+
+
 def _registered_prose_documents() -> list[Path]:
     """Every Markdown document this script names as a module-level constant.
 
@@ -1121,6 +1328,12 @@ def banned_entailment_overclaims(
     wrap point. While the sweep joined wrapped lines and the other two arms read raw text,
     a claim broken inside its own subject marker joined no set and matched no arm.
 
+    And all three COUNT what they visited (:func:`_check_visited`), because an arm that
+    reports nothing and an arm that never ran print the same green line. The reach arm
+    counted from the day it was extracted; the other two did not, so either loop could be
+    deleted with every gate green. The counts are checked against what the derivation
+    produced, not against anything the loops compute for themselves.
+
     Returns the problems, the number of units swept, the size of the corpus they were
     drawn from and the number of units the reach arm visited, so the script's headline
     reports what each arm really read rather than a number from somewhere nearby.
@@ -1142,12 +1355,24 @@ def banned_entailment_overclaims(
             f"the {_SENTENCE_CACHE}-entry sentence cache, so the sweep would re-parse "
             f"documents it has already read. Raise _SENTENCE_CACHE"
         )
+    swept = 0
     for label, text in units:
+        swept += 1
         problems.extend(_overclaims_in(label, text))
+    _check_visited(
+        "the sentence sweep",
+        swept,
+        len(units),
+        "and the sweep is the arm that reads the derived set sentence by sentence, so a "
+        "banned claim in a unit the derivation produced would be matched by nothing",
+    )
 
     swept_set = {label for label, _ in units}
     reachable = {label for label, _ in corpus}
-    for document in _registered_prose_documents():
+    registered = _registered_prose_documents()
+    covered = 0
+    for document in registered:
+        covered += 1
         relative = str(document.relative_to(_REPO))
         if relative not in reachable:
             problems.append(
@@ -1168,21 +1393,27 @@ def banned_entailment_overclaims(
                 f"restore it rather than leaving one of this gate's own documents outside "
                 f"the ban"
             )
+    _check_visited(
+        "the coverage arm",
+        covered,
+        len(registered),
+        "and the coverage arm is what names the documents this gate knows about that the "
+        "traversal or the derivation stopped reaching",
+    )
 
     hits, reached = _reach_arm(surface, swept_set)
     problems.extend(hits)
     # What the reach arm VISITED, not what it found. An arm whose walk is skipped reports
     # zero hits exactly like a clean tree, so the count is checked rather than assumed:
     # everything outside the swept set must be visited, and this says so out loud.
-    outside = len(surface) - 1 + len(_registry_prose()) - len(swept_set)
-    if reached < outside:
-        raise SystemExit(
-            f"check-doc-claims: the reach arm visited {reached} of the {outside} unit(s) "
-            f"outside the swept set. It was narrowed or skipped — and that arm is the only "
-            f"reason the swept set is a permission boundary rather than a detection "
-            f"boundary, so a claim written in the gap would be reported by nothing"
-        )
-    return problems, len(units), len(corpus), reached
+    _check_visited(
+        "the reach arm",
+        reached,
+        len(surface) - 1 + len(_registry_prose()) - len(swept_set),
+        "and that arm is the only reason the swept set is a permission boundary rather than "
+        "a detection boundary, so a claim written in the gap would be reported by nothing",
+    )
+    return problems, swept, len(corpus), reached
 
 
 # One specimen sentence per banned claim, in two written forms: on one line, and wrapped
@@ -1387,15 +1618,47 @@ def _acquiring(host: Path, text: str, sentence: str) -> str:
     return text.replace(data, f"{data} {escaped}", 1)
 
 
+def _check_scope_placement(pattern: re.Pattern[str], scoped: str) -> None:
+    """The scoped specimen must carry its scope phrase on a LATER LINE than its claim.
+
+    The exemption direction is the half of this ban that refuses a sentence a writer is
+    entitled to write, and the only form that tests it across a wrap is the one
+    :func:`_scoped` builds. Written on ONE line it tests nothing the plain scoped form does
+    not: a line-scoped ``_sentences`` — the defect this file removed — answers every
+    same-line form correctly and every cross-line form wrongly.
+
+    Takes the scoped text rather than scoping it here, so :data:`_MUTATIONS` can hand it the
+    same-line form and require it to fail.
+    """
+    claim = pattern.search(scoped)
+    if claim is None or _CORPUS_SCOPE not in scoped:
+        raise SystemExit(
+            f"check-doc-claims: the scoped specimen {scoped!r} does not carry both the "
+            f"banned claim ({pattern.pattern!r}) and the literal scope phrase "
+            f"{_CORPUS_SCOPE!r}, so the exemption it exists to test is not being tested"
+        )
+    if scoped.count("\n", 0, claim.end()) == scoped.count(
+        "\n", 0, scoped.index(_CORPUS_SCOPE)
+    ):
+        raise SystemExit(
+            f"check-doc-claims: the scoped specimen {scoped!r} carries its scope phrase on "
+            f"the SAME line as the claim it scopes, so the one form that proves a correctly "
+            f"bounded sentence survives a paragraph reflow has stopped proving it. A "
+            f"line-scoped sweep would answer this form correctly and still refuse every "
+            f"writer whose scope wrapped"
+        )
+
+
 def _check_specimens() -> None:
     """Each specimen must match ITS OWN banned claim, and carry that claim's marker.
 
-    Four assertions, and the last three are what make the derived sweep total. The
-    specimens are index-aligned with ``_BANNED_OVERCLAIMS``; a specimen that matches some
-    OTHER pattern would leave its own pattern untested while the self-test still printed a
-    number. A marker-bearing specimen that does NOT contain its marker would be a
-    counter-example to the whole derivation: it would be a real instance of the claim that
-    a document could carry without joining the swept set.
+    Four assertions, and three of them are what make the derived sweep total. The specimens are
+    index-aligned with ``_BANNED_OVERCLAIMS`` — asserted by :func:`_table_pairs`, which
+    every reader of either table goes through — and a specimen that matches some OTHER
+    pattern would leave its own pattern untested while the self-test still printed a number.
+    A marker-bearing specimen that does NOT contain its marker would be a counter-example to
+    the whole derivation: it would be a real instance of the claim that a document could
+    carry without joining the swept set.
 
     And the same has to hold of the specimen WRAPPED INSIDE ITS MARKER, which is where the
     derivation stopped being total: reflowed, that form must still carry the marker (so it
@@ -1404,17 +1667,14 @@ def _check_specimens() -> None:
     three arms now read — and the two spellings of that normalization
     (:func:`_reflowed` and :func:`_reflowed_stripped`) are asserted equal on every form,
     so "the same normalization by the faster route" stays a fact rather than a comment.
+
+    The fourth is the other direction: the scoped form must put its scope phrase on a later
+    LINE than the claim (:func:`_check_scope_placement`), because a scoped form written on
+    one line is a form a line-scoped sweep answers correctly.
     """
-    if len(_OVERCLAIM_SPECIMENS) != len(_BANNED_OVERCLAIMS):
-        raise SystemExit(
-            f"check-doc-claims: {len(_OVERCLAIM_SPECIMENS)} specimen(s) for "
-            f"{len(_BANNED_OVERCLAIMS)} banned claim(s) — they are index-aligned, so a "
-            f"banned claim would go untested. Add the missing specimen"
-        )
     _check_separators()
-    for (pattern, subject, _), (sentence, wrapped) in zip(
-        _BANNED_OVERCLAIMS, _OVERCLAIM_SPECIMENS
-    ):
+    for (pattern, subject, _), (sentence, wrapped) in _table_pairs():
+        _check_scope_placement(pattern, _scoped(sentence))
         if not pattern.search(sentence):
             raise SystemExit(
                 f"check-doc-claims: the self-test's specimen {sentence!r} does not match "
@@ -1508,9 +1768,7 @@ def overclaim_self_test(surface: list[Path], report: bool) -> list[str]:
     wrong: list[str] = []
     checked = 0
     for label, committed in units:
-        for (_pattern, subject, _why), (sentence, wrapped) in zip(
-            _BANNED_OVERCLAIMS, _OVERCLAIM_SPECIMENS
-        ):
+        for (_pattern, subject, _why), (sentence, wrapped) in _table_pairs():
             for form, injected, must_catch in _specimen_forms(
                 sentence, wrapped, subject
             ):
@@ -1528,9 +1786,7 @@ def overclaim_self_test(surface: list[Path], report: bool) -> list[str]:
     # answer depends on WHICH whitespace fell inside the claim, which is a property of the
     # normalization and needs one document to settle.
     probe_label, probe_text = units[0]
-    for (_pattern, subject, _why), (sentence, _wrapped) in zip(
-        _BANNED_OVERCLAIMS, _OVERCLAIM_SPECIMENS
-    ):
+    for (_pattern, subject, _why), (sentence, _wrapped) in _table_pairs():
         for character in _WHITESPACE_PROBES:
             injected = _broken_in_marker(sentence, subject, character)
             if injected is None:
@@ -1587,9 +1843,7 @@ def overclaim_self_test(surface: list[Path], report: bool) -> list[str]:
         (unswept_registry[0], str(unswept_registry[0].relative_to(_REPO))),
     ):
         host_text = _read(host)
-        for (_pattern, subject, _why), (sentence, _wrapped) in zip(
-            _BANNED_OVERCLAIMS, _OVERCLAIM_SPECIMENS
-        ):
+        for (_pattern, subject, _why), (sentence, _wrapped) in _table_pairs():
             if subject is None:
                 continue
             for injected in (sentence, *_broken_forms(sentence, subject)):
@@ -1626,9 +1880,7 @@ def overclaim_self_test(surface: list[Path], report: bool) -> list[str]:
         )
     outside_relative = str(outside.relative_to(_REPO))
     outside_text = _read(outside)
-    for (_pattern, subject, _why), (sentence, _wrapped) in zip(
-        _BANNED_OVERCLAIMS, _OVERCLAIM_SPECIMENS
-    ):
+    for (_pattern, subject, _why), (sentence, _wrapped) in _table_pairs():
         if subject is None:
             continue
         for injected in (sentence, *_broken_forms(sentence, subject)):
@@ -1671,6 +1923,164 @@ def overclaim_self_test(surface: list[Path], report: bool) -> list[str]:
             f"{checked - len(wrong)} correctly, {len(wrong)} not."
         )
     return wrong
+
+
+def _marker_made_optional(pattern: re.Pattern[str], subject: str) -> re.Pattern[str]:
+    """`pattern` with its subject marker wrapped as an OPTIONAL group.
+
+    The edit a source-text check cannot see: the marker's literal is still spelled in
+    ``pattern.pattern``, so ``subject in pattern.pattern.lower()`` passes — while the
+    pattern now matches prose that never writes the marker, and prose that never writes the
+    marker joins no swept set and fires no reach-arm probe.
+    """
+    match = re.search(rf"{re.escape(subject)} ?", pattern.pattern, re.I)
+    if not match:
+        raise SystemExit(
+            f"check-doc-claims: the marker {subject!r} cannot be found in "
+            f"{pattern.pattern!r}, so the mutation that proves the marker is REQUIRED cannot "
+            f"be applied — and a mutation that cannot be applied proves nothing"
+        )
+    return re.compile(
+        f"{pattern.pattern[: match.start()]}(?:{match.group(0)})?"
+        f"{pattern.pattern[match.end() :]}",
+        pattern.flags,
+    )
+
+
+def _mutated_optional_marker() -> None:
+    """A marker made optional rather than deleted. ``_check_marker_bounds`` must refuse."""
+    for (pattern, subject, _), (sentence, _wrapped) in _table_pairs():
+        if subject is None:
+            continue
+        _check_marker_bounds(_marker_made_optional(pattern, subject), subject, sentence)
+        return
+    raise SystemExit(
+        "check-doc-claims: no banned overclaim declares a subject marker, so the mutation "
+        "that proves a marker must be REQUIRED cannot be applied"
+    )
+
+
+def _mutated_same_line_scope() -> None:
+    """A scoped specimen written on ONE line. ``_check_scope_placement`` must refuse."""
+    for (pattern, _subject, _), (sentence, _wrapped) in _table_pairs():
+        _check_scope_placement(pattern, _scoped(sentence).replace("\n", " "))
+        return
+    raise SystemExit(
+        "check-doc-claims: the ban table is empty, so the mutation that proves the scoped "
+        "specimen still crosses a line cannot be applied"
+    )
+
+
+def _mutated_dropped_arm() -> None:
+    """An arm of the surface walk contributing nothing. ``_check_surface_landmarks`` refuses."""
+    _check_surface_landmarks({path for path, _ in _SURFACE_LANDMARKS[1:]})
+
+
+def _mutated_empty_kind() -> None:
+    """A declared manifest kind that yields nothing. ``_check_registry_yield`` must refuse."""
+    harvest = {
+        name: [(f"{name} [{'.'.join(keys)}]", "A sentence a registry renders.")]
+        for name, keys in _REGISTRY_DESCRIPTION
+    }
+    harvest.pop(_REGISTRY_DESCRIPTION[0][0])
+    _check_registry_yield(harvest)
+
+
+def _mutated_identifier_field() -> None:
+    """A field path re-pointed at an identifier. ``_check_registry_yield`` must refuse."""
+    harvest = {
+        name: [(f"{name} [{'.'.join(keys)}]", "A sentence a registry renders.")]
+        for name, keys in _REGISTRY_DESCRIPTION
+    }
+    name, keys = _REGISTRY_DESCRIPTION[0]
+    harvest[name] = [(f"{name} [{'.'.join(keys)}]", "purrdf-entail")]
+    _check_registry_yield(harvest)
+
+
+def _mutated_skipped_walk() -> None:
+    """A deleted loop's answer: zero visits of a set the derivation filled.
+
+    ONE entry for the three arms rather than three, because all three route through the same
+    guard and three calls differing only in a label would claim a coverage this does not
+    have. What each arm passes IN is checked where it is passed — against ``len(units)``,
+    ``len(registered)`` and the surface arithmetic — and none of those is a number its own
+    loop computed.
+    """
+    _check_visited("a deleted walk", 0, 3, "this is the mutation, not the tree")
+
+
+# One mutation per lever this file has had to have removed, applied to the GUARD'S INPUT
+# rather than to the tree. A guard is a conditional, and a conditional nothing ever
+# satisfies is the same green light as the loop it was written to protect — `_check_visited`
+# compared against a total the loop itself computed would pass forever, and
+# `_check_registry_yield` reading the tree it validates could never be shown the tree it
+# exists to refuse. So each guard takes its subject as an argument and each mutation below
+# hands it the shape the defect really had.
+#
+# Every entry must raise `SystemExit`. A mutation the guards SURVIVE is a guard that cannot
+# see the thing it is named for, and `mutation_self_test` says so by name.
+_MUTATIONS: tuple[tuple[str, Callable[[], None]], ...] = (
+    (
+        "an arm of the documented-surface walk that contributes nothing",
+        _mutated_dropped_arm,
+    ),
+    (
+        "a manifest kind whose declared field path yields no description",
+        _mutated_empty_kind,
+    ),
+    (
+        "a description field path re-pointed at a bare identifier",
+        _mutated_identifier_field,
+    ),
+    (
+        "a subject marker made OPTIONAL in its own pattern",
+        _mutated_optional_marker,
+    ),
+    (
+        "a scoped specimen that no longer crosses a line",
+        _mutated_same_line_scope,
+    ),
+    (
+        "an arm of the entailment-overclaim ban with its walk deleted",
+        _mutated_skipped_walk,
+    ),
+)
+
+
+def mutation_self_test(report: bool) -> list[str]:
+    """Every mutation this gate's guards do NOT refuse. An empty list is the passing answer.
+
+    The preflight beside :func:`overclaim_self_test`, and the same argument one level down.
+    That one proves the ban answers injected PROSE; this one proves the guards around it
+    answer injected STATE — an arm of the surface walk that contributes nothing, a manifest
+    kind that publishes nothing, a field path that publishes an identifier, a pattern that
+    no longer requires its marker, a scoped specimen that stopped crossing a line, and a
+    ban arm whose walk was removed. Every one of those shapes was live, with every gate
+    green.
+
+    It costs microseconds: no tree is read and no file is written, because each guard takes
+    what it judges as an argument.
+    """
+    survived = [
+        what
+        for what, mutate in _MUTATIONS
+        if _survives(mutate)
+    ]
+    if report and not survived:
+        print(
+            f"check-doc-claims: all {len(_MUTATIONS)} mutations of this gate's own guards are "
+            f"refused by them."
+        )
+    return survived
+
+
+def _survives(mutate: Callable[[], None]) -> bool:
+    """Whether `mutate` gets past the guard it is aimed at. ``True`` is the failing answer."""
+    try:
+        mutate()
+    except SystemExit:
+        return False
+    return True
 
 
 # The codec's own short `id` has no fixed relationship to the prose name a front page
@@ -3512,10 +3922,22 @@ def main(argv: list[str]) -> int:
     # narrowed without narrowing the other.
     surface = _documented_surface()
 
-    # BEFORE the claims, on every run. The ban is the one check here that compares prose
-    # against a RULE rather than against a generated number, so nothing else in this file
-    # would notice it answering wrongly — and it answered wrongly in both directions for
-    # every claim that happened to wrap.
+    # BEFORE the claims, on every run, and before the ban's own preflight: a guard that
+    # cannot refuse the state it is named for makes every line printed after it worth less.
+    survived = mutation_self_test(report=alone)
+    if survived:
+        print(
+            "check-doc-claims: this gate's own guards do not refuse:\n"
+            + "\n".join(f"  - {entry}" for entry in survived)
+            + "\n\nEach line above is a lever that can be pulled with every gate green. Fix "
+            "the guard, not the mutation.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # The ban is the one check here that compares prose against a RULE rather than against a
+    # generated number, so nothing else in this file would notice it answering wrongly — and
+    # it answered wrongly in both directions for every claim that happened to wrap.
     wrong = overclaim_self_test(surface, report=alone)
     if wrong:
         print(
