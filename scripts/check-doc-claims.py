@@ -43,20 +43,29 @@ number — ``banned_entailment_overclaims``, the ban on unbounded claims — so
 nothing else in this file would notice it answering wrongly, and it did, in both
 directions, for every claim that happened to wrap. It therefore SELF-TESTS before
 the claims run: ``overclaim_self_test`` injects each banned claim into each swept
-document on one line and wrapped, and asserts it is caught both times and exempt
-both times when the scope phrase is present, wherever the line breaks fall.
-``--self-test`` runs that alone.
+unit on one line, wrapped, and wrapped INSIDE the marker the sweep is derived
+from, and asserts it is caught every time and exempt every time the scope phrase
+is present, wherever the line breaks fall. ``--self-test`` runs that alone.
 
-The set of documents that ban sweeps is DERIVED rather than enumerated, for the same
-reason the two checks above discover their scope. It was a hand-written
-nine-tuple, nothing asserted the tuple was complete, and the self-test iterated
-the same tuple — so cutting it to a single entry left eight documents outside the
-ban while both the gate and its preflight printed a green line about the one that
-remained. The set is now the Markdown of ``_documented_surface`` filtered by the
-ban's own subject markers, with a coverage arm that names any document this file
-knows about which the traversal stops reaching, and a reach arm that matches every
-marker-bearing claim across the whole surface so the swept set is a permission
-boundary and not a detection boundary.
+The set that ban sweeps is DERIVED rather than enumerated, for the same reason the
+two checks above discover their scope. It was a hand-written nine-tuple, nothing
+asserted the tuple was complete, and the self-test iterated the same tuple — so
+cutting it to a single entry left eight documents outside the ban while both the
+gate and its preflight printed a green line about the one that remained. The set
+is now ``_claim_corpus`` — the Markdown of ``_documented_surface`` plus the
+registry descriptions this workspace publishes to crates.io, PyPI and npm —
+filtered by the ban's own subject markers, with a coverage arm that names any
+document this file knows about which the traversal stops reaching, and a reach arm
+that matches every marker-bearing claim across the whole surface so the swept set
+is a permission boundary and not a detection boundary.
+
+Membership, the sweep and the reach arm all read ``_reflowed`` text. That is what
+makes the derivation total rather than nearly total: the sweep joined wrapped lines
+before matching while the other two read raw text, so a claim broken inside its own
+subject marker — ``complete OWL`` / ``2 RL entailment`` — joined no set and was
+matched by no arm, and the five hand-written wrapped specimens all happened to
+break somewhere else. The same held of a whitespace run WITHIN one line, which
+the sweep did not normalize at all.
 
 It is pure text-over-committed-files: no cargo, no network, no test run. The
 expensive gates prove the generated artifacts are current; this one proves the
@@ -66,7 +75,9 @@ prose agrees with them. Run standalone, or as part of
 
 from __future__ import annotations
 
+import json
 import re
+import string
 import sys
 import tomllib
 from dataclasses import dataclass, field
@@ -119,15 +130,91 @@ _RL_SUITE_ROW = "Entailment (OWL 2 RL, W3C entailment tests)"
 _OVERLAY: dict[str, str] = {}
 
 
+@lru_cache(maxsize=None)
+def _committed(path: Path) -> str:
+    """`path` as it stands on disk.
+
+    Cached because this gate never writes: a file's committed text is the same string for
+    the whole run, and the derived sweep is re-derived once per injected sentence to prove
+    it re-derives. Reading the tree that many times cost more than every check in this file
+    put together. The self-test's injections do NOT go through here — they go through the
+    overlay in ``_read``, which is consulted first and never cached.
+    """
+    return path.read_text(encoding="utf-8")
+
+
 def _read(path: Path) -> str:
     if str(path) in _OVERLAY:
         return _OVERLAY[str(path)]
-    return path.read_text(encoding="utf-8")
+    return _committed(path)
 
 
 def _int(text: str) -> int:
     """Parse a documented count, tolerating the thousands separator prose uses."""
     return int(text.replace(",", "").replace(" ", ""))
+
+
+# A run of whitespace, and the one thing every arm of the entailment-overclaim ban does to
+# text before it looks at it. The ban's patterns spell their subjects with SINGLE SPACES
+# (`OWL 2 RL entailment`), so a paragraph reflow that moves the line break INSIDE one of
+# those spaces must not change any arm's answer. It did: `_overclaims_in` joined wrapped
+# lines before matching while the membership test and the reach arm read raw text, so
+# `complete OWL` / `2 RL entailment` across a wrap was a claim the sweep would have caught
+# in a document that never joined the swept set and that no other arm was reading either.
+_WHITESPACE = re.compile(r"\s+")
+
+# Big enough for the whole prose corpus and every manifest, plus the injected variants one
+# self-test run produces, so the derived sweep can be re-derived once per injected sentence
+# — which is the point of it — without re-scanning units whose text has not changed.
+_MARKER_CACHE = 256
+
+
+def _reflowed(text: str) -> str:
+    """`text` with every whitespace run collapsed to one space.
+
+    The shared definition of what an OCCURRENCE is. Membership in the swept set, the
+    sentence sweep and the reach arm all read text through this, so all three agree, and
+    the derivation's guarantee — a unit that carries a banned claim carries that claim's
+    subject marker — holds at every wrap point rather than at the ones nobody tried.
+    """
+    return _WHITESPACE.sub(" ", text)
+
+
+def _reflowed_stripped(text: str) -> str:
+    """``_reflowed(text).strip()``, by the faster route.
+
+    ``str.split()`` with no argument splits on exactly the runs ``\\s+`` matches — both ask
+    ``Py_UNICODE_ISSPACE`` — so this is the same normalization, not a second one. It is
+    spelled separately because the sweep calls it once per LINE of every document it reads,
+    where the regex cost is the largest single line item in this gate, and
+    :func:`_check_specimens` asserts the two agree on every specimen form rather than
+    leaving "the same normalization" as a claim in a comment.
+    """
+    return " ".join(text.split())
+
+
+def _reflowed_offsets(text: str) -> list[int]:
+    """For each character of ``_reflowed(text)``, its offset in `text`.
+
+    Built only when a reach-arm hit has to be REPORTED with a line number, because it is
+    the one per-character mapping in this file and the reach arm walks the whole documented
+    surface. A passing run never calls it.
+    """
+    offsets: list[int] = []
+    cursor = 0
+    for run in _WHITESPACE.finditer(text):
+        offsets.extend(range(cursor, run.start()))
+        offsets.append(run.start())
+        cursor = run.end()
+    offsets.extend(range(cursor, len(text)))
+    return offsets
+
+
+def _reflowed_line(text: str, index: int) -> int:
+    """The 1-based line of `text` holding the character at ``_reflowed(text)`` offset `index`."""
+    offsets = _reflowed_offsets(text)
+    raw = offsets[index] if index < len(offsets) else len(text)
+    return text.count("\n", 0, raw) + 1
 
 
 # ---------------------------------------------------------------------------
@@ -375,6 +462,26 @@ def _documented_surface() -> list[Path]:
     until this walk was extended to include it — and every Markdown file at the
     repository root, which is where the contract (``AGENTS.md``), the release notes
     (``CHANGELOG.md``) and the provenance and licensing statements live.
+
+    What it does NOT cover is stated here rather than left to be discovered, because both
+    bans below describe their reach as total over this walk and "total" has to name the
+    thing it is total over:
+
+      * REGISTRY METADATA is covered, but not by this walk — a manifest is not prose, and
+        only one of its fields is published. See :func:`_registry_prose`, which the
+        entailment-overclaim ban sweeps alongside this walk's Markdown.
+      * ``.html`` is deliberately out. Two HTML files are tracked (one vendored RO-Crate
+        fixture and the playground shell), and ``docs/book/book`` holds hundreds more that
+        are mdBook OUTPUT — a re-rendering of Markdown this walk already reads. Including
+        the suffix would sweep the same prose twice and make the gate's answer depend on
+        whether ``make book`` had been run on the machine. The suffix set is what keeps
+        this walk independent of the build.
+      * ``.sh``, ``.yml`` and the ``Makefile`` are deliberately out: their comments are build
+        mechanics addressed to whoever edits the build, published to no reader. The
+        ``scripts`` arm takes ``.py``/``.json`` because those two carry the conformance
+        harness's own PROSE about the fragment and the corpus, which regressed once.
+      * The many ``.ttl``/``.rq``/``.srx`` fixture suffixes are corpus data, not
+        statements this project makes.
     """
     found: list[Path] = []
     for root in ("crates", "bindings", "docs"):
@@ -395,6 +502,125 @@ def _documented_surface() -> list[Path]:
             "the documentation unswept"
         )
     return sorted(found)
+
+
+# The manifest file names that carry registry metadata, and the table path to the one field
+# each of them PUBLISHES as prose. Three registries, because this repository releases to
+# three: crates.io, PyPI and npm.
+_REGISTRY_DESCRIPTION: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Cargo.toml", ("package", "description")),
+    ("pyproject.toml", ("project", "description")),
+    ("package.json", ("description",)),
+)
+
+
+@lru_cache(maxsize=1)
+def _registry_manifest_paths() -> tuple[Path, ...]:
+    """Every manifest in this workspace that carries registry metadata, in path order.
+
+    Memoized because it is a pure function of the tree's LAYOUT and the walk is a second
+    pass over the same two trees :func:`_documented_surface` reads. Contents are never
+    cached: every reader goes back through ``_read``, so the self-test's overlay is seen.
+
+    Cross-checked against the workspace's own ``members`` list, which is the ground truth
+    for what reaches crates.io. A member whose manifest this walk does not reach is a
+    narrowed traversal, and it fails here by name rather than by silently publishing an
+    ungated description.
+    """
+    # How many registries this repository actually publishes to, read off the release
+    # lanes rather than counted here. The lanes are maintained for an entirely different
+    # reason, so dropping a manifest kind from `_REGISTRY_DESCRIPTION` — which would also
+    # stop this walk from LOOKING for that kind, and so could never notice its own gap —
+    # fails against them instead. A fourth lane fails this on the day it is added.
+    lanes = sorted(
+        path.name for path in (_REPO / ".github" / "workflows").glob("release-*.y*ml")
+    )
+    if len(_REGISTRY_DESCRIPTION) < len(lanes):
+        raise SystemExit(
+            f"check-doc-claims: this repository has {len(lanes)} release lane(s) ({lanes}) "
+            f"but only {len(_REGISTRY_DESCRIPTION)} registry description field(s) are "
+            f"declared, so at least one registry's front page is published ungated. Add "
+            f"the manifest and the field it publishes"
+        )
+    names = sorted({name for name, _ in _REGISTRY_DESCRIPTION})
+    found: list[Path] = []
+    for root in ("crates", "bindings"):
+        for name in names:
+            for path in (_REPO / root).rglob(name):
+                if not _UNDOCUMENTED_SEGMENTS.intersection(path.parts):
+                    found.append(path)
+    found.extend(_REPO / name for name in names if (_REPO / name).is_file())
+    reached = set(found)
+    members = (
+        tomllib.loads(_read(_REPO / "Cargo.toml")).get("workspace", {}).get("members", [])
+    )
+    if not members:
+        raise SystemExit(
+            "check-doc-claims: the root manifest lists no workspace members, so the "
+            "registry-metadata walk has nothing to check itself against"
+        )
+    missing = sorted(
+        member for member in members if _REPO / member / "Cargo.toml" not in reached
+    )
+    if missing:
+        raise SystemExit(
+            f"check-doc-claims: the registry-metadata walk does not reach the manifest of "
+            f"workspace member(s) {missing}, whose descriptions are published to crates.io. "
+            f"The traversal was narrowed; restore it rather than leaving a crate's front "
+            f"page outside the entailment-overclaim ban"
+        )
+    return tuple(sorted(found))
+
+
+@lru_cache(maxsize=_MARKER_CACHE)
+def _manifest_data(name: str, text: str) -> object:
+    """`text` parsed as the manifest `name` — TOML, or JSON for ``package.json``.
+
+    Keyed on the TEXT, so the self-test's overlaid manifest is a different key and is
+    parsed for real rather than served from the committed one. Callers READ the result and
+    never mutate it; a mutation would be shared, and there is nothing here to mutate.
+    """
+    return json.loads(text) if name.endswith(".json") else tomllib.loads(text)
+
+
+def _registry_prose() -> list[tuple[str, str]]:
+    """``(label, prose)`` for every registry description this workspace publishes.
+
+    A crate's ``description`` is the first sentence a reader meets on crates.io — above the
+    README, and alone in every search result — and ``project.description`` and npm's
+    ``description`` are the same sentence on PyPI and npm. That is precisely the
+    highest-traffic-front-page argument this script already uses to gate
+    ``bindings/python/README.md``, so the metadata beside that README cannot sit outside
+    the ban: ``crates/entail/Cargo.toml`` carries the ``owl 2`` subject marker today, and
+    until this walk existed it was neither swept nor reachable.
+
+    DESCRIPTIONS, not whole manifests, and that boundary is the decision rather than a
+    convenience. What a registry renders is the description; a manifest's COMMENTS are
+    addressed to whoever edits the build and are published nowhere, so sweeping them would
+    put the ban in the position of refusing ``crates/sparql-conformance/Cargo.toml``'s
+    comment explaining what the OWL 2 RL lane renders — prose ABOUT the ban's subject
+    rather than a claim. Keywords and categories are published too, but they are a
+    controlled vocabulary rather than sentences, and ``_sentences`` has nothing to say
+    about them.
+
+    No TOML writer and no new dependency: ``tomllib`` and ``json`` are both standard
+    library, and this repository's Python floor is 3.13.
+    """
+    units: list[tuple[str, str]] = []
+    for path in _registry_manifest_paths():
+        table = next(keys for name, keys in _REGISTRY_DESCRIPTION if name == path.name)
+        data = _manifest_data(path.name, _read(path))
+        for key in table:
+            data = data.get(key, {}) if isinstance(data, dict) else {}
+        if isinstance(data, str) and data.strip():
+            units.append((f"{path.relative_to(_REPO)} [{'.'.join(table)}]", data))
+    if not units:
+        raise SystemExit(
+            "check-doc-claims: no registry description was read from any manifest, so the "
+            "entailment-overclaim ban would sweep none of the three registry front pages "
+            "and pass. Fix the walk rather than leaving the published metadata unswept"
+        )
+    return units
 
 
 def banned_stale_fragment_names(surface: list[Path]) -> tuple[list[str], int]:
@@ -436,17 +662,30 @@ _CORPUS_SCOPE = "on this vendored W3C corpus"
 # a complete RULE TABLE, a full closure of one document — and only the sentence that
 # promotes them into a claim about a SPECIFICATION is caught.
 #
-# The SUBJECT MARKER is the lower-cased literal a document must already contain before the
-# pattern beside it can possibly match, and it is what DERIVES the swept document set
-# below. It is not a judgement about which documents "carry the entailment story" — that
-# judgement is what let the set be hand-written, and a hand-written set can be narrowed.
-# It is read off the pattern itself: `complete OWL 2 RL entailment` cannot appear in a
-# document that never writes `OWL 2`, so sweeping the documents that write `OWL 2` is
-# TOTAL for that pattern rather than merely generous. `_check_ban_table` asserts each
-# marker really does appear in its own pattern's source, and `overclaim_self_test` asserts
-# each specimen sentence carries its marker — so a document ACQUIRES membership in the
-# swept set at the same instant it acquires the claim, and the ban cannot be dodged by
-# writing the claim somewhere unswept.
+# The SUBJECT MARKER is the lower-cased literal a unit must already contain before the
+# pattern beside it can possibly match, and it is what DERIVES the swept set below. It is
+# not a judgement about which documents "carry the entailment story" — that judgement is
+# what let the set be hand-written, and a hand-written set can be narrowed. It is read off
+# the pattern itself: `complete OWL 2 RL entailment` cannot appear in a unit that never
+# writes `OWL 2`, so sweeping the units that write `OWL 2` is total for that pattern rather
+# than merely generous.
+#
+# "Total" is an implication with a precondition, and the precondition is that membership
+# and detection read the SAME TEXT. They did not. The sweep joined wrapped lines into
+# paragraphs before matching and the membership test read raw text, so a claim wrapped
+# inside the marker's own space — `complete OWL` / `2 RL entailment` — was a claim the
+# sweep would have caught in a unit that never joined the set. Both now read
+# `_reflowed` text, which makes the implication hold at every wrap point:
+#
+#   if a banned pattern matches the reflowed text of a unit,
+#   then the pattern's marker is a substring of that same reflowed text (`_check_ban_table`
+#   asserts each marker really does appear in its pattern's source, single-spaced),
+#   therefore the unit is in the swept set.
+#
+# `_check_specimens` asserts each specimen sentence carries its marker, and does so in the
+# form wrapped INSIDE the marker as well as on one line — so a unit ACQUIRES membership in
+# the swept set at the same instant it acquires the claim, and the ban cannot be dodged by
+# writing the claim somewhere unswept or by pressing return in the middle of it.
 #
 # The performance claim declares no marker, and that is deliberate rather than an
 # oversight. Its pattern names a WORD rather than a claim, and the word is used honestly
@@ -494,6 +733,28 @@ _BANNED_OVERCLAIMS: tuple[tuple[re.Pattern[str], str | None, str], ...] = (
 )
 
 
+# The subject markers as a RAW-TEXT probe: each marker with its internal spaces relaxed to
+# `\s+`, so it matches whatever a paragraph reflow did to the words. The reach arm walks the
+# whole documented surface and would otherwise reflow ten megabytes to find nothing, so it
+# asks this first and stops if the answer is no.
+#
+# Sound rather than merely fast, and this is why: a banned pattern that matches reflowed text
+# necessarily contains that pattern's marker single-spaced (`_check_ban_table`), and a
+# single-spaced marker in reflowed text was a run of whitespace between the same words in the
+# raw text — which is exactly what this matches. Derived from the same markers rather than
+# written out, so it cannot go stale, and the self-test injects through it in both wrap forms.
+_MARKER_PROBE = re.compile(
+    "|".join(
+        sorted(
+            r"\s+".join(re.escape(word) for word in subject.split())
+            for _, subject, _ in _BANNED_OVERCLAIMS
+            if subject
+        )
+    ),
+    re.I,
+)
+
+
 def _check_ban_table() -> None:
     """The ban table must keep enough markers, and each must really bound its pattern.
 
@@ -519,6 +780,13 @@ def _check_ban_table() -> None:
                 f"check-doc-claims: the subject marker {subject!r} is not lower-cased, so "
                 f"the case-insensitive membership test below would miss documents"
             )
+        if subject != _reflowed(subject):
+            raise SystemExit(
+                f"check-doc-claims: the subject marker {subject!r} does not survive "
+                f"`_reflowed`, so the membership test — which reads reflowed text — could "
+                f"never find it and the derived sweep would silently sweep nothing for "
+                f"this pattern. Spell the marker with single spaces"
+            )
         if subject not in pattern.pattern.lower():
             raise SystemExit(
                 f"check-doc-claims: the banned overclaim {pattern.pattern!r} does not "
@@ -528,8 +796,39 @@ def _check_ban_table() -> None:
             )
 
 
-def _entailment_claim_docs(surface: list[Path]) -> list[str]:
-    """The Markdown documents the entailment-overclaim ban sweeps, DERIVED not enumerated.
+@lru_cache(maxsize=_MARKER_CACHE)
+def _markers_in(text: str) -> tuple[str, ...]:
+    """The banned claims' subject markers `text` carries, read from its REFLOWED form.
+
+    The whole membership test, in one place, so the sweep's derivation and the coverage
+    arm's independent re-check cannot drift apart. Reflowed because that is what makes the
+    derivation total: a claim broken inside `OWL 2` carries the marker just as much as one
+    that is not, and the raw-text test said otherwise.
+    """
+    lowered = _reflowed(text).lower()
+    subjects = sorted({subject for _, subject, _ in _BANNED_OVERCLAIMS if subject})
+    return tuple(subject for subject in subjects if subject in lowered)
+
+
+def _claim_corpus(surface: list[Path]) -> list[tuple[str, str]]:
+    """``(label, prose)`` for every unit the entailment-overclaim ban may sweep.
+
+    The Markdown of :func:`_documented_surface` — the ban judges SENTENCES, and
+    ``_sentences`` reads Markdown (fences, tables, wrapped paragraphs), not source code —
+    plus every registry description (:func:`_registry_prose`), which is prose a reader
+    meets on crates.io, PyPI and npm without opening the repository at all.
+    """
+    units = [
+        (str(path.relative_to(_REPO)), _read(path))
+        for path in surface
+        if path.suffix == ".md" and path != _GATE_SCRIPT
+    ]
+    units.extend(_registry_prose())
+    return units
+
+
+def _entailment_claim_units(surface: list[Path]) -> list[tuple[str, str]]:
+    """The prose units the entailment-overclaim ban sweeps, DERIVED not enumerated.
 
     This set used to be a hand-written nine-tuple. Nothing asserted the tuple was
     complete, and the self-test iterated the same tuple, so cutting it from nine entries
@@ -537,24 +836,16 @@ def _entailment_claim_docs(surface: list[Path]) -> list[str]:
     printing a green line about the one that remained. That is a gate that cannot fail,
     one level up from the gate the preflight was written to keep honest.
 
-    So the set is now derived the way :func:`banned_stale_fragment_names` derives its own:
-    from the shared :func:`_documented_surface`, filtered to Markdown — the ban judges
-    SENTENCES, and `_sentences` reads Markdown (fences, tables, wrapped paragraphs), not
-    source code — and then to the documents that carry a banned claim's subject marker.
+    So the set is derived the way :func:`banned_stale_fragment_names` derives its own:
+    from :func:`_claim_corpus`, filtered to the units that carry a banned claim's subject
+    marker.
 
-    Membership is computed from the same TEXT the ban then reads, through ``_read``, so a
-    document that acquires a banned claim acquires membership in the same edit: every
-    marker-bearing claim contains its own marker.
+    Membership is computed from the same REFLOWED text the ban then reads, through
+    ``_read`` and ``_reflowed``, so a unit that acquires a banned claim acquires
+    membership in the same edit — including when the claim wraps inside its own marker,
+    which is the one wrap point the earlier raw-text test could not see.
     """
-    docs: list[str] = []
-    subjects = sorted({subject for _, subject, _ in _BANNED_OVERCLAIMS if subject})
-    for path in surface:
-        if path.suffix != ".md" or path == _GATE_SCRIPT:
-            continue
-        lowered = _read(path).lower()
-        if any(subject in lowered for subject in subjects):
-            docs.append(str(path.relative_to(_REPO)))
-    return docs
+    return [(label, text) for label, text in _claim_corpus(surface) if _markers_in(text)]
 
 
 # A line that opens a block of its OWN rather than continuing the one above it: a heading, a
@@ -573,6 +864,12 @@ def _paragraph_sentences(lines: list[tuple[int, str]]) -> list[tuple[int, str]]:
 
     The start line rather than the line the claim's banned phrase lands on, so a wrapped
     claim is reported where a reader will find its first word.
+
+    Each line is ``_reflowed`` before it is joined, so the sweep and the membership test
+    that derives the swept set agree about what an OCCURRENCE is right down to the run of
+    spaces inside one line: `OWL  2 RL entailment` is the same claim as `OWL 2 RL
+    entailment`, and a table cell indented with a tab is the same sentence as one that is
+    not.
     """
     joined = ""
     starts: list[tuple[int, int]] = []
@@ -580,7 +877,7 @@ def _paragraph_sentences(lines: list[tuple[int, str]]) -> list[tuple[int, str]]:
         if joined:
             joined += " "
         starts.append((len(joined), number))
-        joined += piece.strip()
+        joined += _reflowed_stripped(piece)
 
     spans: list[tuple[int, int]] = []
     opened = 0
@@ -686,6 +983,72 @@ def _overclaims_in(relative: str, text: str) -> list[str]:
     return problems
 
 
+def _reach_hits(label: str, text: str, *, locate: bool) -> list[str]:
+    """Every marker-bearing banned claim `text` makes, for a unit OUTSIDE the swept set.
+
+    The ban's third arm, extracted so it can be injected into rather than only walked. It
+    matches over ``_reflowed`` text, which is the same text the membership test reads: a
+    claim wrapped inside its own subject marker either joins the swept set and is caught
+    there, or it is not in the swept set and is caught here. Before both arms read reflowed
+    text it could do neither, and the "permission boundary, not a detection boundary"
+    property held everywhere except the one wrap point that mattered.
+
+    Deliberately coarser than :func:`_overclaims_in`: it has no sentence structure and no
+    exemption, because a unit outside the swept set has nowhere to put a scope phrase. A
+    hit here is either a claim to reword or a claim to move into documentation the ban
+    reads, and both are loud.
+
+    `locate` asks for a line number, which costs the offset map; registry descriptions are
+    single strings with no line to name.
+    """
+    hits: list[str] = []
+    if not _MARKER_PROBE.search(text):
+        return hits
+    flat = _reflowed(text)
+    for pattern, subject, why in _BANNED_OVERCLAIMS:
+        if subject is None:
+            continue
+        for match in pattern.finditer(flat):
+            where = f"{label}:{_reflowed_line(text, match.start())}" if locate else label
+            hits.append(
+                f"{where}: banned entailment overclaim `{match.group(0)}` OUTSIDE the "
+                f"swept set — {why}. This unit is not one the ban sweeps sentence by "
+                f"sentence, so the {_CORPUS_SCOPE!r} exemption cannot be applied to it: "
+                f"say the bounded thing instead, or move the claim to documentation the "
+                f"ban reads"
+            )
+    return hits
+
+
+def _reach_arm(
+    surface: list[Path], swept_set: set[str]
+) -> tuple[list[str], int]:
+    """The reach arm's WALK: every unit outside `swept_set`, and how many it visited.
+
+    A function rather than a loop inside the ban so the self-test can run it over a surface
+    of ONE with an injected claim and see the whole arm answer — the filter, the read and
+    the match — for the price of one file instead of eight hundred. Injecting into
+    :func:`_reach_hits` alone proved the matcher answered and left the walk itself untested,
+    which is how the arm could have been deleted with every gate still green.
+    """
+    problems: list[str] = []
+    visited = 0
+    for path in surface:
+        if path == _GATE_SCRIPT:
+            continue
+        relative = str(path.relative_to(_REPO))
+        if relative in swept_set:
+            continue
+        visited += 1
+        problems.extend(_reach_hits(relative, _read(path), locate=True))
+    for label, text in _registry_prose():
+        if label in swept_set:
+            continue
+        visited += 1
+        problems.extend(_reach_hits(label, text, locate=False))
+    return problems, visited
+
+
 def _registered_prose_documents() -> list[Path]:
     """Every Markdown document this script names as a module-level constant.
 
@@ -711,7 +1074,9 @@ def _registered_prose_documents() -> list[Path]:
     return sorted(found)
 
 
-def banned_entailment_overclaims(surface: list[Path]) -> tuple[list[str], int, int]:
+def banned_entailment_overclaims(
+    surface: list[Path],
+) -> tuple[list[str], int, int, int]:
     """The unbounded entailment claims this documentation may not make.
 
     Modelled on :func:`banned_stale_fragment_names`, and run from the same ``main``, for
@@ -734,7 +1099,8 @@ def banned_entailment_overclaims(surface: list[Path]) -> tuple[list[str], int, i
     The exemption is a property of the SENTENCE, so the sentence has to be the unit — which
     means joining wrapped lines back into paragraphs before splitting on terminators; see
     ``_sentences``, which did not, and ``overclaim_self_test``, which now injects every banned
-    claim into every swept document in both forms and asserts the answer in both directions.
+    claim into every swept unit in every form its whitespace can take, and asserts the
+    answer in both directions.
 
     THREE arms, because the swept set is where this ban was last hollowed out:
 
@@ -744,42 +1110,43 @@ def banned_entailment_overclaims(surface: list[Path]) -> tuple[list[str], int, i
         subject marker. Narrow the traversal, the suffix filter or the derivation itself
         and this names the documents that left, whether or not any of them carries a
         claim today;
-      * a REACH arm — every marker-bearing pattern is matched against the WHOLE documented
-        surface, source files included, and a hit outside the swept set is a failure. The
-        swept set is then a permission boundary and not a detection boundary: narrowing it
-        cannot hide a claim, it can only take away the place a scoped claim may be
-        written, which fails loudly rather than silently.
+      * a REACH arm (:func:`_reach_hits`) — every marker-bearing pattern is matched against
+        the WHOLE documented surface, source files and registry descriptions included, and
+        a hit outside the swept set is a failure. The swept set is then a permission
+        boundary and not a detection boundary: narrowing it cannot hide a claim, it can
+        only take away the place a scoped claim may be written, which fails loudly rather
+        than silently.
 
-    Returns the problems, the number of documents swept and the size of the Markdown
-    corpus they were drawn from, so the script's headline reports both what it read and
-    what it chose not to.
+    All three read ``_reflowed`` text, which is what makes that last sentence true at every
+    wrap point. While the sweep joined wrapped lines and the other two arms read raw text,
+    a claim broken inside its own subject marker joined no set and matched no arm.
+
+    Returns the problems, the number of units swept, the size of the corpus they were
+    drawn from and the number of units the reach arm visited, so the script's headline
+    reports what each arm really read rather than a number from somewhere nearby.
     """
     _check_ban_table()
     problems: list[str] = []
-    corpus = [
-        path for path in surface if path.suffix == ".md" and path != _GATE_SCRIPT
-    ]
-    swept = _entailment_claim_docs(surface)
-    if not swept:
+    corpus = _claim_corpus(surface)
+    units = _entailment_claim_units(surface)
+    if not units:
         raise SystemExit(
-            "check-doc-claims: the entailment-overclaim ban derived an EMPTY document set "
-            "from a corpus of "
-            f"{len(corpus)} Markdown file(s). Either the subject markers no longer match "
-            "any documentation or the traversal broke; a ban that sweeps nothing passes "
-            "everything"
+            "check-doc-claims: the entailment-overclaim ban derived an EMPTY set from a "
+            f"corpus of {len(corpus)} prose unit(s). Either the subject markers no longer "
+            "match any documentation or the traversal broke; a ban that sweeps nothing "
+            "passes everything"
         )
-    if len(swept) > _SENTENCE_CACHE:
+    if len(units) > _SENTENCE_CACHE:
         raise SystemExit(
-            f"check-doc-claims: the swept set has grown to {len(swept)} documents, past "
+            f"check-doc-claims: the swept set has grown to {len(units)} units, past "
             f"the {_SENTENCE_CACHE}-entry sentence cache, so the sweep would re-parse "
             f"documents it has already read. Raise _SENTENCE_CACHE"
         )
-    for relative in swept:
-        problems.extend(_overclaims_in(relative, _read(_REPO / relative)))
+    for label, text in units:
+        problems.extend(_overclaims_in(label, text))
 
-    swept_set = set(swept)
-    reachable = {str(path.relative_to(_REPO)) for path in corpus}
-    subjects = sorted({subject for _, subject, _ in _BANNED_OVERCLAIMS if subject})
+    swept_set = {label for label, _ in units}
+    reachable = {label for label, _ in corpus}
     for document in _registered_prose_documents():
         relative = str(document.relative_to(_REPO))
         if relative not in reachable:
@@ -792,8 +1159,7 @@ def banned_entailment_overclaims(surface: list[Path]) -> tuple[list[str], int, i
             continue
         if relative in swept_set:
             continue
-        lowered = _read(document).lower()
-        carried = [subject for subject in subjects if subject in lowered]
+        carried = list(_markers_in(_read(document)))
         if carried:
             problems.append(
                 f"{relative}: this gate already names the document elsewhere, it carries "
@@ -803,36 +1169,34 @@ def banned_entailment_overclaims(surface: list[Path]) -> tuple[list[str], int, i
                 f"the ban"
             )
 
-    for path in surface:
-        if path == _GATE_SCRIPT:
-            continue
-        relative = str(path.relative_to(_REPO))
-        if relative in swept_set:
-            continue
-        text = _read(path)
-        for pattern, subject, why in _BANNED_OVERCLAIMS:
-            if subject is None:
-                continue
-            for match in pattern.finditer(text):
-                line = text.count("\n", 0, match.start()) + 1
-                problems.append(
-                    f"{relative}:{line}: banned entailment overclaim "
-                    f"`{match.group(0)}` OUTSIDE the swept set — {why}. This file is not "
-                    f"one the ban sweeps sentence by sentence, so the "
-                    f"{_CORPUS_SCOPE!r} exemption cannot be applied to it: say the "
-                    f"bounded thing instead, or move the claim to documentation the ban "
-                    f"reads"
-                )
-    return problems, len(swept), len(corpus)
+    hits, reached = _reach_arm(surface, swept_set)
+    problems.extend(hits)
+    # What the reach arm VISITED, not what it found. An arm whose walk is skipped reports
+    # zero hits exactly like a clean tree, so the count is checked rather than assumed:
+    # everything outside the swept set must be visited, and this says so out loud.
+    outside = len(surface) - 1 + len(_registry_prose()) - len(swept_set)
+    if reached < outside:
+        raise SystemExit(
+            f"check-doc-claims: the reach arm visited {reached} of the {outside} unit(s) "
+            f"outside the swept set. It was narrowed or skipped — and that arm is the only "
+            f"reason the swept set is a permission boundary rather than a detection "
+            f"boundary, so a claim written in the gap would be reported by nothing"
+        )
+    return problems, len(units), len(corpus), reached
 
 
-# One specimen sentence per banned claim, in two forms: on one line, and wrapped INSIDE the
-# banned phrase itself. The wrap is where the ban used to end — every one of these claims was
-# sayable by pressing return in the middle of it — so the pair is the falsifiable form of the
-# rule that the exemption is a property of the SENTENCE and not of the reflow.
+# One specimen sentence per banned claim, in two written forms: on one line, and wrapped
+# INSIDE the banned phrase itself. The wrap is where the ban used to end — every one of these
+# claims was sayable by pressing return in the middle of it — so the pair is the falsifiable
+# form of the rule that the exemption is a property of the SENTENCE and not of the reflow.
 #
 # The last one wraps before the word rather than inside it: a one-word pattern cannot be split
 # by a line break, and what a wrap moves there is the SCOPE, which `_scoped` then tests.
+#
+# These two are written; the rest of the matrix is DERIVED. `_specimen_forms` adds the scoped
+# variants and, for a marker with an internal space, the forms whose whitespace falls inside
+# the marker itself — which is the wrap point all five written ones happen to miss, and the
+# one the derivation used to be blind to.
 _OVERCLAIM_SPECIMENS: tuple[tuple[str, str], ...] = (
     (
         "PurRDF implements the complete OWL 2 RDF-Based semantics.",
@@ -864,15 +1228,182 @@ def _scoped(sentence: str) -> str:
     return f"{sentence.rstrip('.')}\n{_CORPUS_SCOPE}."
 
 
+def _broken_in_marker(
+    sentence: str, subject: str | None, separator: str
+) -> str | None:
+    """`sentence` with the subject marker's own internal space replaced by `separator`.
+
+    The specimen forms the other five could not see. Every hand-written wrapped specimen
+    breaks somewhere ELSE — after ``RDF-Based``, before ``OWL 2``, after ``OWL 2 RL``,
+    after ``fully``, before ``faster`` — so 525 injections all passed while
+    ``complete OWL`` / ``2 RL entailment`` joined no set and matched no arm. A specimen
+    that only breaks where someone thought to break it tests the wrap points that were
+    already safe.
+
+    DERIVED from the marker rather than written beside it, so it cannot drift away from the
+    literal the membership test searches for: re-point a marker and these forms re-point
+    with it, in the same edit. ``None`` when the marker is a single word — no whitespace run
+    lives inside ``conformant``, so there is no such form and nothing to test.
+    """
+    if subject is None or " " not in subject:
+        return None
+    match = re.search(re.escape(subject), sentence, re.I)
+    if not match:
+        return None
+    return (
+        sentence[: match.start()]
+        + match.group(0).replace(" ", separator, 1)
+        + sentence[match.end() :]
+    )
+
+
+# Every whitespace character this repository's prose can hold: the ASCII set Python names,
+# plus the no-break and narrow-no-break spaces its own numeric prose uses — `_int` above
+# strips the narrow one out of documented counts. The two spellings of the normalization
+# must agree on all of them, because `_reflowed_stripped` is what the sweep reads and
+# `_reflowed` is what membership and the reach arm read.
+_WHITESPACE_PROBES = tuple(sorted(set(string.whitespace) | {" ", " "}))
+
+
+# The two whitespace runs the full specimen matrix breaks a marker with. Two rather than
+# all eight because the matrix runs over every swept unit and every banned claim, and what
+# a third ASCII space character would add there is cost; `overclaim_self_test` runs the
+# whole probe set over one unit instead. `_check_separators` asserts these two still cover
+# both KINDS of run, since that is what the pair is for: one crosses a line boundary, which
+# only the paragraph join can survive, and one does not, which only the within-line
+# normalization can.
+_BROKEN_SEPARATORS = ("\n", "  ")
+
+
+def _check_separators() -> None:
+    """The matrix must break a marker both ACROSS a line and WITHIN one."""
+    if not any("\n" in run for run in _BROKEN_SEPARATORS):
+        raise SystemExit(
+            "check-doc-claims: no specimen separator crosses a line boundary, so the "
+            "paragraph join the sweep depends on would go untested"
+        )
+    if not any("\n" not in run for run in _BROKEN_SEPARATORS):
+        raise SystemExit(
+            "check-doc-claims: every specimen separator crosses a line boundary, so a "
+            "claim whose whitespace falls WITHIN one line — `OWL  2 RL entailment` — would "
+            "go untested, and the sweep normalizes between lines and within one for "
+            "exactly that reason"
+        )
+    stray = sorted(set("".join(_BROKEN_SEPARATORS)) - set(_WHITESPACE_PROBES))
+    if stray:
+        raise SystemExit(
+            f"check-doc-claims: the specimen separators use {stray}, which are not "
+            f"whitespace this gate normalizes. A separator that is not whitespace tests "
+            f"nothing about the reflow"
+        )
+
+
+def _check_reflow_agreement(form: str, text: str) -> None:
+    """The two spellings of the normalization must produce the same string."""
+    if _reflowed_stripped(text) != _reflowed(text).strip():
+        raise SystemExit(
+            f"check-doc-claims: `_reflowed_stripped` and `_reflowed` disagree about the "
+            f"specimen form {form!r} ({text!r}). The sweep uses the first and the "
+            f"membership test and the reach arm use the second, so they would be back to "
+            f"reading two different texts and a claim could sit in the gap"
+        )
+
+
+def _broken_forms(sentence: str, subject: str | None) -> list[str]:
+    """Every form of `sentence` whose whitespace falls INSIDE its own subject marker.
+
+    Empty for a single-word marker. One list, so the three places that inject a claim into
+    something that does not yet carry one — an unswept document, an unswept registry
+    description and a file outside the swept set entirely — all test the same forms, and
+    adding a form covers all three.
+    """
+    return [
+        form
+        for separator in _BROKEN_SEPARATORS
+        if (form := _broken_in_marker(sentence, subject, separator)) is not None
+    ]
+
+
+def _specimen_forms(
+    sentence: str, wrapped: str, subject: str | None
+) -> list[tuple[str, str, bool]]:
+    """``(name, text, must be caught)`` for every form of one specimen the ban must answer.
+
+    Eight forms where the marker has an internal space and five where it does not, in both
+    directions: the claim must be caught however the whitespace inside it falls, and the
+    same claim scoped must be exempt however it falls. The scoped variants are not
+    decoration — a writer whose correctly bounded sentence happens to reflow inside
+    ``OWL 2`` must not be refused for it.
+
+    The last two pairs are the ones that were missing. A line break inside the marker is
+    what the membership test could not see; a DOUBLE SPACE inside it is what the sweep
+    could not see, because the sweep normalizes between lines and, until this commit, not
+    within one.
+    """
+    forms = [
+        ("one line", sentence, True),
+        ("wrapped", wrapped, True),
+        ("one line, scoped", _scoped(sentence).replace("\n", " "), False),
+        ("scope on the next line", _scoped(sentence), False),
+        ("wrapped, scoped", _scoped(wrapped), False),
+    ]
+    for separator in _BROKEN_SEPARATORS:
+        name = "wrapped" if "\n" in separator else "double-spaced"
+        inside = _broken_in_marker(sentence, subject, separator)
+        if inside is None:
+            continue
+        forms.append((f"{name} inside the subject marker", inside, True))
+        forms.append((f"{name} inside the subject marker, scoped", _scoped(inside), False))
+    return forms
+
+
+def _acquiring(host: Path, text: str, sentence: str) -> str:
+    """`text` rewritten so `host` really carries `sentence`, in `host`'s OWN format.
+
+    A Markdown document acquires a claim by gaining a paragraph. A manifest acquires one
+    only inside the field a registry publishes, and only if the file still parses — an
+    injection that produced unreadable TOML would prove nothing about the walk that reads
+    it, and an injection appended as a comment would prove the opposite of what is wanted.
+
+    The form wrapped inside the marker arrives with a real newline, which a single-line
+    manifest string cannot hold, so it is written as the escape both TOML and JSON decode
+    back to one. The parser, not this function, decides whether that worked.
+    """
+    if host.suffix == ".md":
+        return f"{text}\n\n{sentence}\n"
+    table = next(keys for name, keys in _REGISTRY_DESCRIPTION if name == host.name)
+    data: object = _manifest_data(host.name, text)
+    for key in table:
+        data = data[key] if isinstance(data, dict) else ""
+    if not isinstance(data, str) or data not in text:
+        raise SystemExit(
+            f"check-doc-claims: {host.relative_to(_REPO)} does not spell its "
+            f"`{'.'.join(table)}` verbatim, so the self-test cannot make it acquire a "
+            f"claim and the registry surface's own direction would go untested"
+        )
+    escaped = (
+        sentence.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+    )
+    return text.replace(data, f"{data} {escaped}", 1)
+
+
 def _check_specimens() -> None:
     """Each specimen must match ITS OWN banned claim, and carry that claim's marker.
 
-    Two assertions, and the second is the one that makes the derived sweep total. The
+    Four assertions, and the last three are what make the derived sweep total. The
     specimens are index-aligned with ``_BANNED_OVERCLAIMS``; a specimen that matches some
     OTHER pattern would leave its own pattern untested while the self-test still printed a
-    number. And a marker-bearing specimen that does NOT contain its marker would be a
+    number. A marker-bearing specimen that does NOT contain its marker would be a
     counter-example to the whole derivation: it would be a real instance of the claim that
     a document could carry without joining the swept set.
+
+    And the same has to hold of the specimen WRAPPED INSIDE ITS MARKER, which is where the
+    derivation stopped being total: reflowed, that form must still carry the marker (so it
+    joins the set) and must still match the pattern (so it is caught once it has). Asserted
+    over the reflowed text rather than the raw text, because reflowed text is what all
+    three arms now read — and the two spellings of that normalization
+    (:func:`_reflowed` and :func:`_reflowed_stripped`) are asserted equal on every form,
+    so "the same normalization by the faster route" stays a fact rather than a comment.
     """
     if len(_OVERCLAIM_SPECIMENS) != len(_BANNED_OVERCLAIMS):
         raise SystemExit(
@@ -880,7 +1411,8 @@ def _check_specimens() -> None:
             f"{len(_BANNED_OVERCLAIMS)} banned claim(s) — they are index-aligned, so a "
             f"banned claim would go untested. Add the missing specimen"
         )
-    for (pattern, subject, _), (sentence, _wrapped) in zip(
+    _check_separators()
+    for (pattern, subject, _), (sentence, wrapped) in zip(
         _BANNED_OVERCLAIMS, _OVERCLAIM_SPECIMENS
     ):
         if not pattern.search(sentence):
@@ -897,6 +1429,44 @@ def _check_specimens() -> None:
                 f"joining the swept set the marker derives. Either the marker or the "
                 f"specimen is wrong"
             )
+        for form, text, _catch in _specimen_forms(sentence, wrapped, subject):
+            _check_reflow_agreement(form, text)
+            if subject is None:
+                continue
+            # The same form with every whitespace character this repository's prose can
+            # hold, one at a time, dropped inside the marker. The specimens carry spaces
+            # and newlines and nothing else, so asserting the two normalizations agree on
+            # the specimens alone would leave a tab free to make them disagree.
+            for character in _WHITESPACE_PROBES:
+                probe = _broken_in_marker(sentence, subject, character)
+                if probe is not None:
+                    _check_reflow_agreement(f"{form}, split by {character!r}", probe)
+        for separator in _BROKEN_SEPARATORS:
+            inside = _broken_in_marker(sentence, subject, separator)
+            if subject is not None and " " in subject and inside is None:
+                raise SystemExit(
+                    f"check-doc-claims: the subject marker {subject!r} has an internal "
+                    f"space, so whitespace can fall inside a claim that carries it — and "
+                    f"no such form could be derived from the specimen {sentence!r}. That "
+                    f"is exactly where this derivation stopped being total once; do not "
+                    f"leave it untested"
+                )
+            # `subject is None` already implies `inside is None`, because that is the
+            # first thing `_broken_in_marker` tests. Saying both here makes the invariant
+            # LOCAL: the reader (and the type checker) sees why the `in` below is safe
+            # without holding a distant helper's contract in their head.
+            if inside is None or subject is None:
+                continue
+            if subject not in _reflowed(inside).lower() or not pattern.search(
+                _reflowed(inside)
+            ):
+                raise SystemExit(
+                    f"check-doc-claims: the specimen {inside!r}, broken inside its own "
+                    f"subject marker, does not both carry {subject!r} and match "
+                    f"{pattern.pattern!r} once reflowed. Membership and detection have "
+                    f"stopped reading the same text, so a claim broken there would join "
+                    f"no set and be matched by no arm"
+                )
 
 
 def overclaim_self_test(surface: list[Path], report: bool) -> list[str]:
@@ -909,49 +1479,78 @@ def overclaim_self_test(surface: list[Path], report: bool) -> list[str]:
     of the cases that did not were live in the same file.
 
     A third direction was added with the derived document set: a marker-bearing claim
-    injected into a corpus document the ban does NOT currently sweep must pull that
-    document into the swept set and be caught there. That is the falsifiable form of the
-    derivation — "a document acquires membership at the same instant it acquires the
-    claim" — and without it the widened set would be a story rather than a property.
+    injected into a corpus unit the ban does NOT currently sweep must pull that unit into
+    the swept set and be caught there. That is the falsifiable form of the derivation — "a
+    unit acquires membership at the same instant it acquires the claim" — and without it
+    the widened set would be a story rather than a property. It runs against an unswept
+    Markdown document AND an unswept registry description, because those are two different
+    readers of the corpus and only one of them existed when the property was first written
+    down. Each is injected in the plain form and in the form WRAPPED INSIDE ITS OWN MARKER,
+    which is the form that used to join nothing.
+
+    A fourth direction covers the reach arm, which nothing exercised: a marker-bearing
+    claim written into a file the ban cannot sweep sentence by sentence — the first Rust
+    source file on the surface — must still be REPORTED, in every form its whitespace can
+    take, and must NOT be reported for a unit the sweep already reads. That arm is what
+    makes the swept set a permission boundary rather than a detection boundary, and it read
+    raw text until this commit, so the form broken inside the marker escaped it too.
 
     The count of injections is derived from the same call that derives the sweep, so it
     cannot be read as evidence that the sweep is wide: a narrowed sweep narrows this number
     with it, and it is the coverage and reach arms in
     :func:`banned_entailment_overclaims`, not this count, that refuse the narrowing.
 
-    Nothing is written: the document is read once and the injected copy lives in a string.
+    Nothing is written: each unit is read once and the injected copy lives in a string.
     """
     _check_ban_table()
     _check_specimens()
-    swept = _entailment_claim_docs(surface)
-    committed = {
-        relative: _read(_REPO / relative) for relative in swept
-    }
+    units = _entailment_claim_units(surface)
     wrong: list[str] = []
     checked = 0
-    for relative in swept:
-        for sentence, wrapped in _OVERCLAIM_SPECIMENS:
-            for form, injected, must_catch in (
-                ("one line", sentence, True),
-                ("wrapped", wrapped, True),
-                ("one line, scoped", _scoped(sentence).replace("\n", " "), False),
-                ("scope on the next line", _scoped(sentence), False),
-                ("wrapped, scoped", _scoped(wrapped), False),
+    for label, committed in units:
+        for (_pattern, subject, _why), (sentence, wrapped) in zip(
+            _BANNED_OVERCLAIMS, _OVERCLAIM_SPECIMENS
+        ):
+            for form, injected, must_catch in _specimen_forms(
+                sentence, wrapped, subject
             ):
-                problems = _overclaims_in(
-                    relative, f"{committed[relative]}\n\n{injected}\n"
-                )
+                problems = _overclaims_in(label, f"{committed}\n\n{injected}\n")
                 checked += 1
                 if bool(problems) is must_catch:
                     continue
                 wrong.append(
-                    f"{relative}: {'NOT CAUGHT' if must_catch else 'FALSELY CAUGHT'} "
+                    f"{label}: {'NOT CAUGHT' if must_catch else 'FALSELY CAUGHT'} "
                     f"({form}) — {injected!r}"
                 )
 
-    # The derivation itself, injected: an UNSWEPT corpus document that acquires a
+    # EVERY whitespace character, once, in one unit. The matrix above breaks a marker with
+    # two runs over every swept unit, which is where the cost is; this asks whether the
+    # answer depends on WHICH whitespace fell inside the claim, which is a property of the
+    # normalization and needs one document to settle.
+    probe_label, probe_text = units[0]
+    for (_pattern, subject, _why), (sentence, _wrapped) in zip(
+        _BANNED_OVERCLAIMS, _OVERCLAIM_SPECIMENS
+    ):
+        for character in _WHITESPACE_PROBES:
+            injected = _broken_in_marker(sentence, subject, character)
+            if injected is None:
+                continue
+            for form, text, must_catch in (
+                (f"split by {character!r}", injected, True),
+                (f"split by {character!r}, scoped", _scoped(injected), False),
+            ):
+                problems = _overclaims_in(probe_label, f"{probe_text}\n\n{text}\n")
+                checked += 1
+                if bool(problems) is must_catch:
+                    continue
+                wrong.append(
+                    f"{probe_label}: {'NOT CAUGHT' if must_catch else 'FALSELY CAUGHT'} "
+                    f"({form}) — {text!r}"
+                )
+
+    # The derivation itself, injected: an UNSWEPT corpus unit that acquires a
     # marker-bearing claim must both join the swept set and be caught in it.
-    already = set(swept)
+    already = {label for label, _ in units}
     unswept = [
         path
         for path in surface
@@ -965,39 +1564,110 @@ def overclaim_self_test(surface: list[Path], report: bool) -> list[str]:
             "the derivation's own direction — an unswept document that acquires a claim "
             "joins the set — cannot be tested. Widen the corpus or narrow nothing"
         )
-    # One unswept document is enough, and it is the first in path order rather than a
-    # chosen one: the property under test belongs to the MARKER, not to the document, and
-    # re-deriving the whole set once per document per claim would cost more than the sweep.
-    host = unswept[0]
-    relative = str(host.relative_to(_REPO))
-    host_text = _read(host)
+    registry = _registry_prose()
+    unswept_registry = [
+        path
+        for path in _registry_manifest_paths()
+        if any(
+            label.startswith(f"{path.relative_to(_REPO)} [") and label not in already
+            for label, _ in registry
+        )
+    ]
+    if not unswept_registry:
+        raise SystemExit(
+            "check-doc-claims: every registry description is already swept, so the "
+            "derivation's own direction cannot be tested on the registry surface. Widen "
+            "the corpus or narrow nothing"
+        )
+    # One unswept unit of each kind is enough, and each is the first in path order rather
+    # than a chosen one: the property under test belongs to the MARKER, not to the unit,
+    # and re-deriving the whole set once per unit per claim would cost more than the sweep.
+    for host, relative in (
+        (unswept[0], str(unswept[0].relative_to(_REPO))),
+        (unswept_registry[0], str(unswept_registry[0].relative_to(_REPO))),
+    ):
+        host_text = _read(host)
+        for (_pattern, subject, _why), (sentence, _wrapped) in zip(
+            _BANNED_OVERCLAIMS, _OVERCLAIM_SPECIMENS
+        ):
+            if subject is None:
+                continue
+            for injected in (sentence, *_broken_forms(sentence, subject)):
+                _OVERLAY[str(host)] = _acquiring(host, host_text, injected)
+                try:
+                    joined = [
+                        (label, body)
+                        for label, body in _entailment_claim_units(surface)
+                        if label == relative or label.startswith(f"{relative} [")
+                    ]
+                    caught = bool(joined) and bool(_overclaims_in(*joined[0]))
+                finally:
+                    _OVERLAY.clear()
+                checked += 1
+                if joined and caught:
+                    continue
+                wrong.append(
+                    f"{relative}: NOT SWEPT ON ACQUIRING THE CLAIM — {injected!r} carries "
+                    f"the subject marker {subject!r}, so this unit must join the derived "
+                    f"set and be caught in it"
+                )
+
+    # The reach arm, injected: a marker-bearing claim in a file the ban cannot sweep
+    # sentence by sentence must still be reported, however it wraps.
+    outside = next(
+        (path for path in surface if path.suffix == ".rs"),
+        None,
+    )
+    if outside is None:
+        raise SystemExit(
+            "check-doc-claims: the documented surface holds no source file outside the "
+            "swept set, so the reach arm — the one that makes the swept set a permission "
+            "boundary rather than a detection boundary — cannot be tested"
+        )
+    outside_relative = str(outside.relative_to(_REPO))
+    outside_text = _read(outside)
     for (_pattern, subject, _why), (sentence, _wrapped) in zip(
         _BANNED_OVERCLAIMS, _OVERCLAIM_SPECIMENS
     ):
         if subject is None:
             continue
-        _OVERLAY[str(host)] = f"{host_text}\n\n{sentence}\n"
-        try:
-            joined = relative in _entailment_claim_docs(surface)
-            caught = joined and bool(
-                _overclaims_in(relative, _OVERLAY[str(host)])
+        for injected in (sentence, *_broken_forms(sentence, subject)):
+            _OVERLAY[str(outside)] = f"{outside_text}\n// {injected}\n"
+            try:
+                # Through the whole arm, over a surface of one, and in both directions: a
+                # unit outside the swept set is reported, and the same unit inside it is
+                # left to the sentence sweep instead of being reported twice.
+                reported, _ = _reach_arm([outside], set())
+                permitted, _ = _reach_arm([outside], {outside_relative})
+            finally:
+                _OVERLAY.clear()
+            checked += 2
+            if any(entry.startswith(outside_relative) for entry in reported):
+                if not any(
+                    entry.startswith(outside_relative) for entry in permitted
+                ):
+                    continue
+                wrong.append(
+                    f"{outside_relative}: REACHED INSIDE THE SWEPT SET — {injected!r} was "
+                    f"reported for a unit the sweep already reads sentence by sentence, so "
+                    f"the swept set has stopped being a permission boundary"
+                )
+                continue
+            wrong.append(
+                f"{outside_relative}: NOT REACHED OUTSIDE THE SWEPT SET — {injected!r} "
+                f"carries the subject marker {subject!r}, so the reach arm must report it "
+                f"wherever it is written"
             )
-        finally:
-            _OVERLAY.clear()
-        checked += 1
-        if joined and caught:
-            continue
-        wrong.append(
-            f"{relative}: NOT SWEPT ON ACQUIRING THE CLAIM — {sentence!r} carries the "
-            f"subject marker {subject!r}, so this document must join the derived set "
-            f"and be caught in it"
-        )
     if report:
         print(
             f"check-doc-claims: the entailment-overclaim ban answered {checked} injected "
-            f"sentence(s) — every banned claim in five forms over all {len(swept)} swept "
-            f"document(s), and each marker-bearing claim over one of the "
-            f"{len(unswept)} unswept ones ({relative}) — "
+            f"sentence(s) — every banned claim in every wrap form over all {len(units)} "
+            f"swept unit(s), each split by every one of the "
+            f"{len(_WHITESPACE_PROBES)} whitespace characters over one of them, each "
+            f"marker-bearing claim over one unswept document "
+            f"({unswept[0].relative_to(_REPO)}) and one unswept registry description "
+            f"({unswept_registry[0].relative_to(_REPO)}), and each over one unswept source "
+            f"file ({outside_relative}) — "
             f"{checked - len(wrong)} correctly, {len(wrong)} not."
         )
     return wrong
@@ -2906,7 +3576,7 @@ def main(argv: list[str]) -> int:
     problems.extend(fragment_problems)
     checked += 1
     # The second ban, and the same accounting: one claim, its reach printed separately.
-    overclaim_problems, overclaim_swept, overclaim_corpus = (
+    overclaim_problems, overclaim_swept, overclaim_corpus, overclaim_reached = (
         banned_entailment_overclaims(surface)
     )
     problems.extend(overclaim_problems)
@@ -2937,8 +3607,9 @@ def main(argv: list[str]) -> int:
     print(
         f"OK: {checked} documented claim(s) agree with their generated source "
         f"(stale-name ban swept {fragment_files} file(s); entailment-overclaim ban swept "
-        f"{overclaim_swept} of {overclaim_corpus} Markdown file(s) sentence by sentence, "
-        f"and matched every marker-bearing claim across all {fragment_files})."
+        f"{overclaim_swept} of {overclaim_corpus} prose unit(s) — Markdown documents and "
+        f"registry descriptions — sentence by sentence, and matched every marker-bearing "
+        f"claim across the {overclaim_reached} unit(s) outside that set)."
     )
     return 0
 
