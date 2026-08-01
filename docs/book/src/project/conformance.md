@@ -53,7 +53,7 @@ non-canonical XSD lexicals; 4 typed OWL 2 divergences). Two of those numbers
 need their scope stated: the OWL 2 DL corpus is a *subset*, 261 of the 482
 consistency-shaped cases W3C published, and rule-table coverage is not
 entailment conformance — on W3C's own OWL 2 RL entailment tests the chase
-scores 45/50, being 22 of 27 positive and 23 of 23 negative, the latter meaning
+scores 46/50, being 23 of 27 positive and 23 of 23 negative, the latter meaning
 no unsoundness was found. Always read the current
 numbers from
 [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md)

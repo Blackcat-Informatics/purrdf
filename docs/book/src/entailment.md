@@ -104,7 +104,7 @@ Where the numbers stop:
   rules, and a run that met a boundary still reports
   `Completeness::ExactWithinBoundaries` rather than `Exact`. The two claims are
   reported separately on purpose. Nor is a complete rule table entailment
-  conformance: on W3C's own OWL 2 RL entailment tests `entails()` reaches 22 of
+  conformance: on W3C's own OWL 2 RL entailment tests `entails()` reaches 23 of
   27 published positive entailments and correctly withholds on 23 of 23
   negative ones (see [Conformance](#conformance) below). 78 / 78 says every
   rule of Tables 4–9 is implemented — and the one W3C-published entailment
@@ -254,7 +254,7 @@ Two corpora measure two different things, and the distinction matters:
   over the 221 excluded cases, so this row cannot detect a regression among them.
   Re-deriving them means re-running the probe, which is a deliberate act rather
   than part of the gate.
-- **W3C OWL 2 RL entailment tests — 45 of 50 cases agree, 5 ledgered**, zero
+- **W3C OWL 2 RL entailment tests — 46 of 50 cases agree, 4 ledgered**, zero
   unledgered. This is the independent oracle for the rule table: W3C's own
   entailment tests, answered by one call to `purrdf_entail::entails()` per case
   under `Regime::OwlRl`. The two lanes prove different things and are reported
@@ -265,39 +265,60 @@ Two corpora measure two different things, and the distinction matters:
   holds over *all* 23 negative cases — soundness is owed on every case, so none
   were filtered by profile.
 
-  The positive lane is **22 of 27** — the 27 positive entailments W3C itself
-  places inside the RL profile under RDF-Based semantics. 5 of the 5
+  The positive lane is **23 of 27** — the 27 positive entailments W3C itself
+  places inside the RL profile under RDF-Based semantics. 4 of the 4
   divergences are structural limits of OWL 2 RL rather than of this
   implementation: every head in Profiles §4.3 Tables 4–9 is an assertional
   triple over named terms or `false`, so no conforming RL rule set derives a
   schema axiom (3 `schema-conclusion`) or a negative fact (0
   `negative-conclusion`), and the profile states no rule at all for constructs
-  outside its syntax (1 `construct-outside-rl`); one more premise is incomplete
+  outside its syntax (0 `construct-outside-rl`); one more premise is incomplete
   as exported (1 `imports-unresolved`). **0 are actionable** (0
   `missing-rule`).
 
-  That `negative-conclusion` zero is the interesting one, because the rule
-  table did not change to earn it. A negative fact still has no head anywhere
-  in Tables 4–9 — no rule concludes `owl:differentFrom`, and none concludes
-  membership in an `owl:complementOf` class. What the table *does* have is
-  seventeen rules whose conclusion is `false`, and those seventeen are an
-  inconsistency calculus. So `entails()` reaches a negative conclusion by
-  **refutation**: assert its negation into the premise, re-run the same
-  seventy-eight rules over a premise whose consistency the first run already
-  established, and read the resulting inconsistency as the proof. An
-  `owl:AllDifferent` collection is, by OWL 2's own definition, the conjunction
-  of its `n(n−1)/2` pairwise inequalities, so it lowers to the same shape and is
-  entailed exactly when every pair refutes — which is why two entries left the
-  `schema-conclusion` class with them.
+  The two zeros are the interesting numbers, because the rule table did not
+  change to earn either. `entails()` reaches a conclusion five ways, and four of
+  the five are not matching:
+
+  * **refutation.** A negative fact still has no head anywhere in Tables 4–9 —
+    no rule concludes `owl:differentFrom`, and none concludes membership in an
+    `owl:complementOf` class. What the table *does* have is seventeen rules
+    whose conclusion is `false`, and those seventeen are an inconsistency
+    calculus: assert the conclusion's negation into the premise, re-run the same
+    seventy-eight rules over a premise whose consistency the first run already
+    established, and read the resulting inconsistency as the proof. An
+    `owl:AllDifferent` collection is, by OWL 2's own definition, the conjunction
+    of its `n(n−1)/2` pairwise inequalities, so it lowers to the same shape and
+    is entailed exactly when every pair refutes — which is why two entries left
+    the `schema-conclusion` class with them.
+  * **freeze-and-chase.** `p rdf:type owl:TransitiveProperty` abbreviates a
+    universally quantified Horn implication, and an implication is decided by
+    generalisation on constants: freeze its body over constants the premise does
+    not mention, re-run the table, and look for the head. `chain2trans1`'s
+    arrives through `prp-spo2`, one of the 78. The axiom's other conjunct — `p`
+    is an object property — is a lookup in the premise's own closure, and it is
+    owed: a schema axiom is a conjunction and establishing only the interesting
+    half would claim conclusions the semantics does not license.
+  * **comprehension.** A conclusion may assert that a CLASS EXISTS — an
+    anonymous `owl:unionOf`, an anonymous `owl:Restriction` — which the
+    RDF-Based semantics' own comprehension conditions license, subject to a
+    typing side condition on the operands. Only the scaffolds the conclusion
+    names are minted, over blank nodes checked absent from both documents.
+  * **reflexivity.** `owl:ReflexiveProperty` is outside the RL syntax, so the
+    profile states no rule for it — and a rule that did would range over every
+    resource, widening a closure every consumer computes by default. The
+    conclusion's own self-loops are read off the premise's reflexive typings
+    instead.
 
   Nothing about the inventory moves: `rules(Regime::OwlRl)` and
-  `implemented(Regime::OwlRl)` are still exactly the same 78 and
-  `extensions(Regime::OwlRl)` is still the one `ext-eq-diff-sym`. The evidence
-  moves instead — an entailment reached this way carries a *refutation*
-  warrant naming the `false`-concluding rule that fired, a minimal subset of the
-  caller's own premise that still produces the clash, and enough of the
-  re-chase's closure that `verify()` re-decides the whole thing without running
-  a reasoner.
+  `implemented(Regime::OwlRl)` are still exactly the same 78,
+  `extensions(Regime::OwlRl)` is still the one `ext-eq-diff-sym`, and strict
+  `Materialization::OwlRl` output is byte-for-byte what it was. The evidence
+  moves instead — each mechanism arrives with its own `EntailmentWarrant` arm
+  carrying what it actually used (the `false`-concluding rule that fired and a
+  minimal entailing premise subset; the frozen constants, body and head; the
+  minted triples and the closure triples that license them) and its own checker
+  that re-decides the whole thing without running a reasoner.
 
   The one case that used to be actionable is closed by an **extension**, and
   the extension is labelled rather than absorbed. `a owl:differentFrom b`

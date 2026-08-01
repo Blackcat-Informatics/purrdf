@@ -87,17 +87,22 @@
 //!   typing side conditions the RDF-Based comprehension conditions impose. It exists because
 //!   a comprehension condition asserts the existence of a resource NOTHING NAMES, and a rule
 //!   set that produced one for every licensed shape would produce infinitely many.
+//! * [`reflexivity`] — read the conclusion's own self-loops `x p x` off the premise's
+//!   `owl:ReflexiveProperty` typings. It exists because `owl:ReflexiveProperty` is outside
+//!   the OWL 2 RL syntax so the profile states no rule for it at all, and because a rule that
+//!   DID state it would range over every resource — an `O(|terms|)` closure widening in a lane
+//!   every consumer runs by default, to answer a question only a conclusion ever asks.
 //!
-//! None of the three extra mechanisms adds a rule — `rules`, `implemented` and `extensions`
+//! None of the four extra mechanisms adds a rule — `rules`, `implemented` and `extensions`
 //! are untouched by all of them — and each runs only after the premise's consistency has been
 //! established, which is the hypothesis every one of the soundness arguments rests on. See
 //! their module docs for those arguments, written out.
 //!
-//! [`EntailmentWarrant`] therefore has exactly four arms, one per mechanism, each minted by
-//! the mechanism it names. A fifth arrives with its own producer, together — this crate does
+//! [`EntailmentWarrant`] therefore has exactly five arms, one per mechanism, each minted by
+//! the mechanism it names. A sixth arrives with its own producer, together — this crate does
 //! not pre-declare states that nothing constructs.
 //!
-//! The three extra lanes are [`entails`]-only, and deliberately. Refutation decides a ground
+//! The four extra lanes are [`entails`]-only, and deliberately. Refutation decides a ground
 //! negative fact, and a projected variable ranging over one is a different question — "which
 //! individuals is `a` entailed to differ from?" would need a refutation per candidate over
 //! the whole domain, which is not what [`certain_answers`] computes and not what it would be
@@ -106,7 +111,10 @@
 //! which needs one frozen chase per candidate property for the same reason. Comprehension
 //! decides the existence of a class the conclusion DESCRIBES, and there is no answer to
 //! project: the minted witness is not a term of the scoping graph, so no SPARQL entailment
-//! regime admits it as a binding.
+//! regime admits it as a binding. Reflexivity decides a self-loop over a term the CONCLUSION
+//! names, and a projected variable there would range over every resource — which is the
+//! closure widening this crate declines to perform in the materialization lane, arriving by
+//! another door.
 //!
 //! # A mechanism discharges the WHOLE conclusion or none of it
 //!
@@ -141,6 +149,7 @@ pub mod homomorphism;
 pub mod imports;
 pub mod negation;
 pub mod precondition;
+pub mod reflexivity;
 pub mod refutation;
 pub mod warrant;
 
@@ -161,6 +170,7 @@ pub use imports::ImportMap;
 pub use negation::NegativeFact;
 pub use pattern::VarKey;
 pub use precondition::UndecidedReason;
+pub use reflexivity::ReflexivityWarrant;
 pub use refutation::{REFUTATION_BUDGET, Refutation, RefutationWarrant};
 pub use warrant::{EntailmentWarrant, HomomorphismWarrant, verify};
 
@@ -221,7 +231,12 @@ type Mechanism = fn(&RdfDataset, &RdfDataset, Regime, &Closure) -> Result<Attemp
 /// any conclusion and the answer does not depend on which runs first. What the order buys is
 /// that a conclusion no mechanism reads pays only the cheapest applicability tests before
 /// falling through.
-const MECHANISMS: [Mechanism; 3] = [refutation::attempt, freeze::attempt, comprehension::attempt];
+const MECHANISMS: [Mechanism; 4] = [
+    refutation::attempt,
+    freeze::attempt,
+    comprehension::attempt,
+    reflexivity::attempt,
+];
 
 /// The plan for a regime, or a refusal.
 ///

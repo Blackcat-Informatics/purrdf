@@ -69,8 +69,8 @@
 //!
 //! # The chase is also measured with its EXTRA MECHANISMS, which add no rule
 //!
-//! `purrdf_entail::entails()` reaches a conclusion four ways, and eleven of the cases
-//! graded here are reached only by one of the three beyond matching.
+//! `purrdf_entail::entails()` reaches a conclusion five ways, and twelve of the cases
+//! graded here are reached only by one of the four beyond matching.
 //!
 //! * **Refutation.** Seventeen of the seventy-eight rules conclude `false`, which is
 //!   to say the table carries its own inconsistency calculus; so a conclusion whose
@@ -90,15 +90,19 @@
 //!   operands. The scaffolds the conclusion names are minted over blank nodes checked
 //!   absent from both documents, and nothing else is. Two cases
 //!   (`webont-i5-5-005`, `webont-i5-26-010`).
+//! * **Reflexivity.** `owl:ReflexiveProperty` is outside the OWL 2 RL syntax, so the
+//!   profile states no rule for it — and a rule that DID state it would range over
+//!   every resource. The conclusion's own self-loops `x p x` are instead read off the
+//!   premise's reflexive typings, one lookup per conclusion triple. One case
+//!   (`new-feature-reflexiveproperty-001`).
 //!
-//! All three are worth separating from the extension above because they are a
+//! All four are worth separating from the extension above because they are a
 //! different kind of thing. `ext-eq-diff-sym` is a rule PurRDF states that no
 //! specification does, and it is declared as such. None of these mechanisms states
 //! anything: the rule inventory is byte-for-byte the same seventy-eight before and
-//! after, and `the_refutation_lane_adds_no_rule`, `the_freeze_lane_adds_no_rule` and
-//! `the_comprehension_lane_adds_no_rule` in `purrdf-entail` assert it. What changed is
-//! how many times the table is run, what it is run over, and what the run's `false`
-//! is read as.
+//! after, and the four `the_*_lane_adds_no_rule` tests in `purrdf-entail` assert it.
+//! What changed is how many times the table is run, what it is run over, and what the
+//! run's `false` is read as.
 //!
 //! Grading a positive case is one-sided in the honest direction: matching proves
 //! entailment (the chase is sound), and failing to match is always a real,
@@ -252,9 +256,21 @@ pub enum RlGap {
     /// filed somewhere that says so. It is not [`Self::is_actionable`], because
     /// reaching one is not a matter of adding a rule to the table.
     NegativeConclusion,
-    /// The entailment turns on an OWL 2 construct **outside the OWL 2 RL syntax**
-    /// (`owl:ReflexiveProperty`, …), for which the profile's rule table states no
-    /// rule at all.
+    /// The entailment turns on an OWL 2 construct **outside the OWL 2 RL syntax**,
+    /// for which the profile's rule table states no rule at all.
+    ///
+    /// The ledger holds no entry of this kind today. The one it did hold
+    /// (`new-feature-reflexiveproperty-001`, `owl:ReflexiveProperty`) is closed, and
+    /// closing it did not add a rule: the profile still states none, and a rule that
+    /// stated one would range over every resource in a lane every consumer runs by
+    /// default. It was closed by ESTABLISHING the conclusion positively from the
+    /// semantic condition, which needs no completeness theorem and therefore no
+    /// profile membership.
+    ///
+    /// The variant stays because a construct outside the syntax whose conclusion
+    /// nothing establishes positively has to be filed somewhere that says so. It is
+    /// not [`Self::is_actionable`]: reaching one is not a matter of adding a rule to
+    /// the table.
     ConstructOutsideRl,
     /// The premise `owl:imports` a document the upstream manifest keeps as a
     /// separate support file rather than inline, so the vendored premise is not
@@ -437,15 +453,25 @@ pub const LEDGER: &[LedgerEntry] = &[
         case: "webont-i5-8-009",
         gap: RlGap::SchemaConclusion,
     },
-    // --- CONSTRUCT OUTSIDE OWL 2 RL -------------------------------------------
-    //     `owl:ReflexiveProperty` is not in the OWL 2 RL syntax, so Profiles §4.3
-    //     states no `prp-rfl` rule to fire. W3C still tags the case `otest:profile
-    //     RL`, which is why the profile tag is a selector for this corpus and not
-    //     a promise about the rule table.
-    LedgerEntry {
-        case: "new-feature-reflexiveproperty-001",
-        gap: RlGap::ConstructOutsideRl,
-    },
+    // --- NO CONSTRUCT OUTSIDE OWL 2 RL EITHER. That block is CLOSED. ----------
+    //     `new-feature-reflexiveproperty-001` asserts `knows a owl:ReflexiveProperty`
+    //     and concludes `Peter knows Peter`. `owl:ReflexiveProperty` is still outside
+    //     the OWL 2 RL syntax and Profiles §4.3 still states no `prp-rfl` rule — so
+    //     the premise is ALSO outside the syntax, which is why a failed match here
+    //     could never be read as a refutation either. The conclusion is therefore
+    //     established POSITIVELY, which needs no completeness theorem: OWL 2's
+    //     RDF-Based Semantics puts `<x,x>` in `EXT(p)` for every `x ∈ IR` when `p` is
+    //     reflexive, and every IRI of the conclusion's vocabulary denotes an element
+    //     of `IR`, so `Peter knows Peter` holds in every model of the premise.
+    //
+    //     Deliberately NOT closed by an `ext-prp-rfl` rule. Such a clause has no join
+    //     to constrain its subject, so it would fire once per (term × reflexive
+    //     property) pair in a lane every consumer runs by default, would put literals
+    //     in subject position, and would move the calculus contract hash across every
+    //     committed golden. `strict_materialization_is_unchanged` in `purrdf-entail`
+    //     is the falsifiable form: `Materialization::OwlRl` produces exactly what it
+    //     produced before, and `extensions(Regime::OwlRl)` is still the one
+    //     `ext-eq-diff-sym`.
     // --- THE VENDORED PREMISE IS NOT THE WHOLE PREMISE ------------------------
     //     `webont-imports-011`'s premise `owl:imports` `support011-A`, which the
     //     upstream `all.rdf` export does not carry inline — the conclusion is about

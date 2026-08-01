@@ -142,7 +142,8 @@ pub use entails::{
     Binding, CertainAnswers, ComprehensionWarrant, EntailmentOutcome, EntailmentWarrant,
     FREEZE_BUDGET, FreezeWarrant, FrozenInstance, FrozenOutcome, Generalization,
     HomomorphismWarrant, ImportMap, MATCH_BUDGET, MissReason, NegativeFact, REFUTATION_BUDGET,
-    Refutation, RefutationWarrant, UndecidedReason, VarKey, certain_answers, entails, verify,
+    ReflexivityWarrant, Refutation, RefutationWarrant, UndecidedReason, VarKey, certain_answers,
+    entails, verify,
 };
 pub use explain::{
     BackwardCheck, ChaseProof, ExplainError, Justification, explain_conclusion, justify,

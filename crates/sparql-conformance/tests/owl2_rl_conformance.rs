@@ -257,8 +257,7 @@ fn census_accounts_for_every_upstream_case() {
     }
 }
 
-/// The corpus's premises that are OUTSIDE the OWL 2 RL syntax, named — and the
-/// answer each one gets.
+/// The corpus's cases that answer `Undecided`, named — and why each is entitled to.
 ///
 /// Theorem PR1's completeness half is conditional on the premise being an OWL 2 RL
 /// ontology, and this corpus does **not** consist only of such premises: W3C's
@@ -268,20 +267,23 @@ fn census_accounts_for_every_upstream_case() {
 /// it the distinction between "refuted" and "not refutable" would be untested and
 /// could rot into a synonym.
 ///
-/// The six are pinned by name, so a re-vendor that changes the set has to say so, and
-/// each is checked to get the answer its direction earns:
+/// FIVE of those six answer `Undecided`, and they are pinned by name so a re-vendor
+/// that changes the set has to say so. All five are NEGATIVE cases, where the graded
+/// claim is soundness — the closure was computed and does not contain the
+/// non-conclusion — which `Undecided` reports in full, so they agree without a ledger
+/// entry.
 ///
-/// * `new-feature-reflexiveproperty-001` is POSITIVE, so an `Undecided` is a
-///   capability gap, and `LEDGER` carries it as `construct-outside-rl`;
-/// * the other five are NEGATIVE, where the graded claim is soundness — the closure
-///   was computed and does not contain the non-conclusion — which `Undecided` reports
-///   in full, so they agree without a ledger entry.
+/// The sixth, `new-feature-reflexiveproperty-001`, is POSITIVE and is **not** here:
+/// its premise is still outside the RL syntax, and its conclusion is established
+/// POSITIVELY from `owl:ReflexiveProperty`'s semantic condition rather than by a
+/// match, which needs no completeness theorem and therefore no profile membership.
+/// That is the distinction this test now also pins: being outside the syntax costs a
+/// case the ability to REFUTE, not the ability to be entailed.
 #[test]
 fn the_non_rl_premises_are_named_and_answer_undecided() {
-    /// Every vendored case whose premise the OWL 2 RL grammar excludes, measured.
-    const OUTSIDE_RL: [&str; 6] = [
+    /// Every vendored case that answers `Undecided`, measured.
+    const OUTSIDE_RL: [&str; 5] = [
         "new-feature-keys-007",
-        "new-feature-reflexiveproperty-001",
         "webont-description-logic-209",
         "webont-equivalentclass-005",
         "webont-i5-8-005",

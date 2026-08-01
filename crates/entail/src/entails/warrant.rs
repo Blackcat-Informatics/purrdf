@@ -28,7 +28,7 @@
 //! # ONE ARM PER MECHANISM, and each arrives with its producer
 //!
 //! [`EntailmentWarrant`] is an enum with exactly as many arms as this crate has mechanisms
-//! for reaching a `yes`, and it has never had one more than that. There are four:
+//! for reaching a `yes`, and it has never had one more than that. There are five:
 //!
 //! * [`Homomorphism`](EntailmentWarrant::Homomorphism) — the chase-and-graph-match procedure
 //!   OWL 2 Profiles §4.3 states the RL entailment relation in terms of, minted by
@@ -51,11 +51,15 @@
 //!   comprehension conditions impose, minted by [`super::comprehension`]. Its evidence is the
 //!   triples MINTED, the closure triples that LICENSE them, and the witness map that says
 //!   which fresh node stood in for which of the conclusion's own.
+//! * [`Reflexivity`](EntailmentWarrant::Reflexivity) — read the conclusion's own self-loops
+//!   `x p x` off the premise's `owl:ReflexiveProperty` typings, minted by
+//!   [`super::reflexivity`]. Its evidence is the self-loops MINTED and the typing that
+//!   licenses each.
 //!
 //! An arm nothing constructs would be a state [`verify`] could not check and no caller could
 //! ever be handed, which is the same unrepresentable-contradiction discipline that keeps
 //! [`DlCertificate`](crate::DlCertificate) from storing a completeness beside the boundary
-//! list that contradicts it. A fifth mechanism brings its own arm and its own producer,
+//! list that contradicts it. A sixth mechanism brings its own arm and its own producer,
 //! together, or it does not arrive.
 //!
 //! # What `verify` actually checks, and why it needs the premise
@@ -97,6 +101,10 @@
 //! witnesses), every licence is re-looked-up in the premise closure, and the binding is
 //! replayed against `closure ∪ minted`.
 //!
+//! The reflexivity arm is the same shape with no witnesses to check: the conclusion is read
+//! again, the self-loops it licenses under the warrant's closure are recomputed and compared,
+//! each licensing typing is re-looked-up, and the binding is replayed.
+//!
 //! # What `verify` does NOT check
 //!
 //! It does not re-derive any closure, and it therefore cannot detect a closure that never
@@ -113,12 +121,13 @@ use crate::entails::freeze::{FreezeWarrant, verify_freeze};
 use crate::entails::graph::{Triple, default_graph_triples};
 use crate::entails::homomorphism::{Binding, Closure, substitute};
 use crate::entails::pattern::conclusion_patterns;
+use crate::entails::reflexivity::{ReflexivityWarrant, verify_reflexivity};
 use crate::entails::refutation::{RefutationWarrant, verify_refutation};
 
 /// The evidence that a premise entails a conclusion, tagged by the mechanism that produced
 /// it.
 ///
-/// See the [module docs](self) for why there are exactly four arms and what an arm owes.
+/// See the [module docs](self) for why there are exactly five arms and what an arm owes.
 #[derive(Debug, Clone)]
 pub enum EntailmentWarrant {
     /// The conclusion MAPPED into the closure of the premise.
@@ -131,6 +140,9 @@ pub enum EntailmentWarrant {
     /// The conclusion's anonymous class expressions were COMPREHENDED under their typing side
     /// conditions, and the whole conclusion mapped into the extended closure.
     Comprehension(ComprehensionWarrant),
+    /// The conclusion's self-loops were read off the premise's REFLEXIVE property typings,
+    /// and the whole conclusion mapped into the extended closure.
+    Reflexivity(ReflexivityWarrant),
 }
 
 impl EntailmentWarrant {
@@ -143,6 +155,7 @@ impl EntailmentWarrant {
             Self::Refutation(w) => w.regime(),
             Self::Freeze(w) => w.regime(),
             Self::Comprehension(w) => w.regime(),
+            Self::Reflexivity(w) => w.regime(),
         }
     }
 
@@ -160,6 +173,7 @@ impl EntailmentWarrant {
             Self::Refutation(w) => w.binding(),
             Self::Freeze(w) => w.binding(),
             Self::Comprehension(w) => w.binding(),
+            Self::Reflexivity(w) => w.binding(),
         }
     }
 
@@ -174,6 +188,7 @@ impl EntailmentWarrant {
             Self::Refutation(w) => w.closure_size(),
             Self::Freeze(w) => w.closure_size(),
             Self::Comprehension(w) => w.closure_size(),
+            Self::Reflexivity(w) => w.closure_size(),
         }
     }
 }
@@ -301,6 +316,9 @@ pub fn verify(w: &EntailmentWarrant, premise: &RdfDataset, conclusion: &RdfDatas
         EntailmentWarrant::Freeze(frozen) => verify_freeze(frozen, premise, conclusion),
         EntailmentWarrant::Comprehension(comprehended) => {
             verify_comprehension(comprehended, premise, conclusion)
+        }
+        EntailmentWarrant::Reflexivity(reflexive) => {
+            verify_reflexivity(reflexive, premise, conclusion)
         }
     }
 }

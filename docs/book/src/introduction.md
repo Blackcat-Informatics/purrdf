@@ -47,7 +47,7 @@ reimplemented per language.
   See [Validation](validation/shacl.md).
 - **Entailment** — Simple/RDF/RDFS/OWL-RL/D materialization (all 78 OWL 2 RL
   rules implemented — rule-table coverage, distinct from entailment
-  conformance, where W3C's own OWL 2 RL tests score 22 of 27 positive and 23 of
+  conformance, where W3C's own OWL 2 RL tests score 23 of 27 positive and 23 of
   23 negative), an OWL-Direct tableau, and RIF-Core rules, with a reasoning
   report on every closure. See [Entailment](entailment.md), evaluated on the
   [Datalog fixpoint engine](datalog.md).
