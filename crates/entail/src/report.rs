@@ -1051,10 +1051,20 @@ impl DatasetSurvey {
     /// because every graph is now reasoned over: a named graph is closed against the union
     /// of itself and the default graph, so a triple term sitting in one is a term this
     /// crate's chase cannot look inside exactly as a default-graph one is.
+    ///
+    /// All three questions are answered in one pass, so the three-way break below can
+    /// actually fire: the `owl:imports` id is resolved once before the loop (a dataset that
+    /// never mentions the predicate interns no id for it, so that lookup costs one map
+    /// probe), and each quad's predicate id — read alongside its resolved [`TermRef`] view
+    /// via `ds.quads()`, zipped lock-step with `ds.quad_refs()` — is compared to it directly
+    /// rather than by a second full scan. When no id was interned, the import question is
+    /// already settled as `false`, so the exit guard treats "no id to match" the same as
+    /// "already found"; either way the loop still stops the moment the other two flags are
+    /// set, rather than draining the rest of the dataset.
     fn of(ds: &RdfDataset) -> Self {
         let mut survey = Self::default();
         let imports = ds.term_id_by_iri(crate::vocab::OWL_IMPORTS);
-        for quad in ds.quad_refs() {
+        for (ids, quad) in ds.quads().zip(ds.quad_refs()) {
             if quad.g.is_some() {
                 survey.named_graph = true;
             }
@@ -1064,14 +1074,16 @@ impl DatasetSurvey {
             {
                 survey.triple_term = true;
             }
-            if survey.named_graph && survey.triple_term && survey.ontology_import {
+            if imports == Some(ids.p) {
+                survey.ontology_import = true;
+            }
+            if survey.named_graph
+                && survey.triple_term
+                && (survey.ontology_import || imports.is_none())
+            {
                 break;
             }
         }
-        // The import question is a predicate lookup rather than a per-quad comparison: the
-        // dataset already indexes its terms, so a graph that never mentions `owl:imports`
-        // interns no id for it and the whole question costs one map probe.
-        survey.ontology_import = imports.is_some_and(|id| ds.quads().any(|quad| quad.p == id));
         survey
     }
 }
@@ -1712,6 +1724,85 @@ mod tests {
                 "{construct}"
             );
             assert_ne!(report.completeness(), Completeness::Exact, "{construct}");
+        }
+    }
+
+    /// `DatasetSurvey::of` reports each of its three flags independently of the other two,
+    /// across every one of the eight combinations.
+    ///
+    /// This pins the survey's single loop: `named_graph`, `triple_term` and
+    /// `ontology_import` are each set from a distinct condition inside one pass over
+    /// `ds.quads().zip(ds.quad_refs())`, and the loop exits the moment all three are
+    /// settled rather than draining the rest of the dataset. Because the three fields are
+    /// monotonic OR accumulators, an early exit that fired on the wrong guard (or fired too
+    /// early) could only be caught by checking the FINAL flags against every combination of
+    /// which conditions the dataset actually holds — a single "does it work at all" case
+    /// would pass even with a guard that always breaks after the first quad. Every
+    /// combination is built with a leading quad every dataset carries (so the false/false/
+    /// false case still exercises the loop) and the three constructs are added in a fixed
+    /// position, so the flag that a construct isn't present at is exercised even when a
+    /// later quad WOULD have set it.
+    #[test]
+    fn survey_reports_each_flag_independently_of_the_others() {
+        use purrdf_core::RdfDatasetBuilder;
+
+        use super::DatasetSurvey;
+        use crate::vocab::OWL_IMPORTS;
+
+        const NS: &str = "http://example.org/dataset-survey#";
+
+        for named_graph in [false, true] {
+            for triple_term in [false, true] {
+                for ontology_import in [false, true] {
+                    let mut b = RdfDatasetBuilder::new();
+                    let s = b.intern_iri(&format!("{NS}s"));
+                    let o = b.intern_iri(&format!("{NS}o"));
+                    let plain_pred = b.intern_iri(&format!("{NS}plain"));
+                    let graph = if named_graph {
+                        Some(b.intern_iri(&format!("{NS}g")))
+                    } else {
+                        None
+                    };
+
+                    // Every combination carries this quad, so the all-false case still
+                    // walks the loop instead of surveying an empty dataset.
+                    b.push_quad(s, plain_pred, o, graph);
+
+                    if triple_term {
+                        // A quoted triple may sit in an asserted quad's OBJECT position
+                        // (an asserted statement's own SUBJECT and PREDICATE must be an
+                        // IRI/blank node and an IRI respectively — `RdfDatasetBuilder`
+                        // rejects a quoted-triple subject with `rdf-ir-triple-subject`).
+                        let inner = b.intern_triple(s, plain_pred, o);
+                        let holds = b.intern_iri(&format!("{NS}holds"));
+                        b.push_quad(s, holds, inner, graph);
+                    }
+
+                    if ontology_import {
+                        let imports = b.intern_iri(OWL_IMPORTS);
+                        let other_doc = b.intern_iri(&format!("{NS}other-ontology"));
+                        b.push_quad(s, imports, other_doc, graph);
+                    }
+
+                    let ds = b.freeze().expect("freeze");
+                    let survey = DatasetSurvey::of(&ds);
+                    assert_eq!(
+                        survey.named_graph, named_graph,
+                        "named_graph for (named_graph={named_graph}, \
+                         triple_term={triple_term}, ontology_import={ontology_import})"
+                    );
+                    assert_eq!(
+                        survey.triple_term, triple_term,
+                        "triple_term for (named_graph={named_graph}, \
+                         triple_term={triple_term}, ontology_import={ontology_import})"
+                    );
+                    assert_eq!(
+                        survey.ontology_import, ontology_import,
+                        "ontology_import for (named_graph={named_graph}, \
+                         triple_term={triple_term}, ontology_import={ontology_import})"
+                    );
+                }
+            }
         }
     }
 }
