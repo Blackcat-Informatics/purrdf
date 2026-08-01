@@ -902,6 +902,9 @@ class entail:
     # the answers to a basic graph pattern to be. `pattern` is N-Triples with
     # `?name` in any position, the PREDICATE included; a blank node in it is a
     # NON-DISTINGUISHED variable, constrained by the match and not projected. A
+    # variable inside an RDF 1.2 triple term is an ordinary variable — it binds
+    # and it is a column — and one NAME is one VARIABLE wherever it was written,
+    # so a pattern using it above and below the triple-term boundary is joined. A
     # predicate variable is projected like any other, and under OWL_RL it also
     # renders a `limit`: it ranges over the whole predicate vocabulary, including
     # the schema predicates and the constructs the mechanisms beyond the rule

@@ -318,7 +318,10 @@ table* whether a premise entails a conclusion *graph*.
 
 `pattern` is N-Triples with `?name` in any position, the **predicate** included; a blank
 node in it is a non-distinguished variable, constrained by the match and not projected,
-which is what SPARQL says a query blank node is. A row is a substitution the knowledge
+which is what SPARQL says a query blank node is. A variable inside an RDF 1.2 triple term
+is an ordinary variable — it binds and it is a column — and one *name* is one *variable*
+wherever it was written, so `?x <ex:p> <<( ?x <ex:q> <ex:r> )>>` is the join it reads as.
+A row is a substitution the knowledge
 base *entails* the pattern under — true in every model, not merely present in one closure.
 The one slot that admits no variable is a literal's **datatype**: `"5"^^?d` asks for a
 binding in a position that holds an IRI rather than a term, and raises `ValueError`

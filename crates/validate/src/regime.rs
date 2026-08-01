@@ -2377,14 +2377,6 @@ fn emit_var(key: &VarKey) -> String {
     }
 }
 
-/// The N-Triples blank-node label prefix a query variable NESTED IN A TRIPLE TERM keeps.
-///
-/// See [`parse_bgp`] for why a nested variable is a non-distinguished one rather than a
-/// projected one. The prefix is extended with `q`s until it occurs nowhere in the caller's
-/// own text, so a caller writing `_:purrdfQvar0` themselves cannot have it read as one of
-/// these.
-const QUERY_VAR_PREFIX: &str = "purrdfQvar";
-
 /// The IRI namespace a query VARIABLE is rewritten into before parsing.
 ///
 /// See [`parse_bgp`] for why the rewrite happens at all and why the namespace is an IRI
@@ -2424,13 +2416,16 @@ const QUERY_VAR_IRI: &str = "urn:purrdf-query-variable:purrdfQvar";
 /// construct the caller had not written. An IRI is legal in all three positions, so the
 /// stand-in is one, and the promise is now true rather than qualified.
 ///
-/// # A variable INSIDE an RDF 1.2 triple term is non-distinguished
+/// # A variable INSIDE an RDF 1.2 triple term is THE SAME VARIABLE
 ///
-/// [`QNode`] is a variable OR a term, with no nesting, so a variable inside a triple term
-/// has no projected form to be mapped back to. Such an occurrence therefore becomes the
-/// blank node it has always been — a non-distinguished variable, in the swept
-/// [`QUERY_VAR_PREFIX`] namespace — rather than being left as the stand-in IRI, which would
-/// be a term this boundary invented appearing in the caller's own pattern.
+/// [`QNode`] nests, so a variable inside a triple term is mapped back to [`QNode::Var`]
+/// exactly like one at top level and is projected exactly like one. That is not a
+/// convenience: one NAME is one VARIABLE wherever the caller wrote it, so
+/// `?x <ex:p> <<( ?x <ex:q> <ex:r> )>>` is the join it reads as, and a premise that fails
+/// it returns no row. A nested occurrence carried as a term of its own — a blank node, say
+/// — would have been a SECOND variable joined to the first by nothing, so the pattern
+/// would have matched premises that do not satisfy it. The nesting is in [`QNode`] for
+/// that reason and no other.
 ///
 /// # A variable in a literal's DATATYPE is refused, by name
 ///
@@ -2441,21 +2436,36 @@ const QUERY_VAR_IRI: &str = "urn:purrdf-query-variable:purrdfQvar";
 /// blank-node stand-in used to get — with a message naming the position, instead of a
 /// parser diagnostic about a construct the caller did not write.
 ///
+/// # The sweep reads the pattern the way the PARSER will read it
+///
+/// The stand-in namespace is extended with `q`s until it occurs nowhere in the caller's
+/// text — and "occurs" has to mean what the PARSER will see, not what the bytes spell. An
+/// N-Triples IRIREF admits `UCHAR` escapes, so `<urn:purrdf-query-variable:…>` and
+/// `<urn:pur\u0072df-query-variable:…>` are ONE IRI written two ways: the second does not
+/// contain the namespace as text, the parser hands back an IRI that does, and a sweep over
+/// the raw bytes alone would then read the caller's own IRI back as a variable — one
+/// spelling answering a different question from the other. So the sweep runs over the raw
+/// text AND over [`uchar_expanded`], and either occurrence extends the namespace.
+///
+/// That is sound rather than approximate. The lexer's only transformation of an IRIREF
+/// body is `\uXXXX`/`\UXXXXXXXX` decoding, and in a document that parses at all every `\`
+/// inside an IRIREF begins a valid `UCHAR` — so the expansion visits the same escapes the
+/// lexer does and yields a string containing every IRI value the parse can produce. A
+/// document where that is not true is one the parser refuses, and a refusal is not an
+/// answer. Expanding a `\u` the parser would NOT decode (in a comment, say) can only
+/// extend the namespace further, which costs a `q` and no correctness.
+///
 /// # Errors
 ///
 /// A `?` with no name after it, a variable in a literal's datatype, or a document the
 /// N-Triples parser refuses.
 fn parse_bgp(text: &str) -> Result<Vec<purrdf_entail::QTriple>, String> {
-    // Two namespaces the caller's own text does not contain, swept the same way: the IRI a
-    // variable is rewritten INTO, so no IRI the caller wrote can be read back as a variable,
-    // and the blank-node label a nested variable comes back OUT as, so it cannot collide with
-    // a blank node the caller wrote.
-    let mut prefix = QUERY_VAR_PREFIX.to_owned();
-    while text.contains(&prefix) {
-        prefix.push('q');
-    }
+    // The one namespace the caller's own text does not contain — the IRI a variable is
+    // rewritten INTO, so no IRI the caller wrote can be read back as a variable, in either
+    // of the two ways N-Triples lets them write it (see the item docs).
+    let expanded = uchar_expanded(text);
     let mut iri_prefix = QUERY_VAR_IRI.to_owned();
-    while text.contains(&iri_prefix) {
+    while text.contains(&iri_prefix) || expanded.contains(&iri_prefix) {
         iri_prefix.push('q');
     }
     let mut names: Vec<String> = Vec::new();
@@ -2546,19 +2556,11 @@ fn parse_bgp(text: &str) -> Result<Vec<purrdf_entail::QTriple>, String> {
             .and_then(|index| index.parse::<usize>().ok())
             .filter(|index| *index < names.len())
     };
+    // One walk for all three positions and every depth below them: `restore_query_vars` is
+    // total over the term, so no stand-in can survive into a returned pattern, and a nested
+    // occurrence comes back as the SAME variable a top-level one does.
     let node = |term: TermValue| -> Result<purrdf_entail::QNode, String> {
-        if let TermValue::Iri(iri) = &term
-            && let Some(index) = slot(iri)
-        {
-            return Ok(purrdf_entail::QNode::Var(names[index].clone()));
-        }
-        // A stand-in NESTED in a triple term has no projected form (see the item docs), so it
-        // comes back as the non-distinguished variable it has always been. The walk is total
-        // over the term, so no stand-in can survive at any depth — and the one slot that has
-        // no such form at all, a literal's datatype, is refused there rather than carried.
-        Ok(purrdf_entail::QNode::Term(demote_query_vars(
-            term, &slot, &names, &prefix,
-        )?))
+        restore_query_vars(term, &slot, &names)
     };
     let mut bgp = Vec::new();
     // `quads()` yields interned ids in document order, so the pattern's own triple order —
@@ -2580,65 +2582,88 @@ fn parse_bgp(text: &str) -> Result<Vec<purrdf_entail::QTriple>, String> {
     Ok(bgp)
 }
 
-/// Every [`QUERY_VAR_IRI`] stand-in inside `term`, as the blank node a non-distinguished
-/// variable is — or the refusal of the one slot that has no such reading.
+/// `term`, as the query node it stands for: every [`QUERY_VAR_IRI`] stand-in inside it back
+/// to the variable the caller wrote — or the refusal of the one slot that has no such
+/// reading.
 ///
 /// TOTAL over the term's structure, and that is the point rather than a detail: the stand-in
 /// is a name this boundary invented to get a variable past a parser, so an occurrence of it
 /// that survived into a returned pattern would reach a row, a binding or a warrant as though
-/// the caller had written it. [`parse_bgp`] maps the three top-level positions to
-/// [`QNode::Var`] and this maps everything below them, so between the two there is no
-/// position a stand-in can come out of.
+/// the caller had written it. This maps the three top-level positions AND everything below
+/// them, so there is no position a stand-in can come out of.
+///
+/// A stand-in below the top level becomes the same [`QNode::Var`] one at the top level does,
+/// carried by [`QNode::Triple`]. That is what makes one NAME one VARIABLE: the matcher keys
+/// a binding by the name at every depth, so `?x <ex:p> <<( ?x <ex:q> <ex:r> )>>` is the join
+/// it reads as. A nested occurrence demoted to a blank node instead — which is what this
+/// used to do — was a second variable that the first constrained in no way, so a premise
+/// failing the join still produced a row.
 ///
 /// Totality is a claim about [`TermValue`]'s own definition, so here are its slots and what
 /// each one does with a stand-in:
 ///
-/// * [`TermValue::Iri`] — an IRI slot, and the only one a stand-in can be PARSED into at
-///   top level. Demoted to the swept blank node below.
+/// * [`TermValue::Iri`] — an IRI slot, and the only one a stand-in can be PARSED into.
+///   Mapped back to the variable it stands for.
 /// * [`TermValue::Blank`] — `label` is a bare blank-node label and `scope` a structural
 ///   ordinal. N-Triples' `BLANK_NODE_LABEL` admits no `:`, so no label can spell an IRI at
-///   all, and a blank node the caller wrote is already the non-distinguished variable this
-///   would demote a stand-in to. Carried through unchanged.
+///   all, and a blank node the caller wrote is the non-distinguished variable SPARQL says
+///   it is. Carried through unchanged.
 /// * [`TermValue::Literal`] — four slots, one of which is an IRI. `lexical_form` is opaque
 ///   text the scanner never rewrites (a `?` inside a quoted literal is data); `language` is
 ///   a `BCP 47`-shaped tag, which admits no `:` and so cannot spell an IRI; `direction` is
 ///   an enum with no string at all; and `datatype` IS an IRI, which is why it is refused
 ///   here rather than walked — see [`parse_bgp`]'s own docs.
 /// * [`TermValue::Triple`] — three nested term slots, each of which is one of the above.
-///   Recursed into, so the audit holds at every depth.
+///   Recursed into, so the audit holds at every depth. A triple term with a variable
+///   anywhere inside it becomes [`QNode::Triple`]; a fully ground one stays a term.
 ///
 /// A graph name is not a slot of a term: [`parse_bgp`] refuses a pattern that names a graph
 /// before it reads one, so no fourth position exists for a stand-in to reach.
 ///
 /// `slot` is [`parse_bgp`]'s own reader, so the two cannot disagree about which IRIs are
-/// stand-ins; `names` is its variable table, so a refusal can name the variable the caller
-/// actually wrote; and `prefix` is the swept blank-node namespace the demoted variable lands
-/// in.
+/// stand-ins, and `names` is its variable table, so a variable comes back under the name the
+/// caller actually wrote and a refusal can say which one it means.
 ///
 /// # Errors
 ///
 /// A stand-in in a literal's `datatype`. [`QNode`] has no variable-datatype form, so the
 /// alternatives are a refusal or a term of this boundary's own invented namespace reaching
 /// the matcher as if the caller had written it.
-fn demote_query_vars(
+fn restore_query_vars(
     term: TermValue,
     slot: &impl Fn(&str) -> Option<usize>,
     names: &[String],
-    prefix: &str,
-) -> Result<TermValue, String> {
+) -> Result<purrdf_entail::QNode, String> {
     match term {
         TermValue::Iri(ref iri) => Ok(match slot(iri) {
-            Some(index) => TermValue::Blank {
-                label: format!("{prefix}{index}"),
-                scope: purrdf_core::BlankScope::DEFAULT,
-            },
-            None => term,
+            Some(index) => purrdf_entail::QNode::Var(names[index].clone()),
+            None => purrdf_entail::QNode::Term(term),
         }),
-        TermValue::Triple { s, p, o } => Ok(TermValue::Triple {
-            s: Box::new(demote_query_vars(*s, slot, names, prefix)?),
-            p: Box::new(demote_query_vars(*p, slot, names, prefix)?),
-            o: Box::new(demote_query_vars(*o, slot, names, prefix)?),
-        }),
+        TermValue::Triple { s, p, o } => {
+            let s = restore_query_vars(*s, slot, names)?;
+            let p = restore_query_vars(*p, slot, names)?;
+            let o = restore_query_vars(*o, slot, names)?;
+            // A triple term with no variable in it is a TERM, not a three-node question:
+            // the pattern layer reads a ground `QNode::Term` and a ground `QNode::Triple`
+            // the same way, and keeping the term shape keeps an RDF 1.2 pattern's own terms
+            // the ones the caller wrote.
+            Ok(match (s, p, o) {
+                (
+                    purrdf_entail::QNode::Term(s),
+                    purrdf_entail::QNode::Term(p),
+                    purrdf_entail::QNode::Term(o),
+                ) => purrdf_entail::QNode::Term(TermValue::Triple {
+                    s: Box::new(s),
+                    p: Box::new(p),
+                    o: Box::new(o),
+                }),
+                (s, p, o) => purrdf_entail::QNode::Triple {
+                    s: Box::new(s),
+                    p: Box::new(p),
+                    o: Box::new(o),
+                },
+            })
+        }
         TermValue::Literal {
             ref lexical_form,
             ref datatype,
@@ -2650,10 +2675,67 @@ fn demote_query_vars(
                  term can be bound",
                 names[index]
             )),
-            None => Ok(term),
+            None => Ok(purrdf_entail::QNode::Term(term)),
         },
-        TermValue::Blank { .. } => Ok(term),
+        TermValue::Blank { .. } => Ok(purrdf_entail::QNode::Term(term)),
     }
+}
+
+/// `text` with every N-Triples `UCHAR` escape — `\uXXXX` and `\UXXXXXXXX` — replaced by the
+/// character it denotes.
+///
+/// The one string [`parse_bgp`]'s namespace sweep needs beside the raw text: an IRIREF's
+/// only decoding is this one, so an IRI the parser will hand back containing the stand-in
+/// namespace must spell that namespace here, whichever of the two ways the caller wrote it.
+/// See [`parse_bgp`] for why sweeping the raw bytes alone is not enough and why expanding an
+/// escape the parser would not decode costs nothing.
+///
+/// A `\` that does not begin a well-formed `UCHAR` is copied through as itself, exactly as
+/// the lexer leaves it — one that reaches an IRIREF makes the document unparseable, and one
+/// inside a literal is some other escape whose expansion no IRI can be read out of.
+fn uchar_expanded(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'\\'
+            && let Some((width, decoded)) = read_uchar(bytes, at)
+        {
+            out.push(decoded);
+            at += width;
+            continue;
+        }
+        // `at` is a char boundary: every byte consumed above is ASCII, and so is every byte
+        // of an escape, so the slice below always starts on one.
+        let character = text[at..]
+            .chars()
+            .next()
+            .expect("`at` is a char boundary inside the string");
+        out.push(character);
+        at += character.len_utf8();
+    }
+    out
+}
+
+/// The `UCHAR` escape starting at byte `at` (the `\`), as `(bytes consumed, character)`.
+///
+/// The escape is all-ASCII, so the byte count is the character count. `None` for anything
+/// that is not a complete, in-range `\uXXXX` / `\UXXXXXXXX` — the same reading the lexer
+/// this shadows applies, so the two agree about what an escape IS as well as about what it
+/// denotes.
+fn read_uchar(bytes: &[u8], at: usize) -> Option<(usize, char)> {
+    let width = match *bytes.get(at + 1)? {
+        b'u' => 4,
+        b'U' => 8,
+        _ => return None,
+    };
+    let mut value: u32 = 0;
+    for offset in 0..width {
+        // Sixteen times a 28-bit prefix plus a digit, `width` times: `\U`'s eight digits
+        // reach `u32::MAX` exactly, so no step can overflow.
+        value = value * 16 + char::from(*bytes.get(at + 2 + offset)?).to_digit(16)?;
+    }
+    Some((2 + width, char::from_u32(value)?))
 }
 
 /// The caller's `owl:imports` table, as an ORDERED list of `(ontology-iri, document)` pairs.
@@ -2741,6 +2823,11 @@ fn with_premise<T>(
 ///
 /// A blank node in the pattern is a NON-DISTINGUISHED variable: constrained by the match,
 /// not projected, and not a column — which is what SPARQL says a query blank node is.
+///
+/// A variable INSIDE an RDF 1.2 triple term is an ordinary variable: it binds, it is a
+/// column, and one NAME is one VARIABLE wherever the caller wrote it — so
+/// `?x <ex:p> <<( ?x <ex:q> <ex:r> )>>` is the join it reads as and a premise that fails it
+/// yields no row.
 ///
 /// A predicate variable is projected like any other, and under `owl-rl` it also renders a
 /// `limit`: it ranges over the whole predicate vocabulary, so it ranges over the schema
@@ -4709,16 +4796,15 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
         );
     }
 
-    /// A VARIABLE INSIDE AN RDF 1.2 TRIPLE TERM IS THE NON-DISTINGUISHED ONE IT HAS ALWAYS
-    /// BEEN.
+    /// A VARIABLE INSIDE AN RDF 1.2 TRIPLE TERM IS A VARIABLE, AND A COLUMN.
     ///
-    /// [`QNode`](purrdf_entail::QNode) is a variable OR a term with no nesting, so a variable
-    /// below the top level has no projected form: it constrains the match and is not a
-    /// column, which is what SPARQL says a query blank node is. What is asserted here is that
-    /// it does not become anything ELSE — the stand-in IRI must not survive as a ground term,
-    /// and the top-level variables beside it must still be projected.
+    /// [`QNode`](purrdf_entail::QNode) nests, so a variable below the top level is the same
+    /// kind of variable one above it is: it binds, it is projected, and it appears in the
+    /// caller's own first-occurrence order beside the top-level ones. What is asserted here
+    /// is the whole answer, so the stand-in IRI cannot have survived as a ground term and no
+    /// position can have been dropped.
     #[test]
-    fn a_variable_inside_a_triple_term_is_not_projected() {
+    fn a_variable_inside_a_triple_term_is_a_variable_of_the_pattern() {
         let premise = "<http://example.org/q> <http://example.org/r> \
 <<( <http://example.org/s> <http://example.org/p> <http://example.org/o> )>> .\n";
         let answers =
@@ -4726,9 +4812,200 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
                 .expect("answers");
         assert_eq!(
             answers.answer(),
-            "mechanism strict-table\nvar a\nvar b\n\
-             row <http://example.org/q> <http://example.org/r>\n",
-            "only the top-level positions are columns"
+            "mechanism strict-table\nvar a\nvar b\nvar s\nvar p\nvar o\n\
+             row <http://example.org/q> <http://example.org/r> <http://example.org/s> \
+             <http://example.org/p> <http://example.org/o>\n",
+            "every position the caller wrote a `?` in is a column"
+        );
+    }
+
+    /// ONE NAME IS ONE VARIABLE ACROSS A TRIPLE-TERM BOUNDARY, SO AN UNSATISFIABLE JOIN
+    /// RETURNS NO ROW.
+    ///
+    /// The defect this pins is a SILENT WRONG ANSWER rather than a missing column: a nested
+    /// occurrence carried as its own term was a second variable the first constrained in no
+    /// way, so `?x <p> <<( ?x … )>>` matched a premise whose quoted subject is somebody else
+    /// — an EXTRA row, which no `limit` line can excuse, since a limit says the row set may
+    /// not be exhaustive and never that a row in it is not an answer.
+    ///
+    /// Asserted SEMANTICALLY, over two premises that differ only in whether the join holds:
+    /// the pattern is the same one both times, so a run that returns the same answer for
+    /// both is not enforcing the join whatever it renders.
+    #[test]
+    fn a_variable_used_inside_and_outside_a_triple_term_is_one_variable() {
+        let pattern = "?x <http://example.org/p> \
+<<( ?x <http://example.org/q> <http://example.org/r> )>> .\n";
+        // The quoted subject is somebody ELSE, so `?x` cannot be both at once.
+        let unsatisfiable = "<http://example.org/a> <http://example.org/p> \
+<<( <http://example.org/b> <http://example.org/q> <http://example.org/r> )>> .\n";
+        let answers =
+            certain_answers_to_string("simple", unsatisfiable, pattern, &[]).expect("answers");
+        assert_eq!(
+            answers.answer(),
+            "mechanism strict-table\nvar x\n",
+            "no substitution satisfies both occurrences of `?x`, so there is no certain answer"
+        );
+
+        // The same pattern over a premise that DOES satisfy the join.
+        let satisfiable = "<http://example.org/a> <http://example.org/p> \
+<<( <http://example.org/a> <http://example.org/q> <http://example.org/r> )>> .\n";
+        let answers =
+            certain_answers_to_string("simple", satisfiable, pattern, &[]).expect("answers");
+        assert_eq!(
+            answers.answer(),
+            "mechanism strict-table\nvar x\nrow <http://example.org/a>\n",
+            "the join holds here, so the row is a certain answer"
+        );
+
+        // ACROSS TWO TRIPLES of one pattern: nested in the first, top level in the second.
+        let cross = "<http://example.org/a> <http://example.org/p> \
+<<( <http://example.org/b> <http://example.org/q> <http://example.org/r> )>> .\n\
+<http://example.org/c> <http://example.org/k> <http://example.org/v> .\n";
+        let answers = certain_answers_to_string(
+            "simple",
+            cross,
+            "<http://example.org/a> <http://example.org/p> \
+<<( ?x <http://example.org/q> <http://example.org/r> )>> .\n\
+?x <http://example.org/k> <http://example.org/v> .\n",
+            &[],
+        )
+        .expect("answers");
+        assert_eq!(
+            answers.answer(),
+            "mechanism strict-table\nvar x\n",
+            "`?x` is <b> in the quoted triple and <c> in the second triple, which is no \
+             substitution at all"
+        );
+
+        // And a PURELY NESTED name still answers: a variable that occurs only below the top
+        // level is an ordinary variable, not a case this refuses.
+        let answers = certain_answers_to_string(
+            "simple",
+            unsatisfiable,
+            "<http://example.org/a> <http://example.org/p> \
+<<( ?y <http://example.org/q> <http://example.org/r> )>> .\n",
+            &[],
+        )
+        .expect("answers");
+        assert_eq!(
+            answers.answer(),
+            "mechanism strict-table\nvar y\nrow <http://example.org/b>\n"
+        );
+    }
+
+    /// ONE IRI IS ONE IRI, HOWEVER THE CALLER SPELLED IT — INCLUDING IN THE STAND-IN'S OWN
+    /// NAMESPACE.
+    ///
+    /// [`QUERY_VAR_IRI`] is swept out of the caller's text so that no IRI the caller wrote
+    /// can be read back as a variable. N-Triples lets an IRIREF spell any character as a
+    /// `UCHAR`, so a sweep over the raw bytes alone missed a namespace one of whose letters
+    /// was escaped: the parser reconstructed it and the reverse mapping read the caller's
+    /// own IRI as a variable, which is a SILENT WRONG ANSWER — the escaped spelling
+    /// answered a different question from the plain one, both with no `limit` line.
+    ///
+    /// Asserted SEMANTICALLY over four positions and both escape widths: the two spellings
+    /// of one IRI must produce ONE answer. A rendered-output grep would not catch the
+    /// datatype case at all, because a diagnostic elides a literal's datatype.
+    #[test]
+    fn one_iri_two_spellings_is_one_answer() {
+        // The three spellings of the second `r` of `purrdf`: itself, and both `UCHAR`
+        // widths. Each spells the stand-in namespace exactly — as the PARSER reads it, not
+        // as the bytes read.
+        let spellings = ["r", "\\u0072", "\\U00000072"];
+        let stand_in = |letter: &str| format!("urn:pur{letter}df-query-variable:purrdfQvar0");
+
+        // SUBJECT and OBJECT, over a premise whose one triple is `<a> <p> <a>`: read as a
+        // variable, the stand-in would join with `?s`/`?o` and produce a row; read as the
+        // IRI it is, the premise holds no such term and there is none.
+        let reflexive = "<http://example.org/a> <http://example.org/p> <http://example.org/a> .\n";
+        for (premise, pattern, expected) in [
+            (
+                reflexive,
+                "?s <http://example.org/p> <{IRI}> .\n",
+                "mechanism strict-table\nvar s\n",
+            ),
+            (
+                reflexive,
+                "<{IRI}> <http://example.org/p> ?o .\n",
+                "mechanism strict-table\nvar o\n",
+            ),
+            // PREDICATE, over `<a> <p> <p>`: read as a variable the stand-in would bind to
+            // `?o`'s own term.
+            (
+                "<http://example.org/a> <http://example.org/p> <http://example.org/p> .\n",
+                "<http://example.org/a> <{IRI}> ?o .\n",
+                "mechanism strict-table\nvar o\n",
+            ),
+            // DATATYPE, over a premise that USES the namespace as a datatype: read as a
+            // variable the stand-in is refused by name, so the escaped spelling would refuse
+            // a pattern the plain one answers.
+            (
+                "<http://example.org/a> <http://example.org/p> \
+\"5\"^^<urn:purrdf-query-variable:purrdfQvar0> .\n",
+                "?s <http://example.org/p> \"5\"^^<{IRI}> .\n",
+                "mechanism strict-table\nvar s\nrow <http://example.org/a>\n",
+            ),
+        ] {
+            for spelling in spellings.map(stand_in) {
+                let written = pattern.replace("{IRI}", &spelling);
+                let answers = certain_answers_to_string("simple", premise, &written, &[])
+                    .unwrap_or_else(|refusal| panic!("{written}: {refusal}"));
+                assert_eq!(answers.answer(), expected, "{written}");
+            }
+        }
+    }
+
+    /// A `?` WRITTEN AS A `UCHAR` IS STILL NOT A VARIABLE.
+    ///
+    /// The property the escape-aware sweep must not cost: the scanner reads a `?` only
+    /// outside an IRI, outside a literal and outside a comment, and expanding escapes for
+    /// the SWEEP must not turn an escaped `?` inside one of those into a variable. Each
+    /// case writes the `?` as `?` and asserts the whole answer, which has no column for
+    /// it.
+    #[test]
+    fn an_escaped_question_mark_is_not_a_variable_either() {
+        // In an IRI's query string: the premise spells it raw, the pattern escaped, and the
+        // two are the same IRI — so a row means the escape was NOT read as a variable.
+        let premise = "<http://example.org/s> <http://example.org/p?zzz=1> \
+<http://example.org/o> .\n";
+        let answers = certain_answers_to_string(
+            "simple",
+            premise,
+            "<http://example.org/s> <http://example.org/p\\u003Fzzz=1> ?o .\n",
+            &[],
+        )
+        .expect("answers");
+        assert_eq!(
+            answers.answer(),
+            "mechanism strict-table\nvar o\nrow <http://example.org/o>\n"
+        );
+
+        // In a literal's lexical form.
+        let quoted = "<http://example.org/s> <http://example.org/p> \"is ?zzz a variable\" .\n";
+        let answers = certain_answers_to_string(
+            "simple",
+            quoted,
+            "<http://example.org/s> ?p \"is \\u003Fzzz a variable\" .\n",
+            &[],
+        )
+        .expect("answers");
+        assert_eq!(
+            answers.answer(),
+            "mechanism strict-table\nvar p\nrow <http://example.org/p>\n"
+        );
+
+        // In a comment, which no parser decodes at all.
+        let answers = certain_answers_to_string(
+            "simple",
+            ONE_TRIPLE,
+            "# is \\u003Fzzz a variable? it is prose.\n\
+<http://example.org/s> ?p <http://example.org/o> .\n",
+            &[],
+        )
+        .expect("answers");
+        assert_eq!(
+            answers.answer(),
+            "mechanism strict-table\nvar p\nrow <http://example.org/p>\n"
         );
     }
 

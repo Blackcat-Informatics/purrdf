@@ -129,18 +129,26 @@ pub(crate) fn patterns_at(triples: &[Triple], keep: &BTreeSet<usize>) -> Vec<Pat
 }
 
 /// Read a basic-graph-pattern node as a pattern position.
+///
+/// A [`QNode::Triple`] becomes a [`Pat::Triple`] whose own positions are read the same
+/// way, so a `?v` inside an RDF 1.2 triple term is the SAME [`VarKey::Projected`] as one
+/// outside it: [`try_unify`](super::homomorphism) keys the binding by that name at every
+/// depth, so one name is one variable and a pattern that uses it in both places is joined
+/// rather than split into two.
 fn bgp_node(node: &QNode) -> Pat {
     match node {
         QNode::Var(name) => Pat::Var(VarKey::Projected(name.clone())),
         QNode::Term(term) => conclusion_node(term.clone()),
+        QNode::Triple { s, p, o } => Pat::Triple(Box::new([bgp_node(s), bgp_node(p), bgp_node(o)])),
     }
 }
 
 /// The basic graph pattern `bgp`, read as patterns.
 ///
-/// A `?v` becomes [`VarKey::Projected`]; a blank node becomes [`VarKey::Blank`], because
-/// SPARQL reads a blank node in a query as a non-distinguished variable — the caller may
-/// constrain it but may not see it.
+/// A `?v` becomes [`VarKey::Projected`] wherever it occurs — inside an RDF 1.2 triple term
+/// as well as at top level, which is what [`projected_vars`] walks for; a blank node
+/// becomes [`VarKey::Blank`], because SPARQL reads a blank node in a query as a
+/// non-distinguished variable — the caller may constrain it but may not see it.
 pub(crate) fn bgp_patterns(bgp: &[QTriple]) -> Vec<PatTriple> {
     bgp.iter()
         .map(|triple| {

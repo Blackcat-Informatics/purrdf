@@ -90,16 +90,38 @@ use crate::owl_dl::{Kb, class_concept, hyper};
 use crate::report::{Construct, ReasoningReport};
 use crate::vocab::{OWL_SAMEAS, RDF_TYPE, RDFS_DOMAIN, RDFS_RANGE, RDFS_SUBCLASSOF};
 
-/// A node of a query basic-graph-pattern triple: a variable (by name) or a concrete
-/// RDF term. Blank nodes in the query are concrete terms ([`QNode::Term`] wrapping a
+/// A node of a query basic-graph-pattern triple: a variable (by name), a concrete
+/// RDF term, or an RDF 1.2 triple term whose own positions may be either.
+///
+/// Blank nodes in the query are concrete terms ([`QNode::Term`] wrapping a
 /// [`TermValue::Blank`]); the evaluator treats them as non-distinguished variables, but
 /// here they are the ground scaffold of a class expression.
+///
+/// # Why a triple term is a NODE KIND and not a [`TermValue::Triple`]
+///
+/// A [`TermValue`] is ground, so a triple term carried as one can hold no variable —
+/// and a caller who wrote the same name inside a triple term and at top level would
+/// have had TWO variables, joined by nothing, because the nested occurrence had no form
+/// to be the same variable IN. One name is one variable wherever it occurs, which is
+/// what SPARQL says and what a caller reads a pattern as meaning, so the nesting is in
+/// this type rather than under it. A FULLY GROUND triple term is still a
+/// [`QNode::Term`]: this variant is what a variable below the top level needs, not a
+/// second spelling of a term.
 #[derive(Debug, Clone)]
 pub enum QNode {
     /// A query variable, by its name (the part after `?`/`$`).
     Var(String),
     /// A concrete term (IRI, blank node, or literal).
     Term(TermValue),
+    /// An RDF 1.2 triple term, each of whose three positions is itself a query node.
+    Triple {
+        /// The quoted triple's subject node.
+        s: Box<Self>,
+        /// The quoted triple's predicate node.
+        p: Box<Self>,
+        /// The quoted triple's object node.
+        o: Box<Self>,
+    },
 }
 
 /// One query triple pattern in the neutral representation the DL layer consumes (so the
@@ -281,9 +303,15 @@ pub fn materialize_dl_reported(
 }
 
 /// Resolve a query node to an interned id (a variable yields `None`).
+///
+/// A [`QNode::Triple`] yields `None` for the same reason a variable does: it is a triple
+/// term with a VARIABLE somewhere inside it, so there is no one term to intern, and the
+/// query direction below reads it as the open position it is. A ground triple term is a
+/// [`QNode::Term`] and interns like any other term, so this costs an RDF 1.2 query
+/// nothing it used to have.
 fn resolve_node(interner: &mut Interner, node: &QNode) -> Option<u32> {
     match node {
-        QNode::Var(_) => None,
+        QNode::Var(_) | QNode::Triple { .. } => None,
         QNode::Term(tv) => Some(interner.intern(tv.clone())),
     }
 }

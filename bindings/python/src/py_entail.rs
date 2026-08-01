@@ -582,6 +582,9 @@ fn import_list(imports: &[(String, String)]) -> Vec<(&str, &str)> {
 /// `pattern` is N-Triples with `?name` in any position, the PREDICATE included. A
 /// blank node in it is a NON-DISTINGUISHED variable: constrained by the match, not
 /// projected, and not a column, which is what SPARQL says a query blank node is. A
+/// variable inside an RDF 1.2 triple term is an ordinary variable — it binds, it is a
+/// column, and one NAME is one VARIABLE wherever it was written, so a pattern that
+/// uses it above and below the triple-term boundary is joined rather than split. A
 /// predicate variable is projected like any other, and under `owl-rl` it also renders a
 /// `limit`: it ranges over the whole predicate vocabulary, including the schema
 /// predicates and the constructs the mechanisms beyond the rule table decide, and the

@@ -72,6 +72,13 @@
 //! own text, parses the result with the real N-Triples parser, and maps every such term back
 //! to a variable — which is how a `?name` reaches a position RDF reserves for an IRI. The
 //! rewrite is invisible on both sides, and [`purrdf_validate::regime`] states its full shape.
+//! It is also escape-aware: the swept namespace is chosen against the pattern as the PARSER
+//! will read it, so an IRI the caller wrote with a `UCHAR` escape is the same IRI as the one
+//! they wrote plainly and neither is read back as a variable.
+//!
+//! A `?name` INSIDE an RDF 1.2 triple term is an ordinary variable — it binds, it is a
+//! column, and one NAME is one VARIABLE wherever it was written, so
+//! `?x <ex:p> <<( ?x <ex:q> <ex:r> )>>` is the join it reads as.
 //!
 //! # One stdin
 //!

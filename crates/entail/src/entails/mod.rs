@@ -529,9 +529,11 @@ fn resolved_imports_error(error: EntailError) -> EntailError {
 /// exhaustive is [`CertainAnswers::is_complete`], derived from the same completeness
 /// conditions [`entails`] uses.
 ///
-/// A `?v` of the pattern is projected and appears in [`CertainAnswers::vars`]; a blank node
-/// of the pattern is a non-distinguished variable, constrained by the match and not
-/// projected, which is what SPARQL says a query blank node is.
+/// A `?v` of the pattern is projected and appears in [`CertainAnswers::vars`] — including a
+/// `?v` inside an RDF 1.2 triple term, which is the SAME variable as one of that name
+/// outside it, so the join is enforced rather than split into two unrelated variables; a
+/// blank node of the pattern is a non-distinguished variable, constrained by the match and
+/// not projected, which is what SPARQL says a query blank node is.
 ///
 /// # NOTHING TO PROJECT IS [`entails`]'S QUESTION, AND IS ANSWERED BY [`entails`]'S FOLD
 ///
@@ -2036,6 +2038,67 @@ mod tests {
                 .iter()
                 .any(|why| why.contains("differentFrom") || why.contains("witness")),
             "{constructs:?}"
+        );
+    }
+
+    /// A VARIABLE INSIDE AN RDF 1.2 TRIPLE TERM IS THE SAME VARIABLE AS ONE OUTSIDE IT.
+    ///
+    /// [`QNode::Triple`] exists so that a name used above and below a triple-term boundary
+    /// is ONE variable, joined by the match. Asserted semantically, over two premises that
+    /// differ only in whether the join holds: a construction that split the name into two
+    /// variables returns the same row for both, which is an EXTRA row — a substitution that
+    /// does not satisfy the pattern — and no limit line makes such a row an answer.
+    #[test]
+    fn a_name_used_inside_and_outside_a_triple_term_is_one_variable() {
+        let premise = |quoted_subject: &str| {
+            let mut b = RdfDatasetBuilder::new();
+            let a = b.intern_iri("http://example.org/a");
+            let p = b.intern_iri("http://example.org/p");
+            let q = b.intern_iri("http://example.org/q");
+            let r = b.intern_iri("http://example.org/r");
+            let subject = b.intern_iri(quoted_subject);
+            let quoted = b.intern_triple(subject, q, r);
+            b.push_quad(a, p, quoted, None);
+            b.freeze().expect("freeze")
+        };
+        // `?x <p> <<( ?x <q> <r> )>>`
+        let bgp = [QTriple {
+            s: QNode::Var("x".to_owned()),
+            p: QNode::Term(TermValue::iri("http://example.org/p")),
+            o: QNode::Triple {
+                s: Box::new(QNode::Var("x".to_owned())),
+                p: Box::new(QNode::Term(TermValue::iri("http://example.org/q"))),
+                o: Box::new(QNode::Term(TermValue::iri("http://example.org/r"))),
+            },
+        }];
+
+        // The quoted subject is somebody ELSE, so no substitution satisfies both
+        // occurrences.
+        let answers = certain_answers(
+            &premise("http://example.org/b"),
+            &bgp,
+            Regime::Simple,
+            &ImportMap::new(),
+        )
+        .expect("consistent");
+        assert_eq!(answers.vars(), ["x"]);
+        assert!(
+            answers.rows().is_empty(),
+            "`?x` cannot be <a> and <b> at once: {:?}",
+            answers.rows()
+        );
+
+        // …and the same pattern over a premise that DOES satisfy the join answers it.
+        let answers = certain_answers(
+            &premise("http://example.org/a"),
+            &bgp,
+            Regime::Simple,
+            &ImportMap::new(),
+        )
+        .expect("consistent");
+        assert_eq!(
+            answers.rows(),
+            [vec![TermValue::iri("http://example.org/a")]]
         );
     }
 
