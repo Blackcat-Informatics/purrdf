@@ -913,7 +913,9 @@ class entail:
     # a pattern with NO projected variable is a conclusion graph, is answered by
     # the same fold `graph_entails` runs, and names whichever of the seven
     # reached it. Raises ValueError for OWL_DIRECT and RIF, each defined by
-    # an input this signature does not carry.
+    # an input this signature does not carry, and for a variable in a literal's
+    # DATATYPE — a slot that holds an IRI rather than a term to bind, so
+    # `"5"^^?d` is refused by name rather than answered.
     #
     # `imports` is the caller's `owl:imports` table: an ORDERED sequence of
     # `(ontology_iri, document)` pairs, `document` being N-Quads text exactly

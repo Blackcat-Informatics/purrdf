@@ -606,31 +606,15 @@ pub fn certain_answers(
     let prepared = prepare(premise, regime, imports)?;
     let pats = bgp_patterns(bgp);
     let names = projected_vars(&pats);
-    // THE LANE SURVEY READS A GRAPH, AND A TRIPLE WITH A PROJECTED PREDICATE IS NOT ONE.
-    //
-    // Every lane's whitelist is stated over an RDF graph, and RDF says a predicate is an IRI —
-    // so a `?p` has no term to substitute that a graph can hold, and [`as_graph`] would answer
-    // `None` for the whole question. That would cost the OTHER triples their survey: a pattern
-    // pairing `?s ?p ?o` with `?x owl:differentFrom ex:Peter` would lose the refutation lane's
-    // limit as well, which is the silence this crate spends its whole design preventing. So
-    // the open-predicate triples are withheld from the survey graph and nothing else is, and
-    // what their openness costs is disclosed BY NAME as `UndecidedReason::OpenPredicate` from
-    // the precondition below.
-    //
-    // Only a PROJECTED predicate is withheld. A conclusion graph reaches this function through
-    // the branch below and its predicates are all ground, so nothing is ever withheld from the
-    // graph a verdict is decided against.
-    let surveyed: Vec<PatTriple> = pats
-        .iter()
-        .filter(|triple| !matches!(triple[1], Pat::Var(VarKey::Projected(_))))
-        .cloned()
-        .collect();
-    let question = as_graph(&surveyed, &names);
-
     // NOTHING TO PROJECT: this is `entails`'s question, so it is `entails`'s fold that answers
     // it. Routed rather than re-implemented — one implementation, two presentations.
+    //
+    // The WHOLE pattern reaches it, before the survey filter below exists. A verdict is a
+    // statement about the conjunction the caller asked about, and withholding a conjunct from
+    // it would make an unentailed question answer `entailed` — so the filter is built after
+    // this returns and there is no ordering in which it could reach a verdict.
     if names.is_empty()
-        && let Some(question) = &question
+        && let Some(question) = as_graph(&pats, &names)
     {
         let Prepared {
             merged,
@@ -646,6 +630,29 @@ pub fn certain_answers(
         )?;
         return Ok(verdict_answers(regime, &outcome, report));
     }
+
+    // THE LANE SURVEY READS A GRAPH, AND A TRIPLE WITH AN OPEN PREDICATE IS NOT ONE.
+    //
+    // Every lane's whitelist is stated over an RDF graph, and RDF says a predicate is an IRI —
+    // so an open predicate has no term to substitute that a graph can hold, `as_graph` cannot
+    // freeze one, and it would answer `None` for the whole question. That would cost the OTHER
+    // triples their survey: a pattern pairing `?s ?p ?o` with `?x owl:differentFrom ex:Peter`
+    // would lose the refutation lane's limit as well, which is the silence this crate spends
+    // its whole design preventing. So the open-predicate triples are withheld from the survey
+    // graph and nothing else is, and what their openness costs is disclosed BY NAME as
+    // `UndecidedReason::OpenPredicate` from the precondition below.
+    //
+    // BOTH kinds of variable are withheld, and that is the same list `open_predicates` reports:
+    // a non-distinguished predicate is a blank node, which is no more an RDF predicate than a
+    // projected variable's substitution is, and a survey that read one would be reading
+    // something the rule table's whitelists are not stated over. The two predicates agree
+    // because the position — not the projection — is what decides both.
+    let surveyed: Vec<PatTriple> = pats
+        .iter()
+        .filter(|triple| !matches!(triple[1], Pat::Var(_)))
+        .cloned()
+        .collect();
+    let question = as_graph(&surveyed, &names);
 
     // The table's own completeness conditions. `decided_by_refutation` is EMPTY here and that
     // is a claim rather than a default: the refutation lane is not run on this path, so no
@@ -2174,6 +2181,104 @@ mod tests {
             "{:?}",
             answers.limits()
         );
+    }
+
+    /// A NON-DISTINGUISHED PREDICATE IS OPEN IN THE SAME SENSE, AND BOTH PREDICATES SAY SO.
+    ///
+    /// `open_predicates` reports BOTH kinds of predicate variable, because the position and
+    /// not the projection is what the rule table's whitelists cannot range over. The survey
+    /// filter has to agree: a non-distinguished predicate is a blank node, RDF says a
+    /// predicate is an IRI, and `RdfDatasetBuilder::freeze` refuses one — so a survey graph
+    /// built with it inside is no graph at all and the WHOLE question loses its survey,
+    /// which is the silence the filter exists to prevent.
+    ///
+    /// No host can reach this: the N-Triples parser refuses a blank predicate, so the pattern
+    /// below can only be built by a Rust caller of this crate — which is why the assertion
+    /// lives here and not in a boundary test.
+    #[test]
+    fn a_non_distinguished_predicate_is_withheld_from_the_survey_like_a_projected_one() {
+        let premise = three_lane_premise();
+        let bgp = [
+            QTriple {
+                s: QNode::Var("s".to_owned()),
+                p: QNode::Term(TermValue::blank("np")),
+                o: QNode::Var("o".to_owned()),
+            },
+            QTriple {
+                s: QNode::Var("x".to_owned()),
+                p: QNode::Term(TermValue::iri(DIFFERENTFROM)),
+                o: QNode::Term(TermValue::iri(STEWIE)),
+            },
+        ];
+        let answers =
+            certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::new()).expect("consistent");
+        // The blank predicate is reported as open, naming the triple the caller wrote…
+        let open: Vec<&Vec<String>> = answers
+            .limits()
+            .iter()
+            .filter_map(|limit| match limit {
+                UndecidedReason::OpenPredicate(triples) => Some(triples),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            open,
+            [&vec!["?s _:np#0 ?o".to_owned()]],
+            "{:?}",
+            answers.limits()
+        );
+        // …and it is withheld from the survey graph, so the neighbour still gets surveyed.
+        assert!(
+            answers
+                .limits()
+                .iter()
+                .any(|limit| limit.mechanism() == EntailmentMechanism::Refutation),
+            "the neighbour keeps its own lane's limit: {:?}",
+            answers.limits()
+        );
+    }
+
+    /// A VERDICT IS DECIDED AGAINST THE WHOLE PATTERN, NEVER THE SURVEY'S FILTERED COPY.
+    ///
+    /// A pattern with nothing to project IS a conclusion graph, and the survey filter above
+    /// withholds triples from a SURVEY. Handing the filtered copy to the fold instead would
+    /// drop a conjunct, and dropping a conjunct only ever makes an entailment easier — so the
+    /// question below must not answer `yes` on the strength of its SECOND triple alone.
+    ///
+    /// `Peter` is a term the premise never mentions, so no triple of the closure has it in
+    /// both end positions and the first conjunct holds under no substitution for `_:np`.
+    /// `Stewie : Boy` is asserted, so the second conjunct is entailed on its own — which is
+    /// exactly what a truncated question would report as the answer to the conjunction.
+    #[test]
+    fn a_withheld_predicate_never_shrinks_the_question_a_verdict_is_decided_against() {
+        let premise = three_lane_premise();
+        let bgp = [
+            QTriple {
+                s: QNode::Term(TermValue::iri(PETER)),
+                p: QNode::Term(TermValue::blank("np")),
+                o: QNode::Term(TermValue::iri(PETER)),
+            },
+            QTriple {
+                s: QNode::Term(TermValue::iri(STEWIE)),
+                p: QNode::Term(TermValue::iri(TYPE)),
+                o: QNode::Term(TermValue::iri(BOY)),
+            },
+        ];
+        let answers =
+            certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::new()).expect("consistent");
+        assert!(answers.vars().is_empty(), "nothing is projected");
+        assert!(
+            answers.rows().is_empty(),
+            "the first conjunct holds under no substitution, so the conjunction does not \
+             either: {:?}",
+            answers.rows()
+        );
+        // The second conjunct on its own IS entailed, which is what makes the assertion above
+        // a statement about the question's SHAPE rather than about this premise.
+        assert!(matches!(
+            outcome(&premise, &graph(&[(STEWIE, TYPE, BOY)]), Regime::OwlRl),
+            EntailmentOutcome::Entailed(_)
+        ));
     }
 
     /// Every lane that would have been needed names itself, not only the refutation one.

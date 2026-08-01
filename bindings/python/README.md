@@ -320,6 +320,9 @@ table* whether a premise entails a conclusion *graph*.
 node in it is a non-distinguished variable, constrained by the match and not projected,
 which is what SPARQL says a query blank node is. A row is a substitution the knowledge
 base *entails* the pattern under — true in every model, not merely present in one closure.
+The one slot that admits no variable is a literal's **datatype**: `"5"^^?d` asks for a
+binding in a position that holds an IRI rather than a term, and raises `ValueError`
+naming it.
 
 A predicate variable is projected like any other, and under `OWL_RL` it also renders a
 `limit`: it ranges over the whole predicate vocabulary, so it ranges over the schema

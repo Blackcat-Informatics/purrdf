@@ -618,8 +618,10 @@ fn import_list(imports: &[(String, String)]) -> Vec<(&str, &str)> {
 /// Raises `ValueError` on `OWL_DIRECT` or `RIF` — each is defined by an input this
 /// signature does not carry, so both are refused by name rather than served by a weaker
 /// lane — on a malformed document, pattern or import document, on a duplicate or empty
-/// import IRI, on a pattern that names a graph, on an `owl:imports` `imports` does not
-/// resolve, and on an inconsistent premise, whose refusal carries the full report.
+/// import IRI, on a pattern that names a graph, on a pattern that writes a variable in a
+/// literal's DATATYPE (a slot RDF reserves for an IRI, and one a basic graph pattern has no
+/// binding to project), on an `owl:imports` `imports` does not resolve, and on an
+/// inconsistent premise, whose refusal carries the full report.
 #[pyfunction]
 #[pyo3(signature = (regime, data, pattern, imports))]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values

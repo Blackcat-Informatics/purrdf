@@ -614,8 +614,10 @@ pub(crate) fn certain_answers_impl(
 /// Throws on an unknown regime, on `owl-direct` or `rif` (each defined by an input this
 /// signature does not carry), on a malformed document, pattern or import document, on import
 /// arrays of different lengths, on a duplicate or empty import IRI, on a pattern that names
-/// a graph, on an `owl:imports` the table does not resolve, and on an inconsistent premise —
-/// whose refusal carries the full report.
+/// a graph, on a pattern that writes a variable in a literal's DATATYPE — a slot RDF reserves
+/// for an IRI, and one a basic graph pattern has no binding to project — on an `owl:imports`
+/// the table does not resolve, and on an inconsistent premise — whose refusal carries the
+/// full report.
 #[wasm_bindgen(js_name = entailCertainAnswers)]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 pub fn entail_certain_answers(

@@ -531,8 +531,14 @@ fn is_assertional(triple: &PatTriple) -> bool {
 /// a projected `?p` and a non-distinguished blank both range over every predicate the closure
 /// could hold, and [`is_assertional`] can read neither to decide whether the triple is a shape
 /// Tables 4–9 conclude. A conclusion GRAPH reaches this too and never has one — RDF says a
-/// predicate is an IRI, so a parsed conclusion's predicates are all ground — which is why this
+/// predicate is an IRI, so a PARSED conclusion's predicates are all ground — which is why this
 /// costs an entailment question nothing.
+///
+/// A non-distinguished predicate is therefore reachable only from a basic graph pattern a Rust
+/// caller BUILT, since no host's parser accepts one. [`certain_answers`](super::certain_answers)
+/// withholds the same two kinds from the survey graph it hands the lanes, and that agreement is
+/// the point: a triple reported open here must not also be interned into a survey graph's
+/// predicate slot, which is not a position an RDF graph has a term for.
 fn open_predicates(pats: &[PatTriple]) -> Vec<String> {
     pats.iter()
         .filter(|triple| matches!(triple[1], Pat::Var(_)))

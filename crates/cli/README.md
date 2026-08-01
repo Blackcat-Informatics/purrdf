@@ -283,7 +283,9 @@ ran on. A conclusion can also be entailed while appearing nowhere in the closure
   variable is projected like any other, and under `owl-rl` it also renders a
   `limit`: it ranges over the whole predicate vocabulary, including the schema
   predicates and the constructs the mechanisms beyond the rule table decide, and the
-  closure the rows are drawn from holds neither.
+  closure the rows are drawn from holds neither. The one slot that admits no
+  variable is a literal's **datatype**: `"5"^^?d` asks for a binding in a position
+  that holds an IRI rather than a term, and is refused by name.
 - `--import <IRI>=<FILE>` — repeatable; resolves one `owl:imports` the premise
   declares to one local document (see below).
 - `--report[=PATH]` — the reasoning certificate, as `reason --report`.

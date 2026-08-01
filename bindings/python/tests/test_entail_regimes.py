@@ -796,6 +796,55 @@ def test_the_variable_stand_in_never_reaches_a_python_caller() -> None:
             assert "purrdfQvar" not in answer + certificate
 
 
+def test_a_variable_in_a_literal_datatype_is_refused_rather_than_matched() -> None:
+    """`"5"^^?d` is refused by name, and never matches the stand-in namespace.
+
+    The datatype slot is the one position the stand-in's own legality opened up: RDF
+    forbids a blank node as a datatype, so the stand-in this replaced was refused
+    there by the parser, and an IRI is legal there. This asserts the SEMANTICS rather
+    than the rendering, because a diagnostic drops a literal's datatype when it
+    prints one — a stand-in that reached that slot is invisible to
+    `test_the_variable_stand_in_never_reaches_a_python_caller` above and answers a
+    question about the library's own namespace instead of the caller's data.
+    """
+    probe = "urn:purrdf-query-variable:purrdfQvar1"
+    premise = (
+        '<https://example.org/caller> <https://example.org/p> "5"^^<https://example.org/dt> .\n'
+        f'<https://example.org/probe> <https://example.org/p> "5"^^<{probe}> .\n'
+    )
+    # THE CONTROL: each half of the premise is reachable by the pattern that names its
+    # datatype, so a leak into the datatype slot would show up as a row.
+    answer, _ = entail.certain_answers(
+        entail.Regime.SIMPLE,
+        premise,
+        '?s <https://example.org/p> "5"^^<https://example.org/dt> .\n',
+        [],
+    )
+    assert answer == "mechanism strict-table\nvar s\nrow <https://example.org/caller>\n"
+    answer, _ = entail.certain_answers(
+        entail.Regime.SIMPLE,
+        premise,
+        f'?s <https://example.org/p> "5"^^<{probe}> .\n',
+        [],
+    )
+    assert answer == "mechanism strict-table\nvar s\nrow <https://example.org/probe>\n"
+
+    for pattern in [
+        '?s <https://example.org/p> "5"^^?d .\n',
+        '?d <https://example.org/p> "5"^^?d .\n',
+        '?a <https://example.org/q> '
+        '<<( <https://example.org/s> <https://example.org/p> "5"^^?d )>> .\n',
+    ]:
+        for regime in (entail.Regime.SIMPLE, entail.Regime.RDFS, entail.Regime.OWL_RL):
+            with pytest.raises(ValueError) as refused:
+                entail.certain_answers(regime, premise, pattern, [])
+            message = str(refused.value)
+            assert "a variable is not a datatype IRI" in message
+            assert "`?d`" in message
+            assert "urn:purrdf" not in message
+            assert "probe" not in message
+
+
 def test_graph_entails_gives_three_verdicts_and_names_the_mechanism() -> None:
     """THREE verdicts, never two — and the answer says which mechanism reached one.
 

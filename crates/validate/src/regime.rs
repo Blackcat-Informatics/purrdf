@@ -2432,9 +2432,19 @@ const QUERY_VAR_IRI: &str = "urn:purrdf-query-variable:purrdfQvar";
 /// [`QUERY_VAR_PREFIX`] namespace — rather than being left as the stand-in IRI, which would
 /// be a term this boundary invented appearing in the caller's own pattern.
 ///
+/// # A variable in a literal's DATATYPE is refused, by name
+///
+/// `"5"^^?d` is the one position the stand-in's own legality opens up: a datatype slot holds
+/// an IRI, so a blank-node stand-in was refused there by the parser and an IRI one is not.
+/// [`QNode`] has no variable-datatype form and SPARQL admits no variable in a datatype slot
+/// within a basic graph pattern, so the honest answer is the caller-visible refusal the
+/// blank-node stand-in used to get — with a message naming the position, instead of a
+/// parser diagnostic about a construct the caller did not write.
+///
 /// # Errors
 ///
-/// A `?` with no name after it, or a document the N-Triples parser refuses.
+/// A `?` with no name after it, a variable in a literal's datatype, or a document the
+/// N-Triples parser refuses.
 fn parse_bgp(text: &str) -> Result<Vec<purrdf_entail::QTriple>, String> {
     // Two namespaces the caller's own text does not contain, swept the same way: the IRI a
     // variable is rewritten INTO, so no IRI the caller wrote can be read back as a variable,
@@ -2536,16 +2546,19 @@ fn parse_bgp(text: &str) -> Result<Vec<purrdf_entail::QTriple>, String> {
             .and_then(|index| index.parse::<usize>().ok())
             .filter(|index| *index < names.len())
     };
-    let node = |term: TermValue| -> purrdf_entail::QNode {
+    let node = |term: TermValue| -> Result<purrdf_entail::QNode, String> {
         if let TermValue::Iri(iri) = &term
             && let Some(index) = slot(iri)
         {
-            return purrdf_entail::QNode::Var(names[index].clone());
+            return Ok(purrdf_entail::QNode::Var(names[index].clone()));
         }
         // A stand-in NESTED in a triple term has no projected form (see the item docs), so it
         // comes back as the non-distinguished variable it has always been. The walk is total
-        // over the term, so no stand-in can survive at any depth.
-        purrdf_entail::QNode::Term(demote_query_vars(term, &slot, &prefix))
+        // over the term, so no stand-in can survive at any depth — and the one slot that has
+        // no such form at all, a literal's datatype, is refused there rather than carried.
+        Ok(purrdf_entail::QNode::Term(demote_query_vars(
+            term, &slot, &names, &prefix,
+        )?))
     };
     let mut bgp = Vec::new();
     // `quads()` yields interned ids in document order, so the pattern's own triple order —
@@ -2559,16 +2572,16 @@ fn parse_bgp(text: &str) -> Result<Vec<purrdf_entail::QTriple>, String> {
             );
         }
         bgp.push(purrdf_entail::QTriple {
-            s: node(dataset.term_value(quad.s)),
-            p: node(dataset.term_value(quad.p)),
-            o: node(dataset.term_value(quad.o)),
+            s: node(dataset.term_value(quad.s))?,
+            p: node(dataset.term_value(quad.p))?,
+            o: node(dataset.term_value(quad.o))?,
         });
     }
     Ok(bgp)
 }
 
 /// Every [`QUERY_VAR_IRI`] stand-in inside `term`, as the blank node a non-distinguished
-/// variable is.
+/// variable is — or the refusal of the one slot that has no such reading.
 ///
 /// TOTAL over the term's structure, and that is the point rather than a detail: the stand-in
 /// is a name this boundary invented to get a variable past a parser, so an occurrence of it
@@ -2577,27 +2590,69 @@ fn parse_bgp(text: &str) -> Result<Vec<purrdf_entail::QTriple>, String> {
 /// [`QNode::Var`] and this maps everything below them, so between the two there is no
 /// position a stand-in can come out of.
 ///
+/// Totality is a claim about [`TermValue`]'s own definition, so here are its slots and what
+/// each one does with a stand-in:
+///
+/// * [`TermValue::Iri`] — an IRI slot, and the only one a stand-in can be PARSED into at
+///   top level. Demoted to the swept blank node below.
+/// * [`TermValue::Blank`] — `label` is a bare blank-node label and `scope` a structural
+///   ordinal. N-Triples' `BLANK_NODE_LABEL` admits no `:`, so no label can spell an IRI at
+///   all, and a blank node the caller wrote is already the non-distinguished variable this
+///   would demote a stand-in to. Carried through unchanged.
+/// * [`TermValue::Literal`] — four slots, one of which is an IRI. `lexical_form` is opaque
+///   text the scanner never rewrites (a `?` inside a quoted literal is data); `language` is
+///   a `BCP 47`-shaped tag, which admits no `:` and so cannot spell an IRI; `direction` is
+///   an enum with no string at all; and `datatype` IS an IRI, which is why it is refused
+///   here rather than walked — see [`parse_bgp`]'s own docs.
+/// * [`TermValue::Triple`] — three nested term slots, each of which is one of the above.
+///   Recursed into, so the audit holds at every depth.
+///
+/// A graph name is not a slot of a term: [`parse_bgp`] refuses a pattern that names a graph
+/// before it reads one, so no fourth position exists for a stand-in to reach.
+///
 /// `slot` is [`parse_bgp`]'s own reader, so the two cannot disagree about which IRIs are
-/// stand-ins, and `prefix` is the swept blank-node namespace the demoted variable lands in.
+/// stand-ins; `names` is its variable table, so a refusal can name the variable the caller
+/// actually wrote; and `prefix` is the swept blank-node namespace the demoted variable lands
+/// in.
+///
+/// # Errors
+///
+/// A stand-in in a literal's `datatype`. [`QNode`] has no variable-datatype form, so the
+/// alternatives are a refusal or a term of this boundary's own invented namespace reaching
+/// the matcher as if the caller had written it.
 fn demote_query_vars(
     term: TermValue,
     slot: &impl Fn(&str) -> Option<usize>,
+    names: &[String],
     prefix: &str,
-) -> TermValue {
+) -> Result<TermValue, String> {
     match term {
-        TermValue::Iri(ref iri) => match slot(iri) {
+        TermValue::Iri(ref iri) => Ok(match slot(iri) {
             Some(index) => TermValue::Blank {
                 label: format!("{prefix}{index}"),
                 scope: purrdf_core::BlankScope::DEFAULT,
             },
             None => term,
+        }),
+        TermValue::Triple { s, p, o } => Ok(TermValue::Triple {
+            s: Box::new(demote_query_vars(*s, slot, names, prefix)?),
+            p: Box::new(demote_query_vars(*p, slot, names, prefix)?),
+            o: Box::new(demote_query_vars(*o, slot, names, prefix)?),
+        }),
+        TermValue::Literal {
+            ref lexical_form,
+            ref datatype,
+            ..
+        } => match slot(datatype) {
+            Some(index) => Err(format!(
+                "a variable is not a datatype IRI: `?{}` stands in the datatype of the literal \
+                 \"{lexical_form}\", and a basic graph pattern admits a variable only where a \
+                 term can be bound",
+                names[index]
+            )),
+            None => Ok(term),
         },
-        TermValue::Triple { s, p, o } => TermValue::Triple {
-            s: Box::new(demote_query_vars(*s, slot, prefix)),
-            p: Box::new(demote_query_vars(*p, slot, prefix)),
-            o: Box::new(demote_query_vars(*o, slot, prefix)),
-        },
-        other => other,
+        TermValue::Blank { .. } => Ok(term),
     }
 }
 
@@ -2743,8 +2798,10 @@ fn with_premise<T>(
 /// An unknown regime spelling; a regime this service is not total over (`owl-direct` and
 /// `rif` are each defined by an input this signature does not carry); a malformed document,
 /// pattern or import document; a duplicate or empty import IRI; a pattern that names a graph;
-/// an `owl:imports` `imports` does not resolve; an inconsistent premise, whose refusal carries
-/// the full report; or an exhausted match budget.
+/// a pattern that writes a variable in a literal's DATATYPE, which is a slot RDF reserves for
+/// an IRI and for which a basic graph pattern has no binding to project; an `owl:imports`
+/// `imports` does not resolve; an inconsistent premise, whose refusal carries the full report;
+/// or an exhausted match budget.
 ///
 /// ```
 /// use purrdf_validate::regime::certain_answers_to_string;
@@ -4713,6 +4770,96 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
                         "{regime} / {pattern}: {rendered}"
                     );
                 }
+            }
+        }
+    }
+
+    /// A VARIABLE IN A LITERAL'S DATATYPE IS REFUSED, AND THE STAND-IN MATCHES NOTHING THERE.
+    ///
+    /// The datatype slot is the one position the stand-in's own legality opens up: RDF forbids
+    /// a blank node as a datatype, so the old stand-in was refused there by the parser, and an
+    /// IRI is legal there, so the new one parses straight in. This asserts the SEMANTICS
+    /// rather than the rendering, because
+    /// [`show`](purrdf_entail) drops a literal's datatype when a diagnostic prints it — a
+    /// stand-in that reached that slot would be invisible to
+    /// [`the_variable_stand_in_never_reaches_a_caller`], and would silently answer a question
+    /// about this boundary's own namespace instead of the caller's data.
+    #[test]
+    fn a_variable_in_a_literal_datatype_is_refused_rather_than_matched() {
+        // A premise whose second half is reachable ONLY through the stand-in namespace: one
+        // probe per slot index a pattern below could mint, so the assertion does not depend
+        // on which variable of the pattern is rewritten first.
+        let mut premise = String::from(
+            "<http://example.org/caller> <http://example.org/p> \"5\"^^<http://example.org/dt> .\n",
+        );
+        for index in 0..3_usize {
+            let _ = writeln!(
+                premise,
+                "<http://example.org/probe{index}> <http://example.org/p> \
+                 \"5\"^^<{QUERY_VAR_IRI}{index}> ."
+            );
+        }
+        // THE CONTROL: the probe half IS reachable by an ordinary pattern, so a leak into the
+        // datatype slot would show up as a row — this is what makes the refusals below a
+        // statement about matching rather than about parsing.
+        let control = certain_answers_to_string(
+            "simple",
+            &premise,
+            "?s <http://example.org/p> \"5\"^^<http://example.org/dt> .\n",
+            &[],
+        )
+        .expect("answers");
+        assert_eq!(
+            control.answer(),
+            "mechanism strict-table\nvar s\nrow <http://example.org/caller>\n",
+            "the caller's own datatype matches the caller's own subject and nothing else"
+        );
+        let probed = certain_answers_to_string(
+            "simple",
+            &premise,
+            &format!("?s <http://example.org/p> \"5\"^^<{QUERY_VAR_IRI}1> .\n"),
+            &[],
+        )
+        .expect("answers");
+        assert_eq!(
+            probed.answer(),
+            "mechanism strict-table\nvar s\nrow <http://example.org/probe1>\n",
+            "and a caller who writes the stand-in namespace themselves reaches the probe half, \
+             which is the row a leak would fabricate"
+        );
+
+        for pattern in [
+            "?s <http://example.org/p> \"5\"^^?d .\n",
+            "?d <http://example.org/p> \"5\"^^?d .\n",
+            "?s <http://example.org/p> \"5\"^^?d .\n?s <http://example.org/p> ?o .\n",
+            "?a <http://example.org/q> \
+<<( <http://example.org/s> <http://example.org/p> \"5\"^^?d )>> .\n",
+        ] {
+            for regime in ["simple", "rdfs", "owl-rl"] {
+                let refusal = match certain_answers_to_string(regime, &premise, pattern, &[]) {
+                    Ok(answers) => panic!(
+                        "{regime} / {pattern}: a variable has no datatype-IRI form, so this must \
+                         be refused rather than answered: {}",
+                        answers.answer()
+                    ),
+                    Err(refusal) => refusal,
+                };
+                assert!(
+                    refusal.contains("a variable is not a datatype IRI"),
+                    "the refusal names the position: {regime} / {pattern}: {refusal}"
+                );
+                assert!(
+                    refusal.contains("`?d`"),
+                    "and the variable the caller wrote: {regime} / {pattern}: {refusal}"
+                );
+                assert!(
+                    !refusal.contains("urn:purrdf"),
+                    "{regime} / {pattern}: {refusal}"
+                );
+                assert!(
+                    !refusal.contains("probe"),
+                    "{regime} / {pattern}: {refusal}"
+                );
             }
         }
     }

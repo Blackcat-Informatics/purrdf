@@ -114,7 +114,11 @@ A pattern is N-Triples with `?name` (or `$name`) in any position, the **predicat
 included. RDF reserves that position for an IRI, so the boundary reaches it by
 rewriting each variable to a term drawn from a namespace it has swept out of the
 caller's own text and mapping every occurrence back afterwards; nothing of that
-namespace reaches a row, a binding or a report. A predicate variable is projected
+namespace reaches a row, a binding or a report. The one slot that admits no variable
+is a literal's **datatype**: `"5"^^?d` asks for a binding in a position that holds an
+IRI rather than a term, and it is refused by name — the stand-in must never be left
+sitting there, matching the boundary's own namespace instead of the caller's data.
+A predicate variable is projected
 like any other, and under `owl-rl` it also renders a `limit`: it ranges over the
 whole predicate vocabulary, so it ranges over the schema predicates Theorem PR1's
 conclusion hypothesis excludes — the table claims no completeness for them, whether

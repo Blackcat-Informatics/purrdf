@@ -51,7 +51,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | ShEx 2.1 validation | shexTest v2.1.0 | 1105 | 0 | 0 | 0 | GREEN |
 | ShEx syntax + ShExC/ShExJ round-trip | shexTest v2.1.0 | 9 | 0 | 0 | 0 | GREEN |
 | rdflib LSP drop-in gate | rdflib 7.6 own tests | 85 | 1 | 1 | 0 | GREEN |
-| Python binding suite | first-party (incl. compat differential vs rdflib) | 513 | 4 | 4 | 0 | GREEN |
+| Python binding suite | first-party (incl. compat differential vs rdflib) | 514 | 4 | 4 | 0 | GREEN |
 <!-- END GENERATED: conformance-matrix -->
 
 The `Budget` column is the ledger ratchet's committed ceiling (see
@@ -86,7 +86,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | Entailment rule tables | `purrdf-entail` `rules()` / `implemented()` | `OWL-RL` **78 / 78** (OWL 2 Profiles §4.3 Tables 4–9) · `RDFS` **18 / 18** · `RDF` **3 / 3** · `D` **5 / 5** (§4.3 Table 8). This is **rule-table coverage, not entailment conformance** — the two are measured separately, and the row above is the second one: on this vendored W3C corpus, the OWL 2 RL entailment tests score 27 of 27 positive and 23 of 23 negative. Neither column counts an **extension** — the one rule the `OWL-RL` lane fires that no specification table states (`ext-eq-diff-sym`, symmetry of `owl:differentFrom`) is `extensions(Regime::OwlRl)`, is in neither `rules()` nor `implemented()`, and is rendered on its own `extension` line in every report. Every materializable regime is rule-complete; the four existential rules (`rdfD1`, `rdfD1a`, `rdfs14`, `rdfs14a`) fire through the restricted chase and their surrogate blank nodes are withheld at the materialization boundary rather than answered. Per-rule detail is generated and drift-guarded: [`docs/book/src/entailment-rules.md`](book/src/entailment-rules.md) |
 | RDFC-1.0 canonicalization | W3C fixtures, `crates/rdf/tests/fixtures/rdfc/` | **65** vectors (64 eval + 1 negative), green |
 | rdflib drop-in (LSP) gate | rdflib 7.6 own vendored tests | **85** pass · 1 strict-xfail (ledgered) |
-| Python binding suite | first-party, compat differential vs rdflib 7.6 included | **513** pass · 4 strict-xfail (ledgered). The count is the WHOLE binding suite — entailment, GTS, projections, shapes — not the rdflib differential alone; the 4 ledgered entries are that differential's |
+| Python binding suite | first-party, compat differential vs rdflib 7.6 included | **514** pass · 4 strict-xfail (ledgered). The count is the WHOLE binding suite — entailment, GTS, projections, shapes — not the rdflib differential alone; the 4 ledgered entries are that differential's |
 | GTS transport | frozen cross-language vectors, `vectors/` | byte-exact |
 
 ## Where the suites live

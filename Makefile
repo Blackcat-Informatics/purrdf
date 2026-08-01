@@ -40,7 +40,7 @@ BINARYEN_VERSION := 130
 # nine OWL reasoner services, the concrete domain AND the conclusion-directed
 # entailment service with its seven mechanisms and its caller-supplied import
 # map — measures
-# 9_762_944 bytes against the 12_112_500 ceiling, which is 19.398% headroom. That
+# 9_764_851 bytes against the 12_112_500 ceiling, which is 19.382% headroom. That
 # figure is recorded below (WASM_SIZE_MEASURED_BYTES) and REPORTED rather than
 # enforced; the ceiling is the check that fails.
 #
@@ -189,8 +189,17 @@ WASM_SIZE_BUDGET_BYTES := 12112500
 # Still 80% of WASM_SIZE_BUDGET_BYTES, so this is a measurement update and NOT a ceiling
 # raise.
 #
+# The increase 9_762_944 -> 9_764_851 is the basic-graph-pattern boundary refusing a
+# variable in a literal's DATATYPE. The stand-in a variable is rewritten to became an IRI
+# so that a variable could sit in predicate position, and an IRI is legal as a datatype —
+# so a pattern like "5"^^?d parsed straight into that slot and the stand-in reached the
+# matcher, where it matched this library's own namespace instead of the caller's data. The
+# demotion walk is now total over the term and returns a refusal naming the position, which
+# is the fallible plumbing and the refusal text the artifact grew by. It is a correctness
+# fix rather than a capability, which is why under two kilobytes buys it.
+#
 # The measured constant below is the CURRENT size, not any intermediate figure.
-WASM_SIZE_MEASURED_BYTES := 9762944
+WASM_SIZE_MEASURED_BYTES := 9764851
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
