@@ -47,6 +47,22 @@ import {
 
 await ready();
 
+/**
+ * `text` as a regular expression that matches exactly `text` and nothing else.
+ *
+ * A refusal is asserted to NAME a term, and the two obvious ways to write that are both
+ * wrong. `new RegExp(iri)` reads the IRI's own `.` as "any character" and its `?` as
+ * "optional", so the pattern is strictly WEAKER than the assertion it looks like — it
+ * would also accept a message naming a different document. `message.includes(iri)` is an
+ * unanchored substring test against a URL, which is the shape of an incomplete
+ * authorization check and is flagged as one whatever the intent.
+ *
+ * Escaping first gives the exact match the assertion was always meant to be.
+ */
+function exactly(text) {
+  return new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+}
+
 // `A ⊑ B ⊑ C`, and one typed instance — enough for rdfs9 to re-type it twice.
 const SCHEMA = `<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .
 <http://example.org/B> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .
@@ -584,12 +600,7 @@ test("the two regimes defined by a missing input are refused by name", () => {
   const conclusion =
     "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .\n";
   for (const regime of ["owl-direct", "rif"]) {
-    // Literal substring, for the reason given at the unsupplied-import test below: a
-    // name compiled into a pattern is a weaker assertion than the name itself.
-    assert.throws(
-      () => entailGraphEntails(regime, SCHEMA, conclusion, [], []),
-      (error) => String(error.message).includes(regime),
-    );
+    assert.throws(() => entailGraphEntails(regime, SCHEMA, conclusion, [], []), exactly(regime));
   }
 });
 
@@ -657,15 +668,9 @@ test("an unsupplied import throws by name rather than reasoning without it", asy
   // that answer as though it were this one is what the refusal prevents.
   const premise = await corpusNquads("cases/webont-imports-011/premise.rdf");
   const conclusion = await corpusNquads("cases/webont-imports-011/conclusion.rdf");
-  // The IRI is matched as a LITERAL substring rather than compiled into a pattern.
-  // An IRI carries `.` and `?`, which a regexp reads as "any character" and "optional",
-  // so a pattern built from one is strictly WEAKER than the assertion it looks like: it
-  // would also accept a message naming a different document whose IRI happened to
-  // differ only where the dots are. Asserting the substring is both the stronger check
-  // and the one that does not build a regexp out of untrusted-shaped text.
   assert.throws(
     () => entailGraphEntails("owl-rl", premise, conclusion, [], []),
-    (error) => String(error.message).includes(SUPPORT_011_A),
+    exactly(SUPPORT_011_A),
   );
 });
 
