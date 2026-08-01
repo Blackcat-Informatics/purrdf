@@ -42,10 +42,21 @@ One check here compares prose against a RULE rather than against a generated
 number — ``banned_entailment_overclaims``, the ban on unbounded claims — so
 nothing else in this file would notice it answering wrongly, and it did, in both
 directions, for every claim that happened to wrap. It therefore SELF-TESTS before
-the claims run: ``overclaim_self_test`` injects each banned claim into each gated
+the claims run: ``overclaim_self_test`` injects each banned claim into each swept
 document on one line and wrapped, and asserts it is caught both times and exempt
 both times when the scope phrase is present, wherever the line breaks fall.
 ``--self-test`` runs that alone.
+
+The set of documents that ban sweeps is DERIVED rather than enumerated, for the same
+reason the two checks above discover their scope. It was a hand-written
+nine-tuple, nothing asserted the tuple was complete, and the self-test iterated
+the same tuple — so cutting it to a single entry left eight documents outside the
+ban while both the gate and its preflight printed a green line about the one that
+remained. The set is now the Markdown of ``_documented_surface`` filtered by the
+ban's own subject markers, with a coverage arm that names any document this file
+knows about which the traversal stops reaching, and a reach arm that matches every
+marker-bearing claim across the whole surface so the swept set is a permission
+boundary and not a detection boundary.
 
 It is pure text-over-committed-files: no cargo, no network, no test run. The
 expensive gates prove the generated artifacts are current; this one proves the
@@ -340,7 +351,53 @@ def program_regime_dts_claim() -> list[str]:
     return problems
 
 
-def banned_stale_fragment_names() -> tuple[list[str], int]:
+# This script names both superseded fragment spellings and every banned overclaim in its
+# own docstrings and patterns, because that is where the bans are DEFINED. It is therefore
+# the one file both bans must skip: a ban that fails on its own definition is a ban nobody
+# can write down.
+_GATE_SCRIPT = Path(__file__).resolve()
+
+# Directories that are not this repository's documented surface: build output, a Python
+# virtualenv that may or may not exist on a given machine, and vendored JavaScript. They
+# are skipped by PATH SEGMENT rather than by substring so a crate legitimately named
+# `pkg-something` is not silently dropped.
+_UNDOCUMENTED_SEGMENTS = frozenset({"pkg", "node_modules", ".venv", "target"})
+
+
+def _documented_surface() -> list[Path]:
+    """Every file in this repository's own documented surface, in path order.
+
+    ONE traversal, shared by both bans below, so neither can be narrowed without
+    narrowing the other and neither can drift into covering a different tree than it
+    claims. It covers ``crates``, ``bindings`` and ``docs`` prose, ``scripts``' own
+    ``.py``/``.json`` — the conformance harness and its ratchet baseline restate the
+    fragment name in their own prose, and a superseded spelling regressed there silently
+    until this walk was extended to include it — and every Markdown file at the
+    repository root, which is where the contract (``AGENTS.md``), the release notes
+    (``CHANGELOG.md``) and the provenance and licensing statements live.
+    """
+    found: list[Path] = []
+    for root in ("crates", "bindings", "docs"):
+        for path in sorted((_REPO / root).rglob("*")):
+            if path.suffix not in {".rs", ".md", ".pyi", ".mjs", ".ts"}:
+                continue
+            if _UNDOCUMENTED_SEGMENTS.intersection(path.parts):
+                continue
+            found.append(path)
+    for path in sorted((_REPO / "scripts").rglob("*")):
+        if path.suffix in {".py", ".json"}:
+            found.append(path)
+    found.extend(sorted(_REPO.glob("*.md")))
+    if not found:
+        raise SystemExit(
+            "check-doc-claims: the documented surface walked to zero files, so both bans "
+            "below would sweep nothing and pass. Fix the traversal rather than leaving "
+            "the documentation unswept"
+        )
+    return sorted(found)
+
+
+def banned_stale_fragment_names(surface: list[Path]) -> tuple[list[str], int]:
     """The DL fragment has ONE published name; its two superseded spellings are banned.
 
     The decision core was published as ALCOIQ on nineteen sites and ALCHOIQ in the
@@ -348,35 +405,13 @@ def banned_stale_fragment_names() -> tuple[list[str], int]:
     a superseded spelling reappearing anywhere in the documented surface is a
     regression to the two-name state, caught here by name.
 
-    The walk covers ``crates``, ``bindings``, and ``docs`` prose plus ``scripts``' own
-    ``.py``/``.json`` — the conformance harness and its ratchet baseline restate the
-    same fragment name in their own prose, and a superseded spelling regressed there
-    silently until this walk was extended to include it. Returns the problems and the
-    number of files scanned, so the script's claim count reports what it really read.
+    Walks the shared :func:`_documented_surface`. Returns the problems and the number of
+    files scanned, so the script's claim count reports what it really read.
     """
     problems: list[str] = []
     checked = 0
-    for root in ("crates", "bindings", "docs"):
-        for path in sorted((_REPO / root).rglob("*")):
-            if path.suffix not in {".rs", ".md", ".pyi", ".mjs", ".ts"}:
-                continue
-            if "/pkg/" in str(path) or "node_modules" in str(path):
-                continue
-            checked += 1
-            text = _read(path)
-            for match in re.finditer(r"\bALCH?OIQ\b", text):
-                line = text.count("\n", 0, match.start()) + 1
-                problems.append(
-                    f"{path.relative_to(_REPO)}:{line}: superseded fragment spelling "
-                    f"`{match.group(0)}` — the decision core's one published name is "
-                    f"SHOIQ(D)"
-                )
-    for path in sorted((_REPO / "scripts").rglob("*")):
-        if path.suffix not in {".py", ".json"}:
-            continue
-        if path.name == "check-doc-claims.py":
-            # Names both superseded spellings in its own docstrings/pattern to
-            # explain what it bans; that is the ban's definition, not a regression.
+    for path in surface:
+        if path == _GATE_SCRIPT:
             continue
         checked += 1
         text = _read(path)
@@ -387,71 +422,139 @@ def banned_stale_fragment_names() -> tuple[list[str], int]:
                 f"`{match.group(0)}` — the decision core's one published name is "
                 f"SHOIQ(D)"
             )
-    checked += 1
-    readme = _read(_README)
-    for match in re.finditer(r"\bALCH?OIQ\b", readme):
-        problems.append(
-            f"README.md: superseded fragment spelling `{match.group(0)}`"
-        )
     return problems, checked
 
-
-# The nine documents that carry the entailment story: the repository front page, the
-# four published READMEs that restate it, and the four book chapters. They are named
-# rather than discovered because the ban below is about what these documents CLAIM, and a
-# claim's absence from a document that never makes claims is not evidence of anything —
-# sweeping every `.md` in the tree would dilute the ban into a spell-checker over
-# changelogs and vendored provenance files.
-_ENTAILMENT_CLAIM_DOCS = (
-    "README.md",
-    "bindings/python/README.md",
-    "crates/cli/README.md",
-    "crates/entail/README.md",
-    "crates/purrdf/README.md",
-    "docs/CONFORMANCE.md",
-    "docs/book/src/entailment.md",
-    "docs/book/src/introduction.md",
-    "docs/book/src/project/conformance.md",
-)
 
 # The literal phrase that SCOPES a claim to the corpus it was measured on. A sentence
 # carrying it is making a bounded statement — "50 / 50 on this vendored W3C corpus" — and
 # is exempt; one without it is making the unbounded statement the ban is about.
 _CORPUS_SCOPE = "on this vendored W3C corpus"
 
-# Each entry is (compiled pattern, why it is banned). The patterns are deliberately
-# narrow: they name the specific unbounded claim rather than the words it is built from,
-# so "complete" and "full" remain writable about the things they are true of — a complete
-# RULE TABLE, a full closure of one document — and only the sentence that promotes them
-# into a claim about a SPECIFICATION is caught.
-_BANNED_OVERCLAIMS: tuple[tuple[re.Pattern[str], str], ...] = (
+# Each entry is (compiled pattern, subject marker, why it is banned). The patterns are
+# deliberately narrow: they name the specific unbounded claim rather than the words it is
+# built from, so "complete" and "full" remain writable about the things they are true of —
+# a complete RULE TABLE, a full closure of one document — and only the sentence that
+# promotes them into a claim about a SPECIFICATION is caught.
+#
+# The SUBJECT MARKER is the lower-cased literal a document must already contain before the
+# pattern beside it can possibly match, and it is what DERIVES the swept document set
+# below. It is not a judgement about which documents "carry the entailment story" — that
+# judgement is what let the set be hand-written, and a hand-written set can be narrowed.
+# It is read off the pattern itself: `complete OWL 2 RL entailment` cannot appear in a
+# document that never writes `OWL 2`, so sweeping the documents that write `OWL 2` is
+# TOTAL for that pattern rather than merely generous. `_check_ban_table` asserts each
+# marker really does appear in its own pattern's source, and `overclaim_self_test` asserts
+# each specimen sentence carries its marker — so a document ACQUIRES membership in the
+# swept set at the same instant it acquires the claim, and the ban cannot be dodged by
+# writing the claim somewhere unswept.
+#
+# The performance claim declares no marker, and that is deliberate rather than an
+# oversight. Its pattern names a WORD rather than a claim, and the word is used honestly
+# and often in prose whose subject IS measurement: `docs/BENCHMARKS.md` reports "2.1-2.2x
+# faster than real `rdflib` at 100k triples" with a named competitor, a named workload and
+# a reproducible harness, which is exactly the bounded form the ban asks for, and
+# `docs/book/src/project/performance.md` disclaims '"Nx faster."' in as many words.
+# Deriving a document set from that word would sweep both and refuse both, so the ban
+# would be arguing with the two documents in the repository that already agree with it.
+# It is therefore enforced over the surface the marker-bearing patterns define — the
+# conformance and entailment story, where a comparative brag has no business appearing —
+# and not repo-wide.
+_BANNED_OVERCLAIMS: tuple[tuple[re.Pattern[str], str | None, str], ...] = (
     (
         re.compile(r"\b(complete|full)[a-z]*\s+(?:the\s+)?OWL 2 RDF-Based semantics", re.I),
+        "owl 2",
         "the RDF-Based semantics is not finitely axiomatizable by a rule table; PurRDF "
         "implements a profile's rule table plus five named mechanisms, not the semantics",
     ),
     (
         re.compile(r"\b(complete|full)[a-z]*\s+OWL 2 conformance", re.I),
+        "owl 2",
         "OWL 2 conformance is defined per syntax and per semantics over the whole test "
         "suite; what is measured here is one vendored subset of one corpus",
     ),
     (
         re.compile(r"\b(complete|full)[a-z]*\s+OWL 2 RL entailment", re.I),
+        "owl 2",
         "78 / 78 is RULE-TABLE coverage. Entailment conformance is a different claim, "
         "measured separately and only over the cases actually vendored",
     ),
     (
         re.compile(r"\bfully conformant\b", re.I),
+        "conformant",
         "conformance is per specification clause and per corpus; `fully conformant` names "
         "neither, so nothing can check it",
     ),
     (
         re.compile(r"\b(faster|fastest|outperform[a-z]*)\b", re.I),
+        None,
         "a comparative performance claim needs a named competitor, a named workload and a "
         "reproducible measurement; this repository's benches are report-only and assert "
         "no speedup",
     ),
 )
+
+
+def _check_ban_table() -> None:
+    """The ban table must keep enough markers, and each must really bound its pattern.
+
+    A marker that does not appear in its pattern's source is a marker that no longer
+    proves anything about which documents the pattern can match, and the derived sweep
+    would silently stop being total. Reworded the other way — a pattern edited so it no
+    longer requires its marker — this fails on the same line, in the same commit.
+    """
+    marked = sum(1 for _, subject, _ in _BANNED_OVERCLAIMS if subject)
+    if marked < 4:
+        raise SystemExit(
+            f"check-doc-claims: only {marked} banned overclaim(s) declare a subject "
+            f"marker, below this table's floor of 4. Setting a marker to None narrows "
+            f"BOTH the swept set and the reach arm in one edit — which is the shape of "
+            f"narrowing this ban already had to have removed once. Restore the marker, "
+            f"or lower the floor deliberately in the same commit and say why"
+        )
+    for pattern, subject, _ in _BANNED_OVERCLAIMS:
+        if subject is None:
+            continue
+        if subject != subject.lower():
+            raise SystemExit(
+                f"check-doc-claims: the subject marker {subject!r} is not lower-cased, so "
+                f"the case-insensitive membership test below would miss documents"
+            )
+        if subject not in pattern.pattern.lower():
+            raise SystemExit(
+                f"check-doc-claims: the banned overclaim {pattern.pattern!r} does not "
+                f"contain its own subject marker {subject!r}, so a document without the "
+                f"marker could still match it and the derived sweep would not be total. "
+                f"Re-point the marker at what the pattern really requires"
+            )
+
+
+def _entailment_claim_docs(surface: list[Path]) -> list[str]:
+    """The Markdown documents the entailment-overclaim ban sweeps, DERIVED not enumerated.
+
+    This set used to be a hand-written nine-tuple. Nothing asserted the tuple was
+    complete, and the self-test iterated the same tuple, so cutting it from nine entries
+    to one left eight documents outside the ban and BOTH the gate and its preflight
+    printing a green line about the one that remained. That is a gate that cannot fail,
+    one level up from the gate the preflight was written to keep honest.
+
+    So the set is now derived the way :func:`banned_stale_fragment_names` derives its own:
+    from the shared :func:`_documented_surface`, filtered to Markdown — the ban judges
+    SENTENCES, and `_sentences` reads Markdown (fences, tables, wrapped paragraphs), not
+    source code — and then to the documents that carry a banned claim's subject marker.
+
+    Membership is computed from the same TEXT the ban then reads, through ``_read``, so a
+    document that acquires a banned claim acquires membership in the same edit: every
+    marker-bearing claim contains its own marker.
+    """
+    docs: list[str] = []
+    subjects = sorted({subject for _, subject, _ in _BANNED_OVERCLAIMS if subject})
+    for path in surface:
+        if path.suffix != ".md" or path == _GATE_SCRIPT:
+            continue
+        lowered = _read(path).lower()
+        if any(subject in lowered for subject in subjects):
+            docs.append(str(path.relative_to(_REPO)))
+    return docs
 
 
 # A line that opens a block of its OWN rather than continuing the one above it: a heading, a
@@ -496,10 +599,14 @@ def _paragraph_sentences(lines: list[tuple[int, str]]) -> list[tuple[int, str]]:
     return out
 
 
-# Memoized because the self-test re-reads the same eight unmutated documents once per
-# injected sentence, and a document's sentences are a pure function of its text. The returned
-# list is read and never mutated, here or by the ban walk.
-@lru_cache(maxsize=16)
+# Big enough to hold the whole derived sweep, so one run never splits a document's sentences
+# twice; `banned_entailment_overclaims` fails if the swept set outgrows it rather than
+# quietly paying for the re-parse. A document's sentences are a pure function of its text,
+# and the returned list is read and never mutated, here or by the ban walk.
+_SENTENCE_CACHE = 64
+
+
+@lru_cache(maxsize=_SENTENCE_CACHE)
 def _sentences(text: str) -> list[tuple[int, str]]:
     """`(line number, sentence)` for every sentence of `text`, with WRAPPED LINES JOINED.
 
@@ -555,7 +662,56 @@ def _sentences(text: str) -> list[tuple[int, str]]:
     return out
 
 
-def banned_entailment_overclaims() -> tuple[list[str], int]:
+def _overclaims_in(relative: str, text: str) -> list[str]:
+    """Every banned overclaim `text` makes, reported against `relative`.
+
+    One document at a time, so nothing that exercises this walk has to re-read the rest of
+    the swept set to do it. The self-test injects a sentence into one document at a time
+    and used to re-run the WHOLE sweep for each injection, which made its cost the square
+    of the swept set — a shape that quietly punishes widening the very set this gate now
+    derives rather than enumerates.
+    """
+    problems: list[str] = []
+    for line, sentence in _sentences(text):
+        if _CORPUS_SCOPE in sentence:
+            continue
+        for pattern, _subject, why in _BANNED_OVERCLAIMS:
+            match = pattern.search(sentence)
+            if match:
+                problems.append(
+                    f"{relative}:{line}: banned entailment overclaim "
+                    f"`{match.group(0)}` — {why}. Scope the sentence with the literal "
+                    f"phrase {_CORPUS_SCOPE!r}, or say the bounded thing instead"
+                )
+    return problems
+
+
+def _registered_prose_documents() -> list[Path]:
+    """Every Markdown document this script names as a module-level constant.
+
+    An INDEPENDENT reference for the ban's reach, read out of this module's own globals.
+    These paths are maintained for entirely different reasons — each is the subject of a
+    numeric claim elsewhere in this file — so narrowing the ban's traversal cannot narrow
+    them in the same edit, and the coverage arm below can name exactly which documents
+    left. A hand-written list of "documents the ban must reach" would be the defect this
+    change removes, wearing a different hat.
+    """
+    found: set[Path] = set()
+    for value in list(globals().values()):
+        for item in value if isinstance(value, tuple) else (value,):
+            if isinstance(item, Path) and item.suffix == ".md":
+                found.add(item)
+    if len(found) < 8:
+        raise SystemExit(
+            f"check-doc-claims: only {len(found)} Markdown document(s) are reachable as "
+            f"module-level constants, so the entailment-overclaim ban's coverage arm has "
+            f"almost nothing to check itself against. The document constants were inlined "
+            f"or renamed; restore them rather than leaving the ban's reach unchecked"
+        )
+    return sorted(found)
+
+
+def banned_entailment_overclaims(surface: list[Path]) -> tuple[list[str], int, int]:
     """The unbounded entailment claims this documentation may not make.
 
     Modelled on :func:`banned_stale_fragment_names`, and run from the same ``main``, for
@@ -563,8 +719,8 @@ def banned_entailment_overclaims() -> tuple[list[str], int]:
     other gate in this file compares a documented figure against a generated one, which
     catches a stale count and is blind to a sentence that states no count at all.
 
-    It exists at exactly the moment it is most needed. The documentation these nine files
-    carry was rewritten from "here are the known gaps" to "50 / 50, ledger empty", and
+    It exists at exactly the moment it is most needed. The documentation this repository
+    carries was rewritten from "here are the known gaps" to "50 / 50, ledger empty", and
     that is precisely when a `complete OWL 2 RL entailment` sentence gets written — the
     numbers really did all reach their ceilings, and the step from "every vendored case
     agrees" to "the implementation is complete" is one short sentence and one large lie.
@@ -578,32 +734,96 @@ def banned_entailment_overclaims() -> tuple[list[str], int]:
     The exemption is a property of the SENTENCE, so the sentence has to be the unit — which
     means joining wrapped lines back into paragraphs before splitting on terminators; see
     ``_sentences``, which did not, and ``overclaim_self_test``, which now injects every banned
-    claim into every gated document in both forms and asserts the answer in both directions.
+    claim into every swept document in both forms and asserts the answer in both directions.
 
-    Returns the problems and the number of files scanned, so the script's headline
-    reports what it really read.
+    THREE arms, because the swept set is where this ban was last hollowed out:
+
+      * the SWEEP itself, sentence-scoped and exemption-aware, over the derived set;
+      * a COVERAGE arm — every Markdown document this script names as a module-level
+        constant must be reachable by the traversal, and must be SWEPT if it carries a
+        subject marker. Narrow the traversal, the suffix filter or the derivation itself
+        and this names the documents that left, whether or not any of them carries a
+        claim today;
+      * a REACH arm — every marker-bearing pattern is matched against the WHOLE documented
+        surface, source files included, and a hit outside the swept set is a failure. The
+        swept set is then a permission boundary and not a detection boundary: narrowing it
+        cannot hide a claim, it can only take away the place a scoped claim may be
+        written, which fails loudly rather than silently.
+
+    Returns the problems, the number of documents swept and the size of the Markdown
+    corpus they were drawn from, so the script's headline reports both what it read and
+    what it chose not to.
     """
+    _check_ban_table()
     problems: list[str] = []
-    for relative in _ENTAILMENT_CLAIM_DOCS:
-        path = _REPO / relative
-        if not path.is_file():
-            raise SystemExit(
-                f"check-doc-claims: {relative} is in _ENTAILMENT_CLAIM_DOCS and does not "
-                f"exist; the entailment documentation moved, so update the list rather "
-                f"than leaving the ban silently narrower"
+    corpus = [
+        path for path in surface if path.suffix == ".md" and path != _GATE_SCRIPT
+    ]
+    swept = _entailment_claim_docs(surface)
+    if not swept:
+        raise SystemExit(
+            "check-doc-claims: the entailment-overclaim ban derived an EMPTY document set "
+            "from a corpus of "
+            f"{len(corpus)} Markdown file(s). Either the subject markers no longer match "
+            "any documentation or the traversal broke; a ban that sweeps nothing passes "
+            "everything"
+        )
+    if len(swept) > _SENTENCE_CACHE:
+        raise SystemExit(
+            f"check-doc-claims: the swept set has grown to {len(swept)} documents, past "
+            f"the {_SENTENCE_CACHE}-entry sentence cache, so the sweep would re-parse "
+            f"documents it has already read. Raise _SENTENCE_CACHE"
+        )
+    for relative in swept:
+        problems.extend(_overclaims_in(relative, _read(_REPO / relative)))
+
+    swept_set = set(swept)
+    reachable = {str(path.relative_to(_REPO)) for path in corpus}
+    subjects = sorted({subject for _, subject, _ in _BANNED_OVERCLAIMS if subject})
+    for document in _registered_prose_documents():
+        relative = str(document.relative_to(_REPO))
+        if relative not in reachable:
+            problems.append(
+                f"{relative}: this gate already names the document elsewhere, and the "
+                f"entailment-overclaim ban's traversal does not reach it. The traversal "
+                f"was narrowed — a document outside it cannot be swept, and a claim "
+                f"written there would never be read"
             )
-        for line, sentence in _sentences(_read(path)):
-            if _CORPUS_SCOPE in sentence:
+            continue
+        if relative in swept_set:
+            continue
+        lowered = _read(document).lower()
+        carried = [subject for subject in subjects if subject in lowered]
+        if carried:
+            problems.append(
+                f"{relative}: this gate already names the document elsewhere, it carries "
+                f"the banned claims' subject marker(s) {carried}, and the "
+                f"entailment-overclaim ban does not sweep it. The derivation dropped it — "
+                f"restore it rather than leaving one of this gate's own documents outside "
+                f"the ban"
+            )
+
+    for path in surface:
+        if path == _GATE_SCRIPT:
+            continue
+        relative = str(path.relative_to(_REPO))
+        if relative in swept_set:
+            continue
+        text = _read(path)
+        for pattern, subject, why in _BANNED_OVERCLAIMS:
+            if subject is None:
                 continue
-            for pattern, why in _BANNED_OVERCLAIMS:
-                match = pattern.search(sentence)
-                if match:
-                    problems.append(
-                        f"{relative}:{line}: banned entailment overclaim "
-                        f"`{match.group(0)}` — {why}. Scope the sentence with the literal "
-                        f"phrase {_CORPUS_SCOPE!r}, or say the bounded thing instead"
-                    )
-    return problems, len(_ENTAILMENT_CLAIM_DOCS)
+            for match in pattern.finditer(text):
+                line = text.count("\n", 0, match.start()) + 1
+                problems.append(
+                    f"{relative}:{line}: banned entailment overclaim "
+                    f"`{match.group(0)}` OUTSIDE the swept set — {why}. This file is not "
+                    f"one the ban sweeps sentence by sentence, so the "
+                    f"{_CORPUS_SCOPE!r} exemption cannot be applied to it: say the "
+                    f"bounded thing instead, or move the claim to documentation the ban "
+                    f"reads"
+                )
+    return problems, len(swept), len(corpus)
 
 
 # One specimen sentence per banned claim, in two forms: on one line, and wrapped INSIDE the
@@ -644,32 +864,72 @@ def _scoped(sentence: str) -> str:
     return f"{sentence.rstrip('.')}\n{_CORPUS_SCOPE}."
 
 
-def overclaim_self_test(report: bool) -> list[str]:
+def _check_specimens() -> None:
+    """Each specimen must match ITS OWN banned claim, and carry that claim's marker.
+
+    Two assertions, and the second is the one that makes the derived sweep total. The
+    specimens are index-aligned with ``_BANNED_OVERCLAIMS``; a specimen that matches some
+    OTHER pattern would leave its own pattern untested while the self-test still printed a
+    number. And a marker-bearing specimen that does NOT contain its marker would be a
+    counter-example to the whole derivation: it would be a real instance of the claim that
+    a document could carry without joining the swept set.
+    """
+    if len(_OVERCLAIM_SPECIMENS) != len(_BANNED_OVERCLAIMS):
+        raise SystemExit(
+            f"check-doc-claims: {len(_OVERCLAIM_SPECIMENS)} specimen(s) for "
+            f"{len(_BANNED_OVERCLAIMS)} banned claim(s) — they are index-aligned, so a "
+            f"banned claim would go untested. Add the missing specimen"
+        )
+    for (pattern, subject, _), (sentence, _wrapped) in zip(
+        _BANNED_OVERCLAIMS, _OVERCLAIM_SPECIMENS
+    ):
+        if not pattern.search(sentence):
+            raise SystemExit(
+                f"check-doc-claims: the self-test's specimen {sentence!r} does not match "
+                f"the banned overclaim beside it ({pattern.pattern!r}) — the ban was "
+                f"reworded, so re-point the specimen rather than leaving the self-test "
+                f"proving nothing."
+            )
+        if subject is not None and subject not in sentence.lower():
+            raise SystemExit(
+                f"check-doc-claims: the specimen {sentence!r} does not carry its claim's "
+                f"subject marker {subject!r}, so a document could make this claim without "
+                f"joining the swept set the marker derives. Either the marker or the "
+                f"specimen is wrong"
+            )
+
+
+def overclaim_self_test(surface: list[Path], report: bool) -> list[str]:
     """Every injected claim the ban does not answer correctly. Empty is the passing answer.
 
-    Two directions, over every gated document and every banned claim: the unscoped sentence
+    Two directions, over every swept document and every banned claim: the unscoped sentence
     must be CAUGHT in both its forms, and the same sentence scoped — with the scope phrase on
     the following line — must be exempt. The first commit to carry this ban verified it with
     45 single-line injections; every one of them exercised the one case that worked, and both
     of the cases that did not were live in the same file.
 
-    Nothing is written: the document is read once and the injected copy lives in `_OVERLAY`.
+    A third direction was added with the derived document set: a marker-bearing claim
+    injected into a corpus document the ban does NOT currently sweep must pull that
+    document into the swept set and be caught there. That is the falsifiable form of the
+    derivation — "a document acquires membership at the same instant it acquires the
+    claim" — and without it the widened set would be a story rather than a property.
+
+    The count of injections is derived from the same call that derives the sweep, so it
+    cannot be read as evidence that the sweep is wide: a narrowed sweep narrows this number
+    with it, and it is the coverage and reach arms in
+    :func:`banned_entailment_overclaims`, not this count, that refuse the narrowing.
+
+    Nothing is written: the document is read once and the injected copy lives in a string.
     """
-    for sentence, wrapped in _OVERCLAIM_SPECIMENS:
-        if not any(pattern.search(sentence) for pattern, _ in _BANNED_OVERCLAIMS):
-            raise SystemExit(
-                f"check-doc-claims: the self-test's specimen {sentence!r} matches no banned "
-                "overclaim — the ban was reworded, so re-point the specimen rather than "
-                "leaving the self-test proving nothing."
-            )
+    _check_ban_table()
+    _check_specimens()
+    swept = _entailment_claim_docs(surface)
     committed = {
-        str(_REPO / relative): _read(_REPO / relative)
-        for relative in _ENTAILMENT_CLAIM_DOCS
+        relative: _read(_REPO / relative) for relative in swept
     }
     wrong: list[str] = []
     checked = 0
-    for relative in _ENTAILMENT_CLAIM_DOCS:
-        target = str(_REPO / relative)
+    for relative in swept:
         for sentence, wrapped in _OVERCLAIM_SPECIMENS:
             for form, injected, must_catch in (
                 ("one line", sentence, True),
@@ -678,25 +938,66 @@ def overclaim_self_test(report: bool) -> list[str]:
                 ("scope on the next line", _scoped(sentence), False),
                 ("wrapped, scoped", _scoped(wrapped), False),
             ):
-                _OVERLAY.clear()
-                _OVERLAY.update(committed)
-                _OVERLAY[target] = f"{committed[target]}\n\n{injected}\n"
-                try:
-                    problems, _ = banned_entailment_overclaims()
-                finally:
-                    _OVERLAY.clear()
+                problems = _overclaims_in(
+                    relative, f"{committed[relative]}\n\n{injected}\n"
+                )
                 checked += 1
-                caught = any(problem.startswith(f"{relative}:") for problem in problems)
-                if caught is must_catch:
+                if bool(problems) is must_catch:
                     continue
                 wrong.append(
                     f"{relative}: {'NOT CAUGHT' if must_catch else 'FALSELY CAUGHT'} "
                     f"({form}) — {injected!r}"
                 )
+
+    # The derivation itself, injected: an UNSWEPT corpus document that acquires a
+    # marker-bearing claim must both join the swept set and be caught in it.
+    already = set(swept)
+    unswept = [
+        path
+        for path in surface
+        if path.suffix == ".md"
+        and path != _GATE_SCRIPT
+        and str(path.relative_to(_REPO)) not in already
+    ]
+    if not unswept:
+        raise SystemExit(
+            "check-doc-claims: every Markdown document in the corpus is already swept, so "
+            "the derivation's own direction — an unswept document that acquires a claim "
+            "joins the set — cannot be tested. Widen the corpus or narrow nothing"
+        )
+    # One unswept document is enough, and it is the first in path order rather than a
+    # chosen one: the property under test belongs to the MARKER, not to the document, and
+    # re-deriving the whole set once per document per claim would cost more than the sweep.
+    host = unswept[0]
+    relative = str(host.relative_to(_REPO))
+    host_text = _read(host)
+    for (_pattern, subject, _why), (sentence, _wrapped) in zip(
+        _BANNED_OVERCLAIMS, _OVERCLAIM_SPECIMENS
+    ):
+        if subject is None:
+            continue
+        _OVERLAY[str(host)] = f"{host_text}\n\n{sentence}\n"
+        try:
+            joined = relative in _entailment_claim_docs(surface)
+            caught = joined and bool(
+                _overclaims_in(relative, _OVERLAY[str(host)])
+            )
+        finally:
+            _OVERLAY.clear()
+        checked += 1
+        if joined and caught:
+            continue
+        wrong.append(
+            f"{relative}: NOT SWEPT ON ACQUIRING THE CLAIM — {sentence!r} carries the "
+            f"subject marker {subject!r}, so this document must join the derived set "
+            f"and be caught in it"
+        )
     if report:
         print(
             f"check-doc-claims: the entailment-overclaim ban answered {checked} injected "
-            f"sentence(s) over {len(_ENTAILMENT_CLAIM_DOCS)} document(s) — "
+            f"sentence(s) — every banned claim in five forms over all {len(swept)} swept "
+            f"document(s), and each marker-bearing claim over one of the "
+            f"{len(unswept)} unswept ones ({relative}) — "
             f"{checked - len(wrong)} correctly, {len(wrong)} not."
         )
     return wrong
@@ -2537,11 +2838,15 @@ def main(argv: list[str]) -> int:
         return 2
     alone = "--self-test" in argv[1:]
 
+    # ONE traversal of the documented surface, shared by both bans, so neither can be
+    # narrowed without narrowing the other.
+    surface = _documented_surface()
+
     # BEFORE the claims, on every run. The ban is the one check here that compares prose
     # against a RULE rather than against a generated number, so nothing else in this file
     # would notice it answering wrongly — and it answered wrongly in both directions for
     # every claim that happened to wrap.
-    wrong = overclaim_self_test(report=alone)
+    wrong = overclaim_self_test(surface, report=alone)
     if wrong:
         print(
             "check-doc-claims: the entailment-overclaim ban does not answer its own "
@@ -2597,11 +2902,13 @@ def main(argv: list[str]) -> int:
     # count — folding ~1,900 scanned files into the "documented claims" headline would
     # inflate a number readers take as the count of gated statements. The ban is one
     # claim; its reach is printed separately.
-    fragment_problems, fragment_files = banned_stale_fragment_names()
+    fragment_problems, fragment_files = banned_stale_fragment_names(surface)
     problems.extend(fragment_problems)
     checked += 1
     # The second ban, and the same accounting: one claim, its reach printed separately.
-    overclaim_problems, overclaim_files = banned_entailment_overclaims()
+    overclaim_problems, overclaim_swept, overclaim_corpus = (
+        banned_entailment_overclaims(surface)
+    )
     problems.extend(overclaim_problems)
     checked += 1
 
@@ -2630,7 +2937,8 @@ def main(argv: list[str]) -> int:
     print(
         f"OK: {checked} documented claim(s) agree with their generated source "
         f"(stale-name ban swept {fragment_files} file(s); entailment-overclaim ban swept "
-        f"{overclaim_files} file(s))."
+        f"{overclaim_swept} of {overclaim_corpus} Markdown file(s) sentence by sentence, "
+        f"and matched every marker-bearing claim across all {fragment_files})."
     )
     return 0
 
