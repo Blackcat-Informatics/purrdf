@@ -68,16 +68,25 @@ break somewhere else. The same held of a whitespace run WITHIN one line, which
 the sweep did not normalize at all.
 
 The guards AROUND that ban have the same problem the ban had: a conditional nothing
-ever satisfies is the same green light as the check it was written to protect. Five
+ever satisfies is the same green light as the check it was written to protect. Seven
 levers could be pulled with every gate green — a description field path re-pointed by
 one letter, a subject marker made OPTIONAL rather than deleted (which leaves the
-literal in the pattern's source, so a substring test passes it), either of two arms
-with its walk removed, one arm of the documented-surface walk dropped, which took that
-surface from 798 files to 785 without an error, and the one scoped specimen that
-crosses a line written on one line instead. Each guard is now a function that
-takes what it judges as an argument, and ``mutation_self_test`` hands each the shape
-the defect really had and requires it to fail (``_MUTATIONS``). It runs first, on every
-invocation.
+literal in the pattern's source, so a substring test passes it), a subject marker made
+one BRANCH of an alternation (which a witness that deletes the marker from one specimen
+answers correctly and which lets ``complete OWL2 RL entailment`` escape the whole ban),
+either of two arms with its walk removed, one arm of the documented-surface walk
+dropped, which took that surface from 798 files to 785 without an error, the one scoped
+specimen that crosses a line written on one line instead, and the table of mutations
+below narrowed to a single entry. Each guard is now a function that takes what it judges
+as an argument, and ``mutation_self_test`` hands each the shape the defect really had
+and requires it to fail (``_MUTATIONS``, floored so it cannot be narrowed back). It runs
+first, on every invocation.
+
+The alternation lever is closed by construction rather than by a guard: a banned claim is
+written as PARTS and ``_banned_pattern`` composes the subject marker into the pattern as a
+concatenated literal, so a pattern that does not require its marker cannot be spelled, and
+the two legitimate ways to broaden the ban — a second entry with its own marker, or a
+marker re-pointed at a literal both spellings share — are written out where the table is.
 
 It is pure text-over-committed-files: no cargo, no network, no test run. The
 expensive gates prove the generated artifacts are current; this one proves the
@@ -770,10 +779,16 @@ def banned_stale_fragment_names(surface: list[Path]) -> tuple[list[str], int]:
 # is exempt; one without it is making the unbounded statement the ban is about.
 _CORPUS_SCOPE = "on this vendored W3C corpus"
 
-# Each entry is (compiled pattern, subject marker, why it is banned). The patterns are
-# deliberately narrow: they name the specific unbounded claim rather than the words it is
-# built from, so "complete" and "full" remain writable about the things they are true of —
-# a complete RULE TABLE, a full closure of one document — and only the sentence that
+# Each entry is (before, subject marker, after, why it is banned) — PARTS rather than a
+# finished pattern, and that is the whole point rather than a style choice. `_banned_pattern`
+# composes them as `(?:before)marker(?:after)`, so a pattern that does not REQUIRE its marker
+# cannot be spelled here: the marker is a literal in a top-level concatenation of three atoms,
+# and neither half can reach around it because each must be a regular expression on its own
+# before it is wrapped.
+#
+# The patterns are deliberately narrow: they name the specific unbounded claim rather than the
+# words it is built from, so "complete" and "full" remain writable about the things they are
+# true of — a complete RULE TABLE, a full closure of one document — and only the sentence that
 # promotes them into a claim about a SPECIFICATION is caught.
 #
 # The SUBJECT MARKER is the lower-cased literal a unit must already contain before the
@@ -783,6 +798,16 @@ _CORPUS_SCOPE = "on this vendored W3C corpus"
 # the pattern itself: `complete OWL 2 RL entailment` cannot appear in a unit that never
 # writes `OWL 2`, so sweeping the units that write `OWL 2` is total for that pattern rather
 # than merely generous.
+#
+# TO BAN A SECOND SPELLING of a claim already here — `OWL2` beside `OWL 2` — there are two
+# correct edits and one wrong one. Correct: add a SECOND ENTRY with its own marker (`owl2`)
+# and its own specimen, so the new spelling derives its own swept set; or RE-POINT this
+# entry's marker at a literal both spellings share (`rl entailment`) and put the alternation
+# in `before`, so the sweep follows the marker that moved. Wrong: widen `before`/`after` into
+# an alternation that makes the marker one branch among several — the pattern would then
+# match prose that never writes the marker, and prose that never writes the marker joins no
+# swept set, fires no reach-arm probe and is reported by no arm. `_banned_pattern` refuses
+# that edit rather than trusting a reader to notice it.
 #
 # "Total" is an implication with a precondition, and the precondition is that membership
 # and detection read the SAME TEXT. They did not. The sweep joined wrapped lines into
@@ -812,38 +837,139 @@ _CORPUS_SCOPE = "on this vendored W3C corpus"
 # It is therefore enforced over the surface the marker-bearing patterns define — the
 # conformance and entailment story, where a comparative brag has no business appearing —
 # and not repo-wide.
-_BANNED_OVERCLAIMS: tuple[tuple[re.Pattern[str], str | None, str], ...] = (
+_BANNED_PARTS: tuple[tuple[str, str | None, str, str], ...] = (
     (
-        re.compile(r"\b(complete|full)[a-z]*\s+(?:the\s+)?OWL 2 RDF-Based semantics", re.I),
+        r"\b(complete|full)[a-z]*\s+(?:the\s+)?",
         "owl 2",
+        r" RDF-Based semantics",
         "the RDF-Based semantics is not finitely axiomatizable by a rule table; PurRDF "
         "implements a profile's rule table plus five named mechanisms, not the semantics",
     ),
     (
-        re.compile(r"\b(complete|full)[a-z]*\s+OWL 2 conformance", re.I),
+        r"\b(complete|full)[a-z]*\s+",
         "owl 2",
+        r" conformance",
         "OWL 2 conformance is defined per syntax and per semantics over the whole test "
         "suite; what is measured here is one vendored subset of one corpus",
     ),
     (
-        re.compile(r"\b(complete|full)[a-z]*\s+OWL 2 RL entailment", re.I),
+        r"\b(complete|full)[a-z]*\s+",
         "owl 2",
+        r" RL entailment",
         "78 / 78 is RULE-TABLE coverage. Entailment conformance is a different claim, "
         "measured separately and only over the cases actually vendored",
     ),
     (
-        re.compile(r"\bfully conformant\b", re.I),
+        r"\bfully ",
         "conformant",
+        r"\b",
         "conformance is per specification clause and per corpus; `fully conformant` names "
         "neither, so nothing can check it",
     ),
     (
-        re.compile(r"\b(faster|fastest|outperform[a-z]*)\b", re.I),
+        r"\b(faster|fastest|outperform[a-z]*)\b",
         None,
+        "",
         "a comparative performance claim needs a named competitor, a named workload and a "
         "reproducible measurement; this repository's benches are report-only and assert "
         "no speedup",
     ),
+)
+
+
+# A subject marker's permitted SPELLING, and it is narrow on purpose. The marker is inserted
+# into its pattern as a PLAIN LITERAL, so a metacharacter would stop it being one; it names
+# the text a document must carry, so an upper-case letter would be a marker the ban's own
+# lower-cased reasoning could not follow; and it is searched for in `_reflowed` text, where
+# every whitespace run is a single space, so a tab or a double space could never be found
+# there and the marker would silently sweep nothing. One spelling rule settles all three:
+# lower-case ASCII words, single spaces between them, nothing else.
+_MARKER_SPELLING = re.compile(r"[a-z0-9]+(?: [a-z0-9]+)*")
+
+
+def _banned_pattern(before: str, subject: str | None, after: str) -> re.Pattern[str]:
+    """One banned claim, composed so it CANNOT match prose that omits its subject marker.
+
+    Requirement as a property of the PATTERN, which is what a witness could not give. The
+    old guard deleted the marker from that pattern's own specimen and required the match to
+    stop — which proves the pattern cannot match THAT STRING without the marker, not that it
+    cannot match ANY string without it. Adding a branch (``(?:OWL 2|OWL2) RL entailment``)
+    passed that witness while a document writing the unspaced spelling joined no swept set,
+    fired no reach-arm probe and was reported by no arm of the ban. The natural trigger was
+    benign: a maintainer BROADENING the ban would have punched the hole.
+
+    So the marker is not written into a pattern, it is composed into one. Each half is
+    required to be a regular expression ON ITS OWN and is then wrapped as ``(?:…)``, and the
+    marker goes between them as a literal. The result is a top-level concatenation of three
+    atoms, so every string the pattern matches contains the marker's characters
+    consecutively — case-insensitively, which is exactly what :data:`_MARKER_LITERALS` then
+    asks of a document. There is no alternation, quantifier or group either half can spell
+    that reaches around a concatenated atom: an added branch lands INSIDE its own ``(?:…)``,
+    and a half that would only balance once the marker sat between the two — ``…(?:`` and
+    ``|OWL2 …)`` — is refused here, by name, because that is the one shape that could put the
+    marker inside a group this composition does not control.
+
+    ``None`` is the marker-less case (see the performance claim below): its pattern is
+    written whole in ``before``, it derives no swept set, and it is enforced over the surface
+    the marked patterns define.
+    """
+    if subject is None:
+        if after:
+            raise SystemExit(
+                f"check-doc-claims: a banned overclaim with no subject marker spells its "
+                f"whole pattern in one part, and this one also carries {after!r}. There is "
+                f"no marker to compose around, so the second part would be silently "
+                f"concatenated and the reader would be told a marker bounds it"
+            )
+        return re.compile(before, re.I)
+    if not _MARKER_SPELLING.fullmatch(subject):
+        raise SystemExit(
+            f"check-doc-claims: the subject marker {subject!r} is not spelled as lower-case "
+            f"words separated by single spaces. It is inserted into its pattern as a plain "
+            f"literal and searched for in `_reflowed` text, so anything else is either not "
+            f"a literal there or not findable here, and the derived sweep would silently "
+            f"sweep nothing for this pattern"
+        )
+    for role, part in (("before", before), ("after", after)):
+        try:
+            re.compile(part)
+        except re.error as broken:
+            raise SystemExit(
+                f"check-doc-claims: the {role} half of the banned claim whose subject "
+                f"marker is {subject!r} is not a regular expression on its own ({broken}): "
+                f"{part!r}. Each half is wrapped as `(?:…)` and composed around the marker, "
+                f"and that wrapping is the only reason an added alternation branch cannot "
+                f"reach around it — a half that balances only once the marker sits between "
+                f"the two would put the marker inside a group this composition does not "
+                f"control, and `(?:OWL 2|OWL2) RL entailment` matches prose that never "
+                f"writes the marker, joins no swept set and is reported by no arm. To ban a "
+                f"second spelling, add a second entry with its own marker and its own "
+                f"specimen, or re-point this entry's marker at a literal both spellings "
+                f"share and put the alternation in `before`"
+            ) from broken
+    return re.compile(f"(?:{before}){subject}(?:{after})", re.I)
+
+
+# The ban table the rest of this file reads: (compiled pattern, subject marker, why). Derived
+# from the parts rather than written beside them, so the composition above is the only way a
+# banned claim gets compiled at all.
+_BANNED_OVERCLAIMS: tuple[tuple[re.Pattern[str], str | None, str], ...] = tuple(
+    (_banned_pattern(before, subject, after), subject, why)
+    for before, subject, after, why in _BANNED_PARTS
+)
+
+
+# Each subject marker as a compiled literal, so MEMBERSHIP asks the same question DETECTION
+# does, in the same currency. The ban's patterns match case-insensitively and require their
+# marker's characters consecutively (`_banned_pattern`); a lower-cased substring test is not
+# the same question, because `re.IGNORECASE` folds pairs `str.lower` does not move — `ſ`
+# matches `s`, `K` matches `k`, `İ` matches `i` — so a pattern could match text a `.lower()`
+# containment test said carried no marker, and the derivation's implication (matched here,
+# therefore swept there) would hold for every document anyone had tried and not in general.
+# Derived from the same markers, so re-pointing one re-points this in the same edit.
+_MARKER_LITERALS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
+    (subject, re.compile(re.escape(subject), re.I))
+    for subject in sorted({subject for _, subject, _ in _BANNED_OVERCLAIMS if subject})
 )
 
 
@@ -898,36 +1024,27 @@ def _table_pairs() -> tuple[
 def _check_marker_bounds(
     pattern: re.Pattern[str], subject: str, specimen: str
 ) -> None:
-    """`subject` must really BOUND `pattern` — spelling, and requirement.
+    """`subject` must really BOUND `pattern` — a WITNESS, in the currency of text.
 
-    Three assertions, and the third is the one the derivation rests on. A marker that does
-    not appear in its pattern's source proves nothing about which documents the pattern can
-    match; a marker the pattern does not REQUIRE proves the same nothing while still
-    appearing in it. That second shape is what a substring test cannot see: wrapping the
-    literal as ``(?:OWL 2 )?`` leaves it in ``pattern.pattern`` verbatim, so the source
-    check passes it — and a document saying ``complete RL entailment`` then carries no
-    marker, joins no swept set, fires no marker probe, and is reported by no arm of the ban.
+    The second opinion, and deliberately not the proof. Requirement is a property of the
+    PATTERN and is settled where the pattern is built (:func:`_banned_pattern`): the marker
+    is a literal in a concatenation, so no string the pattern matches can omit it. This
+    function asks the same question of one string instead — delete the marker from the
+    pattern's own specimen and the match must stop — which is strictly weaker, and saying so
+    is the point: a witness that stands in for the proof is what let an added alternation
+    branch pass while ``complete OWL2 RL entailment`` escaped the whole ban.
 
-    So requirement is tested by BEHAVIOUR: delete the marker from the pattern's own specimen
-    and the pattern must stop matching. Deleted rather than corrupted, and from the specimen
-    rather than from the pattern, because "this pattern cannot match text without its
-    marker" is a statement about text.
+    What it is still FOR is the route that goes around the composition: a pattern compiled by
+    hand into the table, where nothing checked that the marker is required and nothing
+    checked that it is even spelled. Both of those it can see, and :data:`_MUTATIONS` hands
+    it the shape they take — a marker wrapped as ``(?:OWL 2 )?``, which leaves the literal in
+    ``pattern.pattern`` verbatim so a source check passes it, while a document saying
+    ``complete RL entailment`` carries no marker, joins no swept set, fires no marker probe
+    and is reported by no arm of the ban.
 
-    Takes its three arguments rather than reading the table, so :data:`_MUTATIONS` can hand
-    it the optional-marker pattern and require it to fail.
+    Takes its three arguments rather than reading the table, so that mutation can be applied
+    without editing one.
     """
-    if subject != subject.lower():
-        raise SystemExit(
-            f"check-doc-claims: the subject marker {subject!r} is not lower-cased, so "
-            f"the case-insensitive membership test below would miss documents"
-        )
-    if subject != _reflowed(subject):
-        raise SystemExit(
-            f"check-doc-claims: the subject marker {subject!r} does not survive "
-            f"`_reflowed`, so the membership test — which reads reflowed text — could "
-            f"never find it and the derived sweep would silently sweep nothing for "
-            f"this pattern. Spell the marker with single spaces"
-        )
     if subject not in pattern.pattern.lower():
         raise SystemExit(
             f"check-doc-claims: the banned overclaim {pattern.pattern!r} does not "
@@ -956,13 +1073,16 @@ def _check_marker_bounds(
 def _check_ban_table() -> None:
     """The ban table must keep enough markers, and each must really bound its pattern.
 
-    A marker that does not appear in its pattern's source is a marker that no longer
-    proves anything about which documents the pattern can match, and the derived sweep
-    would silently stop being total. Reworded the other way — a pattern edited so it no
-    longer requires its marker, whether by deleting the literal or by wrapping it as
-    ``(?:OWL 2 )?`` — this fails on the same line, in the same commit, because
-    :func:`_check_marker_bounds` deletes the marker from the pattern's own specimen and
-    requires the match to stop.
+    A marker that does not appear in its pattern's source is a marker that no longer proves
+    anything about which documents the pattern can match, and the derived sweep would
+    silently stop being total. A pattern edited so it no longer REQUIRES its marker — the
+    literal deleted, wrapped as ``(?:OWL 2 )?``, or made one branch of an alternation — is
+    not caught here at all: it cannot be written. The table holds parts, and
+    :func:`_banned_pattern` composes the marker into every pattern as a concatenated literal,
+    so the edit fails at import, on the line that spells it, in the same commit. What is left
+    for this function is the FLOOR (a marker deleted outright, by setting it to ``None``) and
+    :func:`_check_marker_bounds`, the witness that still answers if a pattern is ever
+    compiled by hand around the composition.
 
     The specimens are read through :func:`_table_pairs`, which is also what asserts the two
     tables are still index-aligned; a pattern with no specimen beside it would otherwise be
@@ -992,9 +1112,10 @@ def _markers_in(text: str) -> tuple[str, ...]:
     derivation total: a claim broken inside `OWL 2` carries the marker just as much as one
     that is not, and the raw-text test said otherwise.
     """
-    lowered = _reflowed(text).lower()
-    subjects = sorted({subject for _, subject, _ in _BANNED_OVERCLAIMS if subject})
-    return tuple(subject for subject in subjects if subject in lowered)
+    reflowed = _reflowed(text)
+    return tuple(
+        subject for subject, literal in _MARKER_LITERALS if literal.search(reflowed)
+    )
 
 
 def _claim_corpus(surface: list[Path]) -> list[tuple[str, str]]:
@@ -1925,39 +2046,74 @@ def overclaim_self_test(surface: list[Path], report: bool) -> list[str]:
     return wrong
 
 
-def _marker_made_optional(pattern: re.Pattern[str], subject: str) -> re.Pattern[str]:
-    """`pattern` with its subject marker wrapped as an OPTIONAL group.
+def _marker_made_optional(before: str, subject: str, after: str) -> re.Pattern[str]:
+    """The banned claim's parts recompiled with the subject marker OPTIONAL.
 
-    The edit a source-text check cannot see: the marker's literal is still spelled in
-    ``pattern.pattern``, so ``subject in pattern.pattern.lower()`` passes — while the
-    pattern now matches prose that never writes the marker, and prose that never writes the
-    marker joins no swept set and fires no reach-arm probe.
+    The pattern a hand-compiled table entry could hold and a source-text check could not
+    see: the marker's literal is still spelled in ``pattern.pattern``, so
+    ``subject in pattern.pattern.lower()`` passes — while the pattern now matches prose
+    that never writes the marker, and prose that never writes the marker joins no swept set
+    and fires no reach-arm probe.
+
+    Built from the PARTS rather than by rewriting a composed pattern's source, because the
+    composition puts the marker's neighbouring space on the far side of a group boundary and
+    a mutation that left that space mandatory would be a different, harmless pattern — a
+    mutation that does not reproduce the defect proves nothing about the guard that refuses
+    it.
     """
-    match = re.search(rf"{re.escape(subject)} ?", pattern.pattern, re.I)
-    if not match:
-        raise SystemExit(
-            f"check-doc-claims: the marker {subject!r} cannot be found in "
-            f"{pattern.pattern!r}, so the mutation that proves the marker is REQUIRED cannot "
-            f"be applied — and a mutation that cannot be applied proves nothing"
-        )
     return re.compile(
-        f"{pattern.pattern[: match.start()]}(?:{match.group(0)})?"
-        f"{pattern.pattern[match.end() :]}",
-        pattern.flags,
+        f"(?:{before})(?:{subject} ?)?"
+        f"(?:{after[1:] if after.startswith(' ') else after})",
+        re.I,
     )
 
 
 def _mutated_optional_marker() -> None:
     """A marker made optional rather than deleted. ``_check_marker_bounds`` must refuse."""
-    for (pattern, subject, _), (sentence, _wrapped) in _table_pairs():
+    for (before, subject, after, _why), (_entry, (sentence, _wrapped)) in zip(
+        _BANNED_PARTS, _table_pairs()
+    ):
         if subject is None:
             continue
-        _check_marker_bounds(_marker_made_optional(pattern, subject), subject, sentence)
+        _check_marker_bounds(
+            _marker_made_optional(before, subject, after), subject, sentence
+        )
         return
     raise SystemExit(
         "check-doc-claims: no banned overclaim declares a subject marker, so the mutation "
         "that proves a marker must be REQUIRED cannot be applied"
     )
+
+
+def _mutated_alternating_marker() -> None:
+    """A second spelling smuggled in as an ALTERNATION BRANCH. ``_banned_pattern`` refuses.
+
+    The escape the single-specimen witness could not see, in the shape a maintainer would
+    have reached for: broadening `OWL 2 RL entailment` to `(?:OWL 2|OWL2) RL entailment`
+    leaves the marker in the pattern's source and leaves the deletion witness satisfied,
+    while `complete OWL2 RL entailment` joins no swept set and is reported by no arm. Spelled
+    against the composition it must go through, the same edit splits into two halves that are
+    not regular expressions on their own, and that is what is refused.
+
+    The mutation proves the door is locked. The reason there is no second door is structural
+    and lives in :func:`_banned_pattern`: an alternation written INSIDE either half stays
+    inside its own ``(?:…)``, so the marker remains a concatenated atom whatever the halves
+    say.
+    """
+    for before, subject, after, _why in _BANNED_PARTS:
+        if subject is None:
+            continue
+        _banned_pattern(f"{before}(?:", subject, f"|OWL2{after})")
+        return
+    raise SystemExit(
+        "check-doc-claims: no banned overclaim declares a subject marker, so the mutation "
+        "that proves an alternation cannot reach around one cannot be applied"
+    )
+
+
+def _mutated_narrowed_mutations() -> None:
+    """This table itself, cut to one entry. ``_check_mutation_floor`` must refuse."""
+    _check_mutation_floor(_MUTATIONS[:1])
 
 
 def _mutated_same_line_scope() -> None:
@@ -2037,6 +2193,10 @@ _MUTATIONS: tuple[tuple[str, Callable[[], None]], ...] = (
         _mutated_optional_marker,
     ),
     (
+        "a subject marker made one BRANCH of an alternation",
+        _mutated_alternating_marker,
+    ),
+    (
         "a scoped specimen that no longer crosses a line",
         _mutated_same_line_scope,
     ),
@@ -2044,7 +2204,57 @@ _MUTATIONS: tuple[tuple[str, Callable[[], None]], ...] = (
         "an arm of the entailment-overclaim ban with its walk deleted",
         _mutated_skipped_walk,
     ),
+    (
+        "this mutation table itself, narrowed",
+        _mutated_narrowed_mutations,
+    ),
 )
+
+# The floor under the table above, in the same shape as `_BANNED_OVERCLAIMS`'s own floor and
+# for the same reason: every table in this file that can be narrowed has been, and the two
+# gates one level down both printed a green line about whatever was left. Narrowing this one
+# to a single entry — or to `()` — left every gate at exit 0, because the guards still ran and
+# only the evidence that they SEE anything went away.
+#
+# One entry per defect that was live with every gate green, so the floor is the count itself:
+# none of these shapes stops being possible, and a table below the floor is a table that has
+# forgotten one. Adding a mutation raises it in the same commit.
+_MUTATION_FLOOR = 8
+
+
+def _check_mutation_floor(
+    mutations: tuple[tuple[str, Callable[[], None]], ...],
+) -> None:
+    """The mutation table must keep its entries, and they must be DIFFERENT entries.
+
+    A count alone would be a floor a copy-paste satisfies, so distinctness is asserted with
+    it: eight copies of one mutation is one lever proved and seven claimed. Both halves are
+    the same argument the ban table's own floor makes — this table is narrowable, narrowing
+    it costs no gate its exit code, and what it takes away is the only evidence that any of
+    these guards can see the shape it is named for.
+
+    Takes the table rather than reading it, so :data:`_MUTATIONS` can hand it a narrowed one.
+    """
+    if len(mutations) < _MUTATION_FLOOR:
+        raise SystemExit(
+            f"check-doc-claims: {len(mutations)} mutation(s) of this gate's own guards, "
+            f"below the floor of {_MUTATION_FLOOR}. Each entry is a lever that was live "
+            f"with every gate green, and deleting one leaves every gate at exit 0 while the "
+            f"guard it exercised stops being exercised at all. Restore it, or lower the "
+            f"floor deliberately in the same commit and say which defect stopped being "
+            f"possible"
+        )
+    for kind, seen in (
+        ("descriptions", {what for what, _ in mutations}),
+        ("callables", {mutate for _, mutate in mutations}),
+    ):
+        if len(seen) != len(mutations):
+            raise SystemExit(
+                f"check-doc-claims: the mutation table has {len(mutations)} entries and "
+                f"{len(seen)} distinct {kind}, so it is claiming more levers than it "
+                f"exercises. A floor a repeated entry satisfies is the hand-written tuple "
+                f"this file has already had to remove once"
+            )
 
 
 def mutation_self_test(report: bool) -> list[str]:
@@ -2054,13 +2264,21 @@ def mutation_self_test(report: bool) -> list[str]:
     That one proves the ban answers injected PROSE; this one proves the guards around it
     answer injected STATE — an arm of the surface walk that contributes nothing, a manifest
     kind that publishes nothing, a field path that publishes an identifier, a pattern that
-    no longer requires its marker, a scoped specimen that stopped crossing a line, and a
-    ban arm whose walk was removed. Every one of those shapes was live, with every gate
+    no longer requires its marker (made optional, or made one branch of an alternation), a
+    scoped specimen that stopped crossing a line, a ban arm whose walk was removed, and this
+    table itself narrowed to one entry. Every one of those shapes was live, with every gate
     green.
+
+    The table is floored before it is run (:func:`_check_mutation_floor`), because a table of
+    mutations is the one table in this file whose narrowing costs no gate its exit code:
+    every guard still runs, and only the evidence that any of them can SEE anything goes
+    away. That is the same shape as the hand-written tuple this file already had to remove,
+    one meta-level up.
 
     It costs microseconds: no tree is read and no file is written, because each guard takes
     what it judges as an argument.
     """
+    _check_mutation_floor(_MUTATIONS)
     survived = [
         what
         for what, mutate in _MUTATIONS
