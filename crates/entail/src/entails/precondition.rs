@@ -87,6 +87,16 @@ pub enum UndecidedReason {
     /// `D`: the five `dt-*` rules are the part of datatype entailment a forward chase can
     /// produce, and this crate states no theorem that they are all of it.
     DatatypeValueSpace,
+    /// `OWL-RL`: the conclusion states this many NEGATIVE FACTS, which is more chase
+    /// re-runs than [`REFUTATION_BUDGET`](super::REFUTATION_BUDGET) allows, so the
+    /// refutation lane did not finish.
+    ///
+    /// Distinct from every other variant here in what it is about: the others say the
+    /// PROCEDURE is not complete for this input, and this one says the procedure was not
+    /// RUN to completion. Both license exactly the same thing — nothing — and collapsing
+    /// this into `NotEntailed` would turn "I stopped" into "there is nothing to find",
+    /// which is the overclaim this whole enum exists to prevent.
+    RefutationBudget(u64),
 }
 
 impl std::fmt::Display for UndecidedReason {
@@ -118,6 +128,13 @@ impl std::fmt::Display for UndecidedReason {
             Self::DatatypeValueSpace => f.write_str(
                 "datatype entailment quantifies over infinite value spaces, of which the five \
                  dt-* rules are the part a forward chase can produce",
+            ),
+            Self::RefutationBudget(needed) => write!(
+                f,
+                "the conclusion states {needed} negative fact{}, each of which needs its own \
+                 re-chase, and the refutation budget of {} runs does not reach that far",
+                if *needed == 1 { "" } else { "s" },
+                super::REFUTATION_BUDGET,
             ),
         }
     }
@@ -248,6 +265,7 @@ mod tests {
             UndecidedReason::WithheldSurrogate(3),
             UndecidedReason::AxiomaticSchema(vec!["rdf:_1".to_owned()]),
             UndecidedReason::DatatypeValueSpace,
+            UndecidedReason::RefutationBudget(9_000),
         ] {
             assert!(!reason.to_string().is_empty(), "{reason:?}");
         }

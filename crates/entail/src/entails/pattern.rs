@@ -81,7 +81,7 @@ pub(crate) fn var_count(pat: &Pat) -> usize {
 }
 
 /// Read a term of a conclusion GRAPH as a pattern: every blank node is an existential.
-fn conclusion_node(term: TermValue) -> Pat {
+pub(crate) fn conclusion_node(term: TermValue) -> Pat {
     match term {
         TermValue::Blank { label, scope } => Pat::Var(VarKey::Blank { label, scope }),
         TermValue::Triple { s, p, o } => Pat::Triple(Box::new([

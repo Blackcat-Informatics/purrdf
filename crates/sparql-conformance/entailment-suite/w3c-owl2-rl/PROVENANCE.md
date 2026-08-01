@@ -119,15 +119,24 @@ base-less document for a scheme — rather than taking it on trust.
 
 ## How a case is graded
 
-1. Parse `premise.rdf`; forward-materialize it with
-   `purrdf_entail::materialize(&ds, Regime::OwlRl)`.
-2. Parse the target document into its default-graph triples.
-3. Ask whether the closure **simple-entails** the target: does the target graph
-   map into the closure, with the target's blank nodes read as existentials? The
-   search is a backtracking homomorphism with a candidate budget; exhausting the
-   budget is a *withhold*, never a verdict.
-4. Compare with the published direction. A positive case passes when the closure
-   contains the conclusion; a negative case passes when it does not.
+1. Parse `premise.rdf` and the target document.
+2. Hand both to `purrdf_entail::entails(&premise, &target, Regime::OwlRl,
+   &ImportMap::new())` — the library's conclusion-directed entailment service,
+   which is what any caller gets. The harness owns no reasoning of its own; it
+   parses two documents and compares one answer.
+3. That call resolves `owl:imports`, establishes the premise's **consistency**
+   (an inconsistent premise entails everything, so it is a refusal and never a
+   verdict), forward-materializes under `Regime::OwlRl`, and then reaches the
+   conclusion one of two ways:
+   - **matching** — does the target graph map into the closure, with its blank
+     nodes read as existentials? A backtracking homomorphism with a candidate
+     budget; exhausting the budget is a *withhold*, never a verdict.
+   - **refutation** — for a conclusion whose shape no rule of Tables 4–9 has a
+     head for, assert its negation into the premise and re-run the same rule
+     table; the seventeen `false`-concluding rules are what decide it. Sound
+     only because step 3 established the premise's consistency first.
+4. Compare with the published direction. A positive case passes when the service
+   answers `Entailed`; a negative case passes when it does not.
 
 Three buckets, never two — **agree**, **withhold** (a refusal: a parse failure, a
 chase error, a budget exhaustion), **disagree** — and every withhold and
@@ -148,23 +157,51 @@ table omits) as opposed to descriptions of what the profile cannot reach.
 ## What the oracle measured
 
 ```
-OWL2-RL-ENTAILMENT: agreed 34 ledgered 16 unledgered 0 stale 0 total 50 actionable 0
+OWL2-RL-ENTAILMENT: agreed 42 ledgered 8 unledgered 0 stale 0 total 50 actionable 0
 ```
 
-- **Negative lane: 23 / 23 agree. No unsoundness was found** — the chase never
-  derived a triple W3C publishes as not entailed.
-- **Positive lane: 11 of 27 agree.** The other 16 are ledgered with typed reasons:
-  8 `schema-conclusion`, 6 `negative-conclusion`, 1 `construct-outside-rl`,
-  1 `imports-unresolved`.
+- **Negative lane: 23 / 23 agree. No unsoundness was found** — nothing W3C
+  publishes as not entailed was ever reached.
+- **Positive lane: 19 of 27 agree.** The other 8 are ledgered with typed reasons:
+  6 `schema-conclusion`, 1 `construct-outside-rl`, 1 `imports-unresolved`.
 
-The 16 are not 16 bugs. Every one of them is a structural property of the OWL 2
+The 8 are not 8 bugs. Every one of them is a structural property of the OWL 2
 RL/RDF rule table rather than of this implementation: every head in Tables 4–9 is
 an assertional triple over named terms or `false`, so no conforming RL rule set
 derives a schema axiom (`p a owl:TransitiveProperty`, an `rdfs:range`, an
-anonymous `owl:Restriction`, an `owl:AllDifferent`), and none derives a negative
-fact (`owl:differentFrom`, membership in an `owl:complementOf`), which follows
-only by refutation. W3C still tags those cases `otest:profile RL`, because that
-tag describes the *ontology's* profile and not what the rule table reaches.
+anonymous `owl:Restriction`). W3C still tags those cases `otest:profile RL`,
+because that tag describes the *ontology's* profile and not what the rule table
+reaches.
+
+### The eight that were structural in ONE reading and not in the other
+
+The ledger used to hold six `negative-conclusion` entries and two more filed as
+`schema-conclusion`, and the reason given for all eight was true as far as it
+went: no head anywhere in Tables 4–9 is a negative fact, so no forward chase over
+those rules derives an `owl:differentFrom`, a membership in an anonymous
+`owl:complementOf` class, or an `owl:AllDifferent` collection. What that reading
+missed is that **seventeen of the seventy-eight rules conclude `false`**, and
+seventeen rules that conclude `false` are an inconsistency calculus. A negative
+fact does not need a rule with a negative head; it needs a refutation.
+
+`purrdf_entail::entails()` performs one. It asserts the conclusion's negation
+into the premise — `owl:sameAs` for an `owl:differentFrom`, a class assertion for
+an `owl:complementOf` membership — and re-runs the same rule table over a premise
+whose consistency the first run already established. Across the eight cases the
+rule that actually reaches `false` is `cax-dw`, `cax-adc`, `prp-pdw`, `prp-adp`
+or `eq-diff1` — measured, not guessed. `new-feature-objectqcr-002` is the longest
+chain of the eight: the asserted `Stewie a Woman` lets `cls-maxqc3` derive
+`Stewie owl:sameAs Meg` against a `maxQualifiedCardinality 1`, and `eq-diff1`
+then clashes that against the premise's own `Stewie owl:differentFrom Meg`. An
+`owl:AllDifferent` collection is, by OWL 2's own definition, the conjunction of
+its `n(n−1)/2` pairwise inequalities, so it lowers to the same shape and is
+entailed exactly when every pair refutes — which is why two `schema-conclusion`
+entries left with the six.
+
+Nothing was added to the table to do it: `rules(Regime::OwlRl)` and
+`implemented(Regime::OwlRl)` are still exactly the same 78, and
+`extensions(Regime::OwlRl)` is still the one rule named below. This row moved
+34 → 42 and the ledger 16 → 8 on a second run of the same seventy-eight rules.
 
 ### The one that was NOT structural, and how it was closed
 
@@ -181,9 +218,9 @@ declared to sit outside every specification table: `extensions(Regime::OwlRl)`
 names it, `rules(Regime::OwlRl)` and `implemented(Regime::OwlRl)` are both still
 exactly the same 78 and name none of it, `RuleId::is_extension` decides which is
 which, and every rendered report carries an `extension ext-eq-diff-sym` line
-beside its `missing` lines. So this row moved 33 → 34 and the ledger's
-`actionable` count 1 → 0, while `OWL-RL 78 / 78` still means Tables 4–9 and
-nothing else.
+beside its `missing` lines. So this row moved 33 → 34 — the change before the
+eight above — and the ledger's `actionable` count 1 → 0, while `OWL-RL 78 / 78`
+still means Tables 4–9 and nothing else.
 
 ## The upstream census (`census.tsv`)
 

@@ -809,6 +809,193 @@ fn witness_of(
     InconsistencyWitness::new(rule, premises, graph.cloned())
 }
 
+// ── Refutation: the same calculus, re-run over the premise plus an assertion ──────────
+
+/// The calculus, COMPILED ONCE, ready to be run over a premise plus any number of added
+/// assertions.
+///
+/// # Why this is not just another [`close`] call
+///
+/// A refutation asks a different question from a closure. `close` wants the conclusions and
+/// refuses the moment a `false`-headed rule matches; a refutation wants exactly that match —
+/// the clash IS the answer — and it asks for it many times over, once per negated
+/// conclusion statement and again once per candidate axiom while a minimal entailing subset
+/// is shrunk out. Routing that through `close` would mean handing every one of those runs a
+/// fresh `RdfDatasetBuilder`, a fresh materialization pass and a fresh plan compilation for
+/// a plan that is a pure function of the clauses.
+///
+/// So the two costs a repeated run would otherwise pay per iteration are paid ONCE here:
+///
+/// * **the plan.** [`PlanCache`] is content-addressed on the calculus's own contract hash,
+///   so the ~200-clause `OWL-RL` program is compiled the first time [`Self::refute`] runs
+///   and read back on every later call, whatever premise subset it is running over. The
+///   cache is owned by this value and threaded by `&mut`, never global — the same
+///   discipline [`close`] uses, and for the same reason: a longer-lived cache would make a
+///   run's cost depend on which runs came before it.
+/// * **the seed.** [`Self::seed`] interns the premise's terms, walks its RDF collections
+///   into the internal `LIST[…]` relations and decides its literals' value spaces once; the
+///   resulting [`RelationStore`] is then CLONED per run and the negation goes in as an
+///   insert delta on the already-arranged store. Every pairwise refutation of one
+///   `owl:AllDifferent` collection shares one seed and differs by one row.
+///
+/// What is NOT shared is the FIXPOINT, and the honest reason is worth writing down rather
+/// than eliding. `purrdf-datalog`'s store is generic over an abelian
+/// [`Weight`](purrdf_datalog::store::Weight) monoid and its consolidation merge compiles for
+/// the signed `i64` instantiation — so Z-set retraction, and hence incremental maintenance,
+/// is a COMPILED FACT of the representation. What the crate does not yet have is an
+/// evaluator entry point that consumes one: [`evaluate`] takes a whole store and seeds its
+/// round-1 delta from the whole of it, so each run here recomputes the closure of
+/// `premise ∪ Δ` from the arranged seed. The sharing above is real and measurable; calling
+/// it "incremental evaluation" would claim a maintenance path that does not exist yet, and a
+/// refutation lane that quietly did so would be the wrong place to find that out.
+pub(crate) struct Refuter {
+    /// The lane whose calculus runs. `OWL-RL` in every caller today; carried rather than
+    /// assumed so the attribution and the witness's rule spelling stay the lane's own.
+    regime: Regime,
+    /// The calculus's contract hash, which is the plan cache's key.
+    contract: String,
+    /// The clause program, lowered exactly as [`close_graph`] lowers it.
+    program: Vec<DlClause>,
+    /// Clause index → the rule that clause states, for the witness's attribution.
+    attribution: Vec<ChaseRule>,
+    /// The compiled plan, kept across every run of this refuter.
+    plans: PlanCache,
+}
+
+/// A premise seeded ONCE, re-closed against any number of added assertions.
+///
+/// The dictionary is mutable because an added assertion may mention a term the premise does
+/// not — the class of an `owl:complementOf`, say — and [`Terms::value`] has to stay total
+/// over everything the store can hold. Recording is monotone and idempotent: a surface only
+/// ever gains its value, so a term left over from one run cannot be reached by a later run
+/// whose store never held it.
+pub(crate) struct Seeded {
+    /// The arranged store the premise's own facts and pre-passes produced.
+    edb: RelationStore,
+    /// The surface → value dictionary that reads an answer back.
+    terms: Terms,
+}
+
+/// What one refutation run found: the clash, and everything the run derived.
+#[derive(Debug)]
+pub(crate) struct Clash {
+    /// The rule whose premises were all satisfied, and the triples that satisfied them.
+    pub(crate) witness: InconsistencyWitness,
+    /// Every RDF-1.2-representable triple the run DERIVED, in the evaluator's own total
+    /// derivation order.
+    ///
+    /// The seeded facts are not repeated here: the caller already holds them (they are the
+    /// premise subset and the assertion it handed in), so restating them would be a second
+    /// copy that could disagree with the first.
+    pub(crate) derived: Vec<[TermValue; 3]>,
+}
+
+impl Refuter {
+    /// A refuter for `regime`'s calculus.
+    ///
+    /// Capacity one, because a refuter presents exactly one program for its whole life: the
+    /// calculus is a function of the regime, and the regime is fixed at construction.
+    pub(crate) fn new(regime: Regime) -> Self {
+        let (program, attribution) = program_with_attribution(regime);
+        Self {
+            regime,
+            contract: calculus_contract_hash(regime).to_hex(),
+            program,
+            attribution,
+            plans: PlanCache::new(1),
+        }
+    }
+
+    /// Seed `ds`'s default graph once.
+    ///
+    /// # Errors
+    ///
+    /// [`EntailError::MalformedList`] if an RDF collection an OWL 2 axiom points at is not a
+    /// well-formed collection — the same refusal [`seed`] owes any caller.
+    pub(crate) fn seed(&self, ds: &RdfDataset) -> Result<Seeded, EntailError> {
+        let (edb, terms) = seed(ds, self.regime, &self.program, None)?;
+        Ok(Seeded { edb, terms })
+    }
+
+    /// Run the calculus over `seeded`'s premise PLUS `added`, and report the first clash.
+    ///
+    /// `Ok(None)` is "no `false`-headed rule matched": under a calculus that is complete for
+    /// the input's syntax that is a proof of CONSISTENCY, which is what a caller reads it as
+    /// — see [`crate::entails::refutation`] for the precondition that entitles it to.
+    ///
+    /// # The pre-passes are not re-run, and that is CHECKED rather than assumed
+    ///
+    /// [`seed`] computes three things no clause can express — the RDF collections an OWL
+    /// axiom points at, the XSD value-space judgements, and (in the surrogate lanes) the
+    /// term-kind observations — and this method reuses all three from the seed instead of
+    /// recomputing them over `premise ∪ added`. That is only sound if `added` cannot change
+    /// any of them, so the caller mints assertions from a WHITELIST of exactly two shapes
+    /// (`owl:sameAs` between two terms, and `rdf:type` to a named class) and
+    /// `an_added_assertion_never_disturbs_a_pre_pass` is what holds it to that: neither
+    /// predicate is `rdf:first`, `rdf:rest` or one of the seven list-valued OWL predicates
+    /// [`crate::lists::LIST_VALUED`] names, and neither shape carries a literal.
+    ///
+    /// # Errors
+    ///
+    /// [`EntailError::Evaluate`] if the plan will not compile or the evaluation passes one
+    /// of `purrdf-datalog`'s three fixed ceilings.
+    pub(crate) fn refute(
+        &mut self,
+        seeded: &mut Seeded,
+        added: &[[TermValue; 3]],
+    ) -> Result<Option<Clash>, EntailError> {
+        // The insert DELTA: the seed's arrangement is cloned, and the assertion is the only
+        // row that was not already in it.
+        let mut edb = seeded.edb.clone();
+        for [subject, predicate, object] in added {
+            let subject = seeded.terms.record(subject);
+            let predicate = seeded.terms.record(predicate);
+            let object = seeded.terms.record(object);
+            let _ = edb.insert(&subject, &predicate, &object, RelationStore::DEFAULT_GRAPH);
+        }
+
+        let program = self.program.clone();
+        let executable = self
+            .plans
+            .get_or_compile(&self.contract, program)
+            .into_plan()
+            .map_err(EntailError::Evaluate)?;
+        let evaluation = evaluate(&executable, edb).map_err(EntailError::Evaluate)?;
+
+        let Some(witness) = first_clash(
+            &evaluation,
+            &self.attribution,
+            &seeded.terms,
+            self.regime,
+            None,
+        ) else {
+            return Ok(None);
+        };
+
+        // Everything the run derived, read back through the same two filters [`close_graph`]
+        // applies: an internal relation is bookkeeping rather than a triple, and a
+        // conclusion the RDF 1.2 IR cannot hold is abandoned rather than fabricated around.
+        let mut derived = Vec::new();
+        for derivation in evaluation.derivations() {
+            let fact = derivation.fact();
+            if is_internal(&fact.predicate) {
+                continue;
+            }
+            let subject = seeded.terms.value(&fact.subject);
+            let predicate = seeded.terms.value(&fact.predicate);
+            if !admits_subject(subject) || !admits_predicate(predicate) {
+                continue;
+            }
+            derived.push([
+                subject.clone(),
+                predicate.clone(),
+                seeded.terms.value(&fact.object).clone(),
+            ]);
+        }
+        Ok(Some(Clash { witness, derived }))
+    }
+}
+
 /// Whether `value` may occupy a triple SUBJECT position in RDF 1.2 — an IRI or a blank
 /// node, never a literal and never a triple term.
 fn admits_subject(value: &TermValue) -> bool {
@@ -842,7 +1029,7 @@ pub(crate) struct Terms {
 
 impl Terms {
     /// Record `value` and return its surface.
-    fn record(&mut self, value: &TermValue) -> String {
+    pub(crate) fn record(&mut self, value: &TermValue) -> String {
         let surface = surface_of(value);
         if !self.by_surface.contains_key(&surface) {
             self.by_surface.insert(surface.clone(), value.clone());

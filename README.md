@@ -85,7 +85,7 @@ but it assumes nothing about your ontology or application.
   deterministic semi-naive fixpoint (**all 78 OWL 2 RL rules** of OWL 2 Profiles
   §4.3 Tables 4–9 — *rule-table coverage*, which is not the same claim as
   entailment conformance: on W3C's own OWL 2 RL entailment tests the chase
-  scores **11 of 27 positive and 23 of 23 negative**, the latter meaning no
+  scores **19 of 27 positive and 23 of 23 negative**, the latter meaning no
   unsoundness was found; all 18 RDF + RDFS patterns, the four existential ones
   firing through the restricted chase with their surrogate blank nodes withheld at
   the materialization boundary), an open-world OWL-Direct
@@ -288,7 +288,7 @@ full scoreboard and how-to-run in [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md)
 | SPARQL 1.1 | W3C suite via `purrdf-sparql-conformance` | green, xfail-ledgered |
 | Entailment (SPARQL regimes) | W3C sparql11 `entailment/` group | **70 / 70**, 0 ledgered |
 | Entailment (OWL 2 DL consistency) | vendored W3C OWL 2 suite | **257 / 261** agreeing, 4 ledgered, 0 unledgered |
-| Entailment (OWL 2 RL, W3C entailment tests) | vendored W3C OWL 2 entailment suite | **34 / 50** agreeing, 16 ledgered, 0 unledgered — negative lane **23 / 23** (no unsoundness), positive lane **11 / 27** |
+| Entailment (OWL 2 RL, W3C entailment tests) | vendored W3C OWL 2 entailment suite | **42 / 50** agreeing, 8 ledgered, 0 unledgered — negative lane **23 / 23** (no unsoundness), positive lane **19 / 27** |
 | RDFC-1.0 | W3C canonicalization fixtures | green |
 | GTS | frozen cross-language vectors (`vectors/`) | byte-exact |
 

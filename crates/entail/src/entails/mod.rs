@@ -68,14 +68,29 @@
 //! is [`EntailError::UnresolvedImport`] naming the document — never a silently truncated
 //! premise. See [`imports`].
 //!
-//! # One mechanism, and it is named
+//! # Two mechanisms, and both are named
 //!
-//! There is exactly one mechanism here today: [`homomorphism`], the chase-and-graph-match
-//! procedure OWL 2 Profiles §4.3 states the RL entailment relation in terms of. An
-//! [`EntailmentWarrant`] therefore has exactly one shape of evidence, because that is the
-//! only shape anything in this crate can currently produce. A second mechanism arrives with
-//! its own arm and its own producer, together — this crate does not pre-declare states that
-//! nothing constructs.
+//! * [`homomorphism`] — the chase-and-graph-match procedure OWL 2 Profiles §4.3 states the
+//!   RL entailment relation in terms of. It is complete for every conclusion the rule table
+//!   can produce.
+//! * [`refutation`] — assert the conclusion's negation into the premise, re-chase, and read
+//!   the profile's own seventeen `false`-concluding rules as the proof. It exists because
+//!   the rule table produces no NEGATIVE FACT at all: no head in Tables 4–9 is an
+//!   `owl:differentFrom` or a membership in an `owl:complementOf` class, so a premise can
+//!   entail one while a forward chase derives nothing to match against. It adds no rule —
+//!   `rules`, `implemented` and `extensions` are untouched — and it runs only after the
+//!   premise's consistency has been established, which is the hypothesis its whole soundness
+//!   argument rests on. See its module docs for that argument, written out.
+//!
+//! [`EntailmentWarrant`] therefore has exactly two arms, one per mechanism, each minted by
+//! the mechanism it names. A third arrives with its own producer, together — this crate does
+//! not pre-declare states that nothing constructs.
+//!
+//! The refutation lane is [`entails`]-only, and deliberately: it decides a ground negative
+//! fact, and a projected variable ranging over one is a different question — "which
+//! individuals is `a` entailed to differ from?" would need a refutation per candidate over
+//! the whole domain, which is not what [`certain_answers`] computes and not what it would be
+//! honest to let it claim.
 //!
 //! # Determinism
 //!
@@ -96,7 +111,9 @@ use crate::{EntailError, Materialization, Regime, materialize};
 pub mod answers;
 pub mod homomorphism;
 pub mod imports;
+pub mod negation;
 pub mod precondition;
+pub mod refutation;
 pub mod warrant;
 
 // Two support modules with no public items of their own: the owned triple view both sides
@@ -108,9 +125,11 @@ mod pattern;
 pub use answers::CertainAnswers;
 pub use homomorphism::{Binding, MATCH_BUDGET, MissReason};
 pub use imports::ImportMap;
+pub use negation::NegativeFact;
 pub use pattern::VarKey;
 pub use precondition::UndecidedReason;
-pub use warrant::{EntailmentWarrant, verify};
+pub use refutation::{REFUTATION_BUDGET, Refutation, RefutationWarrant};
+pub use warrant::{EntailmentWarrant, HomomorphismWarrant, verify};
 
 use graph::default_graph_triples;
 use homomorphism::Closure;
@@ -307,16 +326,42 @@ pub fn entails(
     match homomorphism::find_one(pats, &prepared.closure)? {
         // A found mapping is a proof, and it needs no precondition: the rule set is sound,
         // so a conclusion mapped into the closure is entailed whatever the premise's syntax.
-        Ok(binding) => Ok(EntailmentOutcome::Entailed(EntailmentWarrant::new(
+        Ok(binding) => Ok(EntailmentOutcome::Entailed(
+            EntailmentWarrant::Homomorphism(HomomorphismWarrant::new(
+                regime,
+                binding,
+                prepared.closure,
+            )),
+        )),
+        // No mapping. Before that is read as anything, the second mechanism gets its turn:
+        // a conclusion the rule table has no head for is exactly the case a match cannot
+        // reach and a refutation can. It runs HERE and not earlier because it is strictly
+        // more expensive — one full re-chase per negative fact — and because the premise's
+        // consistency, which its soundness argument requires, is what `prepare` above has
+        // just established.
+        Err(miss) => match refutation::attempt(
+            prepared.effective(premise),
+            conclusion,
             regime,
-            binding,
-            prepared.closure,
-        ))),
-        // No mapping. What that MEANS is the precondition's answer, not this search's.
-        Err(miss) => Ok(match limits.into_iter().next() {
-            Some(reason) => EntailmentOutcome::Undecided(reason),
-            None => EntailmentOutcome::NotEntailed(miss),
-        }),
+            &prepared.closure,
+        )? {
+            refutation::Attempt::Entailed(warrant) => Ok(EntailmentOutcome::Entailed(
+                EntailmentWarrant::Refutation(*warrant),
+            )),
+            // The lane ran and stopped early. "I stopped looking" is not "there is nothing
+            // to find", so it is never allowed to become a refutation.
+            refutation::Attempt::Exhausted { needed } => Ok(EntailmentOutcome::Undecided(
+                UndecidedReason::RefutationBudget(needed),
+            )),
+            // Neither mechanism reached it. What that MEANS is the precondition's answer,
+            // not either search's.
+            refutation::Attempt::NotApplicable | refutation::Attempt::NotEstablished => {
+                Ok(match limits.into_iter().next() {
+                    Some(reason) => EntailmentOutcome::Undecided(reason),
+                    None => EntailmentOutcome::NotEntailed(miss),
+                })
+            }
+        },
     }
 }
 

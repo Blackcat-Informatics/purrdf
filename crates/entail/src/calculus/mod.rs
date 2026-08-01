@@ -552,6 +552,26 @@ pub(crate) fn clash_rule(marker: &str) -> Option<ChaseRule> {
         .find(|&rule| clash_marker(rule).surface().as_deref() == Some(marker))
 }
 
+/// Whether `id` names a rule whose conclusion is `false` rather than a triple.
+///
+/// The seventeen of OWL 2 Profiles §4.3 Tables 4–9 — `eq-diff1..3`, `prp-irp`, `prp-asyp`,
+/// `prp-pdw`, `prp-adp`, `prp-npa1`, `prp-npa2`, `cls-nothing2`, `cls-com`, `cls-maxc1`,
+/// `cls-maxqc1`, `cls-maxqc2`, `cax-dw`, `cax-adc` and `dt-not-type` — read off the
+/// declaration rather than transcribed, so the answer cannot drift from the rule table the
+/// evaluator actually runs.
+///
+/// It exists because those seventeen ARE the profile's inconsistency calculus, and a
+/// checker that re-decides a refutation
+/// ([`verify`](crate::verify)) has to be able to say, without running anything, that the
+/// rule a witness names is one whose firing means `false` and not one whose firing means
+/// "and here is another triple". Both lane spellings are accepted, because the nine rules
+/// with two specification names are one rule.
+pub(crate) fn concludes_false(id: RuleId) -> bool {
+    ChaseRule::ALL
+        .into_iter()
+        .any(|rule| rule.is_constraint() && (rule.rule_id(true) == id || rule.rule_id(false) == id))
+}
+
 /// The identity of the calculus `regime` runs, as `purrdf-datalog` computes it.
 ///
 /// Exactly `purrdf_datalog::cache::contract_hash(&calculus_program(regime))` — the same

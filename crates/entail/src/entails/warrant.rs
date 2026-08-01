@@ -9,26 +9,48 @@
 //! re-decide rather than re-read: a [`ChaseProof`](crate::ChaseProof) re-derives its head
 //! from its premises, a [`Justification`](crate::Justification) re-decides both its
 //! sufficiency and its minimality. An entailment verdict owes the same, and
-//! [`EntailmentWarrant`] is what it owes: the blank-node MAPPING that made the conclusion
-//! true, together with the closure it maps into.
+//! [`EntailmentWarrant`] is what it owes.
 //!
-//! [`verify`] then re-applies the mapping and looks each resulting triple up. It runs no
-//! reasoner and re-derives nothing — deliberately, because that is a different claim with a
-//! different checker. The two decompose:
+//! [`verify`] then re-decides it. It runs no reasoner and re-derives nothing —
+//! deliberately, because that is a different claim with a different checker. The two
+//! decompose:
 //!
 //! * **"the closure follows from the premise"** is the chase's claim, and
 //!   [`explain_conclusion`](crate::explain_conclusion) answers it with a `ChaseProof` whose
 //!   `check` re-derives each step against the clause program.
-//! * **"the conclusion follows from the closure"** is this claim, and it is a graph
-//!   homomorphism: finite, purely combinatorial, and checkable in one pass over the
-//!   conclusion.
+//! * **"the conclusion follows from the closure"** is this claim, and it is finite and
+//!   purely combinatorial — a graph homomorphism, or a set of lookups against a refutation's
+//!   own closure — checkable in one pass over the conclusion.
 //!
 //! Folding them into one checker would mean `verify` had to re-run the chase, which costs
 //! what the original call cost and gives a caller no independent check at all.
 //!
+//! # ONE ARM PER MECHANISM, and each arrives with its producer
+//!
+//! [`EntailmentWarrant`] is an enum with exactly as many arms as this crate has mechanisms
+//! for reaching a `yes`, and it has never had one more than that. There are two:
+//!
+//! * [`Homomorphism`](EntailmentWarrant::Homomorphism) — the chase-and-graph-match procedure
+//!   OWL 2 Profiles §4.3 states the RL entailment relation in terms of, minted by
+//!   [`super::homomorphism`]. Its evidence is the blank-node MAPPING that made the
+//!   conclusion true, together with the closure it maps into.
+//! * [`Refutation`](EntailmentWarrant::Refutation) — assert the conclusion's negation,
+//!   re-chase, and read the profile's own inconsistency calculus as the proof, minted by
+//!   [`super::refutation`]. Its evidence is a [`Refutation`](super::Refutation) per negative
+//!   fact — the clash, the minimal premise subset that produces it, and the closure its rule
+//!   body instances lie in — beside the ordinary mapping for whatever part of the conclusion
+//!   was not negative.
+//!
+//! An arm nothing constructs would be a state [`verify`] could not check and no caller could
+//! ever be handed, which is the same unrepresentable-contradiction discipline that keeps
+//! [`DlCertificate`](crate::DlCertificate) from storing a completeness beside the boundary
+//! list that contradicts it. A third mechanism brings its own arm and its own producer,
+//! together, or it does not arrive.
+//!
 //! # What `verify` actually checks, and why it needs the premise
 //!
-//! Three things, all of them necessary and none of them a reasoner:
+//! For the homomorphism arm, three things, all of them necessary and none of them a
+//! reasoner:
 //!
 //! 1. Every triple of the conclusion, with the warrant's mapping applied, is a triple of the
 //!    warrant's closure. A mapping that leaves a conclusion blank node unbound produces no
@@ -44,9 +66,14 @@
 //! for the binding — one lookup per triple, no search, because the search already happened
 //! and its result is what the warrant carries.
 //!
+//! For the refutation arm it is the same three over the conclusion's RESIDUAL triples, plus
+//! [`Refutation::check`](super::Refutation::check) per negative fact — and the conclusion is
+//! LOWERED again on the spot, so a warrant cannot be replayed against a conclusion whose
+//! negative facts are different ones.
+//!
 //! # What `verify` does NOT check
 //!
-//! It does not re-derive the closure, and it therefore cannot detect a closure that never
+//! It does not re-derive any closure, and it therefore cannot detect a closure that never
 //! followed from the premise in the first place. That is the chase's claim and the chase's
 //! checker; saying so here rather than implying otherwise is the point of splitting them.
 
@@ -58,22 +85,61 @@ use crate::Regime;
 use crate::entails::graph::{Triple, default_graph_triples};
 use crate::entails::homomorphism::{Binding, Closure, substitute};
 use crate::entails::pattern::conclusion_patterns;
+use crate::entails::refutation::{RefutationWarrant, verify_refutation};
 
-/// The evidence that a premise entails a conclusion.
+/// The evidence that a premise entails a conclusion, tagged by the mechanism that produced
+/// it.
 ///
-/// # There is one variant of evidence because there is one mechanism
-///
-/// A warrant is minted only by the homomorphism mechanism, so the homomorphism's mapping is
-/// the only thing it can carry. A second field for a mechanism that does not exist yet
-/// would be a state nothing constructs and [`verify`] could not check — the same
-/// unrepresentable-contradiction discipline that keeps
-/// [`DlCertificate`](crate::DlCertificate) from storing a completeness beside the boundary
-/// list that contradicts it. When a second mechanism arrives it brings its own arm and its
-/// own producer, together, or it does not arrive.
+/// See the [module docs](self) for why there are exactly two arms and what an arm owes.
 #[derive(Debug, Clone)]
-pub struct EntailmentWarrant {
-    /// The regime the closure was computed under — the identity of the claim, not part of
-    /// its check.
+pub enum EntailmentWarrant {
+    /// The conclusion MAPPED into the closure of the premise.
+    Homomorphism(HomomorphismWarrant),
+    /// The conclusion's negative facts were REFUTED and the rest mapped.
+    Refutation(RefutationWarrant),
+}
+
+impl EntailmentWarrant {
+    /// The regime whose closure this warrant is against — the identity of the claim, not
+    /// part of its check.
+    #[must_use]
+    pub const fn regime(&self) -> Regime {
+        match self {
+            Self::Homomorphism(w) => w.regime(),
+            Self::Refutation(w) => w.regime(),
+        }
+    }
+
+    /// The mapping: what each of the conclusion's existentials was bound to.
+    ///
+    /// For the refutation arm this is the mapping of the conclusion's RESIDUAL triples
+    /// alone; the negative facts have no mapping, which is why they had to be refuted.
+    #[must_use]
+    pub const fn binding(&self) -> &Binding {
+        match self {
+            Self::Homomorphism(w) => w.binding(),
+            Self::Refutation(w) => w.binding(),
+        }
+    }
+
+    /// How many distinct triples the premise closure this warrant is against holds.
+    ///
+    /// The closure itself is not exposed: a warrant is evidence for one conclusion, not an
+    /// alternative way to read a closure out of a call that already returns one.
+    #[must_use]
+    pub fn closure_size(&self) -> usize {
+        match self {
+            Self::Homomorphism(w) => w.closure_size(),
+            Self::Refutation(w) => w.closure_size(),
+        }
+    }
+}
+
+/// The evidence of a HOMOMORPHISM: the mapping that made the conclusion true, and the
+/// closure it maps into.
+#[derive(Debug, Clone)]
+pub struct HomomorphismWarrant {
+    /// The regime the closure was computed under.
     regime: Regime,
     /// What each existential of the conclusion was bound to.
     binding: Binding,
@@ -81,7 +147,7 @@ pub struct EntailmentWarrant {
     closure: Closure,
 }
 
-impl EntailmentWarrant {
+impl HomomorphismWarrant {
     /// Mint a warrant. Crate-internal: the only producer is the homomorphism search.
     pub(crate) const fn new(regime: Regime, binding: Binding, closure: Closure) -> Self {
         Self {
@@ -104,9 +170,6 @@ impl EntailmentWarrant {
     }
 
     /// How many distinct triples the closure this warrant is against holds.
-    ///
-    /// The closure itself is not exposed: a warrant is evidence for one conclusion, not an
-    /// alternative way to read a closure out of a call that already returns one.
     #[must_use]
     pub fn closure_size(&self) -> usize {
         self.closure.len()
@@ -130,14 +193,28 @@ impl EntailmentWarrant {
             })
             .collect()
     }
+
+    /// Re-decide this warrant against `premise` and `conclusion`.
+    fn check(&self, premise: &RdfDataset, conclusion: &RdfDataset) -> bool {
+        let Some(image) = self.witnesses(conclusion) else {
+            return false;
+        };
+        if !image.iter().all(|triple| self.closure.contains(triple)) {
+            return false;
+        }
+        // The closure of a premise holds the premise: every lane copies the input through
+        // and adds conclusions ABOUT it. A warrant whose closure does not is a warrant about
+        // some other premise.
+        let held: BTreeSet<Triple> = default_graph_triples(premise).into_iter().collect();
+        held.iter().all(|triple| self.closure.contains(triple))
+    }
 }
 
 /// Re-decide a warrant, without running a reasoner.
 ///
 /// Returns whether `w` really is evidence that `premise` entails `conclusion` under the
-/// mechanism that minted it: the mapping covers the conclusion, its image lies in the
-/// warrant's closure, and that closure extends `premise`. See the [module docs](self) for
-/// what this does not check and which checker owns that.
+/// mechanism that minted it. See the [module docs](self) for what each arm checks, what this
+/// does not check, and which checker owns that.
 ///
 /// ```
 /// use purrdf_core::RdfDatasetBuilder;
@@ -168,19 +245,15 @@ impl EntailmentWarrant {
 /// };
 /// assert!(verify(&warrant, &premise, &conclusion));
 /// // …and it says WHICH closure triple witnesses it.
-/// assert_eq!(warrant.witnesses(&conclusion).expect("covered").len(), 1);
+/// let purrdf_entail::EntailmentWarrant::Homomorphism(mapped) = &warrant else {
+///     panic!("an ordinary conclusion is reached by matching");
+/// };
+/// assert_eq!(mapped.witnesses(&conclusion).expect("covered").len(), 1);
 /// ```
 #[must_use]
 pub fn verify(w: &EntailmentWarrant, premise: &RdfDataset, conclusion: &RdfDataset) -> bool {
-    let Some(image) = w.witnesses(conclusion) else {
-        return false;
-    };
-    if !image.iter().all(|triple| w.closure.contains(triple)) {
-        return false;
+    match w {
+        EntailmentWarrant::Homomorphism(mapped) => mapped.check(premise, conclusion),
+        EntailmentWarrant::Refutation(refuted) => verify_refutation(refuted, premise, conclusion),
     }
-    // The closure of a premise holds the premise: every lane copies the input through and
-    // adds conclusions ABOUT it. A warrant whose closure does not is a warrant about some
-    // other premise.
-    let held: BTreeSet<Triple> = default_graph_triples(premise).into_iter().collect();
-    held.iter().all(|triple| w.closure.contains(triple))
 }

@@ -67,6 +67,23 @@
 //! line naming it — so a reader of this scoreboard can tell which agreements the
 //! normative table reached on its own.
 //!
+//! # The chase is also measured with its REFUTATION lane, which adds no rule
+//!
+//! `purrdf_entail::entails()` reaches a conclusion two ways, and eight of the cases
+//! graded here are reached only the second way. Seventeen of the seventy-eight
+//! rules conclude `false`, which is to say the table carries its own inconsistency
+//! calculus; so a conclusion whose head no rule has — an `owl:differentFrom`, a
+//! membership in an `owl:complementOf` class, an `owl:AllDifferent` collection — is
+//! decided by asserting its negation into the premise and re-running the SAME
+//! table, over a premise whose consistency was established first.
+//!
+//! This is worth separating from the extension above because it is a different kind
+//! of thing. `ext-eq-diff-sym` is a rule PurRDF states that no specification does,
+//! and it is declared as such. Refutation states nothing: the rule inventory is
+//! byte-for-byte the same seventy-eight before and after, and
+//! `the_refutation_lane_adds_no_rule` in `purrdf-entail` asserts it. What changed is
+//! how many times the table is run and what the run's `false` is read as.
+//!
 //! Grading a positive case is one-sided in the honest direction: matching proves
 //! entailment (the chase is sound), and failing to match is always a real,
 //! reportable limit of the lane. Grading a negative case is one-sided the other
@@ -180,16 +197,38 @@ pub enum RlGap {
     /// reach this" from "no conforming RL rule set could".
     MissingRule,
     /// The conclusion is a **schema axiom** — a property characteristic, an
-    /// `rdfs:range`, an anonymous class expression, an `owl:AllDifferent`
-    /// collection. Every head in the OWL 2 RL/RDF rule table (Profiles §4.3) is
-    /// either an assertional triple over named terms or `false`; not one concludes
-    /// a new axiom of these shapes, so no conforming RL rule set derives them.
+    /// `rdfs:range`, an anonymous class expression. Every head in the OWL 2 RL/RDF
+    /// rule table (Profiles §4.3) is either an assertional triple over named terms
+    /// or `false`; not one concludes a new axiom of these shapes, so no conforming
+    /// RL rule set derives them.
+    ///
+    /// `owl:AllDifferent` used to be on that list and is not any more, which is the
+    /// distinction the list is for: an `owl:AllDifferent` collection LOOKS like a
+    /// schema axiom and IS, by OWL 2's own definition, the conjunction of its
+    /// `n(n−1)/2` pairwise inequalities — so it lowers to
+    /// [`Self::NegativeConclusion`]'s shape and is reached by refuting every pair.
+    /// A conclusion belongs here when nothing it can be decomposed into has a head
+    /// in the table either.
     SchemaConclusion,
     /// The conclusion is a **negative fact** — an `owl:differentFrom`, or
     /// membership in an `owl:complementOf` class. It follows from the premise only
-    /// by refutation (assume the negation, reach `false`), and a forward chase
-    /// over definite rules cannot perform refutation: the RL rule table sends every
-    /// contradiction to `false` and never turns one back into a conclusion.
+    /// by refutation: assume the negation, reach `false`.
+    ///
+    /// The ledger holds no entry of this kind today, and the six it did hold are
+    /// the reason the wording above is a description rather than an excuse. They
+    /// were filed under "a forward chase over definite rules cannot perform
+    /// refutation", which conflated two things: the rule table has no rule whose
+    /// HEAD is a negative fact — true, and still true — but seventeen of its
+    /// seventy-eight rules conclude `false`, and those seventeen *are* an
+    /// inconsistency calculus. A refutation needs no new rule, only a second run of
+    /// the same table over the premise plus the conclusion's negation, and
+    /// [`purrdf_entail::entails()`] performs one.
+    ///
+    /// The variant stays because the CLASSIFICATION is still what a conclusion of
+    /// this shape is, and because a future one that the refutation lane cannot
+    /// reach — a negative construct outside the three shapes it reads — has to be
+    /// filed somewhere that says so. It is not [`Self::is_actionable`], because
+    /// reaching one is not a matter of adding a rule to the table.
     NegativeConclusion,
     /// The entailment turns on an OWL 2 construct **outside the OWL 2 RL syntax**
     /// (`owl:ReflexiveProperty`, …), for which the profile's rule table states no
@@ -300,57 +339,48 @@ pub const LEDGER: &[LedgerEntry] = &[
     //     rather than something PurRDF withholds: `RlGap::is_actionable` is now
     //     false for all of them, and `only_missing_rules_are_actionable` pins that
     //     the actionable set is EMPTY.
-    // --- NEGATIVE CONCLUSION: only reachable by refutation --------------------
-    //     Each of these concludes a negative fact — an `owl:differentFrom`, or
-    //     membership in an anonymous `owl:complementOf` class. The premise refutes
-    //     the opposite (`prp-fp` / `prp-ifp` / `prp-pdw` / `cax-dw` would send the
-    //     negation to `false`), but a forward chase over definite rules cannot run
-    //     that argument backwards: OWL 2 RL's rule table has no rule whose head is
-    //     a negative fact, so no conforming RL rule set derives these either.
-    LedgerEntry {
-        case: "disjointclasses-001",
-        gap: RlGap::NegativeConclusion,
-    },
-    LedgerEntry {
-        case: "disjointclasses-003",
-        gap: RlGap::NegativeConclusion,
-    },
-    LedgerEntry {
-        case: "new-feature-disjointobjectproperties-001",
-        gap: RlGap::NegativeConclusion,
-    },
-    LedgerEntry {
-        case: "new-feature-objectqcr-002",
-        gap: RlGap::NegativeConclusion,
-    },
-    LedgerEntry {
-        case: "owl2-rl-rules-fp-differentfrom",
-        gap: RlGap::NegativeConclusion,
-    },
-    LedgerEntry {
-        case: "owl2-rl-rules-ifp-differentfrom",
-        gap: RlGap::NegativeConclusion,
-    },
+    // --- NO NEGATIVE CONCLUSION EITHER. That block is CLOSED, all six of it. ---
+    //     Each of the six concluded a negative fact — an `owl:differentFrom`, or
+    //     membership in an anonymous `owl:complementOf` class — and each was
+    //     ledgered on the ground that a forward chase over definite rules cannot
+    //     run a refutation backwards. That premise was true and the conclusion
+    //     drawn from it was too strong: the rule table has no rule whose HEAD is a
+    //     negative fact, but seventeen of its seventy-eight rules conclude `false`,
+    //     and those seventeen ARE the profile's inconsistency calculus. Asserting
+    //     the conclusion's negation into the premise and re-running the SAME table
+    //     sends `cax-dw`, `cax-adc`, `prp-pdw`, `prp-adp` or `eq-diff1` to
+    //     `false` — those five are the rules the eight cases actually clash on,
+    //     measured rather than guessed — and, over a premise whose consistency
+    //     was established first, that inconsistency IS the entailment.
+    //     `new-feature-objectqcr-002` shows the shape at its longest: the
+    //     asserted `Stewie a Woman` lets `cls-maxqc3` derive `Stewie sameAs Meg`
+    //     against a `maxQualifiedCardinality 1`, and `eq-diff1` then clashes it
+    //     with the premise's own `Stewie owl:differentFrom Meg`.
+    //
+    //     `purrdf_entail::entails()` now does exactly that, as a second mechanism
+    //     with its own `EntailmentWarrant` arm and its own reasoner-free checker.
+    //     It adds NO rule: `rules(Regime::OwlRl)` and `implemented(Regime::OwlRl)`
+    //     are still exactly the 78 and `extensions(Regime::OwlRl)` is still the one
+    //     `ext-eq-diff-sym`. So these six agree through the normative table, run a
+    //     second time.
     // --- SCHEMA CONCLUSION: the head shape does not exist in the rule table ---
     //     `chain2trans1` concludes `p rdf:type owl:TransitiveProperty`;
+    //     `webont-i5-26-010` concludes an anonymous `owl:Restriction`;
+    //     `webont-i5-5-005` concludes an anonymous `owl:unionOf` class; the three
+    //     `webont-i5-8-*` cases conclude an `rdfs:range` narrowed to an XSD
+    //     datatype. Every head in OWL 2 RL/RDF's rule table is an assertional
+    //     triple over named terms or `false`; not one concludes an axiom, so these
+    //     are outside what the profile's rule set can produce rather than outside
+    //     what this implementation happens to do.
+    //
+    //     Two cases left this block with the six above:
     //     `new-feature-disjoint{data,object}properties-002` conclude an
-    //     `owl:AllDifferent` collection; `webont-i5-26-010` concludes an anonymous
-    //     `owl:Restriction`; `webont-i5-5-005` concludes an anonymous
-    //     `owl:unionOf` class; the three `webont-i5-8-*` cases conclude an
-    //     `rdfs:range` narrowed to an XSD datatype. Every head in OWL 2 RL/RDF's
-    //     rule table is an assertional triple over named terms or `false`; not one
-    //     concludes an axiom, so these are outside what the profile's rule set can
-    //     produce rather than outside what this implementation happens to do.
+    //     `owl:AllDifferent` collection, which reads as a schema axiom and IS the
+    //     conjunction of its `n(n−1)/2` pairwise inequalities — so it lowers to the
+    //     negative facts of the previous block and is reached the same way, one
+    //     refutation per pair, all of them required.
     LedgerEntry {
         case: "chain2trans1",
-        gap: RlGap::SchemaConclusion,
-    },
-    LedgerEntry {
-        case: "new-feature-disjointdataproperties-002",
-        gap: RlGap::SchemaConclusion,
-    },
-    LedgerEntry {
-        case: "new-feature-disjointobjectproperties-002",
         gap: RlGap::SchemaConclusion,
     },
     LedgerEntry {

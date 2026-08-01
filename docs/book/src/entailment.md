@@ -104,14 +104,15 @@ Where the numbers stop:
   rules, and a run that met a boundary still reports
   `Completeness::ExactWithinBoundaries` rather than `Exact`. The two claims are
   reported separately on purpose. Nor is a complete rule table entailment
-  conformance: on W3C's own OWL 2 RL entailment tests the chase reaches 11 of
+  conformance: on W3C's own OWL 2 RL entailment tests `entails()` reaches 19 of
   27 published positive entailments and correctly withholds on 23 of 23
   negative ones (see [Conformance](#conformance) below). 78 / 78 says every
   rule of Tables 4–9 is implemented — and the one W3C-published entailment
   that is reachable only by a sound rule outside those tables is reached by an
   **extension**, `ext-eq-diff-sym`, which `extensions(Regime::OwlRl)` names,
   neither `rules()` nor `implemented()` names, and every report renders on its
-  own `extension` line.
+  own `extension` line. Eight more are reached by **refutation** rather than by
+  matching, and those add no rule at all: see the conformance section below.
 - **Seventeen OWL 2 RL rules conclude `false`.** "Implemented" for those means
   *decided*: a body match becomes `EntailError::Inconsistent` carrying a witness
   that names the rule and the asserted triples that satisfied it. That is the
@@ -253,27 +254,50 @@ Two corpora measure two different things, and the distinction matters:
   over the 221 excluded cases, so this row cannot detect a regression among them.
   Re-deriving them means re-running the probe, which is a deliberate act rather
   than part of the gate.
-- **W3C OWL 2 RL entailment tests — 34 of 50 cases agree, 16 ledgered**, zero
+- **W3C OWL 2 RL entailment tests — 42 of 50 cases agree, 8 ledgered**, zero
   unledgered. This is the independent oracle for the rule table: W3C's own
-  entailment tests, forward-materialized under `Regime::OwlRl` and checked for
-  whether the published conclusion maps into the closure. The two lanes prove
-  different things and are reported separately.
+  entailment tests, answered by one call to `purrdf_entail::entails()` per case
+  under `Regime::OwlRl`. The two lanes prove different things and are reported
+  separately.
 
   **The negative lane is 23 of 23: no unsoundness.** The chase never derived a
   triple W3C publishes as *not* entailed. That is the safety result, and it
   holds over *all* 23 negative cases — soundness is owed on every case, so none
   were filtered by profile.
 
-  The positive lane is **11 of 27** — the 27 positive entailments W3C itself
-  places inside the RL profile under RDF-Based semantics. 16 of the 16
+  The positive lane is **19 of 27** — the 27 positive entailments W3C itself
+  places inside the RL profile under RDF-Based semantics. 8 of the 8
   divergences are structural limits of OWL 2 RL rather than of this
   implementation: every head in Profiles §4.3 Tables 4–9 is an assertional
   triple over named terms or `false`, so no conforming RL rule set derives a
-  schema axiom (8 `schema-conclusion`) or a negative fact (6
+  schema axiom (6 `schema-conclusion`) or a negative fact (0
   `negative-conclusion`), and the profile states no rule at all for constructs
   outside its syntax (1 `construct-outside-rl`); one more premise is incomplete
   as exported (1 `imports-unresolved`). **0 are actionable** (0
   `missing-rule`).
+
+  That `negative-conclusion` zero is the interesting one, because the rule
+  table did not change to earn it. A negative fact still has no head anywhere
+  in Tables 4–9 — no rule concludes `owl:differentFrom`, and none concludes
+  membership in an `owl:complementOf` class. What the table *does* have is
+  seventeen rules whose conclusion is `false`, and those seventeen are an
+  inconsistency calculus. So `entails()` reaches a negative conclusion by
+  **refutation**: assert its negation into the premise, re-run the same
+  seventy-eight rules over a premise whose consistency the first run already
+  established, and read the resulting inconsistency as the proof. An
+  `owl:AllDifferent` collection is, by OWL 2's own definition, the conjunction
+  of its `n(n−1)/2` pairwise inequalities, so it lowers to the same shape and is
+  entailed exactly when every pair refutes — which is why two entries left the
+  `schema-conclusion` class with them.
+
+  Nothing about the inventory moves: `rules(Regime::OwlRl)` and
+  `implemented(Regime::OwlRl)` are still exactly the same 78 and
+  `extensions(Regime::OwlRl)` is still the one `ext-eq-diff-sym`. The evidence
+  moves instead — an entailment reached this way carries a *refutation*
+  warrant naming the `false`-concluding rule that fired, a minimal subset of the
+  caller's own premise that still produces the clash, and enough of the
+  re-chase's closure that `verify()` re-decides the whole thing without running
+  a reasoner.
 
   The one case that used to be actionable is closed by an **extension**, and
   the extension is labelled rather than absorbed. `a owl:differentFrom b`
