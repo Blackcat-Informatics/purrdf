@@ -844,14 +844,29 @@ int32_t purrdf_entail_explain_conclusion(const char *document,
  * answer is the relation with no columns, so a `yes` is one bare `row` line and a `no` is
  * none.
  *
+ * `import_iris` and `import_documents` are the caller's `owl:imports` table, as two
+ * parallel arrays of `import_count` C strings: entry `i` declares that the ontology IRI
+ * `import_iris[i]` denotes the N-Quads document `import_documents[i]`. A premise carrying
+ * an `owl:imports` states that its axioms are its own PLUS those of the documents it names,
+ * so this is where those documents arrive — and the `owl:imports` triple stays exactly
+ * where the caller wrote it. **PurRDF fetches nothing**: an ontology IRI the table does not
+ * resolve is an error naming the document, never a network access and never a silently
+ * empty import. `import_count == 0` with two NULL arrays is the ordinary "imports nothing"
+ * case and is accepted; a NULL array with a non-zero count is a caller error and is
+ * refused, never dereferenced. Resolution is transitive to a fixpoint.
+ *
  * # Safety
- * `regime`, `document` and `pattern` must be non-null, NUL-terminated C strings;
- * `out_answer` and `out_certificate` must be writable pointers; `out_error` must be null
- * or writable.
+ * `regime`, `document` and `pattern` must be non-null, NUL-terminated C strings; when
+ * `import_count` is non-zero, `import_iris` and `import_documents` must each address at
+ * least `import_count` readable, non-null, NUL-terminated C strings; `out_answer` and
+ * `out_certificate` must be writable pointers; `out_error` must be null or writable.
  */
 int32_t purrdf_entail_certain_answers(const char *regime,
                                       const char *document,
                                       const char *pattern,
+                                      const char *const *import_iris,
+                                      const char *const *import_documents,
+                                      size_t import_count,
                                       PurrdfBuffer **out_answer,
                                       PurrdfBuffer **out_certificate,
                                       PurrdfError **out_error);
@@ -882,14 +897,23 @@ int32_t purrdf_entail_certain_answers(const char *regime,
  * turn a limitation of this library into a false statement about the caller's data.
  * **Free BOTH buffers with `purrdf_buffer_free`.**
  *
+ * `import_iris`, `import_documents` and `import_count` are
+ * `purrdf_entail_certain_answers`'s, and apply to the PREMISE: the conclusion is a graph to
+ * match rather than an ontology to close, so an `owl:imports` in it names nothing this
+ * service resolves.
+ *
  * # Safety
- * `regime`, `premise` and `conclusion` must be non-null, NUL-terminated C strings;
- * `out_answer` and `out_certificate` must be writable pointers; `out_error` must be null
- * or writable.
+ * `regime`, `premise` and `conclusion` must be non-null, NUL-terminated C strings; when
+ * `import_count` is non-zero, `import_iris` and `import_documents` must each address at
+ * least `import_count` readable, non-null, NUL-terminated C strings; `out_answer` and
+ * `out_certificate` must be writable pointers; `out_error` must be null or writable.
  */
 int32_t purrdf_entail_graph_entails(const char *regime,
                                     const char *premise,
                                     const char *conclusion,
+                                    const char *const *import_iris,
+                                    const char *const *import_documents,
+                                    size_t import_count,
                                     PurrdfBuffer **out_answer,
                                     PurrdfBuffer **out_certificate,
                                     PurrdfError **out_error);
@@ -910,14 +934,24 @@ int32_t purrdf_entail_graph_entails(const char *regime,
  * there would read as a failed check rather than as an absent one.
  * **Free BOTH buffers with `purrdf_buffer_free`.**
  *
+ * `import_iris`, `import_documents` and `import_count` are
+ * `purrdf_entail_certain_answers`'s. The re-check runs against the premise AS WRITTEN
+ * rather than against its imports closure: a warrant re-decidable from the caller's own
+ * document is a stronger check than one only re-decidable against a graph the library
+ * assembled.
+ *
  * # Safety
- * `regime`, `premise` and `conclusion` must be non-null, NUL-terminated C strings;
- * `out_answer` and `out_certificate` must be writable pointers; `out_error` must be null
- * or writable.
+ * `regime`, `premise` and `conclusion` must be non-null, NUL-terminated C strings; when
+ * `import_count` is non-zero, `import_iris` and `import_documents` must each address at
+ * least `import_count` readable, non-null, NUL-terminated C strings; `out_answer` and
+ * `out_certificate` must be writable pointers; `out_error` must be null or writable.
  */
 int32_t purrdf_entail_verify_entailment(const char *regime,
                                         const char *premise,
                                         const char *conclusion,
+                                        const char *const *import_iris,
+                                        const char *const *import_documents,
+                                        size_t import_count,
                                         PurrdfBuffer **out_answer,
                                         PurrdfBuffer **out_certificate,
                                         PurrdfError **out_error);

@@ -2510,17 +2510,75 @@ fn parse_bgp(text: &str) -> Result<Vec<purrdf_entail::QTriple>, String> {
     Ok(bgp)
 }
 
-/// Parse `document` and `regime`, then run `f` over them. The shared preamble of the three
-/// services below.
+/// The caller's `owl:imports` table, as an ORDERED list of `(ontology-iri, document)` pairs.
+///
+/// One entry declares that the ontology IRI an `owl:imports` names denotes that document —
+/// source text in N-Quads (which accepts N-Triples), the same media type the premise itself is
+/// read in, so
+/// one parser serves both and a caller holding two documents does not have to hold them in two
+/// syntaxes.
+///
+/// A LIST rather than a map, because a map's iteration order is the host's and this boundary's
+/// output is a promise: the same input always produces the same run, and a table whose entries
+/// arrive in an order the caller cannot see would make that promise depend on a hash seed.
+/// Order is the caller's, and it is preserved.
+pub type ImportList<'a> = [(&'a str, &'a str)];
+
+/// The caller's [`ImportList`] as a resolved [`ImportMap`], or the reason it is not one.
+///
+/// **This library fetches nothing.** An `owl:imports` names an ontology DOCUMENT, and PurRDF has
+/// no notion of what an ontology IRI dereferences to — inventing one would make an entailment
+/// depend on the network. So the imports closure is caller-supplied configuration, exactly like
+/// every other vocabulary this workspace reads, and an IRI the caller did not supply is a
+/// caller-visible hard error (`purrdf_entail::EntailError::UnresolvedImport`, rendered by
+/// [`render_entail_error`]) rather than a silently truncated premise.
+///
+/// The list is REQUIRED on every service that takes one, and the empty list is the ordinary
+/// "imports nothing" case — not a default standing in for an argument the caller forgot.
+///
+/// # Errors
+///
+/// A document that is not N-Quads; an entry with an empty ontology IRI, which no
+/// `owl:imports` object can ever equal and which would therefore be configuration that silently
+/// never applies; or one ontology IRI declared twice, where keeping either document would be a
+/// choice this boundary made on the caller's behalf.
+fn build_import_map(imports: &ImportList<'_>) -> Result<ImportMap, String> {
+    let mut map = ImportMap::new();
+    for (iri, document) in imports {
+        if iri.is_empty() {
+            return Err(
+                "an import entry names the empty ontology IRI, which no owl:imports object can \
+                 equal, so the document it supplies could never be resolved"
+                    .to_owned(),
+            );
+        }
+        let parsed = purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
+            .map_err(|diagnostic| {
+                format!("the import document for <{iri}> is not N-Quads: {diagnostic}")
+            })?;
+        if map.insert((*iri).to_owned(), parsed).is_some() {
+            return Err(format!(
+                "the import list declares <{iri}> twice; keeping either document would be a \
+                 choice this boundary made for the caller"
+            ));
+        }
+    }
+    Ok(map)
+}
+
+/// Parse `document`, `regime` and `imports`, then run `f` over them. The shared preamble of
+/// the three services below.
 fn with_premise<T>(
     regime: &str,
     document: &str,
-    f: impl FnOnce(&purrdf_core::RdfDataset, Regime) -> Result<T, EntailError>,
+    imports: &ImportList<'_>,
+    f: impl FnOnce(&purrdf_core::RdfDataset, Regime, &ImportMap) -> Result<T, EntailError>,
 ) -> Result<T, String> {
     let parsed = parse_regime(regime)?;
+    let map = build_import_map(imports)?;
     let dataset = purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
         .map_err(|diagnostic| diagnostic.to_string())?;
-    f(&dataset, parsed).map_err(|error| render_entail_error(regime, &error))
+    f(&dataset, parsed, &map).map_err(|error| render_entail_error(regime, &error))
 }
 
 /// The CERTAIN ANSWERS of a basic graph pattern over `document` under `regime`.
@@ -2569,11 +2627,22 @@ fn with_premise<T>(
 /// row set is the answer a caller is most likely to act on and the one that says least on
 /// its own.
 ///
+/// # `imports` — the documents the premise says it is not all of
+///
+/// An ordered [`ImportList`] of `(ontology-iri, document)` pairs. A premise carrying an
+/// `owl:imports` is an ontology stating that its axioms are its own PLUS those of the
+/// documents it names, so answering over the premise alone would answer a different question;
+/// this is where those documents arrive. The library fetches nothing, so an imported IRI this
+/// list does not resolve is refused BY NAME rather than treated as an empty document. The
+/// empty list is the ordinary "imports nothing" case, and the argument is required rather than
+/// defaulted for the same reason `program` is.
+///
 /// # Errors
 ///
 /// An unknown regime spelling; a regime this service is not total over (`owl-direct` and
-/// `rif` are each defined by an input this signature does not carry); a malformed document
-/// or pattern; a pattern that names a graph; an inconsistent premise, whose refusal carries
+/// `rif` are each defined by an input this signature does not carry); a malformed document,
+/// pattern or import document; a duplicate or empty import IRI; a pattern that names a graph;
+/// an `owl:imports` `imports` does not resolve; an inconsistent premise, whose refusal carries
 /// the full report; or an exhausted match budget.
 ///
 /// ```
@@ -2585,7 +2654,7 @@ fn with_premise<T>(
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .\n";
 /// let pattern = "<http://example.org/tom> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?c .\n";
-/// let answers = certain_answers_to_string("owl-rl", data, pattern).expect("answers");
+/// let answers = certain_answers_to_string("owl-rl", data, pattern, &[]).expect("answers");
 /// assert!(answers.answer().starts_with("mechanism strict-table\nvar c\n"));
 /// // `?c` ranges over the ENTAILED types, not the asserted one.
 /// assert!(answers.answer().contains("\nrow <http://example.org/Animal>\n"));
@@ -2598,17 +2667,31 @@ fn with_premise<T>(
 /// // The SAME call with nothing to project is an entailment question, and answers as one.
 /// let ground = "<http://example.org/tom> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Animal> .\n";
-/// let asked = certain_answers_to_string("owl-rl", data, ground).expect("answers");
+/// let asked = certain_answers_to_string("owl-rl", data, ground, &[]).expect("answers");
 /// assert_eq!(asked.answer(), "mechanism strict-table\nrow\n");
+///
+/// // A premise that IMPORTS its schema answers from the imports closure, with its
+/// // `owl:imports` triple left exactly where the caller put it.
+/// let importing = "<http://example.org/o> \
+///     <http://www.w3.org/2002/07/owl#imports> <http://example.org/schema> .\n\
+///     <http://example.org/tom> \
+///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .\n";
+/// let schema = "<http://example.org/Cat> \
+///     <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .\n";
+/// let closed = certain_answers_to_string(
+///     "owl-rl", importing, pattern, &[("http://example.org/schema", schema)],
+/// ).expect("answers");
+/// assert!(closed.answer().contains("\nrow <http://example.org/Animal>\n"));
 /// ```
 pub fn certain_answers_to_string(
     regime: &str,
     document: &str,
     pattern: &str,
+    imports: &ImportList<'_>,
 ) -> Result<ReasoningAnswer, String> {
     let bgp = parse_bgp(pattern)?;
-    let answers = with_premise(regime, document, |premise, parsed| {
-        purrdf_entail::certain_answers(premise, &bgp, parsed, &ImportMap::new())
+    let answers = with_premise(regime, document, imports, |premise, parsed, map| {
+        purrdf_entail::certain_answers(premise, &bgp, parsed, map)
     })?;
     // The mechanism that ANSWERED, read off the answer set rather than asserted here. A
     // pattern with nothing to project routes through the same fold `graph_entails_to_string`
@@ -2673,6 +2756,10 @@ pub fn certain_answers_to_string(
 /// service folds them in. It is spelled that way rather than by any one constituent's name,
 /// which would tell a consumer that one mechanism sufficed.
 ///
+/// `imports` is [`certain_answers_to_string`]'s, and applies to the PREMISE: the conclusion is
+/// a graph to match rather than an ontology to close, so an `owl:imports` in it names nothing
+/// this service resolves.
+///
 /// # Errors
 ///
 /// As [`certain_answers_to_string`].
@@ -2686,7 +2773,7 @@ pub fn certain_answers_to_string(
 ///     <http://example.org/x> <http://example.org/p> <http://example.org/y> .\n\
 ///     <http://example.org/y> <http://example.org/p> <http://example.org/z> .\n";
 /// let conclusion = "<http://example.org/x> <http://example.org/p> <http://example.org/z> .\n";
-/// let decided = graph_entails_to_string("owl-rl", premise, conclusion).expect("decides");
+/// let decided = graph_entails_to_string("owl-rl", premise, conclusion, &[]).expect("decides");
 /// // `prp-trp` derives it, so the rule table itself answers.
 /// assert!(decided.answer().starts_with("mechanism strict-table\nentailment entailed\n"));
 /// assert!(decided.certificate().contains("\nfired prp-trp "));
@@ -2695,11 +2782,12 @@ pub fn graph_entails_to_string(
     regime: &str,
     premise: &str,
     conclusion: &str,
+    imports: &ImportList<'_>,
 ) -> Result<ReasoningAnswer, String> {
     let target = purrdf_rdf::parse_dataset(conclusion.as_bytes(), INPUT_MEDIA_TYPE, None)
         .map_err(|diagnostic| format!("the conclusion is not N-Quads: {diagnostic}"))?;
-    let certificate = with_premise(regime, premise, |premise, parsed| {
-        purrdf_entail::entails(premise, &target, parsed, &ImportMap::new())
+    let certificate = with_premise(regime, premise, imports, |premise, parsed, map| {
+        purrdf_entail::entails(premise, &target, parsed, map)
     })?;
     Ok(ReasoningAnswer {
         answer: render_entailment_answer(&certificate),
@@ -2762,6 +2850,11 @@ fn render_entailment_answer(certificate: &EntailmentCertificate) -> String {
 /// is RENDERED rather than raised so a caller re-deciding sees what this boundary saw — the
 /// same discipline the chase proof's `checked` line is under.
 ///
+/// `imports` is [`certain_answers_to_string`]'s. The re-check runs against the premise AS
+/// WRITTEN rather than against its imports closure, deliberately: a warrant this service can
+/// re-decide from the caller's own document is a stronger check than one that could only be
+/// re-decided against a graph the library assembled.
+///
 /// # Errors
 ///
 /// As [`certain_answers_to_string`].
@@ -2775,7 +2868,8 @@ fn render_entailment_answer(certificate: &EntailmentCertificate) -> String {
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .\n";
 /// let conclusion = "<http://example.org/x> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> .\n";
-/// let checked = verify_entailment_to_string("owl-rl", premise, conclusion).expect("decides");
+/// let checked =
+///     verify_entailment_to_string("owl-rl", premise, conclusion, &[]).expect("decides");
 /// assert!(checked.answer().contains("\nwarrant present\n"));
 /// assert!(checked.answer().ends_with("verified true\n"));
 ///
@@ -2783,7 +2877,7 @@ fn render_entailment_answer(certificate: &EntailmentCertificate) -> String {
 /// // reporting a check that failed.
 /// let never = "<http://example.org/x> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Never> .\n";
-/// let missing = verify_entailment_to_string("owl-rl", premise, never).expect("decides");
+/// let missing = verify_entailment_to_string("owl-rl", premise, never, &[]).expect("decides");
 /// assert!(missing.answer().contains("\nwarrant absent\n"));
 /// assert!(missing.answer().ends_with("verified not-applicable\n"));
 /// ```
@@ -2791,13 +2885,15 @@ pub fn verify_entailment_to_string(
     regime: &str,
     premise: &str,
     conclusion: &str,
+    imports: &ImportList<'_>,
 ) -> Result<ReasoningAnswer, String> {
     let target = purrdf_rdf::parse_dataset(conclusion.as_bytes(), INPUT_MEDIA_TYPE, None)
         .map_err(|diagnostic| format!("the conclusion is not N-Quads: {diagnostic}"))?;
     let parsed_premise = purrdf_rdf::parse_dataset(premise.as_bytes(), INPUT_MEDIA_TYPE, None)
         .map_err(|diagnostic| diagnostic.to_string())?;
     let parsed = parse_regime(regime)?;
-    let certificate = purrdf_entail::entails(&parsed_premise, &target, parsed, &ImportMap::new())
+    let map = build_import_map(imports)?;
+    let certificate = purrdf_entail::entails(&parsed_premise, &target, parsed, &map)
         .map_err(|error| render_entail_error(regime, &error))?;
     let mut answer = render_entailment_answer(&certificate);
     match certificate.warrant() {
@@ -4244,7 +4340,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
     fn a_declined_lane_renders_a_limit_line_naming_itself() {
         let pattern = "?x <http://www.w3.org/2002/07/owl#differentFrom> \
 <http://example.org/Peter> .\n";
-        let answers = certain_answers_to_string("owl-rl", DISJOINT, pattern).expect("answers");
+        let answers = certain_answers_to_string("owl-rl", DISJOINT, pattern, &[]).expect("answers");
         assert!(
             answers
                 .answer()
@@ -4279,8 +4375,8 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
     fn nothing_to_project_answers_as_the_entailment_question_it_is() {
         let ground = "<http://example.org/Stewie> \
 <http://www.w3.org/2002/07/owl#differentFrom> <http://example.org/Peter> .\n";
-        let answers = certain_answers_to_string("owl-rl", DISJOINT, ground).expect("answers");
-        let decided = graph_entails_to_string("owl-rl", DISJOINT, ground).expect("decides");
+        let answers = certain_answers_to_string("owl-rl", DISJOINT, ground, &[]).expect("answers");
+        let decided = graph_entails_to_string("owl-rl", DISJOINT, ground, &[]).expect("decides");
         assert_eq!(answers.answer(), "mechanism refutation\nrow\n");
         assert_eq!(
             decided.answer(),
@@ -4293,10 +4389,179 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
         // A ground question the table REFUTES is the empty relation, and exhaustively so.
         let never = "<http://example.org/Stewie> \
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Girl> .\n";
-        let missing = certain_answers_to_string("owl-rl", DISJOINT, never).expect("answers");
+        let missing = certain_answers_to_string("owl-rl", DISJOINT, never, &[]).expect("answers");
         assert_eq!(missing.answer(), "mechanism strict-table\n");
-        let refuted = graph_entails_to_string("owl-rl", DISJOINT, never).expect("decides");
+        let refuted = graph_entails_to_string("owl-rl", DISJOINT, never, &[]).expect("decides");
         assert!(refuted.answer().contains("\nentailment not-entailed\n"));
+    }
+
+    // ── The caller's `owl:imports` table, at the string boundary ────────────
+
+    /// A premise that IMPORTS its schema, with the `owl:imports` triple left where the
+    /// caller wrote it.
+    const IMPORTING_PREMISE: &str = "<http://example.org/o> \
+<http://www.w3.org/2002/07/owl#imports> <http://example.org/schema> .\n\
+<http://example.org/socrates> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Man> .\n";
+
+    /// The document `<http://example.org/schema>` denotes — supplied, never fetched.
+    const IMPORTED_SCHEMA: &str = "<http://example.org/Man> \
+<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Mortal> .\n";
+
+    /// The conclusion only the imports closure reaches.
+    const IMPORTED_CONCLUSION: &str = "<http://example.org/socrates> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Mortal> .\n";
+
+    /// ALL THREE conclusion-directed services take the caller's import table, and answer
+    /// from the imports closure over the premise AS WRITTEN.
+    ///
+    /// Falsifiable against what this replaced: every one of the three hard-coded an empty
+    /// map, so a premise carrying any `owl:imports` was a permanent refusal on every host
+    /// and the only escape was to hand the library a graph that was not the caller's.
+    #[test]
+    fn every_conclusion_directed_service_resolves_the_callers_imports() {
+        let imports = [("http://example.org/schema", IMPORTED_SCHEMA)];
+
+        let answers =
+            certain_answers_to_string("owl-rl", IMPORTING_PREMISE, IMPORTED_CONCLUSION, &imports)
+                .expect("answers");
+        assert_eq!(answers.answer(), "mechanism strict-table\nrow\n");
+
+        let decided =
+            graph_entails_to_string("owl-rl", IMPORTING_PREMISE, IMPORTED_CONCLUSION, &imports)
+                .expect("decides");
+        assert_eq!(
+            decided.answer(),
+            "mechanism strict-table\nentailment entailed\n"
+        );
+
+        let checked =
+            verify_entailment_to_string("owl-rl", IMPORTING_PREMISE, IMPORTED_CONCLUSION, &imports)
+                .expect("decides");
+        assert!(checked.answer().contains("\nentailment entailed\n"));
+        assert!(
+            checked
+                .answer()
+                .ends_with("warrant present\nverified true\n")
+        );
+
+        // …and the pattern-shaped question projects out of the same closure.
+        let pattern = "<http://example.org/socrates> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?c .\n";
+        let projected = certain_answers_to_string("owl-rl", IMPORTING_PREMISE, pattern, &imports)
+            .expect("answers");
+        assert!(
+            projected
+                .answer()
+                .contains("\nrow <http://example.org/Mortal>\n"),
+            "{}",
+            projected.answer()
+        );
+    }
+
+    /// THE EMPTY LIST IS "IMPORTS NOTHING", NOT "IMPORT ANYTHING NAMED".
+    ///
+    /// The library fetches nothing, so an `owl:imports` the caller did not supply refuses BY
+    /// NAME on all three services rather than being reasoned over as though the missing
+    /// axioms said nothing.
+    #[test]
+    fn an_unsupplied_import_still_refuses_by_name() {
+        for refusal in [
+            certain_answers_to_string("owl-rl", IMPORTING_PREMISE, IMPORTED_CONCLUSION, &[])
+                .expect_err("unresolved"),
+            graph_entails_to_string("owl-rl", IMPORTING_PREMISE, IMPORTED_CONCLUSION, &[])
+                .expect_err("unresolved"),
+            verify_entailment_to_string("owl-rl", IMPORTING_PREMISE, IMPORTED_CONCLUSION, &[])
+                .expect_err("unresolved"),
+            // …and a list that resolves a DIFFERENT ontology is the same absence.
+            graph_entails_to_string(
+                "owl-rl",
+                IMPORTING_PREMISE,
+                IMPORTED_CONCLUSION,
+                &[("http://example.org/other", IMPORTED_SCHEMA)],
+            )
+            .expect_err("unresolved"),
+        ] {
+            assert!(
+                refusal.contains("<http://example.org/schema>"),
+                "the refusal names the document it was not handed: {refusal}"
+            );
+        }
+    }
+
+    /// An import table that cannot be read is refused BEFORE any reasoning, and says which
+    /// entry.
+    #[test]
+    fn a_malformed_import_table_is_refused_by_entry() {
+        let not_nquads = graph_entails_to_string(
+            "owl-rl",
+            IMPORTING_PREMISE,
+            IMPORTED_CONCLUSION,
+            &[("http://example.org/schema", "this is not n-quads\n")],
+        )
+        .expect_err("a document that is not N-Quads");
+        assert!(
+            not_nquads.contains("the import document for <http://example.org/schema>"),
+            "{not_nquads}"
+        );
+
+        let twice = graph_entails_to_string(
+            "owl-rl",
+            IMPORTING_PREMISE,
+            IMPORTED_CONCLUSION,
+            &[
+                ("http://example.org/schema", IMPORTED_SCHEMA),
+                ("http://example.org/schema", ""),
+            ],
+        )
+        .expect_err("one ontology IRI declared twice");
+        assert!(
+            twice.contains("declares <http://example.org/schema> twice"),
+            "{twice}"
+        );
+
+        let nameless = graph_entails_to_string(
+            "owl-rl",
+            IMPORTING_PREMISE,
+            IMPORTED_CONCLUSION,
+            &[("", IMPORTED_SCHEMA)],
+        )
+        .expect_err("the empty ontology IRI");
+        assert!(nameless.contains("empty ontology IRI"), "{nameless}");
+    }
+
+    /// The resolution is TRANSITIVE: a supplied document's own `owl:imports` is followed,
+    /// and a stop at depth one would reason over a partial premise.
+    #[test]
+    fn the_import_resolution_reaches_a_fixpoint() {
+        let first = "<http://example.org/schema> \
+<http://www.w3.org/2002/07/owl#imports> <http://example.org/upper> .\n\
+<http://example.org/Man> \
+<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Human> .\n";
+        let upper = "<http://example.org/Human> \
+<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Mortal> .\n";
+        let decided = graph_entails_to_string(
+            "owl-rl",
+            IMPORTING_PREMISE,
+            IMPORTED_CONCLUSION,
+            &[
+                ("http://example.org/schema", first),
+                ("http://example.org/upper", upper),
+            ],
+        )
+        .expect("decides");
+        assert!(decided.answer().contains("\nentailment entailed\n"));
+
+        // Drop the second hop and the refusal NAMES it, rather than answering from half a
+        // premise.
+        let refusal = graph_entails_to_string(
+            "owl-rl",
+            IMPORTING_PREMISE,
+            IMPORTED_CONCLUSION,
+            &[("http://example.org/schema", first)],
+        )
+        .expect_err("the second hop is unresolved");
+        assert!(refusal.contains("<http://example.org/upper>"), "{refusal}");
     }
 
     // ── The boundary's term syntax ──────────────────────────────────────────

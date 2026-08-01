@@ -741,6 +741,56 @@ pub unsafe extern "C" fn purrdf_entail_explain_conclusion(
 // would compile, link and ship — and never appear in the committed header, which is the
 // definition of a dark capability on this host.
 
+/// Read the caller's `owl:imports` table out of two parallel C arrays.
+///
+/// Entry `i` declares that the ontology IRI `import_iris[i]` denotes the N-Quads document
+/// `import_documents[i]`. Two arrays rather than an array of structs because a struct
+/// crossing this ABI is a layout the caller has to reproduce; two `const char *const *`
+/// and a count are what a C caller already knows how to build, and the ORDER is the
+/// caller's — the boundary's table is a list rather than a map precisely so the same input
+/// always produces the same run.
+///
+/// `count == 0` with two NULL arrays is the ordinary "imports nothing" case and is
+/// ACCEPTED: there is nothing to dereference, so refusing it would make the common call
+/// pass two dummy arrays. A NULL array with a non-zero count is a caller error and is
+/// refused BEFORE any dereference, as is a NULL element inside a non-empty array.
+///
+/// # Safety
+/// When `count` is non-zero, `import_iris` and `import_documents` must each address at
+/// least `count` readable `*const c_char`, every one of which is null (refused here) or a
+/// NUL-terminated C string that outlives the returned borrows.
+unsafe fn import_pairs<'a>(
+    import_iris: *const *const c_char,
+    import_documents: *const *const c_char,
+    count: usize,
+    entry: &str,
+) -> Result<Vec<(&'a str, &'a str)>, PurrdfError> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    if import_iris.is_null() || import_documents.is_null() {
+        return Err(PurrdfError::new(
+            PurrdfStatus::NullPointer,
+            format!("null import array with a non-zero import count ({count}) passed to {entry}"),
+        ));
+    }
+    let mut pairs = Vec::with_capacity(count);
+    for index in 0..count {
+        // SAFETY: the caller's contract above — both arrays are non-null (checked) and
+        // hold at least `count` readable elements, so `index < count` is in bounds. Each
+        // element is handed to `cstr_to_str`, which refuses a null pointer rather than
+        // dereferencing it.
+        let (iri, document) = unsafe {
+            (
+                cstr_to_str(*import_iris.add(index))?,
+                cstr_to_str(*import_documents.add(index))?,
+            )
+        };
+        pairs.push((iri, document));
+    }
+    Ok(pairs)
+}
+
 /// The certain answers of a basic graph pattern under an entailment regime.
 ///
 /// A certain answer is a substitution the knowledge base ENTAILS the pattern under —
@@ -772,20 +822,37 @@ pub unsafe extern "C" fn purrdf_entail_explain_conclusion(
 /// answer is the relation with no columns, so a `yes` is one bare `row` line and a `no` is
 /// none.
 ///
+/// `import_iris` and `import_documents` are the caller's `owl:imports` table, as two
+/// parallel arrays of `import_count` C strings: entry `i` declares that the ontology IRI
+/// `import_iris[i]` denotes the N-Quads document `import_documents[i]`. A premise carrying
+/// an `owl:imports` states that its axioms are its own PLUS those of the documents it names,
+/// so this is where those documents arrive — and the `owl:imports` triple stays exactly
+/// where the caller wrote it. **PurRDF fetches nothing**: an ontology IRI the table does not
+/// resolve is an error naming the document, never a network access and never a silently
+/// empty import. `import_count == 0` with two NULL arrays is the ordinary "imports nothing"
+/// case and is accepted; a NULL array with a non-zero count is a caller error and is
+/// refused, never dereferenced. Resolution is transitive to a fixpoint.
+///
 /// # Safety
-/// `regime`, `document` and `pattern` must be non-null, NUL-terminated C strings;
-/// `out_answer` and `out_certificate` must be writable pointers; `out_error` must be null
-/// or writable.
+/// `regime`, `document` and `pattern` must be non-null, NUL-terminated C strings; when
+/// `import_count` is non-zero, `import_iris` and `import_documents` must each address at
+/// least `import_count` readable, non-null, NUL-terminated C strings; `out_answer` and
+/// `out_certificate` must be writable pointers; `out_error` must be null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_entail_certain_answers(
     regime: *const c_char,
     document: *const c_char,
     pattern: *const c_char,
+    import_iris: *const *const c_char,
+    import_documents: *const *const c_char,
+    import_count: usize,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
-    // SAFETY: as `purrdf_entail_explain_conclusion`.
+    // SAFETY: as `purrdf_entail_explain_conclusion`, plus the two import arrays, which
+    // `import_pairs` reads only after establishing that a non-zero count has non-null
+    // arrays behind it.
     unsafe {
         ffi_try!(out_error, {
             if regime.is_null()
@@ -799,8 +866,14 @@ pub unsafe extern "C" fn purrdf_entail_certain_answers(
             let regime = cstr_to_str(regime)?;
             let document = cstr_to_str(document)?;
             let pattern = cstr_to_str(pattern)?;
+            let imports = import_pairs(
+                import_iris,
+                import_documents,
+                import_count,
+                "purrdf_entail_certain_answers",
+            )?;
             store_answer(
-                certain_answers_to_string(regime, document, pattern),
+                certain_answers_to_string(regime, document, pattern, &imports),
                 out_answer,
                 out_certificate,
             )
@@ -833,20 +906,29 @@ pub unsafe extern "C" fn purrdf_entail_certain_answers(
 /// turn a limitation of this library into a false statement about the caller's data.
 /// **Free BOTH buffers with `purrdf_buffer_free`.**
 ///
+/// `import_iris`, `import_documents` and `import_count` are
+/// `purrdf_entail_certain_answers`'s, and apply to the PREMISE: the conclusion is a graph to
+/// match rather than an ontology to close, so an `owl:imports` in it names nothing this
+/// service resolves.
+///
 /// # Safety
-/// `regime`, `premise` and `conclusion` must be non-null, NUL-terminated C strings;
-/// `out_answer` and `out_certificate` must be writable pointers; `out_error` must be null
-/// or writable.
+/// `regime`, `premise` and `conclusion` must be non-null, NUL-terminated C strings; when
+/// `import_count` is non-zero, `import_iris` and `import_documents` must each address at
+/// least `import_count` readable, non-null, NUL-terminated C strings; `out_answer` and
+/// `out_certificate` must be writable pointers; `out_error` must be null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_entail_graph_entails(
     regime: *const c_char,
     premise: *const c_char,
     conclusion: *const c_char,
+    import_iris: *const *const c_char,
+    import_documents: *const *const c_char,
+    import_count: usize,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
-    // SAFETY: as `purrdf_entail_explain_conclusion`.
+    // SAFETY: as `purrdf_entail_certain_answers`.
     unsafe {
         ffi_try!(out_error, {
             if regime.is_null()
@@ -860,8 +942,14 @@ pub unsafe extern "C" fn purrdf_entail_graph_entails(
             let regime = cstr_to_str(regime)?;
             let premise = cstr_to_str(premise)?;
             let conclusion = cstr_to_str(conclusion)?;
+            let imports = import_pairs(
+                import_iris,
+                import_documents,
+                import_count,
+                "purrdf_entail_graph_entails",
+            )?;
             store_answer(
-                graph_entails_to_string(regime, premise, conclusion),
+                graph_entails_to_string(regime, premise, conclusion, &imports),
                 out_answer,
                 out_certificate,
             )
@@ -884,20 +972,30 @@ pub unsafe extern "C" fn purrdf_entail_graph_entails(
 /// there would read as a failed check rather than as an absent one.
 /// **Free BOTH buffers with `purrdf_buffer_free`.**
 ///
+/// `import_iris`, `import_documents` and `import_count` are
+/// `purrdf_entail_certain_answers`'s. The re-check runs against the premise AS WRITTEN
+/// rather than against its imports closure: a warrant re-decidable from the caller's own
+/// document is a stronger check than one only re-decidable against a graph the library
+/// assembled.
+///
 /// # Safety
-/// `regime`, `premise` and `conclusion` must be non-null, NUL-terminated C strings;
-/// `out_answer` and `out_certificate` must be writable pointers; `out_error` must be null
-/// or writable.
+/// `regime`, `premise` and `conclusion` must be non-null, NUL-terminated C strings; when
+/// `import_count` is non-zero, `import_iris` and `import_documents` must each address at
+/// least `import_count` readable, non-null, NUL-terminated C strings; `out_answer` and
+/// `out_certificate` must be writable pointers; `out_error` must be null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_entail_verify_entailment(
     regime: *const c_char,
     premise: *const c_char,
     conclusion: *const c_char,
+    import_iris: *const *const c_char,
+    import_documents: *const *const c_char,
+    import_count: usize,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
-    // SAFETY: as `purrdf_entail_explain_conclusion`.
+    // SAFETY: as `purrdf_entail_certain_answers`.
     unsafe {
         ffi_try!(out_error, {
             if regime.is_null()
@@ -911,8 +1009,14 @@ pub unsafe extern "C" fn purrdf_entail_verify_entailment(
             let regime = cstr_to_str(regime)?;
             let premise = cstr_to_str(premise)?;
             let conclusion = cstr_to_str(conclusion)?;
+            let imports = import_pairs(
+                import_iris,
+                import_documents,
+                import_count,
+                "purrdf_entail_verify_entailment",
+            )?;
             store_answer(
-                verify_entailment_to_string(regime, premise, conclusion),
+                verify_entailment_to_string(regime, premise, conclusion, &imports),
                 out_answer,
                 out_certificate,
             )
@@ -1770,6 +1874,9 @@ mod tests {
                             regime.as_ptr(),
                             document.as_ptr(),
                             pattern.as_ptr(),
+                            std::ptr::null(),
+                            std::ptr::null(),
+                            0,
                             a,
                             c,
                             e,
@@ -1783,6 +1890,9 @@ mod tests {
                             regime.as_ptr(),
                             document.as_ptr(),
                             conclusion.as_ptr(),
+                            std::ptr::null(),
+                            std::ptr::null(),
+                            0,
                             a,
                             c,
                             e,
@@ -1796,6 +1906,9 @@ mod tests {
                             regime.as_ptr(),
                             document.as_ptr(),
                             conclusion.as_ptr(),
+                            std::ptr::null(),
+                            std::ptr::null(),
+                            0,
                             a,
                             c,
                             e,
@@ -1855,6 +1968,9 @@ mod tests {
                         null,
                         null,
                         null,
+                        std::ptr::null(),
+                        std::ptr::null(),
+                        0,
                         &raw mut answer,
                         &raw mut certificate,
                         std::ptr::null_mut(),
@@ -1866,6 +1982,9 @@ mod tests {
                         null,
                         null,
                         null,
+                        std::ptr::null(),
+                        std::ptr::null(),
+                        0,
                         &raw mut answer,
                         &raw mut certificate,
                         std::ptr::null_mut(),
@@ -1877,6 +1996,9 @@ mod tests {
                         null,
                         null,
                         null,
+                        std::ptr::null(),
+                        std::ptr::null(),
+                        0,
                         &raw mut answer,
                         &raw mut certificate,
                         std::ptr::null_mut(),
@@ -1888,6 +2010,120 @@ mod tests {
         }
         assert!(answer.is_null());
         assert!(certificate.is_null());
+    }
+
+    /// A NULL import array with a NON-ZERO count is REFUSED rather than dereferenced —
+    /// and two NULL arrays with a count of zero are the ordinary "imports nothing" call.
+    ///
+    /// The two halves belong in one test because the pair is the contract: refusing the
+    /// second would make every ordinary call pass two dummy arrays, and dereferencing the
+    /// first would be a segfault a C caller could reach by writing `1` for a table it had
+    /// not built.
+    #[test]
+    fn a_null_import_array_with_a_non_zero_count_is_refused_not_dereferenced() {
+        let regime = CString::new("owl-rl").expect("no interior NUL");
+        let document = CString::new(TAXONOMY).expect("no interior NUL");
+        let conclusion = CString::new(CHAIN_AXIOM).expect("no interior NUL");
+        let iri = CString::new("http://example.org/schema").expect("no interior NUL");
+        let iris: [*const c_char; 1] = [iri.as_ptr()];
+        let mut answer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut certificate: *mut PurrdfBuffer = std::ptr::null_mut();
+        // SAFETY: every C string and the one-element array are live for the whole block;
+        // the out-pointers address live, writable locals. No error channel is requested,
+        // so the status code is the whole observable result — and no buffer is handed out
+        // on a refusal, which the two null assertions below check.
+        unsafe {
+            let (a, c) = (&raw mut answer, &raw mut certificate);
+            for (service, status) in [
+                (
+                    "certain-answers: both arrays null",
+                    purrdf_entail_certain_answers(
+                        regime.as_ptr(),
+                        document.as_ptr(),
+                        conclusion.as_ptr(),
+                        std::ptr::null(),
+                        std::ptr::null(),
+                        1,
+                        a,
+                        c,
+                        std::ptr::null_mut(),
+                    ),
+                ),
+                (
+                    "graph-entails: the DOCUMENT array null",
+                    purrdf_entail_graph_entails(
+                        regime.as_ptr(),
+                        document.as_ptr(),
+                        conclusion.as_ptr(),
+                        iris.as_ptr(),
+                        std::ptr::null(),
+                        1,
+                        a,
+                        c,
+                        std::ptr::null_mut(),
+                    ),
+                ),
+                (
+                    "verify-entailment: the IRI array null",
+                    purrdf_entail_verify_entailment(
+                        regime.as_ptr(),
+                        document.as_ptr(),
+                        conclusion.as_ptr(),
+                        std::ptr::null(),
+                        iris.as_ptr(),
+                        1,
+                        a,
+                        c,
+                        std::ptr::null_mut(),
+                    ),
+                ),
+            ] {
+                assert_eq!(status, PurrdfStatus::NullPointer as i32, "{service}");
+            }
+        }
+        assert!(answer.is_null());
+        assert!(certificate.is_null());
+
+        // …and a NULL ELEMENT inside a non-empty array is refused the same way.
+        let nulls: [*const c_char; 1] = [std::ptr::null()];
+        // SAFETY: as above; the one-element array holds a null the entry point must
+        // refuse rather than pass to `CStr::from_ptr`.
+        let status = unsafe {
+            purrdf_entail_graph_entails(
+                regime.as_ptr(),
+                document.as_ptr(),
+                conclusion.as_ptr(),
+                nulls.as_ptr(),
+                nulls.as_ptr(),
+                1,
+                &raw mut answer,
+                &raw mut certificate,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(status, PurrdfStatus::NullPointer as i32);
+        assert!(answer.is_null());
+        assert!(certificate.is_null());
+
+        // The ZERO case is not an error: two null arrays and a count of zero is the
+        // premise that imports nothing, which is the overwhelmingly common call.
+        // SAFETY: the C strings are live; `pair` owns the out-pointers and frees both.
+        let (decided, _) = unsafe {
+            pair(|a, c, e| {
+                purrdf_entail_graph_entails(
+                    regime.as_ptr(),
+                    document.as_ptr(),
+                    conclusion.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    a,
+                    c,
+                    e,
+                )
+            })
+        };
+        assert!(decided.contains("\nentailment entailed\n"), "{decided}");
     }
 
     /// The step cap crosses the ABI and drives the third completeness state.
@@ -1965,6 +2201,164 @@ mod tests {
             ] {
                 assert_eq!(status, PurrdfStatus::NullPointer as i32);
             }
+        }
+    }
+
+    // ── The vendored `owl:imports` case, driven through the pointer surface ──
+
+    /// The W3C OWL 2 RL entailment corpus, as the conformance harness locates it.
+    ///
+    /// A path rather than a copy: `scripts/check-corpus-frozen.py` digests those bytes,
+    /// so a fixture transcribing them here would be a second, un-digested corpus that
+    /// could silently drift from the one the conformance scoreboard grades. This crate
+    /// is `publish = false`, so reading a sibling crate's vendored tree from a test is a
+    /// dev-only path and ships to nobody.
+    fn corpus(relative: &str) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../sparql-conformance/entailment-suite/w3c-owl2-rl")
+            .join(relative)
+    }
+
+    /// One vendored RDF/XML document, converted to N-Quads THROUGH THE C ABI.
+    ///
+    /// `purrdf_parse` + `purrdf_serialize` rather than the Rust API: a C caller holding
+    /// an RDF/XML ontology reaches the entailment services exactly this way, and a test
+    /// that took a shortcut around the ABI would not be testing the host.
+    ///
+    /// No base IRI is passed, and none is needed — every document in the vendored tree
+    /// either declares its own `xml:base` or uses only absolute IRIs, which the
+    /// conformance harness asserts as a standing tripwire.
+    fn corpus_nquads(relative: &str) -> String {
+        let bytes = std::fs::read(corpus(relative)).expect("the vendored document");
+        let media_type = CString::new("application/rdf+xml").expect("no interior NUL");
+        let nquads_type = CString::new("application/n-quads").expect("no interior NUL");
+        let mut dataset: *mut crate::handles::PurrdfDataset = std::ptr::null_mut();
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        // SAFETY: `bytes` is live for the parse call and its length is its own; both C
+        // strings are live for the whole block; every out-pointer addresses a live,
+        // writable local; the dataset handle and the buffer are each released once.
+        unsafe {
+            assert_eq!(
+                crate::parse::purrdf_parse(
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    media_type.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &raw mut dataset,
+                    &raw mut error,
+                ),
+                PurrdfStatus::Ok as i32
+            );
+            assert!(error.is_null());
+            assert_eq!(
+                crate::serialize::purrdf_serialize(
+                    dataset,
+                    nquads_type.as_ptr(),
+                    std::ptr::null(),
+                    &raw mut buffer,
+                    std::ptr::null_mut(),
+                    &raw mut error,
+                ),
+                PurrdfStatus::Ok as i32
+            );
+            assert!(error.is_null());
+            crate::handles::purrdf_dataset_free(dataset);
+            take(buffer)
+        }
+    }
+
+    /// `webont-imports-011` ANSWERS ON THIS HOST, from its own premise, `owl:imports`
+    /// INTACT.
+    ///
+    /// The case the whole parameter exists for. Its premise says `Socrates a ont:Man`
+    /// and `owl:imports <…/support011-A>`; `Man ⊑ Mortal` lives only in that support
+    /// document, so the published answer — `Socrates a ont:Mortal` — is reachable only
+    /// from the imports closure. Before this parameter existed the C ABI could not
+    /// express the support document at all, and this premise was a permanent refusal.
+    ///
+    /// The premise is handed over UNMODIFIED: nothing is merged into it and the
+    /// `owl:imports` triple is left exactly where W3C wrote it, which is the whole
+    /// difference between resolving an import and being given a different premise.
+    #[test]
+    fn the_vendored_imports_case_answers_through_the_pointer_surface() {
+        let premise_text = corpus_nquads("cases/webont-imports-011/premise.rdf");
+        // The premise really does carry the import, so the test cannot pass by having
+        // quietly been handed a document that needs none.
+        assert!(
+            premise_text.contains("<http://www.w3.org/2002/07/owl#imports>"),
+            "{premise_text}"
+        );
+        let conclusion_text = corpus_nquads("cases/webont-imports-011/conclusion.rdf");
+        let support_text = corpus_nquads("imports/support011-A.rdf");
+
+        let regime = CString::new("owl-rl").expect("no interior NUL");
+        let premise = CString::new(premise_text).expect("no interior NUL");
+        let conclusion = CString::new(conclusion_text).expect("no interior NUL");
+        let support = CString::new(support_text).expect("no interior NUL");
+        // The ontology IRI the support document declares — the name the premise's
+        // `owl:imports` object actually is, not the file it happens to live in.
+        let iri = CString::new("http://www.w3.org/2002/03owlt/imports/support011-A")
+            .expect("no interior NUL");
+        let iris: [*const c_char; 1] = [iri.as_ptr()];
+        let documents: [*const c_char; 1] = [support.as_ptr()];
+
+        // SAFETY: every C string and both one-element arrays are live for the whole
+        // block; `pair` owns the out-pointers and frees both buffers it reads.
+        let (answer, certificate) = unsafe {
+            pair(|a, c, e| {
+                purrdf_entail_graph_entails(
+                    regime.as_ptr(),
+                    premise.as_ptr(),
+                    conclusion.as_ptr(),
+                    iris.as_ptr(),
+                    documents.as_ptr(),
+                    1,
+                    a,
+                    c,
+                    e,
+                )
+            })
+        };
+        assert_eq!(answer.lines().next(), Some("mechanism strict-table"));
+        assert!(answer.contains("\nentailment entailed\n"), "{answer}");
+        assert!(certificate.starts_with("purrdf-reasoning-report 4\n"));
+
+        // …and the SAME call with an empty table refuses by name rather than answering
+        // from a premise that is missing the axioms it told the caller about.
+        let mut answer_ptr: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut certificate_ptr: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        // SAFETY: as above; the error handle is read and freed below.
+        unsafe {
+            assert_eq!(
+                purrdf_entail_graph_entails(
+                    regime.as_ptr(),
+                    premise.as_ptr(),
+                    conclusion.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    &raw mut answer_ptr,
+                    &raw mut certificate_ptr,
+                    &raw mut error,
+                ),
+                PurrdfStatus::ParseError as i32
+            );
+            assert!(answer_ptr.is_null());
+            assert!(certificate_ptr.is_null());
+            assert!(!error.is_null());
+            let message = crate::error::purrdf_error_message(error);
+            assert!(!message.is_null());
+            let message = std::ffi::CStr::from_ptr(message)
+                .to_str()
+                .expect("the boundary emits UTF-8");
+            assert!(
+                message.contains("http://www.w3.org/2002/03owlt/imports/support011-A"),
+                "{message}"
+            );
+            crate::error::purrdf_error_free(error);
         }
     }
 }

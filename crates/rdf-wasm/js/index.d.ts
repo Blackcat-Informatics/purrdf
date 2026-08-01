@@ -753,8 +753,8 @@ export function entailExplainConclusion(
 ): ReasoningAnswer;
 
 /**
- * `entailCertainAnswers(regime, document, pattern)` → the substitutions the knowledge
- * base ENTAILS the pattern under, as `var` and `row` lines.
+ * `entailCertainAnswers(regime, document, pattern, importIris, importDocuments)` → the
+ * substitutions the knowledge base ENTAILS the pattern under, as `var` and `row` lines.
  *
  * A certain answer is true in every model, not merely present in one closure, which is
  * what SPARQL's entailment regimes define the answers to a basic graph pattern to be.
@@ -765,18 +765,36 @@ export function entailExplainConclusion(
  * A `limit` line says the row set may not be EXHAUSTIVE; no `limit` lines is the claim
  * that it is. The certificate is a `purrdf-reasoning-report 4` block.
  *
- * Throws on an unknown regime, on `owl-direct` or `rif`, on a malformed document or
- * pattern, on a pattern that names a graph, and on an inconsistent premise.
+ * `importIris` and `importDocuments` are the caller's `owl:imports` table, as two
+ * PARALLEL arrays of equal length: entry `i` declares that the ontology IRI
+ * `importIris[i]` denotes the N-Quads document `importDocuments[i]`. A premise carrying
+ * an `owl:imports` states that its axioms are its own PLUS those of the documents it
+ * names, so this is where those documents go — and the `owl:imports` triple stays exactly
+ * where you wrote it. PurRDF FETCHES NOTHING: an ontology IRI the table does not resolve
+ * throws by name, never a network access and never a silently empty import. Two empty
+ * arrays are the ordinary *imports nothing* case; both are required, not defaulted, and
+ * resolution is transitive to a fixpoint.
+ *
+ * Two arrays are the shape rather than one array of `[iri, document]` pairs because
+ * wasm-bindgen has no ABI for a nested string array; it is the same parallel-array
+ * convention the C ABI uses.
+ *
+ * Throws on an unknown regime, on `owl-direct` or `rif`, on a malformed document,
+ * pattern or import document, on import arrays of different lengths, on a duplicate or
+ * empty import IRI, on a pattern that names a graph, on an `owl:imports` the table does
+ * not resolve, and on an inconsistent premise.
  */
 export function entailCertainAnswers(
   regime: EntailmentRegime | string,
   document: string,
   pattern: string,
+  importIris: readonly string[],
+  importDocuments: readonly string[],
 ): ReasoningAnswer;
 
 /**
- * `entailGraphEntails(regime, premise, conclusion)` → does the premise entail the
- * conclusion GRAPH under the regime's rule table?
+ * `entailGraphEntails(regime, premise, conclusion, importIris, importDocuments)` → does
+ * the premise entail the conclusion GRAPH under the regime's rule table?
  *
  * NOT `entailEntails`, which asks the OWL 2 Direct-Semantics TABLEAU about one AXIOM and
  * renders a `purrdf-dl-certificate 1`. This asks the regime's RULE TABLE about a
@@ -788,21 +806,30 @@ export function entailCertainAnswers(
  * THREE verdicts, never two: `not-entailed` is a PROOF, and `undecided` is what an
  * incomplete procedure is entitled to say instead.
  *
+ * `importIris`/`importDocuments` are `entailCertainAnswers`'s, and apply to the PREMISE:
+ * the conclusion is a graph to match rather than an ontology to close.
+ *
  * Throws as `entailCertainAnswers`.
  */
 export function entailGraphEntails(
   regime: EntailmentRegime | string,
   premise: string,
   conclusion: string,
+  importIris: readonly string[],
+  importDocuments: readonly string[],
 ): ReasoningAnswer;
 
 /**
- * `entailVerifyEntailment(regime, premise, conclusion)` → `entailGraphEntails` with the
- * warrant RE-DECIDED, without running a reasoner.
+ * `entailVerifyEntailment(regime, premise, conclusion, importIris, importDocuments)` →
+ * `entailGraphEntails` with the warrant RE-DECIDED, without running a reasoner.
  *
  * `warrant absent` / `verified not-applicable` is a `not-entailed` or an `undecided`:
  * there is no evidence to re-decide, and a `false` there would read as a failed check
  * rather than as an absent one.
+ *
+ * `importIris`/`importDocuments` are `entailCertainAnswers`'s. The re-check runs against
+ * the premise AS WRITTEN, which is a stronger check than one only re-decidable against a
+ * graph the library assembled.
  *
  * Throws as `entailCertainAnswers`.
  */
@@ -810,6 +837,8 @@ export function entailVerifyEntailment(
   regime: EntailmentRegime | string,
   premise: string,
   conclusion: string,
+  importIris: readonly string[],
+  importDocuments: readonly string[],
 ): ReasoningAnswer;
 
 export function shaclEntail(shapesTtl: string, dataNt: string): string;

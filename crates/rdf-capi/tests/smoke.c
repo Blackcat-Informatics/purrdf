@@ -231,9 +231,215 @@ static int check_golden_vector(const char *path) {
     return failed != 0 ? -1 : cases;
 }
 
+/* ── The caller's `owl:imports` table, from a REAL C caller ──────────────────
+ *
+ * `webont-imports-011` is the W3C case the parameter exists for: its premise says
+ * `Socrates a ont:Man` and `owl:imports <…/support011-A>`, and `Man ⊑ Mortal` lives
+ * only in that support document, so the published answer is reachable only from the
+ * imports closure. PurRDF fetches nothing, so the document arrives as configuration.
+ *
+ * This is the C-ABI leg of that claim, and it is load-bearing in a way a Rust test
+ * cannot be: the program below is compiled against the COMMITTED `purrdf.h`, so a
+ * header that had lost the import parameters would fail to compile here rather than
+ * shipping an entry point no C caller could see. */
+
+/* One RDF/XML file as a NUL-terminated N-Quads string, converted through the C ABI.
+ *
+ * No base IRI is passed and none is needed: every document in the vendored corpus
+ * either declares its own `xml:base` or uses only absolute IRIs. The caller frees
+ * the result with `free()`. */
+static char *rdfxml_file_to_nquads(const char *path) {
+    size_t source_len = 0;
+    uint8_t *source = read_file(path, &source_len);
+    if (source == NULL) {
+        return NULL;
+    }
+    PurrdfDataset *parsed = NULL;
+    PurrdfBuffer *serialized = NULL;
+    PurrdfError *error = NULL;
+    char *out = NULL;
+    if (purrdf_parse(source, source_len, "application/rdf+xml", NULL, NULL, &parsed,
+                     &error) != PURRDF_STATUS_OK) {
+        fprintf(stderr, "cannot parse %s: %s\n", path,
+                error == NULL ? "(no error)" : purrdf_error_message(error));
+        goto done;
+    }
+    if (purrdf_serialize(parsed, "application/n-quads", NULL, &serialized, NULL,
+                         &error) != PURRDF_STATUS_OK) {
+        fprintf(stderr, "cannot serialize %s: %s\n", path,
+                error == NULL ? "(no error)" : purrdf_error_message(error));
+        goto done;
+    }
+    const uint8_t *bytes = NULL;
+    size_t len = 0;
+    purrdf_buffer_data(serialized, &bytes, &len);
+    /* The buffer carries bytes and a length, never a NUL, and the entailment
+     * entry points take C strings — so the copy is not incidental. */
+    Slice slice = {(const char *)bytes, len};
+    out = dup_slice(slice);
+
+done:
+    if (error != NULL) {
+        purrdf_error_free(error);
+    }
+    if (serialized != NULL) {
+        purrdf_buffer_free(serialized);
+    }
+    if (parsed != NULL) {
+        purrdf_dataset_free(parsed);
+    }
+    free(source);
+    return out;
+}
+
+/* Drive `webont-imports-011` through the three conclusion-directed services with
+ * the vendored support ontology supplied. Returns 0 on success. */
+static int check_vendored_imports(const char *premise_path,
+                                  const char *conclusion_path,
+                                  const char *support_path) {
+    char *premise = rdfxml_file_to_nquads(premise_path);
+    char *conclusion = rdfxml_file_to_nquads(conclusion_path);
+    char *support = rdfxml_file_to_nquads(support_path);
+    PurrdfBuffer *answer = NULL;
+    PurrdfBuffer *certificate = NULL;
+    PurrdfError *error = NULL;
+    int failed = 1;
+
+    if (premise == NULL || conclusion == NULL || support == NULL) {
+        fprintf(stderr, "the vendored imports case did not convert to N-Quads\n");
+        goto done;
+    }
+    /* The premise really does carry the import, so this cannot pass by having been
+     * handed a document that needs none. */
+    if (!contains_bytes((const uint8_t *)premise, strlen(premise),
+                        "<http://www.w3.org/2002/07/owl#imports>")) {
+        fprintf(stderr, "the vendored premise carries no owl:imports\n");
+        goto done;
+    }
+
+    /* The ontology IRI the support document DECLARES — the name the premise's
+     * `owl:imports` object actually is, not the file it happens to live in. */
+    const char *import_iris[1] = {"http://www.w3.org/2002/03owlt/imports/support011-A"};
+    const char *import_documents[1] = {support};
+
+    const uint8_t *bytes = NULL;
+    size_t len = 0;
+
+    if (purrdf_entail_graph_entails("owl-rl", premise, conclusion, import_iris,
+                                    import_documents, 1, &answer, &certificate,
+                                    &error) != PURRDF_STATUS_OK) {
+        fprintf(stderr, "graph_entails refused the vendored case: %s\n",
+                error == NULL ? "(no error)" : purrdf_error_message(error));
+        goto done;
+    }
+    purrdf_buffer_data(answer, &bytes, &len);
+    if (!contains_bytes(bytes, len, "entailment entailed\n")) {
+        fprintf(stderr, "the vendored imports case did not answer entailed\n");
+        goto done;
+    }
+    purrdf_buffer_data(certificate, &bytes, &len);
+    if (!contains_bytes(bytes, len, "purrdf-reasoning-report 4\n")) {
+        fprintf(stderr, "the vendored imports case carried no report\n");
+        goto done;
+    }
+    purrdf_buffer_free(answer);
+    purrdf_buffer_free(certificate);
+    answer = NULL;
+    certificate = NULL;
+
+    /* The pattern-shaped entry point answers the same question the same way: a
+     * conclusion graph is the relation with no columns, so a `yes` is one bare row. */
+    if (purrdf_entail_certain_answers("owl-rl", premise, conclusion, import_iris,
+                                      import_documents, 1, &answer, &certificate,
+                                      &error) != PURRDF_STATUS_OK) {
+        fprintf(stderr, "certain_answers refused the vendored case\n");
+        goto done;
+    }
+    purrdf_buffer_data(answer, &bytes, &len);
+    if (len != strlen("mechanism strict-table\nrow\n") ||
+        memcmp(bytes, "mechanism strict-table\nrow\n", len) != 0) {
+        fprintf(stderr, "the vendored imports case is not one bare row\n");
+        goto done;
+    }
+    purrdf_buffer_free(answer);
+    purrdf_buffer_free(certificate);
+    answer = NULL;
+    certificate = NULL;
+
+    if (purrdf_entail_verify_entailment("owl-rl", premise, conclusion, import_iris,
+                                        import_documents, 1, &answer, &certificate,
+                                        &error) != PURRDF_STATUS_OK) {
+        fprintf(stderr, "verify_entailment refused the vendored case\n");
+        goto done;
+    }
+    purrdf_buffer_data(answer, &bytes, &len);
+    if (!contains_bytes(bytes, len, "warrant present\nverified true\n")) {
+        fprintf(stderr, "the vendored imports warrant did not re-decide\n");
+        goto done;
+    }
+    purrdf_buffer_free(answer);
+    purrdf_buffer_free(certificate);
+    answer = NULL;
+    certificate = NULL;
+
+    /* An empty table with two NULL arrays is accepted as "imports nothing" — and
+     * for THIS premise that is a refusal NAMING the document, never an answer
+     * computed from a premise missing the axioms it told the caller about. */
+    if (purrdf_entail_graph_entails("owl-rl", premise, conclusion, NULL, NULL, 0,
+                                    &answer, &certificate,
+                                    &error) != PURRDF_STATUS_PARSE_ERROR) {
+        fprintf(stderr, "an unsupplied import was not refused\n");
+        goto done;
+    }
+    if (answer != NULL || certificate != NULL) {
+        fprintf(stderr, "a refused call handed out a buffer to free\n");
+        goto done;
+    }
+    if (error == NULL ||
+        !contains_bytes((const uint8_t *)purrdf_error_message(error),
+                        strlen(purrdf_error_message(error)),
+                        "http://www.w3.org/2002/03owlt/imports/support011-A")) {
+        fprintf(stderr, "the refusal did not name the unresolved document\n");
+        goto done;
+    }
+    purrdf_error_free(error);
+    error = NULL;
+
+    /* A NULL array with a NON-ZERO count is a caller error, refused before any
+     * dereference rather than segfaulting. */
+    if (purrdf_entail_graph_entails("owl-rl", premise, conclusion, NULL, NULL, 1,
+                                    &answer, &certificate,
+                                    &error) != PURRDF_STATUS_NULL_POINTER) {
+        fprintf(stderr, "a null import array with a non-zero count was not refused\n");
+        goto done;
+    }
+    if (error != NULL) {
+        purrdf_error_free(error);
+        error = NULL;
+    }
+
+    failed = 0;
+
+done:
+    if (error != NULL) {
+        purrdf_error_free(error);
+    }
+    if (answer != NULL) {
+        purrdf_buffer_free(answer);
+    }
+    if (certificate != NULL) {
+        purrdf_buffer_free(certificate);
+    }
+    free(premise);
+    free(conclusion);
+    free(support);
+    return failed;
+}
+
 int main(int argc, char **argv) {
-    CHECK(argc == 4,
-          "shared OKF fixture, OKF config, and entailment golden vector arguments");
+    CHECK(argc == 7,
+          "shared OKF fixture, OKF config, entailment golden vector, and the three "
+          "vendored webont-imports-011 documents");
     /* ABI version */
     PurrdfAbiVersion version;
     CHECK(purrdf_abi_version(&version) == PURRDF_STATUS_OK, "abi_version");
@@ -471,6 +677,14 @@ int main(int argc, char **argv) {
      * exact bytes, not merely non-emptiness: a caller filtering for strictly
      * normative conclusions has to be able to read the name. */
     PurrdfBuffer *added = NULL;
+    /* The conclusion-directed services, with the caller's `owl:imports` table —
+       the parameter that makes a premise naming another ontology answerable here
+       at all. */
+    CHECK(check_vendored_imports(argv[4], argv[5], argv[6]) == 0,
+          "webont-imports-011 answers from its own premise, owl:imports intact");
+    printf("webont-imports-011: entailed through the C ABI with its support "
+           "ontology supplied\n");
+
     rc = purrdf_entail_extensions("owl-rl", &added, &error);
     CHECK(rc == PURRDF_STATUS_OK && added != NULL, "entail_extensions(owl-rl)");
     const uint8_t *added_bytes = NULL;

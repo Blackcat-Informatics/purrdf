@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   ready,
+  Dataset,
   entailCertainAnswers,
   entailCheckGoldenVectors,
   entailCheckInconsistentRefusal,
@@ -491,14 +492,14 @@ test("every conclusion-directed entailment service is reachable from the package
     "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?c .\n";
 
   // `?c` ranges over the ENTAILED types, so `C` is a row and it is asserted nowhere.
-  const answers = entailCertainAnswers("owl-rl", SCHEMA, pattern);
+  const answers = entailCertainAnswers("owl-rl", SCHEMA, pattern, [], []);
   assert.ok(answers.answer.startsWith("mechanism strict-table\nvar c\n"), answers.answer);
   assert.ok(answers.answer.includes("\nrow <http://example.org/C>\n"), answers.answer);
 
-  const decided = entailGraphEntails("owl-rl", SCHEMA, conclusion);
+  const decided = entailGraphEntails("owl-rl", SCHEMA, conclusion, [], []);
   assert.equal(decided.answer, "mechanism strict-table\nentailment entailed\n");
 
-  const checked = entailVerifyEntailment("owl-rl", SCHEMA, conclusion);
+  const checked = entailVerifyEntailment("owl-rl", SCHEMA, conclusion, [], []);
   assert.ok(checked.answer.endsWith("warrant present\nverified true\n"), checked.answer);
 
   // All three carry the run that answered, on the materialization lane's own banner,
@@ -514,7 +515,7 @@ test("every conclusion-directed entailment service is reachable from the package
 test("a conclusion nothing derives has no warrant, and says so", () => {
   const never =
     "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Never> .\n";
-  const checked = entailVerifyEntailment("owl-rl", SCHEMA, never);
+  const checked = entailVerifyEntailment("owl-rl", SCHEMA, never, [], []);
   assert.ok(checked.answer.includes("\nentailment not-entailed\n"), checked.answer);
   // `not-applicable`, never `false`: there is no evidence to re-decide, and a `false`
   // would read as a check that ran and failed.
@@ -528,6 +529,120 @@ test("the two regimes defined by a missing input are refused by name", () => {
   const conclusion =
     "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .\n";
   for (const regime of ["owl-direct", "rif"]) {
-    assert.throws(() => entailGraphEntails(regime, SCHEMA, conclusion), new RegExp(regime));
+    assert.throws(() => entailGraphEntails(regime, SCHEMA, conclusion, [], []), new RegExp(regime));
   }
+});
+
+
+// ── The caller's `owl:imports` table ────────────────────────────────────────────
+
+// The W3C OWL 2 RL entailment corpus, as the Rust conformance harness locates it. A
+// path rather than a copy: `scripts/check-corpus-frozen.py` digests those bytes, so a
+// fixture transcribing them here would be a second, un-digested corpus free to drift
+// from the one the conformance scoreboard grades.
+const CORPUS = new URL(
+  "../../../sparql-conformance/entailment-suite/w3c-owl2-rl/",
+  import.meta.url,
+);
+
+// The ontology IRI `support011-A.rdf` DECLARES — the name the premise's `owl:imports`
+// object actually is, not the file it happens to live in.
+const SUPPORT_011_A = "http://www.w3.org/2002/03owlt/imports/support011-A";
+
+// One vendored RDF/XML document as N-Quads text. No base IRI is passed and none is
+// needed: every document in the vendored tree either declares its own `xml:base` or
+// uses only absolute IRIs, which the Rust conformance harness asserts as a standing
+// tripwire.
+async function corpusNquads(relative) {
+  const text = await readFile(new URL(relative, CORPUS), "utf8");
+  return Dataset.parse(text, "rdfxml").serialize("nquads");
+}
+
+test("webont-imports-011 answers from its own premise, owl:imports intact", async () => {
+  // Its premise says `Socrates a ont:Man` and `owl:imports <…/support011-A>`;
+  // `Man ⊑ Mortal` lives only in that support document, so the published answer —
+  // `Socrates a ont:Mortal` — is reachable only from the imports closure.
+  //
+  // The premise is handed over UNMODIFIED: nothing is merged into it and the
+  // `owl:imports` triple is left exactly where W3C wrote it. That is the whole
+  // difference between resolving an import and being given a different premise, and
+  // before this parameter existed the npm package could express only the second.
+  const premise = await corpusNquads("cases/webont-imports-011/premise.rdf");
+  assert.ok(
+    premise.includes("<http://www.w3.org/2002/07/owl#imports>"),
+    "the premise really carries the import, so this cannot pass vacuously",
+  );
+  const conclusion = await corpusNquads("cases/webont-imports-011/conclusion.rdf");
+  const support = await corpusNquads("imports/support011-A.rdf");
+  const iris = [SUPPORT_011_A];
+  const documents = [support];
+
+  const decided = entailGraphEntails("owl-rl", premise, conclusion, iris, documents);
+  assert.ok(
+    decided.answer.startsWith("mechanism strict-table\nentailment entailed\n"),
+    decided.answer,
+  );
+  assert.match(decided.certificate, /^purrdf-reasoning-report 4\n/);
+
+  // The other two services answer the same question the same way.
+  const answers = entailCertainAnswers("owl-rl", premise, conclusion, iris, documents);
+  assert.equal(answers.answer, "mechanism strict-table\nrow\n");
+  const checked = entailVerifyEntailment("owl-rl", premise, conclusion, iris, documents);
+  assert.ok(checked.answer.endsWith("warrant present\nverified true\n"), checked.answer);
+});
+
+test("an unsupplied import throws by name rather than reasoning without it", async () => {
+  // PurRDF fetches nothing. Reasoning over the premise alone would answer a different
+  // question — the premise itself says its axioms are not all of them — and returning
+  // that answer as though it were this one is what the refusal prevents.
+  const premise = await corpusNquads("cases/webont-imports-011/premise.rdf");
+  const conclusion = await corpusNquads("cases/webont-imports-011/conclusion.rdf");
+  assert.throws(
+    () => entailGraphEntails("owl-rl", premise, conclusion, [], []),
+    new RegExp(SUPPORT_011_A),
+  );
+});
+
+test("the import arrays are parallel, and a length mismatch is refused", async () => {
+  // Truncating to the shorter array would silently drop an import the caller
+  // supplied, which is the same failure as never having had the parameter.
+  const premise = await corpusNquads("cases/webont-imports-011/premise.rdf");
+  const conclusion = await corpusNquads("cases/webont-imports-011/conclusion.rdf");
+  const support = await corpusNquads("imports/support011-A.rdf");
+  assert.throws(
+    () => entailGraphEntails("owl-rl", premise, conclusion, [SUPPORT_011_A], []),
+    /1 ontology IRI\(s\) and 0 document\(s\)/,
+  );
+  assert.throws(
+    () => entailGraphEntails("owl-rl", premise, conclusion, [], [support]),
+    /0 ontology IRI\(s\) and 1 document\(s\)/,
+  );
+});
+
+test("a malformed import table is refused by entry", async () => {
+  const premise = await corpusNquads("cases/webont-imports-011/premise.rdf");
+  const conclusion = await corpusNquads("cases/webont-imports-011/conclusion.rdf");
+  const support = await corpusNquads("imports/support011-A.rdf");
+  assert.throws(
+    () =>
+      entailGraphEntails("owl-rl", premise, conclusion, [SUPPORT_011_A], [
+        "this is not n-quads\n",
+      ]),
+    /the import document for/,
+  );
+  assert.throws(
+    () =>
+      entailGraphEntails(
+        "owl-rl",
+        premise,
+        conclusion,
+        [SUPPORT_011_A, SUPPORT_011_A],
+        [support, ""],
+      ),
+    /twice/,
+  );
+  assert.throws(
+    () => entailGraphEntails("owl-rl", premise, conclusion, [""], [support]),
+    /empty ontology IRI/,
+  );
 });

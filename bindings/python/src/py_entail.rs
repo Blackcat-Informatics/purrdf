@@ -559,6 +559,20 @@ fn explain_conclusion(
 
 // ── The conclusion-directed entailment services ─────────────────────────────────
 
+/// Borrow a Python-supplied import table as the boundary's [`ImportList`].
+///
+/// The three services below all take `imports` as a `Sequence[tuple[str, str]]`, which PyO3
+/// materializes as owned `String`s; the boundary takes borrowed pairs. This is that one
+/// re-borrow, written once so the three call sites cannot drift, and it preserves the
+/// caller's ORDER — the boundary's table is a list rather than a map precisely so the same
+/// input always produces the same run.
+fn import_list(imports: &[(String, String)]) -> Vec<(&str, &str)> {
+    imports
+        .iter()
+        .map(|(iri, document)| (iri.as_str(), document.as_str()))
+        .collect()
+}
+
 /// The CERTAIN ANSWERS of a basic graph pattern over `data` under `regime`.
 ///
 /// A certain answer is a substitution the knowledge base ENTAILS the pattern under —
@@ -584,21 +598,38 @@ fn explain_conclusion(
 /// `graph_entails` runs, and names whichever of the seven reached it; such an answer is
 /// the relation with no columns, so a `yes` is one bare `row` line and a `no` is none.
 ///
+/// # `imports` — the documents the premise says it is not all of, and never optional
+///
+/// A `Sequence[tuple[str, str]]` of `(ontology_iri, document)` pairs, where `document` is
+/// N-Quads (or N-Triples) text exactly like `data`. A premise carrying an `owl:imports` is an
+/// ontology stating that its axioms are its own PLUS those of the documents it names, so
+/// answering over the premise alone would answer a different question — this is where those
+/// documents arrive.
+///
+/// **PurRDF fetches nothing.** An ontology IRI this sequence does not resolve is a
+/// `ValueError` naming the document, never a network access and never a silently empty
+/// import. `[]` is the ordinary "imports nothing" case and is required rather than defaulted,
+/// in the same position on all four hosts, so one call shape works everywhere.
+///
 /// Raises `ValueError` on `OWL_DIRECT` or `RIF` — each is defined by an input this
 /// signature does not carry, so both are refused by name rather than served by a weaker
-/// lane — on a malformed document or pattern, on a pattern that names a graph, and on an
-/// inconsistent premise, whose refusal carries the full report.
+/// lane — on a malformed document, pattern or import document, on a duplicate or empty
+/// import IRI, on a pattern that names a graph, on an `owl:imports` `imports` does not
+/// resolve, and on an inconsistent premise, whose refusal carries the full report.
 #[pyfunction]
-#[pyo3(signature = (regime, data, pattern))]
+#[pyo3(signature = (regime, data, pattern, imports))]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 fn certain_answers(
     py: Python<'_>,
     regime: &Bound<'_, PyAny>,
     data: &str,
     pattern: &str,
+    imports: Vec<(String, String)>,
 ) -> PyResult<(String, String)> {
     let name = regime_name(native_regime(regime)?);
+    let table = import_list(&imports);
     let answer = py
-        .detach(|| certain_answers_to_string(name, data, pattern))
+        .detach(|| certain_answers_to_string(name, data, pattern, &table))
         .map_err(PyValueError::new_err)?;
     Ok(answer.into_parts())
 }
@@ -624,18 +655,25 @@ fn certain_answers(
 /// say instead. Reading the third as the second would turn a limitation of this library
 /// into a false statement about the caller's data.
 ///
+/// `imports` is [`certain_answers`]'s, and applies to the PREMISE: the conclusion is a graph
+/// to match rather than an ontology to close, so an `owl:imports` in it names nothing this
+/// service resolves.
+///
 /// Raises `ValueError` as [`certain_answers`].
 #[pyfunction]
-#[pyo3(signature = (regime, premise, conclusion))]
+#[pyo3(signature = (regime, premise, conclusion, imports))]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 fn graph_entails(
     py: Python<'_>,
     regime: &Bound<'_, PyAny>,
     premise: &str,
     conclusion: &str,
+    imports: Vec<(String, String)>,
 ) -> PyResult<(String, String)> {
     let name = regime_name(native_regime(regime)?);
+    let table = import_list(&imports);
     let answer = py
-        .detach(|| graph_entails_to_string(name, premise, conclusion))
+        .detach(|| graph_entails_to_string(name, premise, conclusion, &table))
         .map_err(PyValueError::new_err)?;
     Ok(answer.into_parts())
 }
@@ -652,18 +690,26 @@ fn graph_entails(
 /// to re-decide, and a `false` there would read as a failed check rather than an absent
 /// one.
 ///
+/// `imports` is [`certain_answers`]'s. The re-check runs against the premise AS WRITTEN
+/// rather than against its imports closure: a warrant re-decidable from the caller's own
+/// document is a stronger check than one only re-decidable against a graph the library
+/// assembled.
+///
 /// Raises `ValueError` as [`certain_answers`].
 #[pyfunction]
-#[pyo3(signature = (regime, premise, conclusion))]
+#[pyo3(signature = (regime, premise, conclusion, imports))]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 fn verify_entailment(
     py: Python<'_>,
     regime: &Bound<'_, PyAny>,
     premise: &str,
     conclusion: &str,
+    imports: Vec<(String, String)>,
 ) -> PyResult<(String, String)> {
     let name = regime_name(native_regime(regime)?);
+    let table = import_list(&imports);
     let answer = py
-        .detach(|| verify_entailment_to_string(name, premise, conclusion))
+        .detach(|| verify_entailment_to_string(name, premise, conclusion, &table))
         .map_err(PyValueError::new_err)?;
     Ok(answer.into_parts())
 }

@@ -45,6 +45,29 @@ capability callable —
   cbindgen does not expand macros and a macro-generated entry point would link into the
   shared object and never reach the header.
 
+# A NAME is not a CAPABILITY: the PARAMETER LIST is checked too
+
+A binding can carry the right name and still be crippled. The `owl:imports` table is
+the case that proved it: `purrdf_entail::entails()` has resolved a caller-supplied
+import map from the start, the Rust boundary hard-coded an empty one, and every host
+therefore refused any premise carrying an `owl:imports` — permanently, with no
+parameter to fix it. A name-only gate passed the whole time.
+
+So the Rust boundary's parameter list is read out of `crates/validate/src/regime.rs`
+and is the SOURCE OF TRUTH, and every host's parameter list is reconstructed from
+`_PARAM_SPELLINGS` and compared to what that host actually declares, in order. Adding
+a parameter to the boundary and forgetting one host is therefore a failure that NAMES
+the host, and so is a host that grew a parameter the boundary does not have.
+
+`_PARAM_SPELLINGS` is keyed by the BOUNDARY's parameter name and must cover every one
+of them — a boundary parameter with no row fails the gate, exactly as a service with
+no row in `_HOST_NAMES` does — so the table cannot go quietly stale. One boundary
+parameter may map to SEVERAL host parameters where a host has no type for it: the C
+ABI has no pair, so an import table is `(import_iris, import_documents, import_count)`
+there, and wasm-bindgen has no nested string array, so it is two parallel arrays on
+that host too. Each host also declares whatever fixed plumbing it appends
+(`out_answer` / `out_certificate` / `out_error` on the C ABI), and nothing else.
+
 Pure text over committed files: no cargo build, no wasm build, no Node, no Python
 import. Run standalone or from `make check` / CI.
 """
@@ -94,6 +117,180 @@ _HOST_NAMES: dict[str, dict[str, str]] = {
 }
 
 _PUB_FN_RE = re.compile(r"^pub fn (\w+)[(<]", re.MULTILINE)
+
+# How each BOUNDARY parameter is spelled on each host. The keys must be exactly the
+# boundary's own parameter names — a boundary parameter with no row fails the gate,
+# and a row naming no boundary parameter fails it too — so this table cannot drift
+# from `crates/validate/src/regime.rs` in either direction.
+#
+# A value is a TUPLE because one boundary parameter can be several host parameters
+# where the host has no type for it. `imports` is an ordered list of
+# `(ontology-iri, document)` pairs; C has no pair, so it is two parallel arrays plus a
+# count there, and wasm-bindgen has no ABI for a nested string array (`Vec<Vec<String>>`
+# does not implement `VectorFromWasmAbi`), so it is two parallel arrays on that host too.
+#
+# Four host keys, because a host's Rust spelling and its published spelling are
+# different files that can disagree: `python` is the `#[pyo3(signature = …)]` list AND
+# the `.pyi` stub, `wasm` is the `#[wasm_bindgen]` function, `dts` is `index.d.ts`
+# (camelCase, hand-written), and `capi` is the Rust entry point AND the cbindgen header.
+_PARAM_SPELLINGS: dict[str, dict[str, tuple[str, ...]]] = {
+    "regime": {
+        "python": ("regime",),
+        "wasm": ("regime",),
+        "dts": ("regime",),
+        "capi": ("regime",),
+    },
+    # The premise, under the two names the boundary gives it: `document` for the
+    # pattern-shaped question, `premise` for the conclusion-shaped one.
+    "document": {
+        "python": ("data",),
+        "wasm": ("document",),
+        "dts": ("document",),
+        "capi": ("document",),
+    },
+    "premise": {
+        "python": ("premise",),
+        "wasm": ("premise",),
+        "dts": ("premise",),
+        "capi": ("premise",),
+    },
+    "pattern": {
+        "python": ("pattern",),
+        "wasm": ("pattern",),
+        "dts": ("pattern",),
+        "capi": ("pattern",),
+    },
+    "conclusion": {
+        "python": ("conclusion",),
+        "wasm": ("conclusion",),
+        "dts": ("conclusion",),
+        "capi": ("conclusion",),
+    },
+    "imports": {
+        "python": ("imports",),
+        "wasm": ("import_iris", "import_documents"),
+        "dts": ("importIris", "importDocuments"),
+        "capi": ("import_iris", "import_documents", "import_count"),
+    },
+}
+
+# What each host appends AFTER the boundary's own parameters, and nothing else. The C
+# ABI returns through out-params and reports through an error handle; every other host
+# returns a value.
+_HOST_PLUMBING: dict[str, tuple[str, ...]] = {
+    "capi": ("out_answer", "out_certificate", "out_error"),
+}
+
+# Matched pairs the parameter splitter must not split inside. Angle brackets are here
+# for `&ImportList<'_>` and `Vec<(String, String)>`; the splitter only ever runs over
+# the text BETWEEN a function's own parentheses, so a `->` return arrow is out of reach.
+_BRACKETS = {"(": ")", "[": "]", "{": "}", "<": ">"}
+
+
+def _params_between_parens(text: str, open_paren: int, what: str) -> list[str]:
+    """The top-level, comma-separated chunks inside the parens starting at `open_paren`."""
+    if text[open_paren] != "(":
+        raise SystemExit(f"check-entailment-surface: {what} does not open with `(`")
+    depth: list[str] = []
+    chunks: list[str] = []
+    current = ""
+    for index in range(open_paren, len(text)):
+        char = text[index]
+        if char in _BRACKETS:
+            depth.append(_BRACKETS[char])
+            if len(depth) == 1:
+                continue
+        elif depth and char == depth[-1]:
+            depth.pop()
+            if not depth:
+                if current.strip():
+                    chunks.append(current.strip())
+                return chunks
+        if len(depth) == 1 and char == ",":
+            if current.strip():
+                chunks.append(current.strip())
+            current = ""
+            continue
+        current += char
+    raise SystemExit(
+        f"check-entailment-surface: the parameter list of {what} is unterminated; the "
+        "file's layout moved — update this gate rather than leaving it vacuous"
+    )
+
+
+def _named_params(text: str, opener: str, what: str, trailing: bool) -> list[str]:
+    """The parameter NAMES of the declaration `opener` introduces.
+
+    `trailing` picks the identifier off the END of each chunk (C, whose declarators put
+    the name last: `const char *const *import_iris`) rather than off the front
+    (Rust/Python/TypeScript, which are all `name: type`).
+    """
+    start = text.find(opener)
+    if start < 0:
+        raise SystemExit(
+            f"check-entailment-surface: cannot find {opener!r} for {what}; the file's "
+            "layout moved — update this gate rather than leaving it vacuous"
+        )
+    chunks = _params_between_parens(text, start + len(opener) - 1, what)
+    names: list[str] = []
+    for chunk in chunks:
+        pattern = r"(\w+)\s*(?:\[\s*\])?\s*$" if trailing else r"^(?:mut\s+)?(\w+)"
+        found = re.search(pattern, chunk) if trailing else re.match(pattern, chunk)
+        if not found:
+            raise SystemExit(
+                f"check-entailment-surface: cannot read a parameter name out of "
+                f"{chunk!r} in {what}"
+            )
+        names.append(found.group(1))
+    return names
+
+
+def _pyo3_signature(text: str, function: str) -> list[str]:
+    """The `#[pyo3(signature = (…))]` list attached to `fn <function>(`.
+
+    The signature attribute rather than the Rust parameter list, because the attribute
+    is what Python actually sees: it excludes the `py: Python<'_>` token and it is the
+    thing that would carry a default if one were ever (wrongly) added.
+    """
+    # Further attribute lines may sit between — `#[allow(clippy::needless_pass_by_value)]`
+    # is where this repository puts the binding-ABI waiver — so the run of them is
+    # skipped rather than assumed absent. What is NOT allowed between is another `fn`.
+    found = re.search(
+        rf"#\[pyo3\(signature = \((?P<params>[^()]*)\)\)\]\s*"
+        rf"(?:#\[[^\n]*\][^\n]*\s*)*fn {function}\(",
+        text,
+    )
+    if not found:
+        raise SystemExit(
+            f"check-entailment-surface: `fn {function}` carries no `#[pyo3(signature = …)]` "
+            "above it; without one the Python call shape is whatever PyO3 infers, which "
+            "this gate cannot check"
+        )
+    return [chunk.strip().split("=")[0].strip() for chunk in found.group("params").split(",") if chunk.strip()]
+
+
+def _wasm_params(text: str, js_name: str) -> list[str]:
+    """The parameter names of the `pub fn` under `#[wasm_bindgen(js_name = <js_name>)]`.
+
+    The attribute is what names the function on the JS side, so the binding is found by
+    it rather than by the Rust identifier, which is free to differ and does.
+    """
+    attribute = f"#[wasm_bindgen(js_name = {js_name})]"
+    start = text.find(attribute)
+    if start < 0:
+        raise SystemExit(
+            f"check-entailment-surface: cannot find {attribute!r}; the file's layout moved"
+        )
+    tail = text[start:]
+    found = re.search(r"pub fn (\w+)\(", tail)
+    if not found:
+        raise SystemExit(
+            f"check-entailment-surface: {attribute!r} decorates no `pub fn`; the file's "
+            "layout moved — update this gate rather than leaving it vacuous"
+        )
+    return _named_params(
+        tail, found.group(0), f"the wasm binding {js_name}", trailing=False
+    )
 
 
 def _read(relative: str | Path) -> str:
@@ -235,11 +432,140 @@ def missing_bindings(services: set[str]) -> list[str]:
                 re.search(rf"^int32_t {names['capi']}\(", capi_header, re.MULTILINE) is not None,
             ),
         ]
+        crippled = False
         for host, where, present in checks:
             if not present:
                 problems.append(
                     f"  • {service}: NO {host} — expected {names} to be reachable from {where}"
                 )
+                crippled = True
+        # A name that is not there has no parameter list to read, and a second message
+        # about it would say nothing the first did not.
+        if not crippled:
+            problems.extend(
+                _arity_problems(
+                    service,
+                    names,
+                    boundary=boundary,
+                    py_source=py_source,
+                    py_stub=py_stub,
+                    wasm_source=wasm_source,
+                    index_dts=index_dts,
+                    capi_source=capi_source,
+                    capi_header=capi_header,
+                )
+            )
+    return problems
+
+
+def _arity_problems(
+    service: str,
+    names: dict[str, str],
+    *,
+    boundary: str,
+    py_source: str,
+    py_stub: str,
+    wasm_source: str,
+    index_dts: str,
+    capi_source: str,
+    capi_header: str,
+) -> list[str]:
+    """One message per host whose parameter list is not the boundary's.
+
+    The boundary is the source of truth and every host is RECONSTRUCTED from it through
+    `_PARAM_SPELLINGS`, so a parameter added to the boundary and forgotten on one host
+    fails here naming that host — which is the whole reason this function exists. A
+    name-only gate certified the `owl:imports` table as reachable from four hosts while
+    it had a parameter on none of them.
+    """
+    boundary_params = _named_params(
+        boundary,
+        f"pub fn {names['boundary']}(",
+        f"the boundary {names['boundary']}",
+        trailing=False,
+    )
+    unmapped = [param for param in boundary_params if param not in _PARAM_SPELLINGS]
+    if unmapped:
+        return [
+            f"  • {service}: the boundary takes {unmapped} and _PARAM_SPELLINGS says how "
+            "NO host spells them. A parameter the Rust boundary has and the hosts do not "
+            "is the defect this gate exists for: add it to every binding and a row here."
+        ]
+
+    def expected(host: str) -> list[str]:
+        spelled: list[str] = []
+        for param in boundary_params:
+            spelled.extend(_PARAM_SPELLINGS[param][host])
+        return spelled + list(_HOST_PLUMBING.get(host, ()))
+
+    actual: list[tuple[str, str, str, list[str]]] = [
+        (
+            "python function",
+            "bindings/python/src/py_entail.rs",
+            "python",
+            _pyo3_signature(py_source, names["python"]),
+        ),
+        (
+            "python stub",
+            "bindings/python/python/src/purrdf/__init__.pyi",
+            "python",
+            _named_params(
+                py_stub,
+                f"def {names['python']}(",
+                f"the stub for {names['python']}",
+                trailing=False,
+            ),
+        ),
+        (
+            "wasm binding",
+            "crates/rdf-wasm/src/entail.rs",
+            "wasm",
+            _wasm_params(wasm_source, names["wasm"]),
+        ),
+        (
+            "npm type declaration",
+            "crates/rdf-wasm/js/index.d.ts",
+            "dts",
+            _named_params(
+                index_dts,
+                f"export function {names['wasm']}(",
+                f"the .d.ts declaration of {names['wasm']}",
+                trailing=False,
+            ),
+        ),
+        (
+            "c abi entry point",
+            "crates/rdf-capi/src/entail.rs",
+            "capi",
+            _named_params(
+                capi_source,
+                f'pub unsafe extern "C" fn {names["capi"]}(',
+                f"the C entry point {names['capi']}",
+                trailing=False,
+            ),
+        ),
+        (
+            "c abi header declaration",
+            "crates/rdf-capi/include/purrdf.h",
+            "capi",
+            _named_params(
+                capi_header,
+                f"int32_t {names['capi']}(",
+                f"the header declaration of {names['capi']}",
+                trailing=True,
+            ),
+        ),
+    ]
+
+    problems: list[str] = []
+    for host, where, key, declared in actual:
+        wanted = expected(key)
+        if declared != wanted:
+            problems.append(
+                f"  • {service}: the {host} does NOT take the boundary's parameters — "
+                f"{where} declares {declared}, and {names['boundary']}"
+                f"{boundary_params} means it must declare {wanted}"
+            )
     return problems
 
 
@@ -276,7 +602,8 @@ def main() -> int:
 
     print(
         f"OK: all {len(services)} conclusion-directed entailment service(s) "
-        f"({', '.join(sorted(services))}) reach Rust, Python, WASM and the C ABI."
+        f"({', '.join(sorted(services))}) reach Rust, Python, WASM and the C ABI, "
+        "each with the boundary's whole parameter list."
     )
     return 0
 

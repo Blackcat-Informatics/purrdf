@@ -523,13 +523,57 @@ pub fn entail_explain_conclusion(
     explain_conclusion_impl(document, regime, conclusion).map_err(|e| JsError::new(&e))
 }
 
+// ── The conclusion-directed entailment services ─────────────────────────────────
+
+/// Zip the caller's two import arrays into the boundary's ordered `(iri, document)` table.
+///
+/// # Why TWO arrays and not one array of `[iri, document]` pairs
+///
+/// wasm-bindgen has no ABI for a nested string array: `Vec<Vec<String>>` does not
+/// implement `VectorFromWasmAbi`, because `ErasableGeneric` bottoms out at `&str` rather
+/// than at `JsValue`. Reading a JS `Array` of `Array`s therefore needs `js-sys`, which this
+/// crate does not depend on, and the alternative — receiving the pairs in `js/index.mjs`
+/// and flattening them there — is structurally refused by
+/// `scripts/check-wasm-js-exports.py`, which requires every `#[wasm_bindgen]` free
+/// function to be re-exported from the package root under its OWN name, leaving no room
+/// for a renaming wrapper.
+///
+/// So this host reuses the C ABI's convention — parallel arrays plus a length agreement —
+/// rather than inventing a second one. Order is the caller's and is preserved: the
+/// boundary's table is a list rather than a map precisely so the same input always
+/// produces the same run.
+///
+/// Two arrays of different lengths are a caller error and are REFUSED, never truncated to
+/// the shorter one: a silently dropped tail is an import the caller believes was supplied.
+fn import_pairs<'a>(
+    iris: &'a [String],
+    documents: &'a [String],
+) -> Result<Vec<(&'a str, &'a str)>, String> {
+    if iris.len() != documents.len() {
+        return Err(format!(
+            "the import table has {} ontology IRI(s) and {} document(s); an entry is a PAIR, \
+             so truncating to the shorter array would drop an import the caller supplied",
+            iris.len(),
+            documents.len()
+        ));
+    }
+    Ok(iris
+        .iter()
+        .zip(documents)
+        .map(|(iri, document)| (iri.as_str(), document.as_str()))
+        .collect())
+}
+
 /// The certain answers of a basic graph pattern. See [`entail_certain_answers`].
 pub(crate) fn certain_answers_impl(
     regime: &str,
     document: &str,
     pattern: &str,
+    import_iris: &[String],
+    import_documents: &[String],
 ) -> Result<ReasoningAnswer, String> {
-    certain_answers_to_string(regime, document, pattern).map(ReasoningAnswer::from)
+    let imports = import_pairs(import_iris, import_documents)?;
+    certain_answers_to_string(regime, document, pattern, &imports).map(ReasoningAnswer::from)
 }
 
 /// `entailCertainAnswers(regime, document, pattern)` → the substitutions the knowledge
@@ -555,16 +599,31 @@ pub(crate) fn certain_answers_impl(
 /// reached it; such an answer is the relation with no columns, so a `yes` is one bare `row`
 /// line and a `no` is none.
 ///
+/// `importIris` and `importDocuments` are the caller's `owl:imports` table, as two PARALLEL
+/// arrays of the same length: entry `i` declares that the ontology IRI `importIris[i]`
+/// denotes the N-Quads document `importDocuments[i]`. A premise carrying an `owl:imports`
+/// states that its axioms are its own PLUS those of the documents it names, so this is where
+/// those documents arrive and the `owl:imports` triple stays exactly where the caller wrote
+/// it. **PurRDF fetches nothing**: an ontology IRI the table does not resolve throws by name,
+/// never a network access and never a silently empty import. Two empty arrays are the
+/// ordinary "imports nothing" case, and both are required rather than defaulted.
+///
 /// Throws on an unknown regime, on `owl-direct` or `rif` (each defined by an input this
-/// signature does not carry), on a malformed document or pattern, on a pattern that names
-/// a graph, and on an inconsistent premise — whose refusal carries the full report.
+/// signature does not carry), on a malformed document, pattern or import document, on import
+/// arrays of different lengths, on a duplicate or empty import IRI, on a pattern that names
+/// a graph, on an `owl:imports` the table does not resolve, and on an inconsistent premise —
+/// whose refusal carries the full report.
 #[wasm_bindgen(js_name = entailCertainAnswers)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 pub fn entail_certain_answers(
     regime: &str,
     document: &str,
     pattern: &str,
+    import_iris: Vec<String>,
+    import_documents: Vec<String>,
 ) -> Result<ReasoningAnswer, JsError> {
-    certain_answers_impl(regime, document, pattern).map_err(|e| JsError::new(&e))
+    certain_answers_impl(regime, document, pattern, &import_iris, &import_documents)
+        .map_err(|e| JsError::new(&e))
 }
 
 /// Conclusion-directed entailment under a regime. See [`entail_graph_entails`].
@@ -572,8 +631,11 @@ pub(crate) fn graph_entails_impl(
     regime: &str,
     premise: &str,
     conclusion: &str,
+    import_iris: &[String],
+    import_documents: &[String],
 ) -> Result<ReasoningAnswer, String> {
-    graph_entails_to_string(regime, premise, conclusion).map(ReasoningAnswer::from)
+    let imports = import_pairs(import_iris, import_documents)?;
+    graph_entails_to_string(regime, premise, conclusion, &imports).map(ReasoningAnswer::from)
 }
 
 /// `entailGraphEntails(regime, premise, conclusion)` → does the premise entail the
@@ -595,14 +657,22 @@ pub(crate) fn graph_entails_impl(
 /// instead. Collapsing the second into the first would turn a limitation of this library
 /// into a false statement about the caller's data.
 ///
+/// `importIris`/`importDocuments` are [`entail_certain_answers`]'s, and apply to the
+/// PREMISE: the conclusion is a graph to match rather than an ontology to close, so an
+/// `owl:imports` in it names nothing this service resolves.
+///
 /// Throws as [`entail_certain_answers`].
 #[wasm_bindgen(js_name = entailGraphEntails)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 pub fn entail_graph_entails(
     regime: &str,
     premise: &str,
     conclusion: &str,
+    import_iris: Vec<String>,
+    import_documents: Vec<String>,
 ) -> Result<ReasoningAnswer, JsError> {
-    graph_entails_impl(regime, premise, conclusion).map_err(|e| JsError::new(&e))
+    graph_entails_impl(regime, premise, conclusion, &import_iris, &import_documents)
+        .map_err(|e| JsError::new(&e))
 }
 
 /// Entailment with its warrant RE-DECIDED. See [`entail_verify_entailment`].
@@ -610,8 +680,11 @@ pub(crate) fn verify_entailment_impl(
     regime: &str,
     premise: &str,
     conclusion: &str,
+    import_iris: &[String],
+    import_documents: &[String],
 ) -> Result<ReasoningAnswer, String> {
-    verify_entailment_to_string(regime, premise, conclusion).map(ReasoningAnswer::from)
+    let imports = import_pairs(import_iris, import_documents)?;
+    verify_entailment_to_string(regime, premise, conclusion, &imports).map(ReasoningAnswer::from)
 }
 
 /// `entailVerifyEntailment(regime, premise, conclusion)` → [`entail_graph_entails`] with
@@ -625,14 +698,23 @@ pub(crate) fn verify_entailment_impl(
 /// there is no evidence to re-decide, and a `false` there would read as a failed check
 /// rather than as an absent one.
 ///
+/// `importIris`/`importDocuments` are [`entail_certain_answers`]'s. The re-check runs
+/// against the premise AS WRITTEN rather than against its imports closure: a warrant
+/// re-decidable from the caller's own document is a stronger check than one only
+/// re-decidable against a graph the library assembled.
+///
 /// Throws as [`entail_certain_answers`].
 #[wasm_bindgen(js_name = entailVerifyEntailment)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 pub fn entail_verify_entailment(
     regime: &str,
     premise: &str,
     conclusion: &str,
+    import_iris: Vec<String>,
+    import_documents: Vec<String>,
 ) -> Result<ReasoningAnswer, JsError> {
-    verify_entailment_impl(regime, premise, conclusion).map_err(|e| JsError::new(&e))
+    verify_entailment_impl(regime, premise, conclusion, &import_iris, &import_documents)
+        .map_err(|e| JsError::new(&e))
 }
 
 // ── The session ─────────────────────────────────────────────────────────────────
@@ -864,7 +946,7 @@ mod tests {
         let pattern = "<http://example.org/x> \
                        <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?c .\n";
 
-        let answers = certain_answers_impl("owl-rl", SCHEMA, pattern).expect("answers");
+        let answers = certain_answers_impl("owl-rl", SCHEMA, pattern, &[], &[]).expect("answers");
         assert!(
             answers
                 .answer()
@@ -877,13 +959,14 @@ mod tests {
             answers.answer()
         );
 
-        let decided = graph_entails_impl("owl-rl", SCHEMA, conclusion).expect("decides");
+        let decided = graph_entails_impl("owl-rl", SCHEMA, conclusion, &[], &[]).expect("decides");
         assert_eq!(
             decided.answer(),
             "mechanism strict-table\nentailment entailed\n"
         );
 
-        let checked = verify_entailment_impl("owl-rl", SCHEMA, conclusion).expect("decides");
+        let checked =
+            verify_entailment_impl("owl-rl", SCHEMA, conclusion, &[], &[]).expect("decides");
         assert!(
             checked
                 .answer()
@@ -916,7 +999,7 @@ mod tests {
         let never = "<http://example.org/x> \
                      <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
                      <http://example.org/Never> .\n";
-        let checked = verify_entailment_impl("owl-rl", SCHEMA, never).expect("decides");
+        let checked = verify_entailment_impl("owl-rl", SCHEMA, never, &[], &[]).expect("decides");
         assert!(checked.answer().starts_with("mechanism strict-table\n"));
         assert!(checked.answer().contains("\nentailment not-entailed\n"));
         assert!(
@@ -933,7 +1016,7 @@ mod tests {
                           <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
                           <http://example.org/B> .\n";
         for regime in ["owl-direct", "rif"] {
-            let refused = graph_entails_impl(regime, SCHEMA, conclusion)
+            let refused = graph_entails_impl(regime, SCHEMA, conclusion, &[], &[])
                 .expect_err("defined by an input this signature does not carry");
             assert!(refused.contains(regime), "{refused}");
         }

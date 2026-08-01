@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import builtins
+from collections.abc import Sequence
 from typing import IO, Any, Callable, TypeAlias, TypedDict, overload
 
 # `Literal` is aliased because this package DEFINES an RDF `Literal` class below.
@@ -909,9 +910,22 @@ class entail:
     # the same fold `graph_entails` runs, and names whichever of the seven
     # reached it. Raises ValueError for OWL_DIRECT and RIF, each defined by
     # an input this signature does not carry.
+    #
+    # `imports` is the caller's `owl:imports` table: an ORDERED sequence of
+    # `(ontology_iri, document)` pairs, `document` being N-Quads text exactly
+    # like `data`. A premise carrying an `owl:imports` states that its axioms
+    # are its own PLUS those of the documents it names, so this is where those
+    # documents arrive. PurRDF FETCHES NOTHING: an ontology IRI the sequence
+    # does not resolve raises ValueError naming the document, never a network
+    # access and never a silently empty import. `[]` is the ordinary "imports
+    # nothing" case; the argument is required, not defaulted, and sits in the
+    # same position on all four hosts.
     @staticmethod
     def certain_answers(
-        regime: RegimeLike, data: str, pattern: str
+        regime: RegimeLike,
+        data: str,
+        pattern: str,
+        imports: Sequence[tuple[str, str]],
     ) -> tuple[str, str]: ...
     # Does `premise` entail the conclusion GRAPH under the regime's rule table?
     # NOT `entails`, which asks the OWL 2 Direct-Semantics TABLEAU about one
@@ -920,18 +934,28 @@ class entail:
     # `mechanism <name>` — which of the six mechanisms reached the verdict — and
     # then gives THREE verdicts, never two: `not-entailed` is a PROOF, and
     # `undecided` is what an incomplete procedure is entitled to say instead.
+    # `imports` is `certain_answers`'s, and applies to the PREMISE: the
+    # conclusion is a graph to match, not an ontology to close.
     @staticmethod
     def graph_entails(
-        regime: RegimeLike, premise: str, conclusion: str
+        regime: RegimeLike,
+        premise: str,
+        conclusion: str,
+        imports: Sequence[tuple[str, str]],
     ) -> tuple[str, str]: ...
     # `graph_entails` with the warrant RE-DECIDED, without running a reasoner.
     # Adds `warrant present|absent` and `verified true|false|not-applicable`;
     # `warrant absent` is a not-entailed or an undecided, where there is no
     # evidence to re-decide and a `false` would read as a failed check rather
-    # than an absent one.
+    # than an absent one. `imports` is `certain_answers`'s; the re-check runs
+    # against the premise AS WRITTEN, which is a stronger check than one only
+    # re-decidable against a graph the library assembled.
     @staticmethod
     def verify_entailment(
-        regime: RegimeLike, premise: str, conclusion: str
+        regime: RegimeLike,
+        premise: str,
+        conclusion: str,
+        imports: Sequence[tuple[str, str]],
     ) -> tuple[str, str]: ...
 
     # ── The session ──────────────────────────────────────────────────────────

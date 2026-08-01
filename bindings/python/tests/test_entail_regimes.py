@@ -640,7 +640,7 @@ def test_certain_answers_enumerate_entailed_bindings_and_disclose_completeness()
     of the asserted one.
     """
     pattern = f"<https://example.org/x> <{RDF_TYPE}> ?c .\n"
-    answer, certificate = entail.certain_answers(entail.Regime.OWL_RL, SCHEMA, pattern)
+    answer, certificate = entail.certain_answers(entail.Regime.OWL_RL, SCHEMA, pattern, [])
 
     assert answer.startswith("mechanism strict-table\nvar c\n")
     # `A` is asserted; `B` is derived by cax-sco and is a certain answer all the same.
@@ -667,18 +667,18 @@ def test_graph_entails_gives_three_verdicts_and_names_the_mechanism() -> None:
     caller's data.
     """
     entailed = f"{SUBCLASS_INFERENCE}\n"
-    answer, certificate = entail.graph_entails(entail.Regime.OWL_RL, SCHEMA, entailed)
+    answer, certificate = entail.graph_entails(entail.Regime.OWL_RL, SCHEMA, entailed, [])
     assert answer == "mechanism strict-table\nentailment entailed\n"
     assert "\nfired cax-sco " in certificate
 
     never = f"<https://example.org/x> <{RDF_TYPE}> <https://example.org/Never> .\n"
-    answer, _ = entail.graph_entails(entail.Regime.OWL_RL, SCHEMA, never)
+    answer, _ = entail.graph_entails(entail.Regime.OWL_RL, SCHEMA, never, [])
     assert answer.startswith("mechanism strict-table\nentailment not-entailed\n")
     assert "\nmiss " in answer
 
     # `D` realizes datatype entailment as the five dt-* rules and states no theorem
     # that they are all of it, so it can PROVE an entailment and never refute one.
-    answer, _ = entail.graph_entails(entail.Regime.D, SCHEMA, never)
+    answer, _ = entail.graph_entails(entail.Regime.D, SCHEMA, never, [])
     assert answer.startswith("mechanism strict-table\nentailment undecided\n")
     assert "\nundecided " in answer
 
@@ -692,14 +692,14 @@ def test_verify_entailment_re_decides_its_own_warrant() -> None:
     """
     entailed = f"{SUBCLASS_INFERENCE}\n"
     answer, certificate = entail.verify_entailment(
-        entail.Regime.OWL_RL, SCHEMA, entailed
+        entail.Regime.OWL_RL, SCHEMA, entailed, []
     )
     assert answer.startswith("mechanism strict-table\nentailment entailed\n")
     assert answer.endswith("warrant present\nverified true\n")
     assert certificate.startswith("purrdf-reasoning-report 4\n")
 
     never = f"<https://example.org/x> <{RDF_TYPE}> <https://example.org/Never> .\n"
-    answer, _ = entail.verify_entailment(entail.Regime.OWL_RL, SCHEMA, never)
+    answer, _ = entail.verify_entailment(entail.Regime.OWL_RL, SCHEMA, never, [])
     assert answer.endswith("warrant absent\nverified not-applicable\n")
 
 
@@ -717,8 +717,136 @@ def test_the_regimes_defined_by_a_missing_input_are_refused_by_name() -> None:
         (entail.Regime.RIF, "rif"),
     ]:
         with pytest.raises(ValueError) as raised:
-            entail.graph_entails(regime, SCHEMA, entailed)
+            entail.graph_entails(regime, SCHEMA, entailed, [])
         assert spelling in str(raised.value)
         with pytest.raises(ValueError) as raised:
-            entail.certain_answers(regime, SCHEMA, pattern)
+            entail.certain_answers(regime, SCHEMA, pattern, [])
         assert spelling in str(raised.value)
+
+
+# ── The caller's `owl:imports` table ────────────────────────────────────────────
+
+# The W3C OWL 2 RL entailment corpus, as the Rust conformance harness locates it.
+# A path rather than a copy: `scripts/check-corpus-frozen.py` digests those bytes,
+# so a fixture transcribing them here would be a second, un-digested corpus free to
+# drift from the one the conformance scoreboard grades.
+_CORPUS = (
+    Path(__file__).resolve().parents[3]
+    / "crates"
+    / "sparql-conformance"
+    / "entailment-suite"
+    / "w3c-owl2-rl"
+)
+
+# The ontology IRI `support011-A.rdf` DECLARES — the name the premise's `owl:imports`
+# object actually is, not the file it happens to live in.
+SUPPORT_011_A = "http://www.w3.org/2002/03owlt/imports/support011-A"
+
+
+def _corpus_nquads(relative: str) -> str:
+    """One vendored RDF/XML document as N-Quads text.
+
+    No base IRI is passed and none is needed: every document in the vendored tree
+    either declares its own `xml:base` or uses only absolute IRIs, which the Rust
+    conformance harness asserts as a standing tripwire.
+    """
+    return purrdf.from_rdf_xml((_CORPUS / relative).read_text(encoding="utf-8")).decode()
+
+
+def test_webont_imports_011_answers_from_its_own_premise_imports_intact() -> None:
+    """The W3C case the `imports` parameter exists for, on this host.
+
+    Its premise says `Socrates a ont:Man` and `owl:imports <…/support011-A>`;
+    `Man ⊑ Mortal` lives only in that support document, so the published answer —
+    `Socrates a ont:Mortal` — is reachable only from the imports closure.
+
+    The premise is handed over UNMODIFIED: nothing is merged into it and the
+    `owl:imports` triple is left exactly where W3C wrote it. That is the whole
+    difference between resolving an import and being given a different premise —
+    before this parameter existed, Python could express only the second.
+    """
+    premise = _corpus_nquads("cases/webont-imports-011/premise.rdf")
+    # The premise really does carry the import, so this cannot pass by having been
+    # handed a document that needs none.
+    assert "<http://www.w3.org/2002/07/owl#imports>" in premise
+    conclusion = _corpus_nquads("cases/webont-imports-011/conclusion.rdf")
+    support = _corpus_nquads("imports/support011-A.rdf")
+    imports = [(SUPPORT_011_A, support)]
+
+    answer, certificate = entail.graph_entails(
+        entail.Regime.OWL_RL, premise, conclusion, imports
+    )
+    assert answer.startswith("mechanism strict-table\nentailment entailed\n")
+    assert certificate.startswith("purrdf-reasoning-report 4\n")
+
+    # The other two services answer the same question the same way.
+    answer, _ = entail.certain_answers(
+        entail.Regime.OWL_RL, premise, conclusion, imports
+    )
+    assert answer == "mechanism strict-table\nrow\n"
+    answer, _ = entail.verify_entailment(
+        entail.Regime.OWL_RL, premise, conclusion, imports
+    )
+    assert answer.endswith("warrant present\nverified true\n")
+
+
+def test_an_unsupplied_import_refuses_by_name_rather_than_reasoning_without_it() -> None:
+    """PurRDF fetches nothing, so an unsupplied import is a refusal that NAMES it.
+
+    Reasoning over the premise alone would answer a different question — the premise
+    itself says its axioms are not all of them — and returning that answer as though
+    it were this one is exactly what the refusal prevents.
+    """
+    premise = _corpus_nquads("cases/webont-imports-011/premise.rdf")
+    conclusion = _corpus_nquads("cases/webont-imports-011/conclusion.rdf")
+    with pytest.raises(ValueError) as raised:
+        entail.graph_entails(entail.Regime.OWL_RL, premise, conclusion, [])
+    assert SUPPORT_011_A in str(raised.value)
+
+
+def test_a_malformed_import_table_is_refused_by_entry() -> None:
+    """Every way of getting the table wrong is a typed refusal naming the entry."""
+    premise = _corpus_nquads("cases/webont-imports-011/premise.rdf")
+    conclusion = _corpus_nquads("cases/webont-imports-011/conclusion.rdf")
+    support = _corpus_nquads("imports/support011-A.rdf")
+
+    with pytest.raises(ValueError) as raised:
+        entail.graph_entails(
+            entail.Regime.OWL_RL,
+            premise,
+            conclusion,
+            [(SUPPORT_011_A, "this is not n-quads\n")],
+        )
+    assert "the import document for" in str(raised.value)
+
+    with pytest.raises(ValueError) as raised:
+        entail.graph_entails(
+            entail.Regime.OWL_RL,
+            premise,
+            conclusion,
+            [(SUPPORT_011_A, support), (SUPPORT_011_A, "")],
+        )
+    assert "twice" in str(raised.value)
+
+    with pytest.raises(ValueError) as raised:
+        entail.graph_entails(
+            entail.Regime.OWL_RL, premise, conclusion, [("", support)]
+        )
+    assert "empty ontology IRI" in str(raised.value)
+
+
+def test_the_import_table_is_required_rather_than_defaulted() -> None:
+    """`[]` is *imports nothing*; a MISSING argument is a TypeError, not a default.
+
+    LOW optionality is the point: a default would let a caller who meant to supply a
+    table get an answer computed without one, which is the failure the whole
+    parameter exists to make impossible.
+    """
+    entailed = f"{SUBCLASS_INFERENCE}\n"
+    pattern = f"<https://example.org/x> <{RDF_TYPE}> ?c .\n"
+    with pytest.raises(TypeError):
+        entail.graph_entails(entail.Regime.OWL_RL, SCHEMA, entailed)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        entail.certain_answers(entail.Regime.OWL_RL, SCHEMA, pattern)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        entail.verify_entailment(entail.Regime.OWL_RL, SCHEMA, entailed)  # type: ignore[call-arg]

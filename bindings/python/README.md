@@ -310,9 +310,9 @@ table* whether a premise entails a conclusion *graph*.
 
 | Service | Call | Answer |
 | --- | --- | --- |
-| Certain answers | `entail.certain_answers(regime, data, pattern)` | `mechanism`, one `var` line per projected variable, one `row` per certain answer, and a `limit` line per reason the row set may not be exhaustive |
-| Graph entailment | `entail.graph_entails(regime, premise, conclusion)` | `mechanism <name>`, then `entailment entailed` / `not-entailed` / `undecided` — three verdicts, never two |
-| Verified entailment | `entail.verify_entailment(regime, premise, conclusion)` | the above plus `warrant present`/`absent` and `verified true`/`false`/`not-applicable` |
+| Certain answers | `entail.certain_answers(regime, data, pattern, imports)` | `mechanism`, one `var` line per projected variable, one `row` per certain answer, and a `limit` line per reason the row set may not be exhaustive |
+| Graph entailment | `entail.graph_entails(regime, premise, conclusion, imports)` | `mechanism <name>`, then `entailment entailed` / `not-entailed` / `undecided` — three verdicts, never two |
+| Verified entailment | `entail.verify_entailment(regime, premise, conclusion, imports)` | the above plus `warrant present`/`absent` and `verified true`/`false`/`not-applicable` |
 
 `pattern` is N-Triples with `?name` in any position; a blank node in it is a
 non-distinguished variable, constrained by the match and not projected, which is what
@@ -339,6 +339,52 @@ name, which would say that one mechanism sufficed.
 so the absence of a mapping is the absence of an entailment — while `undecided` is what
 an incomplete procedure is entitled to say instead. Reading the second as the first
 would turn a limitation of this library into a false statement about your ontology.
+
+### `imports` — the documents your premise says it is not all of
+
+`imports` is an ordered sequence of `(ontology_iri, document)` pairs, where `document` is
+N-Quads (or N-Triples) text exactly like the premise. An ontology carrying an
+`owl:imports` states that its axioms are its own *plus* those of the documents it names,
+so answering over the premise alone would answer a different question — this is where
+those documents go, and your `owl:imports` triple stays exactly where you wrote it.
+
+**PurRDF fetches nothing.** An ontology IRI you did not supply raises `ValueError` naming
+the document, never a network access and never a silently empty import. `[]` is the
+ordinary *imports nothing* case; the argument is required rather than defaulted, in the
+same position on all four hosts, so one call shape works from Python, from JavaScript,
+from C and from Rust. Resolution is transitive to a fixpoint, so a supplied document's
+own `owl:imports` is followed too.
+
+```python
+from purrdf import entail
+
+premise = (
+    "<https://example.org/o>"
+    " <http://www.w3.org/2002/07/owl#imports> <https://example.org/schema> .\n"
+    "<https://example.org/socrates>"
+    " <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://example.org/Man> .\n"
+)
+schema = (
+    "<https://example.org/Man>"
+    " <http://www.w3.org/2000/01/rdf-schema#subClassOf> <https://example.org/Mortal> .\n"
+)
+conclusion = (
+    "<https://example.org/socrates>"
+    " <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://example.org/Mortal> .\n"
+)
+
+answer, _ = entail.graph_entails(
+    "owl-rl", premise, conclusion, [("https://example.org/schema", schema)]
+)
+assert "entailment entailed" in answer
+
+# The same call with nothing supplied refuses BY NAME rather than reasoning over a
+# premise that is missing the axioms it told you about.
+try:
+    entail.graph_entails("owl-rl", premise, conclusion, [])
+except ValueError as refusal:
+    assert "https://example.org/schema" in str(refusal)
+```
 
 ```python
 from purrdf import entail
