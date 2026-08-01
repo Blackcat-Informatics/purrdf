@@ -3,9 +3,15 @@
 #
 # REUSE.toml (REUSE spec 3.3): declares licensing for the vendored W3C OWL 2
 # entailment payload in this tree. The payload is 100 RDF/XML documents across 50
-# cases plus the upstream census, so it is annotated by ONE glob block rather
-# than 101 per-file `.license` sidecars — the same declaration, one place to keep
-# true on a re-vendor.
+# cases, one SUPPORT document the upstream manifest does not inline, plus the
+# upstream census — so it is annotated by ONE glob block rather than 102 per-file
+# `.license` sidecars — the same declaration, one place to keep true on a
+# re-vendor.
+#
+# `imports/*.rdf` is a support ontology an `owl:imports` names. It is W3C's, from
+# the same suite, fetched from its own URL rather than extracted from the manifest
+# (the manifest carries no literal for it); see PROVENANCE.md for its date and
+# digest. Same publisher, same license, same declaration.
 #
 # The glob names `LicenseRef-W3C-Test-Suite`, NOT the bare SPDX id `W3C`. The bare
 # `W3C` id denotes the W3C Software Notice and License, which is a different
@@ -21,6 +27,6 @@
 version = 1
 
 [[annotations]]
-path = ["cases/*/*.rdf", "census.tsv"]
+path = ["cases/*/*.rdf", "imports/*.rdf", "census.tsv"]
 SPDX-FileCopyrightText = "2009 W3C (Massachusetts Institute of Technology, ERCIM, Keio, Beihang)"
 SPDX-License-Identifier = "LicenseRef-W3C-Test-Suite"

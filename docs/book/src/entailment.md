@@ -104,7 +104,7 @@ Where the numbers stop:
   rules, and a run that met a boundary still reports
   `Completeness::ExactWithinBoundaries` rather than `Exact`. The two claims are
   reported separately on purpose. Nor is a complete rule table entailment
-  conformance: on W3C's own OWL 2 RL entailment tests `entails()` reaches 26 of
+  conformance: on W3C's own OWL 2 RL entailment tests `entails()` reaches 27 of
   27 published positive entailments and correctly withholds on 23 of 23
   negative ones (see [Conformance](#conformance) below). 78 / 78 says every
   rule of Tables 4–9 is implemented — and the one W3C-published entailment
@@ -254,7 +254,7 @@ Two corpora measure two different things, and the distinction matters:
   over the 221 excluded cases, so this row cannot detect a regression among them.
   Re-deriving them means re-running the probe, which is a deliberate act rather
   than part of the gate.
-- **W3C OWL 2 RL entailment tests — 49 of 50 cases agree, 1 ledgered**, zero
+- **W3C OWL 2 RL entailment tests — 50 of 50 cases agree, 0 ledgered**, zero
   unledgered. This is the independent oracle for the rule table: W3C's own
   entailment tests, answered by one call to `purrdf_entail::entails()` per case
   under `Regime::OwlRl`. The two lanes prove different things and are reported
@@ -265,20 +265,16 @@ Two corpora measure two different things, and the distinction matters:
   holds over *all* 23 negative cases — soundness is owed on every case, so none
   were filtered by profile.
 
-  The positive lane is **26 of 27** — the 27 positive entailments W3C itself
-  places inside the RL profile under RDF-Based semantics. 1 of the 1
-  divergence is a structural limit of OWL 2 RL rather than of this
-  implementation: every head in Profiles §4.3 Tables 4–9 is an assertional
-  triple over named terms or `false`, so no conforming RL rule set derives a
-  schema axiom (0 `schema-conclusion`) or a negative fact (0
-  `negative-conclusion`), and the profile states no rule at all for constructs
-  outside its syntax (0 `construct-outside-rl`); one more premise is incomplete
-  as exported (1 `imports-unresolved`). **0 are actionable** (0
+  The positive lane is **27 of 27** — the 27 positive entailments W3C itself
+  places inside the RL profile under RDF-Based semantics — and the typed
+  divergence ledger `purrdf_sparql_conformance::owl2_rl::LEDGER`
+  is EMPTY — 0 `schema-conclusion`, 0 `negative-conclusion`, 0
+  `construct-outside-rl`, 0 `imports-unresolved`, and **0 are actionable** (0
   `missing-rule`).
 
-  The two zeros are the interesting numbers, because the rule table did not
-  change to earn either. `entails()` reaches a conclusion five ways, and four of
-  the five are not matching:
+  Every class it used to hold is closed, and the rule table did not change once
+  to close any of them. `entails()` reaches a conclusion six ways, and five of
+  the six are not matching:
 
   * **refutation.** A negative fact still has no head anywhere in Tables 4–9 —
     no rule concludes `owl:differentFrom`, and none concludes membership in an
@@ -309,6 +305,18 @@ Two corpora measure two different things, and the distinction matters:
     resource, widening a closure every consumer computes by default. The
     conclusion's own self-loops are read off the premise's reflexive typings
     instead.
+  * **datatype containment.** A property's declared `rdfs:range` datatypes
+    intersect, and the intersection may be contained in one the premise never
+    mentions — `xsd:byte ⊑ xsd:short`, and `short ⊓ unsignedInt ⊑
+    unsignedShort`, neither of which a join over triples can discover. Decided
+    over the XSD value spaces, three-valued, with the negative answer gated on
+    the counterexample range being exactly decided.
+
+  The last case needed no mechanism at all, only the document its premise names:
+  `webont-imports-011` `owl:imports` a support ontology the upstream manifest
+  does not inline, so it is vendored beside the cases from W3C's own URL and
+  supplied to `entails()` as caller-owned configuration. The library still
+  fetches nothing.
 
   Nothing about the inventory moves: `rules(Regime::OwlRl)` and
   `implemented(Regime::OwlRl)` are still exactly the same 78,

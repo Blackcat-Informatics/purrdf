@@ -138,50 +138,60 @@ fn no_vendored_document_needs_the_harness_base() {
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
     }
 
+    // EVERY vendored document, not the case documents alone. Sweeping `[premise, target]`
+    // would have stopped covering the payload the moment one arrived anywhere else, which
+    // is what `imports/` is.
+    let documents =
+        owl2_rl::vendored_documents(&owl2_rl::suite_root()).expect("sweep the vendored payload");
     let cases = owl2_rl::discover(&owl2_rl::suite_root()).expect("discover the vendored corpus");
+    assert!(
+        documents.len() > cases.len() * 2,
+        "the sweep must reach past the {} case documents; it found {}",
+        cases.len() * 2,
+        documents.len()
+    );
     let mut with_base = 0_usize;
     let mut absolute_only = 0_usize;
-    for case in &cases {
-        for path in [&case.premise, &case.target] {
-            let text = std::fs::read_to_string(path).expect("read vendored document");
-            if text.contains("xml:base") {
-                with_base += 1;
-                continue;
-            }
-            // No declared base, so every IRI-valued attribute must be absolute —
-            // `rdf:nodeID` is a blank-node label and never resolved at all.
-            let mut relative: Vec<String> = Vec::new();
-            for attr in IRI_ATTRS {
-                let mut rest = text.as_str();
-                while let Some(at) = rest.find(attr) {
-                    rest = &rest[at + attr.len()..];
-                    let quote = rest.chars().next().unwrap_or(' ');
-                    if quote != '"' && quote != '\'' {
-                        continue;
-                    }
-                    let Some(end) = rest[1..].find(quote) else {
-                        continue;
-                    };
-                    let value = &rest[1..=end];
-                    if attr != "rdf:nodeID=" && !is_absolute(value) {
-                        relative.push(format!("{attr}{quote}{value}{quote}"));
-                    }
-                    rest = &rest[end + 2..];
-                }
-            }
-            assert!(
-                relative.is_empty(),
-                "{} declares no xml:base AND uses relative references {relative:?}, so its IRIs \
-                 would resolve against the harness's synthetic base and the verdict would depend \
-                 on the harness's own choice",
-                path.display()
-            );
-            absolute_only += 1;
+    for path in &documents {
+        let text = std::fs::read_to_string(path).expect("read vendored document");
+        if text.contains("xml:base") {
+            with_base += 1;
+            continue;
         }
+        // No declared base, so every IRI-valued attribute must be absolute —
+        // `rdf:nodeID` is a blank-node label and never resolved at all.
+        let mut relative: Vec<String> = Vec::new();
+        for attr in IRI_ATTRS {
+            let mut rest = text.as_str();
+            while let Some(at) = rest.find(attr) {
+                rest = &rest[at + attr.len()..];
+                let quote = rest.chars().next().unwrap_or(' ');
+                if quote != '"' && quote != '\'' {
+                    continue;
+                }
+                let Some(end) = rest[1..].find(quote) else {
+                    continue;
+                };
+                let value = &rest[1..=end];
+                if attr != "rdf:nodeID=" && !is_absolute(value) {
+                    relative.push(format!("{attr}{quote}{value}{quote}"));
+                }
+                rest = &rest[end + 2..];
+            }
+        }
+        assert!(
+            relative.is_empty(),
+            "{} declares no xml:base AND uses relative references {relative:?}, so its IRIs \
+             would resolve against the harness's synthetic base and the verdict would depend \
+             on the harness's own choice",
+            path.display()
+        );
+        absolute_only += 1;
     }
     eprintln!(
-        "[w3c-owl2-rl] base independence: {with_base} documents declare xml:base, {absolute_only} \
-         use only absolute IRIs"
+        "[w3c-owl2-rl] base independence: {} documents swept — {with_base} declare xml:base, \
+         {absolute_only} use only absolute IRIs",
+        documents.len()
     );
 }
 
@@ -290,10 +300,12 @@ fn the_non_rl_premises_are_named_and_answer_undecided() {
         "webont-somevaluesfrom-002",
     ];
 
-    let cases = owl2_rl::discover(&owl2_rl::suite_root()).expect("discover the corpus");
+    let root = owl2_rl::suite_root();
+    let cases = owl2_rl::discover(&root).expect("discover the corpus");
+    let imports = owl2_rl::vendored_imports(&root).expect("read the vendored support documents");
     let mut measured: Vec<&str> = Vec::new();
     for case in &cases {
-        if !matches!(owl2_rl::decide(case), Answer::Undecided(_)) {
+        if !matches!(owl2_rl::decide(case, &imports), Answer::Undecided(_)) {
             continue;
         }
         measured.push(&case.name);

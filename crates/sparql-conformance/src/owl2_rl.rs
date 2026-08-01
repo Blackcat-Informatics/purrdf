@@ -70,7 +70,9 @@
 //! # The chase is also measured with its EXTRA MECHANISMS, which add no rule
 //!
 //! `purrdf_entail::entails()` reaches a conclusion six ways, and fifteen of the cases
-//! graded here are reached only by one of the five beyond matching.
+//! graded here are reached only by one of the five beyond matching. A sixteenth
+//! needed no new mechanism at all, only the document its premise names — see
+//! [`vendored_imports`].
 //!
 //! * **Refutation.** Seventeen of the seventy-eight rules conclude `false`, which is
 //!   to say the table carries its own inconsistency calculus; so a conclusion whose
@@ -286,8 +288,14 @@ pub enum RlGap {
     /// The premise `owl:imports` a document the upstream manifest keeps as a
     /// separate support file rather than inline, so the vendored premise is not
     /// the whole premise and **no** reasoner could reach the conclusion from what
-    /// is vendored. Ledgered rather than dropped, so the incompleteness of the
-    /// upstream export stays visible.
+    /// is vendored.
+    ///
+    /// The ledger holds no entry of this kind today, and the one it did hold is
+    /// the reason this variant's fix was never a reasoning change: the missing
+    /// document is vendored under `imports/` and supplied to the service as
+    /// caller-owned configuration. The variant stays because a support document
+    /// upstream does not publish at a fetchable URL would land here, and because it
+    /// is the only [`RlGap`] that describes the CORPUS rather than the profile.
     ImportsUnresolved,
     /// The premise or target RDF/XML did not parse, or the chase returned an
     /// error, so the run refused to decide.
@@ -364,8 +372,14 @@ pub struct LedgerEntry {
 /// The divergence ledger: every vendored entailment case PurRDF does not answer
 /// as the W3C published it.
 ///
+/// It is EMPTY. Every one of the 50 vendored cases now answers as W3C published
+/// it, so this table holds no entry and the commentary below is the record of what
+/// each closed class was and how it closed — kept because the classification is
+/// still what a future divergence must be filed under, and because a reader who
+/// finds an empty ledger is owed the argument rather than the absence of one.
+///
 /// Nothing is skipped at discovery time — all 50 cases run, and a case absent
-/// from this table must agree.
+/// from this table must agree, which is now every case.
 pub const LEDGER: &[LedgerEntry] = &[
     // --- NO MISSING RULE. The one entry this table used to open with is CLOSED. -
     //     `webont-differentfrom-001` is `a owl:differentFrom b` entailing
@@ -483,16 +497,27 @@ pub const LEDGER: &[LedgerEntry] = &[
     //     is the falsifiable form: `Materialization::OwlRl` produces exactly what it
     //     produced before, and `extensions(Regime::OwlRl)` is still the one
     //     `ext-eq-diff-sym`.
-    // --- THE VENDORED PREMISE IS NOT THE WHOLE PREMISE ------------------------
-    //     `webont-imports-011`'s premise `owl:imports` `support011-A`, which the
-    //     upstream `all.rdf` export does not carry inline — the conclusion is about
-    //     a class defined only in that support document. No reasoner reaches it
-    //     from the vendored bytes. Ledgered rather than dropped so the gap in the
-    //     upstream export stays visible instead of being silently deselected.
-    LedgerEntry {
-        case: "webont-imports-011",
-        gap: RlGap::ImportsUnresolved,
-    },
+    // --- NO IMPORTS UNRESOLVED EITHER. That block is CLOSED, and it is the last.
+    //     `webont-imports-011`'s premise `owl:imports` `support011-A`, and the
+    //     conclusion is about a class defined only in that support document. The
+    //     upstream `all.rdf` export does not carry it inline — an
+    //     `otest:rdfXmlPremiseOntology` literal is ONE document — so no reasoner
+    //     could reach the conclusion from the vendored bytes, and the entry said so.
+    //
+    //     The answer was not to reason harder but to vendor the missing document.
+    //     `imports/support011-A.rdf` is W3C's, fetched from its own URL with its
+    //     date and digest recorded in `PROVENANCE.md`, and it lives OUTSIDE `cases/`
+    //     because `census_accounts_for_every_upstream_case` requires every case
+    //     directory to have a census row and a support ontology is not a test case.
+    //     `vendored_imports` keys it by the ontology IRI the document itself
+    //     declares — not by its file name, which nothing would enforce — and hands
+    //     it to `entails()` as caller-supplied CONFIGURATION, which is the only way
+    //     this library ever learns what an ontology IRI denotes. It fetches nothing.
+    //
+    //     The resolution is transitive to a fixpoint, so `support011-A`'s own
+    //     imports would be followed too; a resolver stopping at depth one would
+    //     reason over a partial premise, which is the exact failure the import lane
+    //     exists to prevent.
 ];
 
 /// Look a case up in [`LEDGER`].
@@ -574,6 +599,14 @@ pub fn suite_root() -> PathBuf {
 /// derived metadata file to drift out of step with the payload: a directory with
 /// both targets, or neither, is a hard error rather than a silent default.
 ///
+/// "Exactly" below is CHECKED rather than described. A case directory holds a
+/// `premise.rdf` and exactly one of `conclusion.rdf` / `non-conclusion.rdf`, and
+/// any other entry — a stray support document, an editor backup, a second target
+/// under a third name — is a hard error. The corpus is a byte-frozen payload
+/// whose inventory is asserted, so a file nothing reads is either a re-vendor
+/// that went wrong or a payload the grader is silently ignoring, and both are
+/// things to be told about.
+///
 /// # Errors
 ///
 /// Returns a message if the corpus root cannot be read, if it holds a
@@ -630,6 +663,29 @@ pub fn discover(root: &Path) -> Result<Vec<RlCase>, String> {
         } else {
             negative
         };
+        // …and NOTHING else. See this function's doc for why an unread file is an
+        // error rather than a shrug.
+        let expected = ["premise.rdf", direction.target_file()];
+        let mut extra: Vec<String> = Vec::new();
+        for entry in
+            std::fs::read_dir(&dir).map_err(|e| format!("cannot read {}: {e}", dir.display()))?
+        {
+            let entry = entry.map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !expected.contains(&name.as_str()) {
+                extra.push(name);
+            }
+        }
+        if !extra.is_empty() {
+            extra.sort();
+            return Err(format!(
+                "{}: holds {extra:?} beside its premise and {}; a case directory holds \
+                 exactly those two files, and a file the grader does not read is either a \
+                 re-vendor that went wrong or payload being silently ignored",
+                dir.display(),
+                direction.target_file()
+            ));
+        }
         cases.push(RlCase {
             name,
             premise,
@@ -638,6 +694,118 @@ pub fn discover(root: &Path) -> Result<Vec<RlCase>, String> {
         });
     }
     Ok(cases)
+}
+
+/// The vendored support documents an `owl:imports` names, keyed by ontology IRI.
+///
+/// # Why they live OUTSIDE `cases/`
+///
+/// Because `census_accounts_for_every_upstream_case` requires every directory under
+/// `cases/` to have a census row, and a support document is not a test case: it has
+/// no `otest:identifier`, no direction and no published verdict. Putting it under
+/// `cases/` would either break that cross-check or force a fabricated census row,
+/// and both are worse than a second directory.
+///
+/// # Why the key is read from the document rather than from its file name
+///
+/// An `owl:imports` names an ONTOLOGY IRI, and the document itself is what says
+/// which ontology it is: its `owl:Ontology` subject. Deriving the key from the file
+/// name would be a naming convention nothing enforces, and a re-vendor that renamed
+/// a file would silently stop resolving an import — which is exactly the failure the
+/// whole import lane exists to make loud. So the ontology declaration is read, and a
+/// document with no `owl:Ontology` subject, more than one, or a blank-node one is a
+/// hard error.
+///
+/// # Errors
+///
+/// Returns a message if `imports/` cannot be read, if a document does not parse, or
+/// if a document does not declare exactly one named ontology.
+pub fn vendored_imports(root: &Path) -> Result<purrdf_entail::ImportMap, String> {
+    let dir = root.join("imports");
+    let mut map = purrdf_entail::ImportMap::new();
+    if !dir.is_dir() {
+        return Ok(map);
+    }
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for entry in
+        std::fs::read_dir(&dir).map_err(|e| format!("cannot read {}: {e}", dir.display()))?
+    {
+        let entry = entry.map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
+        paths.push(entry.path());
+    }
+    paths.sort();
+    for path in paths {
+        // The base is the same synthetic `example.org` one every vendored document is
+        // parsed under, and it is not consulted: the tripwire below asserts that every
+        // vendored document either declares its own `xml:base` or uses only absolute
+        // IRIs.
+        let base = format!(
+            "http://example.org/w3c-owl2-rl/imports/{}",
+            path.file_name().unwrap_or_default().to_string_lossy()
+        );
+        let document = parse(&path, &base)?;
+        let iri = ontology_iri(&document).ok_or_else(|| {
+            format!(
+                "{}: does not declare exactly one named owl:Ontology, so \
+                 there is no ontology IRI for an owl:imports to name it by",
+                path.display()
+            )
+        })?;
+        if map.insert(iri.clone(), document).is_some() {
+            return Err(format!(
+                "{}: two vendored support documents both declare the ontology {iri}",
+                path.display()
+            ));
+        }
+    }
+    Ok(map)
+}
+
+/// The one named `owl:Ontology` subject of `ds`, or `None` if it does not have exactly one.
+fn ontology_iri(ds: &purrdf_core::RdfDataset) -> Option<String> {
+    let ty = ds.term_id_by_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")?;
+    let ontology = ds.term_id_by_iri("http://www.w3.org/2002/07/owl#Ontology")?;
+    let mut found: Option<String> = None;
+    for quad in ds.quads().filter(|quad| quad.p == ty && quad.o == ontology) {
+        let purrdf_core::TermValue::Iri(iri) = ds.term_value(quad.s) else {
+            return None;
+        };
+        if found.replace(iri).is_some() {
+            return None;
+        }
+    }
+    found
+}
+
+/// Every vendored RDF/XML document under `root`, in path order.
+///
+/// The whole payload, not the case documents alone: a base-independence or licensing
+/// claim about "the vendored documents" that swept only `cases/` would stop being
+/// checked the moment a payload arrived anywhere else, which is precisely what
+/// happened when `imports/` did.
+///
+/// # Errors
+///
+/// Returns a message if any directory under `root` cannot be read.
+pub fn vendored_documents(root: &Path) -> Result<Vec<PathBuf>, String> {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+        for entry in
+            std::fs::read_dir(dir).map_err(|e| format!("cannot read {}: {e}", dir.display()))?
+        {
+            let entry = entry.map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out)?;
+            } else if path.extension().is_some_and(|ext| ext == "rdf") {
+                out.push(path);
+            }
+        }
+        Ok(())
+    }
+    let mut out = Vec::new();
+    walk(root, &mut out)?;
+    out.sort();
+    Ok(out)
 }
 
 /// Parse an RDF/XML document with PurRDF's first-party codec.
@@ -661,12 +829,15 @@ fn parse(path: &Path, base: &str) -> Result<std::sync::Arc<purrdf_core::RdfDatas
 /// blank-node matcher in this workspace and it is that one — a second copy here is how
 /// a corpus comes to grade an implementation that is not the one callers get.
 ///
-/// The empty [`ImportMap`](purrdf_entail::ImportMap) is the honest configuration for
-/// this corpus: the upstream `all.rdf` export inlines no support document, so there is
-/// nothing to resolve an import to, and a premise that imports one refuses by name
-/// instead of being reasoned over as though the missing axioms said nothing.
+/// `imports` is the corpus's own [`vendored_imports`] map. The upstream `all.rdf`
+/// export inlines no support document — an `otest:rdfXmlPremiseOntology` literal is one
+/// document, and an `owl:imports` in it names another — so a premise that imports one
+/// used to refuse by name. It no longer has to: the support documents are vendored
+/// beside the cases, from W3C's own URLs, and handed to the service as CONFIGURATION.
+/// A premise that imports something the map does not resolve still refuses by name
+/// rather than being reasoned over as though the missing axioms said nothing.
 #[must_use]
-pub fn decide(case: &RlCase) -> Answer {
+pub fn decide(case: &RlCase, imports: &purrdf_entail::ImportMap) -> Answer {
     let base = format!("http://example.org/w3c-owl2-rl/{}", case.name);
     let premise = match parse(&case.premise, &base) {
         Ok(dataset) => dataset,
@@ -676,12 +847,7 @@ pub fn decide(case: &RlCase) -> Answer {
         Ok(dataset) => dataset,
         Err(e) => return Answer::Withheld(e),
     };
-    match purrdf_entail::entails(
-        &premise,
-        &target,
-        purrdf_entail::Regime::OwlRl,
-        &purrdf_entail::ImportMap::new(),
-    ) {
+    match purrdf_entail::entails(&premise, &target, purrdf_entail::Regime::OwlRl, imports) {
         Ok(EntailmentOutcome::Entailed(_)) => Answer::Entailed,
         Ok(EntailmentOutcome::NotEntailed(reason)) => Answer::NotEntailed(reason),
         Ok(EntailmentOutcome::Undecided(reason)) => Answer::Undecided(reason),
@@ -714,8 +880,8 @@ pub fn decide(case: &RlCase) -> Answer {
 /// power". The discrimination lives in the positive lane, where an `Undecided` is
 /// scored as the capability gap it is.
 #[must_use]
-pub fn grade(case: &RlCase) -> Grade {
-    match decide(case) {
+pub fn grade(case: &RlCase, imports: &purrdf_entail::ImportMap) -> Grade {
+    match decide(case, imports) {
         Answer::Withheld(why) => Grade::Withhold(why),
         Answer::Entailed if case.direction.expects_match() => Grade::Agree,
         Answer::NotEntailed(_) | Answer::Undecided(_) if !case.direction.expects_match() => {
@@ -902,11 +1068,12 @@ impl RlSummary {
 ///
 /// # Errors
 ///
-/// Returns a message if the corpus cannot be discovered, or if [`LEDGER`] names a
-/// case that is not vendored (an entry for a case that no longer exists would
-/// silently inflate the budget).
+/// Returns a message if the corpus cannot be discovered, if a vendored support
+/// document cannot be read, or if [`LEDGER`] names a case that is not vendored (an
+/// entry for a case that no longer exists would silently inflate the budget).
 pub fn run(root: &Path) -> Result<RlSummary, String> {
     let cases = discover(root)?;
+    let imports = vendored_imports(root)?;
     for entry in LEDGER {
         if !cases.iter().any(|c| c.name == entry.case) {
             return Err(format!(
@@ -921,7 +1088,7 @@ pub fn run(root: &Path) -> Result<RlSummary, String> {
         summary.cases.push(GradedCase {
             name: case.name.clone(),
             direction: case.direction,
-            grade: grade(case),
+            grade: grade(case, &imports),
             ledgered: ledger_lookup(&case.name),
         });
     }

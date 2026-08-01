@@ -624,7 +624,15 @@ impl Construct {
                  nothing — PurRDF performs no I/O, has no network and must stay \
                  wasm32-clean — so the imported axioms are premises this run did not have. \
                  A caller who wants them merges the documents before calling; the boundary \
-                 is what stops the run pretending the merge already happened"
+                 is what stops the run pretending the merge already happened. \
+                 \
+                 Both the OWL-Direct reverse mapping and the RULE CHASE raise it, and they \
+                 raise it for the same observation: the input names a document. A caller \
+                 that supplied one — purrdf_entail::entails resolves an ImportMap into the \
+                 premise before the chase runs, transitively and to a fixpoint — is reading \
+                 it as the list of documents the merge was about rather than as a list of \
+                 missing ones, because the merged dataset still carries the owl:imports \
+                 triples that named them"
             }
             Self::UnrecognizedTerm => {
                 "a term in the reserved owl:, rdf: or rdfs: vocabulary that the OWL-2-RDF \
@@ -1026,6 +1034,8 @@ struct DatasetSurvey {
     named_graph: bool,
     /// Whether any quad of ANY graph mentions a triple term.
     triple_term: bool,
+    /// Whether the dataset names another ontology DOCUMENT with `owl:imports`.
+    ontology_import: bool,
 }
 
 impl DatasetSurvey {
@@ -1037,6 +1047,7 @@ impl DatasetSurvey {
     /// crate's chase cannot look inside exactly as a default-graph one is.
     fn of(ds: &RdfDataset) -> Self {
         let mut survey = Self::default();
+        let imports = ds.term_id_by_iri(crate::vocab::OWL_IMPORTS);
         for quad in ds.quad_refs() {
             if quad.g.is_some() {
                 survey.named_graph = true;
@@ -1047,10 +1058,14 @@ impl DatasetSurvey {
             {
                 survey.triple_term = true;
             }
-            if survey.named_graph && survey.triple_term {
+            if survey.named_graph && survey.triple_term && survey.ontology_import {
                 break;
             }
         }
+        // The import question is a predicate lookup rather than a per-quad comparison: the
+        // dataset already indexes its terms, so a graph that never mentions `owl:imports`
+        // interns no id for it and the whole question costs one map probe.
+        survey.ontology_import = imports.is_some_and(|id| ds.quads().any(|quad| quad.p == id));
         survey
     }
 }
@@ -1533,14 +1548,23 @@ fn boundaries(ds: &RdfDataset, regime: Regime, stats: &RunStats) -> Vec<Boundary
             Construct::NamedGraph => survey.named_graph,
             Construct::TripleTerm => survey.triple_term,
             Construct::GeneralizedRdf => stats.generalized_rdf_drops > 0,
+            // OBSERVED, like the two above: the input actually names another document. The
+            // chase itself fetches nothing — this crate performs no I/O — so a run over a
+            // dataset that names one is a run whose premise may be smaller than the ontology
+            // the author wrote, and saying so is the whole point of the boundary. A caller
+            // that resolved the imports first (`purrdf_entail::entails` does, through its
+            // `ImportMap`) has already supplied the axioms; the boundary then names which
+            // documents the merge was about rather than which ones are missing, and a caller
+            // that wants the stronger claim reads its own map.
+            Construct::OntologyImport => survey.ontology_import,
             // RDF and RDFS fix the axiomatic triples; OWL 2 RL/RDF deliberately omits
             // them, so its lane does not meet this boundary.
             Construct::AxiomaticTriples => matches!(regime, Regime::Rdf | Regime::Rdfs),
             Construct::DatatypeValueSpace => true,
             Construct::Surrogate => stats.surrogate_drops > 0,
-            // The eight OWL-Direct boundaries are the reverse mapping's (and the combined
-            // approach's), raised by `ReasoningReport::of_dl_run` from the axioms and the
-            // query it actually read. No chase lane parses an OWL class expression or runs
+            // The seven remaining OWL-Direct boundaries are the reverse mapping's (and the
+            // combined approach's), raised by `ReasoningReport::of_dl_run` from the axioms and
+            // the query it actually read. No chase lane parses an OWL class expression or runs
             // the combined approach's own TBox lowering at all, so none of them can be met
             // here — and the arm is written out rather than defaulted so a ninth construct
             // has to decide which side of the split it is on.
@@ -1548,7 +1572,6 @@ fn boundaries(ds: &RdfDataset, regime: Regime, stats: &RunStats) -> Vec<Boundary
             | Construct::NonSimpleRole
             | Construct::DataRange
             | Construct::BuiltinRole
-            | Construct::OntologyImport
             | Construct::UnrecognizedTerm
             | Construct::NonDistinguishedVariable
             | Construct::CountingOnInverse

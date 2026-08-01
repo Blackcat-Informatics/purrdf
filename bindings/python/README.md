@@ -269,7 +269,7 @@ line rather than with a missing rule, and `completeness` reads
 **78 / 78 is rule-table coverage, and rule-table coverage is not entailment
 conformance.** The two are measured separately and stating only the first is the
 overclaim the reasoning report exists to prevent: on W3C's own OWL 2 RL entailment
-tests this chase reaches 26 of 27 published positive entailments and correctly
+tests this chase reaches 27 of 27 published positive entailments and correctly
 withholds on 23 of 23 negative ones — the latter meaning no unsoundness was found.
 Both numbers are true. The full scoreboard, the typed divergence ledger, and every
 other suite are in

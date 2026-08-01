@@ -44,6 +44,23 @@
 //! blank nodes were moved to would be re-deriving the merge instead of reading the premise.
 //! Imported scopes are allocated strictly above every scope the premise uses, so the
 //! standardize-apart property holds in both directions.
+//!
+//! # ONE import concept for the crate
+//!
+//! This crate already had a caller-owns-the-I/O import discipline before this module:
+//! [`resolve_rif_imports`](crate::resolve_rif_imports) takes a
+//! [`crate::RifImport`]'s location and a resolver CALLBACK, and the library
+//! fetches nothing. [`ImportMap`] is the same discipline in table form, and
+//! [`ImportMap::rif_resolver`] is the bridge: one map of caller-supplied documents serves
+//! both, so a caller that already declared what its ontology IRIs denote does not declare it
+//! twice.
+//!
+//! What the bridge does NOT do is pretend the two resolutions are one operation, because
+//! they are not. A RIF import names an entailment PROFILE and contributes the FACTS of the
+//! closure computed under it; an `owl:imports` names an ontology and contributes its AXIOMS
+//! verbatim, with the closure computed after the merge. Collapsing those would change what
+//! one of them means, so what is shared is the configuration and the no-I/O rule, and the
+//! two consumers stay separate.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
@@ -51,6 +68,7 @@ use std::sync::Arc;
 use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, TermId, TermValue};
 
 use crate::EntailError;
+use crate::rif_xml::RifImport;
 use crate::vocab::OWL_IMPORTS;
 
 /// The documents an `owl:imports` resolves to.
@@ -113,6 +131,43 @@ impl ImportMap {
     #[must_use]
     pub fn len(&self) -> usize {
         self.documents.len()
+    }
+
+    /// This map as a resolver for [`resolve_rif_imports`](crate::resolve_rif_imports).
+    ///
+    /// A [`RifImport`]'s `location` is looked up exactly as an `owl:imports` object is, and an
+    /// unresolved one refuses by name through the SAME error. See the [module docs](self) for
+    /// why the two resolutions share their configuration and not their semantics.
+    ///
+    /// ```
+    /// use purrdf_core::RdfDatasetBuilder;
+    /// use purrdf_entail::{EntailError, ImportMap, RifImport};
+    ///
+    /// let mut b = RdfDatasetBuilder::new();
+    /// let s = b.intern_iri("http://example.org/s");
+    /// let p = b.intern_iri("http://example.org/p");
+    /// let o = b.intern_iri("http://example.org/o");
+    /// b.push_quad(s, p, o, None);
+    /// let document = b.freeze().expect("freeze");
+    ///
+    /// let mut map = ImportMap::new();
+    /// map.insert("http://example.org/lib", document);
+    /// let mut resolve = map.rif_resolver();
+    ///
+    /// let known = RifImport { location: "http://example.org/lib".to_owned(), profile: None };
+    /// assert!(resolve(&known).is_ok());
+    /// let unknown = RifImport { location: "http://example.org/other".to_owned(), profile: None };
+    /// assert!(matches!(
+    ///     resolve(&unknown),
+    ///     Err(EntailError::UnresolvedImport(ref iri)) if iri == "http://example.org/other"
+    /// ));
+    /// ```
+    pub fn rif_resolver(&self) -> impl FnMut(&RifImport) -> Result<Arc<RdfDataset>, EntailError> {
+        move |import: &RifImport| {
+            self.get(&import.location)
+                .map(Arc::clone)
+                .ok_or_else(|| EntailError::UnresolvedImport(import.location.clone()))
+        }
     }
 
     /// Whether this map resolves no document at all.
@@ -225,8 +280,17 @@ pub(crate) fn resolve(
         return Ok(None);
     }
 
-    // Breadth-first over the import graph, each document visited once, so a cycle
-    // terminates and a diamond is merged once rather than twice.
+    // Breadth-first over the import graph to a FIXPOINT, each document visited once. Two
+    // properties follow, and both matter:
+    //
+    // * an imported document's OWN imports are followed, so a resolver that stopped at depth
+    //   one — reasoning over a partial premise, which is the exact failure this module exists
+    //   to prevent — is not what runs here. `an_imported_document_is_itself_checked_for_imports`
+    //   is the falsifiable form.
+    // * a CYCLE terminates rather than looping, and it does so without refusing: OWL 2 §3.4
+    //   defines the imports closure as the transitive one and explicitly permits `A` to
+    //   import `B` to import `A`. Hard-failing a cycle would refuse an ontology the
+    //   specification allows, so the visited set is the answer and not a hedge.
     let mut queue: VecDeque<String> = direct.into_iter().collect();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut documents: Vec<Arc<RdfDataset>> = Vec::new();
@@ -365,6 +429,72 @@ mod tests {
         ] {
             assert!(objects.iter().any(|o| o == said), "{said} is missing");
         }
+    }
+
+    /// AN IMPORTED DOCUMENT IS ITSELF CHECKED FOR IMPORTS. A resolver that stopped at depth
+    /// one would reason over a partial premise, which is the exact failure this module
+    /// exists to prevent — so the depth-2 document's own content has to arrive, and the
+    /// depth-2 import has to be REFUSED by name when nobody supplied it.
+    #[test]
+    fn an_imported_document_is_itself_checked_for_imports() {
+        let premise = document("b", "http://example.org/o", &["http://example.org/a"]);
+        let mut map = ImportMap::new();
+        map.insert(
+            "http://example.org/a",
+            document(
+                "b",
+                "http://example.org/a-said",
+                &["http://example.org/deep"],
+            ),
+        );
+        // Depth 2 is unresolved, so the whole merge refuses NAMING it — a resolver that
+        // stopped at depth 1 would have succeeded here with a premise missing an axiom.
+        let Err(EntailError::UnresolvedImport(iri)) = resolve(&premise, &map) else {
+            panic!("the imported document's own import must be followed");
+        };
+        assert_eq!(iri, "http://example.org/deep");
+
+        // …and supplying it lets the merge through, carrying all three documents.
+        map.insert(
+            "http://example.org/deep",
+            document("b", "http://example.org/deep-said", &[]),
+        );
+        let merged = resolve(&premise, &map)
+            .expect("every import resolves")
+            .expect("the premise imports something");
+        let objects: Vec<String> = merged
+            .quads()
+            .filter_map(|quad| match merged.term_value(quad.o) {
+                TermValue::Iri(iri) => Some(iri),
+                _ => None,
+            })
+            .collect();
+        assert!(objects.iter().any(|o| o == "http://example.org/deep-said"));
+    }
+
+    /// The map serves the RIF lane too, so a caller declares its documents ONCE.
+    #[test]
+    fn the_map_resolves_a_rif_import_the_same_way() {
+        let mut map = ImportMap::new();
+        map.insert(
+            "http://example.org/lib",
+            document("b", "http://example.org/o", &[]),
+        );
+        let mut resolve = map.rif_resolver();
+        assert!(
+            resolve(&crate::RifImport {
+                location: "http://example.org/lib".to_owned(),
+                profile: None,
+            })
+            .is_ok()
+        );
+        let Err(EntailError::UnresolvedImport(iri)) = resolve(&crate::RifImport {
+            location: "http://example.org/missing".to_owned(),
+            profile: None,
+        }) else {
+            panic!("an unsupplied RIF import refuses by name, exactly as an owl:imports does");
+        };
+        assert_eq!(iri, "http://example.org/missing");
     }
 
     #[test]

@@ -1082,6 +1082,15 @@ def load_rl_ledger() -> list[tuple[str, str]]:
     *exactly* the set of vendored entailment cases whose verdict diverges from
     W3C's. That is what lets the per-lane split below be derived rather than
     asserted.
+
+    **An EMPTY ledger is a legitimate answer**, and telling it apart from a
+    parse failure is this function's only subtlety. The table is now empty — all
+    50 vendored cases agree — so a blanket "could not parse any entry" refusal
+    would fail the gate on the very state the gate exists to reach. What is still
+    fatal is the table being *missing* (a rename this script did not follow), or
+    the body holding ``LedgerEntry`` text that the entry pattern cannot read (a
+    reshaped entry, which would silently under-count the ledger). Both are
+    checked; an empty body is not.
     """
     text = _read(_RL_LEDGER)
     body = re.search(
@@ -1094,10 +1103,15 @@ def load_rl_ledger() -> list[tuple[str, str]]:
     entries = re.findall(
         r"case:\s*\"([^\"]+)\",\s*\n?\s*gap:\s*RlGap::(\w+)", body.group(1)
     )
-    if not entries:
+    # Every `LedgerEntry` in the body must have been read. Counting the construct
+    # separately is what keeps "the table is empty" and "the entries changed shape"
+    # from looking alike.
+    declared = len(re.findall(r"\bLedgerEntry\s*\{", body.group(1)))
+    if declared != len(entries):
         raise SystemExit(
-            f"check-doc-claims: could not parse any LEDGER entry out of "
-            f"{_RL_LEDGER.relative_to(_REPO)}"
+            f"check-doc-claims: {_RL_LEDGER.relative_to(_REPO)} declares {declared} "
+            f"`LedgerEntry` value(s) but only {len(entries)} parsed; the entry shape "
+            f"changed, so update the pattern in load_rl_ledger()"
         )
     return entries
 
@@ -1697,29 +1711,21 @@ def build_claims(
         (
             "the OWL 2 RL gap tally in the CONFORMANCE scoreboard row",
             _CONFORMANCE,
-            r"(?P<structural>\d+) of the (?P<ledgered>\d+) divergences? (?:is a|are) structural "
-            r"limits? of OWL 2 RL itself \((?P<schema>\d+) schema-conclusion, (?P<neg>\d+) "
-            r"negative-conclusion, (?P<outside>\d+) construct-outside-rl, (?P<imports>\d+) "
-            # `is`/`are` because the count moves: the ledger held exactly one
-            # actionable divergence and now holds none, and a pattern that
-            # hard-codes the singular stops matching the moment it is fixed.
-            r"imports-unresolved\); \*\*(?P<actionable>\d+) (?:is|are) actionable\*\* "
-            r"\((?P<missing>\d+) missing-rule\)",
+            # The ledger is EMPTY, so the row states the tally as zeros rather than as
+            # a split of a nonzero total. Every typed count is still checked: an
+            # entry arriving in any class moves the number the prose has to state.
+            r"the typed-divergence ledger is EMPTY \((?P<schema>\d+) schema-conclusion, "
+            r"(?P<neg>\d+) negative-conclusion, (?P<outside>\d+) construct-outside-rl, "
+            r"(?P<imports>\d+) imports-unresolved\); \*\*(?P<actionable>\d+) (?:is|are) "
+            r"actionable\*\* \((?P<missing>\d+) missing-rule\)",
         ),
         (
             "the OWL 2 RL gap tally in the CONFORMANCE known-gaps item",
             _CONFORMANCE,
-            _flow(r"(?P<structural>\d+) (?:is a|are) structural limits? of OWL 2 RL")
-            + ANY
-            + _flow(
-                r"schema axiom \((?P<schema>\d+) `schema-conclusion`\) or a negative "
-                r"fact \((?P<neg>\d+) `negative-conclusion`\)"
-            )
-            + ANY
-            + _flow(
-                r"its syntax \((?P<outside>\d+) `construct-outside-rl`\), and one "
-                r"upstream premise is incomplete as exported "
-                r"\((?P<imports>\d+) `imports-unresolved`\)\. "
+            _flow(
+                r"is EMPTY — (?P<schema>\d+) `schema-conclusion`, (?P<neg>\d+) "
+                r"`negative-conclusion`, (?P<outside>\d+) `construct-outside-rl`, "
+                r"(?P<imports>\d+) `imports-unresolved`, and "
                 r"\*\*(?P<actionable>\d+) (?:is|are) actionable\*\* "
                 r"\((?P<missing>\d+) `missing-rule`\)"
             ),
@@ -1728,19 +1734,9 @@ def build_claims(
             "the OWL 2 RL gap tally in the entailment chapter",
             _ENTAILMENT,
             _flow(
-                r"(?P<structural>\d+) of the (?P<ledgered>\d+) divergences? (?:is a|are) "
-                r"structural limits? of OWL 2 RL"
-            )
-            + ANY
-            + _flow(
-                r"schema axiom \((?P<schema>\d+) `schema-conclusion`\) or a negative "
-                r"fact \((?P<neg>\d+) `negative-conclusion`\)"
-            )
-            + ANY
-            + _flow(
-                r"outside its syntax \((?P<outside>\d+) `construct-outside-rl`\); one "
-                r"more premise is incomplete as exported "
-                r"\((?P<imports>\d+) `imports-unresolved`\)\. "
+                r"is EMPTY — (?P<schema>\d+) `schema-conclusion`, (?P<neg>\d+) "
+                r"`negative-conclusion`, (?P<outside>\d+) `construct-outside-rl`, "
+                r"(?P<imports>\d+) `imports-unresolved`, and "
                 r"\*\*(?P<actionable>\d+) (?:is|are) actionable\*\* "
                 r"\((?P<missing>\d+) `missing-rule`\)"
             ),
