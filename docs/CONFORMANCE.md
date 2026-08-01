@@ -328,21 +328,32 @@ issue, so the matrix stays honest:
      `no_case_diverges_from_the_published_verdict`:
 
      ```text
-     OWL2-RL-MECHANISMS: positive 27/27 negative 23/23 strict-table 12/23 refutation 8/0 freeze 1/0 comprehension 2/0 reflexivity 1/0 data-range 3/0 withheld 0
+     OWL2-RL-MECHANISMS: positive 27/27 negative 23/23 strict-table 12/18 refutation 8/1 freeze 1/2 comprehension 2/2 reflexivity 1/0 data-range 3/0 composite 0/0 withheld 0
      ```
 
      Each pair is `<positive>/<negative>`. The normative rule table
-     (`strict-table`) reaches 12 positives on its own and observes all 23
-     non-conclusions absent; the other five reach 15 positives between them and
-     **0 negatives**, which is not a shortfall but the point — those five only
-     ever *establish* a conclusion, so a non-zero negative count on any of them
-     would be an unsoundness rather than a better score.
+     (`strict-table`) reaches 12 positives on its own and reports the absence of
+     18 of the 23 non-conclusions; the other five reach 15 positives between
+     them. `composite` is the seventh mechanism — two or more of the others
+     folded over one conclusion — and no vendored case needs it, which is why
+     its column reads `0/0` and why the column is printed anyway.
+
+     A **negative** count on one of the five is not an unsoundness and not a
+     better score: none of them ever refutes. What a lane's name on a negative
+     case reports is that the lane *recognized* a construct of the
+     non-conclusion and *admitted* it could not read it, which reaches the
+     caller as `undecided` naming the construct instead of as a refutation
+     nothing tested. The five are `webont-class-005` (a complement class nested
+     in a union operand), `webont-description-logic-902` and `-904` (an
+     inclusion between two anonymous class expressions), `webont-i5-5-007` (a
+     nested anonymous operand) and `webont-restriction-005` (a membership in an
+     anonymous restriction).
 
      Every class the ledger used to hold is closed, and **the rule table did not
      change once**. `rules(Regime::OwlRl)` and `implemented(Regime::OwlRl)` are
      the same 78, `extensions(Regime::OwlRl)` is the one `ext-eq-diff-sym`, and
      strict `Materialization::OwlRl` output is byte-for-byte what it was.
-     `purrdf_entail::entails()` reaches a conclusion six ways, and five of the
+     `purrdf_entail::entails()` reaches a conclusion seven ways, and five of the
      six are not matching:
 
      * **refutation** — a negative fact has no head anywhere in Tables 4–9 and

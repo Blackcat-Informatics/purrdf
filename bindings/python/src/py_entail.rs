@@ -604,10 +604,11 @@ fn certain_answers(
 /// entails a conclusion GRAPH, and its certificate is a `purrdf-reasoning-report 4` block
 /// whose completeness is the regime's own rule inventory.
 ///
-/// Returns `(answer, certificate)`. The answer opens `mechanism <name>`: WHICH of the six
+/// Returns `(answer, certificate)`. The answer opens `mechanism <name>`: WHICH of the seven
 /// mechanisms reached the verdict. `strict-table` is the regime's own rule table, run
 /// once; `refutation`, `freeze`, `comprehension`, `reflexivity` and `data-range` each
-/// exist because no head in that table has the conclusion's shape at all.
+/// exist because no head in that table has the conclusion's shape at all; and `composite` is
+/// two or more of those folded over one conclusion.
 ///
 /// Then THREE verdicts, never two. `entailment not-entailed` is a PROOF — the procedure
 /// was complete for this premise, so the absence of a mapping is the absence of an

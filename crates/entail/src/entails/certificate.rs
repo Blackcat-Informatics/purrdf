@@ -33,7 +33,9 @@
 //! * **The mechanism.** [`EntailmentCertificate::mechanism`] reads the outcome — the warrant's arm for a
 //!   `yes`, [`UndecidedReason::mechanism`] for an `undecided`, and
 //!   [`EntailmentMechanism::StrictTable`] for a `no`, because refuting needs a completeness
-//!   claim and only the rule table has one.
+//!   claim and only the rule table has one. A `yes` that needed two or more mechanisms reads
+//!   [`EntailmentMechanism::Composite`], which is the warrant's own arm rather than a special
+//!   case here.
 //! * **Budget exhaustion.** [`EntailmentCertificate::is_budget_exhausted`] reads the outcome
 //!   too: a lane that
 //!   stopped early says so in its [`UndecidedReason`], and every other refusal to run is an
@@ -107,11 +109,13 @@ impl EntailmentCertificate {
         self.report.regime()
     }
 
-    /// WHICH of the six mechanisms answered.
+    /// WHICH of the seven mechanisms answered.
     ///
     /// Derived from [`Self::outcome`] on every call. [`EntailmentMechanism::StrictTable`] is
     /// the regime's own rule table deciding the question — a positive claim, and the only
     /// mechanism a [`NotEntailed`](super::EntailmentOutcome::NotEntailed) can carry.
+    /// [`EntailmentMechanism::Composite`] is two or more of the others folded over one
+    /// conclusion, and [`EntailmentWarrant::Composite`] says which, in order.
     #[must_use]
     pub const fn mechanism(&self) -> EntailmentMechanism {
         mechanism_of(&self.outcome)

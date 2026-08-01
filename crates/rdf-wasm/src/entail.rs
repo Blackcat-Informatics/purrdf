@@ -576,9 +576,10 @@ pub(crate) fn graph_entails_impl(
 /// different calculus, different certificate — and the banners differ so neither can be
 /// parsed as the other.
 ///
-/// The answer opens `mechanism <name>`: WHICH of the six mechanisms reached the verdict.
-/// `strict-table` is the regime's own rule table, run once; the other five exist because
-/// no head in that table has the conclusion's shape at all.
+/// The answer opens `mechanism <name>`: WHICH of the seven mechanisms reached the verdict.
+/// `strict-table` is the regime's own rule table, run once; five more exist because no head
+/// in that table has the conclusion's shape at all; and `composite` is two or more of those
+/// five folded over one conclusion.
 ///
 /// THREE verdicts, never two. `not-entailed` is a PROOF — the procedure was complete for
 /// this premise — and `undecided` is what an incomplete procedure is entitled to say

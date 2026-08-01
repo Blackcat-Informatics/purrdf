@@ -139,11 +139,10 @@ use crate::calculus::concludes_false;
 use crate::engine::Refuter;
 use crate::entails::fresh::{FreshBlanks, labels_of};
 use crate::entails::graph::{Triple, default_graph_triples, show};
-use crate::entails::homomorphism::{Binding, Closure, find_one, substitute};
+use crate::entails::homomorphism::{Binding, Closure};
 use crate::entails::membership::Membership;
-use crate::entails::pattern::conclusion_node;
-use crate::entails::warrant::EntailmentWarrant;
-use crate::entails::{Attempt, UndecidedReason};
+use crate::entails::warrant::{EntailmentMechanism, EntailmentWarrant, Replay};
+use crate::entails::{Attempt, Established, Question, UndecidedReason};
 use crate::lists::LIST_VALUED;
 use crate::report::InconsistencyWitness;
 use crate::vocab::{
@@ -545,24 +544,41 @@ impl FreezeWarrant {
     pub fn closure_size(&self) -> usize {
         self.closure.len()
     }
+
+    /// The premise closure this warrant is against.
+    pub(crate) const fn closure(&self) -> &Closure {
+        &self.closure
+    }
+
+    /// This warrant with the fold's residual `binding` attached.
+    pub(crate) fn with_binding(mut self, binding: Binding) -> Self {
+        self.binding = binding;
+        self
+    }
 }
 
 // ── Reading a conclusion ───────────────────────────────────────────────────────────────
 
 /// One recognized axiom triple, with the shape that recognized it.
 struct Axiom {
+    /// Its index in the conclusion's own frozen triple order — the name every lane of the
+    /// fold refers to a conclusion triple by.
+    index: usize,
     /// The conclusion triple.
     triple: Triple,
     /// The shape it matched.
     shape: &'static Shape,
 }
 
-/// The conclusion split into what this mechanism establishes and what matching must.
+/// The conclusion split into what this mechanism establishes and what it recognized and
+/// declined.
 struct Reading {
     /// The recognized schema axioms, in the conclusion's own triple order.
     axioms: Vec<Axiom>,
-    /// The triples no axiom consumed, as match patterns.
-    residual: Vec<crate::entails::pattern::PatTriple>,
+    /// The shapes this lane RECOGNIZED and declined to read, rendered. Never a residual: a
+    /// triple this lane read the predicate of and refused the terms of is one it has admitted
+    /// it cannot decide, and an admission must not become a refutation.
+    declined: Vec<String>,
 }
 
 /// Whether `term` is the IRI `iri`.
@@ -570,24 +586,50 @@ fn is(term: &TermValue, iri: &str) -> bool {
     matches!(term, TermValue::Iri(value) if value == iri)
 }
 
+/// What this mechanism made of one conclusion triple.
+enum Recognized {
+    /// Not a shape this lane reads at all — the triple is residual and keeps its ordinary
+    /// obligation.
+    No,
+    /// A shape this lane READS, stated over terms it cannot read. An admission of incapacity,
+    /// never a residual: a blank node in a named position is an EXISTENTIAL over classes or
+    /// properties — "is there some transitive property?" — and a list-valued predicate in the
+    /// axiom's own term position would make the seeded collection walk a walk of a different
+    /// graph.
+    Declined(String),
+    /// A shape this lane reads, over terms it reads.
+    Yes(&'static Shape),
+}
+
 /// The shape `triple` states, if this mechanism reads one.
-///
-/// Both named terms must be IRIs: a blank node in either position is an EXISTENTIAL over
-/// classes or properties, which is a different question — "is there some transitive property?"
-/// — and one this mechanism does not answer. Such a triple stays residual, where it keeps the
-/// full obligation to map into the closure.
-fn recognize(triple: &Triple) -> Option<&'static Shape> {
+fn recognize(triple: &Triple) -> Recognized {
     let [subject, predicate, object] = triple;
-    if !matches!(subject, TermValue::Iri(_)) {
-        return None;
-    }
-    let shape = SHAPES.iter().find(|shape| {
+    let Some(shape) = SHAPES.iter().find(|shape| {
         is(predicate, shape.predicate)
             && shape.typed_as.is_none_or(|class| is(object, class))
             && (shape.typed_as.is_some() == shape.object_is.is_none())
-    })?;
+    }) else {
+        return Recognized::No;
+    };
+    let declined = |why: &str| {
+        Recognized::Declined(format!(
+            "{} {} {}: {why}",
+            show(&triple[0]),
+            show(&triple[1]),
+            show(&triple[2])
+        ))
+    };
+    if !matches!(subject, TermValue::Iri(_)) {
+        return declined(
+            "an existential over the classes or properties an axiom is about is a different \
+             question, and not one generalisation on constants answers",
+        );
+    }
     if shape.object_is.is_some() && !matches!(object, TermValue::Iri(_)) {
-        return None;
+        return declined(
+            "an existential in the axiom's second named position is a different question, and \
+             not one generalisation on constants answers",
+        );
     }
     // THE PRE-PASS WHITELIST. A named term of the axiom may land in a body atom's PREDICATE
     // position, and freezing `_:a rdf:first _:b` into a premise whose collection walk was
@@ -609,29 +651,41 @@ fn recognize(triple: &Triple) -> Option<&'static Shape> {
             Slot::Var(_) | Slot::Iri(_) => continue,
         };
         if disturbs(term) {
-            return None;
+            return declined(
+                "freezing a body atom over a list-valued predicate would make the premise's \
+                 own collection walk a walk of a different graph",
+            );
         }
     }
-    Some(shape)
+    Recognized::Yes(shape)
 }
 
-/// Split `conclusion` into the schema axioms this mechanism establishes and the triples
-/// matching must.
-fn read(conclusion: &RdfDataset) -> Option<Reading> {
-    let triples = default_graph_triples(conclusion);
+/// Split `conclusion`'s still-outstanding triples into the schema axioms this mechanism
+/// establishes and the shapes it recognized and declined.
+///
+/// `pending` is what no earlier lane discharged: `p rdfs:range D` is a shape of this table AND
+/// of [`datarange`](super::datarange)'s, and a triple already decided is not this lane's to
+/// decide a second time.
+fn read(triples: &[Triple], pending: &BTreeSet<usize>) -> Reading {
     let mut axioms = Vec::new();
-    let mut residual = Vec::new();
-    for triple in triples {
-        match recognize(&triple) {
-            Some(shape) => axioms.push(Axiom { triple, shape }),
-            None => residual.push([
-                conclusion_node(triple[0].clone()),
-                conclusion_node(triple[1].clone()),
-                conclusion_node(triple[2].clone()),
-            ]),
+    let mut declined = Vec::new();
+    for (index, triple) in triples.iter().enumerate() {
+        if !pending.contains(&index) {
+            continue;
+        }
+        match recognize(triple) {
+            Recognized::Yes(shape) => axioms.push(Axiom {
+                index,
+                triple: triple.clone(),
+                shape,
+            }),
+            Recognized::Declined(why) => declined.push(why),
+            Recognized::No => {}
         }
     }
-    (!axioms.is_empty()).then_some(Reading { axioms, residual })
+    declined.sort_unstable();
+    declined.dedup();
+    Reading { axioms, declined }
 }
 
 /// Instantiate `atom` against an axiom triple and a set of frozen constants.
@@ -673,26 +727,34 @@ fn arity(implication: &Implication) -> usize {
 /// Whatever the re-chase refuses with: [`EntailError::Evaluate`] for an evaluation ceiling,
 /// [`EntailError::MalformedList`] for a premise whose OWL collections are not well formed,
 /// and [`EntailError::MatchBudget`] from the residual match.
-pub(crate) fn attempt(
-    premise: &RdfDataset,
-    conclusion: &RdfDataset,
-    regime: Regime,
-    closure: &Closure,
-) -> Result<Attempt, EntailError> {
+pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
+    let Question {
+        premise,
+        conclusion,
+        regime,
+        closure,
+        triples,
+        pending,
+    } = *q;
     // WHITELIST, not blacklist: the four other regimes fall out. `Simple`, `RDF` and `RDFS`
     // state no rule that could derive a frozen head from an OWL axiom, and `D` states no
     // completeness theorem this crate would read a derivation of one against.
     if !matches!(regime, Regime::OwlRl) {
         return Ok(Attempt::NotApplicable);
     }
-    let Some(reading) = read(conclusion) else {
-        return Ok(Attempt::NotApplicable);
-    };
-
-    // The residual triples carry their ordinary obligation, exactly as without this lane.
-    let Ok(binding) = find_one(reading.residual, closure)? else {
-        return Ok(Attempt::NotEstablished);
-    };
+    let reading = read(triples, pending);
+    if reading.axioms.is_empty() {
+        // Nothing to establish. A recognized-and-declined shape beside it is an ADMISSION of
+        // incapacity and travels as one; nothing at all is simply not this lane's question.
+        return Ok(if reading.declined.is_empty() {
+            Attempt::NotApplicable
+        } else {
+            Attempt::Disqualified(UndecidedReason::ConstructNotRead {
+                lane: EntailmentMechanism::Freeze,
+                constructs: reading.declined,
+            })
+        });
+    }
 
     // ESTABLISHMENT IS ALL-OR-NOTHING, so the budget is checked against the whole bill
     // before any of it is spent: a run that established half the axioms and then stopped
@@ -778,14 +840,17 @@ pub(crate) fn attempt(
         });
     }
 
-    Ok(Attempt::Entailed(Box::new(EntailmentWarrant::Freeze(
-        FreezeWarrant {
+    Ok(Attempt::Entailed(Box::new(Established {
+        warrant: EntailmentWarrant::Freeze(FreezeWarrant {
             regime,
-            binding,
+            // The residual is the FOLD's, not this lane's; `entails` fills it in at the end.
+            binding: Binding::new(),
             closure: closure.clone(),
             generalizations,
-        },
-    ))))
+        }),
+        discharged: reading.axioms.iter().map(|axiom| axiom.index).collect(),
+        minted: Vec::new(),
+    })))
 }
 
 /// Re-decide a freeze warrant against the caller's own premise and conclusion.
@@ -798,15 +863,15 @@ pub(crate) fn verify_freeze(
     w: &FreezeWarrant,
     premise: &RdfDataset,
     conclusion: &RdfDataset,
-) -> bool {
-    let Some(reading) = read(conclusion) else {
-        return false;
-    };
-    // The axioms this warrant claims must be EXACTLY the axioms the conclusion states, in
-    // the same order: a warrant for a subset would leave part of the conclusion
+    triples: &[Triple],
+    pending: &BTreeSet<usize>,
+) -> Option<Replay> {
+    let reading = read(triples, pending);
+    // The axioms this warrant claims must be EXACTLY the axioms the conclusion still states,
+    // in the same order: a warrant for a subset would leave part of the conclusion
     // unaccounted for, and one for a superset would be evidence about a different question.
     if reading.axioms.len() != w.generalizations.len() {
-        return false;
+        return None;
     }
     let held: Vec<Triple> = default_graph_triples(premise);
     // The non-occurrence hypothesis is decided against the caller's OWN documents.
@@ -815,7 +880,7 @@ pub(crate) fn verify_freeze(
 
     for (axiom, generalization) in reading.axioms.iter().zip(&w.generalizations) {
         if axiom.triple != generalization.axiom {
-            return false;
+            return None;
         }
         // The membership half, re-looked-up in the premise's closure.
         if !generalization
@@ -823,10 +888,10 @@ pub(crate) fn verify_freeze(
             .iter()
             .all(|triple| w.closure.contains(triple))
         {
-            return false;
+            return None;
         }
         if generalization.instances.len() != axiom.shape.implications.len() {
-            return false;
+            return None;
         }
         for (implication, instance) in axiom
             .shape
@@ -837,7 +902,7 @@ pub(crate) fn verify_freeze(
             // The body and head must be THIS shape's implication, instantiated over the
             // constants the warrant cites — otherwise the chase decided some other question.
             if instance.constants.len() != arity(implication) {
-                return false;
+                return None;
             }
             let body: Vec<Triple> = implication
                 .body
@@ -850,34 +915,18 @@ pub(crate) fn verify_freeze(
                 &instance.constants,
             );
             if instance.body != body || instance.head != head {
-                return false;
+                return None;
             }
             if !instance.check(&held, &forbidden) {
-                return false;
+                return None;
             }
         }
     }
 
-    // The residual half is the ordinary homomorphism claim, checked the ordinary way.
-    let image: Option<Vec<Triple>> = reading
-        .residual
-        .iter()
-        .map(|pat| {
-            Some([
-                substitute(&pat[0], &w.binding)?,
-                substitute(&pat[1], &w.binding)?,
-                substitute(&pat[2], &w.binding)?,
-            ])
-        })
-        .collect();
-    let Some(image) = image else {
-        return false;
-    };
-    if !image.iter().all(|triple| w.closure.contains(triple)) {
-        return false;
-    }
-    // …and the closure it maps into has to be a closure OF this premise.
-    held.iter().all(|triple| w.closure.contains(triple))
+    Some(Replay {
+        discharged: reading.axioms.iter().map(|axiom| axiom.index).collect(),
+        minted: Vec::new(),
+    })
 }
 
 #[cfg(test)]
@@ -887,7 +936,9 @@ mod tests {
 
     use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, TermValue};
 
-    use super::{Axiom, FREEZE_BUDGET, FrozenOutcome, SHAPES, Slot, arity, read, recognize};
+    use super::{
+        Axiom, FREEZE_BUDGET, FrozenOutcome, Recognized, SHAPES, Slot, arity, read, recognize,
+    };
     use crate::entails::fresh::mentions_any;
     use crate::entails::graph::default_graph_triples;
     use crate::entails::{EntailmentOutcome, EntailmentWarrant, ImportMap, entails, verify};
@@ -966,6 +1017,11 @@ mod tests {
             .expect("a consistent premise")
             .into_parts()
             .0
+    }
+
+    /// Every triple of `conclusion` still outstanding — the pending set the fold starts with.
+    fn all_of(conclusion: &RdfDataset) -> BTreeSet<usize> {
+        (0..default_graph_triples(conclusion).len()).collect()
     }
 
     // ── The mechanism reaches what the rule table cannot ───────────────────────────────
@@ -1074,22 +1130,27 @@ mod tests {
 
     // ── ADVERSARIAL: the mechanism must be able to say NO ──────────────────────────────
 
-    /// A PROPERTY NOTHING MAKES TRANSITIVE IS NOT ENTAILED TRANSITIVE.
+    /// A PROPERTY NOTHING MAKES TRANSITIVE IS NOT ESTABLISHED TRANSITIVE — and the answer is
+    /// UNDECIDED rather than a refutation, because this lane has no completeness theorem.
     ///
     /// Falsifiable against the failure mode a freeze-and-chase invites: a mechanism that
     /// answered `Entailed` whenever it recognized a shape would pass the corpus case above,
-    /// because every ledgered case was a positive.
+    /// because every ledgered case was a positive. And falsifiable against the OTHER failure
+    /// mode, which the module docs have always disclaimed and the code used to contradict:
+    /// "the converse is NOT claimed, and this module never answers not entailed". A frozen
+    /// chase that derives nothing is silence, and Theorem PR1 says nothing about a conclusion
+    /// stating a property characteristic, so there is no theorem to read a refutation out of.
     #[test]
-    fn an_unconstrained_property_is_not_entailed_transitive() {
+    fn an_unconstrained_property_is_undecided_rather_than_refuted() {
         let premise = graph(&[(P, RDF_TYPE, OWL_OBJECTPROPERTY)]);
         let conclusion = graph(&[(P, RDF_TYPE, OWL_TRANSITIVEPROPERTY)]);
-        assert!(
-            matches!(
-                decide(&premise, &conclusion),
-                EntailmentOutcome::NotEntailed(_)
-            ),
-            "nothing in the premise composes p with itself"
-        );
+        let EntailmentOutcome::Undecided(crate::UndecidedReason::ConclusionOutsideRl(triples)) =
+            decide(&premise, &conclusion)
+        else {
+            panic!("nothing in the premise composes p with itself, and nothing refutes it either");
+        };
+        assert_eq!(triples.len(), 1, "{triples:?}");
+        assert!(triples[0].contains("TransitiveProperty"), "{triples:?}");
     }
 
     /// THE MEMBERSHIP HALF IS OWED. `rdfs:subClassOf` is `c,d ∈ IC` AND the inclusion, so an
@@ -1123,8 +1184,9 @@ mod tests {
                 TermValue::iri(OWL_TRANSITIVEPROPERTY),
             ];
             assert!(
-                recognize(&triple).is_none(),
-                "{predicate} would disturb the collection pre-pass"
+                matches!(recognize(&triple), Recognized::Declined(_)),
+                "{predicate} would disturb the collection pre-pass, and declining it is an \
+                 ADMISSION rather than a residual nobody would notice went untested"
             );
         }
         // …while an ordinary property of the caller's vocabulary is read.
@@ -1133,26 +1195,35 @@ mod tests {
             TermValue::iri(RDF_TYPE),
             TermValue::iri(OWL_TRANSITIVEPROPERTY),
         ];
-        assert!(recognize(&ordinary).is_some());
+        assert!(matches!(recognize(&ordinary), Recognized::Yes(_)));
     }
 
-    /// AN EXISTENTIAL OVER PROPERTIES IS NOT THIS MECHANISM'S QUESTION. A blank node in
-    /// either named position leaves the triple residual, where it keeps its full obligation.
+    /// AN EXISTENTIAL OVER PROPERTIES IS RECOGNIZED AND DECLINED, never quietly residual.
+    ///
+    /// "Is there some transitive property?" is a question this mechanism does not answer, and
+    /// saying so is an ADMISSION: a residual that fell through to a failed match would have
+    /// come out of the service as a proof of non-entailment.
     #[test]
-    fn a_blank_named_position_is_left_residual() {
-        let conclusion = graph(&[("_x", RDF_TYPE, OWL_TRANSITIVEPROPERTY)]);
-        assert!(
-            read(&conclusion).is_none(),
-            "an existential over transitive properties is a different question"
-        );
-        let conclusion = graph(&[(A, RDFS_SUBCLASSOF, "_d")]);
-        assert!(read(&conclusion).is_none());
+    fn a_blank_named_position_is_declined_rather_than_dropped() {
+        for triples in [
+            vec![("_x", RDF_TYPE, OWL_TRANSITIVEPROPERTY)],
+            vec![(A, RDFS_SUBCLASSOF, "_d")],
+        ] {
+            let conclusion = graph(&triples);
+            let reading = read(&default_graph_triples(&conclusion), &all_of(&conclusion));
+            assert!(reading.axioms.is_empty(), "{triples:?}");
+            assert!(!reading.declined.is_empty(), "{triples:?}");
+        }
     }
 
-    /// A conclusion this mechanism reads nothing in is NOT its business.
+    /// A conclusion this mechanism reads nothing in is NOT its business, and it does not
+    /// pretend otherwise by declining something it never recognized.
     #[test]
     fn an_ordinary_conclusion_is_not_applicable() {
-        assert!(read(&graph(&[(A, RDF_TYPE, OWL_CLASS)])).is_none());
+        let conclusion = graph(&[(A, RDF_TYPE, OWL_CLASS)]);
+        let reading = read(&default_graph_triples(&conclusion), &all_of(&conclusion));
+        assert!(reading.axioms.is_empty());
+        assert!(reading.declined.is_empty());
     }
 
     // ── The table, and the inventory ───────────────────────────────────────────────────
@@ -1311,10 +1382,23 @@ mod tests {
     #[test]
     fn a_read_axiom_carries_the_shape_that_recognized_it() {
         let conclusion = transitive_conclusion();
-        let reading = read(&conclusion).expect("recognized");
-        let Axiom { triple, shape } = &reading.axioms[0];
+        let triples = default_graph_triples(&conclusion);
+        let reading = read(&triples, &all_of(&conclusion));
+        let Axiom {
+            index,
+            triple,
+            shape,
+        } = &reading.axioms[0];
+        assert_eq!(
+            triple, &triples[*index],
+            "the index names the triple it read"
+        );
         assert_eq!(triple[0], TermValue::iri(P));
         assert_eq!(shape.typed_as, Some(OWL_TRANSITIVEPROPERTY));
-        assert_eq!(reading.residual.len(), 1, "the ontology header still maps");
+        assert_eq!(
+            reading.axioms.len(),
+            1,
+            "the ontology header is nobody's axiom and stays outstanding"
+        );
     }
 }

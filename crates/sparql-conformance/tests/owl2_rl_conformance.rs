@@ -34,6 +34,7 @@
 //!     --ignored --nocapture regenerate_rl_ledger
 //! ```
 
+use purrdf_entail::UndecidedReason;
 use purrdf_sparql_conformance::owl2_rl::{self, Answer, Direction, EntailmentOutcome};
 
 /// Exactly what was vendored: the 27 positive plus 23 negative entailment cases.
@@ -281,9 +282,9 @@ fn census_accounts_for_every_upstream_case() {
 /// it the distinction between "refuted" and "not refutable" would be untested and
 /// could rot into a synonym.
 ///
-/// FIVE of those six answer `Undecided`, and they are pinned by name so a re-vendor
-/// that changes the set has to say so. All five are NEGATIVE cases, where the graded
-/// claim is soundness — the closure was computed and does not contain the
+/// FIVE of those six answer `Undecided(PremiseOutsideRl)`, and they are pinned by name
+/// so a re-vendor that changes the set has to say so. All five are NEGATIVE cases, where
+/// the graded claim is soundness — the closure was computed and does not contain the
 /// non-conclusion — which `Undecided` reports in full, so they agree without a ledger
 /// entry.
 ///
@@ -293,9 +294,17 @@ fn census_accounts_for_every_upstream_case() {
 /// match, which needs no completeness theorem and therefore no profile membership.
 /// That is the distinction this test now also pins: being outside the syntax costs a
 /// case the ability to REFUTE, not the ability to be entailed.
+///
+/// The filter is `PremiseOutsideRl` specifically, and narrowing it is a claim rather than
+/// a convenience. Theorem PR1's hypothesis has a CONCLUSION-side half too, and a lane may
+/// additionally recognize a construct and decline it; both also answer `Undecided`, both
+/// are about the question rather than about the premise's syntax, and
+/// `every_negative_case_is_decided_under_an_unexhausted_certificate` is where their split
+/// is pinned. A filter that lumped all three together would report a case moving between
+/// two different reasons as no change at all.
 #[test]
 fn the_non_rl_premises_are_named_and_answer_undecided() {
-    /// Every vendored case that answers `Undecided`, measured.
+    /// Every vendored case whose PREMISE is outside the OWL 2 RL syntax, measured.
     const OUTSIDE_RL: [&str; 5] = [
         "new-feature-keys-007",
         "webont-description-logic-209",
@@ -309,10 +318,9 @@ fn the_non_rl_premises_are_named_and_answer_undecided() {
     let imports = owl2_rl::vendored_imports(&root).expect("read the vendored support documents");
     let mut measured: Vec<&str> = Vec::new();
     for case in &cases {
-        if !matches!(owl2_rl::decide(case, &imports), Answer::Undecided(_)) {
+        let Answer::Undecided(reason) = owl2_rl::decide(case, &imports) else {
             continue;
-        }
-        measured.push(&case.name);
+        };
         let ledgered = owl2_rl::ledger_lookup(&case.name).is_some();
         assert_eq!(
             case.direction == Direction::Positive,
@@ -321,6 +329,9 @@ fn the_non_rl_premises_are_named_and_answer_undecided() {
              NEGATIVE case it is the soundness observation the lane grades and must not be",
             case.name
         );
+        if matches!(reason, UndecidedReason::PremiseOutsideRl(_)) {
+            measured.push(&case.name);
+        }
     }
     assert_eq!(
         measured, OUTSIDE_RL,
@@ -366,14 +377,35 @@ fn no_case_diverges_from_the_published_verdict() {
     assert_eq!(summary.agreed(), EXPECTED_CASES);
     assert_eq!(summary.ledgered(), 0);
 
-    // The mechanism scoreboard, pinned. `strict-table 12/23` is the normative rule table
-    // reaching 12 positives on its own and observing all 23 non-conclusions absent; the
-    // other four counts are the mechanisms the table has no head for, and every one of
-    // their negative counts is ZERO because those five only ever ESTABLISH a conclusion.
+    // The mechanism scoreboard, pinned. `strict-table 12/18` is the normative rule table
+    // reaching 12 positives on its own and REPORTING the absence of 18 of the 23
+    // non-conclusions; `composite 0/0` is the seventh mechanism, which no vendored case
+    // needs — every case here is reached by one lane or by none.
+    //
+    // The five negatives NOT in the table's bucket are the ones where a lane RECOGNIZED a
+    // construct of the non-conclusion and declined to read it, so the lane's own admission
+    // is what the answer carries. A lane on a negative case is not an unsoundness and never
+    // was one: these five are `Undecided`, not `Entailed`, and no mechanism beyond the table
+    // refutes anything —
+    // `every_negative_case_is_decided_under_an_unexhausted_certificate` pins that per case.
+    //
+    // * `refutation 8/1` — `webont-class-005` states `[ owl:complementOf #c ]` as an OPERAND
+    //   of a union. The refutation lane reads a complement class only when its every other
+    //   mention is `x rdf:type` it, so it recognizes the construct and declines.
+    // * `freeze 1/2` — `webont-description-logic-902` and `-904` state
+    //   `_:c rdfs:subClassOf _:r` between two ANONYMOUS class expressions. Freeze reads
+    //   `rdfs:subClassOf` and decides it by generalisation on constants over the two NAMED
+    //   terms it relates; an existential in either position is a different question.
+    // * `comprehension 2/2` — `webont-i5-5-007` nests an anonymous intersection inside a
+    //   union's operand list, and `webont-restriction-005` asserts a MEMBERSHIP in an
+    //   anonymous restriction, which is a counting question minting the restriction does not
+    //   answer. Both are refusals this lane's whitelist has always made; what changed is
+    //   that they now travel as `Undecided` naming the construct instead of falling out as
+    //   "not applicable" and being answered by the fall-through as a proof.
     assert_eq!(
         summary.mechanism_line(),
-        "OWL2-RL-MECHANISMS: positive 27/27 negative 23/23 strict-table 12/23 refutation 8/0 \
-         freeze 1/0 comprehension 2/0 reflexivity 1/0 data-range 3/0 withheld 0",
+        "OWL2-RL-MECHANISMS: positive 27/27 negative 23/23 strict-table 12/18 refutation 8/1 \
+         freeze 1/2 comprehension 2/2 reflexivity 1/0 data-range 3/0 composite 0/0 withheld 0",
         "the mechanism x PR1-clause split moved; say WHICH lane and WHICH mechanism, because \
          the aggregate 50/50 is unchanged by a case moving between two of them"
     );
@@ -384,7 +416,7 @@ fn no_case_diverges_from_the_published_verdict() {
 ///
 /// The sixteen entries below are the whole of what [`owl2_rl::LEDGER`] used to contain. An
 /// empty ledger is trivially green, so what makes the closure a claim rather than a
-/// tautology is naming, per case, WHICH of the six mechanisms answered it. Fifteen are
+/// tautology is naming, per case, WHICH of the seven mechanisms answered it. Fifteen are
 /// answered by one of the five that exist because no head in Tables 4–9 has the
 /// conclusion's shape, and the assertion for those is exactly the plan's: not
 /// `strict-table`.
@@ -497,36 +529,180 @@ fn every_previously_ledgered_case_names_the_mechanism_that_closed_it() {
 /// — a budget that ran out would produce the same "did not derive it" with none of the
 /// meaning, and that is exactly the failure a corpus reporting green cannot otherwise see.
 ///
-/// Eighteen of the twenty-three are decided `NotEntailed`: the premise is inside the OWL 2
-/// RL syntax, so Theorem PR1's completeness half applies and the absence of a match IS a
-/// refutation. The other five are `Undecided(PremiseOutsideRl)` and are named here for the
-/// same reason `the_non_rl_premises_are_named_and_answer_undecided` names them: their
-/// premises are outside the syntax, so the observation the negative lane grades — the
-/// closure was computed and does not contain the non-conclusion — was still made in full,
-/// and what is missing is only the entitlement to call it a refutation. Demanding
-/// `NotEntailed` from all twenty-three would be demanding that this library claim a
-/// completeness theorem whose hypothesis those five premises break.
+/// THREE of the twenty-three are decided `NotEntailed`, and the other twenty are
+/// `Undecided` under one of three named reasons. The split is pinned case by case, because
+/// which reason a case carries is the whole of what this library is entitled to say about
+/// it.
 ///
-/// All twenty-three report `strict-table`, and that is the substantive claim rather than a
-/// formality: the five mechanisms beyond the table only ever ESTABLISH a conclusion, so a
-/// negative case reached by one of them would be an unsoundness, and this is the executable
-/// form of that argument.
+/// * `NotEntailed` — the premise is inside the OWL 2 RL syntax AND the non-conclusion is an
+///   assertional graph over named terms, so BOTH halves of Theorem PR1's hypothesis hold and
+///   the absence of a match IS a refutation. `new-feature-keys-004` (`Peter owl:sameAs
+///   StPeter`), `webont-imports-002` (`Socrates rdf:type Mortal`) and
+///   `webont-miscellaneous-301` (`a first:prop "bar"`) are exactly that shape.
+/// * `Undecided(PremiseOutsideRl)` — the premise breaks the first half; five cases, the same
+///   five `the_non_rl_premises_are_named_and_answer_undecided` names.
+/// * `Undecided(ConclusionOutsideRl)` — the NON-CONCLUSION breaks the second half: it states
+///   a declaration (`Man rdf:type owl:Class`), a schema axiom (`p rdfs:range
+///   xsd:unsignedByte`, `c1 owl:equivalentClass c2`), a collection cell, or an anonymous
+///   class expression. No head in Tables 4–9 has any of those shapes, so the closure's
+///   silence about one is the table having no rule for it and never evidence about the
+///   premise. Ten cases.
+/// * `Undecided(ConstructNotRead)` — a lane RECOGNIZED a construct and declined to read it:
+///   a complement class nested inside a union operand, an inclusion between two anonymous
+///   class expressions, a nested anonymous operand, a membership in a restriction. Five
+///   cases.
+///
+/// The negative lane grades SOUNDNESS — the closure was computed and does not contain the
+/// non-conclusion — and all twenty-three still report exactly that observation. What differs
+/// between the four buckets is only what may be CLAIMED beyond it, which is why demanding
+/// `NotEntailed` from all twenty-three would be demanding that this library claim a
+/// completeness theorem whose hypothesis twenty of them break.
+///
+/// Eighteen report `strict-table` and five report the lane that declined. A lane appearing
+/// on a negative case used to be impossible and is not any more: the five mechanisms beyond
+/// the table still only ever ESTABLISH a conclusion — never refute one — and what a lane's
+/// name on a negative case says now is that the lane ADMITTED it could not read the
+/// question. That is checked below by requiring every non-`strict-table` negative to be an
+/// `Undecided`, which is the executable form of "no mechanism beyond the table refutes".
 #[test]
 fn every_negative_case_is_decided_under_an_unexhausted_certificate() {
-    /// The negatives whose premise is outside the OWL 2 RL syntax, so PR1 does not apply.
-    const OUTSIDE_RL: [&str; 5] = [
-        "new-feature-keys-007",
-        "webont-description-logic-209",
-        "webont-equivalentclass-005",
-        "webont-i5-8-005",
-        "webont-somevaluesfrom-002",
+    /// Every negative case, and the answer it is entitled to: the outcome, then the reason
+    /// kind (`-` for a decided refutation), then the mechanism that reports it.
+    const ANSWERS: [(&str, &str, &str, &str); EXPECTED_NEGATIVE] = [
+        ("new-feature-keys-004", "not-entailed", "-", "strict-table"),
+        (
+            "new-feature-keys-007",
+            "undecided",
+            "premise-outside-rl",
+            "strict-table",
+        ),
+        (
+            "new-feature-objectpropertychain-bjp-004",
+            "undecided",
+            "conclusion-outside-rl",
+            "strict-table",
+        ),
+        (
+            "webont-allvaluesfrom-002",
+            "undecided",
+            "conclusion-outside-rl",
+            "strict-table",
+        ),
+        (
+            "webont-class-004",
+            "undecided",
+            "conclusion-outside-rl",
+            "strict-table",
+        ),
+        (
+            "webont-class-005",
+            "undecided",
+            "construct-not-read",
+            "refutation",
+        ),
+        (
+            "webont-description-logic-209",
+            "undecided",
+            "premise-outside-rl",
+            "strict-table",
+        ),
+        (
+            "webont-description-logic-902",
+            "undecided",
+            "construct-not-read",
+            "freeze",
+        ),
+        (
+            "webont-description-logic-904",
+            "undecided",
+            "construct-not-read",
+            "freeze",
+        ),
+        (
+            "webont-equivalentclass-005",
+            "undecided",
+            "premise-outside-rl",
+            "strict-table",
+        ),
+        (
+            "webont-equivalentclass-008",
+            "undecided",
+            "conclusion-outside-rl",
+            "strict-table",
+        ),
+        (
+            "webont-i4-6-004",
+            "undecided",
+            "conclusion-outside-rl",
+            "strict-table",
+        ),
+        (
+            "webont-i4-6-005",
+            "undecided",
+            "conclusion-outside-rl",
+            "strict-table",
+        ),
+        (
+            "webont-i5-5-006",
+            "undecided",
+            "conclusion-outside-rl",
+            "strict-table",
+        ),
+        (
+            "webont-i5-5-007",
+            "undecided",
+            "construct-not-read",
+            "comprehension",
+        ),
+        (
+            "webont-i5-8-005",
+            "undecided",
+            "premise-outside-rl",
+            "strict-table",
+        ),
+        (
+            "webont-i5-8-007",
+            "undecided",
+            "conclusion-outside-rl",
+            "strict-table",
+        ),
+        ("webont-imports-002", "not-entailed", "-", "strict-table"),
+        (
+            "webont-miscellaneous-301",
+            "not-entailed",
+            "-",
+            "strict-table",
+        ),
+        (
+            "webont-miscellaneous-302",
+            "undecided",
+            "conclusion-outside-rl",
+            "strict-table",
+        ),
+        (
+            "webont-ontology-003",
+            "undecided",
+            "conclusion-outside-rl",
+            "strict-table",
+        ),
+        (
+            "webont-restriction-005",
+            "undecided",
+            "construct-not-read",
+            "comprehension",
+        ),
+        (
+            "webont-somevaluesfrom-002",
+            "undecided",
+            "premise-outside-rl",
+            "strict-table",
+        ),
     ];
 
     let root = owl2_rl::suite_root();
     let cases = owl2_rl::discover(&root).expect("discover the corpus");
     let imports = owl2_rl::vendored_imports(&root).expect("read the vendored support documents");
-    let mut refuted = 0_usize;
-    let mut undecided: Vec<&str> = Vec::new();
+    let mut measured: Vec<(String, &str, &str, String)> = Vec::new();
     for case in cases.iter().filter(|c| c.direction == Direction::Negative) {
         let certificate = owl2_rl::certify(case, &imports)
             .unwrap_or_else(|e| panic!("{} must answer rather than refuse: {e}", case.name));
@@ -536,45 +712,56 @@ fn every_negative_case_is_decided_under_an_unexhausted_certificate() {
              observation, it is a run that stopped",
             case.name
         );
-        assert_eq!(
-            certificate.mechanism().as_str(),
-            "strict-table",
-            "{}: the five mechanisms beyond the rule table only ever ESTABLISH a conclusion, \
-             so one of them answering a NEGATIVE case would be an unsoundness",
-            case.name
-        );
+        let mechanism = certificate.mechanism().as_str();
         let rendered = purrdf_validate::regime::render_reasoning_report(certificate.report());
         assert!(
-            rendered.contains("\nmechanism strict-table "),
+            rendered.contains(&format!("\nmechanism {mechanism} ")),
             "{}: the rendered report must name the mechanism a caller is reading:\n{rendered}",
             case.name
         );
-        match certificate.outcome() {
-            EntailmentOutcome::NotEntailed(_) => refuted += 1,
-            EntailmentOutcome::Undecided(_) => undecided.push(&case.name),
+        let (outcome, reason) = match certificate.outcome() {
+            EntailmentOutcome::NotEntailed(_) => {
+                assert_eq!(
+                    mechanism, "strict-table",
+                    "{}: only the rule table has a completeness theorem, so only it can refute",
+                    case.name
+                );
+                ("not-entailed", "-")
+            }
+            EntailmentOutcome::Undecided(reason) => (
+                "undecided",
+                match reason {
+                    UndecidedReason::PremiseOutsideRl(_) => "premise-outside-rl",
+                    UndecidedReason::ConclusionOutsideRl(_) => "conclusion-outside-rl",
+                    UndecidedReason::ConstructNotRead { .. } => "construct-not-read",
+                    other => panic!("{}: unexpected reason {other}", case.name),
+                },
+            ),
             EntailmentOutcome::Entailed(_) => panic!(
                 "{}: W3C published a NEGATIVE entailment and the OWL-RL lane reached it — the \
                  rule table is UNSOUND",
                 case.name
             ),
-        }
+        };
+        measured.push((case.name.clone(), outcome, reason, mechanism.to_owned()));
     }
+    let expected: Vec<(String, &str, &str, String)> = ANSWERS
+        .iter()
+        .map(|(name, outcome, reason, mechanism)| {
+            (
+                (*name).to_owned(),
+                *outcome,
+                *reason,
+                (*mechanism).to_owned(),
+            )
+        })
+        .collect();
     assert_eq!(
-        undecided, OUTSIDE_RL,
-        "the set of negative premises outside the OWL 2 RL syntax changed; a case leaving it \
-         means the premise or the profile scanner moved, and a case joining it means a \
-         non-conclusion this corpus could previously REFUTE can now only be observed absent"
+        measured, expected,
+        "the negative lane's split between a proven refutation and a NAMED admission moved; \
+         say which case, which reason and why the new answer is the more truthful one"
     );
-    assert_eq!(
-        (refuted, undecided.len()),
-        (18, 5),
-        "the negative lane's split between a proven refutation and an observed absence changed"
-    );
-    assert_eq!(
-        refuted + undecided.len(),
-        EXPECTED_NEGATIVE,
-        "every negative case must be answered"
-    );
+    assert_eq!(measured.len(), EXPECTED_NEGATIVE);
 }
 
 /// The committed golden render of one case's report — the bytes a caller sees.

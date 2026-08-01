@@ -107,11 +107,12 @@ use purrdf_xsd::range::{
     DataRange, Satisfiability, containment, counterexample, is_exactly_decided,
 };
 
-use crate::entails::graph::{Triple, default_graph_triples, show};
-use crate::entails::homomorphism::{Binding, Closure, find_one, substitute};
-use crate::entails::pattern::{PatTriple, conclusion_node};
-use crate::entails::warrant::EntailmentWarrant;
-use crate::entails::{Attempt, UndecidedReason};
+use std::collections::BTreeSet;
+
+use crate::entails::graph::{Triple, show};
+use crate::entails::homomorphism::{Binding, Closure};
+use crate::entails::warrant::{EntailmentWarrant, Replay};
+use crate::entails::{Attempt, Established, Question, UndecidedReason};
 use crate::vocab::{RDFS_LITERAL, RDFS_RANGE};
 use crate::{EntailError, Regime};
 
@@ -196,6 +197,17 @@ impl DataRangeWarrant {
     pub fn closure_size(&self) -> usize {
         self.closure.len()
     }
+
+    /// The premise closure this warrant is against.
+    pub(crate) const fn closure(&self) -> &Closure {
+        &self.closure
+    }
+
+    /// This warrant with the fold's residual `binding` attached.
+    pub(crate) fn with_binding(mut self, binding: Binding) -> Self {
+        self.binding = binding;
+        self
+    }
 }
 
 /// What a range term denotes, as far as this module can tell.
@@ -224,56 +236,50 @@ fn is_readable_target(term: &TermValue) -> bool {
 
 /// One recognized `rdfs:range` axiom, with the declarations it is decided against.
 struct Axiom {
+    /// Its index in the conclusion's own frozen triple order.
+    index: usize,
     /// The conclusion triple.
     triple: Triple,
     /// The premise-closure declarations for its property, in closure order.
     declarations: Vec<Triple>,
 }
 
-/// The conclusion split into the range axioms this mechanism decides and the rest.
-struct Reading {
-    /// The recognized axioms, in the conclusion's own triple order.
-    axioms: Vec<Axiom>,
-    /// The triples no axiom consumed, as match patterns.
-    residual: Vec<PatTriple>,
-}
-
-/// Split `conclusion` into the range axioms this mechanism decides and the triples matching
-/// must.
-fn read(conclusion: &RdfDataset, closure: &Closure) -> Option<Reading> {
+/// The conclusion's still-outstanding range axioms this mechanism decides.
+///
+/// `pending` is what no earlier lane discharged. `p rdfs:range D` is also a
+/// [`freeze`](super::freeze) shape when `D` is a class, and a triple that lane already
+/// established is not this one's to decide a second time — possibly the other way, which is
+/// how a fold turns two right answers into one wrong one.
+fn read(triples: &[Triple], pending: &BTreeSet<usize>, closure: &Closure) -> Vec<Axiom> {
     let mut axioms = Vec::new();
-    let mut residual = Vec::new();
-    for triple in default_graph_triples(conclusion) {
-        let [subject, predicate, object] = &triple;
-        let readable = matches!(subject, TermValue::Iri(_))
-            && matches!(predicate, TermValue::Iri(iri) if iri == RDFS_RANGE)
-            && is_readable_target(object);
+    for (index, triple) in triples.iter().enumerate() {
+        if !pending.contains(&index) {
+            continue;
+        }
+        let [subject, predicate, object] = triple;
+        if !matches!(subject, TermValue::Iri(_))
+            || !matches!(predicate, TermValue::Iri(iri) if iri == RDFS_RANGE)
+            || !is_readable_target(object)
+        {
+            continue;
+        }
         // The premise must DECLARE a range for the property. That is what establishes
         // `p ∈ IP`, and it is why an undeclared property is not given a range for free.
-        let declarations: Vec<Triple> = if readable {
-            closure
-                .with_predicate(RDFS_RANGE)
-                .iter()
-                .filter(|declared| &declared[0] == subject)
-                .cloned()
-                .collect()
-        } else {
-            Vec::new()
-        };
-        if readable && !declarations.is_empty() {
+        let declarations: Vec<Triple> = closure
+            .with_predicate(RDFS_RANGE)
+            .iter()
+            .filter(|declared| &declared[0] == subject)
+            .cloned()
+            .collect();
+        if !declarations.is_empty() {
             axioms.push(Axiom {
-                triple,
+                index,
+                triple: triple.clone(),
                 declarations,
             });
-        } else {
-            residual.push([
-                conclusion_node(triple[0].clone()),
-                conclusion_node(triple[1].clone()),
-                conclusion_node(triple[2].clone()),
-            ]);
         }
     }
-    (!axioms.is_empty()).then_some(Reading { axioms, residual })
+    axioms
 }
 
 /// The counterexample range for `axiom`: a value the declarations admit and the axiom's own
@@ -292,12 +298,14 @@ fn counterexample_of(axiom: &Axiom) -> DataRange {
 /// # Errors
 ///
 /// [`EntailError::MatchBudget`] if the residual match exhausts its budget.
-pub(crate) fn attempt(
-    _premise: &RdfDataset,
-    conclusion: &RdfDataset,
-    regime: Regime,
-    closure: &Closure,
-) -> Result<Attempt, EntailError> {
+pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
+    let Question {
+        regime,
+        closure,
+        triples,
+        pending,
+        ..
+    } = *q;
     // WHITELIST, not blacklist. The containment argument is over the OWL 2 datatype map, and
     // `OWL-RL` is the lane this crate reads a closure against it for. `D` states the five
     // `dt-*` rules and no completeness theorem at all, and the three below it interpret no
@@ -306,16 +314,17 @@ pub(crate) fn attempt(
     if !matches!(regime, Regime::OwlRl) {
         return Ok(Attempt::NotApplicable);
     }
-    let Some(reading) = read(conclusion, closure) else {
+    let axioms = read(triples, pending, closure);
+    if axioms.is_empty() {
         return Ok(Attempt::NotApplicable);
-    };
+    }
 
     // THE THREE-VALUED ANSWER, kept three-valued. `Undecided` wins over "not established",
     // because a conclusion one of whose axioms is undecided is a conclusion the precondition
     // must not be allowed to refute.
     let mut undecided: Vec<String> = Vec::new();
     let mut established = true;
-    for axiom in &reading.axioms {
+    for axiom in &axioms {
         let counter = counterexample_of(axiom);
         match containment(
             &DataRange::And(
@@ -348,26 +357,23 @@ pub(crate) fn attempt(
         return Ok(Attempt::NotEstablished);
     }
 
-    // The residual triples carry their ordinary obligation.
-    let Ok(binding) = find_one(reading.residual, closure)? else {
-        return Ok(Attempt::NotEstablished);
-    };
-
-    Ok(Attempt::Entailed(Box::new(EntailmentWarrant::DataRange(
-        DataRangeWarrant {
+    Ok(Attempt::Entailed(Box::new(Established {
+        discharged: axioms.iter().map(|axiom| axiom.index).collect(),
+        warrant: EntailmentWarrant::DataRange(DataRangeWarrant {
             regime,
-            binding,
+            // The residual is the FOLD's, not this lane's; `entails` fills it in at the end.
+            binding: Binding::new(),
             closure: closure.clone(),
-            containments: reading
-                .axioms
+            containments: axioms
                 .into_iter()
                 .map(|axiom| RangeContainment {
                     axiom: axiom.triple,
                     declarations: axiom.declarations,
                 })
                 .collect(),
-        },
-    ))))
+        }),
+        minted: Vec::new(),
+    })))
 }
 
 /// Re-decide a data-range warrant against the caller's own premise and conclusion.
@@ -379,28 +385,27 @@ pub(crate) fn attempt(
 /// replayed.
 pub(crate) fn verify_datarange(
     w: &DataRangeWarrant,
-    premise: &RdfDataset,
-    conclusion: &RdfDataset,
-) -> bool {
-    let Some(reading) = read(conclusion, &w.closure) else {
-        return false;
-    };
-    if reading.axioms.len() != w.containments.len() {
-        return false;
+    _conclusion: &RdfDataset,
+    triples: &[Triple],
+    pending: &BTreeSet<usize>,
+) -> Option<Replay> {
+    let axioms = read(triples, pending, &w.closure);
+    if axioms.len() != w.containments.len() {
+        return None;
     }
-    for (axiom, claimed) in reading.axioms.iter().zip(&w.containments) {
+    for (axiom, claimed) in axioms.iter().zip(&w.containments) {
         if axiom.triple != claimed.axiom {
-            return false;
+            return None;
         }
         if axiom.declarations != claimed.declarations {
-            return false;
+            return None;
         }
         if !claimed
             .declarations
             .iter()
             .all(|triple| w.closure.contains(triple))
         {
-            return false;
+            return None;
         }
         if containment(
             &DataRange::And(
@@ -413,30 +418,14 @@ pub(crate) fn verify_datarange(
             &range_of(&axiom.triple[2]),
         ) != Satisfiability::Empty
         {
-            return false;
+            return None;
         }
     }
 
-    let image: Option<Vec<Triple>> = reading
-        .residual
-        .iter()
-        .map(|pat| {
-            Some([
-                substitute(&pat[0], &w.binding)?,
-                substitute(&pat[1], &w.binding)?,
-                substitute(&pat[2], &w.binding)?,
-            ])
-        })
-        .collect();
-    let Some(image) = image else {
-        return false;
-    };
-    if !image.iter().all(|triple| w.closure.contains(triple)) {
-        return false;
-    }
-    default_graph_triples(premise)
-        .iter()
-        .all(|triple| w.closure.contains(triple))
+    Some(Replay {
+        discharged: axioms.iter().map(|axiom| axiom.index).collect(),
+        minted: Vec::new(),
+    })
 }
 
 #[cfg(test)]
@@ -551,30 +540,41 @@ mod tests {
 
     // ── ADVERSARIAL: narrowing is unsound, and it is refused ───────────────────────────
 
-    /// A NARROWING IS NOT ENTAILED. `xsd:short` does not fit in `xsd:byte`, and this is the
-    /// direction that would be an unsoundness rather than an incompleteness.
+    /// A NARROWING IS NOT ESTABLISHED. `xsd:short` does not fit in `xsd:byte`, and this is
+    /// the direction that would be an unsoundness rather than an incompleteness.
+    ///
+    /// The answer is UNDECIDED and not a refutation, and the difference is a real one rather
+    /// than caution: this lane proves that the DECLARED ranges do not intersect inside the
+    /// target, which is not the same claim as `p` having a value outside it. A premise saying
+    /// `p rdfs:domain owl:Nothing` makes `p` empty and every range axiom holds of it, so the
+    /// containment failing decides nothing about entailment — and Theorem PR1 says nothing
+    /// about a conclusion stating an `rdfs:range` axiom either.
     #[test]
-    fn a_narrowing_is_not_entailed() {
+    fn a_narrowing_is_undecided_rather_than_refuted() {
         let premise = ranges(&[XSD_SHORT]);
         let conclusion = graph(&[(P, RDFS_RANGE, XSD_BYTE)]);
         assert!(
-            matches!(
+            !matches!(
                 decide(&premise, &conclusion),
-                EntailmentOutcome::NotEntailed(_)
+                EntailmentOutcome::Entailed(_)
             ),
             "an xsd:short value need not be an xsd:byte"
         );
+        assert!(matches!(
+            decide(&premise, &conclusion),
+            EntailmentOutcome::Undecided(UndecidedReason::ConclusionOutsideRl(_))
+        ));
     }
 
     /// …and disjoint value spaces are not contained in one another either.
     #[test]
-    fn a_disjoint_range_is_not_entailed() {
+    fn a_disjoint_range_is_not_established() {
         assert!(matches!(
             decide(
                 &ranges(&[XSD_SHORT]),
                 &graph(&[(P, RDFS_RANGE, XSD_STRING)])
             ),
-            EntailmentOutcome::NotEntailed(_)
+            EntailmentOutcome::Undecided(UndecidedReason::ConclusionOutsideRl(_))
         ));
     }
 
@@ -624,15 +624,19 @@ mod tests {
     // ── Applicability, the inventory, and `verify` ─────────────────────────────────────
 
     /// A conclusion whose range this module cannot read is NOT its question, so it does not
-    /// turn an honest refutation into an `Undecided`.
+    /// answer with a containment it never decided — it reports nothing, and the outcome is
+    /// then the conclusion-side clause of Theorem PR1 rather than this lane's.
     #[test]
     fn an_unreadable_target_range_is_not_this_modules_question() {
         let premise = ranges(&[XSD_SHORT]);
         let conclusion = graph(&[(P, RDFS_RANGE, "http://example.org/SomeClass")]);
-        assert!(matches!(
-            decide(&premise, &conclusion),
-            EntailmentOutcome::NotEntailed(_)
-        ));
+        let EntailmentOutcome::Undecided(reason) = decide(&premise, &conclusion) else {
+            panic!("an rdfs:range axiom is outside PR1's conclusion-side hypothesis");
+        };
+        assert!(
+            matches!(reason, UndecidedReason::ConclusionOutsideRl(_)),
+            "this lane must not claim a containment it did not decide: {reason:?}"
+        );
     }
 
     /// STRICT MATERIALIZATION GAINS NOTHING.

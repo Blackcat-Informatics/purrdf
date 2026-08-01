@@ -69,7 +69,7 @@
 //!
 //! # The chase is also measured with its EXTRA MECHANISMS, which add no rule
 //!
-//! `purrdf_entail::entails()` reaches a conclusion six ways, and fifteen of the cases
+//! `purrdf_entail::entails()` reaches a conclusion seven ways, and fifteen of the cases
 //! graded here are reached only by one of the five beyond matching. A sixteenth
 //! needed no new mechanism at all, only the document its premise names — see
 //! [`vendored_imports`].
@@ -110,6 +110,15 @@
 //! after, and the five `the_*_lane_adds_no_rule` tests in `purrdf-entail` assert it.
 //! What changed is how many times the table is run, what it is run over, and what the
 //! run's `false` is read as.
+//!
+//! * **Composite.** A conclusion GRAPH is a conjunction and entailment is monotone
+//!   over one, so a conclusion stating a negative fact BESIDE a schema axiom is
+//!   entailed when each half is. `purrdf_entail::entails()` therefore threads the
+//!   residual through every lane in turn and matches only what survives; an answer
+//!   that needed two or more of them reports `composite` rather than any single
+//!   constituent's name. No vendored case needs it — each of the fifty is reached by
+//!   one lane or by none — which is why its column reads `0/0` and why the column is
+//!   printed anyway.
 //!
 //! Grading a positive case is one-sided in the honest direction: matching proves
 //! entailment (the chase is sound), and failing to match is always a real,
@@ -881,7 +890,7 @@ pub fn decide(case: &RlCase, imports: &purrdf_entail::ImportMap) -> Answer {
 ///
 /// [`decide`] is this with everything but the verdict thrown away, and it is the narrower
 /// call because most of the grading needs only the verdict. What this adds is the two facts
-/// the grading cannot see: WHICH of [`purrdf_entail::entails()`]'s six mechanisms answered, and
+/// the grading cannot see: WHICH of [`purrdf_entail::entails()`]'s seven mechanisms answered, and
 /// what the run that answered it did. A corpus that graded fifty verdicts without ever
 /// naming the mechanism would report the same green whether the profile's own rule table
 /// reached them or a second run over the premise's negation did, which is the distinction
@@ -969,7 +978,7 @@ pub struct GradedCase {
     pub grade: Grade,
     /// Its ledger entry, if it has one.
     pub ledgered: Option<RlGap>,
-    /// WHICH of [`purrdf_entail::entails()`]'s six mechanisms answered it.
+    /// WHICH of [`purrdf_entail::entails()`]'s seven mechanisms answered it.
     ///
     /// `None` only for a WITHHELD case, where no run completed and there is therefore no
     /// mechanism to name — an absence this corpus has none of today and which the type
@@ -1079,10 +1088,15 @@ impl RlSummary {
     /// owed unconditionally and has weak discriminating power. Reporting one number for
     /// both would hide which half a change moved.
     ///
-    /// Per mechanism the pair is `<positive>/<negative>`. The five beyond
-    /// `strict-table` only ever ESTABLISH a conclusion, so a non-zero negative count on
-    /// any of them would be an unsoundness rather than a better score, and printing the
-    /// split is what makes that readable rather than inferable.
+    /// Per mechanism the pair is `<positive>/<negative>`. A POSITIVE count on any of the
+    /// six beyond `strict-table` is a conclusion that mechanism ESTABLISHED. A NEGATIVE
+    /// count on one is not an unsoundness and is not a better score either: none of them
+    /// ever refutes, so what a lane's name on a negative case reports is that the lane
+    /// RECOGNIZED a construct of the non-conclusion and ADMITTED it could not read it,
+    /// which reaches the caller as `Undecided` naming the construct. Printing the split is
+    /// what makes both readable rather than inferable — a case moving from the table's
+    /// bucket to a lane's is a case that stopped claiming a refutation it was not entitled
+    /// to.
     ///
     /// The mechanism is spelled by its own `as_str`, and mechanisms with no case are
     /// still printed, because a lane dropping to zero is exactly the kind of change a

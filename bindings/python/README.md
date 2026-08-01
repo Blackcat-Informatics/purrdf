@@ -319,10 +319,13 @@ non-distinguished variable, constrained by the match and not projected, which is
 SPARQL says a query blank node is. A row is a substitution the knowledge base
 *entails* the pattern under — true in every model, not merely present in one closure.
 
-`mechanism` says *which* of six mechanisms reached the verdict. `strict-table` is the
+`mechanism` says *which* of seven mechanisms reached the verdict. `strict-table` is the
 regime's own rule table, run once; `refutation`, `freeze`, `comprehension`,
 `reflexivity` and `data-range` each exist because no head in that table has the
-conclusion's shape at all, and none of them adds a rule to it.
+conclusion's shape at all, and none of them adds a rule to it. `composite` is two or
+more of those folded over one conclusion — each discharging the triples it reads and
+handing the rest on — and it is spelled that way rather than by any one constituent's
+name, which would say that one mechanism sufficed.
 
 `entailment not-entailed` is a **proof** — the procedure was complete for this premise,
 so the absence of a mapping is the absence of an entailment — while `undecided` is what

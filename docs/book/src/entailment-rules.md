@@ -43,6 +43,15 @@ them adds a rule, which is why this inventory is byte-for-byte what it was
 before they existed — they change how many times the table is run and what its
 `false` is read as, not what the table states.
 
+The five COMPOSE. A conclusion graph is a conjunction and entailment is monotone
+over one, so a conclusion stating a negative fact beside a schema axiom is
+entailed when each half is: `purrdf_entail::entails()` threads the residual
+through every lane in turn and matches only what survives, and an answer that
+needed two or more of them renders as `composite` rather than as any single
+constituent's name. No vendored case needs it — each of the 50 is reached by one
+lane or by none — so the corpus does not measure it and the crate's own tests
+do.
+
 ## Coverage by regime
 
 | Regime | `--regime` | Defined | Implemented |

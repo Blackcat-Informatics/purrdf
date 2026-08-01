@@ -75,7 +75,8 @@
 //! evidence and none of the chase's, so a caller reading `NotEntailed` could not ask whether
 //! the rule table it came out of was complete, which rules fired, or which calculus ran —
 //! and had to reconstruct all three from prose. The certificate also names the mechanism, on
-//! its report, so a rendered answer says which of the six below reached it. See
+//! its report, so a rendered answer says which of the six below — or which combination of
+//! them — reached it. See
 //! [`certificate`].
 //!
 //! # Six mechanisms, and all of them are named
@@ -112,9 +113,10 @@
 //! established, which is the hypothesis every one of the soundness arguments rests on. See
 //! their module docs for those arguments, written out.
 //!
-//! [`EntailmentWarrant`] therefore has exactly six arms, one per mechanism, each minted by
-//! the mechanism it names. A seventh arrives with its own producer, together — this crate does
-//! not pre-declare states that nothing constructs.
+//! [`EntailmentWarrant`] has one arm per mechanism, each minted by the mechanism it names,
+//! and a SEVENTH — [`Composite`](EntailmentWarrant::Composite) — that arrived with its own
+//! producer: the fold below, which is the only thing that constructs one. This crate does not
+//! pre-declare states that nothing constructs.
 //!
 //! The five extra lanes are [`entails`]-only, and deliberately. Refutation decides a ground
 //! negative fact, and a projected variable ranging over one is a different question — "which
@@ -131,15 +133,27 @@
 //! another door. Datatype containment decides a ground `rdfs:range` AXIOM, and a projected
 //! variable there would range over the datatype map rather than over the premise's terms.
 //!
-//! # A mechanism discharges the WHOLE conclusion or none of it
+//! # The mechanisms COMPOSE, because entailment is monotone over conjunction
 //!
 //! Each of the extra mechanisms splits the conclusion into the triples it establishes and the
-//! RESIDUAL triples, which keep their ordinary obligation to map into the premise's closure.
-//! A conclusion that would need TWO of them at once — a negative fact beside a schema axiom —
-//! is therefore established by neither, because each sees the other's half as a residual
-//! triple that does not map. That is a real limit and it is stated rather than papered over:
-//! the alternative, letting a mechanism report success for the part it read, would make
-//! `Entailed` mean "some of this follows", which is not a claim anyone can act on.
+//! RESIDUAL triples. The residual is not handed to the closure by the lane that produced it:
+//! it is THREADED through the remaining lanes in a fixed cost order, and only whatever
+//! survives all five is matched — against `closure ∪ Σ(minted)`, because comprehension and
+//! reflexivity add licensed triples a later obligation may legitimately reference.
+//!
+//! It has to work that way because a conclusion GRAPH is a conjunction and entailment is
+//! monotone over one: if `P ⊨ C₁` and `P ⊨ C₂` then `P ⊨ C₁ ∪ C₂`. A conclusion stating a
+//! negative fact BESIDE a schema axiom is entailed when each half is, and an implementation
+//! in which each lane scored the other's half as an unmatched residual would answer `no` to a
+//! question whose answer is `yes` — and would answer it as a PROOF, because the fall-through
+//! reads "no mechanism reached it" as "nothing entails it".
+//!
+//! An answer that needed two or more lanes is an
+//! [`EntailmentWarrant::Composite`] carrying the contributing
+//! warrants in that same fixed cost order, and it renders as
+//! [`EntailmentMechanism::Composite`] — never as any single lane's name, which would be a
+//! false attribution. One lane and the final match is still that lane's own warrant, so a
+//! `refutation` answer is still spelled `refutation`.
 //!
 //! # Determinism
 //!
@@ -191,11 +205,13 @@ pub use pattern::VarKey;
 pub use precondition::UndecidedReason;
 pub use reflexivity::ReflexivityWarrant;
 pub use refutation::{REFUTATION_BUDGET, Refutation, RefutationWarrant};
-pub use warrant::{EntailmentMechanism, EntailmentWarrant, HomomorphismWarrant, verify};
+pub use warrant::{
+    CompositeWarrant, EntailmentMechanism, EntailmentWarrant, HomomorphismWarrant, verify,
+};
 
-use graph::default_graph_triples;
+use graph::{Triple, default_graph_triples};
 use homomorphism::Closure;
-use pattern::{PatTriple, bgp_patterns, conclusion_patterns, projected_vars};
+use pattern::{PatTriple, bgp_patterns, conclusion_patterns, patterns_at, projected_vars};
 
 /// What a conclusion-directed question answered.
 ///
@@ -215,41 +231,96 @@ pub enum EntailmentOutcome {
 
 /// What ONE mechanism made of a conclusion.
 ///
-/// Every mechanism beyond [`homomorphism`] answers in these four states and no others, which
-/// is what lets [`MECHANISMS`] be a list rather than a nest of special cases. The two that
-/// look alike are not: `NotApplicable` says "this conclusion is not my question" and
-/// `NotEstablished` says "it is my question and I did not reach it". Both hand the verdict
-/// back unchanged — a mechanism never refutes, because refuting needs a completeness claim
-/// and [`precondition`] is where those live — so the distinction is for the reader rather
-/// than for the control flow, and it is kept because collapsing it would leave no way to tell
-/// a mechanism that ran from one that declined.
+/// Every mechanism beyond [`homomorphism`] answers in these five states and no others, which
+/// is what lets [`MECHANISMS`] be a list rather than a nest of special cases. Three of them
+/// look alike and carry three different epistemic weights:
+///
+/// * `NotApplicable` — "this conclusion says nothing I read". The caller answers exactly what
+///   it would have answered without this lane.
+/// * `NotEstablished` — "it is my question and I did not reach it". Handed back unchanged; a
+///   mechanism never refutes, because refuting needs a completeness claim and [`precondition`]
+///   is where those live.
+/// * `Disqualified` — "I RECOGNIZE a construct here and I decline to read it". That is an
+///   admission of incapacity, and an admission must never become a refutation, so it routes to
+///   [`EntailmentOutcome::Undecided`] naming what was declined. Collapsing it into
+///   `NotApplicable`, which is what this enum used to do, is how a whitelist refusal came out
+///   of the service as a proof.
 pub(crate) enum Attempt {
     /// The lane does not apply: the regime is not one it serves, or the conclusion states
-    /// nothing it reads, or it states something it does not read. The caller answers exactly
-    /// what it would have answered without this lane.
+    /// nothing it reads.
     NotApplicable,
-    /// The conclusion is established, and here is the evidence.
+    /// The lane RECOGNIZES a construct of this conclusion and declines to read it, so nothing
+    /// tested it in either direction.
+    Disqualified(UndecidedReason),
+    /// Part or all of the conclusion is established, and here is the evidence together with
+    /// exactly which triples it discharged and what it minted.
     ///
     /// Boxed because a warrant carries whole closures and this enum is returned by value from
     /// every mechanism, including the ones that almost always decline.
-    Entailed(Box<EntailmentWarrant>),
-    /// The lane applies and did NOT establish the conclusion. Handed back to the
-    /// precondition, which decides whether that is a refutation or an admission.
+    Entailed(Box<Established>),
+    /// The lane applies and did NOT establish what it recognized.
     NotEstablished,
     /// The lane applies and stopped early, so it proved nothing in either direction.
     Undecided(UndecidedReason),
 }
 
-/// One mechanism's entry point.
-type Mechanism = fn(&RdfDataset, &RdfDataset, Regime, &Closure) -> Result<Attempt, EntailError>;
-
-/// The mechanisms beyond [`homomorphism`], in the order [`entails`] tries them.
+/// What one mechanism CONTRIBUTED to a conclusion.
 ///
-/// Order is a COST ordering and never a correctness one: each mechanism reads a disjoint
-/// class of conclusion (a negative fact, a schema axiom), so at most one of them can apply to
-/// any conclusion and the answer does not depend on which runs first. What the order buys is
-/// that a conclusion no mechanism reads pays only the cheapest applicability tests before
-/// falling through.
+/// The three parts are what makes the fold in [`entails`] possible. A lane that returned only
+/// a warrant would leave the caller unable to say which of the conclusion's obligations are
+/// still outstanding, which is exactly the information a second lane needs.
+pub(crate) struct Established {
+    /// The evidence for what this lane established. Its binding is EMPTY: the residual
+    /// homomorphism belongs to the answer, not to a lane, and [`entails`] fills it in on the
+    /// single-lane path or carries it on the composite.
+    pub(crate) warrant: EntailmentWarrant,
+    /// The conclusion triples this lane DISCHARGED, by index into the conclusion's own frozen
+    /// triple order. Empty for a lane that only widens the closure.
+    pub(crate) discharged: BTreeSet<usize>,
+    /// The triples this lane licensed INTO the closure — comprehension's minted scaffolds,
+    /// reflexivity's self-loops. Every one of them is entailed by the premise, so the final
+    /// match may legitimately land in them.
+    pub(crate) minted: Vec<Triple>,
+}
+
+/// One conclusion-directed question, as a mechanism reads it.
+///
+/// Carried as a struct rather than as five parameters because [`pending`](Self::pending) is
+/// the one a reader must not forget: a lane that answered about a triple another lane already
+/// discharged would double-count it, and one that ignored the field would re-decide a
+/// question already decided.
+pub(crate) struct Question<'a> {
+    /// The premise, with its imports resolved.
+    pub(crate) premise: &'a RdfDataset,
+    /// The conclusion, whole — every lane's whitelist is a claim about ALL of it.
+    pub(crate) conclusion: &'a RdfDataset,
+    /// The regime, which every lane gates itself on by whitelist.
+    pub(crate) regime: Regime,
+    /// The premise's own closure, indexed.
+    pub(crate) closure: &'a Closure,
+    /// The conclusion's default-graph triples, in its own frozen order — the index space every
+    /// lane's `discharged` set is expressed in.
+    pub(crate) triples: &'a [Triple],
+    /// The indices no earlier lane has discharged yet.
+    pub(crate) pending: &'a BTreeSet<usize>,
+}
+
+/// One mechanism's entry point.
+type Mechanism = fn(&Question<'_>) -> Result<Attempt, EntailError>;
+
+/// The mechanisms beyond [`homomorphism`], in the order [`entails`] folds them.
+///
+/// Order is a COST ordering: a conclusion no mechanism reads pays only the cheapest
+/// applicability tests before falling through. It is also, and deliberately, the ONLY thing
+/// that decides the order of a composite warrant's constituents — a fixed array rather than
+/// the order a search happened to reach, so the same question over the same premise always
+/// produces the same warrant, on `wasm32` as on native.
+///
+/// Two lanes can read one predicate — `rdfs:range` is a freeze shape when its object is a
+/// class and a data-range shape when its object is a datatype — which is why every lane
+/// filters what it recognizes through [`Question::pending`]: the earlier lane's discharge
+/// removes the triple from the later lane's question rather than leaving it to be decided
+/// twice, possibly two ways.
 const MECHANISMS: [Mechanism; 5] = [
     refutation::attempt,
     freeze::attempt,
@@ -373,7 +444,16 @@ pub fn certain_answers(
 ) -> Result<CertainAnswers, EntailError> {
     let prepared = prepare(premise, regime, imports)?;
     let pats = bgp_patterns(bgp);
-    let limits = precondition::limits(regime, prepared.effective(premise), &prepared.report, &pats);
+    // A basic graph pattern has no mechanism but the table, so nothing is decided elsewhere:
+    // the five conclusion-directed lanes are not reachable from here, and saying so with an
+    // empty set is what keeps the conclusion-side condition honest for this entry point too.
+    let limits = precondition::limits(
+        regime,
+        prepared.effective(premise),
+        &prepared.report,
+        &pats,
+        &BTreeSet::new(),
+    );
     let names = projected_vars(&pats);
     let vars: Vec<VarKey> = names.iter().cloned().map(VarKey::Projected).collect();
     let rows: BTreeSet<Vec<TermValue>> = homomorphism::find_all(pats, &prepared.closure, &vars)?;
@@ -458,7 +538,6 @@ pub fn entails(
     } = prepare(premise, regime, imports)?;
     let effective = merged.as_deref().unwrap_or(premise);
     let pats: Vec<PatTriple> = conclusion_patterns(conclusion);
-    let limits = precondition::limits(regime, effective, &report, &pats);
     let outcome = match homomorphism::find_one(pats, &closure)? {
         // A found mapping is a proof, and it needs no precondition: the rule set is sound,
         // so a conclusion mapped into the closure is entailed whatever the premise's syntax.
@@ -471,32 +550,122 @@ pub fn entails(
         // more expensive — a full re-chase per negative fact or per frozen implication — and
         // because the premise's consistency, which both soundness arguments require, is what
         // `prepare` above has just established.
-        Err(miss) => {
-            let mut answered = None;
-            for mechanism in MECHANISMS {
-                match mechanism(effective, conclusion, regime, &closure)? {
-                    Attempt::Entailed(warrant) => {
-                        answered = Some(EntailmentOutcome::Entailed(*warrant));
-                        break;
-                    }
-                    // The lane ran and stopped early. "I stopped looking" is not "there is
-                    // nothing to find", so it is never allowed to become a refutation.
-                    Attempt::Undecided(reason) => {
-                        answered = Some(EntailmentOutcome::Undecided(reason));
-                        break;
-                    }
-                    Attempt::NotApplicable | Attempt::NotEstablished => {}
-                }
-            }
-            // No mechanism reached it. What that MEANS is the precondition's answer, not any
-            // search's.
-            answered.unwrap_or_else(|| match limits.into_iter().next() {
-                Some(reason) => EntailmentOutcome::Undecided(reason),
-                None => EntailmentOutcome::NotEntailed(miss),
-            })
-        }
+        Err(_) => fold(effective, conclusion, regime, closure, &report)?,
     };
     Ok(EntailmentCertificate::new(outcome, report))
+}
+
+/// Thread the conclusion's residual through every mechanism, then match whatever survives.
+///
+/// The loop FOLDS rather than stopping at the first lane that answers: entailment is monotone
+/// over the conjunction a conclusion graph is, so a conclusion two lanes each read half of is
+/// entailed when each half is. See the [module docs](self).
+///
+/// A lane's refusal is COLLECTED rather than returned on the spot, for the same reason: a lane
+/// that declines a construct has said nothing about the conclusion's other triples, and
+/// letting its refusal end the fold would withhold an answer another lane was about to reach.
+/// The refusals are read only if the surviving residual does not map.
+fn fold(
+    premise: &RdfDataset,
+    conclusion: &RdfDataset,
+    regime: Regime,
+    closure: Closure,
+    report: &ReasoningReport,
+) -> Result<EntailmentOutcome, EntailError> {
+    let triples = default_graph_triples(conclusion);
+    let mut pending: BTreeSet<usize> = (0..triples.len()).collect();
+    let mut minted: Vec<Triple> = Vec::new();
+    let mut parts: Vec<EntailmentWarrant> = Vec::new();
+    let mut withheld: Vec<UndecidedReason> = Vec::new();
+    for mechanism in MECHANISMS {
+        let question = Question {
+            premise,
+            conclusion,
+            regime,
+            closure: &closure,
+            triples: &triples,
+            pending: &pending,
+        };
+        match mechanism(&question)? {
+            Attempt::Entailed(established) => {
+                let Established {
+                    warrant,
+                    discharged,
+                    minted: licensed,
+                } = *established;
+                parts.push(warrant);
+                pending.retain(|index| !discharged.contains(index));
+                minted.extend(licensed);
+            }
+            // "I stopped looking" and "I recognize this and decline to read it" are both
+            // admissions, and an admission is never allowed to become a refutation.
+            Attempt::Disqualified(reason) | Attempt::Undecided(reason) => withheld.push(reason),
+            Attempt::NotApplicable | Attempt::NotEstablished => {}
+        }
+    }
+
+    // Whatever no lane discharged keeps its ordinary obligation, against the closure the lanes
+    // widened: a comprehended scaffold is entailed, so a later conclusion triple may land in
+    // one.
+    let extended = if minted.is_empty() {
+        None
+    } else {
+        Some(closure.extended_with(minted))
+    };
+    let target = extended.as_ref().unwrap_or(&closure);
+    let residual = patterns_at(&triples, &pending);
+    match homomorphism::find_one(residual, target)? {
+        Ok(binding) => Ok(EntailmentOutcome::Entailed(compose(
+            regime, parts, binding, closure,
+        ))),
+        Err(miss) => {
+            // Nothing reached it. What that MEANS is a lane's own admission if one was made,
+            // and otherwise the precondition's answer — never any search's.
+            let refutable = negation::lowering(conclusion)
+                .map_or_else(BTreeSet::new, |lowering| lowering.consumed);
+            let limits = precondition::limits(
+                regime,
+                premise,
+                report,
+                &conclusion_patterns(conclusion),
+                &refutable,
+            );
+            Ok(
+                match withheld
+                    .into_iter()
+                    .next()
+                    .or_else(|| limits.into_iter().next())
+                {
+                    Some(reason) => EntailmentOutcome::Undecided(reason),
+                    None => EntailmentOutcome::NotEntailed(miss),
+                },
+            )
+        }
+    }
+}
+
+/// The warrant for a fold that reached the conclusion.
+///
+/// Three shapes, and the arity decides which: no contributing lane is the ordinary
+/// homomorphism, one lane is that lane's own warrant with the residual binding filled in, and
+/// two or more is a [`Composite`](EntailmentWarrant::Composite). The middle case is what keeps
+/// a `refutation` answer spelled `refutation` rather than renamed by a fold that happened to
+/// run five lanes to reach it.
+fn compose(
+    regime: Regime,
+    parts: Vec<EntailmentWarrant>,
+    binding: Binding,
+    closure: Closure,
+) -> EntailmentWarrant {
+    let mut parts = parts;
+    match parts.len() {
+        0 => EntailmentWarrant::Homomorphism(HomomorphismWarrant::new(regime, binding, closure)),
+        1 => parts
+            .pop()
+            .expect("a one-element vector pops")
+            .with_binding(binding),
+        _ => EntailmentWarrant::Composite(CompositeWarrant::new(regime, parts, binding, closure)),
+    }
 }
 
 #[cfg(test)]
@@ -506,8 +675,9 @@ mod tests {
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 
     use super::{
-        CertainAnswers, EntailmentOutcome, ImportMap, MissReason, UndecidedReason, certain_answers,
-        entails, verify,
+        CertainAnswers, CompositeWarrant, EntailmentMechanism, EntailmentOutcome,
+        EntailmentWarrant, ImportMap, MissReason, UndecidedReason, certain_answers, entails,
+        verify,
     };
     use crate::owl_dl::query::{QNode, QTriple};
     use crate::{EntailError, Regime};
@@ -750,6 +920,362 @@ mod tests {
         let again =
             certain_answers(&premise, &bgp, Regime::OwlRl, &ImportMap::new()).expect("consistent");
         assert_eq!(answers.rows(), again.rows());
+    }
+
+    // ── COMPOSITION: entailment is monotone over the conjunction a conclusion graph is ───
+
+    const COMPLEMENTOF: &str = "http://www.w3.org/2002/07/owl#complementOf";
+    const DIFFERENTFROM: &str = "http://www.w3.org/2002/07/owl#differentFrom";
+    const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
+    const OBJECT_PROPERTY: &str = "http://www.w3.org/2002/07/owl#ObjectProperty";
+    const TRANSITIVE: &str = "http://www.w3.org/2002/07/owl#TransitiveProperty";
+    const REFLEXIVE: &str = "http://www.w3.org/2002/07/owl#ReflexiveProperty";
+    const CHAIN: &str = "http://www.w3.org/2002/07/owl#propertyChainAxiom";
+    const ONEOF: &str = "http://www.w3.org/2002/07/owl#oneOf";
+    const FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
+    const REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
+    const NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
+
+    const BOY: &str = "http://example.org/Boy";
+    const GIRL: &str = "http://example.org/Girl";
+    const STEWIE: &str = "http://example.org/Stewie";
+    const PETER: &str = "http://example.org/Peter";
+    const P: &str = "http://example.org/p";
+    const KNOWS: &str = "http://example.org/knows";
+
+    /// A default-graph dataset; a leading `_` names a blank node, anything else an IRI.
+    fn mixed(triples: &[(&str, &str, &str)]) -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        for (s, p, o) in triples {
+            let term = |b: &mut RdfDatasetBuilder, value: &str| match value.strip_prefix('_') {
+                Some(label) => b.intern_blank(label, purrdf_core::BlankScope::DEFAULT),
+                None => b.intern_iri(value),
+            };
+            let s = term(&mut b, s);
+            let p = term(&mut b, p);
+            let o = term(&mut b, o);
+            b.push_quad(s, p, o, None);
+        }
+        b.freeze().expect("freeze")
+    }
+
+    /// A premise that gives each of three lanes something to establish, and nothing else.
+    ///
+    /// `Boy ⊓ Girl = ⊥` with `Stewie : Boy` is the refutation lane's shape; `p ∘ p ⊑ p` is
+    /// the freeze lane's; `knows` being reflexive is the reflexivity lane's.
+    fn three_lane_premise() -> Arc<RdfDataset> {
+        mixed(&[
+            (BOY, TYPE, OWL_CLASS),
+            (GIRL, TYPE, OWL_CLASS),
+            (BOY, DISJOINT, GIRL),
+            (STEWIE, TYPE, BOY),
+            (P, TYPE, OBJECT_PROPERTY),
+            (P, CHAIN, "_l1"),
+            ("_l1", FIRST, P),
+            ("_l1", REST, "_l2"),
+            ("_l2", FIRST, P),
+            ("_l2", REST, NIL),
+            (KNOWS, TYPE, REFLEXIVE),
+        ])
+    }
+
+    /// `Stewie : ¬Girl` — the refutation lane's half of a conclusion.
+    const COMPLEMENT_HALF: [(&str, &str, &str); 3] = [
+        ("_c", TYPE, OWL_CLASS),
+        ("_c", COMPLEMENTOF, GIRL),
+        (STEWIE, TYPE, "_c"),
+    ];
+
+    /// The mechanisms a warrant names, composite or not.
+    fn contributors(warrant: &EntailmentWarrant) -> Vec<EntailmentMechanism> {
+        match warrant {
+            EntailmentWarrant::Composite(composite) => composite.mechanisms(),
+            other => vec![other.mechanism()],
+        }
+    }
+
+    /// TWO MECHANISMS AND A HOMOMORPHISM, over ONE conclusion.
+    ///
+    /// Each half is entailed on its own — `Stewie : ¬Girl` by refutation, `p` transitive by
+    /// freezing `p ∘ p ⊑ p` — and `Girl a owl:Class` maps into the closure like any other
+    /// triple. Falsifiable against the exact defect this fold replaced: with each lane
+    /// matching a residual of its own, refutation scored the transitivity axiom as an
+    /// unmatched residual and freeze scored the complement scaffold as one, so neither
+    /// established anything and the fall-through answered `NotEntailed` — a PROOF, of
+    /// something false, because entailment is monotone over conjunction.
+    #[test]
+    fn two_mechanisms_and_a_residual_compose_into_one_warrant() {
+        let premise = three_lane_premise();
+        let mut triples = COMPLEMENT_HALF.to_vec();
+        triples.push((P, TYPE, TRANSITIVE));
+        triples.push((GIRL, TYPE, OWL_CLASS));
+        let conclusion = mixed(&triples);
+
+        // Each half alone is reached by exactly one lane, and by its own name.
+        assert_eq!(
+            contributors(&entailed(&premise, &mixed(&COMPLEMENT_HALF))),
+            [EntailmentMechanism::Refutation]
+        );
+        assert_eq!(
+            contributors(&entailed(&premise, &mixed(&[(P, TYPE, TRANSITIVE)]))),
+            [EntailmentMechanism::Freeze]
+        );
+
+        // …and both together are reached by BOTH, under a name that is neither of theirs.
+        let warrant = entailed(&premise, &conclusion);
+        assert_eq!(
+            warrant.mechanism(),
+            EntailmentMechanism::Composite,
+            "a composite answer that rendered as one constituent's name would tell a consumer \
+             that one mechanism sufficed"
+        );
+        assert_eq!(
+            contributors(&warrant),
+            [EntailmentMechanism::Refutation, EntailmentMechanism::Freeze]
+        );
+        assert!(verify(&warrant, &premise, &conclusion));
+    }
+
+    /// THREE mechanisms over one conclusion, plus the residual match.
+    #[test]
+    fn three_mechanisms_compose_over_one_conclusion() {
+        let premise = three_lane_premise();
+        let mut triples = COMPLEMENT_HALF.to_vec();
+        triples.push((P, TYPE, TRANSITIVE));
+        triples.push((STEWIE, KNOWS, STEWIE));
+        triples.push((STEWIE, TYPE, BOY));
+        let conclusion = mixed(&triples);
+
+        let warrant = entailed(&premise, &conclusion);
+        assert_eq!(
+            contributors(&warrant),
+            [
+                EntailmentMechanism::Refutation,
+                EntailmentMechanism::Freeze,
+                EntailmentMechanism::Reflexivity,
+            ],
+            "the constituents are the fixed MECHANISMS cost order, not the conclusion's own"
+        );
+        assert!(verify(&warrant, &premise, &conclusion));
+    }
+
+    /// THE ANSWER IS A FUNCTION OF THE INPUTS ALONE, not of the order the caller wrote.
+    ///
+    /// The same conclusion with its triples permuted returns the identical verdict and the
+    /// identical warrant — the same constituents, in the same order, with the same binding.
+    #[test]
+    fn a_permuted_conclusion_returns_the_identical_warrant() {
+        let premise = three_lane_premise();
+        let mut forward = COMPLEMENT_HALF.to_vec();
+        forward.push((P, TYPE, TRANSITIVE));
+        forward.push((GIRL, TYPE, OWL_CLASS));
+        let mut backward = forward.clone();
+        backward.reverse();
+        // …and one more permutation that puts the FREEZE axiom first, so the conclusion's own
+        // triple order disagrees with the fold's cost order rather than merely differing.
+        let mut freeze_first = vec![(P, TYPE, TRANSITIVE), (GIRL, TYPE, OWL_CLASS)];
+        freeze_first.extend(COMPLEMENT_HALF);
+
+        let mut seen: Vec<(Vec<EntailmentMechanism>, String)> = Vec::new();
+        for order in [forward, backward, freeze_first] {
+            let conclusion = mixed(&order);
+            let warrant = entailed(&premise, &conclusion);
+            assert!(verify(&warrant, &premise, &conclusion));
+            seen.push((contributors(&warrant), format!("{:?}", warrant.binding())));
+        }
+        assert_eq!(seen[0], seen[1]);
+        assert_eq!(seen[0], seen[2]);
+        assert_eq!(
+            seen[0].0,
+            [EntailmentMechanism::Refutation, EntailmentMechanism::Freeze]
+        );
+    }
+
+    /// `verify` ACCEPTS a composite and REJECTS every way of doctoring one.
+    ///
+    /// Four forgeries, one per thing the check re-decides: another premise, another
+    /// conclusion, a REORDERED constituent list, and a composite of one.
+    #[test]
+    fn a_composite_warrant_does_not_replay() {
+        let premise = three_lane_premise();
+        let mut triples = COMPLEMENT_HALF.to_vec();
+        triples.push((P, TYPE, TRANSITIVE));
+        triples.push((GIRL, TYPE, OWL_CLASS));
+        let conclusion = mixed(&triples);
+        let warrant = entailed(&premise, &conclusion);
+        assert!(verify(&warrant, &premise, &conclusion));
+
+        // Another PREMISE: no constituent's closure holds it.
+        assert!(!verify(&warrant, &subclass_premise(), &conclusion));
+        // Another CONCLUSION: the halves it states are different ones.
+        assert!(!verify(
+            &warrant,
+            &premise,
+            &mixed(&[(P, TYPE, TRANSITIVE), (GIRL, TYPE, OWL_CLASS)])
+        ));
+
+        let EntailmentWarrant::Composite(composite) = &warrant else {
+            panic!("two mechanisms compose into a composite");
+        };
+        // REORDERED: a warrant whose constituents are not in `MECHANISMS` order replays
+        // against a different pending set at every step, so it is not a warrant at all.
+        let mut reversed = composite.parts().to_vec();
+        reversed.reverse();
+        let forged = EntailmentWarrant::Composite(CompositeWarrant::new(
+            composite.regime(),
+            reversed,
+            composite.binding().clone(),
+            forged_closure(&warrant),
+        ));
+        assert!(!verify(&forged, &premise, &conclusion));
+
+        // A composite of ONE is a shape the fold never mints: one lane is that lane's own
+        // warrant, so a single-constituent composite is a relabelling of it.
+        let alone = EntailmentWarrant::Composite(CompositeWarrant::new(
+            composite.regime(),
+            vec![composite.parts()[0].clone()],
+            composite.binding().clone(),
+            forged_closure(&warrant),
+        ));
+        assert!(!verify(&alone, &premise, &conclusion));
+    }
+
+    /// AN EXISTENTIAL NEGATIVE FACT IS AN ADMISSION, NEVER A REFUTATION.
+    ///
+    /// `_:x owl:differentFrom Peter` asks whether SOMETHING is entailed different from
+    /// `Peter`; the refutation lane would have to choose a witness to negate, and it declines.
+    /// The ground question over the same premise IS decided, so this is a fact about the
+    /// existential rather than about the premise.
+    #[test]
+    fn an_existential_negative_fact_is_undecided_and_names_the_construct() {
+        let mut triples = default_disjoint();
+        triples.push((PETER, TYPE, GIRL));
+        let premise = mixed(&triples);
+
+        assert!(matches!(
+            outcome(
+                &premise,
+                &mixed(&[(STEWIE, DIFFERENTFROM, PETER)]),
+                Regime::OwlRl
+            ),
+            EntailmentOutcome::Entailed(_)
+        ));
+
+        let EntailmentOutcome::Undecided(UndecidedReason::ConstructNotRead { lane, constructs }) =
+            outcome(
+                &premise,
+                &mixed(&[("_x", DIFFERENTFROM, PETER)]),
+                Regime::OwlRl,
+            )
+        else {
+            panic!("declining to search for a witness is an admission, not a refutation");
+        };
+        assert_eq!(lane, EntailmentMechanism::Refutation);
+        assert!(
+            constructs.iter().any(|why| why.contains("witness")),
+            "{constructs:?}"
+        );
+    }
+
+    /// A CONSTRUCT A LANE'S WHITELIST REFUSES IS AN ADMISSION, NEVER A REFUTATION.
+    ///
+    /// `owl:oneOf` is a class constructor the comprehension lane names and does not read, and
+    /// the answer says so by name rather than reporting a proof of non-entailment about a
+    /// conclusion nothing tested.
+    #[test]
+    fn a_whitelist_refused_constructor_is_undecided_and_names_the_construct() {
+        let premise = mixed(&[("http://example.org/a", TYPE, OWL_CLASS)]);
+        let conclusion = mixed(&[
+            ("_u", TYPE, OWL_CLASS),
+            ("_u", ONEOF, "_l1"),
+            ("_l1", FIRST, "http://example.org/a"),
+            ("_l1", REST, NIL),
+        ]);
+        let EntailmentOutcome::Undecided(UndecidedReason::ConstructNotRead { lane, constructs }) =
+            outcome(&premise, &conclusion, Regime::OwlRl)
+        else {
+            panic!("a construct a whitelist refuses is an admission of incapacity");
+        };
+        assert_eq!(lane, EntailmentMechanism::Comprehension);
+        assert!(
+            constructs.iter().any(|why| why.contains("oneOf")),
+            "{constructs:?}"
+        );
+    }
+
+    /// A CONCLUSION OUTSIDE PR1'S SECOND HALF IS UNDECIDED, and it names the triple.
+    ///
+    /// `p rdf:type owl:IrreflexiveProperty` is a property characteristic no head in Tables
+    /// 4–9 has, and no lane reads it either — freeze excludes it because its defining
+    /// condition is not Horn. So nothing tested it, and the conclusion-side clause says so.
+    #[test]
+    fn a_schema_conclusion_no_lane_reads_is_undecided_and_names_the_triple() {
+        let premise = mixed(&[(P, TYPE, OBJECT_PROPERTY)]);
+        let conclusion = mixed(&[(P, TYPE, "http://www.w3.org/2002/07/owl#IrreflexiveProperty")]);
+        let EntailmentOutcome::Undecided(UndecidedReason::ConclusionOutsideRl(triples)) =
+            outcome(&premise, &conclusion, Regime::OwlRl)
+        else {
+            panic!("no mechanism reads an owl:IrreflexiveProperty conclusion");
+        };
+        assert_eq!(triples.len(), 1);
+        assert!(triples[0].contains("IrreflexiveProperty"), "{triples:?}");
+    }
+
+    /// …AND `NotEntailed` IS STILL REACHED, WITH A REAL PROOF.
+    ///
+    /// The cheap way to make everything above pass is to answer `Undecided` everywhere, which
+    /// would break the service rather than fix it. This is the genuine case the three answers
+    /// exist for: an RL-syntax premise, an assertional ground conclusion over named terms,
+    /// every mechanism run to completion, and no mapping. Both a class assertion and a
+    /// property assertion, because the conclusion-side clause reads the two differently.
+    #[test]
+    fn an_assertional_conclusion_over_an_rl_premise_is_still_refuted() {
+        let premise = mixed(&default_disjoint());
+        for conclusion in [
+            mixed(&[(STEWIE, TYPE, GIRL)]),
+            mixed(&[(STEWIE, KNOWS, PETER)]),
+            mixed(&[(STEWIE, TYPE, GIRL), (STEWIE, KNOWS, PETER)]),
+        ] {
+            let EntailmentOutcome::NotEntailed(miss) =
+                outcome(&premise, &conclusion, Regime::OwlRl)
+            else {
+                panic!("an assertional conclusion over an RL premise is REFUTED, not shrugged at");
+            };
+            assert!(!miss.summary().is_empty());
+        }
+        // …and the same premise still refutes a negative fact the refutation lane RAN on:
+        // there is no unique-name assumption, so nothing separates two unrelated individuals.
+        assert!(matches!(
+            outcome(
+                &premise,
+                &mixed(&[(STEWIE, DIFFERENTFROM, PETER)]),
+                Regime::OwlRl
+            ),
+            EntailmentOutcome::NotEntailed(_)
+        ));
+    }
+
+    /// `Boy ⊓ Girl = ⊥`, `Stewie : Boy` — an OWL 2 RL premise, as triples.
+    fn default_disjoint() -> Vec<(&'static str, &'static str, &'static str)> {
+        vec![
+            (BOY, TYPE, OWL_CLASS),
+            (GIRL, TYPE, OWL_CLASS),
+            (BOY, DISJOINT, GIRL),
+            (STEWIE, TYPE, BOY),
+        ]
+    }
+
+    /// The warrant of an entailed answer, or a panic naming the question that failed.
+    fn entailed(premise: &RdfDataset, conclusion: &RdfDataset) -> EntailmentWarrant {
+        match outcome(premise, conclusion, Regime::OwlRl) {
+            EntailmentOutcome::Entailed(warrant) => warrant,
+            other => panic!("expected an entailment, got {other:?}"),
+        }
+    }
+
+    /// A copy of `warrant`'s own premise closure, for building a forgery to be rejected.
+    fn forged_closure(warrant: &EntailmentWarrant) -> crate::entails::homomorphism::Closure {
+        warrant.closure().clone()
     }
 
     /// `entails` IS `certain_answers` with nothing to project: over the same premise and the

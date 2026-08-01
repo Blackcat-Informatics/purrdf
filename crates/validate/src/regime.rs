@@ -128,7 +128,7 @@ pub const PROGRAM_REGIME_NAMES: [&str; 1] = ["rif"];
 /// Against `3`, ONE line is new and nothing was removed:
 ///
 /// * `mechanism none | mechanism <name> <why>` — WHICH of the conclusion-directed
-///   entailment service's six mechanisms read an answer off this run, and the semantic
+///   entailment service's seven mechanisms read an answer off this run, and the semantic
 ///   boundary of the rule table that mechanism crosses.
 ///   [`purrdf_entail::entails()`] reaches a conclusion six ways, and five of them exist
 ///   because no head in the regime's rule table has the conclusion's shape at all — a
@@ -552,7 +552,7 @@ fn rule_lines(rules: &[purrdf_entail::RuleId]) -> String {
 ///
 /// `mechanism` sits with the `boundary` lines above it because it answers the same question
 /// one step further out: those say what the RUN could not fully handle, and this says which
-/// of [`purrdf_entail::entails()`]'s six mechanisms actually read the answer off it, together
+/// of [`purrdf_entail::entails()`]'s seven mechanisms actually read the answer off it, together
 /// with the semantic boundary of the rule table that mechanism crosses. `strict-table` is a
 /// positive claim — the regime's own table was run once and the conclusion was matched into
 /// (or proven absent from) its closure — and it is the only spelling a `not entailed` can
@@ -560,9 +560,12 @@ fn rule_lines(rules: &[purrdf_entail::RuleId]) -> String {
 /// one. The other five (`refutation`, `freeze`, `comprehension`, `reflexivity`,
 /// `data-range`) each exist because NO head in Tables 4–9 has the conclusion's shape, and
 /// none of them adds a rule: `missing`, `extension` and `fired` above are byte-identical
-/// whichever answered. `none` is a materialization, which asked no conclusion-directed
+/// whichever answered. `composite` is two or more of those five folded over one conclusion —
+/// a conclusion GRAPH is a conjunction, so it can need a lane per half — and it is spelled
+/// that way rather than by any constituent's name, which would tell a reader that one
+/// mechanism sufficed. `none` is a materialization, which asked no conclusion-directed
 /// question at all. The name is the mechanism's own `as_str` spelling and never an enum
-/// ordinal, so a seventh arm cannot silently renumber a consumer's reading of an old one.
+/// ordinal, so an eighth arm cannot silently renumber a consumer's reading of an old one.
 ///
 /// `completeness` has three forms and the middle one is the interesting one:
 /// `exact-within-boundaries` says the rule TABLE was complete and the run still
@@ -2630,6 +2633,7 @@ pub fn certain_answers_to_string(
 /// ```text
 /// mechanism <name>
 /// entailment entailed | entailment not-entailed | entailment undecided
+/// constituent <name>                (0..n, a `composite` mechanism only)
 /// binding <?var | _:label> <term>   (0..n, entailed only)
 /// miss <summary>                    (not-entailed only)
 /// undecided <reason>                (undecided only)
@@ -2640,6 +2644,11 @@ pub fn certain_answers_to_string(
 /// `undecided` is what an incomplete procedure is entitled to say instead. Collapsing the
 /// second into the first would turn a limitation of this library into a false statement
 /// about the caller's data.
+///
+/// A conclusion GRAPH is a conjunction, so it can need one mechanism per half; such an answer
+/// reads `mechanism composite` and lists its `constituent` lines in the fixed cost order the
+/// service folds them in. It is spelled that way rather than by any one constituent's name,
+/// which would tell a consumer that one mechanism sufficed.
 ///
 /// # Errors
 ///
@@ -2682,6 +2691,15 @@ fn render_entailment_answer(certificate: &EntailmentCertificate) -> String {
     match certificate.outcome() {
         EntailmentOutcome::Entailed(warrant) => {
             answer.push_str("entailment entailed\n");
+            // A COMPOSITE names its constituents, in the fixed cost order the fold tried them.
+            // `mechanism composite` alone would be truthful and useless: the one thing a reader
+            // of a folded answer needs is WHICH lanes did the work, and deriving it from the
+            // `boundary` lines is not something a consumer should have to do.
+            if let purrdf_entail::EntailmentWarrant::Composite(composite) = warrant {
+                for mechanism in composite.mechanisms() {
+                    let _ = writeln!(answer, "constituent {}", mechanism.as_str());
+                }
+            }
             for (key, term) in warrant.binding() {
                 let _ = writeln!(answer, "binding {} {}", emit_var(key), emit(term));
             }

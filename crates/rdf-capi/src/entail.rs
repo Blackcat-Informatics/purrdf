@@ -807,12 +807,14 @@ pub unsafe extern "C" fn purrdf_entail_certain_answers(
 /// question, different calculus, different certificate — and the two banners differ so
 /// neither can be parsed as the other.
 ///
-/// `*out_answer` opens `mechanism <name>`: WHICH of the six mechanisms reached the
+/// `*out_answer` opens `mechanism <name>`: WHICH of the seven mechanisms reached the
 /// verdict. `strict-table` is the regime's own rule table, run once, with the conclusion
 /// matched into (or proven absent from) its closure; the other five —  `refutation`,
 /// `freeze`, `comprehension`, `reflexivity`, `data-range` — exist because no head in that
-/// table has the conclusion's shape at all. The name is the canonical spelling and never
-/// an enum ordinal, so a seventh mechanism cannot renumber a reading of an old one.
+/// table has the conclusion's shape at all. `composite` is two or more of those folded over
+/// one conclusion, which a conjunction can need and which is spelled that way rather than by
+/// any one constituent's name. The name is the canonical spelling and never an enum ordinal,
+/// so an eighth mechanism cannot renumber a reading of an old one.
 ///
 /// Then THREE verdicts, never two: `entailment entailed` (with one `binding` line per
 /// existential of the conclusion), `entailment not-entailed` (a PROOF — the procedure was

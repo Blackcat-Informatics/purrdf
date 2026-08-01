@@ -782,7 +782,9 @@ export function entailCertainAnswers(
  * renders a `purrdf-dl-certificate 1`. This asks the regime's RULE TABLE about a
  * conclusion GRAPH and renders a `purrdf-reasoning-report 4`.
  *
- * The answer opens `mechanism <name>` — which of the six mechanisms reached the verdict.
+ * The answer opens `mechanism <name>` — which of the seven mechanisms reached the verdict.
+ * `composite` is two or more of the others folded over one conclusion, and such an answer
+ * lists one `constituent <name>` line per contributor.
  * THREE verdicts, never two: `not-entailed` is a PROOF, and `undecided` is what an
  * incomplete procedure is entitled to say instead.
  *

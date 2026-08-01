@@ -26,11 +26,16 @@
 //! collection is entailed exactly when every pair refutes. Reading it any other way — as one
 //! obligation, or as "enough" pairs — would be a different axiom.
 //!
-//! # Applicability is decided by WHITELIST, and an unknown falls OUT
+//! # Applicability is decided by WHITELIST, and an unknown DISQUALIFIES
 //!
-//! This module answers `None` — "not applicable; the caller falls back to what it would have
-//! answered anyway" — whenever the conclusion holds anything it does not fully read. The
-//! direction is the one [`crate::combined`]'s module docs argue for at length, and the
+//! This module's reading has three outcomes and the difference between two of them is the
+//! whole point. NOT-APPLICABLE says the conclusion states no negative fact at all, so a
+//! refutation would have nothing to prove and the caller answers exactly what it would have
+//! answered anyway. DECLINED says the conclusion states something this module RECOGNIZES and
+//! cannot read — and that is an admission of incapacity, never a refutation, so it travels to
+//! [`super::EntailmentOutcome::Undecided`] naming the construct.
+//!
+//! The direction is the one [`crate::combined`]'s module docs argue for at length, and the
 //! argument transfers verbatim: a BLACKLIST of negative constructs could not support the
 //! claim this lowering makes, because the claim is about EVERY statement of the conclusion.
 //! A refutation that discharged the `owl:differentFrom` it recognized and quietly left an
@@ -41,7 +46,9 @@
 //!
 //! * **consumed** by a recognized negative fact, and discharged by that fact's refutation;
 //! * **residual**, and discharged by mapping into the premise's closure like any other
-//!   conclusion triple — [`super::homomorphism`]'s ordinary obligation, not a weaker one.
+//!   conclusion triple — [`super::homomorphism`]'s ordinary obligation, not a weaker one —
+//!   or by another mechanism, which [`super::entails`] gets to try because the residual is
+//!   THREADED through the remaining lanes rather than handed straight to the closure.
 //!
 //! and any of the five constructs `NEGATIVE_CONSTRUCTS` names that this module cannot read
 //! in one of its three shapes disqualifies the whole conclusion. A construct nobody has
@@ -61,7 +68,7 @@ use purrdf_core::{RdfDataset, TermValue};
 
 use crate::engine::surface_of;
 use crate::entails::graph::{Triple, default_graph_triples, show};
-use crate::entails::pattern::{PatTriple, conclusion_node};
+use crate::entails::pattern::{PatTriple, patterns_at};
 use crate::vocab::{
     OWL_ALLDIFFERENT, OWL_CLASS, OWL_COMPLEMENTOF, OWL_DATATYPECOMPLEMENTOF, OWL_DIFFERENTFROM,
     OWL_DISTINCTMEMBERS, OWL_MEMBERS, OWL_NEGATIVEPROPERTYASSERTION, OWL_SAMEAS, RDF_FIRST,
@@ -164,13 +171,45 @@ impl std::fmt::Display for NegativeFact {
     }
 }
 
-/// A conclusion graph split into what refutation discharges and what matching discharges.
+/// A conclusion graph split into what refutation discharges and what it leaves behind.
 #[derive(Debug)]
 pub(crate) struct Lowering {
-    /// The conclusion triples NO negative fact consumed, as match patterns.
-    pub(crate) residual: Vec<PatTriple>,
+    /// The indices — into the conclusion's own frozen triple order — that the recognized
+    /// negative facts CONSUMED.
+    ///
+    /// An index set rather than a residual pattern list, because [`super::entails`] threads
+    /// one residual through every mechanism in turn and can only subtract what each lane
+    /// consumed if the lanes speak about the same triples by the same names.
+    pub(crate) consumed: BTreeSet<usize>,
     /// The negative facts, in the conclusion's own triple order and then member order.
     pub(crate) facts: Vec<NegativeFact>,
+}
+
+impl Lowering {
+    /// The conclusion triples no negative fact consumed, as match patterns.
+    pub(crate) fn residual(&self, triples: &[Triple]) -> Vec<PatTriple> {
+        let keep: BTreeSet<usize> = (0..triples.len())
+            .filter(|index| !self.consumed.contains(index))
+            .collect();
+        patterns_at(triples, &keep)
+    }
+}
+
+/// What this module made of a conclusion graph.
+///
+/// Three inhabitants, and the second exists because "I read nothing here" and "I read
+/// something here and cannot handle it" carry opposite epistemic weight. See the
+/// [module docs](self).
+#[derive(Debug)]
+pub(crate) enum Read {
+    /// The conclusion states no negative fact this module reads, so a refutation would have
+    /// nothing to prove.
+    NotApplicable,
+    /// The conclusion states something this module RECOGNIZES and declines to read, rendered
+    /// one entry per refusal. An admission, never a refutation.
+    Declined(Vec<String>),
+    /// The conclusion lowers, and here is the split. Always carries at least one fact.
+    Lowered(Lowering),
 }
 
 /// One conclusion graph, indexed the three ways the recognizers need to read it.
@@ -233,21 +272,17 @@ fn is(term: &TermValue, iri: &str) -> bool {
     matches!(term, TermValue::Iri(value) if value == iri)
 }
 
-/// Split `conclusion` into the negative facts refutation must discharge and the triples
-/// matching must.
+/// Split `conclusion` into the negative facts refutation must discharge and the triples it
+/// leaves behind.
 ///
-/// `None` is "not applicable": either the conclusion states nothing negative that this
-/// module reads (in which case a refutation would have nothing to prove) or it states
-/// something negative that this module does NOT read (in which case proceeding would leave a
-/// statement of the conclusion unaccounted for). Both send the caller back to the answer it
-/// would have given anyway — see the [module docs](self) for why an unknown falls that way.
-///
-/// A returned `Lowering` always carries at least one fact, so a caller can read "Some" as
-/// "there is something here only refutation can reach".
-pub(crate) fn lower(conclusion: &RdfDataset) -> Option<Lowering> {
+/// See [`Read`] for the three answers and why the middle one is not the first. A returned
+/// [`Read::Lowered`] always carries at least one fact, so a caller can read it as "there is
+/// something here only refutation can reach".
+pub(crate) fn lower(conclusion: &RdfDataset) -> Read {
     let indexed = Indexed::of(conclusion);
     let mut consumed: BTreeSet<usize> = BTreeSet::new();
     let mut facts: Vec<NegativeFact> = Vec::new();
+    let mut declined: Vec<String> = Vec::new();
 
     for index in 0..indexed.triples.len() {
         let [subject, predicate, object] = &indexed.triples[index];
@@ -263,28 +298,45 @@ pub(crate) fn lower(conclusion: &RdfDataset) -> Option<Lowering> {
         {
             continue;
         }
-        if is(predicate, OWL_DIFFERENTFROM) {
+        let read = if is(predicate, OWL_DIFFERENTFROM) {
             // An existential inequality — "there is something different from b" — is not a
             // fact whose negation this module can assert: it would have to choose a witness.
-            if !is_named(subject) || !is_named(object) {
-                return None;
+            if is_named(subject) && is_named(object) {
+                consumed.insert(index);
+                facts.push(NegativeFact::Distinct {
+                    left: subject.clone(),
+                    right: object.clone(),
+                });
+                Ok(())
+            } else {
+                Err(
+                    "an owl:differentFrom over an existential names no witness whose \
+                     identity could be negated"
+                        .to_owned(),
+                )
             }
-            consumed.insert(index);
-            facts.push(NegativeFact::Distinct {
-                left: subject.clone(),
-                right: object.clone(),
-            });
         } else if is(predicate, OWL_COMPLEMENTOF) {
-            complement(&indexed, subject, &mut consumed, &mut facts)?;
+            complement(&indexed, subject, &mut consumed, &mut facts)
         } else if is(predicate, RDF_TYPE) && is(object, OWL_ALLDIFFERENT) {
-            all_different(&indexed, subject, &mut consumed, &mut facts)?;
+            all_different(&indexed, subject, &mut consumed, &mut facts)
         } else {
-            return None;
+            Err(format!(
+                "{} states a negative construct this lane does not read",
+                show_triple(&indexed.triples[index])
+            ))
+        };
+        if let Err(why) = read {
+            declined.push(why);
         }
     }
 
+    if !declined.is_empty() {
+        declined.sort_unstable();
+        declined.dedup();
+        return Read::Declined(declined);
+    }
     if facts.is_empty() {
-        return None;
+        return Read::NotApplicable;
     }
 
     // THE WHITELIST'S CLOSING CHECK. Every triple is now either consumed or residual, and a
@@ -299,7 +351,6 @@ pub(crate) fn lower(conclusion: &RdfDataset) -> Option<Lowering> {
             }
         }
     }
-    let mut residual = Vec::new();
     for (index, triple) in indexed.triples.iter().enumerate() {
         if consumed.contains(&index) {
             continue;
@@ -308,15 +359,36 @@ pub(crate) fn lower(conclusion: &RdfDataset) -> Option<Lowering> {
             .iter()
             .any(|position| scaffold.contains(&surface_of(position)))
         {
-            return None;
+            return Read::Declined(vec![format!(
+                "{} mentions a node a negative fact already consumed, so the node has two \
+                 readings and at most one of them can be right",
+                show_triple(triple)
+            )]);
         }
-        residual.push([
-            conclusion_node(triple[0].clone()),
-            conclusion_node(triple[1].clone()),
-            conclusion_node(triple[2].clone()),
-        ]);
     }
-    Some(Lowering { residual, facts })
+    Read::Lowered(Lowering { consumed, facts })
+}
+
+/// The lowering of `conclusion`, or `None` for either of the two refusals.
+///
+/// [`verify`](super::verify) and [`precondition`](super::precondition) both need the split
+/// and neither needs the reason a refusal gave, so they read this rather than re-matching
+/// [`Read`]'s three arms.
+pub(crate) fn lowering(conclusion: &RdfDataset) -> Option<Lowering> {
+    match lower(conclusion) {
+        Read::Lowered(lowering) => Some(lowering),
+        Read::NotApplicable | Read::Declined(_) => None,
+    }
+}
+
+/// Render a triple the way a refusal names it.
+fn show_triple(triple: &Triple) -> String {
+    format!(
+        "{} {} {}",
+        show(&triple[0]),
+        show(&triple[1]),
+        show(&triple[2])
+    )
 }
 
 /// Recognize the anonymous complement class `node`, or refuse the whole conclusion.
@@ -345,28 +417,40 @@ fn complement(
     node: &TermValue,
     consumed: &mut BTreeSet<usize>,
     facts: &mut Vec<NegativeFact>,
-) -> Option<()> {
+) -> Result<(), String> {
+    let refuse = |why: &str| Err(format!("{} owl:complementOf …: {why}", show(node)));
     if !matches!(node, TermValue::Blank { .. }) {
-        return None;
+        return refuse(
+            "a NAMED complement is a class axiom about the caller's own vocabulary, not a \
+             negative fact about an individual",
+        );
     }
     let own = indexed.subject_of(node);
     let mut filler: Option<TermValue> = None;
     for &index in own {
         let [_, predicate, object] = &indexed.triples[index];
         if is(predicate, OWL_COMPLEMENTOF) {
-            if filler.is_some() || !is_named(object) {
-                return None;
+            if filler.is_some() {
+                return refuse("the node carries two complements, so it denotes neither");
+            }
+            if !is_named(object) {
+                return refuse(
+                    "the complement of a class EXPRESSION would negate membership in a class \
+                     whose own axioms nothing here read",
+                );
             }
             filler = Some(object.clone());
         } else if is(predicate, RDF_TYPE) {
             if !is(object, OWL_CLASS) && !is(object, RDFS_CLASS) {
-                return None;
+                return refuse("the node carries a typing other than owl:Class or rdfs:Class");
             }
         } else {
-            return None;
+            return refuse("the node carries a predicate that makes it denote something else");
         }
     }
-    let filler = filler?;
+    let Some(filler) = filler else {
+        return refuse("the node states no complement at all");
+    };
 
     let own_set: BTreeSet<usize> = own.iter().copied().collect();
     let mut instances = Vec::new();
@@ -377,12 +461,12 @@ fn complement(
         let [subject, predicate, object] = &indexed.triples[index];
         if !is(predicate, RDF_TYPE) || surface_of(object) != surface_of(node) || !is_named(subject)
         {
-            return None;
+            return refuse("the node is mentioned somewhere this lane did not look");
         }
         instances.push((index, subject.clone()));
     }
     if instances.is_empty() {
-        return None;
+        return refuse("the complement class is asserted of nobody, so it proves nothing");
     }
 
     consumed.extend(own_set);
@@ -393,7 +477,7 @@ fn complement(
             class: filler.clone(),
         });
     }
-    Some(())
+    Ok(())
 }
 
 /// Recognize the `owl:AllDifferent` collection `node` and lower it to its pairs, or refuse
@@ -417,9 +501,10 @@ fn all_different(
     node: &TermValue,
     consumed: &mut BTreeSet<usize>,
     facts: &mut Vec<NegativeFact>,
-) -> Option<()> {
+) -> Result<(), String> {
+    let refuse = |why: &str| Err(format!("{} a owl:AllDifferent: {why}", show(node)));
     if !matches!(node, TermValue::Blank { .. }) {
-        return None;
+        return refuse("a NAMED collection node is not a shape this lane reads");
     }
     let own = indexed.subject_of(node);
     let mut typed = 0_usize;
@@ -428,20 +513,20 @@ fn all_different(
         let [_, predicate, object] = &indexed.triples[index];
         if is(predicate, RDF_TYPE) {
             if !is(object, OWL_ALLDIFFERENT) {
-                return None;
+                return refuse("the node carries a typing other than owl:AllDifferent");
             }
             typed += 1;
         } else if is(predicate, OWL_MEMBERS) || is(predicate, OWL_DISTINCTMEMBERS) {
             if head.is_some() {
-                return None;
+                return refuse("the node carries two member lists, so it states two axioms");
             }
             head = Some(object.clone());
         } else {
-            return None;
+            return refuse("the node carries a predicate that makes it denote something else");
         }
     }
     if typed != 1 {
-        return None;
+        return refuse("the node is typed owl:AllDifferent other than exactly once");
     }
     let own_set: BTreeSet<usize> = own.iter().copied().collect();
     // The node is the collection's only anchor: a mention anywhere else means something this
@@ -451,13 +536,19 @@ fn all_different(
         .iter()
         .any(|index| !own_set.contains(index))
     {
-        return None;
+        return refuse("the node is mentioned somewhere this lane did not look");
     }
 
+    let Some(head) = head else {
+        return refuse("the node states no member list");
+    };
     let mut cells: BTreeSet<usize> = BTreeSet::new();
-    let members = walk(indexed, &head?, node, &mut cells)?;
+    let members = walk(indexed, &head, node, &mut cells)?;
     if members.len() < 2 {
-        return None;
+        return refuse(
+            "a collection of fewer than two members constrains nothing, so answering it would \
+             be saying yes without testing anything",
+        );
     }
 
     consumed.extend(own_set);
@@ -470,7 +561,7 @@ fn all_different(
             });
         }
     }
-    Some(())
+    Ok(())
 }
 
 /// Walk the RDF collection headed by `head`, collecting its members and its cells' triples.
@@ -488,14 +579,18 @@ fn walk(
     head: &TermValue,
     previous: &TermValue,
     cells: &mut BTreeSet<usize>,
-) -> Option<Vec<TermValue>> {
+) -> Result<Vec<TermValue>, String> {
     let mut members = Vec::new();
     let mut current = head.clone();
     let mut from = previous.clone();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     while !is(&current, RDF_NIL) {
-        if !matches!(current, TermValue::Blank { .. }) || !seen.insert(surface_of(&current)) {
-            return None;
+        let refuse = |why: &str| Err(format!("the member list at {}: {why}", show(&current)));
+        if !matches!(current, TermValue::Blank { .. }) {
+            return refuse("a collection cell must be a blank node");
+        }
+        if !seen.insert(surface_of(&current)) {
+            return refuse("the collection is cyclic");
         }
         let own = indexed.subject_of(&current);
         let own_set: BTreeSet<usize> = own.iter().copied().collect();
@@ -504,17 +599,23 @@ fn walk(
         for &index in own {
             let [_, predicate, object] = &indexed.triples[index];
             if is(predicate, RDF_FIRST) {
-                if member.is_some() || !is_named(object) {
-                    return None;
+                if member.is_some() {
+                    return refuse("the cell carries two rdf:first values");
+                }
+                if !is_named(object) {
+                    return refuse(
+                        "a member that is not a named individual has no identity to \
+                                   separate",
+                    );
                 }
                 member = Some(object.clone());
             } else if is(predicate, RDF_REST) {
                 if rest.is_some() {
-                    return None;
+                    return refuse("the cell carries two rdf:rest values");
                 }
                 rest = Some(object.clone());
             } else {
-                return None;
+                return refuse("the cell carries a triple that is not part of a collection");
             }
         }
         // Reached from exactly one place, and that place is the predecessor: a cell two
@@ -527,22 +628,25 @@ fn walk(
             if surface_of(subject) != surface_of(&from)
                 || surface_of(object) != surface_of(&current)
             {
-                return None;
+                return refuse("the cell is reached from more than one place");
             }
         }
+        let (Some(member), Some(rest)) = (member, rest) else {
+            return refuse("the cell is missing its rdf:first or its rdf:rest");
+        };
         cells.extend(own_set);
-        members.push(member?);
+        members.push(member);
         from = current;
-        current = rest?;
+        current = rest;
     }
-    Some(members)
+    Ok(members)
 }
 
 #[cfg(test)]
 mod tests {
     use purrdf_core::{BlankScope, RdfDatasetBuilder};
 
-    use super::{NegativeFact, lower};
+    use super::{NegativeFact, Read, lower, lowering};
     use crate::vocab::{
         OWL_ALLDIFFERENT, OWL_CLASS, OWL_COMPLEMENTOF, OWL_DIFFERENTFROM, OWL_DISTINCTMEMBERS,
         OWL_MEMBERS, OWL_NEGATIVEPROPERTYASSERTION, OWL_SAMEAS, RDF_FIRST, RDF_NIL, RDF_REST,
@@ -575,8 +679,13 @@ mod tests {
     /// `a owl:differentFrom b` lowers to one fact whose negation is `a owl:sameAs b`.
     #[test]
     fn a_different_from_lowers_to_one_pair() {
-        let lowered = lower(&graph(&[(A, OWL_DIFFERENTFROM, B)])).expect("recognized");
-        assert!(lowered.residual.is_empty());
+        let conclusion = graph(&[(A, OWL_DIFFERENTFROM, B)]);
+        let lowered = lowering(&conclusion).expect("recognized");
+        assert!(
+            lowered
+                .residual(&crate::entails::graph::default_graph_triples(&conclusion))
+                .is_empty()
+        );
         assert_eq!(
             lowered.facts,
             [NegativeFact::Distinct {
@@ -598,13 +707,13 @@ mod tests {
     /// while the unrelated triple beside it stays residual.
     #[test]
     fn a_complement_typing_consumes_its_scaffold_and_leaves_the_rest() {
-        let lowered = lower(&graph(&[
+        let conclusion = graph(&[
             ("_c", RDF_TYPE, OWL_CLASS),
             ("_c", OWL_COMPLEMENTOF, K),
             (A, RDF_TYPE, "_c"),
             (K, RDF_TYPE, OWL_CLASS),
-        ]))
-        .expect("recognized");
+        ]);
+        let lowered = lowering(&conclusion).expect("recognized");
         assert_eq!(
             lowered.facts,
             [NegativeFact::NotAnInstanceOf {
@@ -613,7 +722,9 @@ mod tests {
             }]
         );
         assert_eq!(
-            lowered.residual.len(),
+            lowered
+                .residual(&crate::entails::graph::default_graph_triples(&conclusion))
+                .len(),
             1,
             "`K a owl:Class` still has to match"
         );
@@ -631,7 +742,7 @@ mod tests {
     #[test]
     fn an_all_different_collection_lowers_to_every_pair() {
         for members in [OWL_MEMBERS, OWL_DISTINCTMEMBERS] {
-            let lowered = lower(&graph(&[
+            let conclusion = graph(&[
                 ("_x", RDF_TYPE, OWL_ALLDIFFERENT),
                 ("_x", members, "_l1"),
                 ("_l1", RDF_FIRST, A),
@@ -640,10 +751,13 @@ mod tests {
                 ("_l2", RDF_REST, "_l3"),
                 ("_l3", RDF_FIRST, C),
                 ("_l3", RDF_REST, RDF_NIL),
-            ]))
-            .unwrap_or_else(|| panic!("{members} is a recognized spelling"));
+            ]);
+            let lowered = lowering(&conclusion)
+                .unwrap_or_else(|| panic!("{members} is a recognized spelling"));
             assert!(
-                lowered.residual.is_empty(),
+                lowered
+                    .residual(&crate::entails::graph::default_graph_triples(&conclusion))
+                    .is_empty(),
                 "the whole scaffold is consumed"
             );
             assert_eq!(
@@ -669,7 +783,10 @@ mod tests {
     /// A conclusion with nothing negative in it is NOT this module's business.
     #[test]
     fn an_ordinary_conclusion_is_not_applicable() {
-        assert!(lower(&graph(&[(A, RDF_TYPE, K)])).is_none());
+        assert!(matches!(
+            lower(&graph(&[(A, RDF_TYPE, K)])),
+            Read::NotApplicable
+        ));
     }
 
     // ── The whitelist: an unrecognized shape DISQUALIFIES ──────────────────────────────
@@ -770,7 +887,10 @@ mod tests {
             ),
         ];
         for (why, triples) in cases {
-            assert!(lower(&graph(&triples)).is_none(), "{why}");
+            let Read::Declined(reasons) = lower(&graph(&triples)) else {
+                panic!("{why}: a recognized-and-declined shape is an ADMISSION, never a shrug");
+            };
+            assert!(!reasons.is_empty(), "{why}: the refusal names nothing");
         }
     }
 
@@ -778,16 +898,19 @@ mod tests {
     /// collection walk refuses too.
     #[test]
     fn a_cyclic_member_list_refuses() {
+        let Read::Declined(reasons) = lower(&graph(&[
+            ("_x", RDF_TYPE, OWL_ALLDIFFERENT),
+            ("_x", OWL_MEMBERS, "_l1"),
+            ("_l1", RDF_FIRST, A),
+            ("_l1", RDF_REST, "_l2"),
+            ("_l2", RDF_FIRST, B),
+            ("_l2", RDF_REST, "_l1"),
+        ])) else {
+            panic!("a cycle is a shape this lane recognizes and declines");
+        };
         assert!(
-            lower(&graph(&[
-                ("_x", RDF_TYPE, OWL_ALLDIFFERENT),
-                ("_x", OWL_MEMBERS, "_l1"),
-                ("_l1", RDF_FIRST, A),
-                ("_l1", RDF_REST, "_l2"),
-                ("_l2", RDF_FIRST, B),
-                ("_l2", RDF_REST, "_l1"),
-            ]))
-            .is_none()
+            reasons.iter().any(|why| why.contains("member list")),
+            "{reasons:?}"
         );
     }
 
@@ -802,8 +925,8 @@ mod tests {
             ("_l2", RDF_FIRST, B),
             ("_l2", RDF_REST, RDF_NIL),
         ]);
-        let first = lower(&conclusion).expect("recognized");
-        let second = lower(&conclusion).expect("recognized");
+        let first = lowering(&conclusion).expect("recognized");
+        let second = lowering(&conclusion).expect("recognized");
         assert_eq!(first.facts, second.facts);
     }
 

@@ -28,7 +28,8 @@
 //! # ONE ARM PER MECHANISM, and each arrives with its producer
 //!
 //! [`EntailmentWarrant`] is an enum with exactly as many arms as this crate has mechanisms
-//! for reaching a `yes`, and it has never had one more than that. There are six:
+//! for reaching a `yes`, and it has never had one more than that. There are seven, six of
+//! which are one lane each:
 //!
 //! * [`Homomorphism`](EntailmentWarrant::Homomorphism) — the chase-and-graph-match procedure
 //!   OWL 2 Profiles §4.3 states the RL entailment relation in terms of, minted by
@@ -60,13 +61,42 @@
 //!   contained in the conclusion's, minted by [`super::datarange`]. Its evidence is the
 //!   declarations the containment was decided over, per axiom.
 //!
+//! …and the seventh is not a lane at all:
+//!
+//! * [`Composite`](EntailmentWarrant::Composite) — TWO OR MORE of the six, folded, minted by
+//!   [`super::entails`]'s own fold and by nothing else. A conclusion graph is a conjunction
+//!   and entailment is monotone over one, so a conclusion stating a negative fact beside a
+//!   schema axiom is entailed when each half is; the fold threads the residual through every
+//!   lane in the fixed cost order [`super::entails`] tries them in, and matches whatever
+//!   survives. Its evidence is the
+//!   ORDERED list of contributing warrants together with the binding of the surviving
+//!   residual — see [`CompositeWarrant`].
+//!
 //! An arm nothing constructs would be a state [`verify`] could not check and no caller could
 //! ever be handed, which is the same unrepresentable-contradiction discipline that keeps
 //! [`DlCertificate`](crate::DlCertificate) from storing a completeness beside the boundary
-//! list that contradicts it. A seventh mechanism brings its own arm and its own producer,
+//! list that contradicts it. An eighth mechanism brings its own arm and its own producer,
 //! together, or it does not arrive.
 //!
+//! # The RESIDUAL homomorphism belongs to the ANSWER, not to a lane
+//!
+//! Every warrant carries a [`binding`](EntailmentWarrant::binding), and it is always the
+//! mapping of the triples NO lane discharged — the one final homomorphism the fold runs, once,
+//! against `closure ∪ Σ(minted)`. A lane no longer matches a residual of its own, because its
+//! residual is not the answer's: a triple refutation left behind may be one freeze discharges,
+//! and a lane that scored it as a miss would be answering a question the fold had not finished
+//! asking. On a composite the binding lives on the composite and every constituent's is empty,
+//! which is the same "nothing stored that can be derived" discipline as everywhere else here:
+//! one binding, one owner.
+//!
 //! # What `verify` actually checks, and why it needs the premise
+//!
+//! [`verify`] REPLAYS the fold's reading — which is pure syntax plus closure lookups, and runs
+//! no reasoner. For each constituent in order it re-reads the conclusion, re-checks that
+//! constituent's own evidence, and subtracts what that constituent discharged; then it maps the
+//! surviving residual under the warrant's binding into `closure ∪ Σ(minted)`. So a composite is
+//! re-decided by exactly the same accounting that produced it, and a warrant claiming a
+//! discharge the conclusion does not license fails at the step that recomputes it.
 //!
 //! For the homomorphism arm, three things, all of them necessary and none of them a
 //! reasoner:
@@ -85,12 +115,12 @@
 //! for the binding — one lookup per triple, no search, because the search already happened
 //! and its result is what the warrant carries.
 //!
-//! For the refutation arm it is the same three over the conclusion's RESIDUAL triples, plus
+//! For the refutation arm it is the residual mapping above plus
 //! [`Refutation::check`](super::Refutation::check) per negative fact — and the conclusion is
 //! LOWERED again on the spot, so a warrant cannot be replayed against a conclusion whose
 //! negative facts are different ones.
 //!
-//! For the freeze arm it is again the same three over the residual triples, plus, per
+//! For the freeze arm it is the residual mapping plus, per
 //! generalisation: the axiom's typings are triples of the premise closure; the constants are
 //! distinct blank nodes occurring in NEITHER the premise nor the conclusion — the hypothesis
 //! of the theorem on constants, re-decided against the caller's own documents rather than
@@ -109,10 +139,15 @@
 //! again, the self-loops it licenses under the warrant's closure are recomputed and compared,
 //! each licensing typing is re-looked-up, and the binding is replayed.
 //!
-//! The data-range arm is the same three over the residual triples, plus, per axiom: the cited
+//! The data-range arm is the residual mapping plus, per axiom: the cited
 //! declarations really are the closure's declarations for that property, and the containment
 //! is RE-DECIDED — which is arithmetic over value spaces rather than inference, so it is a
 //! check and not a second run of anything.
+//!
+//! The composite arm is every constituent's own check above, run in the warrant's own order
+//! against the pending set each of them saw, and then the residual mapping once. A constituent
+//! that is itself a composite is rejected outright: the fold never nests one, so a nested arm
+//! is a forgery rather than a shape this crate produces.
 //!
 //! # What `verify` does NOT check
 //!
@@ -130,11 +165,11 @@ use crate::entails::datarange::{DataRangeWarrant, verify_datarange};
 use crate::entails::freeze::{FreezeWarrant, verify_freeze};
 use crate::entails::graph::{Triple, default_graph_triples};
 use crate::entails::homomorphism::{Binding, Closure, substitute};
-use crate::entails::pattern::conclusion_patterns;
+use crate::entails::pattern::{conclusion_patterns, patterns_at};
 use crate::entails::reflexivity::{ReflexivityWarrant, verify_reflexivity};
 use crate::entails::refutation::{RefutationWarrant, verify_refutation};
 
-/// WHICH of this crate's six mechanisms answered a conclusion-directed question.
+/// WHICH of this crate's seven mechanisms answered a conclusion-directed question.
 ///
 /// The NAME of the answer's provenance, separated from the answer's evidence so it can be
 /// carried where the evidence cannot: an [`EntailmentWarrant`] holds whole closures and only
@@ -153,8 +188,8 @@ use crate::entails::refutation::{RefutationWarrant, verify_refutation};
 ///
 /// # [`Self::StrictTable`] is the answer, not the absence of one
 ///
-/// Five of the six arms exist because the rule table has NO head of the conclusion's shape;
-/// the sixth is the table itself. A question the table decides — matched into its closure, or
+/// Five of the seven arms exist because the rule table has NO head of the conclusion's shape;
+/// the sixth is the table itself and the seventh is two or more of them at once. A question the table decides — matched into its closure, or
 /// proven absent from it — is answered by [`Self::StrictTable`], and that is a positive claim:
 /// the seventy-eight rules of OWL 2 Profiles §4.3 (or the regime's own table) were run once
 /// over the premise and the conclusion was read off the result. It is the ONLY arm that can
@@ -179,18 +214,27 @@ pub enum EntailmentMechanism {
     Reflexivity,
     /// An `rdfs:range` axiom decided by containment between XSD value spaces.
     DataRange,
+    /// TWO OR MORE of the six above, folded over one conclusion — each discharging the triples
+    /// it reads and handing the rest on, with the surviving residual matched once at the end.
+    ///
+    /// Spelled `composite` rather than by any constituent's name, because a conclusion reached
+    /// by refutation AND freeze was not reached by refutation: naming either would tell a
+    /// consumer that one mechanism sufficed, which is exactly the claim the arm exists to
+    /// deny. [`EntailmentWarrant::Composite`] carries WHICH lanes contributed, in order.
+    Composite,
 }
 
 impl EntailmentMechanism {
     /// Every mechanism, in the order [`super::entails`] reaches for them — the table first,
     /// then the cost order [`super::entails`] tries the other five in.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::StrictTable,
         Self::Refutation,
         Self::Freeze,
         Self::Comprehension,
         Self::Reflexivity,
         Self::DataRange,
+        Self::Composite,
     ];
 
     /// A short, stable name — the spelling every host renders and the C and WASM boundaries
@@ -208,6 +252,7 @@ impl EntailmentMechanism {
             Self::Comprehension => "comprehension",
             Self::Reflexivity => "reflexivity",
             Self::DataRange => "data-range",
+            Self::Composite => "composite",
         }
     }
 
@@ -273,6 +318,15 @@ impl EntailmentMechanism {
                  containment is decided by purrdf-xsd over those value spaces, three-valued, so \
                  that an undecidable facet reads as UNDECIDED rather than as a refutation"
             }
+            Self::Composite => {
+                "A CONCLUSION GRAPH IS A CONJUNCTION, AND ENTAILMENT IS MONOTONE OVER ONE. No \
+                 single boundary was crossed: two or more of the mechanisms above were, one per \
+                 half of a conclusion neither could read alone. Each lane discharged the triples \
+                 it reads and handed the RESIDUAL on rather than scoring it as a miss, and the \
+                 triples that survived every lane were matched once against the closure the \
+                 lanes widened. Reporting any one constituent's name here would say that one \
+                 mechanism sufficed, which is the claim this mechanism exists to deny"
+            }
         }
     }
 }
@@ -305,6 +359,9 @@ pub enum EntailmentWarrant {
     /// The conclusion's `rdfs:range` axioms were decided by datatype CONTAINMENT, and the
     /// rest mapped.
     DataRange(DataRangeWarrant),
+    /// TWO OR MORE of the six above each discharged the part of the conclusion it reads, and
+    /// what survived them all mapped.
+    Composite(CompositeWarrant),
 }
 
 impl EntailmentWarrant {
@@ -319,6 +376,7 @@ impl EntailmentWarrant {
             Self::Comprehension(w) => w.regime(),
             Self::Reflexivity(w) => w.regime(),
             Self::DataRange(w) => w.regime(),
+            Self::Composite(w) => w.regime(),
         }
     }
 
@@ -337,16 +395,20 @@ impl EntailmentWarrant {
             Self::Comprehension(_) => EntailmentMechanism::Comprehension,
             Self::Reflexivity(_) => EntailmentMechanism::Reflexivity,
             Self::DataRange(_) => EntailmentMechanism::DataRange,
+            Self::Composite(_) => EntailmentMechanism::Composite,
         }
     }
 
-    /// The mapping: what each of the conclusion's existentials was bound to.
+    /// The mapping: what each existential of the conclusion's RESIDUAL was bound to.
     ///
-    /// For the refutation and freeze arms this is the mapping of the conclusion's RESIDUAL
-    /// triples alone; a negative fact has no mapping, which is why it had to be refuted, and
-    /// a schema axiom has none either, which is why it had to be frozen. For the
-    /// comprehension arm it is the mapping of the WHOLE conclusion, into the closure extended
-    /// by what was minted — nothing there is discharged by having been recognized.
+    /// The residual is the triples NO mechanism discharged — a negative fact has no mapping,
+    /// which is why it had to be refuted, and a schema axiom has none either, which is why it
+    /// had to be frozen. For the comprehension and reflexivity arms nothing is discharged at
+    /// all: those two only WIDEN the closure, so the residual is the whole conclusion and it
+    /// maps into `closure ∪ minted`.
+    ///
+    /// On a [`Composite`](Self::Composite) this is the composite's own, and every constituent's
+    /// is empty: one residual, one mapping, one owner.
     #[must_use]
     pub const fn binding(&self) -> &Binding {
         match self {
@@ -356,6 +418,7 @@ impl EntailmentWarrant {
             Self::Comprehension(w) => w.binding(),
             Self::Reflexivity(w) => w.binding(),
             Self::DataRange(w) => w.binding(),
+            Self::Composite(w) => w.binding(),
         }
     }
 
@@ -372,6 +435,39 @@ impl EntailmentWarrant {
             Self::Comprehension(w) => w.closure_size(),
             Self::Reflexivity(w) => w.closure_size(),
             Self::DataRange(w) => w.closure_size(),
+            Self::Composite(w) => w.closure_size(),
+        }
+    }
+
+    /// This warrant with the fold's residual `binding` attached.
+    ///
+    /// Crate-internal, and the ONE place a lane warrant acquires a binding: a lane establishes
+    /// what it reads and never matches a residual of its own, so the mapping arrives from
+    /// [`entails`](super::entails)'s single final homomorphism once every lane has had its
+    /// turn. A composite already owns the binding and a nested one would be two owners, so the
+    /// arm is written out and refuses rather than defaulting.
+    pub(crate) fn with_binding(self, binding: Binding) -> Self {
+        match self {
+            Self::Homomorphism(w) => Self::Homomorphism(w.with_binding(binding)),
+            Self::Refutation(w) => Self::Refutation(w.with_binding(binding)),
+            Self::Freeze(w) => Self::Freeze(w.with_binding(binding)),
+            Self::Comprehension(w) => Self::Comprehension(w.with_binding(binding)),
+            Self::Reflexivity(w) => Self::Reflexivity(w.with_binding(binding)),
+            Self::DataRange(w) => Self::DataRange(w.with_binding(binding)),
+            Self::Composite(w) => Self::Composite(w),
+        }
+    }
+
+    /// The premise closure this warrant is against.
+    pub(crate) const fn closure(&self) -> &Closure {
+        match self {
+            Self::Homomorphism(w) => w.closure(),
+            Self::Refutation(w) => w.closure(),
+            Self::Freeze(w) => w.closure(),
+            Self::Comprehension(w) => w.closure(),
+            Self::Reflexivity(w) => w.closure(),
+            Self::DataRange(w) => w.closure(),
+            Self::Composite(w) => w.closure(),
         }
     }
 }
@@ -416,6 +512,17 @@ impl HomomorphismWarrant {
         self.closure.len()
     }
 
+    /// The closure this warrant is against.
+    pub(crate) const fn closure(&self) -> &Closure {
+        &self.closure
+    }
+
+    /// This warrant with `binding` in place of its own.
+    pub(crate) fn with_binding(mut self, binding: Binding) -> Self {
+        self.binding = binding;
+        self
+    }
+
     /// The image of `conclusion` under this warrant's mapping — the closure triples that
     /// witness it — or `None` if the mapping leaves a position of the conclusion unbound.
     ///
@@ -434,20 +541,180 @@ impl HomomorphismWarrant {
             })
             .collect()
     }
+}
 
-    /// Re-decide this warrant against `premise` and `conclusion`.
-    fn check(&self, premise: &RdfDataset, conclusion: &RdfDataset) -> bool {
-        let Some(image) = self.witnesses(conclusion) else {
-            return false;
-        };
-        if !image.iter().all(|triple| self.closure.contains(triple)) {
-            return false;
+/// The evidence of a FOLD: which mechanisms contributed, in order, and the mapping of what
+/// none of them discharged.
+///
+/// # Why the constituents are ORDERED and why the order is not the fold's choice
+///
+/// It is the fixed cost order [`super::entails`] folds the mechanisms in — an array in the
+/// source, not a search's arrival order. A composite is
+/// therefore a function of the premise and the conclusion alone: two runs over one question
+/// produce the same constituents in the same sequence, and [`verify`] can REPLAY the fold's
+/// accounting — re-reading the conclusion once per constituent, subtracting what each
+/// discharged — instead of trusting an index list the warrant carries. A warrant whose
+/// constituents were in the order a search happened to reach them would be unreplayable, and
+/// an unreplayable warrant is a claim rather than evidence.
+///
+/// # What it does NOT carry
+///
+/// The discharged triples, and the minted ones. Both are functions of the conclusion, the
+/// closure and the constituent list, so [`verify`] recomputes them; storing a copy would be
+/// storing something that can disagree with the evidence beside it.
+#[derive(Debug, Clone)]
+pub struct CompositeWarrant {
+    /// The regime every constituent's closure was computed under.
+    regime: Regime,
+    /// The contributing warrants, in the fixed cost order the fold tries them. Never fewer
+    /// than two — one is that lane's own warrant — and never itself a composite.
+    parts: Vec<EntailmentWarrant>,
+    /// What each existential of the SURVIVING residual was bound to.
+    binding: Binding,
+    /// The premise's own closure, which the residual maps into once the constituents' mints
+    /// are added to it.
+    closure: Closure,
+}
+
+impl CompositeWarrant {
+    /// Mint a composite. Crate-internal: the only producer is
+    /// [`entails`](super::entails)'s fold.
+    pub(crate) const fn new(
+        regime: Regime,
+        parts: Vec<EntailmentWarrant>,
+        binding: Binding,
+        closure: Closure,
+    ) -> Self {
+        Self {
+            regime,
+            parts,
+            binding,
+            closure,
         }
-        // The closure of a premise holds the premise: every lane copies the input through
-        // and adds conclusions ABOUT it. A warrant whose closure does not is a warrant about
-        // some other premise.
-        let held: BTreeSet<Triple> = default_graph_triples(premise).into_iter().collect();
-        held.iter().all(|triple| self.closure.contains(triple))
+    }
+
+    /// The regime every constituent ran under.
+    #[must_use]
+    pub const fn regime(&self) -> Regime {
+        self.regime
+    }
+
+    /// The contributing warrants, in the order the fold tried their mechanisms.
+    #[must_use]
+    pub fn parts(&self) -> &[EntailmentWarrant] {
+        &self.parts
+    }
+
+    /// WHICH mechanisms contributed, in the same order.
+    ///
+    /// Derived from [`Self::parts`] rather than stored beside it, so the list cannot name a
+    /// mechanism no constituent came from.
+    #[must_use]
+    pub fn mechanisms(&self) -> Vec<EntailmentMechanism> {
+        self.parts
+            .iter()
+            .map(EntailmentWarrant::mechanism)
+            .collect()
+    }
+
+    /// The mapping that discharged whatever no constituent did.
+    #[must_use]
+    pub const fn binding(&self) -> &Binding {
+        &self.binding
+    }
+
+    /// How many distinct triples the premise closure this warrant is against holds.
+    #[must_use]
+    pub fn closure_size(&self) -> usize {
+        self.closure.len()
+    }
+
+    /// The premise closure the residual maps into.
+    pub(crate) const fn closure(&self) -> &Closure {
+        &self.closure
+    }
+}
+
+impl std::fmt::Display for CompositeWarrant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} mechanisms folded:", self.parts.len())?;
+        for mechanism in self.mechanisms() {
+            write!(f, " {mechanism}")?;
+        }
+        Ok(())
+    }
+}
+
+/// Where a mechanism sits in the fixed cost order [`entails`](super::entails) folds them in.
+///
+/// `None` for the two that are not lanes: the rule table is the fold's own final match rather
+/// than a constituent, and a composite never nests one. [`verify`] requires a composite's
+/// constituents to be STRICTLY INCREASING in this order, which is what makes a composite
+/// replayable — a reordered warrant would replay against a different pending set at every
+/// step, and one with a repeated lane would account for the same triples twice.
+const fn fold_rank(mechanism: EntailmentMechanism) -> Option<usize> {
+    match mechanism {
+        EntailmentMechanism::Refutation => Some(0),
+        EntailmentMechanism::Freeze => Some(1),
+        EntailmentMechanism::Comprehension => Some(2),
+        EntailmentMechanism::Reflexivity => Some(3),
+        EntailmentMechanism::DataRange => Some(4),
+        EntailmentMechanism::StrictTable | EntailmentMechanism::Composite => None,
+    }
+}
+
+/// What one constituent of a fold accounted for, recomputed rather than trusted.
+#[derive(Debug, Default)]
+pub(crate) struct Replay {
+    /// The conclusion triples it discharged, by index into the conclusion's frozen order.
+    pub(crate) discharged: BTreeSet<usize>,
+    /// The triples it licensed into the closure.
+    pub(crate) minted: Vec<Triple>,
+}
+
+/// Re-check ONE constituent's own evidence and recompute what it accounted for.
+///
+/// `None` is a failed check. Runs no reasoner: every lane's checker is lookups against the
+/// closure the constituent carries, plus a re-reading of the conclusion.
+fn replay(
+    part: &EntailmentWarrant,
+    premise: &RdfDataset,
+    conclusion: &RdfDataset,
+    triples: &[Triple],
+    pending: &BTreeSet<usize>,
+) -> Option<Replay> {
+    // The closure of a premise holds the premise: every lane copies the input through and adds
+    // conclusions ABOUT it. A constituent whose closure does not is evidence about some other
+    // premise, and checking it here rather than once per lane is what keeps a composite from
+    // smuggling one in beside five honest ones.
+    let held: BTreeSet<Triple> = default_graph_triples(premise).into_iter().collect();
+    if !held.iter().all(|triple| part.closure().contains(triple)) {
+        return None;
+    }
+    match part {
+        // The residual homomorphism is the fold's own, checked once by `verify` below, so this
+        // arm accounts for nothing and mints nothing.
+        EntailmentWarrant::Homomorphism(_) => Some(Replay::default()),
+        EntailmentWarrant::Refutation(refuted) => {
+            verify_refutation(refuted, premise, conclusion, triples, pending)
+        }
+        EntailmentWarrant::Freeze(frozen) => {
+            verify_freeze(frozen, premise, conclusion, triples, pending)
+        }
+        EntailmentWarrant::Comprehension(comprehended) => {
+            verify_comprehension(comprehended, premise, conclusion, triples, pending)
+        }
+        EntailmentWarrant::Reflexivity(reflexive) => {
+            verify_reflexivity(reflexive, conclusion, triples, pending)
+        }
+        EntailmentWarrant::DataRange(ranged) => {
+            verify_datarange(ranged, conclusion, triples, pending)
+        }
+        // The fold never nests one, so a nested composite is a forgery rather than a shape
+        // this crate produces. Written out rather than recursed into, because recursing would
+        // make the constituent order — the whole of a composite's replayability — a tree
+        // nothing pins.
+        EntailmentWarrant::Composite(_) => None,
     }
 }
 
@@ -493,18 +760,74 @@ impl HomomorphismWarrant {
 /// ```
 #[must_use]
 pub fn verify(w: &EntailmentWarrant, premise: &RdfDataset, conclusion: &RdfDataset) -> bool {
-    match w {
-        EntailmentWarrant::Homomorphism(mapped) => mapped.check(premise, conclusion),
-        EntailmentWarrant::Refutation(refuted) => verify_refutation(refuted, premise, conclusion),
-        EntailmentWarrant::Freeze(frozen) => verify_freeze(frozen, premise, conclusion),
-        EntailmentWarrant::Comprehension(comprehended) => {
-            verify_comprehension(comprehended, premise, conclusion)
+    let triples = default_graph_triples(conclusion);
+    let mut pending: BTreeSet<usize> = (0..triples.len()).collect();
+    let mut minted: Vec<Triple> = Vec::new();
+    // A composite is its constituents in order; anything else is its own single constituent.
+    // One code path, so a lane warrant and a lane INSIDE a composite are checked identically.
+    let parts: &[EntailmentWarrant] = match w {
+        EntailmentWarrant::Composite(composite) => {
+            // The fold never mints a composite of fewer than two — one lane is that lane's own
+            // warrant — so a shorter list is a shape nothing here produces.
+            if composite.parts().len() < 2 {
+                return false;
+            }
+            // …and it mints them in `MECHANISMS` order, so a warrant whose constituents are in
+            // any other order is one this crate did not produce and could not replay: each
+            // step's reading depends on what the steps before it discharged.
+            let mut previous: Option<usize> = None;
+            for mechanism in composite.mechanisms() {
+                let Some(rank) = fold_rank(mechanism) else {
+                    return false;
+                };
+                if previous.is_some_and(|seen| seen >= rank) {
+                    return false;
+                }
+                previous = Some(rank);
+            }
+            composite.parts()
         }
-        EntailmentWarrant::Reflexivity(reflexive) => {
-            verify_reflexivity(reflexive, premise, conclusion)
-        }
-        EntailmentWarrant::DataRange(ranged) => verify_datarange(ranged, premise, conclusion),
+        other => std::slice::from_ref(other),
+    };
+    for part in parts {
+        let Some(accounted) = replay(part, premise, conclusion, &triples, &pending) else {
+            return false;
+        };
+        pending.retain(|index| !accounted.discharged.contains(index));
+        minted.extend(accounted.minted);
     }
+
+    // …and the surviving residual is the ordinary homomorphism claim, checked the ordinary
+    // way, against the closure the constituents widened.
+    let closure = w.closure();
+    let extended = if minted.is_empty() {
+        None
+    } else {
+        Some(closure.extended_with(minted))
+    };
+    let target = extended.as_ref().unwrap_or(closure);
+    let binding = w.binding();
+    let image: Option<Vec<Triple>> = patterns_at(&triples, &pending)
+        .iter()
+        .map(|pat| {
+            Some([
+                substitute(&pat[0], binding)?,
+                substitute(&pat[1], binding)?,
+                substitute(&pat[2], binding)?,
+            ])
+        })
+        .collect();
+    let Some(image) = image else {
+        return false;
+    };
+    if !image.iter().all(|triple| target.contains(triple)) {
+        return false;
+    }
+    // The closure of a premise holds the premise. Already checked per constituent; checked
+    // again for the warrant's own closure, which is the one the residual just mapped into.
+    default_graph_triples(premise)
+        .iter()
+        .all(|triple| closure.contains(triple))
 }
 
 #[cfg(test)]
@@ -524,7 +847,7 @@ mod tests {
             .into_iter()
             .map(EntailmentMechanism::as_str)
             .collect();
-        assert_eq!(names.len(), 6);
+        assert_eq!(names.len(), 7);
         names.sort_unstable();
         let count = names.len();
         names.dedup();
@@ -564,6 +887,7 @@ mod tests {
                 "comprehension",
                 "reflexivity",
                 "data-range",
+                "composite",
             ]
         );
     }

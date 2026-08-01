@@ -1116,7 +1116,7 @@ pub struct ReasoningReport {
     withheld_surrogates: u64,
     /// The termination proof that admitted the program, for a lane the chase evaluated.
     termination: Option<TerminationCertificate>,
-    /// WHICH of the conclusion-directed service's six mechanisms read the answer off this
+    /// WHICH of the conclusion-directed service's seven mechanisms read the answer off this
     /// run; `None` for a run that answered no conclusion-directed question at all.
     ///
     /// Not a parameter of [`Self::new`], and not settable by a consumer: the ONE producer is
@@ -1526,7 +1526,7 @@ impl ReasoningReport {
         self.termination
     }
 
-    /// WHICH of the six conclusion-directed mechanisms read an answer off this run.
+    /// WHICH of the seven conclusion-directed mechanisms read an answer off this run.
     ///
     /// `None` for a report that accompanies a CLOSURE: [`materialize`](crate::materialize)
     /// answers no conclusion-directed question, so there is no mechanism to name and this

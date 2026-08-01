@@ -437,7 +437,7 @@ pub(crate) fn substitute(pat: &Pat, bound: &Binding) -> Option<TermValue> {
 }
 
 /// Render a pattern triple the way a diagnostic prints it.
-fn show_pattern(pat: &PatTriple) -> String {
+pub(crate) fn show_pattern(pat: &PatTriple) -> String {
     let render = |position: &Pat| -> String {
         match position {
             Pat::Ground(term) => crate::entails::graph::show(term),

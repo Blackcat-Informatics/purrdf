@@ -94,11 +94,12 @@
 
 use purrdf_core::{RdfDataset, TermValue};
 
-use crate::entails::graph::{Triple, default_graph_triples, show};
-use crate::entails::homomorphism::{Binding, Closure, find_one, substitute};
-use crate::entails::pattern::{PatTriple, conclusion_node};
-use crate::entails::warrant::EntailmentWarrant;
-use crate::entails::{Attempt, negation};
+use std::collections::BTreeSet;
+
+use crate::entails::graph::{Triple, show};
+use crate::entails::homomorphism::{Binding, Closure};
+use crate::entails::warrant::{EntailmentMechanism, EntailmentWarrant, Replay};
+use crate::entails::{Attempt, Established, Question, UndecidedReason};
 use crate::vocab::{OWL_REFLEXIVEPROPERTY, RDF_TYPE};
 use crate::{EntailError, Regime};
 
@@ -155,6 +156,17 @@ impl ReflexivityWarrant {
     pub fn closure_size(&self) -> usize {
         self.closure.len()
     }
+
+    /// The premise closure this warrant is against.
+    pub(crate) const fn closure(&self) -> &Closure {
+        &self.closure
+    }
+
+    /// This warrant with the fold's residual `binding` attached.
+    pub(crate) fn with_binding(mut self, binding: Binding) -> Self {
+        self.binding = binding;
+        self
+    }
 }
 
 impl std::fmt::Display for ReflexivityWarrant {
@@ -178,12 +190,18 @@ impl std::fmt::Display for ReflexivityWarrant {
     }
 }
 
-/// What one conclusion licensed: the self-loops and the typings that license them.
+/// What one conclusion licensed: the self-loops, the typings that license them, and the
+/// self-loops this lane RECOGNIZED and declined.
 struct Licensed {
     /// The self-loops.
     minted: Vec<Triple>,
     /// The closure triple licensing each.
     licences: Vec<Triple>,
+    /// Self-loops over an EXISTENTIAL — `_:b p _:b` for a `p` the closure declares reflexive.
+    /// This lane establishes a loop at a term the conclusion NAMES and does not choose a
+    /// witness for one it does not, so such a triple is an admission rather than a residual
+    /// the closure would be asked to refute.
+    declined: Vec<String>,
 }
 
 /// Every self-loop of `conclusion` the closure's reflexive typings license, with the whole
@@ -191,19 +209,15 @@ struct Licensed {
 ///
 /// A pure function of the conclusion and the closure — which is what lets
 /// [`verify`](super::verify) recompute it and compare rather than trust the warrant's list.
-fn license(conclusion: &RdfDataset, closure: &Closure) -> (Licensed, Vec<PatTriple>) {
-    let triples = default_graph_triples(conclusion);
+fn license(triples: &[Triple], closure: &Closure) -> Licensed {
     let mut minted = Vec::new();
     let mut licences = Vec::new();
-    for triple in &triples {
+    let mut declined = Vec::new();
+    for triple in triples {
         let [subject, predicate, object] = triple;
-        // THE WHITELIST: the same NAMED term either side of a NAMED predicate. A blank node
-        // is an existential this mechanism does not choose a witness for, and a literal
-        // cannot be a subject at all.
-        if !matches!(subject, TermValue::Iri(_))
-            || !matches!(predicate, TermValue::Iri(_))
-            || subject != object
-        {
+        // THE WHITELIST: the same NAMED term either side of a NAMED predicate. A literal
+        // cannot be a subject at all, and a triple whose two sides differ is not a self-loop.
+        if !matches!(predicate, TermValue::Iri(_)) || subject != object {
             continue;
         }
         let typing = [
@@ -214,14 +228,29 @@ fn license(conclusion: &RdfDataset, closure: &Closure) -> (Licensed, Vec<PatTrip
         if !closure.contains(&typing) {
             continue;
         }
+        // A BLANK node either side is an existential — "is there something that `p`s itself?"
+        // — and this lane establishes a loop at a term the CONCLUSION names rather than
+        // choosing a witness for one it does not. Recognized and declined, never dropped: a
+        // dropped one would fall through to a failed match and be reported as a proof.
+        if !matches!(subject, TermValue::Iri(_)) {
+            declined.push(format!(
+                "{} {} {}: a self-loop over an existential names no term to establish it at",
+                show(subject),
+                show(predicate),
+                show(object)
+            ));
+            continue;
+        }
         minted.push(triple.clone());
         licences.push(typing);
     }
-    let patterns = triples
-        .into_iter()
-        .map(|[s, p, o]| [conclusion_node(s), conclusion_node(p), conclusion_node(o)])
-        .collect();
-    (Licensed { minted, licences }, patterns)
+    declined.sort_unstable();
+    declined.dedup();
+    Licensed {
+        minted,
+        licences,
+        declined,
+    }
 }
 
 /// Try to establish `conclusion` from the premise through its reflexive properties.
@@ -234,12 +263,13 @@ fn license(conclusion: &RdfDataset, closure: &Closure) -> (Licensed, Vec<PatTrip
 /// # Errors
 ///
 /// [`EntailError::MatchBudget`] if the final match exhausts its budget.
-pub(crate) fn attempt(
-    _premise: &RdfDataset,
-    conclusion: &RdfDataset,
-    regime: Regime,
-    closure: &Closure,
-) -> Result<Attempt, EntailError> {
+pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
+    let Question {
+        regime,
+        closure,
+        triples,
+        ..
+    } = *q;
     // WHITELIST, not blacklist. `owl:ReflexiveProperty` is an OWL 2 term, and the three
     // lanes below `OWL-RL` interpret no OWL vocabulary at all: reading a typing they do not
     // interpret as a licence would be this service drawing an OWL conclusion under a regime
@@ -247,29 +277,31 @@ pub(crate) fn attempt(
     if !matches!(regime, Regime::OwlRl) {
         return Ok(Attempt::NotApplicable);
     }
-    // A conclusion the refutation lane reads is not this one's.
-    if negation::lower(conclusion).is_some() {
-        return Ok(Attempt::NotApplicable);
-    }
-    let (licensed, patterns) = license(conclusion, closure);
+    let licensed = license(triples, closure);
     if licensed.minted.is_empty() {
-        return Ok(Attempt::NotApplicable);
+        return Ok(if licensed.declined.is_empty() {
+            Attempt::NotApplicable
+        } else {
+            Attempt::Disqualified(UndecidedReason::ConstructNotRead {
+                lane: EntailmentMechanism::Reflexivity,
+                constructs: licensed.declined,
+            })
+        });
     }
 
-    let extended = closure.extended_with(licensed.minted.clone());
-    let Ok(binding) = find_one(patterns, &extended)? else {
-        return Ok(Attempt::NotEstablished);
-    };
-
-    Ok(Attempt::Entailed(Box::new(EntailmentWarrant::Reflexivity(
-        ReflexivityWarrant {
+    // This lane DISCHARGES nothing: it adds self-loops to the closure and every conclusion
+    // triple, self-loop included, keeps its full obligation to map into the widened closure.
+    Ok(Attempt::Entailed(Box::new(Established {
+        warrant: EntailmentWarrant::Reflexivity(ReflexivityWarrant {
             regime,
-            binding,
+            binding: Binding::new(),
             closure: closure.clone(),
-            minted: licensed.minted,
+            minted: licensed.minted.clone(),
             licences: licensed.licences,
-        },
-    ))))
+        }),
+        discharged: BTreeSet::new(),
+        minted: licensed.minted,
+    })))
 }
 
 /// Re-decide a reflexivity warrant against the caller's own premise and conclusion.
@@ -279,37 +311,21 @@ pub(crate) fn attempt(
 /// compared, every licence is re-looked-up in the closure, and the binding is replayed.
 pub(crate) fn verify_reflexivity(
     w: &ReflexivityWarrant,
-    premise: &RdfDataset,
-    conclusion: &RdfDataset,
-) -> bool {
-    let (licensed, patterns) = license(conclusion, &w.closure);
+    _conclusion: &RdfDataset,
+    triples: &[Triple],
+    _pending: &BTreeSet<usize>,
+) -> Option<Replay> {
+    let licensed = license(triples, &w.closure);
     if licensed.minted != w.minted || licensed.licences != w.licences || w.minted.is_empty() {
-        return false;
+        return None;
     }
     if !w.licences.iter().all(|triple| w.closure.contains(triple)) {
-        return false;
+        return None;
     }
-    let extended = w.closure.extended_with(w.minted.clone());
-    let image: Option<Vec<Triple>> = patterns
-        .iter()
-        .map(|pat| {
-            Some([
-                substitute(&pat[0], &w.binding)?,
-                substitute(&pat[1], &w.binding)?,
-                substitute(&pat[2], &w.binding)?,
-            ])
-        })
-        .collect();
-    let Some(image) = image else {
-        return false;
-    };
-    if !image.iter().all(|triple| extended.contains(triple)) {
-        return false;
-    }
-    // …and the closure it maps into has to be a closure OF this premise.
-    default_graph_triples(premise)
-        .iter()
-        .all(|triple| w.closure.contains(triple))
+    Some(Replay {
+        discharged: BTreeSet::new(),
+        minted: w.minted.clone(),
+    })
 }
 
 #[cfg(test)]
@@ -453,6 +469,32 @@ mod tests {
                 EntailmentOutcome::Entailed(_)
             ),
             "nothing declares `likes` reflexive"
+        );
+    }
+
+    /// A SELF-LOOP OVER AN EXISTENTIAL IS AN ADMISSION, NOT A REFUTATION.
+    ///
+    /// `_:b knows _:b` asks whether SOMETHING knows itself. The argument this lane rests on
+    /// establishes the loop at a term the CONCLUSION names — "let `x` be any IRI of the
+    /// conclusion's vocabulary" — and an existential names none, so the lane recognizes the
+    /// reflexive typing and declines. Falsifiable against the failure the whitelist used to
+    /// have: dropping the triple silently sent it to a match that could not find it, and the
+    /// fall-through reported that as a proof of non-entailment.
+    #[test]
+    fn a_self_loop_over_an_existential_is_declined_by_name() {
+        let premise = graph(&[(KNOWS, RDF_TYPE, OWL_REFLEXIVEPROPERTY)]);
+        let conclusion = graph(&[("_b", KNOWS, "_b")]);
+        let EntailmentOutcome::Undecided(crate::UndecidedReason::ConstructNotRead {
+            lane,
+            constructs,
+        }) = decide(&premise, &conclusion)
+        else {
+            panic!("declining to choose a witness is an admission, not a refutation");
+        };
+        assert_eq!(lane, crate::EntailmentMechanism::Reflexivity);
+        assert!(
+            constructs.iter().any(|why| why.contains("existential")),
+            "{constructs:?}"
         );
     }
 

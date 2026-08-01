@@ -105,15 +105,16 @@ use purrdf_xsd::{XsdDatatype, parse};
 use crate::engine::surface_of;
 use crate::entails::fresh::{FreshBlanks, labels_of};
 use crate::entails::graph::{Triple, default_graph_triples, show};
-use crate::entails::homomorphism::{Binding, Closure, find_one, substitute};
+use crate::entails::homomorphism::{Binding, Closure};
 use crate::entails::membership::Membership;
-use crate::entails::pattern::{PatTriple, conclusion_node};
-use crate::entails::warrant::EntailmentWarrant;
-use crate::entails::{Attempt, negation};
+use crate::entails::warrant::{EntailmentMechanism, EntailmentWarrant, Replay};
+use crate::entails::{Attempt, Established, Question, UndecidedReason};
 use crate::vocab::{
-    OWL_ALLVALUESFROM, OWL_CARDINALITY, OWL_CLASS, OWL_HASVALUE, OWL_INTERSECTIONOF,
-    OWL_MAXCARDINALITY, OWL_MINCARDINALITY, OWL_ONPROPERTY, OWL_RESTRICTION, OWL_SOMEVALUESFROM,
-    OWL_UNIONOF, RDF_FIRST, RDF_LIST, RDF_NIL, RDF_REST, RDF_TYPE, RDFS_CLASS,
+    OWL_ALLVALUESFROM, OWL_CARDINALITY, OWL_CLASS, OWL_DISJOINTUNIONOF, OWL_HASSELF, OWL_HASVALUE,
+    OWL_INTERSECTIONOF, OWL_MAXCARDINALITY, OWL_MAXQUALIFIEDCARDINALITY, OWL_MINCARDINALITY,
+    OWL_MINQUALIFIEDCARDINALITY, OWL_ONDATARANGE, OWL_ONDATATYPE, OWL_ONEOF, OWL_ONPROPERTIES,
+    OWL_ONPROPERTY, OWL_QUALIFIEDCARDINALITY, OWL_RESTRICTION, OWL_SOMEVALUESFROM, OWL_UNIONOF,
+    OWL_WITHRESTRICTIONS, RDF_FIRST, RDF_LIST, RDF_NIL, RDF_REST, RDF_TYPE, RDFS_CLASS,
 };
 use crate::{EntailError, Regime};
 
@@ -182,6 +183,17 @@ impl ComprehensionWarrant {
     pub fn closure_size(&self) -> usize {
         self.closure.len()
     }
+
+    /// The premise closure this warrant is against.
+    pub(crate) const fn closure(&self) -> &Closure {
+        &self.closure
+    }
+
+    /// This warrant with the fold's residual `binding` attached.
+    pub(crate) fn with_binding(mut self, binding: Binding) -> Self {
+        self.binding = binding;
+        self
+    }
 }
 
 // ── Reading a conclusion ───────────────────────────────────────────────────────────────
@@ -245,10 +257,43 @@ struct Reading {
     scaffolds: Vec<Scaffold>,
     /// Every blank node any scaffold consumed, by surface.
     consumed_nodes: Vec<TermValue>,
-    /// The whole conclusion as match patterns — including the scaffold triples, which map
-    /// onto the minted ones rather than being waved through.
-    patterns: Vec<PatTriple>,
 }
+
+/// What this mechanism made of a conclusion.
+///
+/// The middle arm is the whole of Part Two's discipline here: a class constructor this lane
+/// RECOGNIZES and cannot read is an admission of incapacity, and the conclusion's other
+/// triples keep their ordinary obligation rather than being scored against a mint that never
+/// happened.
+enum Read {
+    /// The conclusion names no anonymous class expression at all.
+    NotApplicable,
+    /// It names one this lane recognizes and declines to read, rendered one per refusal.
+    Declined(Vec<String>),
+    /// It names scaffolds this lane mints.
+    Scaffolds(Reading),
+}
+
+/// The class constructors this lane RECOGNIZES on a blank node and does not read.
+///
+/// Named so their presence is an admission rather than a silence. Each states an anonymous
+/// class or data range the RDF-Based comprehension conditions do license — `owl:oneOf` is a
+/// nominal, `owl:disjointUnionOf` a union with a disjointness side condition, the qualified
+/// cardinalities count over a class, `owl:hasSelf` is a self-restriction, and the datatype
+/// facet vocabulary describes a derived data range — and none of the five this module reads
+/// is any of them.
+const UNREAD_CONSTRUCTORS: [&str; 10] = [
+    OWL_ONEOF,
+    OWL_DISJOINTUNIONOF,
+    OWL_HASSELF,
+    OWL_MINQUALIFIEDCARDINALITY,
+    OWL_MAXQUALIFIEDCARDINALITY,
+    OWL_QUALIFIEDCARDINALITY,
+    OWL_ONDATARANGE,
+    OWL_ONPROPERTIES,
+    OWL_ONDATATYPE,
+    OWL_WITHRESTRICTIONS,
+];
 
 /// Whether `term` is the IRI `iri`.
 fn is(term: &TermValue, iri: &str) -> bool {
@@ -347,17 +392,34 @@ impl Indexed {
 /// `None` is "not applicable": either the conclusion names no anonymous class expression (so
 /// there is nothing to comprehend) or it names one this module does not fully read (so
 /// proceeding would leave a statement of the conclusion unaccounted for).
-fn read(conclusion: &RdfDataset) -> Option<Reading> {
+fn read(conclusion: &RdfDataset) -> Read {
     let indexed = Indexed::of(conclusion);
     let mut scaffolds: Vec<Scaffold> = Vec::new();
     let mut consumed: BTreeSet<usize> = BTreeSet::new();
     let mut consumed_nodes: Vec<TermValue> = Vec::new();
+    let mut declined: Vec<String> = Vec::new();
 
     for index in 0..indexed.triples.len() {
         if consumed.contains(&index) {
             continue;
         }
         let [subject, predicate, object] = &indexed.triples[index];
+        // A class constructor this lane names and does not read is an ADMISSION, not a
+        // residual: the conclusion asserts that a class of that description exists, and
+        // nothing here tests it.
+        if matches!(subject, TermValue::Blank { .. })
+            && UNREAD_CONSTRUCTORS
+                .iter()
+                .any(|construct| is(predicate, construct))
+        {
+            declined.push(format!(
+                "{} {} {}: a class constructor this lane does not read",
+                show(subject),
+                show(predicate),
+                show(object)
+            ));
+            continue;
+        }
         // A scaffold node is a BLANK node that heads one of the three read constructors.
         // Everything else on this pass is somebody else's triple.
         let is_restriction_typing = is(predicate, RDF_TYPE) && is(object, OWL_RESTRICTION);
@@ -371,15 +433,29 @@ fn read(conclusion: &RdfDataset) -> Option<Reading> {
             // A NAMED anonymous-class scaffold is a class AXIOM about the caller's own
             // vocabulary — `C owl:unionOf (…)` says what `C` IS — which comprehension does
             // not license and this module does not read.
-            return None;
+            declined.push(format!(
+                "{} {} {}: a NAMED class expression is an axiom about the caller's own \
+                 vocabulary, which no comprehension condition licenses",
+                show(subject),
+                show(predicate),
+                show(object)
+            ));
+            continue;
         }
         let node = subject.clone();
-        let scaffold = recognize(&indexed, &node, &mut consumed, &mut consumed_nodes)?;
-        scaffolds.push(scaffold);
+        match recognize(&indexed, &node, &mut consumed, &mut consumed_nodes) {
+            Ok(scaffold) => scaffolds.push(scaffold),
+            Err(why) => declined.push(why),
+        }
     }
 
+    if !declined.is_empty() {
+        declined.sort_unstable();
+        declined.dedup();
+        return Read::Declined(declined);
+    }
     if scaffolds.is_empty() {
-        return None;
+        return Read::NotApplicable;
     }
 
     // THE CLOSING CHECK. Every triple mentioning a consumed blank node must itself have been
@@ -394,27 +470,19 @@ fn read(conclusion: &RdfDataset) -> Option<Reading> {
             .iter()
             .any(|position| scaffold_surfaces.contains(&surface_of(position)))
         {
-            return None;
+            return Read::Declined(vec![format!(
+                "{} {} {}: it mentions a scaffold node this lane already consumed, so the node \
+                 has two readings and at most one of them can be right",
+                show(&triple[0]),
+                show(&triple[1]),
+                show(&triple[2])
+            )]);
         }
     }
 
-    // The WHOLE conclusion is matched, scaffold triples included: they map onto the minted
-    // triples, so nothing is discharged by having been recognized.
-    let patterns = indexed
-        .triples
-        .iter()
-        .map(|triple| {
-            [
-                conclusion_node(triple[0].clone()),
-                conclusion_node(triple[1].clone()),
-                conclusion_node(triple[2].clone()),
-            ]
-        })
-        .collect();
-    Some(Reading {
+    Read::Scaffolds(Reading {
         scaffolds,
         consumed_nodes,
-        patterns,
     })
 }
 
@@ -424,7 +492,8 @@ fn recognize(
     node: &TermValue,
     consumed: &mut BTreeSet<usize>,
     consumed_nodes: &mut Vec<TermValue>,
-) -> Option<Scaffold> {
+) -> Result<Scaffold, String> {
+    let refuse = |why: &str| Err(format!("the class expression at {}: {why}", show(node)));
     let own = indexed.subject_of(node);
     let mut class_typings: Vec<TermValue> = Vec::new();
     let mut restriction_typed = false;
@@ -440,11 +509,11 @@ fn recognize(
             } else if is(object, OWL_RESTRICTION) {
                 restriction_typed = true;
             } else {
-                return None;
+                return refuse("it carries a typing this lane does not read");
             }
         } else if is(predicate, OWL_UNIONOF) || is(predicate, OWL_INTERSECTIONOF) {
             if operands.is_some() {
-                return None;
+                return refuse("it carries two constructors, so it denotes neither");
             }
             let which = if is(predicate, OWL_UNIONOF) {
                 OWL_UNIONOF
@@ -453,14 +522,19 @@ fn recognize(
             };
             operands = Some((which, object.clone()));
         } else if is(predicate, OWL_ONPROPERTY) {
-            if property.is_some() || !is_named(object) {
-                return None;
+            if property.is_some() {
+                return refuse("it restricts two properties at once");
+            }
+            if !is_named(object) {
+                return refuse("it restricts a property expression rather than a named property");
             }
             property = Some(object.clone());
         } else {
-            let read = constraint_of(predicate, object)?;
+            let Some(read) = constraint_of(predicate, object) else {
+                return refuse("it carries a constraint this lane does not read");
+            };
             if constraint.is_some() {
-                return None;
+                return refuse("it carries two constraints, so it denotes neither");
             }
             constraint = Some(read);
         }
@@ -476,7 +550,10 @@ fn recognize(
                 // The empty union is `owl:Nothing` and the empty intersection is
                 // `owl:Thing`; both are NAMED classes of the vocabulary, so a conclusion
                 // stating one anonymously is asking a different question.
-                return None;
+                return refuse(
+                    "an empty collection makes it owl:Nothing or owl:Thing, both of which are \
+                     named classes and neither of which is an anonymous class expression",
+                );
             }
             if which == OWL_UNIONOF {
                 Constructor::Union(members)
@@ -488,7 +565,12 @@ fn recognize(
             property,
             constraint,
         },
-        _ => return None,
+        _ => {
+            return refuse(
+                "it mixes a collection constructor with a restriction, or states a restriction \
+                 missing its property or its constraint",
+            );
+        }
     };
 
     // Every OTHER mention of the node must be a membership assertion `x rdf:type node` for a
@@ -503,12 +585,15 @@ fn recognize(
         let [subject, predicate, object] = &indexed.triples[index];
         if !is(predicate, RDF_TYPE) || surface_of(object) != surface_of(node) || !is_named(subject)
         {
-            return None;
+            return refuse("it is mentioned somewhere this lane did not look");
         }
         // A membership in a RESTRICTION is a counting or witness question — "does `x` have a
         // `p`-successor?" — which this mechanism does not answer. Refused rather than minted.
         if matches!(constructor, Constructor::Restriction { .. }) {
-            return None;
+            return refuse(
+                "a membership in a restriction is a counting or witness question, which \
+                 minting the restriction does not answer",
+            );
         }
         instances.push(subject.clone());
         membership_indices.push(index);
@@ -519,7 +604,7 @@ fn recognize(
     consumed.extend(membership_indices);
     consumed_nodes.push(node.clone());
     consumed_nodes.extend(cell_nodes.iter().cloned());
-    Some(Scaffold {
+    Ok(Scaffold {
         node: node.clone(),
         class_typings,
         constructor,
@@ -568,14 +653,18 @@ fn walk(
     previous: &TermValue,
     cells: &mut BTreeSet<usize>,
     cell_nodes: &mut Vec<TermValue>,
-) -> Option<Vec<TermValue>> {
+) -> Result<Vec<TermValue>, String> {
     let mut members = Vec::new();
     let mut current = head.clone();
     let mut from = previous.clone();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     while !is(&current, RDF_NIL) {
-        if !matches!(current, TermValue::Blank { .. }) || !seen.insert(surface_of(&current)) {
-            return None;
+        let refuse = |why: &str| Err(format!("the operand list at {}: {why}", show(&current)));
+        if !matches!(current, TermValue::Blank { .. }) {
+            return refuse("a collection cell must be a blank node");
+        }
+        if !seen.insert(surface_of(&current)) {
+            return refuse("the collection is cyclic");
         }
         let own = indexed.subject_of(&current);
         let own_set: BTreeSet<usize> = own.iter().copied().collect();
@@ -584,17 +673,23 @@ fn walk(
         for &index in own {
             let [_, predicate, object] = &indexed.triples[index];
             if is(predicate, RDF_FIRST) {
-                if member.is_some() || !is_named(object) {
-                    return None;
+                if member.is_some() {
+                    return refuse("the cell carries two rdf:first values");
+                }
+                if !is_named(object) {
+                    return refuse(
+                        "a NESTED anonymous operand is a class expression whose own axioms \
+                         this lane has not read",
+                    );
                 }
                 member = Some(object.clone());
             } else if is(predicate, RDF_REST) {
                 if rest.is_some() {
-                    return None;
+                    return refuse("the cell carries two rdf:rest values");
                 }
                 rest = Some(object.clone());
             } else if !(is(predicate, RDF_TYPE) && is(object, RDF_LIST)) {
-                return None;
+                return refuse("the cell carries a triple that is not part of a collection");
             }
         }
         // Reached from exactly one place, and that place is the predecessor.
@@ -606,16 +701,19 @@ fn walk(
             if surface_of(subject) != surface_of(&from)
                 || surface_of(object) != surface_of(&current)
             {
-                return None;
+                return refuse("the cell is reached from more than one place");
             }
         }
+        let (Some(member), Some(rest)) = (member, rest) else {
+            return refuse("the cell is missing its rdf:first or its rdf:rest");
+        };
         cells.extend(own_set);
         cell_nodes.push(current.clone());
-        members.push(member?);
+        members.push(member);
         from = current;
-        current = rest?;
+        current = rest;
     }
-    Some(members)
+    Ok(members)
 }
 
 // ── Minting ────────────────────────────────────────────────────────────────────────────
@@ -784,47 +882,52 @@ fn list_triples(
 /// # Errors
 ///
 /// [`EntailError::MatchBudget`] if the final match exhausts its budget.
-pub(crate) fn attempt(
-    premise: &RdfDataset,
-    conclusion: &RdfDataset,
-    regime: Regime,
-    closure: &Closure,
-) -> Result<Attempt, EntailError> {
+pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
+    let Question {
+        premise,
+        conclusion,
+        regime,
+        closure,
+        ..
+    } = *q;
     // WHITELIST, not blacklist. The comprehension conditions this mechanism applies are the
     // RDF-Based semantics', and `OWL-RL` is the only lane whose closure this crate reads
     // against them; the four others fall out.
     if !matches!(regime, Regime::OwlRl) {
         return Ok(Attempt::NotApplicable);
     }
-    // A conclusion the refutation lane reads is not this one's, even when it also names an
-    // anonymous class: `[ owl:complementOf C ]` is a NEGATIVE fact about an individual and is
-    // decided by refuting it, not by minting a class.
-    if negation::lower(conclusion).is_some() {
-        return Ok(Attempt::NotApplicable);
-    }
-    let Some(reading) = read(conclusion) else {
-        return Ok(Attempt::NotApplicable);
+    let reading = match read(conclusion) {
+        Read::Scaffolds(reading) => reading,
+        Read::NotApplicable => return Ok(Attempt::NotApplicable),
+        Read::Declined(constructs) => {
+            return Ok(Attempt::Disqualified(UndecidedReason::ConstructNotRead {
+                lane: EntailmentMechanism::Comprehension,
+                constructs,
+            }));
+        }
     };
 
     let witnesses = mint_witnesses(&reading, premise, conclusion);
     let Some(licensed) = license(&reading, &witnesses, closure) else {
         return Ok(Attempt::NotEstablished);
     };
-    let extended = closure.extended_with(licensed.minted.clone());
-    let Ok(binding) = find_one(reading.patterns, &extended)? else {
-        return Ok(Attempt::NotEstablished);
-    };
 
-    Ok(Attempt::Entailed(Box::new(
-        EntailmentWarrant::Comprehension(ComprehensionWarrant {
+    // This lane DISCHARGES nothing: it widens the closure with triples the comprehension
+    // conditions license, and the conclusion's own scaffold triples keep their full obligation
+    // to map onto them. `entails` runs that match once, at the end, over what survives every
+    // lane.
+    Ok(Attempt::Entailed(Box::new(Established {
+        warrant: EntailmentWarrant::Comprehension(ComprehensionWarrant {
             regime,
-            binding,
+            binding: Binding::new(),
             closure: closure.clone(),
             witnesses,
-            minted: licensed.minted,
+            minted: licensed.minted.clone(),
             licences: licensed.licences,
         }),
-    )))
+        discharged: BTreeSet::new(),
+        minted: licensed.minted,
+    })))
 }
 
 /// One witness per scaffold-internal blank node, none of them naming anything either document
@@ -854,9 +957,11 @@ pub(crate) fn verify_comprehension(
     w: &ComprehensionWarrant,
     premise: &RdfDataset,
     conclusion: &RdfDataset,
-) -> bool {
-    let Some(reading) = read(conclusion) else {
-        return false;
+    _triples: &[Triple],
+    _pending: &BTreeSet<usize>,
+) -> Option<Replay> {
+    let Read::Scaffolds(reading) = read(conclusion) else {
+        return None;
     };
     // THE WITNESSES ARE FRESH, decided against the caller's own documents rather than taken
     // on the generator's word. A witness that named a node of either document would let the
@@ -866,10 +971,10 @@ pub(crate) fn verify_comprehension(
     let mut minted_labels: BTreeSet<&str> = BTreeSet::new();
     for value in w.witnesses.values() {
         let TermValue::Blank { label, .. } = value else {
-            return false;
+            return None;
         };
         if forbidden.contains(label) {
-            return false;
+            return None;
         }
         minted_labels.insert(label.as_str());
     }
@@ -881,44 +986,24 @@ pub(crate) fn verify_comprehension(
         .iter()
         .all(|node| w.witnesses.contains_key(&surface_of(node)))
     {
-        return false;
+        return None;
     }
     if minted_labels.len() != w.witnesses.values().collect::<BTreeSet<_>>().len() {
-        return false;
+        return None;
     }
 
-    let Some(licensed) = license(&reading, &w.witnesses, &w.closure) else {
-        return false;
-    };
+    let licensed = license(&reading, &w.witnesses, &w.closure)?;
     if licensed.minted != w.minted || licensed.licences != w.licences {
-        return false;
+        return None;
     }
     if !w.licences.iter().all(|triple| w.closure.contains(triple)) {
-        return false;
+        return None;
     }
 
-    let extended = w.closure.extended_with(w.minted.clone());
-    let image: Option<Vec<Triple>> = reading
-        .patterns
-        .iter()
-        .map(|pat| {
-            Some([
-                substitute(&pat[0], &w.binding)?,
-                substitute(&pat[1], &w.binding)?,
-                substitute(&pat[2], &w.binding)?,
-            ])
-        })
-        .collect();
-    let Some(image) = image else {
-        return false;
-    };
-    if !image.iter().all(|triple| extended.contains(triple)) {
-        return false;
-    }
-    // …and the closure it maps into has to be a closure OF this premise.
-    default_graph_triples(premise)
-        .iter()
-        .all(|triple| w.closure.contains(triple))
+    Some(Replay {
+        discharged: BTreeSet::new(),
+        minted: w.minted.clone(),
+    })
 }
 
 impl std::fmt::Display for ComprehensionWarrant {
@@ -950,7 +1035,7 @@ mod tests {
 
     use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, TermValue};
 
-    use super::{is_non_negative_integer, read};
+    use super::{Read, is_non_negative_integer, read};
     use crate::entails::graph::default_graph_triples;
     use crate::entails::{EntailmentOutcome, EntailmentWarrant, ImportMap, entails, verify};
     use crate::vocab::{
@@ -1261,17 +1346,27 @@ mod tests {
             ),
         ];
         for (why, triples) in cases {
-            assert!(read(&graph(&triples)).is_none(), "{why}");
+            let Read::Declined(reasons) = read(&graph(&triples)) else {
+                panic!("{why}: a recognized-and-declined shape is an ADMISSION, never a shrug");
+            };
+            assert!(!reasons.is_empty(), "{why}: the refusal names nothing");
         }
         // …and an EMPTY collection, whose union and intersection are the named `owl:Nothing`
         // and `owl:Thing`.
-        assert!(read(&graph(&[("_c", OWL_UNIONOF, RDF_NIL)])).is_none());
+        assert!(matches!(
+            read(&graph(&[("_c", OWL_UNIONOF, RDF_NIL)])),
+            Read::Declined(_)
+        ));
     }
 
-    /// A conclusion naming no anonymous class expression is NOT this module's business.
+    /// A conclusion naming no anonymous class expression is NOT this module's business, and
+    /// it does not pretend otherwise by declining something it never recognized.
     #[test]
     fn an_ordinary_conclusion_is_not_applicable() {
-        assert!(read(&graph(&[(A, RDF_TYPE, OWL_CLASS)])).is_none());
+        assert!(matches!(
+            read(&graph(&[(A, RDF_TYPE, OWL_CLASS)])),
+            Read::NotApplicable
+        ));
     }
 
     /// A cardinality operand outside the non-negative integers licenses nothing.

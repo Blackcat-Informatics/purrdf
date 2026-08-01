@@ -104,10 +104,10 @@ use purrdf_core::{RdfDataset, TermValue};
 use crate::calculus::concludes_false;
 use crate::engine::Refuter;
 use crate::entails::graph::{Triple, default_graph_triples};
-use crate::entails::homomorphism::{Binding, Closure, find_one, substitute};
-use crate::entails::negation::{self, NegativeFact};
-use crate::entails::warrant::EntailmentWarrant;
-use crate::entails::{Attempt, UndecidedReason};
+use crate::entails::homomorphism::{Binding, Closure, substitute};
+use crate::entails::negation::{self, NegativeFact, Read};
+use crate::entails::warrant::{EntailmentMechanism, EntailmentWarrant, Replay};
+use crate::entails::{Attempt, Established, Question, UndecidedReason};
 use crate::explain::shrink_to_irreducible;
 use crate::report::InconsistencyWitness;
 use crate::{EntailError, Regime};
@@ -320,6 +320,17 @@ impl RefutationWarrant {
         self.closure.len()
     }
 
+    /// The premise closure this warrant is against.
+    pub(crate) const fn closure(&self) -> &Closure {
+        &self.closure
+    }
+
+    /// This warrant with the fold's residual `binding` attached.
+    pub(crate) fn with_binding(mut self, binding: Binding) -> Self {
+        self.binding = binding;
+        self
+    }
+
     /// The closure triples that witness the conclusion's NON-NEGATIVE half, or `None` if the
     /// mapping leaves a position of it open.
     ///
@@ -329,9 +340,9 @@ impl RefutationWarrant {
     /// witnesses the other half is [`Refutation::witness`], one per fact.
     #[must_use]
     pub fn residual_witnesses(&self, conclusion: &RdfDataset) -> Option<Vec<[TermValue; 3]>> {
-        let lowering = negation::lower(conclusion)?;
+        let lowering = negation::lowering(conclusion)?;
         lowering
-            .residual
+            .residual(&default_graph_triples(conclusion))
             .iter()
             .map(|pat| {
                 Some([
@@ -357,27 +368,43 @@ impl RefutationWarrant {
 /// [`EntailError::MalformedList`] for a premise whose OWL collections are not well formed,
 /// [`EntailError::Build`] for a subset that cannot be frozen, and
 /// [`EntailError::MatchBudget`] from the residual match.
-pub(crate) fn attempt(
-    premise: &RdfDataset,
-    conclusion: &RdfDataset,
-    regime: Regime,
-    closure: &Closure,
-) -> Result<Attempt, EntailError> {
+pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
+    let Question {
+        premise,
+        conclusion,
+        regime,
+        closure,
+        pending,
+        ..
+    } = *q;
     // WHITELIST, not blacklist: the four other regimes fall out rather than being served by
     // a calculus whose completeness for inconsistency this crate does not claim.
     if !matches!(regime, Regime::OwlRl) {
         return Ok(Attempt::NotApplicable);
     }
-    let Some(lowering) = negation::lower(conclusion) else {
+    let lowering = match negation::lower(conclusion) {
+        Read::Lowered(lowering) => lowering,
+        Read::NotApplicable => return Ok(Attempt::NotApplicable),
+        // RECOGNIZED AND DECLINED. An admission of incapacity, which must never come out of
+        // the service as a refutation — see [`super::Attempt::Disqualified`].
+        Read::Declined(constructs) => {
+            return Ok(Attempt::Disqualified(UndecidedReason::ConstructNotRead {
+                lane: EntailmentMechanism::Refutation,
+                constructs,
+            }));
+        }
+    };
+    // Every triple this lane reads must still be outstanding: a triple an earlier lane already
+    // discharged is not this one's to decide a second time.
+    if !lowering
+        .consumed
+        .iter()
+        .all(|index| pending.contains(index))
+    {
         return Ok(Attempt::NotApplicable);
-    };
+    }
 
-    // The residual triples carry their ordinary obligation: they must map into the premise's
-    // closure exactly as they would have without this lane.
-    let Ok(binding) = find_one(lowering.residual, closure)? else {
-        return Ok(Attempt::NotEstablished);
-    };
-
+    let discharged = lowering.consumed;
     let facts = lowering.facts;
     let mut budget = REFUTATION_BUDGET;
     // ESTABLISHMENT BEFORE EVIDENCE. Every fact is refuted first, so a budget spent on
@@ -448,35 +475,41 @@ pub(crate) fn attempt(
         });
     }
 
-    Ok(Attempt::Entailed(Box::new(EntailmentWarrant::Refutation(
-        RefutationWarrant {
+    Ok(Attempt::Entailed(Box::new(Established {
+        warrant: EntailmentWarrant::Refutation(RefutationWarrant {
             regime,
-            binding,
+            // The residual is the FOLD's, not this lane's: a triple refutation left behind may
+            // be one a later mechanism discharges. `entails` fills this in once every lane has
+            // had its turn.
+            binding: Binding::new(),
             closure: closure.clone(),
             refutations,
-        },
-    ))))
+        }),
+        discharged,
+        minted: Vec::new(),
+    })))
 }
 
-/// Re-decide a refutation warrant against the caller's own premise and conclusion.
+/// Re-check a refutation warrant's own evidence and recompute what it discharged.
 ///
-/// Called by [`verify`](super::verify), which owns the doc comment a caller reads. It runs
-/// no reasoner: the conclusion is lowered again on the spot — so a warrant cannot be
-/// replayed against a different conclusion, or against the same conclusion read a different
-/// way — and each refutation is re-checked by [`Refutation::check`].
+/// Called by [`verify`](super::verify), which owns the doc comment a caller reads and which
+/// checks the residual mapping once for the whole answer. It runs no reasoner: the conclusion
+/// is lowered again on the spot — so a warrant cannot be replayed against a different
+/// conclusion, or against the same conclusion read a different way — and each refutation is
+/// re-checked by [`Refutation::check`].
 pub(crate) fn verify_refutation(
     w: &RefutationWarrant,
     premise: &RdfDataset,
     conclusion: &RdfDataset,
-) -> bool {
-    let Some(lowering) = negation::lower(conclusion) else {
-        return false;
-    };
+    _triples: &[Triple],
+    pending: &BTreeSet<usize>,
+) -> Option<Replay> {
+    let lowering = negation::lowering(conclusion)?;
     // The facts this warrant claims must be EXACTLY the facts the conclusion states, in the
     // same order: a warrant for a subset of them would leave part of the conclusion
     // unaccounted for, and one for a superset would be evidence about a different question.
     if lowering.facts.len() != w.refutations.len() {
-        return false;
+        return None;
     }
     if !lowering
         .facts
@@ -484,34 +517,26 @@ pub(crate) fn verify_refutation(
         .zip(&w.refutations)
         .all(|(fact, refutation)| fact == &refutation.fact)
     {
-        return false;
+        return None;
     }
-    // The residual half is the ordinary homomorphism claim, checked the ordinary way.
-    let image: Option<Vec<Triple>> = lowering
-        .residual
+    if !lowering
+        .consumed
         .iter()
-        .map(|pat| {
-            Some([
-                substitute(&pat[0], &w.binding)?,
-                substitute(&pat[1], &w.binding)?,
-                substitute(&pat[2], &w.binding)?,
-            ])
-        })
-        .collect();
-    let Some(image) = image else {
-        return false;
-    };
-    if !image.iter().all(|triple| w.closure.contains(triple)) {
-        return false;
+        .all(|index| pending.contains(index))
+    {
+        return None;
     }
-    // …and the closure it maps into has to be a closure OF this premise.
-    let held: Vec<Triple> = default_graph_triples(premise);
-    if !held.iter().all(|triple| w.closure.contains(triple)) {
-        return false;
-    }
-    w.refutations
+    if !w
+        .refutations
         .iter()
         .all(|refutation| refutation.check(premise))
+    {
+        return None;
+    }
+    Some(Replay {
+        discharged: lowering.consumed,
+        minted: Vec::new(),
+    })
 }
 
 #[cfg(test)]
@@ -991,10 +1016,20 @@ mod tests {
         let premise = disjoint_properties();
         let conclusion = graph(&[(PETER, OWL_DIFFERENTFROM, LOIS)]);
         let closure = Closure::of(Vec::new());
+        let triples = default_graph_triples(&conclusion);
+        let pending: std::collections::BTreeSet<usize> = (0..triples.len()).collect();
         for regime in [Regime::Simple, Regime::Rdf, Regime::Rdfs, Regime::D] {
+            let question = crate::entails::Question {
+                premise: &premise,
+                conclusion: &conclusion,
+                regime,
+                closure: &closure,
+                triples: &triples,
+                pending: &pending,
+            };
             assert!(
                 matches!(
-                    attempt(&premise, &conclusion, regime, &closure).expect("no chase"),
+                    attempt(&question).expect("no chase"),
                     Attempt::NotApplicable
                 ),
                 "{regime:?} states no rule this lane could read as a refutation"
@@ -1031,7 +1066,10 @@ mod tests {
         let needed = (members.len() * (members.len() - 1) / 2) as u64;
         assert!(needed > REFUTATION_BUDGET);
         assert!(
-            lower(&conclusion).is_some(),
+            matches!(
+                lower(&conclusion),
+                crate::entails::negation::Read::Lowered(_)
+            ),
             "the conclusion IS one this lane reads; what it cannot do is afford it"
         );
         assert!(matches!(

@@ -27,9 +27,11 @@
 //! conclusion parsed from its own document and a premise parsed from another can therefore
 //! both use `_:b` without the match conflating them.
 
+use std::collections::BTreeSet;
+
 use purrdf_core::{BlankScope, RdfDataset, TermValue};
 
-use crate::entails::graph::default_graph_triples;
+use crate::entails::graph::{Triple, default_graph_triples};
 use crate::owl_dl::query::{QNode, QTriple};
 
 /// A variable position in a pattern.
@@ -104,6 +106,25 @@ pub(crate) fn conclusion_patterns(ds: &RdfDataset) -> Vec<PatTriple> {
     default_graph_triples(ds)
         .into_iter()
         .map(|[s, p, o]| [conclusion_node(s), conclusion_node(p), conclusion_node(o)])
+        .collect()
+}
+
+/// The triples of `triples` whose index is in `keep`, as patterns, in `triples` order.
+///
+/// The one place a residual becomes a question again. `keep` is an index set rather than a
+/// triple list because [`entails`](super::entails) subtracts one lane's discharge from
+/// another's obligation, and two lanes can only agree about which triple they mean if they
+/// name it by its position in the conclusion's own frozen order.
+pub(crate) fn patterns_at(triples: &[Triple], keep: &BTreeSet<usize>) -> Vec<PatTriple> {
+    keep.iter()
+        .filter_map(|&index| triples.get(index))
+        .map(|triple| {
+            [
+                conclusion_node(triple[0].clone()),
+                conclusion_node(triple[1].clone()),
+                conclusion_node(triple[2].clone()),
+            ]
+        })
         .collect()
 }
 
