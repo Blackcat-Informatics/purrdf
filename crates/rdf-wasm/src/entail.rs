@@ -40,10 +40,11 @@
 
 use purrdf_validate::regime::{
     ReasonerSession, ReasoningAnswer as BoundaryAnswer, RegimeClosure as BoundaryClosure,
-    check_inconsistent_refusal, check_regime_golden_vectors, classify_to_string,
-    consistency_to_string, entails_to_string, explain_conclusion_to_string, extension_rules_string,
-    extract_module_to_string, implemented_rules_string, instances_to_string, justify_to_string,
-    materialize_to_nquads_string, profile_to_string, realize_to_string, rules_string,
+    certain_answers_to_string, check_inconsistent_refusal, check_regime_golden_vectors,
+    classify_to_string, consistency_to_string, entails_to_string, explain_conclusion_to_string,
+    extension_rules_string, extract_module_to_string, graph_entails_to_string,
+    implemented_rules_string, instances_to_string, justify_to_string, materialize_to_nquads_string,
+    profile_to_string, realize_to_string, rules_string, verify_entailment_to_string,
 };
 use wasm_bindgen::prelude::*;
 
@@ -522,6 +523,108 @@ pub fn entail_explain_conclusion(
     explain_conclusion_impl(document, regime, conclusion).map_err(|e| JsError::new(&e))
 }
 
+/// The certain answers of a basic graph pattern. See [`entail_certain_answers`].
+pub(crate) fn certain_answers_impl(
+    regime: &str,
+    document: &str,
+    pattern: &str,
+) -> Result<ReasoningAnswer, String> {
+    certain_answers_to_string(regime, document, pattern).map(ReasoningAnswer::from)
+}
+
+/// `entailCertainAnswers(regime, document, pattern)` → the substitutions the knowledge
+/// base ENTAILS the pattern under, as `var` and `row` lines.
+///
+/// A certain answer is true in every model, not merely present in one closure, which is
+/// what SPARQL's entailment regimes define the answers to a basic graph pattern to be.
+///
+/// `pattern` is N-Triples with `?name` in any position. A blank node in it is a
+/// NON-DISTINGUISHED variable — constrained by the match, not projected, and not a column
+/// — which is what SPARQL says a query blank node is.
+///
+/// A `limit` line says the row set may not be EXHAUSTIVE. Every row is sound
+/// unconditionally; what needs a precondition is the claim about a row that is NOT there,
+/// so no `limit` lines is the claim that the row set is complete.
+///
+/// Throws on an unknown regime, on `owl-direct` or `rif` (each defined by an input this
+/// signature does not carry), on a malformed document or pattern, on a pattern that names
+/// a graph, and on an inconsistent premise — whose refusal carries the full report.
+#[wasm_bindgen(js_name = entailCertainAnswers)]
+pub fn entail_certain_answers(
+    regime: &str,
+    document: &str,
+    pattern: &str,
+) -> Result<ReasoningAnswer, JsError> {
+    certain_answers_impl(regime, document, pattern).map_err(|e| JsError::new(&e))
+}
+
+/// Conclusion-directed entailment under a regime. See [`entail_graph_entails`].
+pub(crate) fn graph_entails_impl(
+    regime: &str,
+    premise: &str,
+    conclusion: &str,
+) -> Result<ReasoningAnswer, String> {
+    graph_entails_to_string(regime, premise, conclusion).map(ReasoningAnswer::from)
+}
+
+/// `entailGraphEntails(regime, premise, conclusion)` → does the premise entail the
+/// conclusion GRAPH under the regime's rule table?
+///
+/// NOT [`entail_entails`], which asks the OWL 2 Direct-Semantics TABLEAU about one AXIOM
+/// and renders a `purrdf-dl-certificate 1`. This asks the regime's RULE TABLE about a
+/// conclusion GRAPH and renders a `purrdf-reasoning-report 4`. Different question,
+/// different calculus, different certificate — and the banners differ so neither can be
+/// parsed as the other.
+///
+/// The answer opens `mechanism <name>`: WHICH of the six mechanisms reached the verdict.
+/// `strict-table` is the regime's own rule table, run once; the other five exist because
+/// no head in that table has the conclusion's shape at all.
+///
+/// THREE verdicts, never two. `not-entailed` is a PROOF — the procedure was complete for
+/// this premise — and `undecided` is what an incomplete procedure is entitled to say
+/// instead. Collapsing the second into the first would turn a limitation of this library
+/// into a false statement about the caller's data.
+///
+/// Throws as [`entail_certain_answers`].
+#[wasm_bindgen(js_name = entailGraphEntails)]
+pub fn entail_graph_entails(
+    regime: &str,
+    premise: &str,
+    conclusion: &str,
+) -> Result<ReasoningAnswer, JsError> {
+    graph_entails_impl(regime, premise, conclusion).map_err(|e| JsError::new(&e))
+}
+
+/// Entailment with its warrant RE-DECIDED. See [`entail_verify_entailment`].
+pub(crate) fn verify_entailment_impl(
+    regime: &str,
+    premise: &str,
+    conclusion: &str,
+) -> Result<ReasoningAnswer, String> {
+    verify_entailment_to_string(regime, premise, conclusion).map(ReasoningAnswer::from)
+}
+
+/// `entailVerifyEntailment(regime, premise, conclusion)` → [`entail_graph_entails`] with
+/// the warrant re-decided, without running a reasoner.
+///
+/// The re-check re-derives nothing: "the closure follows from the premise" is the chase's
+/// claim and `entailExplainConclusion` is its checker, while "the conclusion follows from
+/// the closure" is this one and is finite and purely combinatorial.
+///
+/// `warrant absent` / `verified not-applicable` is a `not-entailed` or an `undecided`:
+/// there is no evidence to re-decide, and a `false` there would read as a failed check
+/// rather than as an absent one.
+///
+/// Throws as [`entail_certain_answers`].
+#[wasm_bindgen(js_name = entailVerifyEntailment)]
+pub fn entail_verify_entailment(
+    regime: &str,
+    premise: &str,
+    conclusion: &str,
+) -> Result<ReasoningAnswer, JsError> {
+    verify_entailment_impl(regime, premise, conclusion).map_err(|e| JsError::new(&e))
+}
+
 // ── The session ─────────────────────────────────────────────────────────────────
 
 /// A reasoning session over one ontology — `new Reasoner(document, stepCap)`.
@@ -733,6 +836,97 @@ mod tests {
     #[test]
     fn the_golden_vector_matches_natively() {
         check_regime_golden_vectors().expect("the regime golden vector");
+    }
+
+    /// EVERY conclusion-directed service reaches THIS host, with its report.
+    ///
+    /// The sibling of `every_dl_service_reaches_this_host_with_its_certificate`, and it
+    /// exists for the same reason: nine tableau services were once compiled into this
+    /// artifact, budgeted for, and unreachable from the npm package root. The structural
+    /// half of that — is the symbol re-exported? — is
+    /// `scripts/check-entailment-surface.py`. This is the behavioural half: the service
+    /// runs on this host and its answer says what the boundary says it says.
+    #[test]
+    fn every_conclusion_directed_service_reaches_this_host() {
+        let conclusion = "<http://example.org/x> \
+                          <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+                          <http://example.org/B> .\n";
+        let pattern = "<http://example.org/x> \
+                       <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?c .\n";
+
+        let answers = certain_answers_impl("owl-rl", SCHEMA, pattern).expect("answers");
+        assert!(
+            answers
+                .answer()
+                .starts_with("mechanism strict-table\nvar c\n")
+        );
+        // `?c` ranges over the ENTAILED types, so `B` is a row and it is not asserted.
+        assert!(
+            answers.answer().contains("\nrow <http://example.org/B>\n"),
+            "{}",
+            answers.answer()
+        );
+
+        let decided = graph_entails_impl("owl-rl", SCHEMA, conclusion).expect("decides");
+        assert_eq!(
+            decided.answer(),
+            "mechanism strict-table\nentailment entailed\n"
+        );
+
+        let checked = verify_entailment_impl("owl-rl", SCHEMA, conclusion).expect("decides");
+        assert!(
+            checked
+                .answer()
+                .ends_with("warrant present\nverified true\n")
+        );
+
+        // …and all three carry the run, on the SAME banner the materialization lane uses,
+        // naming the mechanism that answered.
+        for (service, produced) in [
+            ("certain-answers", &answers),
+            ("graph-entails", &decided),
+            ("verify-entailment", &checked),
+        ] {
+            let certificate = produced.certificate();
+            assert!(
+                certificate.starts_with("purrdf-reasoning-report 4\n"),
+                "{service}: {certificate}"
+            );
+            assert!(
+                certificate.contains("\nmechanism strict-table "),
+                "{service}: {certificate}"
+            );
+        }
+    }
+
+    /// A conclusion nothing derives has NO warrant, and the answer says so rather than
+    /// reporting a check that failed.
+    #[test]
+    fn an_unreached_conclusion_reports_an_absent_warrant_rather_than_a_failed_check() {
+        let never = "<http://example.org/x> \
+                     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+                     <http://example.org/Never> .\n";
+        let checked = verify_entailment_impl("owl-rl", SCHEMA, never).expect("decides");
+        assert!(checked.answer().starts_with("mechanism strict-table\n"));
+        assert!(checked.answer().contains("\nentailment not-entailed\n"));
+        assert!(
+            checked
+                .answer()
+                .ends_with("warrant absent\nverified not-applicable\n")
+        );
+    }
+
+    /// The two regimes this service is not total over are REFUSED by name.
+    #[test]
+    fn the_regimes_defined_by_a_missing_input_are_refused_by_name() {
+        let conclusion = "<http://example.org/x> \
+                          <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+                          <http://example.org/B> .\n";
+        for regime in ["owl-direct", "rif"] {
+            let refused = graph_entails_impl(regime, SCHEMA, conclusion)
+                .expect_err("defined by an input this signature does not carry");
+            assert!(refused.contains(regime), "{refused}");
+        }
     }
 
     /// The other tri-host assertion, made from THIS crate: an inconsistent input is

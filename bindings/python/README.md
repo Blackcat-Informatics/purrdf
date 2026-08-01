@@ -302,6 +302,33 @@ being able to not ask for it:
 | Justification | `entail.justify(data, axiom)` | a minimal subset of the ontology that still entails `axiom`, as canonical N-Quads |
 | Proof | `entail.explain_conclusion(data, regime, conclusion)` | `asserted`, `steps`, and one `rule` line per rule the derivation cited |
 
+The three services below are the **chase** lane's, not the tableau's, and their
+certificate is a `purrdf-reasoning-report 4` block rather than a DL one. Note the
+collision and that both names are right: `entail.entails` asks the tableau about one
+*axiom* of the OWL 2 RDF mapping, while `entail.graph_entails` asks the regime's *rule
+table* whether a premise entails a conclusion *graph*.
+
+| Service | Call | Answer |
+| --- | --- | --- |
+| Certain answers | `entail.certain_answers(regime, data, pattern)` | `mechanism`, one `var` line per projected variable, one `row` per certain answer, and a `limit` line per reason the row set may not be exhaustive |
+| Graph entailment | `entail.graph_entails(regime, premise, conclusion)` | `mechanism <name>`, then `entailment entailed` / `not-entailed` / `undecided` — three verdicts, never two |
+| Verified entailment | `entail.verify_entailment(regime, premise, conclusion)` | the above plus `warrant present`/`absent` and `verified true`/`false`/`not-applicable` |
+
+`pattern` is N-Triples with `?name` in any position; a blank node in it is a
+non-distinguished variable, constrained by the match and not projected, which is what
+SPARQL says a query blank node is. A row is a substitution the knowledge base
+*entails* the pattern under — true in every model, not merely present in one closure.
+
+`mechanism` says *which* of six mechanisms reached the verdict. `strict-table` is the
+regime's own rule table, run once; `refutation`, `freeze`, `comprehension`,
+`reflexivity` and `data-range` each exist because no head in that table has the
+conclusion's shape at all, and none of them adds a rule to it.
+
+`entailment not-entailed` is a **proof** — the procedure was complete for this premise,
+so the absence of a mapping is the absence of an entailment — while `undecided` is what
+an incomplete procedure is entitled to say instead. Reading the second as the first
+would turn a limitation of this library into a false statement about your ontology.
+
 ```python
 from purrdf import entail
 

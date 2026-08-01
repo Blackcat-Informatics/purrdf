@@ -327,6 +327,11 @@ fn prepare(
 /// of the pattern is a non-distinguished variable, constrained by the match and not
 /// projected, which is what SPARQL says a query blank node is.
 ///
+/// The run that produced the rows travels with them, as [`CertainAnswers::report`]. Rows
+/// without it are half an answer for the same reason a verdict without it is: a caller
+/// reading an empty row set beside [`CertainAnswers::is_complete`] needs to know which rule
+/// table the closure came out of, and there is no second call to get it from.
+///
 /// # Errors
 ///
 /// [`EntailError::UnsupportedRegime`] for a regime defined by an input this signature does
@@ -377,6 +382,7 @@ pub fn certain_answers(
         names,
         rows.into_iter().collect(),
         limits,
+        prepared.report,
     ))
 }
 

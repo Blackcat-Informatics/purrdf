@@ -813,6 +813,105 @@ int32_t purrdf_entail_explain_conclusion(const char *document,
                                          PurrdfError **out_error);
 
 /**
+ * The certain answers of a basic graph pattern under an entailment regime.
+ *
+ * A certain answer is a substitution the knowledge base ENTAILS the pattern under —
+ * true in every model, not merely present in one closure — which is what SPARQL's
+ * entailment regimes define the answers to a basic graph pattern to be.
+ *
+ * `regime` is one of the same spellings every other entry point accepts, minus the two
+ * this service is not total over: `owl-direct` is query-directed and `rif` entails under
+ * a rule document, and each is defined by an input this signature does not carry, so
+ * both are refused by name rather than served by a weaker lane.
+ *
+ * `pattern` is N-Triples with `?name` in any position. A blank node in it is a
+ * NON-DISTINGUISHED variable — constrained by the match, not projected, and not a
+ * column — which is what SPARQL says a query blank node is.
+ *
+ * `*out_answer` receives `mechanism`, one `var` line per projected variable, one `row`
+ * line per certain answer, and a `limit` line per reason the row set may not be
+ * EXHAUSTIVE. Every row is sound unconditionally; what needs a precondition is the claim
+ * about a row that is NOT there, so no `limit` lines is the claim that the row set is
+ * complete. `*out_certificate` receives the run's `purrdf-reasoning-report 4` block.
+ * **Free BOTH with `purrdf_buffer_free`.**
+ *
+ * # Safety
+ * `regime`, `document` and `pattern` must be non-null, NUL-terminated C strings;
+ * `out_answer` and `out_certificate` must be writable pointers; `out_error` must be null
+ * or writable.
+ */
+int32_t purrdf_entail_certain_answers(const char *regime,
+                                      const char *document,
+                                      const char *pattern,
+                                      PurrdfBuffer **out_answer,
+                                      PurrdfBuffer **out_certificate,
+                                      PurrdfError **out_error);
+
+/**
+ * Does `premise` entail the conclusion GRAPH under `regime`'s rule table?
+ *
+ * NOT `purrdf_entail_entails`, which asks the OWL 2 Direct-Semantics TABLEAU about one
+ * AXIOM and renders a `purrdf-dl-certificate 1` block. This asks the regime's RULE TABLE
+ * about a conclusion GRAPH and renders a `purrdf-reasoning-report 4` one. Different
+ * question, different calculus, different certificate — and the two banners differ so
+ * neither can be parsed as the other.
+ *
+ * `*out_answer` opens `mechanism <name>`: WHICH of the six mechanisms reached the
+ * verdict. `strict-table` is the regime's own rule table, run once, with the conclusion
+ * matched into (or proven absent from) its closure; the other five —  `refutation`,
+ * `freeze`, `comprehension`, `reflexivity`, `data-range` — exist because no head in that
+ * table has the conclusion's shape at all. The name is the canonical spelling and never
+ * an enum ordinal, so a seventh mechanism cannot renumber a reading of an old one.
+ *
+ * Then THREE verdicts, never two: `entailment entailed` (with one `binding` line per
+ * existential of the conclusion), `entailment not-entailed` (a PROOF — the procedure was
+ * complete for this premise — with a `miss` line), or `entailment undecided` (what an
+ * incomplete procedure is entitled to say instead, with an `undecided` line naming which
+ * hypothesis of which theorem the input broke). Reading the third as the second would
+ * turn a limitation of this library into a false statement about the caller's data.
+ * **Free BOTH buffers with `purrdf_buffer_free`.**
+ *
+ * # Safety
+ * `regime`, `premise` and `conclusion` must be non-null, NUL-terminated C strings;
+ * `out_answer` and `out_certificate` must be writable pointers; `out_error` must be null
+ * or writable.
+ */
+int32_t purrdf_entail_graph_entails(const char *regime,
+                                    const char *premise,
+                                    const char *conclusion,
+                                    PurrdfBuffer **out_answer,
+                                    PurrdfBuffer **out_certificate,
+                                    PurrdfError **out_error);
+
+/**
+ * `purrdf_entail_graph_entails` with the warrant RE-DECIDED, without running a reasoner.
+ *
+ * The re-check re-derives nothing, deliberately: "the closure follows from the premise"
+ * is the chase's claim and `purrdf_entail_explain_conclusion` is its checker, while "the
+ * conclusion follows from the closure" is this one and is finite and purely
+ * combinatorial — a graph homomorphism, or a set of lookups against a refutation's own
+ * closure. Folding them would cost what the original call cost and give a caller no
+ * independent check at all.
+ *
+ * `*out_answer` is `purrdf_entail_graph_entails`'s, plus `warrant present|absent` and
+ * `verified true|false|not-applicable`. `warrant absent` / `verified not-applicable` is
+ * a `not-entailed` or an `undecided`: there is no evidence to re-decide, and a `false`
+ * there would read as a failed check rather than as an absent one.
+ * **Free BOTH buffers with `purrdf_buffer_free`.**
+ *
+ * # Safety
+ * `regime`, `premise` and `conclusion` must be non-null, NUL-terminated C strings;
+ * `out_answer` and `out_certificate` must be writable pointers; `out_error` must be null
+ * or writable.
+ */
+int32_t purrdf_entail_verify_entailment(const char *regime,
+                                        const char *premise,
+                                        const char *conclusion,
+                                        PurrdfBuffer **out_answer,
+                                        PurrdfBuffer **out_certificate,
+                                        PurrdfError **out_error);
+
+/**
  * Open a reasoning session over `document`.
  *
  * `step_cap` narrows the per-decision tableau step cap for every question asked through

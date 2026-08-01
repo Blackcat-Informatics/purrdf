@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   ready,
+  entailCertainAnswers,
   entailCheckGoldenVectors,
   entailCheckInconsistentRefusal,
   entailClassify,
@@ -32,6 +33,7 @@ import {
   entailExplainConclusion,
   entailExtensions,
   entailExtractModule,
+  entailGraphEntails,
   entailImplementedRules,
   entailInstances,
   entailJustify,
@@ -39,6 +41,7 @@ import {
   entailProfile,
   entailRealize,
   entailRules,
+  entailVerifyEntailment,
 } from "../index.mjs";
 
 await ready();
@@ -469,5 +472,62 @@ test("every DL reasoning service is reachable from the package root, not only ./
     entailExplainConclusion,
   ]) {
     assert.equal(typeof fn, "function");
+  }
+});
+
+test("every conclusion-directed entailment service is reachable from the package root", () => {
+  // The same dark-feature argument as the nine above, made for the three services of
+  // the CHASE lane: compiled in, budgeted for, and worth nothing if `../index.mjs`
+  // does not re-export them, because the npm `exports` map refuses a deep `./pkg/`
+  // import. `scripts/check-entailment-surface.py` gates the re-export structurally;
+  // this executes it on real wasm.
+  for (const fn of [entailCertainAnswers, entailGraphEntails, entailVerifyEntailment]) {
+    assert.equal(typeof fn, "function");
+  }
+
+  const conclusion =
+    "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .\n";
+  const pattern =
+    "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?c .\n";
+
+  // `?c` ranges over the ENTAILED types, so `C` is a row and it is asserted nowhere.
+  const answers = entailCertainAnswers("owl-rl", SCHEMA, pattern);
+  assert.ok(answers.answer.startsWith("mechanism strict-table\nvar c\n"), answers.answer);
+  assert.ok(answers.answer.includes("\nrow <http://example.org/C>\n"), answers.answer);
+
+  const decided = entailGraphEntails("owl-rl", SCHEMA, conclusion);
+  assert.equal(decided.answer, "mechanism strict-table\nentailment entailed\n");
+
+  const checked = entailVerifyEntailment("owl-rl", SCHEMA, conclusion);
+  assert.ok(checked.answer.endsWith("warrant present\nverified true\n"), checked.answer);
+
+  // All three carry the run that answered, on the materialization lane's own banner,
+  // naming the mechanism. The mechanism crosses this boundary as its canonical
+  // spelling and never as an enum ordinal, so a seventh mechanism cannot renumber a
+  // JS consumer's reading of an old one.
+  for (const produced of [answers, decided, checked]) {
+    assert.match(produced.certificate, /^purrdf-reasoning-report 4\n/);
+    assert.ok(produced.certificate.includes("\nmechanism strict-table "), produced.certificate);
+  }
+});
+
+test("a conclusion nothing derives has no warrant, and says so", () => {
+  const never =
+    "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Never> .\n";
+  const checked = entailVerifyEntailment("owl-rl", SCHEMA, never);
+  assert.ok(checked.answer.includes("\nentailment not-entailed\n"), checked.answer);
+  // `not-applicable`, never `false`: there is no evidence to re-decide, and a `false`
+  // would read as a check that ran and failed.
+  assert.ok(
+    checked.answer.endsWith("warrant absent\nverified not-applicable\n"),
+    checked.answer,
+  );
+});
+
+test("the two regimes defined by a missing input are refused by name", () => {
+  const conclusion =
+    "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .\n";
+  for (const regime of ["owl-direct", "rif"]) {
+    assert.throws(() => entailGraphEntails(regime, SCHEMA, conclusion), new RegExp(regime));
   }
 });

@@ -23,6 +23,15 @@
 //! cheap call wins, and a row set read as exhaustive when it is not is how an incomplete
 //! procedure comes to be described as a decision.
 //!
+//! # The rows arrive WITH the run that produced them
+//!
+//! [`CertainAnswers::report`] is the chase underneath, carried for exactly the reason
+//! [`EntailmentCertificate`](super::EntailmentCertificate) carries one. An empty row set is
+//! the answer a caller is most likely to act on and the one that says least on its own:
+//! whether it means "nothing is entailed" depends on which rule table ran, what that run
+//! could not fully handle, and which calculus it was. All three are on the report, and there
+//! is no entry point that returns rows without it.
+//!
 //! # There is no field to disagree with
 //!
 //! [`CertainAnswers`] stores no completeness flag. [`CertainAnswers::is_complete`] DERIVES
@@ -35,7 +44,9 @@
 use purrdf_core::TermValue;
 
 use crate::Regime;
+use crate::entails::EntailmentMechanism;
 use crate::entails::precondition::UndecidedReason;
+use crate::report::ReasoningReport;
 
 /// The certain answers of a basic graph pattern under an entailment regime.
 ///
@@ -51,22 +62,32 @@ pub struct CertainAnswers {
     rows: Vec<Vec<TermValue>>,
     /// Why the row set may not be exhaustive. EMPTY is the claim that it is.
     limits: Vec<UndecidedReason>,
+    /// What the chase underneath did, with the mechanism attached.
+    report: ReasoningReport,
 }
 
 impl CertainAnswers {
     /// Assemble an answer set. Crate-internal: the only producer is the service that ran
     /// the mechanism, so a row cannot exist without the run that justifies it.
-    pub(crate) const fn new(
+    ///
+    /// The mechanism attached to `report` is not a parameter and never could be: this
+    /// service runs the homomorphism and nothing else — the five lanes beyond it are
+    /// [`entails`](super::entails)-only, for the reasons that module's docs set out — so the
+    /// mechanism is [`EntailmentMechanism::StrictTable`] by definition, exactly as the
+    /// report's contract hash is its regime's calculus by definition.
+    pub(crate) fn new(
         regime: Regime,
         vars: Vec<String>,
         rows: Vec<Vec<TermValue>>,
         limits: Vec<UndecidedReason>,
+        report: ReasoningReport,
     ) -> Self {
         Self {
             regime,
             vars,
             rows,
             limits,
+            report: report.with_mechanism(EntailmentMechanism::StrictTable),
         }
     }
 
@@ -121,5 +142,25 @@ impl CertainAnswers {
     #[must_use]
     pub fn is_complete(&self) -> bool {
         self.limits.is_empty()
+    }
+
+    /// What the chase underneath did — its boundaries, the rules it fired, the extensions
+    /// its calculus states, its budget, and its contract hash.
+    ///
+    /// Carried for the same reason [`EntailmentCertificate`](super::EntailmentCertificate)
+    /// carries one: rows without the run that produced them are half an answer. A caller
+    /// reading an EMPTY row set beside `is_complete` needs to know which rule table produced
+    /// the closure those rows were drawn from, and there is no second call to get it from —
+    /// the alternative, an entry point that drops the report, is how "there are no answers"
+    /// comes to mean "there were no rules".
+    ///
+    /// Its [`ReasoningReport::mechanism`] is always
+    /// [`EntailmentMechanism::StrictTable`](super::EntailmentMechanism::StrictTable), and
+    /// that is a claim rather than a placeholder: the five mechanisms beyond the rule table
+    /// are [`entails`](super::entails)-only, each because a projected variable over what it
+    /// decides would be a different question than the one this service answers.
+    #[must_use]
+    pub const fn report(&self) -> &ReasoningReport {
+        &self.report
     }
 }

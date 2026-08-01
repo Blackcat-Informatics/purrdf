@@ -36,9 +36,10 @@ BINARYEN_VERSION := 130
 # deterministic layout, SVG export, all sixteen graph/tabular/
 # dataset-description/research-object projection profiles, the compiled JSON-LD
 # context/options/registry engine, validation-scoped asserted-subclass
-# membership shared by native SHACL and SHACL-SPARQL, and now the entailment
-# engine, the nine OWL reasoner services AND the concrete domain — measures
-# 9_502_971 bytes against the 12_112_500 ceiling, which is 21.544% headroom. That
+# membership shared by native SHACL and SHACL-SPARQL, the entailment engine, the
+# nine OWL reasoner services, the concrete domain AND the conclusion-directed
+# entailment service with its six mechanisms — measures
+# 9_700_232 bytes against the 12_112_500 ceiling, which is 19.916% headroom. That
 # figure is recorded below (WASM_SIZE_MEASURED_BYTES) and REPORTED rather than
 # enforced; the ceiling is the check that fails.
 #
@@ -173,8 +174,22 @@ WASM_SIZE_BUDGET_BYTES := 12112500
 # that replace it come to slightly less than it cost. The completion graph itself
 # is shared by both, so it is linked exactly once either way.
 #
-# The measured constant below is the CURRENT size, not that intermediate figure.
-WASM_SIZE_MEASURED_BYTES := 9502971
+# The increase 9_502_971 -> 9_700_232 is the CONCLUSION-DIRECTED entailment service
+# reaching the artifact. `purrdf_entail::entails`, `certain_answers` and `verify` were
+# already in the workspace and reachable from no wasm-exported symbol, so the linker
+# dead-code-eliminated the whole of them — the chase-and-graph-match search, the
+# refutation re-chase, the freeze-and-chase generalisation, the comprehension mint, the
+# reflexivity read, the datatype-containment decision, the `owl:imports` resolver and
+# their six warrant arms with their reasoner-free checkers. `entailCertainAnswers`,
+# `entailGraphEntails` and `entailVerifyEntailment` now reach all of it, and the growth
+# is that machinery rather than the three thin wrappers over it. It is a NEW CAPABILITY
+# on this host: a browser could close a document under a regime and could not ask whether
+# one document entailed another, which is the question a caller with one question has.
+# Still 80% of WASM_SIZE_BUDGET_BYTES, so this is a measurement update and NOT a ceiling
+# raise.
+#
+# The measured constant below is the CURRENT size, not any intermediate figure.
+WASM_SIZE_MEASURED_BYTES := 9700232
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -197,6 +212,7 @@ check: ## The full local gate: fmt, clippy, build, tests, hygiene.
 	python3 scripts/check-issue-refs.py
 	python3 scripts/check-versions.py
 	python3 scripts/check-wasm-js-exports.py
+	python3 scripts/check-entailment-surface.py
 	cargo test --workspace --locked
 	$(MAKE) rdf-core-hygiene
 	$(MAKE) wasm

@@ -752,6 +752,64 @@ export function entailExplainConclusion(
   conclusion: string,
 ): ReasoningAnswer;
 
+/**
+ * `entailCertainAnswers(regime, document, pattern)` → the substitutions the knowledge
+ * base ENTAILS the pattern under, as `var` and `row` lines.
+ *
+ * A certain answer is true in every model, not merely present in one closure, which is
+ * what SPARQL's entailment regimes define the answers to a basic graph pattern to be.
+ *
+ * `pattern` is N-Triples with `?name` in any position. A blank node in it is a
+ * NON-DISTINGUISHED variable — constrained by the match, not projected, not a column.
+ *
+ * A `limit` line says the row set may not be EXHAUSTIVE; no `limit` lines is the claim
+ * that it is. The certificate is a `purrdf-reasoning-report 4` block.
+ *
+ * Throws on an unknown regime, on `owl-direct` or `rif`, on a malformed document or
+ * pattern, on a pattern that names a graph, and on an inconsistent premise.
+ */
+export function entailCertainAnswers(
+  regime: EntailmentRegime | string,
+  document: string,
+  pattern: string,
+): ReasoningAnswer;
+
+/**
+ * `entailGraphEntails(regime, premise, conclusion)` → does the premise entail the
+ * conclusion GRAPH under the regime's rule table?
+ *
+ * NOT `entailEntails`, which asks the OWL 2 Direct-Semantics TABLEAU about one AXIOM and
+ * renders a `purrdf-dl-certificate 1`. This asks the regime's RULE TABLE about a
+ * conclusion GRAPH and renders a `purrdf-reasoning-report 4`.
+ *
+ * The answer opens `mechanism <name>` — which of the six mechanisms reached the verdict.
+ * THREE verdicts, never two: `not-entailed` is a PROOF, and `undecided` is what an
+ * incomplete procedure is entitled to say instead.
+ *
+ * Throws as `entailCertainAnswers`.
+ */
+export function entailGraphEntails(
+  regime: EntailmentRegime | string,
+  premise: string,
+  conclusion: string,
+): ReasoningAnswer;
+
+/**
+ * `entailVerifyEntailment(regime, premise, conclusion)` → `entailGraphEntails` with the
+ * warrant RE-DECIDED, without running a reasoner.
+ *
+ * `warrant absent` / `verified not-applicable` is a `not-entailed` or an `undecided`:
+ * there is no evidence to re-decide, and a `false` there would read as a failed check
+ * rather than as an absent one.
+ *
+ * Throws as `entailCertainAnswers`.
+ */
+export function entailVerifyEntailment(
+  regime: EntailmentRegime | string,
+  premise: string,
+  conclusion: string,
+): ReasoningAnswer;
+
 export function shaclEntail(shapesTtl: string, dataNt: string): string;
 export function shaclValidateToSarif(shapesTtl: string, dataNt: string): string;
 export function version(): string;

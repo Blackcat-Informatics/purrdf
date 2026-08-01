@@ -626,3 +626,99 @@ def test_the_dataset_path_refuses_an_inconsistent_run_the_same_way() -> None:
     message = str(raised.value)
     assert "purrdf-reasoning-report 4\n" in message
     assert message.count("\ninconsistency-premise ") == 3
+
+
+# ── Conclusion-directed entailment: the chase lane's three services ─────────────
+
+
+def test_certain_answers_enumerate_entailed_bindings_and_disclose_completeness() -> None:
+    """A row is a substitution the knowledge base ENTAILS the pattern under.
+
+    Not "a substitution present in one closure": SPARQL's entailment regimes define
+    the answers to a basic graph pattern as the CERTAIN answers, true in every model.
+    `?c` therefore ranges over the entailed types of `x`, which is a strict superset
+    of the asserted one.
+    """
+    pattern = f"<https://example.org/x> <{RDF_TYPE}> ?c .\n"
+    answer, certificate = entail.certain_answers(entail.Regime.OWL_RL, SCHEMA, pattern)
+
+    assert answer.startswith("mechanism strict-table\nvar c\n")
+    # `A` is asserted; `B` is derived by cax-sco and is a certain answer all the same.
+    assert "\nrow <https://example.org/A>\n" in answer
+    assert "\nrow <https://example.org/B>\n" in answer
+    # No `limit` line IS the claim that the row set is exhaustive. There is
+    # deliberately no `complete true` line beside it: that would be a boolean
+    # function of lines already rendered.
+    assert "\nlimit " not in answer
+
+    # The rows arrive with the run that produced them, on the materialization lane's
+    # own banner — an empty row set is the answer a caller is most likely to act on
+    # and the one that says least on its own.
+    assert certificate.startswith("purrdf-reasoning-report 4\n")
+    assert "\nmechanism strict-table " in certificate
+
+
+def test_graph_entails_gives_three_verdicts_and_names_the_mechanism() -> None:
+    """THREE verdicts, never two — and the answer says which mechanism reached one.
+
+    `not-entailed` is a PROOF: the procedure was complete for this premise, so the
+    absence of a mapping is the absence of an entailment. Collapsing an `undecided`
+    into it would turn a limitation of this library into a false statement about the
+    caller's data.
+    """
+    entailed = f"{SUBCLASS_INFERENCE}\n"
+    answer, certificate = entail.graph_entails(entail.Regime.OWL_RL, SCHEMA, entailed)
+    assert answer == "mechanism strict-table\nentailment entailed\n"
+    assert "\nfired cax-sco " in certificate
+
+    never = f"<https://example.org/x> <{RDF_TYPE}> <https://example.org/Never> .\n"
+    answer, _ = entail.graph_entails(entail.Regime.OWL_RL, SCHEMA, never)
+    assert answer.startswith("mechanism strict-table\nentailment not-entailed\n")
+    assert "\nmiss " in answer
+
+    # `D` realizes datatype entailment as the five dt-* rules and states no theorem
+    # that they are all of it, so it can PROVE an entailment and never refute one.
+    answer, _ = entail.graph_entails(entail.Regime.D, SCHEMA, never)
+    assert answer.startswith("mechanism strict-table\nentailment undecided\n")
+    assert "\nundecided " in answer
+
+
+def test_verify_entailment_re_decides_its_own_warrant() -> None:
+    """The warrant is re-decided without running a reasoner.
+
+    `warrant absent` / `verified not-applicable` is a not-entailed or an undecided:
+    there is no evidence to re-decide, and a `false` there would read as a check that
+    ran and failed rather than one that never applied.
+    """
+    entailed = f"{SUBCLASS_INFERENCE}\n"
+    answer, certificate = entail.verify_entailment(
+        entail.Regime.OWL_RL, SCHEMA, entailed
+    )
+    assert answer.startswith("mechanism strict-table\nentailment entailed\n")
+    assert answer.endswith("warrant present\nverified true\n")
+    assert certificate.startswith("purrdf-reasoning-report 4\n")
+
+    never = f"<https://example.org/x> <{RDF_TYPE}> <https://example.org/Never> .\n"
+    answer, _ = entail.verify_entailment(entail.Regime.OWL_RL, SCHEMA, never)
+    assert answer.endswith("warrant absent\nverified not-applicable\n")
+
+
+def test_the_regimes_defined_by_a_missing_input_are_refused_by_name() -> None:
+    """`OWL_DIRECT` and `RIF` are refused rather than served by a weaker lane.
+
+    Each is defined by an input these signatures do not carry — a query's class
+    expressions, and the caller's rule document — so accepting them and quietly doing
+    something else would be worse than refusing.
+    """
+    entailed = f"{SUBCLASS_INFERENCE}\n"
+    pattern = f"<https://example.org/x> <{RDF_TYPE}> ?c .\n"
+    for regime, spelling in [
+        (entail.Regime.OWL_DIRECT, "owl-direct"),
+        (entail.Regime.RIF, "rif"),
+    ]:
+        with pytest.raises(ValueError) as raised:
+            entail.graph_entails(regime, SCHEMA, entailed)
+        assert spelling in str(raised.value)
+        with pytest.raises(ValueError) as raised:
+            entail.certain_answers(regime, SCHEMA, pattern)
+        assert spelling in str(raised.value)

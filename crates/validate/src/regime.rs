@@ -84,10 +84,11 @@ use core::fmt::Write as _;
 
 use purrdf_core::{RdfLiteral, RdfTerm, RdfTriple, TermValue, emit_term};
 use purrdf_entail::{
-    ChaseProof, Completeness, DlAxiom, DlCertificate, DlCompleteness, EntailError, Justification,
+    ChaseProof, Completeness, DlAxiom, DlCertificate, DlCompleteness, EntailError,
+    EntailmentCertificate, EntailmentMechanism, EntailmentOutcome, ImportMap, Justification,
     Materialization, ModuleExtraction, ModuleMethod, OwlProfile, ProfileCertificate, Reasoner,
-    ReasoningReport, Regime, RuleSet, Verdict, explain_conclusion, extensions, extract_module,
-    implemented, justify, materialize, parse_rif_xml, profile, rules,
+    ReasoningReport, Regime, RuleSet, VarKey, Verdict, explain_conclusion, extensions,
+    extract_module, implemented, justify, materialize, parse_rif_xml, profile, rules,
 };
 
 /// The accepted regime spellings, in the order an error message lists them.
@@ -2340,6 +2341,442 @@ fn render_chase_proof_certificate(proof: &ChaseProof) -> String {
     let _ = writeln!(out, "proof-term-bytes {}", proof.encode().len());
     let _ = writeln!(out, "checked {}", checked.is_ok());
     out
+}
+
+// ── The conclusion-directed entailment services ─────────────────────────────
+
+/// The `mechanism` line every conclusion-directed answer opens its provenance with.
+///
+/// Rendered on the ANSWER as well as inside the certificate's report, and that repetition
+/// is deliberate rather than redundant: the answer is what a caller branches on, and a
+/// caller that must act only on a conclusion the normative rule table reached needs the
+/// mechanism without parsing a certificate. It is the mechanism's own `as_str` spelling in
+/// both places, never an enum ordinal, so the two cannot drift and neither can be renumbered
+/// by a seventh mechanism arriving.
+fn render_mechanism(mechanism: EntailmentMechanism) -> String {
+    format!("mechanism {}\n", mechanism.as_str())
+}
+
+/// Render a [`VarKey`] in the syntax the question wrote it in.
+///
+/// A projected variable comes back as `?name` and a non-distinguished one as the N-Triples
+/// blank node it was — which is what SPARQL says a query blank node is, and what keeps the
+/// two distinguishable in a `binding` line without a third column saying which kind it is.
+fn emit_var(key: &VarKey) -> String {
+    match key {
+        VarKey::Projected(name) => format!("?{name}"),
+        VarKey::Blank { label, scope } => emit(&TermValue::Blank {
+            label: label.clone(),
+            scope: *scope,
+        }),
+    }
+}
+
+/// The N-Triples blank-node label prefix a query VARIABLE is rewritten to before parsing.
+///
+/// See [`parse_bgp`] for why the rewrite happens at all. The prefix is extended with `q`s
+/// until it occurs nowhere in the caller's own text, so a caller writing
+/// `_:purrdfQvar0` themselves cannot have it read as a projected variable.
+const QUERY_VAR_PREFIX: &str = "purrdfQvar";
+
+/// Parse a basic graph pattern written as N-Triples with `?name` in any position.
+///
+/// # Why the variables are rewritten rather than tokenized
+///
+/// An RDF term's syntax is the parser's business, and this boundary has a parser: IRIs with
+/// escapes, literals whose lexical form holds a `>` or a `?`, language tags, base directions
+/// and RDF 1.2 triple terms are all things `purrdf_rdf::parse_dataset` already gets right. A
+/// hand-rolled term scanner here would be a second, worse copy of that, and the first thing
+/// it would get wrong is the `?` inside an IRI's query string.
+///
+/// So the ONLY thing scanned here is where a `?` is legal to start a variable: outside an
+/// IRI, outside a literal and outside a comment. Each such variable is rewritten to a fresh
+/// blank node, the whole document goes through the real parser, and the blank nodes are
+/// mapped back to [`QNode::Var`]. A blank node the caller wrote is left alone and stays what
+/// SPARQL says it is — a non-distinguished variable, constrained by the match and not
+/// projected.
+///
+/// # Errors
+///
+/// A `?` with no name after it, or a document the N-Triples parser refuses.
+fn parse_bgp(text: &str) -> Result<Vec<purrdf_entail::QTriple>, String> {
+    // A prefix the caller's own text does not contain, so a rewritten variable cannot
+    // collide with a blank node the caller wrote.
+    let mut prefix = QUERY_VAR_PREFIX.to_owned();
+    while text.contains(&prefix) {
+        prefix.push('q');
+    }
+    let mut names: Vec<String> = Vec::new();
+    let mut rewritten = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            // An IRI runs to the first `>`; N-Triples forbids an unescaped one inside.
+            '<' => {
+                rewritten.push(c);
+                for inner in chars.by_ref() {
+                    rewritten.push(inner);
+                    if inner == '>' {
+                        break;
+                    }
+                }
+            }
+            // A literal runs to the first UNESCAPED `"`.
+            '"' => {
+                rewritten.push(c);
+                let mut escaped = false;
+                for inner in chars.by_ref() {
+                    rewritten.push(inner);
+                    if escaped {
+                        escaped = false;
+                    } else if inner == '\\' {
+                        escaped = true;
+                    } else if inner == '"' {
+                        break;
+                    }
+                }
+            }
+            // A comment runs to the end of the line, and a `?` in one is prose.
+            '#' => {
+                rewritten.push(c);
+                for inner in chars.by_ref() {
+                    rewritten.push(inner);
+                    if inner == '\n' {
+                        break;
+                    }
+                }
+            }
+            '?' | '$' => {
+                let mut name = String::new();
+                while let Some(&next) = chars.peek() {
+                    if next.is_ascii_alphanumeric() || next == '_' {
+                        name.push(next);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                if name.is_empty() {
+                    return Err(format!(
+                        "a variable marker `{c}` with no name after it; a projected variable is \
+                         written `{c}name`"
+                    ));
+                }
+                let index = names
+                    .iter()
+                    .position(|known| *known == name)
+                    .unwrap_or_else(|| {
+                        names.push(name.clone());
+                        names.len() - 1
+                    });
+                let _ = write!(rewritten, "_:{prefix}{index}");
+            }
+            _ => rewritten.push(c),
+        }
+    }
+
+    let dataset = purrdf_rdf::parse_dataset(rewritten.as_bytes(), INPUT_MEDIA_TYPE, None)
+        .map_err(|diagnostic| format!("the basic graph pattern is not N-Triples: {diagnostic}"))?;
+    let node = |term: TermValue| -> purrdf_entail::QNode {
+        if let TermValue::Blank { label, .. } = &term
+            && let Some(index) = label.strip_prefix(&prefix)
+            && let Ok(index) = index.parse::<usize>()
+            && let Some(name) = names.get(index)
+        {
+            return purrdf_entail::QNode::Var(name.clone());
+        }
+        purrdf_entail::QNode::Term(term)
+    };
+    let mut bgp = Vec::new();
+    // `quads()` yields interned ids in document order, so the pattern's own triple order —
+    // and hence the column order `projected_vars` reads off it — is the caller's.
+    for quad in dataset.quads() {
+        if quad.g.is_some() {
+            return Err(
+                "a basic graph pattern is matched against the DEFAULT graph, so a pattern that \
+                 names a graph is refused rather than having that graph silently dropped"
+                    .to_owned(),
+            );
+        }
+        bgp.push(purrdf_entail::QTriple {
+            s: node(dataset.term_value(quad.s)),
+            p: node(dataset.term_value(quad.p)),
+            o: node(dataset.term_value(quad.o)),
+        });
+    }
+    Ok(bgp)
+}
+
+/// Parse `document` and `regime`, then run `f` over them. The shared preamble of the three
+/// services below.
+fn with_premise<T>(
+    regime: &str,
+    document: &str,
+    f: impl FnOnce(&purrdf_core::RdfDataset, Regime) -> Result<T, EntailError>,
+) -> Result<T, String> {
+    let parsed = parse_regime(regime)?;
+    let dataset = purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
+        .map_err(|diagnostic| diagnostic.to_string())?;
+    f(&dataset, parsed).map_err(|error| render_entail_error(regime, &error))
+}
+
+/// The CERTAIN ANSWERS of a basic graph pattern over `document` under `regime`.
+///
+/// A row is a substitution the knowledge base ENTAILS the pattern under — true in every
+/// model, not merely present in one closure — which is what SPARQL's entailment regimes
+/// define the answers to a basic graph pattern to be.
+///
+/// `pattern` is N-Triples with `?name` (or `$name`) in any position. A blank node in it is a
+/// NON-DISTINGUISHED variable: constrained by the match, not projected, and not a column —
+/// which is what SPARQL says a query blank node is.
+///
+/// The answer's grammar, in emission order:
+///
+/// ```text
+/// mechanism strict-table
+/// var <name>              (0..n, in the order the pattern first mentions each)
+/// row <term> …            (0..n, one per certain answer, positionally aligned to `var`)
+/// limit <reason>          (0..n)
+/// ```
+///
+/// A `limit` line is a reason the row set may not be EXHAUSTIVE. Every row is sound
+/// unconditionally — the mechanism that found it is sound — and what needs a precondition is
+/// the claim a caller makes about a row that is NOT there. So the absence of `limit` lines
+/// is the claim that the row set is complete, and there is deliberately no `complete
+/// true|false` line beside them: it would be a boolean function of lines already rendered,
+/// which this boundary omits rather than restates.
+///
+/// `mechanism` is always `strict-table` here, and that is a claim rather than a placeholder:
+/// the five mechanisms beyond the rule table are conclusion-directed only, each because a
+/// projected variable over what it decides would be a different question. See
+/// [`graph_entails_to_string`], which is the same machinery with nothing to project.
+///
+/// The certificate is the run's [`ReasoningReport`], rendered by
+/// [`render_reasoning_report`]. There is no answers-without-a-report entry point: an empty
+/// row set is the answer a caller is most likely to act on and the one that says least on
+/// its own.
+///
+/// # Errors
+///
+/// An unknown regime spelling; a regime this service is not total over (`owl-direct` and
+/// `rif` are each defined by an input this signature does not carry); a malformed document
+/// or pattern; a pattern that names a graph; an inconsistent premise, whose refusal carries
+/// the full report; or an exhausted match budget.
+///
+/// ```
+/// use purrdf_validate::regime::certain_answers_to_string;
+///
+/// let data = "<http://example.org/Cat> \
+///     <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .\n\
+///     <http://example.org/tom> \
+///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .\n";
+/// let pattern = "<http://example.org/tom> \
+///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?c .\n";
+/// let answers = certain_answers_to_string("owl-rl", data, pattern).expect("answers");
+/// assert!(answers.answer().starts_with("mechanism strict-table\nvar c\n"));
+/// // `?c` ranges over the ENTAILED types, not the asserted one.
+/// assert!(answers.answer().contains("\nrow <http://example.org/Animal>\n"));
+/// // The certificate's own line carries the semantic boundary beside the name.
+/// assert!(answers.certificate().contains("\nmechanism strict-table no boundary was crossed:"));
+/// ```
+pub fn certain_answers_to_string(
+    regime: &str,
+    document: &str,
+    pattern: &str,
+) -> Result<ReasoningAnswer, String> {
+    let bgp = parse_bgp(pattern)?;
+    let answers = with_premise(regime, document, |premise, parsed| {
+        purrdf_entail::certain_answers(premise, &bgp, parsed, &ImportMap::new())
+    })?;
+    let mut answer = render_mechanism(EntailmentMechanism::StrictTable);
+    for var in answers.vars() {
+        let _ = writeln!(answer, "var {var}");
+    }
+    for row in answers.rows() {
+        answer.push_str("row");
+        for term in row {
+            let _ = write!(answer, " {}", emit(term));
+        }
+        answer.push('\n');
+    }
+    for limit in answers.limits() {
+        let _ = writeln!(answer, "limit {limit}");
+    }
+    Ok(ReasoningAnswer {
+        answer,
+        certificate: render_reasoning_report(answers.report()),
+    })
+}
+
+/// Does `premise` entail `conclusion` under `regime`?
+///
+/// The zero-projected-variable case of [`certain_answers_to_string`]: a conclusion GRAPH is
+/// a basic graph pattern with nothing to project, so its answer is a verdict rather than a
+/// relation, and the binding is read as the WARRANT for a yes rather than as an answer.
+///
+/// # Not to be confused with [`entails_to_string`]
+///
+/// The collision is real and both names are right, so it is stated rather than resolved by
+/// renaming. [`entails_to_string`] asks the OWL 2 Direct-Semantics TABLEAU whether an
+/// ontology entails one AXIOM of the OWL 2 RDF mapping, and renders a `DlCertificate` whose
+/// completeness counts hypertableau rounds. This asks the regime's RULE TABLE whether a
+/// premise entails a conclusion GRAPH, and renders a `ReasoningReport` whose completeness is
+/// the regime's own rule inventory. Different question, different calculus, different
+/// certificate — and the two certificates carry different banners so neither can be parsed
+/// as the other.
+///
+/// The answer's grammar, in emission order:
+///
+/// ```text
+/// mechanism <name>
+/// entailment entailed | entailment not-entailed | entailment undecided
+/// binding <?var | _:label> <term>   (0..n, entailed only)
+/// miss <summary>                    (not-entailed only)
+/// undecided <reason>                (undecided only)
+/// ```
+///
+/// THREE verdicts, never two. `not-entailed` is a PROOF — the procedure was complete for
+/// this premise, so the absence of a mapping is the absence of an entailment — and
+/// `undecided` is what an incomplete procedure is entitled to say instead. Collapsing the
+/// second into the first would turn a limitation of this library into a false statement
+/// about the caller's data.
+///
+/// # Errors
+///
+/// As [`certain_answers_to_string`].
+///
+/// ```
+/// use purrdf_validate::regime::graph_entails_to_string;
+///
+/// let premise = "<http://example.org/p> \
+///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+///     <http://www.w3.org/2002/07/owl#TransitiveProperty> .\n\
+///     <http://example.org/x> <http://example.org/p> <http://example.org/y> .\n\
+///     <http://example.org/y> <http://example.org/p> <http://example.org/z> .\n";
+/// let conclusion = "<http://example.org/x> <http://example.org/p> <http://example.org/z> .\n";
+/// let decided = graph_entails_to_string("owl-rl", premise, conclusion).expect("decides");
+/// // `prp-trp` derives it, so the rule table itself answers.
+/// assert!(decided.answer().starts_with("mechanism strict-table\nentailment entailed\n"));
+/// assert!(decided.certificate().contains("\nfired prp-trp "));
+/// ```
+pub fn graph_entails_to_string(
+    regime: &str,
+    premise: &str,
+    conclusion: &str,
+) -> Result<ReasoningAnswer, String> {
+    let target = purrdf_rdf::parse_dataset(conclusion.as_bytes(), INPUT_MEDIA_TYPE, None)
+        .map_err(|diagnostic| format!("the conclusion is not N-Quads: {diagnostic}"))?;
+    let certificate = with_premise(regime, premise, |premise, parsed| {
+        purrdf_entail::entails(premise, &target, parsed, &ImportMap::new())
+    })?;
+    Ok(ReasoningAnswer {
+        answer: render_entailment_answer(&certificate),
+        certificate: render_reasoning_report(certificate.report()),
+    })
+}
+
+/// The `mechanism`/`entailment`/evidence block shared by [`graph_entails_to_string`] and
+/// [`verify_entailment_to_string`].
+fn render_entailment_answer(certificate: &EntailmentCertificate) -> String {
+    let mut answer = render_mechanism(certificate.mechanism());
+    match certificate.outcome() {
+        EntailmentOutcome::Entailed(warrant) => {
+            answer.push_str("entailment entailed\n");
+            for (key, term) in warrant.binding() {
+                let _ = writeln!(answer, "binding {} {}", emit_var(key), emit(term));
+            }
+        }
+        EntailmentOutcome::NotEntailed(miss) => {
+            answer.push_str("entailment not-entailed\n");
+            let _ = writeln!(answer, "miss {}", miss.summary());
+        }
+        EntailmentOutcome::Undecided(reason) => {
+            answer.push_str("entailment undecided\n");
+            let _ = writeln!(answer, "undecided {reason}");
+        }
+    }
+    answer
+}
+
+/// Decide whether `premise` entails `conclusion`, then RE-DECIDE the warrant without running
+/// a reasoner.
+///
+/// [`graph_entails_to_string`] with `purrdf_entail::verify` run over its own answer. The
+/// re-check runs no reasoner and re-derives nothing — deliberately, because "the closure
+/// follows from the premise" is the chase's claim and [`explain_conclusion_to_string`] is
+/// its checker, while "the conclusion follows from the closure" is this one and is finite
+/// and purely combinatorial. Folding them would cost what the original call cost and give a
+/// caller no independent check at all.
+///
+/// The answer's grammar is [`graph_entails_to_string`]'s plus two lines:
+///
+/// ```text
+/// warrant present | warrant absent
+/// verified true | verified false | verified not-applicable
+/// ```
+///
+/// `warrant absent` / `verified not-applicable` is a `not-entailed` or an `undecided`: there
+/// is no evidence to re-decide, and a `false` there would read as a failed check rather than
+/// as an absent one. A `verified false` beside `warrant present` is an engine defect, and it
+/// is RENDERED rather than raised so a caller re-deciding sees what this boundary saw — the
+/// same discipline the chase proof's `checked` line is under.
+///
+/// # Errors
+///
+/// As [`certain_answers_to_string`].
+///
+/// ```
+/// use purrdf_validate::regime::verify_entailment_to_string;
+///
+/// let premise = "<http://example.org/A> \
+///     <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .\n\
+///     <http://example.org/x> \
+///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .\n";
+/// let conclusion = "<http://example.org/x> \
+///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> .\n";
+/// let checked = verify_entailment_to_string("owl-rl", premise, conclusion).expect("decides");
+/// assert!(checked.answer().contains("\nwarrant present\n"));
+/// assert!(checked.answer().ends_with("verified true\n"));
+///
+/// // A conclusion nothing derives has no warrant to re-decide, and says so rather than
+/// // reporting a check that failed.
+/// let never = "<http://example.org/x> \
+///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Never> .\n";
+/// let missing = verify_entailment_to_string("owl-rl", premise, never).expect("decides");
+/// assert!(missing.answer().contains("\nwarrant absent\n"));
+/// assert!(missing.answer().ends_with("verified not-applicable\n"));
+/// ```
+pub fn verify_entailment_to_string(
+    regime: &str,
+    premise: &str,
+    conclusion: &str,
+) -> Result<ReasoningAnswer, String> {
+    let target = purrdf_rdf::parse_dataset(conclusion.as_bytes(), INPUT_MEDIA_TYPE, None)
+        .map_err(|diagnostic| format!("the conclusion is not N-Quads: {diagnostic}"))?;
+    let parsed_premise = purrdf_rdf::parse_dataset(premise.as_bytes(), INPUT_MEDIA_TYPE, None)
+        .map_err(|diagnostic| diagnostic.to_string())?;
+    let parsed = parse_regime(regime)?;
+    let certificate = purrdf_entail::entails(&parsed_premise, &target, parsed, &ImportMap::new())
+        .map_err(|error| render_entail_error(regime, &error))?;
+    let mut answer = render_entailment_answer(&certificate);
+    match certificate.warrant() {
+        Some(warrant) => {
+            answer.push_str("warrant present\n");
+            let _ = writeln!(
+                answer,
+                "verified {}",
+                purrdf_entail::verify(warrant, &parsed_premise, &target)
+            );
+        }
+        None => {
+            answer.push_str("warrant absent\n");
+            answer.push_str("verified not-applicable\n");
+        }
+    }
+    Ok(ReasoningAnswer {
+        answer,
+        certificate: render_reasoning_report(certificate.report()),
+    })
 }
 
 #[cfg(test)]

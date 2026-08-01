@@ -29,7 +29,11 @@ const PACKAGE_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 // the exported entailment API in crates/rdf-wasm/src/entail.rs links
 // purrdf-entail and purrdf-datalog into the wasm artifact, so both ceilings move
 // with the WASM_SIZE_BUDGET_BYTES raise that records it. The most recent is the
-// concrete domain, which moved the wasm artifact and both of these with it.
+// concrete domain, which moved the wasm artifact and both of these with it. The most
+// recent is the CONCLUSION-DIRECTED entailment service: `entailCertainAnswers`,
+// `entailGraphEntails` and `entailVerifyEntailment` reach `purrdf_entail::entails` and
+// its six mechanisms, which the linker had dead-code-eliminated entirely while no
+// exported symbol reached them. Both ceilings hold; only the measured figures move.
 //
 // The MEASURED figures below are REPORTED, not enforced. They were equality-gated,
 // but a packaged byte count is not a property of the source: it moves with the
@@ -40,8 +44,8 @@ const PACKAGE_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 // and CI. Equality could not hold in both places at once, and it blocked merges and
 // a release while the package sat well inside its ceiling. Update these when you
 // want the printed note to track the build.
-const MEASURED_TARBALL_BYTES = 3_245_930;
-const MEASURED_UNPACKED_BYTES = 9_738_278;
+const MEASURED_TARBALL_BYTES = 3_323_157;
+const MEASURED_UNPACKED_BYTES = 9_948_156;
 const MAX_TARBALL_BYTES = 4_137_500;
 const MAX_UNPACKED_BYTES = 12_400_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;

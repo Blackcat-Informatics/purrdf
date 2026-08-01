@@ -894,6 +894,42 @@ class entail:
         data: str, regime: RegimeLike, conclusion: str
     ) -> tuple[str, str]: ...
 
+    # ── Conclusion-directed entailment (the CHASE lane, not the tableau) ─────
+    # The CERTAIN ANSWERS of a basic graph pattern: the substitutions the
+    # knowledge base ENTAILS the pattern under — true in every model, not merely
+    # present in one closure, which is what SPARQL's entailment regimes define
+    # the answers to a basic graph pattern to be. `pattern` is N-Triples with
+    # `?name` in any position; a blank node in it is a NON-DISTINGUISHED
+    # variable, constrained by the match and not projected. The answer opens
+    # `mechanism strict-table`, then `var` and `row` lines, then a `limit` line
+    # per reason the row set may not be EXHAUSTIVE — no `limit` lines is the
+    # claim that it is. Raises ValueError for OWL_DIRECT and RIF, each defined by
+    # an input this signature does not carry.
+    @staticmethod
+    def certain_answers(
+        regime: RegimeLike, data: str, pattern: str
+    ) -> tuple[str, str]: ...
+    # Does `premise` entail the conclusion GRAPH under the regime's rule table?
+    # NOT `entails`, which asks the OWL 2 Direct-Semantics TABLEAU about one
+    # AXIOM and renders a DL certificate; this asks the RULE TABLE about a
+    # conclusion GRAPH and renders a reasoning report. The answer opens
+    # `mechanism <name>` — which of the six mechanisms reached the verdict — and
+    # then gives THREE verdicts, never two: `not-entailed` is a PROOF, and
+    # `undecided` is what an incomplete procedure is entitled to say instead.
+    @staticmethod
+    def graph_entails(
+        regime: RegimeLike, premise: str, conclusion: str
+    ) -> tuple[str, str]: ...
+    # `graph_entails` with the warrant RE-DECIDED, without running a reasoner.
+    # Adds `warrant present|absent` and `verified true|false|not-applicable`;
+    # `warrant absent` is a not-entailed or an undecided, where there is no
+    # evidence to re-decide and a `false` would read as a failed check rather
+    # than an absent one.
+    @staticmethod
+    def verify_entailment(
+        regime: RegimeLike, premise: str, conclusion: str
+    ) -> tuple[str, str]: ...
+
     # ── The session ──────────────────────────────────────────────────────────
     # Every service above takes the document as a string and rebuilds everything
     # it needs, so asking three questions parses and reverse-maps the ontology
