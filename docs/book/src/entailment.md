@@ -104,8 +104,8 @@ Where the numbers stop:
   rules, and a run that met a boundary still reports
   `Completeness::ExactWithinBoundaries` rather than `Exact`. The two claims are
   reported separately on purpose. Nor is a complete rule table entailment
-  conformance: on W3C's own OWL 2 RL entailment tests `entails()` reaches 27 of
-  27 published positive entailments and correctly withholds on 23 of 23
+  conformance: on this vendored W3C corpus of OWL 2 RL entailment tests
+  `entails()` reaches 27 of 27 published positive entailments and correctly withholds on 23 of 23
   negative ones (see [Conformance](#conformance) below). 78 / 78 says every
   rule of Tables 4–9 is implemented — and the one W3C-published entailment
   that is reachable only by a sound rule outside those tables is reached by an

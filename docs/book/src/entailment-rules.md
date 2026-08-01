@@ -22,6 +22,27 @@ specification table states. Those are listed in their own section below
 `OWL-RL 78 / 78` stays a claim about OWL 2 Profiles §4.3 Tables 4–9 and about
 nothing else.
 
+## `78 / 78` and `50 / 50` are two different measurements
+
+This page is the RULE INVENTORY: `78 / 78` says every rule OWL 2 Profiles §4.3
+Tables 4–9 states is one the chase fires. It says nothing about how many
+published entailments that reaches, and the two figures are measured against
+different things and can move independently.
+
+The second measurement is ENTAILMENT CONFORMANCE, over the vendored W3C OWL 2 RL
+entailment corpus: 50 of 50 cases agree with W3C's published verdict, 27 of 27
+positive and 23 of 23 negative, with an empty divergence ledger. That figure is
+`crates/sparql-conformance/entailment-suite/w3c-owl2-rl/`'s and is bounded by
+what is vendored there — see `docs/CONFORMANCE.md`, which carries it beside the
+corpus it was measured on.
+
+Fifteen of those 50 are reached by a mechanism the rule table has no head for:
+refutation, freeze-and-chase, comprehension, reflexivity and datatype
+containment, each documented on `purrdf_entail::EntailmentMechanism`. NONE of
+them adds a rule, which is why this inventory is byte-for-byte what it was
+before they existed — they change how many times the table is run and what its
+`false` is read as, not what the table states.
+
 ## Coverage by regime
 
 | Regime | `--regime` | Defined | Implemented |

@@ -84,8 +84,8 @@ but it assumes nothing about your ontology or application.
 - **Entailment** — Simple/RDF/RDFS/OWL-RL/D forward materialization over a
   deterministic semi-naive fixpoint (**all 78 OWL 2 RL rules** of OWL 2 Profiles
   §4.3 Tables 4–9 — *rule-table coverage*, which is not the same claim as
-  entailment conformance: on W3C's own OWL 2 RL entailment tests the chase
-  scores **27 of 27 positive and 23 of 23 negative**, the latter meaning no
+  entailment conformance: on this vendored W3C corpus of OWL 2 RL entailment
+  tests the chase scores **27 of 27 positive and 23 of 23 negative**, the latter meaning no
   unsoundness was found; all 18 RDF + RDFS patterns, the four existential ones
   firing through the restricted chase with their surrogate blank nodes withheld at
   the materialization boundary), an open-world OWL-Direct

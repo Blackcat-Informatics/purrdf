@@ -149,7 +149,9 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-pub use purrdf_entail::{EntailmentOutcome, MissReason, UndecidedReason};
+pub use purrdf_entail::{
+    EntailmentCertificate, EntailmentMechanism, EntailmentOutcome, MissReason, UndecidedReason,
+};
 
 /// What the W3C published for a case, which is also which target file it carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -191,8 +193,19 @@ impl Direction {
 /// case.
 ///
 /// Each variant names the concrete rule or construct responsible, so the ledger
-/// doubles as an inventory of what the rule table does not yet do. A catch-all
+/// doubles as an inventory of what the rule table does not reach. A catch-all
 /// would defeat the point.
+///
+/// # The table is EMPTY and every variant stays
+///
+/// [`LEDGER`] holds nothing: all fifty vendored cases answer as W3C published them. The
+/// seven variants below are kept anyway, and the reason is the same one for each — a
+/// classification is what a divergence of that SHAPE is filed under, and deleting it
+/// would leave the next one with nowhere to go that says what it is. That is a statement
+/// about the taxonomy, not a schedule: nothing here is owed, and none of these variants
+/// is waiting for anything. [`RlGap::ALL`] is what
+/// `every_gap_classifies_itself_on_both_axes` ranges over, so the classifications stay
+/// checked while the ledger is empty.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RlGap {
     /// The conclusion is a **positive assertional triple over named terms** that a
@@ -306,6 +319,21 @@ pub enum RlGap {
 }
 
 impl RlGap {
+    /// Every classification, in declaration order.
+    ///
+    /// The list a retained variant is read off, and the reason `every_gap_classifies_itself`
+    /// cannot go vacuous: it ranges over THIS rather than over [`LEDGER`], so an empty
+    /// ledger does not empty it.
+    pub const ALL: [Self; 7] = [
+        Self::MissingRule,
+        Self::SchemaConclusion,
+        Self::NegativeConclusion,
+        Self::ConstructOutsideRl,
+        Self::ImportsUnresolved,
+        Self::Refused,
+        Self::UnsoundDerivation,
+    ];
+
     /// A short human-readable label for the ledger tally and the log.
     #[must_use]
     pub const fn label(self) -> &'static str {
@@ -867,7 +895,7 @@ pub fn decide(case: &RlCase, imports: &purrdf_entail::ImportMap) -> Answer {
 pub fn certify(
     case: &RlCase,
     imports: &purrdf_entail::ImportMap,
-) -> Result<purrdf_entail::EntailmentCertificate, String> {
+) -> Result<EntailmentCertificate, String> {
     let base = format!("http://example.org/w3c-owl2-rl/{}", case.name);
     let premise = parse(&case.premise, &base)?;
     let target = parse(&case.target, &base)?;
@@ -901,7 +929,18 @@ pub fn certify(
 /// scored as the capability gap it is.
 #[must_use]
 pub fn grade(case: &RlCase, imports: &purrdf_entail::ImportMap) -> Grade {
-    match decide(case, imports) {
+    grade_answer(case, decide(case, imports))
+}
+
+/// Grade an answer already obtained, so one run can be read twice.
+///
+/// [`grade`] is this over its own [`decide`]. It is split out because [`run`] needs BOTH
+/// the grade and the MECHANISM, and calling `decide` a second time to get the second would
+/// chase the premise twice per case — and, worse, would let the two halves of one row come
+/// from two different runs.
+#[must_use]
+fn grade_answer(case: &RlCase, answer: Answer) -> Grade {
+    match answer {
         Answer::Withheld(why) => Grade::Withhold(why),
         Answer::Entailed if case.direction.expects_match() => Grade::Agree,
         Answer::NotEntailed(_) | Answer::Undecided(_) if !case.direction.expects_match() => {
@@ -930,6 +969,12 @@ pub struct GradedCase {
     pub grade: Grade,
     /// Its ledger entry, if it has one.
     pub ledgered: Option<RlGap>,
+    /// WHICH of [`purrdf_entail::entails`]'s six mechanisms answered it.
+    ///
+    /// `None` only for a WITHHELD case, where no run completed and there is therefore no
+    /// mechanism to name — an absence this corpus has none of today and which the type
+    /// still has to be able to say.
+    pub mechanism: Option<EntailmentMechanism>,
 }
 
 /// The whole corpus run.
@@ -1016,6 +1061,75 @@ impl RlSummary {
             self.cases.len(),
             self.actionable(),
         )
+    }
+
+    /// The MECHANISM × PR1-CLAUSE scoreboard: a second machine-readable line.
+    ///
+    /// [`Self::scoreboard_line`] answers "did the corpus agree?" and, with an EMPTY
+    /// ledger, answers it by subtracting zero from fifty — trivially correct and
+    /// therefore near-vacuous. This answers the question that is not trivial: WHICH
+    /// mechanism reached each agreement, split by the clause of Theorem PR1 the lane
+    /// grades.
+    ///
+    /// The two lanes grade different halves of that theorem. The POSITIVE lane grades
+    /// the completeness half — W3C published an entailment and PurRDF has to reach it —
+    /// and it is where the discrimination lives, because a reasoner that derives nothing
+    /// at all fails every one of the 27. The NEGATIVE lane grades the soundness half —
+    /// deriving one of these would be asserting something W3C contradicts — which is
+    /// owed unconditionally and has weak discriminating power. Reporting one number for
+    /// both would hide which half a change moved.
+    ///
+    /// Per mechanism the pair is `<positive>/<negative>`. The five beyond
+    /// `strict-table` only ever ESTABLISH a conclusion, so a non-zero negative count on
+    /// any of them would be an unsoundness rather than a better score, and printing the
+    /// split is what makes that readable rather than inferable.
+    ///
+    /// The mechanism is spelled by its own `as_str`, and mechanisms with no case are
+    /// still printed, because a lane dropping to zero is exactly the kind of change a
+    /// line that only listed non-empty buckets would render invisible.
+    #[must_use]
+    pub fn mechanism_line(&self) -> String {
+        let (positive_total, negative_total) = self.by_direction();
+        let mut positive_agree = 0_usize;
+        let mut negative_agree = 0_usize;
+        for case in &self.cases {
+            if !matches!(case.grade, Grade::Agree) {
+                continue;
+            }
+            if case.direction == Direction::Positive {
+                positive_agree += 1;
+            } else {
+                negative_agree += 1;
+            }
+        }
+        let mut out = format!(
+            "OWL2-RL-MECHANISMS: positive {positive_agree}/{positive_total} negative \
+             {negative_agree}/{negative_total}"
+        );
+        for mechanism in EntailmentMechanism::ALL {
+            let (mut positive, mut negative) = (0_usize, 0_usize);
+            for case in &self.cases {
+                if case.mechanism != Some(mechanism) {
+                    continue;
+                }
+                if case.direction == Direction::Positive {
+                    positive += 1;
+                } else {
+                    negative += 1;
+                }
+            }
+            let _ = write!(out, " {} {positive}/{negative}", mechanism.as_str());
+        }
+        // A case whose run did not complete has no mechanism, so the buckets above do
+        // not sum to the corpus. Printing the residue keeps the line's own arithmetic
+        // checkable rather than leaving a reader to discover the shortfall.
+        let unanswered = self
+            .cases
+            .iter()
+            .filter(|case| case.mechanism.is_none())
+            .count();
+        let _ = write!(out, " withheld {unanswered}");
+        out
     }
 
     /// A per-gap tally of the ledger, in label order, for the run log.
@@ -1105,11 +1219,28 @@ pub fn run(root: &Path) -> Result<RlSummary, String> {
     }
     let mut summary = RlSummary::default();
     for case in &cases {
+        // ONE run per case, read twice. The grade and the mechanism are two halves of the
+        // same answer, and obtaining them from two calls would let a scoreboard row
+        // describe a run its own grade did not come from.
+        let certified = certify(case, &imports);
+        let mechanism = certified
+            .as_ref()
+            .ok()
+            .map(EntailmentCertificate::mechanism);
+        let answer = match certified {
+            Ok(certificate) => match certificate.into_parts().0 {
+                EntailmentOutcome::Entailed(_) => Answer::Entailed,
+                EntailmentOutcome::NotEntailed(reason) => Answer::NotEntailed(reason),
+                EntailmentOutcome::Undecided(reason) => Answer::Undecided(reason),
+            },
+            Err(why) => Answer::Withheld(why),
+        };
         summary.cases.push(GradedCase {
             name: case.name.clone(),
             direction: case.direction,
-            grade: grade(case, &imports),
+            grade: grade_answer(case, answer),
             ledgered: ledger_lookup(&case.name),
+            mechanism,
         });
     }
     Ok(summary)
@@ -1278,38 +1409,56 @@ mod tests {
         assert_eq!(count, names.len(), "LEDGER holds a duplicate case entry");
     }
 
+    /// EVERY classification places itself on both axes, and the placements are pinned.
+    ///
+    /// This replaces two tests that iterated [`LEDGER`]. With the ledger empty they had
+    /// become tautologies — "no entry is unsound" and "no entry is actionable" are both
+    /// true of an empty table however the variants are classified — so they proved
+    /// nothing about the thing they were named for. This ranges over [`RlGap::ALL`]
+    /// instead, which an empty ledger does not empty, and it pins WHICH variants are
+    /// unsound and WHICH are actionable. A variant added without deciding both is a
+    /// compile error at the two exhaustive matches and a failure here.
+    ///
+    /// The corpus-level claims those two tests were reaching for are made where they can
+    /// actually be made — over the 50 graded cases, in
+    /// `tests/owl2_rl_conformance.rs`: `no_case_diverges_from_the_published_verdict` and
+    /// `every_negative_case_is_decided_under_an_unexhausted_certificate`.
     #[test]
-    fn no_ledgered_gap_is_an_unsoundness() {
-        let unsound: Vec<&str> = LEDGER
-            .iter()
-            .filter(|e| e.gap.is_unsound())
-            .map(|e| e.case)
+    fn every_gap_classifies_itself_on_both_axes() {
+        let unsound: Vec<&str> = RlGap::ALL
+            .into_iter()
+            .filter(|gap| gap.is_unsound())
+            .map(RlGap::label)
             .collect();
-        assert!(
-            unsound.is_empty(),
-            "the set of unsound divergences must be EMPTY — an unsoundness is the OWL-RL chase \
-             deriving a triple the W3C says is NOT entailed, which no incompleteness can excuse. \
-             These claim otherwise and must be reviewed by hand: {unsound:?}"
+        assert_eq!(
+            unsound,
+            ["unsound-derivation"],
+            "exactly ONE classification is an unsoundness — the chase deriving a triple W3C \
+             says is NOT entailed, which no incompleteness excuses. A second one arriving is a \
+             decision to state here, not a default"
         );
-    }
 
-    #[test]
-    fn only_missing_rules_are_actionable() {
-        // The ledger's size is not a to-do list. Exactly the entries that name a
-        // sound, in-shape rule the table omits (or an unsoundness) are actionable;
-        // everything else describes what the OWL 2 RL profile itself cannot reach.
-        let actionable: Vec<&str> = LEDGER
-            .iter()
-            .filter(|e| e.gap.is_actionable())
-            .map(|e| e.case)
+        let actionable: Vec<&str> = RlGap::ALL
+            .into_iter()
+            .filter(|gap| gap.is_actionable())
+            .map(RlGap::label)
             .collect();
         assert_eq!(
             actionable,
-            [] as [&str; 0],
-            "the actionable set changed; a new entry means the rule table owes a conclusion it \
-             does not produce, and a lost entry means one was fixed — either way, say so in the \
-             ledger comment and here"
+            ["missing-rule", "unsound-derivation"],
+            "the actionable classifications are the two PurRDF could close inside the rule \
+             table; every other one describes what the OWL 2 RL profile itself does not reach, \
+             and misfiling one there would turn a structural limit into a to-do item"
         );
+
+        // Labels are what the tally and the log print, so two variants sharing one would
+        // make a ledger tally unreadable.
+        let mut labels: Vec<&str> = RlGap::ALL.into_iter().map(RlGap::label).collect();
+        assert_eq!(labels.len(), 7);
+        labels.sort_unstable();
+        let count = labels.len();
+        labels.dedup();
+        assert_eq!(count, labels.len(), "two RlGap variants share a label");
     }
 
     #[test]

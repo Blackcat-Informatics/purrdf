@@ -66,6 +66,10 @@ fn owl2_rl_entailment_conformance() {
         summary.ledger_tally()
     );
     eprintln!("{}", summary.scoreboard_line());
+    // The lane split, made EXECUTABLE rather than derived. Deriving it from an empty
+    // ledger is subtracting zero from fifty; printing which mechanism reached each
+    // agreement is the part that is not trivially true.
+    eprintln!("{}", summary.mechanism_line());
 
     assert!(
         summary.unledgered().is_empty() && summary.stale().is_empty(),
@@ -323,6 +327,55 @@ fn the_non_rl_premises_are_named_and_answer_undecided() {
         "the set of premises outside the OWL 2 RL syntax changed; a case leaving it means the \
          premise or the profile scanner moved, and a case joining it means a premise this corpus \
          could previously refute can no longer be refuted — either way, say which and why"
+    );
+}
+
+/// NO case diverges from the published verdict, and the lane split is PINNED.
+///
+/// This is one half of what replaced `only_missing_rules_are_actionable`, which iterated
+/// `LEDGER`. With that table empty it had become a tautology: "no entry is actionable" is
+/// true of an empty table whatever the classifications are, so it asserted nothing about
+/// the corpus it was named for. The claim an empty ledger actually encodes is the one
+/// below — every one of the fifty graded cases AGREES — and it is stated over the graded
+/// cases rather than over the absence of entries.
+///
+/// The mechanism scoreboard is pinned beside it, per lane, because that is the part of
+/// `50 / 50` that is not arithmetic. The two lanes grade different clauses of Theorem
+/// PR1: the positive lane grades COMPLETENESS and carries the discrimination (a reasoner
+/// that derives nothing fails all 27), while the negative lane grades SOUNDNESS, which is
+/// owed unconditionally and which a reasoner that derives nothing passes trivially. Which
+/// mechanism reached each agreement is what says how the corpus was closed.
+#[test]
+fn no_case_diverges_from_the_published_verdict() {
+    let summary =
+        owl2_rl::run(&owl2_rl::suite_root()).expect("grade the vendored W3C OWL 2 RL corpus");
+    let diverged: Vec<&str> = summary
+        .cases
+        .iter()
+        .filter(|case| !matches!(case.grade, owl2_rl::Grade::Agree))
+        .map(|case| case.name.as_str())
+        .collect();
+    assert_eq!(
+        diverged,
+        [] as [&str; 0],
+        "the ledger is EMPTY, which is the claim that every vendored case answers as W3C \
+         published it. A case here means that claim is false and the divergence owes a typed \
+         RlGap:\n{}",
+        summary.failure_report()
+    );
+    assert_eq!(summary.agreed(), EXPECTED_CASES);
+    assert_eq!(summary.ledgered(), 0);
+
+    // The mechanism scoreboard, pinned. `strict-table 12/23` is the normative rule table
+    // reaching 12 positives on its own and observing all 23 non-conclusions absent; the
+    // other four counts are the mechanisms the table has no head for, and every one of
+    // their negative counts is ZERO because those five only ever ESTABLISH a conclusion.
+    assert_eq!(
+        summary.mechanism_line(),
+        "OWL2-RL-MECHANISMS: positive 27/27 negative 23/23 strict-table 12/23 refutation 8/0 \
+         freeze 1/0 comprehension 2/0 reflexivity 1/0 data-range 3/0 withheld 0",
+        "the mechanism x PR1-clause split moved; say WHICH lane and WHICH mechanism, because \
+         the aggregate 50/50 is unchanged by a case moving between two of them"
     );
 }
 

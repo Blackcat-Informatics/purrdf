@@ -378,6 +378,131 @@ def banned_stale_fragment_names() -> tuple[list[str], int]:
     return problems, checked
 
 
+# The nine documents that carry the entailment story: the repository front page, the
+# four published READMEs that restate it, and the four book chapters. They are named
+# rather than discovered because the ban below is about what these documents CLAIM, and a
+# claim's absence from a document that never makes claims is not evidence of anything —
+# sweeping every `.md` in the tree would dilute the ban into a spell-checker over
+# changelogs and vendored provenance files.
+_ENTAILMENT_CLAIM_DOCS = (
+    "README.md",
+    "bindings/python/README.md",
+    "crates/cli/README.md",
+    "crates/entail/README.md",
+    "crates/purrdf/README.md",
+    "docs/CONFORMANCE.md",
+    "docs/book/src/entailment.md",
+    "docs/book/src/introduction.md",
+    "docs/book/src/project/conformance.md",
+)
+
+# The literal phrase that SCOPES a claim to the corpus it was measured on. A sentence
+# carrying it is making a bounded statement — "50 / 50 on this vendored W3C corpus" — and
+# is exempt; one without it is making the unbounded statement the ban is about.
+_CORPUS_SCOPE = "on this vendored W3C corpus"
+
+# Each entry is (compiled pattern, why it is banned). The patterns are deliberately
+# narrow: they name the specific unbounded claim rather than the words it is built from,
+# so "complete" and "full" remain writable about the things they are true of — a complete
+# RULE TABLE, a full closure of one document — and only the sentence that promotes them
+# into a claim about a SPECIFICATION is caught.
+_BANNED_OVERCLAIMS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(r"\b(complete|full)[a-z]*\s+(?:the\s+)?OWL 2 RDF-Based semantics", re.I),
+        "the RDF-Based semantics is not finitely axiomatizable by a rule table; PurRDF "
+        "implements a profile's rule table plus five named mechanisms, not the semantics",
+    ),
+    (
+        re.compile(r"\b(complete|full)[a-z]*\s+OWL 2 conformance", re.I),
+        "OWL 2 conformance is defined per syntax and per semantics over the whole test "
+        "suite; what is measured here is one vendored subset of one corpus",
+    ),
+    (
+        re.compile(r"\b(complete|full)[a-z]*\s+OWL 2 RL entailment", re.I),
+        "78 / 78 is RULE-TABLE coverage. Entailment conformance is a different claim, "
+        "measured separately and only over the cases actually vendored",
+    ),
+    (
+        re.compile(r"\bfully conformant\b", re.I),
+        "conformance is per specification clause and per corpus; `fully conformant` names "
+        "neither, so nothing can check it",
+    ),
+    (
+        re.compile(r"\b(faster|fastest|outperform[a-z]*)\b", re.I),
+        "a comparative performance claim needs a named competitor, a named workload and a "
+        "reproducible measurement; this repository's benches are report-only and assert "
+        "no speedup",
+    ),
+)
+
+
+def _sentences(text: str) -> list[tuple[int, str]]:
+    """`(line number, sentence)` for every sentence of `text`.
+
+    Sentence-scoped rather than line-scoped because the exemption is: the SENTENCE
+    carrying the claim also carries the scope phrase. A line-scoped check would exempt a
+    claim whose scope sits on the previous wrapped line and refuse one whose scope sits on
+    the next, which is a property of the paragraph reflow rather than of the prose.
+
+    Markdown table rows are one "sentence" per cell, because a table cell is a standalone
+    statement and the row's other cells are not its context.
+    """
+    out: list[tuple[int, str]] = []
+    for offset, line in enumerate(text.splitlines(), start=1):
+        pieces = line.split("|") if line.lstrip().startswith("|") else [line]
+        for piece in pieces:
+            for sentence in re.split(r"(?<=[.!?])\s+", piece):
+                if sentence.strip():
+                    out.append((offset, sentence))
+    return out
+
+
+def banned_entailment_overclaims() -> tuple[list[str], int]:
+    """The unbounded entailment claims this documentation may not make.
+
+    Modelled on :func:`banned_stale_fragment_names`, and run from the same ``main``, for
+    the same reason: some statements are wrong in a way no NUMBER check can see. Every
+    other gate in this file compares a documented figure against a generated one, which
+    catches a stale count and is blind to a sentence that states no count at all.
+
+    It exists at exactly the moment it is most needed. The documentation these nine files
+    carry was rewritten from "here are the known gaps" to "50 / 50, ledger empty", and
+    that is precisely when a `complete OWL 2 RL entailment` sentence gets written — the
+    numbers really did all reach their ceilings, and the step from "every vendored case
+    agrees" to "the implementation is complete" is one short sentence and one large lie.
+
+    Five claims are banned, each with its own reason (see ``_BANNED_OVERCLAIMS``), and
+    each is exempt when the SENTENCE carrying it also carries the literal phrase
+    ``on this vendored W3C corpus``. The exemption is a literal string rather than a
+    pattern on purpose: a bounded claim has to say what it is bounded BY, and a phrase
+    a writer must type verbatim is one a reader can search for.
+
+    Returns the problems and the number of files scanned, so the script's headline
+    reports what it really read.
+    """
+    problems: list[str] = []
+    for relative in _ENTAILMENT_CLAIM_DOCS:
+        path = _REPO / relative
+        if not path.is_file():
+            raise SystemExit(
+                f"check-doc-claims: {relative} is in _ENTAILMENT_CLAIM_DOCS and does not "
+                f"exist; the entailment documentation moved, so update the list rather "
+                f"than leaving the ban silently narrower"
+            )
+        for line, sentence in _sentences(_read(path)):
+            if _CORPUS_SCOPE in sentence:
+                continue
+            for pattern, why in _BANNED_OVERCLAIMS:
+                match = pattern.search(sentence)
+                if match:
+                    problems.append(
+                        f"{relative}:{line}: banned entailment overclaim "
+                        f"`{match.group(0)}` — {why}. Scope the sentence with the literal "
+                        f"phrase {_CORPUS_SCOPE!r}, or say the bounded thing instead"
+                    )
+    return problems, len(_ENTAILMENT_CLAIM_DOCS)
+
+
 # The codec's own short `id` has no fixed relationship to the prose name a front page
 # uses, so the mapping is spelled out once here rather than guessed per document. A new
 # `FormatDescriptor` whose `id` is missing from this map is a `KeyError` in
@@ -2236,6 +2361,10 @@ def main() -> int:
     fragment_problems, fragment_files = banned_stale_fragment_names()
     problems.extend(fragment_problems)
     checked += 1
+    # The second ban, and the same accounting: one claim, its reach printed separately.
+    overclaim_problems, overclaim_files = banned_entailment_overclaims()
+    problems.extend(overclaim_problems)
+    checked += 1
 
     for claim in build_claims(inventory, matrix, census, lanes):
         claim.check()
@@ -2261,7 +2390,8 @@ def main() -> int:
 
     print(
         f"OK: {checked} documented claim(s) agree with their generated source "
-        f"(stale-name ban swept {fragment_files} file(s))."
+        f"(stale-name ban swept {fragment_files} file(s); entailment-overclaim ban swept "
+        f"{overclaim_files} file(s))."
     )
     return 0
 

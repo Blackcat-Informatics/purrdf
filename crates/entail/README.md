@@ -92,8 +92,8 @@ Three bounds are stated rather than papered over:
   which is the part of D-entailment a forward chase can produce; the value
   spaces themselves are reported as `Construct::DatatypeValueSpace`.
 * **A complete rule table is not entailment conformance either.** 78 / 78 is
-  *rule-table coverage*; the two are measured separately, and on W3C's own OWL 2
-  RL entailment tests this chase scores **27 of 27 positive and 23 of 23
+  *rule-table coverage*; the two are measured separately, and on this vendored W3C corpus of
+  OWL 2 RL entailment tests this chase scores **27 of 27 positive and 23 of 23
   negative**, the latter meaning no unsoundness was found. Both numbers are true
   and stating only the first is the overclaim the reasoning report exists to
   prevent. See
