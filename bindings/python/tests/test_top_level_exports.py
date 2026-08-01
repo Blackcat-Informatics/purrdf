@@ -154,7 +154,11 @@ def test_stub_signatures_match_the_built_bindings() -> None:
         body = re.search(rf"\nclass {engine}:\n(.*?)(?:\n\S|\Z)", text, re.DOTALL)
         assert body, f"no `class {engine}:` block in {stub}"
         for name, params in re.findall(
-            r"^    def (\w+)\(\s*\n?((?:[^)]|\n)*?)\)\s*->", body.group(1), re.MULTILINE
+            # `[^)]` already matches a newline — a negated class is not narrowed by
+            # `re.DOTALL`, which only governs `.` — so the old `(?:[^)]|\n)*?` gave every
+            # newline TWO ways to be matched and 2**n paths to backtrack through. Same
+            # language, one path.
+            r"^    def (\w+)\(\s*\n?([^)]*?)\)\s*->", body.group(1), re.MULTILINE
         ):
             fn = getattr(getattr(purrdf, engine), name, None)
             signature = getattr(fn, "__text_signature__", None)
