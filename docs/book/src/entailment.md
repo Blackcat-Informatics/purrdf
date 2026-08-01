@@ -104,7 +104,7 @@ Where the numbers stop:
   rules, and a run that met a boundary still reports
   `Completeness::ExactWithinBoundaries` rather than `Exact`. The two claims are
   reported separately on purpose. Nor is a complete rule table entailment
-  conformance: on W3C's own OWL 2 RL entailment tests `entails()` reaches 20 of
+  conformance: on W3C's own OWL 2 RL entailment tests `entails()` reaches 22 of
   27 published positive entailments and correctly withholds on 23 of 23
   negative ones (see [Conformance](#conformance) below). 78 / 78 says every
   rule of Tables 4–9 is implemented — and the one W3C-published entailment
@@ -254,7 +254,7 @@ Two corpora measure two different things, and the distinction matters:
   over the 221 excluded cases, so this row cannot detect a regression among them.
   Re-deriving them means re-running the probe, which is a deliberate act rather
   than part of the gate.
-- **W3C OWL 2 RL entailment tests — 43 of 50 cases agree, 7 ledgered**, zero
+- **W3C OWL 2 RL entailment tests — 45 of 50 cases agree, 5 ledgered**, zero
   unledgered. This is the independent oracle for the rule table: W3C's own
   entailment tests, answered by one call to `purrdf_entail::entails()` per case
   under `Regime::OwlRl`. The two lanes prove different things and are reported
@@ -265,12 +265,12 @@ Two corpora measure two different things, and the distinction matters:
   holds over *all* 23 negative cases — soundness is owed on every case, so none
   were filtered by profile.
 
-  The positive lane is **20 of 27** — the 27 positive entailments W3C itself
-  places inside the RL profile under RDF-Based semantics. 7 of the 7
+  The positive lane is **22 of 27** — the 27 positive entailments W3C itself
+  places inside the RL profile under RDF-Based semantics. 5 of the 5
   divergences are structural limits of OWL 2 RL rather than of this
   implementation: every head in Profiles §4.3 Tables 4–9 is an assertional
   triple over named terms or `false`, so no conforming RL rule set derives a
-  schema axiom (5 `schema-conclusion`) or a negative fact (0
+  schema axiom (3 `schema-conclusion`) or a negative fact (0
   `negative-conclusion`), and the profile states no rule at all for constructs
   outside its syntax (1 `construct-outside-rl`); one more premise is incomplete
   as exported (1 `imports-unresolved`). **0 are actionable** (0

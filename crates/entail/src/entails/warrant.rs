@@ -28,7 +28,7 @@
 //! # ONE ARM PER MECHANISM, and each arrives with its producer
 //!
 //! [`EntailmentWarrant`] is an enum with exactly as many arms as this crate has mechanisms
-//! for reaching a `yes`, and it has never had one more than that. There are three:
+//! for reaching a `yes`, and it has never had one more than that. There are four:
 //!
 //! * [`Homomorphism`](EntailmentWarrant::Homomorphism) — the chase-and-graph-match procedure
 //!   OWL 2 Profiles §4.3 states the RL entailment relation in terms of, minted by
@@ -46,11 +46,16 @@
 //!   [`Generalization`](super::Generalization) per axiom — the closure triples establishing
 //!   the axiom's MEMBERSHIP half, and one frozen instance per implication carrying the
 //!   constants, the body, the head and the closure they lie in.
+//! * [`Comprehension`](EntailmentWarrant::Comprehension) — mint the anonymous class
+//!   expressions the conclusion names, under the typing side conditions the RDF-Based
+//!   comprehension conditions impose, minted by [`super::comprehension`]. Its evidence is the
+//!   triples MINTED, the closure triples that LICENSE them, and the witness map that says
+//!   which fresh node stood in for which of the conclusion's own.
 //!
 //! An arm nothing constructs would be a state [`verify`] could not check and no caller could
 //! ever be handed, which is the same unrepresentable-contradiction discipline that keeps
 //! [`DlCertificate`](crate::DlCertificate) from storing a completeness beside the boundary
-//! list that contradicts it. A fourth mechanism brings its own arm and its own producer,
+//! list that contradicts it. A fifth mechanism brings its own arm and its own producer,
 //! together, or it does not arrive.
 //!
 //! # What `verify` actually checks, and why it needs the premise
@@ -85,6 +90,13 @@
 //! over exactly those constants; and each frozen closure holds the premise, the body and
 //! either the head or a `false`-concluding rule's satisfied body.
 //!
+//! For the comprehension arm the conclusion is READ again and the mint RECOMPUTED from the
+//! warrant's witness map, then compared: a warrant whose minted list is not what this
+//! conclusion licenses under those witnesses fails. Beside that, every witness is re-checked
+//! to be a blank node naming nothing in either document (and distinct from the other
+//! witnesses), every licence is re-looked-up in the premise closure, and the binding is
+//! replayed against `closure ∪ minted`.
+//!
 //! # What `verify` does NOT check
 //!
 //! It does not re-derive any closure, and it therefore cannot detect a closure that never
@@ -96,6 +108,7 @@ use std::collections::BTreeSet;
 use purrdf_core::{RdfDataset, TermValue};
 
 use crate::Regime;
+use crate::entails::comprehension::{ComprehensionWarrant, verify_comprehension};
 use crate::entails::freeze::{FreezeWarrant, verify_freeze};
 use crate::entails::graph::{Triple, default_graph_triples};
 use crate::entails::homomorphism::{Binding, Closure, substitute};
@@ -105,7 +118,7 @@ use crate::entails::refutation::{RefutationWarrant, verify_refutation};
 /// The evidence that a premise entails a conclusion, tagged by the mechanism that produced
 /// it.
 ///
-/// See the [module docs](self) for why there are exactly three arms and what an arm owes.
+/// See the [module docs](self) for why there are exactly four arms and what an arm owes.
 #[derive(Debug, Clone)]
 pub enum EntailmentWarrant {
     /// The conclusion MAPPED into the closure of the premise.
@@ -115,6 +128,9 @@ pub enum EntailmentWarrant {
     /// The conclusion's schema axioms were FROZEN over fresh constants and chased, and the
     /// rest mapped.
     Freeze(FreezeWarrant),
+    /// The conclusion's anonymous class expressions were COMPREHENDED under their typing side
+    /// conditions, and the whole conclusion mapped into the extended closure.
+    Comprehension(ComprehensionWarrant),
 }
 
 impl EntailmentWarrant {
@@ -126,6 +142,7 @@ impl EntailmentWarrant {
             Self::Homomorphism(w) => w.regime(),
             Self::Refutation(w) => w.regime(),
             Self::Freeze(w) => w.regime(),
+            Self::Comprehension(w) => w.regime(),
         }
     }
 
@@ -133,13 +150,16 @@ impl EntailmentWarrant {
     ///
     /// For the refutation and freeze arms this is the mapping of the conclusion's RESIDUAL
     /// triples alone; a negative fact has no mapping, which is why it had to be refuted, and
-    /// a schema axiom has none either, which is why it had to be frozen.
+    /// a schema axiom has none either, which is why it had to be frozen. For the
+    /// comprehension arm it is the mapping of the WHOLE conclusion, into the closure extended
+    /// by what was minted — nothing there is discharged by having been recognized.
     #[must_use]
     pub const fn binding(&self) -> &Binding {
         match self {
             Self::Homomorphism(w) => w.binding(),
             Self::Refutation(w) => w.binding(),
             Self::Freeze(w) => w.binding(),
+            Self::Comprehension(w) => w.binding(),
         }
     }
 
@@ -153,6 +173,7 @@ impl EntailmentWarrant {
             Self::Homomorphism(w) => w.closure_size(),
             Self::Refutation(w) => w.closure_size(),
             Self::Freeze(w) => w.closure_size(),
+            Self::Comprehension(w) => w.closure_size(),
         }
     }
 }
@@ -278,5 +299,8 @@ pub fn verify(w: &EntailmentWarrant, premise: &RdfDataset, conclusion: &RdfDatas
         EntailmentWarrant::Homomorphism(mapped) => mapped.check(premise, conclusion),
         EntailmentWarrant::Refutation(refuted) => verify_refutation(refuted, premise, conclusion),
         EntailmentWarrant::Freeze(frozen) => verify_freeze(frozen, premise, conclusion),
+        EntailmentWarrant::Comprehension(comprehended) => {
+            verify_comprehension(comprehended, premise, conclusion)
+        }
     }
 }

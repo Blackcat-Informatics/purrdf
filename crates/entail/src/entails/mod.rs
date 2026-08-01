@@ -83,33 +83,40 @@
 //!   because the rule table produces no SCHEMA AXIOM either: no head in Tables 4–9 is a
 //!   property characteristic or an inclusion, so `p owl:propertyChainAxiom (p p)` can entail
 //!   `p rdf:type owl:TransitiveProperty` while the chase derives nothing to match against.
+//! * [`comprehension`] — mint the anonymous class expressions the conclusion names, under the
+//!   typing side conditions the RDF-Based comprehension conditions impose. It exists because
+//!   a comprehension condition asserts the existence of a resource NOTHING NAMES, and a rule
+//!   set that produced one for every licensed shape would produce infinitely many.
 //!
-//! None of the two extra mechanisms adds a rule — `rules`, `implemented` and `extensions` are
-//! untouched by both — and each runs only after the premise's consistency has been
-//! established, which is the hypothesis both soundness arguments rest on. See their module
-//! docs for those arguments, written out.
+//! None of the three extra mechanisms adds a rule — `rules`, `implemented` and `extensions`
+//! are untouched by all of them — and each runs only after the premise's consistency has been
+//! established, which is the hypothesis every one of the soundness arguments rests on. See
+//! their module docs for those arguments, written out.
 //!
-//! [`EntailmentWarrant`] therefore has exactly three arms, one per mechanism, each minted by
-//! the mechanism it names. A fourth arrives with its own producer, together — this crate does
+//! [`EntailmentWarrant`] therefore has exactly four arms, one per mechanism, each minted by
+//! the mechanism it names. A fifth arrives with its own producer, together — this crate does
 //! not pre-declare states that nothing constructs.
 //!
-//! The two extra lanes are [`entails`]-only, and deliberately. Refutation decides a ground
+//! The three extra lanes are [`entails`]-only, and deliberately. Refutation decides a ground
 //! negative fact, and a projected variable ranging over one is a different question — "which
 //! individuals is `a` entailed to differ from?" would need a refutation per candidate over
 //! the whole domain, which is not what [`certain_answers`] computes and not what it would be
 //! honest to let it claim. Freeze-and-chase decides a ground SCHEMA AXIOM, and a projected
 //! variable there would be "which properties is the premise entailed to make transitive?",
-//! which needs one frozen chase per candidate property for the same reason.
+//! which needs one frozen chase per candidate property for the same reason. Comprehension
+//! decides the existence of a class the conclusion DESCRIBES, and there is no answer to
+//! project: the minted witness is not a term of the scoping graph, so no SPARQL entailment
+//! regime admits it as a binding.
 //!
 //! # A mechanism discharges the WHOLE conclusion or none of it
 //!
-//! Each of the two extra mechanisms splits the conclusion into the triples it establishes and
-//! the RESIDUAL triples, which keep their ordinary obligation to map into the premise's
-//! closure. A conclusion that would need TWO of them at once — a negative fact beside a
-//! schema axiom — is therefore established by neither, because each sees the other's half as
-//! a residual triple that does not map. That is a real limit and it is stated rather than
-//! papered over: the alternative, letting a mechanism report success for the part it read,
-//! would make `Entailed` mean "some of this follows", which is not a claim anyone can act on.
+//! Each of the extra mechanisms splits the conclusion into the triples it establishes and the
+//! RESIDUAL triples, which keep their ordinary obligation to map into the premise's closure.
+//! A conclusion that would need TWO of them at once — a negative fact beside a schema axiom —
+//! is therefore established by neither, because each sees the other's half as a residual
+//! triple that does not map. That is a real limit and it is stated rather than papered over:
+//! the alternative, letting a mechanism report success for the part it read, would make
+//! `Entailed` mean "some of this follows", which is not a claim anyone can act on.
 //!
 //! # Determinism
 //!
@@ -128,6 +135,7 @@ use crate::report::ReasoningReport;
 use crate::{EntailError, Materialization, Regime, materialize};
 
 pub mod answers;
+pub mod comprehension;
 pub mod freeze;
 pub mod homomorphism;
 pub mod imports;
@@ -136,15 +144,17 @@ pub mod precondition;
 pub mod refutation;
 pub mod warrant;
 
-// Three support modules with no public items of their own: the owned triple view both sides
-// of a match are read through, the pattern the question is compiled to, and the generator of
-// names no input uses. `VarKey` is the one thing a caller sees out of any of them, and it is
-// re-exported below.
+// Four support modules with no public items of their own: the owned triple view both sides
+// of a match are read through, the pattern the question is compiled to, the generator of
+// names no input uses, and the typing side condition every schema conclusion carries.
+// `VarKey` is the one thing a caller sees out of any of them, and it is re-exported below.
 mod fresh;
 mod graph;
+mod membership;
 mod pattern;
 
 pub use answers::CertainAnswers;
+pub use comprehension::ComprehensionWarrant;
 pub use freeze::{FREEZE_BUDGET, FreezeWarrant, FrozenInstance, FrozenOutcome, Generalization};
 pub use homomorphism::{Binding, MATCH_BUDGET, MissReason};
 pub use imports::ImportMap;
@@ -211,7 +221,7 @@ type Mechanism = fn(&RdfDataset, &RdfDataset, Regime, &Closure) -> Result<Attemp
 /// any conclusion and the answer does not depend on which runs first. What the order buys is
 /// that a conclusion no mechanism reads pays only the cheapest applicability tests before
 /// falling through.
-const MECHANISMS: [Mechanism; 2] = [refutation::attempt, freeze::attempt];
+const MECHANISMS: [Mechanism; 3] = [refutation::attempt, freeze::attempt, comprehension::attempt];
 
 /// The plan for a regime, or a refusal.
 ///

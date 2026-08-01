@@ -117,6 +117,19 @@ impl Closure {
     pub(crate) fn len(&self) -> usize {
         self.members.len()
     }
+
+    /// This closure plus `extra`, as a new closure.
+    ///
+    /// The original is left alone because a warrant carries it: [`comprehension`] mints
+    /// licensed triples on top of the premise's closure and has to be able to report the two
+    /// apart, since only one of them is a conclusion of the chase.
+    ///
+    /// [`comprehension`]: super::comprehension
+    pub(crate) fn extended_with(&self, extra: Vec<Triple>) -> Self {
+        let mut triples: Vec<Triple> = self.members.iter().cloned().collect();
+        triples.extend(extra);
+        Self::of(triples)
+    }
 }
 
 /// Whether `pat` unifies with `ground`, binding variables as it goes.

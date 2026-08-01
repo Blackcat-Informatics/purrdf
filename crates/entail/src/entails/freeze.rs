@@ -140,16 +140,16 @@ use crate::engine::Refuter;
 use crate::entails::fresh::{FreshBlanks, labels_of};
 use crate::entails::graph::{Triple, default_graph_triples, show};
 use crate::entails::homomorphism::{Binding, Closure, find_one, substitute};
+use crate::entails::membership::Membership;
 use crate::entails::pattern::conclusion_node;
 use crate::entails::warrant::EntailmentWarrant;
 use crate::entails::{Attempt, UndecidedReason};
 use crate::lists::LIST_VALUED;
 use crate::report::InconsistencyWitness;
 use crate::vocab::{
-    OWL_CLASS, OWL_DATATYPEPROPERTY, OWL_EQUIVALENTCLASS, OWL_EQUIVALENTPROPERTY,
-    OWL_FUNCTIONALPROPERTY, OWL_INVERSEFUNCTIONALPROPERTY, OWL_OBJECTPROPERTY, OWL_SAMEAS,
-    OWL_SYMMETRICPROPERTY, OWL_TRANSITIVEPROPERTY, RDF_FIRST, RDF_PROPERTY, RDF_REST, RDF_TYPE,
-    RDFS_CLASS, RDFS_DOMAIN, RDFS_RANGE, RDFS_SUBCLASSOF, RDFS_SUBPROPERTYOF,
+    OWL_EQUIVALENTCLASS, OWL_EQUIVALENTPROPERTY, OWL_FUNCTIONALPROPERTY,
+    OWL_INVERSEFUNCTIONALPROPERTY, OWL_SAMEAS, OWL_SYMMETRICPROPERTY, OWL_TRANSITIVEPROPERTY,
+    RDF_FIRST, RDF_REST, RDF_TYPE, RDFS_DOMAIN, RDFS_RANGE, RDFS_SUBCLASSOF, RDFS_SUBPROPERTYOF,
 };
 use crate::{EntailError, Regime};
 
@@ -186,37 +186,11 @@ struct Implication {
     head: [Slot; 3],
 }
 
-/// Which semantic membership a named term of an axiom must have.
-///
-/// The axioms below all state a conjunction — a membership AND an implication — and this is
-/// the membership half. It is checked against the premise's closure, which is the
-/// [`homomorphism`](super::homomorphism) mechanism's own test applied to a ground triple: an
-/// entailment check, not a syntactic look at the premise's bytes.
-#[derive(Debug, Clone, Copy)]
-enum Membership {
-    /// `∈ IC`. `ICEXT(rdfs:Class) = IC` is RDF Semantics' own definition, and OWL 2's
-    /// RDF-Based Semantics states `ICEXT(owl:Class) = IC`, so either typing establishes it.
-    Class,
-    /// `∈ IP`. `ICEXT(rdf:Property) = IP`, and OWL 2's RDF-Based Semantics places both
-    /// `IOOP` (object properties) and `IODP` (data properties) inside `IP`.
-    Property,
-    /// `∈ IOOP`. Only an `owl:ObjectProperty` typing establishes this one: `IOOP` is a
-    /// PROPER part of `IP` in general, so a bare `rdf:Property` typing does not reach it.
-    ObjectProperty,
-}
-
-impl Membership {
-    /// The typings that establish this membership, in the order they are tried.
-    const fn typings(self) -> &'static [&'static str] {
-        match self {
-            Self::Class => &[OWL_CLASS, RDFS_CLASS],
-            Self::Property => &[RDF_PROPERTY, OWL_OBJECTPROPERTY, OWL_DATATYPEPROPERTY],
-            Self::ObjectProperty => &[OWL_OBJECTPROPERTY],
-        }
-    }
-}
-
 /// One recognized conclusion shape: how to spot it, what it presupposes, what it implies.
+///
+/// The membership columns are the conjunct a reader most often forgets is there — see
+/// [`Membership`] — and leaving one unchecked would make this mechanism claim an axiom whose
+/// typing half nothing established.
 #[derive(Debug)]
 struct Shape {
     /// The predicate of the conclusion triple that states this axiom.
