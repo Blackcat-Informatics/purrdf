@@ -311,6 +311,22 @@ Two corpora measure two different things, and the distinction matters:
   holds over *all* 23 negative cases — soundness is owed on every case, so none
   were filtered by profile.
 
+  **Those 23 agreements are two different results, and the harness prints the
+  split** on a scoreboard line of its own:
+
+  ```text
+  OWL2-RL-NEGATIVE: total 23 = refuted 3 + admitted 20 (premise-outside-rl 5, conclusion-outside-rl 10, construct-not-read 5, refutation-budget 0, freeze-budget 0, data-range-containment 0) + unsound 0 + withheld 0
+  ```
+
+  Three are *decided* non-entailments — both halves of Theorem PR1's hypothesis
+  hold, so the closure's failure to contain the non-conclusion is a proof. The
+  other 20 *admit*: the closure was computed and does not contain the
+  non-conclusion, which is the whole of the soundness observation, and nothing
+  beyond it is claimed. Both agree, and correctly so; what they differ in is
+  discriminating power, since a reasoner that derived nothing at all would score
+  `negative 23 of 23` with `refuted 0`. Read `23 of 23` as "no unsoundness
+  found", never as "23 non-entailments proved".
+
   The positive lane is **27 of 27** — the 27 positive entailments W3C itself
   places inside the RL profile under RDF-Based semantics — and the typed
   divergence ledger `purrdf_sparql_conformance::owl2_rl::LEDGER`

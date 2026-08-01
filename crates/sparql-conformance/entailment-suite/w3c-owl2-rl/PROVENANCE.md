@@ -237,8 +237,22 @@ table omits) as opposed to descriptions of what the profile cannot reach.
 OWL2-RL-ENTAILMENT: agreed 50 ledgered 0 unledgered 0 stale 0 total 50 actionable 0
 ```
 
+```
+OWL2-RL-NEGATIVE: total 23 = refuted 3 + admitted 20 (premise-outside-rl 5, conclusion-outside-rl 10, construct-not-read 5, refutation-budget 0, freeze-budget 0, data-range-containment 0) + unsound 0 + withheld 0
+```
+
 - **Negative lane: 23 / 23 agree. No unsoundness was found** — nothing W3C
-  publishes as not entailed was ever reached.
+  publishes as not entailed was ever reached. The second line above says what
+  those 23 agreements are made of, because they are not one kind of result:
+  **3 are decided refutations** (`new-feature-keys-004`, `webont-imports-002`,
+  `webont-miscellaneous-301` — the premise is inside the RL syntax *and* the
+  non-conclusion is an assertional graph over named terms, so both halves of
+  Theorem PR1's hypothesis hold and the absence of a match is a proof), and
+  **20 are named admissions** (the observation was made, nothing beyond it is
+  claimed, and the missing entitlement is named). Every one of the 23 makes the
+  soundness observation this lane grades — which is why every one of them
+  agrees, and why the "no unsoundness" claim above is unqualified. What only 3
+  of them carry is the entitlement to call it a refutation.
 - **Positive lane: 27 of 27 agree.** The ledger is EMPTY.
 
 That number moved 33 → 34 → 42 → 50 across five changes, and **the rule table did

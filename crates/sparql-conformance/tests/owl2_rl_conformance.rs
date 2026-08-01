@@ -71,6 +71,10 @@ fn owl2_rl_entailment_conformance() {
     // ledger is subtracting zero from fifty; printing which mechanism reached each
     // agreement is the part that is not trivially true.
     eprintln!("{}", summary.mechanism_line());
+    // …and what the negative lane's own number is MADE OF. `negative 23/23` reads as
+    // twenty-three of one thing and is three decided refutations plus twenty named
+    // admissions, which a reader cannot tell from the total.
+    eprintln!("{}", summary.negative_lane_line());
 
     assert!(
         summary.unledgered().is_empty() && summary.stale().is_empty(),
@@ -299,7 +303,7 @@ fn census_accounts_for_every_upstream_case() {
 /// a convenience. Theorem PR1's hypothesis has a CONCLUSION-side half too, and a lane may
 /// additionally recognize a construct and decline it; both also answer `Undecided`, both
 /// are about the question rather than about the premise's syntax, and
-/// `every_negative_case_is_decided_under_an_unexhausted_certificate` is where their split
+/// `every_negative_case_is_answered_under_an_unexhausted_certificate` is where their split
 /// is pinned. A filter that lumped all three together would report a case moving between
 /// two different reasons as no change at all.
 #[test]
@@ -356,6 +360,14 @@ fn the_non_rl_premises_are_named_and_answer_undecided() {
 /// that derives nothing fails all 27), while the negative lane grades SOUNDNESS, which is
 /// owed unconditionally and which a reasoner that derives nothing passes trivially. Which
 /// mechanism reached each agreement is what says how the corpus was closed.
+///
+/// So is the NEGATIVE lane's composition, and pinning it three ways is deliberate. The
+/// aggregate `negative 23/23` is unchanged by a case moving between a decided refutation and
+/// an admission, which is exactly how twenty admissions came to be printed as though they
+/// were twenty-three refutations; so this test pins the two-way count on the mechanism line,
+/// the six-way split of the admissions on the negative-lane line, and the NAMES of the three
+/// refutations. The names are what catches a SWAP — one case gaining a refutation while
+/// another loses one leaves every count on both lines untouched.
 #[test]
 fn no_case_diverges_from_the_published_verdict() {
     let summary =
@@ -387,7 +399,7 @@ fn no_case_diverges_from_the_published_verdict() {
     // is what the answer carries. A lane on a negative case is not an unsoundness and never
     // was one: these five are `Undecided`, not `Entailed`, and no mechanism beyond the table
     // refutes anything —
-    // `every_negative_case_is_decided_under_an_unexhausted_certificate` pins that per case.
+    // `every_negative_case_is_answered_under_an_unexhausted_certificate` pins that per case.
     //
     // * `refutation 8/1` — `webont-class-005` states `[ owl:complementOf #c ]` as an OPERAND
     //   of a union. The refutation lane reads a complement class only when its every other
@@ -404,10 +416,50 @@ fn no_case_diverges_from_the_published_verdict() {
     //   "not applicable" and being answered by the fall-through as a proof.
     assert_eq!(
         summary.mechanism_line(),
-        "OWL2-RL-MECHANISMS: positive 27/27 negative 23/23 strict-table 12/18 refutation 8/1 \
-         freeze 1/2 comprehension 2/2 reflexivity 1/0 data-range 3/0 composite 0/0 withheld 0",
+        "OWL2-RL-MECHANISMS: positive 27/27 negative 23/23 (refuted 3, admitted 20) \
+         strict-table 12/18 refutation 8/1 freeze 1/2 comprehension 2/2 reflexivity 1/0 \
+         data-range 3/0 composite 0/0 withheld 0",
         "the mechanism x PR1-clause split moved; say WHICH lane and WHICH mechanism, because \
          the aggregate 50/50 is unchanged by a case moving between two of them"
+    );
+
+    // The negative lane's composition, pinned bucket by bucket. `refuted 3` is the only part
+    // of `negative 23/23` with discriminating power: a reasoner that derived nothing at all
+    // would score `negative 23/23` too, with `refuted 0` and every one of its twenty-three
+    // agreements sitting in an admission bucket. The six admission buckets print including
+    // the three that are empty — a lane arriving in `refutation-budget` would mean a negative
+    // case answered by a run that stopped, which is not a soundness observation at all.
+    assert_eq!(
+        summary.negative_lane_line(),
+        "OWL2-RL-NEGATIVE: total 23 = refuted 3 + admitted 20 (premise-outside-rl 5, \
+         conclusion-outside-rl 10, construct-not-read 5, refutation-budget 0, freeze-budget 0, \
+         data-range-containment 0) + unsound 0 + withheld 0",
+        "the negative lane's composition moved; `negative 23/23` is unchanged by a case moving \
+         between a decided refutation and a named admission, so say WHICH case moved and why \
+         its new answer is the more truthful one"
+    );
+
+    // …and WHICH three, because a swap moves no count on either line above.
+    let refuted: Vec<&str> = summary
+        .cases
+        .iter()
+        .filter(|case| {
+            case.direction == Direction::Negative
+                && case.disposition == owl2_rl::Disposition::Refuted
+        })
+        .map(|case| case.name.as_str())
+        .collect();
+    assert_eq!(
+        refuted,
+        [
+            "new-feature-keys-004",
+            "webont-imports-002",
+            "webont-miscellaneous-301"
+        ],
+        "these are the negative cases whose non-entailment PurRDF actually DECIDES — both \
+         halves of Theorem PR1's hypothesis hold, so the closure's silence is a proof. A case \
+         leaving this list is a refutation lost; a case joining it is a refutation claimed, \
+         and a claimed refutation needs the hypothesis that licenses it"
     );
 }
 
@@ -558,6 +610,12 @@ fn every_previously_ledgered_case_names_the_mechanism_that_closed_it() {
 /// `NotEntailed` from all twenty-three would be demanding that this library claim a
 /// completeness theorem whose hypothesis twenty of them break.
 ///
+/// This table is the per-case form of the `OWL2-RL-NEGATIVE` scoreboard line, which reports
+/// the same 3 / 5 / 10 / 5 as counts and is pinned in
+/// `no_case_diverges_from_the_published_verdict`. Both exist because they fail on different
+/// things: the counts catch a lane's composition changing without anyone naming a case, and
+/// this table catches a case changing bucket while the counts stay put.
+///
 /// Eighteen report `strict-table` and five report the lane that declined. A lane appearing
 /// on a negative case used to be impossible and is not any more: the five mechanisms beyond
 /// the table still only ever ESTABLISH a conclusion — never refute one — and what a lane's
@@ -565,7 +623,7 @@ fn every_previously_ledgered_case_names_the_mechanism_that_closed_it() {
 /// question. That is checked below by requiring every non-`strict-table` negative to be an
 /// `Undecided`, which is the executable form of "no mechanism beyond the table refutes".
 #[test]
-fn every_negative_case_is_decided_under_an_unexhausted_certificate() {
+fn every_negative_case_is_answered_under_an_unexhausted_certificate() {
     /// Every negative case, and the answer it is entitled to: the outcome, then the reason
     /// kind (`-` for a decided refutation), then the mechanism that reports it.
     const ANSWERS: [(&str, &str, &str, &str); EXPECTED_NEGATIVE] = [

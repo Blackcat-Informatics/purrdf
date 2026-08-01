@@ -129,6 +129,30 @@
 //! completeness. The positive lane carries the discrimination: a reasoner that
 //! derives nothing at all fails all 27 positive cases.
 //!
+//! # `negative 23/23` is twenty-three agreements of TWO kinds, and the scoreboard says which
+//!
+//! Three of the twenty-three are DECIDED non-entailments: both halves of Theorem PR1's
+//! hypothesis hold, so the closure's failure to contain the non-conclusion is a proof and
+//! not merely a failure to find something. They are `new-feature-keys-004`,
+//! `webont-imports-002` and `webont-miscellaneous-301`.
+//!
+//! The other twenty agree by ADMISSION. The closure was computed and does not contain the
+//! non-conclusion — the soundness observation, in full — and the run claims nothing beyond
+//! it, naming the entitlement it lacks: five because the premise is outside the RL syntax,
+//! ten because the non-conclusion is not an assertional graph over named terms, five
+//! because a lane recognised a construct of it and declined to read it.
+//!
+//! Both kinds AGREE, and that is the correct grading rather than a lenience. Soundness is
+//! owed unconditionally — every rule of the table is a valid inference over arbitrary RDF
+//! graphs, whatever the premise's syntax — so an `Undecided` reports the graded claim in
+//! full. What the two kinds differ in is DISCRIMINATING POWER: a reasoner that derived
+//! nothing at all would land all twenty-three in the admission buckets and still read
+//! `negative 23/23`. So the composition is printed rather than left to be inferred —
+//! [`RlSummary::negative_lane_line`] carries the whole split and
+//! [`RlSummary::mechanism_line`] carries its two-way form beside the total, both DERIVED
+//! from the answers through [`Disposition`] — and the per-case table lives in
+//! `every_negative_case_is_answered_under_an_unexhausted_certificate`.
+//!
 //! # Three outcomes, never two
 //!
 //! Matching [`crate::owl2`]'s discipline, a run has three buckets ([`Grade`]):
@@ -605,6 +629,151 @@ pub enum Answer {
     Withheld(String),
 }
 
+/// What a case's answer WAS, reduced to a bucket a scoreboard can tally.
+///
+/// [`Answer`] carries payloads and is consumed by the grading, and [`Grade`] throws the
+/// answer's *kind* away — `Agree` is one word for "reached the conclusion" and for "did not
+/// reach it and is not entitled to say so". This is the part [`Grade`] discards, kept as a
+/// fixed, enumerable set of buckets with stable labels so the negative lane's composition
+/// can be printed in a fixed order with its empty buckets included.
+///
+/// # Why the six `Undecided` buckets are spelled out
+///
+/// [`UndecidedReason`] has nine inhabitants and the `OWL-RL` lane produces exactly these
+/// six: three are `RDF`/`RDFS`/`D` preconditions this corpus never runs. Folding the six
+/// into one `Undecided` bucket would print `admitted 20` and stop, which is the same
+/// silence one level down; carrying all nine would print three buckets that cannot become
+/// non-zero, which is noise rather than disclosure. So [`Self::classify`] is a total match
+/// that ERRORS on the other three rather than filing one somewhere it does not belong.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Disposition {
+    /// [`Answer::Entailed`] — the closure contains the target graph. The published answer
+    /// on a positive case; an unsoundness on a negative one.
+    Entailed,
+    /// [`Answer::NotEntailed`] — a **decided** non-entailment. Both halves of Theorem PR1's
+    /// hypothesis hold, so the closure's failure to contain the target is a refutation and
+    /// not merely a failure to find something.
+    Refuted,
+    /// `Undecided(PremiseOutsideRl)` — the premise is outside the OWL 2 RL syntax.
+    PremiseOutsideRl,
+    /// `Undecided(ConclusionOutsideRl)` — the target is not an assertional graph over named
+    /// terms, so no head in Tables 4–9 has its shape and the closure's silence about it was
+    /// never evidence.
+    ConclusionOutsideRl,
+    /// `Undecided(ConstructNotRead)` — a lane recognised a construct of the target and
+    /// declined to read it.
+    ConstructNotRead,
+    /// `Undecided(RefutationBudget)` — the refutation lane did not finish.
+    RefutationBudget,
+    /// `Undecided(FreezeBudget)` — the freeze-and-chase lane did not finish.
+    FreezeBudget,
+    /// `Undecided(DataRangeContainment)` — the datatype decision procedure did not decide a
+    /// containment.
+    DataRangeContainment,
+    /// [`Answer::Withheld`] — no closure was computed at all, so the soundness observation
+    /// the negative lane grades was never made.
+    Withheld,
+}
+
+impl Disposition {
+    /// Every bucket, in declaration order.
+    ///
+    /// The list `every_disposition_classifies_itself` ranges over, so
+    /// [`Self::ADMISSIONS`] cannot drift away from [`Self::is_admission`]: one of them is a
+    /// print order and the other is a predicate, and a bucket that appeared in one but not
+    /// the other would make the scoreboard's `admitted` total disagree with the buckets
+    /// printed under it.
+    pub const ALL: [Self; 9] = [
+        Self::Entailed,
+        Self::Refuted,
+        Self::PremiseOutsideRl,
+        Self::ConclusionOutsideRl,
+        Self::ConstructNotRead,
+        Self::RefutationBudget,
+        Self::FreezeBudget,
+        Self::DataRangeContainment,
+        Self::Withheld,
+    ];
+
+    /// The six `Undecided` buckets, in the fixed order the scoreboard prints them.
+    ///
+    /// An agreement in one of these is an ADMISSION: the closure was computed and does not
+    /// contain the target — the whole of the soundness observation — with no entitlement to
+    /// call that a refutation, and with the missing entitlement named.
+    pub const ADMISSIONS: [Self; 6] = [
+        Self::PremiseOutsideRl,
+        Self::ConclusionOutsideRl,
+        Self::ConstructNotRead,
+        Self::RefutationBudget,
+        Self::FreezeBudget,
+        Self::DataRangeContainment,
+    ];
+
+    /// The token the scoreboard prints for this bucket.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Entailed => "entailed",
+            Self::Refuted => "refuted",
+            Self::PremiseOutsideRl => "premise-outside-rl",
+            Self::ConclusionOutsideRl => "conclusion-outside-rl",
+            Self::ConstructNotRead => "construct-not-read",
+            Self::RefutationBudget => "refutation-budget",
+            Self::FreezeBudget => "freeze-budget",
+            Self::DataRangeContainment => "data-range-containment",
+            Self::Withheld => "withheld",
+        }
+    }
+
+    /// Whether an agreement in this bucket is an ADMISSION rather than a decided answer.
+    #[must_use]
+    pub const fn is_admission(self) -> bool {
+        match self {
+            Self::PremiseOutsideRl
+            | Self::ConclusionOutsideRl
+            | Self::ConstructNotRead
+            | Self::RefutationBudget
+            | Self::FreezeBudget
+            | Self::DataRangeContainment => true,
+            Self::Entailed | Self::Refuted | Self::Withheld => false,
+        }
+    }
+
+    /// Which bucket `answer` falls in.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message if the answer is an `Undecided` for one of the three reasons only
+    /// the `RDF`, `RDFS` or `D` regimes produce. This corpus runs `Regime::OwlRl` and has no
+    /// bucket for those, and inventing one — or quietly folding it into a neighbour — would
+    /// print a number that means something other than what its label says.
+    pub fn classify(answer: &Answer) -> Result<Self, String> {
+        Ok(match answer {
+            Answer::Entailed => Self::Entailed,
+            Answer::NotEntailed(_) => Self::Refuted,
+            Answer::Withheld(_) => Self::Withheld,
+            Answer::Undecided(reason) => match reason {
+                UndecidedReason::PremiseOutsideRl(_) => Self::PremiseOutsideRl,
+                UndecidedReason::ConclusionOutsideRl(_) => Self::ConclusionOutsideRl,
+                UndecidedReason::ConstructNotRead { .. } => Self::ConstructNotRead,
+                UndecidedReason::RefutationBudget(_) => Self::RefutationBudget,
+                UndecidedReason::FreezeBudget(_) => Self::FreezeBudget,
+                UndecidedReason::DataRangeContainment(_) => Self::DataRangeContainment,
+                other @ (UndecidedReason::WithheldSurrogate(_)
+                | UndecidedReason::AxiomaticSchema(_)
+                | UndecidedReason::DatatypeValueSpace) => {
+                    return Err(format!(
+                        "the OWL-RL lane answered Undecided({other}), which is a reason only \
+                         the RDF, RDFS or D regimes state; this corpus runs Regime::OwlRl and \
+                         has no scoreboard bucket for it, so classify it here deliberately \
+                         rather than letting it be counted as something else"
+                    ));
+                }
+            },
+        })
+    }
+}
+
 /// How PurRDF's answer compares to the published verdict.
 #[derive(Debug)]
 pub enum Grade {
@@ -976,6 +1145,13 @@ pub struct GradedCase {
     pub direction: Direction,
     /// How PurRDF's answer compared.
     pub grade: Grade,
+    /// WHICH answer it was, as the bucket the scoreboard tallies.
+    ///
+    /// Kept beside [`Self::grade`] rather than derived from it, because it is exactly what
+    /// the grade throws away: on the negative lane `Grade::Agree` is one word for a decided
+    /// refutation and for an admission, and a scoreboard that only had the grade could not
+    /// tell a reader which of the two it counted.
+    pub disposition: Disposition,
     /// Its ledger entry, if it has one.
     pub ledgered: Option<RlGap>,
     /// WHICH of [`purrdf_entail::entails()`]'s seven mechanisms answered it.
@@ -1101,6 +1277,15 @@ impl RlSummary {
     /// The mechanism is spelled by its own `as_str`, and mechanisms with no case are
     /// still printed, because a lane dropping to zero is exactly the kind of change a
     /// line that only listed non-empty buckets would render invisible.
+    ///
+    /// # `negative N/N` carries its composition, because it is not one kind of result
+    ///
+    /// A negative agreement is either a DECIDED non-entailment or an ADMISSION, and
+    /// printing one number for both is the same silence this line exists to break one level
+    /// up. So the negative pair is followed by `(refuted R, admitted A)`, both DERIVED from
+    /// the answers via [`Disposition`] and summing to the agreement count. The admissions'
+    /// own split by reason is a line of its own — [`Self::negative_lane_line`] — because
+    /// six more buckets here would make this one unreadable.
     #[must_use]
     pub fn mechanism_line(&self) -> String {
         let (positive_total, negative_total) = self.by_direction();
@@ -1116,9 +1301,14 @@ impl RlSummary {
                 negative_agree += 1;
             }
         }
+        let refuted = self.negative_agreements(Disposition::Refuted);
+        let admitted: usize = Disposition::ADMISSIONS
+            .into_iter()
+            .map(|bucket| self.negative_agreements(bucket))
+            .sum();
         let mut out = format!(
             "OWL2-RL-MECHANISMS: positive {positive_agree}/{positive_total} negative \
-             {negative_agree}/{negative_total}"
+             {negative_agree}/{negative_total} (refuted {refuted}, admitted {admitted})"
         );
         for mechanism in EntailmentMechanism::ALL {
             let (mut positive, mut negative) = (0_usize, 0_usize);
@@ -1143,6 +1333,91 @@ impl RlSummary {
             .filter(|case| case.mechanism.is_none())
             .count();
         let _ = write!(out, " withheld {unanswered}");
+        out
+    }
+
+    /// How many NEGATIVE cases agreed with the published verdict from `bucket`.
+    ///
+    /// Filtered on the grade as well as the bucket, so this counts agreements rather than
+    /// answers — an `Entailed` on a negative case is an unsoundness and must never be summed
+    /// into the same total as a refutation.
+    #[must_use]
+    fn negative_agreements(&self, bucket: Disposition) -> usize {
+        self.cases
+            .iter()
+            .filter(|case| {
+                case.direction == Direction::Negative
+                    && matches!(case.grade, Grade::Agree)
+                    && case.disposition == bucket
+            })
+            .count()
+    }
+
+    /// How many NEGATIVE cases fell in `bucket` however they graded.
+    #[must_use]
+    fn negative_answers(&self, bucket: Disposition) -> usize {
+        self.cases
+            .iter()
+            .filter(|case| case.direction == Direction::Negative && case.disposition == bucket)
+            .count()
+    }
+
+    /// The NEGATIVE lane's composition: what the `negative N/N` pair is MADE OF.
+    ///
+    /// # Why this line exists
+    ///
+    /// `negative 23/23` reads as twenty-three of one thing and is twenty-three of two. A
+    /// negative case agrees when the closure was computed and does not contain the
+    /// non-conclusion, and that observation — which is the whole of the soundness claim the
+    /// lane grades — is owed unconditionally and is genuinely made in every one of them. What
+    /// differs is what may be CLAIMED beyond it:
+    ///
+    /// * **refuted** — both halves of Theorem PR1's hypothesis hold (the premise is inside
+    ///   the OWL 2 RL syntax AND the non-conclusion is an assertional graph over named
+    ///   terms), so the absence of a match IS a proof of non-entailment. This is the bucket
+    ///   with discriminating power, and it is the only one that would notice a reasoner
+    ///   deriving too little;
+    /// * **admitted** — the observation was made and nothing beyond it is claimed, with the
+    ///   missing entitlement NAMED. An admission is a correct agreement and a weak one: a
+    ///   reasoner that derived nothing at all would land every case here.
+    ///
+    /// So the line is the arithmetic, written out: the negative total is the refutations plus
+    /// the admissions plus anything that agreed with neither. Every count is derived from the
+    /// answers through [`Disposition`], every bucket prints including the empty ones (a lane
+    /// dropping to zero is precisely what a line listing only non-empty buckets would hide),
+    /// and the order is [`Disposition::ADMISSIONS`]' declaration order rather than any
+    /// iteration order.
+    ///
+    /// The four groups partition the lane because the bucket DETERMINES the grade here:
+    /// `refuted` and all six admissions agree, `entailed` on a negative case is the
+    /// unsoundness (`unsound`), and a withheld case computed no closure at all.
+    #[must_use]
+    pub fn negative_lane_line(&self) -> String {
+        let (_, negative_total) = self.by_direction();
+        let refuted = self.negative_agreements(Disposition::Refuted);
+        let admitted: usize = Disposition::ADMISSIONS
+            .into_iter()
+            .map(|bucket| self.negative_agreements(bucket))
+            .sum();
+        let mut out = format!(
+            "OWL2-RL-NEGATIVE: total {negative_total} = refuted {refuted} + admitted \
+             {admitted} ("
+        );
+        for (n, bucket) in Disposition::ADMISSIONS.into_iter().enumerate() {
+            let separator = if n == 0 { "" } else { ", " };
+            let _ = write!(
+                out,
+                "{separator}{} {}",
+                bucket.label(),
+                self.negative_agreements(bucket)
+            );
+        }
+        let _ = write!(
+            out,
+            ") + unsound {} + withheld {}",
+            self.negative_answers(Disposition::Entailed),
+            self.negative_answers(Disposition::Withheld),
+        );
         out
     }
 
@@ -1249,10 +1524,13 @@ pub fn run(root: &Path) -> Result<RlSummary, String> {
             },
             Err(why) => Answer::Withheld(why),
         };
+        let disposition =
+            Disposition::classify(&answer).map_err(|why| format!("{}: {why}", case.name))?;
         summary.cases.push(GradedCase {
             name: case.name.clone(),
             direction: case.direction,
             grade: grade_answer(case, answer),
+            disposition,
             ledgered: ledger_lookup(&case.name),
             mechanism,
         });
@@ -1436,7 +1714,7 @@ mod tests {
     /// The corpus-level claims those two tests were reaching for are made where they can
     /// actually be made — over the 50 graded cases, in
     /// `tests/owl2_rl_conformance.rs`: `no_case_diverges_from_the_published_verdict` and
-    /// `every_negative_case_is_decided_under_an_unexhausted_certificate`.
+    /// `every_negative_case_is_answered_under_an_unexhausted_certificate`.
     #[test]
     fn every_gap_classifies_itself_on_both_axes() {
         let unsound: Vec<&str> = RlGap::ALL
@@ -1473,6 +1751,44 @@ mod tests {
         let count = labels.len();
         labels.dedup();
         assert_eq!(count, labels.len(), "two RlGap variants share a label");
+    }
+
+    /// The scoreboard's print order and its predicate name the SAME six buckets.
+    ///
+    /// [`Disposition::ADMISSIONS`] is what [`RlSummary::negative_lane_line`] prints and sums
+    /// into `admitted`, and [`Disposition::is_admission`] is what says a bucket is one. They
+    /// are two statements of one taxonomy, so a bucket in one and not the other would print
+    /// an `admitted` total that its own sub-buckets do not add up to — which is precisely the
+    /// unfalsifiable number this line exists to replace.
+    #[test]
+    fn every_disposition_classifies_itself() {
+        let admissions: Vec<Disposition> = Disposition::ALL
+            .into_iter()
+            .filter(|bucket| bucket.is_admission())
+            .collect();
+        assert_eq!(
+            admissions,
+            Disposition::ADMISSIONS,
+            "the printed admission buckets and the is_admission predicate disagree"
+        );
+
+        // A decided answer is never an admission, and neither is a run that made no
+        // observation at all — pinned by name so a re-classification has to be deliberate.
+        assert!(!Disposition::Refuted.is_admission());
+        assert!(!Disposition::Entailed.is_admission());
+        assert!(!Disposition::Withheld.is_admission());
+
+        // Labels are what the scoreboard prints, so two buckets sharing one would make the
+        // negative lane's composition unreadable.
+        let mut labels: Vec<&str> = Disposition::ALL
+            .into_iter()
+            .map(Disposition::label)
+            .collect();
+        assert_eq!(labels.len(), 9);
+        labels.sort_unstable();
+        let count = labels.len();
+        labels.dedup();
+        assert_eq!(count, labels.len(), "two Disposition buckets share a label");
     }
 
     #[test]
