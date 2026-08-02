@@ -1262,8 +1262,23 @@ impl RlSummary {
     /// [`Self::scoreboard_line`] answers "did the corpus agree?" and, with an EMPTY
     /// ledger, answers it by subtracting zero from fifty — trivially correct and
     /// therefore near-vacuous. This answers the question that is not trivial: WHICH
-    /// mechanism reached each agreement, split by the clause of Theorem PR1 the lane
-    /// grades.
+    /// mechanism ANSWERED each case, split by the clause of Theorem PR1 the lane grades.
+    ///
+    /// # The two halves of the line count different things, deliberately
+    ///
+    /// The leading `positive P/T negative N/T` pair is the AGREEMENT count: it filters on
+    /// [`Grade::Agree`], so it is the corpus's score. Everything after it — the
+    /// per-mechanism buckets and `withheld` — is a CENSUS of the corpus by who answered,
+    /// and it does NOT filter on the grade: a case one mechanism answered wrongly is still
+    /// that mechanism's case. That is what makes the tail's arithmetic checkable, because
+    /// `mechanism` is `Some` for exactly the cases that were answered, so the buckets plus
+    /// `withheld` sum to the corpus with nothing unaccounted for. Filtering the buckets on
+    /// agreement would break that identity and hide a disagreement's mechanism — which is
+    /// the first thing a reader chasing one needs.
+    ///
+    /// With the corpus at 50 agreed of 50 the two readings coincide, and the difference is
+    /// only visible once something disagrees. It is stated here rather than left to be
+    /// rediscovered then.
     ///
     /// The two lanes grade different halves of that theorem. The POSITIVE lane grades
     /// the completeness half — W3C published an entailment and PurRDF has to reach it —
@@ -1273,11 +1288,12 @@ impl RlSummary {
     /// owed unconditionally and has weak discriminating power. Reporting one number for
     /// both would hide which half a change moved.
     ///
-    /// Per mechanism the pair is `<positive>/<negative>`. A POSITIVE count on any of the
-    /// six beyond `strict-table` is a conclusion that mechanism ESTABLISHED. A NEGATIVE
-    /// count on one is not an unsoundness and is not a better score either: none of them
-    /// ever refutes, so what a lane's name on a negative case reports is that the lane
-    /// RECOGNIZED a construct of the non-conclusion and ADMITTED it could not read it,
+    /// Per mechanism the pair is `<positive>/<negative>`, over the cases that mechanism
+    /// ANSWERED. A POSITIVE count on any of the six beyond `strict-table` is a conclusion
+    /// that mechanism reached — and, while the corpus agrees, one it ESTABLISHED. A
+    /// NEGATIVE count on one is not an unsoundness and is not a better score either: none
+    /// of them ever refutes, so what a lane's name on a negative case reports is that the
+    /// lane RECOGNIZED a construct of the non-conclusion and ADMITTED it could not read it,
     /// which reaches the caller as `Undecided` naming the construct. Printing the split is
     /// what makes both readable rather than inferable — a case moving from the table's
     /// bucket to a lane's is a case that stopped claiming a refutation it was not entitled

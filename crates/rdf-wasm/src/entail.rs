@@ -263,10 +263,17 @@ impl ReasoningAnswer {
         self.answer.clone()
     }
 
-    /// How completely the service decided: the `purrdf-dl-certificate 1` block for
-    /// a tableau service, or that service's own certificate grammar for the three
-    /// that run no tableau (`entailProfile`, `entailExtractModule`,
-    /// `entailExplainConclusion`).
+    /// How completely the service decided, in one of THREE certificate grammars —
+    /// which one is a property of the service, so a caller reads it off the call
+    /// rather than sniffing the string:
+    ///
+    /// - `purrdf-dl-certificate 1` — the tableau services (`entailConsistency`,
+    ///   `entailClassify`, `entailRealize`, `entailInstances`, `entailEntails`).
+    /// - `purrdf-reasoning-report 4` — the entailment-regime services
+    ///   (`entailCertainAnswers`, `entailGraphEntails`, `entailVerifyEntailment`),
+    ///   which decide by the regime's rule table rather than by a tableau.
+    /// - that service's own grammar — the three that run neither (`entailProfile`,
+    ///   `entailExtractModule`, `entailExplainConclusion`).
     ///
     /// The DL lane's completeness is `decided` / `decided-within-boundaries` /
     /// `budget-exhausted` — NOT the chase's `exact` / `sound-incomplete`, which is

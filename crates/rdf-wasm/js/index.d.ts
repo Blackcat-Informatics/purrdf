@@ -487,10 +487,12 @@ export class RegimeClosure {
 }
 
 /**
- * One Description-Logic reasoning service's answer and the certificate of the run
- * that produced it. Returned by `entailConsistency`, `entailClassify`,
+ * One reasoning service's answer and the certificate of the run that produced it.
+ * Returned by the Description-Logic services `entailConsistency`, `entailClassify`,
  * `entailRealize`, `entailInstances`, `entailEntails`, `entailProfile`,
- * `entailExtractModule`, `entailJustify`, and `entailExplainConclusion`.
+ * `entailExtractModule`, `entailJustify` and `entailExplainConclusion`, and by the
+ * regime services `entailCertainAnswers`, `entailGraphEntails` and
+ * `entailVerifyEntailment`.
  */
 export class ReasoningAnswer {
   private constructor();
@@ -501,11 +503,17 @@ export class ReasoningAnswer {
    */
   readonly answer: string;
   /**
-   * How completely the service decided: the `purrdf-dl-certificate 1` block for a
-   * tableau service (`entailConsistency`, `entailClassify`, `entailRealize`,
-   * `entailInstances`, `entailEntails`), or that service's own certificate grammar
-   * for the three that run no tableau (`entailProfile`, `entailExtractModule`,
-   * `entailExplainConclusion`).
+   * How completely the service decided, in one of THREE certificate grammars —
+   * which one is a property of the service, so read it off the call rather than
+   * sniffing the string:
+   *
+   * - `purrdf-dl-certificate 1` — the tableau services `entailConsistency`,
+   *   `entailClassify`, `entailRealize`, `entailInstances` and `entailEntails`.
+   * - `purrdf-reasoning-report 4` — the entailment-regime services
+   *   `entailCertainAnswers`, `entailGraphEntails` and `entailVerifyEntailment`,
+   *   which run the regime's rule table rather than a tableau.
+   * - that service's own grammar — the three that run neither (`entailProfile`,
+   *   `entailExtractModule`, `entailExplainConclusion`).
    */
   readonly certificate: string;
   free(): void;

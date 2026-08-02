@@ -137,6 +137,13 @@ _INTRODUCTION = _REPO / "docs" / "book" / "src" / "introduction.md"
 _RL_SUITE = _REPO / "crates" / "sparql-conformance" / "entailment-suite" / "w3c-owl2-rl"
 _CENSUS = _RL_SUITE / "census.tsv"
 _RL_LEDGER = _REPO / "crates" / "sparql-conformance" / "src" / "owl2_rl.rs"
+# The harness test that pins `OWL2-RL-MECHANISMS` verbatim. The line is RECOMPUTED
+# from the corpus on every run and the assertion fails if it moved, so the pinned
+# string is a measurement this script may quote — unlike prose, which is a number
+# someone typed a second time.
+_RL_MECHANISM_PIN = (
+    _REPO / "crates" / "sparql-conformance" / "tests" / "owl2_rl_conformance.rs"
+)
 
 _MATRIX_BEGIN = "<!-- BEGIN GENERATED: conformance-matrix -->"
 _MATRIX_END = "<!-- END GENERATED: conformance-matrix -->"
@@ -172,8 +179,16 @@ def _read(path: Path) -> str:
 
 
 def _int(text: str) -> int:
-    """Parse a documented count, tolerating the thousands separator prose uses."""
-    return int(text.replace(",", "").replace(" ", ""))
+    """Parse a documented count, tolerating the separator and spelling prose uses.
+
+    A sentence that OPENS on a count spells it (`Fifteen of those 50`), so a
+    reader that only accepted digits would leave exactly those sentences
+    ungated. The word forms are `_SPELLED` read backwards, so there is one
+    table rather than two that can fall out of step.
+    """
+    cleaned = text.replace(",", "").replace(" ", "")
+    spelled = _CARDINAL.get(cleaned.lower())
+    return spelled if spelled is not None else int(cleaned)
 
 
 # A run of whitespace, and the one thing every arm of the entailment-overclaim ban does to
@@ -364,6 +379,10 @@ _SPELLED = {
     8: "eight", 9: "nine", 10: "ten", 11: "eleven", 12: "twelve", 13: "thirteen",
     14: "fourteen", 15: "fifteen", 16: "sixteen", 17: "seventeen", 18: "eighteen",
 }
+
+# The same table read backwards, for `_int`. Derived rather than written out, so a
+# cardinal added above is one both directions gain at once.
+_CARDINAL = {word: value for value, word in _SPELLED.items()}
 
 
 def never_published_claim() -> list[str]:
@@ -3092,6 +3111,61 @@ def rl_lane_counts() -> dict[str, int]:
     }
 
 
+# The bucket of the normative rule table itself. Every OTHER bucket on the mechanism
+# line is a lane that exists because the table decides no conclusion of that shape —
+# what the prose calls "the five" — so "beyond the table" is this name's complement
+# rather than a list repeated here that could fall behind `EntailmentMechanism::ALL`.
+_RL_TABLE_MECHANISM = "strict-table"
+
+
+def rl_mechanism_counts() -> dict[str, int]:
+    """The `OWL2-RL-MECHANISMS` split, read from the line the harness pins verbatim.
+
+    The harness RECOMPUTES that line from the corpus on every run and its `assert_eq!`
+    fails the moment a case moves between two mechanisms, so the pinned string is a
+    measurement rather than a second copy of a number — which is what makes it a
+    legitimate source for a claim, unlike the prose the claim checks.
+
+    Returns the corpus total, and the POSITIVE count reached by a mechanism other
+    than the rule table. A positive count on such a lane is a conclusion that lane
+    ESTABLISHED; a negative one is an admission it could not read the construct, so
+    summing the two would not be the number the prose is about.
+    """
+    text = _read(_RL_MECHANISM_PIN)
+    literal = re.search(r'"(OWL2-RL-MECHANISMS:[^"]*)"', text, re.DOTALL)
+    if not literal:
+        raise SystemExit(
+            f"check-doc-claims: no pinned `OWL2-RL-MECHANISMS` string literal in "
+            f"{_RL_MECHANISM_PIN.relative_to(_REPO)}; the harness assertion was "
+            f"reworded or removed, so update rl_mechanism_counts()"
+        )
+    # A Rust string literal wraps with a trailing backslash and re-indents, which is
+    # whitespace the line itself does not have.
+    line = re.sub(r"\\\s*", " ", literal.group(1))
+    buckets = {
+        name: (int(positive), int(negative))
+        for name, positive, negative in re.findall(
+            r"([a-z][a-z-]*) (\d+)/(\d+)", line.split(") ", 1)[-1]
+        )
+    }
+    withheld = re.search(r"withheld (\d+)", line)
+    if _RL_TABLE_MECHANISM not in buckets or not withheld:
+        raise SystemExit(
+            f"check-doc-claims: the pinned `OWL2-RL-MECHANISMS` line in "
+            f"{_RL_MECHANISM_PIN.relative_to(_REPO)} has no "
+            f"{_RL_TABLE_MECHANISM!r} bucket or no `withheld` residue; its shape "
+            f"changed, so update rl_mechanism_counts()"
+        )
+    return {
+        "total": sum(p + n for p, n in buckets.values()) + int(withheld.group(1)),
+        "beyond_table_positive": sum(
+            positive
+            for name, (positive, _) in buckets.items()
+            if name != _RL_TABLE_MECHANISM
+        ),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Source 5 — the release crate set
 # ---------------------------------------------------------------------------
@@ -3422,6 +3496,7 @@ def build_claims(
     matrix: dict[str, tuple[int, int]],
     census: dict[str, int],
     lanes: dict[str, int],
+    mechanisms: dict[str, int],
 ) -> list[Claim]:
     owl2_pass, owl2_ledger = matrix["Entailment (OWL 2 DL consistency)"]
     owl2_total = owl2_pass + owl2_ledger
@@ -3445,6 +3520,11 @@ def build_claims(
     led = (
         "crates/sparql-conformance/src/owl2_rl.rs::LEDGER cross-referenced against "
         "census.tsv (the harness asserts 0 unledgered and 0 stale)"
+    )
+    mech = (
+        "the `OWL2-RL-MECHANISMS` line pinned in "
+        "crates/sparql-conformance/tests/owl2_rl_conformance.rs, which the harness "
+        "recomputes from the corpus on every run"
     )
 
     # Every prose site that states the RL lane split, in the exact words it uses.
@@ -3550,6 +3630,19 @@ def build_claims(
             _flow(
                 r"tests score (?P<pos_a>\d+) of (?P<pos_t>\d+) positive and "
                 r"(?P<neg_a>\d+) of (?P<neg_t>\d+) negative"
+            ),
+        ),
+        (
+            # The GENERATED inventory. It restates the lane split in prose that
+            # `crates/entail/examples/gen_rule_inventory.rs` carries as a literal, so
+            # `scripts/check-generated.sh` can only prove the two copies agree with each
+            # other — never that either agrees with the harness. This entry is the only
+            # thing that ties them to a measurement.
+            "the OWL 2 RL lane split in the generated rule inventory",
+            _INVENTORY,
+            _flow(
+                r"(?P<pos_a>\d+) of (?P<pos_t>\d+) positive and (?P<neg_a>\d+) of "
+                r"(?P<neg_t>\d+) negative"
             ),
         ),
         (
@@ -3728,6 +3821,37 @@ def build_claims(
             led,
         )
         for what, path, pattern in gap_sites
+    ]
+    # --- the generated rule inventory's two remaining entailment numbers --------
+    #
+    # Both are prose that `crates/entail/examples/gen_rule_inventory.rs` emits as a
+    # HARDCODED literal, so the document and its generator agree by construction and
+    # `scripts/check-generated.sh` cannot tell either of them from the truth. Each is
+    # therefore sourced here from the artifact that MEASURES it — the matrix block and
+    # the harness's pinned mechanism line — and not from the generator.
+    claims += [
+        Claim(
+            "the corpus agreement total in the generated rule inventory",
+            _INVENTORY,
+            _flow(
+                r"entailment corpus: (?P<agreed>\d+) of (?P<total>\d+) cases agree"
+            ),
+            {"agreed": rl_pass, "total": rl_total},
+            mat,
+        ),
+        Claim(
+            "the beyond-the-table tally in the generated rule inventory",
+            _INVENTORY,
+            _flow(
+                r"(?P<beyond>[A-Za-z]+|\d+) of those (?P<total>\d+) are reached by a "
+                r"mechanism"
+            ),
+            {
+                "beyond": mechanisms["beyond_table_positive"],
+                "total": mechanisms["total"],
+            },
+            mech,
+        ),
     ]
 
     return claims + [
@@ -4176,6 +4300,7 @@ def main(argv: list[str]) -> int:
     crates = load_release_crates()
     census = census_counts()
     lanes = rl_lane_counts()
+    mechanisms = rl_mechanism_counts()
 
     problems: list[str] = []
     checked = 0
@@ -4222,7 +4347,7 @@ def main(argv: list[str]) -> int:
     problems.extend(overclaim_problems)
     checked += 1
 
-    for claim in build_claims(inventory, matrix, census, lanes):
+    for claim in build_claims(inventory, matrix, census, lanes, mechanisms):
         claim.check()
         problems.extend(claim.failures)
         checked += 1

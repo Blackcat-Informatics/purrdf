@@ -2794,19 +2794,31 @@ fn build_import_map(imports: &ImportList<'_>) -> Result<ImportMap, String> {
     Ok(map)
 }
 
-/// Parse `document`, `regime` and `imports`, then run `f` over them. The shared preamble of
-/// the three services below.
-fn with_premise<T>(
-    regime: &str,
-    document: &str,
-    imports: &ImportList<'_>,
-    f: impl FnOnce(&purrdf_core::RdfDataset, Regime, &ImportMap) -> Result<T, EntailError>,
-) -> Result<T, String> {
+/// Parse the CONFIGURATION of a reasoning service — the regime name and the import table —
+/// which every service below does BEFORE it looks at a caller document.
+///
+/// The order is a contract, not an implementation detail. All three services can be handed
+/// more than one bad input at once, and a caller who fixes what the first one names has to
+/// be able to fix the same thing whichever service they called. Configuration comes first
+/// because a run that names no regime this library implements, or an import table it cannot
+/// read, has no question to ask yet: which of the caller's DOCUMENTS is also malformed is
+/// not yet a meaningful thing to report. `the_three_services_agree_on_error_precedence`
+/// drives all three with the same doubly-bad input and holds them to it.
+fn configuration(regime: &str, imports: &ImportList<'_>) -> Result<(Regime, ImportMap), String> {
     let parsed = parse_regime(regime)?;
     let map = build_import_map(imports)?;
-    let dataset = purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
-        .map_err(|diagnostic| diagnostic.to_string())?;
-    f(&dataset, parsed, &map).map_err(|error| render_entail_error(regime, &error))
+    Ok((parsed, map))
+}
+
+/// Parse a premise document as the N-Quads every service on this boundary takes.
+///
+/// The premise's diagnostic is rendered bare, unprefixed: it is the document the caller
+/// named first and the one a service with only one document has, so a prefix would be
+/// noise. A SECOND document — a conclusion, an import — says which one it is, because there
+/// the ambiguity is real.
+fn parse_premise(document: &str) -> Result<std::sync::Arc<purrdf_core::RdfDataset>, String> {
+    purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
+        .map_err(|diagnostic| diagnostic.to_string())
 }
 
 /// The CERTAIN ANSWERS of a basic graph pattern over `document` under `regime`.
@@ -2890,6 +2902,11 @@ fn with_premise<T>(
 /// `imports` does not resolve; an inconsistent premise, whose refusal carries the full report;
 /// or an exhausted match budget.
 ///
+/// When several of those hold at once, the CONFIGURATION is reported first — the regime
+/// spelling, then the import table — and only then the caller's documents. That precedence
+/// is the same on all three services, so a caller who switches between them is told to fix
+/// the same thing.
+///
 /// ```
 /// use purrdf_validate::regime::certain_answers_to_string;
 ///
@@ -2934,10 +2951,11 @@ pub fn certain_answers_to_string(
     pattern: &str,
     imports: &ImportList<'_>,
 ) -> Result<ReasoningAnswer, String> {
+    let (parsed, map) = configuration(regime, imports)?;
     let bgp = parse_bgp(pattern)?;
-    let answers = with_premise(regime, document, imports, |premise, parsed, map| {
-        purrdf_entail::certain_answers(premise, &bgp, parsed, map)
-    })?;
+    let premise = parse_premise(document)?;
+    let answers = purrdf_entail::certain_answers(&premise, &bgp, parsed, &map)
+        .map_err(|error| render_entail_error(regime, &error))?;
     // The mechanism that ANSWERED, read off the answer set rather than asserted here. A
     // pattern with nothing to project routes through the same fold `graph_entails_to_string`
     // does, so it can be reached by any of the seven — and a hard-coded `strict-table` beside
@@ -3029,11 +3047,12 @@ pub fn graph_entails_to_string(
     conclusion: &str,
     imports: &ImportList<'_>,
 ) -> Result<ReasoningAnswer, String> {
+    let (parsed, map) = configuration(regime, imports)?;
     let target = purrdf_rdf::parse_dataset(conclusion.as_bytes(), INPUT_MEDIA_TYPE, None)
         .map_err(|diagnostic| format!("the conclusion is not N-Quads: {diagnostic}"))?;
-    let certificate = with_premise(regime, premise, imports, |premise, parsed, map| {
-        purrdf_entail::entails(premise, &target, parsed, map)
-    })?;
+    let parsed_premise = parse_premise(premise)?;
+    let certificate = purrdf_entail::entails(&parsed_premise, &target, parsed, &map)
+        .map_err(|error| render_entail_error(regime, &error))?;
     Ok(ReasoningAnswer {
         answer: render_entailment_answer(&certificate),
         certificate: render_reasoning_report(certificate.report()),
@@ -3132,12 +3151,10 @@ pub fn verify_entailment_to_string(
     conclusion: &str,
     imports: &ImportList<'_>,
 ) -> Result<ReasoningAnswer, String> {
+    let (parsed, map) = configuration(regime, imports)?;
     let target = purrdf_rdf::parse_dataset(conclusion.as_bytes(), INPUT_MEDIA_TYPE, None)
         .map_err(|diagnostic| format!("the conclusion is not N-Quads: {diagnostic}"))?;
-    let parsed_premise = purrdf_rdf::parse_dataset(premise.as_bytes(), INPUT_MEDIA_TYPE, None)
-        .map_err(|diagnostic| diagnostic.to_string())?;
-    let parsed = parse_regime(regime)?;
-    let map = build_import_map(imports)?;
+    let parsed_premise = parse_premise(premise)?;
     let certificate = purrdf_entail::entails(&parsed_premise, &target, parsed, &map)
         .map_err(|error| render_entail_error(regime, &error))?;
     let mut answer = render_entailment_answer(&certificate);
@@ -5363,6 +5380,81 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
         )
         .expect_err("the empty ontology IRI");
         assert!(nameless.contains("empty ontology IRI"), "{nameless}");
+    }
+
+    /// The three reasoning services report the SAME error when handed the same bad inputs.
+    ///
+    /// Not a test of one function's statement order: it is the invariant that the boundary
+    /// has ONE error precedence. A caller who moves from `certain_answers_to_string` to
+    /// `graph_entails_to_string` to `verify_entailment_to_string` — the same question, asked
+    /// three ways — must be told to fix the same thing, and `verify_entailment_to_string`'s
+    /// own `# Errors` section claims exactly that by saying "as `certain_answers_to_string`".
+    /// Each case below is bad in TWO ways at once, so a service that checked in a different
+    /// order would name the other fault and fail here.
+    #[test]
+    fn the_three_services_agree_on_error_precedence() {
+        const BAD_DOCUMENT: &str = "this is not n-quads\n";
+        const GOOD_GROUND: &str = "<http://example.org/x> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .\n";
+        let good_imports: &ImportList<'_> = &[];
+        let bad_imports: &ImportList<'_> = &[("", GOOD_GROUND)];
+
+        // (regime, premise, second document, imports, the fragment every service must name)
+        let cases: &[(&str, &str, &str, &ImportList<'_>, &str)] = &[
+            // An unknown regime AND an unparseable premise: the regime wins everywhere.
+            (
+                "not-a-regime",
+                BAD_DOCUMENT,
+                GOOD_GROUND,
+                good_imports,
+                "unknown entailment regime \"not-a-regime\"",
+            ),
+            // An unknown regime AND an unreadable import table: still the regime.
+            (
+                "not-a-regime",
+                GOOD_GROUND,
+                GOOD_GROUND,
+                bad_imports,
+                "unknown entailment regime \"not-a-regime\"",
+            ),
+            // A known regime, an unreadable import table AND an unparseable premise: the
+            // import table wins, because it is configuration and the premise is data.
+            (
+                "owl-rl",
+                BAD_DOCUMENT,
+                GOOD_GROUND,
+                bad_imports,
+                "empty ontology IRI",
+            ),
+            // An unknown regime AND an unparseable SECOND document (the pattern for one
+            // service, the conclusion for the other two): the regime still wins.
+            (
+                "not-a-regime",
+                GOOD_GROUND,
+                BAD_DOCUMENT,
+                good_imports,
+                "unknown entailment regime \"not-a-regime\"",
+            ),
+        ];
+
+        for (regime, premise, second, imports, expected) in cases {
+            let answers = certain_answers_to_string(regime, premise, second, imports)
+                .expect_err("doubly-bad input");
+            let entails = graph_entails_to_string(regime, premise, second, imports)
+                .expect_err("doubly-bad input");
+            let verified = verify_entailment_to_string(regime, premise, second, imports)
+                .expect_err("doubly-bad input");
+            for (service, refusal) in [
+                ("certain_answers_to_string", &answers),
+                ("graph_entails_to_string", &entails),
+                ("verify_entailment_to_string", &verified),
+            ] {
+                assert!(
+                    refusal.contains(expected),
+                    "{service} must report {expected:?} for regime {regime:?}, not: {refusal}"
+                );
+            }
+        }
     }
 
     /// The resolution is TRANSITIVE: a supplied document's own `owl:imports` is followed,
