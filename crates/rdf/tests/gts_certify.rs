@@ -16,6 +16,7 @@ use purrdf_gts::reader::read;
 use purrdf_gts::stream;
 use purrdf_gts::wire;
 use purrdf_gts::writer::{Writer, term_to_wire};
+use purrdf_rdf::CanonError;
 use purrdf_rdf::gts_certify::{
     CertifyError, CompactionCertificate, compact_and_certify, compose, effective_digest,
     refold_digest, verify_compaction,
@@ -1024,7 +1025,11 @@ fn verify_compaction_fails_closed_on_symmetric_poison_content() {
     // Re-folding the SAME poison bytes as "post" keeps the fixture minimal
     // and self-contained (no dependency on a separate valid pack).
     match verify_compaction(&poison, &poison, &ring) {
-        Err(CertifyError::CanonBudgetExceeded(err)) => {
+        // Matched to the BUDGET refusal specifically, not to `CanonRefused` as a whole:
+        // canonicalization now has a second refusal (reserved vocabulary), and a test
+        // that accepted either would pass if this fixture ever started failing for the
+        // wrong reason.
+        Err(CertifyError::CanonRefused(CanonError::BudgetExceeded(err))) => {
             assert_eq!(
                 err.blank_count, 10,
                 "the budget-exceeded diagnostic must report the poison graph's blank count"
@@ -1032,7 +1037,7 @@ fn verify_compaction_fails_closed_on_symmetric_poison_content() {
         }
         other => panic!(
             "expected verify_compaction to fail CLOSED with \
-             CertifyError::CanonBudgetExceeded on a symmetric-poison content projection \
+             CertifyError::CanonRefused(BudgetExceeded) on a symmetric-poison content projection \
              (never panic, never silently pass); got {other:?}"
         ),
     }

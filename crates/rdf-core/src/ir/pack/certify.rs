@@ -310,9 +310,10 @@ pub fn restore_pack(bytes: &[u8]) -> Result<Arc<RdfDataset>, PackError> {
 ///   isolation, but only this reconstruct-then-freeze step re-checks those
 ///   cross-section role constraints, and untrusted bytes must fail closed
 ///   rather than hang or panic even when they trip it.
-/// - [`PackError::CanonBudgetExceeded`] if the reconstructed dataset's RDFC-1.0
-///   canonicalization exceeds its call budget (a pathologically symmetric blank
-///   graph — untrusted input fails closed here rather than hanging or panicking).
+/// - [`PackError::CanonRefused`] if canonicalization refuses the reconstructed
+///   dataset — its call budget exhausted by a pathologically symmetric blank graph,
+///   or an IRI found in the profile's reserved namespace. Untrusted input fails
+///   closed here rather than hanging, panicking, or certifying a forgeable identity.
 /// - [`PackError::RdfcDigestMismatch`] if the independently recomputed digest
 ///   disagrees with the pack's stored `rdfc_digest` header field — the pack's
 ///   contents do not actually canonicalize to the identity it claims.
@@ -325,7 +326,7 @@ pub fn verify_pack(bytes: &[u8]) -> Result<PackDigest, PackError> {
     })?;
 
     let canonicalized = crate::try_canonicalize_with(&reconstructed, CanonHash::Sha256)
-        .map_err(|_| PackError::CanonBudgetExceeded)?;
+        .map_err(PackError::CanonRefused)?;
     let computed: [u8; 32] = Sha256::digest(canonicalized.nquads.as_bytes()).into();
 
     let expected = view.rdfc_digest();

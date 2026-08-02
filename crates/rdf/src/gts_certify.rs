@@ -42,7 +42,7 @@ use purrdf_gts::wire;
 
 use crate::gts::dataset_from_gts_graph;
 use crate::gts_core::diagnostics_to_error;
-use crate::{BudgetExceeded, CanonHash, RdfDiagnostic, canonicalize_with, try_canonicalize_with};
+use crate::{CanonError, CanonHash, RdfDiagnostic, canonicalize_with, try_canonicalize_with};
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
@@ -70,7 +70,7 @@ pub enum CertifyError {
     /// staying far under [`POISON_BLANK_LIMIT`]). [`verify_compaction`] routes
     /// through the fallible canonicalizer and surfaces this instead of letting
     /// the RDFC-1.0 engine panic on adversarial verifier input.
-    CanonBudgetExceeded(BudgetExceeded),
+    CanonRefused(CanonError),
     /// The certificate's canonical CBOR encoding is malformed.
     Cbor(String),
     /// An internal invariant was violated (e.g. a freshly authored
@@ -89,7 +89,7 @@ impl std::fmt::Display for CertifyError {
                 "refusing to canonicalize a content projection with {count} blank node(s) \
                  (exceeds the {POISON_BLANK_LIMIT} poison guard)"
             ),
-            Self::CanonBudgetExceeded(err) => write!(f, "compaction verification failed: {err}"),
+            Self::CanonRefused(err) => write!(f, "compaction verification failed: {err}"),
             Self::Cbor(msg) => write!(f, "compaction certificate CBOR error: {msg}"),
             Self::Invariant(msg) => {
                 write!(f, "compaction certificate invariant violated: {msg}")
@@ -102,7 +102,7 @@ impl std::error::Error for CertifyError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Dataset(diag) => Some(diag),
-            Self::CanonBudgetExceeded(err) => Some(err),
+            Self::CanonRefused(err) => Some(err),
             Self::Refused(_) | Self::Poison(_) | Self::Cbor(_) | Self::Invariant(_) => None,
         }
     }
@@ -323,7 +323,7 @@ fn canonical_digest(projected: &Graph) -> Result<String, CertifyError> {
 /// cheap [`POISON_BLANK_LIMIT`] blank-COUNT pre-reject, but canonicalizes
 /// through [`try_canonicalize_with`] so a pathologically symmetric graph that
 /// stays under the count limit yet exhausts RDFC-1.0's n-degree search call
-/// budget surfaces as [`CertifyError::CanonBudgetExceeded`] instead of
+/// budget surfaces as [`CertifyError::CanonRefused`] instead of
 /// panicking. Byte-identical `Ok` digest to [`canonical_digest`] on any input
 /// both accept — determinism is unaffected, only the failure mode on
 /// adversarial input changes from abort to a returned error.
@@ -333,8 +333,8 @@ fn try_canonical_digest(projected: &Graph) -> Result<String, CertifyError> {
     if blanks > POISON_BLANK_LIMIT {
         return Err(CertifyError::Poison(blanks));
     }
-    let canonical = try_canonicalize_with(&dataset, CanonHash::Sha256)
-        .map_err(CertifyError::CanonBudgetExceeded)?;
+    let canonical =
+        try_canonicalize_with(&dataset, CanonHash::Sha256).map_err(CertifyError::CanonRefused)?;
     let digest = Sha256::digest(canonical.nquads.as_bytes());
     Ok(wire::hex(digest.as_slice()))
 }
@@ -344,7 +344,7 @@ fn try_canonical_digest(projected: &Graph) -> Result<String, CertifyError> {
 ///
 /// # Errors
 /// Returns [`CertifyError::Dataset`], [`CertifyError::Poison`], or
-/// [`CertifyError::CanonBudgetExceeded`] — never panics, regardless of how
+/// [`CertifyError::CanonRefused`] — never panics, regardless of how
 /// adversarially symmetric `g`'s content projection is.
 fn try_refold_digest(g: &Graph) -> Result<String, CertifyError> {
     try_canonical_digest(&content_projection(g))
@@ -355,7 +355,7 @@ fn try_refold_digest(g: &Graph) -> Result<String, CertifyError> {
 ///
 /// # Errors
 /// Returns [`CertifyError::Dataset`], [`CertifyError::Poison`], or
-/// [`CertifyError::CanonBudgetExceeded`] — never panics, regardless of how
+/// [`CertifyError::CanonRefused`] — never panics, regardless of how
 /// adversarially symmetric `g`'s effective projection is.
 fn try_effective_digest(g: &Graph) -> Result<String, CertifyError> {
     try_canonical_digest(&effective_projection(g))
@@ -783,7 +783,7 @@ fn suppressions_ok(pre: &Graph, post: &Graph) -> Result<bool, CertifyError> {
 /// [`canonicalize_with`]: a pathologically symmetric blank graph that stays
 /// under [`POISON_BLANK_LIMIT`]'s cheap blank-COUNT pre-reject yet exhausts
 /// RDFC-1.0's n-degree search call budget surfaces as
-/// [`CertifyError::CanonBudgetExceeded`], never a process-aborting panic —
+/// [`CertifyError::CanonRefused`], never a process-aborting panic —
 /// this function must never be a resource-exhaustion (or crash) vector.
 ///
 /// A post pack with a broken hash chain (a corrupted frame) still returns
