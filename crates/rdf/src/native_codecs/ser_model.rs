@@ -85,52 +85,50 @@ impl SerGraph {
     /// which binding a quoted-triple term resolves to; the self-reifier sentinel rows
     /// (skipped on output) are permuted harmlessly among the real reifier rows.
     pub(crate) fn sort_canonical(&mut self) {
-        let quad_key = |&(s, p, o, g): &SerQuad| -> Vec<String> {
-            vec![
-                render_term(self, s),
-                render_term(self, p),
-                render_term(self, o),
-                g.map(|g| render_term(self, g)).unwrap_or_default(),
-            ]
-        };
-        let reifier_key = |&(r, (s, p, o), g): &SerReifierRow| -> Vec<String> {
-            vec![
-                render_term(self, r),
-                render_term(self, s),
-                render_term(self, p),
-                render_term(self, o),
-                g.map(|g| render_term(self, g)).unwrap_or_default(),
-            ]
-        };
-        let annotation_key = |&(r, p, o, g): &SerAnnotationRow| -> Vec<String> {
-            vec![
-                render_term(self, r),
-                render_term(self, p),
-                render_term(self, o),
-                g.map(|g| render_term(self, g)).unwrap_or_default(),
-            ]
-        };
+        // The rows are sorted THROUGH a comparator that renders on demand, rather than
+        // by precomputing a key per row. The keys were `Vec<String>` — four or five
+        // allocations for every quad, reifier and annotation in the document, every one
+        // of them alive for the whole sort — and they were compared element by element
+        // and then thrown away. Two reusable buffers give the identical ordering: the
+        // comparison is still term-by-term on rendered text, and a `None` graph still
+        // renders as the empty string, which is what places it before any named graph.
+        //
+        // The trade is deliberate. This renders O(n log n) times instead of n, and holds
+        // O(1) scratch instead of O(n) keys. It is the right way round for a serializer,
+        // whose peak is what decides whether a large export completes at all — and the
+        // rendering it repeats is a walk over a term table already in memory.
+        //
+        // Each vector is taken out before sorting so the comparator can borrow `self`
+        // immutably while the rows it orders are a local.
+        let mut left = String::new();
+        let mut right = String::new();
 
-        // Precompute every sort key up front (all immutable borrows of `self`) so the
-        // three rewrites below hold no live borrow of `self` while reassigning its
-        // fields.
-        let mut quads: Vec<(Vec<String>, SerQuad)> =
-            self.quads.iter().map(|q| (quad_key(q), *q)).collect();
-        let mut reifiers: Vec<(Vec<String>, SerReifierRow)> =
-            self.reifiers.iter().map(|r| (reifier_key(r), *r)).collect();
-        let mut annotations: Vec<(Vec<String>, SerAnnotationRow)> = self
-            .annotations
-            .iter()
-            .map(|a| (annotation_key(a), *a))
-            .collect();
+        let mut quads = std::mem::take(&mut self.quads);
+        quads.sort_by(|&(s1, p1, o1, g1), &(s2, p2, o2, g2)| {
+            cmp_terms(self, &[s1, p1, o1], &[s2, p2, o2], &mut left, &mut right)
+                .then_with(|| cmp_graph(self, g1, g2, &mut left, &mut right))
+        });
+        self.quads = quads;
 
-        quads.sort_by(|a, b| a.0.cmp(&b.0));
-        reifiers.sort_by(|a, b| a.0.cmp(&b.0));
-        annotations.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut reifiers = std::mem::take(&mut self.reifiers);
+        reifiers.sort_by(|&(r1, (s1, p1, o1), g1), &(r2, (s2, p2, o2), g2)| {
+            cmp_terms(
+                self,
+                &[r1, s1, p1, o1],
+                &[r2, s2, p2, o2],
+                &mut left,
+                &mut right,
+            )
+            .then_with(|| cmp_graph(self, g1, g2, &mut left, &mut right))
+        });
+        self.reifiers = reifiers;
 
-        self.quads = quads.into_iter().map(|(_, q)| q).collect();
-        self.reifiers = reifiers.into_iter().map(|(_, r)| r).collect();
-        self.annotations = annotations.into_iter().map(|(_, a)| a).collect();
+        let mut annotations = std::mem::take(&mut self.annotations);
+        annotations.sort_by(|&(r1, p1, o1, g1), &(r2, p2, o2, g2)| {
+            cmp_terms(self, &[r1, p1, o1], &[r2, p2, o2], &mut left, &mut right)
+                .then_with(|| cmp_graph(self, g1, g2, &mut left, &mut right))
+        });
+        self.annotations = annotations;
     }
 }
 
@@ -310,18 +308,53 @@ pub(crate) fn escape_literal(lex: &str) -> Cow<'_, str> {
 }
 
 /// Render a term-id as an N-Triples token.
-/// One term's N-Triples surface as an owned `String`.
+/// Compare two term-id sequences by their rendered text, position by position.
 ///
-/// The serializers do not use this — they append through [`write_term`] and never
-/// materialise a term on its own. It remains for [`SerGraph::sort_canonical`], whose
-/// keys are `Vec<String>` compared element by element. Flattening those into one
-/// concatenated key would remove the per-term allocation there too, and would also
-/// change the ordering the moment a term contained the separator — and the emitted
-/// byte order is the thing that ordering decides, so it is left exactly as it was.
-fn render_term(g: &SerGraph, tid: usize) -> String {
-    let mut out = String::new();
-    write_term(g, tid, &mut out);
-    out
+/// The sequences are the same length at every call site. `left` and `right` are scratch
+/// reused across the whole sort, which is the point: this is the comparison a
+/// `Vec<String>` key used to make after allocating one string per position per row.
+fn cmp_terms(
+    g: &SerGraph,
+    a: &[usize],
+    b: &[usize],
+    left: &mut String,
+    right: &mut String,
+) -> std::cmp::Ordering {
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        left.clear();
+        right.clear();
+        write_term(g, x, left);
+        write_term(g, y, right);
+        let ordering = left.as_str().cmp(right.as_str());
+        if ordering != std::cmp::Ordering::Equal {
+            return ordering;
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
+/// Compare two optional graph slots by rendered text, `None` rendering as empty.
+///
+/// Empty is what `unwrap_or_default` produced for the absent graph in the previous key,
+/// and it is load-bearing: the empty string sorts before every rendered term, so the
+/// default graph's rows lead. Rendering `None` as anything else would reorder the
+/// document.
+fn cmp_graph(
+    g: &SerGraph,
+    a: Option<usize>,
+    b: Option<usize>,
+    left: &mut String,
+    right: &mut String,
+) -> std::cmp::Ordering {
+    left.clear();
+    right.clear();
+    if let Some(x) = a {
+        write_term(g, x, left);
+    }
+    if let Some(y) = b {
+        write_term(g, y, right);
+    }
+    left.as_str().cmp(right.as_str())
 }
 
 /// Append one term's N-Triples surface to `out`.
@@ -674,6 +707,102 @@ mod tests {
     // buffer, so a `to_*` in the crate proper would be dead code kept alive by tests.
     // These assert on a whole document, which is the one place materialising it is the
     // point rather than a cost.
+
+    /// The lazy comparator orders rows exactly as the materialised keys did.
+    ///
+    /// `sort_canonical` used to build a `Vec<String>` key per row and sort on that. The
+    /// keys are gone; the ORDER they produced is a published property, because it is
+    /// what makes an exported document byte-identical across backends. So the old key
+    /// construction is reproduced here and the two orderings are compared directly —
+    /// asserting the replacement is equivalent, not merely that it is some valid order.
+    ///
+    /// The graph is built to exercise the part a round-trip vector is least likely to:
+    /// rows identical in subject, predicate and object that differ ONLY in the graph
+    /// slot, including the absent one. The old key rendered `None` through
+    /// `unwrap_or_default` as the empty string, which sorts before every rendered term
+    /// and therefore puts the default graph's rows first — behaviour the comparator has
+    /// to reproduce deliberately rather than inherit.
+    #[test]
+    fn the_lazy_comparator_orders_rows_exactly_as_the_materialised_keys_did() {
+        fn term(g: &mut SerGraph, iri: &str) -> usize {
+            g.terms.push(SerTerm {
+                kind: SerTermKind::Iri,
+                value: Some(iri.to_owned()),
+                datatype: None,
+                lang: None,
+                direction: None,
+                reifier: None,
+            });
+            g.terms.len() - 1
+        }
+
+        let mut g = SerGraph::default();
+        let s = term(&mut g, "https://example.org/s");
+        let p = term(&mut g, "https://example.org/p");
+        let o = term(&mut g, "https://example.org/o");
+        let o2 = term(&mut g, "https://example.org/a");
+        let ga = term(&mut g, "https://example.org/gz");
+        let gb = term(&mut g, "https://example.org/ga");
+
+        // Deliberately inserted out of order, with the default-graph rows in the middle
+        // so neither the input order nor a stable sort can produce the answer by luck.
+        g.quads = vec![
+            (s, p, o, Some(ga)),
+            (s, p, o2, None),
+            (s, p, o, Some(gb)),
+            (s, p, o, None),
+            (s, p, o2, Some(ga)),
+        ];
+
+        // The key the previous implementation built, verbatim in shape.
+        let key = |g: &SerGraph, &(a, b, c, d): &SerQuad| -> Vec<String> {
+            vec![
+                render_term(g, a),
+                render_term(g, b),
+                render_term(g, c),
+                d.map(|x| render_term(g, x)).unwrap_or_default(),
+            ]
+        };
+        let mut expected = g.quads.clone();
+        expected.sort_by_key(|x| key(&g, x));
+
+        g.sort_canonical();
+        assert_eq!(
+            g.quads, expected,
+            "the comparator must reproduce the key-based order exactly; the emitted \
+             byte order is what that order decides"
+        );
+
+        // And the property that empty-renders-`None` actually buys. The graph slot is
+        // the LAST key component, so it separates rows only once subject, predicate and
+        // object have tied — the default graph leads within each such group, not the
+        // document. Stated as the invariant rather than as fixed positions, because
+        // fixed positions would also pass for a comparator that ignored the graph.
+        for pair in g.quads.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            if (a.0, a.1, a.2) == (b.0, b.1, b.2) {
+                assert!(
+                    !(a.3.is_some() && b.3.is_none()),
+                    "within one subject/predicate/object group an absent graph renders \
+                     as the empty string and must precede every named one: {:?}",
+                    g.quads
+                );
+            }
+        }
+    }
+
+    /// One term's N-Triples surface as an owned `String`.
+    ///
+    /// Production has none: `sort_canonical` compares through reusable buffers and the
+    /// serializers append, so nothing outside this module ever wants a term on its own.
+    /// It survives here to reconstruct the key the sort used to build, which is what
+    /// lets the ordering test compare against the old behaviour rather than against
+    /// itself.
+    fn render_term(g: &SerGraph, tid: usize) -> String {
+        let mut out = String::new();
+        write_term(g, tid, &mut out);
+        out
+    }
 
     fn to_ntriples(g: &SerGraph) -> Result<String, RdfDiagnostic> {
         let mut out = String::new();
