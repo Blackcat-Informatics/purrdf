@@ -271,7 +271,33 @@ impl std::fmt::Display for PackError {
     }
 }
 
-impl std::error::Error for PackError {}
+impl std::error::Error for PackError {
+    /// The wrapped section error, for the three variants that delegate to one.
+    ///
+    /// A pack is read section by section, and `Dict`, `Triples` and `Side` exist to say
+    /// WHICH section refused while the section's own error says why. Without this the
+    /// two halves were split: the standard chain reported the section and stopped, and
+    /// the reason — which byte, which bound, which digest — was reachable only by
+    /// matching this enum.
+    ///
+    /// The rest return `None` because they are container-level facts with nothing
+    /// beneath them: a bad magic, a truncation, an unsupported version, a digest that
+    /// did not match, or a canonicalization budget spent are each complete as stated.
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Dict(inner) => Some(inner),
+            Self::Triples(inner) => Some(inner),
+            Self::Side(inner) => Some(inner),
+            Self::BadMagic
+            | Self::UnsupportedVersion(_)
+            | Self::Truncated
+            | Self::Malformed(_)
+            | Self::SectionDigestMismatch { .. }
+            | Self::CanonBudgetExceeded
+            | Self::RdfcDigestMismatch { .. } => None,
+        }
+    }
+}
 
 impl From<PackDictError> for PackError {
     fn from(e: PackDictError) -> Self {

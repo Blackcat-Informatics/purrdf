@@ -92,7 +92,20 @@ impl std::fmt::Display for ReasoningError {
     }
 }
 
-impl std::error::Error for ReasoningError {}
+impl std::error::Error for ReasoningError {
+    /// The wrapped cause — always present, because every variant is one.
+    ///
+    /// This type exists ONLY to say which of two subsystems failed; it adds no failure
+    /// of its own. Returning `None` therefore hid the entire diagnostic behind a value
+    /// whose whole content was the choice between two wrappers, and a caller walking
+    /// `Error::source` reached the fork and then nothing.
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Query(inner) => Some(inner),
+            Self::Entailment(inner) => Some(inner),
+        }
+    }
+}
 
 impl From<RdfDiagnostic> for ReasoningError {
     fn from(value: RdfDiagnostic) -> Self {
@@ -872,6 +885,43 @@ mod tests {
 
     const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
     const RDFS_SUBCLASS: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+
+    /// A caller can walk from the wrapper to the failure it wraps.
+    ///
+    /// `ReasoningError` adds nothing of its own — it says only which subsystem failed —
+    /// so before it carried a `source` the standard chain reached that fork and stopped,
+    /// and the diagnostic underneath was reachable only by matching the concrete enum.
+    /// That is the situation `Error::source` exists to remove, and this asserts it is
+    /// gone rather than trusting the impl to be there.
+    ///
+    /// The inner error is compared by its RENDERED text, not by identity: the claim a
+    /// caller depends on is that walking the chain reaches the message describing the
+    /// real failure, which is what a `{:#}` printer or a `source()` loop will show.
+    #[test]
+    fn the_error_chain_reaches_the_wrapped_failure() {
+        use std::error::Error as _;
+
+        let inner = EntailError::UnsupportedRegime(Regime::Rif);
+        let rendered = inner.to_string();
+        let wrapped = ReasoningError::Entailment(inner);
+
+        let source = wrapped
+            .source()
+            .expect("the entailment wrapper must expose the failure it wraps");
+        assert_eq!(
+            source.to_string(),
+            rendered,
+            "walking the chain must reach the wrapped diagnostic itself, not a \
+             re-description of it"
+        );
+
+        // And the chain terminates rather than cycling: this variant of `EntailError`
+        // names a regime and wraps nothing further.
+        assert!(
+            source.source().is_none(),
+            "an error that wraps nothing must end the chain"
+        );
+    }
 
     fn hierarchy() -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();

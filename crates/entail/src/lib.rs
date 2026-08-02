@@ -442,7 +442,39 @@ impl std::fmt::Display for EntailError {
     }
 }
 
-impl std::error::Error for EntailError {}
+impl std::error::Error for EntailError {
+    /// The wrapped cause, for the variants that carry one.
+    ///
+    /// Two of these variants exist ONLY to carry another crate's diagnostic —
+    /// `Evaluate` holds the evaluator's ceiling report, `Chase` holds the termination
+    /// analysis — and without this the standard chain stopped at the outermost message.
+    /// A caller printing `{:#}`, or walking `Error::source`, saw "the chase refused"
+    /// and could not reach WHICH ceiling refused it, though the value was right there;
+    /// the only way through was to match this enum's concrete variant, which is what a
+    /// trait-object error exists to avoid.
+    ///
+    /// The rest return `None` because they genuinely have no cause to name.
+    /// `Build`, `Parse`, `MalformedList` and `UnresolvedImport` carry a `String` — a
+    /// rendered message, not an error value — and `Unsatisfiable`, `MatchBudget` and
+    /// `UnsupportedRegime` are complete statements in themselves. `Inconsistent` carries
+    /// an `InconsistentRun`, which is a WITNESS rather than a failure: it is evidence
+    /// that the premise has no model, and the run it describes succeeded at producing
+    /// it, so calling it the cause of this error would misdescribe both.
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Evaluate(inner) => Some(inner),
+            Self::Chase(inner) => Some(inner),
+            Self::Build(_)
+            | Self::Parse(_)
+            | Self::MalformedList(_)
+            | Self::Inconsistent(_)
+            | Self::Unsatisfiable
+            | Self::UnsupportedRegime(_)
+            | Self::UnresolvedImport(_)
+            | Self::MatchBudget => None,
+        }
+    }
+}
 
 /// Compute the entailment closure of `ds` under `plan`, and say what was done.
 ///
