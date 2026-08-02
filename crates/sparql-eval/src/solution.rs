@@ -5,8 +5,10 @@
 //!
 //! A [`SolutionSeq`] is a **bag** (multiset) of [`Solution`] rows over a shared,
 //! ordered [`VarSchema`]. Duplicate rows are preserved until `DISTINCT`/`REDUCED`.
-//! Each row is a dense `Vec<Option<SolutionTerm>>` indexed by column ordinal —
-//! `None` means the variable is *in the schema's domain but unbound in this row*
+//! Each row is a dense, inline-capacity-4 `SmallVec<[Option<SolutionTerm>; 4]>`
+//! indexed by column ordinal — see [`Solution`] for why it is not a `Vec`, which
+//! matters to anyone reasoning about where a row lives. `None` means the variable
+//! is *in the schema's domain but unbound in this row*
 //! (which `OPTIONAL`/`UNION` produce), distinct from "not a column at all".
 //!
 //! Column orientation (rather than per-row hash maps) is deliberate: multiset
@@ -133,7 +135,8 @@ pub type Solution<I = TermId> = smallvec::SmallVec<[Option<SolutionTerm<I>>; 4]>
 /// (multiset semantics) until an explicit `DISTINCT`/`REDUCED`.
 #[derive(Clone, Debug)]
 pub struct SolutionSeq<I: ViewTermId = TermId> {
-    /// The shared variable schema (so a row is just a `Vec<Option<SolutionTerm>>`).
+    /// The shared variable schema — the reason a row carries only its cells and no
+    /// per-row map of variable names (see [`Solution`] for the row's own storage).
     pub schema: Arc<VarSchema>,
     /// The solution rows (a bag — duplicates significant).
     pub rows: Vec<Solution<I>>,

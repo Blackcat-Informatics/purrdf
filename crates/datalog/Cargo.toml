@@ -42,6 +42,12 @@ hashbrown = { workspace = true }
 # never `par_sort`/`par_bridge`. Degrades to inline-sequential on
 # wasm32-unknown-unknown, so the wasm gate holds.
 rayon = { workspace = true }
+# The join's per-solution binding frame. Inline capacity 8 because 8 is the WIDEST
+# frame the OWL 2 RL rule table and this workspace's own suites produce (measured,
+# not assumed), and `Option<TermId>` is 4 bytes through `Id`'s `NonZeroU32` niche —
+# so the whole frame is 32 inline bytes and never reaches the allocator. The same
+# crate-local reasoning `purrdf-sparql-eval` applies to its solution rows.
+smallvec = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
