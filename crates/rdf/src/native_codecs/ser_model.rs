@@ -454,13 +454,6 @@ fn write_graph_terminator(g: &SerGraph, gname: Option<usize>, out: &mut String) 
     out.push_str(" .\n");
 }
 
-/// Serialise a [`SerGraph`] to N-Quads text.
-pub(crate) fn to_nquads(g: &SerGraph) -> String {
-    let mut out = String::new();
-    write_nquads(g, &mut out);
-    out
-}
-
 /// Assert that no row of `g` carries a named-graph slot — the single-graph syntaxes
 /// (N-Triples, Turtle) cannot serialize named-graph quads. Mirrors the upstream
 /// `ensure_default_graph_projection` rejection.
@@ -478,15 +471,16 @@ fn ensure_default_graph_projection(g: &SerGraph, format: &str) -> Result<(), Rdf
 }
 
 /// Serialise a [`SerGraph`] to N-Triples text (default graph only).
-pub(crate) fn to_ntriples(g: &SerGraph) -> Result<String, RdfDiagnostic> {
+pub(crate) fn write_ntriples(g: &SerGraph, out: &mut String) -> Result<(), RdfDiagnostic> {
     ensure_default_graph_projection(g, "N-Triples")?;
-    Ok(to_nquads(g))
+    write_nquads(g, out);
+    Ok(())
 }
 
 /// Serialise a [`SerGraph`] to Turtle text (default graph only); the N-Quads body is
 /// prefixed with the `rdf:`/`xsd:` `@prefix` header. IRIs in the body stay full
 /// `<...>` — they are NOT abbreviated against the declared prefixes.
-pub(crate) fn to_turtle(g: &SerGraph) -> Result<String, RdfDiagnostic> {
+pub(crate) fn write_turtle(g: &SerGraph, out: &mut String) -> Result<(), RdfDiagnostic> {
     ensure_default_graph_projection(g, "Turtle")?;
 
     // The header is written first and RETRACTED if the body turns out to be empty,
@@ -495,7 +489,7 @@ pub(crate) fn to_turtle(g: &SerGraph) -> Result<String, RdfDiagnostic> {
     // copied a second time to place it after the header — on top of the two copies
     // `to_nquads` itself was making — so a Turtle export peaked at roughly three times
     // its own output.
-    let mut out = String::new();
+    let start = out.len();
     out.push_str("@prefix rdf: <");
     out.push_str(RDF_NS);
     out.push_str("> .\n@prefix xsd: <");
@@ -503,12 +497,14 @@ pub(crate) fn to_turtle(g: &SerGraph) -> Result<String, RdfDiagnostic> {
     out.push_str("> .\n\n");
     let header = out.len();
 
-    write_nquads(g, &mut out);
+    write_nquads(g, out);
     if out.len() == header {
         // An empty graph emits nothing at all, header included — unchanged behaviour.
-        out.clear();
+        // Truncating to where this call began (not `clear`) is what lets a caller write
+        // more than one document into one buffer.
+        out.truncate(start);
     }
-    Ok(out)
+    Ok(())
 }
 
 // ── TriG ──────────────────────────────────────────────────────────────────────────
@@ -605,13 +601,6 @@ fn begin_statement(
     out.push_str("  ");
 }
 
-/// Serialise a [`SerGraph`] to TriG text.
-pub(crate) fn to_trig(g: &SerGraph) -> String {
-    let mut out = String::new();
-    write_trig(g, &mut out);
-    out
-}
-
 /// Append a [`SerGraph`]'s TriG text to `out`.
 ///
 /// Statements are written in place. The previous shape collected every line into a
@@ -679,6 +668,24 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
     use std::fmt::Write as _;
+
+    // Collect-into-a-`String` shims. Production has no such function any more: every
+    // caller reaches the writers through `RdfCodec::serialize_into` and supplies its own
+    // buffer, so a `to_*` in the crate proper would be dead code kept alive by tests.
+    // These assert on a whole document, which is the one place materialising it is the
+    // point rather than a cost.
+
+    fn to_ntriples(g: &SerGraph) -> Result<String, RdfDiagnostic> {
+        let mut out = String::new();
+        write_ntriples(g, &mut out)?;
+        Ok(out)
+    }
+
+    fn to_turtle(g: &SerGraph) -> Result<String, RdfDiagnostic> {
+        let mut out = String::new();
+        write_turtle(g, &mut out)?;
+        Ok(out)
+    }
 
     #[test]
     fn deterministic_blank_label_matches_zero_timestamp_ulid() {
