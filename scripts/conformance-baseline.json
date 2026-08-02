@@ -9,6 +9,10 @@
       "ledgered": 0,
       "note": "no ledgered gaps"
     },
+    "RDF 1.2 canonicalization profile": {
+      "ledgered": 0,
+      "note": "no ledgered gaps"
+    },
     "Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML)": {
       "ledgered": 0,
       "note": "no ledgered gaps"
