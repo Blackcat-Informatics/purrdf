@@ -1,0 +1,17 @@
+ghprsq PR head backlink metadata
+
+parent_hashes: 934b22bcf78eb94e454853e722494fec72834142
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash-head-backlink
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 178
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/178
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: 09ce00435ed0b19a4499799f008d28cc954f5672
+GhpRsq-Head-Ref: paudley/release-0.12.0
+GhpRsq-Head-OID: 934b22bcf78eb94e454853e722494fec72834142
+GhpRsq-Result-Tree: 05ec45005662d383b5720ab72ef21f561a85a071
+GhpRsq-Result-Commit: dfb1df73199668720116dfbc737c0585e23afb5e
+GhpRsq-Parent-Hashes: 934b22bcf78eb94e454853e722494fec72834142
+GhpRsq-Squash-Notes-SHA256: 2d68c43281443444bab09b1328fe624fa6127a03e1dd43bd9f1e7ffe676980ff
