@@ -513,84 +513,130 @@ pub(crate) fn to_turtle(g: &SerGraph) -> Result<String, RdfDiagnostic> {
 
 // ── TriG ──────────────────────────────────────────────────────────────────────────
 
-fn render_trig_term(g: &SerGraph, tid: usize) -> String {
+/// Append one term's TriG surface to `out`.
+///
+/// TriG differs from N-Triples in exactly one place — `rdf:reifies` is written through
+/// the declared prefix rather than as a full IRI — so this mirrors [`write_term`] and
+/// appends for the same reason: a term built as its own `String` is an allocation whose
+/// every byte was going to be copied into the output regardless.
+fn write_trig_term(g: &SerGraph, tid: usize, out: &mut String) {
+    use std::fmt::Write as _;
+
     let t = &g.terms[tid];
     match t.kind {
-        SerTermKind::Iri if t.value.as_deref() == Some(RDF_REIFIES) => "rdf:reifies".to_string(),
-        SerTermKind::Iri => format!("<{}>", escape_iri(t.value.as_deref().unwrap_or(""))),
+        SerTermKind::Iri if t.value.as_deref() == Some(RDF_REIFIES) => out.push_str("rdf:reifies"),
+        SerTermKind::Iri => {
+            out.push('<');
+            out.push_str(&escape_iri(t.value.as_deref().unwrap_or("")));
+            out.push('>');
+        }
         SerTermKind::Bnode => match &t.value {
-            Some(v) => format!("_:{v}"),
-            None => format!("_:b{tid}"),
+            Some(v) => {
+                out.push_str("_:");
+                out.push_str(v);
+            }
+            None => {
+                let _ = write!(out, "_:b{tid}");
+            }
         },
         SerTermKind::Literal => {
-            let lit = format!("\"{}\"", escape_literal(t.value.as_deref().unwrap_or("")));
+            out.push('"');
+            out.push_str(&escape_literal(t.value.as_deref().unwrap_or("")));
+            out.push('"');
             if let Some(lang) = &t.lang {
-                match t.direction.as_deref().filter(|d| is_literal_direction(d)) {
-                    Some(direction) => format!("{lit}@{lang}--{direction}"),
-                    None => format!("{lit}@{lang}"),
+                out.push('@');
+                out.push_str(lang);
+                if let Some(direction) = t.direction.as_deref().filter(|d| is_literal_direction(d))
+                {
+                    out.push_str("--");
+                    out.push_str(direction);
                 }
             } else if let Some(dt) = t.datatype {
-                format!("{lit}^^{}", render_trig_term(g, dt))
-            } else {
-                lit
+                out.push_str("^^");
+                write_trig_term(g, dt, out);
             }
         }
         SerTermKind::Triple => match t.reifier.and_then(|rf| g.reifier(rf)) {
-            Some((s, p, o)) => format!(
-                "<<( {} {} {} )>>",
-                render_trig_term(g, s),
-                render_trig_term(g, p),
-                render_trig_term(g, o)
-            ),
-            None => render_term(g, tid),
+            Some((s, p, o)) => {
+                out.push_str("<<( ");
+                write_trig_term(g, s, out);
+                out.push(' ');
+                write_trig_term(g, p, out);
+                out.push(' ');
+                write_trig_term(g, o, out);
+                out.push_str(" )>>");
+            }
+            None => write_term(g, tid, out),
         },
     }
 }
 
-fn close_graph(out: &mut Vec<String>, open_graph: &mut Option<String>) {
+/// Close the open `GRAPH { … }` block, if one is open.
+fn close_graph(out: &mut String, open_graph: &mut Option<String>) {
     if open_graph.take().is_some() {
-        out.push("}".to_string());
+        out.push_str("}\n");
     }
 }
 
-fn push_statement(
-    out: &mut Vec<String>,
+/// Put `out` in the right block for `graph_name` and write the statement's indent.
+///
+/// The caller then appends the statement's own terms directly, rather than handing over
+/// a finished `String`. `open_graph` still holds the RENDERED graph name because that
+/// name is what decides whether the next statement continues this block or starts
+/// another — but it is now rebuilt only when the graph CHANGES, not once per statement.
+fn begin_statement(
+    out: &mut String,
     open_graph: &mut Option<String>,
     graph: &SerGraph,
     graph_name: Option<usize>,
-    statement: String,
 ) {
-    if let Some(gid) = graph_name {
-        let rendered_graph = render_trig_term(graph, gid);
-        if open_graph.as_deref() != Some(rendered_graph.as_str()) {
-            close_graph(out, open_graph);
-            out.push(format!("{rendered_graph} {{"));
-            *open_graph = Some(rendered_graph);
-        }
-        out.push(format!("  {statement}"));
-    } else {
+    let Some(gid) = graph_name else {
         close_graph(out, open_graph);
-        out.push(statement);
+        return;
+    };
+    let mut rendered = String::new();
+    write_trig_term(graph, gid, &mut rendered);
+    if open_graph.as_deref() != Some(rendered.as_str()) {
+        close_graph(out, open_graph);
+        out.push_str(&rendered);
+        out.push_str(" {\n");
+        *open_graph = Some(rendered);
     }
+    out.push_str("  ");
 }
 
 /// Serialise a [`SerGraph`] to TriG text.
 pub(crate) fn to_trig(g: &SerGraph) -> String {
+    let mut out = String::new();
+    write_trig(g, &mut out);
+    out
+}
+
+/// Append a [`SerGraph`]'s TriG text to `out`.
+///
+/// Statements are written in place. The previous shape collected every line into a
+/// `Vec<String>`, `join`ed it — copying the whole document — and then `format!`ed the
+/// result to add a trailing newline, copying it again. Writing each line followed by
+/// its own newline produces exactly those bytes: a join with `"\n"` plus one trailing
+/// `"\n"` is the same sequence as one `"\n"` after each line.
+pub(crate) fn write_trig(g: &SerGraph, out: &mut String) {
     if g.quads.is_empty() && g.reifiers.is_empty() && g.annotations.is_empty() {
-        return String::new();
+        return;
     }
 
-    let mut lines = vec![format!("@prefix rdf: <{RDF_NS}> ."), String::new()];
+    out.push_str("@prefix rdf: <");
+    out.push_str(RDF_NS);
+    out.push_str("> .\n\n");
     let mut open_graph: Option<String> = None;
 
     for &(s, p, o, gname) in &g.quads {
-        let triple = format!(
-            "{} {} {} .",
-            render_trig_term(g, s),
-            render_trig_term(g, p),
-            render_trig_term(g, o)
-        );
-        push_statement(&mut lines, &mut open_graph, g, gname, triple);
+        begin_statement(out, &mut open_graph, g, gname);
+        write_trig_term(g, s, out);
+        out.push(' ');
+        write_trig_term(g, p, out);
+        out.push(' ');
+        write_trig_term(g, o, out);
+        out.push_str(" .\n");
     }
 
     for &(rid, (s, p, o), gname) in &g.reifiers {
@@ -604,27 +650,28 @@ pub(crate) fn to_trig(g: &SerGraph) -> String {
         {
             continue;
         }
-        let quoted = format!(
-            "<<( {} {} {} )>>",
-            render_trig_term(g, s),
-            render_trig_term(g, p),
-            render_trig_term(g, o)
-        );
-        let statement = format!("{} rdf:reifies {quoted} .", render_trig_term(g, rid));
-        push_statement(&mut lines, &mut open_graph, g, gname, statement);
-    }
-    for &(r, p, v, gname) in &g.annotations {
-        let statement = format!(
-            "{} {} {} .",
-            render_trig_term(g, r),
-            render_trig_term(g, p),
-            render_trig_term(g, v)
-        );
-        push_statement(&mut lines, &mut open_graph, g, gname, statement);
+        begin_statement(out, &mut open_graph, g, gname);
+        write_trig_term(g, rid, out);
+        out.push_str(" rdf:reifies <<( ");
+        write_trig_term(g, s, out);
+        out.push(' ');
+        write_trig_term(g, p, out);
+        out.push(' ');
+        write_trig_term(g, o, out);
+        out.push_str(" )>> .\n");
     }
 
-    close_graph(&mut lines, &mut open_graph);
-    format!("{}\n", lines.join("\n"))
+    for &(r, p, v, gname) in &g.annotations {
+        begin_statement(out, &mut open_graph, g, gname);
+        write_trig_term(g, r, out);
+        out.push(' ');
+        write_trig_term(g, p, out);
+        out.push(' ');
+        write_trig_term(g, v, out);
+        out.push_str(" .\n");
+    }
+
+    close_graph(out, &mut open_graph);
 }
 
 #[cfg(test)]
