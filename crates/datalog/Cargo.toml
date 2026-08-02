@@ -42,3 +42,15 @@ hashbrown = { workspace = true }
 # never `par_sort`/`par_bridge`. Degrades to inline-sequential on
 # wasm32-unknown-unknown, so the wasm gate holds.
 rayon = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+# Semi-naive join latency along the three axes a join's cost actually has: the
+# fan-out of the intermediate relation, the WIDTH of one solution's binding frame
+# at a fixed solution count, and the round count of a recursive fixpoint. The
+# evaluator previously had no bench of its own — the nearest measured it through a
+# regime's rule table. Report-only.
+name = "seminaive"
+harness = false
