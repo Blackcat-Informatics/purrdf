@@ -1023,10 +1023,16 @@ enum XmlLiteralStep<'a, 'input> {
 ///
 /// The value of an `rdf:parseType="Literal"` property is OPAQUE: it is whatever XML the
 /// author put there, and it lowers to a single literal STRING — no part of it reaches the IR
-/// as structure, so nothing downstream bounds its depth and refusing a deep one would be a
-/// capability loss with nothing to justify it. Walking it recursively made the document's
-/// nesting the process's stack depth, which aborted on deep input. The work list below makes
-/// the depth a heap cost instead, so there is no bound to pick and no input to refuse.
+/// as structure, so nothing downstream bounds its depth. Walking it recursively made the
+/// document's nesting the process's stack depth, which aborted on deep input. The work list
+/// below makes the depth a heap cost instead, so THIS WALK adds no bound of its own.
+///
+/// It is not the only thing between the input and here, and the distinction matters to
+/// anyone reading this for the codec's real limit. [`guard_xml_nesting`] measures element
+/// nesting on the SOURCE TEXT, in front of the XML tokenizer that would otherwise overflow
+/// on its own, and text is all it has — it cannot tell an element that is literal content
+/// from one that is structure. So a deep literal IS refused, by that guard rather than by
+/// this function.
 ///
 /// Pre-order with an owed end tag reproduces the recursive walk's bytes exactly: children are
 /// pushed in reverse so they pop in document order, and the [`XmlLiteralStep::Close`] pushed
