@@ -1,0 +1,3 @@
+@prefix ex: <http://example.org/> .
+
+<urn:purrdf:rdfc:annotation> { ex:s ex:p ex:o . }

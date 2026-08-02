@@ -1,0 +1,2 @@
+<http://example.org/r> <http://example.org/reifies> <<( _:c14n1 <http://example.org/p> _:c14n0 )>> .
+_:c14n1 <http://example.org/q> _:c14n0 .

@@ -50,6 +50,7 @@ pub struct Rational {
 
 /// Why a lexical form is not an `owl:rational` literal.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RationalError {
     /// The lexical form is not `integer '/' positive-integer` (OWL 2 §4.1: no
     /// whitespace, and the denominator is an unsigned integer).

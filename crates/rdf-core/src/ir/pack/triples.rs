@@ -114,6 +114,7 @@ use crate::hash::FastMap;
 
 /// Why decoding a [`Triples`] byte buffer failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PackTriplesError {
     /// The buffer ended before all the bytes a header promised were present.
     Truncated {

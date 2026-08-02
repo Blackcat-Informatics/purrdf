@@ -1050,6 +1050,7 @@ pub fn resolve_fol(dag: &mut TermDag, program: &FolProgram, budget: &FolBudget) 
 /// Every variant is a NORMAL rejection of an invalid proof, never an engine
 /// fault — mirroring [`crate::proof::ProofError`]'s own doctrine.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FolProofError {
     /// The proof cites a clause index the program does not have.
     UnknownRule {

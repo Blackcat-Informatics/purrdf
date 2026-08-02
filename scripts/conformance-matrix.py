@@ -581,6 +581,12 @@ def native_suites() -> list[SuiteResult]:
             ["cargo", "test", "-p", "purrdf-rdf", "--locked", "--test", "rdfc_w3c"],
             detail="65 vectors (64 eval + 1 negative), sharded",
         ),
+        _suite_cargo(
+            "RDF 1.2 canonicalization profile", "purrdf-rdfc12 v1 (first-party)",
+            ["cargo", "test", "-p", "purrdf-rdf", "--locked",
+             "--test", "rdf12_canon_profile"],
+            detail="17 goldens + 9 refusals, frozen and content-addressed",
+        ),
         _suite_codec(),
         _suite_sparql(),
         _suite_entailment(),

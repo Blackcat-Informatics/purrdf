@@ -198,6 +198,7 @@ use crate::entails::refutation::{RefutationWarrant, verify_refutation};
 /// accompany a [`NotEntailed`](super::EntailmentOutcome::NotEntailed), because refuting needs
 /// a completeness claim and only the table has one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
 pub enum EntailmentMechanism {
     /// The regime's own rule table, run once over the premise, and the conclusion matched
     /// into (or proven absent from) the closure.
@@ -344,6 +345,7 @@ impl std::fmt::Display for EntailmentMechanism {
 ///
 /// See the [module docs](self) for why there are exactly six arms and what an arm owes.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum EntailmentWarrant {
     /// The conclusion MAPPED into the closure of the premise.
     Homomorphism(HomomorphismWarrant),

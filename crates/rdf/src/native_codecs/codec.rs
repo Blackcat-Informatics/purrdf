@@ -46,8 +46,28 @@ pub(super) trait RdfCodec {
         mode: LineParseMode,
     ) -> Result<Arc<RdfDataset>, RdfDiagnostic>;
 
+    /// Append this format's text for `graph` to `out`.
+    ///
+    /// The sink is the required half of the pair, and [`serialize`](Self::serialize) is
+    /// derived from it rather than the other way round. A codec that only knew how to
+    /// hand back a finished `String` forced every caller to accept one — including the
+    /// callers that were about to copy it somewhere else — so the copy was structural
+    /// rather than incidental.
+    ///
+    /// Implementors MUST append. `out` may already hold a document's worth of text, and
+    /// a codec that cleared it or assumed it began empty would corrupt a caller writing
+    /// more than one graph into one buffer.
+    fn serialize_into(&self, graph: &SerGraph, out: &mut String) -> Result<(), RdfDiagnostic>;
+
     /// Serialize a first-party [`SerGraph`] to this format's text.
-    fn serialize(&self, graph: &SerGraph) -> Result<String, RdfDiagnostic>;
+    ///
+    /// Provided in terms of [`serialize_into`](Self::serialize_into), so a codec gets it
+    /// for nothing and the two can never disagree about what the format emits.
+    fn serialize(&self, graph: &SerGraph) -> Result<String, RdfDiagnostic> {
+        let mut out = String::new();
+        self.serialize_into(graph, &mut out)?;
+        Ok(out)
+    }
 }
 
 /// The shared implementor for the four line/Turtle-family formats, keyed by the wrapped
@@ -70,12 +90,14 @@ impl RdfCodec for LineCodec {
         super::parse::dataset_from_ser_graph(&graph)
     }
 
-    fn serialize(&self, graph: &SerGraph) -> Result<String, RdfDiagnostic> {
-        Ok(match self.0 {
-            NativeRdfFormat::Turtle => ser_model::to_turtle(graph)?,
-            NativeRdfFormat::TriG => ser_model::to_trig(graph),
-            NativeRdfFormat::NTriples => ser_model::to_ntriples(graph)?,
-            NativeRdfFormat::NQuads => ser_model::to_nquads(graph),
+    fn serialize_into(&self, graph: &SerGraph, out: &mut String) -> Result<(), RdfDiagnostic> {
+        // The four text formats append directly, so `out` is the only buffer their
+        // bytes ever occupy — no per-line `String`, no join, no trailing-newline copy.
+        match self.0 {
+            NativeRdfFormat::Turtle => ser_model::write_turtle(graph, out)?,
+            NativeRdfFormat::TriG => ser_model::write_trig(graph, out),
+            NativeRdfFormat::NTriples => ser_model::write_ntriples(graph, out)?,
+            NativeRdfFormat::NQuads => ser_model::write_nquads(graph, out),
             NativeRdfFormat::RdfXml
             | NativeRdfFormat::TriX
             | NativeRdfFormat::HexTuples
@@ -83,7 +105,8 @@ impl RdfCodec for LineCodec {
             | NativeRdfFormat::YamlLd => {
                 unreachable!("LineCodec only wraps line/Turtle-family formats")
             }
-        })
+        }
+        Ok(())
     }
 }
 

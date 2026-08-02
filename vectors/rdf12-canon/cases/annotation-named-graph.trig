@@ -1,0 +1,3 @@
+@prefix ex: <http://example.org/> .
+
+ex:g { ex:s ex:p ex:o {| ex:certainty "0.9" |} . }

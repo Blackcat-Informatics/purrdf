@@ -147,6 +147,7 @@ impl Default for RecallOptions<'_> {
 
 /// Errors raised by the dependency-light example API.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum MemoryError {
     /// Reading or writing the package file failed.
     Io(std::io::Error),
@@ -187,7 +188,29 @@ impl fmt::Display for MemoryError {
     }
 }
 
-impl std::error::Error for MemoryError {}
+impl std::error::Error for MemoryError {
+    /// The wrapped cause, for the two variants that carry one.
+    ///
+    /// `Io` holds a [`std::io::Error`] and `Author` a [`WriterError`], and both were
+    /// unreachable through the standard chain — so a caller saw that writing memory
+    /// failed without seeing that the disk was full or which frame the writer refused.
+    /// `Author`'s chain now runs two links deep, through the writer to the codec.
+    ///
+    /// The rest return `None`: each is a validation finding about the claim being
+    /// recorded, complete as stated and wrapping nothing.
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(inner) => Some(inner),
+            Self::Author(inner) => Some(inner),
+            Self::EmptyClaim
+            | Self::InvalidConfidence
+            | Self::EmptyTool
+            | Self::EmptyInvocation
+            | Self::EmptyGeneratedEntity
+            | Self::UnknownClaim(_) => None,
+        }
+    }
+}
 
 impl From<std::io::Error> for MemoryError {
     fn from(err: std::io::Error) -> Self {

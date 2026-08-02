@@ -618,9 +618,12 @@ fn verify_source_ordinals(
 ) -> Result<u64, EmbeddingError> {
     let dataset = dataset_from_view(pack)
         .map_err(|error| EmbeddingError::InvalidSourcePack(error.to_string()))?;
-    let canonical = try_canonicalize(&dataset).map_err(|_| {
-        EmbeddingError::InvalidSourcePack("RDFC canonicalization budget exceeded".to_owned())
-    })?;
+    // The refusal REASON is carried through rather than replaced by a fixed string:
+    // canonicalization now refuses for two different reasons, and a pack rejected for
+    // carrying reserved vocabulary must not be reported as one that merely ran out of
+    // budget — the first is an attempt to forge an identity, the second is not.
+    let canonical = try_canonicalize(&dataset)
+        .map_err(|err| EmbeddingError::InvalidSourcePack(err.to_string()))?;
     let reifier_lookup = source_reifier_lookup(pack)?;
     let dataset_target = embedding.source().dataset_target_id();
     let mut checked = 0u64;

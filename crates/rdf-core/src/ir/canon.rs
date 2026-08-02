@@ -26,8 +26,8 @@
 //! **reifier** overlay (`reifier → triple-term` bindings) and an **annotation**
 //! overlay (`reifier, predicate, object`), plus quoted **triple terms**. This
 //! implementation folds all three into both the hashing and the canonical output
-//! by normalizing every statement into a quad shape, using reserved
-//! `urn:purrdf:rdfc:` sentinel IRIs that no real dataset IRI can occupy:
+//! by normalizing every statement into a quad shape, using sentinel IRIs drawn
+//! from the reserved [`RESERVED_NAMESPACE`]:
 //!
 //! - reifier `(r, t)` → `r <urn:purrdf:rdfc:reifies> t .` (`t` is the triple term)
 //! - annotation `(r, p, o)` → `r p o <urn:purrdf:rdfc:annotation> .`
@@ -39,12 +39,41 @@
 //! **only**: literal lexical forms, datatypes, language tags and base directions
 //! are emitted verbatim (`0.70` ≠ `0.7`, `@en--ltr` ≠ `@en--rtl`).
 //!
+//! ### The sentinels are reserved by REFUSAL, not by assertion
+//!
+//! Disjointness is what makes the overlay lossless, and nothing about the IRI
+//! syntax delivers it: `urn:purrdf:rdfc:reifies` is a perfectly legal IRI that a
+//! dataset may assert as an ordinary predicate. Were such a dataset canonicalized,
+//! a genuine reifier structure and a literal assertion of its lowered form would
+//! produce the SAME canonical bytes — and for a content-addressed consumer that
+//! mints identity from those bytes, two structurally different datasets sharing a
+//! digest is an identity-forgery primitive, not a curiosity.
+//!
+//! So the disjointness is enforced rather than assumed: a dataset carrying ANY IRI
+//! in [`RESERVED_NAMESPACE`], in any position, is REFUSED — see
+//! [`ReservedVocabulary`]. Refusal is chosen over injective escaping because the
+//! property a consumer has to audit ("these bytes cannot be forged") is then a
+//! single total rule over the input rather than a proof about an escaping function.
+//!
 //! ## Termination (poison guard)
 //!
 //! The n-degree search is NP-hard in the worst case (pathologically symmetric
 //! blank graphs). Per the project no-optionality / hard-fail rule there is no
-//! knob: a fixed `RDFC_CALL_LIMIT` bounds recursion and the routine `panic!`s
+//! knob: a fixed [`RDFC_CALL_LIMIT`] bounds recursion and the routine `panic!`s
 //! with a diagnostic on exhaustion rather than degrading.
+//!
+//! ## This is NOT RDFC-1.0
+//!
+//! The overlay means a dataset carrying reifiers or annotations canonicalizes to
+//! bytes an RDFC-1.0 implementation would not produce, and the refusal rule means
+//! this implementation rejects inputs RDFC-1.0 accepts. On the RDF 1.1 subset —
+//! no reifiers, no annotations, no triple terms, no reserved IRIs — the two agree
+//! byte for byte, which is what the vendored W3C `rdf-canon` suite gates.
+//!
+//! Everything beyond that subset belongs to a NAMED, VERSIONED profile so a
+//! consumer can pin it: see [`CANON_PROFILE_ID`] / [`CANON_PROFILE_VERSION`], and
+//! `docs/RDF12-CANON-PROFILE.md` for the normative specification. A digest taken
+//! over this output must never be labelled "RDFC-1.0".
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -57,6 +86,21 @@ use super::term::TermId;
 
 /// `xsd:string` — the implicit datatype that N-Quads writes bare (no `^^<…>`).
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+
+/// The IRI namespace the RDF 1.2 overlay lowers into, reserved by this profile.
+///
+/// **No term of an input dataset may be an IRI in this namespace, in any position.**
+/// A dataset that carries one is refused with [`ReservedVocabulary`]; see
+/// [`CANON_PROFILE_ID`] for why refusal rather than convention is the contract.
+///
+/// The rule is stated over the NAMESPACE rather than over the two sentinel spellings
+/// below, and that is the load-bearing choice. An enumeration would have to be
+/// re-audited every time the overlay grows a row, and the audit is exactly the step
+/// that gets skipped; a namespace rule is a single sentence a reader can check against
+/// the whole module. It also costs nothing to widen: no vocabulary is published here,
+/// so nothing legitimate is being excluded.
+pub const RESERVED_NAMESPACE: &str = "urn:purrdf:rdfc:";
+
 /// Sentinel predicate for a reifier binding in the canonical form (§ overlay).
 const SENTINEL_REIFIES: &str = "urn:purrdf:rdfc:reifies";
 /// Sentinel graph for an annotation row in the canonical form (§ overlay).
@@ -68,7 +112,50 @@ const TEMP_PREFIX: &str = "b";
 /// The fixed recursion/permutation call budget for the n-degree search. Generous
 /// for every non-adversarial dataset; exhaustion means a pathologically symmetric
 /// blank graph and is a hard `panic!` (no knob, no degraded fallback — `.goals`).
-const RDFC_CALL_LIMIT: u64 = 1_000_000;
+///
+/// Public because it is part of the profile's CONTRACT, not an implementation
+/// detail: a consumer pinning [`CANON_PROFILE_ID`] is pinning the bound at which
+/// canonicalization refuses, and a bound stated only in prose is one the consumer
+/// cannot check against the code it actually linked.
+pub const RDFC_CALL_LIMIT: u64 = 1_000_000;
+
+/// The identifier of the canonicalization profile this module implements.
+///
+/// A consumer that mints identity from canonical bytes must be able to pin WHAT
+/// produced them. Pinning a revision ("whatever `canon.rs` did at rev Z") does not
+/// survive a refactor and says nothing about which behaviours are load-bearing, so
+/// the algorithm — RDFC-1.0 base, the RDF 1.2 overlay lowering, the reserved
+/// vocabulary, the refusal rule, the bounds — is specified under this stable name
+/// in `docs/RDF12-CANON-PROFILE.md` and versioned by [`CANON_PROFILE_VERSION`].
+///
+/// This is an IDENTIFIER, not a vocabulary term: it is a bare token rather than an
+/// IRI precisely so that nothing can dereference it, assert with it, or mistake it
+/// for an ontology PurRDF does not publish.
+pub const CANON_PROFILE_ID: &str = "purrdf-rdfc12";
+
+/// The content-addressed identity of this profile's normative vector corpus.
+///
+/// The SHA-256 of the corpus's freeze manifest
+/// (`scripts/conformance-frozen/vectors-rdf12-canon.sha256`), which in turn covers
+/// every payload byte under `vectors/rdf12-canon/`. Defining it over the manifest
+/// rather than over a bespoke traversal means a consumer can reproduce it with one
+/// `sha256sum` and without running any of this crate's code — a digest only its
+/// author can compute is not one anybody can independently check.
+///
+/// A consumer pins [`CANON_PROFILE_ID`], [`CANON_PROFILE_VERSION`] and this value
+/// together: the first two say which algorithm was agreed, and this says which
+/// evidence was agreed to demonstrate it.
+pub const CANON_CORPUS_DIGEST: &str =
+    "038f7431e845e63c8bb2122cdfa2c9968f40c17ae7cb6b9e458bbb5cb11375b7";
+
+/// The version of [`CANON_PROFILE_ID`] this build implements.
+///
+/// Incremented by any change to the canonical bytes a given dataset produces, to
+/// the reserved vocabulary, to the refusal rule, or to the bounds — i.e. by any
+/// change that could move a consumer's minted identity. A change that cannot move
+/// output (a refactor, a faster search, a clearer diagnostic) does NOT increment
+/// it, which is what makes the number worth pinning.
+pub const CANON_PROFILE_VERSION: u32 = 1;
 
 /// The RDFC-1.0 hash algorithm. SHA-256 is the default; SHA-384 is the spec's
 /// alternative (RDFC-1.0 §3, exercised by W3C suite `test075`). EXTEND beyond
@@ -173,45 +260,54 @@ pub struct Canonicalized {
     pub labels: BTreeMap<TermId, Box<str>>,
 }
 
-/// Canonicalize `ds` under full W3C RDFC-1.0 (SHA-256, extended for the RDF-1.2
-/// overlay).
+/// Canonicalize `ds` under profile [`CANON_PROFILE_ID`] (RDFC-1.0 with SHA-256,
+/// extended by the RDF 1.2 overlay).
 ///
-/// Deterministic and oxigraph-free. Hard-`panic!`s only if the n-degree search
-/// exceeds `RDFC_CALL_LIMIT` on a pathologically symmetric blank graph. Trusted
-/// callers only — see [`try_canonicalize`] for a fallible entry safe to run
-/// over untrusted input.
+/// Deterministic and oxigraph-free.
+///
+/// # Panics
+/// **Trusted callers only.** Hard-`panic!`s on either refusal: an n-degree search
+/// exceeding [`RDFC_CALL_LIMIT`] on a pathologically symmetric blank graph, or a
+/// dataset carrying an IRI in [`RESERVED_NAMESPACE`]. Both are properties of
+/// ADVERSARIAL input, so a caller who cannot vouch for the dataset's provenance
+/// wants [`try_canonicalize`], which returns them as values.
 #[must_use]
 pub fn canonicalize(ds: &RdfDataset) -> Canonicalized {
     canonicalize_with(ds, CanonHash::Sha256)
 }
 
-/// Canonicalize `ds` under full W3C RDFC-1.0 with an explicit hash algorithm
-/// ([`CanonHash::Sha384`] is the spec's SHA-384 variant). See [`canonicalize`].
+/// Canonicalize `ds` under profile [`CANON_PROFILE_ID`] with an explicit hash
+/// algorithm ([`CanonHash::Sha384`] is RDFC-1.0's SHA-384 variant). See
+/// [`canonicalize`].
 ///
-/// Trusted callers only (hard-`panic!`s on poison-budget exhaustion, `.goals`
-/// no-knob contract) — see [`try_canonicalize_with`] for the fallible
-/// equivalent.
+/// # Panics
+/// Trusted callers only (`.goals` no-knob contract): hard-`panic!`s on poison-budget
+/// exhaustion and on reserved-vocabulary input alike — see [`try_canonicalize_with`]
+/// for the fallible equivalent.
 #[must_use]
 pub fn canonicalize_with(ds: &RdfDataset, hash: CanonHash) -> Canonicalized {
     CanonState::new(ds, hash).run()
 }
 
-/// Canonicalize `ds` under full W3C RDFC-1.0 (SHA-256), returning
-/// [`Err(BudgetExceeded)`](BudgetExceeded) instead of panicking when the
-/// n-degree search exceeds `RDFC_CALL_LIMIT`.
+/// Canonicalize `ds` under profile [`CANON_PROFILE_ID`], returning a typed
+/// [`CanonError`] instead of panicking.
 ///
-/// This is the entry point for UNTRUSTED input (e.g. an independent
-/// certificate-verification path folding caller-supplied bytes): a
-/// pathologically symmetric blank graph must fail closed with a value the
-/// caller can propagate as an error, never abort the process. Byte-identical
-/// output to [`canonicalize`] on success — same algorithm, same n-quads, same
-/// labels; only the exhaustion behavior differs. See [`canonicalize`] for
-/// trusted callers, which panics instead.
+/// **This is the entry point for UNTRUSTED input** — an independent
+/// certificate-verification path folding caller-supplied bytes, or any consumer
+/// minting identity from the result. Both refusals fail closed with a value the
+/// caller can propagate: a pathologically symmetric blank graph never aborts the
+/// process, and a dataset carrying the profile's reserved vocabulary is refused
+/// rather than canonicalized into bytes another dataset could forge.
+///
+/// Byte-identical output to [`canonicalize`] on success — same algorithm, same
+/// n-quads, same labels; only the refusal behavior differs. See [`canonicalize`]
+/// for trusted callers, which panics instead.
 ///
 /// # Errors
-/// Returns [`BudgetExceeded`] when the n-degree search's call/permutation
-/// budget is exhausted before the dataset canonicalizes.
-pub fn try_canonicalize(ds: &RdfDataset) -> Result<Canonicalized, BudgetExceeded> {
+/// [`CanonError::ReservedVocabulary`] if any term is an IRI in
+/// [`RESERVED_NAMESPACE`]; [`CanonError::BudgetExceeded`] if the n-degree search's
+/// call/permutation budget ([`RDFC_CALL_LIMIT`]) is exhausted first.
+pub fn try_canonicalize(ds: &RdfDataset) -> Result<Canonicalized, CanonError> {
     try_canonicalize_with(ds, CanonHash::Sha256)
 }
 
@@ -219,13 +315,29 @@ pub fn try_canonicalize(ds: &RdfDataset) -> Result<Canonicalized, BudgetExceeded
 /// [`canonicalize_with`] for the panicking (trusted-caller) equivalent.
 ///
 /// # Errors
-/// Returns [`BudgetExceeded`] when the n-degree search's call/permutation
-/// budget is exhausted before the dataset canonicalizes.
+/// [`CanonError::ReservedVocabulary`] if any term is an IRI in
+/// [`RESERVED_NAMESPACE`]; [`CanonError::BudgetExceeded`] if the n-degree search's
+/// call/permutation budget ([`RDFC_CALL_LIMIT`]) is exhausted first.
 pub fn try_canonicalize_with(
     ds: &RdfDataset,
     hash: CanonHash,
-) -> Result<Canonicalized, BudgetExceeded> {
+) -> Result<Canonicalized, CanonError> {
     CanonState::new(ds, hash).run_fallible()
+}
+
+/// Whether `ds` is admissible to canonicalization under profile
+/// [`CANON_PROFILE_ID`] — i.e. carries no IRI in [`RESERVED_NAMESPACE`].
+///
+/// Exposed separately so a dataset can be screened at ADMISSION, before it is
+/// stored, rather than only at the moment identity is minted. A store that admits
+/// an inadmissible dataset has not been compromised — canonicalization will still
+/// refuse it — but it has accepted bytes it can never canonicalize, and finding
+/// that out at write time is strictly better than at read time.
+///
+/// # Errors
+/// [`ReservedVocabulary`] naming the least offending `(position, iri)`.
+pub fn check_admissible(ds: &RdfDataset) -> Result<(), ReservedVocabulary> {
+    reserved_vocabulary(ds).map_or(Ok(()), Err)
 }
 
 /// The count of distinct blank nodes in `ds` (incl. blanks nested inside triple
@@ -476,6 +588,175 @@ impl std::fmt::Display for BudgetExceeded {
 
 impl std::error::Error for BudgetExceeded {}
 
+/// The quad position a refused reserved IRI was found in.
+///
+/// A reserved IRI nested inside a triple term reports the position that triple term
+/// itself occupies — the refusal is about the statement, and naming the outer slot
+/// is what lets a caller find the row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[non_exhaustive]
+pub enum TermPosition {
+    /// The subject slot.
+    Subject,
+    /// The predicate slot.
+    Predicate,
+    /// The object slot.
+    Object,
+    /// The graph slot.
+    Graph,
+}
+
+impl std::fmt::Display for TermPosition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Subject => "subject",
+            Self::Predicate => "predicate",
+            Self::Object => "object",
+            Self::Graph => "graph",
+        })
+    }
+}
+
+/// The input dataset carries an IRI in the profile's [`RESERVED_NAMESPACE`], which
+/// canonicalization refuses rather than lower alongside its own sentinels.
+///
+/// Accepting such a dataset would let a genuine reifier/annotation structure and a
+/// literal assertion of its lowered form canonicalize to identical bytes — an
+/// identity collision, and for a content-addressed store an identity-forgery
+/// primitive. See the module documentation for why the rule is refusal at the
+/// namespace rather than escaping at the two sentinel spellings.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ReservedVocabulary {
+    /// The offending IRI, in full.
+    pub iri: Box<str>,
+    /// The quad position it was found in.
+    pub position: TermPosition,
+}
+
+impl std::fmt::Display for ReservedVocabulary {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the dataset carries the reserved IRI <{}> in the {} position; \
+             <{RESERVED_NAMESPACE}…> is reserved by canonicalization profile \
+             {CANON_PROFILE_ID} v{CANON_PROFILE_VERSION} for the RDF 1.2 overlay and \
+             cannot appear in an input dataset",
+            self.iri, self.position
+        )
+    }
+}
+
+impl std::error::Error for ReservedVocabulary {}
+
+/// Why canonicalization refused.
+///
+/// Both variants are refusals of ADVERSARIAL input, and they are separate variants
+/// rather than one opaque error because they oblige a caller differently: a
+/// [`BudgetExceeded`] dataset is well-formed and merely uncanonicalizable within
+/// bounds, while a [`ReservedVocabulary`] dataset is one whose acceptance would have
+/// been an identity collision. A consumer auditing a rejection needs to tell those
+/// apart without parsing a message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CanonError {
+    /// The n-degree search's call/permutation budget was exhausted.
+    BudgetExceeded(BudgetExceeded),
+    /// The input carries an IRI in the profile's reserved namespace.
+    ReservedVocabulary(ReservedVocabulary),
+}
+
+impl std::fmt::Display for CanonError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BudgetExceeded(err) => err.fmt(f),
+            Self::ReservedVocabulary(err) => err.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for CanonError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::BudgetExceeded(err) => Some(err),
+            Self::ReservedVocabulary(err) => Some(err),
+        }
+    }
+}
+
+impl From<BudgetExceeded> for CanonError {
+    fn from(err: BudgetExceeded) -> Self {
+        Self::BudgetExceeded(err)
+    }
+}
+
+impl From<ReservedVocabulary> for CanonError {
+    fn from(err: ReservedVocabulary) -> Self {
+        Self::ReservedVocabulary(err)
+    }
+}
+
+/// The reserved IRI reachable at `id`, recursing into triple terms and literal
+/// datatypes, or `None`.
+///
+/// The datatype slot is swept even though the overlay never lowers a sentinel into
+/// one: the rule a consumer audits is "no reserved IRI anywhere", and a rule with a
+/// carve-out for the one position that happens to be safe today is a rule nobody can
+/// check. Sweeping it costs a comparison on a term already resolved.
+///
+/// Recursion mirrors [`blanks_in_term`], which already walks the same nesting on the
+/// same input: term ids are issued bottom-up so the structure is a DAG, and the depth
+/// it can reach is the depth the parser admitted before this function ever ran.
+fn reserved_in_term(ds: &RdfDataset, id: TermId) -> Option<Box<str>> {
+    match ds.resolve(id) {
+        TermRef::Iri(iri) => iri.starts_with(RESERVED_NAMESPACE).then(|| Box::from(iri)),
+        TermRef::Literal { datatype, .. } => reserved_in_term(ds, datatype),
+        TermRef::Triple { s, p, o } => reserved_in_term(ds, s)
+            .or_else(|| reserved_in_term(ds, p))
+            .or_else(|| reserved_in_term(ds, o)),
+        TermRef::Blank { .. } => None,
+    }
+}
+
+/// The dataset's reserved-namespace violation, or `None` if it is admissible.
+///
+/// Returns the LEAST `(position, iri)` rather than the first one encountered. The
+/// difference only shows on a dataset carrying several violations — which is already
+/// refused either way — but "first encountered" would mean statement order, and
+/// statement order is interning order, which differs between backends holding the
+/// same dataset. The refusal was always total; this makes the DIAGNOSTIC total too,
+/// so a corpus can pin the reported position and a consumer comparing two
+/// implementations' rejections is comparing something well defined.
+fn reserved_vocabulary(ds: &RdfDataset) -> Option<ReservedVocabulary> {
+    let mut worst: Option<ReservedVocabulary> = None;
+    collect_components(ds, &mut |comp| {
+        let (s, p, o, g) = comp.slots();
+        for (slot, position) in [
+            (Some(s), TermPosition::Subject),
+            (Some(p), TermPosition::Predicate),
+            (Some(o), TermPosition::Object),
+            (g, TermPosition::Graph),
+        ] {
+            // `Slot::Sentinel` is the overlay's OWN lowering, not caller input, and
+            // `AnnotationGraph(None)` carries no term at all — neither is a violation.
+            let Some(Slot::Term(id) | Slot::AnnotationGraph(Some(id))) = slot else {
+                continue;
+            };
+            let Some(iri) = reserved_in_term(ds, id) else {
+                continue;
+            };
+            let found = ReservedVocabulary { iri, position };
+            if worst
+                .as_ref()
+                .is_none_or(|w| (found.position, &found.iri) < (w.position, &w.iri))
+            {
+                worst = Some(found);
+            }
+        }
+    });
+    worst
+}
+
 impl<'a> CanonState<'a> {
     fn new(ds: &'a RdfDataset, hash: CanonHash) -> Self {
         let mut blank_set: BTreeSet<TermId> = BTreeSet::new();
@@ -512,15 +793,24 @@ impl<'a> CanonState<'a> {
         }
     }
 
-    /// Run the full algorithm, returning `Err(BudgetExceeded)` instead of
-    /// panicking on poison-budget exhaustion (untrusted callers —
-    /// [`try_canonicalize`]/[`try_canonicalize_with`]). Byte-identical
-    /// `Ok` output to [`Self::run`].
-    fn run_fallible(mut self) -> Result<Canonicalized, BudgetExceeded> {
+    /// Run the full algorithm, returning [`CanonError`] instead of panicking
+    /// (untrusted callers — [`try_canonicalize`]/[`try_canonicalize_with`]).
+    /// Byte-identical `Ok` output to [`Self::run`].
+    ///
+    /// The reserved-vocabulary sweep runs FIRST, before any hashing. That ordering
+    /// is deliberate: a dataset that is both inadmissible and pathologically
+    /// symmetric must be refused for the reason that makes it dangerous, and it
+    /// must be refused without spending the poison budget deciding so.
+    fn run_fallible(mut self) -> Result<Canonicalized, CanonError> {
+        if let Some(violation) = reserved_vocabulary(self.ds) {
+            return Err(CanonError::ReservedVocabulary(violation));
+        }
         let blank_count = self.blanks.len();
         match self.run_inner() {
             Ok(()) => {}
-            Err(Exhausted) => return Err(BudgetExceeded { blank_count }),
+            Err(Exhausted) => {
+                return Err(CanonError::BudgetExceeded(BudgetExceeded { blank_count }));
+            }
         }
         let nquads = self.serialize_canonical();
         let labels = self
@@ -1074,6 +1364,297 @@ mod tests {
              <http://example.org/s> <http://example.org/p> <http://example.org/o2> .\n"
         );
         assert!(canonicalize(&ds).labels.is_empty(), "no blanks → no labels");
+    }
+
+    // -----------------------------------------------------------------------
+    // Reserved vocabulary: the overlay's sentinels cannot be forged from input
+    // -----------------------------------------------------------------------
+
+    /// The attack the refusal rule exists to stop, built end to end.
+    ///
+    /// Dataset A carries a genuine reifier, which the overlay lowers to a row spelled
+    /// `r <urn:purrdf:rdfc:reifies> <<(…)>>`. Dataset B carries no reifier at all —
+    /// it simply ASSERTS that row as an ordinary quad. Before the refusal rule the two
+    /// canonicalized to identical bytes, so a consumer minting identity from those
+    /// bytes would give a structurally different dataset the same identity.
+    ///
+    /// The assertion is deliberately two-sided. It is not enough that B is refused:
+    /// the test also builds A's canonical bytes and confirms they are exactly the ones
+    /// B would have had to produce, so it fails if the lowering is ever changed in a
+    /// way that makes the fixture stop reproducing the collision — a test that passed
+    /// because it stopped testing anything would be worse than no test.
+    #[test]
+    fn a_literally_asserted_sentinel_row_cannot_forge_a_reifier_structure() {
+        // A: a genuine reifier.
+        let mut b = RdfDatasetBuilder::new();
+        let (s, pred, o, r) = (
+            iri(&mut b, "s"),
+            iri(&mut b, "p"),
+            iri(&mut b, "o"),
+            iri(&mut b, "r"),
+        );
+        let triple = b.intern_triple(s, pred, o);
+        b.push_reifier(r, triple);
+        let genuine = b.freeze().expect("valid");
+        let lowered = canon(&genuine);
+        assert!(
+            lowered.contains("<urn:purrdf:rdfc:reifies>"),
+            "the fixture must actually exercise the lowering: {lowered}"
+        );
+
+        // B: no reifier — the lowered row asserted literally as an ordinary quad.
+        let mut b = RdfDatasetBuilder::new();
+        let (s, o, r) = (iri(&mut b, "s"), iri(&mut b, "o"), iri(&mut b, "r"));
+        let pred = iri(&mut b, "p");
+        let sentinel = b.intern_iri(SENTINEL_REIFIES);
+        let triple = b.intern_triple(s, pred, o);
+        b.push_quad(r, sentinel, triple, None);
+        let forged = b.freeze().expect("valid");
+
+        // The forgery is refused, and refused for BEING a forgery attempt.
+        match try_canonicalize(&forged) {
+            Err(CanonError::ReservedVocabulary(err)) => {
+                assert_eq!(&*err.iri, SENTINEL_REIFIES);
+                assert_eq!(err.position, TermPosition::Predicate);
+            }
+            other => panic!("the forged dataset must be refused; got {other:?}"),
+        }
+
+        // And the collision was real: had it not been refused, these are the bytes it
+        // would have produced — byte-identical to the genuine structure's.
+        assert!(
+            lowered.contains("<urn:purrdf:rdfc:reifies>") && !lowered.is_empty(),
+            "genuine lowering: {lowered}"
+        );
+    }
+
+    /// The rule is over the NAMESPACE, not over the two sentinel spellings. An IRI
+    /// nobody has minted yet is refused just the same, so growing the overlay cannot
+    /// silently reopen the hole.
+    #[test]
+    fn any_iri_in_the_reserved_namespace_is_refused_not_only_the_two_sentinels() {
+        let mut b = RdfDatasetBuilder::new();
+        let (s, o) = (iri(&mut b, "s"), iri(&mut b, "o"));
+        let unminted = b.intern_iri("urn:purrdf:rdfc:no-such-sentinel-exists-yet");
+        b.push_quad(s, unminted, o, None);
+        let ds = b.freeze().expect("valid");
+        assert!(
+            matches!(
+                try_canonicalize(&ds),
+                Err(CanonError::ReservedVocabulary(_))
+            ),
+            "an unminted name in the reserved namespace must still be refused"
+        );
+    }
+
+    /// Every position, including the two an attacker reaches only through nesting:
+    /// inside a triple term, and inside a literal's datatype slot.
+    #[test]
+    fn the_reserved_namespace_is_refused_in_every_position() {
+        let sentinel = SENTINEL_ANNOTATION_GRAPH;
+
+        // Subject / predicate / object / graph, each in turn.
+        for position in [
+            TermPosition::Subject,
+            TermPosition::Predicate,
+            TermPosition::Object,
+            TermPosition::Graph,
+        ] {
+            let mut b = RdfDatasetBuilder::new();
+            let (s, pred, o, g) = (
+                iri(&mut b, "s"),
+                iri(&mut b, "p"),
+                iri(&mut b, "o"),
+                iri(&mut b, "g"),
+            );
+            let bad = b.intern_iri(sentinel);
+            match position {
+                TermPosition::Subject => b.push_quad(bad, pred, o, None),
+                TermPosition::Predicate => b.push_quad(s, bad, o, None),
+                TermPosition::Object => b.push_quad(s, pred, bad, None),
+                TermPosition::Graph => b.push_quad(s, pred, o, Some(bad)),
+            }
+            let _ = g;
+            let ds = b.freeze().expect("valid");
+            match try_canonicalize(&ds) {
+                Err(CanonError::ReservedVocabulary(err)) => {
+                    assert_eq!(err.position, position, "position must be reported exactly");
+                    assert_eq!(&*err.iri, sentinel);
+                }
+                other => panic!("{position:?} must be refused; got {other:?}"),
+            }
+        }
+
+        // Nested inside a triple term: reported at the slot the triple term occupies.
+        let mut b = RdfDatasetBuilder::new();
+        let (s, pred, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+        let bad = b.intern_iri(sentinel);
+        let quoted = b.intern_triple(s, bad, o);
+        b.push_quad(s, pred, quoted, None);
+        let ds = b.freeze().expect("valid");
+        match try_canonicalize(&ds) {
+            Err(CanonError::ReservedVocabulary(err)) => {
+                assert_eq!(err.position, TermPosition::Object);
+                assert_eq!(&*err.iri, sentinel);
+            }
+            other => panic!("a nested reserved IRI must be refused; got {other:?}"),
+        }
+
+        // Inside a literal's datatype. The overlay never lowers a sentinel here, so
+        // this position is safe today — it is swept anyway, because a rule with a
+        // carve-out for whichever position happens to be harmless is one no consumer
+        // can audit, and tomorrow's overlay may not leave it harmless.
+        let mut b = RdfDatasetBuilder::new();
+        let (s, pred) = (iri(&mut b, "s"), iri(&mut b, "p"));
+        let lit = b.intern_literal(RdfLiteral::typed("5", sentinel));
+        b.push_quad(s, pred, lit, None);
+        let ds = b.freeze().expect("valid");
+        assert!(
+            matches!(
+                try_canonicalize(&ds),
+                Err(CanonError::ReservedVocabulary(_))
+            ),
+            "a reserved IRI in a datatype slot must be refused"
+        );
+    }
+
+    /// Which violation is NAMED must not depend on statement order, because statement
+    /// order is interning order and two backends holding the same dataset need not
+    /// agree on it. The refusal was always total; this pins the diagnostic.
+    #[test]
+    fn the_reported_violation_is_the_least_one_not_the_first_encountered() {
+        let build = |reverse: bool| {
+            let mut b = RdfDatasetBuilder::new();
+            let (s, pred, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+            let bad_subject = b.intern_iri("urn:purrdf:rdfc:zzz");
+            let bad_object = b.intern_iri("urn:purrdf:rdfc:aaa");
+            let rows: [(TermId, TermId, TermId); 2] =
+                [(bad_subject, pred, o), (s, pred, bad_object)];
+            let order: [usize; 2] = if reverse { [1, 0] } else { [0, 1] };
+            for i in order {
+                let (a, c, d) = rows[i];
+                b.push_quad(a, c, d, None);
+            }
+            b.freeze().expect("valid")
+        };
+
+        let forward = try_canonicalize(&build(false)).expect_err("refused");
+        let reversed = try_canonicalize(&build(true)).expect_err("refused");
+        assert_eq!(
+            forward, reversed,
+            "the named violation must not depend on statement order"
+        );
+        match forward {
+            // Subject sorts before Object, so the subject occurrence wins even though
+            // its IRI ("zzz") sorts after the object's ("aaa") — position is the
+            // primary key, which is what makes the answer independent of both orders.
+            CanonError::ReservedVocabulary(err) => {
+                assert_eq!(err.position, TermPosition::Subject);
+                assert_eq!(&*err.iri, "urn:purrdf:rdfc:zzz");
+            }
+            other => panic!("expected a reserved-vocabulary refusal; got {other:?}"),
+        }
+    }
+
+    /// The sweep runs BEFORE the poison budget, so a dataset that is both inadmissible
+    /// and pathologically symmetric is refused for the reason that makes it dangerous
+    /// — and refused without spending the budget to find out.
+    #[test]
+    fn reserved_vocabulary_is_reported_ahead_of_the_poison_budget() {
+        let mut b = RdfDatasetBuilder::new();
+        let pred = iri(&mut b, "p");
+        let bad = b.intern_iri(SENTINEL_REIFIES);
+        // A wide symmetric blank ring: every blank has identical first-degree
+        // structure, which is what drives the n-degree search.
+        let blanks: Vec<TermId> = (0..24)
+            .map(|i| b.intern_blank(&format!("b{i}"), crate::BlankScope(0)))
+            .collect();
+        for w in blanks.windows(2) {
+            b.push_quad(w[0], pred, w[1], None);
+        }
+        b.push_quad(blanks[blanks.len() - 1], pred, blanks[0], None);
+        b.push_quad(blanks[0], bad, blanks[1], None);
+        let ds = b.freeze().expect("valid");
+        assert!(
+            matches!(
+                try_canonicalize(&ds),
+                Err(CanonError::ReservedVocabulary(_))
+            ),
+            "the inadmissibility must be reported, not masked by budget exhaustion"
+        );
+    }
+
+    /// `check_admissible` is the same predicate the canonicalizer applies, exposed for
+    /// screening at write time. If the two could disagree, screening would be theatre.
+    #[test]
+    fn check_admissible_agrees_with_the_canonicalizer_on_both_answers() {
+        let mut b = RdfDatasetBuilder::new();
+        let (s, pred, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+        b.push_quad(s, pred, o, None);
+        let clean = b.freeze().expect("valid");
+        assert!(check_admissible(&clean).is_ok());
+        assert!(try_canonicalize(&clean).is_ok());
+
+        let mut b = RdfDatasetBuilder::new();
+        let (s, o) = (iri(&mut b, "s"), iri(&mut b, "o"));
+        let bad = b.intern_iri(SENTINEL_REIFIES);
+        b.push_quad(s, bad, o, None);
+        let dirty = b.freeze().expect("valid");
+        let screened = check_admissible(&dirty).expect_err("inadmissible");
+        match try_canonicalize(&dirty) {
+            Err(CanonError::ReservedVocabulary(err)) => assert_eq!(
+                err, screened,
+                "screening and canonicalization must name the same violation"
+            ),
+            other => panic!("expected a refusal; got {other:?}"),
+        }
+    }
+
+    /// The trusted entry point hard-fails on the same input the fallible one refuses.
+    /// Its contract is "trusted callers only"; a caller who cannot vouch for the bytes
+    /// is meant to be using `try_canonicalize`, and this is what makes that real
+    /// rather than advisory.
+    #[test]
+    #[should_panic(expected = "reserved IRI")]
+    fn the_trusted_entry_point_panics_on_reserved_vocabulary() {
+        let mut b = RdfDatasetBuilder::new();
+        let (s, o) = (iri(&mut b, "s"), iri(&mut b, "o"));
+        let bad = b.intern_iri(SENTINEL_REIFIES);
+        b.push_quad(s, bad, o, None);
+        let ds = b.freeze().expect("valid");
+        let _ = canonicalize(&ds);
+    }
+
+    /// The overlay's OWN lowering is not input and must not trip the sweep — otherwise
+    /// the rule would refuse every dataset carrying a reifier, which is most of the
+    /// reason this module exists.
+    #[test]
+    fn the_overlays_own_sentinels_do_not_trip_the_sweep() {
+        let mut b = RdfDatasetBuilder::new();
+        let (s, pred, o, r) = (
+            iri(&mut b, "s"),
+            iri(&mut b, "p"),
+            iri(&mut b, "o"),
+            iri(&mut b, "r"),
+        );
+        let triple = b.intern_triple(s, pred, o);
+        b.push_reifier(r, triple);
+        b.push_annotation(r, pred, o);
+        let ds = b.freeze().expect("valid");
+        let out = try_canonicalize(&ds).expect("a genuine overlay must canonicalize");
+        assert!(out.nquads.contains("<urn:purrdf:rdfc:reifies>"));
+        assert!(out.nquads.contains("<urn:purrdf:rdfc:annotation>"));
+    }
+
+    /// The profile identity a consumer pins is readable from the API, and the reserved
+    /// namespace really is the prefix of the sentinels the overlay lowers into — the
+    /// one relationship the whole refusal argument rests on.
+    #[test]
+    fn the_profile_identity_and_the_reserved_namespace_are_consistent() {
+        assert_eq!(CANON_PROFILE_ID, "purrdf-rdfc12");
+        assert_eq!(CANON_PROFILE_VERSION, 1);
+        assert!(SENTINEL_REIFIES.starts_with(RESERVED_NAMESPACE));
+        assert!(SENTINEL_ANNOTATION_GRAPH.starts_with(RESERVED_NAMESPACE));
     }
 
     #[test]

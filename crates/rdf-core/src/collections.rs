@@ -52,6 +52,7 @@ pub(crate) fn container_member_index(iri: &str) -> Option<u64> {
 /// also a validator: cycles terminate gracefully, but a structurally broken cons
 /// cell is a hard error carrying which invariant it violated.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RdfListError {
     /// A cons cell (a term on the `rdf:rest` chain) carries no `rdf:first` object.
     MissingFirst,

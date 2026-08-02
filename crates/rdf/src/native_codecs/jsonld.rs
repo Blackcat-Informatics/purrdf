@@ -229,8 +229,15 @@ impl RdfCodec for JsonLdCodec {
         parse_jsonld(text.as_bytes())
     }
 
-    fn serialize(&self, graph: &SerGraph) -> Result<String, RdfDiagnostic> {
-        serialize_ser_graph(graph)
+    fn serialize_into(&self, graph: &SerGraph, out: &mut String) -> Result<(), RdfDiagnostic> {
+        // Built whole, then appended. Unlike the four text formats, this one's document
+        // is assembled as a TREE — XML nesting, or a `serde_json` value — so its writer
+        // cannot emit a prefix before it knows what follows, and appending would mean
+        // rebuilding the construction itself rather than redirecting its output. The
+        // sink still earns its place here: the caller's buffer is the only one that
+        // outlives the call, and this is the seam a streaming writer replaces.
+        out.push_str(&serialize_ser_graph(graph)?);
+        Ok(())
     }
 }
 
@@ -253,8 +260,15 @@ impl RdfCodec for YamlLdCodec {
         parse_jsonld(json.as_bytes())
     }
 
-    fn serialize(&self, graph: &SerGraph) -> Result<String, RdfDiagnostic> {
-        serialize_ser_graph_to_yamlld(graph, None)
+    fn serialize_into(&self, graph: &SerGraph, out: &mut String) -> Result<(), RdfDiagnostic> {
+        // Built whole, then appended. Unlike the four text formats, this one's document
+        // is assembled as a TREE — XML nesting, or a `serde_json` value — so its writer
+        // cannot emit a prefix before it knows what follows, and appending would mean
+        // rebuilding the construction itself rather than redirecting its output. The
+        // sink still earns its place here: the caller's buffer is the only one that
+        // outlives the call, and this is the seam a streaming writer replaces.
+        out.push_str(&serialize_ser_graph_to_yamlld(graph, None)?);
+        Ok(())
     }
 }
 

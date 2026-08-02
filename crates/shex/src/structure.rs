@@ -27,6 +27,7 @@ use crate::ast::{Schema, Shape, ShapeExpr, TripleExpr};
 
 /// A structural well-formedness violation (spec §5.7).
 #[derive(Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum StructureError {
     /// A `@label` reference with no matching shape declaration.
     DanglingShapeRef(String),

@@ -1345,8 +1345,10 @@ version = "0.11.0"
 dependencies = [
  "ahash",
  "blake3",
+ "criterion",
  "hashbrown 0.15.5",
  "rayon",
+ "smallvec",
 ]
 
 [[package]]

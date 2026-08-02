@@ -82,7 +82,7 @@
 
 use sha2::{Digest, Sha256};
 
-use crate::{CanonHash, RdfDataset, RdfStoreCapabilities, try_canonicalize_with};
+use crate::{CanonError, CanonHash, RdfDataset, RdfStoreCapabilities, try_canonicalize_with};
 
 use super::dict::{PackDict, PackDictError};
 use super::side::{self, PackSideError, SideTables, SideTablesRef};
@@ -189,7 +189,8 @@ fn flags_to_capabilities(flags: u32) -> RdfStoreCapabilities {
 // ---------------------------------------------------------------------------
 
 /// Why building or opening a pack container failed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PackError {
     /// The buffer's leading 8 bytes are not `MAGIC`.
     BadMagic,
@@ -211,10 +212,14 @@ pub enum PackError {
         /// The mismatched section's directory tag.
         kind: u32,
     },
-    /// [`crate::try_canonicalize_with`] exceeded its call budget computing
-    /// the dataset's RDFC-1.0 digest (a pathologically symmetric blank
-    /// graph — see [`crate::BudgetExceeded`]).
-    CanonBudgetExceeded,
+    /// [`crate::try_canonicalize_with`] REFUSED to compute the dataset's canonical
+    /// digest. The typed [`CanonError`] says which refusal it was, and the
+    /// distinction matters to whoever is holding the pack: a
+    /// [`CanonError::BudgetExceeded`] dataset is well-formed but pathologically
+    /// symmetric, while a [`CanonError::ReservedVocabulary`] one carries IRIs whose
+    /// acceptance would have let a different dataset forge this pack's identity.
+    /// Collapsing them into one variant would have made the second unreportable.
+    CanonRefused(CanonError),
     /// [`super::certify::verify_pack`]'s independent RDFC-1.0 recompute over the
     /// pack's own decoded contents disagreed with the header's stored
     /// `rdfc_digest` field. Unlike [`Self::SectionDigestMismatch`], this is NOT a
@@ -251,10 +256,9 @@ impl std::fmt::Display for PackError {
                 f,
                 "pack-container: section {kind} failed its SHA-256 integrity check"
             ),
-            Self::CanonBudgetExceeded => write!(
-                f,
-                "pack-container: RDFC-1.0 canonicalization exceeded its call budget"
-            ),
+            Self::CanonRefused(err) => {
+                write!(f, "pack-container: canonicalization refused: {err}")
+            }
             Self::RdfcDigestMismatch { expected, computed } => {
                 write!(
                     f,
@@ -270,7 +274,33 @@ impl std::fmt::Display for PackError {
     }
 }
 
-impl std::error::Error for PackError {}
+impl std::error::Error for PackError {
+    /// The wrapped section error, for the three variants that delegate to one.
+    ///
+    /// A pack is read section by section, and `Dict`, `Triples` and `Side` exist to say
+    /// WHICH section refused while the section's own error says why. Without this the
+    /// two halves were split: the standard chain reported the section and stopped, and
+    /// the reason — which byte, which bound, which digest — was reachable only by
+    /// matching this enum.
+    ///
+    /// The rest return `None` because they are container-level facts with nothing
+    /// beneath them: a bad magic, a truncation, an unsupported version, a digest that
+    /// did not match, or a canonicalization budget spent are each complete as stated.
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Dict(inner) => Some(inner),
+            Self::Triples(inner) => Some(inner),
+            Self::Side(inner) => Some(inner),
+            Self::BadMagic
+            | Self::UnsupportedVersion(_)
+            | Self::Truncated
+            | Self::Malformed(_)
+            | Self::SectionDigestMismatch { .. }
+            | Self::RdfcDigestMismatch { .. } => None,
+            Self::CanonRefused(inner) => Some(inner),
+        }
+    }
+}
 
 impl From<PackDictError> for PackError {
     fn from(e: PackDictError) -> Self {
@@ -371,8 +401,9 @@ impl PackBuilder {
     ///
     /// # Errors
     ///
-    /// [`PackError::CanonBudgetExceeded`] if RDFC-1.0 canonicalization's call
-    /// budget is exhausted (a pathologically symmetric blank graph). The
+    /// [`PackError::CanonRefused`] if canonicalization refuses the dataset — its
+    /// call budget exhausted by a pathologically symmetric blank graph, or an IRI
+    /// found in the canonicalization profile's reserved namespace. The
     /// dict/triples/side encode steps are infallible; the ONLY way this
     /// method otherwise fails is if one of THIS module's own just-written
     /// sections fails to re-open — a broken-invariant bug in this module or
@@ -392,8 +423,8 @@ impl PackBuilder {
         let base_named_graphs = triples_ref.named_graph_ids().next().is_some();
         let capabilities = side::capabilities(&dict, &side_ref, base_named_graphs);
 
-        let canonicalized = try_canonicalize_with(dataset, CanonHash::Sha256)
-            .map_err(|_| PackError::CanonBudgetExceeded)?;
+        let canonicalized =
+            try_canonicalize_with(dataset, CanonHash::Sha256).map_err(PackError::CanonRefused)?;
         let rdfc_digest: [u8; 32] = Sha256::digest(canonicalized.nquads.as_bytes()).into();
 
         Ok(assemble(

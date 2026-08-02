@@ -163,6 +163,11 @@ fn query_time_failure_cannot_masquerade_as_an_empty_result() {
         FallibleSparqlError::Query { diagnostic, .. } => {
             panic!("expected operational cancellation, got: {diagnostic}")
         }
+        // `FallibleSparqlError` is `#[non_exhaustive]`, so a variant added in its own crate
+        // reaches this test without a compile error. It fails loudly rather than passing:
+        // this case asserts a CANCELLATION is reported as operational, and a new failure
+        // shape silently satisfying that is the assertion going quiet.
+        other => panic!("expected operational cancellation, got: {other:?}"),
     }
 }
 
@@ -213,6 +218,10 @@ fn parse_failure_remains_an_ordinary_query_error_with_evidence() {
         FallibleSparqlError::Operational { error, .. } => {
             panic!("view remained ready; expected parse error, got: {error}")
         }
+        // As above: a variant added later must fail this test rather than satisfy it. The
+        // claim here is that a PARSE failure leaves the view ready, and only the `Query`
+        // arm can witness that.
+        other => panic!("view remained ready; expected parse error, got: {other:?}"),
     }
 }
 

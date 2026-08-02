@@ -75,6 +75,8 @@ use rayon::prelude::*;
 use crate::clause::{ClauseTerm, DlClause, HeadForm};
 use crate::cursor::{LendingIterator, VALUE_OBJECT, VALUE_SUBJECT, ValueCursor};
 use crate::id::{RowId, TermId};
+use smallvec::{SmallVec, smallvec};
+
 use crate::plan::{
     ATOM_ARITY, AtomOperator, AtomShape, CyclicPlan, Executable, IndexChoice, JoinGroup,
     POSITION_GRAPH, POSITION_OBJECT, POSITION_PREDICATE, POSITION_SUBJECT, Parsed, PositionPlan,
@@ -259,6 +261,7 @@ impl StepGovernor {
 /// Every variant is a hard refusal. There is no partial answer and no best-effort mode:
 /// an answer this crate returns is the complete least model of the program it was given.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum EvalError {
     /// A clause's head is existential, disjunctive, conjunctive or `false`, so it is not a
     /// Datalog rule and this evaluator has no semantics for it.
@@ -725,7 +728,20 @@ impl SourceRow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SlotSolution {
     /// One slot per plan variable, `None` until an atom binds it.
-    bindings: Vec<Option<TermId>>,
+    ///
+    /// Inline rather than heap. This frame is CLONED once per surviving candidate row
+    /// in [`extend_atom`], so a heap frame is one allocation per intermediate solution
+    /// — the join's most frequent allocation by a wide margin, and one the evaluator
+    /// paid unconditionally.
+    ///
+    /// Capacity 8 is measured, not assumed: 8 is the widest frame the OWL 2 RL rule
+    /// table and this workspace's own suites produce, so every real frame lives inline.
+    /// It is cheap to be generous here because `Option<TermId>` occupies 4 bytes
+    /// through [`Id`](crate::id::Id)'s `NonZeroU32` niche — the whole frame is 32
+    /// inline bytes, less than the two pointers plus capacity a `Vec` header spends
+    /// before addressing any element. A ninth variable does not break: it spills to the
+    /// heap and behaves exactly as it did.
+    bindings: SmallVec<[Option<TermId>; 8]>,
     /// The matched body rows, in physical execution order until the plan's swap program
     /// restores authored order.
     sources: Vec<SourceRow>,
@@ -735,7 +751,7 @@ impl SlotSolution {
     /// The empty substitution over a frame of `slot_count` variables.
     fn empty(slot_count: usize) -> Self {
         Self {
-            bindings: vec![None; slot_count],
+            bindings: smallvec![None; slot_count],
             sources: Vec::new(),
         }
     }
@@ -2211,6 +2227,43 @@ mod tests {
     fn run(rules: Vec<DlClause>, edb: RelationStore) -> Evaluation {
         let exe = compile(rules).expect("the fixture program compiles");
         evaluate(&exe, edb).expect("the fixture program stays inside every ceiling")
+    }
+
+    // ── The binding frame's inline capacity ─────────────────────────────────────
+
+    /// A frame as wide as the widest rule this workspace compiles stays INLINE.
+    ///
+    /// The capacity is 8 because 8 is the widest frame measured across the OWL 2 RL
+    /// rule table and this workspace's suites. A measurement is not a guarantee, and a
+    /// comment recording one is not checkable — so the claim is asserted here instead,
+    /// on the two facts that make it worth having: a frame at the capacity does not
+    /// reach the allocator, and one past it still WORKS rather than breaking.
+    ///
+    /// If a future rule needs a ninth variable this does not fail; it spills, exactly as
+    /// a `Vec` always did. What would fail is someone shrinking the capacity below the
+    /// width the rules actually use, which is the silent regression this pins.
+    #[test]
+    fn the_widest_measured_frame_never_reaches_the_allocator() {
+        let inline = SlotSolution::empty(8);
+        assert!(
+            !inline.bindings.spilled(),
+            "a frame of the widest measured width must live inline; it is cloned once \
+             per surviving candidate row, so spilling here is one allocation per \
+             intermediate solution"
+        );
+
+        let spilled = SlotSolution::empty(9);
+        assert!(
+            spilled.bindings.spilled(),
+            "a frame past the inline capacity is expected to spill — this asserts the \
+             capacity is where it is claimed to be, so the test above cannot pass \
+             vacuously by the capacity having been raised"
+        );
+        assert_eq!(
+            spilled.bindings.len(),
+            9,
+            "spilling changes where the frame lives, never how wide it is"
+        );
     }
 
     // ── Basic fixpoint behaviour ────────────────────────────────────────────────

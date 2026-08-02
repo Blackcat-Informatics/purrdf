@@ -94,6 +94,7 @@ pub type PackTermId = u64;
 
 /// Why decoding a [`PackDict`] byte buffer failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PackDictError {
     /// The buffer ended before all the bytes a header promised were present.
     Truncated {

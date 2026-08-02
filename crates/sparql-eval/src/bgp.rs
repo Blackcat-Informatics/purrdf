@@ -903,6 +903,33 @@ fn bind_row<D: DatasetView>(
     quad: &QuadIds<D::Id>,
     dataset: &D,
 ) -> Option<Solution<D::Id>> {
+    // Reject what can be rejected WITHOUT the row copy first. A row wider than the
+    // inline capacity spills to the heap, so a copy made before the test is an
+    // allocation spent on a candidate that was never going to survive.
+    //
+    // This filter is deliberately a SUBSET of what the binding loop below rejects,
+    // never a second opinion about it: both arms read only state the loop cannot have
+    // changed yet, so a candidate this rejects the loop would reject too. Everything
+    // else — a repeated variable within one pattern, a nested quoted-triple
+    // unification, a `Computed` binding — still falls to the loop, which remains the
+    // single authority on whether a row binds.
+    //
+    // It earns its place on the VIRTUAL REIFICATION path. On the ordinary path
+    // `query_id` has already handed both of these to `quads_for_pattern`, so the index
+    // filtered them and almost nothing arrives here to reject; the reification
+    // candidates are not pre-filtered at all, which is why the doc above says a
+    // `Pos::Bound` mismatch must be caught in this function.
+    for (pos, id) in [(&cp.s, quad.s), (&cp.p, quad.p), (&cp.o, quad.o)] {
+        match pos {
+            Pos::Bound(want) if *want != id => return None,
+            Pos::Slot(col) => match row[*col] {
+                Some(existing) if existing != SolutionTerm::Existing(id) => return None,
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
     let mut out = row.clone();
     for (pos, id) in [(&cp.s, quad.s), (&cp.p, quad.p), (&cp.o, quad.o)] {
         if !bind_pos(&mut out, pos, id, dataset) {

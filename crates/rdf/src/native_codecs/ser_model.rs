@@ -85,52 +85,50 @@ impl SerGraph {
     /// which binding a quoted-triple term resolves to; the self-reifier sentinel rows
     /// (skipped on output) are permuted harmlessly among the real reifier rows.
     pub(crate) fn sort_canonical(&mut self) {
-        let quad_key = |&(s, p, o, g): &SerQuad| -> Vec<String> {
-            vec![
-                render_term(self, s),
-                render_term(self, p),
-                render_term(self, o),
-                g.map(|g| render_term(self, g)).unwrap_or_default(),
-            ]
-        };
-        let reifier_key = |&(r, (s, p, o), g): &SerReifierRow| -> Vec<String> {
-            vec![
-                render_term(self, r),
-                render_term(self, s),
-                render_term(self, p),
-                render_term(self, o),
-                g.map(|g| render_term(self, g)).unwrap_or_default(),
-            ]
-        };
-        let annotation_key = |&(r, p, o, g): &SerAnnotationRow| -> Vec<String> {
-            vec![
-                render_term(self, r),
-                render_term(self, p),
-                render_term(self, o),
-                g.map(|g| render_term(self, g)).unwrap_or_default(),
-            ]
-        };
+        // The rows are sorted THROUGH a comparator that renders on demand, rather than
+        // by precomputing a key per row. The keys were `Vec<String>` — four or five
+        // allocations for every quad, reifier and annotation in the document, every one
+        // of them alive for the whole sort — and they were compared element by element
+        // and then thrown away. Two reusable buffers give the identical ordering: the
+        // comparison is still term-by-term on rendered text, and a `None` graph still
+        // renders as the empty string, which is what places it before any named graph.
+        //
+        // The trade is deliberate. This renders O(n log n) times instead of n, and holds
+        // O(1) scratch instead of O(n) keys. It is the right way round for a serializer,
+        // whose peak is what decides whether a large export completes at all — and the
+        // rendering it repeats is a walk over a term table already in memory.
+        //
+        // Each vector is taken out before sorting so the comparator can borrow `self`
+        // immutably while the rows it orders are a local.
+        let mut left = String::new();
+        let mut right = String::new();
 
-        // Precompute every sort key up front (all immutable borrows of `self`) so the
-        // three rewrites below hold no live borrow of `self` while reassigning its
-        // fields.
-        let mut quads: Vec<(Vec<String>, SerQuad)> =
-            self.quads.iter().map(|q| (quad_key(q), *q)).collect();
-        let mut reifiers: Vec<(Vec<String>, SerReifierRow)> =
-            self.reifiers.iter().map(|r| (reifier_key(r), *r)).collect();
-        let mut annotations: Vec<(Vec<String>, SerAnnotationRow)> = self
-            .annotations
-            .iter()
-            .map(|a| (annotation_key(a), *a))
-            .collect();
+        let mut quads = std::mem::take(&mut self.quads);
+        quads.sort_by(|&(s1, p1, o1, g1), &(s2, p2, o2, g2)| {
+            cmp_terms(self, &[s1, p1, o1], &[s2, p2, o2], &mut left, &mut right)
+                .then_with(|| cmp_graph(self, g1, g2, &mut left, &mut right))
+        });
+        self.quads = quads;
 
-        quads.sort_by(|a, b| a.0.cmp(&b.0));
-        reifiers.sort_by(|a, b| a.0.cmp(&b.0));
-        annotations.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut reifiers = std::mem::take(&mut self.reifiers);
+        reifiers.sort_by(|&(r1, (s1, p1, o1), g1), &(r2, (s2, p2, o2), g2)| {
+            cmp_terms(
+                self,
+                &[r1, s1, p1, o1],
+                &[r2, s2, p2, o2],
+                &mut left,
+                &mut right,
+            )
+            .then_with(|| cmp_graph(self, g1, g2, &mut left, &mut right))
+        });
+        self.reifiers = reifiers;
 
-        self.quads = quads.into_iter().map(|(_, q)| q).collect();
-        self.reifiers = reifiers.into_iter().map(|(_, r)| r).collect();
-        self.annotations = annotations.into_iter().map(|(_, a)| a).collect();
+        let mut annotations = std::mem::take(&mut self.annotations);
+        annotations.sort_by(|&(r1, p1, o1, g1), &(r2, p2, o2, g2)| {
+            cmp_terms(self, &[r1, p1, o1], &[r2, p2, o2], &mut left, &mut right)
+                .then_with(|| cmp_graph(self, g1, g2, &mut left, &mut right))
+        });
+        self.annotations = annotations;
     }
 }
 
@@ -310,58 +308,142 @@ pub(crate) fn escape_literal(lex: &str) -> Cow<'_, str> {
 }
 
 /// Render a term-id as an N-Triples token.
-fn render_term(g: &SerGraph, tid: usize) -> String {
+/// Compare two term-id sequences by their rendered text, position by position.
+///
+/// The sequences are the same length at every call site. `left` and `right` are scratch
+/// reused across the whole sort, which is the point: this is the comparison a
+/// `Vec<String>` key used to make after allocating one string per position per row.
+fn cmp_terms(
+    g: &SerGraph,
+    a: &[usize],
+    b: &[usize],
+    left: &mut String,
+    right: &mut String,
+) -> std::cmp::Ordering {
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        left.clear();
+        right.clear();
+        write_term(g, x, left);
+        write_term(g, y, right);
+        let ordering = left.as_str().cmp(right.as_str());
+        if ordering != std::cmp::Ordering::Equal {
+            return ordering;
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
+/// Compare two optional graph slots by rendered text, `None` rendering as empty.
+///
+/// Empty is what `unwrap_or_default` produced for the absent graph in the previous key,
+/// and it is load-bearing: the empty string sorts before every rendered term, so the
+/// default graph's rows lead. Rendering `None` as anything else would reorder the
+/// document.
+fn cmp_graph(
+    g: &SerGraph,
+    a: Option<usize>,
+    b: Option<usize>,
+    left: &mut String,
+    right: &mut String,
+) -> std::cmp::Ordering {
+    left.clear();
+    right.clear();
+    if let Some(x) = a {
+        write_term(g, x, left);
+    }
+    if let Some(y) = b {
+        write_term(g, y, right);
+    }
+    left.as_str().cmp(right.as_str())
+}
+
+/// Append one term's N-Triples surface to `out`.
+///
+/// Appends rather than returns. Building each term as its own `String` cost an
+/// allocation per term — three or four per quad, every one of them alive until the
+/// whole document had been assembled — and every byte was going to be copied into the
+/// output anyway. A literal with a datatype paid twice over, since the datatype's IRI
+/// was rendered into a `String` only to be `format!`ed into the literal's.
+///
+/// `escape_iri` and `escape_literal` already return a [`Cow`], so an unescaped value —
+/// which is nearly all of them — is borrowed straight from the term table and reaches
+/// `out` without an intermediate of any kind.
+fn write_term(g: &SerGraph, tid: usize, out: &mut String) {
+    use std::fmt::Write as _;
+
     let t = &g.terms[tid];
     match t.kind {
-        SerTermKind::Iri => format!("<{}>", escape_iri(t.value.as_deref().unwrap_or(""))),
+        SerTermKind::Iri => {
+            out.push('<');
+            out.push_str(&escape_iri(t.value.as_deref().unwrap_or("")));
+            out.push('>');
+        }
         SerTermKind::Bnode => match &t.value {
-            Some(v) => format!("_:{v}"),
-            None => format!("_:b{tid}"),
+            Some(v) => {
+                out.push_str("_:");
+                out.push_str(v);
+            }
+            None => {
+                let _ = write!(out, "_:b{tid}");
+            }
         },
         SerTermKind::Literal => {
-            let lit = format!("\"{}\"", escape_literal(t.value.as_deref().unwrap_or("")));
+            out.push('"');
+            out.push_str(&escape_literal(t.value.as_deref().unwrap_or("")));
+            out.push('"');
             if let Some(lang) = &t.lang {
-                match t.direction.as_deref().filter(|d| is_literal_direction(d)) {
-                    Some(direction) => format!("{lit}@{lang}--{direction}"),
-                    None => format!("{lit}@{lang}"),
+                out.push('@');
+                out.push_str(lang);
+                if let Some(direction) = t.direction.as_deref().filter(|d| is_literal_direction(d))
+                {
+                    out.push_str("--");
+                    out.push_str(direction);
                 }
             } else if let Some(dt) = t.datatype {
-                format!("{lit}^^{}", render_term(g, dt))
-            } else {
-                lit // plain literal == xsd:string
+                out.push_str("^^");
+                write_term(g, dt, out);
             }
+            // else: plain literal == xsd:string, written bare
         }
         // quoted triple (RDF 1.2 triple term), resolved through its reifier
         SerTermKind::Triple => match t.reifier.and_then(|rf| g.reifier(rf)) {
             Some((s, p, o)) => {
-                format!(
-                    "<<( {} {} {} )>>",
-                    render_term(g, s),
-                    render_term(g, p),
-                    render_term(g, o)
-                )
+                out.push_str("<<( ");
+                write_term(g, s, out);
+                out.push(' ');
+                write_term(g, p, out);
+                out.push(' ');
+                write_term(g, o, out);
+                out.push_str(" )>>");
             }
             // degraded but syntactically valid: an unbound reifier becomes a blank node
-            None => format!("_:unbound_triple_{tid}"),
+            None => {
+                let _ = write!(out, "_:unbound_triple_{tid}");
+            }
         },
     }
 }
 
-/// Serialise a [`SerGraph`] to N-Quads text.
-pub(crate) fn to_nquads(g: &SerGraph) -> String {
-    let mut lines: Vec<String> = Vec::new();
+/// Append a [`SerGraph`]'s N-Quads text to `out`.
+///
+/// One line is built at a time into `out` itself. The previous shape collected a
+/// `String` per line into a `Vec`, `join`ed it — copying the whole document — and then
+/// `format!`ed the result to add a trailing newline, copying the whole document a
+/// second time. Peak was therefore about twice the output on top of one live `String`
+/// per quad; Turtle paid a third copy by wrapping this function's result.
+pub(crate) fn write_nquads(g: &SerGraph, out: &mut String) {
+    let mut any = false;
+
     for &(s, p, o, gname) in &g.quads {
-        let triple = format!(
-            "{} {} {}",
-            render_term(g, s),
-            render_term(g, p),
-            render_term(g, o)
-        );
-        match gname {
-            Some(gv) => lines.push(format!("{triple} {} .", render_term(g, gv))),
-            None => lines.push(format!("{triple} .")),
-        }
+        write_term(g, s, out);
+        out.push(' ');
+        write_term(g, p, out);
+        out.push(' ');
+        write_term(g, o, out);
+        write_graph_terminator(g, gname, out);
+        any = true;
     }
+
     for &(rid, (s, p, o), gname) in &g.reifiers {
         if g.terms
             .get(rid)
@@ -369,35 +451,40 @@ pub(crate) fn to_nquads(g: &SerGraph) -> String {
         {
             continue;
         }
-        let quoted = format!(
-            "<<( {} {} {} )>>",
-            render_term(g, s),
-            render_term(g, p),
-            render_term(g, o)
-        );
-        let triple = format!("{} <{RDF_REIFIES}> {quoted}", render_term(g, rid));
-        match gname {
-            Some(gv) => lines.push(format!("{triple} {} .", render_term(g, gv))),
-            None => lines.push(format!("{triple} .")),
-        }
+        write_term(g, rid, out);
+        out.push_str(" <");
+        out.push_str(RDF_REIFIES);
+        out.push_str("> <<( ");
+        write_term(g, s, out);
+        out.push(' ');
+        write_term(g, p, out);
+        out.push(' ');
+        write_term(g, o, out);
+        out.push_str(" )>>");
+        write_graph_terminator(g, gname, out);
+        any = true;
     }
+
     for &(r, p, v, gname) in &g.annotations {
-        let triple = format!(
-            "{} {} {}",
-            render_term(g, r),
-            render_term(g, p),
-            render_term(g, v)
-        );
-        match gname {
-            Some(gv) => lines.push(format!("{triple} {} .", render_term(g, gv))),
-            None => lines.push(format!("{triple} .")),
-        }
+        write_term(g, r, out);
+        out.push(' ');
+        write_term(g, p, out);
+        out.push(' ');
+        write_term(g, v, out);
+        write_graph_terminator(g, gname, out);
+        any = true;
     }
-    if lines.is_empty() {
-        String::new()
-    } else {
-        format!("{}\n", lines.join("\n"))
+
+    let _ = any;
+}
+
+/// Close one N-Quads statement: the optional graph name, the `.`, and the line break.
+fn write_graph_terminator(g: &SerGraph, gname: Option<usize>, out: &mut String) {
+    if let Some(gv) = gname {
+        out.push(' ');
+        write_term(g, gv, out);
     }
+    out.push_str(" .\n");
 }
 
 /// Assert that no row of `g` carries a named-graph slot — the single-graph syntaxes
@@ -417,106 +504,161 @@ fn ensure_default_graph_projection(g: &SerGraph, format: &str) -> Result<(), Rdf
 }
 
 /// Serialise a [`SerGraph`] to N-Triples text (default graph only).
-pub(crate) fn to_ntriples(g: &SerGraph) -> Result<String, RdfDiagnostic> {
+pub(crate) fn write_ntriples(g: &SerGraph, out: &mut String) -> Result<(), RdfDiagnostic> {
     ensure_default_graph_projection(g, "N-Triples")?;
-    Ok(to_nquads(g))
+    write_nquads(g, out);
+    Ok(())
 }
 
 /// Serialise a [`SerGraph`] to Turtle text (default graph only); the N-Quads body is
 /// prefixed with the `rdf:`/`xsd:` `@prefix` header. IRIs in the body stay full
 /// `<...>` — they are NOT abbreviated against the declared prefixes.
-pub(crate) fn to_turtle(g: &SerGraph) -> Result<String, RdfDiagnostic> {
+pub(crate) fn write_turtle(g: &SerGraph, out: &mut String) -> Result<(), RdfDiagnostic> {
     ensure_default_graph_projection(g, "Turtle")?;
-    let body = to_nquads(g);
-    if body.is_empty() {
-        Ok(String::new())
-    } else {
-        Ok(format!(
-            "@prefix rdf: <{RDF_NS}> .\n@prefix xsd: <{XSD_NS}> .\n\n{body}"
-        ))
+
+    // The header is written first and RETRACTED if the body turns out to be empty,
+    // rather than the body being built into its own `String` so its emptiness can be
+    // tested before deciding. Building it separately meant the whole document was
+    // copied a second time to place it after the header — on top of the two copies
+    // `to_nquads` itself was making — so a Turtle export peaked at roughly three times
+    // its own output.
+    let start = out.len();
+    out.push_str("@prefix rdf: <");
+    out.push_str(RDF_NS);
+    out.push_str("> .\n@prefix xsd: <");
+    out.push_str(XSD_NS);
+    out.push_str("> .\n\n");
+    let header = out.len();
+
+    write_nquads(g, out);
+    if out.len() == header {
+        // An empty graph emits nothing at all, header included — unchanged behaviour.
+        // Truncating to where this call began (not `clear`) is what lets a caller write
+        // more than one document into one buffer.
+        out.truncate(start);
     }
+    Ok(())
 }
 
 // ── TriG ──────────────────────────────────────────────────────────────────────────
 
-fn render_trig_term(g: &SerGraph, tid: usize) -> String {
+/// Append one term's TriG surface to `out`.
+///
+/// TriG differs from N-Triples in exactly one place — `rdf:reifies` is written through
+/// the declared prefix rather than as a full IRI — so this mirrors [`write_term`] and
+/// appends for the same reason: a term built as its own `String` is an allocation whose
+/// every byte was going to be copied into the output regardless.
+fn write_trig_term(g: &SerGraph, tid: usize, out: &mut String) {
+    use std::fmt::Write as _;
+
     let t = &g.terms[tid];
     match t.kind {
-        SerTermKind::Iri if t.value.as_deref() == Some(RDF_REIFIES) => "rdf:reifies".to_string(),
-        SerTermKind::Iri => format!("<{}>", escape_iri(t.value.as_deref().unwrap_or(""))),
+        SerTermKind::Iri if t.value.as_deref() == Some(RDF_REIFIES) => out.push_str("rdf:reifies"),
+        SerTermKind::Iri => {
+            out.push('<');
+            out.push_str(&escape_iri(t.value.as_deref().unwrap_or("")));
+            out.push('>');
+        }
         SerTermKind::Bnode => match &t.value {
-            Some(v) => format!("_:{v}"),
-            None => format!("_:b{tid}"),
+            Some(v) => {
+                out.push_str("_:");
+                out.push_str(v);
+            }
+            None => {
+                let _ = write!(out, "_:b{tid}");
+            }
         },
         SerTermKind::Literal => {
-            let lit = format!("\"{}\"", escape_literal(t.value.as_deref().unwrap_or("")));
+            out.push('"');
+            out.push_str(&escape_literal(t.value.as_deref().unwrap_or("")));
+            out.push('"');
             if let Some(lang) = &t.lang {
-                match t.direction.as_deref().filter(|d| is_literal_direction(d)) {
-                    Some(direction) => format!("{lit}@{lang}--{direction}"),
-                    None => format!("{lit}@{lang}"),
+                out.push('@');
+                out.push_str(lang);
+                if let Some(direction) = t.direction.as_deref().filter(|d| is_literal_direction(d))
+                {
+                    out.push_str("--");
+                    out.push_str(direction);
                 }
             } else if let Some(dt) = t.datatype {
-                format!("{lit}^^{}", render_trig_term(g, dt))
-            } else {
-                lit
+                out.push_str("^^");
+                write_trig_term(g, dt, out);
             }
         }
         SerTermKind::Triple => match t.reifier.and_then(|rf| g.reifier(rf)) {
-            Some((s, p, o)) => format!(
-                "<<( {} {} {} )>>",
-                render_trig_term(g, s),
-                render_trig_term(g, p),
-                render_trig_term(g, o)
-            ),
-            None => render_term(g, tid),
+            Some((s, p, o)) => {
+                out.push_str("<<( ");
+                write_trig_term(g, s, out);
+                out.push(' ');
+                write_trig_term(g, p, out);
+                out.push(' ');
+                write_trig_term(g, o, out);
+                out.push_str(" )>>");
+            }
+            None => write_term(g, tid, out),
         },
     }
 }
 
-fn close_graph(out: &mut Vec<String>, open_graph: &mut Option<String>) {
+/// Close the open `GRAPH { … }` block, if one is open.
+fn close_graph(out: &mut String, open_graph: &mut Option<String>) {
     if open_graph.take().is_some() {
-        out.push("}".to_string());
+        out.push_str("}\n");
     }
 }
 
-fn push_statement(
-    out: &mut Vec<String>,
+/// Put `out` in the right block for `graph_name` and write the statement's indent.
+///
+/// The caller then appends the statement's own terms directly, rather than handing over
+/// a finished `String`. `open_graph` still holds the RENDERED graph name because that
+/// name is what decides whether the next statement continues this block or starts
+/// another — but it is now rebuilt only when the graph CHANGES, not once per statement.
+fn begin_statement(
+    out: &mut String,
     open_graph: &mut Option<String>,
     graph: &SerGraph,
     graph_name: Option<usize>,
-    statement: String,
 ) {
-    if let Some(gid) = graph_name {
-        let rendered_graph = render_trig_term(graph, gid);
-        if open_graph.as_deref() != Some(rendered_graph.as_str()) {
-            close_graph(out, open_graph);
-            out.push(format!("{rendered_graph} {{"));
-            *open_graph = Some(rendered_graph);
-        }
-        out.push(format!("  {statement}"));
-    } else {
+    let Some(gid) = graph_name else {
         close_graph(out, open_graph);
-        out.push(statement);
+        return;
+    };
+    let mut rendered = String::new();
+    write_trig_term(graph, gid, &mut rendered);
+    if open_graph.as_deref() != Some(rendered.as_str()) {
+        close_graph(out, open_graph);
+        out.push_str(&rendered);
+        out.push_str(" {\n");
+        *open_graph = Some(rendered);
     }
+    out.push_str("  ");
 }
 
-/// Serialise a [`SerGraph`] to TriG text.
-pub(crate) fn to_trig(g: &SerGraph) -> String {
+/// Append a [`SerGraph`]'s TriG text to `out`.
+///
+/// Statements are written in place. The previous shape collected every line into a
+/// `Vec<String>`, `join`ed it — copying the whole document — and then `format!`ed the
+/// result to add a trailing newline, copying it again. Writing each line followed by
+/// its own newline produces exactly those bytes: a join with `"\n"` plus one trailing
+/// `"\n"` is the same sequence as one `"\n"` after each line.
+pub(crate) fn write_trig(g: &SerGraph, out: &mut String) {
     if g.quads.is_empty() && g.reifiers.is_empty() && g.annotations.is_empty() {
-        return String::new();
+        return;
     }
 
-    let mut lines = vec![format!("@prefix rdf: <{RDF_NS}> ."), String::new()];
+    out.push_str("@prefix rdf: <");
+    out.push_str(RDF_NS);
+    out.push_str("> .\n\n");
     let mut open_graph: Option<String> = None;
 
     for &(s, p, o, gname) in &g.quads {
-        let triple = format!(
-            "{} {} {} .",
-            render_trig_term(g, s),
-            render_trig_term(g, p),
-            render_trig_term(g, o)
-        );
-        push_statement(&mut lines, &mut open_graph, g, gname, triple);
+        begin_statement(out, &mut open_graph, g, gname);
+        write_trig_term(g, s, out);
+        out.push(' ');
+        write_trig_term(g, p, out);
+        out.push(' ');
+        write_trig_term(g, o, out);
+        out.push_str(" .\n");
     }
 
     for &(rid, (s, p, o), gname) in &g.reifiers {
@@ -530,27 +672,28 @@ pub(crate) fn to_trig(g: &SerGraph) -> String {
         {
             continue;
         }
-        let quoted = format!(
-            "<<( {} {} {} )>>",
-            render_trig_term(g, s),
-            render_trig_term(g, p),
-            render_trig_term(g, o)
-        );
-        let statement = format!("{} rdf:reifies {quoted} .", render_trig_term(g, rid));
-        push_statement(&mut lines, &mut open_graph, g, gname, statement);
-    }
-    for &(r, p, v, gname) in &g.annotations {
-        let statement = format!(
-            "{} {} {} .",
-            render_trig_term(g, r),
-            render_trig_term(g, p),
-            render_trig_term(g, v)
-        );
-        push_statement(&mut lines, &mut open_graph, g, gname, statement);
+        begin_statement(out, &mut open_graph, g, gname);
+        write_trig_term(g, rid, out);
+        out.push_str(" rdf:reifies <<( ");
+        write_trig_term(g, s, out);
+        out.push(' ');
+        write_trig_term(g, p, out);
+        out.push(' ');
+        write_trig_term(g, o, out);
+        out.push_str(" )>> .\n");
     }
 
-    close_graph(&mut lines, &mut open_graph);
-    format!("{}\n", lines.join("\n"))
+    for &(r, p, v, gname) in &g.annotations {
+        begin_statement(out, &mut open_graph, g, gname);
+        write_trig_term(g, r, out);
+        out.push(' ');
+        write_trig_term(g, p, out);
+        out.push(' ');
+        write_trig_term(g, v, out);
+        out.push_str(" .\n");
+    }
+
+    close_graph(out, &mut open_graph);
 }
 
 #[cfg(test)]
@@ -558,6 +701,120 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
     use std::fmt::Write as _;
+
+    // Collect-into-a-`String` shims. Production has no such function any more: every
+    // caller reaches the writers through `RdfCodec::serialize_into` and supplies its own
+    // buffer, so a `to_*` in the crate proper would be dead code kept alive by tests.
+    // These assert on a whole document, which is the one place materialising it is the
+    // point rather than a cost.
+
+    /// The lazy comparator orders rows exactly as the materialised keys did.
+    ///
+    /// `sort_canonical` used to build a `Vec<String>` key per row and sort on that. The
+    /// keys are gone; the ORDER they produced is a published property, because it is
+    /// what makes an exported document byte-identical across backends. So the old key
+    /// construction is reproduced here and the two orderings are compared directly —
+    /// asserting the replacement is equivalent, not merely that it is some valid order.
+    ///
+    /// The graph is built to exercise the part a round-trip vector is least likely to:
+    /// rows identical in subject, predicate and object that differ ONLY in the graph
+    /// slot, including the absent one. The old key rendered `None` through
+    /// `unwrap_or_default` as the empty string, which sorts before every rendered term
+    /// and therefore puts the default graph's rows first — behaviour the comparator has
+    /// to reproduce deliberately rather than inherit.
+    #[test]
+    fn the_lazy_comparator_orders_rows_exactly_as_the_materialised_keys_did() {
+        fn term(g: &mut SerGraph, iri: &str) -> usize {
+            g.terms.push(SerTerm {
+                kind: SerTermKind::Iri,
+                value: Some(iri.to_owned()),
+                datatype: None,
+                lang: None,
+                direction: None,
+                reifier: None,
+            });
+            g.terms.len() - 1
+        }
+
+        let mut g = SerGraph::default();
+        let s = term(&mut g, "https://example.org/s");
+        let p = term(&mut g, "https://example.org/p");
+        let o = term(&mut g, "https://example.org/o");
+        let o2 = term(&mut g, "https://example.org/a");
+        let ga = term(&mut g, "https://example.org/gz");
+        let gb = term(&mut g, "https://example.org/ga");
+
+        // Deliberately inserted out of order, with the default-graph rows in the middle
+        // so neither the input order nor a stable sort can produce the answer by luck.
+        g.quads = vec![
+            (s, p, o, Some(ga)),
+            (s, p, o2, None),
+            (s, p, o, Some(gb)),
+            (s, p, o, None),
+            (s, p, o2, Some(ga)),
+        ];
+
+        // The key the previous implementation built, verbatim in shape.
+        let key = |g: &SerGraph, &(a, b, c, d): &SerQuad| -> Vec<String> {
+            vec![
+                render_term(g, a),
+                render_term(g, b),
+                render_term(g, c),
+                d.map(|x| render_term(g, x)).unwrap_or_default(),
+            ]
+        };
+        let mut expected = g.quads.clone();
+        expected.sort_by_key(|x| key(&g, x));
+
+        g.sort_canonical();
+        assert_eq!(
+            g.quads, expected,
+            "the comparator must reproduce the key-based order exactly; the emitted \
+             byte order is what that order decides"
+        );
+
+        // And the property that empty-renders-`None` actually buys. The graph slot is
+        // the LAST key component, so it separates rows only once subject, predicate and
+        // object have tied — the default graph leads within each such group, not the
+        // document. Stated as the invariant rather than as fixed positions, because
+        // fixed positions would also pass for a comparator that ignored the graph.
+        for pair in g.quads.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            if (a.0, a.1, a.2) == (b.0, b.1, b.2) {
+                assert!(
+                    !(a.3.is_some() && b.3.is_none()),
+                    "within one subject/predicate/object group an absent graph renders \
+                     as the empty string and must precede every named one: {:?}",
+                    g.quads
+                );
+            }
+        }
+    }
+
+    /// One term's N-Triples surface as an owned `String`.
+    ///
+    /// Production has none: `sort_canonical` compares through reusable buffers and the
+    /// serializers append, so nothing outside this module ever wants a term on its own.
+    /// It survives here to reconstruct the key the sort used to build, which is what
+    /// lets the ordering test compare against the old behaviour rather than against
+    /// itself.
+    fn render_term(g: &SerGraph, tid: usize) -> String {
+        let mut out = String::new();
+        write_term(g, tid, &mut out);
+        out
+    }
+
+    fn to_ntriples(g: &SerGraph) -> Result<String, RdfDiagnostic> {
+        let mut out = String::new();
+        write_ntriples(g, &mut out)?;
+        Ok(out)
+    }
+
+    fn to_turtle(g: &SerGraph) -> Result<String, RdfDiagnostic> {
+        let mut out = String::new();
+        write_turtle(g, &mut out)?;
+        Ok(out)
+    }
 
     #[test]
     fn deterministic_blank_label_matches_zero_timestamp_ulid() {

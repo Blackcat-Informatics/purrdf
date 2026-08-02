@@ -1,0 +1,3 @@
+@prefix ex: <http://example.org/> .
+
+ex:s <urn:purrdf:rdfc:no-such-sentinel> ex:o .

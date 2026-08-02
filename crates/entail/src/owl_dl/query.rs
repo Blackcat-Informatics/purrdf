@@ -108,6 +108,7 @@ use crate::vocab::{OWL_SAMEAS, RDF_TYPE, RDFS_DOMAIN, RDFS_RANGE, RDFS_SUBCLASSO
 /// [`QNode::Term`]: this variant is what a variable below the top level needs, not a
 /// second spelling of a term.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum QNode {
     /// A query variable, by its name (the part after `?`/`$`).
     Var(String),

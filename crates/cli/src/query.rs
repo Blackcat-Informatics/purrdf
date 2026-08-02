@@ -182,6 +182,13 @@ fn entailed_query(
         }
         Err(purrdf::ReasoningError::Entailment(other)) => Err(other.into()),
         Err(purrdf::ReasoningError::Query(diagnostic)) => Err(diagnostic.into()),
+        // `ReasoningError` is `#[non_exhaustive]`, so a variant added in its own crate
+        // reaches the CLI without a compile error. It is reported rather than swallowed:
+        // the arms above exist to surface a REPORT alongside the failure where one exists,
+        // and a variant this match has never seen carries none it knows how to find — so
+        // the message is what there is to say, and saying it is strictly better than
+        // exiting on a diagnostic the user never sees.
+        Err(other) => Err(CliError::Runtime(other.to_string())),
     }
 }
 

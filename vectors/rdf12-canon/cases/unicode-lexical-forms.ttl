@@ -1,0 +1,5 @@
+@prefix ex: <http://example.org/> .
+
+ex:s ex:nfc "\u00E9" .
+ex:s ex:nfd "e\u0301" .
+ex:s ex:astral "\U0001F408" .

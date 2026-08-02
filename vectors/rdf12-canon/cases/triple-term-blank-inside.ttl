@@ -1,0 +1,4 @@
+@prefix ex: <http://example.org/> .
+
+ex:r ex:reifies <<( _:a ex:p _:b )>> .
+_:a ex:q _:b .

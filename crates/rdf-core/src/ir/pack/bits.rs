@@ -26,6 +26,7 @@ use std::fmt;
 
 /// Why decoding a `pack` byte buffer failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PackBitsError {
     /// The buffer ended before all the bytes a header promised were present.
     Truncated {

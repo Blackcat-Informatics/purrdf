@@ -186,6 +186,7 @@ pub enum SssomCommentKind {
 
 /// A typed set-comment construction failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SssomCommentError {
     /// A raw comment line did not start with `#`.
     MissingMarker,
@@ -350,6 +351,7 @@ pub struct SssomColumnLayout {
 }
 
 /// A declared SSSOM TSV column-layout construction failure.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SssomColumnLayoutError {
     /// A column name was empty.

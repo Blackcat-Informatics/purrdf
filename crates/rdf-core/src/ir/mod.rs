@@ -50,7 +50,9 @@ pub mod validate;
 pub use builder::{RdfDatasetBuilder, ValidatedRdfDatasetBuilder};
 pub use bundle::{GtsBundle, RdfEnvelope};
 pub use canon::{
-    BudgetExceeded, CanonHash, Canonicalized, canonicalize, canonicalize_with, try_canonicalize,
+    BudgetExceeded, CANON_CORPUS_DIGEST, CANON_PROFILE_ID, CANON_PROFILE_VERSION, CanonError,
+    CanonHash, Canonicalized, RDFC_CALL_LIMIT, RESERVED_NAMESPACE, ReservedVocabulary,
+    TermPosition, canonicalize, canonicalize_with, check_admissible, try_canonicalize,
     try_canonicalize_with,
 };
 pub use compare::{DatasetDiff, dataset_diff, datasets_isomorphic};

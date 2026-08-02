@@ -642,6 +642,15 @@ pub fn render_entail_error(regime: &str, error: &EntailError) -> String {
         | EntailError::UnresolvedImport(_)
         | EntailError::MatchBudget
         | EntailError::Unsatisfiable => head,
+        // `EntailError` is `#[non_exhaustive]`, so a variant added in its own crate arrives
+        // here without a compile error. Folding it in with the arm above is correct by
+        // construction rather than by default: the split this match makes is "carries a
+        // run's report" against "is the absence of a run", and only `Inconsistent` carries
+        // one — an `InconsistentRun` is the single payload a report can be read out of. A
+        // variant this match has never seen cannot be known to carry a report, so rendering
+        // it as its own diagnostic states exactly what is known and implies nothing about a
+        // closure that was never assembled.
+        _ => head,
     }
 }
 

@@ -6,6 +6,7 @@
 /// All errors that can arise from slice discovery, manifest parsing, artifact
 /// inventory, and content-addressed digest operations.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum SliceError {
     /// An I/O error reading from the filesystem.
     Io(std::io::Error),

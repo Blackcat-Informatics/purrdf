@@ -33,6 +33,7 @@ use crate::vocab::SliceVocab;
 
 /// Errors produced during analysis graph emission.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AnalysisError {
     /// The authored input contains the self-attestation guard IRI, which would
     /// allow the analysis graph to be consumed as its own input.

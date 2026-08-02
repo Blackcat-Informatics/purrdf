@@ -111,16 +111,18 @@ pub use hash::{FastHasher, FastMap, FastSet, IdSet};
 pub use ir::embedding;
 pub use ir::embedding::*;
 pub use ir::{
-    BlankScope, BudgetExceeded, CanonHash, Canonicalized, CountingDemandProvider, DatasetDiff,
-    DatasetSink, FrozenDatasetSource, GlobalDictionary, GlobalTermId, GtsBundle, HandleEntry,
-    HandleKey, InMemoryPageProvider, MutableDataset, PageFault, PageFaultKind, PageGeneration,
-    PageId, PageMaterialization, PagePart, PageProvider, PageTranslation, PagedDataset,
-    PagedFreezeError, PagedQuadOverlap, PagedQuadTable, PagedQueryError, PagedQueryEvidence,
-    PagedQueryLimits, PagedQueryView, PipelineBundle, PipelineBundleError, QuadHandle, QuadIds,
-    QuadPatternCursor, QuadProbePlan, QuadRef, QuadValues, RdfDataset, RdfDatasetBuilder,
-    RdfDatasetVisitor, RdfEnvelope, SubsetPageProvider, TermId, TermRef, TermValue,
-    ValidatedRdfDatasetBuilder, canonicalize, canonicalize_with, dataset_diff, datasets_isomorphic,
-    try_canonicalize, try_canonicalize_with,
+    BlankScope, BudgetExceeded, CANON_CORPUS_DIGEST, CANON_PROFILE_ID, CANON_PROFILE_VERSION,
+    CanonError, CanonHash, Canonicalized, CountingDemandProvider, DatasetDiff, DatasetSink,
+    FrozenDatasetSource, GlobalDictionary, GlobalTermId, GtsBundle, HandleEntry, HandleKey,
+    InMemoryPageProvider, MutableDataset, PageFault, PageFaultKind, PageGeneration, PageId,
+    PageMaterialization, PagePart, PageProvider, PageTranslation, PagedDataset, PagedFreezeError,
+    PagedQuadOverlap, PagedQuadTable, PagedQueryError, PagedQueryEvidence, PagedQueryLimits,
+    PagedQueryView, PipelineBundle, PipelineBundleError, QuadHandle, QuadIds, QuadPatternCursor,
+    QuadProbePlan, QuadRef, QuadValues, RDFC_CALL_LIMIT, RESERVED_NAMESPACE, RdfDataset,
+    RdfDatasetBuilder, RdfDatasetVisitor, RdfEnvelope, ReservedVocabulary, SubsetPageProvider,
+    TermId, TermPosition, TermRef, TermValue, ValidatedRdfDatasetBuilder, canonicalize,
+    canonicalize_with, check_admissible, dataset_diff, datasets_isomorphic, try_canonicalize,
+    try_canonicalize_with,
 };
 pub use ir::{
     PackBuilder, PackDigest, PackError, PackId, PackView, dataset_from_view, pack_digest,

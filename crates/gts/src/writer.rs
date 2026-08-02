@@ -212,6 +212,7 @@ impl Default for SnapshotOptions {
 
 /// Errors raised by advanced writer construction.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum WriterError {
     /// Invalid caller options.
     InvalidFrame(String),
@@ -233,7 +234,22 @@ impl fmt::Display for WriterError {
     }
 }
 
-impl std::error::Error for WriterError {}
+impl std::error::Error for WriterError {
+    /// The codec's own error, when the writer failed because the codec did.
+    ///
+    /// `Codec` adds no information of its own — it says only that the failure came from
+    /// below — so returning `None` made the wrapper the whole visible message and hid
+    /// the encoding fault it was carrying.
+    ///
+    /// The other two return `None` and carry a `String`: a rendered message rather than
+    /// an error value, and a frame or catalog fault the writer itself found.
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Codec(inner) => Some(inner),
+            Self::InvalidFrame(_) | Self::MissingCatalogEntry(_) => None,
+        }
+    }
+}
 
 impl From<CodecError> for WriterError {
     fn from(value: CodecError) -> Self {

@@ -54,6 +54,7 @@ impl Codec {
 
 /// Why a transform chain could not be reversed.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum CodecError {
     /// A missing capability: `reason` is `"unknown-codec"` or `"missing-key"`
     /// — the frame degrades to an opaque node with that reason (§8.3).

@@ -1,0 +1,3 @@
+_:c14n0 <http://example.org/p> _:c14n2 .
+_:c14n1 <http://example.org/r> _:c14n0 .
+_:c14n2 <http://example.org/q> _:c14n1 .

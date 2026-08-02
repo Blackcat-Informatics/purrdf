@@ -105,6 +105,7 @@ const KIND_BY_RULE: u8 = 1;
 /// is one fact, and four owned surfaces per inlined fact would make the error arm several
 /// times wider than the answer it displaces on every call, including the calls that succeed.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ProofError {
     /// The proof is not a well-formed term: a reference outside the arena, a premise that
     /// does not precede the step it justifies, or — for a decoded proof — bytes that are

@@ -778,6 +778,26 @@ impl Disposition {
                          rather than letting it be counted as something else"
                     ));
                 }
+                // `UndecidedReason` is `#[non_exhaustive]`, so this arm is owed from OUTSIDE
+                // the crate that defines it — the arms above can no longer be proven total
+                // here. It refuses rather than folding, for the same reason every arm above
+                // that refuses does: a bucket is what a number's label means, and a reason
+                // with no bucket counted as a neighbour prints a figure that is not what it
+                // says it is.
+                //
+                // The compile-time force is NOT lost, only moved to where the variant is
+                // added: `UndecidedReason`'s `Display` is a total match in its own crate,
+                // which `#[non_exhaustive]` does not relax, so a new reason fails to build
+                // there first. This is the second gate, and it fails the corpus run by name
+                // rather than silently.
+                other => {
+                    return Err(format!(
+                        "the OWL-RL lane answered Undecided({other}), a reason this corpus \
+                         has no scoreboard bucket for. It was added since these buckets were \
+                         written: give it one, or refuse it beside the reasons above and say \
+                         why — do not let it be counted as something else"
+                    ));
+                }
             },
         })
     }

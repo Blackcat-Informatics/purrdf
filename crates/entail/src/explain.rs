@@ -97,6 +97,7 @@ use crate::{EntailError, Regime};
 /// back empty would be indistinguishable from "there is nothing to explain", which is the
 /// one thing a caller asking *why* must never be told by accident.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum ExplainError {
     /// The conclusion is neither asserted in the graph nor derived by the lane's closure.
     ///
@@ -186,7 +187,31 @@ impl std::fmt::Display for ExplainError {
     }
 }
 
-impl std::error::Error for ExplainError {}
+impl std::error::Error for ExplainError {
+    /// The wrapped cause, for the variants that carry one.
+    ///
+    /// `Entail` and `Unchecked` each hold another crate's error value — the reasoning
+    /// failure that stopped the explanation, and the proof-checking failure that
+    /// rejected it — and both were unreachable through the standard chain, so a caller
+    /// learned that explaining failed without learning what refused.
+    ///
+    /// The rest return `None`, and none of them is a wrapper. `Existential` carries a
+    /// [`Regime`] — not an error but the NAME of the lane whose rules have existential
+    /// heads. `NotDerived`, `BackwardDisagreement`, `NotEntailed` and `Undecided` are
+    /// findings ABOUT the conclusion rather than failures of some subsystem beneath
+    /// this one: each is the whole statement, and there is nothing further in to walk.
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Entail(inner) => Some(inner.as_ref()),
+            Self::Unchecked(inner) => Some(inner),
+            Self::Existential(_)
+            | Self::NotDerived { .. }
+            | Self::BackwardDisagreement { .. }
+            | Self::NotEntailed
+            | Self::Undecided => None,
+        }
+    }
+}
 
 impl From<EntailError> for ExplainError {
     fn from(error: EntailError) -> Self {
