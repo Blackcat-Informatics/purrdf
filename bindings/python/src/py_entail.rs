@@ -63,11 +63,12 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use purrdf_validate::regime::{
-    REGIME_NAMES, ReasonerSession, classify_to_string, consistency_to_string, entails_to_string,
-    explain_conclusion_to_string, extension_rules_string, extract_module_to_string,
-    implemented_rules_string, instances_to_string, justify_to_string, materialize_to_nquads_string,
-    parse_regime, profile_to_string, realize_to_string, regime_name, regime_plan, regime_rule_set,
-    render_entail_error, render_reasoning_report, rules_string,
+    REGIME_NAMES, ReasonerSession, certain_answers_to_string, classify_to_string,
+    consistency_to_string, entails_to_string, explain_conclusion_to_string, extension_rules_string,
+    extract_module_to_string, graph_entails_to_string, implemented_rules_string,
+    instances_to_string, justify_to_string, materialize_to_nquads_string, parse_regime,
+    profile_to_string, realize_to_string, regime_name, regime_plan, regime_rule_set,
+    render_entail_error, render_reasoning_report, rules_string, verify_entailment_to_string,
 };
 
 use crate::entail::{Regime, materialize as materialize_closure};
@@ -556,6 +557,172 @@ fn explain_conclusion(
     Ok(answer.into_parts())
 }
 
+// ── The conclusion-directed entailment services ─────────────────────────────────
+
+/// Borrow a Python-supplied import table as the boundary's [`ImportList`].
+///
+/// The three services below all take `imports` as a `Sequence[tuple[str, str]]`, which PyO3
+/// materializes as owned `String`s; the boundary takes borrowed pairs. This is that one
+/// re-borrow, written once so the three call sites cannot drift, and it preserves the
+/// caller's ORDER — the boundary's table is a list rather than a map precisely so the same
+/// input always produces the same run.
+fn import_list(imports: &[(String, String)]) -> Vec<(&str, &str)> {
+    imports
+        .iter()
+        .map(|(iri, document)| (iri.as_str(), document.as_str()))
+        .collect()
+}
+
+/// The CERTAIN ANSWERS of a basic graph pattern over `data` under `regime`.
+///
+/// A certain answer is a substitution the knowledge base ENTAILS the pattern under —
+/// true in every model, not merely present in one closure — which is what SPARQL's
+/// entailment regimes define the answers to a basic graph pattern to be.
+///
+/// `pattern` is N-Triples with `?name` in any position, the PREDICATE included. A
+/// blank node in it is a NON-DISTINGUISHED variable: constrained by the match, not
+/// projected, and not a column, which is what SPARQL says a query blank node is. A
+/// variable inside an RDF 1.2 triple term is an ordinary variable — it binds, it is a
+/// column, and one NAME is one VARIABLE wherever it was written, so a pattern that
+/// uses it above and below the triple-term boundary is joined rather than split. A
+/// predicate variable is projected like any other, and under `owl-rl` it also renders a
+/// `limit`: it ranges over the whole predicate vocabulary, including the schema
+/// predicates and the constructs the mechanisms beyond the rule table decide, and the
+/// closure holds neither.
+///
+/// Returns `(answer, certificate)`. The answer opens `mechanism <name>`, then one
+/// `var` line per projected variable, one `row` line per certain answer positionally
+/// aligned to them, and a `limit` line per reason the row set may not be EXHAUSTIVE.
+/// Every row is sound unconditionally; what needs a precondition is the claim about a
+/// row that is NOT there, so no `limit` lines is the claim that the row set is complete.
+/// The certificate is the run's `purrdf-reasoning-report 4` block.
+///
+/// A pattern with a projected variable is `mechanism strict-table`: the five mechanisms
+/// beyond the rule table are not run for one, because a projected variable over what any
+/// of them decides is a different question. That one of them WOULD have been needed is
+/// not silence — it arrives as a `limit` line naming the lane. A pattern with NO
+/// projected variable is a conclusion graph, is answered by the same fold
+/// `graph_entails` runs, and names whichever of the seven reached it; such an answer is
+/// the relation with no columns, so a `yes` is one bare `row` line and a `no` is none.
+///
+/// # `imports` — the documents the premise says it is not all of, and never optional
+///
+/// A `Sequence[tuple[str, str]]` of `(ontology_iri, document)` pairs, where `document` is
+/// N-Quads (or N-Triples) text exactly like `data`. A premise carrying an `owl:imports` is an
+/// ontology stating that its axioms are its own PLUS those of the documents it names, so
+/// answering over the premise alone would answer a different question — this is where those
+/// documents arrive.
+///
+/// **PurRDF fetches nothing.** An ontology IRI this sequence does not resolve is a
+/// `ValueError` naming the document, never a network access and never a silently empty
+/// import. `[]` is the ordinary "imports nothing" case and is required rather than defaulted,
+/// in the same position on all four hosts, so one call shape works everywhere.
+///
+/// Raises `ValueError` on `OWL_DIRECT` or `RIF` — each is defined by an input this
+/// signature does not carry, so both are refused by name rather than served by a weaker
+/// lane — on a malformed document, pattern or import document, on a duplicate or empty
+/// import IRI, on a pattern that names a graph, on a pattern that writes a variable in a
+/// literal's DATATYPE (a slot RDF reserves for an IRI, and one a basic graph pattern has no
+/// binding to project), on an `owl:imports` `imports` does not resolve, and on an
+/// inconsistent premise, whose refusal carries the full report.
+#[pyfunction]
+#[pyo3(signature = (regime, data, pattern, imports))]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+fn certain_answers(
+    py: Python<'_>,
+    regime: &Bound<'_, PyAny>,
+    data: &str,
+    pattern: &str,
+    imports: Vec<(String, String)>,
+) -> PyResult<(String, String)> {
+    let name = regime_name(native_regime(regime)?);
+    let table = import_list(&imports);
+    let answer = py
+        .detach(|| certain_answers_to_string(name, data, pattern, &table))
+        .map_err(PyValueError::new_err)?;
+    Ok(answer.into_parts())
+}
+
+/// Does `premise` entail the conclusion GRAPH under `regime`'s rule table?
+///
+/// NOT [`entails`], and the collision is real enough to state rather than rename away.
+/// [`entails`] asks the OWL 2 Direct-Semantics TABLEAU whether an ontology entails one
+/// AXIOM, and its certificate is a `purrdf-dl-certificate 1` block whose completeness
+/// counts hypertableau rounds. This asks the regime's RULE TABLE whether a premise
+/// entails a conclusion GRAPH, and its certificate is a `purrdf-reasoning-report 4` block
+/// whose completeness is the regime's own rule inventory.
+///
+/// Returns `(answer, certificate)`. The answer opens `mechanism <name>`: WHICH of the seven
+/// mechanisms reached the verdict. `strict-table` is the regime's own rule table, run
+/// once; `refutation`, `freeze`, `comprehension`, `reflexivity` and `data-range` each
+/// exist because that table DECIDES no conclusion of that shape; and `composite` is
+/// two or more of those folded over one conclusion.
+///
+/// Then THREE verdicts, never two. `entailment not-entailed` is a PROOF — the procedure
+/// was complete for this premise, so the absence of a mapping is the absence of an
+/// entailment — and `entailment undecided` is what an incomplete procedure is entitled to
+/// say instead. Reading the third as the second would turn a limitation of this library
+/// into a false statement about the caller's data.
+///
+/// `imports` is [`certain_answers`]'s, and applies to the PREMISE: the conclusion is a graph
+/// to match rather than an ontology to close, so an `owl:imports` in it names nothing this
+/// service resolves.
+///
+/// Raises `ValueError` as [`certain_answers`].
+#[pyfunction]
+#[pyo3(signature = (regime, premise, conclusion, imports))]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+fn graph_entails(
+    py: Python<'_>,
+    regime: &Bound<'_, PyAny>,
+    premise: &str,
+    conclusion: &str,
+    imports: Vec<(String, String)>,
+) -> PyResult<(String, String)> {
+    let name = regime_name(native_regime(regime)?);
+    let table = import_list(&imports);
+    let answer = py
+        .detach(|| graph_entails_to_string(name, premise, conclusion, &table))
+        .map_err(PyValueError::new_err)?;
+    Ok(answer.into_parts())
+}
+
+/// [`graph_entails`] with the warrant RE-DECIDED, without running a reasoner.
+///
+/// The re-check re-derives nothing, deliberately: "the closure follows from the premise"
+/// is the chase's claim and [`explain_conclusion`] is its checker, while "the conclusion
+/// follows from the closure" is this one and is finite and purely combinatorial.
+///
+/// Returns `(answer, certificate)`. The answer is [`graph_entails`]'s plus
+/// `warrant present|absent` and `verified true|false|not-applicable`. `warrant absent` /
+/// `verified not-applicable` is a `not-entailed` or an `undecided`: there is no evidence
+/// to re-decide, and a `false` there would read as a failed check rather than an absent
+/// one.
+///
+/// `imports` is [`certain_answers`]'s. The re-check runs against the premise AS WRITTEN
+/// rather than against its imports closure: a warrant re-decidable from the caller's own
+/// document is a stronger check than one only re-decidable against a graph the library
+/// assembled.
+///
+/// Raises `ValueError` as [`certain_answers`].
+#[pyfunction]
+#[pyo3(signature = (regime, premise, conclusion, imports))]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+fn verify_entailment(
+    py: Python<'_>,
+    regime: &Bound<'_, PyAny>,
+    premise: &str,
+    conclusion: &str,
+    imports: Vec<(String, String)>,
+) -> PyResult<(String, String)> {
+    let name = regime_name(native_regime(regime)?);
+    let table = import_list(&imports);
+    let answer = py
+        .detach(|| verify_entailment_to_string(name, premise, conclusion, &table))
+        .map_err(PyValueError::new_err)?;
+    Ok(answer.into_parts())
+}
+
 // ── The session ─────────────────────────────────────────────────────────────────
 
 /// A reasoning session over one ontology — `purrdf.entail.Reasoner`.
@@ -720,6 +887,9 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(extract_module, m)?)?;
     m.add_function(wrap_pyfunction!(justify, m)?)?;
     m.add_function(wrap_pyfunction!(explain_conclusion, m)?)?;
+    m.add_function(wrap_pyfunction!(certain_answers, m)?)?;
+    m.add_function(wrap_pyfunction!(graph_entails, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_entailment, m)?)?;
     Ok(())
 }
 

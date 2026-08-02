@@ -67,10 +67,11 @@ pub use build::{
 pub use entail::entail_to_ntriples_string;
 pub use model::{Level, SARIF_SCHEMA, SARIF_VERSION, SarifLog, to_json_pretty};
 pub use regime::{
-    INCONSISTENT_DOCUMENT, PROGRAM_REGIME_NAMES, REGIME_GOLDEN_VECTORS, REGIME_NAMES,
-    REPORT_FORMAT_BANNER, RegimeClosure, RegimeVector, check_inconsistent_refusal,
-    check_regime_golden_vectors, implemented_rules_string, materialize_to_nquads_string,
-    parse_regime, regime_golden_vectors, regime_name, regime_plan, regime_rule_set,
-    render_entail_error, render_reasoning_report, rules_string,
+    INCONSISTENT_DOCUMENT, ImportList, PROGRAM_REGIME_NAMES, REGIME_GOLDEN_VECTORS, REGIME_NAMES,
+    REPORT_FORMAT_BANNER, RegimeClosure, RegimeVector, certain_answers_to_string,
+    check_inconsistent_refusal, check_regime_golden_vectors, graph_entails_to_string,
+    implemented_rules_string, materialize_to_nquads_string, parse_regime, regime_golden_vectors,
+    regime_name, regime_plan, regime_rule_set, render_entail_error, render_reasoning_report,
+    rules_string, verify_entailment_to_string,
 };
 pub use shacl::validate_to_sarif_string;

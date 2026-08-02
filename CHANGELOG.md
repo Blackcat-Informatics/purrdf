@@ -1003,7 +1003,7 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 - **shapes:** Id-native SHACL engine over interned TermIds
 - **sparql-algebra:** Zero-copy lexer tokens borrowing the source
 - **entail:** Bare-RDF axiomatic predicate-typing entailment (rdf01)
-- **entail:** ALCOIQ OWL-Direct tableau reasoner core (concept, parser, tableau)
+- **entail:** SHOIQ(D) OWL-Direct tableau reasoner core (concept, parser, tableau)
 - **entail:** Query-directed OWL-Direct DL materialization clears 25 conformance cases
 - **entail:** RIF-Core rule engine clears rif01/03/04/06 (zero entailment xfails)
 - **entail:** Native OWL-DL tableau + RIF-Core engine + bare-RDF axiomatic entailment

@@ -77,12 +77,19 @@ conventional_commits = true
 filter_unconventional = false
 split_commits = false
 
-# Strip issue/PR references before parsing so no `#NNN` reaches the changelog.
+# Strip issue/PR references before parsing so no `#NNN` reaches the changelog, and
+# rewrite the decision core's two superseded fragment spellings to its one published
+# name. A commit subject is immutable once pushed, so `scripts/check-doc-claims.py`'s
+# stale-name ban — which reads the committed CHANGELOG.md along with the rest of the
+# documented surface — has no prose to fix there. Rewriting the name on the way in is the
+# only fix that survives `make changelog`, and it is the same shape as the `#NNN` rule
+# directly above it: a string that must never reach the changelog, removed once, here.
 commit_preprocessors = [
   { pattern = '\((?:closes?|fixes?|resolves?)\s+#\d+\)', replace = "" },
   { pattern = '\s*\(#\d+\)', replace = "" },
   { pattern = '#\d+', replace = "" },
   { pattern = '\(\s*\)', replace = "" },
+  { pattern = '\bALCH?OIQ\b', replace = "SHOIQ(D)" },
   { pattern = ' {2,}', replace = " " },
   { pattern = '\s+$', replace = "" },
 ]

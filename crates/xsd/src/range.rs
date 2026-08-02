@@ -321,6 +321,83 @@ pub fn is_exactly_decided(range: &DataRange) -> bool {
     extent(range).is_exact()
 }
 
+/// Whether `sub` is contained in `sup`, answered as the satisfiability of the
+/// **counterexample range** `sub ⊓ ¬sup`.
+///
+/// Read the three answers as:
+///
+/// | answer | meaning |
+/// |---|---|
+/// | [`Satisfiability::Empty`] | PROVED `sub ⊆ sup` — there is no value in `sub` outside `sup` |
+/// | [`Satisfiability::Inhabited`] | PROVED `sub ⊄ sup` — a witness in `sub` lies outside `sup` |
+/// | [`Satisfiability::Undecided`] | neither is proved |
+///
+/// # Why the return type is a satisfiability rather than a boolean
+///
+/// Because containment is the question and emptiness is the *evidence*, and the two are
+/// three-valued in the same way. A boolean would have to fold `Undecided` into one of the
+/// other two, and both foldings are wrong for some consumer: folding it into "contained"
+/// invents an inclusion, and folding it into "not contained" turns a limit of this module
+/// into a false statement about the caller's datatypes. A consumer that wants a verdict
+/// gates its NEGATIVE answer on [`is_exactly_decided`] of the same counterexample range;
+/// [`Satisfiability::Inhabited`] on a range that is not exactly decided is a witness that
+/// may or may not survive a finer decision procedure.
+///
+/// # Why this exists as a named function
+///
+/// The computation is one line, and written inline it is the double negative
+/// "is the conjunction of `sub` with the complement of `sup` empty?" — an expression whose
+/// argument order carries the whole meaning and reads identically when reversed. Naming it
+/// puts the direction in the call site (`containment(sub, sup)`) instead of in the reader's
+/// head.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_xsd::XsdDatatype;
+/// use purrdf_xsd::range::{DataRange, Satisfiability, containment};
+///
+/// let byte = DataRange::Datatype(XsdDatatype::Byte);
+/// let short = DataRange::Datatype(XsdDatatype::Short);
+///
+/// // Every byte is a short, and the containment does NOT hold the other way.
+/// assert_eq!(containment(&byte, &short), Satisfiability::Empty);
+/// assert_eq!(containment(&short, &byte), Satisfiability::Inhabited);
+///
+/// // A range this module models nothing about decides nothing, in either direction.
+/// assert_eq!(
+///     containment(&DataRange::Opaque, &short),
+///     Satisfiability::Undecided
+/// );
+/// ```
+#[must_use]
+pub fn containment(sub: &DataRange, sup: &DataRange) -> Satisfiability {
+    satisfiability(&counterexample(sub, sup))
+}
+
+/// The range a counterexample to `sub ⊆ sup` would have to inhabit.
+///
+/// Exposed beside [`containment`] because a consumer that gates a negative answer needs
+/// [`is_exactly_decided`] of exactly this range: exactness is closed under the boolean
+/// combination, so asking it of the two operands separately would be the same question asked
+/// in two places and able to drift.
+///
+/// ```rust
+/// use purrdf_xsd::XsdDatatype;
+/// use purrdf_xsd::range::{DataRange, counterexample, is_exactly_decided};
+///
+/// let short = DataRange::Datatype(XsdDatatype::Short);
+/// assert!(is_exactly_decided(&counterexample(&short, &short)));
+/// assert!(!is_exactly_decided(&counterexample(
+///     &DataRange::Opaque,
+///     &short
+/// )));
+/// ```
+#[must_use]
+pub fn counterexample(sub: &DataRange, sup: &DataRange) -> DataRange {
+    DataRange::And(vec![sub.clone(), DataRange::Not(Box::new(sup.clone()))])
+}
+
 /// XSD/OWL 2 **value-space identity**: whether `a` and `b` are the same value.
 ///
 /// This is NOT [`crate::value_eq`] (SPARQL `=`). Two differences:
@@ -2941,5 +3018,112 @@ mod tests {
         assert_eq!(TemporalSpace::GMonthDay.size(), Some(366 * 1682));
         assert_eq!(TemporalSpace::Date.size(), None);
         assert_eq!(TemporalSpace::Duration.size(), None);
+    }
+
+    // ── Containment ──────────────────────────────────────────────────────────────
+
+    /// The XSD integer tower NESTS, and containment is asymmetric along it.
+    #[test]
+    fn containment_follows_the_integer_tower() {
+        let nested = [
+            (XsdDatatype::Byte, XsdDatatype::Short),
+            (XsdDatatype::Short, XsdDatatype::Int),
+            (XsdDatatype::Int, XsdDatatype::Long),
+            (XsdDatatype::Long, XsdDatatype::Integer),
+            (XsdDatatype::Integer, XsdDatatype::Decimal),
+            (XsdDatatype::UnsignedByte, XsdDatatype::UnsignedShort),
+            (XsdDatatype::NonNegativeInteger, XsdDatatype::Integer),
+        ];
+        for (sub, sup) in nested {
+            assert_eq!(
+                containment(&DataRange::Datatype(sub), &DataRange::Datatype(sup)),
+                Satisfiability::Empty,
+                "{sub:?} is contained in {sup:?}"
+            );
+            assert_eq!(
+                containment(&DataRange::Datatype(sup), &DataRange::Datatype(sub)),
+                Satisfiability::Inhabited,
+                "{sup:?} is NOT contained in {sub:?}"
+            );
+        }
+    }
+
+    /// An INTERSECTION of two datatypes can be contained in a third that contains neither.
+    #[test]
+    fn an_intersection_can_be_contained_where_no_operand_is() {
+        // short ⊓ unsignedInt ⊆ unsignedShort, while neither operand is.
+        let both = DataRange::And(vec![
+            DataRange::Datatype(XsdDatatype::Short),
+            DataRange::Datatype(XsdDatatype::UnsignedInt),
+        ]);
+        let target = DataRange::Datatype(XsdDatatype::UnsignedShort);
+        assert_eq!(containment(&both, &target), Satisfiability::Empty);
+        assert_eq!(
+            containment(&DataRange::Datatype(XsdDatatype::Short), &target),
+            Satisfiability::Inhabited
+        );
+        assert_eq!(
+            containment(&DataRange::Datatype(XsdDatatype::UnsignedInt), &target),
+            Satisfiability::Inhabited
+        );
+
+        // nonNegativeInteger ⊓ nonPositiveInteger = {0} ⊆ short.
+        let zero = DataRange::And(vec![
+            DataRange::Datatype(XsdDatatype::NonNegativeInteger),
+            DataRange::Datatype(XsdDatatype::NonPositiveInteger),
+        ]);
+        assert_eq!(
+            containment(&zero, &DataRange::Datatype(XsdDatatype::Short)),
+            Satisfiability::Empty
+        );
+    }
+
+    /// A range contains itself, and the empty range is contained in everything.
+    #[test]
+    fn containment_is_reflexive_and_the_empty_range_is_least() {
+        let short = DataRange::Datatype(XsdDatatype::Short);
+        assert_eq!(containment(&short, &short), Satisfiability::Empty);
+        let empty = DataRange::Or(Vec::new());
+        assert_eq!(containment(&empty, &short), Satisfiability::Empty);
+        // …and nothing but the whole domain contains `rdfs:Literal`.
+        assert_eq!(
+            containment(&DataRange::Any, &short),
+            Satisfiability::Inhabited
+        );
+        assert_eq!(
+            containment(&DataRange::Any, &DataRange::Any),
+            Satisfiability::Empty
+        );
+    }
+
+    /// DISJOINT value spaces are not contained in one another, in either direction.
+    #[test]
+    fn disjoint_value_spaces_contain_nothing_of_each_other() {
+        let float = DataRange::Datatype(XsdDatatype::Float);
+        let decimal = DataRange::Datatype(XsdDatatype::Decimal);
+        assert_eq!(containment(&float, &decimal), Satisfiability::Inhabited);
+        assert_eq!(containment(&decimal, &float), Satisfiability::Inhabited);
+    }
+
+    /// An OPAQUE operand decides nothing, on either side — and `is_exactly_decided` of the
+    /// counterexample range is the predicate that says so, which is what a consumer gates a
+    /// negative answer on.
+    #[test]
+    fn an_opaque_operand_is_undecided_and_says_so() {
+        let short = DataRange::Datatype(XsdDatatype::Short);
+        for (sub, sup) in [(&DataRange::Opaque, &short), (&short, &DataRange::Opaque)] {
+            assert_eq!(containment(sub, sup), Satisfiability::Undecided);
+            assert!(!is_exactly_decided(&counterexample(sub, sup)));
+        }
+        assert!(is_exactly_decided(&counterexample(&short, &short)));
+    }
+
+    /// An `xsd:pattern` facet is modelled as [`DataRange::Opaque`], so a range carrying one
+    /// is UNDECIDED against anything rather than reported as uncontained.
+    #[test]
+    fn a_pattern_facet_leaves_containment_undecided() {
+        let patterned = DataRange::Opaque;
+        let strings = DataRange::Datatype(XsdDatatype::String);
+        assert_eq!(containment(&patterned, &strings), Satisfiability::Undecided);
     }
 }

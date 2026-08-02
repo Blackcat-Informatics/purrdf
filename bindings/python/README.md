@@ -268,10 +268,12 @@ line rather than with a missing rule, and `completeness` reads
 
 **78 / 78 is rule-table coverage, and rule-table coverage is not entailment
 conformance.** The two are measured separately and stating only the first is the
-overclaim the reasoning report exists to prevent: on W3C's own OWL 2 RL entailment
-tests this chase reaches 11 of 27 published positive entailments and correctly
-withholds on 23 of 23 negative ones — the latter meaning no unsoundness was found.
-Both numbers are true. The full scoreboard, the typed divergence ledger, and every
+overclaim the reasoning report exists to prevent: on this vendored W3C corpus of
+OWL 2 RL entailment tests this chase reaches 27 of 27 published positive entailments, and agrees
+with W3C on 23 of 23 negative ones — 3 of those 23 *refuted*, a decided
+non-entailment, and 20 *admitted*, the closure computed and observed not to contain
+the non-conclusion. Read the negative figure as "no unsoundness found", never as
+"23 non-entailments proved". Both numbers are true. The full scoreboard, the typed divergence ledger, and every
 other suite are in
 [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md).
 
@@ -301,6 +303,101 @@ being able to not ask for it:
 | Module extraction | `entail.extract_module(data, signature, method)` | the locality module as canonical N-Quads; `method` is `"bot"`, `"top"` or `"star"` |
 | Justification | `entail.justify(data, axiom)` | a minimal subset of the ontology that still entails `axiom`, as canonical N-Quads |
 | Proof | `entail.explain_conclusion(data, regime, conclusion)` | `asserted`, `steps`, and one `rule` line per rule the derivation cited |
+
+The three services below are the **chase** lane's, not the tableau's, and their
+certificate is a `purrdf-reasoning-report 4` block rather than a DL one. Note the
+collision and that both names are right: `entail.entails` asks the tableau about one
+*axiom* of the OWL 2 RDF mapping, while `entail.graph_entails` asks the regime's *rule
+table* whether a premise entails a conclusion *graph*.
+
+| Service | Call | Answer |
+| --- | --- | --- |
+| Certain answers | `entail.certain_answers(regime, data, pattern, imports)` | `mechanism`, one `var` line per projected variable, one `row` per certain answer, and a `limit` line per reason the row set may not be exhaustive |
+| Graph entailment | `entail.graph_entails(regime, premise, conclusion, imports)` | `mechanism <name>`, then `entailment entailed` / `not-entailed` / `undecided` — three verdicts, never two |
+| Verified entailment | `entail.verify_entailment(regime, premise, conclusion, imports)` | the above plus `warrant present`/`absent` and `verified true`/`false`/`not-applicable` |
+
+`pattern` is N-Triples with `?name` in any position, the **predicate** included; a blank
+node in it is a non-distinguished variable, constrained by the match and not projected,
+which is what SPARQL says a query blank node is. A variable inside an RDF 1.2 triple term
+is an ordinary variable — it binds and it is a column — and one *name* is one *variable*
+wherever it was written, so `?x <ex:p> <<( ?x <ex:q> <ex:r> )>>` is the join it reads as.
+A row is a substitution the knowledge
+base *entails* the pattern under — true in every model, not merely present in one closure.
+The one slot that admits no variable is a literal's **datatype**: `"5"^^?d` asks for a
+binding in a position that holds an IRI rather than a term, and raises `ValueError`
+naming it.
+
+A predicate variable is projected like any other, and under `OWL_RL` it also renders a
+`limit`: it ranges over the whole predicate vocabulary, so it ranges over the schema
+predicates no rule of the table concludes and over the constructs the mechanisms beyond
+the table decide, and the closure the rows are drawn from holds neither.
+
+A pattern with **no** `?name` in it is a conclusion *graph*, so `certain_answers` and
+`graph_entails` are asking one question and answer it through one fold: the mechanism is
+whichever one actually reached it, and the relation has no columns — a `yes` is one bare
+`row` line, a `no` is none. With something to project the five mechanisms beyond the rule
+table are not run, because a projected variable over what any of them decides is a
+different question; that one of them *would* have been needed arrives as a `limit` line
+naming the lane, never as an exhaustive empty answer.
+
+`mechanism` says *which* of seven mechanisms reached the verdict. `strict-table` is the
+regime's own rule table, run once; `refutation`, `freeze`, `comprehension`,
+`reflexivity` and `data-range` each exist because that table *decides* no conclusion
+of that shape, and none of them adds a rule to it. `composite` is two or
+more of those folded over one conclusion — each discharging the triples it reads and
+handing the rest on — and it is spelled that way rather than by any one constituent's
+name, which would say that one mechanism sufficed.
+
+`entailment not-entailed` is a **proof** — the procedure was complete for this premise,
+so the absence of a mapping is the absence of an entailment — while `undecided` is what
+an incomplete procedure is entitled to say instead. Reading the second as the first
+would turn a limitation of this library into a false statement about your ontology.
+
+### `imports` — the documents your premise says it is not all of
+
+`imports` is an ordered sequence of `(ontology_iri, document)` pairs, where `document` is
+N-Quads (or N-Triples) text exactly like the premise. An ontology carrying an
+`owl:imports` states that its axioms are its own *plus* those of the documents it names,
+so answering over the premise alone would answer a different question — this is where
+those documents go, and your `owl:imports` triple stays exactly where you wrote it.
+
+**PurRDF fetches nothing.** An ontology IRI you did not supply raises `ValueError` naming
+the document, never a network access and never a silently empty import. `[]` is the
+ordinary *imports nothing* case; the argument is required rather than defaulted, in the
+same position on all four hosts, so one call shape works from Python, from JavaScript,
+from C and from Rust. Resolution is transitive to a fixpoint, so a supplied document's
+own `owl:imports` is followed too.
+
+```python
+from purrdf import entail
+
+premise = (
+    "<https://example.org/o>"
+    " <http://www.w3.org/2002/07/owl#imports> <https://example.org/schema> .\n"
+    "<https://example.org/socrates>"
+    " <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://example.org/Man> .\n"
+)
+schema = (
+    "<https://example.org/Man>"
+    " <http://www.w3.org/2000/01/rdf-schema#subClassOf> <https://example.org/Mortal> .\n"
+)
+conclusion = (
+    "<https://example.org/socrates>"
+    " <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://example.org/Mortal> .\n"
+)
+
+answer, _ = entail.graph_entails(
+    "owl-rl", premise, conclusion, [("https://example.org/schema", schema)]
+)
+assert "entailment entailed" in answer
+
+# The same call with nothing supplied refuses BY NAME rather than reasoning over a
+# premise that is missing the axioms it told you about.
+try:
+    entail.graph_entails("owl-rl", premise, conclusion, [])
+except ValueError as refusal:
+    assert "https://example.org/schema" in str(refusal)
+```
 
 ```python
 from purrdf import entail

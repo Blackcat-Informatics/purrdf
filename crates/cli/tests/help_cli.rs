@@ -27,7 +27,7 @@ fn run(args: &[&str]) -> (i32, String, String) {
 fn top_level_help_lists_all_subcommands() {
     let (code, stdout, _) = run(&["--help"]);
     assert_eq!(code, 0, "`--help` exits 0");
-    for subcommand in ["convert", "query", "reason", "project", "lift"] {
+    for subcommand in ["convert", "query", "reason", "entails", "project", "lift"] {
         assert!(
             stdout.contains(subcommand),
             "top-level help must list `{subcommand}`; got:\n{stdout}"
@@ -152,6 +152,41 @@ fn reason_help_lists_options_and_regime_choices() {
         assert!(
             stdout.contains(choice),
             "reason help must list the `{choice}` regime; got:\n{stdout}"
+        );
+    }
+}
+
+/// `entails --help` lists the flags that reach the conclusion-directed boundary.
+///
+/// Every one of them is a boundary PARAMETER or a service SELECTOR: `--regime`,
+/// `--premise` and `--import` are the parameter list, and `--conclusion` / `--verify` /
+/// `--pattern` pick which of the three services answers. A flag missing here is a
+/// capability the binary cannot reach, which is exactly what
+/// `scripts/check-entailment-surface.py` gates against from the other side.
+#[test]
+fn entails_help_lists_the_boundary_flags_and_regime_choices() {
+    let (code, stdout, _) = run(&["entails", "--help"]);
+    assert_eq!(code, 0, "`entails --help` exits 0");
+    for option in [
+        "--regime",
+        "--premise",
+        "--conclusion",
+        "--pattern",
+        "--verify",
+        "--import",
+        "--report",
+        "--from",
+        "OUT",
+    ] {
+        assert!(
+            stdout.contains(option),
+            "entails help must list `{option}` (OUT is positional); got:\n{stdout}"
+        );
+    }
+    for choice in ["simple", "rdf", "rdfs", "owl-rl", "d"] {
+        assert!(
+            stdout.contains(choice),
+            "entails help must list the `{choice}` regime; got:\n{stdout}"
         );
     }
 }

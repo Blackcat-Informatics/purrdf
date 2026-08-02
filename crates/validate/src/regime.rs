@@ -84,10 +84,11 @@ use core::fmt::Write as _;
 
 use purrdf_core::{RdfLiteral, RdfTerm, RdfTriple, TermValue, emit_term};
 use purrdf_entail::{
-    ChaseProof, Completeness, DlAxiom, DlCertificate, DlCompleteness, EntailError, Justification,
+    ChaseProof, Completeness, DlAxiom, DlCertificate, DlCompleteness, EntailError,
+    EntailmentCertificate, EntailmentMechanism, EntailmentOutcome, ImportMap, Justification,
     Materialization, ModuleExtraction, ModuleMethod, OwlProfile, ProfileCertificate, Reasoner,
-    ReasoningReport, Regime, RuleSet, Verdict, explain_conclusion, extensions, extract_module,
-    implemented, justify, materialize, parse_rif_xml, profile, rules,
+    ReasoningReport, Regime, RuleSet, VarKey, Verdict, explain_conclusion, extensions,
+    extract_module, implemented, justify, materialize, parse_rif_xml, profile, rules,
 };
 
 /// The accepted regime spellings, in the order an error message lists them.
@@ -123,16 +124,29 @@ pub const PROGRAM_REGIME_NAMES: [&str; 1] = ["rif"];
 
 /// The version banner every rendered report opens with.
 ///
-/// `3` because the grammar moved, which is the whole reason a banner is emitted at all.
-/// Against `2`, two lines are new and nothing was removed:
+/// `4` because the grammar moved, which is the whole reason a banner is emitted at all.
+/// Against `3`, ONE line is new and nothing was removed:
 ///
-/// * `extension <rule-id>` — the rules the run's calculus states that NO specification
-///   table does. Without it a caller reading `completeness exact-within-boundaries` and
-///   `fired ext-eq-diff-sym 1` had to know, from prose, that one of those ids is not in
-///   OWL 2 Profiles §4.3 and the other seventy-eight are.
-/// * `termination …` — the weak-acyclicity certificate the restricted chase computed to
-///   admit the program it then ran. It was computed on every `rdf` and `rdfs` run and read
-///   by nothing, so a proof the workspace had already paid for reached no caller.
+/// * `mechanism none | mechanism <name> <why>` — WHICH of the conclusion-directed
+///   entailment service's seven mechanisms read an answer off this run, and the semantic
+///   boundary of the rule table that mechanism crosses.
+///   [`purrdf_entail::entails()`] reaches a conclusion six ways, and five of them exist
+///   because the regime's rule table decides no conclusion of that shape — a
+///   negative fact, a schema axiom, an anonymous class expression, a self-loop over a
+///   construct outside the syntax, a containment between value spaces. Without this line
+///   "the rule table decided this" and "the table has no head of this shape and a second
+///   run over the premise's negation did" rendered as the same report, so the one fact a
+///   reader most needs about a `yes` — how it was reached — was the one fact the report
+///   did not carry. `none` is a materialization: it answered no conclusion-directed
+///   question, and saying so is not the same as having no mechanism to name.
+///
+/// Against `2`, two lines were new: `extension <rule-id>` — the rules the run's calculus
+/// states that NO specification table does, without which a caller reading `completeness
+/// exact-within-boundaries` and `fired ext-eq-diff-sym 1` had to know from prose that one
+/// of those ids is not in OWL 2 Profiles §4.3 and the other seventy-eight are — and
+/// `termination …`, the weak-acyclicity certificate the restricted chase computed to admit
+/// the program it then ran, which was computed on every `rdf` and `rdfs` run and read by
+/// nothing.
 ///
 /// Against `1`: the `withheld-surrogates` count is rendered (it was reachable only
 /// from the CLI's private renderer, so the four existential rules were unobservable from
@@ -144,7 +158,7 @@ pub const PROGRAM_REGIME_NAMES: [&str; 1] = ["rif"];
 /// It is also the marker that lets a REFUSAL carry a report: an inconsistent run has no
 /// closure, so its certificate travels in the error message, beginning at the first line
 /// equal to this banner. See [`render_entail_error`].
-pub const REPORT_FORMAT_BANNER: &str = "purrdf-reasoning-report 3";
+pub const REPORT_FORMAT_BANNER: &str = "purrdf-reasoning-report 4";
 
 /// The media type this boundary parses its input document as.
 ///
@@ -496,13 +510,14 @@ fn rule_lines(rules: &[purrdf_entail::RuleId]) -> String {
 /// The grammar, in emission order — one fact per line, `\n`-terminated:
 ///
 /// ```text
-/// purrdf-reasoning-report 3
+/// purrdf-reasoning-report 4
 /// regime <cli-spelling>
 /// completeness exact | completeness exact-within-boundaries | completeness sound-incomplete <count>
 /// missing <rule-id>                       (0..n, specification table order)
 /// extension <rule-id>                     (0..n, declaration order)
 /// fired <rule-id> <conclusions>           (0..n, specification table order)
 /// boundary <construct> <reason>           (0..n, Construct declaration order)
+/// mechanism none | mechanism <name> <why>
 /// budget join-steps <n>
 /// budget stored-facts <n>
 /// budget term-arena-bytes <n>
@@ -534,6 +549,25 @@ fn rule_lines(rules: &[purrdf_entail::RuleId]) -> String {
 /// they differ between those two lanes and do not vary with the data. Every other regime
 /// renders `none`, which says its rules invent no term and so owe no proof — not that
 /// termination is unknown.
+///
+/// `mechanism` sits with the `boundary` lines above it because it answers the same question
+/// one step further out: those say what the RUN could not fully handle, and this says which
+/// of [`purrdf_entail::entails()`]'s seven mechanisms actually read the answer off it, together
+/// with the semantic boundary of the rule table that mechanism crosses. `strict-table` is a
+/// positive claim — the regime's own table was run once and the conclusion was matched into
+/// (or proven absent from) its closure — and it is the only spelling a `not entailed` can
+/// carry, because refuting needs the completeness half of a theorem and only the table has
+/// one. The other five (`refutation`, `freeze`, `comprehension`, `reflexivity`,
+/// `data-range`) each exist because the table DECIDES no conclusion of that shape — Theorem
+/// PR1 claims completeness only for assertional conclusions over named individuals, and for
+/// several of them Tables 4–9 state no head of the shape at all — and none of them adds a
+/// rule: `missing`, `extension` and `fired` above are byte-identical
+/// whichever answered. `composite` is two or more of those five folded over one conclusion —
+/// a conclusion GRAPH is a conjunction, so it can need a lane per half — and it is spelled
+/// that way rather than by any constituent's name, which would tell a reader that one
+/// mechanism sufficed. `none` is a materialization, which asked no conclusion-directed
+/// question at all. The name is the mechanism's own `as_str` spelling and never an enum
+/// ordinal, so an eighth arm cannot silently renumber a consumer's reading of an old one.
 ///
 /// `completeness` has three forms and the middle one is the interesting one:
 /// `exact-within-boundaries` says the rule TABLE was complete and the run still
@@ -588,8 +622,10 @@ pub fn render_reasoning_report(report: &ReasoningReport) -> String {
 /// than parsing prose.
 ///
 /// Every other variant is the ABSENCE of a run — an exhausted ceiling, a malformed
-/// document, an unsatisfiable tableau — and has no report to carry, so it renders as its
-/// own diagnostic and nothing is implied about a closure that was never assembled.
+/// document, an unsatisfiable tableau, a regime the conclusion-directed service is not
+/// total over, an unresolved `owl:imports`, an exhausted match budget — and has no report to
+/// carry, so it renders as its own diagnostic and nothing is implied about a closure that
+/// was never assembled.
 #[must_use]
 pub fn render_entail_error(regime: &str, error: &EntailError) -> String {
     let head = format!("entailment regime \"{regime}\": {error}");
@@ -602,6 +638,9 @@ pub fn render_entail_error(regime: &str, error: &EntailError) -> String {
         | EntailError::Evaluate(_)
         | EntailError::Chase(_)
         | EntailError::MalformedList(_)
+        | EntailError::UnsupportedRegime(_)
+        | EntailError::UnresolvedImport(_)
+        | EntailError::MatchBudget
         | EntailError::Unsatisfiable => head,
     }
 }
@@ -650,6 +689,15 @@ impl fmt::Display for RenderedReport<'_> {
                 boundary.construct().as_str(),
                 boundary.reason()
             )?;
+        }
+        // Beside the boundaries, and one step further out: they say what the run could not
+        // fully handle, this says which mechanism read an answer off it and which semantic
+        // boundary of the rule table that mechanism crosses.
+        match report.mechanism() {
+            None => writeln!(f, "mechanism none")?,
+            Some(mechanism) => {
+                writeln!(f, "mechanism {} {}", mechanism.as_str(), mechanism.reason())?;
+            }
         }
         let budget = report.budget();
         writeln!(f, "budget join-steps {}", budget.join_steps())?;
@@ -2300,6 +2348,836 @@ fn render_chase_proof_certificate(proof: &ChaseProof) -> String {
     out
 }
 
+// ── The conclusion-directed entailment services ─────────────────────────────
+
+/// The `mechanism` line every conclusion-directed answer opens its provenance with.
+///
+/// Rendered on the ANSWER as well as inside the certificate's report, and that repetition
+/// is deliberate rather than redundant: the answer is what a caller branches on, and a
+/// caller that must act only on a conclusion the normative rule table reached needs the
+/// mechanism without parsing a certificate. It is the mechanism's own `as_str` spelling in
+/// both places, never an enum ordinal, so the two cannot drift and neither can be renumbered
+/// by a seventh mechanism arriving.
+fn render_mechanism(mechanism: EntailmentMechanism) -> String {
+    format!("mechanism {}\n", mechanism.as_str())
+}
+
+/// Render a [`VarKey`] in the syntax the question wrote it in.
+///
+/// A projected variable comes back as `?name` and a non-distinguished one as the N-Triples
+/// blank node it was — which is what SPARQL says a query blank node is, and what keeps the
+/// two distinguishable in a `binding` line without a third column saying which kind it is.
+fn emit_var(key: &VarKey) -> String {
+    match key {
+        VarKey::Projected(name) => format!("?{name}"),
+        VarKey::Blank { label, scope } => emit(&TermValue::Blank {
+            label: label.clone(),
+            scope: *scope,
+        }),
+    }
+}
+
+/// The IRI namespace a query VARIABLE is rewritten into before parsing.
+///
+/// See [`parse_bgp`] for why the rewrite happens at all and why the namespace is an IRI
+/// rather than a blank node. It is extended with `q`s until it occurs nowhere in the
+/// caller's own text, so a caller writing `<urn:purrdf-query-variable:purrdfQvar0>`
+/// themselves cannot have it read as a projected variable.
+///
+/// This is NOT a vocabulary term and PurRDF does not mint one: nothing is ever asserted
+/// about it, it denotes nothing, it is not written to any output, and [`parse_bgp`] maps
+/// every occurrence back to a variable before the pattern leaves this function — so it
+/// cannot reach a row, a binding, a warrant or a report. It is a `urn:` rather than an
+/// `http:` name for exactly that reason: there is nothing to dereference.
+const QUERY_VAR_IRI: &str = "urn:purrdf-query-variable:purrdfQvar";
+
+/// Parse a basic graph pattern written as N-Triples with `?name` in any position.
+///
+/// # Why the variables are rewritten rather than tokenized
+///
+/// An RDF term's syntax is the parser's business, and this boundary has a parser: IRIs with
+/// escapes, literals whose lexical form holds a `>` or a `?`, language tags, base directions
+/// and RDF 1.2 triple terms are all things `purrdf_rdf::parse_dataset` already gets right. A
+/// hand-rolled term scanner here would be a second, worse copy of that, and the first thing
+/// it would get wrong is the `?` inside an IRI's query string.
+///
+/// So the ONLY thing scanned here is where a `?` is legal to start a variable: outside an
+/// IRI, outside a literal and outside a comment. Each such variable is rewritten to a term
+/// in the [`QUERY_VAR_IRI`] namespace, the whole document goes through the real parser, and
+/// every such term is mapped back to [`QNode::Var`]. A blank node the caller wrote is left
+/// alone and stays what SPARQL says it is — a non-distinguished variable, constrained by the
+/// match and not projected.
+///
+/// # An IRI is the stand-in, because a blank node is not legal in every position
+///
+/// The stand-in used to be a blank node, and that made the promise above false in exactly
+/// one position: RDF forbids a blank node as a PREDICATE, so `?s ?p ?o` — the most ordinary
+/// basic graph pattern there is — was refused by the parser with a diagnostic about a
+/// construct the caller had not written. An IRI is legal in all three positions, so the
+/// stand-in is one, and the promise is now true rather than qualified.
+///
+/// # A variable INSIDE an RDF 1.2 triple term is THE SAME VARIABLE
+///
+/// [`QNode`] nests, so a variable inside a triple term is mapped back to [`QNode::Var`]
+/// exactly like one at top level and is projected exactly like one. That is not a
+/// convenience: one NAME is one VARIABLE wherever the caller wrote it, so
+/// `?x <ex:p> <<( ?x <ex:q> <ex:r> )>>` is the join it reads as, and a premise that fails
+/// it returns no row. A nested occurrence carried as a term of its own — a blank node, say
+/// — would have been a SECOND variable joined to the first by nothing, so the pattern
+/// would have matched premises that do not satisfy it. The nesting is in [`QNode`] for
+/// that reason and no other.
+///
+/// # A variable in a literal's DATATYPE is refused, by name
+///
+/// `"5"^^?d` is the one position the stand-in's own legality opens up: a datatype slot holds
+/// an IRI, so a blank-node stand-in was refused there by the parser and an IRI one is not.
+/// [`QNode`] has no variable-datatype form and SPARQL admits no variable in a datatype slot
+/// within a basic graph pattern, so the honest answer is the caller-visible refusal the
+/// blank-node stand-in used to get — with a message naming the position, instead of a
+/// parser diagnostic about a construct the caller did not write.
+///
+/// # The sweep reads the pattern the way the PARSER will read it
+///
+/// The stand-in namespace is extended with `q`s until it occurs nowhere in the caller's
+/// text — and "occurs" has to mean what the PARSER will see, not what the bytes spell. An
+/// N-Triples IRIREF admits `UCHAR` escapes, so `<urn:purrdf-query-variable:…>` and
+/// `<urn:pur\u0072df-query-variable:…>` are ONE IRI written two ways: the second does not
+/// contain the namespace as text, the parser hands back an IRI that does, and a sweep over
+/// the raw bytes alone would then read the caller's own IRI back as a variable — one
+/// spelling answering a different question from the other. So the sweep runs over the raw
+/// text AND over [`uchar_expanded`], and either occurrence extends the namespace.
+///
+/// That is sound rather than approximate. The lexer's only transformation of an IRIREF
+/// body is `\uXXXX`/`\UXXXXXXXX` decoding, and in a document that parses at all every `\`
+/// inside an IRIREF begins a valid `UCHAR` — so the expansion visits the same escapes the
+/// lexer does and yields a string containing every IRI value the parse can produce. A
+/// document where that is not true is one the parser refuses, and a refusal is not an
+/// answer. Expanding a `\u` the parser would NOT decode (in a comment, say) can only
+/// extend the namespace further, which costs a `q` and no correctness.
+///
+/// # Errors
+///
+/// A `?` with no name after it, a variable in a literal's datatype, or a document the
+/// N-Triples parser refuses.
+fn parse_bgp(text: &str) -> Result<Vec<purrdf_entail::QTriple>, String> {
+    // The one namespace the caller's own text does not contain — the IRI a variable is
+    // rewritten INTO, so no IRI the caller wrote can be read back as a variable, in either
+    // of the two ways N-Triples lets them write it (see the item docs).
+    let expanded = uchar_expanded(text);
+    let mut iri_prefix = QUERY_VAR_IRI.to_owned();
+    while text.contains(&iri_prefix) || expanded.contains(&iri_prefix) {
+        iri_prefix.push('q');
+    }
+    let mut names: Vec<String> = Vec::new();
+    let mut rewritten = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            // An IRI runs to the first `>`; N-Triples forbids an unescaped one inside.
+            //
+            // A SECOND `<` is not an IRI at all — it opens an RDF 1.2 triple term, `<<( s p
+            // o )>>`, whose own terms are scanned like any others. Reading it as an IRI
+            // swallowed everything up to the first `>` of the term's first IRI, and a `?`
+            // caught in that stretch reached the parser unrewritten, which then refused the
+            // caller's pattern for a `?` the scanner had hidden from itself.
+            '<' => {
+                rewritten.push(c);
+                if chars.peek() == Some(&'<') {
+                    rewritten.push('<');
+                    chars.next();
+                    continue;
+                }
+                for inner in chars.by_ref() {
+                    rewritten.push(inner);
+                    if inner == '>' {
+                        break;
+                    }
+                }
+            }
+            // A literal runs to the first UNESCAPED `"`.
+            '"' => {
+                rewritten.push(c);
+                let mut escaped = false;
+                for inner in chars.by_ref() {
+                    rewritten.push(inner);
+                    if escaped {
+                        escaped = false;
+                    } else if inner == '\\' {
+                        escaped = true;
+                    } else if inner == '"' {
+                        break;
+                    }
+                }
+            }
+            // A comment runs to the end of the line, and a `?` in one is prose.
+            '#' => {
+                rewritten.push(c);
+                for inner in chars.by_ref() {
+                    rewritten.push(inner);
+                    if inner == '\n' {
+                        break;
+                    }
+                }
+            }
+            '?' | '$' => {
+                let mut name = String::new();
+                while let Some(&next) = chars.peek() {
+                    if next.is_ascii_alphanumeric() || next == '_' {
+                        name.push(next);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                if name.is_empty() {
+                    return Err(format!(
+                        "a variable marker `{c}` with no name after it; a projected variable is \
+                         written `{c}name`"
+                    ));
+                }
+                let index = names
+                    .iter()
+                    .position(|known| *known == name)
+                    .unwrap_or_else(|| {
+                        names.push(name.clone());
+                        names.len() - 1
+                    });
+                let _ = write!(rewritten, "<{iri_prefix}{index}>");
+            }
+            _ => rewritten.push(c),
+        }
+    }
+
+    let dataset = purrdf_rdf::parse_dataset(rewritten.as_bytes(), INPUT_MEDIA_TYPE, None)
+        .map_err(|diagnostic| format!("the basic graph pattern is not N-Triples: {diagnostic}"))?;
+    // The variable index a stand-in IRI carries, or `None` for an IRI the caller wrote.
+    let slot = |iri: &str| -> Option<usize> {
+        iri.strip_prefix(iri_prefix.as_str())
+            .and_then(|index| index.parse::<usize>().ok())
+            .filter(|index| *index < names.len())
+    };
+    // One walk for all three positions and every depth below them: `restore_query_vars` is
+    // total over the term, so no stand-in can survive into a returned pattern, and a nested
+    // occurrence comes back as the SAME variable a top-level one does.
+    let node = |term: TermValue| -> Result<purrdf_entail::QNode, String> {
+        restore_query_vars(term, &slot, &names)
+    };
+    let mut bgp = Vec::new();
+    // `quads()` yields interned ids in document order, so the pattern's own triple order —
+    // and hence the column order `projected_vars` reads off it — is the caller's.
+    for quad in dataset.quads() {
+        if quad.g.is_some() {
+            return Err(
+                "a basic graph pattern is matched against the DEFAULT graph, so a pattern that \
+                 names a graph is refused rather than having that graph silently dropped"
+                    .to_owned(),
+            );
+        }
+        bgp.push(purrdf_entail::QTriple {
+            s: node(dataset.term_value(quad.s))?,
+            p: node(dataset.term_value(quad.p))?,
+            o: node(dataset.term_value(quad.o))?,
+        });
+    }
+    Ok(bgp)
+}
+
+/// `term`, as the query node it stands for: every [`QUERY_VAR_IRI`] stand-in inside it back
+/// to the variable the caller wrote — or the refusal of the one slot that has no such
+/// reading.
+///
+/// TOTAL over the term's structure, and that is the point rather than a detail: the stand-in
+/// is a name this boundary invented to get a variable past a parser, so an occurrence of it
+/// that survived into a returned pattern would reach a row, a binding or a warrant as though
+/// the caller had written it. This maps the three top-level positions AND everything below
+/// them, so there is no position a stand-in can come out of.
+///
+/// A stand-in below the top level becomes the same [`QNode::Var`] one at the top level does,
+/// carried by [`QNode::Triple`]. That is what makes one NAME one VARIABLE: the matcher keys
+/// a binding by the name at every depth, so `?x <ex:p> <<( ?x <ex:q> <ex:r> )>>` is the join
+/// it reads as. A nested occurrence demoted to a blank node instead — which is what this
+/// used to do — was a second variable that the first constrained in no way, so a premise
+/// failing the join still produced a row.
+///
+/// Totality is a claim about [`TermValue`]'s own definition, so here are its slots and what
+/// each one does with a stand-in:
+///
+/// * [`TermValue::Iri`] — an IRI slot, and the only one a stand-in can be PARSED into.
+///   Mapped back to the variable it stands for.
+/// * [`TermValue::Blank`] — `label` is a bare blank-node label and `scope` a structural
+///   ordinal. N-Triples' `BLANK_NODE_LABEL` admits no `:`, so no label can spell an IRI at
+///   all, and a blank node the caller wrote is the non-distinguished variable SPARQL says
+///   it is. Carried through unchanged.
+/// * [`TermValue::Literal`] — four slots, one of which is an IRI. `lexical_form` is opaque
+///   text the scanner never rewrites (a `?` inside a quoted literal is data); `language` is
+///   a `BCP 47`-shaped tag, which admits no `:` and so cannot spell an IRI; `direction` is
+///   an enum with no string at all; and `datatype` IS an IRI, which is why it is refused
+///   here rather than walked — see [`parse_bgp`]'s own docs.
+/// * [`TermValue::Triple`] — three nested term slots, each of which is one of the above.
+///   Recursed into, so the audit holds at every depth. A triple term with a variable
+///   anywhere inside it becomes [`QNode::Triple`]; a fully ground one stays a term.
+///
+/// A graph name is not a slot of a term: [`parse_bgp`] refuses a pattern that names a graph
+/// before it reads one, so no fourth position exists for a stand-in to reach.
+///
+/// `slot` is [`parse_bgp`]'s own reader, so the two cannot disagree about which IRIs are
+/// stand-ins, and `names` is its variable table, so a variable comes back under the name the
+/// caller actually wrote and a refusal can say which one it means.
+///
+/// # Errors
+///
+/// A stand-in in a literal's `datatype`. [`QNode`] has no variable-datatype form, so the
+/// alternatives are a refusal or a term of this boundary's own invented namespace reaching
+/// the matcher as if the caller had written it.
+fn restore_query_vars(
+    term: TermValue,
+    slot: &impl Fn(&str) -> Option<usize>,
+    names: &[String],
+) -> Result<purrdf_entail::QNode, String> {
+    match term {
+        TermValue::Iri(ref iri) => Ok(match slot(iri) {
+            Some(index) => purrdf_entail::QNode::Var(names[index].clone()),
+            None => purrdf_entail::QNode::Term(term),
+        }),
+        TermValue::Triple { s, p, o } => {
+            let s = restore_query_vars(*s, slot, names)?;
+            let p = restore_query_vars(*p, slot, names)?;
+            let o = restore_query_vars(*o, slot, names)?;
+            // A triple term with no variable in it is a TERM, not a three-node question:
+            // the pattern layer reads a ground `QNode::Term` and a ground `QNode::Triple`
+            // the same way, and keeping the term shape keeps an RDF 1.2 pattern's own terms
+            // the ones the caller wrote.
+            Ok(match (s, p, o) {
+                (
+                    purrdf_entail::QNode::Term(s),
+                    purrdf_entail::QNode::Term(p),
+                    purrdf_entail::QNode::Term(o),
+                ) => purrdf_entail::QNode::Term(TermValue::Triple {
+                    s: Box::new(s),
+                    p: Box::new(p),
+                    o: Box::new(o),
+                }),
+                (s, p, o) => purrdf_entail::QNode::Triple {
+                    s: Box::new(s),
+                    p: Box::new(p),
+                    o: Box::new(o),
+                },
+            })
+        }
+        TermValue::Literal {
+            ref lexical_form,
+            ref datatype,
+            ..
+        } => match slot(datatype) {
+            Some(index) => Err(format!(
+                "a variable is not a datatype IRI: `?{}` stands in the datatype of the literal \
+                 \"{lexical_form}\", and a basic graph pattern admits a variable only where a \
+                 term can be bound",
+                names[index]
+            )),
+            None => Ok(purrdf_entail::QNode::Term(term)),
+        },
+        TermValue::Blank { .. } => Ok(purrdf_entail::QNode::Term(term)),
+    }
+}
+
+/// `text` with every N-Triples `UCHAR` escape — `\uXXXX` and `\UXXXXXXXX` — replaced by the
+/// character it denotes.
+///
+/// The one string [`parse_bgp`]'s namespace sweep needs beside the raw text: an IRIREF's
+/// only decoding is this one, so an IRI the parser will hand back containing the stand-in
+/// namespace must spell that namespace here, whichever of the two ways the caller wrote it.
+/// See [`parse_bgp`] for why sweeping the raw bytes alone is not enough and why expanding an
+/// escape the parser would not decode costs nothing.
+///
+/// A `\` that does not begin a well-formed `UCHAR` is copied through as itself, exactly as
+/// the lexer leaves it — one that reaches an IRIREF makes the document unparseable, and one
+/// inside a literal is some other escape whose expansion no IRI can be read out of.
+fn uchar_expanded(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'\\'
+            && let Some((width, decoded)) = read_uchar(bytes, at)
+        {
+            out.push(decoded);
+            at += width;
+            continue;
+        }
+        // `at` is a char boundary: every byte consumed above is ASCII, and so is every byte
+        // of an escape, so the slice below always starts on one.
+        let character = text[at..]
+            .chars()
+            .next()
+            .expect("`at` is a char boundary inside the string");
+        out.push(character);
+        at += character.len_utf8();
+    }
+    out
+}
+
+/// The `UCHAR` escape starting at byte `at` (the `\`), as `(bytes consumed, character)`.
+///
+/// The escape is all-ASCII, so the byte count is the character count. `None` for anything
+/// that is not a complete, in-range `\uXXXX` / `\UXXXXXXXX` — the same reading the lexer
+/// this shadows applies, so the two agree about what an escape IS as well as about what it
+/// denotes.
+fn read_uchar(bytes: &[u8], at: usize) -> Option<(usize, char)> {
+    let width = match *bytes.get(at + 1)? {
+        b'u' => 4,
+        b'U' => 8,
+        _ => return None,
+    };
+    let mut value: u32 = 0;
+    for offset in 0..width {
+        // Sixteen times a 28-bit prefix plus a digit, `width` times: `\U`'s eight digits
+        // reach `u32::MAX` exactly, so no step can overflow.
+        value = value * 16 + char::from(*bytes.get(at + 2 + offset)?).to_digit(16)?;
+    }
+    Some((2 + width, char::from_u32(value)?))
+}
+
+/// The caller's `owl:imports` table, as an ORDERED list of `(ontology-iri, document)` pairs.
+///
+/// One entry declares that the ontology IRI an `owl:imports` names denotes that document —
+/// source text in N-Quads (which accepts N-Triples), the same media type the premise itself is
+/// read in, so
+/// one parser serves both and a caller holding two documents does not have to hold them in two
+/// syntaxes.
+///
+/// A LIST rather than a map, because a map's iteration order is the host's and this boundary's
+/// output is a promise: the same input always produces the same run, and a table whose entries
+/// arrive in an order the caller cannot see would make that promise depend on a hash seed.
+/// Order is the caller's, and it is preserved.
+pub type ImportList<'a> = [(&'a str, &'a str)];
+
+/// The caller's [`ImportList`] as a resolved [`ImportMap`], or the reason it is not one.
+///
+/// **This library fetches nothing.** An `owl:imports` names an ontology DOCUMENT, and PurRDF has
+/// no notion of what an ontology IRI dereferences to — inventing one would make an entailment
+/// depend on the network. So the imports closure is caller-supplied configuration, exactly like
+/// every other vocabulary this workspace reads, and an IRI the caller did not supply is a
+/// caller-visible hard error (`purrdf_entail::EntailError::UnresolvedImport`, rendered by
+/// [`render_entail_error`]) rather than a silently truncated premise.
+///
+/// The list is REQUIRED on every service that takes one, and the empty list is the ordinary
+/// "imports nothing" case — not a default standing in for an argument the caller forgot.
+///
+/// # Errors
+///
+/// A document that is not N-Quads; an entry with an empty ontology IRI, which no
+/// `owl:imports` object can ever equal and which would therefore be configuration that silently
+/// never applies; or one ontology IRI declared twice, where keeping either document would be a
+/// choice this boundary made on the caller's behalf.
+fn build_import_map(imports: &ImportList<'_>) -> Result<ImportMap, String> {
+    let mut map = ImportMap::new();
+    for (iri, document) in imports {
+        if iri.is_empty() {
+            return Err(
+                "an import entry names the empty ontology IRI, which no owl:imports object can \
+                 equal, so the document it supplies could never be resolved"
+                    .to_owned(),
+            );
+        }
+        let parsed = purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
+            .map_err(|diagnostic| {
+                format!("the import document for <{iri}> is not N-Quads: {diagnostic}")
+            })?;
+        if map.insert((*iri).to_owned(), parsed).is_some() {
+            return Err(format!(
+                "the import list declares <{iri}> twice; keeping either document would be a \
+                 choice this boundary made for the caller"
+            ));
+        }
+    }
+    Ok(map)
+}
+
+/// Parse the CONFIGURATION of a reasoning service — the regime name and the import table —
+/// which every service below does BEFORE it looks at a caller document.
+///
+/// The order is a contract, not an implementation detail. All three services can be handed
+/// more than one bad input at once, and a caller who fixes what the first one names has to
+/// be able to fix the same thing whichever service they called. Configuration comes first
+/// because a run that names no regime this library implements, or an import table it cannot
+/// read, has no question to ask yet: which of the caller's DOCUMENTS is also malformed is
+/// not yet a meaningful thing to report. `the_three_services_agree_on_error_precedence`
+/// drives all three with the same doubly-bad input and holds them to it.
+fn configuration(regime: &str, imports: &ImportList<'_>) -> Result<(Regime, ImportMap), String> {
+    let parsed = parse_regime(regime)?;
+    let map = build_import_map(imports)?;
+    Ok((parsed, map))
+}
+
+/// Parse a premise document as the N-Quads every service on this boundary takes.
+///
+/// The premise's diagnostic is rendered bare, unprefixed: it is the document the caller
+/// named first and the one a service with only one document has, so a prefix would be
+/// noise. A SECOND document — a conclusion, an import — says which one it is, because there
+/// the ambiguity is real.
+fn parse_premise(document: &str) -> Result<std::sync::Arc<purrdf_core::RdfDataset>, String> {
+    purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
+        .map_err(|diagnostic| diagnostic.to_string())
+}
+
+/// The CERTAIN ANSWERS of a basic graph pattern over `document` under `regime`.
+///
+/// A row is a substitution the knowledge base ENTAILS the pattern under — true in every
+/// model, not merely present in one closure — which is what SPARQL's entailment regimes
+/// define the answers to a basic graph pattern to be.
+///
+/// `pattern` is N-Triples with `?name` (or `$name`) in any position — the PREDICATE
+/// included, which is a position RDF reserves for an IRI and which this boundary reaches by
+/// rewriting each variable to a term drawn from a namespace swept out of the caller's own
+/// text, then mapping every occurrence back before the pattern is answered. Nothing of that
+/// namespace reaches a row, a binding or a report.
+///
+/// A blank node in the pattern is a NON-DISTINGUISHED variable: constrained by the match,
+/// not projected, and not a column — which is what SPARQL says a query blank node is.
+///
+/// A variable INSIDE an RDF 1.2 triple term is an ordinary variable: it binds, it is a
+/// column, and one NAME is one VARIABLE wherever the caller wrote it — so
+/// `?x <ex:p> <<( ?x <ex:q> <ex:r> )>>` is the join it reads as and a premise that fails it
+/// yields no row.
+///
+/// A predicate variable is projected like any other, and under `owl-rl` it also renders a
+/// `limit`: it ranges over the whole predicate vocabulary, so it ranges over the schema
+/// predicates no head of Tables 4–9 concludes and over the constructs the mechanisms beyond
+/// the table decide, neither of which the closure this service enumerates from holds.
+///
+/// The answer's grammar, in emission order:
+///
+/// ```text
+/// mechanism <name>
+/// var <name>              (0..n, in the order the pattern first mentions each)
+/// row <term> …            (0..n, one per certain answer, positionally aligned to `var`)
+/// limit <reason>          (0..n)
+/// ```
+///
+/// A `limit` line is a reason the row set may not be EXHAUSTIVE. Every row is sound
+/// unconditionally — the mechanism that found it is sound — and what needs a precondition is
+/// the claim a caller makes about a row that is NOT there. So the absence of `limit` lines
+/// is the claim that the row set is complete, and there is deliberately no `complete
+/// true|false` line beside them: it would be a boolean function of lines already rendered,
+/// which this boundary omits rather than restates.
+///
+/// # `mechanism` is a MEASUREMENT, and a pattern with no `?var` is an entailment question
+///
+/// A pattern with something to project reads `mechanism strict-table`, and that is a claim
+/// rather than a placeholder: the five mechanisms beyond the rule table are not run for one,
+/// each because a projected variable over what it decides would be a different question. That
+/// they would have been NEEDED is not silence — it arrives as a `limit` line naming the lane
+/// and the construct, so an empty row set never reads as exhaustive when nothing tested it.
+///
+/// A pattern with NO projected variable is a conclusion graph — every position is a term or a
+/// blank node — so it is the question [`graph_entails_to_string`] asks, it is answered by the
+/// same fold, and it renders whichever of the seven mechanisms reached it. Such an answer is
+/// the relation with no columns: one bare `row` line for a `yes` (the empty substitution) and
+/// none for a `no`, which is what SPARQL says an answer with nothing to project is. The two
+/// entry points cannot disagree about such a question, because one call answers both.
+///
+/// The certificate is the run's [`ReasoningReport`], rendered by
+/// [`render_reasoning_report`]. There is no answers-without-a-report entry point: an empty
+/// row set is the answer a caller is most likely to act on and the one that says least on
+/// its own.
+///
+/// # `imports` — the documents the premise says it is not all of
+///
+/// An ordered [`ImportList`] of `(ontology-iri, document)` pairs. A premise carrying an
+/// `owl:imports` is an ontology stating that its axioms are its own PLUS those of the
+/// documents it names, so answering over the premise alone would answer a different question;
+/// this is where those documents arrive. The library fetches nothing, so an imported IRI this
+/// list does not resolve is refused BY NAME rather than treated as an empty document. The
+/// empty list is the ordinary "imports nothing" case, and the argument is required rather than
+/// defaulted for the same reason `program` is.
+///
+/// # Errors
+///
+/// An unknown regime spelling; a regime this service is not total over (`owl-direct` and
+/// `rif` are each defined by an input this signature does not carry); a malformed document,
+/// pattern or import document; a duplicate or empty import IRI; a pattern that names a graph;
+/// a pattern that writes a variable in a literal's DATATYPE, which is a slot RDF reserves for
+/// an IRI and for which a basic graph pattern has no binding to project; an `owl:imports`
+/// `imports` does not resolve; an inconsistent premise, whose refusal carries the full report;
+/// or an exhausted match budget.
+///
+/// When several of those hold at once, the CONFIGURATION is reported first — the regime
+/// spelling, then the import table — and only then the caller's documents. That precedence
+/// is the same on all three services, so a caller who switches between them is told to fix
+/// the same thing.
+///
+/// ```
+/// use purrdf_validate::regime::certain_answers_to_string;
+///
+/// let data = "<http://example.org/Cat> \
+///     <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .\n\
+///     <http://example.org/tom> \
+///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .\n";
+/// let pattern = "<http://example.org/tom> \
+///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?c .\n";
+/// let answers = certain_answers_to_string("owl-rl", data, pattern, &[]).expect("answers");
+/// assert!(answers.answer().starts_with("mechanism strict-table\nvar c\n"));
+/// // `?c` ranges over the ENTAILED types, not the asserted one.
+/// assert!(answers.answer().contains("\nrow <http://example.org/Animal>\n"));
+/// // Nothing beyond the rule table was needed, so the row set is exhaustive and says so by
+/// // rendering no `limit` line at all.
+/// assert!(!answers.answer().contains("\nlimit "));
+/// // The certificate's own line carries the semantic boundary beside the name.
+/// assert!(answers.certificate().contains("\nmechanism strict-table no boundary was crossed:"));
+///
+/// // The SAME call with nothing to project is an entailment question, and answers as one.
+/// let ground = "<http://example.org/tom> \
+///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Animal> .\n";
+/// let asked = certain_answers_to_string("owl-rl", data, ground, &[]).expect("answers");
+/// assert_eq!(asked.answer(), "mechanism strict-table\nrow\n");
+///
+/// // A premise that IMPORTS its schema answers from the imports closure, with its
+/// // `owl:imports` triple left exactly where the caller put it.
+/// let importing = "<http://example.org/o> \
+///     <http://www.w3.org/2002/07/owl#imports> <http://example.org/schema> .\n\
+///     <http://example.org/tom> \
+///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .\n";
+/// let schema = "<http://example.org/Cat> \
+///     <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .\n";
+/// let closed = certain_answers_to_string(
+///     "owl-rl", importing, pattern, &[("http://example.org/schema", schema)],
+/// ).expect("answers");
+/// assert!(closed.answer().contains("\nrow <http://example.org/Animal>\n"));
+/// ```
+pub fn certain_answers_to_string(
+    regime: &str,
+    document: &str,
+    pattern: &str,
+    imports: &ImportList<'_>,
+) -> Result<ReasoningAnswer, String> {
+    let (parsed, map) = configuration(regime, imports)?;
+    let bgp = parse_bgp(pattern)?;
+    let premise = parse_premise(document)?;
+    let answers = purrdf_entail::certain_answers(&premise, &bgp, parsed, &map)
+        .map_err(|error| render_entail_error(regime, &error))?;
+    // The mechanism that ANSWERED, read off the answer set rather than asserted here. A
+    // pattern with nothing to project routes through the same fold `graph_entails_to_string`
+    // does, so it can be reached by any of the seven — and a hard-coded `strict-table` beside
+    // such an answer told a consumer the rule table had decided a question it had not.
+    let mut answer = render_mechanism(answers.mechanism());
+    for var in answers.vars() {
+        let _ = writeln!(answer, "var {var}");
+    }
+    for row in answers.rows() {
+        answer.push_str("row");
+        for term in row {
+            let _ = write!(answer, " {}", emit(term));
+        }
+        answer.push('\n');
+    }
+    for limit in answers.limits() {
+        let _ = writeln!(answer, "limit {limit}");
+    }
+    Ok(ReasoningAnswer {
+        answer,
+        certificate: render_reasoning_report(answers.report()),
+    })
+}
+
+/// Does `premise` entail `conclusion` under `regime`?
+///
+/// The zero-projected-variable case of [`certain_answers_to_string`]: a conclusion GRAPH is
+/// a basic graph pattern with nothing to project, so its answer is a verdict rather than a
+/// relation, and the binding is read as the WARRANT for a yes rather than as an answer.
+///
+/// # Not to be confused with [`entails_to_string`]
+///
+/// The collision is real and both names are right, so it is stated rather than resolved by
+/// renaming. [`entails_to_string`] asks the OWL 2 Direct-Semantics TABLEAU whether an
+/// ontology entails one AXIOM of the OWL 2 RDF mapping, and renders a `DlCertificate` whose
+/// completeness counts hypertableau rounds. This asks the regime's RULE TABLE whether a
+/// premise entails a conclusion GRAPH, and renders a `ReasoningReport` whose completeness is
+/// the regime's own rule inventory. Different question, different calculus, different
+/// certificate — and the two certificates carry different banners so neither can be parsed
+/// as the other.
+///
+/// The answer's grammar, in emission order:
+///
+/// ```text
+/// mechanism <name>
+/// entailment entailed | entailment not-entailed | entailment undecided
+/// constituent <name>                (0..n, a `composite` mechanism only)
+/// binding <?var | _:label> <term>   (0..n, entailed only)
+/// miss <summary>                    (not-entailed only)
+/// undecided <reason>                (undecided only)
+/// ```
+///
+/// THREE verdicts, never two. `not-entailed` is a PROOF — the procedure was complete for
+/// this premise, so the absence of a mapping is the absence of an entailment — and
+/// `undecided` is what an incomplete procedure is entitled to say instead. Collapsing the
+/// second into the first would turn a limitation of this library into a false statement
+/// about the caller's data.
+///
+/// A conclusion GRAPH is a conjunction, so it can need one mechanism per half; such an answer
+/// reads `mechanism composite` and lists its `constituent` lines in the fixed cost order the
+/// service folds them in. It is spelled that way rather than by any one constituent's name,
+/// which would tell a consumer that one mechanism sufficed.
+///
+/// `imports` is [`certain_answers_to_string`]'s, and applies to the PREMISE: the conclusion is
+/// a graph to match rather than an ontology to close, so an `owl:imports` in it names nothing
+/// this service resolves.
+///
+/// # Errors
+///
+/// As [`certain_answers_to_string`].
+///
+/// ```
+/// use purrdf_validate::regime::graph_entails_to_string;
+///
+/// let premise = "<http://example.org/p> \
+///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+///     <http://www.w3.org/2002/07/owl#TransitiveProperty> .\n\
+///     <http://example.org/x> <http://example.org/p> <http://example.org/y> .\n\
+///     <http://example.org/y> <http://example.org/p> <http://example.org/z> .\n";
+/// let conclusion = "<http://example.org/x> <http://example.org/p> <http://example.org/z> .\n";
+/// let decided = graph_entails_to_string("owl-rl", premise, conclusion, &[]).expect("decides");
+/// // `prp-trp` derives it, so the rule table itself answers.
+/// assert!(decided.answer().starts_with("mechanism strict-table\nentailment entailed\n"));
+/// assert!(decided.certificate().contains("\nfired prp-trp "));
+/// ```
+pub fn graph_entails_to_string(
+    regime: &str,
+    premise: &str,
+    conclusion: &str,
+    imports: &ImportList<'_>,
+) -> Result<ReasoningAnswer, String> {
+    let (parsed, map) = configuration(regime, imports)?;
+    let target = purrdf_rdf::parse_dataset(conclusion.as_bytes(), INPUT_MEDIA_TYPE, None)
+        .map_err(|diagnostic| format!("the conclusion is not N-Quads: {diagnostic}"))?;
+    let parsed_premise = parse_premise(premise)?;
+    let certificate = purrdf_entail::entails(&parsed_premise, &target, parsed, &map)
+        .map_err(|error| render_entail_error(regime, &error))?;
+    Ok(ReasoningAnswer {
+        answer: render_entailment_answer(&certificate),
+        certificate: render_reasoning_report(certificate.report()),
+    })
+}
+
+/// The `mechanism`/`entailment`/evidence block shared by [`graph_entails_to_string`] and
+/// [`verify_entailment_to_string`].
+fn render_entailment_answer(certificate: &EntailmentCertificate) -> String {
+    let mut answer = render_mechanism(certificate.mechanism());
+    match certificate.outcome() {
+        EntailmentOutcome::Entailed(warrant) => {
+            answer.push_str("entailment entailed\n");
+            // A COMPOSITE names its constituents, in the fixed cost order the fold tried them.
+            // `mechanism composite` alone would be truthful and useless: the one thing a reader
+            // of a folded answer needs is WHICH lanes did the work, and deriving it from the
+            // `boundary` lines is not something a consumer should have to do.
+            if let purrdf_entail::EntailmentWarrant::Composite(composite) = warrant {
+                for mechanism in composite.mechanisms() {
+                    let _ = writeln!(answer, "constituent {}", mechanism.as_str());
+                }
+            }
+            for (key, term) in warrant.binding() {
+                let _ = writeln!(answer, "binding {} {}", emit_var(key), emit(term));
+            }
+        }
+        EntailmentOutcome::NotEntailed(miss) => {
+            answer.push_str("entailment not-entailed\n");
+            let _ = writeln!(answer, "miss {}", miss.summary());
+        }
+        EntailmentOutcome::Undecided(reason) => {
+            answer.push_str("entailment undecided\n");
+            let _ = writeln!(answer, "undecided {reason}");
+        }
+    }
+    answer
+}
+
+/// Decide whether `premise` entails `conclusion`, then RE-DECIDE the warrant without running
+/// a reasoner.
+///
+/// [`graph_entails_to_string`] with `purrdf_entail::verify` run over its own answer. The
+/// re-check runs no reasoner and re-derives nothing — deliberately, because "the closure
+/// follows from the premise" is the chase's claim and [`explain_conclusion_to_string`] is
+/// its checker, while "the conclusion follows from the closure" is this one and is finite
+/// and purely combinatorial. Folding them would cost what the original call cost and give a
+/// caller no independent check at all.
+///
+/// The answer's grammar is [`graph_entails_to_string`]'s plus two lines:
+///
+/// ```text
+/// warrant present | warrant absent
+/// verified true | verified false | verified not-applicable
+/// ```
+///
+/// `warrant absent` / `verified not-applicable` is a `not-entailed` or an `undecided`: there
+/// is no evidence to re-decide, and a `false` there would read as a failed check rather than
+/// as an absent one. A `verified false` beside `warrant present` is an engine defect, and it
+/// is RENDERED rather than raised so a caller re-deciding sees what this boundary saw — the
+/// same discipline the chase proof's `checked` line is under.
+///
+/// `imports` is [`certain_answers_to_string`]'s. The re-check runs against the premise AS
+/// WRITTEN rather than against its imports closure, deliberately: a warrant this service can
+/// re-decide from the caller's own document is a stronger check than one that could only be
+/// re-decided against a graph the library assembled.
+///
+/// # Errors
+///
+/// As [`certain_answers_to_string`].
+///
+/// ```
+/// use purrdf_validate::regime::verify_entailment_to_string;
+///
+/// let premise = "<http://example.org/A> \
+///     <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .\n\
+///     <http://example.org/x> \
+///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .\n";
+/// let conclusion = "<http://example.org/x> \
+///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> .\n";
+/// let checked =
+///     verify_entailment_to_string("owl-rl", premise, conclusion, &[]).expect("decides");
+/// assert!(checked.answer().contains("\nwarrant present\n"));
+/// assert!(checked.answer().ends_with("verified true\n"));
+///
+/// // A conclusion nothing derives has no warrant to re-decide, and says so rather than
+/// // reporting a check that failed.
+/// let never = "<http://example.org/x> \
+///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Never> .\n";
+/// let missing = verify_entailment_to_string("owl-rl", premise, never, &[]).expect("decides");
+/// assert!(missing.answer().contains("\nwarrant absent\n"));
+/// assert!(missing.answer().ends_with("verified not-applicable\n"));
+/// ```
+pub fn verify_entailment_to_string(
+    regime: &str,
+    premise: &str,
+    conclusion: &str,
+    imports: &ImportList<'_>,
+) -> Result<ReasoningAnswer, String> {
+    let (parsed, map) = configuration(regime, imports)?;
+    let target = purrdf_rdf::parse_dataset(conclusion.as_bytes(), INPUT_MEDIA_TYPE, None)
+        .map_err(|diagnostic| format!("the conclusion is not N-Quads: {diagnostic}"))?;
+    let parsed_premise = parse_premise(premise)?;
+    let certificate = purrdf_entail::entails(&parsed_premise, &target, parsed, &map)
+        .map_err(|error| render_entail_error(regime, &error))?;
+    let mut answer = render_entailment_answer(&certificate);
+    match certificate.warrant() {
+        Some(warrant) => {
+            answer.push_str("warrant present\n");
+            let _ = writeln!(
+                answer,
+                "verified {}",
+                purrdf_entail::verify(warrant, &parsed_premise, &target)
+            );
+        }
+        None => {
+            answer.push_str("warrant absent\n");
+            answer.push_str("verified not-applicable\n");
+        }
+    }
+    Ok(ReasoningAnswer {
+        answer,
+        certificate: render_reasoning_report(certificate.report()),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3701,6 +4579,918 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
         assert!(error.contains("no derivation"), "{error}");
     }
 
+    // ── The conclusion-directed service, at the string boundary ─────────────
+
+    /// `Boy ⊓ Girl = ⊥`, `Stewie : Boy`, `Peter : Girl` — enough for the profile's own
+    /// inconsistency calculus to refute `Stewie = Peter`, and for nothing else to reach it.
+    const DISJOINT: &str = "<http://example.org/Boy> \
+<http://www.w3.org/2002/07/owl#disjointWith> <http://example.org/Girl> .\n\
+<http://example.org/Stewie> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Boy> .\n\
+<http://example.org/Peter> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Girl> .\n";
+
+    /// AN ANSWER NOTHING TESTED RENDERS A `limit` LINE, AND SAYS WHICH LANE.
+    ///
+    /// `?x owl:differentFrom <Peter>` asks which individuals are entailed different from
+    /// `Peter`, which needs a refutation per candidate over the whole domain — a question this
+    /// service declines. Before the `limit` line it rendered `mechanism strict-table` and
+    /// `var x` and NOTHING ELSE, which a consumer reads as "no certain answers, exhaustively"
+    /// — about a question no mechanism had tested, and one whose ground form
+    /// [`graph_entails_to_string`] proves right below.
+    #[test]
+    fn a_declined_lane_renders_a_limit_line_naming_itself() {
+        let pattern = "?x <http://www.w3.org/2002/07/owl#differentFrom> \
+<http://example.org/Peter> .\n";
+        let answers = certain_answers_to_string("owl-rl", DISJOINT, pattern, &[]).expect("answers");
+        assert!(
+            answers
+                .answer()
+                .starts_with("mechanism strict-table\nvar x\n"),
+            "{}",
+            answers.answer()
+        );
+        assert!(
+            !answers.answer().contains("\nrow"),
+            "this service does not search the domain for a witness: {}",
+            answers.answer()
+        );
+        let limits: Vec<&str> = answers
+            .answer()
+            .lines()
+            .filter_map(|line| line.strip_prefix("limit "))
+            .collect();
+        assert_eq!(limits.len(), 1, "{}", answers.answer());
+        assert!(limits[0].starts_with("the refutation lane "), "{limits:?}");
+    }
+
+    /// …AND THE SAME QUESTION WITH NOTHING TO PROJECT AGREES WITH `graph_entails`, LINE
+    /// FOR LINE.
+    ///
+    /// A pattern with no `?var` is a conclusion graph, so the two entry points ask one
+    /// question and answer it through one fold: the mechanism is the mechanism that actually
+    /// reached it — `refutation`, not `strict-table` — and the verdict is the one bare `row`
+    /// line SPARQL says an answer over zero columns is. Before this they contradicted each
+    /// other on the byte-identical input: `graph_entails` rendered `entailment entailed` while
+    /// `certain_answers` rendered no row at all.
+    #[test]
+    fn nothing_to_project_answers_as_the_entailment_question_it_is() {
+        let ground = "<http://example.org/Stewie> \
+<http://www.w3.org/2002/07/owl#differentFrom> <http://example.org/Peter> .\n";
+        let answers = certain_answers_to_string("owl-rl", DISJOINT, ground, &[]).expect("answers");
+        let decided = graph_entails_to_string("owl-rl", DISJOINT, ground, &[]).expect("decides");
+        assert_eq!(answers.answer(), "mechanism refutation\nrow\n");
+        assert_eq!(
+            decided.answer(),
+            "mechanism refutation\nentailment entailed\n"
+        );
+        // Exhaustive, and it says so by rendering no `limit` line: over zero columns the
+        // empty substitution is the only substitution there is, and it is present.
+        assert!(!answers.answer().contains("\nlimit "));
+
+        // A ground question the table REFUTES is the empty relation, and exhaustively so.
+        let never = "<http://example.org/Stewie> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Girl> .\n";
+        let missing = certain_answers_to_string("owl-rl", DISJOINT, never, &[]).expect("answers");
+        assert_eq!(missing.answer(), "mechanism strict-table\n");
+        let refuted = graph_entails_to_string("owl-rl", DISJOINT, never, &[]).expect("decides");
+        assert!(refuted.answer().contains("\nentailment not-entailed\n"));
+    }
+
+    // ── `?name` IN ANY POSITION, INCLUDING THE PREDICATE ────────────────────
+
+    /// One triple, which under `simple` is the whole closure — so a row is a function of the
+    /// pattern alone and every answer below can be asserted whole.
+    const ONE_TRIPLE: &str =
+        "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n";
+
+    /// EVERY POSITION COMBINATION, PROJECTED AND ASSERTED WHOLE.
+    ///
+    /// Falsifiable against what this replaced: a variable in PREDICATE position was rewritten
+    /// to a blank node, RDF forbids one there, and the parser refused four of these eight
+    /// patterns — `?s ?p ?o` among them — with a diagnostic about the caller's N-Triples that
+    /// named a construct the caller had not written.
+    #[test]
+    fn a_variable_is_projected_from_every_position() {
+        for (pattern, expected) in [
+            (
+                "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n",
+                "mechanism strict-table\nrow\n",
+            ),
+            (
+                "?s <http://example.org/p> <http://example.org/o> .\n",
+                "mechanism strict-table\nvar s\nrow <http://example.org/s>\n",
+            ),
+            (
+                "<http://example.org/s> ?p <http://example.org/o> .\n",
+                "mechanism strict-table\nvar p\nrow <http://example.org/p>\n",
+            ),
+            (
+                "<http://example.org/s> <http://example.org/p> ?o .\n",
+                "mechanism strict-table\nvar o\nrow <http://example.org/o>\n",
+            ),
+            (
+                "?s ?p <http://example.org/o> .\n",
+                "mechanism strict-table\nvar s\nvar p\n\
+                 row <http://example.org/s> <http://example.org/p>\n",
+            ),
+            (
+                "?s <http://example.org/p> ?o .\n",
+                "mechanism strict-table\nvar s\nvar o\n\
+                 row <http://example.org/s> <http://example.org/o>\n",
+            ),
+            (
+                "<http://example.org/s> ?p ?o .\n",
+                "mechanism strict-table\nvar p\nvar o\n\
+                 row <http://example.org/p> <http://example.org/o>\n",
+            ),
+            (
+                "?s ?p ?o .\n",
+                "mechanism strict-table\nvar s\nvar p\nvar o\n\
+                 row <http://example.org/s> <http://example.org/p> <http://example.org/o>\n",
+            ),
+            // `$name` is the same variable syntax, and it reaches the predicate too.
+            (
+                "$s $p $o .\n",
+                "mechanism strict-table\nvar s\nvar p\nvar o\n\
+                 row <http://example.org/s> <http://example.org/p> <http://example.org/o>\n",
+            ),
+        ] {
+            let answers =
+                certain_answers_to_string("simple", ONE_TRIPLE, pattern, &[]).expect(pattern);
+            assert_eq!(answers.answer(), expected, "{pattern}");
+        }
+    }
+
+    /// A PREDICATE VARIABLE RANGES OVER THE ENTAILED PREDICATES, NOT ONLY THE ASSERTED ONES.
+    ///
+    /// `rdfs9` puts `tom rdf:type Animal` in the closure and no triple of the premise states
+    /// it, so the binding `?p ↦ rdf:type` for `<tom> ?p <Animal>` exists only because the
+    /// chase widened the closure — which the same question under `simple` proves, by having
+    /// no answer at all.
+    #[test]
+    fn a_predicate_variable_binds_over_the_widened_closure() {
+        let premise = "<http://example.org/Cat> \
+<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .\n\
+<http://example.org/tom> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .\n";
+        let pattern = "<http://example.org/tom> ?p <http://example.org/Animal> .\n";
+        let entailed = certain_answers_to_string("rdfs", premise, pattern, &[]).expect("answers");
+        let rows: Vec<&str> = entailed
+            .answer()
+            .lines()
+            .filter(|line| line.starts_with("row "))
+            .collect();
+        assert_eq!(
+            rows,
+            ["row <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>"],
+            "{}",
+            entailed.answer()
+        );
+        assert!(
+            entailed
+                .answer()
+                .starts_with("mechanism strict-table\nvar p\n"),
+            "{}",
+            entailed.answer()
+        );
+        let asserted = certain_answers_to_string("simple", premise, pattern, &[]).expect("answers");
+        assert_eq!(
+            asserted.answer(),
+            "mechanism strict-table\nvar p\n",
+            "no triple of the premise states it, so the row is the chase's"
+        );
+    }
+
+    /// A `?` INSIDE AN IRI, A LITERAL OR A COMMENT IS NOT A VARIABLE — IN THE PREDICATE TOO.
+    ///
+    /// The property the rewrite is arranged around: the ONLY `?` scanned is one outside an
+    /// IRI, outside a literal and outside a comment. Each case below writes `?zzz` in one of
+    /// those three places, so a scanner that read it would project a `zzz` column — and each
+    /// asserts the whole answer, which has none.
+    #[test]
+    fn a_question_mark_that_is_not_a_variable_stays_where_it_was() {
+        // In an IRI's query string, IN PREDICATE POSITION.
+        let premise = "<http://example.org/s> <http://example.org/p?zzz=1> \
+<http://example.org/o> .\n";
+        let answers = certain_answers_to_string(
+            "simple",
+            premise,
+            "<http://example.org/s> <http://example.org/p?zzz=1> ?o .\n",
+            &[],
+        )
+        .expect("answers");
+        assert_eq!(
+            answers.answer(),
+            "mechanism strict-table\nvar o\nrow <http://example.org/o>\n"
+        );
+
+        // In a literal's lexical form, beside a PREDICATE variable.
+        let quoted = "<http://example.org/s> <http://example.org/p> \"is ?zzz a variable\" .\n";
+        let answers = certain_answers_to_string(
+            "simple",
+            quoted,
+            "<http://example.org/s> ?p \"is ?zzz a variable\" .\n",
+            &[],
+        )
+        .expect("answers");
+        assert_eq!(
+            answers.answer(),
+            "mechanism strict-table\nvar p\nrow <http://example.org/p>\n"
+        );
+
+        // In a comment, on the line above a PREDICATE variable.
+        let answers = certain_answers_to_string(
+            "simple",
+            ONE_TRIPLE,
+            "# is ?zzz a variable? it is prose.\n<http://example.org/s> ?p <http://example.org/o> .\n",
+            &[],
+        )
+        .expect("answers");
+        assert_eq!(
+            answers.answer(),
+            "mechanism strict-table\nvar p\nrow <http://example.org/p>\n"
+        );
+    }
+
+    /// A VARIABLE INSIDE AN RDF 1.2 TRIPLE TERM IS A VARIABLE, AND A COLUMN.
+    ///
+    /// [`QNode`](purrdf_entail::QNode) nests, so a variable below the top level is the same
+    /// kind of variable one above it is: it binds, it is projected, and it appears in the
+    /// caller's own first-occurrence order beside the top-level ones. What is asserted here
+    /// is the whole answer, so the stand-in IRI cannot have survived as a ground term and no
+    /// position can have been dropped.
+    #[test]
+    fn a_variable_inside_a_triple_term_is_a_variable_of_the_pattern() {
+        let premise = "<http://example.org/q> <http://example.org/r> \
+<<( <http://example.org/s> <http://example.org/p> <http://example.org/o> )>> .\n";
+        let answers =
+            certain_answers_to_string("simple", premise, "?a ?b <<( ?s ?p ?o )>> .\n", &[])
+                .expect("answers");
+        assert_eq!(
+            answers.answer(),
+            "mechanism strict-table\nvar a\nvar b\nvar s\nvar p\nvar o\n\
+             row <http://example.org/q> <http://example.org/r> <http://example.org/s> \
+             <http://example.org/p> <http://example.org/o>\n",
+            "every position the caller wrote a `?` in is a column"
+        );
+    }
+
+    /// ONE NAME IS ONE VARIABLE ACROSS A TRIPLE-TERM BOUNDARY, SO AN UNSATISFIABLE JOIN
+    /// RETURNS NO ROW.
+    ///
+    /// The defect this pins is a SILENT WRONG ANSWER rather than a missing column: a nested
+    /// occurrence carried as its own term was a second variable the first constrained in no
+    /// way, so `?x <p> <<( ?x … )>>` matched a premise whose quoted subject is somebody else
+    /// — an EXTRA row, which no `limit` line can excuse, since a limit says the row set may
+    /// not be exhaustive and never that a row in it is not an answer.
+    ///
+    /// Asserted SEMANTICALLY, over two premises that differ only in whether the join holds:
+    /// the pattern is the same one both times, so a run that returns the same answer for
+    /// both is not enforcing the join whatever it renders.
+    #[test]
+    fn a_variable_used_inside_and_outside_a_triple_term_is_one_variable() {
+        let pattern = "?x <http://example.org/p> \
+<<( ?x <http://example.org/q> <http://example.org/r> )>> .\n";
+        // The quoted subject is somebody ELSE, so `?x` cannot be both at once.
+        let unsatisfiable = "<http://example.org/a> <http://example.org/p> \
+<<( <http://example.org/b> <http://example.org/q> <http://example.org/r> )>> .\n";
+        let answers =
+            certain_answers_to_string("simple", unsatisfiable, pattern, &[]).expect("answers");
+        assert_eq!(
+            answers.answer(),
+            "mechanism strict-table\nvar x\n",
+            "no substitution satisfies both occurrences of `?x`, so there is no certain answer"
+        );
+
+        // The same pattern over a premise that DOES satisfy the join.
+        let satisfiable = "<http://example.org/a> <http://example.org/p> \
+<<( <http://example.org/a> <http://example.org/q> <http://example.org/r> )>> .\n";
+        let answers =
+            certain_answers_to_string("simple", satisfiable, pattern, &[]).expect("answers");
+        assert_eq!(
+            answers.answer(),
+            "mechanism strict-table\nvar x\nrow <http://example.org/a>\n",
+            "the join holds here, so the row is a certain answer"
+        );
+
+        // ACROSS TWO TRIPLES of one pattern: nested in the first, top level in the second.
+        let cross = "<http://example.org/a> <http://example.org/p> \
+<<( <http://example.org/b> <http://example.org/q> <http://example.org/r> )>> .\n\
+<http://example.org/c> <http://example.org/k> <http://example.org/v> .\n";
+        let answers = certain_answers_to_string(
+            "simple",
+            cross,
+            "<http://example.org/a> <http://example.org/p> \
+<<( ?x <http://example.org/q> <http://example.org/r> )>> .\n\
+?x <http://example.org/k> <http://example.org/v> .\n",
+            &[],
+        )
+        .expect("answers");
+        assert_eq!(
+            answers.answer(),
+            "mechanism strict-table\nvar x\n",
+            "`?x` is <b> in the quoted triple and <c> in the second triple, which is no \
+             substitution at all"
+        );
+
+        // And a PURELY NESTED name still answers: a variable that occurs only below the top
+        // level is an ordinary variable, not a case this refuses.
+        let answers = certain_answers_to_string(
+            "simple",
+            unsatisfiable,
+            "<http://example.org/a> <http://example.org/p> \
+<<( ?y <http://example.org/q> <http://example.org/r> )>> .\n",
+            &[],
+        )
+        .expect("answers");
+        assert_eq!(
+            answers.answer(),
+            "mechanism strict-table\nvar y\nrow <http://example.org/b>\n"
+        );
+    }
+
+    /// ONE IRI IS ONE IRI, HOWEVER THE CALLER SPELLED IT — INCLUDING IN THE STAND-IN'S OWN
+    /// NAMESPACE.
+    ///
+    /// [`QUERY_VAR_IRI`] is swept out of the caller's text so that no IRI the caller wrote
+    /// can be read back as a variable. N-Triples lets an IRIREF spell any character as a
+    /// `UCHAR`, so a sweep over the raw bytes alone missed a namespace one of whose letters
+    /// was escaped: the parser reconstructed it and the reverse mapping read the caller's
+    /// own IRI as a variable, which is a SILENT WRONG ANSWER — the escaped spelling
+    /// answered a different question from the plain one, both with no `limit` line.
+    ///
+    /// Asserted SEMANTICALLY over four positions and both escape widths: the two spellings
+    /// of one IRI must produce ONE answer. A rendered-output grep would not catch the
+    /// datatype case at all, because a diagnostic elides a literal's datatype.
+    #[test]
+    fn one_iri_two_spellings_is_one_answer() {
+        // The three spellings of the second `r` of `purrdf`: itself, and both `UCHAR`
+        // widths. Each spells the stand-in namespace exactly — as the PARSER reads it, not
+        // as the bytes read.
+        let spellings = ["r", "\\u0072", "\\U00000072"];
+        let stand_in = |letter: &str| format!("urn:pur{letter}df-query-variable:purrdfQvar0");
+
+        // SUBJECT and OBJECT, over a premise whose one triple is `<a> <p> <a>`: read as a
+        // variable, the stand-in would join with `?s`/`?o` and produce a row; read as the
+        // IRI it is, the premise holds no such term and there is none.
+        let reflexive = "<http://example.org/a> <http://example.org/p> <http://example.org/a> .\n";
+        for (premise, pattern, expected) in [
+            (
+                reflexive,
+                "?s <http://example.org/p> <{IRI}> .\n",
+                "mechanism strict-table\nvar s\n",
+            ),
+            (
+                reflexive,
+                "<{IRI}> <http://example.org/p> ?o .\n",
+                "mechanism strict-table\nvar o\n",
+            ),
+            // PREDICATE, over `<a> <p> <p>`: read as a variable the stand-in would bind to
+            // `?o`'s own term.
+            (
+                "<http://example.org/a> <http://example.org/p> <http://example.org/p> .\n",
+                "<http://example.org/a> <{IRI}> ?o .\n",
+                "mechanism strict-table\nvar o\n",
+            ),
+            // DATATYPE, over a premise that USES the namespace as a datatype: read as a
+            // variable the stand-in is refused by name, so the escaped spelling would refuse
+            // a pattern the plain one answers.
+            (
+                "<http://example.org/a> <http://example.org/p> \
+\"5\"^^<urn:purrdf-query-variable:purrdfQvar0> .\n",
+                "?s <http://example.org/p> \"5\"^^<{IRI}> .\n",
+                "mechanism strict-table\nvar s\nrow <http://example.org/a>\n",
+            ),
+        ] {
+            for spelling in spellings.map(stand_in) {
+                let written = pattern.replace("{IRI}", &spelling);
+                let answers = certain_answers_to_string("simple", premise, &written, &[])
+                    .unwrap_or_else(|refusal| panic!("{written}: {refusal}"));
+                assert_eq!(answers.answer(), expected, "{written}");
+            }
+        }
+    }
+
+    /// A `?` WRITTEN AS A `UCHAR` IS STILL NOT A VARIABLE.
+    ///
+    /// The property the escape-aware sweep must not cost: the scanner reads a `?` only
+    /// outside an IRI, outside a literal and outside a comment, and expanding escapes for
+    /// the SWEEP must not turn an escaped `?` inside one of those into a variable. Each
+    /// case writes the `?` as `?` and asserts the whole answer, which has no column for
+    /// it.
+    #[test]
+    fn an_escaped_question_mark_is_not_a_variable_either() {
+        // In an IRI's query string: the premise spells it raw, the pattern escaped, and the
+        // two are the same IRI — so a row means the escape was NOT read as a variable.
+        let premise = "<http://example.org/s> <http://example.org/p?zzz=1> \
+<http://example.org/o> .\n";
+        let answers = certain_answers_to_string(
+            "simple",
+            premise,
+            "<http://example.org/s> <http://example.org/p\\u003Fzzz=1> ?o .\n",
+            &[],
+        )
+        .expect("answers");
+        assert_eq!(
+            answers.answer(),
+            "mechanism strict-table\nvar o\nrow <http://example.org/o>\n"
+        );
+
+        // In a literal's lexical form.
+        let quoted = "<http://example.org/s> <http://example.org/p> \"is ?zzz a variable\" .\n";
+        let answers = certain_answers_to_string(
+            "simple",
+            quoted,
+            "<http://example.org/s> ?p \"is \\u003Fzzz a variable\" .\n",
+            &[],
+        )
+        .expect("answers");
+        assert_eq!(
+            answers.answer(),
+            "mechanism strict-table\nvar p\nrow <http://example.org/p>\n"
+        );
+
+        // In a comment, which no parser decodes at all.
+        let answers = certain_answers_to_string(
+            "simple",
+            ONE_TRIPLE,
+            "# is \\u003Fzzz a variable? it is prose.\n\
+<http://example.org/s> ?p <http://example.org/o> .\n",
+            &[],
+        )
+        .expect("answers");
+        assert_eq!(
+            answers.answer(),
+            "mechanism strict-table\nvar p\nrow <http://example.org/p>\n"
+        );
+    }
+
+    /// THE STAND-IN NAMESPACE REACHES NO ANSWER, NO CERTIFICATE AND NO REFUSAL.
+    ///
+    /// [`QUERY_VAR_IRI`] is a name this boundary invents to get a variable past a parser that
+    /// requires an IRI in predicate position. PurRDF mints no vocabulary, so an occurrence of
+    /// it in a row, a binding, a limit or a report would be this library's own scaffolding
+    /// rendered to a caller as a term of their data. Every service, over patterns that put a
+    /// variable in each position and inside an RDF 1.2 triple term.
+    #[test]
+    fn the_variable_stand_in_never_reaches_a_caller() {
+        let triple_term = "<<( <http://example.org/s> <http://example.org/p> \
+<http://example.org/o> )>> <http://example.org/q> <http://example.org/r> .\n";
+        for pattern in [
+            "?s ?p ?o .\n",
+            "<http://example.org/s> ?p ?o .\n",
+            "?s ?p <http://example.org/o> .\n",
+            "?s ?p ?o .\n?o ?p2 ?s .\n",
+            "<<( ?s <http://example.org/p> <http://example.org/o> )>> \
+<http://example.org/q> ?r .\n",
+            "<<( <http://example.org/s> ?p <http://example.org/o> )>> \
+<http://example.org/q> ?r .\n",
+        ] {
+            for premise in [ONE_TRIPLE, triple_term, DISJOINT] {
+                for regime in ["simple", "rdfs", "owl-rl"] {
+                    let rendered = match certain_answers_to_string(regime, premise, pattern, &[]) {
+                        Ok(answers) => {
+                            format!("{}{}", answers.answer(), answers.certificate())
+                        }
+                        Err(refusal) => refusal,
+                    };
+                    assert!(
+                        !rendered.contains(QUERY_VAR_IRI),
+                        "{regime} / {pattern}: {rendered}"
+                    );
+                    assert!(
+                        !rendered.contains("urn:purrdf"),
+                        "{regime} / {pattern}: {rendered}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A VARIABLE IN A LITERAL'S DATATYPE IS REFUSED, AND THE STAND-IN MATCHES NOTHING THERE.
+    ///
+    /// The datatype slot is the one position the stand-in's own legality opens up: RDF forbids
+    /// a blank node as a datatype, so the old stand-in was refused there by the parser, and an
+    /// IRI is legal there, so the new one parses straight in. This asserts the SEMANTICS
+    /// rather than the rendering, because
+    /// [`show`](purrdf_entail) drops a literal's datatype when a diagnostic prints it — a
+    /// stand-in that reached that slot would be invisible to
+    /// [`the_variable_stand_in_never_reaches_a_caller`], and would silently answer a question
+    /// about this boundary's own namespace instead of the caller's data.
+    #[test]
+    fn a_variable_in_a_literal_datatype_is_refused_rather_than_matched() {
+        // A premise whose second half is reachable ONLY through the stand-in namespace: one
+        // probe per slot index a pattern below could mint, so the assertion does not depend
+        // on which variable of the pattern is rewritten first.
+        let mut premise = String::from(
+            "<http://example.org/caller> <http://example.org/p> \"5\"^^<http://example.org/dt> .\n",
+        );
+        for index in 0..3_usize {
+            let _ = writeln!(
+                premise,
+                "<http://example.org/probe{index}> <http://example.org/p> \
+                 \"5\"^^<{QUERY_VAR_IRI}{index}> ."
+            );
+        }
+        // THE CONTROL: the probe half IS reachable by an ordinary pattern, so a leak into the
+        // datatype slot would show up as a row — this is what makes the refusals below a
+        // statement about matching rather than about parsing.
+        let control = certain_answers_to_string(
+            "simple",
+            &premise,
+            "?s <http://example.org/p> \"5\"^^<http://example.org/dt> .\n",
+            &[],
+        )
+        .expect("answers");
+        assert_eq!(
+            control.answer(),
+            "mechanism strict-table\nvar s\nrow <http://example.org/caller>\n",
+            "the caller's own datatype matches the caller's own subject and nothing else"
+        );
+        let probed = certain_answers_to_string(
+            "simple",
+            &premise,
+            &format!("?s <http://example.org/p> \"5\"^^<{QUERY_VAR_IRI}1> .\n"),
+            &[],
+        )
+        .expect("answers");
+        assert_eq!(
+            probed.answer(),
+            "mechanism strict-table\nvar s\nrow <http://example.org/probe1>\n",
+            "and a caller who writes the stand-in namespace themselves reaches the probe half, \
+             which is the row a leak would fabricate"
+        );
+
+        for pattern in [
+            "?s <http://example.org/p> \"5\"^^?d .\n",
+            "?d <http://example.org/p> \"5\"^^?d .\n",
+            "?s <http://example.org/p> \"5\"^^?d .\n?s <http://example.org/p> ?o .\n",
+            "?a <http://example.org/q> \
+<<( <http://example.org/s> <http://example.org/p> \"5\"^^?d )>> .\n",
+        ] {
+            for regime in ["simple", "rdfs", "owl-rl"] {
+                let refusal = match certain_answers_to_string(regime, &premise, pattern, &[]) {
+                    Ok(answers) => panic!(
+                        "{regime} / {pattern}: a variable has no datatype-IRI form, so this must \
+                         be refused rather than answered: {}",
+                        answers.answer()
+                    ),
+                    Err(refusal) => refusal,
+                };
+                assert!(
+                    refusal.contains("a variable is not a datatype IRI"),
+                    "the refusal names the position: {regime} / {pattern}: {refusal}"
+                );
+                assert!(
+                    refusal.contains("`?d`"),
+                    "and the variable the caller wrote: {regime} / {pattern}: {refusal}"
+                );
+                assert!(
+                    !refusal.contains("urn:purrdf"),
+                    "{regime} / {pattern}: {refusal}"
+                );
+                assert!(
+                    !refusal.contains("probe"),
+                    "{regime} / {pattern}: {refusal}"
+                );
+            }
+        }
+    }
+
+    /// A CALLER WHO WRITES THE STAND-IN THEMSELVES STILL GETS AN IRI.
+    ///
+    /// The namespace is swept out of the caller's own text — extended with `q`s until it
+    /// occurs nowhere in it — before a single variable is rewritten, so the mapping back is
+    /// injective by construction. Without the sweep this pattern would project a THIRD column
+    /// out of an IRI the caller wrote as a term.
+    #[test]
+    fn a_caller_writing_the_stand_in_is_not_read_as_a_variable() {
+        let collision = "urn:purrdf-query-variable:purrdfQvar0";
+        assert!(
+            collision.starts_with(QUERY_VAR_IRI),
+            "the collision must be inside the namespace this sweeps"
+        );
+        let premise = format!(
+            "<{collision}> <http://example.org/p> <http://example.org/o> .\n\
+             <http://example.org/s> <http://example.org/p> <http://example.org/o> .\n"
+        );
+        let answers =
+            certain_answers_to_string("simple", &premise, &format!("<{collision}> ?p ?o .\n"), &[])
+                .expect("answers");
+        assert_eq!(
+            answers.answer(),
+            "mechanism strict-table\nvar p\nvar o\n\
+             row <http://example.org/p> <http://example.org/o>\n",
+            "the caller's own IRI is a ground term, and only `?p`/`?o` are columns"
+        );
+    }
+
+    /// AN OPEN PREDICATE IS AN `Undecided` WITH A NAMED REASON, NEVER A SILENT EMPTY ANSWER.
+    ///
+    /// `p ∘ p ⊑ p` entails `p rdf:type owl:TransitiveProperty` and no rule of Tables 4–9 puts
+    /// a schema triple in the closure, so `?s ?p ?o` over this premise misses a certain
+    /// answer that `graph_entails_to_string` proves — and says so with a `limit` line naming
+    /// the open position rather than rendering an exhaustive-looking row set.
+    #[test]
+    fn an_open_predicate_renders_a_limit_rather_than_an_exhaustive_answer() {
+        let premise = "<http://example.org/p> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+<http://www.w3.org/2002/07/owl#ObjectProperty> .\n\
+<http://example.org/p> <http://www.w3.org/2002/07/owl#propertyChainAxiom> _:l1 .\n\
+_:l1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://example.org/p> .\n\
+_:l1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> _:l2 .\n\
+_:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://example.org/p> .\n\
+_:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .\n";
+        let transitive = "<http://example.org/p> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+<http://www.w3.org/2002/07/owl#TransitiveProperty> .\n";
+        let decided = graph_entails_to_string("owl-rl", premise, transitive, &[]).expect("decides");
+        assert!(
+            decided
+                .answer()
+                .starts_with("mechanism freeze\nentailment entailed\n"),
+            "{}",
+            decided.answer()
+        );
+
+        let answers =
+            certain_answers_to_string("owl-rl", premise, "?s ?p ?o .\n", &[]).expect("answers");
+        assert!(
+            !answers.answer().contains("owl#TransitiveProperty"),
+            "the closure does not hold it: {}",
+            answers.answer()
+        );
+        let limits: Vec<&str> = answers
+            .answer()
+            .lines()
+            .filter_map(|line| line.strip_prefix("limit "))
+            .collect();
+        assert_eq!(limits.len(), 1, "{}", answers.answer());
+        assert!(
+            limits[0].starts_with(
+                "the question leaves the predicate open in 1 triple (first: ?s ?p ?o)"
+            ),
+            "{limits:?}"
+        );
+
+        // …and a GROUND predicate over the same premise keeps its exhaustive answer, so the
+        // limit is a fact about the open position rather than a blanket disclaimer.
+        let closed = certain_answers_to_string(
+            "owl-rl",
+            premise,
+            "?s <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> ?o .\n",
+            &[],
+        )
+        .expect("answers");
+        assert!(!closed.answer().contains("\nlimit "), "{}", closed.answer());
+    }
+
+    // ── The caller's `owl:imports` table, at the string boundary ────────────
+
+    /// A premise that IMPORTS its schema, with the `owl:imports` triple left where the
+    /// caller wrote it.
+    const IMPORTING_PREMISE: &str = "<http://example.org/o> \
+<http://www.w3.org/2002/07/owl#imports> <http://example.org/schema> .\n\
+<http://example.org/socrates> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Man> .\n";
+
+    /// The document `<http://example.org/schema>` denotes — supplied, never fetched.
+    const IMPORTED_SCHEMA: &str = "<http://example.org/Man> \
+<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Mortal> .\n";
+
+    /// The conclusion only the imports closure reaches.
+    const IMPORTED_CONCLUSION: &str = "<http://example.org/socrates> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Mortal> .\n";
+
+    /// ALL THREE conclusion-directed services take the caller's import table, and answer
+    /// from the imports closure over the premise AS WRITTEN.
+    ///
+    /// Falsifiable against what this replaced: every one of the three hard-coded an empty
+    /// map, so a premise carrying any `owl:imports` was a permanent refusal on every host
+    /// and the only escape was to hand the library a graph that was not the caller's.
+    #[test]
+    fn every_conclusion_directed_service_resolves_the_callers_imports() {
+        let imports = [("http://example.org/schema", IMPORTED_SCHEMA)];
+
+        let answers =
+            certain_answers_to_string("owl-rl", IMPORTING_PREMISE, IMPORTED_CONCLUSION, &imports)
+                .expect("answers");
+        assert_eq!(answers.answer(), "mechanism strict-table\nrow\n");
+
+        let decided =
+            graph_entails_to_string("owl-rl", IMPORTING_PREMISE, IMPORTED_CONCLUSION, &imports)
+                .expect("decides");
+        assert_eq!(
+            decided.answer(),
+            "mechanism strict-table\nentailment entailed\n"
+        );
+
+        let checked =
+            verify_entailment_to_string("owl-rl", IMPORTING_PREMISE, IMPORTED_CONCLUSION, &imports)
+                .expect("decides");
+        assert!(checked.answer().contains("\nentailment entailed\n"));
+        assert!(
+            checked
+                .answer()
+                .ends_with("warrant present\nverified true\n")
+        );
+
+        // …and the pattern-shaped question projects out of the same closure.
+        let pattern = "<http://example.org/socrates> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?c .\n";
+        let projected = certain_answers_to_string("owl-rl", IMPORTING_PREMISE, pattern, &imports)
+            .expect("answers");
+        assert!(
+            projected
+                .answer()
+                .contains("\nrow <http://example.org/Mortal>\n"),
+            "{}",
+            projected.answer()
+        );
+    }
+
+    /// THE EMPTY LIST IS "IMPORTS NOTHING", NOT "IMPORT ANYTHING NAMED".
+    ///
+    /// The library fetches nothing, so an `owl:imports` the caller did not supply refuses BY
+    /// NAME on all three services rather than being reasoned over as though the missing
+    /// axioms said nothing.
+    #[test]
+    fn an_unsupplied_import_still_refuses_by_name() {
+        for refusal in [
+            certain_answers_to_string("owl-rl", IMPORTING_PREMISE, IMPORTED_CONCLUSION, &[])
+                .expect_err("unresolved"),
+            graph_entails_to_string("owl-rl", IMPORTING_PREMISE, IMPORTED_CONCLUSION, &[])
+                .expect_err("unresolved"),
+            verify_entailment_to_string("owl-rl", IMPORTING_PREMISE, IMPORTED_CONCLUSION, &[])
+                .expect_err("unresolved"),
+            // …and a list that resolves a DIFFERENT ontology is the same absence.
+            graph_entails_to_string(
+                "owl-rl",
+                IMPORTING_PREMISE,
+                IMPORTED_CONCLUSION,
+                &[("http://example.org/other", IMPORTED_SCHEMA)],
+            )
+            .expect_err("unresolved"),
+        ] {
+            assert!(
+                refusal.contains("<http://example.org/schema>"),
+                "the refusal names the document it was not handed: {refusal}"
+            );
+        }
+    }
+
+    /// An import table that cannot be read is refused BEFORE any reasoning, and says which
+    /// entry.
+    #[test]
+    fn a_malformed_import_table_is_refused_by_entry() {
+        let not_nquads = graph_entails_to_string(
+            "owl-rl",
+            IMPORTING_PREMISE,
+            IMPORTED_CONCLUSION,
+            &[("http://example.org/schema", "this is not n-quads\n")],
+        )
+        .expect_err("a document that is not N-Quads");
+        assert!(
+            not_nquads.contains("the import document for <http://example.org/schema>"),
+            "{not_nquads}"
+        );
+
+        let twice = graph_entails_to_string(
+            "owl-rl",
+            IMPORTING_PREMISE,
+            IMPORTED_CONCLUSION,
+            &[
+                ("http://example.org/schema", IMPORTED_SCHEMA),
+                ("http://example.org/schema", ""),
+            ],
+        )
+        .expect_err("one ontology IRI declared twice");
+        assert!(
+            twice.contains("declares <http://example.org/schema> twice"),
+            "{twice}"
+        );
+
+        let nameless = graph_entails_to_string(
+            "owl-rl",
+            IMPORTING_PREMISE,
+            IMPORTED_CONCLUSION,
+            &[("", IMPORTED_SCHEMA)],
+        )
+        .expect_err("the empty ontology IRI");
+        assert!(nameless.contains("empty ontology IRI"), "{nameless}");
+    }
+
+    /// The three reasoning services report the SAME error when handed the same bad inputs.
+    ///
+    /// Not a test of one function's statement order: it is the invariant that the boundary
+    /// has ONE error precedence. A caller who moves from `certain_answers_to_string` to
+    /// `graph_entails_to_string` to `verify_entailment_to_string` — the same question, asked
+    /// three ways — must be told to fix the same thing, and `verify_entailment_to_string`'s
+    /// own `# Errors` section claims exactly that by saying "as `certain_answers_to_string`".
+    /// Each case below is bad in TWO ways at once, so a service that checked in a different
+    /// order would name the other fault and fail here.
+    #[test]
+    fn the_three_services_agree_on_error_precedence() {
+        const BAD_DOCUMENT: &str = "this is not n-quads\n";
+        const GOOD_GROUND: &str = "<http://example.org/x> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .\n";
+        let good_imports: &ImportList<'_> = &[];
+        let bad_imports: &ImportList<'_> = &[("", GOOD_GROUND)];
+
+        // (regime, premise, second document, imports, the fragment every service must name)
+        let cases: &[(&str, &str, &str, &ImportList<'_>, &str)] = &[
+            // An unknown regime AND an unparseable premise: the regime wins everywhere.
+            (
+                "not-a-regime",
+                BAD_DOCUMENT,
+                GOOD_GROUND,
+                good_imports,
+                "unknown entailment regime \"not-a-regime\"",
+            ),
+            // An unknown regime AND an unreadable import table: still the regime.
+            (
+                "not-a-regime",
+                GOOD_GROUND,
+                GOOD_GROUND,
+                bad_imports,
+                "unknown entailment regime \"not-a-regime\"",
+            ),
+            // A known regime, an unreadable import table AND an unparseable premise: the
+            // import table wins, because it is configuration and the premise is data.
+            (
+                "owl-rl",
+                BAD_DOCUMENT,
+                GOOD_GROUND,
+                bad_imports,
+                "empty ontology IRI",
+            ),
+            // An unknown regime AND an unparseable SECOND document (the pattern for one
+            // service, the conclusion for the other two): the regime still wins.
+            (
+                "not-a-regime",
+                GOOD_GROUND,
+                BAD_DOCUMENT,
+                good_imports,
+                "unknown entailment regime \"not-a-regime\"",
+            ),
+        ];
+
+        for (regime, premise, second, imports, expected) in cases {
+            let answers = certain_answers_to_string(regime, premise, second, imports)
+                .expect_err("doubly-bad input");
+            let entails = graph_entails_to_string(regime, premise, second, imports)
+                .expect_err("doubly-bad input");
+            let verified = verify_entailment_to_string(regime, premise, second, imports)
+                .expect_err("doubly-bad input");
+            for (service, refusal) in [
+                ("certain_answers_to_string", &answers),
+                ("graph_entails_to_string", &entails),
+                ("verify_entailment_to_string", &verified),
+            ] {
+                assert!(
+                    refusal.contains(expected),
+                    "{service} must report {expected:?} for regime {regime:?}, not: {refusal}"
+                );
+            }
+        }
+    }
+
+    /// The resolution is TRANSITIVE: a supplied document's own `owl:imports` is followed,
+    /// and a stop at depth one would reason over a partial premise.
+    #[test]
+    fn the_import_resolution_reaches_a_fixpoint() {
+        let first = "<http://example.org/schema> \
+<http://www.w3.org/2002/07/owl#imports> <http://example.org/upper> .\n\
+<http://example.org/Man> \
+<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Human> .\n";
+        let upper = "<http://example.org/Human> \
+<http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Mortal> .\n";
+        let decided = graph_entails_to_string(
+            "owl-rl",
+            IMPORTING_PREMISE,
+            IMPORTED_CONCLUSION,
+            &[
+                ("http://example.org/schema", first),
+                ("http://example.org/upper", upper),
+            ],
+        )
+        .expect("decides");
+        assert!(decided.answer().contains("\nentailment entailed\n"));
+
+        // Drop the second hop and the refusal NAMES it, rather than answering from half a
+        // premise.
+        let refusal = graph_entails_to_string(
+            "owl-rl",
+            IMPORTING_PREMISE,
+            IMPORTED_CONCLUSION,
+            &[("http://example.org/schema", first)],
+        )
+        .expect_err("the second hop is unresolved");
+        assert!(refusal.contains("<http://example.org/upper>"), "{refusal}");
+    }
+
     // ── The boundary's term syntax ──────────────────────────────────────────
 
     /// A term round-trips through the boundary's syntax, for every kind a DL
@@ -3749,5 +5539,179 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
 <http://example.org/g> .\n";
         let error = entails_to_string(TAXONOMY, scoped, 0).expect_err("graph-scoped");
         assert!(error.contains("names a graph"), "{error}");
+    }
+
+    // ── A LARGE QUESTION IS A QUESTION, NOT A CRASH ─────────────────────────
+    //
+    // Three of this boundary's services search depth-first, and each one's depth is a
+    // function of how big the caller's input is rather than of how complicated it is. Depth
+    // held in CALL frames is not a refusal a caller can catch: the process aborts, nothing
+    // unwinds, no `Result` is produced, and a host embedding this library — the CLI, Python,
+    // the C ABI, WASM — dies with it. So each is checked here, on the surface those hosts
+    // actually wrap, at a size that would have aborted.
+    //
+    // Every check below runs on a thread built with a 1 MiB stack: that is `wasm32`'s, the
+    // SMALLEST target this library ships to and an eighth of a native thread's default. A
+    // check that passes here passes on every target. It also means these tests fail LOUDLY
+    // — by killing the harness — rather than by an assertion, which is the honest shape for
+    // "the process must survive this".
+
+    /// The stack these checks run on: `wasm32`'s, the smallest of any shipped target.
+    const SMALLEST_TARGET_STACK: usize = 1 << 20;
+
+    /// Run `question` on a thread with [`SMALLEST_TARGET_STACK`] and return its answer.
+    fn on_the_smallest_stack<T: Send + 'static>(
+        question: impl FnOnce() -> T + Send + 'static,
+    ) -> T {
+        std::thread::Builder::new()
+            .stack_size(SMALLEST_TARGET_STACK)
+            .spawn(question)
+            .expect("a thread")
+            .join()
+            .expect("the question is answered rather than aborting the process")
+    }
+
+    /// `count` ground triples sharing a subject and an object, one predicate each.
+    ///
+    /// Distinct predicates are what make this a DEPTH test rather than a breadth test: the
+    /// homomorphism search buckets the closure by predicate, so each bucket holds exactly
+    /// one candidate and the match budget is spent one unit per level. The budget is five
+    /// million and cannot stand in for a depth bound on this shape.
+    fn wide_ground_graph(count: usize) -> String {
+        use std::fmt::Write as _;
+        let mut document = String::new();
+        for index in 0..count {
+            writeln!(
+                document,
+                "<http://example.org/s> <http://example.org/p{index}> <http://example.org/o> ."
+            )
+            .expect("a `String` is infallible to write to");
+        }
+        document
+    }
+
+    /// A conclusion of 25 000 triples is DECIDED — and decided correctly.
+    ///
+    /// One level of the homomorphism search is one conclusion triple, so this is a search
+    /// 25 000 levels deep. Native call frames held roughly seven thousand of them on an
+    /// 8 MiB stack and about eight times fewer on `wasm32`'s 1 MiB, so every one of the
+    /// three questions below aborted the process before this check existed.
+    #[test]
+    fn a_large_conclusion_is_decided_rather_than_overflowing_the_stack() {
+        let premise = wide_ground_graph(25_000);
+
+        // Entailed: a graph entails itself, and saying so requires mapping all 25 000.
+        let self_entailment = premise.clone();
+        let answer = on_the_smallest_stack(move || {
+            graph_entails_to_string("simple", &self_entailment.clone(), &self_entailment, &[])
+                .map(|decided| decided.answer().to_owned())
+        })
+        .expect("decides");
+        assert_eq!(answer, "mechanism strict-table\nentailment entailed\n");
+
+        // Not entailed: one triple the premise lacks, at the far end of the question, is
+        // diagnosed by name rather than lost — so the depth is walked, not truncated.
+        let with_a_gap = format!(
+            "{premise}<http://example.org/s> <http://example.org/absent> <http://example.org/o> .\n"
+        );
+        let (lhs, rhs) = (premise.clone(), with_a_gap);
+        let answer = on_the_smallest_stack(move || {
+            graph_entails_to_string("simple", &lhs, &rhs, &[])
+                .map(|decided| decided.answer().to_owned())
+        })
+        .expect("decides");
+        assert_eq!(
+            answer,
+            "mechanism strict-table\nentailment not-entailed\n\
+             miss closure lacks <http://example.org/s> <http://example.org/absent> \
+             <http://example.org/o>\n"
+        );
+
+        // Existential: ONE blank node has to carry all 25 000 edges, so the binding made at
+        // the first level must still hold at the last. A level-local mapping would answer
+        // `entailed` for the wrong reason; the reported binding is what rules that out.
+        let existential = premise.replace(
+            "<http://example.org/s> <http://example.org/p",
+            "_:b <http://example.org/p",
+        );
+        let answer = on_the_smallest_stack(move || {
+            graph_entails_to_string("simple", &premise, &existential, &[])
+                .map(|decided| decided.answer().to_owned())
+        })
+        .expect("decides");
+        assert_eq!(
+            answer,
+            "mechanism strict-table\nentailment entailed\n\
+             binding _:b <http://example.org/s>\n"
+        );
+    }
+
+    /// A disjunctive ABox with 3 000 individuals is DECIDED, not aborted.
+    ///
+    /// One level of the OWL-Direct hypertableau search is one `⊔`-rule application, so an
+    /// ontology stating one disjunction and 3 000 individuals under it is a search 3 000
+    /// levels deep. There is nothing pathological about that ontology, and the round cap is
+    /// no defence: it bounds derivation ROUNDS, and a level costs one.
+    #[test]
+    fn a_disjunctive_abox_is_decided_rather_than_overflowing_the_stack() {
+        let mut ontology = String::from(
+            "<http://example.org/C> <http://www.w3.org/2002/07/owl#unionOf> _:l1 .\n\
+_:l1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://example.org/A> .\n\
+_:l1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> _:l2 .\n\
+_:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://example.org/B> .\n\
+_:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .\n",
+        );
+        ontology.extend((0..3_000).map(|index| {
+            format!(
+                "<http://example.org/x{index}> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .\n"
+            )
+        }));
+        let answer = on_the_smallest_stack(move || {
+            consistency_to_string(&ontology, 0).map(|decided| decided.answer().to_owned())
+        })
+        .expect("decides");
+        // Nothing in the ontology is contradictory: `A ⊔ B` is satisfied by choosing `A`
+        // for every individual, so the verdict is `true` and not merely "no abort".
+        assert_eq!(answer, "consistency true\n");
+    }
+
+    /// A class expression or data range that nests without end is a REFUSAL by name.
+    ///
+    /// Unlike the two searches above, nesting depth here is also the depth of the `Concept`
+    /// (or `DataRange`) tree the parser builds, and that tree's `Drop`, `Clone` and
+    /// negation-normalization each walk it recursively in turn. The bound therefore lives
+    /// where the tree is built — no over-deep tree is ever constructed — and exceeding it is
+    /// an error every host propagates rather than an abort no host survives.
+    #[test]
+    fn an_endlessly_nested_expression_is_refused_by_name() {
+        use std::fmt::Write as _;
+        // A chain of `owl:complementOf`, one level per triple.
+        let mut chain = String::new();
+        for index in 0..2_000 {
+            writeln!(
+                chain,
+                "_:c{index} <http://www.w3.org/2002/07/owl#complementOf> _:c{} .",
+                index + 1
+            )
+            .expect("a `String` is infallible to write to");
+        }
+        chain.push_str(
+            "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> _:c0 .\n",
+        );
+        let refused = on_the_smallest_stack(move || consistency_to_string(&chain, 0))
+            .expect_err("a 2 000-deep class expression is past the ceiling");
+        assert!(refused.contains("nests deeper than 256"), "{refused}");
+
+        // A CYCLIC data range is four lines long and used to abort the process outright:
+        // the data-range decoder had no cycle guard at all.
+        let cycle = "_:a <http://www.w3.org/2002/07/owl#datatypeComplementOf> _:b .\n\
+_:b <http://www.w3.org/2002/07/owl#datatypeComplementOf> _:a .\n\
+<http://example.org/p> <http://www.w3.org/2000/01/rdf-schema#range> _:a .\n\
+<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .\n";
+        let refused = on_the_smallest_stack(move || consistency_to_string(cycle, 0))
+            .expect_err("a data range cannot be its own complement");
+        assert!(refused.contains("cyclic OWL data range"), "{refused}");
     }
 }

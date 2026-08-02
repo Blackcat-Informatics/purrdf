@@ -19,6 +19,11 @@
 //! * [`Boundary`] says which constructs the run could not fully handle, and why.
 //! * [`ReasoningReport::contract_hash`] names the calculus, so a cached verdict minted
 //!   under a different rule set can be refused rather than trusted.
+//! * [`ReasoningReport::mechanism`] says WHICH of the conclusion-directed service's six
+//!   mechanisms read an answer off this run — `None` for a plain materialization, which
+//!   answers no such question. Without it, "the rule table decided this" and "the rule table
+//!   has no head of this shape and a second run over the premise's negation did" were the
+//!   same rendered report.
 //!
 //! # There is no overclaim, because there is no field to disagree with
 //!
@@ -59,6 +64,7 @@ use purrdf_datalog::seminaive::BudgetReport;
 
 use crate::Regime;
 use crate::calculus::{ChaseRule, calculus_contract_hash};
+use crate::entails::EntailmentMechanism;
 use crate::rules::{RuleId, extensions, implemented, rules};
 
 /// A run's PROOF that the evaluation it describes had to stop.
@@ -281,23 +287,30 @@ impl Completeness {
 /// boundary is identified by the enum below and, where a specification names the rules it
 /// blocks, by those rules' own ids in the [`Boundary::reason`] text.
 ///
-/// Variants are declared in the order a report lists them: the three the CHASE observes
+/// Variants are declared in the order a report lists them: the ones a CHASE lane observes
 /// first (the input held the construct, or a conclusion was actually abandoned because of
-/// it), then the two that are INHERENT to a chase lane and hold for every input, then the
-/// six the OWL-Direct reverse mapping raises when an axiom it cannot fully handle is read,
-/// and last the two the OWL-Direct QUERY layer raises — about the shape of the question,
-/// and about which of the two answering lanes could take it, rather than about the ontology
-/// alone. The derived [`Ord`] follows that declaration order.
+/// it, or the lane's own rules quantify over an infinite set and so meet the construct for
+/// every input), then the ones the OWL-Direct reverse mapping raises when an axiom it cannot
+/// fully handle is read, and last the two the OWL-Direct QUERY layer raises — about the
+/// shape of the question, and about which of the two answering lanes could take it, rather
+/// than about the ontology alone. The derived [`Ord`] follows that declaration order.
 ///
 /// # Every variant has a NAMED producer
 ///
 /// A boundary no code path can raise is a promise the report never keeps, so each variant's
 /// producer is named here and reached by a test:
 ///
-/// * the five chase constructs — this module's own `boundaries`, from the `DatasetSurvey` of
-///   the input and the run's own drop counts;
+/// * the seven chase constructs — this module's own `boundaries`, from the `DatasetSurvey`
+///   of the input, the lane's own rule table and the run's own drop counts;
 /// * the six reverse-mapping constructs — `Kb::boundaries`, driven per construct by
 ///   `every_owl2_construct_is_handled_or_bounded`;
+/// * [`Construct::ResolvedOntologyImport`] — [`entails`](crate::entails()), through
+///   `ReasoningReport::with_resolved_imports`, once `imports::resolve` has merged the whole
+///   `owl:imports` closure into the premise. It is the one construct that is a fact about
+///   what the CALLER supplied rather than about what a lane read, which is exactly why the
+///   chase cannot raise it: `boundaries` surveys the MERGED dataset, which still carries the
+///   `owl:imports` triples, so the survey alone cannot tell a resolved import from an
+///   unresolved one;
 /// * [`Construct::NonDistinguishedVariable`] — the OWL-Direct query layer, when the basic
 ///   graph pattern it was handed carries a blank node that is not class-expression scaffold;
 /// * [`Construct::NonHornTBox`] — the CALLER of
@@ -345,8 +358,11 @@ pub enum Construct {
     /// `owl:topObjectProperty` / `owl:bottomObjectProperty` and their data siblings — the
     /// two BUILT-IN roles whose extension the semantics fixes.
     BuiltinRole,
-    /// `owl:imports` — an ontology document this run was not handed.
-    OntologyImport,
+    /// `owl:imports` naming a document NOBODY resolved for this run.
+    UnresolvedOntologyImport,
+    /// `owl:imports` naming a document the caller's map DID resolve, merged into the
+    /// premise before the run started.
+    ResolvedOntologyImport,
     /// A term of the reserved `owl:`/`rdf:`/`rdfs:` vocabulary the reverse mapping does not
     /// recognize.
     UnrecognizedTerm,
@@ -362,7 +378,7 @@ pub enum Construct {
 
 impl Construct {
     /// Every construct, in declaration order — the order a report lists boundaries in.
-    pub(crate) const ALL: [Self; 15] = [
+    pub(crate) const ALL: [Self; 16] = [
         Self::NamedGraph,
         Self::TripleTerm,
         Self::GeneralizedRdf,
@@ -374,7 +390,8 @@ impl Construct {
         Self::CountingOnInverse,
         Self::DataRange,
         Self::BuiltinRole,
-        Self::OntologyImport,
+        Self::UnresolvedOntologyImport,
+        Self::ResolvedOntologyImport,
         Self::UnrecognizedTerm,
         Self::NonDistinguishedVariable,
         Self::NonHornTBox,
@@ -395,7 +412,8 @@ impl Construct {
             Self::CountingOnInverse => "counting-on-inverse",
             Self::DataRange => "data-range",
             Self::BuiltinRole => "builtin-role",
-            Self::OntologyImport => "ontology-import",
+            Self::UnresolvedOntologyImport => "ontology-import-unresolved",
+            Self::ResolvedOntologyImport => "ontology-import-resolved",
             Self::UnrecognizedTerm => "unrecognized-term",
             Self::NonDistinguishedVariable => "non-distinguished-variable",
             Self::NonHornTBox => "non-horn-tbox",
@@ -617,14 +635,40 @@ impl Construct {
                  role would connect nothing. Raising the boundary says which of the two \
                  answers the run is not entitled to"
             }
-            Self::OntologyImport => {
+            Self::UnresolvedOntologyImport => {
                 "owl:imports names another ontology DOCUMENT, and OWL 2's imports closure \
                  is the union of the importing ontology with every document it transitively \
-                 names. This layer reasons over the dataset it was handed and fetches \
-                 nothing — PurRDF performs no I/O, has no network and must stay \
-                 wasm32-clean — so the imported axioms are premises this run did not have. \
-                 A caller who wants them merges the documents before calling; the boundary \
-                 is what stops the run pretending the merge already happened"
+                 names. NOTHING RESOLVED THOSE DOCUMENTS FOR THIS RUN: a materialization \
+                 takes no import map and the OWL-Direct reverse mapping reads the dataset it \
+                 was handed, and PurRDF fetches neither — it performs no I/O, has no network \
+                 and must stay wasm32-clean. So the imported axioms are premises this run \
+                 did NOT have, and what was closed is a smaller ontology than the one the \
+                 author wrote. A caller who wants them supplies them: \
+                 purrdf_entail::entails takes an ImportMap, merges the named documents into \
+                 the premise before the chase starts, and such a run raises \
+                 ontology-import-resolved instead of this — which is the token that says the \
+                 axioms WERE here. This one is what stops a run pretending a merge it never \
+                 made already happened"
+            }
+            Self::ResolvedOntologyImport => {
+                "owl:imports names another ontology DOCUMENT, and OWL 2's imports closure is \
+                 the union of the importing ontology with every document it transitively \
+                 names. THIS RUN HAD THAT CLOSURE: purrdf_entail::entails resolved the \
+                 caller's ImportMap into the premise before the chase started — transitively, \
+                 to a fixpoint, each document standardized apart — and an import the map did \
+                 not resolve would have refused the whole call with \
+                 EntailError::UnresolvedImport rather than quietly shrinking the premise. So \
+                 every imported axiom was a premise here and every conclusion it licenses was \
+                 drawn; this boundary names the documents the merge was ABOUT, and names no \
+                 missing one. \
+                 \
+                 What it does disclose is the one thing the run could not establish for \
+                 itself. PurRDF fetches nothing, so WHICH document an ontology IRI denotes is \
+                 the caller's declaration and not a fact this library checked: the answer is \
+                 complete for the imports closure that map describes and says nothing about \
+                 the one those IRIs dereference to elsewhere. A caller comparing this answer \
+                 against the document it passed in is comparing against a SMALLER premise \
+                 than the run used"
             }
             Self::UnrecognizedTerm => {
                 "a term in the reserved owl:, rdf: or rdfs: vocabulary that the OWL-2-RDF \
@@ -1026,6 +1070,14 @@ struct DatasetSurvey {
     named_graph: bool,
     /// Whether any quad of ANY graph mentions a triple term.
     triple_term: bool,
+    /// Whether the dataset names another ontology DOCUMENT with `owl:imports`.
+    ///
+    /// An IRI OBJECT and nothing else, which is the same test
+    /// [`imports::resolve`](crate::entails::imports) applies: `owl:imports` is defined to
+    /// relate an ontology to an ontology IRI, so a blank-node or literal object names no
+    /// document and cannot make one missing. Flagging on the PREDICATE alone would have the
+    /// boundary say a document's axioms are absent when the triple named no document at all.
+    ontology_import: bool,
 }
 
 impl DatasetSurvey {
@@ -1035,9 +1087,20 @@ impl DatasetSurvey {
     /// because every graph is now reasoned over: a named graph is closed against the union
     /// of itself and the default graph, so a triple term sitting in one is a term this
     /// crate's chase cannot look inside exactly as a default-graph one is.
+    ///
+    /// All three questions are answered in one pass, so the three-way break below can
+    /// actually fire: the `owl:imports` id is resolved once before the loop (a dataset that
+    /// never mentions the predicate interns no id for it, so that lookup costs one map
+    /// probe), and each quad's predicate id — read alongside its resolved [`TermRef`] view
+    /// via `ds.quads()`, zipped lock-step with `ds.quad_refs()` — is compared to it directly
+    /// rather than by a second full scan. When no id was interned, the import question is
+    /// already settled as `false`, so the exit guard treats "no id to match" the same as
+    /// "already found"; either way the loop still stops the moment the other two flags are
+    /// set, rather than draining the rest of the dataset.
     fn of(ds: &RdfDataset) -> Self {
         let mut survey = Self::default();
-        for quad in ds.quad_refs() {
+        let imports = ds.term_id_by_iri(crate::vocab::OWL_IMPORTS);
+        for (ids, quad) in ds.quads().zip(ds.quad_refs()) {
             if quad.g.is_some() {
                 survey.named_graph = true;
             }
@@ -1047,7 +1110,13 @@ impl DatasetSurvey {
             {
                 survey.triple_term = true;
             }
-            if survey.named_graph && survey.triple_term {
+            if imports == Some(ids.p) && matches!(quad.o, TermRef::Iri(_)) {
+                survey.ontology_import = true;
+            }
+            if survey.named_graph
+                && survey.triple_term
+                && (survey.ontology_import || imports.is_none())
+            {
                 break;
             }
         }
@@ -1083,6 +1152,15 @@ pub struct ReasoningReport {
     withheld_surrogates: u64,
     /// The termination proof that admitted the program, for a lane the chase evaluated.
     termination: Option<TerminationCertificate>,
+    /// WHICH of the conclusion-directed service's seven mechanisms read the answer off this
+    /// run; `None` for a run that answered no conclusion-directed question at all.
+    ///
+    /// Not a parameter of [`Self::new`], and not settable by a consumer: the ONE producer is
+    /// [`EntailmentCertificate`](crate::EntailmentCertificate)'s constructor, which derives it
+    /// from the outcome it is pairing with this report. So a report naming a mechanism other
+    /// than the one that answered is a value nothing can build, exactly as
+    /// [`Self::contract_hash`] cannot name a calculus other than its regime's.
+    mechanism: Option<EntailmentMechanism>,
 }
 
 impl ReasoningReport {
@@ -1099,7 +1177,9 @@ impl ReasoningReport {
     /// The contract hash is not a parameter either: it is
     /// `calculus_contract_hash(regime)` by definition, and a report naming a calculus other
     /// than the one its regime declares would be a second contradiction with no honest
-    /// reading.
+    /// reading. Neither is [`Self::mechanism`]: a materialization answers no
+    /// conclusion-directed question, so every report built here starts with `None`, and the
+    /// only thing that attaches one is the certificate that derives it from its own outcome.
     ///
     /// `rules_fired` and `boundaries` are stored in the order given; this crate supplies
     /// specification table order and [`Construct`] declaration order respectively, which is
@@ -1153,6 +1233,7 @@ impl ReasoningReport {
             inconsistency,
             withheld_surrogates,
             termination,
+            mechanism: None,
         }
     }
 
@@ -1363,6 +1444,39 @@ impl ReasoningReport {
         self
     }
 
+    /// This report, restated for a run whose whole `owl:imports` closure WAS resolved.
+    ///
+    /// Every [`Construct::UnresolvedOntologyImport`] boundary becomes a
+    /// [`Construct::ResolvedOntologyImport`] one; a report that names neither is returned
+    /// unchanged, which is the common case and costs one scan of a list that is at most
+    /// sixteen long.
+    ///
+    /// # Why the swap happens here and not in `boundaries`
+    ///
+    /// `boundaries` surveys the dataset the run was over, and on the [`entails`](crate::entails)
+    /// path that dataset is the MERGED premise — which still carries the `owl:imports`
+    /// triples the merge resolved. So no survey of it can tell "resolved" from "not
+    /// resolved", and the chase raises the honest-from-where-it-stands
+    /// `UnresolvedOntologyImport`.
+    ///
+    /// The fact lives one level up, in a REFUSAL: `imports::resolve` returns
+    /// [`EntailError::UnresolvedImport`](crate::EntailError) naming the first document its
+    /// map does not resolve, so a call that reached a chase at all is a call whose every
+    /// declared import was resolved and merged. That is the whole warrant for this method,
+    /// and it is why its only caller is the one that made the merge.
+    ///
+    /// Order is preserved: the two constructs are adjacent in [`Construct`] declaration
+    /// order and the boundary list is sorted by it, so swapping one for the other cannot
+    /// move a neighbour and two identical runs still render byte-identically.
+    pub(crate) fn with_resolved_imports(mut self) -> Self {
+        for boundary in &mut self.boundaries {
+            if boundary.construct() == Construct::UnresolvedOntologyImport {
+                *boundary = Boundary::of(Construct::ResolvedOntologyImport);
+            }
+        }
+        self
+    }
+
     /// The rules the run's calculus states that NO specification table does — exactly what
     /// [`extensions`] answers for this report's own regime.
     ///
@@ -1480,6 +1594,36 @@ impl ReasoningReport {
     pub const fn termination(&self) -> Option<TerminationCertificate> {
         self.termination
     }
+
+    /// WHICH of the seven conclusion-directed mechanisms read an answer off this run.
+    ///
+    /// `None` for a report that accompanies a CLOSURE: [`materialize`](crate::materialize)
+    /// answers no conclusion-directed question, so there is no mechanism to name and this
+    /// crate does not invent one. `Some` exactly on the report an
+    /// [`EntailmentCertificate`](crate::EntailmentCertificate) carries, where it is
+    /// [`EntailmentMechanism::StrictTable`] when the regime's own rule table decided the
+    /// question and one of the other five when the table DECIDES no conclusion of that
+    /// shape.
+    ///
+    /// It is not an independent fact beside the certificate's outcome. The certificate's
+    /// constructor DERIVES it from that outcome and attaches it here, so the two cannot
+    /// disagree, and it is why this crate publishes no setter for it.
+    #[must_use]
+    pub const fn mechanism(&self) -> Option<EntailmentMechanism> {
+        self.mechanism
+    }
+
+    /// This report with `mechanism` attached.
+    ///
+    /// Crate-internal and single-caller by design. A public setter would let a consumer pair
+    /// a report with a mechanism that did not answer its question, which is precisely the
+    /// self-contradicting certificate this whole type is arranged to make unbuildable — so
+    /// the only caller is [`EntailmentCertificate`](crate::EntailmentCertificate)'s
+    /// constructor, which computes the value from the outcome rather than accepting one.
+    pub(crate) const fn with_mechanism(mut self, mechanism: EntailmentMechanism) -> Self {
+        self.mechanism = Some(mechanism);
+        self
+    }
 }
 
 /// The rules that fired, in specification table order, zero-count rules omitted.
@@ -1533,22 +1677,39 @@ fn boundaries(ds: &RdfDataset, regime: Regime, stats: &RunStats) -> Vec<Boundary
             Construct::NamedGraph => survey.named_graph,
             Construct::TripleTerm => survey.triple_term,
             Construct::GeneralizedRdf => stats.generalized_rdf_drops > 0,
+            // OBSERVED, like the two above: the input actually names another document, by
+            // an IRI. It is the UNRESOLVED token because this function has no import map to
+            // consult — `materialize` takes none — and the chase fetches nothing, so from
+            // here every named document is one the run did not have.
+            //
+            // `entails` is the caller that knows better, and it is the caller that says so:
+            // `imports::resolve` refuses the whole call with `EntailError::UnresolvedImport`
+            // on any import its map misses, so a run that got past it had EVERY declared
+            // document, and it swaps this boundary for `ResolvedOntologyImport` through
+            // `ReasoningReport::with_resolved_imports`. The swap cannot be done here: the
+            // dataset surveyed on that path is the MERGED one, which still carries the very
+            // `owl:imports` triples the merge resolved, so nothing in `ds` distinguishes the
+            // two cases.
+            Construct::UnresolvedOntologyImport => survey.ontology_import,
+            // Never raised here, for the reason just given: no chase lane is handed an
+            // import map, so no chase lane can observe that an import RESOLVED. Its producer
+            // is `ReasoningReport::with_resolved_imports`, called from `entails`.
+            Construct::ResolvedOntologyImport => false,
             // RDF and RDFS fix the axiomatic triples; OWL 2 RL/RDF deliberately omits
             // them, so its lane does not meet this boundary.
             Construct::AxiomaticTriples => matches!(regime, Regime::Rdf | Regime::Rdfs),
             Construct::DatatypeValueSpace => true,
             Construct::Surrogate => stats.surrogate_drops > 0,
-            // The eight OWL-Direct boundaries are the reverse mapping's (and the combined
-            // approach's), raised by `ReasoningReport::of_dl_run` from the axioms and the
-            // query it actually read. No chase lane parses an OWL class expression or runs
+            // The eight remaining OWL-Direct boundaries are the reverse mapping's (and the
+            // combined approach's), raised by `ReasoningReport::of_dl_run` from the axioms and
+            // the query it actually read. No chase lane parses an OWL class expression or runs
             // the combined approach's own TBox lowering at all, so none of them can be met
-            // here — and the arm is written out rather than defaulted so a ninth construct
+            // here — and the arm is written out rather than defaulted so a later construct
             // has to decide which side of the split it is on.
             Construct::PropertyChain
             | Construct::NonSimpleRole
             | Construct::DataRange
             | Construct::BuiltinRole
-            | Construct::OntologyImport
             | Construct::UnrecognizedTerm
             | Construct::NonDistinguishedVariable
             | Construct::CountingOnInverse
@@ -1641,6 +1802,133 @@ mod tests {
                 "{construct}"
             );
             assert_ne!(report.completeness(), Completeness::Exact, "{construct}");
+        }
+    }
+
+    /// AN `owl:imports` WHOSE OBJECT IS NOT AN IRI NAMES NO DOCUMENT, so it raises nothing.
+    ///
+    /// `owl:imports` is defined to relate an ontology to an ontology IRI, and
+    /// `imports::resolve` reads only IRI objects for exactly that reason. A survey that
+    /// flagged on the PREDICATE alone would have the report say a document's axioms were
+    /// absent from a run that named no document at all — the false statement the
+    /// resolved/unresolved split exists to end, in its other direction.
+    #[test]
+    fn an_import_with_no_iri_object_names_no_document() {
+        use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfLiteral};
+
+        use super::DatasetSurvey;
+        use crate::vocab::OWL_IMPORTS;
+
+        const NS: &str = "http://example.org/import-object#";
+
+        for (what, object) in [("blank node", None), ("literal", Some("not-an-iri"))] {
+            let mut b = RdfDatasetBuilder::new();
+            let s = b.intern_iri(&format!("{NS}o"));
+            let imports = b.intern_iri(OWL_IMPORTS);
+            let o = match object {
+                None => b.intern_blank("target", BlankScope::DEFAULT),
+                Some(lexical) => b.intern_literal(RdfLiteral {
+                    lexical_form: lexical.to_owned(),
+                    datatype: None,
+                    language: None,
+                    direction: None,
+                }),
+            };
+            b.push_quad(s, imports, o, None);
+            let ds = b.freeze().expect("freeze");
+            assert!(
+                !DatasetSurvey::of(&ds).ontology_import,
+                "an owl:imports with a {what} object names no document"
+            );
+        }
+
+        // …and the IRI object that DOES name one is still found, so the guard narrowed the
+        // question rather than answering it `false`.
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri(&format!("{NS}o"));
+        let imports = b.intern_iri(OWL_IMPORTS);
+        let o = b.intern_iri(&format!("{NS}other"));
+        b.push_quad(s, imports, o, None);
+        let ds = b.freeze().expect("freeze");
+        assert!(DatasetSurvey::of(&ds).ontology_import);
+    }
+
+    /// `DatasetSurvey::of` reports each of its three flags independently of the other two,
+    /// across every one of the eight combinations.
+    ///
+    /// This pins the survey's single loop: `named_graph`, `triple_term` and
+    /// `ontology_import` are each set from a distinct condition inside one pass over
+    /// `ds.quads().zip(ds.quad_refs())`, and the loop exits the moment all three are
+    /// settled rather than draining the rest of the dataset. Because the three fields are
+    /// monotonic OR accumulators, an early exit that fired on the wrong guard (or fired too
+    /// early) could only be caught by checking the FINAL flags against every combination of
+    /// which conditions the dataset actually holds — a single "does it work at all" case
+    /// would pass even with a guard that always breaks after the first quad. Every
+    /// combination is built with a leading quad every dataset carries (so the false/false/
+    /// false case still exercises the loop) and the three constructs are added in a fixed
+    /// position, so the flag that a construct isn't present at is exercised even when a
+    /// later quad WOULD have set it.
+    #[test]
+    fn survey_reports_each_flag_independently_of_the_others() {
+        use purrdf_core::RdfDatasetBuilder;
+
+        use super::DatasetSurvey;
+        use crate::vocab::OWL_IMPORTS;
+
+        const NS: &str = "http://example.org/dataset-survey#";
+
+        for named_graph in [false, true] {
+            for triple_term in [false, true] {
+                for ontology_import in [false, true] {
+                    let mut b = RdfDatasetBuilder::new();
+                    let s = b.intern_iri(&format!("{NS}s"));
+                    let o = b.intern_iri(&format!("{NS}o"));
+                    let plain_pred = b.intern_iri(&format!("{NS}plain"));
+                    let graph = if named_graph {
+                        Some(b.intern_iri(&format!("{NS}g")))
+                    } else {
+                        None
+                    };
+
+                    // Every combination carries this quad, so the all-false case still
+                    // walks the loop instead of surveying an empty dataset.
+                    b.push_quad(s, plain_pred, o, graph);
+
+                    if triple_term {
+                        // A quoted triple may sit in an asserted quad's OBJECT position
+                        // (an asserted statement's own SUBJECT and PREDICATE must be an
+                        // IRI/blank node and an IRI respectively — `RdfDatasetBuilder`
+                        // rejects a quoted-triple subject with `rdf-ir-triple-subject`).
+                        let inner = b.intern_triple(s, plain_pred, o);
+                        let holds = b.intern_iri(&format!("{NS}holds"));
+                        b.push_quad(s, holds, inner, graph);
+                    }
+
+                    if ontology_import {
+                        let imports = b.intern_iri(OWL_IMPORTS);
+                        let other_doc = b.intern_iri(&format!("{NS}other-ontology"));
+                        b.push_quad(s, imports, other_doc, graph);
+                    }
+
+                    let ds = b.freeze().expect("freeze");
+                    let survey = DatasetSurvey::of(&ds);
+                    assert_eq!(
+                        survey.named_graph, named_graph,
+                        "named_graph for (named_graph={named_graph}, \
+                         triple_term={triple_term}, ontology_import={ontology_import})"
+                    );
+                    assert_eq!(
+                        survey.triple_term, triple_term,
+                        "triple_term for (named_graph={named_graph}, \
+                         triple_term={triple_term}, ontology_import={ontology_import})"
+                    );
+                    assert_eq!(
+                        survey.ontology_import, ontology_import,
+                        "ontology_import for (named_graph={named_graph}, \
+                         triple_term={triple_term}, ontology_import={ontology_import})"
+                    );
+                }
+            }
         }
     }
 }

@@ -24,6 +24,8 @@ import { fileURLToPath } from "node:url";
 
 import {
   ready,
+  Dataset,
+  entailCertainAnswers,
   entailCheckGoldenVectors,
   entailCheckInconsistentRefusal,
   entailClassify,
@@ -32,6 +34,7 @@ import {
   entailExplainConclusion,
   entailExtensions,
   entailExtractModule,
+  entailGraphEntails,
   entailImplementedRules,
   entailInstances,
   entailJustify,
@@ -39,9 +42,26 @@ import {
   entailProfile,
   entailRealize,
   entailRules,
+  entailVerifyEntailment,
 } from "../index.mjs";
 
 await ready();
+
+/**
+ * `text` as a regular expression that matches exactly `text` and nothing else.
+ *
+ * A refusal is asserted to NAME a term, and the two obvious ways to write that are both
+ * wrong. `new RegExp(iri)` reads the IRI's own `.` as "any character" and its `?` as
+ * "optional", so the pattern is strictly WEAKER than the assertion it looks like — it
+ * would also accept a message naming a different document. `message.includes(iri)` is an
+ * unanchored substring test against a URL, which is the shape of an incomplete
+ * authorization check and is flagged as one whatever the intent.
+ *
+ * Escaping first gives the exact match the assertion was always meant to be.
+ */
+function exactly(text) {
+  return new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+}
 
 // `A ⊑ B ⊑ C`, and one typed instance — enough for rdfs9 to re-type it twice.
 const SCHEMA = `<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .
@@ -131,7 +151,7 @@ test("entailMaterialize closes under rdfs and always returns a report", () => {
     closed.nquads,
     /<http:\/\/example\.org\/x> <http:\/\/www\.w3\.org\/1999\/02\/22-rdf-syntax-ns#type> <http:\/\/example\.org\/C> \./,
   );
-  assert.ok(closed.report.startsWith("purrdf-reasoning-report 3\n"));
+  assert.ok(closed.report.startsWith("purrdf-reasoning-report 4\n"));
   assert.ok(closed.report.includes("\nregime rdfs\n"));
   // The report says what the run could NOT do, rather than claiming completeness
   // it does not have. Asserted as the invariant, not as a `sound-incomplete <n>`
@@ -190,7 +210,7 @@ test("entailMaterialize materializes every regime spelling", () => {
     ["d", ""],
   ]) {
     const closed = entailMaterialize(SCHEMA, regime, program);
-    assert.match(closed.report, /^purrdf-reasoning-report 3\n/);
+    assert.match(closed.report, /^purrdf-reasoning-report 4\n/);
     assert.ok(closed.report.includes(`\nregime ${regime}\n`), regime);
     assert.ok(closed.report.includes("\nwithheld-surrogates "), regime);
     assert.ok(closed.report.endsWith("inconsistency none\n"), regime);
@@ -470,4 +490,238 @@ test("every DL reasoning service is reachable from the package root, not only ./
   ]) {
     assert.equal(typeof fn, "function");
   }
+});
+
+test("every conclusion-directed entailment service is reachable from the package root", () => {
+  // The same dark-feature argument as the nine above, made for the three services of
+  // the CHASE lane: compiled in, budgeted for, and worth nothing if `../index.mjs`
+  // does not re-export them, because the npm `exports` map refuses a deep `./pkg/`
+  // import. `scripts/check-entailment-surface.py` gates the re-export structurally;
+  // this executes it on real wasm.
+  for (const fn of [entailCertainAnswers, entailGraphEntails, entailVerifyEntailment]) {
+    assert.equal(typeof fn, "function");
+  }
+
+  const conclusion =
+    "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .\n";
+  const pattern =
+    "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?c .\n";
+
+  // `?c` ranges over the ENTAILED types, so `C` is a row and it is asserted nowhere.
+  const answers = entailCertainAnswers("owl-rl", SCHEMA, pattern, [], []);
+  assert.ok(answers.answer.startsWith("mechanism strict-table\nvar c\n"), answers.answer);
+  assert.ok(answers.answer.includes("\nrow <http://example.org/C>\n"), answers.answer);
+
+  const decided = entailGraphEntails("owl-rl", SCHEMA, conclusion, [], []);
+  assert.equal(decided.answer, "mechanism strict-table\nentailment entailed\n");
+
+  const checked = entailVerifyEntailment("owl-rl", SCHEMA, conclusion, [], []);
+  assert.ok(checked.answer.endsWith("warrant present\nverified true\n"), checked.answer);
+
+  // All three carry the run that answered, on the materialization lane's own banner,
+  // naming the mechanism. The mechanism crosses this boundary as its canonical
+  // spelling and never as an enum ordinal, so a seventh mechanism cannot renumber a
+  // JS consumer's reading of an old one.
+  for (const produced of [answers, decided, checked]) {
+    assert.match(produced.certificate, /^purrdf-reasoning-report 4\n/);
+    assert.ok(produced.certificate.includes("\nmechanism strict-table "), produced.certificate);
+  }
+});
+
+test("a variable in PREDICATE position is projected like any other", () => {
+  // Falsifiable against what this replaced: a `?p` was rewritten to a blank node before
+  // parsing, RDF forbids one in predicate position, and this call threw
+  // `the basic graph pattern is not N-Triples: … predicate must be IRI` — a refusal
+  // naming a construct the caller had not written, while `?s <p> ?o` answered fine.
+  const one =
+    "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n";
+  const whole = entailCertainAnswers("simple", one, "?s ?p ?o .\n", [], []);
+  assert.equal(
+    whole.answer,
+    "mechanism strict-table\nvar s\nvar p\nvar o\n" +
+      "row <http://example.org/s> <http://example.org/p> <http://example.org/o>\n",
+  );
+
+  // The predicate column ranges over what the CHASE entailed: no triple of `SCHEMA`
+  // states `x rdf:type C`, so `cax-sco` is the only reason this row exists.
+  const bridge = "<http://example.org/x> ?p <http://example.org/C> .\n";
+  const derived = entailCertainAnswers("owl-rl", SCHEMA, bridge, [], []);
+  assert.ok(derived.answer.startsWith("mechanism strict-table\nvar p\n"), derived.answer);
+  assert.ok(
+    derived.answer.includes(
+      "\nrow <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>\n",
+    ),
+    derived.answer,
+  );
+  const asserted = entailCertainAnswers("simple", SCHEMA, bridge, [], []);
+  assert.equal(asserted.answer, "mechanism strict-table\nvar p\n");
+
+  // The stand-in the boundary rewrites a `?p` into is its own scaffolding. PurRDF mints
+  // no vocabulary, so it must reach no row, no limit and no report. Literal substrings,
+  // never a compiled pattern.
+  for (const produced of [whole, derived, asserted]) {
+    assert.ok(!produced.answer.includes("urn:purrdf"), produced.answer);
+    assert.ok(!produced.answer.includes("purrdfQvar"), produced.answer);
+    assert.ok(!produced.certificate.includes("urn:purrdf"), produced.certificate);
+    assert.ok(!produced.certificate.includes("purrdfQvar"), produced.certificate);
+  }
+
+  // A `?` inside an IRI's query string is TEXT, in predicate position too: a scanner
+  // that read it would project a `zzz` column, and this answer has only `o`.
+  const query =
+    "<http://example.org/s> <http://example.org/p?zzz=1> <http://example.org/o> .\n";
+  const safe = entailCertainAnswers(
+    "simple",
+    query,
+    "<http://example.org/s> <http://example.org/p?zzz=1> ?o .\n",
+    [],
+    [],
+  );
+  assert.equal(
+    safe.answer,
+    "mechanism strict-table\nvar o\nrow <http://example.org/o>\n",
+  );
+});
+
+test("a conclusion nothing derives has no warrant, and says so", () => {
+  const never =
+    "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Never> .\n";
+  const checked = entailVerifyEntailment("owl-rl", SCHEMA, never, [], []);
+  assert.ok(checked.answer.includes("\nentailment not-entailed\n"), checked.answer);
+  // `not-applicable`, never `false`: there is no evidence to re-decide, and a `false`
+  // would read as a check that ran and failed.
+  assert.ok(
+    checked.answer.endsWith("warrant absent\nverified not-applicable\n"),
+    checked.answer,
+  );
+});
+
+test("the two regimes defined by a missing input are refused by name", () => {
+  const conclusion =
+    "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .\n";
+  for (const regime of ["owl-direct", "rif"]) {
+    assert.throws(() => entailGraphEntails(regime, SCHEMA, conclusion, [], []), exactly(regime));
+  }
+});
+
+
+// ── The caller's `owl:imports` table ────────────────────────────────────────────
+
+// The W3C OWL 2 RL entailment corpus, as the Rust conformance harness locates it. A
+// path rather than a copy: `scripts/check-corpus-frozen.py` digests those bytes, so a
+// fixture transcribing them here would be a second, un-digested corpus free to drift
+// from the one the conformance scoreboard grades.
+const CORPUS = new URL(
+  "../../../sparql-conformance/entailment-suite/w3c-owl2-rl/",
+  import.meta.url,
+);
+
+// The ontology IRI `support011-A.rdf` DECLARES — the name the premise's `owl:imports`
+// object actually is, not the file it happens to live in.
+const SUPPORT_011_A = "http://www.w3.org/2002/03owlt/imports/support011-A";
+
+// One vendored RDF/XML document as N-Quads text. No base IRI is passed and none is
+// needed: every document in the vendored tree either declares its own `xml:base` or
+// uses only absolute IRIs, which the Rust conformance harness asserts as a standing
+// tripwire.
+async function corpusNquads(relative) {
+  const text = await readFile(new URL(relative, CORPUS), "utf8");
+  return Dataset.parse(text, "rdfxml").serialize("nquads");
+}
+
+test("webont-imports-011 answers from its own premise, owl:imports intact", async () => {
+  // Its premise says `Socrates a ont:Man` and `owl:imports <…/support011-A>`;
+  // `Man ⊑ Mortal` lives only in that support document, so the published answer —
+  // `Socrates a ont:Mortal` — is reachable only from the imports closure.
+  //
+  // The premise is handed over UNMODIFIED: nothing is merged into it and the
+  // `owl:imports` triple is left exactly where W3C wrote it. That is the whole
+  // difference between resolving an import and being given a different premise, and
+  // before this parameter existed the npm package could express only the second.
+  const premise = await corpusNquads("cases/webont-imports-011/premise.rdf");
+  assert.ok(
+    premise.includes("<http://www.w3.org/2002/07/owl#imports>"),
+    "the premise really carries the import, so this cannot pass vacuously",
+  );
+  const conclusion = await corpusNquads("cases/webont-imports-011/conclusion.rdf");
+  const support = await corpusNquads("imports/support011-A.rdf");
+  const iris = [SUPPORT_011_A];
+  const documents = [support];
+
+  const decided = entailGraphEntails("owl-rl", premise, conclusion, iris, documents);
+  assert.ok(
+    decided.answer.startsWith("mechanism strict-table\nentailment entailed\n"),
+    decided.answer,
+  );
+  assert.match(decided.certificate, /^purrdf-reasoning-report 4\n/);
+
+  // The other two services answer the same question the same way.
+  const answers = entailCertainAnswers("owl-rl", premise, conclusion, iris, documents);
+  assert.equal(answers.answer, "mechanism strict-table\nrow\n");
+  const checked = entailVerifyEntailment("owl-rl", premise, conclusion, iris, documents);
+  assert.ok(checked.answer.endsWith("warrant present\nverified true\n"), checked.answer);
+});
+
+test("an unsupplied import throws by name rather than reasoning without it", async () => {
+  // PurRDF fetches nothing. Reasoning over the premise alone would answer a different
+  // question — the premise itself says its axioms are not all of them — and returning
+  // that answer as though it were this one is what the refusal prevents.
+  const premise = await corpusNquads("cases/webont-imports-011/premise.rdf");
+  const conclusion = await corpusNquads("cases/webont-imports-011/conclusion.rdf");
+  // The WHOLE refusal is pinned, by equality. A pattern built from the IRI reads its own
+  // `.` as "any character", and an unanchored `includes` against a URL establishes less
+  // than it appears to; equality is neither, and it is the strongest of the three — it
+  // fails if the message gains, loses or reorders a single character, not merely if it
+  // stops naming the document. The IRI is interpolated so it stays declared once.
+  assert.throws(
+    () => entailGraphEntails("owl-rl", premise, conclusion, [], []),
+    (error) =>
+      error.message ===
+      `entailment regime "owl-rl": the premise owl:imports <${SUPPORT_011_A}>, ` +
+        "which the supplied import map does not resolve",
+  );
+});
+
+test("the import arrays are parallel, and a length mismatch is refused", async () => {
+  // Truncating to the shorter array would silently drop an import the caller
+  // supplied, which is the same failure as never having had the parameter.
+  const premise = await corpusNquads("cases/webont-imports-011/premise.rdf");
+  const conclusion = await corpusNquads("cases/webont-imports-011/conclusion.rdf");
+  const support = await corpusNquads("imports/support011-A.rdf");
+  assert.throws(
+    () => entailGraphEntails("owl-rl", premise, conclusion, [SUPPORT_011_A], []),
+    /1 ontology IRI\(s\) and 0 document\(s\)/,
+  );
+  assert.throws(
+    () => entailGraphEntails("owl-rl", premise, conclusion, [], [support]),
+    /0 ontology IRI\(s\) and 1 document\(s\)/,
+  );
+});
+
+test("a malformed import table is refused by entry", async () => {
+  const premise = await corpusNquads("cases/webont-imports-011/premise.rdf");
+  const conclusion = await corpusNquads("cases/webont-imports-011/conclusion.rdf");
+  const support = await corpusNquads("imports/support011-A.rdf");
+  assert.throws(
+    () =>
+      entailGraphEntails("owl-rl", premise, conclusion, [SUPPORT_011_A], [
+        "this is not n-quads\n",
+      ]),
+    /the import document for/,
+  );
+  assert.throws(
+    () =>
+      entailGraphEntails(
+        "owl-rl",
+        premise,
+        conclusion,
+        [SUPPORT_011_A, SUPPORT_011_A],
+        [support, ""],
+      ),
+    /twice/,
+  );
+  assert.throws(
+    () => entailGraphEntails("owl-rl", premise, conclusion, [""], [support]),
+    /empty ontology IRI/,
+  );
 });

@@ -58,6 +58,9 @@ this file.
 | Negative entailment, RDF-BASED, with an RDF/XML premise **and** non-conclusion | 23 | **23** | *All* of them. A chase is sound, so deriving a published non-entailment is an unsoundness whatever profile the case carries — soundness is owed on every case, so nothing is filtered by profile here. |
 | **Total** | | **50** | 100 RDF/XML documents, 124 KB |
 
+One further document is vendored, under `imports/` rather than `cases/` — see
+*Support documents* below.
+
 Counts verified against the fetched manifest, not inherited. The audit that
 prompted this work predicted 27 for the first row; the data agrees exactly.
 
@@ -75,6 +78,64 @@ these dispositions, and `census_accounts_for_every_upstream_case` cross-checks t
 census against both corpora's directory listings — so a case cannot be dropped
 from a corpus while the census still claims it is graded, nor vendored while the
 census claims it is not.
+
+## Support documents (`imports/`)
+
+An `otest:rdfXmlPremiseOntology` literal is ONE document. When a premise
+`owl:imports` another ontology, the manifest carries no literal for that other
+ontology at all — so the vendored premise is not the whole premise, and OWL 2
+defines the imports closure of an ontology to BE the ontology for every semantic
+purpose. Exactly one vendored case is in that position:
+
+| Case | Imports |
+|------|---------|
+| `webont-imports-011` | `http://www.w3.org/2002/03owlt/imports/support011-A` |
+
+That document is therefore vendored too, from its OWN W3C URL:
+
+| Property | Value |
+|----------|-------|
+| path | `imports/support011-A.rdf` |
+| source | <http://www.w3.org/2002/03owlt/imports/support011-A> |
+| fetched | **2026-08-01**, directly from W3C |
+| media type | `application/rdf+xml` |
+| size | 885 bytes |
+| SHA-256 | `f92a919635e21ad412662c5544a1a9003652a3c8a09ae25620fc2e29a72a2572` |
+| `xml:base` | `http://www.w3.org/2002/03owlt/imports/support011-A`, declared in the document |
+
+Reproduce with:
+
+```sh
+curl -sSL -o crates/sparql-conformance/entailment-suite/w3c-owl2-rl/imports/support011-A.rdf \
+    http://www.w3.org/2002/03owlt/imports/support011-A
+```
+
+Three decisions in that table are load-bearing:
+
+- **Outside `cases/`.** `census_accounts_for_every_upstream_case` requires every
+  directory under `cases/` to carry a census row, and a support ontology is not a
+  test case: it has no `otest:identifier`, no direction and no published verdict.
+  Putting it under `cases/` would either break that cross-check or force a
+  fabricated census row.
+- **Keyed by the ontology IRI the document declares**, not by its file name.
+  `owl2_rl::vendored_imports` reads the document's single named `owl:Ontology`
+  subject and uses that as the key; a document with none, or with more than one, or
+  with a blank-node one, is a hard error. A file-name convention would be a rule
+  nothing enforces, and a re-vendor that renamed a file would silently stop
+  resolving an import — the loudest possible failure turned into the quietest.
+- **It declares its own `xml:base`**, so its relative `rdf:ID` references resolve
+  against W3C's IRI rather than against the harness's synthetic one. That is
+  checked, not assumed: `no_vendored_document_needs_the_harness_base` now sweeps
+  **every** `.rdf` under this tree (`owl2_rl::vendored_documents`) rather than the
+  two documents of each case, so a payload arriving in a new directory is covered
+  the day it arrives.
+
+Nothing about this makes the library fetch anything. `vendored_imports` builds a
+`purrdf_entail::ImportMap` — caller-supplied configuration, exactly like every
+other vocabulary this library reads — and hands it to `entails()`. A premise that
+imports something the map does not resolve still refuses by name, and the
+resolution is transitive to a fixpoint, so `support011-A`'s own imports would be
+followed too.
 
 ## Fidelity — byte-exactness, stated precisely
 
@@ -119,15 +180,40 @@ base-less document for a scheme — rather than taking it on trust.
 
 ## How a case is graded
 
-1. Parse `premise.rdf`; forward-materialize it with
-   `purrdf_entail::materialize(&ds, Regime::OwlRl)`.
-2. Parse the target document into its default-graph triples.
-3. Ask whether the closure **simple-entails** the target: does the target graph
-   map into the closure, with the target's blank nodes read as existentials? The
-   search is a backtracking homomorphism with a candidate budget; exhausting the
-   budget is a *withhold*, never a verdict.
-4. Compare with the published direction. A positive case passes when the closure
-   contains the conclusion; a negative case passes when it does not.
+1. Parse `premise.rdf` and the target document.
+2. Hand both to `purrdf_entail::entails(&premise, &target, Regime::OwlRl,
+   &imports)` — the library's conclusion-directed entailment service, which is
+   what any caller gets, with `imports` the corpus's own `vendored_imports` map.
+   The harness owns no reasoning of its own; it parses documents and compares one
+   answer.
+3. That call resolves `owl:imports` transitively against that map (an unresolved
+   one is a refusal that NAMES the document), establishes the premise's
+   **consistency** (an inconsistent premise entails everything, so it is a refusal
+   and never a verdict), forward-materializes under `Regime::OwlRl`, and then
+   reaches the conclusion one of six ways:
+   - **matching** — does the target graph map into the closure, with its blank
+     nodes read as existentials? A backtracking homomorphism with a candidate
+     budget; exhausting the budget is a *withhold*, never a verdict.
+   - **refutation** — for a conclusion whose shape no rule of Tables 4–9 has a
+     head for, assert its negation into the premise and re-run the same rule
+     table; the seventeen `false`-concluding rules are what decide it. Sound
+     only because step 3 established the premise's consistency first.
+   - **freeze-and-chase** — for a schema axiom abbreviating a Horn implication,
+     instantiate its body over constants the premise does not mention, re-run the
+     same table, and look for its head.
+   - **comprehension** — for a conclusion asserting that an anonymous class
+     exists, mint exactly the scaffolds it names, under the typing side conditions
+     the RDF-Based comprehension conditions impose.
+   - **reflexivity** — for a self-loop `x p x` over a property the premise
+     declares reflexive, read it off the semantic condition.
+   - **datatype containment** — for an `rdfs:range` over a datatype, intersect the
+     premise's declared ranges and ask whether the intersection is contained in
+     the conclusion's.
+
+   None of the five beyond matching adds a rule, and each carries its own warrant
+   arm and its own checker that re-decides the claim without running a reasoner.
+4. Compare with the published direction. A positive case passes when the service
+   answers `Entailed`; a negative case passes when it does not.
 
 Three buckets, never two — **agree**, **withhold** (a refusal: a parse failure, a
 chase error, a budget exhaustion), **disagree** — and every withhold and
@@ -148,23 +234,110 @@ table omits) as opposed to descriptions of what the profile cannot reach.
 ## What the oracle measured
 
 ```
-OWL2-RL-ENTAILMENT: agreed 34 ledgered 16 unledgered 0 stale 0 total 50 actionable 0
+OWL2-RL-ENTAILMENT: agreed 50 ledgered 0 unledgered 0 stale 0 total 50 actionable 0
 ```
 
-- **Negative lane: 23 / 23 agree. No unsoundness was found** — the chase never
-  derived a triple W3C publishes as not entailed.
-- **Positive lane: 11 of 27 agree.** The other 16 are ledgered with typed reasons:
-  8 `schema-conclusion`, 6 `negative-conclusion`, 1 `construct-outside-rl`,
-  1 `imports-unresolved`.
+```
+OWL2-RL-NEGATIVE: total 23 = refuted 3 + admitted 20 (premise-outside-rl 5, conclusion-outside-rl 10, construct-not-read 5, refutation-budget 0, freeze-budget 0, data-range-containment 0) + unsound 0 + withheld 0
+```
 
-The 16 are not 16 bugs. Every one of them is a structural property of the OWL 2
-RL/RDF rule table rather than of this implementation: every head in Tables 4–9 is
-an assertional triple over named terms or `false`, so no conforming RL rule set
-derives a schema axiom (`p a owl:TransitiveProperty`, an `rdfs:range`, an
-anonymous `owl:Restriction`, an `owl:AllDifferent`), and none derives a negative
-fact (`owl:differentFrom`, membership in an `owl:complementOf`), which follows
-only by refutation. W3C still tags those cases `otest:profile RL`, because that
-tag describes the *ontology's* profile and not what the rule table reaches.
+- **Negative lane: 23 / 23 agree. No unsoundness was found** — nothing W3C
+  publishes as not entailed was ever reached. The second line above says what
+  those 23 agreements are made of, because they are not one kind of result:
+  **3 are decided refutations** (`new-feature-keys-004`, `webont-imports-002`,
+  `webont-miscellaneous-301` — the premise is inside the RL syntax *and* the
+  non-conclusion is an assertional graph over named terms, so both halves of
+  Theorem PR1's hypothesis hold and the absence of a match is a proof), and
+  **20 are named admissions** (the observation was made, nothing beyond it is
+  claimed, and the missing entitlement is named). Every one of the 23 makes the
+  soundness observation this lane grades — which is why every one of them
+  agrees, and why the "no unsoundness" claim above is unqualified. What only 3
+  of them carry is the entitlement to call it a refutation.
+- **Positive lane: 27 of 27 agree.** The ledger is EMPTY.
+
+That number moved 33 → 34 → 42 → 50 across five changes, and **the rule table did
+not change once**. `rules(Regime::OwlRl)` and `implemented(Regime::OwlRl)` are the
+same 78 they were, `extensions(Regime::OwlRl)` is the one `ext-eq-diff-sym`, and
+strict `Materialization::OwlRl` output is byte-for-byte what it was. What changed
+is how many times the table is run, what it is run over, and what a run's `false`
+is read as — plus, once, which documents the premise consisted of.
+
+The classes the ledger used to hold, and what closed each:
+
+| Was | Cases | Closed by |
+|-----|------:|-----------|
+| `missing-rule` | 1 | a DECLARED extension, `ext-eq-diff-sym`, named in `extensions()` and in every report and in neither `rules()` nor `implemented()` |
+| `negative-conclusion` | 6 | **refutation** — assert the conclusion's negation, re-run the same table, read its own seventeen `false`-concluding rules as the proof |
+| `schema-conclusion` | 8 | two by refutation (an `owl:AllDifferent` IS its pairwise inequalities), one by **freeze-and-chase**, two by **comprehension**, three by **datatype containment** |
+| `construct-outside-rl` | 1 | **reflexivity** — established positively from the semantic condition, which needs no completeness theorem and therefore no profile membership |
+| `imports-unresolved` | 1 | vendoring the document the premise names, above |
+
+Details of the first three are below; the mechanisms themselves are documented in
+`purrdf-entail`'s `entails::{refutation, freeze, comprehension, reflexivity,
+datarange}` modules, each with its soundness argument written out.
+
+### The eight that were structural in ONE reading and not in the other
+
+The ledger used to hold six `negative-conclusion` entries and two more filed as
+`schema-conclusion`, and the reason given for all eight was true as far as it
+went: no head anywhere in Tables 4–9 is a negative fact, so no forward chase over
+those rules derives an `owl:differentFrom`, a membership in an anonymous
+`owl:complementOf` class, or an `owl:AllDifferent` collection. What that reading
+missed is that **seventeen of the seventy-eight rules conclude `false`**, and
+seventeen rules that conclude `false` are an inconsistency calculus. A negative
+fact does not need a rule with a negative head; it needs a refutation.
+
+`purrdf_entail::entails()` performs one. It asserts the conclusion's negation
+into the premise — `owl:sameAs` for an `owl:differentFrom`, a class assertion for
+an `owl:complementOf` membership — and re-runs the same rule table over a premise
+whose consistency the first run already established. Across the eight cases the
+rule that actually reaches `false` is `cax-dw`, `cax-adc`, `prp-pdw`, `prp-adp`
+or `eq-diff1` — measured, not guessed. `new-feature-objectqcr-002` is the longest
+chain of the eight: the asserted `Stewie a Woman` lets `cls-maxqc3` derive
+`Stewie owl:sameAs Meg` against a `maxQualifiedCardinality 1`, and `eq-diff1`
+then clashes that against the premise's own `Stewie owl:differentFrom Meg`. An
+`owl:AllDifferent` collection is, by OWL 2's own definition, the conjunction of
+its `n(n−1)/2` pairwise inequalities, so it lowers to the same shape and is
+entailed exactly when every pair refutes — which is why two `schema-conclusion`
+entries left with the six.
+
+Nothing was added to the table to do it: `rules(Regime::OwlRl)` and
+`implemented(Regime::OwlRl)` are still exactly the same 78, and
+`extensions(Regime::OwlRl)` is still the one rule named below. This row moved
+34 → 42 and the ledger 16 → 8 on a second run of the same seventy-eight rules.
+
+### The eight that remained, and the four mechanisms that closed them
+
+`chain2trans1` concludes `p rdf:type owl:TransitiveProperty` from
+`p owl:propertyChainAxiom (p p)`. Still no head in Tables 4–9 — but the axiom
+ABBREVIATES a universally quantified Horn implication, and an implication is
+decided by **generalisation on constants**: freeze `_:a p _:b . _:b p _:c` over
+constants the premise does not mention, re-run the same table, and `prp-spo2`
+derives `_:a p _:c`. Deliberately not routed through the DL tableau, whose reverse
+mapping DROPS `owl:propertyChainAxiom` and would therefore answer a confident
+wrong "not entailed".
+
+`webont-i5-5-005` and `webont-i5-26-010` conclude an anonymous `owl:unionOf` class
+and an anonymous `owl:Restriction`. Neither says anything about any individual;
+each says a class EXISTS, which the RDF-Based semantics' own **comprehension
+conditions** license — subject to a typing side condition on the operands, which
+is why `i5-5-005`'s premise `a rdf:type owl:Class` is the whole difference between
+a published entailment and a published non-entailment. Only the scaffolds the
+conclusion names are minted, over blank nodes checked absent from both documents.
+
+`new-feature-reflexiveproperty-001` concludes `Peter knows Peter` from
+`knows a owl:ReflexiveProperty`. `owl:ReflexiveProperty` is outside the RL syntax
+so no rule fires — and a rule that DID fire would range over every resource,
+widening a closure every consumer computes by default. It is established
+**positively** instead, from the semantic condition: a reflexive property holds of
+every element of `IR`, and every IRI denotes one.
+
+`webont-i5-8-006`, `-008` and `-009` conclude an `rdfs:range` **widened** to a
+containing XSD datatype. Widened, not narrowed — `xsd:byte ⊑ xsd:short` — which is
+why they are sound at all; two of the three need the INTERSECTION of several
+declared ranges. Deciding that needs the XSD value spaces, so it is decided by
+`purrdf_xsd::range::containment`, three-valued, with the negative answer gated on
+the counterexample range being exactly decided.
 
 ### The one that was NOT structural, and how it was closed
 
@@ -181,9 +354,9 @@ declared to sit outside every specification table: `extensions(Regime::OwlRl)`
 names it, `rules(Regime::OwlRl)` and `implemented(Regime::OwlRl)` are both still
 exactly the same 78 and name none of it, `RuleId::is_extension` decides which is
 which, and every rendered report carries an `extension ext-eq-diff-sym` line
-beside its `missing` lines. So this row moved 33 → 34 and the ledger's
-`actionable` count 1 → 0, while `OWL-RL 78 / 78` still means Tables 4–9 and
-nothing else.
+beside its `missing` lines. So this row moved 33 → 34 — the change before the
+eight above — and the ledger's `actionable` count 1 → 0, while `OWL-RL 78 / 78`
+still means Tables 4–9 and nothing else.
 
 ## The upstream census (`census.tsv`)
 
@@ -243,8 +416,8 @@ grader that reads the tree are PurRDF-authored (MIT OR Apache-2.0).
 
 ## Freeze
 
-This tree is vendored payload and must be byte-frozen like every other. That
-needs one entry in `scripts/check-corpus-frozen.py`'s `GUARDED_ROOTS`:
+This tree is vendored payload and is byte-frozen like every other, `imports/`
+included. It has one entry in `scripts/check-corpus-frozen.py`'s `GUARDED_ROOTS`:
 
 ```python
 "crates/sparql-conformance/entailment-suite/w3c-owl2-rl": (
@@ -252,7 +425,7 @@ needs one entry in `scripts/check-corpus-frozen.py`'s `GUARDED_ROOTS`:
 ),
 ```
 
-then `python3 scripts/check-corpus-frozen.py --update` to write the manifest.
+`python3 scripts/check-corpus-frozen.py --update` writes the manifest.
 (`PROVENANCE.md`, `REUSE.toml` and `LICENSES/` are skipped by the freeze gate, so
 editing this document never requires regenerating it.)
 

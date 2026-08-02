@@ -123,6 +123,7 @@ pub(crate) mod calculus;
 pub mod combined;
 pub(crate) mod datatypes;
 pub(crate) mod engine;
+pub mod entails;
 pub mod explain;
 pub(crate) mod interner;
 pub(crate) mod lists;
@@ -137,6 +138,14 @@ pub(crate) mod vocab;
 
 pub use calculus::calculus_program;
 pub use combined::{CombinedMaterialization, materialize_combined};
+pub use entails::{
+    Binding, CertainAnswers, CompositeWarrant, ComprehensionWarrant, DataRangeWarrant,
+    EntailmentCertificate, EntailmentMechanism, EntailmentOutcome, EntailmentWarrant,
+    FREEZE_BUDGET, FreezeWarrant, FrozenInstance, FrozenOutcome, Generalization,
+    HomomorphismWarrant, ImportMap, MATCH_BUDGET, MissReason, NegativeFact, REFUTATION_BUDGET,
+    ReflexivityWarrant, Refutation, RefutationWarrant, UndecidedReason, VarKey, certain_answers,
+    entails, verify,
+};
 pub use explain::{
     BackwardCheck, ChaseProof, ExplainError, Justification, explain_conclusion, justify,
 };
@@ -361,6 +370,36 @@ pub enum EntailError {
     /// Reporting it under the chase's variant would mean inventing a rule id, which this
     /// crate does not do.
     Unsatisfiable,
+    /// [`entails()`] / [`certain_answers`] were asked for a regime they are not total over.
+    ///
+    /// [`materialize`] is total over [`Materialization`] because that parameter CARRIES each
+    /// regime's own input. The conclusion-directed signature does not: it takes a premise, a
+    /// question and a [`Regime`], which is enough for the five regimes defined by a rule
+    /// table this crate states and is not enough for the two defined by something else —
+    /// `OWL-Direct` by the query's class expressions, `RIF` by the caller's rule document.
+    ///
+    /// The alternative to refusing is silently answering under a weaker regime, which
+    /// produces a sound answer to a question the caller did not ask and labels it with the
+    /// regime they did. So the refusal names the regime, and a caller that wants those two
+    /// reaches [`materialize`] with the input they are defined by.
+    UnsupportedRegime(Regime),
+    /// A premise `owl:imports` a document the caller's [`ImportMap`] does not resolve.
+    ///
+    /// OWL 2 defines an ontology's imports closure to BE the ontology, so this is not a
+    /// slightly smaller premise — it is a different one, and every answer over it would be
+    /// about that different one. PurRDF fetches nothing and mints no vocabulary, so it has
+    /// no way to guess what an ontology IRI names; the closure is caller-supplied
+    /// configuration, and its absence is a refusal that carries the IRI so the caller learns
+    /// exactly which document to supply.
+    UnresolvedImport(String),
+    /// A blank-node match visited [`MATCH_BUDGET`] candidate triples without finishing.
+    ///
+    /// Graph homomorphism is NP-complete in general, and a conclusion with many blank nodes
+    /// over a large closure can make the backtracking search exponential. The budget is a
+    /// STEP count rather than a clock reading, so the refusal is reproducible on every
+    /// target — and it is an error rather than a verdict because "I stopped looking" and
+    /// "there is nothing to find" are different claims and only one of them is true.
+    MatchBudget,
 }
 
 impl std::fmt::Display for EntailError {
@@ -385,6 +424,19 @@ impl std::fmt::Display for EntailError {
             Self::Unsatisfiable => {
                 write!(f, "the OWL-Direct knowledge base is unsatisfiable")
             }
+            Self::UnsupportedRegime(regime) => write!(
+                f,
+                "the conclusion-directed entailment service is not total over {regime:?}: that \
+                 regime is defined by an input its signature does not carry"
+            ),
+            Self::UnresolvedImport(iri) => write!(
+                f,
+                "the premise owl:imports <{iri}>, which the supplied import map does not resolve"
+            ),
+            Self::MatchBudget => write!(
+                f,
+                "the blank-node match exceeded its {MATCH_BUDGET}-candidate budget"
+            ),
         }
     }
 }

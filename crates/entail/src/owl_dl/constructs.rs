@@ -568,7 +568,11 @@ pub(crate) const OWL2_CONSTRUCTS: &[OwlConstruct] = &[
         Shape::TypeObject,
         "the ontology header names the document, not a class or an individual",
     ),
-    bounded(OWL_IMPORTS, Shape::IriPredicate, Construct::OntologyImport),
+    bounded(
+        OWL_IMPORTS,
+        Shape::IriPredicate,
+        Construct::UnresolvedOntologyImport,
+    ),
     inert(
         OWL_VERSIONIRI,
         Shape::IriPredicate,
@@ -1049,7 +1053,7 @@ mod tests {
             Construct::NonSimpleRole,
             Construct::DataRange,
             Construct::BuiltinRole,
-            Construct::OntologyImport,
+            Construct::UnresolvedOntologyImport,
             Construct::UnrecognizedTerm,
         ];
         let mut seen: BTreeSet<Construct> = BTreeSet::new();
@@ -1071,7 +1075,7 @@ mod tests {
             Construct::PropertyChain,
             Construct::DataRange,
             Construct::BuiltinRole,
-            Construct::OntologyImport,
+            Construct::UnresolvedOntologyImport,
         ] {
             assert!(seen.contains(&boundary), "no term raises {boundary}");
         }

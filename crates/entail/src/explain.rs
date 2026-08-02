@@ -806,36 +806,109 @@ impl Justification {
 /// assert!(justification.is_minimal().expect("well formed"));
 /// ```
 pub fn justify(ds: &RdfDataset, axiom: &DlAxiom) -> Result<Justification, ExplainError> {
-    let mut decisions = 1_u64;
     match entails(ds, axiom)? {
         Verdict::True => {}
         Verdict::False => return Err(ExplainError::NotEntailed),
         Verdict::Unknown => return Err(ExplainError::Undecided),
     }
 
+    // An unsatisfiable subset entails everything, which would let the search drop an axiom
+    // for the wrong reason; it is not a `True` verdict, so `entails` reporting it as an
+    // error keeps the candidate.
+    let mut holds = |subset: &RdfDataset| Ok(matches!(entails(subset, axiom), Ok(Verdict::True)));
+    // The tableau lane spends whatever the ontology costs and REPORTS it rather than
+    // capping it; `Justification::decisions` is that number. A cap here would produce a
+    // subset whose minimality claim quietly stopped being true partway through.
+    let mut budget = u64::MAX;
+    let shrunk = shrink_to_irreducible(ds, &mut budget, &mut holds)?;
+    Ok(Justification {
+        axiom: axiom.clone(),
+        ontology: shrunk.subset,
+        axioms: shrunk.axioms,
+        // Plus the one decision that established the entailment before any shrinking began.
+        decisions: 1 + shrunk.decisions,
+    })
+}
+
+/// What a shrink produced: the subset, its size, its cost, and whether it finished.
+///
+/// See [`shrink_to_irreducible`] for why `irreducible` is reported rather than asserted.
+#[derive(Debug)]
+pub(crate) struct Shrunk {
+    /// The surviving subset, holding exactly its axioms and the scaffolding they carry.
+    pub(crate) subset: Arc<RdfDataset>,
+    /// How many AXIOMS it holds — root triples, not the blank-node scaffolding they carry.
+    pub(crate) axioms: usize,
+    /// How many decisions the search spent.
+    pub(crate) decisions: u64,
+    /// Whether every candidate was tried, so no axiom of `subset` can be dropped.
+    ///
+    /// `false` only when `budget` ran out mid-pass. A caller that must not overclaim reads
+    /// this rather than assuming: a subset that still SATISFIES `holds` is a correct answer
+    /// whether or not the search got to try every axiom, and the difference is exactly
+    /// whether "minimal" may be said about it.
+    pub(crate) irreducible: bool,
+}
+
+/// One-pass BLACK-BOX shrink of `ds` to a subset that still satisfies `holds`.
+///
+/// # The mechanism is engine-agnostic, and that is the point of it living here
+///
+/// This is the search [`justify`] performs, with the decision procedure lifted out into a
+/// parameter. Nothing in it knows what `holds` decides: it walks the ontology's axioms in
+/// source order, drops each in turn, and puts back any whose removal loses the property.
+/// What survives is IRREDUCIBLE with respect to `holds` — every axiom left is one whose
+/// removal loses it — which is exactly what
+/// [`Justification::is_minimal`] re-decides for the tableau lane and what
+/// [`crate::entails::refutation`] re-decides for the refutation lane. Two callers, one
+/// search; a second copy of this loop is how two "minimal" subsets come to mean two
+/// different things.
+///
+/// The unit of removal is an AXIOM and not a triple, because half a class expression is not
+/// a class expression: [`Axioms`] splits the input into the triples that STATE something
+/// and the blank-node scaffolding they carry, and a dropped axiom takes its scaffolding
+/// with it. That matters as much for a refutation over an `owl:AllDisjointProperties`
+/// collection as for a justification over a general class inclusion.
+///
+/// `budget` is decremented once per decision and stops the pass when it reaches zero; the
+/// result then reports `irreducible: false` rather than claiming a minimality the search did
+/// not establish. A caller with nothing to cap passes [`u64::MAX`].
+///
+/// # Errors
+///
+/// [`EntailError::Build`] if a subset cannot be frozen, and whatever `holds` refuses with.
+pub(crate) fn shrink_to_irreducible<F>(
+    ds: &RdfDataset,
+    budget: &mut u64,
+    holds: &mut F,
+) -> Result<Shrunk, EntailError>
+where
+    F: FnMut(&RdfDataset) -> Result<bool, EntailError>,
+{
     let axioms = Axioms::of(ds);
     let mut kept: BTreeSet<usize> = (0..axioms.roots.len()).collect();
+    let mut decisions = 0_u64;
+    let mut irreducible = true;
     for candidate in 0..axioms.roots.len() {
+        if *budget == 0 {
+            irreducible = false;
+            break;
+        }
         if !kept.remove(&candidate) {
             continue;
         }
         let subset = axioms.emit(&kept)?;
+        *budget -= 1;
         decisions += 1;
-        // An unsatisfiable subset entails everything, which would let the search drop an
-        // axiom for the wrong reason; it is not a `True` verdict, so `entails` reporting it
-        // as an error keeps the candidate.
-        let needed = !matches!(entails(&subset, axiom), Ok(Verdict::True));
-        if needed {
+        if !holds(&subset)? {
             kept.insert(candidate);
         }
     }
-
-    let ontology = axioms.emit(&kept)?;
-    Ok(Justification {
-        axiom: axiom.clone(),
-        ontology,
+    Ok(Shrunk {
+        subset: axioms.emit(&kept)?,
         axioms: kept.len(),
         decisions,
+        irreducible,
     })
 }
 

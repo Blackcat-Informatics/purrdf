@@ -188,6 +188,14 @@ pub fn read_lpg_graphml(
                 .at_path(GRAPHML_PATH),
         );
     }
+    // `roxmltree`'s tokenizer recurses once per element, so a deeply nested document aborts
+    // the process rather than returning an error. The nesting is measured first and refused.
+    crate::nesting::guard_xml_nesting(text).map_err(|depth| {
+        ProjectionError::syntax(format!(
+            "GraphML XML nests {depth} elements deep, past the parser limit"
+        ))
+        .at_path(GRAPHML_PATH)
+    })?;
     let document = Document::parse(text).map_err(|error| {
         ProjectionError::syntax(format!("parse GraphML XML: {error}")).at_path(GRAPHML_PATH)
     })?;

@@ -88,7 +88,7 @@ impl EntailmentPlan {
         Ok(Self { regime, rules })
     }
 
-    /// The plan to hand [`materialize`].
+    /// The plan to hand [`purrdf_entail::materialize`].
     pub(crate) fn materialization(&self) -> Materialization<'_> {
         match self.regime {
             Regime::Simple => Materialization::Simple,

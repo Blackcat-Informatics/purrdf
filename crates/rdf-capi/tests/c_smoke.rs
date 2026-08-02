@@ -41,6 +41,13 @@ fn cdylib_artifact(messages: &[u8], lib_name: &str) -> Option<PathBuf> {
     None
 }
 
+/// The vendored W3C OWL 2 RL entailment corpus, relative to this crate.
+///
+/// A path rather than a copy: `scripts/check-corpus-frozen.py` digests those bytes,
+/// so a fixture transcribing them here would be a second, un-digested corpus free to
+/// drift from the one the conformance scoreboard grades.
+const CORPUS: &str = "../sparql-conformance/entailment-suite/w3c-owl2-rl";
+
 #[test]
 fn c_abi_smoke() {
     let manifest = env!("CARGO_MANIFEST_DIR");
@@ -141,6 +148,18 @@ fn c_abi_smoke() {
         .arg(format!(
             "{manifest}/../validate/tests/fixtures/regime-boundary.vectors"
         ))
+        // Arguments four to six are `webont-imports-011` and the support ontology
+        // its premise `owl:imports`, taken from the byte-frozen W3C corpus rather
+        // than copied into a fixture of this crate's own. They are what proves the
+        // caller-supplied import table reaches a REAL C caller: the header would
+        // not even compile against a program passing arrays it does not declare.
+        .arg(format!(
+            "{manifest}/{CORPUS}/cases/webont-imports-011/premise.rdf"
+        ))
+        .arg(format!(
+            "{manifest}/{CORPUS}/cases/webont-imports-011/conclusion.rdf"
+        ))
+        .arg(format!("{manifest}/{CORPUS}/imports/support011-A.rdf"))
         .env(loader_path_var, profile_dir)
         .status()
         .expect("failed to run the C smoke binary");

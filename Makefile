@@ -36,9 +36,11 @@ BINARYEN_VERSION := 130
 # deterministic layout, SVG export, all sixteen graph/tabular/
 # dataset-description/research-object projection profiles, the compiled JSON-LD
 # context/options/registry engine, validation-scoped asserted-subclass
-# membership shared by native SHACL and SHACL-SPARQL, and now the entailment
-# engine, the nine OWL reasoner services AND the concrete domain — measures
-# 9_502_971 bytes against the 12_112_500 ceiling, which is 21.544% headroom. That
+# membership shared by native SHACL and SHACL-SPARQL, the entailment engine, the
+# nine OWL reasoner services, the concrete domain AND the conclusion-directed
+# entailment service with its seven mechanisms and its caller-supplied import
+# map — measures
+# 9_765_497 bytes against the 12_112_500 ceiling, which is 19.377% headroom. That
 # figure is recorded below (WASM_SIZE_MEASURED_BYTES) and REPORTED rather than
 # enforced; the ceiling is the check that fails.
 #
@@ -173,8 +175,71 @@ WASM_SIZE_BUDGET_BYTES := 12112500
 # that replace it come to slightly less than it cost. The completion graph itself
 # is shared by both, so it is linked exactly once either way.
 #
-# The measured constant below is the CURRENT size, not that intermediate figure.
-WASM_SIZE_MEASURED_BYTES := 9502971
+# The increase 9_502_971 -> 9_700_232 is the CONCLUSION-DIRECTED entailment service
+# reaching the artifact. `purrdf_entail::entails`, `certain_answers` and `verify` were
+# already in the workspace and reachable from no wasm-exported symbol, so the linker
+# dead-code-eliminated the whole of them — the chase-and-graph-match search, the
+# refutation re-chase, the freeze-and-chase generalisation, the comprehension mint, the
+# reflexivity read, the datatype-containment decision, the `owl:imports` resolver and
+# their six warrant arms with their reasoner-free checkers. `entailCertainAnswers`,
+# `entailGraphEntails` and `entailVerifyEntailment` now reach all of it, and the growth
+# is that machinery rather than the three thin wrappers over it. It is a NEW CAPABILITY
+# on this host: a browser could close a document under a regime and could not ask whether
+# one document entailed another, which is the question a caller with one question has.
+# Still 80% of WASM_SIZE_BUDGET_BYTES, so this is a measurement update and NOT a ceiling
+# raise.
+#
+# The increase 9_762_944 -> 9_764_851 is the basic-graph-pattern boundary refusing a
+# variable in a literal's DATATYPE. The stand-in a variable is rewritten to became an IRI
+# so that a variable could sit in predicate position, and an IRI is legal as a datatype —
+# so a pattern like "5"^^?d parsed straight into that slot and the stand-in reached the
+# matcher, where it matched this library's own namespace instead of the caller's data. The
+# demotion walk is now total over the term and returns a refusal naming the position, which
+# is the fallible plumbing and the refusal text the artifact grew by. It is a correctness
+# fix rather than a capability, which is why under two kilobytes buys it.
+#
+# The increase 9_764_851 -> 9_765_514 is the same boundary reading a pattern the way the
+# PARSER reads it. Two silent wrong answers closed: the stand-in namespace is now swept
+# against the pattern with its `UCHAR` escapes expanded, so an IRI the caller wrote with an
+# escaped letter is no longer reconstructed by the parser and read back as a variable; and a
+# query node gained a triple-term form, so a name used inside an RDF 1.2 triple term and
+# outside it is ONE variable whose join the matcher enforces instead of two that constrain
+# each other in no way. The growth is the escape expander and the extra node arm, and it is
+# a correctness fix rather than a capability, which is why well under a kilobyte buys it.
+#
+# The DECREASE 9_765_514 -> 9_758_312 is two conclusion-directed fixes, and the direction
+# is worth stating because a shrink is as much a moved number as a growth. The
+# comprehension warrant's witness check compared one collection against itself — two
+# scaffold nodes sharing a witness collapsed on both sides and passed — and now compares
+# the labels against the map's own length, which deletes a `BTreeSet<&TermValue>`
+# instantiation and its ordering code from the artifact. Beside it, a lane's evidence grew
+# a `declined` list so a construct it recognized and refused travels with a mint made in
+# the same pass instead of being dropped. The first removes more than the second adds.
+#
+# The increase 9_758_312 -> 9_760_099 is three depth-driven searches that stopped living on
+# the call stack. Each one's depth was a function of how BIG the caller's input is rather
+# than how complicated it is — one level per conclusion triple in the homomorphism match,
+# one per disjunction in the OWL-Direct hypertableau, one per nesting level in the
+# class-expression parser — so a large-but-ordinary document overflowed the stack, which is
+# not a refusal a caller can catch: the process aborts, nothing unwinds, and a host
+# embedding the library dies with it. The first two now carry their frames on the heap and
+# the third refuses past a measured ceiling. The growth is the explicit frame types and
+# their loops, which cost more instructions than the recursion they replace; it buys the
+# ability to answer questions the artifact previously aborted on.
+#
+# The increase 9_760_099 -> 9_765_497 is the text and XML parse front ends learning to
+# refuse a nesting depth instead of dying of one. Every text grammar here nests without
+# limit on paper and reads that nesting with recursion, so an input was an instruction
+# about how much stack to burn: twenty thousand nested quoted triple terms in one
+# N-Triples line, or twenty thousand nested `rdf:Description` elements, aborted the
+# process. The cost is a depth parameter threaded through the recursive-descent term
+# grammar, a source-level element-nesting scan in front of the XML tokenizer (whose own
+# recursion is in a dependency and cannot be bounded from here), and an explicit work
+# stack for XML-literal canonicalization. It buys documents that used to kill the host
+# returning an ordinary located diagnostic.
+#
+# The measured constant below is the CURRENT size, not any intermediate figure.
+WASM_SIZE_MEASURED_BYTES := 9765497
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -197,6 +262,7 @@ check: ## The full local gate: fmt, clippy, build, tests, hygiene.
 	python3 scripts/check-issue-refs.py
 	python3 scripts/check-versions.py
 	python3 scripts/check-wasm-js-exports.py
+	python3 scripts/check-entailment-surface.py
 	cargo test --workspace --locked
 	$(MAKE) rdf-core-hygiene
 	$(MAKE) wasm

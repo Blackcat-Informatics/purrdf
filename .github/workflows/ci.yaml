@@ -54,6 +54,9 @@ jobs:
       - name: Check every wasm-bindgen free function is re-exported from the npm package root
         run: python3 scripts/check-wasm-js-exports.py
 
+      - name: Check the conclusion-directed entailment surface reaches all four hosts
+        run: python3 scripts/check-entailment-surface.py
+
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 45

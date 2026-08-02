@@ -40,10 +40,11 @@
 
 use purrdf_validate::regime::{
     ReasonerSession, ReasoningAnswer as BoundaryAnswer, RegimeClosure as BoundaryClosure,
-    check_inconsistent_refusal, check_regime_golden_vectors, classify_to_string,
-    consistency_to_string, entails_to_string, explain_conclusion_to_string, extension_rules_string,
-    extract_module_to_string, implemented_rules_string, instances_to_string, justify_to_string,
-    materialize_to_nquads_string, profile_to_string, realize_to_string, rules_string,
+    certain_answers_to_string, check_inconsistent_refusal, check_regime_golden_vectors,
+    classify_to_string, consistency_to_string, entails_to_string, explain_conclusion_to_string,
+    extension_rules_string, extract_module_to_string, graph_entails_to_string,
+    implemented_rules_string, instances_to_string, justify_to_string, materialize_to_nquads_string,
+    profile_to_string, realize_to_string, rules_string, verify_entailment_to_string,
 };
 use wasm_bindgen::prelude::*;
 
@@ -262,10 +263,17 @@ impl ReasoningAnswer {
         self.answer.clone()
     }
 
-    /// How completely the service decided: the `purrdf-dl-certificate 1` block for
-    /// a tableau service, or that service's own certificate grammar for the three
-    /// that run no tableau (`entailProfile`, `entailExtractModule`,
-    /// `entailExplainConclusion`).
+    /// How completely the service decided, in one of THREE certificate grammars —
+    /// which one is a property of the service, so a caller reads it off the call
+    /// rather than sniffing the string:
+    ///
+    /// - `purrdf-dl-certificate 1` — the tableau services (`entailConsistency`,
+    ///   `entailClassify`, `entailRealize`, `entailInstances`, `entailEntails`).
+    /// - `purrdf-reasoning-report 4` — the entailment-regime services
+    ///   (`entailCertainAnswers`, `entailGraphEntails`, `entailVerifyEntailment`),
+    ///   which decide by the regime's rule table rather than by a tableau.
+    /// - that service's own grammar — the three that run neither (`entailProfile`,
+    ///   `entailExtractModule`, `entailExplainConclusion`).
     ///
     /// The DL lane's completeness is `decided` / `decided-within-boundaries` /
     /// `budget-exhausted` — NOT the chase's `exact` / `sound-incomplete`, which is
@@ -522,6 +530,208 @@ pub fn entail_explain_conclusion(
     explain_conclusion_impl(document, regime, conclusion).map_err(|e| JsError::new(&e))
 }
 
+// ── The conclusion-directed entailment services ─────────────────────────────────
+
+/// Zip the caller's two import arrays into the boundary's ordered `(iri, document)` table.
+///
+/// # Why TWO arrays and not one array of `[iri, document]` pairs
+///
+/// wasm-bindgen has no ABI for a nested string array: `Vec<Vec<String>>` does not
+/// implement `VectorFromWasmAbi`, because `ErasableGeneric` bottoms out at `&str` rather
+/// than at `JsValue`. Reading a JS `Array` of `Array`s therefore needs `js-sys`, which this
+/// crate does not depend on, and the alternative — receiving the pairs in `js/index.mjs`
+/// and flattening them there — is structurally refused by
+/// `scripts/check-wasm-js-exports.py`, which requires every `#[wasm_bindgen]` free
+/// function to be re-exported from the package root under its OWN name, leaving no room
+/// for a renaming wrapper.
+///
+/// So this host reuses the C ABI's convention — parallel arrays plus a length agreement —
+/// rather than inventing a second one. Order is the caller's and is preserved: the
+/// boundary's table is a list rather than a map precisely so the same input always
+/// produces the same run.
+///
+/// Two arrays of different lengths are a caller error and are REFUSED, never truncated to
+/// the shorter one: a silently dropped tail is an import the caller believes was supplied.
+fn import_pairs<'a>(
+    iris: &'a [String],
+    documents: &'a [String],
+) -> Result<Vec<(&'a str, &'a str)>, String> {
+    if iris.len() != documents.len() {
+        return Err(format!(
+            "the import table has {} ontology IRI(s) and {} document(s); an entry is a PAIR, \
+             so truncating to the shorter array would drop an import the caller supplied",
+            iris.len(),
+            documents.len()
+        ));
+    }
+    Ok(iris
+        .iter()
+        .zip(documents)
+        .map(|(iri, document)| (iri.as_str(), document.as_str()))
+        .collect())
+}
+
+/// The certain answers of a basic graph pattern. See [`entail_certain_answers`].
+pub(crate) fn certain_answers_impl(
+    regime: &str,
+    document: &str,
+    pattern: &str,
+    import_iris: &[String],
+    import_documents: &[String],
+) -> Result<ReasoningAnswer, String> {
+    let imports = import_pairs(import_iris, import_documents)?;
+    certain_answers_to_string(regime, document, pattern, &imports).map(ReasoningAnswer::from)
+}
+
+/// `entailCertainAnswers(regime, document, pattern)` → the substitutions the knowledge
+/// base ENTAILS the pattern under, as `var` and `row` lines.
+///
+/// A certain answer is true in every model, not merely present in one closure, which is
+/// what SPARQL's entailment regimes define the answers to a basic graph pattern to be.
+///
+/// `pattern` is N-Triples with `?name` in any position, the PREDICATE included. A blank
+/// node in it is a NON-DISTINGUISHED variable — constrained by the match, not projected, and
+/// not a column — which is what SPARQL says a query blank node is. A variable inside an RDF
+/// 1.2 triple term is an ordinary variable: it binds, it is a column, and one NAME is one
+/// VARIABLE wherever it was written, so a pattern using it above and below the triple-term
+/// boundary is joined rather than split into two. A predicate variable is
+/// projected like any other, and under `owl-rl` it also renders a `limit`: it ranges over the
+/// whole predicate vocabulary, including the schema predicates and the constructs the
+/// mechanisms beyond the rule table decide, and the closure holds neither.
+///
+/// A `limit` line says the row set may not be EXHAUSTIVE. Every row is sound
+/// unconditionally; what needs a precondition is the claim about a row that is NOT there,
+/// so no `limit` lines is the claim that the row set is complete.
+///
+/// The answer opens `mechanism <name>`. A pattern with a projected variable is
+/// `strict-table`: the five mechanisms beyond the rule table are not run for one, because
+/// a projected variable over what any of them decides is a different question — and that
+/// one of them WOULD have been needed arrives as a `limit` line naming the lane, never as
+/// an exhaustive empty answer. A pattern with NO projected variable is a conclusion graph,
+/// is answered by the same fold `entailGraphEntails` runs, and names whichever of the seven
+/// reached it; such an answer is the relation with no columns, so a `yes` is one bare `row`
+/// line and a `no` is none.
+///
+/// `importIris` and `importDocuments` are the caller's `owl:imports` table, as two PARALLEL
+/// arrays of the same length: entry `i` declares that the ontology IRI `importIris[i]`
+/// denotes the N-Quads document `importDocuments[i]`. A premise carrying an `owl:imports`
+/// states that its axioms are its own PLUS those of the documents it names, so this is where
+/// those documents arrive and the `owl:imports` triple stays exactly where the caller wrote
+/// it. **PurRDF fetches nothing**: an ontology IRI the table does not resolve throws by name,
+/// never a network access and never a silently empty import. Two empty arrays are the
+/// ordinary "imports nothing" case, and both are required rather than defaulted.
+///
+/// Throws on an unknown regime, on `owl-direct` or `rif` (each defined by an input this
+/// signature does not carry), on a malformed document, pattern or import document, on import
+/// arrays of different lengths, on a duplicate or empty import IRI, on a pattern that names
+/// a graph, on a pattern that writes a variable in a literal's DATATYPE — a slot RDF reserves
+/// for an IRI, and one a basic graph pattern has no binding to project — on an `owl:imports`
+/// the table does not resolve, and on an inconsistent premise — whose refusal carries the
+/// full report.
+#[wasm_bindgen(js_name = entailCertainAnswers)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+pub fn entail_certain_answers(
+    regime: &str,
+    document: &str,
+    pattern: &str,
+    import_iris: Vec<String>,
+    import_documents: Vec<String>,
+) -> Result<ReasoningAnswer, JsError> {
+    certain_answers_impl(regime, document, pattern, &import_iris, &import_documents)
+        .map_err(|e| JsError::new(&e))
+}
+
+/// Conclusion-directed entailment under a regime. See [`entail_graph_entails`].
+pub(crate) fn graph_entails_impl(
+    regime: &str,
+    premise: &str,
+    conclusion: &str,
+    import_iris: &[String],
+    import_documents: &[String],
+) -> Result<ReasoningAnswer, String> {
+    let imports = import_pairs(import_iris, import_documents)?;
+    graph_entails_to_string(regime, premise, conclusion, &imports).map(ReasoningAnswer::from)
+}
+
+/// `entailGraphEntails(regime, premise, conclusion)` → does the premise entail the
+/// conclusion GRAPH under the regime's rule table?
+///
+/// NOT [`entail_entails`], which asks the OWL 2 Direct-Semantics TABLEAU about one AXIOM
+/// and renders a `purrdf-dl-certificate 1`. This asks the regime's RULE TABLE about a
+/// conclusion GRAPH and renders a `purrdf-reasoning-report 4`. Different question,
+/// different calculus, different certificate — and the banners differ so neither can be
+/// parsed as the other.
+///
+/// The answer opens `mechanism <name>`: WHICH of the seven mechanisms reached the verdict.
+/// `strict-table` is the regime's own rule table, run once; five more exist because no head
+/// in that table has the conclusion's shape at all; and `composite` is two or more of those
+/// five folded over one conclusion.
+///
+/// THREE verdicts, never two. `not-entailed` is a PROOF — the procedure was complete for
+/// this premise — and `undecided` is what an incomplete procedure is entitled to say
+/// instead. Collapsing the second into the first would turn a limitation of this library
+/// into a false statement about the caller's data.
+///
+/// `importIris`/`importDocuments` are [`entail_certain_answers`]'s, and apply to the
+/// PREMISE: the conclusion is a graph to match rather than an ontology to close, so an
+/// `owl:imports` in it names nothing this service resolves.
+///
+/// Throws as [`entail_certain_answers`].
+#[wasm_bindgen(js_name = entailGraphEntails)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+pub fn entail_graph_entails(
+    regime: &str,
+    premise: &str,
+    conclusion: &str,
+    import_iris: Vec<String>,
+    import_documents: Vec<String>,
+) -> Result<ReasoningAnswer, JsError> {
+    graph_entails_impl(regime, premise, conclusion, &import_iris, &import_documents)
+        .map_err(|e| JsError::new(&e))
+}
+
+/// Entailment with its warrant RE-DECIDED. See [`entail_verify_entailment`].
+pub(crate) fn verify_entailment_impl(
+    regime: &str,
+    premise: &str,
+    conclusion: &str,
+    import_iris: &[String],
+    import_documents: &[String],
+) -> Result<ReasoningAnswer, String> {
+    let imports = import_pairs(import_iris, import_documents)?;
+    verify_entailment_to_string(regime, premise, conclusion, &imports).map(ReasoningAnswer::from)
+}
+
+/// `entailVerifyEntailment(regime, premise, conclusion)` → [`entail_graph_entails`] with
+/// the warrant re-decided, without running a reasoner.
+///
+/// The re-check re-derives nothing: "the closure follows from the premise" is the chase's
+/// claim and `entailExplainConclusion` is its checker, while "the conclusion follows from
+/// the closure" is this one and is finite and purely combinatorial.
+///
+/// `warrant absent` / `verified not-applicable` is a `not-entailed` or an `undecided`:
+/// there is no evidence to re-decide, and a `false` there would read as a failed check
+/// rather than as an absent one.
+///
+/// `importIris`/`importDocuments` are [`entail_certain_answers`]'s. The re-check runs
+/// against the premise AS WRITTEN rather than against its imports closure: a warrant
+/// re-decidable from the caller's own document is a stronger check than one only
+/// re-decidable against a graph the library assembled.
+///
+/// Throws as [`entail_certain_answers`].
+#[wasm_bindgen(js_name = entailVerifyEntailment)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+pub fn entail_verify_entailment(
+    regime: &str,
+    premise: &str,
+    conclusion: &str,
+    import_iris: Vec<String>,
+    import_documents: Vec<String>,
+) -> Result<ReasoningAnswer, JsError> {
+    verify_entailment_impl(regime, premise, conclusion, &import_iris, &import_documents)
+        .map_err(|e| JsError::new(&e))
+}
+
 // ── The session ─────────────────────────────────────────────────────────────────
 
 /// A reasoning session over one ontology — `new Reasoner(document, stepCap)`.
@@ -735,6 +945,98 @@ mod tests {
         check_regime_golden_vectors().expect("the regime golden vector");
     }
 
+    /// EVERY conclusion-directed service reaches THIS host, with its report.
+    ///
+    /// The sibling of `every_dl_service_reaches_this_host_with_its_certificate`, and it
+    /// exists for the same reason: nine tableau services were once compiled into this
+    /// artifact, budgeted for, and unreachable from the npm package root. The structural
+    /// half of that — is the symbol re-exported? — is
+    /// `scripts/check-entailment-surface.py`. This is the behavioural half: the service
+    /// runs on this host and its answer says what the boundary says it says.
+    #[test]
+    fn every_conclusion_directed_service_reaches_this_host() {
+        let conclusion = "<http://example.org/x> \
+                          <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+                          <http://example.org/B> .\n";
+        let pattern = "<http://example.org/x> \
+                       <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?c .\n";
+
+        let answers = certain_answers_impl("owl-rl", SCHEMA, pattern, &[], &[]).expect("answers");
+        assert!(
+            answers
+                .answer()
+                .starts_with("mechanism strict-table\nvar c\n")
+        );
+        // `?c` ranges over the ENTAILED types, so `B` is a row and it is not asserted.
+        assert!(
+            answers.answer().contains("\nrow <http://example.org/B>\n"),
+            "{}",
+            answers.answer()
+        );
+
+        let decided = graph_entails_impl("owl-rl", SCHEMA, conclusion, &[], &[]).expect("decides");
+        assert_eq!(
+            decided.answer(),
+            "mechanism strict-table\nentailment entailed\n"
+        );
+
+        let checked =
+            verify_entailment_impl("owl-rl", SCHEMA, conclusion, &[], &[]).expect("decides");
+        assert!(
+            checked
+                .answer()
+                .ends_with("warrant present\nverified true\n")
+        );
+
+        // …and all three carry the run, on the SAME banner the materialization lane uses,
+        // naming the mechanism that answered.
+        for (service, produced) in [
+            ("certain-answers", &answers),
+            ("graph-entails", &decided),
+            ("verify-entailment", &checked),
+        ] {
+            let certificate = produced.certificate();
+            assert!(
+                certificate.starts_with("purrdf-reasoning-report 4\n"),
+                "{service}: {certificate}"
+            );
+            assert!(
+                certificate.contains("\nmechanism strict-table "),
+                "{service}: {certificate}"
+            );
+        }
+    }
+
+    /// A conclusion nothing derives has NO warrant, and the answer says so rather than
+    /// reporting a check that failed.
+    #[test]
+    fn an_unreached_conclusion_reports_an_absent_warrant_rather_than_a_failed_check() {
+        let never = "<http://example.org/x> \
+                     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+                     <http://example.org/Never> .\n";
+        let checked = verify_entailment_impl("owl-rl", SCHEMA, never, &[], &[]).expect("decides");
+        assert!(checked.answer().starts_with("mechanism strict-table\n"));
+        assert!(checked.answer().contains("\nentailment not-entailed\n"));
+        assert!(
+            checked
+                .answer()
+                .ends_with("warrant absent\nverified not-applicable\n")
+        );
+    }
+
+    /// The two regimes this service is not total over are REFUSED by name.
+    #[test]
+    fn the_regimes_defined_by_a_missing_input_are_refused_by_name() {
+        let conclusion = "<http://example.org/x> \
+                          <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+                          <http://example.org/B> .\n";
+        for regime in ["owl-direct", "rif"] {
+            let refused = graph_entails_impl(regime, SCHEMA, conclusion, &[], &[])
+                .expect_err("defined by an input this signature does not carry");
+            assert!(refused.contains(regime), "{refused}");
+        }
+    }
+
     /// The other tri-host assertion, made from THIS crate: an inconsistent input is
     /// refused WITH its certificate and its witness triples.
     ///
@@ -762,7 +1064,7 @@ mod tests {
         // Asserted as the invariant rather than as a `sound-incomplete <n>`
         // literal: the count moves every time a rule lands, the honesty gate does
         // not, and a `boundary` line outlives a rule table going complete.
-        assert!(closed.report().starts_with("purrdf-reasoning-report 3\n"));
+        assert!(closed.report().starts_with("purrdf-reasoning-report 4\n"));
         assert!(closed.report().contains("\nregime rdfs\n"));
         assert!(closed.report().contains("\ncompleteness "));
         assert!(closed.report().contains("\nboundary "));
@@ -947,7 +1249,7 @@ mod tests {
         );
         assert!(tableau.certificate().contains("\ncompleteness decided\n"));
         let chase = materialize_impl(TAXONOMY, "owl-rl", "").expect("owl-rl");
-        assert!(chase.report().starts_with("purrdf-reasoning-report 3\n"));
+        assert!(chase.report().starts_with("purrdf-reasoning-report 4\n"));
         assert!(!chase.report().contains("completeness decided"));
     }
 

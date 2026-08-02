@@ -20,7 +20,7 @@ text/XML/JSON codecs, the pack container, the SPARQL 1.2 evaluator, and the
 entailment closures — so anything the CLI does, it does with byte-for-byte the
 same behavior as the Rust, Python, WebAssembly, and C surfaces.
 
-Every invocation is one `Source → [transform] → Sink` pipeline, exposed as five
+Every invocation is one `Source → [transform] → Sink` pipeline, exposed as six
 subcommands:
 
 | Subcommand | Pipeline |
@@ -28,6 +28,7 @@ subcommands:
 | [`convert`](#convert) | transcode RDF between syntaxes and the native pack container |
 | [`query`](#query) | evaluate a SPARQL query over an RDF or pack data source |
 | [`reason`](#reason) | materialize an entailment regime's closure over a source graph |
+| [`entails`](#entails) | decide whether a premise entails a conclusion, or answer a pattern's certain answers |
 | [`project`](#project) | materialize a deterministic graph/tabular USTAR carrier |
 | [`lift`](#lift) | reconstruct RDF from a strict bidirectional carrier |
 
@@ -208,8 +209,9 @@ Materialize an entailment regime's closure over the source graph and write it ou
 
 `rdfs` fires 18 of the 18 RDF + RDFS patterns; `owl-rl` fires all 78 rules of
 OWL 2 Profiles §4.3 Tables 4–9. That is *rule-table coverage*, which is not
-entailment conformance: on W3C's own OWL 2 RL entailment tests this chase scores
-**11 of 27 positive and 23 of 23 negative**, the latter meaning no unsoundness was
+entailment conformance: on this vendored W3C corpus of OWL 2 RL entailment tests
+this chase scores
+**27 of 27 positive and 23 of 23 negative**, the latter meaning no unsoundness was
 found. Both numbers are true and stating only the first is an overclaim; see
 [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md).
 
@@ -244,9 +246,130 @@ purrdf reason --regime rdfs people.ttl closure.nt
 # OWL 2 RL closure from stdin to stdout (explicit formats required for `-`).
 cat ontology.ttl | purrdf reason --regime owl-rl --from ttl --to nt - -
 
-# A refused regime: exits 3 with an explanatory message.
+# Every regime materializes, including the two `entails` refuses.
 purrdf reason --regime owl-direct people.ttl out.ttl
-echo $?   # 3
+echo $?   # 0
+```
+
+## `entails`
+
+```text
+purrdf entails --regime <R> --premise <FILE> (--conclusion <FILE> [--verify] | --pattern <FILE>)
+               [--import <IRI>=<FILE>]... [--report[=PATH]] [--from <F>] [--base <IRI>] [OUT]
+```
+
+Decide a question about a premise, rather than compute everything it entails.
+
+`reason` and `entails` are the two halves of entailment and neither is the other.
+`reason` builds a **closure** — everything the premise entails, as a document —
+which is what you want if you are going to ask many questions of one premise.
+`entails` decides **one** question, and that is not the membership test in that
+closure it looks like: a conclusion's blank nodes are existentials that have to be
+*mapped*, an inconsistent premise entails everything, and a failure to find a
+mapping means nothing at all unless the rule set is complete for the premise it
+ran on. A conclusion can also be entailed while appearing nowhere in the closure
+— see the mechanisms below.
+
+- `--regime <R>` — the regime to decide under (see the refusal note below).
+- `--premise <FILE>` — the premise document, or `-` for stdin.
+- `--conclusion <FILE>` — a conclusion **graph**. The answer is a verdict.
+- `--verify` — re-decide the warrant of an `entailed` verdict **without running a
+  reasoner**, adding `warrant` and `verified` lines. Requires `--conclusion`.
+- `--pattern <FILE>` — a **basic graph pattern**: N-Triples with `?name` (or
+  `$name`) in any position, the **predicate** included. The answer is its *certain
+  answers* — the substitutions the premise entails the pattern under, not the ones
+  that happen to be in one closure. A pattern is not an RDF document, so its bytes
+  go to the boundary untranscoded and `--from` says nothing about it. A predicate
+  variable is projected like any other, and under `owl-rl` it also renders a
+  `limit`: it ranges over the whole predicate vocabulary, including the schema
+  predicates and the constructs the mechanisms beyond the rule table decide, and the
+  closure the rows are drawn from holds neither. The one slot that admits no
+  variable is a literal's **datatype**: `"5"^^?d` asks for a binding in a position
+  that holds an IRI rather than a term, and is refused by name.
+- `--import <IRI>=<FILE>` — repeatable; resolves one `owl:imports` the premise
+  declares to one local document (see below).
+- `--report[=PATH]` — the reasoning certificate, as `reason --report`.
+- `--from <F>` / `--base <IRI>` — the input format override and parse base for the
+  premise, the conclusion and every `--import` document.
+
+`--conclusion` and `--pattern` conflict and exactly one is required. The answer
+goes to `OUT` (default stdout) and the certificate to `--report`, so the two never
+mix even when `OUT` is `-`.
+
+**Three verdicts, never two.** `entailment not-entailed` is a *proof* — the
+procedure was complete for this premise, so the absence of a mapping is the
+absence of an entailment — and `entailment undecided` is what an incomplete
+procedure says instead. Collapsing the second into the first would turn a
+limitation of the library into a false statement about your data.
+
+**Six mechanisms, and the answer names the one that reached it.** The first line
+of every answer is `mechanism <name>`:
+
+| `mechanism` | Reaches |
+|---|---|
+| `strict-table` | The regime's own rule table, run once. The only mechanism a `not-entailed` can carry: refuting needs the completeness half of a theorem, and only the table has one. |
+| `refutation` | A **negative fact** (`owl:differentFrom`, membership in an `owl:complementOf` class). No head in OWL 2 Profiles §4.3 Tables 4–9 has that shape, so the seventeen `false`-concluding rules decide it instead. |
+| `freeze` | A **schema axiom** (a property characteristic, an inclusion). Theorem PR1 claims completeness only for *assertional* conclusions, so an absent schema triple is not a fact about the premise — and that holds for an inclusion too, which Table 9's `scm-*` rules do conclude. |
+| `comprehension` | An **anonymous class expression** the conclusion names, under the RDF-Based comprehension conditions. |
+| `reflexivity` | A conclusion's **self-loops**, read off the premise's `owl:ReflexiveProperty` typings. `owl:ReflexiveProperty` is outside the OWL 2 RL syntax. |
+| `data-range` | A **containment between value spaces** (`xsd:byte ⊑ xsd:short`), which no join over triples can discover. |
+| `composite` | Two or more of the above, folded over one conclusion — a conclusion graph is a conjunction, so it can need a lane per half. The `constituent` lines name which. |
+
+None of the five beyond `strict-table` adds a rule: `rules()`, `implemented()` and
+`extensions()` are untouched by all of them, and a `reason` closure is byte-for-byte
+what it was.
+
+**Five regimes, and the other two are refused by name.** `--regime` takes the same
+seven spellings `reason` does, because the accepted set is one vocabulary across
+the binary. This question is served by five of them. `owl-direct` is directed by a
+*query's* class expressions and `rif` entails under the *caller's* rule document,
+and "premise, conclusion, regime" carries neither — so both are refused, naming
+the regime (exit 1), rather than answered under a weaker regime and labelled with
+the one you asked for. Both still **materialize**: `purrdf reason --regime
+owl-direct` and `purrdf reason --regime rif --rules FILE` carry the input each is
+defined by.
+
+**`--import <IRI>=<FILE>` is configuration, not a fetch.** OWL 2 defines an
+ontology's imports closure to *be* the ontology, so a premise carrying an
+`owl:imports` this command was not handed is a different premise from the one you
+asked about. **PurRDF fetches nothing and mints no vocabulary**, so each pair
+resolves one ontology IRI to one local document; an `owl:imports` no pair resolves
+is refused by name (exit 1) rather than treated as an empty document, and a
+malformed pair (no `=`) is a usage error (exit 2) rather than a skipped import. The
+IRI is everything before the *first* `=`.
+
+**One stdin.** The premise, the question and each `--import` document may each be
+`-`, and at most one of them may be: a process has a single standard input, so two
+documents reading it would each get part of one. Two is a usage error naming both.
+
+**No document flags.** `--loss-ledger` records what a conversion dropped and
+`--jsonld-options` configures an RDF serializer; `entails` writes a verdict, so
+both are refused (exit 2) rather than silently doing nothing. The documents it
+reads cross into the boundary's N-Quads — the syntax that carries named graphs, the
+RDF 1.2 statement layer and literal base direction — so that crossing loses nothing
+from any of the nine, and a realized drop is refused rather than recorded.
+
+```sh
+# Does the ontology entail the conclusion under OWL 2 RL?
+purrdf entails --regime owl-rl --premise ontology.ttl --conclusion claim.ttl
+# mechanism strict-table
+# entailment entailed
+
+# A negative fact: entailed, and nowhere in the closure.
+purrdf entails --regime owl-rl --premise family.ttl --conclusion different.ttl
+# mechanism refutation
+# entailment entailed
+
+# Re-decide the warrant without running a reasoner.
+purrdf entails --regime owl-rl --premise ontology.ttl --conclusion claim.ttl --verify
+# … warrant present / verified true
+
+# A premise that imports its schema, plus the certificate on stderr.
+purrdf entails --regime owl-rl --premise ontology.ttl --conclusion claim.ttl \
+  --import http://example.org/schema=schema.ttl --report
+
+# The certain answers of a basic graph pattern.
+purrdf entails --regime rdfs --premise people.ttl --pattern types.bgp
 ```
 
 ## `project`
@@ -395,17 +518,20 @@ purrdf --loss-ledger=convert.loss.json convert star-data.ttl plain.trix
 | Code | Meaning |
 |---|---|
 | `0` | success |
-| `1` | runtime failure — a parse/serialize diagnostic, a pack-integrity failure, an I/O error, or a result/shape mismatch |
-| `2` | usage error — a malformed command line (clap), or a pipeline usage error such as `-` without an explicit format, or `--regime rif` without `--rules` |
+| `1` | runtime failure — a parse/serialize diagnostic, a pack-integrity failure, an I/O error, a result/shape mismatch, or a refusal from the entailment boundary (an unserved regime, an unresolved `owl:imports`, an inconsistent premise) |
+| `2` | usage error — a malformed command line (clap), or a pipeline usage error such as `-` without an explicit format, `--regime rif` without `--rules`, or a malformed `--import` pair |
 
 On any failure the error's message is printed to stderr and its category becomes
 the process exit code; nothing is swallowed.
 
-There is **no unsupported-regime exit code**, because there is no unsupported
-regime. A third code (`3`) used to classify the entailment-regime boundary the CLI
-could not cross; `purrdf-entail`'s `materialize` takes a `Materialization` — which
-carries each regime's own input — so all seven run and the classification has
-nothing left to classify.
+There is **no unsupported-regime exit code**. A third code (`3`) used to classify
+the entailment-regime boundary the CLI could not cross; `purrdf-entail`'s
+`materialize` takes a `Materialization` — which carries each regime's own input —
+so all seven **materialize** and the classification had nothing left to classify.
+The two regimes [`entails`](#entails) does not serve are refused as ordinary
+runtime failures (`1`) carrying the boundary's own diagnostic, which names the
+regime: the CLI keeps no second list of which regimes that service serves, because
+a second list is a second opinion.
 
 ## License
 

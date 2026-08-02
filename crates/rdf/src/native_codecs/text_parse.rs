@@ -42,6 +42,7 @@ use rayon::prelude::*;
 use super::media_type::NativeRdfFormat;
 use super::ser_model::{SerGraph, SerTerm, SerTermKind, SerTriple3};
 use super::span::{NoSpans, SpanCollector};
+use crate::nesting::{MAX_PARSE_NESTING_DEPTH, nesting_too_deep};
 use crate::{RdfDiagnostic, RdfLocation};
 
 const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
@@ -343,7 +344,7 @@ fn parse_lines_sequential<S: SpanCollector>(
         let mut cursor = TokenCursor::new(tokens, raw, lineno);
         let mut nodes = Vec::new();
         while !cursor.at_statement_end() {
-            nodes.push(cursor.term(allow_graph)?);
+            nodes.push(cursor.term(0)?);
         }
         cursor.expect_dot()?;
         let valid_len = if allow_graph {
@@ -453,12 +454,15 @@ impl<'a> TokenCursor<'a> {
         }
     }
 
-    /// Parse one term in N-Triples/N-Quads syntax. `allow_triple_subject` is unused
-    /// here (the lexer admits `<<( … )>>` everywhere); positional validity is checked
-    /// later by [`validate_statement`], exactly as the purrdf-gts parser does.
-    fn term(&mut self, _allow_triple_subject: bool) -> Result<Node, RdfDiagnostic> {
+    /// Parse one term in N-Triples/N-Quads syntax. The lexer admits `<<( … )>>` in every
+    /// position; positional validity is checked later by [`validate_statement`], exactly as
+    /// the purrdf-gts parser does.
+    ///
+    /// `depth` is how many quoted-triple terms this one is already nested inside — 0 at a
+    /// statement's top level — and is what [`MAX_PARSE_NESTING_DEPTH`] is checked against.
+    fn term(&mut self, depth: usize) -> Result<Node, RdfDiagnostic> {
         match self.peek() {
-            Some(Token::TripleOpen) => self.quoted_triple(),
+            Some(Token::TripleOpen) => self.quoted_triple(depth),
             Some(Token::Iri(_)) => {
                 let col = self.col();
                 let Some(Token::Iri(value)) = self.bump() else {
@@ -484,12 +488,21 @@ impl<'a> TokenCursor<'a> {
 
     /// `<<( s p o )>>` quoted-triple term (the only triple form N-Triples/N-Quads
     /// admit). The purrdf-gts N-Quads parser requires the parenthesized form.
-    fn quoted_triple(&mut self) -> Result<Node, RdfDiagnostic> {
+    ///
+    /// The ONE recursion in the line grammar, so this is where the nesting bound is
+    /// decided. It is refused BEFORE the `<<(` is consumed and before the level's `Node` is
+    /// built, so the diagnostic points at the offending token and the partially built term
+    /// that is dropped on the way out is itself no deeper than the bound.
+    fn quoted_triple(&mut self, depth: usize) -> Result<Node, RdfDiagnostic> {
+        if depth >= MAX_PARSE_NESTING_DEPTH {
+            return Err(nesting_too_deep(self.lineno, self.col()));
+        }
+        let depth = depth + 1;
         self.expect(&Token::TripleOpen)?;
         self.expect(&Token::LParen)?;
-        let s = self.term(true)?;
-        let p = self.term(true)?;
-        let o = self.term(true)?;
+        let s = self.term(depth)?;
+        let p = self.term(depth)?;
+        let o = self.term(depth)?;
         self.expect(&Token::RParen)?;
         self.expect(&Token::TripleClose)?;
         Ok(Node::Triple(Box::new(s), Box::new(p), Box::new(o)))
@@ -827,7 +840,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
                     let (l, c) = self.loc();
                     return Err(err_at("Turtle input cannot contain GRAPH blocks", l, c));
                 }
-                let graph = self.term(None)?;
+                let graph = self.term(None, 0)?;
                 self.expect(&Token::LBrace)?;
                 self.graph_block(&graph)?;
                 continue;
@@ -835,7 +848,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
             if S::ENABLED {
                 self.subject_off = self.cur_off();
             }
-            let first = self.term(None)?;
+            let first = self.term(None, 0)?;
             if self.eat(&Token::LBrace) {
                 if !self.allow_named_graphs {
                     let (l, c) = self.loc();
@@ -969,15 +982,34 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
         }
     }
 
-    fn term(&mut self, graph: Option<&Node>) -> Result<Node, RdfDiagnostic> {
+    /// Enter one level of syntactic nesting, or refuse the document.
+    ///
+    /// Turtle/TriG nest through many constructs — quoted and reifying triples, blank-node
+    /// property lists, collections, annotation blocks — and each one is a recursive-descent
+    /// frame, so an input's nesting depth is an instruction about how much stack to burn.
+    /// [`MAX_PARSE_NESTING_DEPTH`] is the ceiling, and this is the single place it is
+    /// enforced: EVERY cycle in this parser's call graph passes through
+    /// [`term`](Self::term) or [`predicate_object_list`](Self::predicate_object_list), and
+    /// both of them descend here on entry, so no nesting construct can be reached without
+    /// paying a level. The location is the token that would have opened the level too many.
+    fn descend(&self, depth: usize) -> Result<usize, RdfDiagnostic> {
+        if depth >= MAX_PARSE_NESTING_DEPTH {
+            let (line, column) = self.loc();
+            return Err(nesting_too_deep(line, column));
+        }
+        Ok(depth + 1)
+    }
+
+    fn term(&mut self, graph: Option<&Node>, depth: usize) -> Result<Node, RdfDiagnostic> {
+        let depth = self.descend(depth)?;
         match self.peek() {
             Some(Token::TripleOpen) => {
                 // Distinguish the value form `<<( s p o )>>` from the reifying form
                 // `<< s p o [~r] >>` by the immediately-following `(`.
                 if self.peek2() == Some(&Token::LParen) {
-                    self.parenthesized_quoted_triple(graph)
+                    self.parenthesized_quoted_triple(graph, depth)
                 } else {
-                    self.reifying_triple(graph)
+                    self.reifying_triple(graph, depth)
                 }
             }
             Some(Token::Iri(_)) => {
@@ -1003,8 +1035,8 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
                 self.pos += 1;
                 Ok(self.next_bnode())
             }
-            Some(Token::LBracket) => self.blank_node_property_list(graph),
-            Some(Token::LParen) => self.collection(graph),
+            Some(Token::LBracket) => self.blank_node_property_list(graph, depth),
+            Some(Token::LParen) => self.collection(graph, depth),
             Some(Token::StringLit(_) | Token::LongStringLit(_)) => self.literal(),
             Some(Token::Integer(_) | Token::Decimal(_) | Token::Double(_)) => {
                 self.numeric_literal("")
@@ -1051,7 +1083,11 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     /// A subject/object inside a triple term. Non-empty `[ … ]` / `( … )` would emit
     /// extra triples that cannot live inside a triple term, so they are rejected
     /// (W3C-conformant); an empty `[]` / `()` is a plain term and is allowed.
-    fn quoted_component(&mut self, graph: Option<&Node>) -> Result<Node, RdfDiagnostic> {
+    fn quoted_component(
+        &mut self,
+        graph: Option<&Node>,
+        depth: usize,
+    ) -> Result<Node, RdfDiagnostic> {
         match self.peek() {
             Some(Token::LBracket) => {
                 let (l, c) = self.loc();
@@ -1063,7 +1099,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
             }
             Some(Token::LParen) => {
                 if self.peek2() == Some(&Token::RParen) {
-                    self.term(graph)
+                    self.term(graph, depth)
                 } else {
                     let (l, c) = self.loc();
                     Err(err_at(
@@ -1073,24 +1109,28 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
                     ))
                 }
             }
-            _ => self.term(graph),
+            _ => self.term(graph, depth),
         }
     }
 
-    fn predicate(&mut self) -> Result<Node, RdfDiagnostic> {
+    fn predicate(&mut self, depth: usize) -> Result<Node, RdfDiagnostic> {
         if matches!(self.peek(), Some(Token::Word(w)) if *w == "a") {
             self.pos += 1;
             return Ok(Node::Iri(RDF_TYPE.to_owned()));
         }
-        self.term(None)
+        self.term(None, depth)
     }
 
-    fn parenthesized_quoted_triple(&mut self, graph: Option<&Node>) -> Result<Node, RdfDiagnostic> {
+    fn parenthesized_quoted_triple(
+        &mut self,
+        graph: Option<&Node>,
+        depth: usize,
+    ) -> Result<Node, RdfDiagnostic> {
         self.expect(&Token::TripleOpen)?;
         self.expect(&Token::LParen)?;
-        let s = self.quoted_component(graph)?;
-        let p = self.predicate()?;
-        let o = self.quoted_component(graph)?;
+        let s = self.quoted_component(graph, depth)?;
+        let p = self.predicate(depth)?;
+        let o = self.quoted_component(graph, depth)?;
         self.expect(&Token::RParen)?;
         self.expect(&Token::TripleClose)?;
         Ok(Node::Triple(Box::new(s), Box::new(p), Box::new(o)))
@@ -1100,12 +1140,16 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     /// the legacy non-parenthesized `<< s p o >>` (purrdf pre-0.9.11 triple-term
     /// serialization). Always a [`Node::Triple`] — never a minted reifier — because the
     /// object of `rdf:reifies` denotes the reified triple itself.
-    fn reifies_object_triple_term(&mut self, graph: Option<&Node>) -> Result<Node, RdfDiagnostic> {
+    fn reifies_object_triple_term(
+        &mut self,
+        graph: Option<&Node>,
+        depth: usize,
+    ) -> Result<Node, RdfDiagnostic> {
         self.expect(&Token::TripleOpen)?;
         let parenthesized = self.eat(&Token::LParen);
-        let s = self.quoted_component(graph)?;
-        let p = self.predicate()?;
-        let o = self.quoted_component(graph)?;
+        let s = self.quoted_component(graph, depth)?;
+        let p = self.predicate(depth)?;
+        let o = self.quoted_component(graph, depth)?;
         if parenthesized {
             self.expect(&Token::RParen)?;
         }
@@ -1118,14 +1162,18 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     /// `~ id`, `r` is that id; otherwise (`~` alone, or no reifier at all) a fresh
     /// blank node is minted. The inner triple is NOT independently asserted here — the
     /// reifiedTriple denotes its reifier, so only the `rdf:reifies` statement is emitted.
-    fn reifying_triple(&mut self, graph: Option<&Node>) -> Result<Node, RdfDiagnostic> {
+    fn reifying_triple(
+        &mut self,
+        graph: Option<&Node>,
+        depth: usize,
+    ) -> Result<Node, RdfDiagnostic> {
         self.expect(&Token::TripleOpen)?;
-        let s = self.quoted_component(graph)?;
-        let p = self.predicate()?;
-        let o = self.quoted_component(graph)?;
+        let s = self.quoted_component(graph, depth)?;
+        let p = self.predicate(depth)?;
+        let o = self.quoted_component(graph, depth)?;
         let reifier = if self.eat(&Token::Tilde) {
             if self.at_reifier_id() {
-                self.term(graph)?
+                self.term(graph, depth)?
             } else {
                 self.next_bnode()
             }
@@ -1137,7 +1185,11 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
         Ok(reifier)
     }
 
-    fn blank_node_property_list(&mut self, graph: Option<&Node>) -> Result<Node, RdfDiagnostic> {
+    fn blank_node_property_list(
+        &mut self,
+        graph: Option<&Node>,
+        depth: usize,
+    ) -> Result<Node, RdfDiagnostic> {
         // `[]` lexes as a single `Anon`; `[ … ]` opens with `LBracket`.
         if self.eat(&Token::Anon) {
             return Ok(self.next_bnode());
@@ -1145,13 +1197,13 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
         self.expect(&Token::LBracket)?;
         let subject = self.next_bnode();
         if !self.eat(&Token::RBracket) {
-            self.predicate_object_list(&subject, graph)?;
+            self.predicate_object_list(&subject, graph, depth)?;
             self.expect(&Token::RBracket)?;
         }
         Ok(subject)
     }
 
-    fn collection(&mut self, graph: Option<&Node>) -> Result<Node, RdfDiagnostic> {
+    fn collection(&mut self, graph: Option<&Node>, depth: usize) -> Result<Node, RdfDiagnostic> {
         self.expect(&Token::LParen)?;
         let mut items = Vec::new();
         while !self.eat(&Token::RParen) {
@@ -1159,7 +1211,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
                 let (l, c) = self.loc();
                 return Err(err_at("unterminated RDF collection", l, c));
             }
-            items.push(self.term(graph)?);
+            items.push(self.term(graph, depth)?);
         }
         if items.is_empty() {
             return Ok(Node::Iri(RDF_NIL.to_owned()));
@@ -1262,7 +1314,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
             if S::ENABLED {
                 self.subject_off = self.cur_off();
             }
-            let subject = self.term(Some(graph))?;
+            let subject = self.term(Some(graph), 0)?;
             self.statement_after_subject_in_graph(&subject, graph)?;
         }
         Ok(())
@@ -1276,7 +1328,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
         // A self-asserting subject (reifying triple or blank-node property list) may
         // end immediately at `.`; a plain subject still needs a predicate-object list.
         if !self.at(&Token::Dot) {
-            self.predicate_object_list(subject, graph)?;
+            self.predicate_object_list(subject, graph, 0)?;
         }
         self.expect(&Token::Dot)
     }
@@ -1287,7 +1339,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
         graph: &Node,
     ) -> Result<(), RdfDiagnostic> {
         if !(self.at(&Token::Dot) || self.at(&Token::RBrace)) {
-            self.predicate_object_list(subject, Some(graph))?;
+            self.predicate_object_list(subject, Some(graph), 0)?;
         }
         // The trailing `.` is optional for the final statement before `}`.
         if self.eat(&Token::Dot) || self.at(&Token::RBrace) {
@@ -1302,13 +1354,21 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
         }
     }
 
+    /// `depth` is the syntactic nesting this list is already inside. It descends a level of
+    /// its own — the `{| … |}` annotation cycle
+    /// (`predicate_object_list` → [`maybe_reify_and_annotate`](Self::maybe_reify_and_annotate)
+    /// → `predicate_object_list`) is the one recursion in this parser that need not pass
+    /// through a nested [`term`](Self::term), so counting only terms would leave it
+    /// unbounded.
     fn predicate_object_list(
         &mut self,
         subject: &Node,
         graph: Option<&Node>,
+        depth: usize,
     ) -> Result<(), RdfDiagnostic> {
+        let depth = self.descend(depth)?;
         loop {
-            let predicate = self.predicate()?;
+            let predicate = self.predicate(depth)?;
             loop {
                 // The object of `rdf:reifies` is a triple TERM. Parse `<<` here as a
                 // triple term whether or not it carries parens, tolerating purrdf's
@@ -1318,12 +1378,12 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
                 let object = if matches!(&predicate, Node::Iri(p) if p == RDF_REIFIES)
                     && self.at(&Token::TripleOpen)
                 {
-                    self.reifies_object_triple_term(graph)?
+                    self.reifies_object_triple_term(graph, depth)?
                 } else {
-                    self.term(graph)?
+                    self.term(graph, depth)?
                 };
                 self.emit(subject, &predicate, &object, graph);
-                self.maybe_reify_and_annotate(subject, &predicate, &object, graph)?;
+                self.maybe_reify_and_annotate(subject, &predicate, &object, graph, depth)?;
                 if self.eat(&Token::Comma) {
                     continue;
                 }
@@ -1367,12 +1427,13 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
         p: &Node,
         o: &Node,
         graph: Option<&Node>,
+        depth: usize,
     ) -> Result<(), RdfDiagnostic> {
         let mut pending: Option<Node> = None;
         loop {
             if self.eat(&Token::Tilde) {
                 let reifier = if self.at_reifier_id() {
-                    self.term(graph)?
+                    self.term(graph, depth)?
                 } else {
                     self.next_bnode()
                 };
@@ -1388,7 +1449,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
                         reifier
                     }
                 };
-                self.predicate_object_list(&reifier, graph)?;
+                self.predicate_object_list(&reifier, graph, depth)?;
                 self.expect(&Token::AnnotationClose)?; // `|}`
             } else {
                 break;
@@ -2260,6 +2321,130 @@ mod tests {
 
     /// A rejected N-Quads line carries a 1-based `(line, column)` location and no
     /// longer embeds the raw line text in the message.
+    /// A DEEP INPUT IS A DIAGNOSTIC, NOT A DEAD PROCESS.
+    ///
+    /// Twenty thousand nested quoted triple terms in one N-Triples line used to abort the
+    /// `purrdf` binary with `SIGABRT`: the recursive descent ran out of stack, so nothing
+    /// unwound, no `Result` came back and an embedding host died with the library. Every
+    /// nesting construct in both grammars is checked, because each one is its own recursion
+    /// and a bound on only the reported one would have left the rest crashing.
+    ///
+    /// The depth is far past the limit on purpose — the guard has to fire on the way DOWN,
+    /// before the frames exist, and a guard that only noticed afterwards would still abort.
+    #[test]
+    fn a_deeply_nested_input_is_refused_rather_than_overflowing_the_stack() {
+        const DEPTH: usize = 20_000;
+        let s = "<http://example.org/s>";
+        let p = "<http://example.org/p>";
+        let o = "<http://example.org/o>";
+        let triple = format!("{s} {p} {o}");
+
+        // Every construct that nests, in the grammar that admits it.
+        let quoted = format!(
+            "{s} {p} {}{triple}{} .",
+            "<<( ".repeat(DEPTH),
+            " )>>".repeat(DEPTH)
+        );
+        let reifying = format!(
+            "{s} {p} {}{triple}{} .",
+            "<< ".repeat(DEPTH),
+            " >>".repeat(DEPTH)
+        );
+        let bnpl = format!(
+            "{s} {p} {}{o}{} .",
+            format!("[ {p} ").repeat(DEPTH),
+            " ]".repeat(DEPTH)
+        );
+        let collection = format!("{s} {p} {}{o}{} .", "( ".repeat(DEPTH), " )".repeat(DEPTH));
+        let annotation = format!(
+            "{s} {p} {o} {}{o}{} .",
+            format!("{{| {p} {o} ").repeat(DEPTH - 1) + &format!("{{| {p} "),
+            " |}".repeat(DEPTH)
+        );
+
+        // The line family: N-Triples and N-Quads share one cursor, and the same line is a
+        // legal shape for both, so both are driven.
+        for allow_graph in [false, true] {
+            let error = parse_lines_sequential(&quoted, allow_graph, 1, &mut NoSpans)
+                .expect_err("a 20 000-deep quoted triple term must be refused");
+            assert!(
+                error.message.contains("nesting exceeds the parser limit"),
+                "the refusal must name the limit, got: {}",
+                error.message
+            );
+            assert!(
+                error.location.as_ref().is_some_and(|l| l.column.is_some()),
+                "the refusal is located at the offending token"
+            );
+        }
+
+        // Turtle/TriG: five constructs, each its own recursion.
+        for (name, text) in [
+            ("quoted triple term", &quoted),
+            ("reifying triple", &reifying),
+            ("blank-node property list", &bnpl),
+            ("collection", &collection),
+            ("annotation block", &annotation),
+        ] {
+            let error = DocParser::new(text, None, false, &mut NoSpans)
+                .parse()
+                .expect_err(&format!("{name}: a 20 000-deep document must be refused"));
+            assert!(
+                error.message.contains("nesting exceeds the parser limit"),
+                "{name}: the refusal must name the limit, got: {}",
+                error.message
+            );
+        }
+    }
+
+    /// …AND THE BOUND DOES NOT COST ORDINARY RDF 1.2.
+    ///
+    /// The other half of the contract: a bound that refused the nesting real documents use
+    /// would be a worse defect than the crash it replaced. The IR itself refuses a
+    /// triple-term nesting past 16, so the deepest triple term that can exist round-trips
+    /// with the parser limit an order of magnitude away — and each syntactic construct is
+    /// exercised well past anything an author writes by hand.
+    #[test]
+    fn ordinary_nesting_is_untouched_by_the_bound() {
+        let s = "<http://example.org/s>";
+        let p = "<http://example.org/p>";
+        let o = "<http://example.org/o>";
+
+        // A 16-deep quoted triple term in object position — the deepest the IR will hold.
+        let mut term = format!("<<( {s} {p} {o} )>>");
+        for _ in 1..16 {
+            term = format!("<<( {s} {p} {term} )>>");
+        }
+        let line = format!("{s} {p} {term} .");
+        parse_lines_sequential(&line, false, 1, &mut NoSpans).expect("16 nested triple terms");
+        DocParser::new(&line, None, false, &mut NoSpans)
+            .parse()
+            .expect("16 nested triple terms in Turtle");
+
+        // Turtle's flat-lowering constructs reach the IR as ordinary statements, so nothing
+        // downstream bounds them; 32 deep is far past hand-written RDF and must parse.
+        const DEEP: usize = 32;
+        for text in [
+            format!(
+                "{s} {p} {}{o}{} .",
+                format!("[ {p} ").repeat(DEEP),
+                " ]".repeat(DEEP)
+            ),
+            format!("{s} {p} {}{o}{} .", "( ".repeat(DEEP), " )".repeat(DEEP)),
+            format!(
+                "{s} {p} {o} {}{o}{} .",
+                format!("{{| {p} {o} ").repeat(DEEP - 1) + &format!("{{| {p} "),
+                " |}".repeat(DEEP)
+            ),
+        ] {
+            DocParser::new(&text, None, false, &mut NoSpans)
+                .parse()
+                .unwrap_or_else(|error| {
+                    panic!("{DEEP}-deep nesting must parse: {}", error.message)
+                });
+        }
+    }
+
     #[test]
     fn nquads_error_carries_line_and_column() {
         // The third line has a blank-node predicate, which is invalid.

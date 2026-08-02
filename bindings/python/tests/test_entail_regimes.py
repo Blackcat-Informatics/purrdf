@@ -177,7 +177,7 @@ def test_base_triples_survive_the_closure() -> None:
 def test_report_names_the_rules_that_fired() -> None:
     """The report is not optional and says what the run actually did."""
     _closure, report = entail.materialize(_dataset(), entail.Regime.OWL_RL, "")
-    assert report.startswith("purrdf-reasoning-report 3\n")
+    assert report.startswith("purrdf-reasoning-report 4\n")
     assert "\nregime owl-rl\n" in report
     # The conclusion counts are the engine's to report, so only the fact that
     # these two rules ran is asserted here — the counts live in the Rust golden
@@ -250,7 +250,7 @@ def test_every_regime_member_materializes(regime: entail.Regime, program: str) -
     assert isinstance(entail.implemented_rules(regime), list)
     closure, report = entail.materialize(_dataset(), regime, program)
     assert closure.quad_count() >= 4
-    assert report.startswith("purrdf-reasoning-report 3\n")
+    assert report.startswith("purrdf-reasoning-report 4\n")
     assert report.endswith("inconsistency none\n")
     # …and the text path agrees, byte for byte, on the same regime and program.
     text_closure, text_report = entail.materialize_nt(SCHEMA, regime, program)
@@ -602,7 +602,7 @@ def test_an_inconsistent_run_raises_with_its_report_and_witness_triples() -> Non
     assert "cax-dw was satisfied by 3 asserted triples" in message
     # The certificate begins at the banner, so a caller splits there rather than
     # parsing prose.
-    banner = "purrdf-reasoning-report 3\n"
+    banner = "purrdf-reasoning-report 4\n"
     assert banner in message
     report = message[message.index(banner) :]
     assert report.startswith(f"{banner}regime owl-rl\n")
@@ -624,5 +624,416 @@ def test_the_dataset_path_refuses_an_inconsistent_run_the_same_way() -> None:
     with pytest.raises(ValueError) as raised:
         entail.materialize(dataset, entail.Regime.OWL_RL, "")
     message = str(raised.value)
-    assert "purrdf-reasoning-report 3\n" in message
+    assert "purrdf-reasoning-report 4\n" in message
     assert message.count("\ninconsistency-premise ") == 3
+
+
+# ── Conclusion-directed entailment: the chase lane's three services ─────────────
+
+
+def test_certain_answers_enumerate_entailed_bindings_and_disclose_completeness() -> None:
+    """A row is a substitution the knowledge base ENTAILS the pattern under.
+
+    Not "a substitution present in one closure": SPARQL's entailment regimes define
+    the answers to a basic graph pattern as the CERTAIN answers, true in every model.
+    `?c` therefore ranges over the entailed types of `x`, which is a strict superset
+    of the asserted one.
+    """
+    pattern = f"<https://example.org/x> <{RDF_TYPE}> ?c .\n"
+    answer, certificate = entail.certain_answers(entail.Regime.OWL_RL, SCHEMA, pattern, [])
+
+    assert answer.startswith("mechanism strict-table\nvar c\n")
+    # `A` is asserted; `B` is derived by cax-sco and is a certain answer all the same.
+    assert "\nrow <https://example.org/A>\n" in answer
+    assert "\nrow <https://example.org/B>\n" in answer
+    # No `limit` line IS the claim that the row set is exhaustive. There is
+    # deliberately no `complete true` line beside it: that would be a boolean
+    # function of lines already rendered.
+    assert "\nlimit " not in answer
+
+    # The rows arrive with the run that produced them, on the materialization lane's
+    # own banner — an empty row set is the answer a caller is most likely to act on
+    # and the one that says least on its own.
+    assert certificate.startswith("purrdf-reasoning-report 4\n")
+    assert "\nmechanism strict-table " in certificate
+
+
+def test_a_variable_is_projected_from_every_position_including_the_predicate() -> None:
+    """`?name` in ANY position, which is what every host's documentation promises.
+
+    Falsifiable against what this replaced: a variable in PREDICATE position was
+    rewritten to a blank node before parsing, RDF forbids one there, and every
+    pattern below with a `?p` in it raised `ValueError: the basic graph pattern is
+    not N-Triples: ... predicate must be IRI` — a refusal naming a construct the
+    caller had not written. `?s <p> ?o` over the same premise answered fine.
+    """
+    one = "<https://example.org/s> <https://example.org/p> <https://example.org/o> .\n"
+    for pattern, expected in [
+        (
+            "<https://example.org/s> ?p <https://example.org/o> .\n",
+            "mechanism strict-table\nvar p\nrow <https://example.org/p>\n",
+        ),
+        (
+            "?s ?p <https://example.org/o> .\n",
+            "mechanism strict-table\nvar s\nvar p\n"
+            "row <https://example.org/s> <https://example.org/p>\n",
+        ),
+        (
+            "?s ?p ?o .\n",
+            "mechanism strict-table\nvar s\nvar p\nvar o\n"
+            "row <https://example.org/s> <https://example.org/p> <https://example.org/o>\n",
+        ),
+        # `$name` is the same variable syntax and reaches the predicate too.
+        (
+            "$s $p $o .\n",
+            "mechanism strict-table\nvar s\nvar p\nvar o\n"
+            "row <https://example.org/s> <https://example.org/p> <https://example.org/o>\n",
+        ),
+    ]:
+        answer, _ = entail.certain_answers(entail.Regime.SIMPLE, one, pattern, [])
+        assert answer == expected, pattern
+
+    # …and the predicate column ranges over what the CHASE entailed. No triple of
+    # `SCHEMA` states `x rdf:type B`; `cax-sco` is the only reason the row exists.
+    bridge = "<https://example.org/x> ?p <https://example.org/B> .\n"
+    answer, _ = entail.certain_answers(entail.Regime.OWL_RL, SCHEMA, bridge, [])
+    assert answer.startswith("mechanism strict-table\nvar p\n")
+    assert f"\nrow <{RDF_TYPE}>\n" in answer
+    asserted, _ = entail.certain_answers(entail.Regime.SIMPLE, SCHEMA, bridge, [])
+    assert asserted == "mechanism strict-table\nvar p\n"
+
+
+def test_a_question_mark_that_is_not_a_variable_is_not_read_as_one() -> None:
+    """A `?` inside an IRI, a literal or a comment is text, not a variable marker.
+
+    The property the whole rewrite is arranged around, asserted with the `?` in
+    PREDICATE position: each pattern writes `?zzz` in one of those three places, so
+    a scanner that read it would project a `zzz` column — and each answer is
+    asserted whole, with none.
+    """
+    query_string = (
+        "<https://example.org/s> <https://example.org/p?zzz=1> <https://example.org/o> .\n"
+    )
+    answer, _ = entail.certain_answers(
+        entail.Regime.SIMPLE,
+        query_string,
+        "<https://example.org/s> <https://example.org/p?zzz=1> ?o .\n",
+        [],
+    )
+    assert answer == "mechanism strict-table\nvar o\nrow <https://example.org/o>\n"
+
+    quoted = '<https://example.org/s> <https://example.org/p> "is ?zzz a variable" .\n'
+    answer, _ = entail.certain_answers(
+        entail.Regime.SIMPLE,
+        quoted,
+        '<https://example.org/s> ?p "is ?zzz a variable" .\n',
+        [],
+    )
+    assert answer == "mechanism strict-table\nvar p\nrow <https://example.org/p>\n"
+
+    one = "<https://example.org/s> <https://example.org/p> <https://example.org/o> .\n"
+    answer, _ = entail.certain_answers(
+        entail.Regime.SIMPLE,
+        one,
+        "# is ?zzz a variable? it is prose.\n"
+        "<https://example.org/s> ?p <https://example.org/o> .\n",
+        [],
+    )
+    assert answer == "mechanism strict-table\nvar p\nrow <https://example.org/p>\n"
+
+
+def test_an_open_predicate_is_a_named_limit_rather_than_a_short_answer() -> None:
+    """A `?p` ranges over predicates the rule table's closure does not hold.
+
+    `p ∘ p ⊑ p` entails `p rdf:type owl:TransitiveProperty` — `graph_entails` proves
+    it, by the freeze mechanism — and no head of OWL 2 RL's Tables 4-9 concludes a
+    property characteristic. So `?s ?p ?o` cannot return that row, and the answer
+    discloses why instead of rendering an exhaustive-looking relation.
+    """
+    chain = (
+        f"<https://example.org/p> <{RDF_TYPE}> "
+        "<http://www.w3.org/2002/07/owl#ObjectProperty> .\n"
+        "<https://example.org/p> <http://www.w3.org/2002/07/owl#propertyChainAxiom> "
+        "_:l1 .\n"
+        "_:l1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> "
+        "<https://example.org/p> .\n"
+        "_:l1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> _:l2 .\n"
+        "_:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> "
+        "<https://example.org/p> .\n"
+        "_:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> "
+        "<http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .\n"
+    )
+    transitive = (
+        f"<https://example.org/p> <{RDF_TYPE}> "
+        "<http://www.w3.org/2002/07/owl#TransitiveProperty> .\n"
+    )
+    verdict, _ = entail.graph_entails(entail.Regime.OWL_RL, chain, transitive, [])
+    assert verdict == "mechanism freeze\nentailment entailed\n"
+
+    answer, _ = entail.certain_answers(entail.Regime.OWL_RL, chain, "?s ?p ?o .\n", [])
+    assert "owl#TransitiveProperty" not in answer
+    limits = [line for line in answer.splitlines() if line.startswith("limit ")]
+    assert len(limits) == 1, answer
+    assert limits[0].startswith("limit the question leaves the predicate open in 1 triple")
+
+
+def test_the_variable_stand_in_never_reaches_a_python_caller() -> None:
+    """The name this boundary invents to get a `?p` past the parser stays inside it.
+
+    PurRDF mints no vocabulary, so a stand-in surfacing in a row, a limit or a report
+    would be the library's own scaffolding rendered to a caller as a term of their
+    data.
+    """
+    one = "<https://example.org/s> <https://example.org/p> <https://example.org/o> .\n"
+    for pattern in [
+        "?s ?p ?o .\n",
+        "<https://example.org/s> ?p ?o .\n",
+        "?s ?p ?o .\n?o ?p2 ?s .\n",
+    ]:
+        for regime in (entail.Regime.SIMPLE, entail.Regime.RDFS, entail.Regime.OWL_RL):
+            answer, certificate = entail.certain_answers(regime, one, pattern, [])
+            assert "urn:purrdf" not in answer + certificate
+            assert "purrdfQvar" not in answer + certificate
+
+
+def test_a_variable_in_a_literal_datatype_is_refused_rather_than_matched() -> None:
+    """`"5"^^?d` is refused by name, and never matches the stand-in namespace.
+
+    The datatype slot is the one position the stand-in's own legality opened up: RDF
+    forbids a blank node as a datatype, so the stand-in this replaced was refused
+    there by the parser, and an IRI is legal there. This asserts the SEMANTICS rather
+    than the rendering, because a diagnostic drops a literal's datatype when it
+    prints one — a stand-in that reached that slot is invisible to
+    `test_the_variable_stand_in_never_reaches_a_python_caller` above and answers a
+    question about the library's own namespace instead of the caller's data.
+    """
+    probe = "urn:purrdf-query-variable:purrdfQvar1"
+    premise = (
+        '<https://example.org/caller> <https://example.org/p> "5"^^<https://example.org/dt> .\n'
+        f'<https://example.org/probe> <https://example.org/p> "5"^^<{probe}> .\n'
+    )
+    # THE CONTROL: each half of the premise is reachable by the pattern that names its
+    # datatype, so a leak into the datatype slot would show up as a row.
+    answer, _ = entail.certain_answers(
+        entail.Regime.SIMPLE,
+        premise,
+        '?s <https://example.org/p> "5"^^<https://example.org/dt> .\n',
+        [],
+    )
+    assert answer == "mechanism strict-table\nvar s\nrow <https://example.org/caller>\n"
+    answer, _ = entail.certain_answers(
+        entail.Regime.SIMPLE,
+        premise,
+        f'?s <https://example.org/p> "5"^^<{probe}> .\n',
+        [],
+    )
+    assert answer == "mechanism strict-table\nvar s\nrow <https://example.org/probe>\n"
+
+    for pattern in [
+        '?s <https://example.org/p> "5"^^?d .\n',
+        '?d <https://example.org/p> "5"^^?d .\n',
+        '?a <https://example.org/q> '
+        '<<( <https://example.org/s> <https://example.org/p> "5"^^?d )>> .\n',
+    ]:
+        for regime in (entail.Regime.SIMPLE, entail.Regime.RDFS, entail.Regime.OWL_RL):
+            with pytest.raises(ValueError) as refused:
+                entail.certain_answers(regime, premise, pattern, [])
+            message = str(refused.value)
+            assert "a variable is not a datatype IRI" in message
+            assert "`?d`" in message
+            assert "urn:purrdf" not in message
+            assert "probe" not in message
+
+
+def test_graph_entails_gives_three_verdicts_and_names_the_mechanism() -> None:
+    """THREE verdicts, never two — and the answer says which mechanism reached one.
+
+    `not-entailed` is a PROOF: the procedure was complete for this premise, so the
+    absence of a mapping is the absence of an entailment. Collapsing an `undecided`
+    into it would turn a limitation of this library into a false statement about the
+    caller's data.
+    """
+    entailed = f"{SUBCLASS_INFERENCE}\n"
+    answer, certificate = entail.graph_entails(entail.Regime.OWL_RL, SCHEMA, entailed, [])
+    assert answer == "mechanism strict-table\nentailment entailed\n"
+    assert "\nfired cax-sco " in certificate
+
+    never = f"<https://example.org/x> <{RDF_TYPE}> <https://example.org/Never> .\n"
+    answer, _ = entail.graph_entails(entail.Regime.OWL_RL, SCHEMA, never, [])
+    assert answer.startswith("mechanism strict-table\nentailment not-entailed\n")
+    assert "\nmiss " in answer
+
+    # `D` realizes datatype entailment as the five dt-* rules and states no theorem
+    # that they are all of it, so it can PROVE an entailment and never refute one.
+    answer, _ = entail.graph_entails(entail.Regime.D, SCHEMA, never, [])
+    assert answer.startswith("mechanism strict-table\nentailment undecided\n")
+    assert "\nundecided " in answer
+
+
+def test_verify_entailment_re_decides_its_own_warrant() -> None:
+    """The warrant is re-decided without running a reasoner.
+
+    `warrant absent` / `verified not-applicable` is a not-entailed or an undecided:
+    there is no evidence to re-decide, and a `false` there would read as a check that
+    ran and failed rather than one that never applied.
+    """
+    entailed = f"{SUBCLASS_INFERENCE}\n"
+    answer, certificate = entail.verify_entailment(
+        entail.Regime.OWL_RL, SCHEMA, entailed, []
+    )
+    assert answer.startswith("mechanism strict-table\nentailment entailed\n")
+    assert answer.endswith("warrant present\nverified true\n")
+    assert certificate.startswith("purrdf-reasoning-report 4\n")
+
+    never = f"<https://example.org/x> <{RDF_TYPE}> <https://example.org/Never> .\n"
+    answer, _ = entail.verify_entailment(entail.Regime.OWL_RL, SCHEMA, never, [])
+    assert answer.endswith("warrant absent\nverified not-applicable\n")
+
+
+def test_the_regimes_defined_by_a_missing_input_are_refused_by_name() -> None:
+    """`OWL_DIRECT` and `RIF` are refused rather than served by a weaker lane.
+
+    Each is defined by an input these signatures do not carry — a query's class
+    expressions, and the caller's rule document — so accepting them and quietly doing
+    something else would be worse than refusing.
+    """
+    entailed = f"{SUBCLASS_INFERENCE}\n"
+    pattern = f"<https://example.org/x> <{RDF_TYPE}> ?c .\n"
+    for regime, spelling in [
+        (entail.Regime.OWL_DIRECT, "owl-direct"),
+        (entail.Regime.RIF, "rif"),
+    ]:
+        with pytest.raises(ValueError) as raised:
+            entail.graph_entails(regime, SCHEMA, entailed, [])
+        assert spelling in str(raised.value)
+        with pytest.raises(ValueError) as raised:
+            entail.certain_answers(regime, SCHEMA, pattern, [])
+        assert spelling in str(raised.value)
+
+
+# ── The caller's `owl:imports` table ────────────────────────────────────────────
+
+# The W3C OWL 2 RL entailment corpus, as the Rust conformance harness locates it.
+# A path rather than a copy: `scripts/check-corpus-frozen.py` digests those bytes,
+# so a fixture transcribing them here would be a second, un-digested corpus free to
+# drift from the one the conformance scoreboard grades.
+_CORPUS = (
+    Path(__file__).resolve().parents[3]
+    / "crates"
+    / "sparql-conformance"
+    / "entailment-suite"
+    / "w3c-owl2-rl"
+)
+
+# The ontology IRI `support011-A.rdf` DECLARES — the name the premise's `owl:imports`
+# object actually is, not the file it happens to live in.
+SUPPORT_011_A = "http://www.w3.org/2002/03owlt/imports/support011-A"
+
+
+def _corpus_nquads(relative: str) -> str:
+    """One vendored RDF/XML document as N-Quads text.
+
+    No base IRI is passed and none is needed: every document in the vendored tree
+    either declares its own `xml:base` or uses only absolute IRIs, which the Rust
+    conformance harness asserts as a standing tripwire.
+    """
+    return purrdf.from_rdf_xml((_CORPUS / relative).read_text(encoding="utf-8")).decode()
+
+
+def test_webont_imports_011_answers_from_its_own_premise_imports_intact() -> None:
+    """The W3C case the `imports` parameter exists for, on this host.
+
+    Its premise says `Socrates a ont:Man` and `owl:imports <…/support011-A>`;
+    `Man ⊑ Mortal` lives only in that support document, so the published answer —
+    `Socrates a ont:Mortal` — is reachable only from the imports closure.
+
+    The premise is handed over UNMODIFIED: nothing is merged into it and the
+    `owl:imports` triple is left exactly where W3C wrote it. That is the whole
+    difference between resolving an import and being given a different premise —
+    before this parameter existed, Python could express only the second.
+    """
+    premise = _corpus_nquads("cases/webont-imports-011/premise.rdf")
+    # The premise really does carry the import, so this cannot pass by having been
+    # handed a document that needs none.
+    assert "<http://www.w3.org/2002/07/owl#imports>" in premise
+    conclusion = _corpus_nquads("cases/webont-imports-011/conclusion.rdf")
+    support = _corpus_nquads("imports/support011-A.rdf")
+    imports = [(SUPPORT_011_A, support)]
+
+    answer, certificate = entail.graph_entails(
+        entail.Regime.OWL_RL, premise, conclusion, imports
+    )
+    assert answer.startswith("mechanism strict-table\nentailment entailed\n")
+    assert certificate.startswith("purrdf-reasoning-report 4\n")
+
+    # The other two services answer the same question the same way.
+    answer, _ = entail.certain_answers(
+        entail.Regime.OWL_RL, premise, conclusion, imports
+    )
+    assert answer == "mechanism strict-table\nrow\n"
+    answer, _ = entail.verify_entailment(
+        entail.Regime.OWL_RL, premise, conclusion, imports
+    )
+    assert answer.endswith("warrant present\nverified true\n")
+
+
+def test_an_unsupplied_import_refuses_by_name_rather_than_reasoning_without_it() -> None:
+    """PurRDF fetches nothing, so an unsupplied import is a refusal that NAMES it.
+
+    Reasoning over the premise alone would answer a different question — the premise
+    itself says its axioms are not all of them — and returning that answer as though
+    it were this one is exactly what the refusal prevents.
+    """
+    premise = _corpus_nquads("cases/webont-imports-011/premise.rdf")
+    conclusion = _corpus_nquads("cases/webont-imports-011/conclusion.rdf")
+    with pytest.raises(ValueError) as raised:
+        entail.graph_entails(entail.Regime.OWL_RL, premise, conclusion, [])
+    assert SUPPORT_011_A in str(raised.value)
+
+
+def test_a_malformed_import_table_is_refused_by_entry() -> None:
+    """Every way of getting the table wrong is a typed refusal naming the entry."""
+    premise = _corpus_nquads("cases/webont-imports-011/premise.rdf")
+    conclusion = _corpus_nquads("cases/webont-imports-011/conclusion.rdf")
+    support = _corpus_nquads("imports/support011-A.rdf")
+
+    with pytest.raises(ValueError) as raised:
+        entail.graph_entails(
+            entail.Regime.OWL_RL,
+            premise,
+            conclusion,
+            [(SUPPORT_011_A, "this is not n-quads\n")],
+        )
+    assert "the import document for" in str(raised.value)
+
+    with pytest.raises(ValueError) as raised:
+        entail.graph_entails(
+            entail.Regime.OWL_RL,
+            premise,
+            conclusion,
+            [(SUPPORT_011_A, support), (SUPPORT_011_A, "")],
+        )
+    assert "twice" in str(raised.value)
+
+    with pytest.raises(ValueError) as raised:
+        entail.graph_entails(
+            entail.Regime.OWL_RL, premise, conclusion, [("", support)]
+        )
+    assert "empty ontology IRI" in str(raised.value)
+
+
+def test_the_import_table_is_required_rather_than_defaulted() -> None:
+    """`[]` is *imports nothing*; a MISSING argument is a TypeError, not a default.
+
+    LOW optionality is the point: a default would let a caller who meant to supply a
+    table get an answer computed without one, which is the failure the whole
+    parameter exists to make impossible.
+    """
+    entailed = f"{SUBCLASS_INFERENCE}\n"
+    pattern = f"<https://example.org/x> <{RDF_TYPE}> ?c .\n"
+    with pytest.raises(TypeError):
+        entail.graph_entails(entail.Regime.OWL_RL, SCHEMA, entailed)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        entail.certain_answers(entail.Regime.OWL_RL, SCHEMA, pattern)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        entail.verify_entailment(entail.Regime.OWL_RL, SCHEMA, entailed)  # type: ignore[call-arg]

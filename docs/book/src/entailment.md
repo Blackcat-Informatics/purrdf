@@ -33,20 +33,21 @@ let (closed, report) = materialize(&ds, Materialization::Rdfs).expect("materiali
 assert_eq!(report.completeness(), Completeness::ExactWithinBoundaries);
 ```
 
-## The same engine in four hosts
+## The same engine in five hosts
 
-Entailment is not re-implemented per host. Python, WebAssembly, and the C ABI all
-route through one shared string boundary (`purrdf_validate::regime`) that wraps
-the Rust engine, and all four surfaces are checked against a single committed
-golden-vector artifact — so a divergence shows up as one vector failing rather
-than as three surfaces that quietly stopped agreeing. The regime spellings
+Entailment is not re-implemented per host. The `purrdf` command line, Python,
+WebAssembly, and the C ABI all route through one shared string boundary
+(`purrdf_validate::regime`) that wraps the Rust engine, and the surfaces are
+checked against a single committed golden-vector artifact — so a divergence shows
+up as one vector failing rather than as several surfaces that quietly stopped
+agreeing. The regime spellings
 (`simple`, `rdf`, `rdfs`, `owl-rl`, `owl-direct`, `rif`, `d`) are the same
 everywhere.
 
 | Host | Materialize | Defined rule table | Implemented rules |
 | --- | --- | --- | --- |
 | Rust | `materialize(&ds, Materialization::Rdfs)` | `rules(Regime::Rdfs)` | `implemented(Regime::Rdfs)` |
-| CLI | `purrdf reason --regime rdfs`, `purrdf convert --entailment rdfs`, `purrdf query --entailment rdfs` | — | — |
+| CLI | `purrdf reason --regime rdfs`, `purrdf convert --entailment rdfs`, `purrdf query --entailment rdfs` (and `purrdf entails` asks the [conclusion-directed question](#asking-a-question-instead-the-conclusion-directed-services)) | — | — |
 | Python | `purrdf.entail.materialize(dataset, "rdfs", "")`, `purrdf.entail.materialize_nt(text, "rdfs", "")` | `purrdf.entail.rules("rdfs")` | `purrdf.entail.implemented_rules("rdfs")` |
 | JavaScript / WebAssembly | `entailMaterialize(doc, "rdfs", "")` | `entailRules("rdfs")` | `entailImplementedRules("rdfs")` |
 | C | `purrdf_entail_materialize_to_nquads(...)` | `purrdf_entail_rules(...)` | `purrdf_entail_implemented_rules(...)` |
@@ -67,6 +68,68 @@ One host-specific note:
   replays the committed tri-host vector artifact inside the module a consumer
   actually loaded — so agreement with the reference implementation can be checked
   without trusting this repository's CI.
+
+## Asking a question instead: the conclusion-directed services
+
+Materializing answers "what does this premise entail?". The three services below
+answer "does this premise entail *that*?", which is a different question and not
+the membership test in a closure it looks like: a conclusion's blank nodes are
+existentials that have to be *mapped*, an inconsistent premise entails everything,
+a failure to find a mapping means nothing unless the rule set is complete for the
+premise it ran on — and a conclusion can be entailed while appearing nowhere in
+the closure at all, which is what the five mechanisms beyond the rule table exist
+for (see [Conformance](#conformance)).
+
+They run over the same shared boundary, on all **five** host shapes, and the
+`purrdf` command line is one of them. `scripts/check-entailment-surface.py` is the
+gate: it derives the service set from `purrdf-entail`'s own public entry points and
+fails until every one of them is reachable from every host *with the boundary's
+whole parameter list*, so a service or a parameter cannot land on four hosts and go
+dark on the fifth. It also mutation-tests itself on every run — one edit per check,
+applied in memory over the committed tree, each of which must make the gate fail —
+because a check that cannot withhold a green light is not a check.
+
+| Host | Does P entail C? | Re-decide the warrant | Certain answers of a pattern |
+| --- | --- | --- | --- |
+| Rust | `entails(&p, &c, Regime::OwlRl, &imports)` | `verify(warrant, &p, &c)` | `certain_answers(&p, &bgp, Regime::OwlRl, &imports)` |
+| CLI | `purrdf entails --regime owl-rl --premise P --conclusion C` | `… --conclusion C --verify` | `… --pattern BGP` |
+| Python | `purrdf.entail.graph_entails("owl-rl", p, c, imports)` | `purrdf.entail.verify_entailment(...)` | `purrdf.entail.certain_answers("owl-rl", p, bgp, imports)` |
+| JavaScript / WebAssembly | `entailGraphEntails("owl-rl", p, c, iris, docs)` | `entailVerifyEntailment(...)` | `entailCertainAnswers(...)` |
+| C | `purrdf_entail_graph_entails(...)` | `purrdf_entail_verify_entailment(...)` | `purrdf_entail_certain_answers(...)` |
+
+Two things differ from the materializing table above, and both are consequences of
+the question rather than of any host:
+
+- **Five regimes, not seven.** `owl-direct` is directed by a *query's* class
+  expressions and `rif` entails under the *caller's* rule document, and "premise,
+  conclusion, regime" carries neither. Both are refused by name on every host —
+  never answered under a weaker regime and labelled with the one that was asked
+  for — and both still materialize.
+- **The import table is a parameter, on every host.** An ontology's imports closure
+  *is* the ontology, so a premise carrying an `owl:imports` the call was not handed
+  is a different premise. PurRDF fetches nothing, so the closure arrives as
+  caller-supplied configuration: an ordered list of `(ontology IRI, document)`
+  pairs, spelled `--import IRI=FILE` on the command line. An unresolved import is a
+  refusal naming the document, never a silently truncated premise.
+
+A pattern is N-Triples with `?name` (or `$name`) in any position, the **predicate**
+included. RDF reserves that position for an IRI, so the boundary reaches it by
+rewriting each variable to a term drawn from a namespace it has swept out of the
+caller's own text and mapping every occurrence back afterwards; nothing of that
+namespace reaches a row, a binding or a report. The one slot that admits no variable
+is a literal's **datatype**: `"5"^^?d` asks for a binding in a position that holds an
+IRI rather than a term, and it is refused by name — the stand-in must never be left
+sitting there, matching the boundary's own namespace instead of the caller's data.
+A predicate variable is projected
+like any other, and under `owl-rl` it also renders a `limit`: it ranges over the
+whole predicate vocabulary, so it ranges over the schema predicates Theorem PR1's
+conclusion hypothesis excludes — the table claims no completeness for them, whether
+or not `scm-*` derives one — and over the constructs the mechanisms beyond the table
+decide, for which the closure the rows are drawn from holds nothing.
+
+Every answer arrives with the certificate of the run underneath it — the same
+`purrdf-reasoning-report` block a materialization renders, plus a `mechanism` line
+naming which of the six reached the verdict.
 
 ## Rule coverage
 
@@ -104,14 +167,19 @@ Where the numbers stop:
   rules, and a run that met a boundary still reports
   `Completeness::ExactWithinBoundaries` rather than `Exact`. The two claims are
   reported separately on purpose. Nor is a complete rule table entailment
-  conformance: on W3C's own OWL 2 RL entailment tests the chase reaches 11 of
-  27 published positive entailments and correctly withholds on 23 of 23
-  negative ones (see [Conformance](#conformance) below). 78 / 78 says every
+  conformance: on this vendored W3C corpus of OWL 2 RL entailment tests
+  `entails()` reaches 27 of 27 published positive entailments, and agrees with
+  W3C on 23 of 23 negative ones — 3 of those 23 *refuted*, a decided
+  non-entailment, and 20 *admitted*, the closure computed and observed not to
+  contain the non-conclusion. Read `23 of 23` as "no unsoundness found", never
+  as "23 non-entailments proved" (see [Conformance](#conformance) below). 78 /
+  78 says every
   rule of Tables 4–9 is implemented — and the one W3C-published entailment
   that is reachable only by a sound rule outside those tables is reached by an
   **extension**, `ext-eq-diff-sym`, which `extensions(Regime::OwlRl)` names,
   neither `rules()` nor `implemented()` names, and every report renders on its
-  own `extension` line.
+  own `extension` line. Eight more are reached by **refutation** rather than by
+  matching, and those add no rule at all: see the conformance section below.
 - **Seventeen OWL 2 RL rules conclude `false`.** "Implemented" for those means
   *decided*: a body match becomes `EntailError::Inconsistent` carrying a witness
   that names the rule and the asserted triples that satisfied it. That is the
@@ -253,27 +321,95 @@ Two corpora measure two different things, and the distinction matters:
   over the 221 excluded cases, so this row cannot detect a regression among them.
   Re-deriving them means re-running the probe, which is a deliberate act rather
   than part of the gate.
-- **W3C OWL 2 RL entailment tests — 34 of 50 cases agree, 16 ledgered**, zero
+- **W3C OWL 2 RL entailment tests — 50 of 50 cases agree, 0 ledgered**, zero
   unledgered. This is the independent oracle for the rule table: W3C's own
-  entailment tests, forward-materialized under `Regime::OwlRl` and checked for
-  whether the published conclusion maps into the closure. The two lanes prove
-  different things and are reported separately.
+  entailment tests, answered by one call to `purrdf_entail::entails()` per case
+  under `Regime::OwlRl`. The two lanes prove different things and are reported
+  separately.
 
   **The negative lane is 23 of 23: no unsoundness.** The chase never derived a
   triple W3C publishes as *not* entailed. That is the safety result, and it
   holds over *all* 23 negative cases — soundness is owed on every case, so none
   were filtered by profile.
 
-  The positive lane is **11 of 27** — the 27 positive entailments W3C itself
-  places inside the RL profile under RDF-Based semantics. 16 of the 16
-  divergences are structural limits of OWL 2 RL rather than of this
-  implementation: every head in Profiles §4.3 Tables 4–9 is an assertional
-  triple over named terms or `false`, so no conforming RL rule set derives a
-  schema axiom (8 `schema-conclusion`) or a negative fact (6
-  `negative-conclusion`), and the profile states no rule at all for constructs
-  outside its syntax (1 `construct-outside-rl`); one more premise is incomplete
-  as exported (1 `imports-unresolved`). **0 are actionable** (0
+  **Those 23 agreements are two different results, and the harness prints the
+  split** on a scoreboard line of its own:
+
+  ```text
+  OWL2-RL-NEGATIVE: total 23 = refuted 3 + admitted 20 (premise-outside-rl 5, conclusion-outside-rl 10, construct-not-read 5, refutation-budget 0, freeze-budget 0, data-range-containment 0) + unsound 0 + withheld 0
+  ```
+
+  Three are *decided* non-entailments — both halves of Theorem PR1's hypothesis
+  hold, so the closure's failure to contain the non-conclusion is a proof. The
+  other 20 *admit*: the closure was computed and does not contain the
+  non-conclusion, which is the whole of the soundness observation, and nothing
+  beyond it is claimed. Both agree, and correctly so; what they differ in is
+  discriminating power, since a reasoner that derived nothing at all would score
+  `negative 23 of 23` with `refuted 0`. Read `23 of 23` as "no unsoundness
+  found", never as "23 non-entailments proved".
+
+  The positive lane is **27 of 27** — the 27 positive entailments W3C itself
+  places inside the RL profile under RDF-Based semantics — and the typed
+  divergence ledger `purrdf_sparql_conformance::owl2_rl::LEDGER`
+  is EMPTY — 0 `schema-conclusion`, 0 `negative-conclusion`, 0
+  `construct-outside-rl`, 0 `imports-unresolved`, and **0 are actionable** (0
   `missing-rule`).
+
+  Every class it used to hold is closed, and the rule table did not change once
+  to close any of them. `entails()` reaches a conclusion six ways, and five of
+  the six are not matching:
+
+  * **refutation.** A negative fact still has no head anywhere in Tables 4–9 —
+    no rule concludes `owl:differentFrom`, and none concludes membership in an
+    `owl:complementOf` class. What the table *does* have is seventeen rules
+    whose conclusion is `false`, and those seventeen are an inconsistency
+    calculus: assert the conclusion's negation into the premise, re-run the same
+    seventy-eight rules over a premise whose consistency the first run already
+    established, and read the resulting inconsistency as the proof. An
+    `owl:AllDifferent` collection is, by OWL 2's own definition, the conjunction
+    of its `n(n−1)/2` pairwise inequalities, so it lowers to the same shape and
+    is entailed exactly when every pair refutes — which is why two entries left
+    the `schema-conclusion` class with them.
+  * **freeze-and-chase.** `p rdf:type owl:TransitiveProperty` abbreviates a
+    universally quantified Horn implication, and an implication is decided by
+    generalisation on constants: freeze its body over constants the premise does
+    not mention, re-run the table, and look for the head. `chain2trans1`'s
+    arrives through `prp-spo2`, one of the 78. The axiom's other conjunct — `p`
+    is an object property — is a lookup in the premise's own closure, and it is
+    owed: a schema axiom is a conjunction and establishing only the interesting
+    half would claim conclusions the semantics does not license.
+  * **comprehension.** A conclusion may assert that a CLASS EXISTS — an
+    anonymous `owl:unionOf`, an anonymous `owl:Restriction` — which the
+    RDF-Based semantics' own comprehension conditions license, subject to a
+    typing side condition on the operands. Only the scaffolds the conclusion
+    names are minted, over blank nodes checked absent from both documents.
+  * **reflexivity.** `owl:ReflexiveProperty` is outside the RL syntax, so the
+    profile states no rule for it — and a rule that did would range over every
+    resource, widening a closure every consumer computes by default. The
+    conclusion's own self-loops are read off the premise's reflexive typings
+    instead.
+  * **datatype containment.** A property's declared `rdfs:range` datatypes
+    intersect, and the intersection may be contained in one the premise never
+    mentions — `xsd:byte ⊑ xsd:short`, and `short ⊓ unsignedInt ⊑
+    unsignedShort`, neither of which a join over triples can discover. Decided
+    over the XSD value spaces, three-valued, with the negative answer gated on
+    the counterexample range being exactly decided.
+
+  The last case needed no mechanism at all, only the document its premise names:
+  `webont-imports-011` `owl:imports` a support ontology the upstream manifest
+  does not inline, so it is vendored beside the cases from W3C's own URL and
+  supplied to `entails()` as caller-owned configuration. The library still
+  fetches nothing.
+
+  Nothing about the inventory moves: `rules(Regime::OwlRl)` and
+  `implemented(Regime::OwlRl)` are still exactly the same 78,
+  `extensions(Regime::OwlRl)` is still the one `ext-eq-diff-sym`, and strict
+  `Materialization::OwlRl` output is byte-for-byte what it was. The evidence
+  moves instead — each mechanism arrives with its own `EntailmentWarrant` arm
+  carrying what it actually used (the `false`-concluding rule that fired and a
+  minimal entailing premise subset; the frozen constants, body and head; the
+  minted triples and the closure triples that license them) and its own checker
+  that re-decides the whole thing without running a reasoner.
 
   The one case that used to be actionable is closed by an **extension**, and
   the extension is labelled rather than absorbed. `a owl:differentFrom b`

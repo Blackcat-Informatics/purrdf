@@ -813,6 +813,156 @@ int32_t purrdf_entail_explain_conclusion(const char *document,
                                          PurrdfError **out_error);
 
 /**
+ * The certain answers of a basic graph pattern under an entailment regime.
+ *
+ * A certain answer is a substitution the knowledge base ENTAILS the pattern under —
+ * true in every model, not merely present in one closure — which is what SPARQL's
+ * entailment regimes define the answers to a basic graph pattern to be.
+ *
+ * `regime` is one of the same spellings every other entry point accepts, minus the two
+ * this service is not total over: `owl-direct` is query-directed and `rif` entails under
+ * a rule document, and each is defined by an input this signature does not carry, so
+ * both are refused by name rather than served by a weaker lane.
+ *
+ * `pattern` is N-Triples with `?name` in any position, the PREDICATE included. A blank
+ * node in it is a NON-DISTINGUISHED variable — constrained by the match, not projected,
+ * and not a column — which is what SPARQL says a query blank node is. A variable inside an
+ * RDF 1.2 triple term is an ordinary variable: it binds, it is a column, and one NAME is
+ * one VARIABLE wherever it was written, so a pattern using it above and below the
+ * triple-term boundary is joined rather than split into two. A predicate variable
+ * is projected like any other, and under `owl-rl` it also renders a `limit`: it ranges over
+ * the whole predicate vocabulary, including the schema predicates and the constructs the
+ * mechanisms beyond the rule table decide, and the closure holds neither.
+ *
+ * `*out_answer` receives `mechanism`, one `var` line per projected variable, one `row`
+ * line per certain answer, and a `limit` line per reason the row set may not be
+ * EXHAUSTIVE. Every row is sound unconditionally; what needs a precondition is the claim
+ * about a row that is NOT there, so no `limit` lines is the claim that the row set is
+ * complete. `*out_certificate` receives the run's `purrdf-reasoning-report 4` block.
+ * **Free BOTH with `purrdf_buffer_free`.**
+ *
+ * A pattern with a projected variable is `mechanism strict-table`: the five mechanisms
+ * beyond the rule table are not run for one, because a projected variable over what any of
+ * them decides is a different question — and that one of them WOULD have been needed
+ * arrives as a `limit` line naming the lane, never as an exhaustive empty answer. A
+ * pattern with NO projected variable is a conclusion graph, is answered by the same fold
+ * `purrdf_entail_graph_entails` runs, and names whichever of the seven reached it; such an
+ * answer is the relation with no columns, so a `yes` is one bare `row` line and a `no` is
+ * none.
+ *
+ * `import_iris` and `import_documents` are the caller's `owl:imports` table, as two
+ * parallel arrays of `import_count` C strings: entry `i` declares that the ontology IRI
+ * `import_iris[i]` denotes the N-Quads document `import_documents[i]`. A premise carrying
+ * an `owl:imports` states that its axioms are its own PLUS those of the documents it names,
+ * so this is where those documents arrive — and the `owl:imports` triple stays exactly
+ * where the caller wrote it. **PurRDF fetches nothing**: an ontology IRI the table does not
+ * resolve is an error naming the document, never a network access and never a silently
+ * empty import. `import_count == 0` with two NULL arrays is the ordinary "imports nothing"
+ * case and is accepted; a NULL array with a non-zero count is a caller error and is
+ * refused, never dereferenced. Resolution is transitive to a fixpoint.
+ *
+ * # Safety
+ * `regime`, `document` and `pattern` must be non-null, NUL-terminated C strings; when
+ * `import_count` is non-zero, `import_iris` and `import_documents` must each address at
+ * least `import_count` readable, non-null, NUL-terminated C strings; `out_answer` and
+ * `out_certificate` must be writable pointers; `out_error` must be null or writable.
+ */
+int32_t purrdf_entail_certain_answers(const char *regime,
+                                      const char *document,
+                                      const char *pattern,
+                                      const char *const *import_iris,
+                                      const char *const *import_documents,
+                                      size_t import_count,
+                                      PurrdfBuffer **out_answer,
+                                      PurrdfBuffer **out_certificate,
+                                      PurrdfError **out_error);
+
+/**
+ * Does `premise` entail the conclusion GRAPH under `regime`'s rule table?
+ *
+ * NOT `purrdf_entail_entails`, which asks the OWL 2 Direct-Semantics TABLEAU about one
+ * AXIOM and renders a `purrdf-dl-certificate 1` block. This asks the regime's RULE TABLE
+ * about a conclusion GRAPH and renders a `purrdf-reasoning-report 4` one. Different
+ * question, different calculus, different certificate — and the two banners differ so
+ * neither can be parsed as the other.
+ *
+ * `*out_answer` opens `mechanism <name>`: WHICH of the seven mechanisms reached the
+ * verdict. `strict-table` is the regime's own rule table, run once, with the conclusion
+ * matched into (or proven absent from) its closure; the other five —  `refutation`,
+ * `freeze`, `comprehension`, `reflexivity`, `data-range` — exist because that table DECIDES
+ * no conclusion of that shape. `composite` is two or more of those folded over
+ * one conclusion, which a conjunction can need and which is spelled that way rather than by
+ * any one constituent's name. The name is the canonical spelling and never an enum ordinal,
+ * so an eighth mechanism cannot renumber a reading of an old one.
+ *
+ * Then THREE verdicts, never two: `entailment entailed` (with one `binding` line per
+ * existential of the conclusion), `entailment not-entailed` (a PROOF — the procedure was
+ * complete for this premise — with a `miss` line), or `entailment undecided` (what an
+ * incomplete procedure is entitled to say instead, with an `undecided` line naming which
+ * hypothesis of which theorem the input broke). Reading the third as the second would
+ * turn a limitation of this library into a false statement about the caller's data.
+ * **Free BOTH buffers with `purrdf_buffer_free`.**
+ *
+ * `import_iris`, `import_documents` and `import_count` are
+ * `purrdf_entail_certain_answers`'s, and apply to the PREMISE: the conclusion is a graph to
+ * match rather than an ontology to close, so an `owl:imports` in it names nothing this
+ * service resolves.
+ *
+ * # Safety
+ * `regime`, `premise` and `conclusion` must be non-null, NUL-terminated C strings; when
+ * `import_count` is non-zero, `import_iris` and `import_documents` must each address at
+ * least `import_count` readable, non-null, NUL-terminated C strings; `out_answer` and
+ * `out_certificate` must be writable pointers; `out_error` must be null or writable.
+ */
+int32_t purrdf_entail_graph_entails(const char *regime,
+                                    const char *premise,
+                                    const char *conclusion,
+                                    const char *const *import_iris,
+                                    const char *const *import_documents,
+                                    size_t import_count,
+                                    PurrdfBuffer **out_answer,
+                                    PurrdfBuffer **out_certificate,
+                                    PurrdfError **out_error);
+
+/**
+ * `purrdf_entail_graph_entails` with the warrant RE-DECIDED, without running a reasoner.
+ *
+ * The re-check re-derives nothing, deliberately: "the closure follows from the premise"
+ * is the chase's claim and `purrdf_entail_explain_conclusion` is its checker, while "the
+ * conclusion follows from the closure" is this one and is finite and purely
+ * combinatorial — a graph homomorphism, or a set of lookups against a refutation's own
+ * closure. Folding them would cost what the original call cost and give a caller no
+ * independent check at all.
+ *
+ * `*out_answer` is `purrdf_entail_graph_entails`'s, plus `warrant present|absent` and
+ * `verified true|false|not-applicable`. `warrant absent` / `verified not-applicable` is
+ * a `not-entailed` or an `undecided`: there is no evidence to re-decide, and a `false`
+ * there would read as a failed check rather than as an absent one.
+ * **Free BOTH buffers with `purrdf_buffer_free`.**
+ *
+ * `import_iris`, `import_documents` and `import_count` are
+ * `purrdf_entail_certain_answers`'s. The re-check runs against the premise AS WRITTEN
+ * rather than against its imports closure: a warrant re-decidable from the caller's own
+ * document is a stronger check than one only re-decidable against a graph the library
+ * assembled.
+ *
+ * # Safety
+ * `regime`, `premise` and `conclusion` must be non-null, NUL-terminated C strings; when
+ * `import_count` is non-zero, `import_iris` and `import_documents` must each address at
+ * least `import_count` readable, non-null, NUL-terminated C strings; `out_answer` and
+ * `out_certificate` must be writable pointers; `out_error` must be null or writable.
+ */
+int32_t purrdf_entail_verify_entailment(const char *regime,
+                                        const char *premise,
+                                        const char *conclusion,
+                                        const char *const *import_iris,
+                                        const char *const *import_documents,
+                                        size_t import_count,
+                                        PurrdfBuffer **out_answer,
+                                        PurrdfBuffer **out_certificate,
+                                        PurrdfError **out_error);
+
+/**
  * Open a reasoning session over `document`.
  *
  * `step_cap` narrows the per-decision tableau step cap for every question asked through

@@ -145,6 +145,19 @@ impl DataRangeTable {
     /// `r₁ ∩ … ∩ rₘ ∩ ¬s₁ ∩ … ∩ ¬sₖ`, and if that set is empty there is no such value.
     /// `Undecided` answers `false` — the branch stays open — because the unsound direction
     /// is claiming emptiness.
+    ///
+    /// # This `bool` is right HERE and wrong as a verdict
+    ///
+    /// Folding `Undecided` into `false` is correct for a CLASH RULE, which is all this
+    /// method serves: not closing a branch loses conclusions and invents none. Read as an
+    /// answer to "is this range contained in that one?", the same `false` says "not
+    /// contained", which converts "this decision procedure cannot say" into a statement
+    /// about the caller's datatypes. The one-positive-one-negative case is therefore
+    /// available separately and three-valued, as
+    /// [`purrdf_xsd::range::containment`], and
+    /// [`crate::entails::datarange`] uses that instead of this — see its module docs for
+    /// the mapping and for why its negative answer is gated on
+    /// [`purrdf_xsd::range::is_exactly_decided`].
     pub(crate) fn conjunction_is_empty(&self, positive: &[u32], negative: &[u32]) -> bool {
         matches!(
             purrdf_xsd::range::satisfiability(&self.conjunction(positive, negative)),

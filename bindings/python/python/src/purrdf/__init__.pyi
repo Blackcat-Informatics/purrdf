@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import builtins
+from collections.abc import Sequence
 from typing import IO, Any, Callable, TypeAlias, TypedDict, overload
 
 # `Literal` is aliased because this package DEFINES an RDF `Literal` class below.
@@ -892,6 +893,78 @@ class entail:
     @staticmethod
     def explain_conclusion(
         data: str, regime: RegimeLike, conclusion: str
+    ) -> tuple[str, str]: ...
+
+    # ── Conclusion-directed entailment (the CHASE lane, not the tableau) ─────
+    # The CERTAIN ANSWERS of a basic graph pattern: the substitutions the
+    # knowledge base ENTAILS the pattern under — true in every model, not merely
+    # present in one closure, which is what SPARQL's entailment regimes define
+    # the answers to a basic graph pattern to be. `pattern` is N-Triples with
+    # `?name` in any position, the PREDICATE included; a blank node in it is a
+    # NON-DISTINGUISHED variable, constrained by the match and not projected. A
+    # variable inside an RDF 1.2 triple term is an ordinary variable — it binds
+    # and it is a column — and one NAME is one VARIABLE wherever it was written,
+    # so a pattern using it above and below the triple-term boundary is joined. A
+    # predicate variable is projected like any other, and under OWL_RL it also
+    # renders a `limit`: it ranges over the whole predicate vocabulary, including
+    # the schema predicates and the constructs the mechanisms beyond the rule
+    # table decide, and the closure holds neither. The answer opens
+    # `mechanism <name>`, then `var` and `row` lines, then a `limit` line
+    # per reason the row set may not be EXHAUSTIVE — no `limit` lines is the
+    # claim that it is. A pattern with a projected variable is `strict-table`,
+    # and a lane that would have been needed for it names itself in a `limit`;
+    # a pattern with NO projected variable is a conclusion graph, is answered by
+    # the same fold `graph_entails` runs, and names whichever of the seven
+    # reached it. Raises ValueError for OWL_DIRECT and RIF, each defined by
+    # an input this signature does not carry, and for a variable in a literal's
+    # DATATYPE — a slot that holds an IRI rather than a term to bind, so
+    # `"5"^^?d` is refused by name rather than answered.
+    #
+    # `imports` is the caller's `owl:imports` table: an ORDERED sequence of
+    # `(ontology_iri, document)` pairs, `document` being N-Quads text exactly
+    # like `data`. A premise carrying an `owl:imports` states that its axioms
+    # are its own PLUS those of the documents it names, so this is where those
+    # documents arrive. PurRDF FETCHES NOTHING: an ontology IRI the sequence
+    # does not resolve raises ValueError naming the document, never a network
+    # access and never a silently empty import. `[]` is the ordinary "imports
+    # nothing" case; the argument is required, not defaulted, and sits in the
+    # same position on all four hosts.
+    @staticmethod
+    def certain_answers(
+        regime: RegimeLike,
+        data: str,
+        pattern: str,
+        imports: Sequence[tuple[str, str]],
+    ) -> tuple[str, str]: ...
+    # Does `premise` entail the conclusion GRAPH under the regime's rule table?
+    # NOT `entails`, which asks the OWL 2 Direct-Semantics TABLEAU about one
+    # AXIOM and renders a DL certificate; this asks the RULE TABLE about a
+    # conclusion GRAPH and renders a reasoning report. The answer opens
+    # `mechanism <name>` — which of the six mechanisms reached the verdict — and
+    # then gives THREE verdicts, never two: `not-entailed` is a PROOF, and
+    # `undecided` is what an incomplete procedure is entitled to say instead.
+    # `imports` is `certain_answers`'s, and applies to the PREMISE: the
+    # conclusion is a graph to match, not an ontology to close.
+    @staticmethod
+    def graph_entails(
+        regime: RegimeLike,
+        premise: str,
+        conclusion: str,
+        imports: Sequence[tuple[str, str]],
+    ) -> tuple[str, str]: ...
+    # `graph_entails` with the warrant RE-DECIDED, without running a reasoner.
+    # Adds `warrant present|absent` and `verified true|false|not-applicable`;
+    # `warrant absent` is a not-entailed or an undecided, where there is no
+    # evidence to re-decide and a `false` would read as a failed check rather
+    # than an absent one. `imports` is `certain_answers`'s; the re-check runs
+    # against the premise AS WRITTEN, which is a stronger check than one only
+    # re-decidable against a graph the library assembled.
+    @staticmethod
+    def verify_entailment(
+        regime: RegimeLike,
+        premise: str,
+        conclusion: str,
+        imports: Sequence[tuple[str, str]],
     ) -> tuple[str, str]: ...
 
     # ── The session ──────────────────────────────────────────────────────────
