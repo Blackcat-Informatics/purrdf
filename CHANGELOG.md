@@ -4,6 +4,53 @@ All notable changes to the PurRDF crate suite are recorded here. The suite
 ships one lockstep version across crates.io, PyPI, and npm; pre-1.0, a minor
 bump may carry breaking changes and a patch bump is bugfix-only.
 
+## [0.11.0] - 2026-08-02
+
+### Bug Fixes
+
+- **entail:** Make the survey's three-way early exit reachable
+- **docs:** Hold the xfail sentence to the count the matrix generates
+- **wasm:** Assert an error names a term, do not compile the term into a pattern
+- **BREAKING** **entail:** `?name` in any position, including the one it was refused in
+- **entail:** A boundary that meant two things, and two claims about rule heads that were false
+- **python:** Give each newline one way to match, not two
+- **wasm:** Assert a refusal names a term exactly, by neither of the two wrong ways
+- **wasm:** Pin the whole refusal, so the IRI reaches no matcher at all
+- **BREAKING** **entail:** A variable is not a datatype IRI, and a withheld predicate is not a smaller question
+- **BREAKING** **entail:** One IRI is one answer, and one variable name is one variable
+- **gates:** Two gates that could not fail, and two guards that could not see
+- **docs:** Derive which documents the overclaim ban sweeps, from the ban itself
+- **docs:** Make the derived sweep total, rather than saying it is
+- **docs:** Let the gate's own guards be mutated, and refuse the mutations
+- **docs:** Compose the ban patterns around their markers, rather than checking they contain one
+- **BREAKING** **entail:** A deep input must be an error, not a dead process
+- **BREAKING** **rdf:** Bound term nesting where it is parsed, and survey every position the merge writes
+- **entail:** Five reviewer findings — a lossy diagnostic, a split precedence, and three claims nothing checked
+
+### Documentation
+
+- **entail:** The doc gate is not `make check`, and it found six broken links
+- **rdf:** The XML-literal walk adds no bound; something in front of it does
+
+### Features
+
+- **entail:** A conclusion-directed entailment service over the RL chase
+- **entail:** Close the negative-conclusion lane by refutation over the chase
+- **entail:** Decide a schema axiom by freezing its body and chasing the head
+- **entail:** Comprehend the anonymous class expressions a conclusion names
+- **entail:** Read a reflexive property's self-loops off the conclusion, not the closure
+- **BREAKING** **entail:** Decide an rdfs:range axiom by datatype containment
+- **entail:** Vendor the document the last unreached premise names
+- **BREAKING** **entail:** Return the run that answered, not the verdict alone
+- **entail:** The conclusion-directed surface reaches all four hosts
+- **conformance:** Print the split an empty ledger makes trivially true
+- **BREAKING** **entail:** A conclusion graph is a conjunction, and entailment is monotone over one
+- **BREAKING** **entail:** A lane not run is a limit, not a silence
+- **BREAKING** **entail:** The import map is the caller's, on every host that has the service
+- **cli:** The binary can ask the question, not only compute the closure
+- **conformance:** Print what the twenty-three negative agreements are made of
+- **BREAKING** **entail:** Close the 16 ledgered W3C OWL 2 RL entailment-corpus gaps
+
 ## [0.10.0] - 2026-07-31
 
 ### Bug Fixes
@@ -37,10 +84,13 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 - **hygiene:** The wasm export gate read the export block and not the imports
 - **datalog:** Make the SLG budget bound the work, not just the output
 - **datalog:** Keep freshen_clause's doc on freshen_clause, and collapse the filter's ifs
+- **build:** Make the wasm artifact's size independent of who built it
 
 ### CI & Build
 
 - **wasm:** Record the session's 8,882 bytes
+- **wasm:** Raise the ceiling 25% and stop failing on the exact byte count
+- **npm:** Raise the package ceilings 25% and stop failing on the exact byte count
 
 ### Documentation
 
