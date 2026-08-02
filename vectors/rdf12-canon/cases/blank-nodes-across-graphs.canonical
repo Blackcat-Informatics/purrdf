@@ -1,0 +1,4 @@
+_:c14n0 <http://example.org/p> <http://example.org/o> <http://example.org/g1> .
+_:c14n1 <http://example.org/p> <http://example.org/o> <http://example.org/g1> .
+_:c14n1 <http://example.org/p> <http://example.org/o> <http://example.org/g2> .
+_:c14n1 <http://example.org/q> _:c14n0 <http://example.org/g1> .

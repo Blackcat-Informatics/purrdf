@@ -1,0 +1,3 @@
+@prefix ex: <http://example.org/> .
+
+ex:r ex:reifies <<( ex:s ex:p ex:o )>> .

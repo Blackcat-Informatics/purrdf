@@ -1,0 +1,10 @@
+# Relations that hold BETWEEN cases. Columns: case-a <TAB> case-b <TAB> relation
+#   same    the two inputs MUST canonicalize to identical bytes (isomorphism)
+#   differ  the two inputs MUST canonicalize to different bytes
+cases/isomorphic-a.ttl	cases/isomorphic-b.ttl	same
+cases/near-isomorphic-a.ttl	cases/near-isomorphic-b.ttl	differ
+cases/reifier-simple.ttl	cases/reifier-count-two.ttl	differ
+cases/annotation-simple.ttl	cases/annotation-named-graph.trig	differ
+cases/literal-forms.ttl	cases/directional-literals.ttl	differ
+cases/unicode-lexical-forms.ttl	cases/literal-forms.ttl	differ
+cases/triple-term-object.ttl	cases/triple-term-nested.ttl	differ

@@ -1,0 +1,33 @@
+# purrdf-rdfc12 profile v1 — normative vector manifest.
+# Columns: input-file <TAB> kind <TAB> expectation
+#   kind=golden   expectation is empty; the expected canonical bytes are
+#                 cases/<stem>.canonical and their SHA-256 is cases/<stem>.digest
+#   kind=refusal  expectation is the exact error discriminant, one of
+#                 "reserved-vocabulary <position> <iri>"   (profile §5, §5.3)
+#                 "budget-exceeded"                        (profile §6)
+cases/plain-rdf11.ttl	golden	
+cases/blank-nodes-across-graphs.trig	golden	
+cases/isomorphic-a.ttl	golden	
+cases/isomorphic-b.ttl	golden	
+cases/near-isomorphic-a.ttl	golden	
+cases/near-isomorphic-b.ttl	golden	
+cases/reifier-simple.ttl	golden	
+cases/reifier-nested.ttl	golden	
+cases/reifier-count-two.ttl	golden	
+cases/annotation-simple.ttl	golden	
+cases/annotation-named-graph.trig	golden	
+cases/triple-term-object.ttl	golden	
+cases/triple-term-nested.ttl	golden	
+cases/triple-term-blank-inside.ttl	golden	
+cases/literal-forms.ttl	golden	
+cases/directional-literals.ttl	golden	
+cases/unicode-lexical-forms.ttl	golden	
+cases/poison-forgery.ttl	refusal	reserved-vocabulary predicate urn:purrdf:rdfc:reifies
+cases/poison-sentinel-subject.ttl	refusal	reserved-vocabulary subject urn:purrdf:rdfc:reifies
+cases/poison-sentinel-predicate.ttl	refusal	reserved-vocabulary predicate urn:purrdf:rdfc:annotation
+cases/poison-sentinel-object.ttl	refusal	reserved-vocabulary object urn:purrdf:rdfc:annotation
+cases/poison-sentinel-graph.trig	refusal	reserved-vocabulary graph urn:purrdf:rdfc:annotation
+cases/poison-sentinel-nested.ttl	refusal	reserved-vocabulary object urn:purrdf:rdfc:reifies
+cases/poison-sentinel-datatype.ttl	refusal	reserved-vocabulary object urn:purrdf:rdfc:reifies
+cases/poison-sentinel-unminted.ttl	refusal	reserved-vocabulary predicate urn:purrdf:rdfc:no-such-sentinel
+cases/poison-complexity.ttl	refusal	budget-exceeded

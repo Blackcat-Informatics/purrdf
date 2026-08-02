@@ -1,0 +1,5 @@
+@prefix ex: <http://example.org/> .
+
+ex:s ex:p ex:o .
+ex:s ex:p "plain" .
+ex:s ex:q "5"^^<http://www.w3.org/2001/XMLSchema#integer> .

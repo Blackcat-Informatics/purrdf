@@ -40,6 +40,7 @@ from pathlib import Path
 # deliberate edit to this map followed by `--update` — a corpus is NEVER guarded
 # until it appears here.)
 GUARDED_ROOTS: dict[str, str] = {
+    "vectors/rdf12-canon": "scripts/conformance-frozen/vectors-rdf12-canon.sha256",
     "vectors/shacl": "scripts/conformance-frozen/vectors-shacl.sha256",
     "vectors/shexTest": "scripts/conformance-frozen/vectors-shexTest.sha256",
     "crates/shapes/corpus": "scripts/conformance-frozen/shapes-corpus.sha256",

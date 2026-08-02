@@ -1,0 +1,6 @@
+@prefix ex: <http://example.org/> .
+
+ex:s ex:decimal "0.70"^^<http://www.w3.org/2001/XMLSchema#decimal> .
+ex:s ex:decimal "0.7"^^<http://www.w3.org/2001/XMLSchema#decimal> .
+ex:s ex:plain "hello" .
+ex:s ex:lang "hello"@en .

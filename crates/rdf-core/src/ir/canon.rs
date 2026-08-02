@@ -133,6 +133,21 @@ pub const RDFC_CALL_LIMIT: u64 = 1_000_000;
 /// for an ontology PurRDF does not publish.
 pub const CANON_PROFILE_ID: &str = "purrdf-rdfc12";
 
+/// The content-addressed identity of this profile's normative vector corpus.
+///
+/// The SHA-256 of the corpus's freeze manifest
+/// (`scripts/conformance-frozen/vectors-rdf12-canon.sha256`), which in turn covers
+/// every payload byte under `vectors/rdf12-canon/`. Defining it over the manifest
+/// rather than over a bespoke traversal means a consumer can reproduce it with one
+/// `sha256sum` and without running any of this crate's code — a digest only its
+/// author can compute is not one anybody can independently check.
+///
+/// A consumer pins [`CANON_PROFILE_ID`], [`CANON_PROFILE_VERSION`] and this value
+/// together: the first two say which algorithm was agreed, and this says which
+/// evidence was agreed to demonstrate it.
+pub const CANON_CORPUS_DIGEST: &str =
+    "038f7431e845e63c8bb2122cdfa2c9968f40c17ae7cb6b9e458bbb5cb11375b7";
+
 /// The version of [`CANON_PROFILE_ID`] this build implements.
 ///
 /// Incremented by any change to the canonical bytes a given dataset produces, to

@@ -1,0 +1,4 @@
+@prefix ex: <http://example.org/> .
+
+ex:g1 { _:a ex:p ex:o . _:a ex:q _:b . _:b ex:p ex:o . }
+ex:g2 { _:a ex:p ex:o . }
