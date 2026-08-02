@@ -4,6 +4,36 @@ All notable changes to the PurRDF crate suite are recorded here. The suite
 ships one lockstep version across crates.io, PyPI, and npm; pre-1.0, a minor
 bump may carry breaking changes and a patch bump is bugfix-only.
 
+## [0.12.0] - 2026-08-02
+
+### Bug Fixes
+
+- **BREAKING** **canon:** Reserve the overlay's namespace by refusal, not by assertion
+
+### Features
+
+- **BREAKING** Let a new enum variant stop being a breaking change
+- **errors:** Let the standard chain reach the failure underneath
+- **canon:** Name and version the canonicalization profile, with a frozen vector corpus
+
+### Performance
+
+- **datalog:** Keep the join's binding frame off the heap
+- **sparql-eval:** Reject a candidate before paying to copy the row
+- **rdf:** Write the text serializers into one buffer instead of many
+- **rdf:** Write TriG in place, blocks and all
+- **rdf:** Sort the canonical order through a comparator, not through keys
+- **rdf:** Cut allocations on the hot paths; fix(canon)!: collision-safe RDF 1.2 canonicalization profile
+
+### Refactor
+
+- **BREAKING** **rdf:** The codec's serializer takes the caller's buffer
+
+### Testing
+
+- **datalog:** Give the semi-naive join a bench of its own
+- **conformance:** Put the canonicalization profile on the scoreboard
+
 ## [0.11.0] - 2026-08-02
 
 ### Bug Fixes
