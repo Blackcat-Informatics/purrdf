@@ -40,7 +40,7 @@ BINARYEN_VERSION := 130
 # nine OWL reasoner services, the concrete domain AND the conclusion-directed
 # entailment service with its seven mechanisms and its caller-supplied import
 # map — measures
-# 9_758_312 bytes against the 12_112_500 ceiling, which is 19.436% headroom. That
+# 9_760_099 bytes against the 12_112_500 ceiling, which is 19.421% headroom. That
 # figure is recorded below (WASM_SIZE_MEASURED_BYTES) and REPORTED rather than
 # enforced; the ceiling is the check that fails.
 #
@@ -216,8 +216,19 @@ WASM_SIZE_BUDGET_BYTES := 12112500
 # a `declined` list so a construct it recognized and refused travels with a mint made in
 # the same pass instead of being dropped. The first removes more than the second adds.
 #
+# The increase 9_758_312 -> 9_760_099 is three depth-driven searches that stopped living on
+# the call stack. Each one's depth was a function of how BIG the caller's input is rather
+# than how complicated it is — one level per conclusion triple in the homomorphism match,
+# one per disjunction in the OWL-Direct hypertableau, one per nesting level in the
+# class-expression parser — so a large-but-ordinary document overflowed the stack, which is
+# not a refusal a caller can catch: the process aborts, nothing unwinds, and a host
+# embedding the library dies with it. The first two now carry their frames on the heap and
+# the third refuses past a measured ceiling. The growth is the explicit frame types and
+# their loops, which cost more instructions than the recursion they replace; it buys the
+# ability to answer questions the artifact previously aborted on.
+#
 # The measured constant below is the CURRENT size, not any intermediate figure.
-WASM_SIZE_MEASURED_BYTES := 9758312
+WASM_SIZE_MEASURED_BYTES := 9760099
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'

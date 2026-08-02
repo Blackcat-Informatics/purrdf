@@ -185,6 +185,20 @@ enum Ground {
     EqualIndividual(usize, u32),
 }
 
+/// One level of the search: the state a `⊔`-rule branched from, and its untried disjuncts.
+///
+/// This is the state a call frame of the recursive form held implicitly, written down so
+/// that the stack it lives on is the heap — see [`Hyper::solve`].
+struct Branches {
+    /// The saturated state the alternatives below are applied to.
+    ///
+    /// Held rather than recomputed because an alternative starts from a CLONE of it: a
+    /// sibling must not see what the branch before it derived.
+    state: State,
+    /// The disjuncts not yet tried, in authored order.
+    alternatives: std::vec::IntoIter<Vec<Ground>>,
+}
+
 /// The hypertableau driver: the graph operations, the clause set, and a budget.
 struct Hyper<'a> {
     /// The completion graph operations over the knowledge base.
@@ -244,20 +258,60 @@ impl<'a> Hyper<'a> {
     }
 
     /// The depth-first, deterministic search: saturate, then branch on a derived disjunction.
-    fn solve(&mut self, mut st: State) -> Result<bool, Exhausted> {
-        if !self.saturate(&mut st)? {
-            return Ok(false);
-        }
-        if let Some(branches) = self.find_branch(&st) {
-            for branch in branches {
-                let mut next = st.clone();
-                if self.apply(&mut next, &branch) && self.solve(next)? {
-                    return Ok(true);
+    ///
+    /// One level of the search is one `⊔`-rule application, so the search is as DEEP as the
+    /// knowledge base has open disjunctions — twenty thousand individuals under one union
+    /// class is twenty thousand levels. As call frames that is a stack overflow, which is
+    /// not a refusal a caller can catch: the process aborts, nothing unwinds, and a host
+    /// embedding this library dies with it. The round cap is no defence, because it bounds
+    /// derivation ROUNDS and a level costs one of them. So the search carries its own
+    /// [`Branches`] stack on the heap and its reachable depth is a function of memory
+    /// rather than of a thread's stack rlimit — which differs by an order of magnitude
+    /// between a native binary and `wasm32` and is not something a library can read or
+    /// raise. [`Exhausted`] stays exactly what it was.
+    ///
+    /// The order is the recursion's, so the [`Decision`] is unchanged: a branch is explored
+    /// to exhaustion before its next sibling is tried, siblings go in authored disjunct
+    /// order, and the first clash-free completion ends the search.
+    fn solve(&mut self, st: State) -> Result<bool, Exhausted> {
+        let mut stack: Vec<Branches> = Vec::new();
+        // The state to saturate and expand next — what the recursive form passed down.
+        let mut pending = Some(st);
+        loop {
+            let Some(mut st) = pending.take() else {
+                // Nothing to descend into, so back up: take the next alternative of the
+                // deepest level that still has one, and drop a level that has none.
+                let Some(level) = stack.last_mut() else {
+                    // Every alternative of every level clashed.
+                    return Ok(false);
+                };
+                match level.alternatives.next() {
+                    Some(disjunct) => {
+                        let mut next = level.state.clone();
+                        if self.apply(&mut next, &disjunct) {
+                            pending = Some(next);
+                        }
+                    }
+                    None => {
+                        stack.pop();
+                    }
                 }
+                continue;
+            };
+            if !self.saturate(&mut st)? {
+                // A clash: this alternative is dead, and the loop backs up.
+                continue;
             }
-            return Ok(false);
+            match self.find_branch(&st) {
+                Some(alternatives) => stack.push(Branches {
+                    state: st,
+                    alternatives: alternatives.into_iter(),
+                }),
+                // No disjunction left to branch on: a clash-free completion, which is the
+                // answer for the whole search rather than for this level alone.
+                None => return Ok(true),
+            }
         }
-        Ok(true)
     }
 
     /// Apply hyperresolution and the `≥`-rule to a fixpoint.

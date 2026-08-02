@@ -5448,4 +5448,178 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
         let error = entails_to_string(TAXONOMY, scoped, 0).expect_err("graph-scoped");
         assert!(error.contains("names a graph"), "{error}");
     }
+
+    // ── A LARGE QUESTION IS A QUESTION, NOT A CRASH ─────────────────────────
+    //
+    // Three of this boundary's services search depth-first, and each one's depth is a
+    // function of how big the caller's input is rather than of how complicated it is. Depth
+    // held in CALL frames is not a refusal a caller can catch: the process aborts, nothing
+    // unwinds, no `Result` is produced, and a host embedding this library — the CLI, Python,
+    // the C ABI, WASM — dies with it. So each is checked here, on the surface those hosts
+    // actually wrap, at a size that would have aborted.
+    //
+    // Every check below runs on a thread built with a 1 MiB stack: that is `wasm32`'s, the
+    // SMALLEST target this library ships to and an eighth of a native thread's default. A
+    // check that passes here passes on every target. It also means these tests fail LOUDLY
+    // — by killing the harness — rather than by an assertion, which is the honest shape for
+    // "the process must survive this".
+
+    /// The stack these checks run on: `wasm32`'s, the smallest of any shipped target.
+    const SMALLEST_TARGET_STACK: usize = 1 << 20;
+
+    /// Run `question` on a thread with [`SMALLEST_TARGET_STACK`] and return its answer.
+    fn on_the_smallest_stack<T: Send + 'static>(
+        question: impl FnOnce() -> T + Send + 'static,
+    ) -> T {
+        std::thread::Builder::new()
+            .stack_size(SMALLEST_TARGET_STACK)
+            .spawn(question)
+            .expect("a thread")
+            .join()
+            .expect("the question is answered rather than aborting the process")
+    }
+
+    /// `count` ground triples sharing a subject and an object, one predicate each.
+    ///
+    /// Distinct predicates are what make this a DEPTH test rather than a breadth test: the
+    /// homomorphism search buckets the closure by predicate, so each bucket holds exactly
+    /// one candidate and the match budget is spent one unit per level. The budget is five
+    /// million and cannot stand in for a depth bound on this shape.
+    fn wide_ground_graph(count: usize) -> String {
+        use std::fmt::Write as _;
+        let mut document = String::new();
+        for index in 0..count {
+            writeln!(
+                document,
+                "<http://example.org/s> <http://example.org/p{index}> <http://example.org/o> ."
+            )
+            .expect("a `String` is infallible to write to");
+        }
+        document
+    }
+
+    /// A conclusion of 25 000 triples is DECIDED — and decided correctly.
+    ///
+    /// One level of the homomorphism search is one conclusion triple, so this is a search
+    /// 25 000 levels deep. Native call frames held roughly seven thousand of them on an
+    /// 8 MiB stack and about eight times fewer on `wasm32`'s 1 MiB, so every one of the
+    /// three questions below aborted the process before this check existed.
+    #[test]
+    fn a_large_conclusion_is_decided_rather_than_overflowing_the_stack() {
+        let premise = wide_ground_graph(25_000);
+
+        // Entailed: a graph entails itself, and saying so requires mapping all 25 000.
+        let self_entailment = premise.clone();
+        let answer = on_the_smallest_stack(move || {
+            graph_entails_to_string("simple", &self_entailment.clone(), &self_entailment, &[])
+                .map(|decided| decided.answer().to_owned())
+        })
+        .expect("decides");
+        assert_eq!(answer, "mechanism strict-table\nentailment entailed\n");
+
+        // Not entailed: one triple the premise lacks, at the far end of the question, is
+        // diagnosed by name rather than lost — so the depth is walked, not truncated.
+        let with_a_gap = format!(
+            "{premise}<http://example.org/s> <http://example.org/absent> <http://example.org/o> .\n"
+        );
+        let (lhs, rhs) = (premise.clone(), with_a_gap);
+        let answer = on_the_smallest_stack(move || {
+            graph_entails_to_string("simple", &lhs, &rhs, &[])
+                .map(|decided| decided.answer().to_owned())
+        })
+        .expect("decides");
+        assert_eq!(
+            answer,
+            "mechanism strict-table\nentailment not-entailed\n\
+             miss closure lacks <http://example.org/s> <http://example.org/absent> \
+             <http://example.org/o>\n"
+        );
+
+        // Existential: ONE blank node has to carry all 25 000 edges, so the binding made at
+        // the first level must still hold at the last. A level-local mapping would answer
+        // `entailed` for the wrong reason; the reported binding is what rules that out.
+        let existential = premise.replace(
+            "<http://example.org/s> <http://example.org/p",
+            "_:b <http://example.org/p",
+        );
+        let answer = on_the_smallest_stack(move || {
+            graph_entails_to_string("simple", &premise, &existential, &[])
+                .map(|decided| decided.answer().to_owned())
+        })
+        .expect("decides");
+        assert_eq!(
+            answer,
+            "mechanism strict-table\nentailment entailed\n\
+             binding _:b <http://example.org/s>\n"
+        );
+    }
+
+    /// A disjunctive ABox with 3 000 individuals is DECIDED, not aborted.
+    ///
+    /// One level of the OWL-Direct hypertableau search is one `⊔`-rule application, so an
+    /// ontology stating one disjunction and 3 000 individuals under it is a search 3 000
+    /// levels deep. There is nothing pathological about that ontology, and the round cap is
+    /// no defence: it bounds derivation ROUNDS, and a level costs one.
+    #[test]
+    fn a_disjunctive_abox_is_decided_rather_than_overflowing_the_stack() {
+        let mut ontology = String::from(
+            "<http://example.org/C> <http://www.w3.org/2002/07/owl#unionOf> _:l1 .\n\
+_:l1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://example.org/A> .\n\
+_:l1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> _:l2 .\n\
+_:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://example.org/B> .\n\
+_:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .\n",
+        );
+        ontology.extend((0..3_000).map(|index| {
+            format!(
+                "<http://example.org/x{index}> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .\n"
+            )
+        }));
+        let answer = on_the_smallest_stack(move || {
+            consistency_to_string(&ontology, 0).map(|decided| decided.answer().to_owned())
+        })
+        .expect("decides");
+        // Nothing in the ontology is contradictory: `A ⊔ B` is satisfied by choosing `A`
+        // for every individual, so the verdict is `true` and not merely "no abort".
+        assert_eq!(answer, "consistency true\n");
+    }
+
+    /// A class expression or data range that nests without end is a REFUSAL by name.
+    ///
+    /// Unlike the two searches above, nesting depth here is also the depth of the `Concept`
+    /// (or `DataRange`) tree the parser builds, and that tree's `Drop`, `Clone` and
+    /// negation-normalization each walk it recursively in turn. The bound therefore lives
+    /// where the tree is built — no over-deep tree is ever constructed — and exceeding it is
+    /// an error every host propagates rather than an abort no host survives.
+    #[test]
+    fn an_endlessly_nested_expression_is_refused_by_name() {
+        use std::fmt::Write as _;
+        // A chain of `owl:complementOf`, one level per triple.
+        let mut chain = String::new();
+        for index in 0..2_000 {
+            writeln!(
+                chain,
+                "_:c{index} <http://www.w3.org/2002/07/owl#complementOf> _:c{} .",
+                index + 1
+            )
+            .expect("a `String` is infallible to write to");
+        }
+        chain.push_str(
+            "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> _:c0 .\n",
+        );
+        let refused = on_the_smallest_stack(move || consistency_to_string(&chain, 0))
+            .expect_err("a 2 000-deep class expression is past the ceiling");
+        assert!(refused.contains("nests deeper than 256"), "{refused}");
+
+        // A CYCLIC data range is four lines long and used to abort the process outright:
+        // the data-range decoder had no cycle guard at all.
+        let cycle = "_:a <http://www.w3.org/2002/07/owl#datatypeComplementOf> _:b .\n\
+_:b <http://www.w3.org/2002/07/owl#datatypeComplementOf> _:a .\n\
+<http://example.org/p> <http://www.w3.org/2000/01/rdf-schema#range> _:a .\n\
+<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .\n";
+        let refused = on_the_smallest_stack(move || consistency_to_string(cycle, 0))
+            .expect_err("a data range cannot be its own complement");
+        assert!(refused.contains("cyclic OWL data range"), "{refused}");
+    }
 }

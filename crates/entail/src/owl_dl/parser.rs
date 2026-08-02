@@ -48,6 +48,23 @@
 //!
 //! Every extraction is deterministic (all indices are `BTreeMap`/insertion-ordered
 //! `Vec`s).
+//!
+//! # How deep an expression may nest, and why there is a limit at all
+//!
+//! A class expression's nesting depth is a property of the DOCUMENT, not of the vocabulary:
+//! `_:c0 owl:complementOf _:c1 . _:c1 owl:complementOf _:c2 . …` nests once per triple, and
+//! a data range does the same through `owl:datatypeComplementOf`. [`CeExtractor`] decodes
+//! that structure recursively, and — this is the part a depth-free reading misses — what it
+//! decodes it INTO is a [`Concept`] (or [`DataRange`]) tree of the same depth, whose `Drop`,
+//! `Clone`, [`Concept::nnf`] and interning all walk it recursively in turn. An unbounded
+//! nesting is therefore not one recursion to make iterative but a family of them, one of
+//! which is the destructor.
+//!
+//! So the depth is bounded where the tree is BUILT, by [`MAX_EXPRESSION_DEPTH`]: no
+//! over-deep tree is ever constructed, and every consumer of one is protected by the same
+//! single check. Exceeding it is an [`EntailError::Parse`] — a refusal every host already
+//! propagates — rather than a stack overflow, which is not a refusal at all: the process
+//! aborts, nothing unwinds, and a host embedding this library dies with it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -82,6 +99,20 @@ use crate::vocab::{
     XSD_MAXINCLUSIVE, XSD_MAXLENGTH, XSD_MINEXCLUSIVE, XSD_MININCLUSIVE, XSD_MINLENGTH, XSD_NS,
     XSD_PATTERN,
 };
+
+/// How deeply a class expression or a data range may nest before the parser refuses.
+///
+/// MEASURED rather than guessed, and measured on the SMALLEST stack this library runs on —
+/// `wasm32`'s 1 MiB, an eighth of a native thread's default. Driving the whole OWL-Direct
+/// pipeline (parse, negation-normalize, intern, decide, drop) over an `owl:complementOf`
+/// chain under a 1 MiB rlimit completed at 1600 levels and aborted at 2400, in both a debug
+/// and a release build. This ceiling is a factor of six below the shallower of those two
+/// figures, so the refusal arrives with the stack still nearly untouched.
+///
+/// It costs no expressible ontology: OWL 2's own RDF mapping nests a class expression once
+/// per operator, and the deepest published ontologies nest tens of levels, not hundreds.
+/// This crate's sibling bound on RDF 1.2 triple-term nesting is 16.
+pub(crate) const MAX_EXPRESSION_DEPTH: usize = 256;
 
 /// Which constraining facet a predicate of an `owl:withRestrictions` list cell states.
 ///
@@ -406,10 +437,19 @@ impl<'a> CeExtractor<'a> {
     ///
     /// # Errors
     ///
-    /// [`EntailError::Parse`] on a malformed class-expression graph.
+    /// [`EntailError::Parse`] on a malformed class-expression graph, on a cyclic one, and on
+    /// one nesting past [`MAX_EXPRESSION_DEPTH`].
     pub(crate) fn expr(&mut self, node: u32) -> Result<Concept, EntailError> {
         if let Some(c) = self.expr_cache.get(&node) {
             return Ok(c.clone());
+        }
+        // `in_progress` holds exactly the nodes on the path from the outermost expression to
+        // this one — inserted on entry, removed on the way out — so its size IS the current
+        // nesting depth. See this module's *How deep an expression may nest*.
+        if self.in_progress.len() >= MAX_EXPRESSION_DEPTH {
+            return Err(EntailError::Parse(format!(
+                "OWL class expression nests deeper than {MAX_EXPRESSION_DEPTH}"
+            )));
         }
         if !self.in_progress.insert(node) {
             return Err(EntailError::Parse("cyclic OWL class expression".to_owned()));
@@ -443,7 +483,7 @@ impl<'a> CeExtractor<'a> {
         // (`owl:intersectionOf`, `owl:unionOf`, `owl:oneOf`) is spelled the same way in both
         // domains and only the datatype typing tells them apart.
         if self.is_data_range(node)? {
-            let range = self.data_range(node)?;
+            let range = self.data_range(node, &mut Vec::new())?;
             let id = self.ranges.intern(range);
             return Ok(Concept::Data(id));
         }
@@ -534,10 +574,36 @@ impl<'a> CeExtractor<'a> {
     /// reports the boundary. Reading it as anything narrower would let a dropped constraint
     /// invent an emptiness under a complement.
     ///
+    /// `path` is the chain of data-range nodes already open, outermost first — the same
+    /// role [`CeExtractor::expr`]'s `in_progress` plays, but carried as an argument because
+    /// data ranges are decoded through `&self`. It is what makes `_:a owl:datatypeComplementOf
+    /// _:b . _:b owl:datatypeComplementOf _:a .` — legal RDF, and four lines long — a refusal
+    /// rather than an unterminated descent.
+    ///
     /// # Errors
     ///
-    /// [`EntailError::Parse`] on a malformed collection in a data-range position.
-    fn data_range(&self, node: u32) -> Result<DataRange, EntailError> {
+    /// [`EntailError::Parse`] on a malformed collection in a data-range position, on a cyclic
+    /// data range, and on one nesting past [`MAX_EXPRESSION_DEPTH`].
+    fn data_range(&self, node: u32, path: &mut Vec<u32>) -> Result<DataRange, EntailError> {
+        if path.contains(&node) {
+            return Err(EntailError::Parse("cyclic OWL data range".to_owned()));
+        }
+        if path.len() >= MAX_EXPRESSION_DEPTH {
+            return Err(EntailError::Parse(format!(
+                "OWL data range nests deeper than {MAX_EXPRESSION_DEPTH}"
+            )));
+        }
+        path.push(node);
+        let decoded = self.data_range_inner(node, path);
+        path.pop();
+        decoded
+    }
+
+    /// [`data_range`](Self::data_range)'s body, with `node` already on `path`.
+    ///
+    /// Split out so that the guard above has exactly one place to push and pop, rather than
+    /// one per early return of a function that has eight.
+    fn data_range_inner(&self, node: u32, path: &mut Vec<u32>) -> Result<DataRange, EntailError> {
         if node == self.v.literal {
             return Ok(DataRange::Any);
         }
@@ -553,14 +619,14 @@ impl<'a> CeExtractor<'a> {
             return self.datatype_restriction(node, base);
         }
         if let Some(inner) = self.get(node, self.v.datatype_complement) {
-            let inner = self.data_range(inner)?;
+            let inner = self.data_range(inner, path)?;
             return Ok(DataRange::Not(Box::new(inner)));
         }
         if let Some(head) = self.get(node, self.v.intersection) {
-            return Ok(DataRange::And(self.data_range_list(head)?));
+            return Ok(DataRange::And(self.data_range_list(head, path)?));
         }
         if let Some(head) = self.get(node, self.v.union) {
-            return Ok(DataRange::Or(self.data_range_list(head)?));
+            return Ok(DataRange::Or(self.data_range_list(head, path)?));
         }
         if let Some(head) = self.get(node, self.v.one_of) {
             return self.data_one_of(head);
@@ -590,11 +656,15 @@ impl<'a> CeExtractor<'a> {
     }
 
     /// Walk an RDF list of data ranges.
-    fn data_range_list(&self, head: u32) -> Result<Vec<DataRange>, EntailError> {
+    fn data_range_list(
+        &self,
+        head: u32,
+        path: &mut Vec<u32>,
+    ) -> Result<Vec<DataRange>, EntailError> {
         let members = self.node_list(head)?;
         members
             .into_iter()
-            .map(|member| self.data_range(member))
+            .map(|member| self.data_range(member, path))
             .collect()
     }
 

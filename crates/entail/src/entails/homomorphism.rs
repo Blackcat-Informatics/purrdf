@@ -34,13 +34,32 @@
 //! verdict, because "I stopped looking" and "there is nothing to find" are different claims
 //! and only one of them is true.
 //!
+//! # Why the search carries its own stack
+//!
+//! One level of the search is one pattern of the question, so the search is as DEEP as the
+//! conclusion graph is large — a ten-thousand-triple conclusion is ten thousand levels. As
+//! call frames that is a stack overflow, which is not an error a caller can catch: the
+//! process aborts, nothing unwinds, and a host embedding this library dies with it. The
+//! budget is no defence, because it counts candidates rather than levels and a conclusion
+//! with distinct predicates costs one candidate per level.
+//!
+//! So the solver carries an explicit frame stack on the HEAP and the depth it can reach
+//! is a function of available memory rather than of a thread's stack rlimit — which differs
+//! by an order of magnitude between a native binary and `wasm32` and is not something a
+//! library can either read or raise. [`MATCH_BUDGET`] stays exactly what it was: the
+//! backstop against combinatorial blowup, reported as [`EntailError::MatchBudget`].
+//!
 //! # Determinism
 //!
 //! The index is a `BTreeMap` keyed by the predicate IRI, each bucket in the closure's own
 //! frozen order; patterns are visited in a stably-sorted, most-constrained-first order; and
 //! the trail undoes exactly the bindings an attempt introduced. Two runs over one closure
 //! and one question therefore visit the same candidates in the same order and return the
-//! same binding — the FIRST one in that order, not an arbitrary one.
+//! same binding — the FIRST one in that order, not an arbitrary one. The frame stack is
+//! the call stack written down, so it visits that same order: a frame's candidates are
+//! enumerated when the frame is pushed (against the bindings in force at that moment), a
+//! child is explored to exhaustion before its parent advances, and the budget is spent one
+//! unit per candidate in the order the candidates are reached.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -235,57 +254,172 @@ enum Collect<'a> {
     },
 }
 
-/// Solve `pats[i..]` against `index`, backtracking over variable bindings.
+/// Record the solution `bound` reached, if the caller asked to see it.
+///
+/// Every variable of the question is bound at a complete solution, so the row is total; a
+/// projected variable that no pattern mentions cannot exist, because `projected_vars` reads
+/// the names out of the patterns themselves.
+fn record(collect: &mut Collect<'_>, bound: &Binding) {
+    if let Collect::All { vars, rows } = collect {
+        let row = vars
+            .iter()
+            .map(|var| {
+                bound.get(var).cloned().expect(
+                    "a projected variable is read out of the patterns themselves, and every \
+                     pattern is unified at a complete solution",
+                )
+            })
+            .collect();
+        rows.insert(row);
+    }
+}
+
+/// One level of the search: one pattern, and where its enumeration has got to.
+///
+/// This is the state a call frame of the recursive form held implicitly — the candidate
+/// iterator, the trail of the attempt in flight, and whether anything below has succeeded —
+/// written down so the stack it lives on is the heap.
+struct Frame<'a> {
+    /// The pattern this level consumes, as an index into the solver's pattern list.
+    pattern: usize,
+    /// The buckets this level's candidates come from, fixed when the frame was pushed.
+    buckets: Buckets<'a>,
+    /// The remainder of the bucket currently being walked.
+    bucket: std::slice::Iter<'a, Triple>,
+    /// The bindings the attempt in flight introduced, to be undone when it is abandoned.
+    ///
+    /// Reused across this frame's attempts rather than reallocated per candidate, which is
+    /// what a `Vec` local to the loop body was.
+    trail: Vec<VarKey>,
+    /// Whether any attempt at this level has reached a complete solution.
+    found: bool,
+}
+
+impl<'a> Frame<'a> {
+    /// A frame for `pattern`, drawing candidates from `buckets`.
+    fn new(pattern: usize, buckets: Buckets<'a>) -> Self {
+        Self {
+            pattern,
+            buckets,
+            bucket: [].iter(),
+            trail: Vec::new(),
+            found: false,
+        }
+    }
+
+    /// The next candidate at this level, walking into the next bucket when one runs out.
+    fn next_candidate(&mut self) -> Option<&'a Triple> {
+        loop {
+            if let Some(candidate) = self.bucket.next() {
+                return Some(candidate);
+            }
+            self.bucket = self.buckets.next()?.iter();
+        }
+    }
+}
+
+/// What the solver's loop does next, decided while the top frame is borrowed and acted on
+/// after that borrow ends — because acting on it may push a frame onto the same stack.
+enum Step<'a> {
+    /// Try this candidate against the top frame's pattern.
+    Try(&'a Triple),
+    /// The top frame has no candidates left; it reports this answer to its parent.
+    Exhausted(bool),
+}
+
+/// Solve `pats` against `index`, backtracking over variable bindings.
 ///
 /// Returns whether at least one solution was reached. Under [`Collect::All`] the search
 /// continues past the first, so the answer is "the row set is now complete" rather than
 /// "stop".
+///
+/// The search is depth-first with an explicit frame stack, in exactly the shape and order
+/// the recursive form had — see this module's *Why the search carries its own stack*.
+///
+/// # Errors
+///
+/// [`EntailError::MatchBudget`] when `budget` runs out before the search finishes.
 fn solve(
     pats: &[PatTriple],
     index: &Index,
-    i: usize,
     bound: &mut Binding,
     budget: &mut u64,
     collect: &mut Collect<'_>,
 ) -> Result<bool, EntailError> {
-    let Some(pat) = pats.get(i) else {
-        if let Collect::All { vars, rows } = collect {
-            // Every variable of the question is bound at a complete solution, so the row is
-            // total; a projected variable that no pattern mentions cannot exist, because
-            // `projected_vars` reads the names out of the patterns themselves.
-            let row = vars
-                .iter()
-                .map(|var| {
-                    bound.get(var).cloned().expect(
-                        "a projected variable is read out of the patterns themselves, and every \
-                         pattern is unified at a complete solution",
-                    )
-                })
-                .collect();
-            rows.insert(row);
-        }
+    // The empty question is satisfied by the empty mapping: there is nothing to place.
+    let Some(first) = pats.first() else {
+        record(collect, bound);
         return Ok(true);
     };
-    let mut found = false;
-    for bucket in candidates(pat, index, bound) {
-        for candidate in bucket {
-            *budget = budget.checked_sub(1).ok_or(EntailError::MatchBudget)?;
-            let mut trail = Vec::new();
-            let matched = try_unify(&pat[0], &candidate[0], bound, &mut trail)
-                && try_unify(&pat[1], &candidate[1], bound, &mut trail)
-                && try_unify(&pat[2], &candidate[2], bound, &mut trail);
-            if matched && solve(pats, index, i + 1, bound, budget, collect)? {
-                found = true;
-                if matches!(collect, Collect::First) {
-                    return Ok(true);
+    let mut stack = vec![Frame::new(0, candidates(first, index, bound))];
+    // The answer a just-finished level reported, waiting to be folded into its parent — the
+    // value the recursive form read straight out of its `solve(…)?` call.
+    let mut reported: Option<bool> = None;
+    loop {
+        let step = {
+            let frame = stack
+                .last_mut()
+                .expect("the loop returns as soon as the stack empties");
+            if let Some(below) = reported.take() {
+                if below {
+                    frame.found = true;
+                    if matches!(collect, Collect::First) {
+                        // The bindings of the winning attempt are the answer, so they are
+                        // deliberately left in place rather than undone.
+                        return Ok(true);
+                    }
+                }
+                for undo in frame.trail.drain(..) {
+                    bound.remove(&undo);
                 }
             }
-            for undo in trail {
+            match frame.next_candidate() {
+                Some(candidate) => Step::Try(candidate),
+                None => Step::Exhausted(frame.found),
+            }
+        };
+        let candidate = match step {
+            Step::Exhausted(found) => {
+                stack.pop();
+                if stack.is_empty() {
+                    return Ok(found);
+                }
+                reported = Some(found);
+                continue;
+            }
+            Step::Try(candidate) => candidate,
+        };
+        *budget = budget.checked_sub(1).ok_or(EntailError::MatchBudget)?;
+        let (pattern, matched) = {
+            let frame = stack
+                .last_mut()
+                .expect("the top frame is the one that produced this candidate");
+            let pat = &pats[frame.pattern];
+            frame.trail.clear();
+            let matched = try_unify(&pat[0], &candidate[0], bound, &mut frame.trail)
+                && try_unify(&pat[1], &candidate[1], bound, &mut frame.trail)
+                && try_unify(&pat[2], &candidate[2], bound, &mut frame.trail);
+            (frame.pattern, matched)
+        };
+        if !matched {
+            let frame = stack
+                .last_mut()
+                .expect("the top frame is the one that produced this candidate");
+            for undo in frame.trail.drain(..) {
                 bound.remove(&undo);
+            }
+            continue;
+        }
+        // Descend, or — with no pattern left to place — report the complete solution back
+        // into the frame that just made it complete.
+        match pats.get(pattern + 1) {
+            Some(next) => stack.push(Frame::new(pattern + 1, candidates(next, index, bound))),
+            None => {
+                record(collect, bound);
+                reported = Some(true);
             }
         }
     }
-    Ok(found)
 }
 
 /// Why a question did not map into a closure.
@@ -354,7 +488,6 @@ pub(crate) fn find_one(
     if solve(
         &pats,
         &closure.index,
-        0,
         &mut bound,
         &mut budget,
         &mut Collect::First,
@@ -371,7 +504,6 @@ pub(crate) fn find_one(
         if !solve(
             std::slice::from_ref(pat),
             &closure.index,
-            0,
             &mut solo_bound,
             &mut solo_budget,
             &mut Collect::First,
@@ -407,7 +539,6 @@ pub(crate) fn find_all(
     solve(
         &pats,
         &closure.index,
-        0,
         &mut bound,
         &mut budget,
         &mut Collect::All {
@@ -650,6 +781,116 @@ mod tests {
         assert_eq!(
             rows.into_iter().collect::<Vec<_>>(),
             vec![vec![iri("p")], vec![iri("q")]]
+        );
+    }
+
+    /// How many levels the depth tests below drive the search to.
+    ///
+    /// One level is one pattern, so this is a question of 25 000 triples. It is far past
+    /// the depth call frames could reach on any stack this library runs on — roughly seven
+    /// thousand on a native thread's 8 MiB, about eight times fewer on a `wasm32` module's
+    /// 1 MiB, and fewer again on the thread the test harness spawns — so a search that went
+    /// back to recursing would abort the process here rather than fail an assertion.
+    const DEPTH: usize = 25_000;
+
+    /// A closure of [`DEPTH`] triples, one per predicate `p0…`, all sharing `s` and `o`.
+    ///
+    /// Distinct predicates are the point: each index bucket holds exactly one candidate, so
+    /// the search spends one budget unit per level and `MATCH_BUDGET` — five million — is
+    /// nowhere near reached. The budget cannot stand in for a depth bound on this shape.
+    fn deep_closure() -> Closure {
+        Closure::of(
+            (0..DEPTH)
+                .map(|level| [iri("s"), iri(&format!("p{level}")), iri("o")])
+                .collect(),
+        )
+    }
+
+    /// [`DEPTH`] patterns matching [`deep_closure`], with `subject` in subject position.
+    fn deep_patterns(subject: &Pat) -> Vec<PatTriple> {
+        (0..DEPTH)
+            .map(|level| {
+                [
+                    subject.clone(),
+                    Pat::Ground(iri(&format!("p{level}"))),
+                    ground("o"),
+                ]
+            })
+            .collect()
+    }
+
+    /// A question is answered at a depth the call stack could not have held — CORRECTLY,
+    /// and in each of the three directions an answer can go.
+    ///
+    /// One level of the search is one triple of the question, so a large conclusion is a
+    /// deep search. Depth held in call frames is not an error a caller can catch: the
+    /// process aborts, nothing unwinds, and a host embedding this library dies with it.
+    #[test]
+    fn a_deep_question_is_answered_rather_than_overflowing_the_stack() {
+        let closure = deep_closure();
+
+        // Ground: every level is present, so the question maps.
+        assert!(matches(&closure, deep_patterns(&ground("s"))));
+
+        // Existential: ONE node has to carry all 25 000 edges, so the binding made at the
+        // first level must survive to the last — the mapping is not merely level-local.
+        let binding = find_one(deep_patterns(&blank("b")), &closure)
+            .expect("within budget")
+            .expect("one node carries every edge");
+        assert_eq!(
+            binding.get(&VarKey::Blank {
+                label: "b".to_owned(),
+                scope: BlankScope::DEFAULT,
+            }),
+            Some(&iri("s")),
+        );
+
+        // A miss at the deepest level is diagnosed, not lost: the diagnosis re-runs the
+        // search once per pattern, so it is 25 000 more searches.
+        let mut missing = deep_patterns(&ground("s"));
+        missing.push([ground("s"), ground("absent"), ground("o")]);
+        let Err(MissReason::NoCandidate(orphans)) =
+            find_one(missing, &closure).expect("within budget")
+        else {
+            panic!("the closure has no `absent` bucket at all");
+        };
+        assert_eq!(orphans, vec!["<s> <absent> <o>".to_owned()]);
+
+        // And enumeration reaches the same depth: one mapping, so one row.
+        let rows = find_all(
+            deep_patterns(&projected("x")),
+            &closure,
+            &[VarKey::Projected("x".to_owned())],
+        )
+        .expect("within budget");
+        assert_eq!(rows.into_iter().collect::<Vec<_>>(), vec![vec![iri("s")]]);
+    }
+
+    /// The budget is still the backstop against combinatorial blowup, and still an ERROR.
+    ///
+    /// Moving depth onto the heap removed a limit that was never a limit; it did not remove
+    /// the one that is. A question whose branching factor is large exhausts the budget and
+    /// says so, rather than returning "no" — "I stopped looking" is not "there is nothing".
+    #[test]
+    fn an_exploding_search_still_refuses_by_budget() {
+        // 60 subjects each carrying `p`, and a question of 60 patterns whose subjects are
+        // all distinct existentials over `p`: 60^60 mappings, none of which satisfies the
+        // final pattern, so the search cannot stop early. The final pattern carries a
+        // variable of its own so that `most_constrained_first` cannot hoist it to the front
+        // and end the search before it branches.
+        let closure = Closure::of(
+            (0..60)
+                .map(|node| [iri(&format!("s{node}")), iri("p"), iri("o")])
+                .collect(),
+        );
+        let mut pats: Vec<PatTriple> = (0..60)
+            .map(|slot| [blank(&format!("b{slot}")), ground("p"), ground("o")])
+            .collect();
+        pats.push([blank("last"), ground("absent"), ground("o")]);
+        let refused = find_one(pats, &closure).expect_err("the budget stops it");
+        assert!(
+            matches!(refused, crate::EntailError::MatchBudget),
+            "{refused}"
         );
     }
 
