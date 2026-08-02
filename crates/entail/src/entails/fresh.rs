@@ -107,6 +107,19 @@ impl FreshBlanks {
 ///
 /// Over EVERY graph and to any depth, because the question this answers is "could a name
 /// collide with something in here", and a triple term in a named graph is somewhere in here.
+///
+/// # "Any position" is [`term_positions`](crate::engine::term_positions), not `quads()`
+///
+/// A blank node can occur in a dataset and in NO quad of it: as the reifier of a reified
+/// triple, inside an annotation row, or as a declared named graph nobody put a quad in.
+/// Those positions are content — [`copy_into`](crate::engine::copy_into) carries all of
+/// them — so a label that occurs only there is a label that is TAKEN.
+///
+/// Missing one is not a cosmetic gap here. This set is the freshness hypothesis of
+/// [`freeze`](super::freeze)'s theorem on constants, and a "fresh" constant that already
+/// names the caller's reifier makes the derivation a statement about that reifier — which
+/// is exactly the unsoundness the [module docs](self) exist to rule out. So the survey is
+/// the same enumeration the copy writes, and cannot drift from it.
 pub(crate) fn labels_of(ds: &RdfDataset) -> BTreeSet<String> {
     fn walk(term: &TermValue, out: &mut BTreeSet<String>) {
         match term {
@@ -122,13 +135,8 @@ pub(crate) fn labels_of(ds: &RdfDataset) -> BTreeSet<String> {
         }
     }
     let mut out = BTreeSet::new();
-    for quad in ds.quads() {
-        for id in [Some(quad.s), Some(quad.p), Some(quad.o), quad.g]
-            .into_iter()
-            .flatten()
-        {
-            walk(&ds.term_value(id), &mut out);
-        }
+    for id in crate::engine::term_positions(ds) {
+        walk(&ds.term_value(id), &mut out);
     }
     out
 }
@@ -223,6 +231,65 @@ mod tests {
             panic!("a minted node is a blank node");
         };
         assert_ne!(label, format!("{FRESH_PREFIX}0"));
+    }
+
+    /// A LABEL IS TAKEN WHEREVER IT OCCURS, AND A QUAD IS NOT THE ONLY PLACE.
+    ///
+    /// This dataset has NO quad. Its three blank-node labels occur only as a reifier, only
+    /// as an annotation object, and only as a declared named graph — every one of them a
+    /// position [`copy_into`](crate::engine::copy_into) carries and a `quads()`-only survey
+    /// cannot see. A survey that missed them would report an empty label set and let
+    /// [`FreshBlanks`] mint a "fresh" constant that is one of the caller's own nodes.
+    #[test]
+    fn a_label_in_a_side_table_or_a_graph_declaration_is_collected() {
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("http://example.org/s");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri("http://example.org/o");
+        let triple = b.intern_triple(s, p, o);
+        let reifier = b.intern_blank("onlyReifier", BlankScope::DEFAULT);
+        b.push_reifier_in_graph(reifier, triple, None);
+        let annotated = b.intern_blank("onlyAnnotation", BlankScope::DEFAULT);
+        b.push_annotation_in_graph(reifier, p, annotated, None);
+        let graph = b.intern_blank("onlyGraph", BlankScope::DEFAULT);
+        b.declare_named_graph(graph);
+        let ds = b.freeze().expect("freeze");
+        assert_eq!(ds.quads().count(), 0, "the fixture asserts no quad at all");
+
+        let labels = super::labels_of(&ds);
+        for expected in ["onlyReifier", "onlyAnnotation", "onlyGraph"] {
+            assert!(
+                labels.contains(expected),
+                "{expected} occurs in the dataset and must be collected: {labels:?}"
+            );
+        }
+    }
+
+    /// …and the consequence that makes it a SOUNDNESS fix rather than a tidy-up: a premise
+    /// whose reifier already carries the generator's prefix must push the generator off it,
+    /// exactly as a colliding quad subject does. Minting that label would have made
+    /// `freeze`'s constant one of the premise's own nodes, and the theorem on constants has
+    /// its non-occurrence as a hypothesis.
+    #[test]
+    fn a_colliding_label_in_a_reifier_position_lengthens_the_prefix() {
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("http://example.org/s");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri("http://example.org/o");
+        let triple = b.intern_triple(s, p, o);
+        let reifier = b.intern_blank(&format!("{FRESH_PREFIX}0"), BlankScope::DEFAULT);
+        b.push_reifier_in_graph(reifier, triple, None);
+        let ds = b.freeze().expect("freeze");
+
+        let mut fresh = FreshBlanks::avoiding(&[&ds]);
+        let TermValue::Blank { label, .. } = fresh.mint() else {
+            panic!("a minted node is a blank node");
+        };
+        assert_ne!(
+            label,
+            format!("{FRESH_PREFIX}0"),
+            "a reifier's label is taken, so the generator must not mint it"
+        );
     }
 
     /// The re-check sees a blank node at any depth, triple terms included.

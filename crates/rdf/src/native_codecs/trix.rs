@@ -27,6 +27,7 @@ use super::media_type::NativeRdfFormat;
 use super::parse::{FoldNode, FoldRow, RDF_REIFIES, fold_statement_layer};
 use super::ser_model::{SerGraph, SerTerm, SerTermKind};
 use super::text_parse::LineParseMode;
+use crate::nesting::guard_xml_nesting;
 use crate::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId};
 
 /// The TriX codec: a standalone (non-line-family) [`RdfCodec`] over the "Triples in XML"
@@ -75,6 +76,13 @@ enum TrixTerm {
 
 /// Parse TriX `text` into a frozen [`RdfDataset`].
 pub(super) fn parse_trix_to_dataset(text: &str) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    // TriX's own shape is flat, but `roxmltree`'s tokenizer recursion is not: it aborts the
+    // process on a deeply nested document before this function sees a tree.
+    guard_xml_nesting(text).map_err(|depth| {
+        parse_err(format!(
+            "element nesting reaches {depth} levels, past the parser limit"
+        ))
+    })?;
     let document = Document::parse(text).map_err(|e| parse_err(e.to_string()))?;
     let root = document.root_element();
     if !is_trix(root, "TriX") {

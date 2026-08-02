@@ -40,7 +40,7 @@ BINARYEN_VERSION := 130
 # nine OWL reasoner services, the concrete domain AND the conclusion-directed
 # entailment service with its seven mechanisms and its caller-supplied import
 # map — measures
-# 9_760_099 bytes against the 12_112_500 ceiling, which is 19.421% headroom. That
+# 9_765_497 bytes against the 12_112_500 ceiling, which is 19.377% headroom. That
 # figure is recorded below (WASM_SIZE_MEASURED_BYTES) and REPORTED rather than
 # enforced; the ceiling is the check that fails.
 #
@@ -227,8 +227,19 @@ WASM_SIZE_BUDGET_BYTES := 12112500
 # their loops, which cost more instructions than the recursion they replace; it buys the
 # ability to answer questions the artifact previously aborted on.
 #
+# The increase 9_760_099 -> 9_765_497 is the text and XML parse front ends learning to
+# refuse a nesting depth instead of dying of one. Every text grammar here nests without
+# limit on paper and reads that nesting with recursion, so an input was an instruction
+# about how much stack to burn: twenty thousand nested quoted triple terms in one
+# N-Triples line, or twenty thousand nested `rdf:Description` elements, aborted the
+# process. The cost is a depth parameter threaded through the recursive-descent term
+# grammar, a source-level element-nesting scan in front of the XML tokenizer (whose own
+# recursion is in a dependency and cannot be bounded from here), and an explicit work
+# stack for XML-literal canonicalization. It buys documents that used to kill the host
+# returning an ordinary located diagnostic.
+#
 # The measured constant below is the CURRENT size, not any intermediate figure.
-WASM_SIZE_MEASURED_BYTES := 9760099
+WASM_SIZE_MEASURED_BYTES := 9765497
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'

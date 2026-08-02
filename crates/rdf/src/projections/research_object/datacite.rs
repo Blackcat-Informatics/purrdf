@@ -397,6 +397,14 @@ fn parse_datacite(
         )
         .at_path(DATACITE_ARTIFACT));
     }
+    // `roxmltree`'s tokenizer recurses once per element, so a deeply nested document aborts
+    // the process rather than returning an error. The nesting is measured first and refused.
+    crate::nesting::guard_xml_nesting(text).map_err(|depth| {
+        ProjectionError::syntax(format!(
+            "DataCite XML nests {depth} elements deep, past the parser limit"
+        ))
+        .at_path(DATACITE_ARTIFACT)
+    })?;
     let document = Document::parse(text).map_err(|error| {
         ProjectionError::syntax(format!("parse DataCite XML: {error}")).at_path(DATACITE_ARTIFACT)
     })?;

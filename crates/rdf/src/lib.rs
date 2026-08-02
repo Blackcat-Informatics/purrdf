@@ -93,6 +93,10 @@ pub mod gts_dict_vectors;
 pub mod turtle_normalize;
 /// Statement-centric RDF 1.2 visualization projection and SVG export support.
 pub mod viz;
+// How deep an input document may nest, and the two places that is enforced. Internal: a
+// caller cannot raise or lower it, because every consumer gets the one portability and
+// denial-of-service envelope.
+mod nesting;
 
 // Mirror the kernel's root-level re-exports so `purrdf::RdfTerm`,
 // `purrdf::RdfDiagnostic`, … keep resolving exactly as before. The two

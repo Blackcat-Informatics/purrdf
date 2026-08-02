@@ -196,13 +196,16 @@ fn imported_iris(ds: &RdfDataset) -> Vec<String> {
 }
 
 /// The highest blank-node scope `ds` uses, so imported documents can be placed above it.
+///
+/// The survey is over [`term_positions`](crate::engine::term_positions) — every position
+/// the merge below WRITES — and not over `quads()` alone. A premise may carry a blank node
+/// that occurs only as a reifier, only inside an annotation, or only as a declared named
+/// graph; a scope survey blind to those three would report a maximum BELOW a scope the
+/// premise actually uses, and the very next imported document would be rescoped on top of
+/// it. Standardize-apart (see the [module docs](self)) is then false in the direction that
+/// matters: two documents' blank nodes would be the same term.
 fn max_scope(ds: &RdfDataset) -> u32 {
-    ds.quads()
-        .flat_map(|quad| {
-            [Some(quad.s), Some(quad.p), Some(quad.o), quad.g]
-                .into_iter()
-                .flatten()
-        })
+    crate::engine::term_positions(ds)
         .map(|id| scope_of(&ds.term_value(id)))
         .max()
         .unwrap_or(0)
@@ -596,6 +599,65 @@ mod tests {
         let (_, plain) = materialize(&premise_graph(false), Materialization::OwlRl)
             .expect("a closure over an import-free premise");
         assert_eq!(certificate.report().completeness(), plain.completeness());
+    }
+
+    /// A PREMISE BLANK NODE IN NO QUAD IS STILL A PREMISE BLANK NODE.
+    ///
+    /// The premise's every quad is all-IRI; its only blank node is a REIFIER, at
+    /// `BlankScope(1)`. A scope survey that read `quads()` alone therefore reported a
+    /// maximum of 0, allocated the first imported document `BlankScope(1)`, and rescoped the
+    /// imported `_:r` onto the premise's reifier — one term where the two documents named
+    /// two, which is precisely the standardize-apart guarantee the module docs state.
+    ///
+    /// The assertion is over the merged dataset's whole term space rather than its quads,
+    /// for the same reason the bug existed: the colliding term is in a side table.
+    #[test]
+    fn a_premise_blank_node_that_occurs_only_as_a_reifier_is_not_overwritten() {
+        // The premise: two all-IRI quads, `_:r` reifying one of them at `BlankScope(1)`,
+        // and an `owl:imports`.
+        let premise = {
+            let mut b = RdfDatasetBuilder::new();
+            let s = b.intern_iri("http://example.org/s");
+            let p = b.intern_iri("http://example.org/p");
+            let o = b.intern_iri("http://example.org/o");
+            b.push_quad(s, p, o, None);
+            let ontology = b.intern_iri("http://example.org/self");
+            let imports = b.intern_iri(OWL_IMPORTS);
+            let target = b.intern_iri("http://example.org/a");
+            b.push_quad(ontology, imports, target, None);
+            let triple = b.intern_triple(s, p, o);
+            let reifier = b.intern_blank("r", BlankScope(1));
+            b.push_reifier_in_graph(reifier, triple, None);
+            b.freeze().expect("freeze")
+        };
+
+        // The imported document names its own `_:r`, in the DEFAULT scope.
+        let mut map = ImportMap::new();
+        map.insert(
+            "http://example.org/a",
+            document("r", "http://example.org/a-said", &[]),
+        );
+
+        let merged = resolve(&premise, &map)
+            .expect("every import resolves")
+            .expect("the premise imports something");
+        let mut scopes: Vec<u32> = crate::engine::term_positions(&merged)
+            .filter_map(|id| match merged.term_value(id) {
+                TermValue::Blank { label, scope } if label == "r" => Some(scope.ordinal()),
+                _ => None,
+            })
+            .collect();
+        scopes.sort_unstable();
+        scopes.dedup();
+        assert_eq!(
+            scopes.len(),
+            2,
+            "the premise's reifier and the imported document's `_:r` are two nodes, not one: {scopes:?}"
+        );
+        assert!(
+            scopes.contains(&1),
+            "the premise's own scope must survive the merge unmoved: {scopes:?}"
+        );
     }
 
     #[test]

@@ -89,7 +89,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
+use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermId, TermValue};
 use purrdf_datalog::cache::PlanCache;
 use purrdf_datalog::chase::chase;
 use purrdf_datalog::clause::{ClauseTerm, DlClause, HeadForm};
@@ -185,6 +185,48 @@ pub(crate) fn copy_into(b: &mut RdfDatasetBuilder, ds: &RdfDataset) {
         let graph = intern_into(b, &ds.term_value(graph));
         b.declare_named_graph(graph);
     }
+}
+
+/// Every term id `ds` holds, in EVERY position [`copy_into`] writes.
+///
+/// # Why this is one function and not a survey per caller
+///
+/// A dataset's content is not its quads. A reifier, an annotation and a declared named
+/// graph each name terms that occur in no quad at all, and [`copy_into`] carries all four
+/// tables because dropping any of them would silently delete part of a caller's data.
+///
+/// Anything that has to REASON about the whole term space — "what is the highest blank-node
+/// scope in here", "which blank-node labels are taken" — has to survey the same four
+/// tables, and a survey that read only `quads()` would be right about every dataset whose
+/// side tables happen to mention nothing new and wrong about the ones that do. Both such
+/// surveys previously carried that bug independently, so the enumeration lives HERE, beside
+/// the copy whose coverage it has to match: a position added to [`copy_into`] and not to
+/// this iterator is a visible omission in one file rather than a silent one in three.
+///
+/// Ids repeat (the same term occurs in many positions) and triple terms are NOT unfolded —
+/// a caller that cares about nesting resolves the id and walks the [`TermValue`] itself.
+pub(crate) fn term_positions(ds: &RdfDataset) -> impl Iterator<Item = TermId> + '_ {
+    let quads = ds.quads().flat_map(|quad| {
+        [Some(quad.s), Some(quad.p), Some(quad.o), quad.g]
+            .into_iter()
+            .flatten()
+    });
+    let reifiers = ds
+        .reifiers_with_graph()
+        .flat_map(|(reifier, triple, graph)| {
+            [Some(reifier), Some(triple), graph].into_iter().flatten()
+        });
+    let annotations =
+        ds.annotations_with_graph()
+            .flat_map(|(reifier, predicate, object, graph)| {
+                [Some(reifier), Some(predicate), Some(object), graph]
+                    .into_iter()
+                    .flatten()
+            });
+    quads
+        .chain(reifiers)
+        .chain(annotations)
+        .chain(ds.named_graphs())
 }
 
 /// Close `ds` under `regime`'s declared calculus and emit `original + inferred`.
@@ -381,7 +423,7 @@ struct GraphRun {
 }
 
 /// Push `conclusion` into `b`, in `graph`.
-fn emit(b: &mut RdfDatasetBuilder, conclusion: &Conclusion, graph: Option<purrdf_core::TermId>) {
+fn emit(b: &mut RdfDatasetBuilder, conclusion: &Conclusion, graph: Option<TermId>) {
     let s = intern_into(b, &conclusion.subject);
     let p = intern_into(b, &conclusion.predicate);
     let o = intern_into(b, &conclusion.object);

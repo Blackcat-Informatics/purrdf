@@ -45,6 +45,7 @@ use super::codec::RdfCodec;
 use super::parse::{FoldNode, FoldRow, RDF_REIFIES as RDF_REIFIES_IRI, fold_statement_layer};
 use super::ser_model::{SerGraph, SerTerm, SerTermKind, deterministic_blank_label_with_prefix};
 use super::text_parse::LineParseMode;
+use crate::nesting::guard_xml_nesting;
 use crate::{
     BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, RdfTextDirection, TermId,
 };
@@ -171,6 +172,15 @@ pub(super) fn parse_rdfxml_to_dataset(
     text: &str,
     base_iri: Option<&str>,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    // `roxmltree`'s tokenizer recurses once per element and aborts the process on a deeply
+    // nested document, so the nesting is measured on the SOURCE and refused here. This is
+    // also what bounds the walk below: the tree it descends came from this very call, so its
+    // element nesting is bounded and it needs no depth counter of its own.
+    guard_xml_nesting(text).map_err(|depth| {
+        parse_err(format!(
+            "element nesting reaches {depth} levels, past the parser limit"
+        ))
+    })?;
     let document = Document::parse(text).map_err(|e| parse_err(e.to_string()))?;
     let mut parser = RdfXmlParser {
         rows: Vec::new(),
@@ -997,45 +1007,80 @@ fn serialize_children_as_xml(element: Node<'_, '_>) -> String {
     out
 }
 
+/// One step of the XML-literal walk: an element/text node still to be written, or the end
+/// tag owed to an element whose start tag is already out.
+enum XmlLiteralStep<'a, 'input> {
+    /// Write this node. The flag is set only for the literal's apex, which is the one
+    /// element that renders the in-scope namespace declarations.
+    Open(Node<'a, 'input>, bool),
+    /// Close the element whose raw (prefixed) name this is.
+    Close(String),
+}
+
+/// Append one node of an XML literal to `out` in canonical form.
+///
+/// # An explicit stack, because the content is arbitrary
+///
+/// The value of an `rdf:parseType="Literal"` property is OPAQUE: it is whatever XML the
+/// author put there, and it lowers to a single literal STRING — no part of it reaches the IR
+/// as structure, so nothing downstream bounds its depth and refusing a deep one would be a
+/// capability loss with nothing to justify it. Walking it recursively made the document's
+/// nesting the process's stack depth, which aborted on deep input. The work list below makes
+/// the depth a heap cost instead, so there is no bound to pick and no input to refuse.
+///
+/// Pre-order with an owed end tag reproduces the recursive walk's bytes exactly: children are
+/// pushed in reverse so they pop in document order, and the [`XmlLiteralStep::Close`] pushed
+/// before them pops after the whole subtree.
 fn serialize_xml_node(node: Node<'_, '_>, apex_ns: Option<&[(String, String)]>, out: &mut String) {
-    if node.is_text() {
-        if let Some(text) = node.text() {
-            out.push_str(&escape_xml_text(text));
+    let mut stack = vec![XmlLiteralStep::Open(node, true)];
+    while let Some(step) = stack.pop() {
+        let (node, is_apex) = match step {
+            XmlLiteralStep::Close(raw) => {
+                out.push_str("</");
+                out.push_str(&raw);
+                out.push('>');
+                continue;
+            }
+            XmlLiteralStep::Open(node, is_apex) => (node, is_apex),
+        };
+        if node.is_text() {
+            if let Some(text) = node.text() {
+                out.push_str(&escape_xml_text(text));
+            }
+            continue;
         }
-        return;
-    }
-    if !node.is_element() {
-        return;
-    }
-    let raw = raw_name(node);
-    out.push('<');
-    out.push_str(&raw);
-    if let Some(namespaces) = apex_ns {
-        for (prefix, iri) in namespaces {
-            if prefix.is_empty() {
-                let _ = write!(out, " xmlns=\"{}\"", escape_xml_attr(iri));
-            } else {
-                let _ = write!(out, " xmlns:{prefix}=\"{}\"", escape_xml_attr(iri));
+        if !node.is_element() {
+            continue;
+        }
+        let raw = raw_name(node);
+        out.push('<');
+        out.push_str(&raw);
+        if let Some(namespaces) = apex_ns.filter(|_| is_apex) {
+            for (prefix, iri) in namespaces {
+                if prefix.is_empty() {
+                    let _ = write!(out, " xmlns=\"{}\"", escape_xml_attr(iri));
+                } else {
+                    let _ = write!(out, " xmlns:{prefix}=\"{}\"", escape_xml_attr(iri));
+                }
             }
         }
-    }
-    for attr in node.attributes() {
-        out.push(' ');
-        out.push_str(&raw_attr_name(node, attr));
-        out.push_str("=\"");
-        out.push_str(&escape_xml_attr(attr.value()));
-        out.push('"');
-    }
-    // Canonical XML has no self-closing form: always emit a start/end pair.
-    out.push('>');
-    for child in node.children() {
-        if child.is_element() || child.is_text() {
-            serialize_xml_node(child, None, out);
+        for attr in node.attributes() {
+            out.push(' ');
+            out.push_str(&raw_attr_name(node, attr));
+            out.push_str("=\"");
+            out.push_str(&escape_xml_attr(attr.value()));
+            out.push('"');
         }
+        // Canonical XML has no self-closing form: always emit a start/end pair.
+        out.push('>');
+        stack.push(XmlLiteralStep::Close(raw));
+        stack.extend(
+            node.children()
+                .rev()
+                .filter(|child| child.is_element() || child.is_text())
+                .map(|child| XmlLiteralStep::Open(child, false)),
+        );
     }
-    out.push_str("</");
-    out.push_str(&raw);
-    out.push('>');
 }
 
 /// The raw (prefixed) element name as it would be written: `prefix:local` when the
@@ -1507,6 +1552,72 @@ mod tests {
     /// Parse RDF/XML straight into a frozen dataset, for assertions over quads.
     fn parse(text: &str, base: Option<&str>) -> Arc<RdfDataset> {
         parse_rdfxml_to_dataset(text, base).expect("parse rdf/xml")
+    }
+
+    /// A DEEP DOCUMENT IS A DIAGNOSTIC, NOT A DEAD PROCESS.
+    ///
+    /// Twenty thousand nested `rdf:Description` elements aborted the `purrdf` binary with
+    /// `SIGABRT`, and the overflow was inside `roxmltree`'s own `parse_content` ⇄
+    /// `parse_element` recursion — before any first-party code held a tree, and past what
+    /// `catch_unwind` can see. The guard therefore sits in front of `Document::parse`, and
+    /// this is the end-to-end proof that it does.
+    ///
+    /// An `rdf:parseType="Literal"` whose CONTENT is deeply nested is the second shape: its
+    /// canonicalization walked the subtree recursively, so it overflowed on XML the RDF
+    /// grammar never descends into. That walk is iterative now, and the same door guards the
+    /// tokenizer underneath it.
+    #[test]
+    fn a_deeply_nested_document_is_refused_rather_than_overflowing_the_stack() {
+        const DEPTH: usize = 20_000;
+        const HEAD: &str = "<?xml version=\"1.0\"?>\n<rdf:RDF \
+            xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" \
+            xmlns:ex=\"http://example.org/\">";
+
+        let striped = format!(
+            "{HEAD}<rdf:Description rdf:about=\"http://example.org/s\">{}{}</rdf:Description></rdf:RDF>",
+            "<ex:p><rdf:Description>".repeat(DEPTH),
+            "</rdf:Description></ex:p>".repeat(DEPTH),
+        );
+        let xml_literal = format!(
+            "{HEAD}<rdf:Description rdf:about=\"http://example.org/s\">\
+             <ex:p rdf:parseType=\"Literal\">{}x{}</ex:p></rdf:Description></rdf:RDF>",
+            "<a>".repeat(DEPTH),
+            "</a>".repeat(DEPTH),
+        );
+
+        for (name, text) in [("node striping", &striped), ("XML literal", &xml_literal)] {
+            let error = parse_rdfxml_to_dataset(text, None)
+                .err()
+                .unwrap_or_else(|| panic!("{name}: a 20 000-deep document must be refused"));
+            assert!(
+                error.message.contains("element nesting reaches"),
+                "{name}: the refusal must name the nesting, got: {}",
+                error.message
+            );
+        }
+    }
+
+    /// …AND ORDINARY RDF/XML IS UNTOUCHED. Node/property striping spends TWO elements per
+    /// RDF nesting level, so a document nested far past anything an author writes still has
+    /// to parse — a bound that cost real documents would be worse than the crash.
+    #[test]
+    fn ordinary_element_nesting_is_untouched_by_the_bound() {
+        const DEPTH: usize = 30;
+        let text = format!(
+            "<?xml version=\"1.0\"?>\n<rdf:RDF \
+             xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" \
+             xmlns:ex=\"http://example.org/\">\
+             <rdf:Description rdf:about=\"http://example.org/s\">{}\
+             <ex:leaf>x</ex:leaf>{}</rdf:Description></rdf:RDF>",
+            "<ex:p><rdf:Description>".repeat(DEPTH),
+            "</rdf:Description></ex:p>".repeat(DEPTH),
+        );
+        let dataset = parse(&text, None);
+        assert_eq!(
+            dataset.quads().count(),
+            DEPTH + 1,
+            "one triple per nesting level, plus the leaf"
+        );
     }
 
     /// Serialize a frozen dataset to RDF/XML through the native base-only egress (the
