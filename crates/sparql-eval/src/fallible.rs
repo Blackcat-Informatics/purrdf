@@ -40,6 +40,7 @@ impl<Evidence> CompleteSparqlResult<Evidence> {
 
 /// Failure of a query over a [`FallibleDatasetView`](purrdf_core::FallibleDatasetView).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FallibleSparqlError<OperationalError, Evidence> {
     /// Parsing or evaluation failed while the view itself remained operational.
     Query {

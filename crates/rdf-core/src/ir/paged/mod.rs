@@ -100,6 +100,7 @@ struct PageSlot {
 /// occurs on more than one page (G3). Naming both offending pages and the quad makes
 /// the refusal actionable.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum PagedFreezeError {
     /// A page could not be materialized by the provider.
     Page(PageFault),

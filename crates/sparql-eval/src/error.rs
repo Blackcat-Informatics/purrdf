@@ -13,6 +13,7 @@ use purrdf_sparql_algebra::ParseError;
 
 /// An error raised while evaluating a SPARQL query.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum EvalError {
     /// A query failed to parse in [`purrdf_sparql_algebra`]. Carries the rendered
     /// parse error.

@@ -243,11 +243,22 @@ pub(crate) fn literal_value(literal: &TermValue) -> Option<LiteralValue> {
         // merely beyond this crate's representable domain is NOT: the ontology is
         // well-formed and the value simply cannot be examined here.
         Err(XsdError::InvalidLexical { .. }) => LiteralValue::IllTyped,
+        // `XsdError` is `#[non_exhaustive]`, so a kind added in its own crate arrives here
+        // without a compile error. The two outcomes are NOT symmetric, and that decides the
+        // default: `IllTyped` asserts something about the CALLER's ontology — that the
+        // literal is malformed — while `Unmodelled` asserts something about THIS crate, that
+        // the value cannot be examined here. Only the second is true by construction of an
+        // error kind this match has never seen, so an unknown kind takes it.
+        //
+        // A new kind that really does mean ill-typed therefore reads as merely unexaminable
+        // until someone lists it above. That is the safe direction to be wrong in: it
+        // withholds a judgement rather than making a false one about data that may be fine.
         Err(
             XsdError::OutOfRange { .. }
             | XsdError::DivisionByZero { .. }
             | XsdError::TypeMismatch { .. },
         ) => LiteralValue::Unmodelled,
+        Err(_) => LiteralValue::Unmodelled,
     })
 }
 

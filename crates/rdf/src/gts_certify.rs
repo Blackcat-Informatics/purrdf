@@ -54,6 +54,7 @@ pub const POISON_BLANK_LIMIT: usize = 100_000;
 
 /// Errors from certificate authoring, verification, and (de)serialization.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum CertifyError {
     /// The compaction pipeline refused the input (`purrdf_gts::compact::CompactRefusedError`).
     Refused(String),

@@ -212,6 +212,7 @@ impl Default for SnapshotOptions {
 
 /// Errors raised by advanced writer construction.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum WriterError {
     /// Invalid caller options.
     InvalidFrame(String),

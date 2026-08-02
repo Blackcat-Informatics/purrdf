@@ -190,6 +190,7 @@ fn flags_to_capabilities(flags: u32) -> RdfStoreCapabilities {
 
 /// Why building or opening a pack container failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PackError {
     /// The buffer's leading 8 bytes are not `MAGIC`.
     BadMagic,

@@ -14,6 +14,7 @@ use std::fmt;
 
 /// Errors produced while serializing a SPARQL result.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Error {
     /// A result value violated an invariant the serializer relies on (for
     /// example a triple-term predicate that is not an IRI). Carries a

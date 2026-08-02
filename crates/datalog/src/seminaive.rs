@@ -261,6 +261,7 @@ impl StepGovernor {
 /// Every variant is a hard refusal. There is no partial answer and no best-effort mode:
 /// an answer this crate returns is the complete least model of the program it was given.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum EvalError {
     /// A clause's head is existential, disjunctive, conjunctive or `false`, so it is not a
     /// Datalog rule and this evaluator has no semantics for it.

@@ -258,6 +258,7 @@ pub fn parse_by_iri(lexical: &str, datatype_iri: &str) -> Result<Option<XsdValue
 /// A failure to map a lexical form into the XSD value space. Malformed input is a
 /// hard error (never a silent default), per the project's no-optionality rule.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum XsdError {
     /// The lexical form is not valid for the target datatype.
     InvalidLexical {

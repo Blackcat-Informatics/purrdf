@@ -51,6 +51,7 @@ pub struct ResolvedBindings {
 /// A failure while resolving a `SERVICE` step. Whether it aborts the query or is
 /// swallowed is decided by `eval_service` from the `SILENT` flag, not here.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RemoteError {
     /// The endpoint was unreachable / the request failed at the transport layer.
     Transport(String),

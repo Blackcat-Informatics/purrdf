@@ -76,6 +76,7 @@ impl PagedQueryEvidence {
 
 /// The typed terminal error of a [`PagedQueryView`].
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PagedQueryError {
     /// The provider failed for an implementation-specific operational reason.
     Provider {

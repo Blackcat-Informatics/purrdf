@@ -147,6 +147,7 @@ impl Default for RecallOptions<'_> {
 
 /// Errors raised by the dependency-light example API.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum MemoryError {
     /// Reading or writing the package file failed.
     Io(std::io::Error),

@@ -111,6 +111,7 @@ const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 /// a mechanism to exist. A caller that reads one of these has been told, in data, which
 /// hypothesis of which theorem its input broke.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum UndecidedReason {
     /// `OWL-RL`: the premise is outside the OWL 2 RL syntax, so Theorem PR1's completeness
     /// half does not apply. Carries the syntactic violations, so the caller learns which

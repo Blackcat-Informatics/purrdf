@@ -239,6 +239,7 @@ pub enum Bound {
 /// updates), so an overflowing combine must hard-fail rather than silently change the
 /// Z-set it is maintaining.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum WeightError {
     /// A signed-weight addition left the `i64` ring.
     Overflow {

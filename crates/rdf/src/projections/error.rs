@@ -5,6 +5,7 @@ use std::fmt;
 
 /// Stable category for a projection failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ProjectionErrorKind {
     /// Mandatory configuration is absent, malformed, or contradictory.
     Configuration,

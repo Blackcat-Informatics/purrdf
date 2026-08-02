@@ -12,6 +12,7 @@ use core::fmt;
 
 /// Why an IRI/URI string (or a reference-resolution / CURIE operation) failed.
 #[derive(Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum IriError {
     /// The string is empty where a non-empty IRI/URI was required.
     Empty,

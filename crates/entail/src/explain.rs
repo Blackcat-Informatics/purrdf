@@ -97,6 +97,7 @@ use crate::{EntailError, Regime};
 /// back empty would be indistinguishable from "there is nothing to explain", which is the
 /// one thing a caller asking *why* must never be told by accident.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum ExplainError {
     /// The conclusion is neither asserted in the graph nor derived by the lane's closure.
     ///

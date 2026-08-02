@@ -12,6 +12,7 @@ use core::fmt;
 /// Why a ShExC or ShExJ document failed to parse into a
 /// [`crate::ast::Schema`].
 #[derive(Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ShexError {
     /// The ShExC byte stream could not be tokenized. Carries a human reason
     /// and the byte offset at which the lexer gave up.

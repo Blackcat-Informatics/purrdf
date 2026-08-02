@@ -619,6 +619,7 @@ pub enum VizElementKind {
 
 /// Visualization projection errors.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum VizError {
     /// The requested projection exceeds explicit size limits.
     TooLarge {

@@ -95,6 +95,7 @@ const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 
 /// Why decoding a [`SideTables`] byte buffer failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PackSideError {
     /// The buffer ended before all the bytes a header promised were present.
     Truncated {

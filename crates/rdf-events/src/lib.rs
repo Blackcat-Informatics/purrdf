@@ -362,6 +362,7 @@ impl SourceSpan {
 /// The **concrete** ingestion error type. Deliberately not generic: the seam stays
 /// object-safe and the error space is fixed by the protocol (see the module docs).
 #[derive(Clone, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum EventError {
     /// An [`EventTermId`] was declared more than once in one drive. Ids are
     /// drive-global, so a redeclaration anywhere — in any scope — is an error.

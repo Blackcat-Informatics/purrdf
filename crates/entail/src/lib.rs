@@ -290,6 +290,7 @@ impl Materialization<'_> {
 
 /// Why a closure could not be produced.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum EntailError {
     /// Building the derived dataset failed.
     Build(String),

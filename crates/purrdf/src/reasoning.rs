@@ -75,6 +75,7 @@ pub enum QueryEntailment<'a> {
 
 /// Failure from entailment-aware query preparation or evaluation.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ReasoningError {
     /// SPARQL parsing or evaluation failed.
     Query(RdfDiagnostic),

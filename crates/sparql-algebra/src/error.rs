@@ -21,6 +21,7 @@ use core::fmt;
 
 /// Why a SPARQL query string failed to parse into the algebra.
 #[derive(Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ParseError {
     /// Tokenization failed. Carries a human reason and the byte offset at which
     /// the lexer gave up.

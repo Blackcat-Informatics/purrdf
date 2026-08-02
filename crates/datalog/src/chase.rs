@@ -665,6 +665,7 @@ impl SkolemRegistry {
 /// best-effort mode: a [`ChaseOutcome`] this module returns is a complete universal model of
 /// the program it was given.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ChaseError {
     /// [`certify`] could not prove the program terminating.
     ///
