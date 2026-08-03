@@ -116,6 +116,18 @@ impl<D: DatasetView + Sync> PathCtx<'_, D> {
             .charge_point_if_engaged(crate::governor::ChargePoint::PathFrontierExpansion)
             .is_ok()
     }
+
+    /// Whether a governor has already stopped this execution, so that anything computed
+    /// from here on is a partial view of the graph rather than a finished one.
+    ///
+    /// One null test on an ungoverned traversal — which is every traversal that did not
+    /// ask for a budget — and one write-once cell read on a governed one.
+    #[inline]
+    fn stopped(&self) -> bool {
+        self.governors
+            .as_ref()
+            .is_some_and(|state| state.tripped().is_some())
+    }
 }
 
 /// Build a `NegatedCache` by walking `path` once and pre-resolving every
@@ -451,6 +463,17 @@ fn node_universe<D: DatasetView + Sync>(ctx: &PathCtx<'_, D>) -> BTreeSet<D::Id>
     out
 }
 
+/// The reachable-set memo in front of [`reach_uncached`], keyed by the path node's
+/// address, the start node, and the direction.
+///
+/// **A set the budget cut short is never memoized.** `closure`, `closure_multi` and
+/// `range_reach` all return the frontier reached so far when a governor stops them, and
+/// that partial set is a *lower* bound on the path relation, not the relation — writing it
+/// under this key would let a later lookup read it as though the traversal had finished.
+/// The write is therefore gated on the traversal having completed, which is the same rule
+/// [`crate::expr::exists`] applies to its inner-pattern memo, and it makes the memo's
+/// soundness local to this function rather than a consequence of trips being latched
+/// somewhere else.
 fn reach_cached<D: DatasetView + Sync>(
     path: &PropertyPathExpression,
     node: D::Id,
@@ -467,6 +490,9 @@ fn reach_cached<D: DatasetView + Sync>(
     }
 
     let result = Rc::new(reach_uncached(path, node, forward, ctx));
+    if ctx.stopped() {
+        return result;
+    }
     ctx.reach_cache.borrow_mut().insert(key, result.clone());
     result
 }
@@ -807,6 +833,37 @@ fn closure_multi<D: DatasetView + Sync>(
 /// (re-entrant per `k`), so a node reachable at multiple repetition counts is
 /// reported. `max == None` (`{n,}`) applies `inner` exactly `min` times then takes
 /// the `*`-closure of that frontier.
+///
+/// # Why this cannot iterate `max` times
+///
+/// `min` and `max` are `u32`, so reading the definition literally makes `p{4000000000,}`
+/// over a cyclic graph a four-billion-level breadth-first search: work bounded by the
+/// *query text* rather than by the data, which no caller can wait out and no budget can
+/// make correct — a budget turns a hang into a truncated answer, where the answer here is
+/// small, exact, and cheap to compute. Two identities bound the iteration by the **graph**
+/// instead. Write `S_k` for the set of nodes reachable in exactly `k` applications, so
+/// `S_{k+1} = step(S_k)` with `step(A) = ⋃_{y ∈ A} reach(y)`. `step` distributes over
+/// union (`step(A ∪ B) = step(A) ∪ step(B)`), which is what both arguments turn on.
+///
+/// 1. **At or above `min`, the first level that adds nothing is the last that could.**
+///    Let `A_k = ⋃_{j=min..k} S_j` be the accumulated output. If `S_k ⊆ A_{k-1}` then
+///    `S_{k+1} = step(S_k) ⊆ step(A_{k-1}) = ⋃_{j=min+1..k} S_j ⊆ A_k = A_{k-1}`, and the
+///    same step applies again to `S_{k+2}`, so *every* later level is already inside
+///    `A_{k-1}`. Each level that does not end the loop therefore contributes at least one
+///    node, and a level set holds only nodes of the graph — which is the reachable-node
+///    cap on the accumulating phase, derived rather than asserted.
+/// 2. **Below `min`, the level sequence is eventually periodic.** `step` is a
+///    deterministic function of the whole set, so a single repeat `S_a == S_b` (`a < b`)
+///    forces `S_{a+t} == S_{b+t}` for every `t`: from `a` on, the sequence cycles with
+///    period `b - a`. [`advance_to_min`] finds such a repeat with Brent's cycle detection
+///    — one saved frontier and one set comparison per level, never a second walk of the
+///    sequence — and then reaches `S_min` by advancing `(min - b) mod (b - a)` further
+///    levels instead of `min - b` of them.
+///
+/// Neither identity truncates a result. `p{n,m}` keeps exact multiset semantics; the
+/// levels not walked are proven to recompute sets the answer already holds. (`p*`/`p+`
+/// are a different shape: [`closure`]/[`closure_multi`] carry a visited-set guard and
+/// already terminate on a cyclic graph.)
 fn range_reach<D: DatasetView + Sync>(
     inner: &PropertyPathExpression,
     node: D::Id,
@@ -816,40 +873,159 @@ fn range_reach<D: DatasetView + Sync>(
     ctx: &PathCtx<'_, D>,
 ) -> BTreeSet<D::Id> {
     let mut out = BTreeSet::new();
-    // `current` = nodes reachable in exactly `k` applications; k starts at 0.
+    // An empty repetition window (`max < min`) admits no `k` at all.
+    if max.is_some_and(|m| m < min) {
+        return out;
+    }
+
+    // The prefix walk: reach level `min`. Levels below it contribute nothing to the
+    // output, so a
+    // frontier that dies on the way there (or a budget that stops the walk) leaves the
+    // whole range empty — no level at or above `min` is reachable either.
     let mut current: BTreeSet<D::Id> = BTreeSet::from([node]);
-    for k in 0u32.. {
-        if k >= min {
-            out.extend(current.iter().copied());
-        }
+    if !advance_to_min(inner, &mut current, forward, min, ctx) {
+        return out;
+    }
+
+    // The accumulating walk: union the levels in `[min, max]`.
+    let mut level = min;
+    loop {
+        let before = out.len();
+        out.extend(current.iter().copied());
+        let grew = out.len() != before;
         match max {
-            Some(m) if k >= m => break,
-            None if k >= min => {
-                // Unbounded tail: `*`-close from the exactly-`min` frontier in a
-                // single joint traversal (avoids redundant per-seed re-traversal).
+            // The window closes at this level.
+            Some(m) if level >= m => break,
+            // Unbounded tail: `*`-close from the exactly-`min` frontier in a single joint
+            // traversal (avoids redundant per-seed re-traversal). Only ever reached at
+            // `level == min`, since this arm always breaks.
+            None => {
                 out.extend(closure_multi(inner, &current, forward, ctx));
                 break;
             }
             _ => {}
         }
-        if current.is_empty() {
-            break; // nothing further reachable; no higher level can add nodes
+        // Identity 1: this level contributed nothing, so no later level can either.
+        if !grew {
+            break;
         }
-        let mut next = BTreeSet::new();
-        for n in &current {
-            // The `path-frontier-expansion` charge point. A `{n,m}` range re-enters the
-            // same nodes at every repetition count by design, so this is the one loop in
-            // the evaluator whose iteration count is bounded by the repetition bounds
-            // rather than by the graph — and `min`/`max` are `u32`, so those bounds can
-            // be in the billions.
-            if !ctx.charge_frontier() {
-                return out;
-            }
-            next.extend(reach_cached(inner, *n, forward, ctx).iter().copied());
-        }
+        let Some(next) = step_level(inner, &current, forward, ctx) else {
+            return out;
+        };
         current = next;
+        level += 1;
     }
     out
+}
+
+/// Advance `current` from level 0 to level `min`, reporting whether a level-`min`
+/// frontier survives to accumulate.
+///
+/// `false` means the frontier emptied out — or the execution's budget stopped the walk —
+/// before level `min`, so no repetition count at or above `min` reaches anything.
+///
+/// Brent's cycle detection runs alongside the advance: `tortoise` is a frontier already
+/// seen, `lam` levels behind the live one, and `power` is the next milestone at which the
+/// tortoise jumps forward. It costs one saved frontier and one set comparison per level —
+/// the live sequence is walked once, never twice — and finds a repeat in
+/// `O(pre-period + period)` levels, which is a property of the graph rather than of
+/// `min`. See [`range_reach`] for why a repeat licenses skipping whole levels exactly.
+fn advance_to_min<D: DatasetView + Sync>(
+    inner: &PropertyPathExpression,
+    current: &mut BTreeSet<D::Id>,
+    forward: bool,
+    min: u32,
+    ctx: &PathCtx<'_, D>,
+) -> bool {
+    let mut tortoise = current.clone();
+    let mut power: u64 = 1;
+    let mut lam: u64 = 0;
+    let mut level: u32 = 0;
+
+    while level < min {
+        let Some(next) = step_level(inner, current, forward, ctx) else {
+            return false;
+        };
+        *current = next;
+        if current.is_empty() {
+            return false;
+        }
+        level += 1;
+        lam += 1;
+
+        if *current == tortoise {
+            // `S_{level - lam} == S_level`, so from level `level - lam` on the sequence
+            // has period `lam` and every level congruent to `level` modulo `lam` holds
+            // exactly this set. Walk out the residue only; the levels stepped over are
+            // proven equal to levels already stepped.
+            let skip = u64::from(min - level) % lam;
+            for _ in 0..skip {
+                let Some(next) = step_level(inner, current, forward, ctx) else {
+                    return false;
+                };
+                *current = next;
+            }
+            return !current.is_empty();
+        }
+        if lam == power {
+            tortoise.clone_from(current);
+            power = power.saturating_mul(2);
+            lam = 0;
+        }
+    }
+    !current.is_empty()
+}
+
+/// One frontier advance: the nodes reachable in one further application of `inner` from
+/// every node of `current`. `None` means the execution's budget stopped the walk
+/// mid-level, which every caller treats as "return what has been reached so far" — a
+/// partially expanded frontier reaches a subset of the truly reachable nodes.
+fn step_level<D: DatasetView + Sync>(
+    inner: &PropertyPathExpression,
+    current: &BTreeSet<D::Id>,
+    forward: bool,
+    ctx: &PathCtx<'_, D>,
+) -> Option<BTreeSet<D::Id>> {
+    note_level_advance();
+    let mut next = BTreeSet::new();
+    for n in current {
+        // The `path-frontier-expansion` charge point. A `{n,m}` range re-enters the same
+        // nodes at every repetition count by design, so the frontier expansion — not the
+        // level — is the quantity a budget bounds.
+        if !ctx.charge_frontier() {
+            return None;
+        }
+        next.extend(reach_cached(inner, *n, forward, ctx).iter().copied());
+    }
+    Some(next)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only instrumentation: the number of range-path frontier advances performed on
+    /// this thread since [`counting_level_advances`] last reset it.
+    static LEVEL_ADVANCES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Record one range-path frontier advance.
+///
+/// Compiled to nothing outside `cfg(test)`. The bound on [`range_reach`]'s level count is
+/// a structural property of the algorithm, and pinning a structural property by test needs
+/// a counter — a wall-clock timeout would only say "it finished on this machine today",
+/// which is exactly the assertion a regression can pass by being slow instead of infinite.
+#[inline]
+fn note_level_advance() {
+    #[cfg(test)]
+    LEVEL_ADVANCES.with(|advances| advances.set(advances.get().saturating_add(1)));
+}
+
+/// Run `body`, returning its value with the number of range-path frontier advances it
+/// performed on this thread.
+#[cfg(test)]
+fn counting_level_advances<T>(body: impl FnOnce() -> T) -> (T, u64) {
+    LEVEL_ADVANCES.with(|advances| advances.set(0));
+    let value = body();
+    (value, LEVEL_ADVANCES.with(std::cell::Cell::get))
 }
 
 #[cfg(test)]
@@ -1129,6 +1305,369 @@ mod tests {
             max: Some(4),
         };
         assert_eq!(reach_locals(&ds, &rng, "a", true), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn cyclic_graph_p_n_m_terminates_without_a_budget() {
+        // `min`/`max` are `u32`, so the levels a literal reading of `p{n,m}` would walk
+        // are bounded by the query text — billions of them over a graph with three nodes.
+        // No governor is engaged here on purpose: an ungoverned caller is every caller
+        // that has not opted in, and "the budget stops it" is not a fix for a hang.
+        //
+        // The bound is asserted by COUNTING frontier advances, never by a wall clock: a
+        // regression that reintroduces the level-per-`k` walk fails this deterministically
+        // on any machine, where a timeout would only report that today's machine was slow
+        // enough or fast enough.
+        let ds = graph_of(&[("a", "p", "b"), ("b", "p", "c"), ("c", "p", "a")]);
+        let rng = |min, max| PropertyPathExpression::Range {
+            inner: Box::new(named("p")),
+            min,
+            max,
+        };
+        let all = vec!["a".to_owned(), "b".to_owned(), "c".to_owned()];
+
+        // A huge `max`: the accumulating phase stops at the first level that adds no node
+        // the output already holds, so it walks at most one level per graph node.
+        let (locals, advances) =
+            counting_level_advances(|| reach_locals(&ds, &rng(0, Some(u32::MAX)), "a", true));
+        assert_eq!(locals, all);
+        assert!(
+            advances <= 4,
+            "a {{0,u32::MAX}} range over a 3-node cycle must stop within one level per \
+             node, walked {advances}"
+        );
+
+        // A huge `min` with an open tail: the prefix is skipped by periodicity, not
+        // walked.
+        let (locals, advances) =
+            counting_level_advances(|| reach_locals(&ds, &rng(4_000_000_000, None), "a", true));
+        assert_eq!(locals, all);
+        assert!(
+            advances <= 16,
+            "a {{4000000000,}} range over a 3-node cycle must detect the period instead \
+             of walking to it, walked {advances}"
+        );
+
+        // A huge `min` AND a huge `max`: both phases bounded at once.
+        let (locals, advances) = counting_level_advances(|| {
+            reach_locals(&ds, &rng(4_000_000_000, Some(u32::MAX)), "a", true)
+        });
+        assert_eq!(locals, all);
+        assert!(
+            advances <= 16,
+            "a {{4000000000,u32::MAX}} range over a 3-node cycle must bound both the \
+             prefix and the accumulation, walked {advances}"
+        );
+    }
+
+    #[test]
+    fn range_path_answers_are_unchanged_by_the_early_exit() {
+        // A governor may only change an outcome, never an answer — and the level bounds
+        // in `range_reach` are not a governor at all: they remove levels that provably
+        // recompute a set the answer already holds. The corpus below spans cyclic and
+        // acyclic shapes, ranges with and without a reachable fixpoint, `{0,k}`, `{n,}`,
+        // `{n,m}`, `n == m`, an empty window (`max < min`), and repetition counts far past
+        // any level the walk actually performs.
+        //
+        // Every expectation is computed BY HAND from the exact-`k` definition
+        // (`S_0 = {start}`, `S_{k+1} = step(S_k)`, answer = `⋃_{k ∈ [min,max]} S_k`), not
+        // captured from this implementation: a golden captured from the code under test
+        // agrees with it by construction, including when both are wrong.
+        struct Case {
+            edges: &'static [(&'static str, &'static str, &'static str)],
+            start: &'static str,
+            min: u32,
+            max: Option<u32>,
+            expected: &'static [&'static str],
+            why: &'static str,
+        }
+
+        // a → b → c → a.  S_k = {a},{b},{c} cycling with period 3.
+        const CYCLE3: &[(&str, &str, &str)] = &[("a", "p", "b"), ("b", "p", "c"), ("c", "p", "a")];
+        // a → b → c → d.  S_0..S_3 = {a},{b},{c},{d}; S_4 and beyond empty.
+        const CHAIN: &[(&str, &str, &str)] = &[("a", "p", "b"), ("b", "p", "c"), ("c", "p", "d")];
+        // x → x, x → y.  S_0 = {x}; S_k = {x,y} for every k ≥ 1 (a level-set fixpoint).
+        const SELF_LOOP: &[(&str, &str, &str)] = &[("x", "p", "x"), ("x", "p", "y")];
+        // a → x1..x5 and xi → x(i+1).  S_k = {x_k … x5} for 1 ≤ k ≤ 5; S_6 empty. The
+        // cumulative reachable set stops growing at level 1, but the LEVEL sets keep
+        // shrinking for four more levels — the shape that makes "stop when the cumulative
+        // union stops growing" an unsound rule and the accumulated-output rule a sound one.
+        const FAN: &[(&str, &str, &str)] = &[
+            ("a", "p", "x1"),
+            ("a", "p", "x2"),
+            ("a", "p", "x3"),
+            ("a", "p", "x4"),
+            ("a", "p", "x5"),
+            ("x1", "p", "x2"),
+            ("x2", "p", "x3"),
+            ("x3", "p", "x4"),
+            ("x4", "p", "x5"),
+        ];
+        // a ⇄ b, b → c.  S_0 = {a}; S_odd = {b}; S_even≥2 = {a,c} (period 2 from level 1).
+        const CYCLE2_TAIL: &[(&str, &str, &str)] =
+            &[("a", "p", "b"), ("b", "p", "a"), ("b", "p", "c")];
+
+        let corpus = [
+            Case {
+                edges: CYCLE3,
+                start: "a",
+                min: 0,
+                max: Some(0),
+                expected: &["a"],
+                why: "S_0 is the zero-length identity",
+            },
+            Case {
+                edges: CYCLE3,
+                start: "a",
+                min: 1,
+                max: Some(1),
+                expected: &["b"],
+                why: "S_1",
+            },
+            Case {
+                edges: CYCLE3,
+                start: "a",
+                min: 7,
+                max: Some(7),
+                expected: &["b"],
+                why: "7 mod 3 == 1, so S_7 == S_1",
+            },
+            Case {
+                edges: CYCLE3,
+                start: "a",
+                min: 4_000_000_000,
+                max: Some(4_000_000_000),
+                expected: &["b"],
+                why: "4000000000 mod 3 == 1, so S_4000000000 == S_1",
+            },
+            Case {
+                edges: CYCLE3,
+                start: "a",
+                min: 2,
+                max: Some(5),
+                expected: &["a", "b", "c"],
+                why: "S_2..S_5 covers every phase of the cycle",
+            },
+            Case {
+                edges: CYCLE3,
+                start: "a",
+                min: 4,
+                max: None,
+                expected: &["a", "b", "c"],
+                why: "the open tail of a cycle covers every phase",
+            },
+            Case {
+                edges: CYCLE3,
+                start: "a",
+                min: 0,
+                max: None,
+                expected: &["a", "b", "c"],
+                why: "{0,} is the reflexive-transitive closure",
+            },
+            Case {
+                edges: CYCLE3,
+                start: "a",
+                min: 3,
+                max: Some(1),
+                expected: &[],
+                why: "max < min admits no repetition count",
+            },
+            Case {
+                edges: CHAIN,
+                start: "a",
+                min: 0,
+                max: Some(2),
+                expected: &["a", "b", "c"],
+                why: "S_0 ∪ S_1 ∪ S_2",
+            },
+            Case {
+                edges: CHAIN,
+                start: "a",
+                min: 2,
+                max: None,
+                expected: &["c", "d"],
+                why: "S_2 ∪ S_3; S_4 onwards is empty",
+            },
+            Case {
+                edges: CHAIN,
+                start: "a",
+                min: 5,
+                max: None,
+                expected: &[],
+                why: "the frontier dies before level 5",
+            },
+            Case {
+                edges: CHAIN,
+                start: "a",
+                min: 2,
+                max: Some(10),
+                expected: &["c", "d"],
+                why: "a max past the end of the chain adds nothing",
+            },
+            Case {
+                edges: CHAIN,
+                start: "a",
+                min: 3,
+                max: Some(3),
+                expected: &["d"],
+                why: "S_3",
+            },
+            Case {
+                edges: CHAIN,
+                start: "a",
+                min: 4,
+                max: Some(4),
+                expected: &[],
+                why: "S_4 is empty",
+            },
+            Case {
+                edges: SELF_LOOP,
+                start: "x",
+                min: 0,
+                max: Some(0),
+                expected: &["x"],
+                why: "S_0",
+            },
+            Case {
+                edges: SELF_LOOP,
+                start: "x",
+                min: 1,
+                max: Some(1),
+                expected: &["x", "y"],
+                why: "S_1 = step({x})",
+            },
+            Case {
+                edges: SELF_LOOP,
+                start: "x",
+                min: 2,
+                max: Some(3),
+                expected: &["x", "y"],
+                why: "the level sets have reached a fixpoint by level 1",
+            },
+            Case {
+                edges: SELF_LOOP,
+                start: "x",
+                min: 5,
+                max: None,
+                expected: &["x", "y"],
+                why: "a fixpoint reached far below min",
+            },
+            Case {
+                edges: FAN,
+                start: "a",
+                min: 1,
+                max: Some(2),
+                expected: &["x1", "x2", "x3", "x4", "x5"],
+                why: "S_1 ∪ S_2",
+            },
+            Case {
+                edges: FAN,
+                start: "a",
+                min: 2,
+                max: Some(4),
+                expected: &["x2", "x3", "x4", "x5"],
+                why: "S_2 ∪ S_3 ∪ S_4 = S_2",
+            },
+            Case {
+                edges: FAN,
+                start: "a",
+                min: 3,
+                max: None,
+                expected: &["x3", "x4", "x5"],
+                why: "x1 and x2 are reachable in fewer than 3 steps only",
+            },
+            Case {
+                edges: FAN,
+                start: "a",
+                min: 5,
+                max: Some(5),
+                expected: &["x5"],
+                why: "S_5",
+            },
+            Case {
+                edges: FAN,
+                start: "a",
+                min: 6,
+                max: None,
+                expected: &[],
+                why: "S_6 is empty",
+            },
+            Case {
+                edges: CYCLE2_TAIL,
+                start: "a",
+                min: 2,
+                max: Some(2),
+                expected: &["a", "c"],
+                why: "S_2 = step({b})",
+            },
+            Case {
+                edges: CYCLE2_TAIL,
+                start: "a",
+                min: 3,
+                max: None,
+                expected: &["a", "b", "c"],
+                why: "the tail alternates {b} and {a,c}",
+            },
+            Case {
+                edges: CYCLE2_TAIL,
+                start: "a",
+                min: 0,
+                max: Some(3),
+                expected: &["a", "b", "c"],
+                why: "S_0 ∪ S_1 ∪ S_2 ∪ S_3",
+            },
+            Case {
+                edges: CYCLE2_TAIL,
+                start: "a",
+                min: 1_000_000_001,
+                max: Some(1_000_000_001),
+                expected: &["b"],
+                why: "an odd level past the pre-period is S_1",
+            },
+            Case {
+                edges: CYCLE2_TAIL,
+                start: "a",
+                min: 1_000_000_000,
+                max: Some(1_000_000_000),
+                expected: &["a", "c"],
+                why: "an even level past the pre-period is S_2",
+            },
+            Case {
+                edges: CHAIN,
+                start: "b",
+                min: 0,
+                max: None,
+                expected: &["b", "c", "d"],
+                why: "a start part-way along the chain",
+            },
+            Case {
+                edges: CHAIN,
+                start: "d",
+                min: 1,
+                max: None,
+                expected: &[],
+                why: "a sink node reaches nothing in one or more steps",
+            },
+        ];
+
+        for case in &corpus {
+            let ds = graph_of(case.edges);
+            let rng = PropertyPathExpression::Range {
+                inner: Box::new(named("p")),
+                min: case.min,
+                max: case.max,
+            };
+            let expected: Vec<String> = case.expected.iter().map(|s| (*s).to_owned()).collect();
+            assert_eq!(
+                reach_locals(&ds, &rng, case.start, true),
+                expected,
+                "p{{{},{:?}}} from {}: {}",
+                case.min,
+                case.max,
+                case.start,
+                case.why
+            );
+        }
     }
 
     // ---- negated property set & wildcard -----------------------------------

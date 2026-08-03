@@ -3946,6 +3946,185 @@ mod tests {
         );
     }
 
+    // ── EXISTS memo under a governor trip ─────────────────────────────────────
+    //
+    // The memo holds ROW DATA keyed by the inner pattern's address, and a forked worker
+    // inherits a clone of it. A bag the budget cut short, memoized under that key, is
+    // read back by each subsequent probe as though it were the inner pattern's answer:
+    // `EXISTS` then reports `false` where the answer is `true`, and `NOT EXISTS` — which
+    // is where it really bites — reports `true`, FABRICATING an outer row that the true
+    // answer does not contain. A missing row is a bound; an invented one is not.
+
+    /// Four outer subjects, each with one `:knows` edge, of which two (`s1`, `s3`) also
+    /// have a `:member` triple. `EXISTS { ?s :member ?c }` is therefore true for half the
+    /// outer rows and false for the other half, so a memo poisoned with an empty or short
+    /// inner bag changes the answer instead of merely shortening it.
+    fn exists_governor_ds() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let knows = b.intern_iri("http://example.org/knows");
+        let member = b.intern_iri("http://example.org/member");
+        let club = b.intern_iri("http://example.org/club");
+        for i in 1..=4 {
+            let s = b.intern_iri(&format!("http://example.org/s{i}"));
+            let o = b.intern_iri(&format!("http://example.org/o{i}"));
+            b.push_quad(s, knows, o, None);
+            if i % 2 == 1 {
+                b.push_quad(s, member, club, None);
+            }
+        }
+        b.freeze().expect("freeze")
+    }
+
+    /// `{ ?s :knows ?o }` and `{ ?s :member ?c }` — the outer pattern and the `EXISTS`
+    /// inner pattern over [`exists_governor_ds`]. They share `?s` in a triple-pattern
+    /// position (never in an expression), so `exists` takes the memoized fast path and
+    /// probes the shared index — the path that owns the cache under test.
+    fn exists_governor_patterns() -> (GraphPattern, GraphPattern) {
+        use purrdf_sparql_algebra::{NamedNodePattern, TermPattern, TriplePattern};
+        let vp = |n: &str| TermPattern::Variable(Variable::new(n));
+        let pred = |iri: &str| NamedNodePattern::NamedNode(NamedNode::new_unchecked(iri));
+        let bgp = |s, p, o| GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: s,
+                predicate: p,
+                object: o,
+            }],
+        };
+        (
+            bgp(vp("s"), pred("http://example.org/knows"), vp("o")),
+            bgp(vp("s"), pred("http://example.org/member"), vp("c")),
+        )
+    }
+
+    #[test]
+    fn a_truncated_exists_inner_is_never_memoized() {
+        use crate::eval::eval_evaluated;
+        use crate::governor::lift::Evaluated;
+
+        let ds = exists_governor_ds();
+        let (outer, inner) = exists_governor_patterns();
+
+        // The inner pattern's true, complete bag — the only bag the memo may ever hold.
+        let mut reference_ctx = EvalCtx::new(&ds);
+        let reference = eval(&inner, &mut reference_ctx).expect("inner");
+        assert!(
+            !reference.rows.is_empty(),
+            "the fixture must match the inner"
+        );
+
+        let exists_expr = Expression::Exists(Box::new(inner));
+        let mut saw_truncated_inner = false;
+        let mut saw_memo = false;
+
+        // Sweep the budget rather than tuning one number to the current charge schedule:
+        // the point is that NO budget can leave a short bag in the memo, and a swept
+        // budget keeps proving that when the schedule moves.
+        for fuel in 1..=64_u64 {
+            let governors = crate::QueryGovernors::UNBOUNDED.with_fuel(fuel);
+            let state = Arc::new(crate::GovernorState::new(&governors));
+            let mut ctx = EvalCtx::new(&ds).with_governors(Arc::clone(&state));
+
+            let outer_rows = match eval_evaluated(&outer, &mut ctx).expect("outer") {
+                Evaluated::Complete(seq) => seq,
+                Evaluated::Truncated(truncation) => truncation.split().0,
+            };
+            for row in &outer_rows.rows {
+                eval_ebv(&exists_expr, row, &outer_rows.schema, &mut ctx).expect("ebv");
+            }
+
+            if ctx.expression_barrier.observed().is_some() {
+                // The inner was cut short at this budget: nothing may have been written
+                // under the site's key, so the next probe re-evaluates instead of reading
+                // a bag that is not the inner pattern's answer.
+                saw_truncated_inner = true;
+                assert!(
+                    ctx.exists_inner_cache.is_empty(),
+                    "fuel {fuel}: a truncated EXISTS inner was memoized"
+                );
+            }
+            for entry in ctx.exists_inner_cache.values() {
+                saw_memo = true;
+                assert_eq!(
+                    entry.inner.rows, reference.rows,
+                    "fuel {fuel}: a memoized EXISTS inner must be the complete inner bag"
+                );
+            }
+        }
+
+        assert!(
+            saw_truncated_inner,
+            "no budget in the sweep stopped the execution inside the EXISTS inner, so \
+             the test proves nothing about a truncated one"
+        );
+        assert!(
+            saw_memo,
+            "no budget in the sweep let the inner complete and populate the memo, so the \
+             test would also pass against an evaluator that never memoizes at all"
+        );
+    }
+
+    #[test]
+    fn a_truncated_subtree_cannot_poison_a_later_evaluation() {
+        use crate::eval::eval_evaluated;
+        use crate::governor::lift::Evaluated;
+
+        // Every governor latches: fuel and the cell/scratch counters only ever rise, and
+        // a stop signal that has fired keeps firing, so once an execution has tripped it
+        // stays tripped and there is no "and now a clean subtree" left INSIDE that
+        // execution. The poisoning question therefore has to be asked across executions,
+        // of everything a tripped one can write into and a later one can read: the plan
+        // (the same value, so every address-keyed memo sees the same keys), the dataset,
+        // and the engine-lived BGP join-order cache. Anything per-execution is discarded
+        // with the context; anything that is not, this test reaches.
+        let ds = exists_governor_ds();
+        let (outer, inner) = exists_governor_patterns();
+        let plan = GraphPattern::Filter {
+            expr: Expression::Not(Box::new(Expression::Exists(Box::new(inner)))),
+            inner: Box::new(outer),
+        };
+        let order_cache = crate::eval::BgpOrderCache::default();
+
+        // `NOT EXISTS` keeps exactly the outer rows whose subject has no `:member`. A
+        // short inner bag makes the negation true for rows it is false for, so poisoning
+        // shows up here as EXTRA rows — the failure mode a subset-only certificate cannot
+        // rule out and this assertion can.
+        let mut baseline_ctx = EvalCtx::new(&ds);
+        let baseline = eval(&plan, &mut baseline_ctx).expect("ungoverned");
+        assert_eq!(
+            baseline.rows.len(),
+            2,
+            "the fixture must keep exactly the two subjects without :member"
+        );
+
+        let mut saw_trip = false;
+        for fuel in 1..=80_u64 {
+            let governors = crate::QueryGovernors::UNBOUNDED.with_fuel(fuel);
+            let state = Arc::new(crate::GovernorState::new(&governors));
+            {
+                let mut governed = EvalCtx::new(&ds)
+                    .with_order_cache(&order_cache)
+                    .with_governors(Arc::clone(&state));
+                saw_trip |= matches!(
+                    eval_evaluated(&plan, &mut governed).expect("governed"),
+                    Evaluated::Truncated(_)
+                );
+            }
+
+            let mut after = EvalCtx::new(&ds).with_order_cache(&order_cache);
+            let again = eval(&plan, &mut after).expect("after the tripped run");
+            assert_eq!(
+                again.rows, baseline.rows,
+                "fuel {fuel}: an execution stopped by a governor changed what a later, \
+                 ungoverned execution of the same plan answered"
+            );
+        }
+        assert!(
+            saw_trip,
+            "no budget in the sweep stopped the execution, so no truncated subtree was \
+             ever produced to poison anything"
+        );
+    }
+
     // ── Correlated EXISTS over many outer rows: address-reuse cache hazard ─────
     //
     // Regression guard for the `ctx.in_substituted_exists` cache bypass: the
