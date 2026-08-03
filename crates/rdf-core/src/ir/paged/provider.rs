@@ -17,6 +17,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::governor::StopCause;
 use crate::ir::{RdfDataset, TermId, TermRef};
 
 /// A dense page ordinal. Pages of a [`PagedDataset`](super::PagedDataset) are
@@ -58,10 +59,9 @@ pub enum PageFaultKind {
         /// The generation returned by the provider.
         actual: PageGeneration,
     },
-    /// The caller or host cancelled the operation.
-    Cancelled,
-    /// A host-owned deadline expired. PurRDF itself never reads a clock.
-    DeadlineExceeded,
+    /// A host-supplied stop signal fired: the caller cancelled the operation, or a
+    /// host-owned deadline expired. PurRDF itself never reads a clock.
+    Stopped(StopCause),
     /// The provider returned data or metadata that violates the sealed page
     /// contract.
     InvalidData,
@@ -74,8 +74,7 @@ impl PageFaultKind {
         match self {
             Self::Provider => "provider failure",
             Self::StaleGeneration { .. } => "stale generation",
-            Self::Cancelled => "cancelled",
-            Self::DeadlineExceeded => "deadline exceeded",
+            Self::Stopped(cause) => cause.label(),
             Self::InvalidData => "invalid page data",
         }
     }
@@ -122,7 +121,7 @@ impl PageFault {
     pub fn cancelled(page: PageId, message: impl Into<String>) -> Self {
         Self {
             page,
-            kind: PageFaultKind::Cancelled,
+            kind: PageFaultKind::Stopped(StopCause::Cancelled),
             message: message.into(),
         }
     }
@@ -131,7 +130,7 @@ impl PageFault {
     pub fn deadline_exceeded(page: PageId, message: impl Into<String>) -> Self {
         Self {
             page,
-            kind: PageFaultKind::DeadlineExceeded,
+            kind: PageFaultKind::Stopped(StopCause::Deadline),
             message: message.into(),
         }
     }

@@ -9,7 +9,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use purrdf_core::{
     InMemoryPageProvider, PackBuilder, PackView, PageFault, PageGeneration, PageId,
     PageMaterialization, PageProvider, PagedDataset, PagedQueryError, PagedQueryEvidence,
-    PagedQueryLimits, RdfDataset, RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue,
+    PagedQueryLimits, RdfDataset, RdfDatasetBuilder, SparqlRequest, SparqlResult, StopCause,
+    TermValue,
 };
 use purrdf_sparql_eval::{FallibleSparqlError, NativeSparqlEngine};
 
@@ -151,8 +152,9 @@ fn query_time_failure_cannot_masquerade_as_an_empty_result() {
         FallibleSparqlError::Operational { error, evidence } => {
             assert_eq!(
                 error,
-                PagedQueryError::Cancelled {
+                PagedQueryError::Stopped {
                     page: PageId(0),
+                    cause: StopCause::Cancelled,
                     message: "cancelled by host".to_owned(),
                 }
             );
@@ -189,8 +191,9 @@ fn operational_root_cause_wins_over_a_derived_evaluator_error() {
     assert!(matches!(
         error,
         FallibleSparqlError::Operational {
-            error: PagedQueryError::Cancelled {
+            error: PagedQueryError::Stopped {
                 page: PageId(0),
+                cause: StopCause::Cancelled,
                 ..
             },
             ..
@@ -518,14 +521,16 @@ fn operational_failure_taxonomy_is_not_an_empty_answer() {
                 }
             ) | (
                 ScriptedFault::Cancelled,
-                PagedQueryError::Cancelled {
+                PagedQueryError::Stopped {
                     page: PageId(0),
+                    cause: StopCause::Cancelled,
                     ..
                 }
             ) | (
                 ScriptedFault::Deadline,
-                PagedQueryError::DeadlineExceeded {
+                PagedQueryError::Stopped {
                     page: PageId(0),
+                    cause: StopCause::Deadline,
                     ..
                 }
             ) | (

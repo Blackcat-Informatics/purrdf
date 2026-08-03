@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use purrdf_core::{
     DatasetView, FallibleDatasetView, GraphMatch, InMemoryPageProvider, PageFault, PageGeneration,
     PageId, PageMaterialization, PageProvider, PagedDataset, PagedQueryError, PagedQueryEvidence,
-    PagedQueryLimits, RdfDataset, RdfDatasetBuilder, TermValue, ViewOperationStatus,
+    PagedQueryLimits, RdfDataset, RdfDatasetBuilder, StopCause, TermValue, ViewOperationStatus,
 };
 
 fn page(subject: &str, object: &str) -> Arc<RdfDataset> {
@@ -179,8 +179,9 @@ fn provider_failure_after_seal_is_sticky_and_never_panics() {
     let (error, evidence) = failed_status(first_status.clone());
     assert_eq!(
         error,
-        PagedQueryError::Cancelled {
+        PagedQueryError::Stopped {
             page: PageId(0),
+            cause: StopCause::Cancelled,
             message: "cancel token set".to_owned(),
         }
     );

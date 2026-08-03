@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, TryLockError};
 
 use crate::RdfStoreCapabilities;
 use crate::dataset_view::{DatasetView, FallibleDatasetView, GraphMatch, ViewOperationStatus};
+use crate::governor::{ResourceDimension, ResourceVector, StopCause};
 use crate::ir::{GlobalTermId, QuadIds, QuadRef, RdfDataset, TermId, TermValue};
 
 use super::{
@@ -26,6 +27,16 @@ use super::{
 /// equal to the corresponding ceiling, and refused only when it would exceed it.
 /// Cached re-reads of an already-admitted page consume neither another page nor more
 /// bytes. Zero is a valid hard limit.
+///
+/// This type is the **I/O projection of [`ResourceVector`]**, not a second budget
+/// system. The paged tier bounds I/O — [`ResourceDimension::Pages`] and
+/// [`ResourceDimension::Bytes`] — while the evaluation tier bounds compute (fuel,
+/// answer rows, intermediate cells, scratch bytes, remote requests, UDF depth). Both
+/// name the one governance vocabulary, so a caller holding a whole-execution
+/// [`ResourceVector`] reads its I/O ceilings out with
+/// [`from_resource_vector`](PagedQueryLimits::from_resource_vector) and a caller
+/// holding paged limits lifts them in with
+/// [`to_resource_vector`](PagedQueryLimits::to_resource_vector).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PagedQueryLimits {
     /// Maximum number of distinct pages the operation may admit.
@@ -47,6 +58,30 @@ impl PagedQueryLimits {
     /// No practical resource ceiling. Provider failures, cancellation, deadlines,
     /// generation drift, and invalid data remain fully checked.
     pub const UNBOUNDED: Self = Self::new(u64::MAX, u64::MAX);
+
+    /// Lift these I/O ceilings into the shared governance vector.
+    ///
+    /// Only [`ResourceDimension::Pages`] and [`ResourceDimension::Bytes`] are set;
+    /// every compute dimension is left at `u64::MAX`. Projecting an I/O limit
+    /// therefore can never accidentally impose a compute ceiling.
+    #[must_use]
+    pub const fn to_resource_vector(self) -> ResourceVector {
+        ResourceVector::UNBOUNDED
+            .with(ResourceDimension::Pages, self.max_pages)
+            .with(ResourceDimension::Bytes, self.max_bytes)
+    }
+
+    /// Read the I/O ceilings back out of the shared governance vector.
+    ///
+    /// Compute dimensions are ignored: they are the evaluation tier's half of the same
+    /// vector and have no meaning to a paged view.
+    #[must_use]
+    pub const fn from_resource_vector(vector: ResourceVector) -> Self {
+        Self::new(
+            vector.get(ResourceDimension::Pages),
+            vector.get(ResourceDimension::Bytes),
+        )
+    }
 }
 
 /// Deterministic evidence accumulated by one paged query operation.
@@ -115,17 +150,13 @@ pub enum PagedQueryError {
         /// The sealed byte charge of the refused page.
         page_bytes: u64,
     },
-    /// The host or caller cancelled the operation.
-    Cancelled {
+    /// A host-supplied stop signal fired: the host or caller cancelled the
+    /// operation, or a host-owned deadline expired. PurRDF never reads a clock.
+    Stopped {
         /// The requested page.
         page: PageId,
-        /// Provider diagnostic detail.
-        message: String,
-    },
-    /// A host-owned deadline expired. PurRDF never reads a clock.
-    DeadlineExceeded {
-        /// The requested page.
-        page: PageId,
+        /// Which stop signal the host reported.
+        cause: StopCause,
         /// Provider diagnostic detail.
         message: String,
     },
@@ -150,12 +181,9 @@ impl From<PageFault> for PagedQueryError {
                 expected,
                 actual,
             },
-            PageFaultKind::Cancelled => Self::Cancelled {
+            PageFaultKind::Stopped(cause) => Self::Stopped {
                 page: fault.page,
-                message: fault.message,
-            },
-            PageFaultKind::DeadlineExceeded => Self::DeadlineExceeded {
-                page: fault.page,
+                cause,
                 message: fault.message,
             },
             PageFaultKind::InvalidData => Self::InvalidData {
@@ -212,14 +240,18 @@ impl std::fmt::Display for PagedQueryError {
                  {page_bytes}, limit {limit}",
                 page.0
             ),
-            Self::Cancelled { page, message } => {
-                write!(f, "cancelled materializing page {}: {message}", page.0)
+            Self::Stopped {
+                page,
+                cause,
+                message,
+            } => {
+                write!(
+                    f,
+                    "{} materializing page {}: {message}",
+                    cause.label(),
+                    page.0
+                )
             }
-            Self::DeadlineExceeded { page, message } => write!(
-                f,
-                "deadline exceeded materializing page {}: {message}",
-                page.0
-            ),
             Self::InvalidData { page, message } => {
                 write!(f, "invalid data materializing page {}: {message}", page.0)
             }
