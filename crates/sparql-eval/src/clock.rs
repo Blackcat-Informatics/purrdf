@@ -5,6 +5,16 @@
 //! `NOW()` returns and the entropy seed for `RAND()`/`UUID()`/`STRUUID()`. The read is
 //! written per target (a wasm build has no `SystemTime`/OS entropy syscall) but every
 //! target returns the correct live value — there is no caller-visible knob.
+//!
+//! These are two of the crate's three host-platform reads. The third is the governor
+//! path's deadline clock, which is confined to
+//! [`crate::governor::WallDeadline`] and split per target exactly as
+//! [`wall_clock_now`] is here. It is deliberately not routed through this module: a
+//! deadline needs elapsed time against a snapshotted start, not an `xsd:dateTime`, and
+//! the evaluator core itself never reads a clock — every governor check consults a
+//! [`StopSignal`](crate::governor::StopSignal), which is a `WallDeadline` only when the
+//! caller did not supply one of their own. Those two sites are the whole set; do not
+//! open a third.
 
 use purrdf_xsd::temporal::DateTime;
 

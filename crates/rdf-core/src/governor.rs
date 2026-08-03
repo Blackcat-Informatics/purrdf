@@ -292,6 +292,57 @@ impl TrippedGovernor {
             },
         }
     }
+
+    /// This governor's precedence rank, **lower winning**, when several are true at the
+    /// same point.
+    ///
+    /// The order is a pinned contract, and it lives here rather than in a consumer so
+    /// that every tier resolves a simultaneous trip identically. Highest priority first:
+    ///
+    /// 1. The stop signal, [`StopCause::Cancelled`] ahead of [`StopCause::Deadline`]. An
+    ///    explicit cancellation is a decision; a deadline is an elapsed measurement.
+    /// 2. [`ResourceDimension::IntermediateCells`] — the ceiling that defends against
+    ///    unrecoverable allocation failure, reported ahead of ceilings whose breach is
+    ///    merely expensive.
+    /// 3. [`ResourceDimension::Fuel`].
+    /// 4. [`ResourceDimension::AnswerRows`].
+    /// 5. [`ResourceDimension::ScratchBytes`].
+    /// 6. [`ResourceDimension::RemoteRequests`].
+    /// 7. [`ResourceDimension::UdfDepth`].
+    /// 8. The demand-paging tier's [`ResourceDimension::Pages`] and
+    ///    [`ResourceDimension::Bytes`], which in practice surface as that tier's own typed
+    ///    error before a compute-tier governor ever sees them, and are ranked here only so
+    ///    the order is total.
+    ///
+    /// A genuine evaluation failure outranks **every** governor: reporting an exhausted
+    /// budget for a query that in fact could not be answered would hand a caller a partial
+    /// answer to a question that has none. That comparison is made where evaluation
+    /// results are combined, not here, because this function's domain is
+    /// [`TrippedGovernor`] alone.
+    #[must_use]
+    pub const fn precedence_rank(self) -> u8 {
+        // This match is deliberately WILDCARD-FREE. `TrippedGovernor` is
+        // `#[non_exhaustive]`, but that restricts only foreign crates: inside the defining
+        // crate the compiler still demands every variant, so adding a governor without
+        // giving it a rank is a build failure rather than a silent last place. Precedence
+        // is a pinned contract, and a contract that can drift quietly is not one.
+        match self {
+            Self::Stopped { cause } => match cause {
+                StopCause::Cancelled => 0,
+                StopCause::Deadline => 1,
+            },
+            Self::Budget { dimension, .. } => match dimension {
+                ResourceDimension::IntermediateCells => 2,
+                ResourceDimension::Fuel => 3,
+                ResourceDimension::AnswerRows => 4,
+                ResourceDimension::ScratchBytes => 5,
+                ResourceDimension::RemoteRequests => 6,
+                ResourceDimension::UdfDepth => 7,
+                ResourceDimension::Pages => 8,
+                ResourceDimension::Bytes => 9,
+            },
+        }
+    }
 }
 
 impl std::fmt::Display for TrippedGovernor {
@@ -521,6 +572,75 @@ mod tests {
             .to_string(),
             "deadline exceeded"
         );
+    }
+
+    #[test]
+    fn precedence_is_a_total_order_over_every_governor() {
+        let budget = |dimension| TrippedGovernor::Budget {
+            dimension,
+            limit: 0,
+            consumed: 1,
+        };
+
+        // The documented order, highest priority first. Ranks are positional, so this
+        // list IS the contract: reordering it is a breaking change to every consumer that
+        // renders a simultaneous trip.
+        let documented = [
+            TrippedGovernor::Stopped {
+                cause: StopCause::Cancelled,
+            },
+            TrippedGovernor::Stopped {
+                cause: StopCause::Deadline,
+            },
+            budget(ResourceDimension::IntermediateCells),
+            budget(ResourceDimension::Fuel),
+            budget(ResourceDimension::AnswerRows),
+            budget(ResourceDimension::ScratchBytes),
+            budget(ResourceDimension::RemoteRequests),
+            budget(ResourceDimension::UdfDepth),
+            budget(ResourceDimension::Pages),
+            budget(ResourceDimension::Bytes),
+        ];
+        for (expected, governor) in documented.into_iter().enumerate() {
+            assert_eq!(
+                u32::from(governor.precedence_rank()),
+                u32::try_from(expected).expect("the rank fits"),
+                "{} is ranked out of the documented order",
+                governor.label()
+            );
+        }
+
+        // Every governor this vocabulary can express is covered, and no two share a rank —
+        // a shared rank would make a simultaneous trip resolve by argument order instead
+        // of by contract.
+        let mut ranks: Vec<u8> = ResourceDimension::ALL
+            .iter()
+            .map(|&dimension| budget(dimension).precedence_rank())
+            .collect();
+        for cause in ALL_STOP_CAUSES {
+            ranks.push(TrippedGovernor::Stopped { cause }.precedence_rank());
+        }
+        assert_eq!(
+            ranks.len(),
+            documented.len(),
+            "the documented order must cover every expressible governor"
+        );
+        ranks.sort_unstable();
+        ranks.dedup();
+        assert_eq!(ranks.len(), documented.len(), "ranks must be distinct");
+
+        // Both stop causes outrank every budget, on every dimension.
+        for dimension in ResourceDimension::ALL {
+            for cause in ALL_STOP_CAUSES {
+                assert!(
+                    TrippedGovernor::Stopped { cause }.precedence_rank()
+                        < budget(dimension).precedence_rank(),
+                    "{} must outrank the {} ceiling",
+                    cause.label(),
+                    dimension.label()
+                );
+            }
+        }
     }
 
     #[test]
