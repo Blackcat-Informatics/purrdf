@@ -7,6 +7,11 @@
 //! content-hashed identity of the charge schedule ([`GOVERNOR_PROFILE_ID`],
 //! [`GOVERNOR_PROFILE_VERSION`], [`GOVERNOR_PROFILE_DIGEST`]).
 //!
+//! [`soundness`] holds the companion static analysis: the one exhaustive algebra visitor
+//! that decides what a truncated bag at a node still certifies about the root answer, and
+//! — the same computation read for a different purpose — whether the answer cap may be
+//! pushed down to that node.
+//!
 //! # A governor never changes an answer, only an outcome
 //!
 //! A resource ceiling decides whether a caller receives the complete answer or a
@@ -32,6 +37,8 @@
 //! [`GovernorEvidence`] all live in [`purrdf_core`] so that the demand-paging tier and
 //! the evaluation tier name one taxonomy. This module adds only the evaluation tier's
 //! configuration, live state, and profile identity.
+
+pub(crate) mod soundness;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, OnceLock};

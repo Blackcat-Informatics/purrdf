@@ -52,11 +52,12 @@
 //! and that per-call state would merge into a forked child instead of `ctx`).
 
 use purrdf_core::{DatasetView, TermId, TermValue, ViewTermId};
-use purrdf_sparql_algebra::{
-    AggregateExpression, Expression, Function, GraphPattern, OrderExpression,
-};
+use purrdf_sparql_algebra::{Expression, Function, GraphPattern};
 
 use crate::error::EvalError;
+use crate::governor::soundness::{
+    ExpressionPart, PatternPart, visit_expression_parts, visit_pattern_parts,
+};
 use crate::scratch::{ScratchInterner, SolutionTerm};
 use crate::solution::Solution;
 use crate::user_fn::{UserFunctionRegistry, Volatility};
@@ -258,51 +259,27 @@ pub(crate) fn is_parallel_safe_pattern(
 
 /// `true` iff `expr` (recursively) reaches an unsafe builtin — see
 /// [`is_parallel_safe`].
+///
+/// The structural decomposition is [`crate::governor::soundness`]'s, not this
+/// module's: the recursion below only decides what to *do* at each part. That
+/// module owns the single exhaustive, wildcard-free match over [`Expression`],
+/// so a new expression variant is one compile error there rather than a silent
+/// omission here (which would classify an unsafe builtin SAFE and let it run
+/// under fork-join). The short-circuit is preserved exactly — the visitor stops
+/// the moment this closure returns `true` — so the answer is identical to the
+/// `||` chain this replaces, including for expressions whose later arms would
+/// have been skipped.
 fn expr_reaches_unsafe_builtin(expr: &Expression, registry: Option<&UserFunctionRegistry>) -> bool {
-    match expr {
-        Expression::NamedNode(_)
-        | Expression::Literal(_)
-        | Expression::Variable(_)
-        | Expression::Bound(_) => false,
-        Expression::Or(a, b)
-        | Expression::And(a, b)
-        | Expression::Equal(a, b)
-        | Expression::SameTerm(a, b)
-        | Expression::Greater(a, b)
-        | Expression::GreaterOrEqual(a, b)
-        | Expression::Less(a, b)
-        | Expression::LessOrEqual(a, b)
-        | Expression::Add(a, b)
-        | Expression::Subtract(a, b)
-        | Expression::Multiply(a, b)
-        | Expression::Divide(a, b) => {
-            expr_reaches_unsafe_builtin(a, registry) || expr_reaches_unsafe_builtin(b, registry)
-        }
-        Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
-            expr_reaches_unsafe_builtin(a, registry)
-        }
-        Expression::In(head, list) => {
-            expr_reaches_unsafe_builtin(head, registry)
-                || list
-                    .iter()
-                    .any(|e| expr_reaches_unsafe_builtin(e, registry))
-        }
-        Expression::If(a, b, c) => {
-            expr_reaches_unsafe_builtin(a, registry)
-                || expr_reaches_unsafe_builtin(b, registry)
-                || expr_reaches_unsafe_builtin(c, registry)
-        }
-        Expression::Coalesce(list) => list
-            .iter()
-            .any(|e| expr_reaches_unsafe_builtin(e, registry)),
-        Expression::FunctionCall(f, args) => {
-            function_is_unsafe(f, registry)
-                || args
-                    .iter()
-                    .any(|e| expr_reaches_unsafe_builtin(e, registry))
-        }
-        Expression::Exists(pattern) => pattern_reaches_unsafe_builtin(pattern, registry),
-    }
+    let mut found = false;
+    visit_expression_parts(expr, &mut |part| {
+        found = match part {
+            ExpressionPart::Sub(sub) => expr_reaches_unsafe_builtin(sub, registry),
+            ExpressionPart::Call(f) => function_is_unsafe(f, registry),
+            ExpressionPart::Exists(pattern) => pattern_reaches_unsafe_builtin(pattern, registry),
+        };
+        found
+    });
+    found
 }
 
 /// Whether `f` is itself one of the stateful-mint builtins (see
@@ -354,66 +331,29 @@ fn function_is_unsafe(f: &Function, registry: Option<&UserFunctionRegistry>) -> 
 
 /// `true` iff `pattern` (recursively) reaches an unsafe builtin through any
 /// expression-bearing variant — see [`is_parallel_safe`].
+///
+/// Expressed in terms of [`crate::governor::soundness::visit_pattern_parts`],
+/// the one exhaustive, wildcard-free walk over [`GraphPattern`] this crate owns.
+/// The [`ChildEdge`](crate::governor::soundness::ChildEdge) that walk attaches to
+/// each child is the answer-completeness certificate's business, not this gate's,
+/// so it is discarded here: parallel safety is a property of the builtins a
+/// subtree can reach, and every child can reach them regardless of how a
+/// truncation would propagate through it. Sharing the *decomposition* is the
+/// point — a new algebra variant must be one compile error, not three
+/// independent edits of which only two get found.
 fn pattern_reaches_unsafe_builtin(
     pattern: &GraphPattern,
     registry: Option<&UserFunctionRegistry>,
 ) -> bool {
-    match pattern {
-        GraphPattern::Bgp { .. } | GraphPattern::Path { .. } | GraphPattern::Values { .. } => false,
-        GraphPattern::Join { left, right }
-        | GraphPattern::Lateral { left, right }
-        | GraphPattern::Union { left, right }
-        | GraphPattern::Minus { left, right } => {
-            pattern_reaches_unsafe_builtin(left, registry)
-                || pattern_reaches_unsafe_builtin(right, registry)
-        }
-        GraphPattern::Graph { inner, .. }
-        | GraphPattern::Service { inner, .. }
-        | GraphPattern::Distinct { inner }
-        | GraphPattern::Reduced { inner }
-        | GraphPattern::Slice { inner, .. }
-        | GraphPattern::Project { inner, .. } => pattern_reaches_unsafe_builtin(inner, registry),
-        GraphPattern::Filter { expr, inner } => {
-            expr_reaches_unsafe_builtin(expr, registry)
-                || pattern_reaches_unsafe_builtin(inner, registry)
-        }
-        GraphPattern::Extend {
-            inner, expression, ..
-        } => {
-            expr_reaches_unsafe_builtin(expression, registry)
-                || pattern_reaches_unsafe_builtin(inner, registry)
-        }
-        GraphPattern::LeftJoin {
-            left,
-            right,
-            expression,
-        } => {
-            pattern_reaches_unsafe_builtin(left, registry)
-                || pattern_reaches_unsafe_builtin(right, registry)
-                || expression
-                    .as_ref()
-                    .is_some_and(|e| expr_reaches_unsafe_builtin(e, registry))
-        }
-        GraphPattern::OrderBy { inner, expression } => {
-            pattern_reaches_unsafe_builtin(inner, registry)
-                || expression.iter().any(|oe| match oe {
-                    OrderExpression::Asc(e) | OrderExpression::Desc(e) => {
-                        expr_reaches_unsafe_builtin(e, registry)
-                    }
-                })
-        }
-        GraphPattern::Group {
-            inner, aggregates, ..
-        } => {
-            pattern_reaches_unsafe_builtin(inner, registry)
-                || aggregates.iter().any(|(_, agg)| match agg {
-                    AggregateExpression::CountStar { .. } => false,
-                    AggregateExpression::FunctionCall { expression, .. } => {
-                        expr_reaches_unsafe_builtin(expression, registry)
-                    }
-                })
-        }
-    }
+    let mut found = false;
+    visit_pattern_parts(pattern, &mut |part| {
+        found = match part {
+            PatternPart::Child(child, _edge) => pattern_reaches_unsafe_builtin(child, registry),
+            PatternPart::Expression(expr) => expr_reaches_unsafe_builtin(expr, registry),
+        };
+        found
+    });
+    found
 }
 
 /// Chunk-based, infallible parallel collect: split `items` into index-ordered
