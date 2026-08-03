@@ -135,7 +135,6 @@ PRE_EXISTING_PROCESS_REFERENCES: frozenset[tuple[str, str]] = frozenset(
         ("crates/sparql-eval/src/eval.rs", "Task 4"),
         ("crates/sparql-eval/src/eval.rs", "Task 5"),
         ("crates/sparql-eval/src/eval.rs", "Task 7"),
-        ("crates/sparql-eval/src/eval.rs", "Task 9"),
         ("crates/sparql-eval/src/expr.rs", "Task 5"),
         ("crates/sparql-eval/src/expr.rs", "Task 6"),
         ("crates/sparql-eval/src/modifier.rs", "Task 6"),
