@@ -148,6 +148,14 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
         .dataset
         .term_id_by_value(&purrdf_core::TermValue::Iri(RDF_REIFIES.to_owned()));
 
+    // Whether this execution charges fuel at all. Read once, outside the pattern loop:
+    // an ungoverned run (and a run whose caller set only a deadline or only an answer
+    // cap) answers `false` here and allocates no charge ledger, so the index-nested-loop
+    // below is byte-for-byte the loop it was before governors existed.
+    let metered = ctx
+        .governor_state()
+        .is_some_and(|state| state.is_engaged_in(purrdf_core::ResourceDimension::Fuel));
+
     // Index-nested-loop evaluation. Rows start as a single all-unbound solution.
     let mut rows: Vec<Solution<D::Id>> = vec![smallvec::smallvec![None; working.len()]];
     for &i in order.iter() {
@@ -167,55 +175,104 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
             )),
             GraphScope::Merge(_) => None,
         };
-        let next = crate::parallel::par_chunk_map(&rows, |acc, row| {
-            let s = query_id(&cp.s, row);
-            let p = query_id(&cp.p, row);
-            let o = query_id(&cp.o, row);
-            match &scope {
-                // Single-graph scope (store default / a named graph): the indexed
-                // partition_point read, unchanged — no de-dup overhead.
-                GraphScope::One(gm) => {
-                    let plan = plan.expect("plan computed above for GraphScope::One");
-                    for quad in ctx.dataset.quads_for_pattern_with_plan(&plan, s, p, o, *gm) {
-                        if let Some(extended) = bind_row(row, cp, &quad, ctx.dataset) {
-                            acc.push(extended);
-                        }
-                    }
-                    // The RDF 1.2 reification layer is a side-table outside `quads`, so
-                    // fold its virtual triples in here — additively (no double
-                    // counting). Each reifier/annotation row carries its own graph, so
-                    // the probe binds `?g` under `GRAPH ?g`: a default-graph reifier
-                    // shows only when the scope admits the default graph (unchanged),
-                    // and a `GRAPH :g`-scoped reifier shows only under that named graph.
-                    emit_virtual_candidates(ctx.dataset, cp, s, p, o, reifies_id, *gm, |quad| {
-                        if let Some(extended) = bind_row(row, cp, &quad, ctx.dataset) {
-                            acc.push(extended);
-                        }
-                    });
-                }
-                // A FROM/USING-merged default graph: union the per-graph reads, but
-                // RDF-merge unions *triples*, so a triple present in two merged graphs
-                // must bind once — de-dupe by (s, p, o) for this pattern+row. The
-                // reification layer is store-default content (not part of an explicitly
-                // FROM-named merge), so it is not folded into a merged scope. `seen` is
-                // local to this row's worker (each row gets its own), identical to the
-                // sequential path.
-                GraphScope::Merge(gs) => {
-                    let mut seen: DetHashSet<(D::Id, D::Id, D::Id)> = DetHashSet::default();
-                    for &g in gs {
-                        for quad in ctx.dataset.quads_for_pattern(s, p, o, GraphMatch::Named(g)) {
-                            if !seen.insert((quad.s, quad.p, quad.o)) {
-                                continue;
-                            }
+        let (next, ledger) =
+            crate::parallel::par_chunk_map_metered(&rows, metered, |acc, fuel, row| {
+                let s = query_id(&cp.s, row);
+                let p = query_id(&cp.p, row);
+                let o = query_id(&cp.o, row);
+                match &scope {
+                    // Single-graph scope (store default / a named graph): the indexed
+                    // partition_point read, unchanged — no de-dup overhead.
+                    GraphScope::One(gm) => {
+                        let plan = plan.expect("plan computed above for GraphScope::One");
+                        for quad in ctx.dataset.quads_for_pattern_with_plan(&plan, s, p, o, *gm) {
+                            // The `bgp-candidate-quad` charge point: one unit per candidate
+                            // EXAMINED, not per candidate that binds. Charging only the ones
+                            // that bind would let the single most expensive shape in the
+                            // evaluator — a highly selective pattern scanned over a large
+                            // index — cost nothing at all.
+                            *fuel = fuel.saturating_add(1);
                             if let Some(extended) = bind_row(row, cp, &quad, ctx.dataset) {
                                 acc.push(extended);
                             }
                         }
+                        // The RDF 1.2 reification layer is a side-table outside `quads`, so
+                        // fold its virtual triples in here — additively (no double
+                        // counting). Each reifier/annotation row carries its own graph, so
+                        // the probe binds `?g` under `GRAPH ?g`: a default-graph reifier
+                        // shows only when the scope admits the default graph (unchanged),
+                        // and a `GRAPH :g`-scoped reifier shows only under that named graph.
+                        emit_virtual_candidates(
+                            ctx.dataset,
+                            cp,
+                            s,
+                            p,
+                            o,
+                            reifies_id,
+                            *gm,
+                            |quad| {
+                                *fuel = fuel.saturating_add(1);
+                                if let Some(extended) = bind_row(row, cp, &quad, ctx.dataset) {
+                                    acc.push(extended);
+                                }
+                            },
+                        );
+                    }
+                    // A FROM/USING-merged default graph: union the per-graph reads, but
+                    // RDF-merge unions *triples*, so a triple present in two merged graphs
+                    // must bind once — de-dupe by (s, p, o) for this pattern+row. The
+                    // reification layer is store-default content (not part of an explicitly
+                    // FROM-named merge), so it is not folded into a merged scope. `seen` is
+                    // local to this row's worker (each row gets its own), identical to the
+                    // sequential path.
+                    GraphScope::Merge(gs) => {
+                        let mut seen: DetHashSet<(D::Id, D::Id, D::Id)> = DetHashSet::default();
+                        for &g in gs {
+                            for quad in ctx.dataset.quads_for_pattern(s, p, o, GraphMatch::Named(g))
+                            {
+                                *fuel = fuel.saturating_add(1);
+                                if !seen.insert((quad.s, quad.p, quad.o)) {
+                                    continue;
+                                }
+                                if let Some(extended) = bind_row(row, cp, &quad, ctx.dataset) {
+                                    acc.push(extended);
+                                }
+                            }
+                        }
                     }
                 }
-            }
-        });
+            });
         rows = next;
+        // The ordered fold. Chunk workers accumulated their per-item charges with no
+        // atomics and nothing shared; this walks the concatenated ledger in source-item
+        // order on one thread, so the item at which the budget runs out is the same one
+        // whatever the worker count, chunk geometry, or scheduling was. The certified
+        // partial is the extension of the input rows strictly before that item — a
+        // positional prefix of what this pattern would have produced, which is what
+        // `eval` then wraps as the truncation's certificate.
+        //
+        // `GovernorState::should_abandon` is deliberately NOT consulted here, and not by
+        // the workers either. It is a `Relaxed` read, so what it reports depends on which
+        // thread asked and when — and a worker that stopped early on it would hand this
+        // fold a ledger missing the very entries the crossing sits among, making the
+        // reported trip point a function of scheduling. The honest consequence is stated
+        // rather than papered over: the actual work of one pattern expansion can overshoot
+        // the reported trip point by the remainder of that expansion. Reported work is
+        // exact; the overshoot is bounded by one pattern, and the next pattern never
+        // starts.
+        if let Some(state) = ctx.governor_state() {
+            if metered {
+                if let Some((_, committed, _)) = state.commit_ordered_items(&ledger) {
+                    rows.truncate(usize::try_from(committed).unwrap_or(usize::MAX));
+                    break;
+                }
+            } else if state.tripped().is_some() {
+                // Some other governor (a stop signal, the allocation ceiling) fired
+                // while this pattern was being expanded. Nothing here is charged, so
+                // there is no ledger to cut against; the rows in hand stand as they are.
+                break;
+            }
+        }
         if rows.is_empty() {
             break;
         }

@@ -570,6 +570,142 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             .map(|cause| TrippedGovernor::Stopped { cause })
     }
 
+    /// The live governor accounting state, if this execution is governed at all.
+    ///
+    /// `None` is the ungoverned execution every non-governor entry point takes: every
+    /// charge helper below short-circuits on this one null test, so an ungoverned query
+    /// performs no atomic operation, no allocation, and no counter update anywhere on
+    /// the hot path.
+    pub(crate) const fn governor_state(&self) -> Option<&Arc<GovernorState>> {
+        self.governors.as_ref()
+    }
+
+    /// Charge one occurrence of `point` against this execution's fuel.
+    ///
+    /// Two short-circuits, in this order: the ungoverned null test above, then the
+    /// per-dimension engagement predicate
+    /// ([`GovernorState::is_engaged_in`]) — so a caller who set only a deadline, or only
+    /// an answer cap, never pays for a fuel counter it did not ask for.
+    ///
+    /// # Errors
+    ///
+    /// The governor that stopped this execution, once one has.
+    #[inline]
+    pub(crate) fn charge(
+        &self,
+        point: crate::governor::ChargePoint,
+    ) -> Result<(), TrippedGovernor> {
+        match self.governors.as_ref() {
+            None => Ok(()),
+            Some(state) => state.charge_point_if_engaged(point),
+        }
+    }
+
+    /// Charge `amount` against `dimension`. See [`Self::charge`] for the short-circuits.
+    ///
+    /// # Errors
+    ///
+    /// The governor that stopped this execution, once one has.
+    #[inline]
+    pub(crate) fn charge_amount(
+        &self,
+        dimension: purrdf_core::ResourceDimension,
+        amount: u64,
+    ) -> Result<(), TrippedGovernor> {
+        match self.governors.as_ref() {
+            None => Ok(()),
+            Some(state) => state.charge_if_engaged(dimension, amount),
+        }
+    }
+
+    /// Record one operator instance's materialized bag as an observation of the
+    /// intermediate-cell ceiling, **cell-denominated**: `rows * columns`.
+    ///
+    /// Cells, not rows: a solution row is a `SmallVec` that spills past four columns, so
+    /// a two-column and a forty-column bag of the same row count are a twentyfold
+    /// different allocation and a row-denominated ceiling would treat them alike.
+    ///
+    /// Compared inclusively against the **maximum** of any single operator instance —
+    /// never a sum and never a running total. Summing would make a long, cheap query
+    /// indistinguishable from one catastrophic cross product, which is the only failure
+    /// this ceiling exists to stop.
+    ///
+    /// # Errors
+    ///
+    /// The governor that stopped this execution, once one has.
+    #[inline]
+    pub(crate) fn observe_cells(&self, rows: usize, columns: usize) -> Result<(), TrippedGovernor> {
+        let Some(state) = self.governors.as_ref() else {
+            return Ok(());
+        };
+        if !state.is_engaged_in(purrdf_core::ResourceDimension::IntermediateCells) {
+            return Ok(());
+        }
+        let cells = (rows as u64).saturating_mul(columns as u64);
+        state.observe_peak(purrdf_core::ResourceDimension::IntermediateCells, cells)
+    }
+
+    /// Charge the scratch arena's growth since it was last charged.
+    ///
+    /// The arena's minted-byte total is monotone and the charged total is exactly the
+    /// consumption recorded on [`ResourceDimension::ScratchBytes`](purrdf_core::ResourceDimension::ScratchBytes),
+    /// so the difference is the uncharged growth and calling this repeatedly cannot
+    /// double-charge. That is what lets it run at every operator boundary — which is
+    /// what makes the ceiling act *promptly*, rather than after the query has already
+    /// minted its way out of memory.
+    ///
+    /// This dimension exists because arena growth is independent of every other meter: a
+    /// `CONCAT`/`GROUP_CONCAT`/`REPLACE`/list-constructor query can exhaust memory with a
+    /// perfectly satisfied row count and cell count.
+    ///
+    /// # Errors
+    ///
+    /// The governor that stopped this execution, once one has.
+    #[inline]
+    pub(crate) fn charge_scratch_growth(&self) -> Result<(), TrippedGovernor> {
+        let Some(state) = self.governors.as_ref() else {
+            return Ok(());
+        };
+        if !state.is_engaged_in(purrdf_core::ResourceDimension::ScratchBytes) {
+            return Ok(());
+        }
+        let minted = self.scratch.minted_bytes();
+        let charged = state.consumed_in(purrdf_core::ResourceDimension::ScratchBytes);
+        if minted <= charged {
+            return Ok(());
+        }
+        state.charge(
+            purrdf_core::ResourceDimension::ScratchBytes,
+            minted - charged,
+        )
+    }
+
+    /// Charge one occurrence of `point` per row of `rows`, **in order**, truncating
+    /// `rows` to the prefix the budget admits.
+    ///
+    /// The truncated bag is a positional prefix of what the operator computed, which is
+    /// what the partial-lift channel needs in order to certify it. Charging in order and
+    /// on the main thread is also what makes this identical under forced-parallel and
+    /// forced-sequential evaluation: the rows have already been reduced into source
+    /// order by the time this runs.
+    pub(crate) fn admit_rows<I: ViewTermId>(
+        &self,
+        rows: &mut Vec<crate::solution::Solution<I>>,
+        point: crate::governor::ChargePoint,
+    ) -> Option<TrippedGovernor> {
+        let state = self.governors.as_ref()?;
+        if !state.is_engaged_in(purrdf_core::ResourceDimension::Fuel) {
+            return None;
+        }
+        for admitted in 0..rows.len() {
+            if let Err(tripped) = state.charge_point_if_engaged(point) {
+                rows.truncate(admitted);
+                return Some(tripped);
+            }
+        }
+        None
+    }
+
     /// Replace the evaluation options for this context. Used by the engine to thread
     /// its configured options into each per-query context, and by tests that need to
     /// flip a measurement seam.
@@ -707,6 +843,25 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// mutually-recursive functions fail closed rather than overflow the stack.
     pub(crate) fn child_for_user_fn(&self) -> Result<Self, EvalError> {
         let next_depth = self.udf_depth + 1;
+        // The recursion guard is a governed dimension whose ceiling is a build constant.
+        // `QueryGovernors::UNBOUNDED` already carries `MAX_UDF_DEPTH` on
+        // `ResourceDimension::UdfDepth` and there is no builder that writes that slot, so
+        // observing the depth here reports the consumption through the same evidence as
+        // every other dimension **without** making the bound relaxable: the ceiling the
+        // governor compares against and the constant below are the same number, and a
+        // caller has no way to move either.
+        //
+        // The observation's own result is deliberately not the decision. A state that has
+        // already latched some other governor answers `Err` for every dimension, and
+        // reading that as "recursion too deep" would report the wrong cause; and a
+        // caller-relaxable stack-recursion bound is not a bound, so the constant stays
+        // the authority on both the governed and the ungoverned path.
+        if let Some(state) = self.governors.as_ref() {
+            let _ = state.observe_peak(
+                purrdf_core::ResourceDimension::UdfDepth,
+                u64::from(next_depth),
+            );
+        }
         if next_depth > MAX_UDF_DEPTH {
             return Err(EvalError::function(format!(
                 "SHACL-AF function recursion exceeded the depth bound of {MAX_UDF_DEPTH}"
@@ -796,6 +951,145 @@ pub(crate) fn eval_evaluated<D: DatasetView + Sync>(
             tripped,
         )));
     }
+    // The `algebra-node-entry` charge point: one unit per node visited, charged before
+    // the node's own work. A trip here has committed nothing, so the truncation
+    // originates with an empty bag — a sound lower bound — and the ancestors that have
+    // already committed rows keep theirs as the lift carries this upwards.
+    if let Err(tripped) = ctx.charge(crate::governor::ChargePoint::AlgebraNodeEntry) {
+        return Ok(Evaluated::Truncated(Truncation::origin(
+            SolutionSeq::empty(Arc::new(VarSchema::new())),
+            tripped,
+        )));
+    }
+    let evaluated = eval_node(pattern, ctx)?;
+    Ok(commit_node_output(evaluated, ctx))
+}
+
+/// Charge one node's output and re-certify it: the `committed-output-row` charge point,
+/// the intermediate-cell peak observation, and the scratch-arena growth charge, applied
+/// uniformly to **every** operator at the one place every operator's result passes
+/// through.
+///
+/// Charging here rather than inside each operator is what makes the schedule honest: a
+/// new algebra variant is charged for its output the moment it is dispatched, instead of
+/// costing nothing until someone remembers to add a call to it. It is also what makes the
+/// charge deterministic under parallel evaluation — by the time a result reaches this
+/// function its rows have already been reduced into source order by
+/// [`crate::parallel`]'s index-ordered reduce, so the per-row charge below runs on one
+/// thread over one fixed sequence regardless of how many workers produced it.
+///
+/// The order of the three charges is the precedence order of the governors they can
+/// trip: the allocation ceiling first (it defends the failure mode from which there is no
+/// recovery), then fuel, then the arena. Where two are true at the same point,
+/// [`crate::governor::resolve_precedence`] settles it inside the state, so this order is
+/// an efficiency, not a second precedence rule.
+fn commit_node_output<D: DatasetView + Sync>(
+    evaluated: Evaluated<D::Id>,
+    ctx: &EvalCtx<'_, D>,
+) -> Evaluated<D::Id> {
+    // The one null test that makes an ungoverned execution free.
+    let Some(state) = ctx.governors.as_ref() else {
+        return evaluated;
+    };
+
+    let (mut rows, certificate) = match evaluated {
+        Evaluated::Complete(seq) => (seq, None),
+        Evaluated::Truncated(truncation) => {
+            let (rows, certificate) = truncation.split();
+            (rows, Some(certificate))
+        }
+    };
+
+    // Already stopped, at this node or below it. The rows in hand are the prefix the
+    // budget already paid for, so charging them a second time here would refuse rows the
+    // certificate has already been written for. A leaf that stopped mid-scan reports its
+    // trip only through the latched state, so this is also where a truncated `Bgp`,
+    // `Path`, or `Values` acquires its certificate.
+    if let Some(tripped) = state.tripped() {
+        return Evaluated::Truncated(match certificate {
+            None => Truncation::origin(rows, tripped),
+            Some(certificate) => Truncation::new(rows, certificate),
+        });
+    }
+
+    let width = rows.schema.len();
+    let tripped = ctx
+        .observe_cells(rows.rows.len(), width)
+        .err()
+        .or_else(|| {
+            ctx.admit_rows(
+                &mut rows.rows,
+                crate::governor::ChargePoint::CommittedOutputRow,
+            )
+        })
+        .or_else(|| ctx.charge_scratch_growth().err());
+
+    match (certificate, tripped) {
+        // Nothing tripped and nothing had: the ordinary, complete result.
+        (None, None) => Evaluated::Complete(rows),
+        // The node's own output crossed a ceiling: the rows left in hand are a
+        // positional prefix of what this node computed, which is exactly what
+        // `Truncation::origin` certifies.
+        (None, Some(tripped)) => Evaluated::Truncated(Truncation::origin(rows, tripped)),
+        // A child had already truncated. The child's certificate is the one that
+        // describes these rows — it names the governor that fired first and the path the
+        // truncation travelled — so it is preserved whether or not this node's own charge
+        // also crossed a ceiling.
+        (Some(certificate), _) => Evaluated::Truncated(Truncation::new(rows, certificate)),
+    }
+}
+
+/// Charge the answer cap against a query's **final** answer sequence, truncating it to
+/// the prefix the cap admits.
+///
+/// The cap is deliberately not `LIMIT`. `LIMIT` is query semantics and has already been
+/// applied by the time this runs — the pattern handed here is the fully-modified result —
+/// so the cap is tested against what the caller would actually receive, which is what
+/// makes it an operational governor rather than a second slice. Inclusive, like every
+/// other ceiling: a result whose size equals the cap is complete.
+fn commit_answer_rows<D: DatasetView + Sync>(
+    evaluated: Evaluated<D::Id>,
+    ctx: &EvalCtx<'_, D>,
+) -> Evaluated<D::Id> {
+    let Some(state) = ctx.governors.as_ref() else {
+        return evaluated;
+    };
+    if !state.is_engaged_in(purrdf_core::ResourceDimension::AnswerRows) {
+        return evaluated;
+    }
+
+    let (mut rows, certificate) = match evaluated {
+        Evaluated::Complete(seq) => (seq, None),
+        Evaluated::Truncated(truncation) => {
+            let (rows, certificate) = truncation.split();
+            (rows, Some(certificate))
+        }
+    };
+
+    let mut tripped = state.tripped();
+    if tripped.is_none() {
+        for admitted in 0..rows.rows.len() {
+            if let Err(cap) = state.charge(purrdf_core::ResourceDimension::AnswerRows, 1) {
+                rows.rows.truncate(admitted);
+                tripped = Some(cap);
+                break;
+            }
+        }
+    }
+
+    match (certificate, tripped) {
+        (None, None) => Evaluated::Complete(rows),
+        (None, Some(tripped)) => Evaluated::Truncated(Truncation::origin(rows, tripped)),
+        (Some(certificate), _) => Evaluated::Truncated(Truncation::new(rows, certificate)),
+    }
+}
+
+/// Dispatch one algebra node to its operator. Split out of [`eval_evaluated`] so that the
+/// charge points bracketing every node are written once rather than once per variant.
+fn eval_node<D: DatasetView + Sync>(
+    pattern: &GraphPattern,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
     match pattern {
         // Leaves: a truncation cannot happen "below" them, so they have no lift.
         GraphPattern::Bgp { patterns } => {
@@ -865,10 +1159,10 @@ pub(crate) fn eval_evaluated<D: DatasetView + Sync>(
 ///
 /// The **ungoverned** entry point, and the one every caller that holds no governor
 /// certificate uses. An [`EvalCtx`] carries no resource ceilings, so no charge site can
-/// fire and [`eval_evaluated`] can only answer [`Evaluated::Complete`] here; a truncation reaching
+/// fire and `eval_evaluated` can only answer `Evaluated::Complete` here; a truncation reaching
 /// this function would mean the channel produced a partial bag with nobody to certify it
 /// to, which is an internal invariant failure and is reported as one rather than as an
-/// answer. A governed caller uses the trip-aware [`eval_evaluated`] and receives the
+/// answer. A governed caller uses the trip-aware `eval_evaluated` and receives the
 /// certificate.
 ///
 /// # Errors
@@ -954,13 +1248,15 @@ pub(crate) fn evaluate_query_evaluated<D: DatasetView + Sync>(
     // string argument against it (SPARQL 1.1 §17.4.2.6).
     ctx.base_iri = query.base_iri().map(|nn| nn.as_str().to_owned());
     match query {
-        Query::Select { pattern, .. } => match eval_evaluated(pattern, ctx)? {
-            Evaluated::Complete(seq) => Ok(EvaluatedOutcome::Complete(Outcome::Solutions(seq))),
-            Evaluated::Truncated(certificate) => Ok(EvaluatedOutcome::Truncated {
-                outcome: Outcome::Solutions(certificate.rows().clone()),
-                certificate,
-            }),
-        },
+        Query::Select { pattern, .. } => {
+            match commit_answer_rows(eval_evaluated(pattern, ctx)?, ctx) {
+                Evaluated::Complete(seq) => Ok(EvaluatedOutcome::Complete(Outcome::Solutions(seq))),
+                Evaluated::Truncated(certificate) => Ok(EvaluatedOutcome::Truncated {
+                    outcome: Outcome::Solutions(certificate.rows().clone()),
+                    certificate,
+                }),
+            }
+        }
         Query::Ask { pattern, .. } => match eval_evaluated(pattern, ctx)? {
             Evaluated::Complete(seq) => Ok(EvaluatedOutcome::Complete(Outcome::Boolean(
                 !seq.is_empty(),

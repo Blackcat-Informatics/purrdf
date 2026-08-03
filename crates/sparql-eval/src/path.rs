@@ -90,6 +90,32 @@ struct PathCtx<'a, D: DatasetView + Sync> {
     scope: GraphScope<D::Id>,
     cache: NegatedCache<D::Id>,
     reach_cache: ReachCache<D::Id>,
+    /// The live governor accounting of the execution this traversal belongs to, shared
+    /// by [`Arc`] with the evaluation context rather than copied — a traversal that
+    /// spent its own copy of the budget would let a query with `N` property paths spend
+    /// `N` budgets.
+    governors: Option<Arc<crate::governor::GovernorState>>,
+}
+
+impl<D: DatasetView + Sync> PathCtx<'_, D> {
+    /// The `path-frontier-expansion` charge point: one unit per frontier node expanded.
+    ///
+    /// A property path is the one place in the evaluator where the work is unbounded in
+    /// the *graph* rather than in the query — a transitive closure over a cyclic graph
+    /// re-enters the same nodes at every repetition count — so the frontier expansion,
+    /// not the emitted row, is the quantity a budget has to bound. Returns `false` when
+    /// the execution has stopped, which every traversal loop treats as "return what has
+    /// been reached so far": a partially explored frontier reaches a subset of the truly
+    /// reachable nodes, which is a sound lower bound.
+    #[inline]
+    fn charge_frontier(&self) -> bool {
+        let Some(state) = self.governors.as_ref() else {
+            return true;
+        };
+        state
+            .charge_point_if_engaged(crate::governor::ChargePoint::PathFrontierExpansion)
+            .is_ok()
+    }
 }
 
 /// Build a `NegatedCache` by walking `path` once and pre-resolving every
@@ -188,6 +214,7 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
         scope,
         cache: build_negated_cache(path, dataset),
         reach_cache: RefCell::new(DetHashMap::default()),
+        governors: ctx.governor_state().map(Arc::clone),
     };
 
     // SPARQL 1.1 §18.3: a path with NO repetition operator (`*`/`+`/`?`/`{n,m}`)
@@ -299,7 +326,7 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
                 // require an actual traversal to discover whether x cycles back to
                 // itself — and for a bag path, count EACH derivation as its own row.
                 let reflexive = path_is_reflexive(path);
-                for x in node_universe(dataset, &pctx.scope) {
+                for x in node_universe(&pctx) {
                     if reflexive {
                         push_pair(
                             &mut rows,
@@ -320,7 +347,7 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
             } else {
                 // PINNED: spec-mandated distinct-var enumeration — enumerate every node
                 // in the universe and materialise all forward reachability. DO NOT alter.
-                for x in node_universe(dataset, &pctx.scope) {
+                for x in node_universe(&pctx) {
                     for y in node_reach(x, true) {
                         push_pair(
                             &mut rows,
@@ -403,9 +430,21 @@ fn visible_var(term: &TermPattern) -> Option<Variable> {
 /// All terms that appear as a subject or object of a quad in the active-dataset scope
 /// — the node universe for a both-endpoints-variable path (SPARQL §18.1.7). The
 /// `BTreeSet` de-dupes endpoints, so a `FROM`-merged scope needs no extra triple dedup.
-fn node_universe<D: DatasetView + Sync>(dataset: &D, scope: &GraphScope<D::Id>) -> BTreeSet<D::Id> {
+fn node_universe<D: DatasetView + Sync>(ctx: &PathCtx<'_, D>) -> BTreeSet<D::Id> {
     let mut out = BTreeSet::new();
-    scope.for_each_quad(dataset, None, None, None, |q| {
+    // The node universe is a full scan of the active scope, and it seeds every
+    // both-endpoints-variable path — so it is charged per candidate endpoint examined,
+    // exactly like a frontier expansion. Stopping early yields a smaller universe, hence
+    // a subset of the true solutions: a sound lower bound.
+    let mut stopped = false;
+    ctx.scope.for_each_quad(ctx.dataset, None, None, None, |q| {
+        if stopped {
+            return;
+        }
+        if !ctx.charge_frontier() {
+            stopped = true;
+            return;
+        }
         out.insert(q.s);
         out.insert(q.o);
     });
@@ -712,6 +751,11 @@ fn closure<D: DatasetView + Sync>(
         if !visited.insert(n) {
             continue;
         }
+        // The `path-frontier-expansion` charge point. Returning the frontier reached so
+        // far is sound: fewer expansions can only reach fewer nodes.
+        if !ctx.charge_frontier() {
+            break;
+        }
         result.insert(n);
         for next in reach_cached(inner, n, forward, ctx).iter().copied() {
             if !visited.contains(&next) {
@@ -743,6 +787,10 @@ fn closure_multi<D: DatasetView + Sync>(
     while let Some(n) = frontier.pop() {
         if !visited.insert(n) {
             continue;
+        }
+        // The `path-frontier-expansion` charge point; see `closure`.
+        if !ctx.charge_frontier() {
+            break;
         }
         result.insert(n);
         for next in reach_cached(inner, n, forward, ctx).iter().copied() {
@@ -789,6 +837,14 @@ fn range_reach<D: DatasetView + Sync>(
         }
         let mut next = BTreeSet::new();
         for n in &current {
+            // The `path-frontier-expansion` charge point. A `{n,m}` range re-enters the
+            // same nodes at every repetition count by design, so this is the one loop in
+            // the evaluator whose iteration count is bounded by the repetition bounds
+            // rather than by the graph — and `min`/`max` are `u32`, so those bounds can
+            // be in the billions.
+            if !ctx.charge_frontier() {
+                return out;
+            }
             next.extend(reach_cached(inner, *n, forward, ctx).iter().copied());
         }
         current = next;
@@ -917,6 +973,7 @@ mod tests {
             scope: GraphScope::One(purrdf_core::GraphMatch::Default),
             cache: build_negated_cache(path, ds),
             reach_cache: RefCell::new(DetHashMap::default()),
+            governors: None,
         };
         let mut v: Vec<String> = reach_cached(path, sid, forward, &pctx)
             .iter()

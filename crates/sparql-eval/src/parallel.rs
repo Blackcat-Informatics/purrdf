@@ -55,6 +55,7 @@ use purrdf_core::{DatasetView, TermId, TermValue, ViewTermId};
 use purrdf_sparql_algebra::{Expression, Function, GraphPattern};
 
 use crate::error::EvalError;
+use crate::governor::ItemCharge;
 use crate::governor::soundness::{
     ExpressionPart, PatternPart, visit_expression_parts, visit_pattern_parts,
 };
@@ -405,6 +406,81 @@ where
         out.extend(chunk_out);
     }
     out
+}
+
+/// [`par_chunk_map`] with a **deterministic charge meter**: alongside its output rows,
+/// each chunk worker records what every input item spent, so a governed caller can find
+/// the exact item at which a ceiling is crossed.
+///
+/// # How a governed parallel run stays deterministic
+///
+/// A shared atomic counter would make the *total* correct and the *trip point* a lottery:
+/// whichever worker reached the counter first would decide which item was blamed. What is
+/// recorded here instead is per-item and chunk-local — no atomics, no contention, and no
+/// shared counter to double-charge — and the chunk ledgers concatenate in chunk (hence
+/// source) order exactly like the rows do. The caller then folds them through
+/// [`crate::governor::GovernorState::commit_ordered_items`], which walks that one fixed sequence on one
+/// thread. The trip point is therefore a pure function of `(query, data, budget)`:
+/// independent of worker count, of chunk geometry, and of scheduling.
+///
+/// `metered` is the caller's short-circuit. When it is `false` — an ungoverned execution,
+/// or one whose fuel dimension carries no ceiling — the returned ledger is empty and this
+/// function is [`par_chunk_map`] exactly: the `&mut u64` handed to `push` is a stack
+/// local, so no per-item record is written and nothing is allocated.
+///
+/// The ledger costs two `u64` per input item on the metered path, which is why it is a
+/// dedicated compact record rather than a full per-item resource vector — see
+/// [`ItemCharge`] for both halves of that reasoning.
+pub(crate) fn par_chunk_map_metered<T, R>(
+    items: &[T],
+    metered: bool,
+    push: impl Fn(&mut Vec<R>, &mut u64, &T) + Sync,
+) -> (Vec<R>, Vec<ItemCharge>)
+where
+    T: Sync,
+    R: Send,
+{
+    /// Fold one chunk, recording each item's charge when `metered`.
+    fn run_chunk<T, R>(
+        chunk: &[T],
+        metered: bool,
+        push: &(impl Fn(&mut Vec<R>, &mut u64, &T) + Sync),
+    ) -> (Vec<R>, Vec<ItemCharge>) {
+        let mut out = Vec::new();
+        let mut ledger = Vec::with_capacity(if metered { chunk.len() } else { 0 });
+        for item in chunk {
+            let before = out.len();
+            let mut fuel = 0_u64;
+            push(&mut out, &mut fuel, item);
+            if metered {
+                ledger.push(ItemCharge {
+                    fuel,
+                    committed: (out.len() - before) as u64,
+                });
+            }
+        }
+        (out, ledger)
+    }
+
+    if !should_parallelize(items.len()) {
+        return run_chunk(items, metered, &push);
+    }
+
+    use rayon::prelude::*;
+
+    let size = chunk_size_for(items.len());
+    let per_chunk: Vec<(Vec<R>, Vec<ItemCharge>)> = items
+        .par_chunks(size)
+        .map(|chunk| run_chunk(chunk, metered, &push))
+        .collect();
+
+    let mut rows = Vec::with_capacity(per_chunk.iter().map(|(out, _)| out.len()).sum());
+    let mut ledger = Vec::with_capacity(per_chunk.iter().map(|(_, l)| l.len()).sum());
+    for (chunk_rows, chunk_ledger) in per_chunk {
+        rows.extend(chunk_rows);
+        ledger.extend(chunk_ledger);
+    }
+    (rows, ledger)
 }
 
 /// The fallible, fork-per-worker sibling of [`par_chunk_map`]: each rayon

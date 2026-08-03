@@ -31,12 +31,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use purrdf_core::{DatasetView, RdfDataset, TermValue, ViewTermId};
+use purrdf_core::{DatasetView, RdfDataset, TermValue, TrippedGovernor, ViewTermId};
 use purrdf_sparql_algebra::{GraphPattern, NamedNodePattern, Variable};
 
 use crate::error::EvalError;
 use crate::eval::{EvalCtx, materialize_solutions};
-use crate::governor::lift::Evaluated;
+use crate::governor::lift::{Evaluated, Truncation};
 use crate::solution::{SolutionSeq, VarSchema};
 
 /// One remote `SELECT` result set, dataset-independent (egress [`TermValue`]
@@ -133,6 +133,26 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
         .map(Evaluated::Complete);
     };
 
+    // The `remote-request-issued` charge point, plus the request against the remote
+    // request ceiling — charged **before** the call, so an exhausted budget prevents the
+    // request rather than merely observing it afterwards. A budget trip is deliberately
+    // NOT silenceable here: `SILENT` is a statement about the endpoint, not about this
+    // engine's budget, and swallowing a trip to the join identity would return a result
+    // that looks complete and is wrong.
+    if let Err(tripped) = ctx
+        .charge(crate::governor::ChargePoint::RemoteRequestIssued)
+        .and_then(|()| ctx.charge_amount(purrdf_core::ResourceDimension::RemoteRequests, 1))
+    {
+        // The empty bag, never the join identity: the identity row is what makes a
+        // surrounding join a no-op, so returning it here would claim the remote endpoint
+        // had been consulted and had imposed nothing. An empty bag claims only that no
+        // remote row was established, which is exactly true and is a sound lower bound.
+        return Ok(Evaluated::Truncated(Truncation::origin(
+            SolutionSeq::empty(Arc::new(VarSchema::new())),
+            tripped,
+        )));
+    }
+
     let query_text = purrdf_sparql_algebra::pattern_to_select_query(inner);
     let resolved = match source.query(&endpoint, &query_text) {
         Ok(resolved) => resolved,
@@ -142,7 +162,11 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
         }
     };
 
-    Ok(Evaluated::Complete(ingest(resolved, ctx)))
+    let (seq, tripped) = ingest(resolved, ctx);
+    Ok(match tripped {
+        None => Evaluated::Complete(seq),
+        Some(tripped) => Evaluated::Truncated(Truncation::origin(seq, tripped)),
+    })
 }
 
 /// On `SILENT`, return the join identity (one empty row, a no-op for the
@@ -171,14 +195,24 @@ fn identity_seq<I: ViewTermId>() -> SolutionSeq<I> {
 /// yielding a [`SolutionSeq`] over the result schema. (Mirrors `modifier::eval_values`
 /// but carries `TermValue` directly, so remote blank nodes survive — `GroundTerm`
 /// has no blank-node variant.)
+/// Returns the interned bag together with the governor that stopped the ingest, if one
+/// did: the `remote-row-ingested` charge point is charged per row **as it is interned**,
+/// so an unbounded remote response cannot walk past the caller's ceilings by arriving
+/// from outside the dataset. Charging in row order makes the ingested prefix a positional
+/// prefix of the endpoint's answer, which is what lets the caller certify it.
 fn ingest<D: DatasetView + Sync>(
     resolved: ResolvedBindings,
     ctx: &mut EvalCtx<'_, D>,
-) -> SolutionSeq<D::Id> {
+) -> (SolutionSeq<D::Id>, Option<TrippedGovernor>) {
     let schema = Arc::new(VarSchema::from_vars(resolved.variables));
     let width = schema.len();
     let mut rows = Vec::with_capacity(resolved.rows.len());
+    let mut tripped = None;
     for binding in resolved.rows {
+        if let Err(governor) = ctx.charge(crate::governor::ChargePoint::RemoteRowIngested) {
+            tripped = Some(governor);
+            break;
+        }
         let mut row = smallvec::smallvec![None; width];
         for (i, cell) in binding.into_iter().enumerate().take(width) {
             if let Some(value) = cell {
@@ -187,7 +221,7 @@ fn ingest<D: DatasetView + Sync>(
         }
         rows.push(row);
     }
-    SolutionSeq { schema, rows }
+    (SolutionSeq { schema, rows }, tripped)
 }
 
 /// An in-memory [`RemoteQuerySource`] that **dog-foods the native engine**: each

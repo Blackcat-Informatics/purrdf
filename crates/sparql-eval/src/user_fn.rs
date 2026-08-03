@@ -425,6 +425,18 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
         }
     }
 
+    // The `user-function-invocation` charge point. Charged once per invocation that
+    // actually reaches a body — an arity or type-constraint refusal above evaluated
+    // nothing, and charging for work that never happened would make the schedule a
+    // description of the query text rather than of the execution. A function body's own
+    // evaluation then charges through the shared state, so a query cannot evade its
+    // ceiling by moving work into a function.
+    if let Err(tripped) = ctx.charge(crate::governor::ChargePoint::UserFunctionInvocation) {
+        return Err(EvalError::function(format!(
+            "SHACL-AF function <{iri}> was not invoked: {tripped}"
+        )));
+    }
+
     // Recursion-bounded child context (guards mutually-recursive functions).
     let mut child = ctx.child_for_user_fn()?;
     let substituted = crate::substitute::apply_substitutions((*func.body).clone(), &substitutions)

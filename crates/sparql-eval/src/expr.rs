@@ -196,10 +196,22 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let mut lift = Lift::at(node);
-    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
+    let Some(mut seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
         return Ok(lift.withheld());
     };
     let schema = seq.schema.clone();
+    // The `row-expression-evaluation` charge point, charged **per row** rather than per
+    // sub-expression so that the cost of a `FILTER` is a property of the data it sees
+    // and not of how the planner happened to shape the predicate. Charged before the
+    // predicate runs and against the rows in source order, so the admitted set is a
+    // positional prefix and the refused rows are never evaluated at all — a governor
+    // that only reported the cost after paying it would bound nothing. The trip itself
+    // is latched in the governor state, which is where `eval` reads it to certify this
+    // node's output.
+    let _ = ctx.admit_rows(
+        &mut seq.rows,
+        crate::governor::ChargePoint::RowExpressionEvaluation,
+    );
     let rows = if crate::parallel::is_parallel_safe(expr, ctx.user_functions) {
         crate::parallel::par_chunk_try_map_init(
             &seq.rows,
@@ -248,9 +260,16 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let mut lift = Lift::at(node);
-    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
+    let Some(mut seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
         return Ok(lift.withheld());
     };
+    // The `row-expression-evaluation` charge point; see `eval_filter` for why it is per
+    // row rather than per sub-expression, and why the refused rows are cut before the
+    // expression runs rather than after.
+    let _ = ctx.admit_rows(
+        &mut seq.rows,
+        crate::governor::ChargePoint::RowExpressionEvaluation,
+    );
     let mut schema = (*seq.schema).clone();
     let col = schema.push(var.clone());
     let width = schema.len();

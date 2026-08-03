@@ -7,9 +7,9 @@
 //! content-hashed identity of the charge schedule ([`GOVERNOR_PROFILE_ID`],
 //! [`GOVERNOR_PROFILE_VERSION`], [`GOVERNOR_PROFILE_DIGEST`]).
 //!
-//! [`lift`] holds the partial-lift channel — the third result an operator can produce,
+//! `lift` holds the partial-lift channel — the third result an operator can produce,
 //! carrying the rows it holds together with a machine-checked statement of what they
-//! bound — and [`soundness`] holds the companion static analysis: the one exhaustive algebra visitor
+//! bound — and `soundness` holds the companion static analysis: the one exhaustive algebra visitor
 //! that decides what a truncated bag at a node still certifies about the root answer, and
 //! — the same computation read for a different purpose — whether the answer cap may be
 //! pushed down to that node.
@@ -28,9 +28,10 @@
 //! [`ResourceDimension::AnswerRows`], and [`ResourceDimension::IntermediateCells`]: the
 //! same query over the same data under the same ceilings consumes exactly the same
 //! amount and trips at exactly the same point. Parallel evaluation preserves this
-//! because charges are accumulated **chunk-locally** ([`LocalCharge`]) and folded in
-//! chunk-index order ([`GovernorState::commit_ordered`]) — the same order-stable
-//! reduction [`crate::parallel`] already uses for errors. A deadline trip is inherently
+//! because charges are accumulated **chunk-locally** ([`ItemCharge`], one record per
+//! input row, no atomics and nothing shared) and folded in source-item order
+//! ([`GovernorState::commit_ordered_items`]) — the same order-stable reduction
+//! `crate::parallel` already uses for errors. A deadline trip is inherently
 //! time-dependent and carries no such determinism claim.
 //!
 //! # The schema of a partial result (a stated contract, not an accident)
@@ -67,6 +68,8 @@
 //! the evaluation tier name one taxonomy. This module adds only the evaluation tier's
 //! configuration, live state, and profile identity.
 
+#[cfg(test)]
+mod charge_points;
 pub(crate) mod lift;
 pub(crate) mod soundness;
 
@@ -345,15 +348,50 @@ const CALLER_SETTABLE_DIMENSIONS: [ResourceDimension; 5] = [
     ResourceDimension::RemoteRequests,
 ];
 
+/// The ceiling [`QueryGovernors::METERED`] puts on every caller-settable dimension:
+/// engaged, so the counter runs, and one below the largest representable, so nothing an
+/// execution can actually consume reaches it.
+const METERING_CEILING: u64 = u64::MAX - 1;
+
+/// [`QueryGovernors::METERED`]'s ceiling vector.
+///
+/// Derived from [`CALLER_SETTABLE_DIMENSIONS`] rather than written out, so a dimension
+/// added to that table is metered automatically instead of being silently left
+/// unmeasurable — the failure mode would be a consumer sizing a budget from evidence with
+/// a hole in it, which is worse than no evidence at all. Fixed-ceiling dimensions are
+/// untouched: this starts from [`QueryGovernors::UNBOUNDED`]'s vector, so the recursion
+/// guard survives.
+const fn metering_limits() -> ResourceVector {
+    let mut limits = QueryGovernors::UNBOUNDED.limits;
+    let mut index = 0;
+    while index < CALLER_SETTABLE_DIMENSIONS.len() {
+        limits.set(CALLER_SETTABLE_DIMENSIONS[index], METERING_CEILING);
+        index += 1;
+    }
+    limits
+}
+
 /// Whether `dimension` is compared against the **maximum** of any single observation
 /// rather than against a running sum.
 ///
-/// The intermediate-cell ceiling bounds how large one operator instance's materialized
-/// bag may get. Summing it across operators would make a long, cheap query
-/// indistinguishable from a single catastrophic cross product, which is the failure the
-/// ceiling exists to stop. Every other dimension is a genuine cumulative cost and sums.
+/// Two dimensions are maxima rather than totals, for the same reason in two different
+/// shapes:
+///
+/// - [`ResourceDimension::IntermediateCells`] bounds how large one operator instance's
+///   materialized bag may get. Summing it across operators would make a long, cheap
+///   query indistinguishable from a single catastrophic cross product, which is the
+///   failure the ceiling exists to stop.
+/// - [`ResourceDimension::UdfDepth`] is a nesting *depth*. A query that calls a
+///   user-defined function a thousand times at depth one has reached depth one, not
+///   depth one thousand; summing it would report a stack that was never that deep and
+///   refuse a call chain that never came close to the recursion guard.
+///
+/// Every other dimension is a genuine cumulative cost and sums.
 const fn is_peak_tracked(dimension: ResourceDimension) -> bool {
-    matches!(dimension, ResourceDimension::IntermediateCells)
+    matches!(
+        dimension,
+        ResourceDimension::IntermediateCells | ResourceDimension::UdfDepth
+    )
 }
 
 /// The fuel interval at which a [`StopSignal`] is polled.
@@ -408,6 +446,40 @@ impl QueryGovernors {
     /// [`PagedQueryLimits::UNBOUNDED`](purrdf_core::ir::PagedQueryLimits::UNBOUNDED).
     pub const UNBOUNDED: Self = Self {
         limits: ResourceVector::UNBOUNDED.with(ResourceDimension::UdfDepth, MAX_UDF_DEPTH as u64),
+        stop: None,
+    };
+
+    /// **Measure** this query's cost without bounding it: every caller-settable dimension
+    /// is engaged, at a ceiling no query can reach.
+    ///
+    /// Run a query under this, read [`GovernorEvidence`] off the completed result, and use
+    /// the numbers to choose the real ceilings. That is the intended way to size a budget,
+    /// and it is why evidence is returned on the *complete* path at all.
+    ///
+    /// # Why [`Self::UNBOUNDED`] does not do this
+    ///
+    /// [`Self::UNBOUNDED`] reports **nothing**, because it charges nothing: every charge
+    /// site short-circuits on [`GovernorState::is_engaged_in`] before it touches a
+    /// counter, which is precisely what makes an ungoverned query cost exactly what it
+    /// cost before governors existed. That is a deliberate trade, not an oversight — you
+    /// cannot have a meter that is free and also a meter that reads. So the two are
+    /// separate, named states: `UNBOUNDED` declines both the ceilings and the accounting;
+    /// `METERED` takes the accounting and declines the ceilings.
+    ///
+    /// # The ceiling is high, not absent
+    ///
+    /// "Engaged" *means* "carries a ceiling" — an absent ceiling is exactly what the
+    /// charge sites short-circuit on — so metering requires a finite number. It is one
+    /// below the largest representable, so a query would have to consume `u64::MAX` units
+    /// of a dimension to trip it, which no execution that fits in memory can do.
+    /// Charging saturates rather than overflowing, so even the impossible case fails
+    /// closed with a typed budget trip instead of a panic.
+    ///
+    /// Fixed-ceiling dimensions are **not** relaxed by this door either:
+    /// [`ResourceDimension::UdfDepth`] keeps the evaluator's recursion guard, exactly as
+    /// it does under [`Self::UNBOUNDED`].
+    pub const METERED: Self = Self {
+        limits: metering_limits(),
         stop: None,
     };
 
@@ -541,68 +613,37 @@ where
 // Chunk-local accumulation
 // ---------------------------------------------------------------------------
 
-/// A non-atomic, `Send` charge accumulator private to one parallel chunk.
+/// One **input item's** contribution to an ordered charge fold: the fuel that item spent
+/// and the output rows it committed.
 ///
-/// A shared atomic counter would be both a contention point and a determinism hazard: the
-/// order in which workers reached it would decide which chunk was blamed for crossing a
-/// ceiling. Each worker instead accumulates here, with no atomics and nothing shared, and
-/// the join phase folds the chunks in index order through
-/// [`GovernorState::commit_ordered`]. Per-chunk accumulation also removes the
-/// double-charging hazard of a per-worker copy of a budget.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LocalCharge {
-    /// Summed charges, one slot per dimension.
-    charged: ResourceVector,
-    /// Maximum single observations, one slot per dimension.
-    peaks: ResourceVector,
-}
-
-impl LocalCharge {
-    /// Nothing charged and nothing observed.
-    pub const EMPTY: Self = Self {
-        charged: ResourceVector::ZERO,
-        peaks: ResourceVector::ZERO,
-    };
-
-    /// Nothing charged and nothing observed.
-    #[must_use]
-    pub const fn new() -> Self {
-        Self::EMPTY
-    }
-
-    /// Add `amount` to this chunk's running total for `dimension`.
-    ///
-    /// Saturating: an arithmetic panic in a resource meter would convert an exhausted
-    /// budget into a crash.
-    pub const fn charge(&mut self, dimension: ResourceDimension, amount: u64) {
-        self.charged.saturating_add_assign(dimension, amount);
-    }
-
-    /// Record `observed` as this chunk's largest single observation of `dimension`.
-    pub const fn peak(&mut self, dimension: ResourceDimension, observed: u64) {
-        self.peaks.max_assign(dimension, observed);
-    }
-
-    /// This chunk's summed charge on `dimension`.
-    #[must_use]
-    pub const fn charged_in(&self, dimension: ResourceDimension) -> u64 {
-        self.charged.get(dimension)
-    }
-
-    /// This chunk's largest single observation of `dimension`.
-    #[must_use]
-    pub const fn peak_in(&self, dimension: ResourceDimension) -> u64 {
-        self.peaks.get(dimension)
-    }
-}
-
-impl Default for LocalCharge {
-    /// An empty accumulator. Unlike a ceiling vector, an all-zero *accumulator* has
-    /// exactly one sensible reading — nothing charged yet — so a default here cannot
-    /// silently grant or deny anyone a budget.
-    fn default() -> Self {
-        Self::EMPTY
-    }
+/// # Why the fold unit is an item and not a chunk
+///
+/// A chunk-granular ledger is the obvious design and it is wrong. Chunk geometry is
+/// derived from `rayon::current_num_threads()` — `crate::parallel` splits `len` items
+/// into `len / (threads * 4)`-sized slices — so folding a row loop at chunk granularity
+/// would make the reported trip point depend on the machine's thread count, which is
+/// exactly the dependence the ordered fold exists to remove. It is also invisible without
+/// a test that varies the worker count, because every run on one machine agrees with
+/// itself. Recording a charge per *item* and folding those in source-item order gives a
+/// trip point that is a pure function of `(query, data, budget)`, while the accumulation
+/// stays chunk-local and atomic-free.
+///
+/// # Why it is two counters and not a full resource vector
+///
+/// A record with one `u64` per dimension would allocate more per row than the rows
+/// themselves cost — an allocation ceiling whose own meter is the largest allocation in
+/// the query is not a ceiling. Every dimension a chunked row loop can charge is a count
+/// of events, and the two counts below are all of them; the wider dimensions (the
+/// intermediate-cell peak, remote requests, scratch bytes) are observed once per operator
+/// instance on the main thread, where width costs nothing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ItemCharge {
+    /// Fuel this item spent.
+    pub fuel: u64,
+    /// Output rows this item appended to its operator's output, used to cut the output
+    /// at the item the fold refuses. Never charged here — an operator's committed rows
+    /// are charged at its own boundary, so counting them again would double-charge.
+    pub committed: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -795,7 +836,7 @@ impl GovernorState {
     ///
     /// **This flag bounds *actual* work only. It is NEVER consulted to decide the reported
     /// trip point.** The reported trip is a pure function of the query, the data, and the
-    /// budget, computed by the ordered fold in [`Self::commit_ordered`]. Letting a
+    /// budget, computed by the ordered fold in [`Self::commit_ordered_items`]. Letting a
     /// `Relaxed` read influence *where* a query stopped would make the answer depend on
     /// worker count and scheduling — the same query, data, and budget would produce
     /// different partial answers on different machines, which is precisely the property
@@ -805,71 +846,97 @@ impl GovernorState {
         self.abandon.load(Ordering::Relaxed)
     }
 
-    /// Fold chunk-local charges in **slice-index order**, returning the first chunk index
-    /// at which a ceiling is crossed and the governor that tripped.
+    /// Whether `dimension` carries a ceiling this execution must enforce.
     ///
-    /// This is what makes a governed parallel execution's trip point a pure function of
-    /// `(query, data, budget)`, independent of worker count, chunk geometry, and
-    /// scheduling. It mirrors the reduction [`crate::parallel`] already performs for
-    /// errors, where the first `Err` **by chunk index** wins regardless of which worker
-    /// finished first: the same reasoning applies to a budget crossing, because a
-    /// completion-order fold would blame whichever chunk happened to finish last and the
-    /// certified prefix would change from run to run.
+    /// This is the predicate every charge site tests **before** touching a counter, and
+    /// it is what makes an ungoverned dimension free: one `Copy` array read and one
+    /// compare, no atomic, no allocation. Per-dimension rather than per-execution so
+    /// that a caller who set only a deadline never pays fuel-charge overhead.
+    #[inline]
+    #[must_use]
+    pub const fn is_engaged_in(&self, dimension: ResourceDimension) -> bool {
+        self.limits.is_bounded(dimension)
+    }
+
+    /// Charge `amount` against `dimension`, **only if** that dimension carries a ceiling.
     ///
-    /// Chunks after the crossing are not folded in: their work is not part of the
+    /// The short-circuit is the whole point: see [`Self::is_engaged_in`].
+    ///
+    /// # Errors
+    ///
+    /// The governor that stopped this execution, once one has.
+    #[inline]
+    pub fn charge_if_engaged(
+        &self,
+        dimension: ResourceDimension,
+        amount: u64,
+    ) -> Result<(), TrippedGovernor> {
+        if self.is_engaged_in(dimension) {
+            self.charge(dimension, amount)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Charge one occurrence of `point` against fuel, only if fuel carries a ceiling.
+    ///
+    /// # Errors
+    ///
+    /// The governor that stopped this execution, once one has.
+    #[inline]
+    pub fn charge_point_if_engaged(&self, point: ChargePoint) -> Result<(), TrippedGovernor> {
+        self.charge_if_engaged(ResourceDimension::Fuel, point.cost())
+    }
+
+    /// Record `observed` as a single observation of `dimension`, only if that dimension
+    /// carries a ceiling.
+    ///
+    /// # Errors
+    ///
+    /// The governor that stopped this execution, once one has.
+    #[inline]
+    pub fn observe_peak_if_engaged(
+        &self,
+        dimension: ResourceDimension,
+        observed: u64,
+    ) -> Result<(), TrippedGovernor> {
+        if self.is_engaged_in(dimension) {
+            self.observe_peak(dimension, observed)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Fold per-**item** charges in source-item order, returning the first item index at
+    /// which a ceiling is crossed, the number of output rows committed strictly before
+    /// that item, and the governor that tripped.
+    ///
+    /// This is the one ordered fold: see [`ItemCharge`] for why a row loop must be folded
+    /// per item rather than per chunk — a chunk-granular sibling is deliberately not
+    /// offered, because its granularity is the wrong one and an API that lets a caller
+    /// reach for it invites a bug no single-machine test can see — and
+    /// [`Self::should_abandon`] for why the best-effort abandon flag is never read here.
+    ///
+    /// Each item is charged through [`Self::charge`], the same sequential charge path a
+    /// non-parallel operator uses, so a forced-sequential run and a forced-parallel run
+    /// of the same operator over the same rows trip at the same item by construction
+    /// rather than by two implementations agreeing.
+    ///
+    /// Items after the crossing are not folded in: their work is not part of the
     /// certified prefix, so charging for it would report a cost the answer does not
-    /// reflect. Within a single chunk, several dimensions can cross at once; those
-    /// candidates are resolved through [`resolve_precedence`], not by dimension
-    /// declaration order.
-    ///
-    /// The fold never polls the stop signal. A stop poll inside the fold would make the
-    /// reported chunk index depend on the wall clock, which is the one thing the ordered
-    /// fold is here to prevent; signals are polled at charge points and at operator
-    /// boundaries instead.
-    ///
-    /// Actual work may overshoot the reported trip point by at most one parallel round:
-    /// every chunk already in flight runs to completion before the fold discovers the
-    /// crossing. [`Self::should_abandon`] bounds that overshoot without perturbing it.
-    pub fn commit_ordered(&self, chunks: &[LocalCharge]) -> Option<(usize, TrippedGovernor)> {
-        for (index, chunk) in chunks.iter().enumerate() {
-            let mut crossings = Vec::new();
-            for dimension in ResourceDimension::ALL {
-                let limit = self.limits.get(dimension);
-                let slot = Self::slot(dimension);
-
-                let amount = chunk.charged_in(dimension);
-                if amount != 0 {
-                    let previous = self.consumed[slot]
-                        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                            Some(current.saturating_add(amount))
-                        })
-                        .unwrap_or(0);
-                    let updated = previous.saturating_add(amount);
-                    if updated > limit {
-                        crossings.push(TrippedGovernor::Budget {
-                            dimension,
-                            limit,
-                            consumed: updated,
-                        });
-                    }
-                }
-
-                let observed = chunk.peak_in(dimension);
-                if observed != 0 {
-                    self.peaks[slot].fetch_max(observed, Ordering::Relaxed);
-                    if observed > limit {
-                        crossings.push(TrippedGovernor::Budget {
-                            dimension,
-                            limit,
-                            consumed: observed,
-                        });
-                    }
-                }
+    /// reflect. Actual work may still overshoot the reported trip point by at most one
+    /// parallel round, because every chunk already in flight runs to completion before
+    /// this fold discovers the crossing. Reported work is exact.
+    pub fn commit_ordered_items(
+        &self,
+        per_item: &[ItemCharge],
+    ) -> Option<(usize, u64, TrippedGovernor)> {
+        let mut committed = 0_u64;
+        for (index, item) in per_item.iter().enumerate() {
+            if let Err(tripped) = self.charge(ResourceDimension::Fuel, item.fuel) {
+                return Some((index, committed, tripped));
             }
-
-            if let Some(candidate) = resolve_precedence(crossings) {
-                return Some((index, self.trip(candidate)));
-            }
+            committed = committed.saturating_add(item.committed);
         }
         None
     }
@@ -1086,7 +1153,7 @@ fn schedule_digest(id: &str, version: u32, schedule: &[(&str, u64)]) -> String {
 }
 
 /// The content-addressed identity of [`CHARGE_SCHEDULE`]: the lowercase-hex SHA-256 of its
-/// canonical encoding (see [`schedule_preimage`]).
+/// canonical encoding (see `schedule_preimage`).
 ///
 /// This is **derived**, not declared. A hand-maintained version number with a "remember to
 /// bump it when costs move" convention is a rule enforced by discipline, which is to say
@@ -1139,7 +1206,7 @@ mod tests {
         assert_send_sync::<WallDeadline>();
         assert_send_sync::<CancellationFlag>();
         fn assert_send<T: Send>() {}
-        assert_send::<LocalCharge>();
+        assert_send::<ItemCharge>();
     };
 
     /// A signal that has already latched to `cause`, for tests that need a deterministic
@@ -1413,111 +1480,122 @@ mod tests {
     }
 
     #[test]
-    fn commit_ordered_returns_the_same_chunk_index_regardless_of_chunk_completion_order() {
-        // Six chunks of four fuel each, against a ceiling of eleven: the running total
-        // crosses during chunk index 2 (4, 8, 12).
-        let chunk_charges = [4_u64; 6];
-        let expected_index = 2;
-        let expected_trip = TrippedGovernor::Budget {
-            dimension: ResourceDimension::Fuel,
-            limit: 11,
-            consumed: 12,
-        };
+    fn commit_ordered_items_returns_the_same_index_regardless_of_worker_completion_order() {
+        // Six input items of four fuel each, against a ceiling of eleven: the running
+        // total crosses at item index 2 (4, 8, 12). Each item also committed one output
+        // row, so the certified prefix is the two rows produced before the crossing.
+        let item_fuel = [4_u64; 6];
+        let expected = Some((
+            2,
+            2,
+            TrippedGovernor::Budget {
+                dimension: ResourceDimension::Fuel,
+                limit: 11,
+                consumed: 12,
+            },
+        ));
 
         let build = |order: &[usize]| {
             // Fill the indexed slots in the given "completion order", exactly as a
-            // work-stealing pool would: the slot index is the chunk's position in the
-            // source, never the order it finished in.
-            let mut chunks = vec![LocalCharge::new(); chunk_charges.len()];
+            // work-stealing pool would: the slot index is the item's position in the
+            // source, never the order the worker holding it finished in.
+            let mut ledger = vec![ItemCharge::default(); item_fuel.len()];
             for &slot in order {
-                let mut local = LocalCharge::new();
-                local.charge(ResourceDimension::Fuel, chunk_charges[slot]);
-                chunks[slot] = local;
+                ledger[slot] = ItemCharge {
+                    fuel: item_fuel[slot],
+                    committed: 1,
+                };
             }
-            chunks
+            ledger
         };
 
-        let in_order: Vec<usize> = (0..chunk_charges.len()).collect();
-        let reversed: Vec<usize> = (0..chunk_charges.len()).rev().collect();
+        let in_order: Vec<usize> = (0..item_fuel.len()).collect();
+        let reversed: Vec<usize> = (0..item_fuel.len()).rev().collect();
         let interleaved = vec![3, 0, 5, 2, 4, 1];
 
         for order in [&in_order, &reversed, &interleaved] {
             let state = GovernorState::new(&QueryGovernors::UNBOUNDED.with_fuel(11));
             assert_eq!(
-                state.commit_ordered(&build(order)),
-                Some((expected_index, expected_trip)),
-                "the trip point is a function of the chunk index, not of completion order"
+                state.commit_ordered_items(&build(order)),
+                expected,
+                "the trip point is a function of the item index, not of completion order"
             );
-            // Chunks after the crossing are not folded in, so the reported cost reflects
+            // Items after the crossing are not folded in, so the reported cost reflects
             // exactly the prefix that was certified.
             assert_eq!(state.consumed_in(ResourceDimension::Fuel), 12);
         }
 
-        // Concurrently produced chunks reach the same answer: production order is
+        // Concurrently produced records reach the same answer: production order is
         // irrelevant because the fold reads the slice by index.
         let state = GovernorState::new(&QueryGovernors::UNBOUNDED.with_fuel(11));
-        let produced: Vec<LocalCharge> = std::thread::scope(|scope| {
+        let produced: Vec<ItemCharge> = std::thread::scope(|scope| {
             let handles: Vec<_> = reversed
                 .iter()
-                .map(|&slot| scope.spawn(move || (slot, chunk_charges[slot])))
+                .map(|&slot| scope.spawn(move || (slot, item_fuel[slot])))
                 .collect();
-            let mut chunks = vec![LocalCharge::new(); chunk_charges.len()];
+            let mut ledger = vec![ItemCharge::default(); item_fuel.len()];
             for handle in handles {
-                let (slot, amount) = handle.join().expect("worker did not panic");
-                chunks[slot].charge(ResourceDimension::Fuel, amount);
+                let (slot, fuel) = handle.join().expect("worker did not panic");
+                ledger[slot] = ItemCharge { fuel, committed: 1 };
             }
-            chunks
+            ledger
         });
-        assert_eq!(
-            state.commit_ordered(&produced),
-            Some((expected_index, expected_trip))
-        );
+        assert_eq!(state.commit_ordered_items(&produced), expected);
     }
 
     #[test]
-    fn commit_ordered_reports_no_crossing_when_the_whole_fold_fits() {
+    fn commit_ordered_items_reports_no_crossing_when_the_whole_fold_fits() {
         let state = GovernorState::new(&QueryGovernors::UNBOUNDED.with_fuel(12));
-        let chunks: Vec<LocalCharge> = (0..3)
-            .map(|_| {
-                let mut local = LocalCharge::new();
-                local.charge(ResourceDimension::Fuel, 4);
-                local.peak(ResourceDimension::IntermediateCells, 9);
-                local
+        let ledger: Vec<ItemCharge> = (0..3)
+            .map(|_| ItemCharge {
+                fuel: 4,
+                committed: 2,
             })
             .collect();
 
-        assert_eq!(state.commit_ordered(&chunks), None);
+        assert_eq!(state.commit_ordered_items(&ledger), None);
         assert_eq!(state.consumed_in(ResourceDimension::Fuel), 12);
-        assert_eq!(
-            state.consumed_in(ResourceDimension::IntermediateCells),
-            9,
-            "peaks fold as a maximum across chunks, never as a sum"
-        );
         assert!(state.evidence().is_complete());
     }
 
     #[test]
-    fn commit_ordered_resolves_a_multi_dimension_crossing_by_precedence() {
-        let state = GovernorState::new(
-            &QueryGovernors::UNBOUNDED
-                .with_fuel(1)
-                .with_max_intermediate_cells(1),
-        );
-        let mut chunk = LocalCharge::new();
-        chunk.charge(ResourceDimension::Fuel, 9);
-        chunk.peak(ResourceDimension::IntermediateCells, 9);
+    fn commit_ordered_items_charges_nothing_beyond_the_certified_prefix() {
+        // A ceiling of one, and three items of one fuel each. The first item is admitted
+        // (the ceiling is inclusive), the second crosses it — and the third is never
+        // charged at all, because its work is not part of what the caller receives.
+        let state = GovernorState::new(&QueryGovernors::UNBOUNDED.with_fuel(1));
+        let ledger = vec![
+            ItemCharge {
+                fuel: 1,
+                committed: 3,
+            },
+            ItemCharge {
+                fuel: 1,
+                committed: 7,
+            },
+            ItemCharge {
+                fuel: 9_000,
+                committed: 11,
+            },
+        ];
 
         assert_eq!(
-            state.commit_ordered(&[chunk]),
+            state.commit_ordered_items(&ledger),
             Some((
-                0,
+                1,
+                3,
                 TrippedGovernor::Budget {
-                    dimension: ResourceDimension::IntermediateCells,
+                    dimension: ResourceDimension::Fuel,
                     limit: 1,
-                    consumed: 9,
+                    consumed: 2,
                 }
             )),
-            "the allocation ceiling outranks fuel when both cross in one chunk"
+            "the certified prefix is the rows the items before the crossing committed"
+        );
+        assert_eq!(
+            state.consumed_in(ResourceDimension::Fuel),
+            2,
+            "the item after the crossing must not be charged"
         );
     }
 
@@ -1601,6 +1679,27 @@ mod tests {
             }
         }
         assert_eq!(resolve_precedence([]), None);
+
+        // Budget against budget, too: the allocation ceiling defends the failure mode
+        // there is no recovering from, so it outranks every other ceiling when several
+        // are true at one charge point.
+        let cells = TrippedGovernor::Budget {
+            dimension: ResourceDimension::IntermediateCells,
+            limit: 1,
+            consumed: 9,
+        };
+        for dimension in ResourceDimension::ALL {
+            if dimension == ResourceDimension::IntermediateCells {
+                continue;
+            }
+            let other = TrippedGovernor::Budget {
+                dimension,
+                limit: 1,
+                consumed: 9,
+            };
+            assert_eq!(resolve_precedence([other, cells]), Some(cells));
+            assert_eq!(resolve_precedence([cells, other]), Some(cells));
+        }
     }
 
     #[test]
@@ -1673,21 +1772,22 @@ mod tests {
     }
 
     #[test]
-    fn local_charge_accumulates_sums_and_maxima_separately() {
-        let mut local = LocalCharge::new();
-        assert_eq!(local, LocalCharge::EMPTY);
+    fn an_empty_item_charge_records_nothing_and_commits_nothing() {
+        // A chunk worker fills its ledger by index, so an item a worker never reached
+        // leaves the default record behind. That record must be inert in the fold: it
+        // charges nothing and it certifies no rows, so a hole in a ledger can never
+        // manufacture budget or manufacture answers.
+        let empty = ItemCharge::default();
+        assert_eq!(empty.fuel, 0);
+        assert_eq!(empty.committed, 0);
 
-        local.charge(ResourceDimension::Fuel, 3);
-        local.charge(ResourceDimension::Fuel, 4);
-        assert_eq!(local.charged_in(ResourceDimension::Fuel), 7);
-
-        local.peak(ResourceDimension::IntermediateCells, 12);
-        local.peak(ResourceDimension::IntermediateCells, 5);
-        assert_eq!(local.peak_in(ResourceDimension::IntermediateCells), 12);
-        assert_eq!(local.charged_in(ResourceDimension::IntermediateCells), 0);
-
-        local.charge(ResourceDimension::Fuel, u64::MAX);
-        assert_eq!(local.charged_in(ResourceDimension::Fuel), u64::MAX);
+        let state = GovernorState::new(&QueryGovernors::UNBOUNDED.with_fuel(0));
+        assert_eq!(
+            state.commit_ordered_items(&[empty, empty]),
+            None,
+            "a zero charge cannot cross even a zero ceiling, which is inclusive"
+        );
+        assert_eq!(state.consumed_in(ResourceDimension::Fuel), 0);
     }
 
     #[test]

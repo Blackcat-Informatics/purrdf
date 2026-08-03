@@ -269,7 +269,8 @@ impl TrippedGovernor {
     ///
     /// These strings are a pinned contract: a frozen conformance corpus records them as
     /// outcome discriminants and a consumer may match on them, so renaming one breaks
-    /// that corpus. They are kebab-case and distinct from the prose of [`Display`].
+    /// that corpus. They are kebab-case and distinct from the prose of
+    /// [`std::fmt::Display`].
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
