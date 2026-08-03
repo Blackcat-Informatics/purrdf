@@ -129,7 +129,9 @@ purrdf convert --base http://example.org/ data.ttl data.nt
 ## `query`
 
 ```text
-purrdf query --data <file|pack> [--base <IRI>] [--entailment <R>] [--results-format <FMT>] '<SPARQL>'
+purrdf query --data <file|pack> [--base <IRI>] [--entailment <R>] [--results-format <FMT>]
+             [--fuel <N>] [--deadline <D>] [--max-answers <N>] [--max-intermediate-cells <N>]
+             [--max-scratch-bytes <N>] [--max-remote-requests <N>] [--explain] '<SPARQL>'
 ```
 
 Evaluate a SPARQL 1.2 query over a data source. The source is opened as a view (a
@@ -155,6 +157,90 @@ The **result shape** selects which half of `--results-format` is legal:
 
 A shape/format mismatch (e.g. SELECT solutions with `turtle`, or a CONSTRUCT graph
 with `csv`) is a hard runtime error (exit 1). Results always go to stdout.
+
+### Execution governors
+
+Six flags bound what one query is allowed to cost. Each is optional and each bounds
+exactly the dimension it names; a dimension no flag names stays unbounded, and a
+query with no governor flag runs the ungoverned path unchanged.
+
+| Flag | Bounds | Unit |
+|---|---|---|
+| `--fuel <N>` | abstract execution steps | the engine's charge schedule (`--explain` prints it) |
+| `--deadline <D>` | wall-clock **evaluation** time | count+unit components over `ms`, `s`, `m`, `h` — `750ms`, `30s`, `1m30s`, `2h` |
+| `--max-answers <N>` | the query form's **answer sequence** | solution rows for SELECT; **output statements** — triples plus RDF 1.2 reifier bindings and annotations — for CONSTRUCT/DESCRIBE |
+| `--max-intermediate-cells <N>` | the largest intermediate bag | cells (`rows × columns`) |
+| `--max-scratch-bytes <N>` | the per-query scratch arena | bytes |
+| `--max-remote-requests <N>` | `SERVICE` requests | requests |
+
+Every ceiling is **inclusive**, so `0` is a valid one that trips at the first charge.
+`--max-answers` is an operational ceiling and never `LIMIT`: `LIMIT` is query
+semantics and applies before the cap is tested. `--max-intermediate-cells` is also
+checked against the planner's *estimate* before evaluation begins, so a plan
+predicted to exceed it is refused rather than started. `--deadline` starts when
+evaluation starts — reading and parsing the data source happen before it — and the
+engine observes it on entry to an algebra node, so an evaluation overruns it by at
+most one operator; it is not a timeout on the process. `--max-remote-requests` is
+enforced and reported like any other ceiling, and this binary configures no
+federation source, so a `SERVICE` clause fails to evaluate before it can be charged.
+
+**A tripped governor is not a failure.** The run did exactly what it was told, so it
+exits **3** rather than 1, and it writes three things:
+
+- **stdout** — the answers the run certified, in the requested `--results-format`, as
+  a *well-formed document of that format*. `purrdf query … | jq` keeps working across
+  a trip.
+- **stderr** — the deterministic governor report: `tripped` (the governor), `detail`,
+  `answers` (`certain` / `at-most` / `withheld`), `positional-prefix`, and the whole
+  `consumed`/`limit` vector, one line each.
+- **exit 3** — the only thing a shell can test to learn that the document on stdout is
+  a partial answer.
+
+The partial status is never marked in-band, because a marker would corrupt the
+SPARQL-Results stream (or require inventing a non-W3C extension to four
+serializations). `answers certain` licenses the rows as answers; `answers at-most`
+licenses only the negative reading; `answers withheld` means no bound survived the
+plan, so *no row is printed at all* and a `barrier` line names the operator that
+withheld them — printing an empty result there would be an "there are no answers"
+claim the run cannot make.
+
+`--entailment` takes no governor flag and refuses one by name (exit 2): that lane
+answers through the entailment-aware query entry point, which materializes a closure
+and takes no ceilings, so accepting one would be a ceiling that bounds nothing.
+
+### `--explain`
+
+`--explain` prints what the engine does with the query and what it costs — the charge
+schedule it was priced under (with the profile's identity and digest), one line per
+algebra node with the planner's estimate beside the cardinality that materialized, the
+cost-based join orders, and the per-dimension consumption — *instead of* the answers,
+the way `EXPLAIN` replaces a result set. The output is byte-deterministic for a given
+query, dataset and build. It is a plain-text rendering on stdout, so `--results-format`
+— which names how *answers* serialize, and an explanation has none — does not apply to
+it.
+
+It **evaluates** the query to produce that, under the metering profile: every counter
+engaged at a ceiling nothing can reach. That is why it refuses a governor flag or
+`--entailment` (exit 2) rather than accepting one it cannot honor — a ceiling it
+reported but did not enforce would be worse than no ceiling at all.
+
+```sh
+# Cap the answer sequence; read the certified prefix and the reason it stopped.
+purrdf query --data people.ttl --max-answers 100 --results-format json \
+  'SELECT ?p ?name WHERE { ?p <http://example.org/name> ?name }' > page.json
+case $? in
+  0) echo "complete" ;;
+  3) echo "partial — see the governor report above" ;;
+esac
+
+# Bound a query three ways at once.
+purrdf query --data people.ttl --fuel 5000000 --deadline 30s --max-intermediate-cells 1000000 \
+  'SELECT * WHERE { ?s ?p ?o }'
+
+# Explain the plan and its charge ledger instead of answering.
+purrdf query --data people.ttl --explain \
+  'SELECT ?name WHERE { ?p <http://example.org/knows> ?q . ?q <http://example.org/name> ?name }'
+```
 
 ```sh
 # SELECT → SPARQL Results JSON (the default).
@@ -520,18 +606,30 @@ purrdf --loss-ledger=convert.loss.json convert star-data.ttl plain.trix
 | `0` | success |
 | `1` | runtime failure — a parse/serialize diagnostic, a pack-integrity failure, an I/O error, a result/shape mismatch, or a refusal from the entailment boundary (an unserved regime, an unresolved `owl:imports`, an inconsistent premise) |
 | `2` | usage error — a malformed command line (clap), or a pipeline usage error such as `-` without an explicit format, `--regime rif` without `--rules`, or a malformed `--import` pair |
+| `3` | a caller-set [execution governor](#execution-governors) stopped a `query`. **Not a failure**: the certified answers are on stdout and the governor report is on stderr |
 
 On any failure the error's message is printed to stderr and its category becomes
 the process exit code; nothing is swallowed.
 
-There is **no unsupported-regime exit code**. A third code (`3`) used to classify
-the entailment-regime boundary the CLI could not cross; `purrdf-entail`'s
-`materialize` takes a `Materialization` — which carries each regime's own input —
-so all seven **materialize** and the classification had nothing left to classify.
-The two regimes [`entails`](#entails) does not serve are refused as ordinary
-runtime failures (`1`) carrying the boundary's own diagnostic, which names the
-regime: the CLI keeps no second list of which regimes that service serves, because
-a second list is a second opinion.
+**Why a governor trip is its own code.** `1` would put a truncated answer in the same
+bucket as a corrupt pack, so a pipeline could not tell "your query was cut short —
+here is the certified prefix" from "your query failed and there is nothing to read".
+`0` would be worse: a truncated answer reported as a complete one is silently wrong,
+and every consumer downstream believes it. So a trip is neither, and it never travels
+the error path — it is not printed with the `purrdf: ` prefix, because nothing went
+wrong.
+
+There is still **no unsupported-regime exit code**, and that is a different question.
+A third code used to classify the entailment-regime boundary *the CLI decided for
+itself*; `purrdf-entail`'s `materialize` takes a `Materialization` — which carries each
+regime's own input — so all seven **materialize** and the classification had nothing
+left to classify. The two regimes [`entails`](#entails) does not serve are refused as
+ordinary runtime failures (`1`) carrying the boundary's own diagnostic, which names the
+regime: the CLI keeps no second list of which regimes that service serves, because a
+second list is a second opinion. A budget trip is not a list the CLI keeps either — it
+is an outcome the engine itself reports, in a type whose whole design says it is
+neither a result nor an error, and an exit code is the only channel a process boundary
+has for carrying that distinction.
 
 ## License
 

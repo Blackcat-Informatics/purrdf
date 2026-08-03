@@ -39,16 +39,64 @@
 //!   the drop (the universal-sink invariant), surfaced under `--loss-ledger`;
 //! * a shape/format-kind MISMATCH (solutions/boolean + an RDF syntax, or a graph +
 //!   a SPARQL-results format) is a hard runtime error (exit 1).
+//!
+//! ## The governed lane, and what a trip puts on which stream
+//!
+//! With any of the six governor flags the query runs through the engine's governed entry
+//! point instead, over the same view, and comes back as a
+//! [`GovernedOutcome`]: complete, or stopped by a governor and carrying the certificate of
+//! what the rows in hand bound. Without a governor flag the ungoverned call is made
+//! verbatim — the governed lane is a branch rather than a wrapper, so an ungoverned query
+//! costs exactly what it cost before governors existed.
+//!
+//! A trip is not a failure ([`CliOutcome`], and `error`'s module documentation for why it
+//! is exit 3), so it prints:
+//!
+//! * the governor report to **stderr** — which governor stopped the run, what the rows
+//!   bound, and the whole consumption/ceiling vector — written FIRST, so that a trip is
+//!   announced even if serializing the rows then fails;
+//! * the certified rows to **stdout**, through the same [`emit_result`] a complete result
+//!   goes through, in the requested `--results-format`.
+//!
+//! Nothing about the trip is interleaved into stdout. A caller piping SPARQL-Results JSON
+//! or XML receives a WELL-FORMED document of the rows that were certified — the partial
+//! status is carried by the exit code and the stderr report, because an in-band marker
+//! would either corrupt that document or require inventing a non-W3C extension to four
+//! serializations. The one case with nothing to print is
+//! [`PartialAnswers::Unknown`](purrdf_sparql_eval::PartialAnswers::Unknown), where no bound
+//! survived to the root: there are structurally no rows to hand out, so stdout stays empty
+//! rather than carrying a serialized empty result, which would be an "there are no answers"
+//! claim the run cannot make. The report's `barrier` line names the operator that withheld
+//! them.
+//!
+//! ## `--explain`
+//!
+//! `--explain` prints [`QueryExplanation::render`] to stdout in place of the answers, the
+//! way `EXPLAIN` replaces a result set everywhere else. The rendering is deterministic — a
+//! profile header, the charge schedule, one line per algebra node with the planner's
+//! estimate beside the count that materialized, the join orders, and the per-dimension
+//! consumption — and it is produced by ONE evaluation, because
+//! [`NativeSparqlEngine::explain_query_view`] evaluates the query itself under the metering
+//! profile.
+//!
+//! That profile is why `--explain` refuses a governor flag rather than accepting it:
+//! metering engages every counter at a ceiling nothing can reach, so a `--fuel 1000
+//! --explain` would print the receipt of a run that was never bounded by 1000. It refuses
+//! `--entailment` for the same shape of reason — the entailment-aware query lane is a
+//! different entry point with no explanation to give — and both refusals name what to drop.
 
 use purrdf_core::{DatasetView, LossLedger, SparqlRequest, SparqlResult};
 use purrdf_entail::EntailError;
 use purrdf_rdf::JsonLdSerializeOptions;
-use purrdf_sparql_eval::{NativeSparqlEngine, PreparedQuery};
+use purrdf_sparql_eval::{
+    GovernedOutcome, NativeSparqlEngine, PreparedQuery, QueryExplanation, QueryGovernors,
+};
 use purrdf_sparql_results::{ResultProvenance, serialize};
 
 use crate::cli::{CliRegime, LedgerTarget, QueryFormat, ReportTarget};
-use crate::error::CliError;
+use crate::error::{CliError, CliOutcome};
 use crate::format::{self, CliFormat};
+use crate::governors::{self, GovernorFlags};
 use crate::ledger;
 use crate::reason;
 use crate::report;
@@ -71,6 +119,60 @@ impl ViewOp for QueryOp<'_> {
 
     fn run<D: DatasetView + Sync>(self, view: &D) -> Result<SparqlResult, CliError> {
         Ok(self.engine.query_prepared_view(view, self.prepared, &[])?)
+    }
+}
+
+/// The GOVERNED query operation: evaluate the prepared query over the concrete view under
+/// the caller's ceilings, returning the outcome rather than a result.
+///
+/// A separate operation rather than a flag on [`QueryOp`] because the return type is
+/// genuinely different: a governed run answers "complete, or stopped — and here is the
+/// receipt", and collapsing that into a `SparqlResult` at this seam would throw away the
+/// only thing that distinguishes a truncated answer from a whole one.
+///
+/// It carries the FLAGS rather than a built [`QueryGovernors`], and builds them inside
+/// [`ViewOp::run`], because `run` is called with the view already open — so a `--deadline`
+/// becomes a running clock at the last moment before evaluation rather than before the
+/// data source has even been read. Handing this a pre-built configuration would silently
+/// charge a large file's parse time to the caller's evaluation budget, which is not what
+/// `--deadline`'s help promises and not a budget an operator could reason about.
+struct GovernedQueryOp<'a> {
+    engine: &'a NativeSparqlEngine,
+    prepared: &'a PreparedQuery,
+    flags: GovernorFlags,
+}
+
+impl ViewOp for GovernedQueryOp<'_> {
+    type Output = GovernedOutcome;
+
+    fn run<D: DatasetView + Sync>(self, view: &D) -> Result<GovernedOutcome, CliError> {
+        let governors: QueryGovernors = self.flags.to_governors();
+        Ok(self
+            .engine
+            .query_prepared_governed_view(view, self.prepared, &[], &governors)?)
+    }
+}
+
+/// The `--explain` operation: explain the query against whichever concrete view the data
+/// source resolved to.
+///
+/// It takes the query TEXT rather than a `PreparedQuery` because that is the shape of the
+/// engine's explanation entry point — it surveys the plan against this view's cardinalities
+/// and then evaluates it under the metering profile — and the plan cache makes the second
+/// parse of the same text free.
+struct ExplainOp<'a> {
+    engine: &'a NativeSparqlEngine,
+    query: &'a str,
+    base: Option<&'a str>,
+}
+
+impl ViewOp for ExplainOp<'_> {
+    type Output = QueryExplanation;
+
+    fn run<D: DatasetView + Sync>(self, view: &D) -> Result<QueryExplanation, CliError> {
+        Ok(self
+            .engine
+            .explain_query_view(view, self.query, self.base)?)
     }
 }
 
@@ -192,54 +294,212 @@ fn entailed_query(
     }
 }
 
+/// The resolved `query` flags: the data source and base, the two entailment inputs, the
+/// result serialization, the query text, the execution governors, and `--explain`.
+///
+/// Grouped for the reason [`ConvertOptions`](crate::convert::ConvertOptions) is: the
+/// dispatcher hands over one borrow rather than a dozen positional arguments whose order
+/// is the only thing keeping them apart.
+pub(crate) struct QueryOptions<'a> {
+    /// `--data`: the data-source path.
+    pub(crate) data: &'a str,
+    /// `--base`: the parse and query base IRI.
+    pub(crate) base: Option<&'a str>,
+    /// `--entailment`: the regime whose closure the query runs under.
+    pub(crate) entailment: Option<CliRegime>,
+    /// `--rules`: the RIF-in-XML rule document `--entailment rif` runs.
+    pub(crate) rules: Option<&'a std::path::Path>,
+    /// `--results-format`: the result serialization.
+    pub(crate) results_format: QueryFormat,
+    /// The SPARQL query text.
+    pub(crate) query: &'a str,
+    /// The six execution-governor flags.
+    pub(crate) governors: GovernorFlags,
+    /// `--explain`: print the plan and its charge ledger instead of the answers.
+    pub(crate) explain: bool,
+    /// `--jsonld-options`: the configured JSON-LD/YAML-LD serializer options.
+    pub(crate) jsonld_options: Option<&'a JsonLdSerializeOptions>,
+}
+
 /// Run the `query` subcommand.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the CLI dispatcher passes the command fields and both surfacing targets explicitly"
-)]
 pub(crate) fn run(
-    data: &str,
-    base: Option<&str>,
-    entailment: Option<CliRegime>,
-    rules: Option<&std::path::Path>,
-    results_format: QueryFormat,
-    query: &str,
-    jsonld_options: Option<&JsonLdSerializeOptions>,
+    options: &QueryOptions<'_>,
     ledger_target: &LedgerTarget,
     report_target: &ReportTarget,
-) -> Result<(), CliError> {
-    let data_format = format::resolve(None, data)?;
+) -> Result<CliOutcome, CliError> {
+    let data_format = format::resolve(None, options.data)?;
     // A report of a run that will not happen is a request the flag cannot honor, and
     // honoring it with silence is what this pipeline refuses.
-    if report_target.is_requested() && entailment.is_none() {
+    if report_target.is_requested() && options.entailment.is_none() {
         return Err(report::requires_entailment("query"));
     }
+    refuse_unenforceable_combinations(options)?;
 
     let engine = NativeSparqlEngine::new();
-    let prepared = engine.prepare_query(query, base)?;
 
-    let result = match entailment {
-        Some(regime) => {
-            // The `--entailment` lane: reconstruct an owned dataset (a pack is rebuilt) and
-            // answer the query UNDER the regime through the library's own entailment-aware
-            // query entry point.
-            let plan = reason::EntailmentPlan::resolve(regime, rules)?;
-            let dataset = source::load_dataset(data, data_format, base)?;
-            // The rows go to stdout and the certificate to `--report`: a solution set that
-            // depends on a closure is not readable without knowing what closed it.
-            entailed_query(&engine, &dataset, query, base, &plan, report_target)?
-        }
-        None => source::run_over_input(
-            data,
+    if options.explain {
+        // `explain_query_view` parses, surveys and evaluates the query itself, so this lane
+        // prepares nothing of its own and the plan cache is warmed once.
+        let explanation = source::run_over_input(
+            options.data,
             data_format,
-            base,
-            QueryOp {
+            options.base,
+            ExplainOp {
                 engine: &engine,
-                // `prepared` is an `Arc<PreparedQuery>`; reborrow it as `&PreparedQuery`.
-                prepared: &prepared,
+                query: options.query,
+                base: options.base,
             },
-        )?,
-    };
+        )?;
+        sink::write_out("-", explanation.render().as_bytes())?;
+        return Ok(CliOutcome::Complete);
+    }
 
-    emit_result(&result, results_format, base, jsonld_options, ledger_target)
+    let prepared = engine.prepare_query(options.query, options.base)?;
+
+    if let Some(regime) = options.entailment {
+        // The `--entailment` lane: reconstruct an owned dataset (a pack is rebuilt) and
+        // answer the query UNDER the regime through the library's own entailment-aware
+        // query entry point.
+        let plan = reason::EntailmentPlan::resolve(regime, options.rules)?;
+        let dataset = source::load_dataset(options.data, data_format, options.base)?;
+        // The rows go to stdout and the certificate to `--report`: a solution set that
+        // depends on a closure is not readable without knowing what closed it.
+        let result = entailed_query(
+            &engine,
+            &dataset,
+            options.query,
+            options.base,
+            &plan,
+            report_target,
+        )?;
+        emit_result(
+            &result,
+            options.results_format,
+            options.base,
+            options.jsonld_options,
+            ledger_target,
+        )?;
+        return Ok(CliOutcome::Complete);
+    }
+
+    if options.governors.is_engaged() {
+        let outcome = source::run_over_input(
+            options.data,
+            data_format,
+            options.base,
+            GovernedQueryOp {
+                engine: &engine,
+                prepared: &prepared,
+                flags: options.governors,
+            },
+        )?;
+        return emit_governed(options, &outcome, ledger_target);
+    }
+
+    // The ungoverned lane, unchanged: the same call over the same zero-copy view the
+    // binary made before governors existed.
+    let result = source::run_over_input(
+        options.data,
+        data_format,
+        options.base,
+        QueryOp {
+            engine: &engine,
+            // `prepared` is an `Arc<PreparedQuery>`; reborrow it as `&PreparedQuery`.
+            prepared: &prepared,
+        },
+    )?;
+    emit_result(
+        &result,
+        options.results_format,
+        options.base,
+        options.jsonld_options,
+        ledger_target,
+    )?;
+    Ok(CliOutcome::Complete)
+}
+
+/// Refuse the three flag combinations this lane cannot honor, naming what to drop.
+///
+/// All three exist because the alternative is a flag that silently does nothing — the
+/// shape this pipeline refuses everywhere else, and the most dangerous shape a GOVERNOR can
+/// take: a ceiling an operator believes is in force and that nothing enforces is worse than
+/// no ceiling at all, because it is relied upon.
+///
+/// * `--explain` with a governor flag. `--explain` runs under the metering profile — every
+///   counter engaged at a ceiling nothing can reach — so a ceiling handed to it would be
+///   printed in the receipt and enforced nowhere.
+/// * `--entailment` with a governor flag. That lane answers through
+///   [`purrdf::query_with_entailment`], which materializes a closure and takes no
+///   governors, so a ceiling handed to it would bound nothing. The refusal is what the
+///   binary can say truthfully today; answering a governed query UNDER an entailment regime
+///   needs a governed entry point on that library lane, not a second opinion here.
+/// * `--explain` with `--entailment`, for the same reason from the other side: that lane
+///   has no plan this prices, so an explanation printed beside it would describe work the
+///   answer did not come from.
+fn refuse_unenforceable_combinations(options: &QueryOptions<'_>) -> Result<(), CliError> {
+    let named = options.governors.named();
+    if !named.is_empty() {
+        let named = named.join(", ");
+        if options.explain {
+            return Err(CliError::Usage(format!(
+                "--explain MEASURES a run rather than bounding one: it evaluates the query \
+                 with every counter engaged at a ceiling nothing can reach, so {named} would \
+                 be reported and never enforced. Drop --explain to run under the ceiling, or \
+                 drop {named} to explain the query"
+            )));
+        }
+        if options.entailment.is_some() {
+            return Err(CliError::Usage(format!(
+                "--entailment answers through the entailment-aware query lane, which \
+                 materializes a closure and takes no execution governors, so {named} would \
+                 bound nothing. Drop --entailment to govern the evaluation, or drop {named} \
+                 to query the closure"
+            )));
+        }
+    }
+    if options.explain && options.entailment.is_some() {
+        return Err(CliError::Usage(
+            "--explain describes the plan the SPARQL evaluator runs, and --entailment answers \
+             through the entailment-aware query lane instead, whose work is a closure rather \
+             than a plan this can price: drop one of the two"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Emit a governed outcome, returning the exit classification it carries.
+///
+/// The complete arm is the ungoverned arm exactly: the same rows, through the same
+/// serializer, exiting 0. The tripped arm writes the governor report to stderr FIRST — so a
+/// trip is announced even if the rows then fail to serialize — and then hands whatever the
+/// certificate licensed to the same [`emit_result`], so a partial answer is a well-formed
+/// document of the requested format rather than a special one.
+fn emit_governed(
+    options: &QueryOptions<'_>,
+    outcome: &GovernedOutcome,
+    ledger_target: &LedgerTarget,
+) -> Result<CliOutcome, CliError> {
+    let emit = |result: &SparqlResult| {
+        emit_result(
+            result,
+            options.results_format,
+            options.base,
+            options.jsonld_options,
+            ledger_target,
+        )
+    };
+    match outcome {
+        GovernedOutcome::Complete { result, .. } => {
+            emit(result)?;
+            Ok(CliOutcome::Complete)
+        }
+        GovernedOutcome::BudgetExhausted(exhausted) => {
+            eprint!("{}", governors::render_trip(exhausted));
+            if let Some(partial) = exhausted.partial.result() {
+                emit(partial.result())?;
+            }
+            Ok(CliOutcome::BudgetExhausted)
+        }
+    }
 }

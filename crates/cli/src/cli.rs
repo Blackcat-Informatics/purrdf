@@ -39,6 +39,23 @@
 //! then have to do nothing — a silent no-op being precisely the shape this repository
 //! refuses. For the same reason `convert --report` / `query --report` WITHOUT `--entailment`
 //! is a usage error rather than an empty file.
+//!
+//! ## The `query` governor flags
+//!
+//! Six flags — `--fuel`, `--deadline`, `--max-answers`, `--max-intermediate-cells`,
+//! `--max-scratch-bytes`, `--max-remote-requests` — carry the engine's execution governors
+//! to the command line, and they are `query`'s alone for the reason `--report` is not
+//! global: they bound a SPARQL evaluation, and a subcommand that runs none would have
+//! nothing to enforce them over. Each is `Option`, and `None` is the only thing that
+//! becomes an unbounded dimension; [`GovernorFlags`](crate::governors::GovernorFlags) is
+//! where they are decoded and where [`QueryGovernors`](purrdf_sparql_eval::QueryGovernors)'
+//! deliberately-unnameable-by-default "no ceiling" state is named exactly once. A trip
+//! exits **3** rather than failing — see [`CliOutcome`](crate::error::CliOutcome).
+//!
+//! `--explain` sits beside them and takes none of them: it measures a run rather than
+//! bounding one, so accepting a ceiling it cannot enforce would be a governor that governs
+//! nothing. The refusal is written where the reason can be given, in
+//! [`query`](crate::query), rather than as a bare clap conflict.
 
 use std::path::PathBuf;
 
@@ -212,6 +229,53 @@ pub(crate) enum Command {
         /// SELECT/ASK, or an RDF syntax (turtle/trig/…) for CONSTRUCT/DESCRIBE.
         #[arg(long, value_enum, default_value_t = QueryFormat::Json)]
         results_format: QueryFormat,
+        /// Bound the query's abstract execution steps. The unit is the engine's own
+        /// charge schedule, which `--explain` prints, so a fuel budget is comparable
+        /// only against the same schedule. The ceiling is inclusive, and `0` is a valid
+        /// one that trips at the first charge. A trip prints the answers it certified
+        /// and exits 3.
+        #[arg(long, value_name = "UNITS")]
+        fuel: Option<u64>,
+        /// Bound the query's wall-clock EVALUATION time: a run of count+unit components
+        /// over `ms`, `s`, `m`, `h` (`750ms`, `30s`, `1m30s`, `2h`). The budget starts
+        /// when evaluation starts — reading and parsing the data source happen before
+        /// it — and the engine observes it when it enters an algebra node, so an
+        /// evaluation overruns it by at most one operator rather than being killed
+        /// mid-step. This is not a timeout on the process.
+        #[arg(long, value_name = "DURATION", value_parser = crate::governors::parse_deadline)]
+        deadline: Option<std::time::Duration>,
+        /// Bound the ANSWER SEQUENCE: solution rows for SELECT, output statements for
+        /// CONSTRUCT/DESCRIBE (an ASK boolean has no sequence to bound). This is an
+        /// operational ceiling and never `LIMIT`: `LIMIT` is query semantics and applies
+        /// before this is tested. Inclusive.
+        #[arg(long, value_name = "ROWS")]
+        max_answers: Option<u64>,
+        /// Bound the largest INTERMEDIATE solution bag, in cells (rows × columns) — the
+        /// ceiling that actually bounds allocation. Compared against the largest single
+        /// bag rather than a running total, and a plan whose ESTIMATED peak already
+        /// exceeds it is refused before evaluation starts.
+        #[arg(long, value_name = "CELLS")]
+        max_intermediate_cells: Option<u64>,
+        /// Bound the bytes value-constructing operations mint into the per-query scratch
+        /// arena, which grow independently of any row or cell count.
+        #[arg(long, value_name = "BYTES")]
+        max_scratch_bytes: Option<u64>,
+        /// Bound the requests issued to a remote or federated endpoint by a `SERVICE`
+        /// clause. The ceiling is enforced and reported like any other; this binary
+        /// configures no federation source, so a `SERVICE` clause fails to evaluate
+        /// before it can be charged.
+        #[arg(long, value_name = "REQUESTS")]
+        max_remote_requests: Option<u64>,
+        /// Print what the engine does with the query and what it costs — the charge
+        /// schedule it was priced under, the per-node ledger with the planner's estimate
+        /// beside the cardinality that materialized, the cost-based join orders, and the
+        /// per-dimension consumption — INSTEAD of the query's answers. The query is
+        /// evaluated to produce it, under the metering profile: every counter engaged at
+        /// a ceiling nothing can reach. The rendering is plain text, so `--results-format`
+        /// (which names how ANSWERS serialize) does not apply to it. Refused beside a
+        /// governor flag or `--entailment`, neither of which it can honor.
+        #[arg(long)]
+        explain: bool,
         /// The SPARQL query text.
         query: String,
     },
