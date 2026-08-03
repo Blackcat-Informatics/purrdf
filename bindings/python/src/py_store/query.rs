@@ -9,13 +9,37 @@
 //! Native backing: solution cells are `purrdf_core::TermValue`,
 //! CONSTRUCT triples are `RdfTriple`. The engine is `NativeSparqlEngine`; the
 //! oxigraph `QueryResults` type is gone from this surface.
+//!
+//! # The governed surface
+//!
+//! This module also owns the Python side of caller-supplied execution governors:
+//! [`GovernorArgs`] (the ceilings a keyword argument carries), [`PyStopWatch`] (the
+//! composed stop signal — the caller's token, the caller's deadline, and the
+//! interpreter's own pending-signal flag), [`run_governed`] (which engages both while
+//! the GIL is released), and the outcome objects `QueryOutcome` / `UpdateOutcome` /
+//! `PartialAnswers` / `TrippedGovernor` / `GovernorEvidence` a governed call returns.
+//!
+//! **A tripped governor is returned, never raised.** It is neither a complete answer nor
+//! a failure: reported as complete, a truncated answer is silently wrong; raised as an
+//! exception, the rows the budget already paid for are thrown away and the caller is told
+//! the engine misbehaved. So `Store.query_governed` returns a `QueryOutcome` on both
+//! paths and reserves exceptions for what they mean everywhere else in this binding — a
+//! malformed query, a broken snapshot, and the one Python-level event that genuinely is
+//! an exception, a `KeyboardInterrupt` (see [`run_governed`]).
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
-use purrdf_sparql_eval::{NativeSparqlEngine, ParserOptions, StandpointPredicates};
+use purrdf_core::ResourceVector;
+use purrdf_sparql_eval::{
+    BudgetExhausted, CancellationFlag, GovernedOutcome, GovernedUpdateOutcome, GovernorEvidence,
+    NativeSparqlEngine, ParserOptions, PartialAnswers, QueryGovernors, ResourceDimension,
+    StandpointPredicates, StopCause, StopSignal, TrippedGovernor, WallDeadline,
+};
 use pyo3::exceptions::{PyKeyError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyString};
+use pyo3::types::{PyBytes, PyDict, PyString};
 
 use super::io::{PyRdfFormat, serialize_triples};
 use super::term::{PyTriple, PyVariable, term_to_py};
@@ -298,6 +322,749 @@ fn term_value_predicate(value: TermValue) -> String {
         TermValue::Iri(iri) => iri,
         other => term_value_to_rdf(other).to_string(),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Execution governors
+// ---------------------------------------------------------------------------
+
+/// A shareable cancellation bit a Python caller flips to stop a running governed call.
+///
+/// Hand the same token to as many governed calls as you like and keep your own handle:
+/// [`cancel`](Self::cancel) stops every call running under it, from any thread, because a
+/// governed call releases the GIL while the engine runs. Latching is by construction —
+/// the bit only ever moves from clear to set, and nothing clears it — so build a fresh
+/// token per operation rather than resetting one.
+#[pyclass(name = "CancellationToken", frozen)]
+#[derive(Debug, Default)]
+pub struct PyCancellationToken {
+    /// The shared monotone bit, handed to the engine inside a [`PyStopWatch`].
+    flag: CancellationFlag,
+}
+
+#[pymethods]
+impl PyCancellationToken {
+    #[new]
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// Cancel every governed call running under this token. Idempotent, never reversible.
+    fn cancel(&self) {
+        self.flag.cancel();
+    }
+
+    /// Whether this token has been cancelled.
+    #[getter]
+    fn cancelled(&self) -> bool {
+        self.flag.is_cancelled()
+    }
+
+    fn __repr__(&self) -> String {
+        // Rendered Python-side (`True`/`False`), not Rust-side: this string is read in a
+        // Python traceback, beside Python values.
+        let cancelled = if self.flag.is_cancelled() {
+            "True"
+        } else {
+            "False"
+        };
+        format!("<CancellationToken cancelled={cancelled}>")
+    }
+}
+
+/// How long the interrupt watch waits between GIL re-acquisitions.
+///
+/// The check itself needs the GIL, and a governed call has deliberately released it, so
+/// every check costs one re-acquisition. Doing that at each of the evaluator's stop polls
+/// would put GIL traffic on a hot path and would serialize the governed call against
+/// every other Python thread; doing it never would swallow Ctrl-C until the query
+/// finished, which is the failure this watch exists to prevent. Twenty milliseconds
+/// bounds the interrupt latency well below human perception while bounding the traffic at
+/// fifty re-acquisitions a second regardless of how fast the evaluator polls.
+const INTERRUPT_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+/// The interrupt watch's mutable half.
+#[derive(Debug, Default)]
+struct InterruptState {
+    /// The exception `Python::check_signals` raised, held until the call re-raises it.
+    ///
+    /// `check_signals` *consumes* the interpreter's pending signal and hands back the
+    /// exception the Python-level handler raised. Dropping it here would make a Ctrl-C
+    /// vanish, so it is carried out of the detached region and raised by
+    /// [`run_governed`].
+    raised: Option<PyErr>,
+    /// When the watch last re-acquired the GIL to check, or `None` if it never has.
+    checked_at: Option<Instant>,
+}
+
+/// The composed [`StopSignal`] every governed Python call runs under.
+///
+/// Three sources, one signal, because [`QueryGovernors::with_stop_signal`] takes one and
+/// composing them is the host's job:
+///
+/// * the caller's [`PyCancellationToken`], when one was supplied;
+/// * the caller's wall deadline, when one was supplied;
+/// * **always** the interpreter's own pending-signal flag, so Ctrl-C stops a long query
+///   rather than being noticed only once it has finished.
+///
+/// # Latching
+///
+/// The trait's contract is that a fired signal stays fired, so the resolved cause is
+/// written once into a [`OnceLock`] and every later poll returns it without consulting a
+/// source again. A simultaneous fire resolves the way the kernel ranks it — a
+/// cancellation (an explicit decision) ahead of a deadline (an elapsed measurement) —
+/// which is the same order [`TrippedGovernor::precedence_rank`] pins for every tier.
+#[derive(Debug)]
+pub(super) struct PyStopWatch {
+    /// The resolved cause, written once. See the latching note above.
+    latched: OnceLock<StopCause>,
+    /// The caller's cancellation flag, when one was supplied.
+    cancel: Option<CancellationFlag>,
+    /// The caller's wall deadline, when one was supplied.
+    deadline: Option<WallDeadline>,
+    /// Whether the interpreter's pending-signal flag has already fired, so the common
+    /// path never takes the mutex.
+    interrupted: AtomicBool,
+    /// The rate limiter and the captured exception.
+    interrupt: Mutex<InterruptState>,
+}
+
+impl PyStopWatch {
+    /// A watch over the caller's `cancel` token and `deadline_ms` budget, if any.
+    fn new(deadline_ms: Option<u64>, cancel: Option<&PyCancellationToken>) -> Self {
+        Self {
+            latched: OnceLock::new(),
+            cancel: cancel.map(|token| token.flag.clone()),
+            deadline: deadline_ms.map(|ms| WallDeadline::after(Duration::from_millis(ms))),
+            interrupted: AtomicBool::new(false),
+            interrupt: Mutex::new(InterruptState::default()),
+        }
+    }
+
+    /// Take the `KeyboardInterrupt` (or whatever the interpreter's SIGINT handler raised)
+    /// the watch captured while the GIL was released, if it captured one.
+    fn take_interrupt(&self) -> Option<PyErr> {
+        self.interrupt
+            .lock()
+            .expect("the interrupt state is only held for the length of a check")
+            .raised
+            .take()
+    }
+
+    /// Poll every source once and resolve a simultaneous fire by the kernel's precedence.
+    fn observe(&self) -> Option<StopCause> {
+        if self
+            .cancel
+            .as_ref()
+            .is_some_and(CancellationFlag::is_cancelled)
+            || self.poll_interrupt()
+        {
+            return Some(StopCause::Cancelled);
+        }
+        self.deadline.as_ref().and_then(StopSignal::poll)
+    }
+
+    /// Whether the interpreter has a signal pending, re-acquiring the GIL to ask at most
+    /// once per [`INTERRUPT_POLL_INTERVAL`].
+    ///
+    /// The GIL is **never** acquired while the interrupt mutex is held: an evaluator
+    /// worker blocking on the GIL with this lock in hand, while a thread that holds the
+    /// GIL blocks on the lock, is a deadlock, and the two orders are only kept apart by
+    /// releasing the lock before attaching.
+    fn poll_interrupt(&self) -> bool {
+        {
+            let mut state = self
+                .interrupt
+                .lock()
+                .expect("the interrupt state is only held for the length of a check");
+            if state.raised.is_some() {
+                return true;
+            }
+            let now = Instant::now();
+            if state
+                .checked_at
+                .is_some_and(|last| now.duration_since(last) < INTERRUPT_POLL_INTERVAL)
+            {
+                return false;
+            }
+            state.checked_at = Some(now);
+        }
+        // Re-attach to the interpreter for exactly as long as the check takes. On a
+        // non-main thread CPython answers "nothing pending" without running a handler, so
+        // an evaluator worker asking is correct and cheap rather than merely harmless.
+        let Some(raised) = Python::attach(|py| py.check_signals().err()) else {
+            return false;
+        };
+        self.interrupted.store(true, Ordering::Relaxed);
+        self.interrupt
+            .lock()
+            .expect("the interrupt state is only held for the length of a check")
+            .raised = Some(raised);
+        true
+    }
+}
+
+impl StopSignal for PyStopWatch {
+    fn poll(&self) -> Option<StopCause> {
+        if let Some(&cause) = self.latched.get() {
+            return Some(cause);
+        }
+        if self.interrupted.load(Ordering::Relaxed) {
+            return Some(*self.latched.get_or_init(|| StopCause::Cancelled));
+        }
+        let cause = self.observe()?;
+        Some(*self.latched.get_or_init(|| cause))
+    }
+}
+
+/// The ceilings one governed call's keyword arguments carry, before they are engaged.
+///
+/// `None` in a slot means the caller declined that ceiling — never zero, which is a
+/// perfectly valid ceiling that trips on the first charged unit of work.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct GovernorArgs {
+    /// Abstract execution steps.
+    pub(super) fuel: Option<u64>,
+    /// Wall-clock budget in milliseconds. Zero expires on the first poll.
+    pub(super) deadline_ms: Option<u64>,
+    /// Units committed to the answer sequence: solution rows for `SELECT`, output
+    /// statements for `CONSTRUCT`/`DESCRIBE`. Inclusive, and nothing for `ASK`.
+    pub(super) max_answers: Option<u64>,
+    /// The largest intermediate bag, in cells (`rows * columns`).
+    pub(super) max_intermediate_cells: Option<u64>,
+    /// Bytes minted into the per-query scratch arena by value-constructing operations.
+    pub(super) max_scratch_bytes: Option<u64>,
+    /// Requests issued to remote or federated endpoints.
+    pub(super) max_remote_requests: Option<u64>,
+}
+
+impl GovernorArgs {
+    /// Engage these ceilings, plus `cancel` and the interpreter's signal flag, as one
+    /// call's [`QueryGovernors`].
+    ///
+    /// # Why the base is `METERED` rather than `UNBOUNDED`
+    ///
+    /// Two reasons, and both are about what a governed call promises. First, every
+    /// outcome — including a complete one — carries evidence a caller can size the next
+    /// budget from; `UNBOUNDED` reports nothing, because it charges nothing. Second, the
+    /// evaluator polls the stop signal every `STOP_POLL_FUEL` units of fuel *and* at each
+    /// algebra node it enters; with fuel disengaged only the second of those runs, so a
+    /// query spending a long time inside one operator would notice a cancellation or a
+    /// Ctrl-C late. Metering costs a saturating add per charge point and buys prompt
+    /// interruption on every query shape, which is the trade a caller who asked for
+    /// governors has already chosen.
+    fn engage(self, cancel: Option<&PyCancellationToken>) -> (QueryGovernors, Arc<PyStopWatch>) {
+        let watch = Arc::new(PyStopWatch::new(self.deadline_ms, cancel));
+        let mut governors = QueryGovernors::METERED;
+        if let Some(fuel) = self.fuel {
+            governors = governors.with_fuel(fuel);
+        }
+        if let Some(rows) = self.max_answers {
+            governors = governors.with_max_answers(rows);
+        }
+        if let Some(cells) = self.max_intermediate_cells {
+            governors = governors.with_max_intermediate_cells(cells);
+        }
+        if let Some(bytes) = self.max_scratch_bytes {
+            governors = governors.with_max_scratch_bytes(bytes);
+        }
+        if let Some(requests) = self.max_remote_requests {
+            governors = governors.with_max_remote_requests(requests);
+        }
+        let signal: Arc<dyn StopSignal> = Arc::<PyStopWatch>::clone(&watch);
+        (governors.with_stop_signal(signal), watch)
+    }
+}
+
+/// Run `run` under the governors `args` describes, with the GIL released.
+///
+/// The engine call is the whole of the detached region, so a governor is enforced exactly
+/// where the work happens and another Python thread — the one holding the caller's
+/// [`PyCancellationToken`] — makes progress while it does.
+///
+/// # A Ctrl-C is raised; a tripped governor is not
+///
+/// `Python::check_signals` *consumes* the interpreter's pending signal and hands back the
+/// exception its handler raised, so swallowing that exception would make a Ctrl-C
+/// disappear. It is therefore re-raised here, ahead of both the outcome and any
+/// evaluation error, and it is the one stop cause that leaves this seam as an exception.
+/// A cancellation token, a deadline, and every resource ceiling leave it as an outcome —
+/// see this module's header for why.
+///
+/// # Errors
+///
+/// The captured `KeyboardInterrupt`, if the interpreter raised one during the call, and
+/// otherwise whatever `run` returned.
+pub(super) fn run_governed<T: Send>(
+    py: Python<'_>,
+    args: GovernorArgs,
+    cancel: Option<&PyCancellationToken>,
+    run: impl FnOnce(&QueryGovernors) -> PyResult<T> + Send,
+) -> PyResult<T> {
+    let (governors, watch) = args.engage(cancel);
+    let outcome = py.detach(|| run(&governors));
+    if let Some(raised) = watch.take_interrupt() {
+        return Err(raised);
+    }
+    outcome
+}
+
+/// The governor that stopped one execution: which one, on which dimension, against which
+/// ceiling.
+#[pyclass(name = "TrippedGovernor", frozen)]
+#[derive(Debug)]
+pub struct PyTrippedGovernor {
+    /// The kernel value this object renders.
+    inner: TrippedGovernor,
+}
+
+#[pymethods]
+impl PyTrippedGovernor {
+    /// Which kind of governor stopped the execution: `"budget"` (a ceiling was reached),
+    /// `"stopped"` (a stop signal fired), or `"refused"` (the planner's estimate already
+    /// exceeded a ceiling, so nothing ran).
+    ///
+    /// # The wildcard arm, here and on every accessor below
+    ///
+    /// The kernel's `TrippedGovernor` is `#[non_exhaustive]`, so this crate — foreign to
+    /// the one that defines it — must carry a wildcard even though the enum is exhaustive
+    /// today. A governor a future kernel adds and this build cannot name therefore reads
+    /// `"unknown"` here and `None` on every field accessor, rather than being silently
+    /// folded into a kind it is not. [`label`](Self::label) and `str(...)` still describe
+    /// it exactly, because both come from the kernel rather than from this match.
+    #[getter]
+    const fn kind(&self) -> &'static str {
+        match self.inner {
+            TrippedGovernor::Budget { .. } => "budget",
+            TrippedGovernor::Stopped { .. } => "stopped",
+            TrippedGovernor::Refused { .. } => "refused",
+            _ => "unknown",
+        }
+    }
+
+    /// The stable kebab-case discriminant, e.g. `"answer-cap-exhausted"`. A pinned
+    /// contract: match on this rather than on the prose of `str(...)`.
+    #[getter]
+    const fn label(&self) -> &'static str {
+        self.inner.label()
+    }
+
+    /// The governed dimension, e.g. `"fuel"` — `None` when a stop signal fired, which
+    /// belongs to no dimension.
+    #[getter]
+    const fn dimension(&self) -> Option<&'static str> {
+        match self.inner {
+            TrippedGovernor::Budget { dimension, .. }
+            | TrippedGovernor::Refused { dimension, .. } => Some(dimension.label()),
+            TrippedGovernor::Stopped { .. } => None,
+            _ => None,
+        }
+    }
+
+    /// The inclusive ceiling in force, or `None` when a stop signal fired.
+    #[getter]
+    const fn limit(&self) -> Option<u64> {
+        match self.inner {
+            TrippedGovernor::Budget { limit, .. } | TrippedGovernor::Refused { limit, .. } => {
+                Some(limit)
+            }
+            TrippedGovernor::Stopped { .. } => None,
+            _ => None,
+        }
+    }
+
+    /// Consumption charged before the refused work — a **measurement**, and present only
+    /// on the `"budget"` kind.
+    #[getter]
+    const fn consumed(&self) -> Option<u64> {
+        match self.inner {
+            TrippedGovernor::Budget { consumed, .. } => Some(consumed),
+            TrippedGovernor::Stopped { .. } | TrippedGovernor::Refused { .. } => None,
+            _ => None,
+        }
+    }
+
+    /// The planner's estimate that exceeded the ceiling — **not** a measurement, and
+    /// present only on the `"refused"` kind, where nothing ran to measure.
+    #[getter]
+    const fn estimate(&self) -> Option<u64> {
+        match self.inner {
+            TrippedGovernor::Refused { estimate, .. } => Some(estimate),
+            TrippedGovernor::Budget { .. } | TrippedGovernor::Stopped { .. } => None,
+            _ => None,
+        }
+    }
+
+    /// Which stop signal fired — `"cancelled"` or `"deadline-exceeded"` — or `None` when
+    /// a ceiling rather than a signal stopped the execution.
+    #[getter]
+    const fn cause(&self) -> Option<&'static str> {
+        match self.inner {
+            TrippedGovernor::Stopped { .. } => Some(self.inner.label()),
+            TrippedGovernor::Budget { .. } | TrippedGovernor::Refused { .. } => None,
+            _ => None,
+        }
+    }
+
+    fn __str__(&self) -> String {
+        self.inner.to_string()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("<TrippedGovernor {}>", self.inner.label())
+    }
+}
+
+/// One governed execution's receipt: what it was allowed, what it spent, and what stopped
+/// it.
+///
+/// Returned on the complete path as well as the exhausted one — "completed, cost N fuel,
+/// peak M cells" is how a caller sizes the next call's budget in the first place.
+#[pyclass(name = "GovernorEvidence", frozen)]
+#[derive(Debug)]
+pub struct PyGovernorEvidence {
+    /// The kernel value this object renders.
+    inner: GovernorEvidence,
+}
+
+#[pymethods]
+impl PyGovernorEvidence {
+    /// Consumption charged per dimension, keyed by the dimension's stable label.
+    ///
+    /// A peak-tracked dimension (`intermediate-cells`, `udf-depth`) reports the largest
+    /// single observation; every other dimension reports the running sum.
+    #[getter]
+    fn consumed<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        vector_to_dict(py, self.inner.consumed())
+    }
+
+    /// The inclusive ceilings in force, keyed by the dimension's stable label.
+    ///
+    /// A dimension the caller declined reads `2**64 - 1`; a governed call meters every
+    /// caller-settable dimension, so an unset one reads `2**64 - 2` — engaged, at a
+    /// ceiling no execution can reach.
+    #[getter]
+    fn limits<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        vector_to_dict(py, self.inner.limits())
+    }
+
+    /// The governor that stopped the execution, or `None` if it completed.
+    #[getter]
+    fn tripped(&self, py: Python<'_>) -> PyResult<Option<Py<PyTrippedGovernor>>> {
+        self.inner
+            .tripped()
+            .map(|inner| Py::new(py, PyTrippedGovernor { inner }))
+            .transpose()
+    }
+
+    /// Whether the execution completed with every governor intact.
+    #[getter]
+    const fn is_complete(&self) -> bool {
+        self.inner.is_complete()
+    }
+
+    /// Consumption charged on one dimension, named by its stable label.
+    fn consumed_in(&self, dimension: &str) -> PyResult<u64> {
+        Ok(self.inner.consumed_in(dimension_from_label(dimension)?))
+    }
+
+    /// The inclusive ceiling in force on one dimension, named by its stable label.
+    fn limit_for(&self, dimension: &str) -> PyResult<u64> {
+        Ok(self.inner.limit_for(dimension_from_label(dimension)?))
+    }
+
+    fn __repr__(&self) -> String {
+        match self.inner.tripped() {
+            None => "<GovernorEvidence complete>".to_owned(),
+            Some(tripped) => format!("<GovernorEvidence tripped={}>", tripped.label()),
+        }
+    }
+}
+
+/// What the rows a truncated execution reached bound, relative to the query's true answer.
+///
+/// A three-way interval, not a yes/no: `"certain"` rows are a certified **lower** bound
+/// and are safe to admit as answers; `"at-most"` rows are a certified **upper** bound and
+/// are sound only for the negative reading (a row absent from them is definitively not an
+/// answer); `"unknown"` means neither bound survived, so **no row is handed over at all**
+/// and [`barrier`](Self::barrier) names the operator that withheld them instead.
+#[pyclass(name = "PartialAnswers", frozen)]
+#[derive(Debug)]
+pub struct PyPartialAnswers {
+    /// `"certain"`, `"at-most"`, or `"unknown"`.
+    certainty: &'static str,
+    /// The materialized rows, absent on the `"unknown"` class.
+    result: Option<Py<PyAny>>,
+    /// Whether those rows are the true answer's first rows, in order.
+    positional_prefix: Option<bool>,
+    /// The operator that withheld the rows, on the `"unknown"` class.
+    barrier: Option<String>,
+}
+
+#[pymethods]
+impl PyPartialAnswers {
+    /// What these rows certify: `"certain"`, `"at-most"`, or `"unknown"`.
+    #[getter]
+    const fn certainty(&self) -> &'static str {
+        self.certainty
+    }
+
+    /// Whether these rows are certified answers — i.e. whether they may be admitted.
+    #[getter]
+    fn is_certain(&self) -> bool {
+        self.certainty == "certain"
+    }
+
+    /// The rows in hand, or `None` on the `"unknown"` class, where rows that bound the
+    /// answer on neither side offer no sound use and one unsound one.
+    #[getter]
+    fn result(&self, py: Python<'_>) -> Option<Py<PyAny>> {
+        self.result.as_ref().map(|result| result.clone_ref(py))
+    }
+
+    /// Whether these rows are the true answer's **first** rows, in order — the resumption
+    /// property: re-running the same query over the same data under a larger budget
+    /// returns these same rows first. `None` on the `"unknown"` class.
+    #[getter]
+    const fn is_positional_prefix(&self) -> Option<bool> {
+        self.positional_prefix
+    }
+
+    /// The algebra operator that withheld the rows, on the `"unknown"` class — which is
+    /// what says whether a larger budget or a different query is the way forward.
+    #[getter]
+    fn barrier(&self) -> Option<&str> {
+        self.barrier.as_deref()
+    }
+
+    fn __repr__(&self) -> String {
+        match &self.barrier {
+            Some(barrier) => format!("<PartialAnswers unknown barrier={barrier}>"),
+            None => format!("<PartialAnswers {}>", self.certainty),
+        }
+    }
+}
+
+/// The outcome of one governed query: a complete answer, or an exhausted budget carrying
+/// the partial answers the execution actually reached.
+///
+/// Exactly two shapes, and **neither is an exception**. A governor trip is not a failure:
+/// raising it would throw away the rows the budget already paid for and tell the caller
+/// the engine misbehaved. Check [`is_complete`](Self::is_complete), read
+/// [`result`](Self::result) when it holds, and read [`tripped`](Self::tripped) with
+/// [`partial`](Self::partial) when it does not.
+#[pyclass(name = "QueryOutcome", frozen)]
+#[derive(Debug)]
+pub struct PyQueryOutcome {
+    /// The complete result, present on the complete path only.
+    result: Option<Py<PyAny>>,
+    /// What the rows in hand bound, present on the exhausted path only.
+    partial: Option<Py<PyPartialAnswers>>,
+    /// The governor that stopped the execution, present on the exhausted path only.
+    tripped: Option<Py<PyTrippedGovernor>>,
+    /// This execution's consumption and ceilings, present on both paths.
+    evidence: Py<PyGovernorEvidence>,
+}
+
+#[pymethods]
+impl PyQueryOutcome {
+    /// Whether every governor stayed intact and this is the query's complete answer.
+    #[getter]
+    const fn is_complete(&self) -> bool {
+        self.tripped.is_none()
+    }
+
+    /// The **complete** result — `QuerySolutions`, `QueryTriples`, or `QueryBoolean` —
+    /// or `None` when a governor stopped the execution.
+    ///
+    /// Deliberately never the partial rows: a caller that stopped reading the outcome one
+    /// level too early receives nothing rather than a truncated answer wearing a complete
+    /// answer's type. The rows a trip reached are on [`partial`](Self::partial), behind
+    /// the certificate that says what they bound.
+    #[getter]
+    fn result(&self, py: Python<'_>) -> Option<Py<PyAny>> {
+        self.result.as_ref().map(|result| result.clone_ref(py))
+    }
+
+    /// What the rows the execution reached bound, or `None` when it completed.
+    #[getter]
+    fn partial(&self, py: Python<'_>) -> Option<Py<PyPartialAnswers>> {
+        self.partial.as_ref().map(|partial| partial.clone_ref(py))
+    }
+
+    /// The governor that stopped the execution, or `None` when it completed.
+    #[getter]
+    fn tripped(&self, py: Python<'_>) -> Option<Py<PyTrippedGovernor>> {
+        self.tripped.as_ref().map(|tripped| tripped.clone_ref(py))
+    }
+
+    /// This execution's consumption, ceilings, and trip — on both paths.
+    #[getter]
+    fn evidence(&self, py: Python<'_>) -> Py<PyGovernorEvidence> {
+        self.evidence.clone_ref(py)
+    }
+
+    fn __repr__(&self) -> String {
+        match &self.tripped {
+            None => "<QueryOutcome complete>".to_owned(),
+            Some(tripped) => format!("<QueryOutcome tripped={}>", tripped.get().label()),
+        }
+    }
+}
+
+/// The outcome of one governed SPARQL UPDATE.
+///
+/// Deliberately not a [`PyQueryOutcome`] and deliberately without a partial arm: a
+/// query's partial answer is a certifiable thing, a partial *mutation* is not. A tripped
+/// request applied **nothing** — not "not all of it" — and left the store exactly as it
+/// found it.
+#[pyclass(name = "UpdateOutcome", frozen)]
+#[derive(Debug)]
+pub struct PyUpdateOutcome {
+    /// The governor that stopped the request, present on the exhausted path only.
+    tripped: Option<Py<PyTrippedGovernor>>,
+    /// This request's consumption and ceilings, present on both paths.
+    evidence: Py<PyGovernorEvidence>,
+}
+
+#[pymethods]
+impl PyUpdateOutcome {
+    /// Whether every operation of the request applied.
+    ///
+    /// `False` means **nothing** applied, never "not all of it applied".
+    #[getter]
+    const fn is_applied(&self) -> bool {
+        self.tripped.is_none()
+    }
+
+    /// The governor that stopped the request, or `None` when it applied.
+    #[getter]
+    fn tripped(&self, py: Python<'_>) -> Option<Py<PyTrippedGovernor>> {
+        self.tripped.as_ref().map(|tripped| tripped.clone_ref(py))
+    }
+
+    /// This request's consumption, ceilings, and trip — on both paths.
+    #[getter]
+    fn evidence(&self, py: Python<'_>) -> Py<PyGovernorEvidence> {
+        self.evidence.clone_ref(py)
+    }
+
+    fn __repr__(&self) -> String {
+        match &self.tripped {
+            None => "<UpdateOutcome applied>".to_owned(),
+            Some(tripped) => format!("<UpdateOutcome tripped={}>", tripped.get().label()),
+        }
+    }
+}
+
+/// The kernel dimension named by its stable kebab-case label.
+fn dimension_from_label(label: &str) -> PyResult<ResourceDimension> {
+    ResourceDimension::ALL
+        .into_iter()
+        .find(|dimension| dimension.label() == label)
+        .ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "unknown resource dimension `{label}`; expected one of {}",
+                ResourceDimension::ALL
+                    .map(ResourceDimension::label)
+                    .join(", ")
+            ))
+        })
+}
+
+/// Render a resource vector as a `{dimension label: value}` dict, in the kernel's
+/// declaration order so the mapping is deterministic across calls and builds.
+fn vector_to_dict(py: Python<'_>, vector: ResourceVector) -> PyResult<Bound<'_, PyDict>> {
+    let dict = PyDict::new(py);
+    for dimension in ResourceDimension::ALL {
+        dict.set_item(dimension.label(), vector.get(dimension))?;
+    }
+    Ok(dict)
+}
+
+/// Convert a native [`GovernedOutcome`] into the Python `QueryOutcome` object.
+pub(crate) fn materialize_outcome(
+    py: Python<'_>,
+    outcome: GovernedOutcome,
+) -> PyResult<Py<PyQueryOutcome>> {
+    match outcome {
+        GovernedOutcome::Complete { result, evidence } => Py::new(
+            py,
+            PyQueryOutcome {
+                result: Some(materialize_results(py, result)?),
+                partial: None,
+                tripped: None,
+                evidence: Py::new(py, PyGovernorEvidence { inner: evidence })?,
+            },
+        ),
+        GovernedOutcome::BudgetExhausted(BudgetExhausted {
+            tripped,
+            evidence,
+            partial,
+        }) => Py::new(
+            py,
+            PyQueryOutcome {
+                result: None,
+                partial: Some(materialize_partial(py, partial)?),
+                tripped: Some(Py::new(py, PyTrippedGovernor { inner: tripped })?),
+                evidence: Py::new(py, PyGovernorEvidence { inner: evidence })?,
+            },
+        ),
+    }
+}
+
+/// Convert a native [`GovernedUpdateOutcome`] into the Python `UpdateOutcome` object.
+pub(crate) fn materialize_update_outcome(
+    py: Python<'_>,
+    outcome: &GovernedUpdateOutcome,
+) -> PyResult<Py<PyUpdateOutcome>> {
+    let tripped = outcome
+        .tripped()
+        .map(|inner| Py::new(py, PyTrippedGovernor { inner }))
+        .transpose()?;
+    Py::new(
+        py,
+        PyUpdateOutcome {
+            tripped,
+            evidence: Py::new(
+                py,
+                PyGovernorEvidence {
+                    inner: outcome.evidence().clone(),
+                },
+            )?,
+        },
+    )
+}
+
+/// Convert the native certificate into the Python `PartialAnswers` object.
+fn materialize_partial(py: Python<'_>, partial: PartialAnswers) -> PyResult<Py<PyPartialAnswers>> {
+    let certainty = match partial {
+        PartialAnswers::Certain(_) => "certain",
+        PartialAnswers::AtMost(_) => "at-most",
+        PartialAnswers::Unknown(_) => "unknown",
+    };
+    let barrier = partial
+        .barrier()
+        .map(|barrier| barrier.operator().to_owned());
+    let (result, positional_prefix) = match partial.into_result() {
+        Some(rows) => {
+            let positional_prefix = rows.is_positional_prefix();
+            (
+                Some(materialize_results(py, rows.into_result())?),
+                Some(positional_prefix),
+            )
+        }
+        None => (None, None),
+    };
+    Py::new(
+        py,
+        PyPartialAnswers {
+            certainty,
+            result,
+            positional_prefix,
+            barrier,
+        },
+    )
 }
 
 #[cfg(test)]

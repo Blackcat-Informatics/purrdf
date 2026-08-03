@@ -13,7 +13,10 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 
 use super::io::{PyRdfFormat, dataset_from_quads_verbatim, parse_quads, read_input};
-use super::query::{build_engine, materialize_results};
+use super::query::{
+    GovernorArgs, PyCancellationToken, PyQueryOutcome, PyUpdateOutcome, build_engine,
+    materialize_outcome, materialize_results, materialize_update_outcome, run_governed,
+};
 use super::store::PyQuadIter;
 use super::term::{PyQuad, PyVariable, extract_graph_name, extract_term};
 use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs};
@@ -235,6 +238,143 @@ impl PyMutableDataset {
                 .map_err(|e| PyValueError::new_err(format!("query evaluation error: {e}")))
         })?;
         materialize_results(py, result)
+    }
+
+    /// Run a SPARQL query under caller-supplied execution governors, returning a
+    /// `QueryOutcome`. The keywords, the outcome, and the Ctrl-C interaction are exactly
+    /// those of `Store.query_governed`.
+    #[pyo3(signature = (
+        query,
+        *,
+        substitutions=None,
+        extension_namespaces=None,
+        standpoint_predicates=None,
+        fuel=None,
+        deadline_ms=None,
+        max_answers=None,
+        max_intermediate_cells=None,
+        max_scratch_bytes=None,
+        max_remote_requests=None,
+        cancel=None,
+    ))]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each governed dimension is named explicitly at the call site; a bag \
+                  argument would make an unset ceiling and a misspelt one look alike"
+    )]
+    fn query_governed(
+        &self,
+        py: Python<'_>,
+        query: &str,
+        substitutions: Option<&Bound<'_, PyDict>>,
+        extension_namespaces: Option<Vec<String>>,
+        standpoint_predicates: Option<(String, String)>,
+        fuel: Option<u64>,
+        deadline_ms: Option<u64>,
+        max_answers: Option<u64>,
+        max_intermediate_cells: Option<u64>,
+        max_scratch_bytes: Option<u64>,
+        max_remote_requests: Option<u64>,
+        cancel: Option<&PyCancellationToken>,
+    ) -> PyResult<Py<PyQueryOutcome>> {
+        let subs = collect_substitutions(substitutions)?;
+        let args = GovernorArgs {
+            fuel,
+            deadline_ms,
+            max_answers,
+            max_intermediate_cells,
+            max_scratch_bytes,
+            max_remote_requests,
+        };
+        let inner = &self.inner;
+        // Snapshot + engine build + governed evaluation run detached (GIL released), so
+        // the thread holding `cancel` keeps running while this one is in the engine.
+        let outcome = run_governed(py, args, cancel, move |governors| {
+            let dataset = inner
+                .freeze()
+                .map_err(|e| PyValueError::new_err(format!("snapshot failed: {e}")))?;
+            let engine = build_engine(extension_namespaces, standpoint_predicates);
+            engine
+                .query_governed(
+                    &dataset,
+                    SparqlRequest {
+                        query,
+                        base_iri: None,
+                        substitutions: &subs,
+                    },
+                    governors,
+                )
+                .map_err(|e| PyValueError::new_err(format!("query evaluation error: {e}")))
+        })?;
+        materialize_outcome(py, outcome)
+    }
+
+    /// Run a SPARQL UPDATE under caller-supplied execution governors, returning an
+    /// `UpdateOutcome`. The keywords and the all-or-nothing guarantee are exactly those
+    /// of `Store.update_governed`.
+    #[pyo3(signature = (
+        update,
+        *,
+        extension_namespaces=None,
+        standpoint_predicates=None,
+        fuel=None,
+        deadline_ms=None,
+        max_intermediate_cells=None,
+        max_scratch_bytes=None,
+        max_remote_requests=None,
+        cancel=None,
+    ))]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each governed dimension is named explicitly at the call site; a bag \
+                  argument would make an unset ceiling and a misspelt one look alike"
+    )]
+    fn update_governed(
+        &mut self,
+        py: Python<'_>,
+        update: &str,
+        extension_namespaces: Option<Vec<String>>,
+        standpoint_predicates: Option<(String, String)>,
+        fuel: Option<u64>,
+        deadline_ms: Option<u64>,
+        max_intermediate_cells: Option<u64>,
+        max_scratch_bytes: Option<u64>,
+        max_remote_requests: Option<u64>,
+        cancel: Option<&PyCancellationToken>,
+    ) -> PyResult<Py<PyUpdateOutcome>> {
+        let args = GovernorArgs {
+            fuel,
+            deadline_ms,
+            max_answers: None,
+            max_intermediate_cells,
+            max_scratch_bytes,
+            max_remote_requests,
+        };
+        let inner = &self.inner;
+        // Snapshot + governed evaluation run detached (GIL released).
+        let (outcome, dataset) = run_governed(py, args, cancel, move |governors| {
+            let mut dataset = inner
+                .freeze()
+                .map_err(|e| PyValueError::new_err(format!("snapshot failed: {e}")))?;
+            let outcome = build_engine(extension_namespaces, standpoint_predicates)
+                .update_governed(
+                    &mut dataset,
+                    SparqlRequest {
+                        query: update,
+                        base_iri: None,
+                        substitutions: &[],
+                    },
+                    governors,
+                )
+                .map_err(|e| PyValueError::new_err(format!("update evaluation error: {e}")))?;
+            Ok((outcome, dataset))
+        })?;
+        // Adopted only on the applied path: a tripped request published nothing, so the
+        // COW base it started from is still the one this dataset must keep.
+        if outcome.is_applied() {
+            self.inner = MutableDataset::new(dataset);
+        }
+        materialize_update_outcome(py, &outcome)
     }
 
     /// Run a SPARQL UPDATE (COW-atomic: a failed update leaves the set unchanged).
