@@ -1135,12 +1135,27 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// v3 also adds [`TrippedGovernor::Refused`], which can stop an execution before its first
 /// charge, and applies the answer cap to `CONSTRUCT` and `DESCRIBE` output statements.
 /// Neither changes a charge; both change which executions reach one.
-pub const GOVERNOR_PROFILE_VERSION: u32 = 3;
+///
+/// # v4
+///
+/// The first version in which [`CHARGE_SCHEDULE`] is **not** byte-identical to v1: it gains
+/// [`ChargePoint::UpdateMutatedQuad`], because SPARQL `UPDATE` became governable
+/// (`NativeSparqlEngine::update_governed`) and a mutation is work a budget has to be able
+/// to bound. `CLEAR ALL`, `MOVE`, `COPY`, `ADD`, `LOAD` and the `DATA` forms do work
+/// proportional to the *store*, not to the request text, and none of it passes through an
+/// algebra node — so without this point a caller could set every ceiling on this crate and
+/// still have `CLEAR ALL` run to completion over a hundred million quads, reporting zero
+/// consumption. A ceiling that a whole operation kind cannot reach is not a ceiling.
+///
+/// No *query* charges it: a query mutates nothing, so a budget sized against v3 for a query
+/// buys exactly the same execution under v4. The number moves anyway, because the schedule
+/// moved and the schedule is what the digest describes.
+pub const GOVERNOR_PROFILE_VERSION: u32 = 4;
 
 /// The charge schedule, as data rather than as scattered literals.
 ///
-/// Unchanged since v1 and byte-identical across both profile versions: see
-/// [`GOVERNOR_PROFILE_VERSION`] for what v2 moved and why the table did not have to.
+/// Byte-identical from v1 through v3; v4 appends `update-mutated-quad` — see
+/// [`GOVERNOR_PROFILE_VERSION`] for what each version moved and why.
 ///
 /// Each entry is `(label, cost)`. The labels are a pinned contract — a frozen corpus and
 /// a per-node ledger record them — so renaming one is a breaking change, not a cosmetic
@@ -1150,8 +1165,9 @@ pub const GOVERNOR_PROFILE_VERSION: u32 = 3;
 /// Every charge point costs one unit in v1. That is deliberate: a schedule whose costs
 /// are all 1 makes fuel a count of *observable evaluation events*, which is a quantity a
 /// caller can reason about and a corpus can pin, rather than a weighted score whose units
-/// mean nothing outside this build.
-pub const CHARGE_SCHEDULE: [(&str, u64); 8] = [
+/// mean nothing outside this build. `update-mutated-quad` is priced at one for the same
+/// reason: it is one observable event — one quad inserted into, or removed from, the store.
+pub const CHARGE_SCHEDULE: [(&str, u64); 9] = [
     ("algebra-node-entry", 1),
     ("committed-output-row", 1),
     ("bgp-candidate-quad", 1),
@@ -1160,6 +1176,7 @@ pub const CHARGE_SCHEDULE: [(&str, u64); 8] = [
     ("user-function-invocation", 1),
     ("remote-request-issued", 1),
     ("remote-row-ingested", 1),
+    ("update-mutated-quad", 1),
 ];
 
 /// A deterministic counting point in the evaluator, and the type-safe index into
@@ -1187,6 +1204,17 @@ pub enum ChargePoint {
     RemoteRequestIssued,
     /// One row ingested from a remote endpoint's response.
     RemoteRowIngested,
+    /// One quad inserted into, or removed from, the store by a SPARQL `UPDATE`.
+    ///
+    /// The only charge point outside the query evaluator, and the only one an algebra node
+    /// never raises. It is what makes a mutation's *size* — as opposed to the size of the
+    /// `WHERE` clause that computed it — visible to a budget: `CLEAR ALL`, `MOVE`, `COPY`,
+    /// `ADD`, `LOAD` and the `DATA` forms all do work proportional to the store rather than
+    /// to the request, and none of that work enters the evaluator at all.
+    ///
+    /// Charged **before** the quads are applied, per operation, so an operation whose
+    /// mutation would breach the ceiling makes no mutation rather than a truncated one.
+    UpdateMutatedQuad,
 }
 
 impl ChargePoint {
@@ -1200,6 +1228,7 @@ impl ChargePoint {
         Self::UserFunctionInvocation,
         Self::RemoteRequestIssued,
         Self::RemoteRowIngested,
+        Self::UpdateMutatedQuad,
     ];
 
     /// This point's row in [`CHARGE_SCHEDULE`], and its column in a
@@ -1219,6 +1248,7 @@ impl ChargePoint {
             Self::UserFunctionInvocation => 5,
             Self::RemoteRequestIssued => 6,
             Self::RemoteRowIngested => 7,
+            Self::UpdateMutatedQuad => 8,
         }
     }
 

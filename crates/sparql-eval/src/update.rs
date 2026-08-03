@@ -38,11 +38,55 @@
 //! - **`LOAD` host seam.** The core is network-free. `LOAD <iri>` needs a host
 //!   [`GraphResolver`] to fetch + parse the source into a frozen dataset; with no
 //!   resolver, `LOAD` hard-fails unless `SILENT`.
+//!
+//! # Governors: what an UPDATE is charged for, and why a trip applies nothing
+//!
+//! An UPDATE runs under the same [`GovernorState`] a governed query runs under, threaded in
+//! through the engine seam's evaluation config, and a trip leaves this module as a typed
+//! governor rather than as a stringly diagnostic.
+//!
+//! Two kinds of work are charged, because an UPDATE does two kinds of work:
+//!
+//! - The `WHERE` clause of a `DELETE/INSERT` is evaluated through an [`EvalCtx`] carrying
+//!   the request's governors, so it charges and stops **exactly** as the same pattern
+//!   inside a governed `SELECT` does — the same fuel, the same intermediate-cell peak, the
+//!   same scratch bytes, the same admission refusal.
+//! - The **mutation itself** is charged per quad, at
+//!   [`ChargePoint::UpdateMutatedQuad`]. This is not decoration. `CLEAR ALL`, `MOVE`,
+//!   `COPY`, `ADD`, `LOAD` and the two `DATA` forms do work proportional to the *store*,
+//!   and none of it enters the evaluator — so a ceiling that only bound the `WHERE` would
+//!   be one an entire half of the UPDATE surface could never reach, on exactly the
+//!   operations whose cost is unbounded by the request text.
+//!
+//! The stop signal is polled before each operation and immediately before the `LOAD` host
+//! seam issues I/O.
+//!
+//! ## A trip applies nothing
+//!
+//! `m` **is** mutated incrementally, both within an operation and across the operations of
+//! a request: operation N+1 must observe operation N's effects (SPARQL 1.1 Update §3.1), so
+//! there is no version of this loop in which earlier operations are held back, and a bulk
+//! operation that trips part-way through has already written part of itself. None of that
+//! is a rollback problem, because none of it is visible.
+//!
+//! [`MutableDataset`] is a copy-on-write **branch** off the caller's frozen base, and
+//! `crate::engine` publishes it back with a single `m.freeze()` assignment that happens on
+//! the success path and nowhere else. Every non-success exit — a diagnostic or a governor
+//! trip — simply drops `m`, and dropping a branch is the rollback: the caller's
+//! `Arc<RdfDataset>` was never written, so it is the same handle it was before, not merely
+//! an equal one. Whatever a half-run operation had reached is dropped with it.
+//!
+//! Nothing here therefore needs a snapshot/restore of its own, and adding one would be a
+//! second, weaker copy of a guarantee the branch already gives structurally. It is also why
+//! charging *before* applying a batch is a courtesy rather than a correctness requirement:
+//! it wastes less work on a request that is going to be discarded, and discards it either
+//! way.
 
 use std::sync::Arc;
 
 use purrdf_core::{
-    DatasetMut, GraphMatchValue, MutableDataset, QuadValues, RdfDataset, RdfDiagnostic, TermValue,
+    DatasetMut, GraphMatchValue, MutableDataset, QuadValues, RdfDataset, RdfDiagnostic,
+    ResourceDimension, TermValue, TrippedGovernor,
 };
 use purrdf_sparql_algebra::{
     GraphTarget, GraphUpdateOperation, NamedNodePattern, QuadPattern, Update, UsingClause,
@@ -52,10 +96,38 @@ use crate::DetHashMap;
 use crate::convert::named_node_to_value;
 use crate::dataset_spec::ActiveDataset;
 use crate::eval::{BgpOrderCache, EvalCtx, StandpointPredicates, eval_evaluated};
+use crate::governor::{ChargePoint, GovernorState};
 use crate::solution::{Solution, VarSchema};
 use crate::template::{
     instantiate_ground_term, instantiate_predicate, instantiate_term, positionally_ill_formed,
 };
+
+/// Why an UPDATE request stopped before applying.
+///
+/// The two arms are genuinely different events and the caller acts on them differently, so
+/// they are not one type with a string in it. A [`Self::Failed`] says the request could not
+/// be carried out — it is malformed, or it asked for a host seam that is not there. A
+/// [`Self::Tripped`] says the request was *fine* and a resource ceiling stopped it; the
+/// remedy is a larger budget, and the caller needs the [`TrippedGovernor`] to know which
+/// ceiling to raise. Rendering the second as an `RdfDiagnostic` with a formatted message —
+/// which is what this path used to do, on a branch nothing could reach — throws that away
+/// and tells the caller the engine misbehaved.
+///
+/// Either arm applies **nothing**: see the module docs.
+#[derive(Debug)]
+pub(crate) enum UpdateAbort {
+    /// The request could not be carried out.
+    Failed(RdfDiagnostic),
+    /// A governor stopped the request. Only reachable when a [`GovernorState`] was
+    /// threaded in through [`UpdateEvalConfig::governors`].
+    Tripped(TrippedGovernor),
+}
+
+impl From<RdfDiagnostic> for UpdateAbort {
+    fn from(diagnostic: RdfDiagnostic) -> Self {
+        Self::Failed(diagnostic)
+    }
+}
 
 /// The engine-level WHERE-evaluation config threaded into UPDATE, mirroring the
 /// query path's `EvalCtx` build (order cache + standpoint predicate table) so a
@@ -63,6 +135,93 @@ use crate::template::{
 pub(crate) struct UpdateEvalConfig<'e> {
     pub(crate) standpoint_predicates: Option<&'e StandpointPredicates>,
     pub(crate) order_cache: &'e BgpOrderCache,
+    /// This request's live governor accounting, or `None` for an ungoverned request.
+    ///
+    /// `None` is not "unbounded": it is the *absence* of the state, which is what keeps an
+    /// ungoverned UPDATE byte-for-byte the execution it was before governors existed —
+    /// `EvalCtx` never acquires a governor, so no charge site, no stop poll, and no
+    /// truncation channel is reachable. It is also what makes [`UpdateAbort::Tripped`]
+    /// structurally impossible on the ungoverned seam.
+    pub(crate) governors: Option<&'e Arc<GovernorState>>,
+}
+
+/// Poll the request's stop signal, converting a fired signal into a trip.
+///
+/// Called at the two places the evaluator's own charge-point polling cannot reach: before
+/// starting each operation of a request, and — the load-bearing one — immediately before
+/// the `LOAD` host seam issues I/O. [`StopSignal`](crate::governor::StopSignal) latches by
+/// contract, so the trip reported is the one already recorded on the state rather than a
+/// fresh derivation of the same condition; that is what keeps a stop that raced some other
+/// ceiling reporting one governor rather than two.
+fn check_stop(governors: Option<&Arc<GovernorState>>) -> Result<(), UpdateAbort> {
+    let Some(state) = governors else {
+        return Ok(());
+    };
+    let Some(cause) = state.poll_stop() else {
+        return Ok(());
+    };
+    // `poll_stop` latched the cause into the state, so `tripped()` is the reported
+    // governor; the fallback keeps this a total function and is not reachable through a
+    // signal that honours the latching contract.
+    Err(UpdateAbort::Tripped(
+        state
+            .tripped()
+            .unwrap_or(TrippedGovernor::Stopped { cause }),
+    ))
+}
+
+/// Charge the one request a `LOAD` issues to the host, before it is issued.
+///
+/// The same pair the `SERVICE` federation seam charges — the fuel charge point and the
+/// [`ResourceDimension::RemoteRequests`] dimension — because it is the same event: the
+/// engine handing a dereferenceable IRI to a host and waiting. A caller who bounds how many
+/// endpoints a federated query may consult means the same thing by that number when the
+/// request is a `LOAD`, and a ceiling that governed one and not the other would be a
+/// ceiling whose meaning depended on which clause spelled the fetch.
+///
+/// This is also the only ceiling that can act on a `LOAD` *before* the network is touched.
+/// Fuel cannot: the document's size is unknown until it has been fetched, so the
+/// per-quad ingest charge is necessarily after the fact. Bounding the number of fetches is
+/// the bound that is knowable in advance, so it is the one taken in advance.
+fn charge_host_fetch(governors: Option<&Arc<GovernorState>>) -> Result<(), UpdateAbort> {
+    let Some(state) = governors else {
+        return Ok(());
+    };
+    state
+        .charge_point_if_engaged(ChargePoint::RemoteRequestIssued)
+        .and_then(|()| state.charge_if_engaged(ResourceDimension::RemoteRequests, 1))
+        .map_err(UpdateAbort::Tripped)
+}
+
+/// Charge `quads` mutated quads against the request's fuel.
+///
+/// The one charge site for the mutation half of an UPDATE, called by every operation that
+/// writes to `m`. Charged as a batch rather than a quad at a time wherever the count is
+/// known in advance, which is everywhere except the two `DATA` forms (whose quads are
+/// instantiated one at a time and may individually be skipped as ill-formed, so charging a
+/// batch would charge for quads no operation ever wrote).
+///
+/// An ungoverned request pays one `Option` test; a request whose fuel is unbounded pays one
+/// further array read, through
+/// [`charge_if_engaged`](GovernorState::charge_if_engaged)'s short-circuit — the same
+/// short-circuit that keeps an ungoverned query costing what it cost before governors
+/// existed.
+///
+/// Saturating rather than wrapping: a store large enough to overflow the product is one no
+/// budget could admit anyway, so failing closed at `u64::MAX` is the honest answer.
+fn charge_mutations(
+    governors: Option<&Arc<GovernorState>>,
+    quads: usize,
+) -> Result<(), UpdateAbort> {
+    let Some(state) = governors else {
+        return Ok(());
+    };
+    let units = u64::try_from(quads)
+        .unwrap_or(u64::MAX)
+        .saturating_mul(ChargePoint::UpdateMutatedQuad.cost());
+    state
+        .charge_if_engaged(ResourceDimension::Fuel, units)
+        .map_err(UpdateAbort::Tripped)
 }
 
 /// Host seam for SPARQL `LOAD <iri>`: resolves a source IRI to a frozen dataset.
@@ -78,17 +237,23 @@ pub trait GraphResolver {
 
 /// Apply a parsed [`Update`] to `m` in request order.
 ///
-/// Returns `Ok(())` on success; a specific [`RdfDiagnostic`] code on the boundary
-/// conditions (`LOAD` with no resolver, a bad re-key destination, an internal eval
-/// error). `resolver` supplies the `LOAD` host seam (see [`GraphResolver`]); pass
-/// `None` to make any non-`SILENT` `LOAD` a hard error.
-// The in-crate caller is the engine UPDATE seam (`engine::update`).
+/// Returns `Ok(())` on success and an [`UpdateAbort`] otherwise: a specific
+/// [`RdfDiagnostic`] code on the boundary conditions (`LOAD` with no resolver, a bad re-key
+/// destination, an internal eval error), or the [`TrippedGovernor`] that stopped the
+/// request. `resolver` supplies the `LOAD` host seam (see [`GraphResolver`]); pass `None`
+/// to make any non-`SILENT` `LOAD` a hard error.
+///
+/// On **either** abort, `m` is left in whatever state the operations reached and is
+/// expected to be dropped rather than frozen — that discard is the request's rollback, and
+/// the module docs explain why it is the whole of it.
+// The in-crate callers are the engine UPDATE seams (`engine::update` and
+// `NativeSparqlEngine::update_governed`).
 pub(crate) fn eval_update(
     update: &Update,
     m: &mut MutableDataset,
     resolver: Option<&dyn GraphResolver>,
     cfg: &UpdateEvalConfig<'_>,
-) -> Result<(), RdfDiagnostic> {
+) -> Result<(), UpdateAbort> {
     // A single monotonic counter threaded across EVERY operation in this request, so
     // a synthetic blank label minted by operation N can never collide with one minted
     // by operation N+1 — even though each operation's own `_:b` → label map starts
@@ -107,16 +272,30 @@ pub(crate) fn eval_update(
 
 /// Apply one update operation to `m`. `bnode_counter` is the request-wide monotonic
 /// blank-mint counter (see [`eval_update`]) — never reset between operations.
+///
+/// The stop signal is polled here, before the operation starts, which is the granularity a
+/// request has: a fuel ceiling stops an operation *within* itself (every mutating operation
+/// charges — see [`charge_mutations`]), but a deadline or a cancellation is observed
+/// between operations, exactly as the query evaluator observes one between operator
+/// boundaries rather than between charge points. Without this poll a cancelled
+/// thousand-operation request would run every one of them with a latched signal nobody
+/// asked. Polling a latching signal is idempotent and costs an ungoverned request nothing
+/// (`governors` is `None`, and the poll returns before touching anything).
 fn apply_operation(
     op: &GraphUpdateOperation,
     m: &mut MutableDataset,
     resolver: Option<&dyn GraphResolver>,
     cfg: &UpdateEvalConfig<'_>,
     bnode_counter: &mut u64,
-) -> Result<(), RdfDiagnostic> {
+) -> Result<(), UpdateAbort> {
+    check_stop(cfg.governors)?;
     match op {
-        GraphUpdateOperation::InsertData { data } => insert_data(data, m, bnode_counter),
-        GraphUpdateOperation::DeleteData { data } => delete_data(data, m, bnode_counter),
+        GraphUpdateOperation::InsertData { data } => {
+            insert_data(data, m, bnode_counter, cfg.governors)
+        }
+        GraphUpdateOperation::DeleteData { data } => {
+            delete_data(data, m, bnode_counter, cfg.governors)
+        }
         GraphUpdateOperation::DeleteInsert {
             delete,
             insert,
@@ -139,11 +318,17 @@ fn apply_operation(
             silent,
             source,
             destination,
-        } => load(*silent, source.as_str(), destination, m, resolver),
+        } => load(
+            *silent,
+            source.as_str(),
+            destination,
+            m,
+            resolver,
+            cfg.governors,
+        ),
         // CLEAR ≡ DROP in a quad store with implicit graph existence (see module docs).
         GraphUpdateOperation::Clear { target, .. } | GraphUpdateOperation::Drop { target, .. } => {
-            clear_target(target, m);
-            Ok(())
+            clear_target(target, m, cfg.governors)
         }
         // Graph existence is implicit, so CREATE has nothing to register: no-op success.
         GraphUpdateOperation::Create { .. } => Ok(()),
@@ -151,17 +336,17 @@ fn apply_operation(
             source,
             destination,
             ..
-        } => graph_op_add(source, destination, m),
+        } => graph_op_add(source, destination, m, cfg.governors),
         GraphUpdateOperation::Move {
             source,
             destination,
             ..
-        } => graph_op_move(source, destination, m),
+        } => graph_op_move(source, destination, m, cfg.governors),
         GraphUpdateOperation::Copy {
             source,
             destination,
             ..
-        } => graph_op_copy(source, destination, m),
+        } => graph_op_copy(source, destination, m, cfg.governors),
     }
 }
 
@@ -178,10 +363,15 @@ fn insert_data(
     data: &[QuadPattern],
     m: &mut MutableDataset,
     counter: &mut u64,
-) -> Result<(), RdfDiagnostic> {
+    governors: Option<&Arc<GovernorState>>,
+) -> Result<(), UpdateAbort> {
     let mut blanks: DetHashMap<String, String> = DetHashMap::default();
     for qp in data {
         if let Some(q) = instantiate_ground_quad(qp, &mut blanks, counter) {
+            // Charged per quad rather than per operation because an ill-formed template
+            // quad is skipped rather than inserted (§16.2), and fuel counts what the store
+            // actually did.
+            charge_mutations(governors, 1)?;
             m.insert(q);
         }
     }
@@ -194,10 +384,12 @@ fn delete_data(
     data: &[QuadPattern],
     m: &mut MutableDataset,
     counter: &mut u64,
-) -> Result<(), RdfDiagnostic> {
+    governors: Option<&Arc<GovernorState>>,
+) -> Result<(), UpdateAbort> {
     let mut blanks: DetHashMap<String, String> = DetHashMap::default();
     for qp in data {
         if let Some(q) = instantiate_ground_quad(qp, &mut blanks, counter) {
+            charge_mutations(governors, 1)?;
             m.remove(&q);
         }
     }
@@ -223,7 +415,7 @@ fn delete_insert(
     m: &mut MutableDataset,
     cfg: &UpdateEvalConfig<'_>,
     bnode_counter: &mut u64,
-) -> Result<(), RdfDiagnostic> {
+) -> Result<(), UpdateAbort> {
     let DeleteInsertSpec {
         delete,
         insert,
@@ -238,6 +430,12 @@ fn delete_insert(
     let snap = m.freeze()?;
     let mut ctx = EvalCtx::new(&*snap);
     ctx = ctx.with_order_cache(cfg.order_cache);
+    // The request's governors, so the `WHERE` charges and stops exactly as the same
+    // pattern would inside a governed `SELECT`. Without this the ceilings a caller set
+    // would bound their queries and silently not bound their mutations.
+    if let Some(state) = cfg.governors {
+        ctx = ctx.with_governors(Arc::clone(state));
+    }
     if let Some(preds) = cfg.standpoint_predicates {
         ctx = ctx.with_standpoint_predicates(preds.clone());
     }
@@ -259,22 +457,22 @@ fn delete_insert(
         ActiveDataset::store_default()
     };
 
+    admit_where(pattern, &snap, &ctx.active_dataset, cfg.governors)?;
+
     // A truncated `WHERE` must apply NO mutation: a half-applied UPDATE is not an
     // incomplete result, it is a corrupt store. Refusing the whole operation is the only
-    // sound reading, and it is reported as a refusal rather than silently applied.
+    // sound reading — and the certified partial rows the query path would hand back are
+    // deliberately dropped here rather than reported, because there is no sound use for
+    // them: instantiating a template from "some of the answers" is exactly the half-applied
+    // mutation this refuses. What crosses is the typed governor, so the caller learns which
+    // ceiling to raise.
+    //
+    // Nothing has been written to `m` at this point (the mutations below are collected
+    // first), so this return needs no undo of its own.
     let seq = eval_evaluated(pattern, &mut ctx)
         .map_err(|e| RdfDiagnostic::error("native-sparql-update-eval", e.to_string()))?
         .into_complete()
-        .map_err(|truncation| {
-            RdfDiagnostic::error(
-                "native-sparql-update-eval",
-                format!(
-                    "a governor tripped while evaluating an UPDATE WHERE clause, so no \
-                     mutation was applied: {}",
-                    truncation.describe()
-                ),
-            )
-        })?;
+        .map_err(|truncation| UpdateAbort::Tripped(truncation.tripped()))?;
     let schema = seq.schema.clone();
 
     // Collect the mutations BEFORE touching `m`, so the snapshot stays valid for the
@@ -318,6 +516,11 @@ fn delete_insert(
     drop(ctx);
     drop(snap);
 
+    // The mutation this operation computed, charged as one batch before any of it lands.
+    // The `WHERE` that produced it was charged as a query; this is the store's half of the
+    // cost, which no ceiling on the `WHERE` bounds — one solution row can instantiate an
+    // arbitrarily large template.
+    charge_mutations(cfg.governors, to_remove.len() + to_insert.len())?;
     for q in &to_remove {
         m.remove(q);
     }
@@ -327,32 +530,113 @@ fn delete_insert(
     Ok(())
 }
 
+/// Refuse an UPDATE's `WHERE` whose predicted peak intermediate bag already breaches the
+/// caller's intermediate-cell ceiling.
+///
+/// The mutation-path twin of the query path's admission control
+/// (`NativeSparqlEngine::admit`), and it exists for the identical reason: every other
+/// governor is a meter, and a meter reports the cross product **after** it is in memory.
+/// On `wasm32` that difference is total rather than uncomfortable — an allocation trap
+/// aborts the module, so there is no execution left to return an outcome. An UPDATE's
+/// `WHERE` builds its bag exactly the way a `SELECT` builds one, so leaving this out would
+/// have made "a governed mutation" mean something strictly weaker than "a governed query"
+/// on the one platform where the difference is fatal.
+///
+/// Priced against the operation's own snapshot and active dataset rather than against the
+/// request's starting state, because that is the data this `WHERE` will actually read:
+/// operation N+1 observes operation N's effects, so a shared pre-flight estimate would be
+/// pricing a store that no longer exists.
+///
+/// The refusal is a [`TrippedGovernor::Refused`] carrying the estimate — never a
+/// consumption it did not measure — latched through [`GovernorState::record_trip`] so a
+/// stop signal that was already firing keeps precedence and the evidence names one governor
+/// rather than two.
+fn admit_where(
+    pattern: &purrdf_sparql_algebra::GraphPattern,
+    snap: &RdfDataset,
+    active_dataset: &ActiveDataset<purrdf_core::TermId>,
+    governors: Option<&Arc<GovernorState>>,
+) -> Result<(), UpdateAbort> {
+    let Some(state) = governors else {
+        return Ok(());
+    };
+    let dimension = ResourceDimension::IntermediateCells;
+    if !state.is_engaged_in(dimension) {
+        return Ok(());
+    }
+    let mut survey = crate::bgp::PlanSurvey::default();
+    crate::bgp::survey_pattern_plans(
+        snap,
+        active_dataset,
+        purrdf_core::GraphMatch::Default,
+        pattern,
+        &mut survey,
+    )
+    .map_err(|e| RdfDiagnostic::error("native-sparql-update-eval", e.to_string()))?;
+    let estimate = survey.peak_cells();
+    let limit = state.limits().get(dimension);
+    if estimate <= limit {
+        return Ok(());
+    }
+    Err(UpdateAbort::Tripped(state.record_trip(
+        TrippedGovernor::Refused {
+            dimension,
+            limit,
+            estimate,
+        },
+    )))
+}
+
 // ── LOAD ─────────────────────────────────────────────────────────────────────
 
 /// `LOAD [SILENT] <iri> [INTO GRAPH <iri>]`.
+///
+/// # The stop signal is polled before the host is asked for anything
+///
+/// This is the one place a nominally governed engine hands control to the host and blocks
+/// there: [`GraphResolver::resolve`] fetches and parses a document, and how long that takes
+/// is not the evaluator's to bound. A signal only the evaluator polls is unpollable for
+/// exactly as long as the evaluator is not running, which is precisely the window this call
+/// occupies — so a cancelled or expired request must be stopped *before* the request is
+/// issued, not noticed once it has returned. This is the same rule the `SERVICE` federation
+/// seam follows.
+///
+/// The fetch is also charged as a host request before it is issued (see
+/// [`charge_host_fetch`]), which is the only ceiling that can act on a `LOAD` in advance:
+/// the ingest is charged per quad, and how many quads there are is the host's answer, not
+/// something the request could have declared.
+///
+/// `SILENT` does **not** launder any of that into a no-op success. `SILENT` is a statement
+/// about the *source* — an unreachable or unparseable document is not a request failure —
+/// and it says nothing about the caller's budget. Swallowing a governor here would report a
+/// request as fully applied when a ceiling had in fact stopped it, which is the one outcome
+/// a governor exists to make impossible.
 fn load(
     silent: bool,
     source: &str,
     destination: &GraphTarget,
     m: &mut MutableDataset,
     resolver: Option<&dyn GraphResolver>,
-) -> Result<(), RdfDiagnostic> {
+    governors: Option<&Arc<GovernorState>>,
+) -> Result<(), UpdateAbort> {
     let Some(resolver) = resolver else {
         if silent {
             return Ok(());
         }
-        return Err(RdfDiagnostic::error(
+        return Err(UpdateAbort::Failed(RdfDiagnostic::error(
             "native-sparql-load-no-resolver",
             format!("LOAD <{source}> needs a GraphResolver host seam, none was provided"),
-        ));
+        )));
     };
+    check_stop(governors)?;
+    charge_host_fetch(governors)?;
     let loaded = match resolver.resolve(source) {
         Ok(ds) => ds,
         Err(e) => {
             if silent {
                 return Ok(());
             }
-            return Err(e);
+            return Err(UpdateAbort::Failed(e));
         }
     };
 
@@ -361,6 +645,10 @@ fn load(
     let dest = graph_target_value(destination)?;
     let view = MutableDataset::new(loaded);
     let quads = view.quads_for_pattern(None, None, None, GraphMatchValue::Any);
+    // The document's size is the host's to choose, not the request's, so this is the one
+    // mutation whose magnitude the caller could not have read off the request text. It is
+    // charged before a single quad of it lands.
+    charge_mutations(governors, quads.len())?;
     for q in quads {
         m.insert(rekey_graph(q, dest.as_ref()));
     }
@@ -370,11 +658,21 @@ fn load(
 // ── CLEAR / DROP ─────────────────────────────────────────────────────────────
 
 /// Remove every quad of `target` from `m` (CLEAR ≡ DROP — see module docs).
-fn clear_target(target: &GraphTarget, m: &mut MutableDataset) {
+///
+/// `CLEAR ALL` is the cheapest sentence in SPARQL to write and the most expensive to
+/// execute — its cost is the whole store — so it is charged per removed quad like every
+/// other mutation.
+fn clear_target(
+    target: &GraphTarget,
+    m: &mut MutableDataset,
+    governors: Option<&Arc<GovernorState>>,
+) -> Result<(), UpdateAbort> {
     let quads = quads_of_target(target, m);
+    charge_mutations(governors, quads.len())?;
     for q in &quads {
         m.remove(q);
     }
+    Ok(())
 }
 
 // ── ADD / MOVE / COPY ────────────────────────────────────────────────────────
@@ -385,13 +683,15 @@ fn graph_op_add(
     source: &GraphTarget,
     destination: &GraphTarget,
     m: &mut MutableDataset,
-) -> Result<(), RdfDiagnostic> {
+    governors: Option<&Arc<GovernorState>>,
+) -> Result<(), UpdateAbort> {
     // SPARQL §3.2.5: ADD where source ≡ destination is a no-op.
     if source == destination {
         return Ok(());
     }
     let src = quads_of_target(source, m);
     let dest = graph_target_value(destination)?;
+    charge_mutations(governors, src.len())?;
     for q in src {
         m.insert(rekey_graph(q, dest.as_ref()));
     }
@@ -403,14 +703,17 @@ fn graph_op_copy(
     source: &GraphTarget,
     destination: &GraphTarget,
     m: &mut MutableDataset,
-) -> Result<(), RdfDiagnostic> {
+    governors: Option<&Arc<GovernorState>>,
+) -> Result<(), UpdateAbort> {
     // SPARQL §3.2.4: COPY where source ≡ destination is a no-op.
     if source == destination {
         return Ok(());
     }
     let dest = graph_target_value(destination)?;
     let src = quads_of_target(source, m);
-    clear_target(destination, m);
+    // The destination clear charges its own removals; this charges the copy.
+    clear_target(destination, m, governors)?;
+    charge_mutations(governors, src.len())?;
     for q in src {
         m.insert(rekey_graph(q, dest.as_ref()));
     }
@@ -423,7 +726,8 @@ fn graph_op_move(
     source: &GraphTarget,
     destination: &GraphTarget,
     m: &mut MutableDataset,
-) -> Result<(), RdfDiagnostic> {
+    governors: Option<&Arc<GovernorState>>,
+) -> Result<(), UpdateAbort> {
     // SPARQL §3.2.6: MOVE where source ≡ destination is a no-op. This guard is also
     // a correctness requirement, not just an optimization: with source == dest the
     // trailing source-removal below would re-suppress the just-inserted quads and
@@ -433,7 +737,11 @@ fn graph_op_move(
     }
     let dest = graph_target_value(destination)?;
     let src = quads_of_target(source, m);
-    clear_target(destination, m);
+    // The destination clear charges its own removals; a MOVE then touches every source
+    // quad twice — once to write it at the destination, once to remove it from the source
+    // — and is charged for both, because both are mutations the store performs.
+    clear_target(destination, m, governors)?;
+    charge_mutations(governors, src.len().saturating_mul(2))?;
     for q in &src {
         m.insert(rekey_graph(q.clone(), dest.as_ref()));
     }
@@ -599,12 +907,34 @@ mod tests {
             .collect()
     }
 
+    /// The ungoverned WHERE-evaluation config every test in this module runs under: the
+    /// governed surface is exercised from the public API (`tests/governed_update.rs`),
+    /// because that is the only vantage a consumer has on it.
+    fn ungoverned(order_cache: &BgpOrderCache) -> UpdateEvalConfig<'_> {
+        UpdateEvalConfig {
+            standpoint_predicates: None,
+            order_cache,
+            governors: None,
+        }
+    }
+
+    /// The diagnostic code of a failed request.
+    ///
+    /// A governor trip has no code — it is a [`TrippedGovernor`], not a diagnostic — so
+    /// reaching that arm from an ungoverned request is itself the failure.
+    fn failure_code(abort: UpdateAbort) -> String {
+        match abort {
+            UpdateAbort::Failed(diagnostic) => diagnostic.code,
+            UpdateAbort::Tripped(tripped) => panic!(
+                "an ungoverned request cannot trip, yet it reported {}",
+                tripped.label()
+            ),
+        }
+    }
+
     fn run(text: &str, m: &mut MutableDataset) {
         let cache = BgpOrderCache::default();
-        let cfg = UpdateEvalConfig {
-            standpoint_predicates: None,
-            order_cache: &cache,
-        };
+        let cfg = ungoverned(&cache);
         eval_update(&parse(text), m, None, &cfg).expect("update applies");
     }
 
@@ -790,12 +1120,9 @@ mod tests {
             base_iri: None,
         };
         let cache = BgpOrderCache::default();
-        let cfg = UpdateEvalConfig {
-            standpoint_predicates: None,
-            order_cache: &cache,
-        };
-        let err = eval_update(&upd, &mut m, None, &cfg).unwrap_err();
-        assert_eq!(err.code, "native-sparql-update-bad-destination");
+        let cfg = ungoverned(&cache);
+        let code = failure_code(eval_update(&upd, &mut m, None, &cfg).unwrap_err());
+        assert_eq!(code, "native-sparql-update-bad-destination");
         // The base is untouched (the error aborts before any mutation lands here, and
         // the engine seam's branch/freeze guarantees atomicity at the request level).
         assert_eq!(quad_set(&m).len(), 1);
@@ -826,10 +1153,7 @@ mod tests {
         let mut m = mut_with(&[]);
         let resolver = TestResolver { ds: loadable() };
         let cache = BgpOrderCache::default();
-        let cfg = UpdateEvalConfig {
-            standpoint_predicates: None,
-            order_cache: &cache,
-        };
+        let cfg = ungoverned(&cache);
         eval_update(&parse("LOAD ex:doc"), &mut m, Some(&resolver), &cfg).expect("load");
         let frozen = m.freeze().expect("freeze");
         assert_eq!(frozen.quad_count(), 1);
@@ -841,10 +1165,7 @@ mod tests {
         let mut m = mut_with(&[]);
         let resolver = TestResolver { ds: loadable() };
         let cache = BgpOrderCache::default();
-        let cfg = UpdateEvalConfig {
-            standpoint_predicates: None,
-            order_cache: &cache,
-        };
+        let cfg = ungoverned(&cache);
         eval_update(
             &parse("LOAD ex:doc INTO GRAPH ex:g"),
             &mut m,
@@ -865,22 +1186,17 @@ mod tests {
     fn load_without_resolver_is_a_hard_error() {
         let mut m = mut_with(&[]);
         let cache = BgpOrderCache::default();
-        let cfg = UpdateEvalConfig {
-            standpoint_predicates: None,
-            order_cache: &cache,
-        };
-        let err = eval_update(&parse("LOAD ex:doc"), &mut m, None, &cfg).unwrap_err();
-        assert_eq!(err.code, "native-sparql-load-no-resolver");
+        let cfg = ungoverned(&cache);
+        let code =
+            failure_code(eval_update(&parse("LOAD ex:doc"), &mut m, None, &cfg).unwrap_err());
+        assert_eq!(code, "native-sparql-load-no-resolver");
     }
 
     #[test]
     fn load_silent_without_resolver_is_a_noop_ok() {
         let mut m = mut_with(&[("a", "p", "b")]);
         let cache = BgpOrderCache::default();
-        let cfg = UpdateEvalConfig {
-            standpoint_predicates: None,
-            order_cache: &cache,
-        };
+        let cfg = ungoverned(&cache);
         eval_update(&parse("LOAD SILENT ex:doc"), &mut m, None, &cfg).expect("silent load no-ops");
         assert_eq!(quad_set(&m).len(), 1, "unchanged");
     }

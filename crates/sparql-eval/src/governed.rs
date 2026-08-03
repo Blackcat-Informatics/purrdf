@@ -30,6 +30,12 @@
 //! to admit as answers), an upper bound (safe only for "definitely not an answer"), or
 //! neither — in which case no row crosses at all and the caller receives the
 //! [`NonMonotoneBarrier`] naming the operator that withheld them instead.
+//!
+//! # UPDATE has its own outcome, and it has no partial arm
+//!
+//! [`GovernedUpdateOutcome`] is deliberately *not* [`GovernedOutcome`]. A query's partial
+//! answer is a useful, certifiable thing; a partial *mutation* is not a thing at all. See
+//! that type for the argument.
 
 use purrdf_core::{GovernorEvidence, SparqlResult, TrippedGovernor};
 
@@ -113,6 +119,84 @@ impl GovernedOutcome {
             Self::Complete { .. } => None,
             Self::BudgetExhausted(exhausted) => Some(exhausted),
         }
+    }
+}
+
+/// The result of one governed SPARQL **UPDATE** request.
+///
+/// # Why this is not [`GovernedOutcome`]
+///
+/// [`GovernedOutcome`] exists because a truncated *query* has something to hand back: the
+/// rows already reached, plus a machine-checked statement of what they bound. That
+/// reasoning does not transfer. A request either applied or it did not — there is no
+/// certifiable "partial mutation", because the thing a partial answer certifies (a bound
+/// on a set of rows) has no counterpart in a store that a caller will go on to read as if
+/// it were whole. An `INSERT`/`DELETE` that landed halfway and was reported as "budget
+/// exhausted" is not an incomplete result; it is a corrupt store, and the corruption is
+/// silent — every later query answers confidently from it.
+///
+/// So the trip arm below carries the governor and the evidence and **structurally nothing
+/// else**: there is no field a caller could read partial mutations out of, because the
+/// engine guarantees there are none to read. A tripped request leaves the caller's dataset
+/// handle exactly as it found it — the same `Arc`, not merely an equal one.
+///
+/// # The vocabulary is shared with the query path
+///
+/// [`TrippedGovernor`] and [`GovernorEvidence`] are the same kernel types
+/// [`GovernedOutcome`] reports, so a caller writes one governor renderer and one
+/// budget-sizing routine for both paths. Only the *shape* of the outcome differs, because
+/// only the shape genuinely differs.
+///
+/// Deliberately not `#[non_exhaustive]`, for the reason [`GovernedOutcome`] gives: a third
+/// arm would be a change to what a governor means.
+#[derive(Debug, Clone)]
+pub enum GovernedUpdateOutcome {
+    /// Every operation of the request applied, and the store now reflects all of them.
+    ///
+    /// The evidence rides along here for the same reason it does on the query path:
+    /// "applied, cost N fuel, peak M cells" is how a caller sizes the next request's
+    /// budget (see [`QueryGovernors::METERED`](crate::governor::QueryGovernors::METERED)).
+    Applied {
+        /// This request's consumption, ceilings, and (here, always absent) trip.
+        evidence: GovernorEvidence,
+    },
+    /// A governor stopped the request, and **no operation of it was applied**.
+    ///
+    /// Not "some of it applied". The store is byte-identical to what it was before the
+    /// request was submitted, whichever operation the governor stopped and however much
+    /// work the earlier operations of the same request had already done.
+    BudgetExhausted {
+        /// The governor that stopped the request.
+        tripped: TrippedGovernor,
+        /// This request's consumption, ceilings, and trip.
+        evidence: GovernorEvidence,
+    },
+}
+
+impl GovernedUpdateOutcome {
+    /// This request's consumption and ceilings, whichever outcome it reached.
+    #[must_use]
+    pub const fn evidence(&self) -> &GovernorEvidence {
+        match self {
+            Self::Applied { evidence } | Self::BudgetExhausted { evidence, .. } => evidence,
+        }
+    }
+
+    /// The governor that stopped this request, or `None` if it applied.
+    #[must_use]
+    pub const fn tripped(&self) -> Option<TrippedGovernor> {
+        match self {
+            Self::Applied { .. } => None,
+            Self::BudgetExhausted { tripped, .. } => Some(*tripped),
+        }
+    }
+
+    /// Whether the request applied.
+    ///
+    /// `false` means **nothing** applied, never "not all of it applied".
+    #[must_use]
+    pub const fn is_applied(&self) -> bool {
+        matches!(self, Self::Applied { .. })
     }
 }
 

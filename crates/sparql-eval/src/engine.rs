@@ -40,10 +40,10 @@ use crate::eval::{
 use crate::governor::ledger::ChargeLedger;
 use crate::governor::soundness::SpineClass;
 use crate::governor::{GovernorState, QueryExplanation, QueryGovernors};
-use crate::update::{GraphResolver, eval_update};
+use crate::update::{GraphResolver, UpdateAbort, eval_update};
 use crate::{
     BudgetExhausted, CompleteSparqlResult, FallibleSparqlError, FallibleSparqlResult,
-    GovernedEvidence, GovernedOutcome, PartialAnswers, PartialSparqlResult,
+    GovernedEvidence, GovernedOutcome, GovernedUpdateOutcome, PartialAnswers, PartialSparqlResult,
 };
 
 /// A parsed, ready-to-evaluate query (the cached unit of the [`PlanCache`]).
@@ -534,6 +534,118 @@ impl NativeSparqlEngine {
             }
         };
         finish_governed_fallible_query(dataset, &state, evaluation)
+    }
+
+    /// Parse and execute one SPARQL **UPDATE** request under caller-supplied execution
+    /// governors.
+    ///
+    /// The governed sibling of [`SparqlEngine::update`], and the only entry through which a
+    /// governor trip on a mutation is an *outcome* rather than a failure: it returns a
+    /// [`GovernedUpdateOutcome`], which says the request applied or that a governor stopped
+    /// it. A genuine parse or evaluation failure is still an [`RdfDiagnostic`].
+    ///
+    /// # A trip applies nothing — that is the contract, not a best effort
+    ///
+    /// On [`GovernedUpdateOutcome::BudgetExhausted`] the caller's `dataset` handle is left
+    /// **exactly** as it was found: not re-frozen, not equal-but-rebuilt, the same `Arc`.
+    /// That holds however far the request got — a five-operation request whose fifth
+    /// operation trips discards the first four with it, because a store carrying part of a
+    /// request nobody was told about is corrupt in a way no later query can detect. It is
+    /// structural rather than defensive: every operation applies to a copy-on-write branch
+    /// of the frozen base, and the single assignment that publishes that branch sits on the
+    /// applied path alone (see [`crate::update`] for the full mutation model).
+    ///
+    /// There is deliberately no partial-mutation payload on the outcome, for the reason
+    /// [`GovernedUpdateOutcome`] states.
+    ///
+    /// # Which ceilings bind a mutation
+    ///
+    /// Everything an UPDATE's `WHERE` clause does is charged exactly as the same pattern
+    /// inside a `SELECT` is — fuel, the intermediate-cell peak, scratch bytes, remote
+    /// requests, the recursion guard — and the stop signal is polled at the evaluator's
+    /// charge points, before each operation of the request, and before the `LOAD` host seam
+    /// issues any I/O.
+    ///
+    /// [`QueryGovernors::with_max_answers`] is the one ceiling that does **not** apply: it
+    /// bounds the answer sequence a caller receives, and an UPDATE has none. A request's
+    /// size is bounded by the ceilings on the work that computes it, which is what those
+    /// other dimensions are. Setting only an answer cap on an update therefore governs
+    /// nothing, and is stated here rather than silently approximated by capping some
+    /// unrelated quantity.
+    ///
+    /// # Governors are per call, never per engine
+    ///
+    /// The live accounting state is built here, for this request, and dropped with it —
+    /// the same rule, for the same reason, as [`Self::query_governed`].
+    ///
+    /// # Errors
+    ///
+    /// Propagates parse and evaluation errors as an [`RdfDiagnostic`]. A tripped governor
+    /// is **not** an error and does not surface here.
+    pub fn update_governed(
+        &self,
+        dataset: &mut Arc<RdfDataset>,
+        request: SparqlRequest<'_>,
+        governors: &QueryGovernors,
+    ) -> Result<GovernedUpdateOutcome, RdfDiagnostic> {
+        let update = self.parse_update(&request)?;
+        let state = Arc::new(GovernorState::new(governors));
+        let mut m = MutableDataset::new(Arc::clone(dataset));
+        let cfg = crate::update::UpdateEvalConfig {
+            standpoint_predicates: self.standpoint_predicates.as_ref(),
+            order_cache: &self.order_cache,
+            governors: Some(&state),
+        };
+        let tripped = match eval_update(&update, &mut m, self.resolver.as_deref(), &cfg) {
+            // A request that ran to the end still does not publish while a trip is latched
+            // on the state. The two are normally the same fact — every site that observes a
+            // governor also aborts the request — but "normally" is the wrong strength for
+            // the one assignment that can corrupt a store, so the publish seam asks the
+            // state directly rather than inferring the answer from the control flow that
+            // reached it. This is what makes `Applied` mean "no governor stopped this",
+            // rather than "no governor stopped this on any path anybody has thought of".
+            Ok(()) => state.tripped(),
+            Err(UpdateAbort::Failed(diagnostic)) => return Err(diagnostic),
+            Err(UpdateAbort::Tripped(tripped)) => Some(tripped),
+        };
+        match tripped {
+            None => {
+                // The one place the branch is published, and it is on this arm only.
+                *dataset = m.freeze()?;
+                Ok(GovernedUpdateOutcome::Applied {
+                    evidence: state.evidence(),
+                })
+            }
+            Some(tripped) => {
+                // `m` is dropped here with every mutation the request had reached in it.
+                // Dropping the branch IS the rollback; `*dataset` was never written.
+                drop(m);
+                Ok(GovernedUpdateOutcome::BudgetExhausted {
+                    tripped,
+                    evidence: state.evidence(),
+                })
+            }
+        }
+    }
+
+    /// Parse one UPDATE request into algebra.
+    ///
+    /// UPDATE deliberately bypasses the plan cache: these requests are side-effecting and
+    /// are not the hot static-query set the cache exists for; caching a mutating statement
+    /// would be a correctness hazard. Shared by the two UPDATE seams so that a governed and
+    /// an ungoverned request of the same text parse identically — including the base IRI and
+    /// the engine's [`ParserOptions`].
+    fn parse_update(
+        &self,
+        request: &SparqlRequest<'_>,
+    ) -> Result<purrdf_sparql_algebra::Update, RdfDiagnostic> {
+        let mut parser = SparqlParser::new();
+        if let Some(base) = request.base_iri {
+            parser = parser.with_base_iri(base);
+        }
+        parser
+            .parse_update_with(request.query, &self.parser_options)
+            .map_err(|e| RdfDiagnostic::error("native-sparql-update-parse", e.to_string()))
     }
 
     /// A fresh engine with an empty plan cache and no `LOAD` resolver.
@@ -1147,16 +1259,7 @@ impl SparqlEngine for NativeSparqlEngine {
         dataset: &mut Self::Dataset,
         request: SparqlRequest<'_>,
     ) -> Result<(), RdfDiagnostic> {
-        // UPDATE deliberately bypasses the plan cache: these requests are
-        // side-effecting and are not the hot static-query set the cache exists for;
-        // caching a mutating statement would be a correctness hazard.
-        let mut parser = SparqlParser::new();
-        if let Some(base) = request.base_iri {
-            parser = parser.with_base_iri(base);
-        }
-        let update = parser
-            .parse_update_with(request.query, &self.parser_options)
-            .map_err(|e| RdfDiagnostic::error("native-sparql-update-parse", e.to_string()))?;
+        let update = self.parse_update(&request)?;
         // Atomicity is structural: branch a COW MutableDataset off the frozen base,
         // apply every op to the delta, and only on FULL success freeze back. Any
         // error drops `m` and leaves `*dataset` untouched.
@@ -1164,8 +1267,25 @@ impl SparqlEngine for NativeSparqlEngine {
         let cfg = crate::update::UpdateEvalConfig {
             standpoint_predicates: self.standpoint_predicates.as_ref(),
             order_cache: &self.order_cache,
+            // Exactly ungoverned, exactly as this seam was before governors existed —
+            // `None` is the absence of the state, not an unbounded one, so no charge site
+            // or stop poll is reachable from here at all. A caller who wants ceilings on a
+            // mutation names them at `NativeSparqlEngine::update_governed`.
+            governors: None,
         };
-        eval_update(&update, &mut m, self.resolver.as_deref(), &cfg)?;
+        match eval_update(&update, &mut m, self.resolver.as_deref(), &cfg) {
+            Ok(()) => {}
+            Err(UpdateAbort::Failed(diagnostic)) => return Err(diagnostic),
+            // Unreachable by construction: a trip can only originate from the
+            // `GovernorState` this seam declines to build, so there is no governor here to
+            // stop anything. Stated as an invariant rather than re-rendered as a
+            // diagnostic, because a diagnostic on this arm would be a place for a real
+            // trip to hide if the invariant ever broke.
+            Err(UpdateAbort::Tripped(tripped)) => unreachable!(
+                "the ungoverned UPDATE seam attaches no GovernorState, yet {} was reported",
+                tripped.label()
+            ),
+        }
         *dataset = m.freeze()?;
         Ok(())
     }
