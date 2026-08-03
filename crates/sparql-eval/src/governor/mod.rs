@@ -14,6 +14,15 @@
 //! — the same computation read for a different purpose — whether the answer cap may be
 //! pushed down to that node.
 //!
+//! Both are **crate-private on purpose**: their types are generic over the dataset's id
+//! type and carry interned solution terms, including terms minted into an execution's
+//! scratch arena, which cannot outlive the evaluation context that owns them. What crosses
+//! the crate boundary instead is the same certificate restated over materialized rows —
+//! [`GovernedOutcome`](crate::GovernedOutcome) and
+//! [`PartialAnswers`](crate::PartialAnswers), produced by
+//! [`NativeSparqlEngine::query_governed`](crate::NativeSparqlEngine::query_governed). Only
+//! [`NonMonotoneBarrier`], which names an operator and owns nothing, is public from here.
+//!
 //! # A governor never changes an answer, only an outcome
 //!
 //! A resource ceiling decides whether a caller receives the complete answer or a

@@ -546,6 +546,19 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     ///
     /// Build the state fresh for every execution: consumption is cumulative, so a state
     /// reused across queries would drain one query's budget into the next.
+    ///
+    /// # Which entry point this context may then be evaluated through
+    ///
+    /// A context built by hand is evaluated through [`eval`]/[`evaluate_query`], which
+    /// return a complete result or a failure and have no third channel to report a trip
+    /// on. So the configuration that belongs here is the **measuring** one —
+    /// [`QueryGovernors::METERED`](crate::governor::QueryGovernors::METERED) engages every
+    /// counter at a ceiling nothing can reach, and the cost is read off
+    /// [`GovernorState::evidence`] afterwards. A configuration that can actually trip goes
+    /// through
+    /// [`NativeSparqlEngine::query_governed`](crate::NativeSparqlEngine::query_governed),
+    /// which is where a trip is an outcome carrying the certified partial answers rather
+    /// than a refusal.
     #[must_use]
     pub fn with_governors(mut self, governors: Arc<GovernorState>) -> Self {
         self.governors = Some(governors);
@@ -1181,13 +1194,21 @@ fn eval_node<D: DatasetView + Sync>(
 
 /// Evaluate a graph pattern to a multiset of solutions, requiring completion.
 ///
-/// The **ungoverned** entry point, and the one every caller that holds no governor
-/// certificate uses. An [`EvalCtx`] carries no resource ceilings, so no charge site can
-/// fire and `eval_evaluated` can only answer `Evaluated::Complete` here; a truncation reaching
-/// this function would mean the channel produced a partial bag with nobody to certify it
-/// to, which is an internal invariant failure and is reported as one rather than as an
-/// answer. A governed caller uses the trip-aware `eval_evaluated` and receives the
-/// certificate.
+/// The **completion-only** entry point, and the one every caller that holds no governor
+/// certificate uses. This signature has room for a complete bag and for a failure, and for
+/// nothing else, so a truncation reaching it cannot be reported as what it is: there is
+/// nobody here to certify a partial bag to. It is therefore refused rather than quietly
+/// returned as a short answer.
+///
+/// A context **may** carry governors here, and that is the supported way to *measure* an
+/// execution: [`QueryGovernors::METERED`](crate::governor::QueryGovernors::METERED)
+/// engages every counter at a ceiling nothing can reach, so nothing trips and the caller
+/// reads the cost off [`GovernorState::evidence`]. A configuration that can actually trip
+/// — any real ceiling, or a stop signal — belongs on the governed query path
+/// ([`NativeSparqlEngine::query_governed`](crate::NativeSparqlEngine::query_governed)),
+/// which hands back the certified partial answers instead of refusing them. Reaching a
+/// trip through this function is therefore a caller-side mismatch between the ceiling set
+/// and the entry point used, and it is reported as one.
 ///
 /// # Errors
 ///
@@ -1200,14 +1221,17 @@ pub fn eval<D: DatasetView + Sync>(
         .into_complete()
         .map_err(|truncation| {
             EvalError::internal(format!(
-                "a governor tripped on the ungoverned evaluation entry point: {}",
+                "a governor tripped on an evaluation entry point that can only return a \
+                 complete bag; run a bounding governor configuration through \
+                 `NativeSparqlEngine::query_governed`, which returns the certified partial \
+                 answers: {}",
                 truncation.describe()
             ))
         })
 }
 
 /// The result of evaluating a top-level query form — the internal counterpart of
-/// the `SparqlResult` egress model (materialized by the engine, S6 Task 9).
+/// the `SparqlResult` egress model, which the engine materializes it into.
 #[derive(Debug)]
 pub enum Outcome<I: ViewTermId = TermId> {
     /// `SELECT` solutions (a multiset over the projected schema).
@@ -1328,8 +1352,9 @@ pub(crate) fn evaluate_query_evaluated<D: DatasetView + Sync>(
 
 /// Evaluate a top-level [`Query`] form over `ctx`'s dataset, requiring completion.
 ///
-/// The **ungoverned** entry point; see [`eval`] for why a truncation reaching it
-/// is an internal invariant failure rather than an answer.
+/// The **completion-only** entry point; see [`eval`] for why a trip reaching it is
+/// refused rather than answered, and for the measurement configuration that is welcome
+/// here.
 ///
 /// # Errors
 ///
@@ -1344,8 +1369,10 @@ pub fn evaluate_query<D: DatasetView + Sync>(
             outcome,
             certificate,
         } => Err(EvalError::internal(format!(
-            "a governor tripped on the ungoverned query entry point, withholding a {} \
-             result: {}",
+            "a governor tripped on a query entry point that can only return a complete {} \
+             result; run a bounding governor configuration through \
+             `NativeSparqlEngine::query_governed`, which returns the certified partial \
+             answers: {}",
             outcome.form_label(),
             certificate.describe()
         ))),

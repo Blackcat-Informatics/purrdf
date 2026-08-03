@@ -368,6 +368,17 @@ mod tests {
         let limits = PagedQueryLimits::new(1, 1024);
         assert_eq!(limits.max_pages, 1);
         let _: Option<sparql::CompleteSparqlResult<PagedQueryEvidence>> = None;
+
+        // So is governed query execution: the ceilings, the outcome, and the certified
+        // partial answers all resolve unambiguously under the one `sparql` module, so a
+        // consumer that sets a budget never has to name the evaluator crate.
+        let governors = sparql::QueryGovernors::UNBOUNDED.with_max_answers(1);
+        assert!(governors.is_engaged());
+        let _: Option<sparql::GovernedOutcome> = None;
+        let _: Option<sparql::PartialAnswers> = None;
+        let _: Option<sparql::PartialSparqlResult> = None;
+        let _: Option<sparql::BudgetExhausted> = None;
+        let _: Option<sparql::GovernedEvidence<PagedQueryEvidence>> = None;
     }
 
     #[test]

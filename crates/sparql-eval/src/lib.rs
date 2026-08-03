@@ -58,6 +58,7 @@ pub mod error;
 pub mod eval;
 mod expr;
 mod fallible;
+mod governed;
 pub mod governor;
 mod list_fn;
 mod modifier;
@@ -82,6 +83,9 @@ pub use eval::{
     EvalCtx, EvalOptions, LossVocabulary, Outcome, StandpointPredicates, eval, evaluate_query,
 };
 pub use fallible::{CompleteSparqlResult, FallibleSparqlError, FallibleSparqlResult};
+pub use governed::{
+    BudgetExhausted, GovernedEvidence, GovernedOutcome, PartialAnswers, PartialSparqlResult,
+};
 pub use governor::{
     CHARGE_SCHEDULE, CancellationFlag, ChargePoint, GOVERNOR_CORPUS_DIGEST,
     GOVERNOR_PROFILE_DIGEST, GOVERNOR_PROFILE_ID, GOVERNOR_PROFILE_VERSION, GovernorState,
