@@ -7,10 +7,14 @@
 //! actual HTTP exchange is injected by the host runtime so the evaluator remains
 //! wasm-portable.
 
-use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult, StopCause, TrippedGovernor};
 use purrdf_sparql_algebra::Variable;
 use purrdf_sparql_eval::{
-    HttpRemoteQuerySource, HttpRequest, NativeSparqlEngine, RemoteError, RemoteQuerySource,
+    CancellationFlag, HttpRemoteQuerySource, HttpRequest, NativeSparqlEngine, RemoteError,
+    RemoteQuerySource, StopSignal,
 };
 
 const ENDPOINT: &str = "https://query.example/sparql";
@@ -42,11 +46,58 @@ fn fixture_transport(request: HttpRequest<'_>) -> Result<Vec<u8>, RemoteError> {
 fn http_transport_decodes_remote_bindings() {
     let source = HttpRemoteQuerySource::new(fixture_transport);
     let resolved = source
-        .query(ENDPOINT, "SELECT ?x WHERE { BIND(1 AS ?x) }")
+        .query(ENDPOINT, "SELECT ?x WHERE { BIND(1 AS ?x) }", None)
         .expect("injected transport");
     assert_eq!(resolved.variables, vec![Variable::new("x")]);
     assert_eq!(resolved.rows.len(), 1, "expected exactly one binding row");
     assert!(resolved.rows[0][0].is_some(), "?x must be bound");
+}
+
+#[test]
+fn the_stop_signal_travels_with_the_request_and_gates_it() {
+    // The transport counts the exchanges it is asked to perform, which is the only
+    // observation that can tell "the request was prevented" apart from "the request was
+    // made and its result discarded".
+    let posts = AtomicUsize::new(0);
+    let flag = CancellationFlag::new();
+    let signal: Arc<dyn StopSignal> = Arc::new(flag.clone());
+    let source = HttpRemoteQuerySource::new(|request: HttpRequest<'_>| {
+        posts.fetch_add(1, Ordering::Relaxed);
+        // A host transport can only abandon an in-flight exchange if the signal reached
+        // it; the evaluator is blocked here for the whole duration of the call.
+        assert!(
+            request.stop.is_some(),
+            "the executing query's stop signal must reach the transport"
+        );
+        assert!(request.timeout.as_secs() > 0, "the timeout is still data");
+        Ok(RESULT_JSON.to_vec())
+    });
+
+    let query = "SELECT ?x WHERE { BIND(1 AS ?x) }";
+    source
+        .query(ENDPOINT, query, Some(&signal))
+        .expect("an unfired signal does not gate the request");
+    assert_eq!(posts.load(Ordering::Relaxed), 1);
+
+    // Once the signal has fired the request is not issued at all — a governor that could
+    // only be observed after the exchange returned would not bound the exchange.
+    flag.cancel();
+    let err = source
+        .query(ENDPOINT, query, Some(&signal))
+        .expect_err("a fired signal refuses the request");
+    assert_eq!(
+        err,
+        RemoteError::Governed(TrippedGovernor::Stopped {
+            cause: StopCause::Cancelled
+        }),
+        "a governor is reported as a governor, never as a transport failure that SILENT \
+         would be entitled to swallow"
+    );
+    assert_eq!(
+        posts.load(Ordering::Relaxed),
+        1,
+        "no second exchange was performed"
+    );
 }
 
 #[test]

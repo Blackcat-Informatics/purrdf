@@ -570,6 +570,30 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             .map(|cause| TrippedGovernor::Stopped { cause })
     }
 
+    /// The stop signal this execution runs under, if the caller supplied one.
+    ///
+    /// Handed to the `SERVICE` federation seam so a deadline or a cancellation can
+    /// **prevent** a request rather than only be noticed once one has returned. A signal
+    /// only the evaluator can poll cannot fire while the evaluator is blocked inside a
+    /// host call, which is the one place an unbounded wait is most likely.
+    pub(crate) fn stop_signal(&self) -> Option<&Arc<dyn crate::governor::StopSignal>> {
+        self.governors.as_ref()?.stop_signal()
+    }
+
+    /// Latch a governor trip that a seam outside the evaluator observed, so the evidence
+    /// reports the same trip the result does.
+    ///
+    /// Falls back to the candidate itself on an ungoverned execution, which cannot happen
+    /// through the federation seam — a source only reports a governor trip when it was
+    /// handed a signal, and only a governed execution has one — but is the honest answer
+    /// if it ever did.
+    pub(crate) fn record_trip(&self, candidate: TrippedGovernor) -> TrippedGovernor {
+        match self.governors.as_ref() {
+            None => candidate,
+            Some(state) => state.record_trip(candidate),
+        }
+    }
+
     /// The live governor accounting state, if this execution is governed at all.
     ///
     /// `None` is the ungoverned execution every non-governor entry point takes: every

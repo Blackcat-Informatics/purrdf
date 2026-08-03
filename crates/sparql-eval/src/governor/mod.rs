@@ -795,6 +795,30 @@ impl GovernorState {
         Some(cause)
     }
 
+    /// The host-supplied stop signal this execution runs under, if one was attached.
+    ///
+    /// Handed to seams that leave the evaluator and can block there — the `SERVICE`
+    /// federation source is the one that exists today. A signal that only the evaluator
+    /// can poll is unpollable for exactly as long as the evaluator is not running, which
+    /// is precisely the window a federated call occupies, so the signal has to travel
+    /// with the call rather than wait for it to return.
+    #[must_use]
+    pub fn stop_signal(&self) -> Option<&Arc<dyn StopSignal>> {
+        self.stop.as_ref()
+    }
+
+    /// Record a trip observed **outside** the evaluator, by a seam that was handed this
+    /// execution's stop signal (see [`Self::stop_signal`]).
+    ///
+    /// Resolved against any stop condition already true and write-once, exactly as an
+    /// evaluator-side trip is: the first trip stays the reported one. Without this, a
+    /// federated call that stopped would report a truncation the evidence knew nothing
+    /// about — a result the caller is told is partial beside a receipt that says every
+    /// governor is intact.
+    pub fn record_trip(&self, candidate: TrippedGovernor) -> TrippedGovernor {
+        self.trip(candidate)
+    }
+
     /// The governor that stopped this execution, or `None` if none has.
     #[must_use]
     pub fn tripped(&self) -> Option<TrippedGovernor> {
