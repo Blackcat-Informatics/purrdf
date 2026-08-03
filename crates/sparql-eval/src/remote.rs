@@ -36,6 +36,7 @@ use purrdf_sparql_algebra::{GraphPattern, NamedNodePattern, Variable};
 
 use crate::error::EvalError;
 use crate::eval::{EvalCtx, materialize_solutions};
+use crate::governor::lift::Evaluated;
 use crate::solution::{SolutionSeq, VarSchema};
 
 /// One remote `SELECT` result set, dataset-independent (egress [`TermValue`]
@@ -95,12 +96,21 @@ pub trait RemoteQuerySource {
 ///
 /// Returns [`EvalError::Remote`] for a non-silent failure (no source, variable
 /// endpoint, transport/decode error).
+///
+/// # Under a truncation
+///
+/// The inner pattern is serialized and sent to the endpoint rather than evaluated here,
+/// so there is no child result to lift: this node is a leaf as far as the partial-lift
+/// channel is concerned, and its result is always complete or a typed failure. Governing
+/// the request itself is the federation seam's own business.
 pub(crate) fn eval_service<D: DatasetView + Sync>(
+    node: &GraphPattern,
     name: &NamedNodePattern,
     inner: &GraphPattern,
     silent: bool,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<SolutionSeq<D::Id>, EvalError> {
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let _ = node;
     // Resolve the endpoint IRI. A variable endpoint needs per-row (lateral)
     // resolution, which the engine defers — so it is a hard error unless SILENT.
     let endpoint = match name {
@@ -109,7 +119,8 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
             return silent_or_err(silent, || {
                 "SERVICE with a variable endpoint is not supported (needs lateral evaluation)"
                     .to_owned()
-            });
+            })
+            .map(Evaluated::Complete);
         }
     };
 
@@ -118,18 +129,20 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
     let Some(source) = ctx.remote else {
         return silent_or_err(silent, || {
             format!("no remote query source configured for SERVICE <{endpoint}>")
-        });
+        })
+        .map(Evaluated::Complete);
     };
 
     let query_text = purrdf_sparql_algebra::pattern_to_select_query(inner);
     let resolved = match source.query(&endpoint, &query_text) {
         Ok(resolved) => resolved,
         Err(e) => {
-            return silent_or_err(silent, || format!("SERVICE <{endpoint}>: {e}"));
+            return silent_or_err(silent, || format!("SERVICE <{endpoint}>: {e}"))
+                .map(Evaluated::Complete);
         }
     };
 
-    Ok(ingest(resolved, ctx))
+    Ok(Evaluated::Complete(ingest(resolved, ctx)))
 }
 
 /// On `SILENT`, return the join identity (one empty row, a no-op for the

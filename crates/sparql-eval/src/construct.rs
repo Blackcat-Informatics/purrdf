@@ -33,7 +33,8 @@ use purrdf_sparql_algebra::{GraphPattern, NamedNodePattern, TermPattern, TripleP
 
 use crate::DetHashMap;
 use crate::error::EvalError;
-use crate::eval::{EvalCtx, eval};
+use crate::eval::{EvalCtx, eval_evaluated};
+use crate::governor::lift::{Evaluated, Truncation};
 use crate::solution::{Solution, VarSchema};
 use crate::template::{instantiate_predicate, instantiate_term, positionally_ill_formed};
 
@@ -56,12 +57,28 @@ const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 /// behaves like a plain `CONSTRUCT`. When the `WHERE` has no `rdf:reifies`
 /// pattern at all the detection does zero extra work and the output is
 /// byte-identical to a plain `CONSTRUCT`.
+///
+/// # Under a truncation
+///
+/// The template is instantiated over whatever rows the `WHERE` produced, and the `WHERE`'s
+/// certificate is handed back beside the graph rather than folded into it: a graph built
+/// from a certified lower bound is a **subgraph** of the true `CONSTRUCT` output, one
+/// built from an upper bound is a supergraph, and one built from no bound at all is built
+/// from no rows. Only the caller that receives the certificate can tell those apart, so
+/// the certificate travels rather than being discarded here.
+/// A `CONSTRUCT`/`DESCRIBE` result: the graph, and the `WHERE`'s certificate when a
+/// governor stopped it short.
+pub(crate) type ConstructedGraph<I> = (Arc<RdfDataset>, Option<Truncation<I>>);
+
 pub(crate) fn eval_construct<D: DatasetView + Sync>(
     template: &[TriplePattern],
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<Arc<RdfDataset>, EvalError> {
-    let seq = eval(pattern, ctx)?;
+) -> Result<ConstructedGraph<D::Id>, EvalError> {
+    let (seq, certificate) = match eval_evaluated(pattern, ctx)? {
+        Evaluated::Complete(seq) => (seq, None),
+        Evaluated::Truncated(truncation) => (truncation.rows().clone(), Some(truncation)),
+    };
     let schema = seq.schema.clone();
     let mut builder = RdfDatasetBuilder::new();
 
@@ -202,9 +219,10 @@ pub(crate) fn eval_construct<D: DatasetView + Sync>(
         }
     }
 
-    builder
+    let graph = builder
         .freeze()
-        .map_err(|d| EvalError::internal(format!("CONSTRUCT output failed to freeze: {d:?}")))
+        .map_err(|d| EvalError::internal(format!("CONSTRUCT output failed to freeze: {d:?}")))?;
+    Ok((graph, certificate))
 }
 
 /// A reifies-pattern in the `WHERE` whose reifier variable the template drops.
@@ -493,6 +511,21 @@ fn instantiate<D: DatasetView + Sync>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The ungoverned `CONSTRUCT`, which is complete by construction: these tests assert
+    /// the graph, and the certificate half is exercised by the lift's own tests.
+    fn eval_construct<D: DatasetView + Sync>(
+        template: &[TriplePattern],
+        pattern: &GraphPattern,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<Arc<RdfDataset>, EvalError> {
+        let (graph, certificate) = super::eval_construct(template, pattern, ctx)?;
+        assert!(
+            certificate.is_none(),
+            "an ungoverned CONSTRUCT cannot truncate"
+        );
+        Ok(graph)
+    }
     use purrdf_core::{RdfLiteral, TermRef};
     use purrdf_sparql_algebra::{NamedNode, NamedNodePattern, TermPattern, Variable};
 

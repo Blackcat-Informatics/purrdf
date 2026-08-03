@@ -86,6 +86,13 @@ struct CompiledPattern<I: ViewTermId = TermId> {
 
 /// Evaluate a basic graph pattern to a multiset of solutions over its real
 /// (non-blank) variables.
+/// # A leaf of the partial-lift channel
+///
+/// A basic graph pattern has no sub-pattern, so there is no child truncation to compose:
+/// it is where a truncation ORIGINATES rather than somewhere one passes through. The
+/// dispatch in [`crate::eval::eval`] therefore wraps this result directly, and this
+/// function keeps its `&EvalCtx` (shared, not exclusive) borrow — the property that lets
+/// a parallel worker call it from a shared context.
 pub(crate) fn eval_bgp<D: DatasetView + Sync>(
     patterns: &[TriplePattern],
     ctx: &EvalCtx<'_, D>,

@@ -51,7 +51,7 @@ use purrdf_sparql_algebra::{
 use crate::DetHashMap;
 use crate::convert::named_node_to_value;
 use crate::dataset_spec::ActiveDataset;
-use crate::eval::{BgpOrderCache, EvalCtx, StandpointPredicates, eval};
+use crate::eval::{BgpOrderCache, EvalCtx, StandpointPredicates, eval_evaluated};
 use crate::solution::{Solution, VarSchema};
 use crate::template::{
     instantiate_ground_term, instantiate_predicate, instantiate_term, positionally_ill_formed,
@@ -259,8 +259,22 @@ fn delete_insert(
         ActiveDataset::store_default()
     };
 
-    let seq = eval(pattern, &mut ctx)
-        .map_err(|e| RdfDiagnostic::error("native-sparql-update-eval", e.to_string()))?;
+    // A truncated `WHERE` must apply NO mutation: a half-applied UPDATE is not an
+    // incomplete result, it is a corrupt store. Refusing the whole operation is the only
+    // sound reading, and it is reported as a refusal rather than silently applied.
+    let seq = eval_evaluated(pattern, &mut ctx)
+        .map_err(|e| RdfDiagnostic::error("native-sparql-update-eval", e.to_string()))?
+        .into_complete()
+        .map_err(|truncation| {
+            RdfDiagnostic::error(
+                "native-sparql-update-eval",
+                format!(
+                    "a governor tripped while evaluating an UPDATE WHERE clause, so no \
+                     mutation was applied: {}",
+                    truncation.describe()
+                ),
+            )
+        })?;
     let schema = seq.schema.clone();
 
     // Collect the mutations BEFORE touching `m`, so the snapshot stays valid for the

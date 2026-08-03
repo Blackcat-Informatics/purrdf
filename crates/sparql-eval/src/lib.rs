@@ -85,7 +85,8 @@ pub use fallible::{CompleteSparqlResult, FallibleSparqlError, FallibleSparqlResu
 pub use governor::{
     CHARGE_SCHEDULE, CancellationFlag, ChargePoint, GOVERNOR_CORPUS_DIGEST,
     GOVERNOR_PROFILE_DIGEST, GOVERNOR_PROFILE_ID, GOVERNOR_PROFILE_VERSION, GovernorState,
-    LocalCharge, QueryGovernors, STOP_POLL_FUEL, StopSignal, WallDeadline, resolve_precedence,
+    LocalCharge, NonMonotoneBarrier, QueryGovernors, STOP_POLL_FUEL, StopSignal, WallDeadline,
+    resolve_precedence,
 };
 // Re-exported so engine hosts can configure the extension-function namespace set
 // (see [`NativeSparqlEngine::with_parser_options`]) without depending on the

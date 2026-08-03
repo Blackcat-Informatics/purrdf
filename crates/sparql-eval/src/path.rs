@@ -157,6 +157,11 @@ fn collect_negated<D: DatasetView + Sync>(
 /// self-pairing (W3C `property-path/zero_or_more_set_start` /
 /// `zero_or_more_set_end`). A non-reflexive path cannot connect an absent node
 /// to anything else (it has no edges to traverse), so it correctly stays empty.
+/// # A leaf of the partial-lift channel
+///
+/// A property path has no sub-pattern, so there is no child truncation to compose: like a
+/// basic graph pattern, it is where a truncation ORIGINATES rather than somewhere one
+/// passes through, and the dispatch in [`crate::eval::eval`] wraps its result directly.
 pub(crate) fn eval_path<D: DatasetView + Sync>(
     subject: &TermPattern,
     path: &PropertyPathExpression,

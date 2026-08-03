@@ -37,7 +37,9 @@ use purrdf_sparql_algebra::Query;
 
 use crate::DetHashMap;
 use crate::error::EvalError;
-use crate::eval::{EvalCtx, Outcome, evaluate_query, materialize_solutions};
+use crate::eval::{
+    EvalCtx, EvaluatedOutcome, Outcome, evaluate_query_evaluated, materialize_solutions,
+};
 
 /// The result form of a function body: a `sh:select` returns the first projected
 /// value of the first solution; a `sh:ask` returns an `xsd:boolean`.
@@ -427,7 +429,22 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     let mut child = ctx.child_for_user_fn()?;
     let substituted = crate::substitute::apply_substitutions((*func.body).clone(), &substitutions)
         .map_err(|d| EvalError::function(d.to_string()))?;
-    let outcome = evaluate_query(&substituted, &mut child)?;
+    let outcome = match evaluate_query_evaluated(&substituted, &mut child)? {
+        EvaluatedOutcome::Complete(outcome) => outcome,
+        EvaluatedOutcome::Truncated { certificate, .. } => {
+            // A function call is an expression position, so a truncated body makes the
+            // call's value unknowable rather than merely partial: an `ASK` body over a
+            // partial answer can report `false` where the truth is `true`, and a `SELECT`
+            // body can report a different first row. The trip is recorded on the shared
+            // expression barrier, which makes the operator that owns the calling
+            // expression withhold every row it produced — the same treatment an `EXISTS`
+            // gets, for the same reason.
+            child.expression_barrier.record(certificate.tripped());
+            ctx.bnode_counter = child.bnode_counter;
+            ctx.rng_state = child.rng_state;
+            return Ok(None);
+        }
+    };
 
     let result: Option<TermValue> = match (func.kind, outcome) {
         (UserFnBody::Ask, Outcome::Boolean(value)) => Some(TermValue::typed_literal(

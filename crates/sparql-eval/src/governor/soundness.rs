@@ -103,13 +103,7 @@
 // The certificate is a pure function of the algebra and holds no evaluator types, which
 // is what lets it be exercised against hand-built plans (see this module's tests) rather
 // than only through whole-query evaluation — a certificate that can only be observed
-// through the thing it licenses is a certificate nobody can falsify. The price is that
-// the compiler sees the classification surface as unreferenced from inside this crate
-// until the evaluator's descent and the planner's cap pushdown read it; the parallel
-// gate already reads the visitor half. The allow is module-scoped rather than per-item
-// because it applies to the whole classification surface for one reason, not to a
-// handful of items for several.
-#![allow(dead_code)]
+// through the thing it licenses is a certificate nobody can falsify.
 
 use purrdf_sparql_algebra::{
     AggregateExpression, Expression, Function, GraphPattern, OrderExpression,
@@ -171,7 +165,7 @@ pub(crate) struct ChildEdge {
 impl ChildEdge {
     /// The edge of an operator that both preserves prefixes and imposes nothing:
     /// truncation below it keeps whatever bound it had, positionally.
-    const MONOTONE: Self = Self {
+    pub(crate) const MONOTONE: Self = Self {
         role: ChildRole::PrefixMonotone,
         fidelity: PrefixFidelity::Positional,
         selects_by_position: false,
@@ -179,7 +173,7 @@ impl ChildEdge {
 
     /// [`Self::MONOTONE`], but the parent reorders or interleaves this child's rows into
     /// its output, so only the multiset relation survives.
-    const MONOTONE_BAG: Self = Self {
+    pub(crate) const MONOTONE_BAG: Self = Self {
         role: ChildRole::PrefixMonotone,
         fidelity: PrefixFidelity::BagOnly,
         selects_by_position: false,
@@ -188,14 +182,14 @@ impl ChildEdge {
     /// A subtracted / negated position. Antitone edges are always
     /// [`PrefixFidelity::BagOnly`]: a super-bag of the true output has extra rows
     /// wherever the removed ones were, never only at the end.
-    const ANTITONE: Self = Self {
+    pub(crate) const ANTITONE: Self = Self {
         role: ChildRole::Antitone,
         fidelity: PrefixFidelity::BagOnly,
         selects_by_position: false,
     };
 
     /// A position from which no bound propagates at all.
-    const OPAQUE: Self = Self {
+    pub(crate) const OPAQUE: Self = Self {
         role: ChildRole::Opaque,
         fidelity: PrefixFidelity::BagOnly,
         selects_by_position: false,
@@ -217,7 +211,7 @@ impl ChildEdge {
     /// counterexample. That is why the edge sets [`ChildEdge::selects_by_position`]: the
     /// proof consumed the hypothesis that the input is a prefix, so anything below that
     /// only delivers a sub-bag invalidates it.
-    const SLICED: Self = Self {
+    pub(crate) const SLICED: Self = Self {
         role: ChildRole::PrefixMonotone,
         fidelity: PrefixFidelity::Positional,
         selects_by_position: true,
@@ -660,6 +654,42 @@ where
     })
 }
 
+/// The classified edges of one node's children, indexed by the ordinal at which
+/// [`visit_classified_children`] yields them — which is exactly the order in which the
+/// evaluator's operator for that variant evaluates them (`left` then `right`, or the
+/// single `inner`, followed by any `EXISTS` pattern the node's expressions carry).
+///
+/// This is how an operator learns the transfer function of the edge it is descending
+/// **without restating the classification**: the association between a variant's child
+/// position and its [`ChildEdge`] lives once, in [`visit_pattern_parts`], and every
+/// consumer reads it from there. Restating it at the operator would make a new algebra
+/// variant two edits of which only one gets found — the exact failure this module exists
+/// to prevent.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ChildEdges(smallvec::SmallVec<[ChildEdge; 4]>);
+
+impl ChildEdges {
+    /// The edge to the child at `ordinal`.
+    ///
+    /// An ordinal past the end answers [`ChildEdge::OPAQUE`], which is the conservative
+    /// classification: an opaque edge certifies nothing and withholds every row, so a
+    /// caller that asks about a child a node does not have cannot be handed a licence to
+    /// emit rows as answers.
+    pub(crate) fn at(&self, ordinal: usize) -> ChildEdge {
+        self.0.get(ordinal).copied().unwrap_or(ChildEdge::OPAQUE)
+    }
+}
+
+/// The classified edges of `pattern`'s children, in [`visit_classified_children`] order.
+pub(crate) fn child_edges(pattern: &GraphPattern) -> ChildEdges {
+    let mut edges = smallvec::SmallVec::new();
+    visit_classified_children(pattern, &mut |_child, edge| {
+        edges.push(edge);
+        false
+    });
+    ChildEdges(edges)
+}
+
 /// Walk the whole plan rooted at `root`, invoking `visit` with every node and the
 /// [`SpineContext`] that holds at it.
 ///
@@ -669,6 +699,14 @@ where
 /// [`SpineContext::descend`] per child as it goes, which is the same composition with no
 /// second traversal. This function exists for callers that hold a plan but are not
 /// evaluating it, such as planner-side pushdown and the tests below.
+// Deliberately unreferenced from evaluation, and deliberately kept. The evaluator does
+// NOT walk a plan to ask this question — it composes the same `descend` along the path a
+// truncation actually travelled, which is the same answer with no second traversal — so
+// this function's caller is a holder of a plan that is not evaluating it: the planner-side
+// answer-cap pushdown. Deleting it to silence the compiler would delete the only entry
+// point that lets the certificate be checked against a whole plan at once, which is what
+// this module's own tests do to falsify it.
+#[allow(dead_code)]
 pub(crate) fn walk_spine<F>(root: &GraphPattern, visit: &mut F)
 where
     F: FnMut(&GraphPattern, SpineContext),

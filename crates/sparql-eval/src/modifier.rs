@@ -21,8 +21,9 @@ const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 
 use crate::convert::{ground_term_to_value, named_node_to_value};
 use crate::error::EvalError;
-use crate::eval::{EvalCtx, eval};
+use crate::eval::{EvalCtx, eval_evaluated};
 use crate::expr::{eval_expr, xsd_of, xsd_to_term};
+use crate::governor::lift::{Evaluated, Lift, Truncation};
 use crate::scratch::SolutionTerm;
 use crate::solution::{Solution, SolutionSeq, VarSchema};
 use crate::{DetHashMap, DetHashSet, DetHasher};
@@ -55,11 +56,15 @@ pub(crate) fn eval_values<D: DatasetView + Sync>(
 /// `SELECT`-list projection: restrict to `variables` in order. A projected variable
 /// absent from the inner solution yields an all-unbound column.
 pub(crate) fn eval_project<D: DatasetView + Sync>(
+    node: &GraphPattern,
     inner: &GraphPattern,
     variables: &[Variable],
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<SolutionSeq<D::Id>, EvalError> {
-    let seq = eval(inner, ctx)?;
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let mut lift = Lift::at(node);
+    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
+        return Ok(lift.withheld());
+    };
     let out = Arc::new(VarSchema::from_vars(variables.iter().cloned()));
     // For each projected column, the source column in the inner schema (if any).
     let src: Vec<Option<usize>> = out.vars().iter().map(|v| seq.schema.index_of(v)).collect();
@@ -68,24 +73,44 @@ pub(crate) fn eval_project<D: DatasetView + Sync>(
         .iter()
         .map(|row| src.iter().map(|s| s.and_then(|c| row[c])).collect())
         .collect();
-    Ok(SolutionSeq { schema: out, rows })
+    Ok(lift.finish(SolutionSeq { schema: out, rows }))
 }
 
 /// `DISTINCT`: drop duplicate whole-solution rows, preserving first-seen order.
 pub(crate) fn eval_distinct<D: DatasetView + Sync>(
+    node: &GraphPattern,
     inner: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<SolutionSeq<D::Id>, EvalError> {
-    Ok(dedup(eval(inner, ctx)?))
+) -> Result<Evaluated<D::Id>, EvalError> {
+    dedup_lifted(node, inner, ctx)
 }
 
 /// `REDUCED`: permitted to drop duplicates; we apply the same dedup as `DISTINCT`
 /// (a stronger-but-permitted reduction than the spec's minimum).
 pub(crate) fn eval_reduced<D: DatasetView + Sync>(
+    node: &GraphPattern,
     inner: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<SolutionSeq<D::Id>, EvalError> {
-    Ok(dedup(eval(inner, ctx)?))
+) -> Result<Evaluated<D::Id>, EvalError> {
+    dedup_lifted(node, inner, ctx)
+}
+
+/// The shared `DISTINCT`/`REDUCED` body.
+///
+/// De-duplication decides each row from the rows already seen, so it depends only on the
+/// prefix and commits **per input row**: a prefix of the input dedups to a prefix of the
+/// output, which is why a truncation below either operator keeps its bound instead of
+/// voiding every `SELECT DISTINCT` in the corpus.
+fn dedup_lifted<D: DatasetView + Sync>(
+    node: &GraphPattern,
+    inner: &GraphPattern,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let mut lift = Lift::at(node);
+    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
+        return Ok(lift.withheld());
+    };
+    Ok(lift.finish(dedup(seq)))
 }
 
 /// Drop duplicate rows, preserving first-seen order (SolutionTerm equality is exact
@@ -109,32 +134,47 @@ fn dedup<I: ViewTermId>(seq: SolutionSeq<I>) -> SolutionSeq<I> {
 }
 
 /// `LIMIT`/`OFFSET`: skip `start` solutions then keep at most `length`.
+///
+/// # Under a truncated child
+///
+/// A restricting slice selects **by position**, so it needs a genuine prefix: given only
+/// a sub-bag it can select rows the true query never returns. The lift enforces that —
+/// a truncation that reaches this node having lost positional fidelity anywhere below it
+/// yields no rows at all — so the ordinary slice below only ever runs over a prefix.
 pub(crate) fn eval_slice<D: DatasetView + Sync>(
+    node: &GraphPattern,
     inner: &GraphPattern,
     start: usize,
     length: Option<usize>,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<SolutionSeq<D::Id>, EvalError> {
-    let seq = eval(inner, ctx)?;
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let mut lift = Lift::at(node);
+    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
+        return Ok(lift.withheld());
+    };
     let rows = seq
         .rows
         .into_iter()
         .skip(start)
         .take(length.unwrap_or(usize::MAX))
         .collect();
-    Ok(SolutionSeq {
+    Ok(lift.finish(SolutionSeq {
         schema: seq.schema,
         rows,
-    })
+    }))
 }
 
 /// `ORDER BY`: stable-sort by the sort keys under SPARQL ordering (§15.1).
 pub(crate) fn eval_order_by<D: DatasetView + Sync>(
+    node: &GraphPattern,
     inner: &GraphPattern,
     exprs: &[OrderExpression],
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<SolutionSeq<D::Id>, EvalError> {
-    let seq = eval(inner, ctx)?;
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let mut lift = Lift::at(node);
+    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
+        return Ok(lift.withheld());
+    };
     let schema = seq.schema.clone();
 
     // Precompute each row's typed sort keys — including the one-time XSD parse
@@ -153,36 +193,51 @@ pub(crate) fn eval_order_by<D: DatasetView + Sync>(
 
     keyed.sort_by(|(ka, _), (kb, _)| compare_keys(ka, kb, exprs));
     let rows = keyed.into_iter().map(|(_, row)| row).collect();
-    Ok(SolutionSeq { schema, rows })
+    // An `EXISTS` inside a sort key is an opaque edge; see `eval_left_join`.
+    if let Some(tripped) = ctx.expression_barrier.observed() {
+        return Ok(Evaluated::Truncated(Truncation::barred_at(
+            node,
+            tripped,
+            schema.clone(),
+        )));
+    }
+    Ok(lift.finish(SolutionSeq { schema, rows }))
 }
 
 /// `GRAPH name { ... }`: scope the inner pattern to a named graph (or, for a
 /// variable, every named graph in turn, binding the variable to each).
 pub(crate) fn eval_graph<D: DatasetView + Sync>(
+    node: &GraphPattern,
     name: &NamedNodePattern,
     inner: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<SolutionSeq<D::Id>, EvalError> {
+) -> Result<Evaluated<D::Id>, EvalError> {
     match name {
         NamedNodePattern::NamedNode(n) => {
+            let mut lift = Lift::at(node);
             match ctx.dataset.term_id_by_value(&named_node_to_value(n)) {
                 // Addressable only if the active dataset's named set admits it (a
                 // `FROM NAMED` / `USING NAMED` may restrict which graphs `GRAPH` sees).
                 Some(id) if ctx.active_dataset.named_allows(id) => {
                     let saved = ctx.active_graph;
                     ctx.active_graph = GraphMatch::Named(id);
-                    let result = eval(inner, ctx);
+                    let result = eval_evaluated(inner, ctx);
                     ctx.active_graph = saved;
-                    result
+                    let Some(seq) = lift.absorb(0, result?) else {
+                        return Ok(lift.withheld());
+                    };
+                    Ok(lift.finish(seq))
                 }
                 // The IRI is not a term (no quads), or not in the named dataset → empty.
                 _ => {
-                    let seq = eval(inner, ctx)?;
-                    Ok(SolutionSeq::empty(seq.schema))
+                    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
+                        return Ok(lift.withheld());
+                    };
+                    Ok(lift.finish(SolutionSeq::empty(seq.schema)))
                 }
             }
         }
-        NamedNodePattern::Variable(v) => eval_graph_var(v, inner, ctx),
+        NamedNodePattern::Variable(v) => eval_graph_var(node, v, inner, ctx),
     }
 }
 
@@ -196,11 +251,20 @@ pub(crate) fn eval_graph<D: DatasetView + Sync>(
 /// (e.g. an outer `VALUES (?g ?t) { ... }` nested inside the `GRAPH ?g { }` block,
 /// or any other pre-binding), each candidate graph must be JOINED against that
 /// existing binding — kept only when compatible — rather than blindly overwritten.
+///
+/// # Under a truncated child
+///
+/// The inner pattern is evaluated once per named graph, so a trip inside it is a trip in
+/// flight: the graph being scanned contributes nothing (its block is incomplete) while
+/// every graph already scanned keeps its complete block — commit granularity at the
+/// per-graph boundary, which is this operator's input row.
 fn eval_graph_var<D: DatasetView + Sync>(
+    node: &GraphPattern,
     var: &Variable,
     inner: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<SolutionSeq<D::Id>, EvalError> {
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let mut lift = Lift::at(node);
     // Enumerate every named graph the dataset knows about, restricted to those the
     // active dataset admits (a `FROM NAMED` / `USING NAMED` may limit which graphs
     // `GRAPH ?g` binds to).
@@ -213,9 +277,24 @@ fn eval_graph_var<D: DatasetView + Sync>(
     let saved = ctx.active_graph;
     let mut out_schema: Option<Arc<VarSchema>> = None;
     let mut rows = Vec::new();
+    let mut truncated = false;
     for g in graphs {
         ctx.active_graph = GraphMatch::Named(g);
-        let inner_seq = eval(inner, ctx)?;
+        let inner_seq = match eval_evaluated(inner, ctx) {
+            Ok(Evaluated::Complete(seq)) => seq,
+            Ok(truncation @ Evaluated::Truncated(_)) => {
+                truncated = true;
+                if lift.absorb(0, truncation).is_none() {
+                    ctx.active_graph = saved;
+                    return Ok(lift.withheld());
+                }
+                break;
+            }
+            Err(e) => {
+                ctx.active_graph = saved;
+                return Err(e);
+            }
+        };
         let mut sch = (*inner_seq.schema).clone();
         let candidate = SolutionTerm::Existing(g);
         match sch.index_of(var) {
@@ -250,16 +329,24 @@ fn eval_graph_var<D: DatasetView + Sync>(
     ctx.active_graph = saved;
 
     // No named graphs (or none matched): still produce the right schema with no rows.
+    // A truncation already in hand means the inner pattern must NOT be evaluated again
+    // (that would be a fresh scan after the budget is spent), so the schema is taken
+    // from the partial result instead.
     let schema = match out_schema {
         Some(s) => s,
+        None if truncated => lift
+            .absorbed_schema()
+            .unwrap_or_else(|| Arc::new(VarSchema::new())),
         None => {
-            let seq = eval(inner, ctx)?;
+            let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
+                return Ok(lift.withheld());
+            };
             let mut sch = (*seq.schema).clone();
             sch.push(var.clone());
             Arc::new(sch)
         }
     };
-    Ok(SolutionSeq { schema, rows })
+    Ok(lift.finish(SolutionSeq { schema, rows }))
 }
 
 // ---------------------------------------------------------------------------
@@ -479,13 +566,33 @@ fn literal_order(a: (&str, &str, &Option<String>), b: (&str, &str, &Option<Strin
 ///
 /// With **no** grouping variables but aggregates present, the whole input is a
 /// single group — even when empty (so `COUNT(*)` yields one row binding `0`).
+///
+/// # Under a truncated child
+///
+/// Nothing crosses. An aggregate over a partial input is a **different number**, not a
+/// subset of the true one — `COUNT` under-counts, `SUM` under-sums — so the edge to the
+/// grouped input is opaque and the lift withholds every row, carrying the barrier in
+/// their place. Computing the aggregates anyway and discarding them would be the same
+/// answer at higher cost, so the operator returns before grouping.
 pub(crate) fn eval_group<D: DatasetView + Sync>(
+    node: &GraphPattern,
     inner: &GraphPattern,
     variables: &[Variable],
     aggregates: &[(Variable, AggregateExpression)],
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<SolutionSeq<D::Id>, EvalError> {
-    let seq = eval(inner, ctx)?;
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let mut lift = Lift::at(node);
+    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
+        // No rows cross an opaque edge, but the COLUMNS still do: a `GROUP BY`'s output
+        // schema is syntactic — the grouping variables followed by the aggregate output
+        // variables — so it costs nothing to report the columns this node would have
+        // produced rather than the columns of the input it withheld.
+        let mut out_schema = VarSchema::from_vars(variables.iter().cloned());
+        for (out_var, _) in aggregates {
+            out_schema.push(out_var.clone());
+        }
+        return Ok(lift.finish(SolutionSeq::empty(Arc::new(out_schema))));
+    };
     let in_schema = seq.schema.clone();
     let key_cols: Vec<Option<usize>> = variables.iter().map(|v| in_schema.index_of(v)).collect();
 
@@ -566,10 +673,16 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
         rows
     };
 
-    Ok(SolutionSeq {
+    // An `EXISTS` inside an aggregate argument is an opaque edge; see `eval_left_join`.
+    if let Some(tripped) = ctx.expression_barrier.observed() {
+        return Ok(Evaluated::Truncated(Truncation::barred_at(
+            node, tripped, out_schema,
+        )));
+    }
+    Ok(lift.finish(SolutionSeq {
         schema: out_schema,
         rows,
-    })
+    }))
 }
 
 /// Compute one aggregate over a group's rows.
@@ -765,6 +878,67 @@ fn string_term<D: DatasetView + Sync>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::eval::eval;
+
+    // These modifiers take the algebra node itself (it names the barrier and supplies the
+    // child edge classification), so the tests build the node and drive the ordinary
+    // dispatch — testing the wiring rather than an entry point no query reaches.
+    fn eval_order_by<D: DatasetView<Id = purrdf_core::TermId> + Sync>(
+        inner: &GraphPattern,
+        exprs: &[OrderExpression],
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<SolutionSeq, EvalError> {
+        eval(
+            &GraphPattern::OrderBy {
+                inner: Box::new(inner.clone()),
+                expression: exprs.to_vec(),
+            },
+            ctx,
+        )
+    }
+
+    fn eval_distinct<D: DatasetView<Id = purrdf_core::TermId> + Sync>(
+        inner: &GraphPattern,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<SolutionSeq, EvalError> {
+        eval(
+            &GraphPattern::Distinct {
+                inner: Box::new(inner.clone()),
+            },
+            ctx,
+        )
+    }
+
+    fn eval_project<D: DatasetView<Id = purrdf_core::TermId> + Sync>(
+        inner: &GraphPattern,
+        variables: &[Variable],
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<SolutionSeq, EvalError> {
+        eval(
+            &GraphPattern::Project {
+                inner: Box::new(inner.clone()),
+                variables: variables.to_vec(),
+            },
+            ctx,
+        )
+    }
+
+    fn eval_slice<D: DatasetView<Id = purrdf_core::TermId> + Sync>(
+        inner: &GraphPattern,
+        start: usize,
+        length: Option<usize>,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<SolutionSeq, EvalError> {
+        eval(
+            &GraphPattern::Slice {
+                inner: Box::new(inner.clone()),
+                start,
+                length,
+            },
+            ctx,
+        )
+    }
+
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
     use purrdf_sparql_algebra::{NamedNode, NamedNodePattern, TermPattern, TriplePattern};
 

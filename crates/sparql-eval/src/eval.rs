@@ -18,15 +18,18 @@
 use std::sync::Arc;
 
 use purrdf_core::{
-    DatasetView, GraphMatch, RdfDataset, TermFactory, TermId, TermValue, ViewTermId,
+    DatasetView, GraphMatch, RdfDataset, TermFactory, TermId, TermValue, TrippedGovernor,
+    ViewTermId,
 };
 use purrdf_sparql_algebra::{GraphPattern, Query, Variable};
 
 use crate::DetHashMap;
 use crate::dataset_spec::ActiveDataset;
 use crate::error::EvalError;
+use crate::governor::GovernorState;
+use crate::governor::lift::{Evaluated, ExpressionBarrier, Truncation};
 use crate::scratch::{ScratchInterner, SolutionTerm};
-use crate::solution::SolutionSeq;
+use crate::solution::{SolutionSeq, VarSchema};
 
 /// Tunable evaluation behavior. Every flag defaults to the production-optimal
 /// value; the criterion benches and differential tests flip individual flags to
@@ -153,7 +156,7 @@ pub(crate) struct ExistsInner<I: ViewTermId = TermId> {
 /// A cheap FNV-1a fingerprint of an outer schema's variables (names in column order),
 /// for [`ExistsCacheKey`]. Two schemas with the same ordered variable list hash equal,
 /// so the cached probe index is only reused against a matching outer-row layout.
-pub(crate) fn schema_fingerprint(schema: &crate::solution::VarSchema) -> u64 {
+pub(crate) fn schema_fingerprint(schema: &VarSchema) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for v in schema.vars() {
         for b in v.as_str().as_bytes() {
@@ -342,6 +345,20 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// [`Self::child_for_user_fn`] and bounded by [`MAX_UDF_DEPTH`] so
     /// mutually-recursive functions fail closed rather than overflow the stack.
     pub(crate) udf_depth: u32,
+    /// The caller-supplied execution governors in force, if any. `None` — the default —
+    /// is an **ungoverned** execution: no ceiling can be exceeded and no stop signal can
+    /// fire, so [`Self::stop_check`] short-circuits on one null test and evaluation does
+    /// exactly the work it did before governors existed.
+    ///
+    /// Held behind an [`Arc`] rather than by value so a forked worker shares the ONE
+    /// live accounting state instead of a copy: a per-worker copy would multiply the
+    /// budget by the thread count, invisibly.
+    pub(crate) governors: Option<Arc<GovernorState>>,
+    /// The one-shot cell through which a governor trip inside an expression-embedded
+    /// `EXISTS` reaches the operator that owns the expression (see
+    /// [`ExpressionBarrier`]). Shared by [`Arc`] with every forked worker context, so a
+    /// worker's observation is not lost when the worker's context is dropped.
+    pub(crate) expression_barrier: ExpressionBarrier,
 }
 
 /// The maximum SHACL-AF function call depth. A function body that calls another
@@ -411,6 +428,8 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             base_iri: None,
             user_functions: None,
             udf_depth: 0,
+            governors: None,
+            expression_barrier: ExpressionBarrier::default(),
         }
     }
 
@@ -523,6 +542,34 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         self
     }
 
+    /// Attach caller-supplied execution governors to this evaluation.
+    ///
+    /// Build the state fresh for every execution: consumption is cumulative, so a state
+    /// reused across queries would drain one query's budget into the next.
+    #[must_use]
+    pub fn with_governors(mut self, governors: Arc<GovernorState>) -> Self {
+        self.governors = Some(governors);
+        self
+    }
+
+    /// The governor that has already stopped this execution, if one has.
+    ///
+    /// **This is not a charge point.** It spends no budget and cannot itself exhaust one:
+    /// it reads the latched trip and polls the host's stop signal, both of which are pure
+    /// observations. That is what makes it safe to call at every operator boundary, which
+    /// in turn is what gives a deadline and a cancellation the row/operator granularity
+    /// they are useless without — a signal that could only be observed at a charge point
+    /// would go unnoticed for as long as the evaluator happened not to charge.
+    pub(crate) fn stop_check(&self) -> Option<TrippedGovernor> {
+        let state = self.governors.as_ref()?;
+        if let Some(tripped) = state.tripped() {
+            return Some(tripped);
+        }
+        state
+            .poll_stop()
+            .map(|cause| TrippedGovernor::Stopped { cause })
+    }
+
     /// Replace the evaluation options for this context. Used by the engine to thread
     /// its configured options into each per-query context, and by tests that need to
     /// flip a measurement seam.
@@ -626,6 +673,13 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // must see the same table and depth bound as its parent.
             user_functions: self.user_functions,
             udf_depth: self.udf_depth,
+            // SHARED, not fresh: one live accounting state across every worker, so the
+            // budget is not multiplied by the thread count.
+            governors: self.governors.clone(),
+            // SHARED, not fresh: a worker that observes a truncation inside an
+            // expression-embedded `EXISTS` must be able to tell the parent, and the
+            // worker's own context is dropped the instant its closure returns.
+            expression_barrier: self.expression_barrier.clone(),
         }
     }
 
@@ -691,6 +745,15 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             base_iri: None,
             user_functions: self.user_functions,
             udf_depth: next_depth,
+            // SHARED: a function body's evaluation spends the caller's budget, not a
+            // fresh one — otherwise a query could evade its ceiling by calling a
+            // function.
+            governors: self.governors.clone(),
+            // SHARED: a function call sits in an expression position, so a truncation
+            // inside the body makes the call's value unknowable — exactly the opaque
+            // edge an `EXISTS` is, and reported through the same cell so the operator
+            // owning the calling expression withholds its rows.
+            expression_barrier: self.expression_barrier.clone(),
         })
     }
 
@@ -706,67 +769,123 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     }
 }
 
-/// Evaluate a graph pattern to a multiset of solutions.
+/// Evaluate a graph pattern to a multiset of solutions, **trip-aware**.
 ///
-/// Implemented incrementally over the S6 build tasks; an unimplemented variant
-/// returns [`EvalError::Unsupported`] naming the construct. Property paths are
-/// evaluated in-engine (S8, the `path` module); the remaining out-of-scope
-/// nodes (`Service`, `Lateral`) stay permanent hard errors (SERVICE is S6b).
-pub fn eval<D: DatasetView + Sync>(
+/// The return is [`Evaluated`]: a complete bag, or a partial one carrying the certificate
+/// that says what it bounds. A governor trip is therefore neither an error nor a silently
+/// short result — it is a third outcome with a proof obligation attached, and every arm
+/// below discharges that obligation through [`Lift`], which reads each child's transfer
+/// function from the one algebra visitor rather than restating it.
+///
+/// Every operator receives the algebra node itself alongside its destructured children:
+/// the node is what names the barrier when a bound is lost, and what identifies the
+/// child edges in [`crate::governor::soundness::child_edges`]. Property paths are
+/// evaluated in-engine (the `path` module); an unimplemented builtin is a typed
+/// [`EvalError`], never a partial bag.
+pub(crate) fn eval_evaluated<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<SolutionSeq<D::Id>, EvalError> {
+) -> Result<Evaluated<D::Id>, EvalError> {
+    // Operator-granularity stop observation, before any of this node's work begins.
+    // Nothing is committed yet, so the truncation originates with an empty bag — which
+    // is a sound lower bound, and the ancestors that have already committed rows keep
+    // theirs as the lift carries this upwards.
+    if let Some(tripped) = ctx.stop_check() {
+        return Ok(Evaluated::Truncated(Truncation::origin(
+            SolutionSeq::empty(Arc::new(VarSchema::new())),
+            tripped,
+        )));
+    }
     match pattern {
-        GraphPattern::Bgp { patterns } => crate::bgp::eval_bgp(patterns, ctx),
+        // Leaves: a truncation cannot happen "below" them, so they have no lift.
+        GraphPattern::Bgp { patterns } => {
+            Ok(Evaluated::Complete(crate::bgp::eval_bgp(patterns, ctx)?))
+        }
         GraphPattern::Path {
             subject,
             path,
             object,
-        } => crate::path::eval_path(subject, path, object, ctx),
-        GraphPattern::Join { left, right } => crate::binop::eval_join(left, right, ctx),
-        GraphPattern::Union { left, right } => crate::binop::eval_union(left, right, ctx),
+        } => Ok(Evaluated::Complete(crate::path::eval_path(
+            subject, path, object, ctx,
+        )?)),
+        GraphPattern::Values {
+            variables,
+            bindings,
+        } => Ok(Evaluated::Complete(crate::modifier::eval_values(
+            variables, bindings, ctx,
+        )?)),
+
+        GraphPattern::Join { left, right } => crate::binop::eval_join(pattern, left, right, ctx),
+        GraphPattern::Union { left, right } => crate::binop::eval_union(pattern, left, right, ctx),
         GraphPattern::LeftJoin {
             left,
             right,
             expression,
-        } => crate::binop::eval_left_join(left, right, expression.as_ref(), ctx),
-        GraphPattern::Minus { left, right } => crate::binop::eval_minus(left, right, ctx),
-        GraphPattern::Filter { expr, inner } => crate::expr::eval_filter(expr, inner, ctx),
+        } => crate::binop::eval_left_join(pattern, left, right, expression.as_ref(), ctx),
+        GraphPattern::Minus { left, right } => crate::binop::eval_minus(pattern, left, right, ctx),
+        GraphPattern::Filter { expr, inner } => crate::expr::eval_filter(pattern, expr, inner, ctx),
         GraphPattern::Extend {
             inner,
             variable,
             expression,
-        } => crate::expr::eval_extend(inner, variable, expression, ctx),
-        GraphPattern::Values {
-            variables,
-            bindings,
-        } => crate::modifier::eval_values(variables, bindings, ctx),
+        } => crate::expr::eval_extend(pattern, inner, variable, expression, ctx),
         GraphPattern::Project { inner, variables } => {
-            crate::modifier::eval_project(inner, variables, ctx)
+            crate::modifier::eval_project(pattern, inner, variables, ctx)
         }
-        GraphPattern::Distinct { inner } => crate::modifier::eval_distinct(inner, ctx),
-        GraphPattern::Reduced { inner } => crate::modifier::eval_reduced(inner, ctx),
+        GraphPattern::Distinct { inner } => crate::modifier::eval_distinct(pattern, inner, ctx),
+        GraphPattern::Reduced { inner } => crate::modifier::eval_reduced(pattern, inner, ctx),
         GraphPattern::Slice {
             inner,
             start,
             length,
-        } => crate::modifier::eval_slice(inner, *start, *length, ctx),
+        } => crate::modifier::eval_slice(pattern, inner, *start, *length, ctx),
         GraphPattern::OrderBy { inner, expression } => {
-            crate::modifier::eval_order_by(inner, expression, ctx)
+            crate::modifier::eval_order_by(pattern, inner, expression, ctx)
         }
-        GraphPattern::Graph { name, inner } => crate::modifier::eval_graph(name, inner, ctx),
+        GraphPattern::Graph { name, inner } => {
+            crate::modifier::eval_graph(pattern, name, inner, ctx)
+        }
         GraphPattern::Group {
             inner,
             variables,
             aggregates,
-        } => crate::modifier::eval_group(inner, variables, aggregates, ctx),
+        } => crate::modifier::eval_group(pattern, inner, variables, aggregates, ctx),
         GraphPattern::Service {
             name,
             inner,
             silent,
-        } => crate::remote::eval_service(name, inner, *silent, ctx),
-        GraphPattern::Lateral { left, right } => crate::binop::eval_lateral(left, right, ctx),
+        } => crate::remote::eval_service(pattern, name, inner, *silent, ctx),
+        GraphPattern::Lateral { left, right } => {
+            crate::binop::eval_lateral(pattern, left, right, ctx)
+        }
     }
+}
+
+/// Evaluate a graph pattern to a multiset of solutions, requiring completion.
+///
+/// The **ungoverned** entry point, and the one every caller that holds no governor
+/// certificate uses. An [`EvalCtx`] carries no resource ceilings, so no charge site can
+/// fire and [`eval_evaluated`] can only answer [`Evaluated::Complete`] here; a truncation reaching
+/// this function would mean the channel produced a partial bag with nobody to certify it
+/// to, which is an internal invariant failure and is reported as one rather than as an
+/// answer. A governed caller uses the trip-aware [`eval_evaluated`] and receives the
+/// certificate.
+///
+/// # Errors
+///
+/// Propagates [`EvalError`] from evaluation.
+pub fn eval<D: DatasetView + Sync>(
+    pattern: &GraphPattern,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<SolutionSeq<D::Id>, EvalError> {
+    eval_evaluated(pattern, ctx)?
+        .into_complete()
+        .map_err(|truncation| {
+            EvalError::internal(format!(
+                "a governor tripped on the ungoverned evaluation entry point: {}",
+                truncation.describe()
+            ))
+        })
 }
 
 /// The result of evaluating a top-level query form — the internal counterpart of
@@ -781,32 +900,135 @@ pub enum Outcome<I: ViewTermId = TermId> {
     Boolean(bool),
 }
 
-/// Evaluate a top-level [`Query`] form over `ctx`'s dataset.
+impl<I: ViewTermId> Outcome<I> {
+    /// The query form this outcome came from, for diagnostics.
+    pub(crate) const fn form_label(&self) -> &'static str {
+        match self {
+            Self::Solutions(_) => "solution",
+            Self::Graph(_) => "graph",
+            Self::Boolean(_) => "boolean",
+        }
+    }
+}
+
+/// A top-level query form's result, trip-aware.
+///
+/// The pattern-level [`Evaluated`] channel carries rows; a query form's result may be a
+/// boolean or a graph instead, so the certificate is carried beside the outcome rather
+/// than inside it. The certificate's rows are the *pattern's* partial rows, which is what
+/// a caller needs in order to know what the outcome was computed from.
+#[derive(Debug)]
+pub(crate) enum EvaluatedOutcome<I: ViewTermId = TermId> {
+    /// The query form's full result.
+    Complete(Outcome<I>),
+    /// A governor tripped while evaluating the query's pattern. The outcome is what the
+    /// form computed from the partial rows, and the certificate says what those rows
+    /// bound.
+    Truncated {
+        /// The form's result over the partial rows.
+        outcome: Outcome<I>,
+        /// What the rows the outcome was computed from bound.
+        certificate: Truncation<I>,
+    },
+}
+
+/// Evaluate a top-level [`Query`] form over `ctx`'s dataset, trip-aware.
 ///
 /// `SELECT`/`ASK` walk the modifier-wrapped pattern; `CONSTRUCT` and `DESCRIBE` emit
 /// the IR dataset directly (`DESCRIBE` via the canonical Symmetric CBD).
-pub fn evaluate_query<D: DatasetView + Sync>(
+///
+/// # `ASK` is strictly better under a trip
+///
+/// `ASK` asks whether *any* solution exists, so a certified **lower** bound answers it
+/// outright: a single row that is certainly an answer proves `true`, whichever governor
+/// stopped the search, and the result is [`EvaluatedOutcome::Complete`]. Only an empty
+/// lower bound leaves the question open. Reporting "budget exhausted" for a question the
+/// evaluator has already answered would throw away a complete result.
+pub(crate) fn evaluate_query_evaluated<D: DatasetView + Sync>(
     query: &Query,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<Outcome<D::Id>, EvalError> {
+) -> Result<EvaluatedOutcome<D::Id>, EvalError> {
     // Install the query's FROM / FROM NAMED active dataset (§13) before evaluating.
     ctx.active_dataset = ActiveDataset::from_query_dataset(query.dataset(), ctx.dataset);
     // Install the query's effective base IRI so IRI()/URI() can resolve a relative
     // string argument against it (SPARQL 1.1 §17.4.2.6).
     ctx.base_iri = query.base_iri().map(|nn| nn.as_str().to_owned());
     match query {
-        Query::Select { pattern, .. } => Ok(Outcome::Solutions(eval(pattern, ctx)?)),
-        Query::Ask { pattern, .. } => Ok(Outcome::Boolean(!eval(pattern, ctx)?.is_empty())),
+        Query::Select { pattern, .. } => match eval_evaluated(pattern, ctx)? {
+            Evaluated::Complete(seq) => Ok(EvaluatedOutcome::Complete(Outcome::Solutions(seq))),
+            Evaluated::Truncated(certificate) => Ok(EvaluatedOutcome::Truncated {
+                outcome: Outcome::Solutions(certificate.rows().clone()),
+                certificate,
+            }),
+        },
+        Query::Ask { pattern, .. } => match eval_evaluated(pattern, ctx)? {
+            Evaluated::Complete(seq) => Ok(EvaluatedOutcome::Complete(Outcome::Boolean(
+                !seq.is_empty(),
+            ))),
+            Evaluated::Truncated(certificate) => {
+                if certificate
+                    .certain_rows()
+                    .is_some_and(|rows| !rows.is_empty())
+                {
+                    // A row that is certainly an answer settles the question.
+                    return Ok(EvaluatedOutcome::Complete(Outcome::Boolean(true)));
+                }
+                Ok(EvaluatedOutcome::Truncated {
+                    outcome: Outcome::Boolean(!certificate.rows().is_empty()),
+                    certificate,
+                })
+            }
+        },
         Query::Construct {
             template, pattern, ..
-        } => Ok(Outcome::Graph(crate::construct::eval_construct(
-            template, pattern, ctx,
-        )?)),
+        } => {
+            let (graph, certificate) = crate::construct::eval_construct(template, pattern, ctx)?;
+            Ok(match certificate {
+                None => EvaluatedOutcome::Complete(Outcome::Graph(graph)),
+                Some(certificate) => EvaluatedOutcome::Truncated {
+                    outcome: Outcome::Graph(graph),
+                    certificate,
+                },
+            })
+        }
         Query::Describe {
             pattern, targets, ..
-        } => Ok(Outcome::Graph(crate::describe_query::eval_describe(
-            pattern, targets, ctx,
-        )?)),
+        } => {
+            let (graph, certificate) = crate::describe_query::eval_describe(pattern, targets, ctx)?;
+            Ok(match certificate {
+                None => EvaluatedOutcome::Complete(Outcome::Graph(graph)),
+                Some(certificate) => EvaluatedOutcome::Truncated {
+                    outcome: Outcome::Graph(graph),
+                    certificate,
+                },
+            })
+        }
+    }
+}
+
+/// Evaluate a top-level [`Query`] form over `ctx`'s dataset, requiring completion.
+///
+/// The **ungoverned** entry point; see [`eval`] for why a truncation reaching it
+/// is an internal invariant failure rather than an answer.
+///
+/// # Errors
+///
+/// Propagates [`EvalError`] from evaluation.
+pub fn evaluate_query<D: DatasetView + Sync>(
+    query: &Query,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Outcome<D::Id>, EvalError> {
+    match evaluate_query_evaluated(query, ctx)? {
+        EvaluatedOutcome::Complete(outcome) => Ok(outcome),
+        EvaluatedOutcome::Truncated {
+            outcome,
+            certificate,
+        } => Err(EvalError::internal(format!(
+            "a governor tripped on the ungoverned query entry point, withholding a {} \
+             result: {}",
+            outcome.form_label(),
+            certificate.describe()
+        ))),
     }
 }
 
@@ -1016,9 +1238,7 @@ mod tests {
     #[test]
     fn schema_fingerprint_distinguishes_variable_lists() {
         use purrdf_sparql_algebra::Variable;
-        let s = |names: &[&str]| {
-            crate::solution::VarSchema::from_vars(names.iter().map(|n| Variable::new(*n)))
-        };
+        let s = |names: &[&str]| VarSchema::from_vars(names.iter().map(|n| Variable::new(*n)));
         // Order matters, separator prevents boundary collisions, equal lists match.
         assert_ne!(
             schema_fingerprint(&s(&["a", "b"])),
@@ -1380,5 +1600,173 @@ mod tests {
         // x=a/y=b/age=50 passes the filter; x=a/y=c fails it and falls back to a
         // left-alone row (y/a unbound) — two rows total.
         assert_eq!(rows_seq.len(), 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // The partial-lift channel, end to end
+    // -----------------------------------------------------------------------
+
+    /// A [`crate::StopSignal`] that fires on its `n`-th poll and latches thereafter.
+    ///
+    /// A latched-from-the-start signal only ever truncates the first node, which proves
+    /// nothing about the lift; firing part-way through is what puts committed rows in the
+    /// evaluator's hands at the moment it stops.
+    #[derive(Debug)]
+    struct StopOnPoll {
+        /// Polls remaining before the signal fires.
+        remaining: std::sync::atomic::AtomicU64,
+    }
+
+    impl crate::StopSignal for StopOnPoll {
+        fn poll(&self) -> Option<purrdf_core::StopCause> {
+            let previous = self
+                .remaining
+                .fetch_update(
+                    std::sync::atomic::Ordering::Relaxed,
+                    std::sync::atomic::Ordering::Relaxed,
+                    |left| Some(left.saturating_sub(1)),
+                )
+                .unwrap_or(0);
+            // Latching: once the countdown reaches zero it stays there, so every later
+            // poll answers the same cause.
+            (previous == 0).then_some(purrdf_core::StopCause::Cancelled)
+        }
+    }
+
+    /// The fixture for the channel tests: a two-hop `knows` chain with `likes` edges, so
+    /// a LATERAL over it emits one block per left row and a truncation lands between
+    /// blocks.
+    fn chain_dataset() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let knows = b.intern_iri("https://example.org/knows");
+        let likes = b.intern_iri("https://example.org/likes");
+        let a = b.intern_iri("https://example.org/a");
+        let bb = b.intern_iri("https://example.org/b");
+        let c = b.intern_iri("https://example.org/c");
+        let tea = b.intern_iri("https://example.org/tea");
+        let cake = b.intern_iri("https://example.org/cake");
+        b.push_quad(a, knows, bb, None);
+        b.push_quad(bb, knows, c, None);
+        b.push_quad(a, likes, tea, None);
+        b.push_quad(bb, likes, cake, None);
+        b.push_quad(c, likes, tea, None);
+        b.freeze().expect("freeze")
+    }
+
+    /// `LATERAL { ?x :knows ?y } { ?y :likes ?z }`: the right side is evaluated once per
+    /// left row, which is the commit boundary the channel is tested at.
+    fn lateral_plan() -> GraphPattern {
+        use purrdf_sparql_algebra::{NamedNode, NamedNodePattern, TermPattern, TriplePattern};
+        let vp = |n: &str| TermPattern::Variable(Variable::new(n));
+        let pred = |iri: &str| NamedNodePattern::NamedNode(NamedNode::new_unchecked(iri));
+        let bgp = |s, p, o| GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: s,
+                predicate: p,
+                object: o,
+            }],
+        };
+        GraphPattern::Lateral {
+            left: Box::new(bgp(vp("x"), pred("https://example.org/knows"), vp("y"))),
+            right: Box::new(bgp(vp("y"), pred("https://example.org/likes"), vp("z"))),
+        }
+    }
+
+    #[test]
+    fn a_certified_partial_is_always_a_prefix_of_the_ungoverned_answer() {
+        // The certificate's whole purpose, exercised through production code: for every
+        // point at which the execution can be stopped, whatever crosses as a certified
+        // lower bound must be an initial segment of what the ungoverned run returns.
+        // A fabricated row — one the true answer does not contain — fails this at the
+        // first budget that produces it.
+        let ds = chain_dataset();
+        let plan = lateral_plan();
+
+        let mut ctx = EvalCtx::new(&ds);
+        let full = eval(&plan, &mut ctx).expect("ungoverned");
+        assert!(!full.rows.is_empty(), "the fixture must produce rows");
+
+        let mut saw_partial_with_rows = false;
+        let mut saw_complete = false;
+        for budget in 1..=30_u64 {
+            let signal = Arc::new(StopOnPoll {
+                remaining: std::sync::atomic::AtomicU64::new(budget),
+            });
+            let governors = crate::QueryGovernors::UNBOUNDED.with_stop_signal(signal);
+            let state = Arc::new(GovernorState::new(&governors));
+            let mut ctx = EvalCtx::new(&ds).with_governors(state);
+
+            match eval_evaluated(&plan, &mut ctx).expect("governed eval") {
+                Evaluated::Complete(seq) => {
+                    saw_complete = true;
+                    assert_eq!(
+                        seq.rows, full.rows,
+                        "a completed governed run must be byte-identical to the \
+                         ungoverned one"
+                    );
+                }
+                Evaluated::Truncated(truncation) => {
+                    assert_eq!(
+                        truncation.bound(),
+                        crate::governor::soundness::SpineClass::Certain,
+                        "every node on this plan's spine is prefix-monotone"
+                    );
+                    let rows = truncation
+                        .certain_rows()
+                        .expect("a lower bound carries its rows");
+                    assert!(
+                        rows.rows.len() <= full.rows.len()
+                            && full.rows[..rows.rows.len()] == rows.rows[..],
+                        "budget {budget}: the certified rows must be an initial segment \
+                         of the true answer, not merely a subset of it"
+                    );
+                    saw_partial_with_rows |= !rows.rows.is_empty();
+                }
+            }
+        }
+
+        assert!(
+            saw_complete,
+            "the largest budgets must let the query finish, or the test proves nothing \
+             about the complete path"
+        );
+        assert!(
+            saw_partial_with_rows,
+            "some budget must stop the execution with rows already committed, or the \
+             lift is never exercised"
+        );
+    }
+
+    #[test]
+    fn an_already_latched_stop_signal_truncates_before_any_work() {
+        let ds = chain_dataset();
+        let plan = lateral_plan();
+        let flag = crate::CancellationFlag::new();
+        flag.cancel();
+        let governors = crate::QueryGovernors::UNBOUNDED.with_stop_signal(Arc::new(flag));
+        let state = Arc::new(GovernorState::new(&governors));
+        let mut ctx = EvalCtx::new(&ds).with_governors(state);
+
+        let Evaluated::Truncated(truncation) =
+            eval_evaluated(&plan, &mut ctx).expect("governed eval")
+        else {
+            panic!("a latched stop signal must truncate the first node entered");
+        };
+        assert_eq!(
+            truncation.tripped(),
+            TrippedGovernor::Stopped {
+                cause: purrdf_core::StopCause::Cancelled,
+            }
+        );
+        assert!(truncation.rows().is_empty());
+        assert_eq!(
+            truncation.bound(),
+            crate::governor::soundness::SpineClass::Certain,
+            "the empty bag is a sound lower bound"
+        );
+
+        // And the ungoverned entry point refuses to hand a partial back as an answer.
+        let mut ctx = EvalCtx::new(&ds);
+        assert!(eval(&plan, &mut ctx).is_ok(), "ungoverned completes");
     }
 }

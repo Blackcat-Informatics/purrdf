@@ -38,7 +38,8 @@ use sha2::Digest; // brings the Digest trait in scope for all RustCrypto hash ca
 
 use crate::DetHashSet;
 use crate::error::EvalError;
-use crate::eval::{EvalCtx, eval};
+use crate::eval::{EvalCtx, eval_evaluated};
+use crate::governor::lift::{Evaluated, Lift, Truncation};
 use crate::scratch::SolutionTerm;
 use crate::solution::{SolutionSeq, VarSchema};
 
@@ -179,12 +180,25 @@ pub(crate) fn eval_ebv<D: DatasetView + Sync>(
 /// surviving rows are the ORIGINAL rows (never a value derived from the child's
 /// scratch), so each forked child's scratch is discarded after use — nothing to
 /// re-intern via [`crate::parallel::reintern_minted_row`].
+///
+/// # Under a truncated child
+///
+/// A `FILTER`'s own data child is prefix-monotone: the predicate is evaluated in full
+/// over every row that reaches it and no surviving row moves, so filtering a prefix
+/// yields a prefix. A truncation **inside an `EXISTS` in the predicate** is a different
+/// matter — it is an opaque edge, because a truncated `EXISTS` inner bag drops rows the
+/// true query keeps and a truncated `NOT EXISTS` inner bag fabricates rows outright — so
+/// the whole output is withheld and only the barrier crosses.
 pub(crate) fn eval_filter<D: DatasetView + Sync>(
+    node: &GraphPattern,
     expr: &Expression,
     inner: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<SolutionSeq<D::Id>, EvalError> {
-    let seq = eval(inner, ctx)?;
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let mut lift = Lift::at(node);
+    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
+        return Ok(lift.withheld());
+    };
     let schema = seq.schema.clone();
     let rows = if crate::parallel::is_parallel_safe(expr, ctx.user_functions) {
         crate::parallel::par_chunk_try_map_init(
@@ -206,7 +220,14 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
         }
         rows
     };
-    Ok(SolutionSeq { schema, rows })
+    if let Some(tripped) = ctx.expression_barrier.observed() {
+        return Ok(Evaluated::Truncated(Truncation::barred_at(
+            node,
+            tripped,
+            schema.clone(),
+        )));
+    }
+    Ok(lift.finish(SolutionSeq { schema, rows }))
 }
 
 /// `Extend(inner, var, expr)` (BIND): add `var` bound to `expr`'s value for each
@@ -220,12 +241,16 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
 /// function re-interns each portable row against `ctx.scratch` afterwards, in
 /// source-index order, via [`crate::parallel::reintern_portable_row`].
 pub(crate) fn eval_extend<D: DatasetView + Sync>(
+    node: &GraphPattern,
     inner: &GraphPattern,
     var: &Variable,
     expr: &Expression,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<SolutionSeq<D::Id>, EvalError> {
-    let seq = eval(inner, ctx)?;
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let mut lift = Lift::at(node);
+    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
+        return Ok(lift.withheld());
+    };
     let mut schema = (*seq.schema).clone();
     let col = schema.push(var.clone());
     let width = schema.len();
@@ -267,7 +292,15 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
         }
         rows
     };
-    Ok(SolutionSeq { schema, rows })
+    // An `EXISTS` inside the bound expression is an opaque edge; see `eval_filter`.
+    if let Some(tripped) = ctx.expression_barrier.observed() {
+        return Ok(Evaluated::Truncated(Truncation::barred_at(
+            node,
+            tripped,
+            schema.clone(),
+        )));
+    }
+    Ok(lift.finish(SolutionSeq { schema, rows }))
 }
 
 // ---------------------------------------------------------------------------
@@ -915,10 +948,19 @@ fn exists<D: DatasetView + Sync>(
         // correctly.
         let prev_in_substituted_exists = ctx.in_substituted_exists;
         ctx.in_substituted_exists = true;
-        let inner = eval(&substituted, ctx);
+        let inner = eval_evaluated(&substituted, ctx);
         ctx.in_substituted_exists = prev_in_substituted_exists;
         let inner = inner?;
-        Ok(!inner.is_empty())
+        if let Evaluated::Truncated(truncation) = &inner {
+            // A truncated `EXISTS` inner bag can only turn its boolean from true to
+            // false, and a truncated `NOT EXISTS` one from false to true — a fabricated
+            // row. Neither is a bound, so the trip is reported to the enclosing operator,
+            // which withholds its whole output. The boolean returned here is therefore
+            // never observed in any row that reaches a caller.
+            ctx.expression_barrier.record(truncation.tripped());
+            return Ok(false);
+        }
+        Ok(!inner.rows().is_empty())
     } else {
         // Fast memoized path: the inner pattern result is independent of the outer
         // row's values in expression contexts, so evaluate it — and build the probe
@@ -944,7 +986,19 @@ fn exists<D: DatasetView + Sync>(
         let entry = match cached {
             Some(entry) => entry,
             None => {
-                let inner = Arc::new(eval(pattern, ctx)?);
+                let evaluated = eval_evaluated(pattern, ctx)?;
+                if let Evaluated::Truncated(truncation) = &evaluated {
+                    // Never memoized: a truncated inner bag cached under this site's key
+                    // would make every subsequent probe — including one under a larger budget
+                    // in the same query — read a bag that is not the inner pattern's
+                    // answer. See the correlated branch above for why the boolean is
+                    // irrelevant once the barrier is recorded.
+                    ctx.expression_barrier.record(truncation.tripped());
+                    return Ok(false);
+                }
+                let inner = Arc::new(evaluated.into_complete().unwrap_or_else(|_| {
+                    unreachable!("a non-truncated result is complete by construction")
+                }));
                 // `shared` is computed against the FULL outer schema (not just the
                 // row's bound vars), so one index serves every row: an outer var
                 // unbound in a given row is `None` in the probe and matches anything
@@ -2792,6 +2846,7 @@ fn make_uuid<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>) -> (String, [u8; 1
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::eval::eval;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder};
     use purrdf_sparql_algebra::{Literal, NamedNode};
 

@@ -7,7 +7,9 @@
 //! content-hashed identity of the charge schedule ([`GOVERNOR_PROFILE_ID`],
 //! [`GOVERNOR_PROFILE_VERSION`], [`GOVERNOR_PROFILE_DIGEST`]).
 //!
-//! [`soundness`] holds the companion static analysis: the one exhaustive algebra visitor
+//! [`lift`] holds the partial-lift channel — the third result an operator can produce,
+//! carrying the rows it holds together with a machine-checked statement of what they
+//! bound — and [`soundness`] holds the companion static analysis: the one exhaustive algebra visitor
 //! that decides what a truncated bag at a node still certifies about the root answer, and
 //! — the same computation read for a different purpose — whether the answer cap may be
 //! pushed down to that node.
@@ -31,6 +33,33 @@
 //! reduction [`crate::parallel`] already uses for errors. A deadline trip is inherently
 //! time-dependent and carries no such determinism claim.
 //!
+//! # The schema of a partial result (a stated contract, not an accident)
+//!
+//! A complete result reports the columns the query produces. A **partial** result reports
+//! the columns of the operator arms that were actually evaluated, and for four operators
+//! those are not the same thing:
+//!
+//! | Operator | Truncated arm | Columns reported |
+//! |---|---|---|
+//! | `JOIN`, `OPTIONAL`, `LATERAL`, `UNION` | left | the **left arm's** columns only |
+//! | everything else, and the right arm of all four | — | the node's true columns |
+//!
+//! When the left arm of one of those four truncates, the right arm is deliberately never
+//! evaluated — starting a fresh subtree after the budget is spent is unbounded work a
+//! governor must not license — and this engine's column ORDER is chosen during
+//! evaluation, not parsed off the query: a basic graph pattern's columns appear in the
+//! order the cost-based join order visits them. So the right arm's columns are not
+//! derivable without doing the work that was just refused, and reporting a guess would be
+//! worse than reporting less.
+//!
+//! No row is affected: in every one of these cases the surviving rows are exactly the
+//! left arm's, or none at all. Only the reported column list is narrower than a complete
+//! run's, and a caller that diffs column lists across the complete and partial paths must
+//! expect that. Where the true schema *is* derivable without the refused work — every
+//! unary operator, `MINUS` (whose schema is its left arm's), `PROJECT` (whose schema is
+//! its variable list), and `GROUP BY` (grouping variables then aggregate outputs) — the
+//! true schema is reported, including when no rows cross at all.
+//!
 //! # The vocabulary is a kernel type
 //!
 //! [`StopCause`], [`ResourceDimension`], [`ResourceVector`], [`TrippedGovernor`], and
@@ -38,7 +67,10 @@
 //! the evaluation tier name one taxonomy. This module adds only the evaluation tier's
 //! configuration, live state, and profile identity.
 
+pub(crate) mod lift;
 pub(crate) mod soundness;
+
+pub use lift::NonMonotoneBarrier;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, OnceLock};

@@ -18,22 +18,28 @@
 //! The union SCBD of that subject set is returned as a frozen dataset.
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
 
 use purrdf_core::describe::Describer;
-use purrdf_core::{DatasetView, RdfDataset, TermValue};
+use purrdf_core::{DatasetView, TermValue};
 use purrdf_sparql_algebra::{GraphPattern, NamedNodePattern};
 
+use crate::construct::ConstructedGraph;
 use crate::error::EvalError;
-use crate::eval::{EvalCtx, eval, materialize_solutions};
+use crate::eval::{EvalCtx, eval_evaluated, materialize_solutions};
+use crate::governor::lift::Evaluated;
 
 /// Evaluate a `DESCRIBE` query to a frozen IR dataset: the union Symmetric CBD of its
 /// resolved subject IRIs.
+///
+/// The `WHERE`'s certificate travels beside the graph for the same reason it does for
+/// `CONSTRUCT`: a description built from a certified lower bound describes a subset of
+/// the true subjects, and only the caller holding the certificate can tell that from a
+/// complete description.
 pub(crate) fn eval_describe<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     targets: &[NamedNodePattern],
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<Arc<RdfDataset>, EvalError> {
+) -> Result<ConstructedGraph<D::Id>, EvalError> {
     // A `BTreeSet` gives a deterministic, deduplicated subject order.
     let mut subjects: BTreeSet<String> = BTreeSet::new();
     let mut var_targets: Vec<&str> = Vec::new();
@@ -50,8 +56,16 @@ pub(crate) fn eval_describe<D: DatasetView + Sync>(
     // projects; an explicit variable describes just that one. Either way we need the
     // solutions. Concrete `DESCRIBE <iri>` targets skip evaluation entirely.
     let describe_all = targets.is_empty();
+    let mut certificate = None;
     if describe_all || !var_targets.is_empty() {
-        let seq = eval(pattern, ctx)?;
+        let seq = match eval_evaluated(pattern, ctx)? {
+            Evaluated::Complete(seq) => seq,
+            Evaluated::Truncated(truncation) => {
+                let rows = truncation.rows().clone();
+                certificate = Some(truncation);
+                rows
+            }
+        };
         let (vars, rows) = materialize_solutions(&seq, ctx);
         for (col, name) in vars.iter().enumerate() {
             if !describe_all && !var_targets.contains(&name.as_str()) {
@@ -67,14 +81,33 @@ pub(crate) fn eval_describe<D: DatasetView + Sync>(
         }
     }
 
-    Describer::new(ctx.dataset)
+    let graph = Describer::new(ctx.dataset)
         .describe_iris(subjects.iter().map(String::as_str))
-        .map_err(|d| EvalError::internal(format!("DESCRIBE output failed to build: {d:?}")))
+        .map_err(|d| EvalError::internal(format!("DESCRIBE output failed to build: {d:?}")))?;
+    Ok((graph, certificate))
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use purrdf_core::RdfDataset;
+
     use super::*;
+
+    /// The ungoverned `DESCRIBE`, which is complete by construction.
+    fn eval_describe<D: DatasetView + Sync>(
+        pattern: &GraphPattern,
+        targets: &[NamedNodePattern],
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<Arc<RdfDataset>, EvalError> {
+        let (graph, certificate) = super::eval_describe(pattern, targets, ctx)?;
+        assert!(
+            certificate.is_none(),
+            "an ungoverned DESCRIBE cannot truncate"
+        );
+        Ok(graph)
+    }
     use purrdf_core::RdfDatasetBuilder;
     use purrdf_sparql_algebra::{NamedNode, TermPattern, TriplePattern, Variable};
 
