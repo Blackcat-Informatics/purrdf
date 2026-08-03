@@ -37,10 +37,10 @@ BINARYEN_VERSION := 130
 # dataset-description/research-object projection profiles, the compiled JSON-LD
 # context/options/registry engine, validation-scoped asserted-subclass
 # membership shared by native SHACL and SHACL-SPARQL, the entailment engine, the
-# nine OWL reasoner services, the concrete domain AND the conclusion-directed
+# nine OWL reasoner services, the concrete domain, the conclusion-directed
 # entailment service with its seven mechanisms and its caller-supplied import
-# map — measures
-# 9_765_497 bytes against the 12_112_500 ceiling, which is 19.377% headroom. That
+# map AND the governed query/update lane with its typed outcome — measures
+# 9_963_673 bytes against the 12_112_500 ceiling, which is 17.741% headroom. That
 # figure is recorded below (WASM_SIZE_MEASURED_BYTES) and REPORTED rather than
 # enforced; the ceiling is the check that fails.
 #
@@ -238,8 +238,22 @@ WASM_SIZE_BUDGET_BYTES := 12112500
 # stack for XML-literal canonicalization. It buys documents that used to kill the host
 # returning an ordinary located diagnostic.
 #
+# The increase 9_765_497 -> 9_963_673 is the GOVERNED evaluation lane reaching the
+# artifact. `query_governed`, `update_governed` and `explain_query` were already in the
+# workspace and reachable from no wasm-exported symbol, so the linker dead-code-eliminated
+# all of them: the per-node charge ledger and its plan survey, the predictive admission
+# check, the partial-lift channel with the exhaustive soundness visitor that decides what
+# a truncated bag still certifies about the root answer, the answer-cap pushdown, the
+# order-stable chunk-local charge fold, and the wall-deadline clock. `queryGoverned`,
+# `updateGoverned` and `explainQuery` now reach every one of them, and the growth is that
+# machinery plus the five host-facing outcome classes over it rather than the wrappers.
+# It is a NEW CAPABILITY on this host, and the one it most needed: a browser tab runs the
+# evaluator on the UI thread, so before this an accidental cross product had no ceiling
+# and no deadline — it froze the page with no way back. Still 82% of
+# WASM_SIZE_BUDGET_BYTES, so this is a measurement update and NOT a ceiling raise.
+#
 # The measured constant below is the CURRENT size, not any intermediate figure.
-WASM_SIZE_MEASURED_BYTES := 9765497
+WASM_SIZE_MEASURED_BYTES := 9963673
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'

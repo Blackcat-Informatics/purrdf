@@ -53,12 +53,150 @@ export type QueryResultsFormat =
   | "text/tab-separated-values";
 export type QueryRawFormat = QueryGraphFormat | QueryResultsFormat;
 
-export interface QueryOptions {
+/**
+ * One execution governor's ceiling. The engine's ceilings are 64-bit integers, so the
+ * boundary type is `bigint`; a `number` (or an integral numeric string) is coerced for
+ * you. Every ceiling is INCLUSIVE — consumption equal to it is admitted — and `0` is a
+ * valid ceiling that trips on the first charged unit of work. Omit the key (or pass
+ * `null`/`undefined`) to decline the dimension; a negative value is refused.
+ */
+export type GovernorCeiling = number | bigint | string;
+
+/**
+ * The ceilings and stop sources one governed call runs under.
+ *
+ * These are enforced ONLY by `queryGoverned` / `updateGoverned`. Passing one to an
+ * ungoverned call (`query`, `select`, `ask`, `construct`, `describe`, `update`,
+ * `queryRaw`, `explainQuery`) throws rather than running with no ceiling at all.
+ */
+export interface GovernorOptions {
+  /** Abstract execution steps, priced by the engine's charge schedule. */
+  readonly fuel?: GovernorCeiling | null;
+  /** A wall-clock evaluation budget in milliseconds. `0` expires on the first poll. */
+  readonly deadlineMs?: GovernorCeiling | null;
+  /**
+   * Units committed to the query form's own answer sequence: one solution row for
+   * SELECT, one output statement for CONSTRUCT/DESCRIBE (an ordinary triple, an RDF 1.2
+   * reifier binding, or an annotation), and nothing at all for ASK.
+   *
+   * Never `LIMIT`: `LIMIT` is query semantics and applies before this cap is tested.
+   * Not accepted by `updateGoverned`, which has no answer sequence to bound.
+   */
+  readonly maxAnswers?: GovernorCeiling | null;
+  /** The largest single intermediate bag, in cells (`rows * columns`). */
+  readonly maxIntermediateCells?: GovernorCeiling | null;
+  /** Bytes minted into the per-query scratch arena by value-constructing operations. */
+  readonly maxScratchBytes?: GovernorCeiling | null;
+  /** Requests issued to remote or federated endpoints. */
+  readonly maxRemoteRequests?: GovernorCeiling | null;
+  /** A cancellation bit the host can flip. The engine is handed a share of it. */
+  readonly cancel?: CancellationToken | null;
+}
+
+export interface QueryOptions extends GovernorOptions {
   readonly base?: string | null;
 }
 
 export interface QueryRawOptions extends QueryOptions {
   readonly format?: QueryRawFormat | string | null;
+}
+
+/** Which kind of governor stopped an execution. */
+export type TrippedGovernorKind = "budget" | "stopped" | "refused" | "unknown";
+
+/** The governor that stopped one execution. */
+export interface TrippedGovernor {
+  /**
+   * `"budget"` (a ceiling was reached), `"stopped"` (a stop signal fired), `"refused"`
+   * (the planner's estimate already exceeded a ceiling, so nothing ran), or `"unknown"`
+   * for a governor a future engine adds that this build cannot name.
+   */
+  readonly kind: TrippedGovernorKind;
+  /**
+   * The stable kebab-case discriminant, e.g. `"fuel-exhausted"`,
+   * `"answer-cap-exhausted"`, `"deadline-exceeded"`, `"cancelled"`. A pinned contract:
+   * match on this rather than on the prose of `message`.
+   */
+  readonly label: string;
+  /** The governed dimension, e.g. `"fuel"`. Absent when a stop signal fired. */
+  readonly dimension?: string;
+  /** The inclusive ceiling in force. Absent when a stop signal fired. */
+  readonly limit?: bigint;
+  /** Consumption charged before the refused work — a measurement, on `"budget"` only. */
+  readonly consumed?: bigint;
+  /** The planner's estimate — NOT a measurement, on `"refused"` only. */
+  readonly estimate?: bigint;
+  /** `"cancelled"` or `"deadline-exceeded"`, on `"stopped"` only. */
+  readonly cause?: string;
+  /** A human-readable rendering. Prose, not a contract. */
+  readonly message: string;
+}
+
+/**
+ * One governed execution's receipt: what it was allowed and what it spent, on the
+ * complete path as well as the exhausted one.
+ *
+ * Both maps are keyed by the engine's own dimension labels (`governorDimensions()`). A
+ * dimension the caller declined reads `2n ** 64n - 2n` — metered, at a ceiling no
+ * execution can reach.
+ */
+export interface GovernorEvidence {
+  readonly isComplete: boolean;
+  readonly consumed: Readonly<Record<string, bigint>>;
+  readonly limits: Readonly<Record<string, bigint>>;
+}
+
+/**
+ * What a truncated execution's rows bound relative to the query's true answer: a
+ * certified lower bound (`"certain"`, safe to admit as answers), a certified upper bound
+ * (`"at-most"`, sound only for "definitely not an answer"), or neither (`"unknown"`, in
+ * which case NO row is handed over and `barrier` names the operator that withheld them).
+ */
+export type PartialCertainty = "certain" | "at-most" | "unknown";
+
+export interface PartialAnswers {
+  readonly certainty: PartialCertainty;
+  readonly isCertain: boolean;
+  /**
+   * Whether these rows are the true answer's FIRST rows, in order — the resumption
+   * property. Absent on `"unknown"`.
+   */
+  readonly isPositionalPrefix?: boolean;
+  /** The algebra operator that withheld the rows, on `"unknown"` only. */
+  readonly barrier?: string;
+  /** The rows in hand. Absent on `"unknown"`. */
+  readonly result?: QueryResult;
+}
+
+/**
+ * The outcome of one governed query: a complete answer, or an exhausted budget carrying
+ * the partial answers the execution actually reached.
+ *
+ * Exactly two shapes, and NEITHER is a thrown error. A governor trip is not a failure:
+ * throwing it would discard the rows the budget already paid for and tell the caller the
+ * engine misbehaved.
+ */
+export interface QueryOutcome {
+  readonly isComplete: boolean;
+  /** The COMPLETE result. Absent when a governor stopped the execution. */
+  readonly result?: QueryResult;
+  /** What the rows the execution reached bound. Absent when it completed. */
+  readonly partial?: PartialAnswers;
+  /** The governor that stopped the execution. Absent when it completed. */
+  readonly tripped?: TrippedGovernor;
+  /** This execution's consumption and ceilings, on both paths. */
+  readonly evidence: GovernorEvidence;
+}
+
+/**
+ * The outcome of one governed SPARQL UPDATE. Deliberately without a partial arm: a
+ * query's partial answer is a certifiable thing, a partial mutation is not.
+ * `isApplied === false` means NOTHING applied, never "not all of it applied".
+ */
+export interface UpdateOutcome {
+  readonly isApplied: boolean;
+  readonly tripped?: TrippedGovernor;
+  readonly evidence: GovernorEvidence;
 }
 
 /** Closed, versioned options document consumed by the shared Rust JSON-LD engine. */
@@ -566,6 +704,35 @@ export class QueryEngine {
   describe(dataset: Dataset, sparql: string, options?: QueryOptions | null): Dataset;
   update(dataset: Dataset, sparql: string, options?: QueryOptions | null): Dataset;
   queryRaw(dataset: Dataset, sparql: string, options?: QueryRawOptions | null): string;
+  /**
+   * Run a SPARQL query under caller-supplied execution governors.
+   *
+   * A tripped governor is an OUTCOME, not a throw: check `isComplete`, read `result`
+   * when it holds, and read `tripped` with `partial` when it does not. Only a parse
+   * error, an evaluation error, or a malformed ceiling throws.
+   */
+  queryGoverned(
+    dataset: Dataset,
+    sparql: string,
+    options?: QueryOptions | null,
+  ): QueryOutcome;
+  /**
+   * Apply a SPARQL UPDATE under caller-supplied execution governors. A tripped request
+   * applies NOTHING and leaves `dataset` exactly as it was found. `maxAnswers` is
+   * refused: an UPDATE has no answer sequence to bound.
+   */
+  updateGoverned(
+    dataset: Dataset,
+    sparql: string,
+    options?: QueryOptions | null,
+  ): UpdateOutcome;
+  /**
+   * The engine's charge ledger for a query, rendered as text: the join orders it chose,
+   * the plan estimates it surveyed, and what each algebra node actually cost. This is how
+   * a budget is sized before it is set — the query runs metered, not bounded, so the
+   * numbers are measurements rather than predictions.
+   */
+  explainQuery(dataset: Dataset, sparql: string, options?: QueryOptions | null): string;
   queryRawConfigured(
     dataset: Dataset,
     sparql: string,
@@ -584,12 +751,39 @@ export class QueryEngine {
   free(): void;
 }
 
+/**
+ * A cancellation bit the host can flip, shared with every governed call it is handed to.
+ *
+ * Latching by construction: the bit only ever moves from clear to set, and nothing clears
+ * it. Build a fresh token per query rather than reusing one.
+ *
+ * A JavaScript host is single-threaded and the wasm boundary is synchronous, so a token
+ * flipped on the same thread that is inside `queryGoverned` cannot be observed by it. The
+ * two shapes that do work are cancelling BEFORE a call and cancelling a worker's query
+ * from another thread that shares the token.
+ */
+export class CancellationToken {
+  constructor();
+  /** Cancel every governed call holding this token. Idempotent, never reversible. */
+  cancel(): void;
+  readonly isCancelled: boolean;
+  /** A second handle onto the SAME bit — not a copy of it. */
+  share(): CancellationToken;
+  free(): void;
+}
+
 export class Sink {
   constructor();
   push(quad: Quad): void;
   finish(): Dataset;
   free(): void;
 }
+
+/**
+ * The engine's governed resource dimensions, by their stable kebab-case labels, in the
+ * engine's own declaration order — the keys of every `GovernorEvidence` map.
+ */
+export function governorDimensions(): string[];
 
 export function ready(wasmBytesOrUrl?: BufferSource | URL | string): Promise<void>;
 export function datasetToStream(dataset: Dataset): AsyncIterableIterator<Quad>;

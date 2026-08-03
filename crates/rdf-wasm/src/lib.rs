@@ -61,7 +61,10 @@ use wasm_bindgen::prelude::*;
 //   * `entail`  — SPARQL entailment-regime materialization + the rule inventories
 //                 (`entailMaterialize`/`entailRules`/`entailImplementedRules`)
 //   * `query`   — the offline SPARQL surface (`Dataset.query`) over the native
-//                 evaluator
+//                 evaluator, plus the GOVERNED lane (`queryGoverned` /
+//                 `updateGoverned` / `explainQuery`) whose ceilings, wall
+//                 deadline and cancellation token return a typed outcome rather
+//                 than throwing when one of them trips
 //   * `shacl`   — SHACL validation to SARIF + SHACL-AF entailment
 //                 (`shaclValidateToSarif`/`shaclEntail`)
 //   * `stream`  — the RDF/JS Sink over the `purrdf-events` ingestion protocol
@@ -82,7 +85,10 @@ pub use entail::RegimeClosure;
 pub use factory::DataFactory;
 pub use jsonld::CompiledJsonLdContext;
 pub use projection::{ProjectionLift, ProjectionPackage, lift_projection};
-pub use query::{QueryEngine, QueryResult, SelectResult, SelectRow};
+pub use query::{
+    CancellationToken, GovernorEvidence, PartialAnswers, QueryEngine, QueryOutcome, QueryResult,
+    SelectResult, SelectRow, TrippedGovernor, UpdateOutcome, governor_dimensions,
+};
 pub use stream::Sink;
 pub use term::{Quad, Term};
 

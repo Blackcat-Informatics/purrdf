@@ -68,6 +68,14 @@ const reparsed = Dataset.parse(nq, "nquads");
   geometry, hashes, diagnostics, and element index; `visualSvg` returns a
   self-contained SVG paired with that complete export. All results are plain,
   structured-clone-safe objects.
+- **Governed evaluation** — `QueryEngine.queryGoverned` / `updateGoverned` run the same
+  evaluator under caller-supplied ceilings (`fuel`, `deadlineMs`, `maxAnswers`,
+  `maxIntermediateCells`, `maxScratchBytes`, `maxRemoteRequests`) plus a
+  `CancellationToken`. A tripped governor is an **outcome, not an exception**: the result
+  carries which governor stopped the run, the per-dimension evidence, and — on the query
+  path — the rows already reached together with a certificate saying whether they are a
+  lower bound, an upper bound, or neither. A tripped UPDATE applies nothing at all.
+  `explainQuery` renders the metered charge ledger those budgets are sized from.
 - **SHACL** — `shaclValidateToSarif(shapesTtl, dataNt)` validates an N-Triples data
   graph against a Turtle shapes graph and returns a SARIF 2.1.0 report;
   `shaclEntail(shapesTtl, dataNt)` materializes the SHACL-AF `sh:rule` inferences as

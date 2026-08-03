@@ -3,6 +3,7 @@
 
 import {
   ready,
+  CancellationToken,
   CompiledJsonLdContext,
   DataFactory,
   Dataset,
@@ -13,7 +14,13 @@ import {
   type ProjectionLossLedger,
   type ProjectionPackage,
   QueryEngine,
+  governorDimensions,
   type DirectionalLanguage,
+  type GovernorEvidence,
+  type PartialAnswers,
+  type QueryOutcome,
+  type TrippedGovernor,
+  type UpdateOutcome,
   type Literal,
   type NamedNode,
   type Quad,
@@ -162,6 +169,30 @@ const updated: Dataset = engine.update(
   new Dataset(),
   "INSERT DATA { <https://example.org/u> <https://example.org/p> <https://example.org/o> }",
 );
+const dimensions: string[] = governorDimensions();
+const cancel = new CancellationToken();
+const outcome: QueryOutcome = engine.queryGoverned(
+  matched,
+  "SELECT ?s WHERE { ?s ?p ?o }",
+  { fuel: 100_000, deadlineMs: 250, maxAnswers: 10n, cancel },
+);
+const receipt: GovernorEvidence = outcome.evidence;
+const spentFuel: bigint = receipt.consumed.fuel;
+if (!outcome.isComplete) {
+  const tripped: TrippedGovernor = outcome.tripped!;
+  const label: string = tripped.label;
+  const partial: PartialAnswers = outcome.partial!;
+  const certainty: string = partial.certainty;
+  void label;
+  void certainty;
+}
+const applied: UpdateOutcome = engine.updateGoverned(
+  new Dataset(),
+  "INSERT DATA { <https://example.org/u> <https://example.org/p> <https://example.org/o> }",
+  { fuel: 100_000 },
+);
+const ledger: string = engine.explainQuery(matched, "SELECT ?s WHERE { ?s ?p ?o }");
+
 const result: QueryResult = engine.query(matched, "ASK { ?s ?p ?o }");
 if (result.kind === "ask") {
   const narrowed: boolean = result.boolean;
@@ -193,5 +224,9 @@ void graph;
 void rawResults;
 void rawGraph;
 void updated;
+void dimensions;
+void spentFuel;
+void applied;
+void ledger;
 void rebuiltFromNull;
 void fromFactoryNull;

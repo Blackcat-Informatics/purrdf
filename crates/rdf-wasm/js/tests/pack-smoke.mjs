@@ -33,7 +33,11 @@ const PACKAGE_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 // recent is the CONCLUSION-DIRECTED entailment service: `entailCertainAnswers`,
 // `entailGraphEntails` and `entailVerifyEntailment` reach `purrdf_entail::entails` and
 // its six mechanisms, which the linker had dead-code-eliminated entirely while no
-// exported symbol reached them. Both ceilings hold; only the measured figures move.
+// exported symbol reached them. The most recent is the GOVERNED evaluation lane:
+// `queryGoverned`, `updateGoverned` and `explainQuery` reach the charge ledger, the
+// predictive admission check, the partial-lift certificate and the wall deadline, none of
+// which any exported symbol had reached before. Both ceilings hold; only the measured
+// figures move.
 //
 // The MEASURED figures below are REPORTED, not enforced. They were equality-gated,
 // but a packaged byte count is not a property of the source: it moves with the
@@ -44,8 +48,8 @@ const PACKAGE_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 // and CI. Equality could not hold in both places at once, and it blocked merges and
 // a release while the package sat well inside its ceiling. Update these when you
 // want the printed note to track the build.
-const MEASURED_TARBALL_BYTES = 3_323_157;
-const MEASURED_UNPACKED_BYTES = 9_948_156;
+const MEASURED_TARBALL_BYTES = 3_439_441;
+const MEASURED_UNPACKED_BYTES = 10_295_192;
 const MAX_TARBALL_BYTES = 4_137_500;
 const MAX_UNPACKED_BYTES = 12_400_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;

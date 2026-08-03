@@ -24,8 +24,21 @@
 //   * `Dataset.from`, `Dataset#toStream`, and `DataFactory#dataset`.
 //   * `datasetToStream` / `streamToDataset` — the async RDF/JS Stream/Sink primitives
 //     over the synchronous `Dataset.quads()` / `Sink` engine surface.
+//   * the governed-outcome shape normalizers — `queryGoverned`/`updateGoverned` return
+//     wasm-owned objects whose fields have to be MOVED out one at a time; the wrappers
+//     below drain them into ordinary JS objects and free the handles, exactly as
+//     `queryResultToObject` already does for an ungoverned result.
+//
+// What this module deliberately does NOT do is decide anything about governors. It sets
+// no default ceiling, applies no fallback, and never converts a trip into a throw: the
+// ceilings it reads off an options object go straight to Rust, which validates them and
+// owns every policy (the metering base, the inclusive boundary, the precedence between
+// two governors that fire at once). The only transformation applied on the way in is a
+// `BigInt` coercion, because the boundary type is a 64-bit integer and JavaScript spells
+// those `bigint` — a shape change, not a decision.
 
 import init, {
+  CancellationToken,
   CompiledJsonLdContext,
   DataFactory,
   Dataset,
@@ -47,6 +60,7 @@ import init, {
   entailRealize,
   entailRules,
   entailVerifyEntailment,
+  governorDimensions,
   liftProjection,
   ProjectionLift,
   ProjectionPackage,
@@ -80,14 +94,75 @@ function isDirectionalLanguage(value) {
   );
 }
 
+// A governor ceiling as the wasm boundary spells it: a 64-bit integer, i.e. a JS bigint.
+// `undefined` means the caller declined the dimension and is passed through as such —
+// this function invents no ceiling of its own. A negative value is NOT rejected here:
+// Rust refuses it, so the one refusal message lives with the one owner of the rule.
+function governorCeiling(value, name) {
+  if (value === undefined || value === null) return undefined;
+  try {
+    return BigInt(value);
+  } catch {
+    throw new TypeError(
+      `query option ${name} must be an integer (number, bigint, or integral string)`,
+    );
+  }
+}
+
+// The option keys that only the GOVERNED entry points enforce. Rust never sees a JS
+// options object — it receives positional arguments — so an ungoverned call cannot
+// possibly notice one of these and would silently run with no ceiling at all. That is the
+// exact failure a governor must not have, and this is the only layer that can see the key,
+// so the ungoverned normalizer refuses them by name instead of dropping them.
+const GOVERNOR_OPTION_KEYS = [
+  "fuel",
+  "deadlineMs",
+  "maxAnswers",
+  "maxIntermediateCells",
+  "maxScratchBytes",
+  "maxRemoteRequests",
+  "cancel",
+];
+
 function normalizeQueryOptions(options) {
   if (options == null) return { base: undefined, format: undefined };
   if (typeof options !== "object") {
     throw new TypeError("query options must be an object when supplied");
   }
+  for (const key of GOVERNOR_OPTION_KEYS) {
+    if (options[key] != null) {
+      throw new TypeError(
+        `query option ${key} is an execution governor and is enforced only by ` +
+          `queryGoverned/updateGoverned; this call would ignore it entirely`,
+      );
+    }
+  }
   return {
     base: options.base ?? undefined,
     format: options.format ?? undefined,
+  };
+}
+
+function normalizeGovernedOptions(options) {
+  if (options == null) return { base: undefined };
+  if (typeof options !== "object") {
+    throw new TypeError("query options must be an object when supplied");
+  }
+  return {
+    base: options.base ?? undefined,
+    fuel: governorCeiling(options.fuel, "fuel"),
+    deadlineMs: governorCeiling(options.deadlineMs, "deadlineMs"),
+    maxAnswers: governorCeiling(options.maxAnswers, "maxAnswers"),
+    maxIntermediateCells: governorCeiling(
+      options.maxIntermediateCells,
+      "maxIntermediateCells",
+    ),
+    maxScratchBytes: governorCeiling(options.maxScratchBytes, "maxScratchBytes"),
+    maxRemoteRequests: governorCeiling(options.maxRemoteRequests, "maxRemoteRequests"),
+    // A governed call CONSUMES the token handle it is given (wasm-bindgen moves an owned
+    // exported value), so the engine gets a share and the caller keeps their own token
+    // usable across the whole sequence of calls it governs.
+    cancel: options.cancel == null ? undefined : options.cancel.share(),
   };
 }
 
@@ -178,6 +253,106 @@ function queryResultToObject(raw) {
       default:
         throw new Error(`unknown SPARQL result kind ${raw.kind}`);
     }
+  } finally {
+    raw.free?.();
+  }
+}
+
+// The kernel's dimension vocabulary, read from the engine once and cached. It is NOT
+// restated here: `governorDimensions()` is the engine's own declaration order, and it is
+// the index order of the evidence vectors below, so a dimension the kernel adds shows up
+// in every caller's evidence map without this file being touched.
+let _governorDimensions;
+
+function governorDimensionLabels() {
+  _governorDimensions ??= governorDimensions();
+  return _governorDimensions;
+}
+
+function governorEvidenceToObject(raw) {
+  try {
+    const labels = governorDimensionLabels();
+    const consumed = raw.consumed;
+    const limits = raw.limits;
+    const consumedBy = Object.create(null);
+    const limitsBy = Object.create(null);
+    for (let index = 0; index < labels.length; index += 1) {
+      consumedBy[labels[index]] = consumed[index];
+      limitsBy[labels[index]] = limits[index];
+    }
+    return { isComplete: raw.isComplete, consumed: consumedBy, limits: limitsBy };
+  } finally {
+    raw.free?.();
+  }
+}
+
+function trippedGovernorToObject(raw) {
+  try {
+    return {
+      kind: raw.kind,
+      label: raw.label,
+      dimension: raw.dimension,
+      limit: raw.limit,
+      consumed: raw.consumed,
+      estimate: raw.estimate,
+      cause: raw.cause,
+      message: raw.message,
+    };
+  } finally {
+    raw.free?.();
+  }
+}
+
+function partialAnswersToObject(raw) {
+  try {
+    const certainty = raw.certainty;
+    const isCertain = raw.isCertain;
+    const isPositionalPrefix = raw.isPositionalPrefix;
+    const barrier = raw.barrier;
+    const result = raw.takeResult();
+    return {
+      certainty,
+      isCertain,
+      isPositionalPrefix,
+      barrier,
+      result: result === undefined ? undefined : queryResultToObject(result),
+    };
+  } finally {
+    raw.free?.();
+  }
+}
+
+function queryOutcomeToObject(raw) {
+  try {
+    // `isComplete` is read before anything is moved out: the discriminator has to survive
+    // the drain, and a trip is an OUTCOME here — nothing on this path throws.
+    const isComplete = raw.isComplete;
+    const result = raw.takeResult();
+    const partial = raw.takePartial();
+    const tripped = raw.takeTripped();
+    const evidence = raw.takeEvidence();
+    return {
+      isComplete,
+      result: result === undefined ? undefined : queryResultToObject(result),
+      partial: partial === undefined ? undefined : partialAnswersToObject(partial),
+      tripped: tripped === undefined ? undefined : trippedGovernorToObject(tripped),
+      evidence: evidence === undefined ? undefined : governorEvidenceToObject(evidence),
+    };
+  } finally {
+    raw.free?.();
+  }
+}
+
+function updateOutcomeToObject(raw) {
+  try {
+    const isApplied = raw.isApplied;
+    const tripped = raw.takeTripped();
+    const evidence = raw.takeEvidence();
+    return {
+      isApplied,
+      tripped: tripped === undefined ? undefined : trippedGovernorToObject(tripped),
+      evidence: evidence === undefined ? undefined : governorEvidenceToObject(evidence),
+    };
   } finally {
     raw.free?.();
   }
@@ -301,6 +476,9 @@ export async function ready(wasmBytesOrUrl) {
     const wasmDescribe = QueryEngine.prototype.describe;
     const wasmUpdate = QueryEngine.prototype.update;
     const wasmQueryRaw = QueryEngine.prototype.queryRaw;
+    const wasmQueryGoverned = QueryEngine.prototype.queryGoverned;
+    const wasmUpdateGoverned = QueryEngine.prototype.updateGoverned;
+    const wasmExplainQuery = QueryEngine.prototype.explainQuery;
 
     QueryEngine.prototype.query = function (dataset, sparql, options) {
       const { base } = normalizeQueryOptions(options);
@@ -331,6 +509,49 @@ export async function ready(wasmBytesOrUrl) {
       const { base, format } = normalizeQueryOptions(options);
       return wasmQueryRaw.call(this, dataset, sparql, base, format);
     };
+    QueryEngine.prototype.queryGoverned = function (dataset, sparql, options) {
+      const o = normalizeGovernedOptions(options);
+      return queryOutcomeToObject(
+        wasmQueryGoverned.call(
+          this,
+          dataset,
+          sparql,
+          o.base,
+          o.fuel,
+          o.deadlineMs,
+          o.maxAnswers,
+          o.maxIntermediateCells,
+          o.maxScratchBytes,
+          o.maxRemoteRequests,
+          o.cancel,
+        ),
+      );
+    };
+    QueryEngine.prototype.updateGoverned = function (dataset, sparql, options) {
+      // `maxAnswers` is forwarded rather than dropped: an UPDATE has no answer sequence to
+      // bound, and Rust refuses it by name. Silently ignoring it here would be a ceiling
+      // the caller believes they set.
+      const o = normalizeGovernedOptions(options);
+      return updateOutcomeToObject(
+        wasmUpdateGoverned.call(
+          this,
+          dataset,
+          sparql,
+          o.base,
+          o.fuel,
+          o.deadlineMs,
+          o.maxAnswers,
+          o.maxIntermediateCells,
+          o.maxScratchBytes,
+          o.maxRemoteRequests,
+          o.cancel,
+        ),
+      );
+    };
+    QueryEngine.prototype.explainQuery = function (dataset, sparql, options) {
+      const { base } = normalizeQueryOptions(options);
+      return wasmExplainQuery.call(this, dataset, sparql, base);
+    };
     QueryEngine.prototype.__purrdfPackageRootApi = true;
   }
 
@@ -359,6 +580,7 @@ export async function streamToDataset(quadStream) {
 }
 
 export {
+  CancellationToken,
   CompiledJsonLdContext,
   DataFactory,
   Dataset,
@@ -380,6 +602,7 @@ export {
   entailRealize,
   entailRules,
   entailVerifyEntailment,
+  governorDimensions,
   liftProjection,
   ProjectionLift,
   ProjectionPackage,
