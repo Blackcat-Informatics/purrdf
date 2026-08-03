@@ -69,8 +69,16 @@ impl std::fmt::Display for StopCause {
 pub enum ResourceDimension {
     /// Abstract execution steps charged at the evaluator's counting points.
     Fuel,
-    /// Rows committed to the final answer sequence, after every modifier. This is an
+    /// Units committed to the final **answer sequence**, after every modifier. This is an
     /// operational ceiling, never `LIMIT`: `LIMIT` is query semantics.
+    ///
+    /// What a unit is follows the query form's answer sequence, because that is what the
+    /// caller receives: solution **rows** for `SELECT`, and output **statements** —
+    /// ordinary triples plus RDF 1.2 reifier bindings and annotations — for the
+    /// graph-producing forms, whose answer *is* a graph. Denominating a graph form in
+    /// solution rows instead would bound the wrong quantity outright, since a single row
+    /// can instantiate a whole `CONSTRUCT` template or pull in an entire concise bounded
+    /// description.
     AnswerRows,
     /// Intermediate solution cells (`rows * columns`), which is what actually bounds
     /// allocation: a two-column and a forty-column bag of the same row count are a
@@ -262,6 +270,27 @@ pub enum TrippedGovernor {
         /// Which stop signal fired.
         cause: StopCause,
     },
+    /// A ceiling was refused at **admission**, before the operation was evaluated at all,
+    /// because the planner's estimate for it already exceeded the ceiling.
+    ///
+    /// The distinct variant is the point. [`Self::Budget`] reports consumption that was
+    /// actually charged; this one reports a number nothing consumed, because nothing ran.
+    /// Folding the two together would put an estimate in the `consumed` slot of an
+    /// evidence vector that every other dimension fills with measurements — a receipt
+    /// that says a query spent what it was merely predicted to spend.
+    ///
+    /// A refusal never claims completeness: it is reported exactly as an exhausted budget
+    /// is, carrying whatever the operation reached (which, having not started, is
+    /// nothing). An over-estimate therefore costs a caller an answer they could have had;
+    /// it can never cost them a wrong one.
+    Refused {
+        /// The dimension whose ceiling the estimate exceeded.
+        dimension: ResourceDimension,
+        /// The inclusive ceiling in force.
+        limit: u64,
+        /// The planner's estimate that exceeded it. **Not** a measurement.
+        estimate: u64,
+    },
 }
 
 impl TrippedGovernor {
@@ -291,6 +320,16 @@ impl TrippedGovernor {
                 StopCause::Cancelled => "cancelled",
                 StopCause::Deadline => "deadline-exceeded",
             },
+            Self::Refused { dimension, .. } => match dimension {
+                ResourceDimension::Fuel => "fuel-admission-refused",
+                ResourceDimension::AnswerRows => "answer-cap-admission-refused",
+                ResourceDimension::IntermediateCells => "cardinality-admission-refused",
+                ResourceDimension::ScratchBytes => "scratch-admission-refused",
+                ResourceDimension::RemoteRequests => "remote-admission-refused",
+                ResourceDimension::UdfDepth => "udf-depth-admission-refused",
+                ResourceDimension::Pages => "page-admission-refused",
+                ResourceDimension::Bytes => "byte-admission-refused",
+            },
         }
     }
 
@@ -302,15 +341,22 @@ impl TrippedGovernor {
     ///
     /// 1. The stop signal, [`StopCause::Cancelled`] ahead of [`StopCause::Deadline`]. An
     ///    explicit cancellation is a decision; a deadline is an elapsed measurement.
-    /// 2. [`ResourceDimension::IntermediateCells`] — the ceiling that defends against
+    /// 2. Every [`Self::Refused`], in the dimension order below. An admission refusal is
+    ///    decided **before** the first charge, so it is the earliest verdict any governor
+    ///    can reach and it is the one that explains why nothing ran; only a stop signal
+    ///    that was already firing outranks it, for exactly the reason it outranks a
+    ///    ceiling. It cannot in practice be simultaneous with a [`Self::Budget`] trip,
+    ///    since a refused operation charges nothing — the ranks are distinct so that the
+    ///    order stays total whether or not that stays true.
+    /// 3. [`ResourceDimension::IntermediateCells`] — the ceiling that defends against
     ///    unrecoverable allocation failure, reported ahead of ceilings whose breach is
     ///    merely expensive.
-    /// 3. [`ResourceDimension::Fuel`].
-    /// 4. [`ResourceDimension::AnswerRows`].
-    /// 5. [`ResourceDimension::ScratchBytes`].
-    /// 6. [`ResourceDimension::RemoteRequests`].
-    /// 7. [`ResourceDimension::UdfDepth`].
-    /// 8. The demand-paging tier's [`ResourceDimension::Pages`] and
+    /// 4. [`ResourceDimension::Fuel`].
+    /// 5. [`ResourceDimension::AnswerRows`].
+    /// 6. [`ResourceDimension::ScratchBytes`].
+    /// 7. [`ResourceDimension::RemoteRequests`].
+    /// 8. [`ResourceDimension::UdfDepth`].
+    /// 9. The demand-paging tier's [`ResourceDimension::Pages`] and
     ///    [`ResourceDimension::Bytes`], which in practice surface as that tier's own typed
     ///    error before a compute-tier governor ever sees them, and are ranked here only so
     ///    the order is total.
@@ -332,16 +378,28 @@ impl TrippedGovernor {
                 StopCause::Cancelled => 0,
                 StopCause::Deadline => 1,
             },
-            Self::Budget { dimension, .. } => match dimension {
-                ResourceDimension::IntermediateCells => 2,
-                ResourceDimension::Fuel => 3,
-                ResourceDimension::AnswerRows => 4,
-                ResourceDimension::ScratchBytes => 5,
-                ResourceDimension::RemoteRequests => 6,
-                ResourceDimension::UdfDepth => 7,
-                ResourceDimension::Pages => 8,
-                ResourceDimension::Bytes => 9,
-            },
+            Self::Refused { dimension, .. } => 2 + Self::dimension_rank(dimension),
+            Self::Budget { dimension, .. } => {
+                2 + ResourceDimension::COUNT as u8 + Self::dimension_rank(dimension)
+            }
+        }
+    }
+
+    /// The offset of `dimension` within one governor kind's rank block.
+    ///
+    /// Written once and shared by [`Self::Refused`] and [`Self::Budget`] so the two blocks
+    /// cannot drift into disagreeing about which ceiling matters most. Wildcard-free for
+    /// the reason stated at [`Self::precedence_rank`].
+    const fn dimension_rank(dimension: ResourceDimension) -> u8 {
+        match dimension {
+            ResourceDimension::IntermediateCells => 0,
+            ResourceDimension::Fuel => 1,
+            ResourceDimension::AnswerRows => 2,
+            ResourceDimension::ScratchBytes => 3,
+            ResourceDimension::RemoteRequests => 4,
+            ResourceDimension::UdfDepth => 5,
+            ResourceDimension::Pages => 6,
+            ResourceDimension::Bytes => 7,
         }
     }
 }
@@ -359,6 +417,15 @@ impl std::fmt::Display for TrippedGovernor {
                 dimension.label()
             ),
             Self::Stopped { cause } => f.write_str(cause.label()),
+            Self::Refused {
+                dimension,
+                limit,
+                estimate,
+            } => write!(
+                f,
+                "{} admission refused: estimated {estimate}, limit {limit}",
+                dimension.label()
+            ),
         }
     }
 }
@@ -551,6 +618,22 @@ mod tests {
         }
         assert_eq!(labels[ResourceDimension::COUNT], "cancelled");
         assert_eq!(labels[ResourceDimension::COUNT + 1], "deadline-exceeded");
+        for &dimension in &ResourceDimension::ALL {
+            labels.push(
+                TrippedGovernor::Refused {
+                    dimension,
+                    limit: 0,
+                    estimate: 1,
+                }
+                .label(),
+            );
+        }
+        assert_eq!(
+            labels[ResourceDimension::COUNT + 2 + 2],
+            "cardinality-admission-refused",
+            "the refusal label must name the dimension, and must be distinguishable from \
+             the same dimension's exhausted-budget label"
+        );
 
         let mut sorted = labels.clone();
         sorted.sort_unstable();
@@ -573,6 +656,16 @@ mod tests {
             .to_string(),
             "deadline exceeded"
         );
+        assert_eq!(
+            TrippedGovernor::Refused {
+                dimension: ResourceDimension::IntermediateCells,
+                limit: 100,
+                estimate: 4_096,
+            }
+            .to_string(),
+            "intermediate-cells admission refused: estimated 4096, limit 100",
+            "the prose must say ESTIMATED, never consumed: nothing ran"
+        );
     }
 
     #[test]
@@ -581,6 +674,11 @@ mod tests {
             dimension,
             limit: 0,
             consumed: 1,
+        };
+        let refused = |dimension| TrippedGovernor::Refused {
+            dimension,
+            limit: 0,
+            estimate: 1,
         };
 
         // The documented order, highest priority first. Ranks are positional, so this
@@ -593,6 +691,14 @@ mod tests {
             TrippedGovernor::Stopped {
                 cause: StopCause::Deadline,
             },
+            refused(ResourceDimension::IntermediateCells),
+            refused(ResourceDimension::Fuel),
+            refused(ResourceDimension::AnswerRows),
+            refused(ResourceDimension::ScratchBytes),
+            refused(ResourceDimension::RemoteRequests),
+            refused(ResourceDimension::UdfDepth),
+            refused(ResourceDimension::Pages),
+            refused(ResourceDimension::Bytes),
             budget(ResourceDimension::IntermediateCells),
             budget(ResourceDimension::Fuel),
             budget(ResourceDimension::AnswerRows),
@@ -616,7 +722,12 @@ mod tests {
         // of by contract.
         let mut ranks: Vec<u8> = ResourceDimension::ALL
             .iter()
-            .map(|&dimension| budget(dimension).precedence_rank())
+            .flat_map(|&dimension| {
+                [
+                    budget(dimension).precedence_rank(),
+                    refused(dimension).precedence_rank(),
+                ]
+            })
             .collect();
         for cause in ALL_STOP_CAUSES {
             ranks.push(TrippedGovernor::Stopped { cause }.precedence_rank());
@@ -630,7 +741,9 @@ mod tests {
         ranks.dedup();
         assert_eq!(ranks.len(), documented.len(), "ranks must be distinct");
 
-        // Both stop causes outrank every budget, on every dimension.
+        // Both stop causes outrank every budget and every refusal, on every dimension;
+        // and a refusal — decided before the first charge — outranks the ceiling it was
+        // decided against.
         for dimension in ResourceDimension::ALL {
             for cause in ALL_STOP_CAUSES {
                 assert!(
@@ -640,7 +753,20 @@ mod tests {
                     cause.label(),
                     dimension.label()
                 );
+                assert!(
+                    TrippedGovernor::Stopped { cause }.precedence_rank()
+                        < refused(dimension).precedence_rank(),
+                    "{} must outrank the {} admission refusal",
+                    cause.label(),
+                    dimension.label()
+                );
             }
+            assert!(
+                refused(dimension).precedence_rank() < budget(dimension).precedence_rank(),
+                "the {} admission refusal explains why nothing ran, so it outranks the \
+                 same dimension's exhausted budget",
+                dimension.label()
+            );
         }
     }
 

@@ -95,6 +95,11 @@ struct PathCtx<'a, D: DatasetView + Sync> {
     /// spent its own copy of the budget would let a query with `N` property paths spend
     /// `N` budgets.
     governors: Option<Arc<crate::governor::GovernorState>>,
+    /// The per-node charge ledger and the ordinal of the path node being evaluated, when
+    /// one is installed. A traversal's fuel is spent well below the operator boundary, so
+    /// without this the single most graph-dependent cost in the evaluator would be the one
+    /// cost an EXPLAIN could not attribute.
+    ledger: Option<(Arc<crate::governor::ledger::ChargeLedger>, usize)>,
 }
 
 impl<D: DatasetView + Sync> PathCtx<'_, D> {
@@ -112,9 +117,12 @@ impl<D: DatasetView + Sync> PathCtx<'_, D> {
         let Some(state) = self.governors.as_ref() else {
             return true;
         };
-        state
-            .charge_point_if_engaged(crate::governor::ChargePoint::PathFrontierExpansion)
-            .is_ok()
+        let point = crate::governor::ChargePoint::PathFrontierExpansion;
+        let charged = state.charge_point_if_engaged(point).is_ok();
+        if charged && let Some((ledger, node)) = self.ledger.as_ref() {
+            ledger.record_fuel(*node, point, point.cost());
+        }
+        charged
     }
 
     /// Whether a governor has already stopped this execution, so that anything computed
@@ -227,6 +235,9 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
         cache: build_negated_cache(path, dataset),
         reach_cache: RefCell::new(DetHashMap::default()),
         governors: ctx.governor_state().map(Arc::clone),
+        ledger: ctx
+            .charge_ledger()
+            .map(|ledger| (Arc::clone(ledger), ctx.ledger_node)),
     };
 
     // SPARQL 1.1 §18.3: a path with NO repetition operator (`*`/`+`/`?`/`{n,m}`)
@@ -250,6 +261,13 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
                 .collect()
         }
     };
+
+    // The answer-cap / `LIMIT` pushdown's verdict for this path node: the number of output
+    // rows past which nothing it produces can reach the query's answer. A path's emission
+    // order is the traversal order below, and the loops that can be stopped are stopped at
+    // the top of an iteration — so what is skipped is whole `node_reach` traversals, which
+    // is where a path's cost lives, not merely the row that would have been pushed.
+    let ceiling = ctx.row_ceiling().unwrap_or(usize::MAX);
 
     let mut rows: Vec<Solution<D::Id>> = Vec::new();
     let push_pair = |rows: &mut Vec<Solution<D::Id>>,
@@ -291,6 +309,9 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
         // Subject ground, object variable: walk forward from the subject.
         (Endpoint::Bound(sid), Endpoint::Free { .. }) => {
             for y in node_reach(sid, true) {
+                if rows.len() >= ceiling {
+                    break;
+                }
                 push_pair(
                     &mut rows,
                     Some(SolutionTerm::Existing(sid)),
@@ -309,6 +330,9 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
         // Object ground, subject variable: walk backward from the object.
         (Endpoint::Free { .. }, Endpoint::Bound(oid)) => {
             for x in node_reach(oid, false) {
+                if rows.len() >= ceiling {
+                    break;
+                }
                 push_pair(
                     &mut rows,
                     Some(SolutionTerm::Existing(x)),
@@ -339,6 +363,9 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
                 // itself — and for a bag path, count EACH derivation as its own row.
                 let reflexive = path_is_reflexive(path);
                 for x in node_universe(&pctx) {
+                    if rows.len() >= ceiling {
+                        break;
+                    }
                     if reflexive {
                         push_pair(
                             &mut rows,
@@ -360,7 +387,13 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
                 // PINNED: spec-mandated distinct-var enumeration — enumerate every node
                 // in the universe and materialise all forward reachability. DO NOT alter.
                 for x in node_universe(&pctx) {
+                    if rows.len() >= ceiling {
+                        break;
+                    }
                     for y in node_reach(x, true) {
+                        if rows.len() >= ceiling {
+                            break;
+                        }
                         push_pair(
                             &mut rows,
                             Some(SolutionTerm::Existing(x)),
@@ -1150,6 +1183,7 @@ mod tests {
             cache: build_negated_cache(path, ds),
             reach_cache: RefCell::new(DetHashMap::default()),
             governors: None,
+            ledger: None,
         };
         let mut v: Vec<String> = reach_cached(path, sid, forward, &pctx)
             .iter()

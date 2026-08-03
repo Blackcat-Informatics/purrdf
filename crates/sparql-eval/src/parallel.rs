@@ -455,6 +455,99 @@ where
     out
 }
 
+/// The output accumulator an operator's row loop pushes into, carrying the row ceiling the
+/// answer-cap pushdown put on this node.
+///
+/// # Why an accumulator type rather than a `Vec` and a length check
+///
+/// The pushdown has to stop a scan **inside** one input item, not merely between items:
+/// the plan that motivates it is `SELECT * WHERE { ?s ?p ?o } LIMIT 10`, whose row loop has
+/// exactly **one** input item — the all-unbound seed row — and whose entire cost is the
+/// index scan that item performs. A driver that could only stop between items would save
+/// nothing at all on precisely the query the cap exists to protect.
+///
+/// So the ceiling travels with the accumulator and the operator asks it, and the two
+/// drivers below differ only in whether the ceiling is finite. The unbounded sink compiles
+/// to the `Vec` push it replaces plus one `usize` compare against `usize::MAX`.
+#[derive(Debug)]
+pub(crate) struct RowSink<'a, R> {
+    /// The rows accumulated for the current chunk.
+    out: &'a mut Vec<R>,
+    /// The total this sink will accept. `usize::MAX` is "no ceiling".
+    ceiling: usize,
+}
+
+impl<'a, R> RowSink<'a, R> {
+    /// A sink that accepts every row.
+    fn unbounded(out: &'a mut Vec<R>) -> Self {
+        Self {
+            out,
+            ceiling: usize::MAX,
+        }
+    }
+
+    /// A sink that accepts rows until `out` holds `ceiling` of them.
+    fn bounded(out: &'a mut Vec<R>, ceiling: usize) -> Self {
+        Self { out, ceiling }
+    }
+
+    /// Accept `row`, unless this sink is already full.
+    ///
+    /// Silently dropping the row past the ceiling rather than returning a refusal is the
+    /// right shape here: a caller that ignores [`Self::is_full`] then produces exactly the
+    /// ceiling's worth of rows, which is a prefix of what it would have produced — never a
+    /// different bag.
+    #[inline]
+    pub(crate) fn push(&mut self, row: R) {
+        if self.out.len() < self.ceiling {
+            self.out.push(row);
+        }
+    }
+
+    /// Whether this sink has reached its ceiling, so the loop feeding it may stop.
+    #[inline]
+    pub(crate) fn is_full(&self) -> bool {
+        self.out.len() >= self.ceiling
+    }
+}
+
+/// The **bounded, sequential** sibling of [`par_chunk_map_metered`]: fold `items` in source
+/// order into at most `ceiling` output rows, stopping the moment the ceiling is reached.
+///
+/// Sequential on purpose. Parallel chunks would each have to be given the whole ceiling —
+/// no worker can know how many rows the chunks before it produced — so the ceiling would
+/// stop nothing until the chunks were concatenated, which is the materialisation it exists
+/// to prevent. The bounded path is entered only when the plan proved a ceiling applies, so
+/// the work it forgoes parallelising is bounded by that ceiling.
+///
+/// The returned ledger covers exactly the items that were folded, so the caller's
+/// [`crate::governor::GovernorState::commit_ordered_items`] charges for the work that was
+/// actually done and no more.
+pub(crate) fn bounded_chunk_map_metered<T, R>(
+    items: &[T],
+    metered: bool,
+    ceiling: usize,
+    push: impl Fn(&mut RowSink<'_, R>, &mut u64, &T),
+) -> (Vec<R>, Vec<ItemCharge>) {
+    let mut out = Vec::new();
+    let mut ledger = Vec::with_capacity(if metered { items.len() } else { 0 });
+    for item in items {
+        if out.len() >= ceiling {
+            break;
+        }
+        let before = out.len();
+        let mut fuel = 0_u64;
+        push(&mut RowSink::bounded(&mut out, ceiling), &mut fuel, item);
+        if metered {
+            ledger.push(ItemCharge {
+                fuel,
+                committed: (out.len() - before) as u64,
+            });
+        }
+    }
+    (out, ledger)
+}
+
 /// [`par_chunk_map`] with a **deterministic charge meter**: alongside its output rows,
 /// each chunk worker records what every input item spent, so a governed caller can find
 /// the exact item at which a ceiling is crossed.
@@ -481,7 +574,7 @@ where
 pub(crate) fn par_chunk_map_metered<T, R>(
     items: &[T],
     metered: bool,
-    push: impl Fn(&mut Vec<R>, &mut u64, &T) + Sync,
+    push: impl Fn(&mut RowSink<'_, R>, &mut u64, &T) + Sync,
 ) -> (Vec<R>, Vec<ItemCharge>)
 where
     T: Sync,
@@ -491,14 +584,14 @@ where
     fn run_chunk<T, R>(
         chunk: &[T],
         metered: bool,
-        push: &(impl Fn(&mut Vec<R>, &mut u64, &T) + Sync),
+        push: &(impl Fn(&mut RowSink<'_, R>, &mut u64, &T) + Sync),
     ) -> (Vec<R>, Vec<ItemCharge>) {
         let mut out = Vec::new();
         let mut ledger = Vec::with_capacity(if metered { chunk.len() } else { 0 });
         for item in chunk {
             let before = out.len();
             let mut fuel = 0_u64;
-            push(&mut out, &mut fuel, item);
+            push(&mut RowSink::unbounded(&mut out), &mut fuel, item);
             if metered {
                 ledger.push(ItemCharge {
                     fuel,

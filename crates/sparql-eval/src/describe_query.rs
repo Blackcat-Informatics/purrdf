@@ -23,10 +23,13 @@ use purrdf_core::describe::Describer;
 use purrdf_core::{DatasetView, TermValue};
 use purrdf_sparql_algebra::{GraphPattern, NamedNodePattern};
 
+use std::sync::Arc;
+
 use crate::construct::ConstructedGraph;
 use crate::error::EvalError;
 use crate::eval::{EvalCtx, eval_evaluated, materialize_solutions};
 use crate::governor::lift::Evaluated;
+use crate::solution::{SolutionSeq, VarSchema};
 
 /// Evaluate a `DESCRIBE` query to a frozen IR dataset: the union Symmetric CBD of its
 /// resolved subject IRIs.
@@ -56,14 +59,14 @@ pub(crate) fn eval_describe<D: DatasetView + Sync>(
     // projects; an explicit variable describes just that one. Either way we need the
     // solutions. Concrete `DESCRIBE <iri>` targets skip evaluation entirely.
     let describe_all = targets.is_empty();
-    let mut certificate = None;
-    if describe_all || !var_targets.is_empty() {
-        let seq = match eval_evaluated(pattern, ctx)? {
-            Evaluated::Complete(seq) => seq,
+    // The `WHERE`'s certificate, and its rows kept past the subject scan so the answer cap
+    // can certify a graph-level trip against what the pattern actually bound.
+    let (certificate, where_rows) = if describe_all || !var_targets.is_empty() {
+        let (seq, certificate) = match eval_evaluated(pattern, ctx)? {
+            Evaluated::Complete(seq) => (seq, None),
             Evaluated::Truncated(truncation) => {
                 let rows = truncation.rows().clone();
-                certificate = Some(truncation);
-                rows
+                (rows, Some(truncation))
             }
         };
         let (vars, rows) = materialize_solutions(&seq, ctx);
@@ -79,12 +82,25 @@ pub(crate) fn eval_describe<D: DatasetView + Sync>(
                 }
             }
         }
-    }
+        (certificate, seq)
+    } else {
+        // A `DESCRIBE <iri>` with no variable target evaluates no pattern at all, and the
+        // empty sequence is the honest statement of that.
+        (None, SolutionSeq::empty(Arc::new(VarSchema::new())))
+    };
 
     let graph = Describer::new(ctx.dataset)
         .describe_iris(subjects.iter().map(String::as_str))
         .map_err(|d| EvalError::internal(format!("DESCRIBE output failed to build: {d:?}")))?;
-    Ok((graph, certificate))
+    // The cap denominates the description's triples, exactly as it does a `CONSTRUCT`'s —
+    // and it matters more here, because a `DESCRIBE` whose `WHERE` bound a single subject
+    // can still return that subject's entire concise bounded description.
+    Ok(crate::construct::commit_answer_triples(
+        graph,
+        certificate,
+        &where_rows,
+        ctx,
+    ))
 }
 
 #[cfg(test)]

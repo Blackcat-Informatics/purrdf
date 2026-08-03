@@ -704,39 +704,234 @@ pub(crate) fn child_edges(pattern: &GraphPattern) -> ChildEdges {
     ChildEdges(edges)
 }
 
-/// Walk the whole plan rooted at `root`, invoking `visit` with every node and the
-/// [`SpineContext`] that holds at it.
+/// Walk the whole plan rooted at `root`, invoking `visit` with every node, the
+/// [`SpineContext`] that holds at it, and its depth below the root.
 ///
 /// The entry point for asking either question — "what does a truncation here certify?"
 /// and "may the answer cap be pushed here?" — about any node of a plan. The evaluator
-/// does not need this: it carries a [`SpineContext`] and calls
-/// [`SpineContext::descend`] per child as it goes, which is the same composition with no
-/// second traversal. This function exists for callers that hold a plan but are not
-/// evaluating it, such as planner-side pushdown and the tests below.
-// Deliberately unreferenced from evaluation, and deliberately kept. The evaluator does
-// NOT walk a plan to ask this question — it composes the same `descend` along the path a
-// truncation actually travelled, which is the same answer with no second traversal — so
-// this function's caller is a holder of a plan that is not evaluating it: the planner-side
-// answer-cap pushdown. Deleting it to silence the compiler would delete the only entry
-// point that lets the certificate be checked against a whole plan at once, which is what
-// this module's own tests do to falsify it.
-#[allow(dead_code)]
+/// does not need this to *evaluate*: it composes the same [`SpineContext::descend`] along
+/// the path a truncation actually travelled, which is the same answer with no second
+/// traversal. This function is for holders of a plan who are not evaluating it — the
+/// answer-cap pushdown ([`plan_cap_pushdown`]) and the per-node charge ledger
+/// ([`crate::governor::ledger`]) both walk a plan exactly once, before evaluation, to fix
+/// a deterministic node order.
+///
+/// The walk is a pre-order over [`visit_classified_children`], so the visit sequence is a
+/// pure function of the plan — which is what lets a ledger index a node by its ordinal in
+/// this walk and get the same number on every machine and every run.
 pub(crate) fn walk_spine<F>(root: &GraphPattern, visit: &mut F)
 where
-    F: FnMut(&GraphPattern, SpineContext),
+    F: FnMut(&GraphPattern, SpineContext, usize),
 {
-    fn descend<F>(node: &GraphPattern, context: SpineContext, visit: &mut F)
+    fn descend<F>(node: &GraphPattern, context: SpineContext, depth: usize, visit: &mut F)
     where
-        F: FnMut(&GraphPattern, SpineContext),
+        F: FnMut(&GraphPattern, SpineContext, usize),
     {
-        visit(node, context);
+        visit(node, context, depth);
         visit_classified_children(node, &mut |child, edge| {
-            descend(child, context.descend(edge), visit);
+            descend(child, context.descend(edge), depth + 1, visit);
             false
         });
     }
 
-    descend(root, SpineContext::ROOT, visit);
+    descend(root, SpineContext::ROOT, 0, visit);
+}
+
+// ---------------------------------------------------------------------------
+// The answer-cap pushdown
+// ---------------------------------------------------------------------------
+
+/// The **arithmetic** of the cap pushdown: given that only the first `ceiling` rows of
+/// `pattern`'s output are needed, how many rows of the child at `ordinal` are enough?
+///
+/// `None` means "no finite prefix of that child is enough", which is the answer for every
+/// operator that can *drop* rows (`FILTER`, `DISTINCT`, `MINUS`, either arm of a `JOIN`)
+/// or *reorder* them (`ORDER BY`): to reach `k` rows out of a filter you may have to read
+/// the entire input, so there is no number to push.
+///
+/// # This is a second, independent condition — not a restatement of the licence
+///
+/// [`SpineContext::admits_cap_pushdown`] answers *whether* stopping at a node yields the
+/// root answer's first rows. This answers *how many* rows that takes. Both are required
+/// and neither implies the other: `ORDER BY` is exactly 1:1 in row count yet needs its
+/// whole input, and `UNION`'s left arm needs at most `k` rows yet does not carry the
+/// positional certificate. A ceiling is pushed to a child only when the licence holds at
+/// that child **and** this function returns a number for the edge reaching it.
+///
+/// # Why the admitted set is this small
+///
+/// Only operators that map their input rows **one-to-one and position-for-position** onto
+/// their output qualify, plus `Slice`, whose arithmetic is the whole point of the
+/// exercise. For those, output row `i` is input row `i` (offset by `start`), so `k` rows
+/// out need exactly the rows the arithmetic below names. Widening this set is a
+/// correctness question and not a tuning one: an operator admitted here that can drop a
+/// single row would let a truncated scan report **fewer answers than the query has** and
+/// call the result complete.
+///
+/// The match is wildcard-free and names every field, so a new algebra variant is a
+/// compile error here rather than silently inheriting a pushdown it does not support.
+pub(crate) const fn child_row_ceiling(
+    pattern: &GraphPattern,
+    ordinal: usize,
+    ceiling: u64,
+) -> Option<u64> {
+    match pattern {
+        // Leaves have no children; the ceiling is *consumed* here, not propagated.
+        GraphPattern::Bgp { patterns: _ }
+        | GraphPattern::Path {
+            subject: _,
+            path: _,
+            object: _,
+        }
+        | GraphPattern::Values {
+            variables: _,
+            bindings: _,
+        } => None,
+
+        // One row in, one row out, in order: `BIND` adds a column, `GRAPH` rescopes, and
+        // `PROJECT` drops columns. None of them drops, adds, or moves a row.
+        GraphPattern::Extend {
+            inner: _,
+            variable: _,
+            expression: _,
+        }
+        | GraphPattern::Graph { name: _, inner: _ }
+        | GraphPattern::Project {
+            inner: _,
+            variables: _,
+        } => {
+            if ordinal == 0 {
+                Some(ceiling)
+            } else {
+                // An `EXISTS` reached through this node's expression, which is opaque.
+                None
+            }
+        }
+
+        // The arithmetic the pushdown exists for. `out = in[start..][..length]`, so `k`
+        // output rows need `start + min(k, length)` input rows — and an absent `length`
+        // is simply `start + k`. Saturating, because a caller may write an offset near
+        // `u64::MAX` and an overflowing ceiling would wrap to a *small* one, which is the
+        // one direction that loses answers.
+        GraphPattern::Slice {
+            inner: _,
+            start,
+            length,
+        } => {
+            if ordinal == 0 {
+                let wanted = match length {
+                    Some(length) if (*length as u64) < ceiling => *length as u64,
+                    Some(_) | None => ceiling,
+                };
+                Some((*start as u64).saturating_add(wanted))
+            } else {
+                None
+            }
+        }
+
+        // Everything below can drop rows, duplicate them, reorder them, or interleave two
+        // arms, so no finite prefix of a child bounds the parent's first `k` rows.
+        //
+        // `ORDER BY` is the instructive one: it is perfectly 1:1 in row count, and it
+        // still needs every input row, because the row that sorts first can arrive last.
+        // `DISTINCT`/`REDUCED` are the other trap — `k` distinct rows can take arbitrarily
+        // many input rows to reach.
+        GraphPattern::Join { left: _, right: _ }
+        | GraphPattern::Lateral { left: _, right: _ }
+        | GraphPattern::Union { left: _, right: _ }
+        | GraphPattern::LeftJoin {
+            left: _,
+            right: _,
+            expression: _,
+        }
+        | GraphPattern::Minus { left: _, right: _ }
+        | GraphPattern::Filter { expr: _, inner: _ }
+        | GraphPattern::Distinct { inner: _ }
+        | GraphPattern::Reduced { inner: _ }
+        | GraphPattern::Service {
+            name: _,
+            inner: _,
+            silent: _,
+        }
+        | GraphPattern::OrderBy {
+            inner: _,
+            expression: _,
+        }
+        | GraphPattern::Group {
+            inner: _,
+            variables: _,
+            aggregates: _,
+        } => None,
+    }
+}
+
+/// A plan's answer-cap pushdown: for each node that may stop early, the number of output
+/// rows past which its work cannot affect the query's answer.
+///
+/// Keyed by the node's **address** in the plan, which is stable for the immutable query
+/// algebra for as long as the plan is borrowed — the same key discipline
+/// [`crate::eval::EvalCtx`]'s address-memoized caches already use. Absent means "no
+/// ceiling": every node not named here evaluates exactly as it did before.
+#[derive(Debug, Default)]
+pub(crate) struct CapPushdown(crate::DetHashMap<usize, u64>);
+
+impl CapPushdown {
+    /// The row ceiling for the node at `address`, if the plan admits one there.
+    pub(crate) fn ceiling_at(&self, address: usize) -> Option<u64> {
+        self.0.get(&address).copied()
+    }
+
+    /// Whether the pushdown named any node at all.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+/// Push `root_ceiling` — the number of output rows the query's root can still use — down
+/// the plan rooted at `root`, returning the ceiling each node inherits.
+///
+/// The descent carries two things and stops when either fails: the [`SpineContext`], whose
+/// [`SpineContext::admits_cap_pushdown`] says whether a node's first rows are the root
+/// answer's first rows, and the running row count, which [`child_row_ceiling`] transforms
+/// per edge. A `None` from either drops the ceiling for that whole subtree; the walk still
+/// descends, because a node further down cannot re-acquire a licence its ancestor lost and
+/// recording nothing for it is exactly right.
+///
+/// `root_ceiling` of `None` yields an empty pushdown and does no work beyond the walk,
+/// which is the ungoverned, `LIMIT`-free case.
+pub(crate) fn plan_cap_pushdown(root: &GraphPattern, root_ceiling: Option<u64>) -> CapPushdown {
+    fn descend(
+        node: &GraphPattern,
+        context: SpineContext,
+        ceiling: Option<u64>,
+        out: &mut crate::DetHashMap<usize, u64>,
+    ) {
+        // The licence is checked at the node the ceiling would be *applied* to, so a node
+        // whose own certificate has lapsed keeps no ceiling even if its parent had one.
+        let ceiling = ceiling.filter(|_| context.admits_cap_pushdown());
+        // `u64::MAX` is the "no ceiling" carrier the descent starts from when the caller
+        // has only a `LIMIT` to contribute, so it is not recorded: an entry saying "stop
+        // after more rows than can exist" would cost a hash probe per node to answer a
+        // question whose answer is no. The map is therefore empty — and the whole pushdown
+        // uninstalled — for every query without a restricting `Slice` or an answer cap.
+        if let Some(ceiling) = ceiling.filter(|ceiling| *ceiling != u64::MAX) {
+            out.insert(std::ptr::from_ref(node) as usize, ceiling);
+        }
+        let mut ordinal = 0_usize;
+        visit_classified_children(node, &mut |child, edge| {
+            let child_ceiling =
+                ceiling.and_then(|ceiling| child_row_ceiling(node, ordinal, ceiling));
+            descend(child, context.descend(edge), child_ceiling, out);
+            ordinal += 1;
+            false
+        });
+    }
+
+    let mut out = crate::DetHashMap::default();
+    if root_ceiling.is_some() {
+        descend(root, SpineContext::ROOT, root_ceiling, &mut out);
+    }
+    CapPushdown(out)
 }
 
 /// The index of `pattern`'s variant in [`PATTERN_LABELS`].
@@ -1298,7 +1493,7 @@ mod tests {
             variables: vec![Variable::new("s")],
         };
         let mut licensed = 0_usize;
-        walk_spine(&scan, &mut |_node, context| {
+        walk_spine(&scan, &mut |_node, context, _depth| {
             assert!(context.admits_cap_pushdown());
             licensed += 1;
         });
@@ -1307,7 +1502,7 @@ mod tests {
         // The licence is the certificate, read for a different purpose: every node it
         // admits is Certain and Ordered, everywhere, on an arbitrary plan.
         let mixed = all_variants_plan();
-        walk_spine(&mixed, &mut |node, context| {
+        walk_spine(&mixed, &mut |node, context, _depth| {
             assert_eq!(
                 context.admits_cap_pushdown(),
                 context.class() == SpineClass::Certain
@@ -1412,7 +1607,7 @@ mod tests {
         let plan = all_variants_plan();
 
         let mut seen: BTreeSet<&'static str> = BTreeSet::new();
-        walk_spine(&plan, &mut |node, context| {
+        walk_spine(&plan, &mut |node, context, _depth| {
             // Reaching a node at all means the walk descended into it, and every context
             // is one of the three classes — there is no fourth, unclassified state.
             assert!(matches!(
@@ -1442,7 +1637,7 @@ mod tests {
         let mut with_children: BTreeSet<&'static str> = BTreeSet::new();
         let mut leaves: BTreeSet<&'static str> = BTreeSet::new();
 
-        walk_spine(&plan, &mut |node, _context| {
+        walk_spine(&plan, &mut |node, _context, _depth| {
             let mut count = 0_usize;
             visit_classified_children(node, &mut |_child, _edge| {
                 count += 1;

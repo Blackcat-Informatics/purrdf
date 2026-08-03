@@ -27,7 +27,9 @@ use crate::DetHashMap;
 use crate::dataset_spec::ActiveDataset;
 use crate::error::EvalError;
 use crate::governor::GovernorState;
+use crate::governor::ledger::ChargeLedger;
 use crate::governor::lift::{Evaluated, ExpressionBarrier, Truncation};
+use crate::governor::soundness::CapPushdown;
 use crate::scratch::{ScratchInterner, SolutionTerm};
 use crate::solution::{SolutionSeq, VarSchema};
 
@@ -359,6 +361,34 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// [`ExpressionBarrier`]). Shared by [`Arc`] with every forked worker context, so a
     /// worker's observation is not lost when the worker's context is dropped.
     pub(crate) expression_barrier: ExpressionBarrier,
+    /// The answer-cap / `LIMIT` pushdown for the plan being evaluated: the row ceiling
+    /// past which each node's work cannot affect the query's answer.
+    ///
+    /// `None` — the default — is "no ceiling anywhere", which is every query with neither
+    /// a `LIMIT` on a pushable spine nor a caller answer cap. Computed once per execution
+    /// from the plan by [`crate::governor::soundness::plan_cap_pushdown`] and shared by
+    /// [`Arc`] with every forked worker, because a worker evaluating part of a node's
+    /// rows is under the same ceiling the node is.
+    pub(crate) cap_pushdown: Option<Arc<CapPushdown>>,
+    /// The address of the algebra node currently being evaluated, set by
+    /// [`eval_evaluated`] and restored on the way out.
+    ///
+    /// The key both the pushdown and the ledger are looked up by. It is a plain scalar so
+    /// that a fork copies it: a worker charges the node its parent was charging, which is
+    /// what makes the ledger's per-node totals independent of how the work was split.
+    pub(crate) current_node: usize,
+    /// The per-node charge ledger, when one is installed. `None` on every ordinary query;
+    /// the EXPLAIN path installs one.
+    pub(crate) ledger: Option<Arc<ChargeLedger>>,
+    /// The ledger ordinal of the nearest enclosing **plan** node.
+    ///
+    /// Distinct from [`Self::current_node`] because not every pattern the evaluator
+    /// enters is in the plan: a correlated `EXISTS` builds a substituted temporary tree
+    /// per outer row, and a SHACL-AF function body is a separate query entirely. Those
+    /// have no ordinal, so this cursor does not move for them and their charges accrue to
+    /// the operator that owns the expression — which is what makes the ledger's fuel
+    /// column sum to the evidence's fuel total exactly.
+    pub(crate) ledger_node: usize,
 }
 
 /// The maximum SHACL-AF function call depth. A function body that calls another
@@ -430,6 +460,10 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             udf_depth: 0,
             governors: None,
             expression_barrier: ExpressionBarrier::default(),
+            cap_pushdown: None,
+            current_node: 0,
+            ledger: None,
+            ledger_node: ChargeLedger::root_ordinal(),
         }
     }
 
@@ -565,6 +599,70 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         self
     }
 
+    /// Install the per-node charge ledger for this evaluation, and start its cursor at the
+    /// plan root.
+    #[must_use]
+    pub(crate) fn with_charge_ledger(mut self, ledger: Arc<ChargeLedger>) -> Self {
+        self.ledger = Some(ledger);
+        self.ledger_node = ChargeLedger::root_ordinal();
+        self
+    }
+
+    /// The number of output rows past which the node currently being evaluated cannot
+    /// affect the query's answer, if the plan licensed one there.
+    ///
+    /// A leaf that can stop producing rows consults this; every other operator ignores it.
+    /// Saturated into `usize` because it is compared against a materialized row count: on
+    /// a 32-bit or wasm32 target a ceiling above `usize::MAX` is one no execution can
+    /// reach, so clamping it is exactly "no cut".
+    pub(crate) fn row_ceiling(&self) -> Option<usize> {
+        let ceiling = self.cap_pushdown.as_ref()?.ceiling_at(self.current_node)?;
+        Some(usize::try_from(ceiling).unwrap_or(usize::MAX))
+    }
+
+    /// Enter `pattern` as the node being evaluated, returning the cursors to restore.
+    ///
+    /// Both cursors move together, except that the ledger's only moves when `pattern` is a
+    /// node of the plan the ledger was built for — see [`Self::ledger_node`].
+    pub(crate) fn enter_node(&mut self, pattern: &GraphPattern) -> (usize, usize) {
+        let restore = (self.current_node, self.ledger_node);
+        self.current_node = std::ptr::from_ref(pattern) as usize;
+        if let Some(ledger) = self.ledger.as_ref()
+            && let Some(ordinal) = ledger.ordinal_of(self.current_node)
+        {
+            self.ledger_node = ordinal;
+        }
+        restore
+    }
+
+    /// Restore the cursors [`Self::enter_node`] returned.
+    pub(crate) const fn leave_node(&mut self, restore: (usize, usize)) {
+        self.current_node = restore.0;
+        self.ledger_node = restore.1;
+    }
+
+    /// The per-node charge ledger this execution records into, if one is installed.
+    ///
+    /// Handed to seams that charge below the operator boundary and therefore cannot use
+    /// [`Self::note_fuel`] — the property-path traversal is the one that exists today.
+    pub(crate) const fn charge_ledger(&self) -> Option<&Arc<ChargeLedger>> {
+        self.ledger.as_ref()
+    }
+
+    /// Record `units` of fuel spent at `point` against the current node, when a ledger is
+    /// installed.
+    ///
+    /// Separate from the charge itself because the two answer different questions: the
+    /// charge decides whether the work is allowed, and this decides where the cost is
+    /// reported. Only work that was actually charged is recorded, so the ledger's fuel
+    /// column always sums to the evidence's fuel total.
+    #[inline]
+    pub(crate) fn note_fuel(&self, point: crate::governor::ChargePoint, units: u64) {
+        if let Some(ledger) = self.ledger.as_ref() {
+            ledger.record_fuel(self.ledger_node, point, units);
+        }
+    }
+
     /// The governor that has already stopped this execution, if one has.
     ///
     /// **This is not a charge point.** It spends no budget and cannot itself exhaust one:
@@ -686,6 +784,16 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// # Errors
     ///
     /// The governor that stopped this execution, once one has.
+    ///
+    /// # What the ledger sees
+    ///
+    /// A successful charge is recorded against the current node; the one charge that
+    /// *crosses* a ceiling is not. That is a deliberate, stated one-unit difference rather
+    /// than an approximation: it keeps the recording free of any read-modify-write race
+    /// with a concurrent trip, and it is exactly zero on the path the ledger is actually
+    /// installed for — EXPLAIN runs under
+    /// [`QueryGovernors::METERED`](crate::governor::QueryGovernors::METERED), where no
+    /// ceiling is reachable and therefore no charge is ever refused.
     #[inline]
     pub(crate) fn charge(
         &self,
@@ -693,7 +801,16 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     ) -> Result<(), TrippedGovernor> {
         match self.governors.as_ref() {
             None => Ok(()),
-            Some(state) => state.charge_point_if_engaged(point),
+            Some(state) => {
+                let result = state.charge_point_if_engaged(point);
+                if result.is_ok()
+                    && self.ledger.is_some()
+                    && state.is_engaged_in(purrdf_core::ResourceDimension::Fuel)
+                {
+                    self.note_fuel(point, point.cost());
+                }
+                result
+            }
         }
     }
 
@@ -738,6 +855,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             return Ok(());
         }
         let cells = (rows as u64).saturating_mul(columns as u64);
+        if let Some(ledger) = self.ledger.as_ref() {
+            ledger.record_cells(self.ledger_node, cells);
+        }
         state.observe_peak(purrdf_core::ResourceDimension::IntermediateCells, cells)
     }
 
@@ -796,9 +916,11 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         for admitted in 0..rows.len() {
             if let Err(tripped) = state.charge_point_if_engaged(point) {
                 rows.truncate(admitted);
+                self.note_fuel(point, point.cost().saturating_mul(admitted as u64));
                 return Some(tripped);
             }
         }
+        self.note_fuel(point, point.cost().saturating_mul(rows.len() as u64));
         None
     }
 
@@ -847,18 +969,33 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         if !state.is_engaged_in(purrdf_core::ResourceDimension::Fuel) {
             return None;
         }
-        for _ in 0..count {
-            if let Err(tripped) =
-                state.charge_point_if_engaged(crate::governor::ChargePoint::CommittedOutputRow)
-            {
+        let point = crate::governor::ChargePoint::CommittedOutputRow;
+        for charged in 0..count {
+            if let Err(tripped) = state.charge_point_if_engaged(point) {
                 // Stop at the first refusal rather than charging the remaining rows into
                 // a ceiling that is already crossed: the trip is latched and write-once,
                 // so further charges could only inflate the reported consumption past the
                 // point the execution actually stopped.
+                self.note_rows(charged, point);
                 return Some(tripped);
             }
         }
+        self.note_rows(count, point);
         None
+    }
+
+    /// Record `count` committed output rows against the current node's ledger line, both
+    /// as a row count and as the fuel those rows cost.
+    #[inline]
+    fn note_rows(&self, count: usize, point: crate::governor::ChargePoint) {
+        if let Some(ledger) = self.ledger.as_ref() {
+            ledger.record_rows(self.ledger_node, count as u64);
+            ledger.record_fuel(
+                self.ledger_node,
+                point,
+                point.cost().saturating_mul(count as u64),
+            );
+        }
     }
 
     /// Replace the evaluation options for this context. Used by the engine to thread
@@ -971,6 +1108,14 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // expression-embedded `EXISTS` must be able to tell the parent, and the
             // worker's own context is dropped the instant its closure returns.
             expression_barrier: self.expression_barrier.clone(),
+            // SHARED: the plan, and therefore its row ceilings, is the same one.
+            cap_pushdown: self.cap_pushdown.clone(),
+            // COPIED: a worker is evaluating part of its parent's node, so it charges the
+            // parent's node. Resetting either cursor would scatter one node's charges
+            // across the ledger by worker count.
+            current_node: self.current_node,
+            ledger: self.ledger.clone(),
+            ledger_node: self.ledger_node,
         }
     }
 
@@ -1064,6 +1209,16 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // edge an `EXISTS` is, and reported through the same cell so the operator
             // owning the calling expression withholds its rows.
             expression_barrier: self.expression_barrier.clone(),
+            // NONE: the body is a different query with its own plan and its own modifiers,
+            // so the calling query's row ceilings say nothing about it. A body that wants
+            // a ceiling gets one from its own `LIMIT`.
+            cap_pushdown: None,
+            current_node: 0,
+            // SHARED, and the cursor deliberately does NOT move: the body's nodes are not
+            // in the calling plan, so its cost is reported against the call site — the one
+            // node a reader of the ledger can act on.
+            ledger: self.ledger.clone(),
+            ledger_node: self.ledger_node,
         })
     }
 
@@ -1110,14 +1265,32 @@ pub(crate) fn eval_evaluated<D: DatasetView + Sync>(
     // the node's own work. A trip here has committed nothing, so the truncation
     // originates with an empty bag — a sound lower bound — and the ancestors that have
     // already committed rows keep theirs as the lift carries this upwards.
+    // This node becomes the cursor for the row ceiling the plan pushed to it and for the
+    // ledger line its charges land on, for the whole of its own evaluation — including
+    // the charges its operator makes after its children have returned, which is why the
+    // cursor is restored around the recursion rather than only set before it.
+    let restore = ctx.enter_node(pattern);
     if let Err(tripped) = ctx.charge(crate::governor::ChargePoint::AlgebraNodeEntry) {
+        ctx.leave_node(restore);
         return Ok(Evaluated::Truncated(Truncation::origin(
             SolutionSeq::empty(Arc::new(VarSchema::new())),
             tripped,
         )));
     }
-    let evaluated = eval_node(pattern, ctx)?;
-    Ok(commit_node_output(evaluated, ctx))
+    let evaluated = match eval_node(pattern, ctx) {
+        Ok(evaluated) => evaluated,
+        Err(error) => {
+            ctx.leave_node(restore);
+            return Err(error);
+        }
+    };
+    // Back at this node: a child's recursion moved the cursor and restored it, so this
+    // re-entry is what makes the output charge land on the parent rather than on whichever
+    // child happened to be evaluated last.
+    ctx.enter_node(pattern);
+    let committed = commit_node_output(evaluated, ctx);
+    ctx.leave_node(restore);
+    Ok(committed)
 }
 
 /// Charge one node's output and re-certify it: the `committed-output-row` charge point,
@@ -1391,6 +1564,65 @@ pub(crate) enum EvaluatedOutcome<I: ViewTermId = TermId> {
     },
 }
 
+/// The graph pattern a query form evaluates.
+///
+/// Wildcard-free, so a new query form is a compile error rather than a plan that silently
+/// loses its pushdown and its ledger.
+pub(crate) const fn query_pattern(query: &Query) -> &GraphPattern {
+    match query {
+        Query::Select { pattern, .. }
+        | Query::Ask { pattern, .. }
+        | Query::Construct { pattern, .. }
+        | Query::Describe { pattern, .. } => pattern,
+    }
+}
+
+/// Compute this query's answer-cap / `LIMIT` pushdown and install it on `ctx`.
+///
+/// # Where the root ceiling comes from — `Slice` first, then the cap
+///
+/// Two independent sources, and they compose in one direction only. A `LIMIT` is *query
+/// semantics*: it lives inside the pattern as a `Slice` node, and the descent picks it up
+/// wherever it sits. A caller's answer cap is an *operational* ceiling on the sequence that
+/// survives every modifier, so it enters at the root — below nothing and above everything,
+/// which is exactly where `Slice`'s arithmetic then narrows it further.
+///
+/// # Why the cap's ceiling is the cap **plus one**
+///
+/// The cap is inclusive: a result whose size equals it is complete. A leaf stopped at
+/// exactly the cap would hand the root a full sequence that the cap then charges without
+/// crossing — and the caller would be told a truncated answer is the whole answer. One
+/// extra row is precisely enough to tell "exactly full" from "overflowed", and it is the
+/// only row the pushdown computes that the answer never uses.
+///
+/// # Only `SELECT` seeds the root from the cap
+///
+/// For a graph-producing form the cap denominates output *triples*
+/// ([`crate::construct::commit_answer_triples`]), and one solution row can instantiate a
+/// whole template — so a row ceiling derived from a triple cap would be an arithmetic
+/// non-sequitur. Those forms still get the `LIMIT` pushdown, seeded from the "no ceiling"
+/// carrier, which is why the seed is unconditional.
+fn install_cap_pushdown<D: DatasetView + Sync>(query: &Query, ctx: &mut EvalCtx<'_, D>) {
+    let cap = match (query, ctx.governors.as_ref()) {
+        (Query::Select { .. }, Some(state))
+            if state.is_engaged_in(purrdf_core::ResourceDimension::AnswerRows) =>
+        {
+            state
+                .limits()
+                .get(purrdf_core::ResourceDimension::AnswerRows)
+                .saturating_add(1)
+        }
+        // No cap to seed with. `u64::MAX` is the identity of the descent's arithmetic: it
+        // records no ceiling anywhere until a restricting `Slice` reduces it, so a query
+        // with neither a cap nor a `LIMIT` installs nothing at all and pays one plan walk.
+        _ => u64::MAX,
+    };
+    let pushdown = crate::governor::soundness::plan_cap_pushdown(query_pattern(query), Some(cap));
+    if !pushdown.is_empty() {
+        ctx.cap_pushdown = Some(Arc::new(pushdown));
+    }
+}
+
 /// Evaluate a top-level [`Query`] form over `ctx`'s dataset, trip-aware.
 ///
 /// `SELECT`/`ASK` walk the modifier-wrapped pattern; `CONSTRUCT` and `DESCRIBE` emit
@@ -1412,6 +1644,7 @@ pub(crate) fn evaluate_query_evaluated<D: DatasetView + Sync>(
     // Install the query's effective base IRI so IRI()/URI() can resolve a relative
     // string argument against it (SPARQL 1.1 §17.4.2.6).
     ctx.base_iri = query.base_iri().map(|nn| nn.as_str().to_owned());
+    install_cap_pushdown(query, ctx);
     match query {
         Query::Select { pattern, .. } => {
             match commit_answer_rows(eval_evaluated(pattern, ctx)?, ctx) {

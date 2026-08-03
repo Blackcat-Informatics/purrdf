@@ -700,7 +700,7 @@ mod tests {
         // and each one's class is read back from the walk by position.
         let mut classes: Vec<(usize, SpineClass)> = Vec::new();
         let mut index = 0_usize;
-        walk_spine(root, &mut |_node, context| {
+        walk_spine(root, &mut |_node, context, _depth| {
             classes.push((index, context.class()));
             index += 1;
         });

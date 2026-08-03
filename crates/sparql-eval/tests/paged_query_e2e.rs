@@ -285,18 +285,20 @@ fn cross_page_join_order_is_cost_driven_and_flips_with_skew() {
 
     // The real planner path: `explain_query_view` returns the cost-based probe order as
     // triple-pattern strings. The low-Σ-per-page pattern is probed FIRST.
-    let order1 = engine
+    let explained1 = engine
         .explain_query_view(&fixture1, SKEW_QUERY, None)
         .expect("explain fixture 1");
+    let order1 = explained1.join_orders().to_vec();
     assert_eq!(
         order1,
         vec![PATTERN_A, PATTERN_B],
         "selective pa probed first"
     );
 
-    let order2 = engine
+    let explained2 = engine
         .explain_query_view(&fixture2, SKEW_QUERY, None)
         .expect("explain fixture 2");
+    let order2 = explained2.join_orders().to_vec();
     // The FLIP: inverting the cross-page skew inverts the probe order. This can only
     // happen if the Σ-per-page cost model is actually consulted — an estimator that
     // ignored the paged cardinalities would return the same (source) order both times.

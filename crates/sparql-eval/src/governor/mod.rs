@@ -79,9 +79,11 @@
 
 #[cfg(test)]
 mod charge_points;
+pub(crate) mod ledger;
 pub(crate) mod lift;
 pub(crate) mod soundness;
 
+pub use ledger::{NodeCharges, PlanEstimate, ProfileIdentity, QueryExplanation};
 pub use lift::NonMonotoneBarrier;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -499,10 +501,29 @@ impl QueryGovernors {
         self
     }
 
-    /// Bound rows committed to the final answer sequence.
+    /// Bound what the query commits to its final answer sequence.
     ///
     /// This is an operational cap, never `LIMIT`: `LIMIT` is query semantics and applies
     /// before the cap is tested.
+    ///
+    /// # What it counts, per query form
+    ///
+    /// The cap always denominates the form's own **answer sequence**, because that is the
+    /// thing the caller receives:
+    ///
+    /// | Form | One unit is |
+    /// |---|---|
+    /// | `SELECT` | one solution row |
+    /// | `CONSTRUCT`, `DESCRIBE` | one output statement — an ordinary triple, an RDF 1.2 reifier binding, or an annotation |
+    /// | `ASK` | nothing; a boolean has no sequence to bound |
+    ///
+    /// A graph form is *not* counted in solution rows. One `CONSTRUCT` row can instantiate
+    /// a whole template and one `DESCRIBE` row can pull in an entire concise bounded
+    /// description, so a caller who capped such a query at a thousand and received a
+    /// hundred thousand statements would have no governor at all.
+    ///
+    /// The boundary is inclusive on every form: an answer whose size equals the cap is
+    /// complete, and one unit more is a trip.
     #[must_use]
     pub fn with_max_answers(mut self, rows: u64) -> Self {
         self.limits.set(ResourceDimension::AnswerRows, rows);
@@ -1094,7 +1115,27 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// before, versus one number on any machine after. A budget sized against v1 for such a
 /// query was sized against the machine that measured it, which is precisely what a pinned
 /// profile exists to prevent, so the number moves rather than the guarantee.
-pub const GOVERNOR_PROFILE_VERSION: u32 = 2;
+///
+/// # v3
+///
+/// [`CHARGE_SCHEDULE`] is again byte-identical — no point moved and no cost changed — and
+/// again the *number of events* a query performs did. The answer cap and `LIMIT` are now
+/// pushed down the certified prefix-monotone spine — the same certificate
+/// [`NonMonotoneBarrier`] is the negative half of — so a leaf under a row ceiling stops
+/// scanning at the ceiling instead of materialising its whole output and having it cut at
+/// the root.
+/// `SELECT * WHERE { ?s ?p ?o } LIMIT 10` over a million quads used to charge a million
+/// `bgp-candidate-quad` points and then discard all but ten rows; it now charges eleven.
+/// Every answer is unchanged — the pushdown is licensed by the same certificate that
+/// governs partial answers, and the pushed ceiling is one row above the cap precisely so
+/// the cap can still tell "exactly full" from "overflowed" — but a budget sized against v2
+/// for a `LIMIT`ed query was sized against work this build no longer does, so the number
+/// moves.
+///
+/// v3 also adds [`TrippedGovernor::Refused`], which can stop an execution before its first
+/// charge, and applies the answer cap to `CONSTRUCT` and `DESCRIBE` output statements.
+/// Neither changes a charge; both change which executions reach one.
+pub const GOVERNOR_PROFILE_VERSION: u32 = 3;
 
 /// The charge schedule, as data rather than as scattered literals.
 ///
@@ -1161,8 +1202,14 @@ impl ChargePoint {
         Self::RemoteRowIngested,
     ];
 
-    /// This point's row in [`CHARGE_SCHEDULE`].
-    const fn index(self) -> usize {
+    /// This point's row in [`CHARGE_SCHEDULE`], and its column in a
+    /// [`NodeCharges`] fuel array.
+    ///
+    /// Public because the per-node ledger's fuel array is indexed by it: a caller reading
+    /// a ledger row needs the same index the schedule uses, and deriving it from a
+    /// position in [`Self::ALL`] would be a second, drift-prone copy of this mapping.
+    #[must_use]
+    pub const fn schedule_index(self) -> usize {
         match self {
             Self::AlgebraNodeEntry => 0,
             Self::CommittedOutputRow => 1,
@@ -1178,13 +1225,13 @@ impl ChargePoint {
     /// This point's pinned schedule label.
     #[must_use]
     pub const fn label(self) -> &'static str {
-        CHARGE_SCHEDULE[self.index()].0
+        CHARGE_SCHEDULE[self.schedule_index()].0
     }
 
     /// The fuel this point costs under the schedule.
     #[must_use]
     pub const fn cost(self) -> u64 {
-        CHARGE_SCHEDULE[self.index()].1
+        CHARGE_SCHEDULE[self.schedule_index()].1
     }
 }
 

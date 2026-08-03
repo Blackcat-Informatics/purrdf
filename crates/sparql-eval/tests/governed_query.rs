@@ -17,8 +17,10 @@ use purrdf_core::{
     RdfDatasetBuilder, ResourceDimension, SparqlRequest, SparqlResult, StopCause, TrippedGovernor,
 };
 use purrdf_sparql_eval::{
-    CancellationFlag, FallibleSparqlError, GovernedOutcome, NativeSparqlEngine, PartialAnswers,
-    QueryGovernors, StopSignal, WallDeadline, resolve_precedence,
+    CHARGE_SCHEDULE, CancellationFlag, ChargePoint, FallibleSparqlError, GOVERNOR_PROFILE_DIGEST,
+    GOVERNOR_PROFILE_ID, GOVERNOR_PROFILE_VERSION, GovernedOutcome, NativeSparqlEngine,
+    PartialAnswers, QueryExplanation, QueryGovernors, STOP_POLL_FUEL, StopSignal, WallDeadline,
+    resolve_precedence,
 };
 
 /// The number of `ex:p` edges in the fixture dataset.
@@ -75,6 +77,26 @@ fn subjects(result: &SparqlResult) -> Vec<String> {
         }
         other => panic!("expected SELECT solutions, got: {other:?}"),
     }
+}
+
+/// The frozen graph a graph-producing query returned.
+fn graph_of(result: &SparqlResult) -> &Arc<RdfDataset> {
+    match result {
+        SparqlResult::Graph(graph) => graph,
+        other => panic!("expected a CONSTRUCT/DESCRIBE graph, got: {other:?}"),
+    }
+}
+
+/// The number of **statements** in a graph result, in the same denomination the answer cap
+/// charges a graph-producing form: every ordinary quad, every RDF 1.2 reifier binding, and
+/// every annotation.
+///
+/// Written out here rather than borrowed from the evaluator on purpose. This is the
+/// caller-visible reading of "how big is the answer", so if the governor ever came to
+/// denominate something else — solution rows, say — the boundary tests below would notice
+/// from outside instead of agreeing with the implementation by construction.
+fn statement_count(graph: &RdfDataset) -> usize {
+    graph.quad_count() + graph.reifiers().count() + graph.annotations().count()
 }
 
 /// The exhaustion an outcome must be, with its certified rows.
@@ -164,11 +186,14 @@ fn ac2_trip_is_neither_complete_nor_error() {
     cancelled.cancel();
 
     // The `cuts_rows` column says whether this governor can stop the search mid-answer.
-    // The intermediate-cell ceiling cannot: it bounds how large one operator's bag may
-    // GET, so it is a peak observation made once the bag exists, and the rows it leaves in
-    // hand are the ones already computed. Reporting the whole answer as a certified lower
-    // bound is sound — a lower bound is allowed to be tight — and it is still not
-    // completion, because the query was stopped rather than finished.
+    //
+    // The intermediate-cell ceiling is the one that does not merely stop the search but
+    // *precedes* it: the cost planner's estimated peak for this plan already exceeds a
+    // ceiling of zero, so the query is refused at admission and never evaluated. That is
+    // the only mechanism that can act before a materialized bag exists — the meter, by
+    // construction, can only observe a bag it already holds — so the trip it reports is
+    // `Refused`, carrying the ESTIMATE that was refused rather than a consumption nothing
+    // measured, and the certified answer it leaves is empty.
     let cases: [(&str, QueryGovernors, TrippedGovernor, bool); 5] = [
         (
             "fuel",
@@ -193,12 +218,12 @@ fn ac2_trip_is_neither_complete_nor_error() {
         (
             "intermediate cells",
             QueryGovernors::UNBOUNDED.with_max_intermediate_cells(0),
-            TrippedGovernor::Budget {
+            TrippedGovernor::Refused {
                 dimension: ResourceDimension::IntermediateCells,
                 limit: 0,
-                consumed: (EDGES * 2) as u64,
+                estimate: (EDGES * 2) as u64,
             },
-            false,
+            true,
         ),
         (
             "deadline",
@@ -448,9 +473,15 @@ fn d6_precedence_order() {
     let cells = budget(ResourceDimension::IntermediateCells);
     let fuel = budget(ResourceDimension::Fuel);
     let cap = budget(ResourceDimension::AnswerRows);
+    let refused = TrippedGovernor::Refused {
+        dimension: ResourceDimension::IntermediateCells,
+        limit: 1,
+        estimate: 2,
+    };
     for (winner, loser) in [
         (cancelled, deadline),
-        (deadline, cells),
+        (deadline, refused),
+        (refused, cells),
         (cells, fuel),
         (fuel, cap),
     ] {
@@ -485,16 +516,40 @@ fn d6_precedence_order() {
         "a firing stop signal outranks every ceiling crossed with it"
     );
 
-    // Ceilings that are crossed at DIFFERENT charge points report the one crossed first —
-    // precedence is evaluated over the conditions already true at a charge point, never
-    // over conditions that might become true later. Fuel is charged on entering the first
-    // algebra node, before any bag exists to measure or any answer row exists to admit,
-    // so it is the reported trip even though it ranks below the cell ceiling.
+    // Admission precedes EVERY charge point, so a plan the cost model already predicts
+    // will breach the cell ceiling reports that refusal rather than whichever ceiling the
+    // first charge would have crossed. This is the one ordering rule the charge-point
+    // precedence cannot express, because the refusal happens before there is a charge
+    // point to rank against.
     let outcome = governed(
         ALL_ROWS,
         &QueryGovernors::UNBOUNDED
             .with_fuel(0)
             .with_max_intermediate_cells(0)
+            .with_max_answers(0),
+    );
+    let (tripped, _, _) = exhausted(&outcome);
+    assert_eq!(
+        tripped,
+        TrippedGovernor::Refused {
+            dimension: ResourceDimension::IntermediateCells,
+            limit: 0,
+            estimate: (EDGES * 2) as u64,
+        }
+    );
+
+    // Ceilings that are crossed at DIFFERENT charge points report the one crossed first —
+    // precedence is evaluated over the conditions already true at a charge point, never
+    // over conditions that might become true later. Fuel is charged on entering the first
+    // algebra node, before any bag exists to measure or any answer row exists to admit,
+    // so it is the reported trip even though it ranks below the cell ceiling. With the
+    // cell ceiling raised past the estimate, admission passes and this is again what the
+    // evaluator reports.
+    let outcome = governed(
+        ALL_ROWS,
+        &QueryGovernors::UNBOUNDED
+            .with_fuel(0)
+            .with_max_intermediate_cells(u64::MAX - 1)
             .with_max_answers(0),
     );
     let (tripped, _, _) = exhausted(&outcome);
@@ -627,4 +682,652 @@ fn a_fallible_view_reports_a_trip_as_budget_exhausted_with_both_meters() {
         error.diagnostic().is_none() && error.operational_error().is_none(),
         "an exhausted budget is neither a query failure nor a view failure"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Pushdown: the cap that PREVENTS work rather than reporting it
+// ---------------------------------------------------------------------------
+
+/// A store wide enough that scanning all of it costs visibly more than scanning a handful
+/// of rows, so "the scan stopped" is separable from "the answer was cut".
+const WIDE_EDGES: usize = 2_000;
+
+/// `edges` subjects on `ex:p`, with zero-padded local names so the first *k* rows of a
+/// scan are the same *k* IRIs whatever `edges` is.
+fn wide_fixture(edges: usize) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let p = builder.intern_iri("http://example.org/p");
+    for index in 0..edges {
+        let s = builder.intern_iri(&format!("http://example.org/s{index:06}"));
+        let o = builder.intern_iri(&format!("http://example.org/o{index:06}"));
+        builder.push_quad(s, p, o, None);
+    }
+    builder.freeze().expect("freeze wide fixture")
+}
+
+/// Every `bgp-candidate-quad` unit the ledger attributes to any node of `explanation`.
+fn candidate_quads(explanation: &QueryExplanation) -> u64 {
+    explanation
+        .ledger()
+        .iter()
+        .map(|node| node.fuel_at(ChargePoint::BgpCandidateQuad))
+        .sum()
+}
+
+#[test]
+fn answer_cap_stops_the_scan_rather_than_materializing_everything() {
+    // The claim under test is *prevention*, not truncation. A cap applied only at the root
+    // produces exactly the same answer as a cap pushed into the scan — so an assertion on
+    // the rows cannot tell the two apart, and every such assertion would still pass on a
+    // build with no pushdown at all. What separates them is the work: a root-only cap
+    // scans the whole store and discards, and a pushed one stops.
+    //
+    // Two observables, from two directions.
+
+    // (1) The whole execution's cost, over two stores that differ only in size. Under the
+    //     same cap the reported fuel must be IDENTICAL: a scan that stops at the ceiling
+    //     cannot know how many quads it did not look at, while a scan that materialises
+    //     everything charges once per quad and would report four times as much on the
+    //     larger store.
+    const CAP: u64 = 5;
+    let engine = NativeSparqlEngine::new();
+    // METERED engages every counter at a ceiling nothing can reach, then the cap replaces
+    // the answer-row ceiling alone — so fuel is measured while the cap is the only thing
+    // that can fire.
+    let capped = QueryGovernors::METERED.with_max_answers(CAP);
+
+    let mut spent = Vec::new();
+    let mut first_rows = Vec::new();
+    for edges in [WIDE_EDGES, WIDE_EDGES * 4] {
+        let dataset = wide_fixture(edges);
+        let outcome = engine
+            .query_governed(&dataset, request(ALL_ROWS), &capped)
+            .expect("a capped run is an outcome, not an error");
+        let exhausted = outcome
+            .exhausted()
+            .unwrap_or_else(|| panic!("a cap of {CAP} below {edges} answers must trip"));
+        assert_eq!(
+            exhausted.tripped,
+            TrippedGovernor::Budget {
+                dimension: ResourceDimension::AnswerRows,
+                limit: CAP,
+                consumed: CAP + 1,
+            },
+            "the pushed ceiling is the cap PLUS ONE, precisely so the cap itself can still \
+             tell an exactly-full answer from an overflowing one"
+        );
+        let certified = exhausted
+            .partial
+            .result()
+            .expect("a bare BGP under a projection certifies its rows");
+        assert_eq!(row_count(certified.result()), CAP as usize);
+        assert!(certified.is_positional_prefix());
+        first_rows.push(subjects(certified.result()));
+        spent.push(exhausted.evidence.consumed_in(ResourceDimension::Fuel));
+
+        // The scale the capped cost is being separated from: the same query over the same
+        // store with nothing capped.
+        let whole = engine
+            .query_governed(&dataset, request(ALL_ROWS), &QueryGovernors::METERED)
+            .expect("a metered run completes");
+        assert!(
+            spent[spent.len() - 1] * 20 < whole.evidence().consumed_in(ResourceDimension::Fuel),
+            "a capped run over {edges} edges spent {} fuel against an uncapped {}; the cap \
+             is not reaching the scan",
+            spent[spent.len() - 1],
+            whole.evidence().consumed_in(ResourceDimension::Fuel)
+        );
+    }
+    assert_eq!(
+        spent[0], spent[1],
+        "quadrupling the store changed what a capped query cost, so the scan is still \
+         being materialised and cut at the root"
+    );
+    assert_eq!(
+        first_rows[0], first_rows[1],
+        "the pushdown must not change WHICH rows are the answer's first rows"
+    );
+
+    // (2) The ledger's own charge counts, per node. `LIMIT` is the same pushdown reached
+    //     through query semantics rather than through an operational cap, and EXPLAIN
+    //     reports what each node actually charged — so the `bgp-candidate-quad` column is
+    //     a direct count of the candidate quads the scan examined.
+    let dataset = wide_fixture(WIDE_EDGES);
+    let limited = engine
+        .explain_query(
+            &dataset,
+            "SELECT ?s ?o WHERE { ?s <http://example.org/p> ?o } LIMIT 5",
+            None,
+        )
+        .expect("explain the limited query");
+    let unlimited = engine
+        .explain_query(&dataset, ALL_ROWS, None)
+        .expect("explain the unlimited query");
+    assert_eq!(
+        candidate_quads(&unlimited),
+        WIDE_EDGES as u64,
+        "an unlimited scan examines every quad exactly once"
+    );
+    assert_eq!(
+        candidate_quads(&limited),
+        5,
+        "`LIMIT 5` needs five candidate quads and must charge for five — not for the \
+         {WIDE_EDGES} the store holds"
+    );
+
+    // And the answers agree, which is the guarantee the pushdown is not allowed to buy
+    // performance with: the limited plan's rows are the unlimited plan's first rows.
+    let unlimited_rows = engine
+        .query_governed(&dataset, request(ALL_ROWS), &QueryGovernors::UNBOUNDED)
+        .expect("the unlimited query");
+    let GovernedOutcome::Complete { result, .. } = &unlimited_rows else {
+        panic!("nothing is bounded, so it completes: {unlimited_rows:?}");
+    };
+    let limited_rows = engine
+        .query_governed(
+            &dataset,
+            request("SELECT ?s ?o WHERE { ?s <http://example.org/p> ?o } LIMIT 5"),
+            &QueryGovernors::UNBOUNDED,
+        )
+        .expect("the limited query");
+    let GovernedOutcome::Complete {
+        result: limited_result,
+        ..
+    } = &limited_rows
+    else {
+        panic!("nothing is bounded, so it completes: {limited_rows:?}");
+    };
+    let (SparqlResult::Solutions { rows: all, .. }, SparqlResult::Solutions { rows: five, .. }) =
+        (result, limited_result)
+    else {
+        panic!("both are SELECTs");
+    };
+    assert_eq!(five.len(), 5);
+    assert_eq!(
+        &all[..5],
+        &five[..],
+        "a stopped scan must return the same rows a full scan's first five were"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Admission: the refusal that happens before the first charge
+// ---------------------------------------------------------------------------
+
+#[test]
+fn admission_refuses_an_estimated_ceiling_breach_before_evaluating() {
+    let engine = NativeSparqlEngine::new();
+    let dataset = fixture();
+
+    // A ceiling the cost model already predicts this plan will breach. Nothing is
+    // evaluated: the refusal is decided from the plan and the dataset's statistics alone.
+    let refused = engine
+        .query_governed(
+            &dataset,
+            request(ALL_ROWS),
+            &QueryGovernors::METERED.with_max_intermediate_cells(1),
+        )
+        .expect("a refusal is an outcome, not an error");
+    let exhausted = refused
+        .exhausted()
+        .expect("the estimate exceeds the ceiling, so the plan is refused");
+
+    // The trip NAMES the governor, and names it as a refusal: the payload is an
+    // `estimate`, never a `consumed`. That distinction is the whole type.
+    let TrippedGovernor::Refused {
+        dimension,
+        limit,
+        estimate,
+    } = exhausted.tripped
+    else {
+        panic!(
+            "an admission decision must be reported as a refusal, not as a measured \
+             ceiling crossing: {:?}",
+            exhausted.tripped
+        );
+    };
+    assert_eq!(dimension, ResourceDimension::IntermediateCells);
+    assert_eq!(limit, 1);
+    assert!(estimate > limit, "a refusal only fires above the ceiling");
+    assert_eq!(
+        exhausted.tripped.label(),
+        "cardinality-admission-refused",
+        "the label distinguishes a refusal from the same dimension's exhausted budget"
+    );
+    assert!(
+        exhausted.tripped.to_string().contains("estimated"),
+        "the prose must say ESTIMATED: {}",
+        exhausted.tripped
+    );
+
+    // BEFORE evaluating. Every counter is engaged (METERED), so a single charge anywhere
+    // would show up — and none did.
+    for dimension in ResourceDimension::ALL {
+        assert_eq!(
+            exhausted.evidence.consumed_in(dimension),
+            0,
+            "a refused query consumed {dimension:?}, so something ran after all"
+        );
+    }
+    // It never claims completeness, and what it hands back is the honest statement about a
+    // query that did not run: a certified lower bound over nothing.
+    assert!(!refused.is_complete());
+    let certified = exhausted
+        .partial
+        .result()
+        .expect("the empty lower bound is still a bound");
+    assert_eq!(row_count(certified.result()), 0);
+    assert!(certified.is_positional_prefix());
+
+    // Deterministic: same query, same data, same ceiling — same decision, every time.
+    for attempt in 1..8 {
+        let again = engine
+            .query_governed(
+                &dataset,
+                request(ALL_ROWS),
+                &QueryGovernors::METERED.with_max_intermediate_cells(1),
+            )
+            .expect("a refusal is an outcome");
+        assert_eq!(
+            again.tripped(),
+            Some(exhausted.tripped),
+            "attempt {attempt} reached a different admission decision"
+        );
+    }
+    // …and monotone in the ceiling: raised above the estimate, the same plan is admitted
+    // and completes. A refusal costs a caller an answer they could have had; it can never
+    // hand them a wrong one.
+    let admitted = engine
+        .query_governed(
+            &dataset,
+            request(ALL_ROWS),
+            &QueryGovernors::METERED.with_max_intermediate_cells(estimate),
+        )
+        .expect("an admitted run");
+    assert!(
+        admitted.is_complete(),
+        "the ceiling is inclusive at admission too: estimate == limit is admitted"
+    );
+
+    // Admission governs every query form, and a refusal is shaped by the form it refused:
+    // a caller matching on the result of a refused `CONSTRUCT` finds the `Graph` arm it
+    // finds on every other path, never a solutions set standing in for a graph.
+    for query in [
+        "ASK { ?s <http://example.org/p> ?o }",
+        "CONSTRUCT { ?s <http://example.org/q> ?o } \
+         WHERE { ?s <http://example.org/p> ?o }",
+        "DESCRIBE ?s WHERE { ?s <http://example.org/p> ?o }",
+    ] {
+        let outcome = engine
+            .query_governed(
+                &dataset,
+                request(query),
+                &QueryGovernors::METERED.with_max_intermediate_cells(1),
+            )
+            .expect("a refusal is an outcome");
+        let refused = outcome
+            .exhausted()
+            .unwrap_or_else(|| panic!("{query}: the same plan must be refused"));
+        assert!(
+            matches!(refused.tripped, TrippedGovernor::Refused { .. }),
+            "{query}: {:?}",
+            refused.tripped
+        );
+        let empty = refused
+            .partial
+            .result()
+            .unwrap_or_else(|| panic!("{query}: the empty lower bound is still a bound"));
+        match (query.starts_with("ASK"), empty.result()) {
+            // A `false` reached without running is not a claim that no answer exists — it
+            // is only ever readable inside an exhausted budget, exactly as a `false`
+            // reached by a truncated search is.
+            (true, SparqlResult::Boolean(false)) => {}
+            (false, SparqlResult::Graph(graph)) => {
+                assert_eq!(statement_count(graph), 0, "{query}: nothing ran");
+            }
+            (_, other) => panic!("{query}: a refusal must keep its form's shape: {other:?}"),
+        }
+    }
+
+    // A REFUSAL and an OBSERVED TRIP in the same dimension must be distinguishable, or the
+    // refusal would be free to masquerade as a measurement. A property path is the case
+    // that separates them: it is not a basic graph pattern, so the cost model produces no
+    // estimate for it — the plan is admitted, and the live cell meter then observes the
+    // bag that really materialised and reports a `Budget` crossing carrying a `consumed`.
+    let observed = engine
+        .query_governed(
+            &dataset,
+            request("SELECT ?s ?o WHERE { ?s <http://example.org/p>+ ?o }"),
+            &QueryGovernors::METERED.with_max_intermediate_cells(1),
+        )
+        .expect("an observed trip is an outcome");
+    let observed = observed
+        .exhausted()
+        .expect("the path's real bag exceeds a ceiling of one");
+    let TrippedGovernor::Budget {
+        dimension: observed_dimension,
+        consumed,
+        ..
+    } = observed.tripped
+    else {
+        panic!(
+            "a ceiling crossed by a MEASUREMENT must be reported as a budget, not as a \
+             refusal: {:?}",
+            observed.tripped
+        );
+    };
+    assert_eq!(observed_dimension, ResourceDimension::IntermediateCells);
+    assert!(consumed > 1);
+    assert_eq!(observed.tripped.label(), "cardinality-exhausted");
+    assert_ne!(
+        observed.tripped.label(),
+        exhausted.tripped.label(),
+        "one dimension, two verdicts, two labels: a caller must be able to tell a plan \
+         that was predicted to be too big from one that was measured to be"
+    );
+    assert!(
+        observed.evidence.consumed_in(ResourceDimension::Fuel) > 0,
+        "an observed trip ran; that is what makes it an observation"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// EXPLAIN: the per-node ledger
+// ---------------------------------------------------------------------------
+
+#[test]
+fn explain_reports_a_deterministic_per_node_ledger() {
+    let engine = NativeSparqlEngine::new();
+    let dataset = fixture();
+    // A plan with several distinct node kinds, one of which is a two-pattern BGP so the
+    // cost planner produces both a join order and a cardinality estimate.
+    let query = "SELECT DISTINCT ?s ?n WHERE { \
+                 ?s <http://example.org/p> ?o . ?s <http://example.org/n> ?n \
+                 FILTER(?n != <http://example.org/absent>) } ORDER BY ?s";
+
+    let first = engine
+        .explain_query(&dataset, query, None)
+        .expect("explain the query");
+    // Byte-identical across runs. A frozen corpus pins this text, so any clock read, any
+    // address, and any hash-map iteration in the rendering would surface here.
+    let rendered = first.render();
+    for attempt in 1..8 {
+        let again = engine
+            .explain_query(&dataset, query, None)
+            .expect("explain the query again");
+        assert_eq!(
+            again.render(),
+            rendered,
+            "attempt {attempt} rendered a different explanation for the same query, data \
+             and build"
+        );
+    }
+    // A second engine, with a cold plan cache, renders the same bytes: the explanation is
+    // a function of the query and the data, never of the engine's history.
+    assert_eq!(
+        NativeSparqlEngine::new()
+            .explain_query(&dataset, query, None)
+            .expect("explain from a cold engine")
+            .render(),
+        rendered,
+        "a cold engine explained the same query differently"
+    );
+
+    // The profile the cost was priced under travels with it, because a cost without one is
+    // not comparable across builds.
+    let profile = first.profile();
+    assert_eq!(profile.id, GOVERNOR_PROFILE_ID);
+    assert_eq!(profile.version, GOVERNOR_PROFILE_VERSION);
+    assert_eq!(profile.digest, *GOVERNOR_PROFILE_DIGEST);
+    assert_eq!(profile.stop_poll_fuel, STOP_POLL_FUEL);
+    assert!(rendered.contains(GOVERNOR_PROFILE_ID));
+    assert!(rendered.contains(&format!("v{GOVERNOR_PROFILE_VERSION}")));
+    assert!(rendered.contains(&*GOVERNOR_PROFILE_DIGEST));
+    assert!(rendered.contains(&STOP_POLL_FUEL.to_string()));
+    // The schedule itself is rendered, so a reader can price the ledger's fuel column
+    // without knowing this build.
+    for (label, _) in CHARGE_SCHEDULE {
+        assert!(
+            rendered.contains(label),
+            "the rendered schedule omits the charge point {label}"
+        );
+    }
+
+    // The ledger is per node, in the plan's pre-order, with no gaps and no repeats.
+    let ledger = first.ledger();
+    assert!(ledger.len() >= 4, "expected a multi-node plan: {ledger:?}");
+    for (position, node) in ledger.iter().enumerate() {
+        assert_eq!(node.ordinal, position, "ordinals are positional");
+        assert!(!node.label.is_empty());
+    }
+    assert_eq!(ledger[0].depth, 0, "the first node is the plan root");
+
+    // The ledger DECOMPOSES the evidence: its fuel column sums to exactly the total the
+    // evidence reports. A decomposition that did not add up would be a decomposition of
+    // some other number.
+    let ledger_fuel: u64 = ledger
+        .iter()
+        .map(purrdf_sparql_eval::NodeCharges::fuel_total)
+        .sum();
+    assert_eq!(
+        ledger_fuel,
+        first.evidence().consumed_in(ResourceDimension::Fuel),
+        "the per-node fuel column must sum to the execution's fuel total"
+    );
+    assert!(ledger_fuel > 0, "the explained run must actually have run");
+
+    // Estimated versus actual, wherever the cost planner produced a number. That pairing is
+    // the only thing that makes the estimator's error observable at all.
+    let estimated: Vec<_> = ledger
+        .iter()
+        .filter_map(|node| node.estimate.as_ref().map(|estimate| (node, estimate)))
+        .collect();
+    assert!(
+        !estimated.is_empty(),
+        "a two-pattern BGP must carry the planner's prediction: {ledger:?}"
+    );
+    for (node, estimate) in &estimated {
+        assert!(estimate.columns > 0, "a BGP with variables has columns");
+        assert!(
+            estimate.peak_rows >= estimate.rows,
+            "the peak of a running estimate is at least its last value"
+        );
+        assert_eq!(
+            estimate.peak_cells(),
+            estimate.peak_rows.saturating_mul(estimate.columns)
+        );
+        assert!(
+            rendered.contains(&format!(
+                "estimated-rows={} actual-rows={}",
+                estimate.rows, node.rows
+            )),
+            "the rendering must print the prediction beside what materialised"
+        );
+    }
+
+    // The join orders the API returned before the ledger existed are still there, unmoved.
+    assert_eq!(
+        first.join_orders().len(),
+        2,
+        "a two-pattern BGP contributes two ordered pattern strings: {:?}",
+        first.join_orders()
+    );
+
+    // Explaining does not bound the query: `METERED` reaches no ceiling, so the run the
+    // explanation describes is the run a caller would get.
+    assert!(first.evidence().is_complete(), "{:?}", first.evidence());
+}
+
+// ---------------------------------------------------------------------------
+// The cap over a graph-producing form
+// ---------------------------------------------------------------------------
+
+/// The graph a query returns under `governors`, and whether it completed.
+fn graph_outcome(query: &str, governors: &QueryGovernors) -> GovernedOutcome {
+    NativeSparqlEngine::new()
+        .query_governed(&fixture(), request(query), governors)
+        .expect("a tripped governor is an outcome, not a query error")
+}
+
+/// Assert the inclusive cap boundary over a graph-producing `query`: a cap equal to the
+/// answer's statement count completes, and one below it trips with the graph truncated to
+/// exactly the cap.
+///
+/// The denomination under test is **output statements**, which is what the cap counts for a
+/// form whose answer *is* a graph — see `construct::commit_answer_triples`. Solution rows
+/// would be the wrong meter: one `CONSTRUCT` row can instantiate a whole template, and a
+/// `DESCRIBE` of one bound subject can pull in that subject's entire description.
+fn assert_graph_cap_boundary(query: &str) -> usize {
+    let complete = graph_outcome(query, &QueryGovernors::METERED);
+    let GovernedOutcome::Complete { result, .. } = &complete else {
+        panic!("METERED bounds nothing: {complete:?}");
+    };
+    let size = statement_count(graph_of(result));
+    assert!(size > 1, "{query}: the fixture must produce a real graph");
+
+    // cap == size: complete. Ceilings are inclusive everywhere in this engine.
+    let at_the_cap = graph_outcome(
+        query,
+        &QueryGovernors::UNBOUNDED.with_max_answers(size as u64),
+    );
+    let GovernedOutcome::Complete { result, evidence } = &at_the_cap else {
+        panic!("{query}: cap == size must be complete: {at_the_cap:?}");
+    };
+    assert_eq!(statement_count(graph_of(result)), size);
+    assert!(evidence.is_complete());
+    assert_eq!(
+        evidence.consumed_in(ResourceDimension::AnswerRows),
+        size as u64,
+        "{query}: the cap is charged once per output statement"
+    );
+
+    // cap == size - 1: exhausted, at the same boundary a SELECT trips at.
+    let one_below = graph_outcome(
+        query,
+        &QueryGovernors::UNBOUNDED.with_max_answers(size as u64 - 1),
+    );
+    let (tripped, partial, _) = exhausted(&one_below);
+    assert_eq!(
+        tripped,
+        TrippedGovernor::Budget {
+            dimension: ResourceDimension::AnswerRows,
+            limit: size as u64 - 1,
+            consumed: size as u64,
+        },
+        "{query}: cap == size - 1 trips on the statement that would have exceeded it"
+    );
+    // `into_result` twice: the caller who wants the truncated graph itself, taking it out
+    // of the certificate rather than borrowing through it.
+    let certified = partial
+        .clone()
+        .into_result()
+        .unwrap_or_else(|| panic!("{query}: the admitted prefix is certified"));
+    assert!(partial.is_certain());
+    assert!(
+        certified.is_positional_prefix(),
+        "{query}: the truncated graph is the complete graph's first statements, in the \
+         frozen canonical order, so raising the cap returns these same statements first"
+    );
+    let truncated = certified.into_result();
+    assert_eq!(
+        statement_count(graph_of(&truncated)),
+        size - 1,
+        "{query}: the cap admits exactly its own count of statements"
+    );
+    size
+}
+
+#[test]
+fn the_answer_cap_governs_construct_output_triples_at_the_same_inclusive_boundary() {
+    // A one-row-to-one-triple template, so the boundary is legible: `EDGES` solutions
+    // become `EDGES` statements.
+    let flat = assert_graph_cap_boundary(
+        "CONSTRUCT { ?s <http://example.org/q> ?o } WHERE { ?s <http://example.org/p> ?o }",
+    );
+    assert_eq!(flat, EDGES);
+
+    // The reason rows are the wrong denomination, made concrete: the same `EDGES`
+    // solutions through a three-triple template are three times the answer. A cap that
+    // counted rows would let this query return 3× what the caller asked for.
+    let fanned = assert_graph_cap_boundary(
+        "CONSTRUCT { ?s <http://example.org/q> ?o . \
+                     ?o <http://example.org/r> ?s . \
+                     ?s <http://example.org/t> ?s } \
+         WHERE { ?s <http://example.org/p> ?o }",
+    );
+    assert_eq!(
+        fanned,
+        EDGES * 3,
+        "the cap must see the template's fan-out, not the WHERE's row count"
+    );
+
+    // RDF 1.2: a reifier binding is a statement the caller receives, and it lives in a
+    // side table rather than in `quads` — so a cap that only counted quads would be a
+    // governor an RDF 1.2 CONSTRUCT could be written straight around. Here the output has
+    // NO quads at all and the cap still governs it.
+    let reified = assert_graph_cap_boundary(
+        "CONSTRUCT { ?r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> \
+                     <<( ?s <http://example.org/p> ?o )>> } \
+         WHERE { ?s <http://example.org/p> ?o . BIND(?s AS ?r) }",
+    );
+    assert_eq!(reified, EDGES);
+    let graph = graph_outcome(
+        "CONSTRUCT { ?r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> \
+                     <<( ?s <http://example.org/p> ?o )>> } \
+         WHERE { ?s <http://example.org/p> ?o . BIND(?s AS ?r) }",
+        &QueryGovernors::METERED,
+    );
+    let GovernedOutcome::Complete { result, .. } = &graph else {
+        panic!("METERED bounds nothing: {graph:?}");
+    };
+    assert_eq!(
+        graph_of(result).quad_count(),
+        0,
+        "this template emits only reifier bindings"
+    );
+    assert_eq!(graph_of(result).reifiers().count(), EDGES);
+}
+
+#[test]
+fn the_answer_cap_governs_describe_output_triples_at_the_same_inclusive_boundary() {
+    // `DESCRIBE ?s` over every subject: the cap denominates the description's statements,
+    // exactly as it does a `CONSTRUCT`'s. It matters more here — a `DESCRIBE` whose WHERE
+    // bound a single row can still return that subject's entire concise bounded
+    // description, so a row-denominated cap would bound nothing at all.
+    let described = assert_graph_cap_boundary("DESCRIBE ?s WHERE { ?s <http://example.org/p> ?o }");
+    assert_eq!(described, EDGES);
+
+    // And with no pattern to evaluate at all: `DESCRIBE <iri>` charges the cap against the
+    // description it built, which is the only work such a query does.
+    let concrete = graph_outcome(
+        "DESCRIBE <http://example.org/s0> <http://example.org/s1> <http://example.org/s2>",
+        &QueryGovernors::METERED,
+    );
+    let GovernedOutcome::Complete { result, .. } = &concrete else {
+        panic!("METERED bounds nothing: {concrete:?}");
+    };
+    let size = statement_count(graph_of(result));
+    assert_eq!(size, 3, "three subjects, one statement each");
+    assert!(
+        graph_outcome(
+            "DESCRIBE <http://example.org/s0> <http://example.org/s1> <http://example.org/s2>",
+            &QueryGovernors::UNBOUNDED.with_max_answers(3),
+        )
+        .is_complete()
+    );
+    let one_below = graph_outcome(
+        "DESCRIBE <http://example.org/s0> <http://example.org/s1> <http://example.org/s2>",
+        &QueryGovernors::UNBOUNDED.with_max_answers(2),
+    );
+    let (tripped, partial, _) = exhausted(&one_below);
+    assert_eq!(
+        tripped,
+        TrippedGovernor::Budget {
+            dimension: ResourceDimension::AnswerRows,
+            limit: 2,
+            consumed: 3,
+        }
+    );
+    let certified = partial.result().expect("the admitted prefix is certified");
+    assert_eq!(statement_count(graph_of(certified.result())), 2);
 }

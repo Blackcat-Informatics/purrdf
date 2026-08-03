@@ -89,8 +89,8 @@ pub use governed::{
 pub use governor::{
     CHARGE_SCHEDULE, CancellationFlag, ChargePoint, GOVERNOR_CORPUS_DIGEST,
     GOVERNOR_PROFILE_DIGEST, GOVERNOR_PROFILE_ID, GOVERNOR_PROFILE_VERSION, GovernorState,
-    ItemCharge, NonMonotoneBarrier, QueryGovernors, STOP_POLL_FUEL, StopSignal, WallDeadline,
-    resolve_precedence,
+    ItemCharge, NodeCharges, NonMonotoneBarrier, PlanEstimate, ProfileIdentity, QueryExplanation,
+    QueryGovernors, STOP_POLL_FUEL, StopSignal, WallDeadline, resolve_precedence,
 };
 // The kernel's governor vocabulary, re-exported so a host that governs queries through
 // this crate can NAME what it gets back — the ceilings it set, what was spent, and which

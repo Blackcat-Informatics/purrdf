@@ -37,6 +37,14 @@ pub(crate) fn eval_values<D: DatasetView + Sync>(
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
     let schema = Arc::new(VarSchema::from_vars(variables.iter().cloned()));
     let width = schema.len();
+    // `VALUES` is 1:1 with its inline bindings, in order, so the pushed row ceiling is
+    // simply how many of them are worth interning. Interning is not free — every ground
+    // term goes through the scratch arena's value hash — so a `VALUES` block of ten
+    // thousand rows under a `LIMIT 5` stops after five.
+    let bindings = match ctx.row_ceiling() {
+        Some(ceiling) if ceiling < bindings.len() => &bindings[..ceiling],
+        Some(_) | None => bindings,
+    };
     let mut rows = Vec::with_capacity(bindings.len());
     for binding in bindings {
         let mut row = smallvec::smallvec![None; width];

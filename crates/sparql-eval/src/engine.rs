@@ -35,10 +35,11 @@ use crate::DetHashMap;
 use crate::dataset_spec::ActiveDataset;
 use crate::eval::{
     BgpOrderCache, EvalCtx, EvalOptions, EvaluatedOutcome, LossVocabulary, Outcome,
-    StandpointPredicates, evaluate_query, evaluate_query_evaluated,
+    StandpointPredicates, evaluate_query, evaluate_query_evaluated, query_pattern,
 };
+use crate::governor::ledger::ChargeLedger;
 use crate::governor::soundness::SpineClass;
-use crate::governor::{GovernorState, QueryGovernors};
+use crate::governor::{GovernorState, QueryExplanation, QueryGovernors};
 use crate::update::{GraphResolver, eval_update};
 use crate::{
     BudgetExhausted, CompleteSparqlResult, FallibleSparqlError, FallibleSparqlResult,
@@ -345,6 +346,9 @@ impl NativeSparqlEngine {
         governors: &QueryGovernors,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
         let state = Arc::new(GovernorState::new(governors));
+        if let Some(refused) = self.admit(dataset, &prepared.query, &state) {
+            return refused;
+        }
         let mut ctx = self.eval_ctx(dataset).with_governors(Arc::clone(&state));
         let evaluated = evaluate_governed_with_substitutions(prepared, substitutions, &mut ctx)?;
         Ok(materialize_governed(evaluated, &ctx, &state))
@@ -395,6 +399,9 @@ impl NativeSparqlEngine {
             &self.parser_options,
         )?;
         let state = Arc::new(GovernorState::new(governors));
+        if let Some(refused) = self.admit(dataset, &prepared.query, &state) {
+            return refused;
+        }
         let mut ctx = self
             .eval_ctx(dataset)
             .with_governors(Arc::clone(&state))
@@ -445,6 +452,9 @@ impl NativeSparqlEngine {
             request.base_iri,
             &self.parser_options,
         )?;
+        if let Some(refused) = self.admit(dataset, &prepared.query, state) {
+            return refused;
+        }
         let mut ctx = self.eval_ctx(dataset).with_governors(Arc::clone(state));
         if let Some(registry) = functions {
             ctx = ctx.with_user_functions(registry);
@@ -512,6 +522,9 @@ impl NativeSparqlEngine {
                 return finish_governed_fallible_query(dataset, &state, Err(diagnostic));
             }
         };
+        if let Some(refused) = self.admit(dataset, &prepared.query, &state) {
+            return finish_governed_fallible_query(dataset, &state, refused);
+        }
         let evaluation = {
             let _sequential = crate::parallel::force_sequential_operation();
             let mut ctx = self.eval_ctx(dataset).with_governors(Arc::clone(&state));
@@ -597,25 +610,41 @@ impl NativeSparqlEngine {
         ctx
     }
 
-    /// Explain the cost-based BGP join order the engine would choose for
-    /// `query_text` against `dataset`.
+    /// Explain what the engine will do with `query_text` against `dataset`, and what it
+    /// costs: the cost-based BGP join orders, the per-node charge ledger, the planner's
+    /// prediction beside the cardinality that actually materialised, and the identity of
+    /// the charge schedule all of it was priced under.
     ///
-    /// Returns an ordered list of triple-pattern strings: for every BGP in the
-    /// query with at least two triple patterns, the patterns are listed in the
-    /// order the planner selected. BGPs are visited in a left-to-right DFS over
-    /// the algebra, so subqueries, OPTIONAL/UNION branches, and GRAPH blocks are
-    /// all represented in query-text order. This is a pure-introspection API: it
-    /// does not evaluate the query and does not mutate the engine state.
+    /// [`QueryExplanation::join_orders`] is the value this method used to return: for every
+    /// BGP with at least two triple patterns, its patterns in the order the planner
+    /// selected, with BGPs visited in a left-to-right DFS over the algebra so subqueries,
+    /// `OPTIONAL`/`UNION` branches, and `GRAPH` blocks all appear in query-text order.
+    ///
+    /// # This **evaluates** the query
+    ///
+    /// It has to. A ledger of what a query cost cannot be derived from its text, and the
+    /// planner's error — the one thing an EXPLAIN is for — is only observable by putting
+    /// the estimate beside the count. The evaluation runs under
+    /// [`QueryGovernors::METERED`], which engages every counter at a ceiling nothing can
+    /// reach: the query is measured, never bounded, so the explanation describes the run a
+    /// caller would actually get. Engine state is still not mutated (the plan cache's
+    /// memoized parse aside, exactly as every other entry point warms it).
+    ///
+    /// The consequence to expect is that a query which fails to *evaluate* now fails to
+    /// explain, with the same diagnostic — a `SERVICE` clause on an engine with no
+    /// federation source being the practical case. That is the honest report: there is no
+    /// cost to describe for work that cannot be done.
     ///
     /// # Errors
     ///
-    /// Returns an [`RdfDiagnostic`] if the query text does not parse.
+    /// Returns an [`RdfDiagnostic`] if the query text does not parse, or if evaluating it
+    /// fails.
     pub fn explain_query(
         &self,
         dataset: &Arc<RdfDataset>,
         query_text: &str,
         base_iri: Option<&str>,
-    ) -> Result<Vec<String>, RdfDiagnostic> {
+    ) -> Result<QueryExplanation, RdfDiagnostic> {
         self.explain_query_view(&**dataset, query_text, base_iri)
     }
 
@@ -625,32 +654,144 @@ impl NativeSparqlEngine {
     ///
     /// # Errors
     ///
-    /// Returns an [`RdfDiagnostic`] if the query text does not parse.
+    /// Returns an [`RdfDiagnostic`] if the query text does not parse, or if evaluating it
+    /// fails.
     pub fn explain_query_view<D: DatasetView + Sync>(
         &self,
         dataset: &D,
         query_text: &str,
         base_iri: Option<&str>,
-    ) -> Result<Vec<String>, RdfDiagnostic> {
+    ) -> Result<QueryExplanation, RdfDiagnostic> {
         let prepared =
             self.cache
                 .borrow_mut()
                 .prepare_with(query_text, base_iri, &self.parser_options)?;
-        let active_dataset = ActiveDataset::from_query_dataset(prepared.query.dataset(), dataset);
-        let mut out = Vec::new();
-        let pattern = match &prepared.query {
-            Query::Select { pattern, .. } | Query::Ask { pattern, .. } => pattern,
-            Query::Construct { pattern, .. } | Query::Describe { pattern, .. } => pattern,
-        };
-        crate::bgp::explain_pattern_orders(
+        let survey = self.survey_plan(dataset, &prepared.query)?;
+        // The ledger's node table is fixed against the plan that is about to be evaluated.
+        // No substitutions are applied on this path, so the addresses the ledger records
+        // are the addresses the evaluator visits.
+        let ledger = Arc::new(ChargeLedger::for_plan(
+            query_pattern(&prepared.query),
+            &survey.estimates,
+        ));
+        let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
+        let mut ctx = self
+            .eval_ctx(dataset)
+            .with_governors(Arc::clone(&state))
+            .with_charge_ledger(Arc::clone(&ledger));
+        evaluate_query_evaluated(&prepared.query, &mut ctx)
+            .map_err(|e| RdfDiagnostic::error("native-sparql-query-explain", e.to_string()))?;
+        Ok(QueryExplanation::new(
+            survey.orders,
+            ledger.snapshot(),
+            state.evidence(),
+        ))
+    }
+
+    /// Walk `query`'s plan against `dataset`'s statistics without evaluating it: the join
+    /// order the cost model chooses for every BGP, and the cardinality it predicts.
+    ///
+    /// One walk feeds both consumers — admission control, which refuses a plan whose
+    /// predicted peak already exceeds the caller's ceiling, and the ledger, which prints
+    /// that prediction beside the count that materialised.
+    fn survey_plan<D: DatasetView + Sync>(
+        &self,
+        dataset: &D,
+        query: &Query,
+    ) -> Result<crate::bgp::PlanSurvey, RdfDiagnostic> {
+        let _ = self;
+        let active_dataset = ActiveDataset::from_query_dataset(query.dataset(), dataset);
+        let mut survey = crate::bgp::PlanSurvey::default();
+        crate::bgp::survey_pattern_plans(
             dataset,
             &active_dataset,
             GraphMatch::Default,
-            pattern,
-            &mut out,
+            query_pattern(query),
+            &mut survey,
         )
         .map_err(|e| RdfDiagnostic::error("native-sparql-query-explain", e.to_string()))?;
-        Ok(out)
+        Ok(survey)
+    }
+
+    /// Decide whether `query` may be evaluated at all under `state`'s ceilings, refusing it
+    /// when the cost planner already predicts a breach.
+    ///
+    /// # Why refusing beats reporting
+    ///
+    /// Every other governor is a *meter*: it observes consumption and stops the execution
+    /// once a ceiling is crossed, which means the work that crossed it has already been
+    /// done. For fuel or a row count that is fine — the overshoot is one charge point. For
+    /// the intermediate-cardinality ceiling it is not, because the work that crosses it is
+    /// a single allocation of the bag that crossed it: by the time the meter can report a
+    /// materialized cross product, the cross product is in memory. On `wasm32` the
+    /// distinction is total rather than merely uncomfortable — an allocation trap aborts
+    /// the module, so there is no execution left to return a [`GovernedOutcome`] at all.
+    /// Admission is the only mechanism that can act before that point.
+    ///
+    /// # Determinism, and what an estimate is allowed to claim
+    ///
+    /// The decision is a pure function of the query as written, the dataset's cardinality
+    /// statistics, and the ceiling. The cost model probes the same statistics the join
+    /// planner probes, composes them with order-stable arithmetic, and the plan walk visits
+    /// nodes in algebra order — so the same query over the same data under the same ceiling
+    /// is refused, or admitted, identically on every run and every machine. Nothing here
+    /// reads a clock, a thread count, or a hash-map iteration order.
+    ///
+    /// "As written" is exact: pre-binding substitutions are applied *after* this decision,
+    /// so the estimate is the un-substituted plan's. That direction is the safe one — a
+    /// substitution can only bind a variable, never free one, so the plan it produces is no
+    /// larger than the one priced here — and it is also what keeps the decision independent
+    /// of which substitutions a caller happened to pass. The cost is that a heavily
+    /// pre-bound query can be refused on its unbound shape; the live ceiling would then have
+    /// admitted it, and raising the ceiling to the reported estimate is what gets it run.
+    ///
+    /// An estimate is an estimate, so the refusal is stated as one: it is reported as
+    /// [`TrippedGovernor::Refused`](purrdf_core::TrippedGovernor::Refused), which carries
+    /// the *estimate* rather than a consumption it never measured, and it is never a
+    /// completeness claim — the outcome is a budget-exhausted one whose certified partial
+    /// answer is empty, which is the truth about a query that did not run. An
+    /// over-estimate therefore costs a caller an answer; it cannot hand them a wrong one.
+    /// An under-estimate changes nothing: the live ceiling is still in force and still
+    /// trips.
+    fn admit<D: DatasetView + Sync>(
+        &self,
+        dataset: &D,
+        query: &Query,
+        state: &GovernorState,
+    ) -> Option<Result<GovernedOutcome, RdfDiagnostic>> {
+        let dimension = purrdf_core::ResourceDimension::IntermediateCells;
+        if !state.is_engaged_in(dimension) {
+            return None;
+        }
+        let limit = state.limits().get(dimension);
+        let estimate = match self.survey_plan(dataset, query) {
+            Ok(survey) => survey.peak_cells(),
+            Err(diagnostic) => return Some(Err(diagnostic)),
+        };
+        if estimate <= limit {
+            return None;
+        }
+        // Latched through the same door an evaluator-side trip uses, so a stop signal that
+        // was already firing outranks the refusal exactly as `resolve_precedence` says it
+        // should, and the evidence reports one governor rather than two.
+        let tripped = state.record_trip(purrdf_core::TrippedGovernor::Refused {
+            dimension,
+            limit,
+            estimate,
+        });
+        Some(Ok(GovernedOutcome::BudgetExhausted(BudgetExhausted {
+            tripped,
+            evidence: state.evidence(),
+            // A certified LOWER bound over nothing: every row here is an answer, and there
+            // are none. That is the strongest true statement about a query that did not
+            // run, and it is a positional prefix of the true answer for the same reason
+            // the empty sequence is a prefix of everything — so a caller who raises the
+            // ceiling and re-runs gets these (zero) answers first, trivially.
+            partial: PartialAnswers::Certain(PartialSparqlResult::new(
+                empty_result_for(query),
+                true,
+            )),
+        })))
     }
 
     /// Evaluate a SPARQL query under SHACL-SPARQL pre-binding semantics.
@@ -1049,6 +1190,35 @@ fn materialize<D: DatasetView + Sync>(
         }
         Outcome::Graph(graph) => SparqlResult::Graph(graph),
         Outcome::Boolean(value) => SparqlResult::Boolean(value),
+    }
+}
+
+/// A frozen dataset with nothing in it — the auxiliary graph of a solution set that
+/// invented no terms, and the whole result of a graph-producing query that did not run.
+fn empty_dataset() -> Arc<RdfDataset> {
+    purrdf_core::RdfDatasetBuilder::new()
+        .freeze()
+        .expect("an empty dataset is positionally valid")
+}
+
+/// The empty result of `query`'s form — what an execution that produced nothing produced.
+///
+/// Shaped by form rather than always `Solutions`, so a caller matching on the result of a
+/// refused `CONSTRUCT` finds the `Graph` arm it would find on every other path. The
+/// variable list is empty because a refused query never chose one: this engine fixes a
+/// solution's column ORDER during evaluation (a BGP's columns appear in the order the
+/// cost-based join order visits them), so naming columns for a plan that was never run
+/// would be a guess — the same reason, stated in [`crate::governor`], that a truncated
+/// binary operator reports its left arm's columns and no more.
+fn empty_result_for(query: &Query) -> SparqlResult {
+    match query {
+        Query::Select { .. } => SparqlResult::Solutions {
+            variables: Vec::new(),
+            rows: Vec::new(),
+            aux: empty_dataset(),
+        },
+        Query::Ask { .. } => SparqlResult::Boolean(false),
+        Query::Construct { .. } | Query::Describe { .. } => SparqlResult::Graph(empty_dataset()),
     }
 }
 
@@ -2456,7 +2626,7 @@ mod tests {
     fn explain_query_returns_non_empty_order_for_multi_pattern_bgp() {
         let ds = social();
         let engine = NativeSparqlEngine::new();
-        let plan = engine
+        let explanation = engine
             .explain_query(
                 &ds,
                 "SELECT ?o ?n WHERE { \
@@ -2465,6 +2635,7 @@ mod tests {
                 None,
             )
             .expect("explain");
+        let plan = explanation.join_orders();
         assert!(
             plan.len() >= 2,
             "expected at least two triple-pattern strings, got {plan:?}"
