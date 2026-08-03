@@ -463,15 +463,29 @@ where
             visit(PatternPart::Child(left, ChildEdge::MONOTONE_BAG))
                 || visit(PatternPart::Child(right, ChildEdge::MONOTONE))
         }
-        // Truncating the optional side can only cause MORE left rows to find no match and
-        // be padded with unbound, so it bounds the output from above.
+        // `OPTIONAL` over a truncated optional side is an inner join, not a wider outer
+        // join: `binop::left_join_lift` suppresses the left-alone padding exactly then,
+        // because "no compatible right row exists" is a claim about the WHOLE right bag.
+        //
+        // Padding instead — and calling the result an upper bound — is the classification
+        // this comment exists to warn off. It is wrong in both directions. The padded row
+        // is not an answer, so it is no lower bound; and it is emitted *instead of* the
+        // true rows `l ⋈ m` for every `m` past the cut, so those answers are missing from
+        // the output and the upper bound's one licence — "a row absent from this result is
+        // definitively not an answer" — is false of precisely the rows the cut hid.
+        //
+        // With the padding suppressed the emitted rows are `{l ⋈ m : m ∈ R'}` for the
+        // partial right bag `R' ⊆ R`, every one of which is in the true output: a sound
+        // sub-bag. Rows vanish from the middle of each left row's block rather than from
+        // the end, so it is bag-only — the same edge, for the same reason, as `Join`'s
+        // right arm.
         GraphPattern::LeftJoin {
             left,
             right,
             expression,
         } => {
             visit(PatternPart::Child(left, ChildEdge::MONOTONE))
-                || visit(PatternPart::Child(right, ChildEdge::ANTITONE))
+                || visit(PatternPart::Child(right, ChildEdge::MONOTONE_BAG))
                 || expression
                     .as_ref()
                     .is_some_and(|e| visit(PatternPart::Expression(e)))
@@ -1033,7 +1047,7 @@ mod tests {
     }
 
     #[test]
-    fn left_join_right_arm_truncation_yields_an_upper_bound_not_unknown() {
+    fn left_join_right_arm_truncation_yields_a_bag_lower_bound_not_an_upper_one() {
         let plan = GraphPattern::LeftJoin {
             left: boxed(bgp()),
             right: boxed(other_bgp()),
@@ -1045,11 +1059,28 @@ mod tests {
         let right = context_at(&plan, &[1]);
         assert_eq!(
             right.class(),
-            SpineClass::Possible,
-            "truncating the optional side can only pad MORE left rows with unbound, so \
-             it bounds the output from above"
+            SpineClass::Certain,
+            "with the left-alone padding suppressed (which it must be — a padded row \
+             asserts that the WHOLE right bag had no match), the operator is an inner \
+             join over a prefix of the right bag, so every emitted row is an answer"
         );
-        assert_eq!(right.order(), OrderCertainty::Unordered);
+        assert_eq!(
+            right.order(),
+            OrderCertainty::Unordered,
+            "rows vanish from the middle of each left row's block, not from the end"
+        );
+        assert!(
+            !right.admits_cap_pushdown(),
+            "a bag bound is not the first n answers"
+        );
+
+        // The classification this deliberately is NOT. Calling the truncated-right output
+        // an upper bound would license the reading "a row absent from this result is
+        // definitively not an answer" — and with padding, the rows absent from it are
+        // exactly the answers `l ⋈ m` the cut hid, every one of which IS an answer. The
+        // `governor_correctness` differential harness holds the end-to-end oracle for
+        // this; the assertion here is that the analysis no longer states it.
+        assert_ne!(right.class(), SpineClass::Possible);
     }
 
     #[test]

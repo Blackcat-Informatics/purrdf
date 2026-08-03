@@ -350,6 +350,116 @@ impl NativeSparqlEngine {
         Ok(materialize_governed(evaluated, &ctx, &state))
     }
 
+    /// [`Self::query_governed`] with a
+    /// [`RemoteQuerySource`](crate::remote::RemoteQuerySource) injected, so `SERVICE`
+    /// clauses resolve through it.
+    ///
+    /// The governed sibling of [`Self::query_with_source`], and the entry a federated
+    /// caller needs: without it, governing a federated query would mean choosing between
+    /// a budget and a `SERVICE` clause. The source is handed this execution's stop signal
+    /// through the evaluation context exactly as the ungoverned path hands it nothing, so
+    /// a deadline can *prevent* a remote request rather than only be noticed once one has
+    /// returned.
+    ///
+    /// # Errors
+    ///
+    /// Propagates parse and evaluation errors as an [`RdfDiagnostic`]. A tripped governor
+    /// is **not** an error and does not surface here.
+    pub fn query_governed_with_source(
+        &self,
+        dataset: &Arc<RdfDataset>,
+        request: SparqlRequest<'_>,
+        source: &(dyn crate::remote::RemoteQuerySource + Sync),
+        governors: &QueryGovernors,
+    ) -> Result<GovernedOutcome, RdfDiagnostic> {
+        self.query_governed_with_source_view(&**dataset, request, source, governors)
+    }
+
+    /// [`Self::query_governed_with_source`] over any [`DatasetView`] backend whose id type
+    /// is the production [`TermId`](purrdf_core::TermId).
+    ///
+    /// # Errors
+    ///
+    /// Propagates parse and evaluation errors as an [`RdfDiagnostic`]. A tripped governor
+    /// is **not** an error and does not surface here.
+    pub fn query_governed_with_source_view<D: DatasetView + Sync>(
+        &self,
+        dataset: &D,
+        request: SparqlRequest<'_>,
+        source: &(dyn crate::remote::RemoteQuerySource + Sync),
+        governors: &QueryGovernors,
+    ) -> Result<GovernedOutcome, RdfDiagnostic> {
+        let prepared = self.cache.borrow_mut().prepare_with(
+            request.query,
+            request.base_iri,
+            &self.parser_options,
+        )?;
+        let state = Arc::new(GovernorState::new(governors));
+        let mut ctx = self
+            .eval_ctx(dataset)
+            .with_governors(Arc::clone(&state))
+            .with_remote(source);
+        let evaluated =
+            evaluate_governed_with_substitutions(&prepared, request.substitutions, &mut ctx)?;
+        Ok(materialize_governed(evaluated, &ctx, &state))
+    }
+
+    /// One governed query of a **multi-query operation**, charged against a
+    /// `state` the caller owns and reuses across every query of that operation.
+    ///
+    /// # Why a shared state, when `query_governed` forbids exactly that
+    ///
+    /// [`Self::query_governed`] builds its state per call and has no `with_governors`
+    /// builder, because a state held on the *engine* would drain one caller's budget into
+    /// an unrelated caller's query. That rule is about the **engine**, and it is not
+    /// weakened here: the state is still owned by whoever is running the operation, still
+    /// built per operation, and still dropped with it.
+    ///
+    /// The distinction this entry exists for is that some operations are not one query.
+    /// A SHACL validation runs one `sh:sparql` query **per focus node** — hundreds of them
+    /// for one call — and every one of those is the same caller's single request. Handing
+    /// each a fresh [`QueryGovernors`] would give an N-focus validation N times the budget
+    /// it asked for, which is not a budget. So the operation builds one
+    /// [`GovernorState`] and every query inside it charges the same one; the state is
+    /// `Sync`, so the operation may run its queries on workers.
+    ///
+    /// `functions` is the SHACL-AF function registry, if the caller has one in scope.
+    /// `prebind` selects the SHACL pre-binding rewrite (`sh:sparql` constraint and
+    /// component bodies, `sh:SPARQLRule`, `sh:ask`/`sh:select` validators) over the
+    /// ordinary substitution rewrite (SHACL-AF node expressions and `sh:SPARQLTarget`).
+    ///
+    /// # Errors
+    ///
+    /// Propagates parse and evaluation errors as an [`RdfDiagnostic`]. A tripped governor
+    /// is **not** an error and does not surface here.
+    pub fn query_governed_in_operation<D: DatasetView + Sync>(
+        &self,
+        dataset: &D,
+        request: SparqlRequest<'_>,
+        prebind: ShaclPrebinding,
+        functions: Option<&crate::user_fn::UserFunctionRegistry>,
+        state: &Arc<GovernorState>,
+    ) -> Result<GovernedOutcome, RdfDiagnostic> {
+        let prepared = self.cache.borrow_mut().prepare_with(
+            request.query,
+            request.base_iri,
+            &self.parser_options,
+        )?;
+        let mut ctx = self.eval_ctx(dataset).with_governors(Arc::clone(state));
+        if let Some(registry) = functions {
+            ctx = ctx.with_user_functions(registry);
+        }
+        let evaluated = match prebind {
+            ShaclPrebinding::Applied => {
+                evaluate_governed_with_shacl_prebinding(&prepared, request.substitutions, &mut ctx)?
+            }
+            ShaclPrebinding::None => {
+                evaluate_governed_with_substitutions(&prepared, request.substitutions, &mut ctx)?
+            }
+        };
+        Ok(materialize_governed(evaluated, &ctx, state))
+    }
+
     /// Parse and execute one request under caller-supplied governors over an
     /// operationally fallible view.
     ///
@@ -837,6 +947,35 @@ fn evaluate_governed_with_substitutions<D: DatasetView + Sync>(
     let substituted =
         crate::substitute::apply_substitutions(prepared.query.clone(), substitutions)?;
     evaluate_query_evaluated(&substituted, ctx).map_err(eval_err)
+}
+
+/// Which rewrite [`NativeSparqlEngine::query_governed_in_operation`] applies to a
+/// request's substitutions before evaluating it.
+///
+/// A named two-state enum rather than a `bool`, because the two rewrites are not "on and
+/// off" — they are different SPARQL semantics (SHACL §5.3's pre-binding versus the
+/// ordinary substitution path), and a call site reading `true` says neither of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ShaclPrebinding {
+    /// Apply the SHACL pre-binding rewrite: `sh:sparql` constraint and component bodies,
+    /// `sh:SPARQLRule`, and `sh:ask`/`sh:select` validators.
+    Applied,
+    /// Apply the ordinary substitution rewrite: SHACL-AF node expressions,
+    /// `sh:SPARQLTarget`, and every non-SHACL caller.
+    None,
+}
+
+/// [`evaluate_with_shacl_prebinding`], on the trip-aware channel — the same relationship
+/// [`evaluate_governed_with_substitutions`] has to [`evaluate_with_substitutions`].
+fn evaluate_governed_with_shacl_prebinding<D: DatasetView + Sync>(
+    prepared: &PreparedQuery,
+    substitutions: &[(String, TermValue)],
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<EvaluatedOutcome<D::Id>, RdfDiagnostic> {
+    let substituted =
+        crate::substitute::apply_shacl_prebinding(prepared.query.clone(), substitutions)?;
+    evaluate_query_evaluated(&substituted, ctx)
+        .map_err(|e| RdfDiagnostic::error("native-sparql-query-eval", e.to_string()))
 }
 
 fn evaluate_with_shacl_prebinding<D: DatasetView + Sync>(

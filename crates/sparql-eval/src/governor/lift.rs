@@ -53,14 +53,32 @@
 //! row, never per emitted row, and when it cannot complete the scan it emits nothing for
 //! that input row at all.
 //!
+//! It bites in **both** directions at `LeftJoin`, which is the part that was originally
+//! got wrong. A truncated *left* arm must not pad, for the reason above. A truncated
+//! *right* arm must not pad either — the right bag is a prefix, so "no compatible right
+//! row exists" is not a fact the operator holds about any left row — and the padded row
+//! is not merely imprecise there, it is emitted **instead of** the true pairings the cut
+//! hid, so it is neither a lower bound nor an upper one. With the padding suppressed the
+//! operator computes an inner join over the prefix, whose every row is an answer; that is
+//! why `LeftJoin`'s right edge is [`ChildEdge::MONOTONE_BAG`] and not
+//! [`ChildEdge::ANTITONE`]. `Minus` keeps the antitone edge, because subtracting less
+//! really does leave a superset.
+//!
 //! # One observable rule per operator, whichever path evaluated it
 //!
 //! A governor may not report a different partial result because a different scheduler
-//! ran. Anywhere a parallel path can observe a sibling the sequential path never starts,
-//! the parallel path must discard what the sequential path would not have had. Only
-//! `UNION` has that shape — `rayon::join` starts both branches, so `binop::union_branch_order`
-//! drops a computed right branch when the left one truncated. Audited and found not to
-//! have it: `Join`, `Minus`, `LeftJoin`, and `Lateral` evaluate their arms one after the
+//! ran. Only `UNION` starts two sibling patterns at once (`rayon::join`), and under
+//! engaged governors it no longer does: both branches are whole patterns, so both charge
+//! the one shared `GovernorState`, and forking them let the two arms race the same
+//! counter. That was not a theoretical hazard — `{ ?s ex:p ?o } UNION { ?s ex:q ?o }`
+//! under nine fuel produced seven distinct outcomes across sixty runs of one process,
+//! differing in both the certified rows and the reported consumption. A governed `UNION`
+//! therefore evaluates its arms in source order on one thread
+//! ([`EvalCtx::may_fork_sibling_patterns`](crate::eval::EvalCtx::may_fork_sibling_patterns)),
+//! and `binop::union_branch_order` keeps the discard rule that the ungoverned fork still
+//! needs — a computed right branch is dropped when the left one truncated, so the two
+//! paths agree on rows as well as on budget. Audited and found not to have the shape at
+//! all: `Join`, `Minus`, `LeftJoin`, and `Lateral` evaluate their arms one after the
 //! other on one thread, so a truncated left arm stops the operator before the right arm
 //! begins on either path; the chunked row loops in `FILTER`/`BIND`/`OPTIONAL`-with-filter
 //! and the per-group aggregate fork parallelize *within* one operator over an input that
@@ -84,6 +102,17 @@
 //!    stops the operator through [`Lift::is_truncated`]). Without that second rule a fuel
 //!    trip in the left arm of a join would still license a full scan of the right arm, and
 //!    the governor would bound nothing.
+//!
+//! The first rule has a consequence that has to be paid for on the *other* side, or the
+//! budget stops being monotone. A node under a truncation passes its whole bag upward for
+//! free; a node whose child merely *completed* would, if its own committed-row charge cut
+//! that bag, report fewer rows than the free lift reports one unit of budget lower. It
+//! did: `SELECT * WHERE { ?s ex:p ?o }` over three edges returned two certified rows at 7
+//! fuel and none at 8. So the committed-row charge does not cut — see
+//! [`EvalCtx::charge_committed_rows`](crate::eval::EvalCtx::charge_committed_rows) for
+//! why cutting an already-materialized bag saves no work and costs the resumption
+//! contract. The charges that bound *work* (a `FILTER` predicate not yet run, a `BIND`
+//! expression not yet evaluated) still cut, because there the refusal is the bound.
 
 use std::sync::{Arc, OnceLock};
 

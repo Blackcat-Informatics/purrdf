@@ -11,6 +11,8 @@ use std::sync::Arc;
 
 use ::purrdf::{FastMap, FastSet, IdSet, RdfDataset, RdfDatasetBuilder, RdfTerm, TermId};
 
+use purrdf_sparql_eval::{GovernorEvidence, GovernorState, QueryGovernors, TrippedGovernor};
+
 use crate::data::{GraphFilter, ShaclData, quads_for_pattern_ids, resolve_id};
 use crate::expression::{FnCall, NodeExpr};
 use crate::report::ValidationReport;
@@ -502,10 +504,20 @@ fn evaluate_shape_focus_nodes(
     focus_nodes: &[FocusNode],
     include_focus: impl Fn(&FocusNode) -> bool + Sync,
 ) -> Result<Vec<crate::report::ValidationResult>, String> {
+    // Read the ambient governor state on THIS thread and hand the `Arc` to each worker's
+    // own scope: a thread-local is invisible from a thread this one forks, so a worker
+    // that did not install it would evaluate its focus nodes ungoverned — the budget
+    // would bound the orchestration thread's queries and nothing else.
+    let governors = crate::sparql::current_governors();
     crate::parallel::try_map_chunks(
         focus_nodes,
-        || crate::sparql::enter_function_scope(Arc::clone(&shapes.functions)),
-        |_function_scope, out, focus| {
+        || {
+            (
+                crate::sparql::enter_function_scope(Arc::clone(&shapes.functions)),
+                governors.clone().map(crate::sparql::enter_governor_scope),
+            )
+        },
+        |_scopes, out, focus| {
             if include_focus(focus) {
                 out.extend(crate::constraints::validate_shape_with_plan_at(
                     data,
@@ -889,6 +901,120 @@ pub fn __prepared_class_membership_view(
 /// or constraint query the engine cannot evaluate.
 pub fn validate_with(data: &ShaclData, shapes: &Shapes) -> Result<ValidationReport, String> {
     validate_with_focus_filter(data, shapes, |_, _| true)
+}
+
+/// The outcome of a **governed** validation: a complete report, or a budget that ran out
+/// before one existed.
+///
+/// # Why there is no partial report
+///
+/// The evaluator hands a governed query its partial answers, because a caller who asked
+/// for a bound on the answer can use a bound on the answer. A conformance verdict is not
+/// that caller. Every SHACL constraint is a *negative* claim — "no solution of this
+/// query violates the shape" — so a truncated solution bag and a complete one that found
+/// nothing produce the identical sentence, and `conforms` computed from the first means
+/// nothing at all. Even the violations already found are not safely reportable as a
+/// report: a `ValidationReport` states which constraints were checked, and a truncated one
+/// silently redefines that. So a trip yields the trip and the evidence, and no report.
+#[derive(Debug, Clone)]
+pub enum GovernedValidation {
+    /// Every governor stayed intact and this is the validation's complete report.
+    Complete {
+        /// The deterministically-sorted report.
+        report: ValidationReport,
+        /// What the validation's SPARQL paths consumed, and against which ceilings.
+        evidence: GovernorEvidence,
+    },
+    /// A governor stopped the validation. See [`GovernedValidation`] for why no partial
+    /// report accompanies it.
+    BudgetExhausted {
+        /// The governor that stopped it.
+        tripped: TrippedGovernor,
+        /// What had been consumed when it stopped.
+        evidence: GovernorEvidence,
+    },
+}
+
+impl GovernedValidation {
+    /// What the validation's SPARQL paths consumed, whichever outcome it reached.
+    #[must_use]
+    pub const fn evidence(&self) -> &GovernorEvidence {
+        match self {
+            Self::Complete { evidence, .. } | Self::BudgetExhausted { evidence, .. } => evidence,
+        }
+    }
+
+    /// The governor that stopped this validation, or `None` if it completed.
+    #[must_use]
+    pub const fn tripped(&self) -> Option<TrippedGovernor> {
+        match self {
+            Self::Complete { .. } => None,
+            Self::BudgetExhausted { tripped, .. } => Some(*tripped),
+        }
+    }
+}
+
+/// Validate under caller-supplied execution governors.
+///
+/// # One budget for the whole validation
+///
+/// SHACL runs one SPARQL query per focus node — `sh:SPARQLTarget` resolution, every
+/// `sh:sparql` constraint, every SHACL-AF node expression and rule. All of them charge
+/// **one** [`GovernorState`], built here and dropped with this call, so `governors` bounds
+/// the validation a caller asked about rather than each of the hundreds of queries it
+/// happens to decompose into. The state is `Sync`, so the focus workers charge it too;
+/// [`crate::sparql::enter_governor_scope`] is what puts it in their reach.
+///
+/// Governors bound the **SPARQL** paths. Core constraint evaluation reads the IR
+/// directly and spends no evaluator budget, so a shapes graph with no SHACL-SPARQL and no
+/// SHACL-AF in it validates under any budget, including a zero one — which is the honest
+/// answer, not an oversight.
+///
+/// # Errors
+///
+/// Returns `Err(String)` on a hard validation failure (see [`validate_with`]). A tripped
+/// governor is **not** an error: it is the [`GovernedValidation::BudgetExhausted`]
+/// outcome.
+pub fn validate_with_governors(
+    data: &ShaclData,
+    shapes: &Shapes,
+    governors: &QueryGovernors,
+) -> Result<GovernedValidation, String> {
+    let state = Arc::new(GovernorState::new(governors));
+    let outcome = {
+        let _governor_scope = crate::sparql::enter_governor_scope(Arc::clone(&state));
+        validate_with_focus_filter(data, shapes, |_, _| true)
+    };
+    let evidence = state.evidence();
+    // The trip is read from the state, not from the error text: `crate::sparql` turns a
+    // trip into an `Err` at the query site so no truncated bag can reach a verdict, and
+    // the state is where the TYPED identity of that trip survives. Reading it back here
+    // is also what keeps the two reports of one trip — the outcome and the evidence —
+    // from being two independently-derived answers that could disagree.
+    match (outcome, state.tripped()) {
+        (_, Some(tripped)) => Ok(GovernedValidation::BudgetExhausted { tripped, evidence }),
+        (Ok(report), None) => Ok(GovernedValidation::Complete { report, evidence }),
+        (Err(message), None) => Err(message),
+    }
+}
+
+/// [`validate_with_governors`] over a frozen dataset, with the shapes graph exposed to
+/// SHACL-SPARQL paths exactly as [`validate_dataset_with_shapes_graph`] exposes it.
+///
+/// # Errors
+///
+/// Returns `Err(String)` on a hard validation failure (see [`validate_with`]).
+pub fn validate_dataset_with_governors(
+    data: &RdfDataset,
+    shapes: &Shapes,
+    shapes_graph_iri: Option<&str>,
+    governors: &QueryGovernors,
+) -> Result<GovernedValidation, String> {
+    let projected = project_dataset(data)?;
+    let (sparql_dataset, shapes_graph_iri) =
+        build_sparql_dataset(Arc::clone(&projected), shapes, shapes_graph_iri)?;
+    let data = ShaclData::new(projected, sparql_dataset, shapes_graph_iri);
+    validate_with_governors(&data, shapes, governors)
 }
 
 /// Validate with an explicit focus-node filter.

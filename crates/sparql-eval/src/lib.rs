@@ -77,7 +77,7 @@ mod template;
 pub mod update;
 pub mod user_fn;
 
-pub use engine::{NativeSparqlEngine, PlanCache, PreparedQuery};
+pub use engine::{NativeSparqlEngine, PlanCache, PreparedQuery, ShaclPrebinding};
 pub use error::EvalError;
 pub use eval::{
     EvalCtx, EvalOptions, LossVocabulary, Outcome, StandpointPredicates, eval, evaluate_query,
@@ -92,6 +92,12 @@ pub use governor::{
     ItemCharge, NonMonotoneBarrier, QueryGovernors, STOP_POLL_FUEL, StopSignal, WallDeadline,
     resolve_precedence,
 };
+// The kernel's governor vocabulary, re-exported so a host that governs queries through
+// this crate can NAME what it gets back — the ceilings it set, what was spent, and which
+// governor stopped the execution — without also depending on `purrdf-core` directly. A
+// governed surface whose outcome types are unnameable from the crate that produces them
+// is one no consumer can match on.
+pub use purrdf_core::{GovernorEvidence, ResourceDimension, StopCause, TrippedGovernor};
 // Re-exported so engine hosts can configure the extension-function namespace set
 // (see [`NativeSparqlEngine::with_parser_options`]) without depending on the
 // front-end crate directly.

@@ -212,7 +212,7 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
         &mut seq.rows,
         crate::governor::ChargePoint::RowExpressionEvaluation,
     );
-    let rows = if crate::parallel::is_parallel_safe(expr, ctx.user_functions) {
+    let rows = if ctx.may_fork_row_loop(expr) {
         crate::parallel::par_chunk_try_map_init(
             &seq.rows,
             || ctx.fork_for_worker(),
@@ -275,7 +275,7 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
     let width = schema.len();
     let schema = Arc::new(schema);
 
-    let rows = if crate::parallel::is_parallel_safe(expr, ctx.user_functions) {
+    let rows = if ctx.may_fork_row_loop(expr) {
         // Parallel path: `is_parallel_safe` excludes `BNODE` (every arity), so the
         // per-solution `BNODE(strExpr)` memo (`ctx.current_row`/`ctx.bnode_memo`) is
         // never observed here — no per-row `current_row` bookkeeping is needed.

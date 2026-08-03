@@ -245,6 +245,53 @@ pub(crate) fn is_parallel_safe(expr: &Expression, registry: Option<&UserFunction
     !expr_reaches_unsafe_builtin(expr, registry)
 }
 
+/// Whether evaluating `expr` for one row can **re-enter whole-pattern evaluation**, and
+/// therefore charge a governor, from inside a forked worker.
+///
+/// # Why this question is asked separately from [`is_parallel_safe`]
+///
+/// The two fork lanes account for a budget in fundamentally different ways.
+/// [`par_chunk_map_metered`] hands each chunk a private, atomic-free
+/// [`ItemCharge`] ledger and the caller folds those in source-item order, so its reported
+/// consumption is a pure function of `(query, data, budget)`. The fork-per-worker lane
+/// ([`par_chunk_try_map_init`]) has no ledger at all: each worker forks a child
+/// [`EvalCtx`](crate::eval::EvalCtx) that shares one `Arc<GovernorState>`, so anything the
+/// closure charges goes straight into shared atomics with no ordering.
+///
+/// For every expression that stays *within* expression evaluation that is harmless,
+/// because expression evaluation charges nothing — the row's whole cost is charged once,
+/// before the loop, at the operator's own `row-expression-evaluation` charge point on the
+/// main thread. Exactly one construct escapes that: an expression-embedded `EXISTS`, which
+/// calls back into `eval_evaluated` and charges the full per-node schedule for its inner
+/// pattern. And because each *chunk* forks its own child — whose `exists_inner_cache` is a
+/// snapshot taken at fork time — the inner pattern is evaluated once per chunk, and the
+/// chunk count is derived from `rayon::current_num_threads()`. The reported fuel would
+/// then be a function of the machine's thread count, which is exactly the dependence the
+/// ordered fold exists to remove; measured on a 1500-row `FILTER EXISTS`, one worker
+/// reported 13507 fuel and eight reported 57036 for the identical query and data.
+///
+/// A SPARQL-bodied user function is the other construct that re-enters evaluation, and it
+/// needs no mention here because [`function_is_unsafe`] already classifies it UNSAFE
+/// outright, so it never reaches a worker on any path.
+///
+/// So the rule the evaluator applies is: **a governed execution does not fork a row loop
+/// whose expression can re-enter evaluation.** Ungoverned execution is untouched (there is
+/// no meter to be exact about), a governed expression that cannot re-enter keeps full
+/// parallelism (it charges nothing from a worker), and the narrow remainder runs
+/// sequentially — where the charge order is the row order by construction.
+pub(crate) fn expression_re_enters_evaluation(expr: &Expression) -> bool {
+    let mut found = false;
+    visit_expression_parts(expr, &mut |part| {
+        found = match part {
+            ExpressionPart::Sub(sub) => expression_re_enters_evaluation(sub),
+            ExpressionPart::Call(_) => false,
+            ExpressionPart::Exists(_) => true,
+        };
+        found
+    });
+    found
+}
+
 /// Whether `pattern` (recursively) is safe to evaluate under the fork-join
 /// parallel model — the pattern-level twin of [`is_parallel_safe`], for callers
 /// (e.g. `UNION`) that must gate a whole sub-pattern rather than a single

@@ -86,6 +86,12 @@ js-sys = { workspace = true }
 [dev-dependencies]
 # Colored line-diffs on assert_eq! failure (repo convention).
 pretty_assertions = { workspace = true }
+# Property-based generation for the governor differential harness
+# (`tests/governor_correctness.rs`): every governed run is checked against the SAME
+# query and data run UNGOVERNED, over generated (dataset, query, budget) triples.
+# Already a workspace dev-dependency of seven sibling crates; version lives in the root
+# `[workspace.dependencies]`.
+proptest = { workspace = true }
 # Criterion for the EXISTS-decorrelation perf bench. Defaults off
 # (no plotters/rayon) like the sibling crates, so `make bench` stays lean and no
 # oxigraph-family edge enters the dev tree (gated by `make rdf-core-hygiene`).

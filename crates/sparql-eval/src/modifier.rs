@@ -632,9 +632,7 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
     // still gates on group count.
     let safe = aggregates.iter().all(|(_, agg)| match agg {
         AggregateExpression::CountStar { .. } => true,
-        AggregateExpression::FunctionCall { expression, .. } => {
-            crate::parallel::is_parallel_safe(expression, ctx.user_functions)
-        }
+        AggregateExpression::FunctionCall { expression, .. } => ctx.may_fork_row_loop(expression),
     });
 
     let rows = if safe {

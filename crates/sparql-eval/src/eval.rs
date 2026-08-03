@@ -607,6 +607,65 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         }
     }
 
+    /// Whether a per-row loop evaluating `expr` may be forked across parallel workers.
+    ///
+    /// Two independent conditions, and both are about what a forked child does **not**
+    /// share with its parent:
+    ///
+    /// 1. [`crate::parallel::is_parallel_safe`] — the expression must not reach a builtin
+    ///    that mints from per-query counter/RNG state, which a fork deliberately does not
+    ///    share.
+    /// 2. [`crate::parallel::expression_re_enters_evaluation`] — under **engaged**
+    ///    governors, the expression must not be able to call back into whole-pattern
+    ///    evaluation. A fork *does* share the `Arc<GovernorState>`, and this lane has no
+    ///    ordered per-item ledger, so a charge raised from inside a worker lands in shared
+    ///    atomics whose total depends on the chunk geometry — i.e. on the machine's thread
+    ///    count. See that function for the measurement and the full argument.
+    ///
+    /// Asked here rather than at the four fork sites (`FILTER`, `BIND`, `OPTIONAL`'s
+    /// inline condition, and the per-group aggregate compute) so the rule is stated once
+    /// and a new fork site cannot inherit half of it.
+    pub(crate) fn may_fork_row_loop(&self, expr: &purrdf_sparql_algebra::Expression) -> bool {
+        if !crate::parallel::is_parallel_safe(expr, self.user_functions) {
+            return false;
+        }
+        !self.governors_are_engaged() || !crate::parallel::expression_re_enters_evaluation(expr)
+    }
+
+    /// Whether this execution carries a governor that actually enforces something.
+    ///
+    /// `false` for every ungoverned query and for one governed by
+    /// [`QueryGovernors::UNBOUNDED`](crate::QueryGovernors::UNBOUNDED), which declines
+    /// both the ceilings and the accounting. It is the gate on every decision that must
+    /// not fork work capable of charging.
+    pub(crate) fn governors_are_engaged(&self) -> bool {
+        self.governors
+            .as_ref()
+            .is_some_and(|state| state.is_engaged())
+    }
+
+    /// Whether two **sibling patterns** may be evaluated concurrently.
+    ///
+    /// `UNION` is the one operator that starts both of its arms at once
+    /// (`rayon::join`), and it is therefore the one place where two whole-pattern
+    /// evaluations charge the same `Arc<GovernorState>` from two threads. Unlike a forked
+    /// row loop, there is no expression to inspect: a sub-pattern always charges, so a
+    /// governed `UNION` always races.
+    ///
+    /// It raced in fact, not in theory. `{ ?s ex:p ?o } UNION { ?s ex:q ?o }` under nine
+    /// fuel produced **seven distinct outcomes** across sixty runs of one process — the
+    /// certified answer was either five rows or none, and the reported consumption was
+    /// 10, 12, 13 or 14 — because whichever arm rayon happened to schedule first drained
+    /// the shared counter. That is the exact opposite of what a governor is for, and no
+    /// certificate can repair it: the two arms disagree about how much budget there was.
+    ///
+    /// So a governed `UNION` evaluates its arms in source order on one thread, which is
+    /// also the order the certificate's branch rule already assumes. An ungoverned
+    /// `UNION` — which has no counter to race — keeps the fork untouched.
+    pub(crate) fn may_fork_sibling_patterns(&self) -> bool {
+        !self.governors_are_engaged()
+    }
+
     /// The live governor accounting state, if this execution is governed at all.
     ///
     /// `None` is the ungoverned execution every non-governor entry point takes: every
@@ -737,6 +796,65 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         for admitted in 0..rows.len() {
             if let Err(tripped) = state.charge_point_if_engaged(point) {
                 rows.truncate(admitted);
+                return Some(tripped);
+            }
+        }
+        None
+    }
+
+    /// Charge `count` rows against fuel **without discarding any of them**, reporting the
+    /// governor that stopped the charge if one did.
+    ///
+    /// # Why this one does not cut, when [`Self::admit_rows`] does
+    ///
+    /// [`Self::admit_rows`] is charged *before* per-row work that has not happened yet —
+    /// a `FILTER` predicate, a `BIND` expression — so refusing a row there refuses the
+    /// work, and the cut is the bound. This one is charged *after* an operator has
+    /// finished: `commit_node_output` runs on a materialized bag, so truncating it saves
+    /// no work at all. It would only throw away rows the evaluator has already computed
+    /// and already paid for further down.
+    ///
+    /// That distinction is not a nicety, it is what makes a budget **monotone**. The lift
+    /// is exempt from charging, so a node under a truncation passes its whole bag upward
+    /// for free — while a node whose child *completed* charged for that same bag row by
+    /// row and cut it. The two disagreed at exactly the budget where a child stops being
+    /// truncated and starts being complete, and the disagreement ran the wrong way:
+    /// `SELECT * WHERE { ?s ex:p ?o }` over three edges returned two certified rows at 7
+    /// fuel and **zero** at 8, because at 7 the scan truncated and the projection lifted
+    /// its rows free, while at 8 the scan completed and the projection was charged for
+    /// them with nothing left. A caller paging by raising the ceiling would have watched
+    /// answers disappear, which is precisely what
+    /// [`PartialSparqlResult::is_positional_prefix`](crate::PartialSparqlResult::is_positional_prefix)
+    /// promises cannot happen.
+    ///
+    /// Charging without cutting makes the two paths agree: a node reports every row it
+    /// computed, whether the trip landed below it or on its own output, and the answer
+    /// grows with the budget. Fuel keeps its meaning — it meters *work*, and every charge
+    /// point that bounds work still cuts — while the two dimensions that bound an answer's
+    /// *size*, [`ResourceDimension::AnswerRows`](purrdf_core::ResourceDimension::AnswerRows)
+    /// and
+    /// [`ResourceDimension::IntermediateCells`](purrdf_core::ResourceDimension::IntermediateCells),
+    /// are unaffected: the cap still cuts the final answer and the cell ceiling is
+    /// observed on this same bag one step earlier.
+    ///
+    /// Neither the schedule nor the trip point moves, so this is not a
+    /// [`GOVERNOR_PROFILE_VERSION`](crate::GOVERNOR_PROFILE_VERSION) change: the charge
+    /// sequence and its costs are identical, the first trip latches at the identical
+    /// point, and consumption up to that point is identical. Only the rows a stopped
+    /// execution is allowed to report change, and they only ever grow.
+    pub(crate) fn charge_committed_rows(&self, count: usize) -> Option<TrippedGovernor> {
+        let state = self.governors.as_ref()?;
+        if !state.is_engaged_in(purrdf_core::ResourceDimension::Fuel) {
+            return None;
+        }
+        for _ in 0..count {
+            if let Err(tripped) =
+                state.charge_point_if_engaged(crate::governor::ChargePoint::CommittedOutputRow)
+            {
+                // Stop at the first refusal rather than charging the remaining rows into
+                // a ceiling that is already crossed: the trip is latched and write-once,
+                // so further charges could only inflate the reported consumption past the
+                // point the execution actually stopped.
                 return Some(tripped);
             }
         }
@@ -1029,7 +1147,7 @@ fn commit_node_output<D: DatasetView + Sync>(
         return evaluated;
     };
 
-    let (mut rows, certificate) = match evaluated {
+    let (rows, certificate) = match evaluated {
         Evaluated::Complete(seq) => (seq, None),
         Evaluated::Truncated(truncation) => {
             let (rows, certificate) = truncation.split();
@@ -1053,20 +1171,19 @@ fn commit_node_output<D: DatasetView + Sync>(
     let tripped = ctx
         .observe_cells(rows.rows.len(), width)
         .err()
-        .or_else(|| {
-            ctx.admit_rows(
-                &mut rows.rows,
-                crate::governor::ChargePoint::CommittedOutputRow,
-            )
-        })
+        // Charged, never cut: this bag is already materialized, so refusing rows here
+        // would discard computed answers without saving any work — and would make the
+        // budget non-monotone against the free lift one row of budget away. See
+        // [`EvalCtx::charge_committed_rows`].
+        .or_else(|| ctx.charge_committed_rows(rows.rows.len()))
         .or_else(|| ctx.charge_scratch_growth().err());
 
     match (certificate, tripped) {
         // Nothing tripped and nothing had: the ordinary, complete result.
         (None, None) => Evaluated::Complete(rows),
-        // The node's own output crossed a ceiling: the rows left in hand are a
-        // positional prefix of what this node computed, which is exactly what
-        // `Truncation::origin` certifies.
+        // The node's own output crossed a ceiling. The rows in hand are this node's whole
+        // computed output — a tight positional prefix of itself — which is exactly what
+        // `Truncation::origin` certifies, and the query as a whole is still stopped.
         (None, Some(tripped)) => Evaluated::Truncated(Truncation::origin(rows, tripped)),
         // A child had already truncated. The child's certificate is the one that
         // describes these rows — it names the governor that fired first and the path the

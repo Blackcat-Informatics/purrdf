@@ -221,6 +221,11 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let mut lift = Lift::at(node);
     if crate::parallel::sequential_operation_required()
+        // A governed `UNION` evaluates its arms in source order on one thread: both arms
+        // charge the same shared `GovernorState`, so forking them makes the budget — and
+        // with it the trip point and the certified rows — a lottery. See
+        // `EvalCtx::may_fork_sibling_patterns`.
+        || !ctx.may_fork_sibling_patterns()
         || !crate::parallel::is_parallel_safe_pattern(left, ctx.user_functions)
         || !crate::parallel::is_parallel_safe_pattern(right, ctx.user_functions)
     {
@@ -619,13 +624,26 @@ fn merge<I: ViewTermId>(
 ///   hand are NOT emitted padded. Padding them would assert "the OPTIONAL matched
 ///   nothing" for rows whose right bag was never looked at: a fabricated answer, not a
 ///   missing one. The node yields the empty bag, a sound lower bound.
-/// - **Truncated right arm.** The join runs over the partial right bag, so left rows
-///   whose only match lay past the cut come out padded. Those padded rows are real
-///   *upper*-bound rows — the true answer is contained in what is emitted — and the
-///   right arm's antitone edge classifies the whole result [`SpineClass::Possible`], so
-///   no padded row can ever be read as a certified answer.
+/// - **Truncated right arm.** Padding is **suppressed** and the operator degenerates to
+///   an inner join over the partial right bag. This is the same fabrication hazard, one
+///   step down: a left row whose only match lies past the cut would come out padded, and
+///   that padded row asserts "the OPTIONAL matched nothing" about a right bag the
+///   evaluator only holds a prefix of.
 ///
-/// [`SpineClass::Possible`]: crate::governor::soundness::SpineClass::Possible
+///   Padding it is not merely imprecise, it is **unsound in both directions**. It is not
+///   a lower bound — the padded row is not an answer. And it is not an upper bound
+///   either, which is the subtler half: emitting `l` padded *in place of* the true rows
+///   `l ⋈ m` for every `m` past the cut means those true answers are absent from the
+///   result, so the one licence an upper bound grants — "a row absent from this result is
+///   definitively not an answer" — is false of exactly the rows the cut hid.
+///
+///   Suppressing the padding restores a bound: what is emitted is `{l ⋈ m : m ∈ R'}` for
+///   the partial right bag `R' ⊆ R`, and every such row is in the true output, so the
+///   result is a certified sub-bag. That is why `LeftJoin`'s right edge is classified
+///   [`ChildEdge::MONOTONE_BAG`] — identical to `Join`'s right edge, which is exactly what
+///   this operator becomes once its right bag is known to be incomplete.
+///
+/// [`ChildEdge::MONOTONE_BAG`]: crate::governor::soundness::ChildEdge::MONOTONE_BAG
 pub(crate) fn eval_left_join<D: DatasetView + Sync>(
     node: &GraphPattern,
     left: &GraphPattern,
@@ -673,9 +691,15 @@ fn left_join_lift<D: DatasetView + Sync>(
     let Some(r) = lift.absorb(1, right(ctx)?) else {
         return Ok(lift.withheld());
     };
+    // The left arm did not truncate (that returned above), so the lift is truncated here
+    // exactly when the RIGHT arm did — i.e. exactly when `r` is a prefix of the right bag
+    // rather than the whole of it, and "no compatible right row exists" is therefore not
+    // a fact this operator holds about any left row. See this operator's doc comment for
+    // why padding then bounds the answer on neither side.
+    let pad_unmatched = !lift.is_truncated();
     let joined = match expression {
-        None => left_outer_join(&l, &r),
-        Some(expr) => left_outer_join_filtered(&l, &r, expr, ctx)?,
+        None => left_outer_join(&l, &r, pad_unmatched),
+        Some(expr) => left_outer_join_filtered(&l, &r, expr, ctx, pad_unmatched)?,
     };
     // An `EXISTS` inside the inline condition is an opaque edge: a trip inside it makes
     // every emitted row's condition a boolean computed over a truncated bag, so the whole
@@ -703,11 +727,16 @@ fn left_join_lift<D: DatasetView + Sync>(
 /// nothing — see its doc comment), so nothing new escapes a forked child's
 /// scratch and it is discarded after use — no re-interning via
 /// [`crate::parallel::reintern_minted_row`] is needed.
+///
+/// `pad_unmatched` is `false` exactly when `r` is a *prefix* of the right bag rather than
+/// the whole of it, in which case "no pairing passes" is not a fact this operator holds
+/// and the left-alone row must not be emitted; see [`eval_left_join`].
 fn left_outer_join_filtered<D: DatasetView + Sync>(
     l: &SolutionSeq<D::Id>,
     r: &SolutionSeq<D::Id>,
     expr: &Expression,
     ctx: &mut EvalCtx<'_, D>,
+    pad_unmatched: bool,
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
     let out = Arc::new(l.schema.union(&r.schema));
     let out_len = out.len();
@@ -716,7 +745,7 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
     let shared = l.schema.shared_columns(&r.schema);
 
     // A left outer join emits at least one row per left row.
-    let rows = if crate::parallel::is_parallel_safe(expr, ctx.user_functions) {
+    let rows = if ctx.may_fork_row_loop(expr) {
         crate::parallel::par_chunk_try_map_init(
             &l.rows,
             || ctx.fork_for_worker(),
@@ -731,7 +760,7 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                         acc.push(merged);
                     }
                 }
-                if acc.len() == before {
+                if pad_unmatched && acc.len() == before {
                     let mut row = smallvec::smallvec![None; out_len];
                     row[..left_len].copy_from_slice(lrow);
                     acc.push(row);
@@ -753,7 +782,7 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                     matched = true;
                 }
             }
-            if !matched {
+            if pad_unmatched && !matched {
                 let mut row = smallvec::smallvec![None; out_len];
                 row[..left_len].copy_from_slice(lrow);
                 rows.push(row);
@@ -766,7 +795,17 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
 
 /// Left outer join: every left solution merged with each compatible right
 /// solution, or emitted alone (right columns unbound) when none is compatible.
-fn left_outer_join<I: ViewTermId>(l: &SolutionSeq<I>, r: &SolutionSeq<I>) -> SolutionSeq<I> {
+///
+/// `pad_unmatched` is `false` exactly when `r` is a *prefix* of the right bag rather than
+/// the whole of it, in which case "no compatible right row exists" is not a fact this
+/// operator holds and the left-alone row must not be emitted; see [`eval_left_join`]. The
+/// operator then computes an inner join, which is what a `LeftJoin` over an incomplete
+/// right bag soundly is.
+fn left_outer_join<I: ViewTermId>(
+    l: &SolutionSeq<I>,
+    r: &SolutionSeq<I>,
+    pad_unmatched: bool,
+) -> SolutionSeq<I> {
     let out = l.schema.union(&r.schema);
     let out_len = out.len();
     let left_len = l.schema.len();
@@ -805,7 +844,7 @@ fn left_outer_join<I: ViewTermId>(l: &SolutionSeq<I>, r: &SolutionSeq<I>) -> Sol
         }
         // No compatible right solution → keep the left solution alone (the OPTIONAL
         // contributed nothing, its variables stay unbound).
-        if acc.len() == before {
+        if pad_unmatched && acc.len() == before {
             let mut row = smallvec::smallvec![None; out_len];
             row[..left_len].copy_from_slice(lrow);
             acc.push(row);
@@ -1517,10 +1556,10 @@ mod tests {
         // caller reading a lower bound would admit as an answer.
         let ds = graph();
         let left = bgp(vp("x"), pred("http://ex/knows"), vp("y"));
-        let right = bgp(vp("y"), pred("http://ex/likes"), vp("z"));
+        let right_arm = bgp(vp("y"), pred("http://ex/likes"), vp("z"));
         let node = GraphPattern::LeftJoin {
             left: Box::new(left.clone()),
-            right: Box::new(right),
+            right: Box::new(right_arm.clone()),
             expression: None,
         };
 
@@ -1560,16 +1599,19 @@ mod tests {
              nothing, about a right bag that was never evaluated: a fabricated answer"
         );
 
-        // Case 2: the RIGHT arm truncates to nothing. The join then DOES pad, because a
-        // padded row is a genuine member of the upper bound — but the certificate says
-        // `Possible`, so no padded row can be read as an answer.
+        // Case 2: the RIGHT arm truncates to nothing. Padding is the SAME fabrication
+        // hazard one step down: a left row emitted alone asserts that the whole right bag
+        // held no match, about a bag the evaluator holds only a prefix of. Worse, it is
+        // emitted INSTEAD of the true rows the cut hid, so it is not an upper bound
+        // either — the answers `l ⋈ m` past the cut would be missing from a result whose
+        // only licence is "absent means definitively not an answer".
         let empty_right = SolutionSeq::empty(Arc::new(VarSchema::from_vars([
             Variable::new("y"),
             Variable::new("z"),
         ])));
         let lifted = left_join_lift(
             &node,
-            Evaluated::Complete(left_rows),
+            Evaluated::Complete(left_rows.clone()),
             move |_ctx| Ok(Evaluated::Truncated(Truncation::origin(empty_right, FUEL))),
             None,
             &mut ctx,
@@ -1580,20 +1622,45 @@ mod tests {
         };
         assert_eq!(
             certificate.bound(),
-            crate::governor::soundness::SpineClass::Possible,
-            "truncating the optional side can only pad MORE left rows, so it bounds the \
-             output from above"
+            crate::governor::soundness::SpineClass::Certain,
+            "with the padding suppressed the operator is an inner join over a prefix of \
+             the right bag, so every row it does emit is an answer"
+        );
+        assert!(
+            certificate.rows().is_empty(),
+            "the empty right prefix pairs with nothing, and the left rows must NOT be \
+             padded out in its place"
+        );
+        assert_eq!(certificate.tripped(), FUEL);
+
+        // And a NON-empty right prefix still emits the pairings it actually found: the
+        // suppression removes fabricated rows, not real ones.
+        let right_rows = eval(&right_arm, &mut ctx).expect("right arm");
+        assert!(!right_rows.is_empty(), "the fixture's OPTIONAL does match");
+        let lifted = left_join_lift(
+            &node,
+            Evaluated::Complete(left_rows),
+            move |_ctx| Ok(Evaluated::Truncated(Truncation::origin(right_rows, FUEL))),
+            None,
+            &mut ctx,
+        )
+        .expect("lift over a truncated right arm");
+        let Evaluated::Truncated(certificate) = lifted else {
+            panic!("a truncated child must stay truncated");
+        };
+        assert_eq!(
+            certificate.bound(),
+            crate::governor::soundness::SpineClass::Certain
         );
         assert_eq!(certificate.rows().len(), 1);
         assert!(
-            certificate.rows().rows[0].iter().any(Option::is_none),
-            "this IS the padded row the invariant is about"
+            certificate.rows().rows[0].iter().all(Option::is_some),
+            "the surviving row is a genuine pairing, not a padded one"
         );
         assert!(
-            certificate.certain_rows().is_none(),
-            "and it is unreachable through the certified-answer channel"
+            certificate.certain_rows().is_some(),
+            "and a genuine pairing IS reachable through the certified-answer channel"
         );
-        assert_eq!(certificate.tripped(), FUEL);
     }
 
     #[test]
@@ -1752,21 +1819,48 @@ mod tests {
 
     #[test]
     fn union_truncation_is_identical_under_forced_parallel_and_forced_sequential() {
-        // A governor may not report more rows because a second thread got there. The
-        // sequential body never starts the right branch once the left has truncated; the
-        // `rayon::join` body starts both, so it must DISCARD the right branch's rows in
-        // that case, and this pins that the two paths are observationally identical.
+        // A governor may not report more rows because a second thread got there, and
+        // under engaged governors it now cannot: `EvalCtx::may_fork_sibling_patterns` is
+        // false, so a governed `UNION` evaluates its arms in source order on one thread
+        // whatever the scheduler wants. (It did not always. Forking them let the two arms
+        // race the one shared fuel counter, and the same query, data and budget produced
+        // seven different answers across sixty runs — see
+        // `tests/governor_correctness.rs`'s
+        // `a_governed_union_reports_one_outcome_however_it_is_scheduled`.)
         //
-        // The comparison needs the stop signal to fire at the same point on both paths,
-        // and the signal counts polls — so the parallel run uses a one-worker rayon pool,
-        // where `rayon::join` still runs BOTH closures (the right branch is genuinely
-        // computed, which is exactly the condition under test) but in the same order the
-        // sequential body would have. With a many-worker pool the two branches' polls
-        // interleave by scheduling and the poll count stops naming a comparable point.
+        // What this test pins is therefore the *parallel gate's* irrelevance to a governed
+        // result: driving `force_parallel_for_test` and `force_sequential_operation`
+        // against each other, over a whole ladder of budgets, must not move a single row.
+        // The one-worker pool keeps the poll-counting signal comparable across the two
+        // runs; the DISCARD rule that the fork used to need is pinned directly on
+        // `union_branch_order` at the bottom of this test, where it does not depend on
+        // winning a race to be exercised.
         //
         // `force_parallel_for_test` governs the chunked row loops rather than the UNION
         // fork — the fork's own gate is `force_sequential_operation` — so both are driven
         // here, each on the thread that will read it.
+        {
+            let ds = wide_graph();
+            let governors = crate::QueryGovernors::UNBOUNDED.with_fuel(64);
+            let state = Arc::new(crate::GovernorState::new(&governors));
+            let governed = EvalCtx::new(&ds).with_governors(state);
+            assert!(
+                !governed.may_fork_sibling_patterns(),
+                "an engaged governor must refuse the UNION fork outright"
+            );
+            assert!(
+                EvalCtx::new(&ds).may_fork_sibling_patterns(),
+                "an ungoverned UNION has no counter to race, so it keeps the fork"
+            );
+            let unbounded = Arc::new(crate::GovernorState::new(&crate::QueryGovernors::UNBOUNDED));
+            assert!(
+                EvalCtx::new(&ds)
+                    .with_governors(unbounded)
+                    .may_fork_sibling_patterns(),
+                "UNBOUNDED declines the accounting as well as the ceilings, so it has no \
+                 counter to race either"
+            );
+        }
         let ds = wide_graph();
         let plan = union_over_lateral();
 

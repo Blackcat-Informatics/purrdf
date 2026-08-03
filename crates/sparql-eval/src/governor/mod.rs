@@ -874,6 +874,23 @@ impl GovernorState {
     /// worker count and scheduling — the same query, data, and budget would produce
     /// different partial answers on different machines, which is precisely the property
     /// the ordered fold exists to guarantee.
+    ///
+    /// # Where the ordered fold does not reach
+    ///
+    /// The fold covers the chunked row loops that carry an [`ItemCharge`] ledger. The
+    /// other parallel lane — the fork-per-worker one
+    /// (`parallel::par_chunk_try_map_init`, used by
+    /// `FILTER`, `BIND`, `OPTIONAL`'s inline condition and the per-group aggregate
+    /// compute) — has no ledger, because a forked worker shares this state through an
+    /// `Arc` and charges it directly. Exactness there is bought differently, by refusing
+    /// the fork rather than by ordering it: that lane is only entered when the row
+    /// expression **cannot charge**, which is decided once, in
+    /// `EvalCtx::may_fork_row_loop`. Ordinary
+    /// expression evaluation charges nothing (a row's whole cost is charged before the
+    /// loop, on the main thread), so the only expression excluded is one embedding an
+    /// `EXISTS`, which re-enters whole-pattern evaluation. So the reported consumption is
+    /// exact on both lanes, and neither buys it by giving up parallelism on a query shape
+    /// that did not need it.
     #[must_use]
     pub fn should_abandon(&self) -> bool {
         self.abandon.load(Ordering::Relaxed)
@@ -889,6 +906,24 @@ impl GovernorState {
     #[must_use]
     pub const fn is_engaged_in(&self, dimension: ResourceDimension) -> bool {
         self.limits.is_bounded(dimension)
+    }
+
+    /// Whether **any** caller-settable governor is engaged in this execution.
+    ///
+    /// The per-execution twin of [`Self::is_engaged_in`], and the same question
+    /// [`QueryGovernors::is_engaged`] answers about the configuration this state was
+    /// built from. Fixed-ceiling dimensions are excluded for the same reason they are
+    /// there: they hold on every query, so counting them would make every execution look
+    /// governed.
+    ///
+    /// The evaluator asks this to decide whether a per-row expression loop may be forked
+    /// across workers at all — see `EvalCtx::may_fork_row_loop`.
+    #[must_use]
+    pub fn is_engaged(&self) -> bool {
+        self.stop.is_some()
+            || CALLER_SETTABLE_DIMENSIONS
+                .iter()
+                .any(|&dimension| self.limits.is_bounded(dimension))
     }
 
     /// Charge `amount` against `dimension`, **only if** that dimension carries a ceiling.
@@ -1044,9 +1079,27 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// the inclusive-boundary rule — i.e. by any change that could move the point at which a
 /// caller's budget trips. A change that cannot move a charge (a refactor, a clearer
 /// diagnostic) does not increment it, which is what makes the number worth pinning.
-pub const GOVERNOR_PROFILE_VERSION: u32 = 1;
+///
+/// # v2
+///
+/// [`CHARGE_SCHEDULE`] is byte-identical to v1 — every point and every cost — so a v1
+/// budget still means the same *events*. What changed is how many of those events a
+/// governed query performs, on one query shape: an expression-embedded `EXISTS` used to
+/// be re-evaluated once per rayon chunk, because each chunk forked a child whose `EXISTS`
+/// memo was a snapshot, and the chunk count is derived from the machine's thread count.
+/// A governed row loop no longer forks when its expression can re-enter evaluation (see
+/// `EvalCtx::may_fork_row_loop`), so the inner
+/// pattern is evaluated once. On a 1500-row `FILTER EXISTS` that is 148 597 fuel before
+/// and 9 004 after — and, more to the point, 13 507 on one worker versus 57 036 on eight
+/// before, versus one number on any machine after. A budget sized against v1 for such a
+/// query was sized against the machine that measured it, which is precisely what a pinned
+/// profile exists to prevent, so the number moves rather than the guarantee.
+pub const GOVERNOR_PROFILE_VERSION: u32 = 2;
 
-/// Charge schedule v1, as data rather than as scattered literals.
+/// The charge schedule, as data rather than as scattered literals.
+///
+/// Unchanged since v1 and byte-identical across both profile versions: see
+/// [`GOVERNOR_PROFILE_VERSION`] for what v2 moved and why the table did not have to.
 ///
 /// Each entry is `(label, cost)`. The labels are a pinned contract — a frozen corpus and
 /// a per-node ledger record them — so renaming one is a breaking change, not a cosmetic
