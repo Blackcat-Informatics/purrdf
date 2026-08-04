@@ -321,11 +321,6 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
                     rows.truncate(usize::try_from(committed).unwrap_or(usize::MAX));
                     break;
                 }
-            } else if state.tripped().is_some() {
-                // Some other governor (a stop signal, the allocation ceiling) fired
-                // while this pattern was being expanded. Nothing here is charged, so
-                // there is no ledger to cut against; the rows in hand stand as they are.
-                break;
             }
         }
         if rows.is_empty() {
