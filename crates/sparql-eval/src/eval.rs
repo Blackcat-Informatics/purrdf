@@ -49,6 +49,11 @@ pub struct EvalOptions {
     /// correctness corpus test to prove that reordering does not change the
     /// result multiset. Always `false` in production.
     pub force_structural_bgp_order: bool,
+    /// Keep evaluator fork sites on their sequential implementation.
+    ///
+    /// This is a measurement seam for Criterion comparisons against the ordered
+    /// parallel fold, and for differential tests. Production leaves it `false`.
+    pub force_sequential: bool,
 }
 
 impl Default for EvalOptions {
@@ -56,6 +61,7 @@ impl Default for EvalOptions {
         Self {
             exists_memo: true,
             force_structural_bgp_order: false,
+            force_sequential: false,
         }
     }
 }
@@ -365,10 +371,11 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// past which each node's work cannot affect the query's answer.
     ///
     /// `None` — the default — is "no ceiling anywhere", which is every query with neither
-    /// a `LIMIT` on a pushable spine nor a caller answer cap. Computed once per execution
-    /// from the plan by [`crate::governor::soundness::plan_cap_pushdown`] and shared by
-    /// [`Arc`] with every forked worker, because a worker evaluating part of a node's
-    /// rows is under the same ceiling the node is.
+    /// a `LIMIT` on the active subtree nor a caller answer cap. A root answer cap installs
+    /// one plan for the execution; semantic slices install theirs lazily and remove it
+    /// when their subtree returns. Either form is shared by [`Arc`] with every forked
+    /// worker, because a worker evaluating part of a node's rows is under the same ceiling
+    /// the node is.
     pub(crate) cap_pushdown: Option<Arc<CapPushdown>>,
     /// The address of the algebra node currently being evaluated, set by
     /// [`eval_evaluated`] and restored on the way out.
@@ -1303,6 +1310,30 @@ pub(crate) fn eval_evaluated<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
+    // A semantic LIMIT is local to its Slice. Install its producer ceiling only while
+    // that subtree is active, so a LIMIT-free ordinary query does not walk the plan at
+    // all and two independent subquery slices do not overwrite one another.
+    let local_cap = install_local_slice_pushdown(pattern, ctx);
+    let evaluated = eval_evaluated_inner(pattern, ctx);
+    if local_cap {
+        ctx.cap_pushdown = None;
+    }
+    evaluated
+}
+
+/// The evaluator recursion after any local semantic-Slice ceiling has been installed.
+fn eval_evaluated_inner<D: DatasetView + Sync>(
+    pattern: &GraphPattern,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    // The ordinary hot path has no stop source, counters, certificate ledger, or producer
+    // ceiling. Dispatch directly: no node-address cursor, atomic probe, output re-wrap, or
+    // terminal checkpoint is useful when nothing can truncate. `UNBOUNDED` takes this
+    // path too; its fixed UDF recursion guard remains enforced inside `child_for_user_fn`.
+    if !ctx.governors_are_engaged() && ctx.ledger.is_none() && ctx.cap_pushdown.is_none() {
+        return eval_node(pattern, ctx);
+    }
+
     // Operator-granularity stop observation, before any of this node's work begins.
     // Nothing is committed yet, so the truncation originates with an empty bag — which
     // is a sound lower bound, and the ancestors that have already committed rows keep
@@ -1352,6 +1383,36 @@ pub(crate) fn eval_evaluated<D: DatasetView + Sync>(
     };
     ctx.leave_node(restore);
     Ok(committed)
+}
+
+/// Lazily install the early-producer ceiling for a semantic `Slice` subtree.
+///
+/// The answer-cap planner starts at the query root because its ceiling is operationally
+/// outside every modifier. A SPARQL `LIMIT`/`OFFSET` already has its own algebra node, so
+/// it can plan at that node when evaluation reaches it. This is both cheaper for the
+/// overwhelmingly common LIMIT-free query (zero discovery walk) and more local: a slice
+/// inside a subquery receives its own plan without making unrelated siblings carry it.
+fn install_local_slice_pushdown<D: DatasetView + Sync>(
+    pattern: &GraphPattern,
+    ctx: &mut EvalCtx<'_, D>,
+) -> bool {
+    if ctx.cap_pushdown.is_some() {
+        return false;
+    }
+    let GraphPattern::Slice { start, length, .. } = pattern else {
+        return false;
+    };
+    if *start == 0 && length.is_none() {
+        return false;
+    }
+
+    let pushdown = crate::governor::soundness::plan_cap_pushdown(pattern, Some(u64::MAX));
+    if pushdown.is_empty() {
+        false
+    } else {
+        ctx.cap_pushdown = Some(Arc::new(pushdown));
+        true
+    }
 }
 
 /// Charge one node's output and re-certify it: the `committed-output-row` charge point,
@@ -1641,15 +1702,14 @@ pub(crate) const fn query_pattern(query: &Query) -> &GraphPattern {
     }
 }
 
-/// Compute this query's answer-cap / `LIMIT` pushdown and install it on `ctx`.
+/// Compute this query's operational answer-cap pushdown and install it on `ctx`.
 ///
-/// # Where the root ceiling comes from — `Slice` first, then the cap
+/// # Where the root ceiling comes from
 ///
-/// Two independent sources, and they compose in one direction only. A `LIMIT` is *query
-/// semantics*: it lives inside the pattern as a `Slice` node, and the descent picks it up
-/// wherever it sits. A caller's answer cap is an *operational* ceiling on the sequence that
-/// survives every modifier, so it enters at the root — below nothing and above everything,
-/// which is exactly where `Slice`'s arithmetic then narrows it further.
+/// A caller's answer cap is an *operational* ceiling on the sequence that survives every
+/// modifier, so it enters at the root — below nothing and above everything. A semantic
+/// `LIMIT` lives at a `Slice` node and is installed lazily by
+/// [`install_local_slice_pushdown`] when no root cap already supplies the composed plan.
 ///
 /// # Why the cap's ceiling is the cap **plus one**
 ///
@@ -1659,14 +1719,14 @@ pub(crate) const fn query_pattern(query: &Query) -> &GraphPattern {
 /// extra row is precisely enough to tell "exactly full" from "overflowed", and it is the
 /// only row the pushdown computes that the answer never uses.
 ///
-/// # Only `SELECT` seeds the root from the cap
+/// # Only `SELECT` has a row-denominated root cap
 ///
 /// For a graph-producing form the cap denominates output *triples*
 /// ([`crate::construct::commit_answer_triples`]), and one solution row can instantiate a
 /// whole template — so a row ceiling derived from a triple cap would be an arithmetic
-/// non-sequitur. Those forms still get the `LIMIT` pushdown, seeded from the "no ceiling"
-/// carrier, which is why the seed is unconditional.
-fn install_cap_pushdown<D: DatasetView + Sync>(query: &Query, ctx: &mut EvalCtx<'_, D>) {
+/// non-sequitur. Their semantic slices are still planned locally.
+fn install_answer_cap_pushdown<D: DatasetView + Sync>(query: &Query, ctx: &mut EvalCtx<'_, D>) {
+    ctx.cap_pushdown = None;
     let cap = match (query, ctx.governors.as_ref()) {
         (Query::Select { .. }, Some(state))
             if state.is_engaged_in(purrdf_core::ResourceDimension::AnswerRows) =>
@@ -1676,10 +1736,8 @@ fn install_cap_pushdown<D: DatasetView + Sync>(query: &Query, ctx: &mut EvalCtx<
                 .get(purrdf_core::ResourceDimension::AnswerRows)
                 .saturating_add(1)
         }
-        // No cap to seed with. `u64::MAX` is the identity of the descent's arithmetic: it
-        // records no ceiling anywhere until a restricting `Slice` reduces it, so a query
-        // with neither a cap nor a `LIMIT` installs nothing at all and pays one plan walk.
-        _ => u64::MAX,
+        // No root cap: semantic slices install their local pushdown only if reached.
+        _ => return,
     };
     let pushdown = crate::governor::soundness::plan_cap_pushdown(query_pattern(query), Some(cap));
     if !pushdown.is_empty() {
@@ -1703,12 +1761,19 @@ pub(crate) fn evaluate_query_evaluated<D: DatasetView + Sync>(
     query: &Query,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<EvaluatedOutcome<D::Id>, EvalError> {
+    // Criterion and differential tests can hold the operation on the sequential branch;
+    // production keeps the ordered parallel fold. The guard is operation-scoped so every
+    // recursive fork gate sees the same decision.
+    let _sequential = ctx
+        .options
+        .force_sequential
+        .then(crate::parallel::force_sequential_operation);
     // Install the query's FROM / FROM NAMED active dataset (§13) before evaluating.
     ctx.active_dataset = ActiveDataset::from_query_dataset(query.dataset(), ctx.dataset);
     // Install the query's effective base IRI so IRI()/URI() can resolve a relative
     // string argument against it (SPARQL 1.1 §17.4.2.6).
     ctx.base_iri = query.base_iri().map(|nn| nn.as_str().to_owned());
-    install_cap_pushdown(query, ctx);
+    install_answer_cap_pushdown(query, ctx);
     match query {
         Query::Select { pattern, .. } => {
             match commit_answer_rows(eval_evaluated(pattern, ctx)?, ctx) {

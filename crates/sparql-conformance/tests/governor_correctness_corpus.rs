@@ -63,6 +63,7 @@ fn harness_engine() -> NativeSparqlEngine {
         .with_eval_options(EvalOptions {
             exists_memo: true,
             force_structural_bgp_order: false,
+            force_sequential: false,
         })
 }
 
