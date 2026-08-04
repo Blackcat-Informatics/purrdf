@@ -93,11 +93,13 @@ export interface GovernorOptions {
   readonly cancel?: CancellationToken | null;
 }
 
-export interface QueryOptions extends GovernorOptions {
+export interface QueryOptions {
   readonly base?: string | null;
 }
 
-export interface EntailmentQueryOptions extends QueryOptions {
+export interface GovernedQueryOptions extends QueryOptions, GovernorOptions {}
+
+export interface EntailmentQueryOptions extends GovernedQueryOptions {
   /** RIF-in-XML program for the `rif` regime; invalid on every fixed regime. */
   readonly program?: string | null;
 }
@@ -732,7 +734,7 @@ export class QueryEngine {
   queryGoverned(
     dataset: Dataset,
     sparql: string,
-    options?: QueryOptions | null,
+    options?: GovernedQueryOptions | null,
   ): QueryOutcome;
   /**
    * Run a governed query over the named entailment closure. The answer and reasoning
@@ -752,7 +754,7 @@ export class QueryEngine {
   updateGoverned(
     dataset: Dataset,
     sparql: string,
-    options?: QueryOptions | null,
+    options?: GovernedQueryOptions | null,
   ): UpdateOutcome;
   /**
    * The engine's charge ledger for a query, rendered as text: the join orders it chose,

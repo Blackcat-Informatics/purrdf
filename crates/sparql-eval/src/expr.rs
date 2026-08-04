@@ -261,7 +261,12 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let mut lift = Lift::at(node);
     let Some(mut seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
-        return Ok(lift.withheld());
+        let mut schema = lift.absorbed_schema().map_or_else(
+            || (*crate::eval::syntactic_schema(inner)).clone(),
+            |s| (*s).clone(),
+        );
+        schema.push(var.clone());
+        return Ok(lift.finish(SolutionSeq::empty(Arc::new(schema))));
     };
     // The `row-expression-evaluation` charge point; see `eval_filter` for why it is per
     // row rather than per sub-expression, and why the refused rows are cut before the

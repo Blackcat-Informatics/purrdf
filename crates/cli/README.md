@@ -619,7 +619,7 @@ bucket as a corrupt pack, so a pipeline could not tell "your query was cut short
 here is the certified prefix" from "your query failed and there is nothing to read".
 `0` would be worse: a truncated answer reported as a complete one is silently wrong,
 and every consumer downstream believes it. So a trip is neither, and it never travels
-the error path — it is not printed with the `purrdf: ` prefix, because nothing went
+the error path — it is not printed with the ``purrdf: `` prefix, because nothing went
 wrong.
 
 There is still **no unsupported-regime exit code**, and that is a different question.

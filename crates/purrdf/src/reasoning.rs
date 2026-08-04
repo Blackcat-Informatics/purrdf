@@ -305,6 +305,7 @@ pub fn query_with_entailment(
               governed entailment query to shrink a value that is moved once, and it would \
               force a caller to deref through a Box to reach the outcome they asked for"
 )]
+#[non_exhaustive]
 pub enum GovernedEntailment {
     /// The closure was computed and the query was evaluated over it.
     ///

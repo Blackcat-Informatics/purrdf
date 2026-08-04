@@ -916,12 +916,13 @@ fn render_result(result: &SparqlResult, out: &mut String) {
 /// The rows a case's caller receives, and what those rows are certified to be.
 fn render_answer(outcome: &GovernedOutcome) -> String {
     let mut out = String::new();
-    let GovernedOutcome::BudgetExhausted(exhausted) = outcome else {
-        out.push_str("outcome\tcomplete\n");
-        if let GovernedOutcome::Complete { result, .. } = outcome {
+    let exhausted = match outcome {
+        GovernedOutcome::Complete { result, .. } => {
+            out.push_str("outcome\tcomplete\n");
             render_result(result, &mut out);
+            return out;
         }
-        return out;
+        GovernedOutcome::BudgetExhausted(exhausted) => exhausted,
     };
     out.push_str("outcome\tbudget-exhausted\n");
     writeln!(out, "tripped\t{}", render_tripped(exhausted.tripped))

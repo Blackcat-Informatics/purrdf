@@ -534,6 +534,12 @@ impl<'a> Engine<'a> {
     /// map lookups, so it is the finest boundary that exists here and the cheapest one to
     /// take.
     fn run(&mut self, kb: &Kb) -> bool {
+        // An empty initial queue is still a classification boundary. Observe a signal
+        // that fired before entry instead of reporting an unexamined empty queue as a
+        // completed fixpoint.
+        if kb.stopped() {
+            return false;
+        }
         while let Some(work) = self.queue.pop_front() {
             if kb.stopped() {
                 return false;

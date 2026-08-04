@@ -1359,6 +1359,7 @@ fn entailment_query_outcome_from_native(
             complete: false,
             closure_stopped: true,
         }),
+        _ => Err(JsError::new("unsupported governed entailment outcome")),
     }
 }
 

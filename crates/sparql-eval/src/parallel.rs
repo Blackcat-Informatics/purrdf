@@ -283,7 +283,7 @@ pub(crate) fn is_parallel_safe(expr: &Expression, registry: Option<&UserFunction
 pub(crate) fn expression_re_enters_evaluation(expr: &Expression) -> bool {
     let mut found = false;
     visit_expression_parts(expr, &mut |part| {
-        found = match part {
+        found |= match part {
             ExpressionPart::Sub(sub) => expression_re_enters_evaluation(sub),
             ExpressionPart::Call(_) => false,
             ExpressionPart::Exists(_) => true,
@@ -321,7 +321,7 @@ pub(crate) fn is_parallel_safe_pattern(
 fn expr_reaches_unsafe_builtin(expr: &Expression, registry: Option<&UserFunctionRegistry>) -> bool {
     let mut found = false;
     visit_expression_parts(expr, &mut |part| {
-        found = match part {
+        found |= match part {
             ExpressionPart::Sub(sub) => expr_reaches_unsafe_builtin(sub, registry),
             ExpressionPart::Call(f) => function_is_unsafe(f, registry),
             ExpressionPart::Exists(pattern) => pattern_reaches_unsafe_builtin(pattern, registry),
@@ -396,7 +396,7 @@ fn pattern_reaches_unsafe_builtin(
 ) -> bool {
     let mut found = false;
     visit_pattern_parts(pattern, &mut |part| {
-        found = match part {
+        found |= match part {
             PatternPart::Child(child, _edge) => pattern_reaches_unsafe_builtin(child, registry),
             PatternPart::Expression(expr) => expr_reaches_unsafe_builtin(expr, registry),
         };

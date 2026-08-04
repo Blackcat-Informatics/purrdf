@@ -210,6 +210,35 @@ typedef int32_t PurrdfGraphMatchKind;
 #endif // __cplusplus
 
 /**
+ * The result-form discriminant written to every query entry point's `out_kind`.
+ */
+enum PurrdfResultKind
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : int32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+    /**
+     * A SELECT solution sequence returned through `PurrdfRowCursor`.
+     */
+    PURRDF_RESULT_KIND_SOLUTIONS = 0,
+    /**
+     * A CONSTRUCT or DESCRIBE graph returned through `PurrdfDataset`.
+     */
+    PURRDF_RESULT_KIND_GRAPH = 1,
+    /**
+     * An ASK boolean returned through `uint8_t`.
+     */
+    PURRDF_RESULT_KIND_BOOLEAN = 2,
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum PurrdfResultKind PurrdfResultKind;
+#else
+typedef int32_t PurrdfResultKind;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+
+/**
  * Bit values for [`PurrdfQueryGovernors::enabled`].
  *
  * The struct stores a plain `uint32_t`, not this enum, so C may combine values safely.

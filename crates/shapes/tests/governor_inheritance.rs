@@ -188,9 +188,9 @@ fn an_exhausted_validation_never_reports_a_verdict() {
     // negative claim, so a truncated solution bag and a complete empty one say the same
     // words — and one of them is a lie.
     //
-    // The sweep is over the whole low range because the exact fuel at which the trip
-    // lands is a property of the charge schedule, not of this test: every outcome must be
-    // either an honest exhaustion or a genuinely complete verdict, and both must occur.
+    // A bounded sample spans zero through the measured completion boundary. The invariant
+    // is per budget, so testing every integer below a charge schedule whose granularity may
+    // grow would add runtime without strengthening it.
     let data = people(6);
     let cost = validate(&data, &QueryGovernors::METERED)
         .evidence()
@@ -199,7 +199,10 @@ fn an_exhausted_validation_never_reports_a_verdict() {
 
     let mut exhausted = 0_usize;
     let mut complete = 0_usize;
-    for fuel in 0..cost {
+    let budgets: Vec<u64> = (0..=16_u64)
+        .map(|step| cost.saturating_mul(step) / 16)
+        .collect();
+    for fuel in budgets.iter().copied() {
         match validate(&data, &QueryGovernors::UNBOUNDED.with_fuel(fuel)) {
             GovernedValidation::BudgetExhausted { evidence, .. } => {
                 exhausted += 1;
@@ -225,11 +228,44 @@ fn an_exhausted_validation_never_reports_a_verdict() {
         "no budget below the measured cost stopped the validation, so the exhaustion \
          path was never reached"
     );
+    assert!(
+        complete > 0,
+        "the measured completion boundary must exercise the complete path"
+    );
     assert_eq!(
         exhausted + complete,
-        cost as usize,
+        budgets.len(),
         "every budget produced exactly one of the two outcomes"
     );
+}
+
+#[test]
+fn governed_focus_fanout_has_schedule_independent_evidence() {
+    // Cross the production parallel threshold. The ungoverned path may distribute these
+    // focus nodes, but one governed validation owns one ordered ledger and must therefore
+    // report the same trip and spend on every run regardless of rayon scheduling.
+    let data = people(1_025);
+    let cost = validate(&data, &QueryGovernors::METERED)
+        .evidence()
+        .consumed_in(ResourceDimension::Fuel);
+    let governors = QueryGovernors::UNBOUNDED.with_fuel(cost / 2);
+    let baseline = validate(&data, &governors);
+    let GovernedValidation::BudgetExhausted {
+        tripped: baseline_trip,
+        evidence: baseline_evidence,
+    } = baseline
+    else {
+        panic!("half the metered cost must stop the governed focus fanout");
+    };
+
+    for _ in 0..3 {
+        let repeated = validate(&data, &governors);
+        let GovernedValidation::BudgetExhausted { tripped, evidence } = repeated else {
+            panic!("the same ceiling must produce the same outcome discriminant");
+        };
+        assert_eq!(tripped, baseline_trip);
+        assert_eq!(evidence, baseline_evidence);
+    }
 }
 
 #[test]

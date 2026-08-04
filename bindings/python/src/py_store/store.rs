@@ -167,10 +167,11 @@ impl PyStore {
     /// Run a SPARQL query under caller-supplied execution governors, returning a
     /// `QueryOutcome` rather than the results directly.
     ///
-    /// Every governor keyword is optional and unset means "no ceiling on that
-    /// dimension": `fuel` bounds abstract execution steps, `deadline_ms` a wall-clock
-    /// budget in milliseconds, `max_answers` the answer sequence (solution rows for
-    /// SELECT, output statements for CONSTRUCT/DESCRIBE, nothing for ASK),
+    /// Every governor keyword is optional. An omitted dimension remains metered at an
+    /// effectively unreachable ceiling; an explicit value replaces that ceiling. `fuel`
+    /// bounds abstract execution steps, `deadline_ms` a wall-clock budget in milliseconds,
+    /// `max_answers` the answer sequence (solution rows for SELECT, output statements for
+    /// CONSTRUCT/DESCRIBE, nothing for ASK),
     /// `max_intermediate_cells` the largest intermediate bag in `rows * columns`,
     /// `max_scratch_bytes` the per-query scratch arena, and `max_remote_requests`
     /// federated requests. Every ceiling is **inclusive**: consumption equal to it is

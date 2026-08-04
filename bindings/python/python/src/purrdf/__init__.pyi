@@ -422,9 +422,10 @@ class Store:
         extension_namespaces: list[str] | None = ...,
         standpoint_predicates: tuple[str, str] | None = ...,
     ) -> QuerySolutions | QueryTriples | QueryBoolean: ...
-    # Governed sibling of `query`: every ceiling is inclusive and unset means "no
-    # ceiling on that dimension"; `deadline_ms` is a wall-clock budget in
-    # milliseconds. A trip is returned in the `QueryOutcome`, never raised.
+    # Governed sibling of `query`: every ceiling is inclusive; an omitted dimension
+    # remains metered at an effectively unreachable ceiling. `deadline_ms` is a
+    # wall-clock budget in milliseconds. A trip is returned in the `QueryOutcome`,
+    # never raised.
     def query_governed(
         self,
         query: str,

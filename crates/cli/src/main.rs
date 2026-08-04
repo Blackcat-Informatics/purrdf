@@ -80,9 +80,9 @@ fn main() {
 /// Route a parsed command line to its subcommand, threading the decoded global
 /// `--loss-ledger` target through.
 ///
-/// Every arm but `query` reports [`CliOutcome::Complete`]: a governor bounds a SPARQL
-/// evaluation, and those subcommands run none, so there is no outcome of theirs a third
-/// exit code could describe.
+/// Every arm but `query` and `update` reports [`CliOutcome::Complete`]: a governor bounds
+/// a SPARQL evaluation or mutation, and the remaining subcommands run neither, so there
+/// is no outcome of theirs a third exit code could describe.
 fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
     let ledger_target = cli.ledger_target();
     let jsonld_options = cli

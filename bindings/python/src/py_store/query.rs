@@ -37,7 +37,7 @@ use purrdf_sparql_eval::{
     NativeSparqlEngine, ParserOptions, PartialAnswers, QueryGovernors, ResourceDimension,
     StandpointPredicates, StopCause, StopSignal, TrippedGovernor, WallDeadline,
 };
-use pyo3::exceptions::{PyKeyError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyString};
 
@@ -495,11 +495,15 @@ impl PyStopWatch {
         let Some(raised) = Python::attach(|py| py.check_signals().err()) else {
             return false;
         };
-        self.interrupted.store(true, Ordering::Relaxed);
         self.interrupt
             .lock()
             .expect("the interrupt state is only held for the length of a check")
             .raised = Some(raised);
+        // Publish only after the exception is stored. A detached evaluator thread that
+        // observes this flag may return immediately, and `run_governed` must then be able
+        // to take and re-raise the exact Python exception rather than laundering it into
+        // an ordinary cancellation outcome.
+        self.interrupted.store(true, Ordering::Release);
         true
     }
 }
@@ -509,7 +513,7 @@ impl StopSignal for PyStopWatch {
         if let Some(&cause) = self.latched.get() {
             return Some(cause);
         }
-        if self.interrupted.load(Ordering::Relaxed) {
+        if self.interrupted.load(Ordering::Acquire) {
             return Some(*self.latched.get_or_init(|| StopCause::Cancelled));
         }
         let cause = self.observe()?;
@@ -1103,6 +1107,9 @@ pub(crate) fn materialize_entailment_outcome(
                 tripped: Some(Py::new(py, PyTrippedGovernor { inner: tripped })?),
             },
         ),
+        _ => Err(PyRuntimeError::new_err(
+            "unsupported governed entailment outcome",
+        )),
     }
 }
 

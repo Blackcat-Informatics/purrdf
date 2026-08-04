@@ -82,7 +82,8 @@ pub(crate) fn eval_project<D: DatasetView + Sync>(
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let mut lift = Lift::at(node);
     let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
-        return Ok(lift.withheld());
+        let schema = Arc::new(VarSchema::from_vars(variables.iter().cloned()));
+        return Ok(lift.finish(SolutionSeq::empty(schema)));
     };
     let out = Arc::new(VarSchema::from_vars(variables.iter().cloned()));
     // For each projected column, the source column in the inner schema (if any).
@@ -248,12 +249,7 @@ pub(crate) fn eval_graph<D: DatasetView + Sync>(
                     Ok(lift.finish(seq))
                 }
                 // The IRI is not a term (no quads), or not in the named dataset → empty.
-                _ => {
-                    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
-                        return Ok(lift.withheld());
-                    };
-                    Ok(lift.finish(SolutionSeq::empty(seq.schema)))
-                }
+                _ => Ok(lift.finish(SolutionSeq::empty(crate::eval::syntactic_schema(inner)))),
             }
         }
         NamedNodePattern::Variable(v) => eval_graph_var(node, v, inner, ctx),
@@ -353,9 +349,18 @@ fn eval_graph_var<D: DatasetView + Sync>(
     // from the partial result instead.
     let schema = match out_schema {
         Some(s) => s,
-        None if truncated => lift
-            .absorbed_schema()
-            .unwrap_or_else(|| Arc::new(VarSchema::new())),
+        None if truncated => lift.absorbed_schema().map_or_else(
+            || {
+                let mut schema = (*crate::eval::syntactic_schema(inner)).clone();
+                schema.push(var.clone());
+                Arc::new(schema)
+            },
+            |schema| {
+                let mut schema = (*schema).clone();
+                schema.push(var.clone());
+                Arc::new(schema)
+            },
+        ),
         None => {
             let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
                 return Ok(lift.withheld());

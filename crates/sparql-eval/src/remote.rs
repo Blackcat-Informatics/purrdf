@@ -246,7 +246,7 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
     // of the charge below.
     if let Some(tripped) = ctx.stop_check() {
         return Ok(Evaluated::Truncated(Truncation::origin(
-            SolutionSeq::empty(Arc::new(VarSchema::new())),
+            SolutionSeq::empty(crate::eval::syntactic_schema(inner)),
             tripped,
         )));
     }
@@ -266,7 +266,7 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
         // had been consulted and had imposed nothing. An empty bag claims only that no
         // remote row was established, which is exactly true and is a sound lower bound.
         return Ok(Evaluated::Truncated(Truncation::origin(
-            SolutionSeq::empty(Arc::new(VarSchema::new())),
+            SolutionSeq::empty(crate::eval::syntactic_schema(inner)),
             tripped,
         )));
     }
@@ -308,13 +308,13 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
         // the result does.
         Err(RemoteError::Governed(governor)) => {
             return Ok(Evaluated::Truncated(Truncation::origin(
-                SolutionSeq::empty(Arc::new(VarSchema::new())),
+                SolutionSeq::empty(crate::eval::syntactic_schema(inner)),
                 ctx.record_trip(governor),
             )));
         }
         Err(RemoteError::GovernedAfterCompletion(governor)) => {
             return Ok(Evaluated::Truncated(Truncation::bag_only_origin(
-                SolutionSeq::empty(Arc::new(VarSchema::new())),
+                SolutionSeq::empty(crate::eval::syntactic_schema(inner)),
                 ctx.record_trip(governor),
             )));
         }
@@ -324,7 +324,7 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
             // fact and must remain non-silenceable.
             if silent && let Some(tripped) = post_return_trip {
                 return Ok(Evaluated::Truncated(Truncation::bag_only_origin(
-                    SolutionSeq::empty(Arc::new(VarSchema::new())),
+                    SolutionSeq::empty(crate::eval::syntactic_schema(inner)),
                     tripped,
                 )));
             }
@@ -459,10 +459,11 @@ impl RemoteQuerySource for LocalRemoteQuerySource {
     /// decode failure. Reporting it as a failure would make it silenceable, which is
     /// exactly the laundering `SILENT` must not perform.
     ///
-    /// The forwarded evaluation carries no *ceilings* — only the signal — because fuel
-    /// spent here is already charged at the calling seam, per request and per ingested
-    /// row: charging it twice would make one query's budget depend on how a federation
-    /// happened to be split up.
+    /// The forwarded evaluation carries the caller's intermediate-cell ceiling, so an
+    /// in-memory endpoint cannot materialize a bag the caller already bounded. It carries
+    /// no *charge* ceilings: fuel spent here is already charged at the calling seam, per
+    /// request and per ingested row, and charging it twice would make one query's budget
+    /// depend on how a federation happened to be split up.
     fn query(
         &self,
         endpoint: &str,
@@ -977,6 +978,10 @@ mod tests {
             "the empty bag, never the join identity: an identity row makes the surrounding \
              join a no-op, so the final result would look complete and be wrong"
         );
+        assert_eq!(
+            run.columns, 3,
+            "an immediate trip still carries the SERVICE pattern's declared schema"
+        );
 
         // The identical SILENT clause with the ceiling lifted really does complete, so the
         // assertions above are about the governor and not about the query.
@@ -1008,6 +1013,10 @@ mod tests {
             })
         );
         assert_eq!(run.rows, 0);
+        assert_eq!(
+            run.columns, 3,
+            "a source-reported trip still carries the SERVICE pattern's declared schema"
+        );
     }
 
     #[test]
@@ -1034,6 +1043,10 @@ mod tests {
             })
         );
         assert_eq!(run.rows, 0);
+        assert_eq!(
+            run.columns, 3,
+            "a pre-dispatch stop still carries the SERVICE pattern's declared schema"
+        );
 
         // …and the seam refuses on its own account, not merely the evaluator around it: a
         // source handed an already-latched signal never reaches its transport.

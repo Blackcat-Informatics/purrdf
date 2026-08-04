@@ -100,6 +100,15 @@ function isDirectionalLanguage(value) {
 // Rust refuses it, so the one refusal message lives with the one owner of the rule.
 function governorCeiling(value, name) {
   if (value === undefined || value === null) return undefined;
+  const valid =
+    typeof value === "bigint" ||
+    (typeof value === "number" && Number.isSafeInteger(value)) ||
+    (typeof value === "string" && /^[+-]?\d+$/.test(value.trim()));
+  if (!valid) {
+    throw new TypeError(
+      `query option ${name} must be an integer (number, bigint, or integral string)`,
+    );
+  }
   try {
     return BigInt(value);
   } catch {
@@ -331,56 +340,136 @@ function partialAnswersToObject(raw) {
 }
 
 function queryOutcomeToObject(raw) {
+  let resultRaw;
+  let partialRaw;
+  let trippedRaw;
+  let evidenceRaw;
   try {
     // `isComplete` is read before anything is moved out: the discriminator has to survive
     // the drain, and a trip is an OUTCOME here — nothing on this path throws.
     const isComplete = raw.isComplete;
-    const result = raw.takeResult();
-    const partial = raw.takePartial();
-    const tripped = raw.takeTripped();
-    const evidence = raw.takeEvidence();
+    resultRaw = raw.takeResult();
+    partialRaw = raw.takePartial();
+    trippedRaw = raw.takeTripped();
+    evidenceRaw = raw.takeEvidence();
+    if (evidenceRaw === undefined) {
+      throw new Error("governed query outcome omitted required evidence");
+    }
+    const evidenceHandle = evidenceRaw;
+    evidenceRaw = undefined;
+    const evidence = governorEvidenceToObject(evidenceHandle);
+    const trippedHandle = trippedRaw;
+    trippedRaw = undefined;
+    const tripped =
+      trippedHandle === undefined ? undefined : trippedGovernorToObject(trippedHandle);
+
+    if (isComplete) {
+      partialRaw?.free?.();
+      partialRaw = undefined;
+      if (resultRaw === undefined) {
+        throw new Error("complete governed query outcome omitted its result");
+      }
+      const resultHandle = resultRaw;
+      resultRaw = undefined;
+      return {
+        isComplete,
+        result: queryResultToObject(resultHandle),
+        partial: undefined,
+        tripped,
+        evidence,
+      };
+    }
+
+    resultRaw?.free?.();
+    resultRaw = undefined;
+    if (partialRaw === undefined) {
+      throw new Error("exhausted governed query outcome omitted its partial certificate");
+    }
+    const partialHandle = partialRaw;
+    partialRaw = undefined;
     return {
       isComplete,
-      result: result === undefined ? undefined : queryResultToObject(result),
-      partial: partial === undefined ? undefined : partialAnswersToObject(partial),
-      tripped: tripped === undefined ? undefined : trippedGovernorToObject(tripped),
-      evidence: evidence === undefined ? undefined : governorEvidenceToObject(evidence),
+      result: undefined,
+      partial: partialAnswersToObject(partialHandle),
+      tripped,
+      evidence,
     };
   } finally {
+    resultRaw?.free?.();
+    partialRaw?.free?.();
+    trippedRaw?.free?.();
+    evidenceRaw?.free?.();
     raw.free?.();
   }
 }
 
 function entailmentQueryOutcomeToObject(raw) {
+  let outcomeRaw;
+  let trippedRaw;
   try {
     const isComplete = raw.isComplete;
     const closureStopped = raw.closureStopped;
     const report = raw.report;
-    const outcome = raw.takeOutcome();
-    const tripped = raw.takeTripped();
+    outcomeRaw = raw.takeOutcome();
+    trippedRaw = raw.takeTripped();
+    const trippedHandle = trippedRaw;
+    trippedRaw = undefined;
+    const tripped =
+      trippedHandle === undefined ? undefined : trippedGovernorToObject(trippedHandle);
+    if (closureStopped) {
+      outcomeRaw?.free?.();
+      outcomeRaw = undefined;
+      return {
+        phase: "closure-stopped",
+        isComplete,
+        outcome: undefined,
+        report,
+        tripped,
+      };
+    }
+    if (outcomeRaw === undefined) {
+      throw new Error("answered entailment outcome omitted its query outcome");
+    }
+    const outcomeHandle = outcomeRaw;
+    outcomeRaw = undefined;
     return {
-      phase: closureStopped ? "closure-stopped" : "answered",
+      phase: "answered",
       isComplete,
-      outcome: outcome === undefined ? undefined : queryOutcomeToObject(outcome),
+      outcome: queryOutcomeToObject(outcomeHandle),
       report,
-      tripped: tripped === undefined ? undefined : trippedGovernorToObject(tripped),
+      tripped,
     };
   } finally {
+    outcomeRaw?.free?.();
+    trippedRaw?.free?.();
     raw.free?.();
   }
 }
 
 function updateOutcomeToObject(raw) {
+  let trippedRaw;
+  let evidenceRaw;
   try {
     const isApplied = raw.isApplied;
-    const tripped = raw.takeTripped();
-    const evidence = raw.takeEvidence();
+    trippedRaw = raw.takeTripped();
+    evidenceRaw = raw.takeEvidence();
+    if (evidenceRaw === undefined) {
+      throw new Error("governed update outcome omitted required evidence");
+    }
+    const evidenceHandle = evidenceRaw;
+    evidenceRaw = undefined;
+    const evidence = governorEvidenceToObject(evidenceHandle);
+    const trippedHandle = trippedRaw;
+    trippedRaw = undefined;
     return {
       isApplied,
-      tripped: tripped === undefined ? undefined : trippedGovernorToObject(tripped),
-      evidence: evidence === undefined ? undefined : governorEvidenceToObject(evidence),
+      tripped:
+        trippedHandle === undefined ? undefined : trippedGovernorToObject(trippedHandle),
+      evidence,
     };
   } finally {
+    trippedRaw?.free?.();
+    evidenceRaw?.free?.();
     raw.free?.();
   }
 }

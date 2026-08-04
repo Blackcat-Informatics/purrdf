@@ -155,9 +155,11 @@ pub(crate) struct Kb {
     /// site and honoured at another.
     ///
     /// `None` — the state [`Kb::from_dataset`] builds — is a run nothing can stop, which is
-    /// exactly the behaviour this lane had before the field existed. It is NOT a budget: see
-    /// [`purrdf_datalog::stop`] for the distinction, which is what admits it into a crate
-    /// whose ceilings are deliberately constants.
+    /// exactly the behaviour this lane had before the field existed. The stop-aware
+    /// constructor installs this before key inference, so a key-bearing ontology cannot
+    /// enter an uninterruptible tableau before the public governed path attaches its signal.
+    /// It is NOT a budget: see [`purrdf_datalog::stop`] for the distinction, which is what
+    /// admits it into a crate whose ceilings are deliberately constants.
     pub(crate) stop: Option<Arc<dyn StopSignal>>,
 }
 
@@ -195,16 +197,6 @@ impl Kb {
         }
     }
 
-    /// This knowledge base, with `stop` polled at every search and saturation round.
-    ///
-    /// A builder rather than a parameter on [`Self::from_dataset`], so that the reverse
-    /// mapping keeps its signature and an ungoverned caller writes exactly what it wrote
-    /// before.
-    pub(crate) fn with_stop(mut self, stop: Option<Arc<dyn StopSignal>>) -> Self {
-        self.stop = stop;
-        self
-    }
-
     /// Whether the caller has asked this run to stop.
     pub(crate) fn stopped(&self) -> bool {
         self.stop.as_ref().is_some_and(|stop| stop.stopped())
@@ -220,7 +212,24 @@ impl Kb {
     /// that is already unsatisfiable (every identification would then be entailed, so the
     /// key says nothing).
     pub(crate) fn from_dataset(ds: &RdfDataset) -> Result<Self, EntailError> {
+        Self::from_dataset_until(ds, None)
+    }
+
+    /// Reverse-map `ds` and install `stop` before any key axiom starts reasoning.
+    ///
+    /// # Errors
+    ///
+    /// The same failures as [`Self::from_dataset`], plus [`EntailError::Stopped`] when the
+    /// signal fires before or during key inference.
+    pub(crate) fn from_dataset_until(
+        ds: &RdfDataset,
+        stop: Option<Arc<dyn StopSignal>>,
+    ) -> Result<Self, EntailError> {
         let mut kb = parser::build(ds)?;
+        kb.stop = stop;
+        if kb.stopped() {
+            return Err(EntailError::Stopped);
+        }
         kb.apply_keys()?;
         Ok(kb)
     }
@@ -519,6 +528,19 @@ mod tests {
     const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
     const OWL_OBJECTPROPERTY: &str = "http://www.w3.org/2002/07/owl#ObjectProperty";
     const OWL_FUNCTIONALPROPERTY: &str = "http://www.w3.org/2002/07/owl#FunctionalProperty";
+    const OWL_HASKEY: &str = "http://www.w3.org/2002/07/owl#hasKey";
+    const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
+    const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
+    const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
+
+    #[derive(Debug)]
+    struct StopAfterFirstPoll(std::sync::atomic::AtomicU64);
+
+    impl StopSignal for StopAfterFirstPoll {
+        fn stopped(&self) -> bool {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= 1
+        }
+    }
 
     /// Build the `simple.ttl` fixture as a dataset (default graph).
     fn simple_dataset() -> Arc<RdfDataset> {
@@ -591,6 +613,37 @@ mod tests {
         let mut expected = [a, bb, cc, dd];
         expected.sort_unstable();
         assert_eq!(kb.instances_of(or_bc).unwrap(), expected.to_vec());
+    }
+
+    #[test]
+    fn governed_construction_installs_stop_before_key_inference() {
+        let mut b = RdfDatasetBuilder::new();
+        let ty = vocab(&mut b, RDF_TYPE);
+        let has_key = vocab(&mut b, OWL_HASKEY);
+        let first = vocab(&mut b, RDF_FIRST);
+        let rest = vocab(&mut b, RDF_REST);
+        let nil = vocab(&mut b, RDF_NIL);
+        let class = iri(&mut b, "Keyed");
+        let property = iri(&mut b, "key");
+        let list = iri(&mut b, "key-list");
+        let left = iri(&mut b, "left");
+        let right = iri(&mut b, "right");
+        let value = iri(&mut b, "value");
+        b.push_quad(class, has_key, list, None);
+        b.push_quad(list, first, property, None);
+        b.push_quad(list, rest, nil, None);
+        b.push_quad(left, ty, class, None);
+        b.push_quad(right, ty, class, None);
+        b.push_quad(left, property, value, None);
+        b.push_quad(right, property, value, None);
+        let dataset = b.freeze().expect("key fixture freezes");
+
+        let stop: Arc<dyn StopSignal> =
+            Arc::new(StopAfterFirstPoll(std::sync::atomic::AtomicU64::new(0)));
+        let Err(error) = Kb::from_dataset_until(&dataset, Some(stop)) else {
+            panic!("the second poll, inside key inference, must stop construction");
+        };
+        assert!(matches!(error, EntailError::Stopped));
     }
 
     /// Build the `parent.ttl` knowledge base directly (Concepts + axioms).

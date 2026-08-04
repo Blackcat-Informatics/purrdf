@@ -152,6 +152,41 @@ fn service_clause_federates_through_injected_http_transport() {
     }
 }
 
+#[test]
+fn missing_named_graph_does_not_execute_its_inner_service() {
+    let posts = AtomicUsize::new(0);
+    let source = HttpRemoteQuerySource::new(|_request: HttpRequest<'_>| {
+        posts.fetch_add(1, Ordering::Relaxed);
+        Err(RemoteError::Transport(
+            "a known-empty GRAPH branch must not issue this request".to_owned(),
+        ))
+    });
+    let dataset = RdfDatasetBuilder::new()
+        .freeze()
+        .expect("freeze empty dataset");
+    let result = NativeSparqlEngine::new()
+        .query_with_source(
+            &dataset,
+            SparqlRequest {
+                query: "SELECT ?x WHERE { GRAPH <https://example.org/missing> { \
+                        SERVICE <https://query.example/sparql> { BIND(1 AS ?x) } } }",
+                base_iri: None,
+                substitutions: &[],
+            },
+            &source,
+        )
+        .expect("a missing named graph is an empty result, not a SERVICE evaluation");
+    let SparqlResult::Solutions {
+        variables, rows, ..
+    } = result
+    else {
+        panic!("SELECT must return a solution sequence");
+    };
+    assert_eq!(variables, ["x"]);
+    assert!(rows.is_empty());
+    assert_eq!(posts.load(Ordering::Relaxed), 0);
+}
+
 fn terminal_service_cancelled_during_post(silent: bool) {
     let posts = Arc::new(AtomicUsize::new(0));
     let flag = CancellationFlag::new();

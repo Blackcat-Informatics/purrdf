@@ -172,6 +172,8 @@ const updated: Dataset = engine.update(
 );
 const dimensions: string[] = governorDimensions();
 const cancel = new CancellationToken();
+// @ts-expect-error governor keys are accepted only by governed entry points
+engine.query(matched, "ASK { ?s ?p ?o }", { fuel: 1 });
 const outcome: QueryOutcome = engine.queryGoverned(
   matched,
   "SELECT ?s WHERE { ?s ?p ?o }",

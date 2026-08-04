@@ -1546,6 +1546,22 @@ mod tests {
         }
     }
 
+    /// A latching signal that permits `remaining` polls before firing.
+    #[derive(Debug)]
+    struct AfterNPolls(std::sync::atomic::AtomicU64);
+
+    impl StopSignal for AfterNPolls {
+        fn stopped(&self) -> bool {
+            use std::sync::atomic::Ordering;
+            self.0
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+                    Some(left.saturating_sub(1))
+                })
+                .unwrap_or(0)
+                == 0
+        }
+    }
+
     /// A SIGNAL THAT NEVER FIRES CHANGES NOTHING the chase produces — the same universal
     /// model, the same witnesses, the same budget.
     ///
@@ -1597,6 +1613,25 @@ mod tests {
         assert!(
             rendered.contains("no universal model was computed"),
             "{rendered}"
+        );
+    }
+
+    #[test]
+    fn a_mid_fixpoint_stop_refuses_after_recording_committed_work() {
+        let program = [restriction()];
+        let signal = AfterNPolls(std::sync::atomic::AtomicU64::new(1));
+        let error = chase_until(
+            &program,
+            store_of(&[("a", TYPE, A), ("b", TYPE, A)]),
+            Some(&signal),
+        )
+        .expect_err("the second round boundary must observe the latched stop");
+        let ChaseError::Stopped { report } = error else {
+            panic!("a mid-fixpoint stop must use the typed stopped channel");
+        };
+        assert!(
+            report.join_steps() > 0,
+            "the first admitted round must have recorded work before the refusal"
         );
     }
 

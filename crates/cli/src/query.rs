@@ -521,6 +521,9 @@ fn emit_entailed(
             eprint!("{}", governors::render_closure_stop(tripped));
             Ok(CliOutcome::BudgetExhausted)
         }
+        _ => Err(CliError::Runtime(
+            "unsupported governed entailment outcome".to_owned(),
+        )),
     }
 }
 

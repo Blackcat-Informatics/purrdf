@@ -244,7 +244,7 @@ pub fn materialize_dl_reported_until(
     query_bgp: &[QTriple],
     stop: Option<&Arc<dyn StopSignal>>,
 ) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
-    let mut kb = Kb::from_dataset(ds)?.with_stop(stop.cloned());
+    let mut kb = Kb::from_dataset_until(ds, stop.cloned())?;
     if !kb.is_consistent()? {
         return Err(EntailError::Unsatisfiable);
     }

@@ -504,20 +504,33 @@ fn evaluate_shape_focus_nodes(
     focus_nodes: &[FocusNode],
     include_focus: impl Fn(&FocusNode) -> bool + Sync,
 ) -> Result<Vec<crate::report::ValidationResult>, String> {
-    // Read the ambient governor state on THIS thread and hand the `Arc` to each worker's
-    // own scope: a thread-local is invisible from a thread this one forks, so a worker
-    // that did not install it would evaluate its focus nodes ungoverned — the budget
-    // would bound the orchestration thread's queries and nothing else.
-    let governors = crate::sparql::current_governors();
+    // One validation owns one ordered governor ledger. Letting focus workers charge that
+    // shared state directly would make the first trip and its consumed vector depend on
+    // rayon scheduling rather than focus order. Governed validation is therefore serial;
+    // the ordinary path keeps the established deterministic chunk parallelism.
+    if let Some(governors) = crate::sparql::current_governors() {
+        let _function_scope = crate::sparql::enter_function_scope(Arc::clone(&shapes.functions));
+        let _governor_scope = crate::sparql::enter_governor_scope(governors);
+        let mut out = Vec::new();
+        for focus in focus_nodes {
+            if include_focus(focus) {
+                out.extend(crate::constraints::validate_shape_with_plan_at(
+                    data,
+                    focus.term(),
+                    focus.id(),
+                    shape,
+                    shapes.box_role_vocab.as_ref(),
+                    plan,
+                )?);
+            }
+        }
+        return Ok(out);
+    }
+
     crate::parallel::try_map_chunks(
         focus_nodes,
-        || {
-            (
-                crate::sparql::enter_function_scope(Arc::clone(&shapes.functions)),
-                governors.clone().map(crate::sparql::enter_governor_scope),
-            )
-        },
-        |_scopes, out, focus| {
+        || crate::sparql::enter_function_scope(Arc::clone(&shapes.functions)),
+        |_function_scope, out, focus| {
             if include_focus(focus) {
                 out.extend(crate::constraints::validate_shape_with_plan_at(
                     data,
@@ -962,8 +975,9 @@ impl GovernedValidation {
 /// `sh:sparql` constraint, every SHACL-AF node expression and rule. All of them charge
 /// **one** [`GovernorState`], built here and dropped with this call, so `governors` bounds
 /// the validation a caller asked about rather than each of the hundreds of queries it
-/// happens to decompose into. The state is `Sync`, so the focus workers charge it too;
-/// [`crate::sparql::enter_governor_scope`] is what puts it in their reach.
+/// happens to decompose into. Governed focus nodes execute serially in source order so
+/// the state has one deterministic charge order; ordinary validation retains parallel
+/// focus execution.
 ///
 /// Governors bound the **SPARQL** paths. Core constraint evaluation reads the IR
 /// directly and spends no evaluator budget, so a shapes graph with no SHACL-SPARQL and no

@@ -469,9 +469,9 @@ thread_local! {
     ///
     /// **One state for the whole validation, not one per query.** SHACL runs one query
     /// per focus node, so a per-query budget would silently hand an N-focus validation N
-    /// times the ceiling its caller set. The state is `Sync` and shared through an `Arc`,
-    /// so the focus workers charge the same counters; installing it is the focus chunk's
-    /// job, exactly as it is for `CURRENT_FUNCTIONS`.
+    /// times the ceiling its caller set. Governed focus validation runs serially in source
+    /// order so scheduling cannot change which query trips or what the evidence consumed;
+    /// the `Arc` still lets nested evaluator workers share the one operation-owned state.
     static CURRENT_GOVERNORS: RefCell<Option<Arc<GovernorState>>> = const { RefCell::new(None) };
 }
 

@@ -723,18 +723,40 @@ pub(crate) fn walk_spine<F>(root: &GraphPattern, visit: &mut F)
 where
     F: FnMut(&GraphPattern, SpineContext, usize),
 {
-    fn descend<F>(node: &GraphPattern, context: SpineContext, depth: usize, visit: &mut F)
-    where
-        F: FnMut(&GraphPattern, SpineContext, usize),
-    {
+    let mut stack = vec![(root, SpineContext::ROOT, 0_usize)];
+    while let Some((node, context, depth)) = stack.pop() {
         visit(node, context, depth);
+        let mut children = smallvec::SmallVec::<[(&GraphPattern, ChildEdge); 4]>::new();
         visit_classified_children(node, &mut |child, edge| {
-            descend(child, context.descend(edge), depth + 1, visit);
+            children.push((child, edge));
+            false
+        });
+        for (child, edge) in children.into_iter().rev() {
+            stack.push((child, context.descend(edge), depth + 1));
+        }
+    }
+}
+
+/// Refuse a manually constructed algebra whose nesting exceeds the parser's bound.
+///
+/// Parsed queries have already passed the same limit. This iterative validation keeps
+/// the public `PreparedQuery { query }` and `eval(&GraphPattern, ..)` surfaces safe when a
+/// caller constructs algebra directly instead of using [`purrdf_sparql_algebra::SparqlParser`].
+pub(crate) fn validate_graph_pattern_depth(root: &GraphPattern) -> Result<(), crate::EvalError> {
+    let mut stack = vec![(root, 1_usize)];
+    while let Some((node, depth)) = stack.pop() {
+        if depth > purrdf_sparql_algebra::MAX_GRAPH_PATTERN_DEPTH {
+            return Err(crate::EvalError::unsupported(format!(
+                "graph pattern nesting exceeds the safety limit of {}",
+                purrdf_sparql_algebra::MAX_GRAPH_PATTERN_DEPTH
+            )));
+        }
+        visit_classified_children(node, &mut |child, _edge| {
+            stack.push((child, depth + 1));
             false
         });
     }
-
-    descend(root, SpineContext::ROOT, 0, visit);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -900,12 +922,12 @@ impl CapPushdown {
 /// `root_ceiling` of `None` yields an empty pushdown and does no work beyond the walk,
 /// which is the ungoverned, `LIMIT`-free case.
 pub(crate) fn plan_cap_pushdown(root: &GraphPattern, root_ceiling: Option<u64>) -> CapPushdown {
-    fn descend(
-        node: &GraphPattern,
-        context: SpineContext,
-        ceiling: Option<u64>,
-        out: &mut crate::DetHashMap<usize, u64>,
-    ) {
+    let mut out = crate::DetHashMap::default();
+    let Some(root_ceiling) = root_ceiling else {
+        return CapPushdown(out);
+    };
+    let mut stack = vec![(root, SpineContext::ROOT, Some(root_ceiling))];
+    while let Some((node, context, ceiling)) = stack.pop() {
         // The licence is checked at the node the ceiling would be *applied* to, so a node
         // whose own certificate has lapsed keeps no ceiling even if its parent had one.
         let ceiling = ceiling.filter(|_| context.admits_cap_pushdown());
@@ -917,19 +939,17 @@ pub(crate) fn plan_cap_pushdown(root: &GraphPattern, root_ceiling: Option<u64>) 
         if let Some(ceiling) = ceiling.filter(|ceiling| *ceiling != u64::MAX) {
             out.insert(std::ptr::from_ref(node) as usize, ceiling);
         }
-        let mut ordinal = 0_usize;
+        let mut children = smallvec::SmallVec::<[(&GraphPattern, ChildEdge, usize); 4]>::new();
         visit_classified_children(node, &mut |child, edge| {
-            let child_ceiling =
-                ceiling.and_then(|ceiling| child_row_ceiling(node, ordinal, ceiling));
-            descend(child, context.descend(edge), child_ceiling, out);
-            ordinal += 1;
+            let ordinal = children.len();
+            children.push((child, edge, ordinal));
             false
         });
-    }
-
-    let mut out = crate::DetHashMap::default();
-    if root_ceiling.is_some() {
-        descend(root, SpineContext::ROOT, root_ceiling, &mut out);
+        for (child, edge, ordinal) in children.into_iter().rev() {
+            let child_ceiling =
+                ceiling.and_then(|ceiling| child_row_ceiling(node, ordinal, ceiling));
+            stack.push((child, context.descend(edge), child_ceiling));
+        }
     }
     CapPushdown(out)
 }
@@ -1068,6 +1088,28 @@ mod tests {
             context = context.descend(edge);
         }
         context
+    }
+
+    #[test]
+    fn directly_constructed_algebra_uses_the_parser_nesting_bound() {
+        fn nested(depth: usize) -> GraphPattern {
+            let mut pattern = bgp();
+            for _ in 1..depth {
+                pattern = GraphPattern::Project {
+                    inner: boxed(pattern),
+                    variables: vec![Variable::new("s")],
+                };
+            }
+            pattern
+        }
+
+        validate_graph_pattern_depth(&nested(purrdf_sparql_algebra::MAX_GRAPH_PATTERN_DEPTH))
+            .expect("the documented maximum is admitted");
+        let error = validate_graph_pattern_depth(&nested(
+            purrdf_sparql_algebra::MAX_GRAPH_PATTERN_DEPTH + 1,
+        ))
+        .expect_err("direct algebra cannot bypass the nesting limit");
+        assert!(matches!(error, crate::EvalError::Unsupported(_)));
     }
 
     // ---- prefix-monotone operators certify --------------------------------

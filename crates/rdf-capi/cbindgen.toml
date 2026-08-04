@@ -38,12 +38,15 @@ prefix = ""
 # `PurrdfTermKind`, `PurrdfDirection`, and `PurrdfGraphMatchKind` are now stored
 # as `int32_t` in the structs (to prevent enum-discriminant UB when C writes an
 # out-of-range value), so cbindgen would drop them — force-export them so C
-# callers retain the named constants.
+# callers retain the named constants. `PurrdfResultKind` plus the eight governor
+# enums below are likewise force-included because governed structs and out-parameter
+# representations carry their discriminants as `int32_t`.
 include = [
     "PurrdfStatus",
     "PurrdfTermKind",
     "PurrdfDirection",
     "PurrdfGraphMatchKind",
+    "PurrdfResultKind",
     "PurrdfGovernorFlag",
     "PurrdfResourceDimension",
     "PurrdfGovernorTripKind",

@@ -26,10 +26,21 @@ use crate::status::PurrdfStatus;
 use crate::term::PurrdfStr;
 use crate::{cstr_to_str, opt_cstr_to_str};
 
-/// The discriminant written to `purrdf_query`'s `out_kind`.
-const KIND_SOLUTIONS: i32 = 0;
-const KIND_GRAPH: i32 = 1;
-const KIND_BOOLEAN: i32 = 2;
+/// The result-form discriminant written to every query entry point's `out_kind`.
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PurrdfResultKind {
+    /// A SELECT solution sequence returned through `PurrdfRowCursor`.
+    Solutions = 0,
+    /// A CONSTRUCT or DESCRIBE graph returned through `PurrdfDataset`.
+    Graph = 1,
+    /// An ASK boolean returned through `uint8_t`.
+    Boolean = 2,
+}
+
+const KIND_SOLUTIONS: i32 = PurrdfResultKind::Solutions as i32;
+const KIND_GRAPH: i32 = PurrdfResultKind::Graph as i32;
+const KIND_BOOLEAN: i32 = PurrdfResultKind::Boolean as i32;
 const KIND_NONE: i32 = -1;
 
 /// The outcome discriminant written by [`purrdf_query_governed`].
@@ -535,7 +546,12 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed(
                 plan.entailment(),
                 &governors,
             )
-            .map_err(|error| PurrdfError::new(PurrdfStatus::QueryError, error.to_string()))?;
+            .map_err(|error| match error {
+                purrdf_rs::ReasoningError::Query(diagnostic) => {
+                    PurrdfError::from_diagnostic(PurrdfStatus::QueryError, &diagnostic)
+                }
+                other => PurrdfError::new(PurrdfStatus::QueryError, other.to_string()),
+            })?;
 
             match outcome {
                 GovernedEntailment::Answered { outcome, report } => {
@@ -573,6 +589,12 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed(
                         query: PurrdfGovernorEvidence::EMPTY,
                         closure_trip: encode_trip(Some(tripped)),
                     };
+                }
+                _ => {
+                    return Err(PurrdfError::new(
+                        PurrdfStatus::QueryError,
+                        "unsupported governed entailment outcome",
+                    ));
                 }
             }
             Ok(PurrdfStatus::Ok)

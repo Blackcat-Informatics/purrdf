@@ -246,6 +246,11 @@ pub fn materialize_rif_until(
     rules: &RuleSet,
     stop: Option<&Arc<dyn StopSignal>>,
 ) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
+    // Refuse a run that was already stopped before interning source terms, ground facts,
+    // or compiled rules. The round-level checks below remain the mid-fixpoint boundary.
+    if stop.is_some_and(|signal| signal.stopped()) {
+        return Err(EntailError::Stopped);
+    }
     let mut terms = Terms::default();
 
     // Seed: the source dataset's default-graph triples, in dataset order. A quad outside
@@ -689,6 +694,22 @@ mod tests {
 
     fn empty_ds() -> Arc<RdfDataset> {
         RdfDatasetBuilder::new().freeze().expect("freeze")
+    }
+
+    #[derive(Debug)]
+    struct AlreadyStopped;
+
+    impl StopSignal for AlreadyStopped {
+        fn stopped(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn an_already_stopped_rif_run_refuses_before_preparation() {
+        let stop: Arc<dyn StopSignal> = Arc::new(AlreadyStopped);
+        let result = materialize_rif_until(&empty_ds(), &RuleSet::new(), Some(&stop));
+        assert!(matches!(result, Err(EntailError::Stopped)));
     }
 
     fn has(ds: &RdfDataset, s: &TermValue, p: &TermValue, o: &TermValue) -> bool {

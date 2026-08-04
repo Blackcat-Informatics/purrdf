@@ -21,7 +21,9 @@ use purrdf_core::{
     DatasetView, GraphMatch, RdfDataset, TermFactory, TermId, TermValue, TrippedGovernor,
     ViewTermId,
 };
-use purrdf_sparql_algebra::{GraphPattern, Query, Variable};
+use purrdf_sparql_algebra::{
+    GraphPattern, NamedNodePattern, Query, TermPattern, TriplePattern, Variable,
+};
 
 use crate::DetHashMap;
 use crate::dataset_spec::ActiveDataset;
@@ -1339,7 +1341,7 @@ fn eval_evaluated_inner<D: DatasetView + Sync>(
     // theirs as the lift carries this upwards.
     if let Some(tripped) = ctx.stop_check() {
         return Ok(Evaluated::Truncated(Truncation::origin(
-            SolutionSeq::empty(Arc::new(VarSchema::new())),
+            SolutionSeq::empty(syntactic_schema(pattern)),
             tripped,
         )));
     }
@@ -1355,7 +1357,7 @@ fn eval_evaluated_inner<D: DatasetView + Sync>(
     if let Err(tripped) = ctx.charge(crate::governor::ChargePoint::AlgebraNodeEntry) {
         ctx.leave_node(restore);
         return Ok(Evaluated::Truncated(Truncation::origin(
-            SolutionSeq::empty(Arc::new(VarSchema::new())),
+            SolutionSeq::empty(syntactic_schema(pattern)),
             tripped,
         )));
     }
@@ -1606,6 +1608,117 @@ fn eval_node<D: DatasetView + Sync>(
     }
 }
 
+/// Derive the columns an algebra node exposes without evaluating it.
+///
+/// This is used only on early-stop and known-empty paths, where executing a child merely
+/// to discover its schema would spend a budget that has already tripped or trigger side
+/// effects in a branch known not to match. The match is exhaustive so a new algebra node
+/// cannot silently inherit an empty schema.
+pub(crate) fn syntactic_schema(pattern: &GraphPattern) -> Arc<VarSchema> {
+    fn push_term(term: &TermPattern, schema: &mut VarSchema) {
+        match term {
+            TermPattern::Variable(variable) => {
+                schema.push(variable.clone());
+            }
+            TermPattern::Triple(triple) => push_triple(triple, schema),
+            TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
+        }
+    }
+
+    fn push_triple(triple: &TriplePattern, schema: &mut VarSchema) {
+        push_term(&triple.subject, schema);
+        if let NamedNodePattern::Variable(variable) = &triple.predicate {
+            schema.push(variable.clone());
+        }
+        push_term(&triple.object, schema);
+    }
+
+    fn derive(pattern: &GraphPattern) -> VarSchema {
+        match pattern {
+            GraphPattern::Bgp { patterns } => {
+                let mut schema = VarSchema::new();
+                for pattern in patterns {
+                    push_triple(pattern, &mut schema);
+                }
+                schema
+            }
+            GraphPattern::Path {
+                subject,
+                path: _,
+                object,
+            } => {
+                let mut schema = VarSchema::new();
+                push_term(subject, &mut schema);
+                push_term(object, &mut schema);
+                schema
+            }
+            GraphPattern::Join { left, right }
+            | GraphPattern::LeftJoin {
+                left,
+                right,
+                expression: _,
+            }
+            | GraphPattern::Lateral { left, right }
+            | GraphPattern::Union { left, right } => derive(left).union(&derive(right)),
+            GraphPattern::Minus { left, right: _ } => derive(left),
+            GraphPattern::Filter { expr: _, inner }
+            | GraphPattern::OrderBy {
+                inner,
+                expression: _,
+            }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice {
+                inner,
+                start: _,
+                length: _,
+            } => derive(inner),
+            GraphPattern::Graph { name, inner } => {
+                let mut schema = derive(inner);
+                if let NamedNodePattern::Variable(variable) = name {
+                    schema.push(variable.clone());
+                }
+                schema
+            }
+            GraphPattern::Service {
+                name: _,
+                inner,
+                silent: _,
+            } => derive(inner),
+            GraphPattern::Extend {
+                inner,
+                variable,
+                expression: _,
+            } => {
+                let mut schema = derive(inner);
+                schema.push(variable.clone());
+                schema
+            }
+            GraphPattern::Values {
+                variables,
+                bindings: _,
+            }
+            | GraphPattern::Project {
+                inner: _,
+                variables,
+            } => VarSchema::from_vars(variables.iter().cloned()),
+            GraphPattern::Group {
+                inner: _,
+                variables,
+                aggregates,
+            } => {
+                let mut schema = VarSchema::from_vars(variables.iter().cloned());
+                for (variable, _) in aggregates {
+                    schema.push(variable.clone());
+                }
+                schema
+            }
+        }
+    }
+
+    Arc::new(derive(pattern))
+}
+
 /// Evaluate a graph pattern to a multiset of solutions, requiring completion.
 ///
 /// The **completion-only** entry point, and the one every caller that holds no governor
@@ -1631,6 +1744,7 @@ pub fn eval<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
+    crate::governor::soundness::validate_graph_pattern_depth(pattern)?;
     eval_evaluated(pattern, ctx)?
         .into_complete()
         .map_err(|truncation| {
@@ -1749,17 +1863,19 @@ fn install_answer_cap_pushdown<D: DatasetView + Sync>(query: &Query, ctx: &mut E
 /// `SELECT`/`ASK` walk the modifier-wrapped pattern; `CONSTRUCT` and `DESCRIBE` emit
 /// the IR dataset directly (`DESCRIBE` via the canonical Symmetric CBD).
 ///
-/// # `ASK` is strictly better under a trip
+/// # `ASK` under a trip settles its value without claiming completion
 ///
-/// `ASK` asks whether *any* solution exists, so a certified **lower** bound answers it
-/// outright: a single row that is certainly an answer proves `true`, whichever governor
-/// stopped the search, and the result is [`EvaluatedOutcome::Complete`]. Only an empty
-/// lower bound leaves the question open. Reporting "budget exhausted" for a question the
-/// evaluator has already answered would throw away a complete result.
+/// `ASK` asks whether *any* solution exists, so a certified **lower** bound settles its
+/// semantic value: a single row that is certainly an answer proves `true`, whichever
+/// governor stopped the search. The execution still stopped operationally, so the result
+/// stays [`EvaluatedOutcome::Truncated`] and carries that boolean as its certified partial.
+/// Reporting [`EvaluatedOutcome::Complete`] beside a latched trip would contradict the
+/// evidence. An empty lower bound leaves the boolean `false` and the question open.
 pub(crate) fn evaluate_query_evaluated<D: DatasetView + Sync>(
     query: &Query,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<EvaluatedOutcome<D::Id>, EvalError> {
+    crate::governor::soundness::validate_graph_pattern_depth(query_pattern(query))?;
     // Criterion and differential tests can hold the operation on the sequential branch;
     // production keeps the ordered parallel fold. The guard is operation-scoped so every
     // recursive fork gate sees the same decision.
@@ -2585,13 +2701,31 @@ mod tests {
         );
         assert!(truncation.rows().is_empty());
         assert_eq!(
+            truncation
+                .rows()
+                .schema
+                .vars()
+                .iter()
+                .map(Variable::as_str)
+                .collect::<Vec<_>>(),
+            ["x", "y", "z"],
+            "an early stop preserves the algebra's projected columns"
+        );
+        assert_eq!(
             truncation.bound(),
             crate::governor::soundness::SpineClass::Certain,
             "the empty bag is a sound lower bound"
         );
 
-        // And the ungoverned entry point refuses to hand a partial back as an answer.
-        let mut ctx = EvalCtx::new(&ds);
-        assert!(eval(&plan, &mut ctx).is_ok(), "ungoverned completes");
+        // The completion-only entry point refuses to hand a partial back as an answer.
+        let flag = crate::CancellationFlag::new();
+        flag.cancel();
+        let governors = crate::QueryGovernors::UNBOUNDED.with_stop_signal(Arc::new(flag));
+        let mut governed =
+            EvalCtx::new(&ds).with_governors(Arc::new(GovernorState::new(&governors)));
+        assert!(
+            eval(&plan, &mut governed).is_err(),
+            "a truncation reaching the completion-only entry point must be refused"
+        );
     }
 }

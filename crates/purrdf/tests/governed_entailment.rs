@@ -503,8 +503,10 @@ const OWL_ON_PROPERTY: &str = "http://www.w3.org/2002/07/owl#onProperty";
 const OWL_SOME_VALUES_FROM: &str = "http://www.w3.org/2002/07/owl#someValuesFrom";
 
 /// `A ⊑ ∃r.B` with three `A` instances — the shape the combined approach answers by minting
-/// an existential witness, and enough instances for an answer cap to cut the result in half.
-fn some_values_from_ontology() -> Arc<RdfDataset> {
+/// an existential witness. When `with_named_answers` is true, each instance also has an asserted
+/// `r` edge to an untyped named individual, giving the answer-cap test ordinary rows that remain
+/// after witness filtration.
+fn some_values_from_ontology(with_named_answers: bool) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
     let ty = b.intern_iri(RDF_TYPE);
     let class = b.intern_iri(OWL_CLASS);
@@ -522,17 +524,21 @@ fn some_values_from_ontology() -> Arc<RdfDataset> {
     b.push_quad(restriction, on_property, r, None);
     b.push_quad(restriction, some_values_from, big_b, None);
     b.push_quad(a, subclass_of, restriction, None);
-    for name in ["a1", "a2", "a3"] {
+    for (name, target) in [("a1", "named1"), ("a2", "named2"), ("a3", "named3")] {
         let individual = b.intern_iri(&format!("{NS}{name}"));
         b.push_quad(individual, ty, a, None);
+        if with_named_answers {
+            let named_target = b.intern_iri(&format!("{NS}{target}"));
+            b.push_quad(individual, r, named_target, None);
+        }
     }
     b.freeze().expect("the fixture freezes")
 }
 
 /// The witnesses the combined approach mints over that ontology, taken from the library's
 /// own materialization rather than reconstructed from the label format.
-fn minted_witnesses() -> BTreeSet<String> {
-    let combined = materialize_combined(&some_values_from_ontology(), &[])
+fn minted_witnesses(dataset: &RdfDataset) -> BTreeSet<String> {
+    let combined = materialize_combined(dataset, &[])
         .expect("the TBox is in the certified Horn fragment")
         .expect("…so the combined approach answers");
     assert!(
@@ -583,11 +589,13 @@ fn mentions_a_witness(result: &SparqlResult, witnesses: &BTreeSet<String>) -> bo
 /// happens, rows cross, and none of them binds a witness.
 #[test]
 fn no_witness_reaches_a_partial_solution_sequence() {
-    let witnesses = minted_witnesses();
+    let dataset = some_values_from_ontology(true);
+    let witnesses = minted_witnesses(&dataset);
     let query = format!("SELECT ?y WHERE {{ ?x <{NS}r> ?y }}");
+    let mut saw_observable_partial = false;
     for cap in [0_u64, 1, 2] {
         let answered = governed(
-            &some_values_from_ontology(),
+            &dataset,
             &query,
             QueryEntailment::OwlDirect,
             &QueryGovernors::UNBOUNDED
@@ -601,7 +609,12 @@ fn no_witness_reaches_a_partial_solution_sequence() {
             GovernedOutcome::Complete { result, .. } => result.clone(),
             GovernedOutcome::BudgetExhausted(exhausted) => match &exhausted.partial {
                 PartialAnswers::Certain(partial) | PartialAnswers::AtMost(partial) => {
-                    partial.result().clone()
+                    let result = partial.result().clone();
+                    saw_observable_partial |= matches!(
+                        &result,
+                        SparqlResult::Solutions { rows, .. } if !rows.is_empty()
+                    );
+                    result
                 }
                 PartialAnswers::Unknown(_) => continue,
             },
@@ -609,9 +622,13 @@ fn no_witness_reaches_a_partial_solution_sequence() {
         assert!(
             !mentions_a_witness(&result, &witnesses),
             "cap {cap}: a chase-minted witness must never bind an observable variable, in a \
-             partial answer either: {result:?}"
+            partial answer either: {result:?}"
         );
     }
+    assert!(
+        saw_observable_partial,
+        "at least one cap must expose partial rows, or the witness assertion is vacuous"
+    );
 }
 
 /// NO CHASE-MINTED WITNESS REACHES A PARTIAL CONSTRUCTED GRAPH.
@@ -626,7 +643,8 @@ fn no_witness_reaches_a_partial_solution_sequence() {
 /// below is what stops this test passing because there was nothing to withhold.
 #[test]
 fn no_witness_reaches_a_partial_constructed_graph() {
-    let witnesses = minted_witnesses();
+    let dataset = some_values_from_ontology(false);
+    let witnesses = minted_witnesses(&dataset);
     let query = format!("DESCRIBE <{NS}a1>");
     // `true` once some cap admitted a witness-mentioning statement and the scrub took it back
     // out — i.e. once the PARTIAL path actually did the withholding rather than the cap
@@ -634,7 +652,7 @@ fn no_witness_reaches_a_partial_constructed_graph() {
     let mut withheld_from_a_partial = false;
     for cap in [0_u64, 1, 2, 3, 100] {
         let answered = governed(
-            &some_values_from_ontology(),
+            &dataset,
             &query,
             QueryEntailment::OwlDirect,
             &QueryGovernors::UNBOUNDED.with_max_answers(cap),
@@ -676,7 +694,8 @@ fn no_witness_reaches_a_partial_constructed_graph() {
 /// one — which is a test that cannot fail.
 #[test]
 fn witness_triples_are_in_the_closure_the_scrub_runs_over() {
-    let combined = materialize_combined(&some_values_from_ontology(), &[])
+    let dataset = some_values_from_ontology(false);
+    let combined = materialize_combined(&dataset, &[])
         .expect("the TBox is in the certified Horn fragment")
         .expect("…so the combined approach answers");
     let witnesses = &combined.surrogates;

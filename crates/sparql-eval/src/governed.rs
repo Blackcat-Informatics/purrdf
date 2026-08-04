@@ -446,9 +446,9 @@ fn rdf_term_mentions_withheld_blank(
 
 /// Rebuild `dataset` without selected blank-bearing items, returning `None` for a no-op.
 ///
-/// The one-pass rebuild is intentional: it invokes a stateful caller predicate exactly once
-/// per visited occurrence, so the reported `removed` fact is the transformation that was
-/// actually applied rather than the result of a separate preflight scan.
+/// The one-pass rebuild is intentional: selection and copying happen in the same traversal,
+/// so the reported `removed` fact describes the transformation actually applied rather than
+/// the result of a separate preflight scan.
 fn dataset_without_withheld_blank_nodes(
     dataset: &Arc<RdfDataset>,
     withhold: &mut impl FnMut(&str) -> bool,

@@ -150,31 +150,31 @@ pub(crate) fn eval_lateral<D: DatasetView + Sync>(
     'left: for (mu, r) in &per_row {
         let right_to_out = right_to_out_map(&r.schema, &out);
         for nu in &r.rows {
-            // Start from μ: left columns are out[0..left_len] in the same order.
+            // Test compatibility before allocating the joined row. The cell ceiling is
+            // an admission boundary, so the first over-limit emit-worthy candidate must
+            // be refused before its output storage is constructed.
+            let compatible_row = nu.iter().enumerate().all(|(j, cell)| {
+                let oi = right_to_out[j];
+                !matches!((cell, mu.get(oi).copied().flatten()), (Some(t), Some(existing)) if *t != existing)
+            });
+            if !compatible_row {
+                continue;
+            }
+            if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
+                let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+                break 'left;
+            }
+
+            // Start from μ: left columns are out[0..left_len] in the same order, then
+            // overlay the now-known-compatible ν cells.
             let mut row = smallvec::smallvec![None; out_len];
             row[..left_len].copy_from_slice(mu);
-            // Overlay ν, requiring compatibility on any column μ already bound
-            // (disjoint for SERVICE, so this never rejects there).
-            let mut compatible_row = true;
             for (j, cell) in nu.iter().enumerate() {
-                if let Some(t) = cell {
-                    let oi = right_to_out[j];
-                    match row[oi] {
-                        Some(existing) if existing != *t => {
-                            compatible_row = false;
-                            break;
-                        }
-                        _ => row[oi] = Some(*t),
-                    }
+                if let Some(term) = cell {
+                    row[right_to_out[j]] = Some(*term);
                 }
             }
-            if compatible_row {
-                if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
-                    let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
-                    break 'left;
-                }
-                rows.push(row);
-            }
+            rows.push(row);
         }
     }
     Ok(lift.finish(SolutionSeq { schema: out, rows }))

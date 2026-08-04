@@ -36,6 +36,13 @@ const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
 const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
 const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
 
+/// Maximum number of nested group graph patterns accepted by the parser and evaluator.
+///
+/// This is a structural safety limit, not an execution governor: it rejects an algebra
+/// whose recursive evaluation would otherwise be able to exhaust the native stack before
+/// a fuel or stop check could run.
+pub const MAX_GRAPH_PATTERN_DEPTH: usize = 128;
+
 /// Parse-time configuration for the SPARQL front-end.
 ///
 /// The single knob today is [`Self::extension_fn_namespaces`]: the set of IRI
@@ -184,6 +191,7 @@ impl SparqlParser {
             agg_counter: 0,
             anon_counter: 0,
             group_counter: 0,
+            group_pattern_depth: 0,
             options,
         })
     }
@@ -198,6 +206,7 @@ struct Parser<'a, 'o> {
     agg_counter: usize,
     anon_counter: usize,
     group_counter: usize,
+    group_pattern_depth: usize,
     options: &'o ParserOptions,
 }
 
@@ -272,6 +281,7 @@ impl<'a> Parser<'a, '_> {
             agg_counter: self.agg_counter,
             anon_counter: self.anon_counter,
             group_counter: self.group_counter,
+            group_pattern_depth: self.group_pattern_depth,
             options: self.options,
         }
     }
@@ -1329,6 +1339,22 @@ impl<'a> Parser<'a, '_> {
     // ── group graph pattern → algebra (§18.2.2) ──────────────────────────────
 
     fn parse_group_graph_pattern(&mut self) -> Result<GraphPattern> {
+        if self.group_pattern_depth >= MAX_GRAPH_PATTERN_DEPTH {
+            return Err(ParseError::syntax(
+                format!(
+                    "group graph pattern nesting exceeds the safety limit of \
+                     {MAX_GRAPH_PATTERN_DEPTH}"
+                ),
+                self.span(),
+            ));
+        }
+        self.group_pattern_depth += 1;
+        let result = self.parse_group_graph_pattern_inner();
+        self.group_pattern_depth -= 1;
+        result
+    }
+
+    fn parse_group_graph_pattern_inner(&mut self) -> Result<GraphPattern> {
         self.expect(&Token::LBrace)?;
 
         // A sub-SELECT group: `{ SELECT ... }`.
@@ -3255,6 +3281,29 @@ mod tests {
             GraphPattern::Project { inner, .. } => *inner,
             other => other,
         }
+    }
+
+    #[test]
+    fn group_graph_pattern_nesting_has_a_typed_limit() {
+        fn nested_query(depth: usize) -> String {
+            format!(
+                "SELECT * WHERE {} ?s ?p ?o {}",
+                "{ ".repeat(depth),
+                "} ".repeat(depth)
+            )
+        }
+
+        SparqlParser::new()
+            .parse_query(&nested_query(MAX_GRAPH_PATTERN_DEPTH))
+            .expect("the documented maximum nesting depth parses");
+        let error = SparqlParser::new()
+            .parse_query(&nested_query(MAX_GRAPH_PATTERN_DEPTH + 1))
+            .expect_err("one group beyond the safety limit must be refused");
+        assert!(
+            matches!(error, ParseError::Syntax { .. }),
+            "the nesting refusal remains a typed syntax error: {error}"
+        );
+        assert!(error.to_string().contains("nesting exceeds"));
     }
 
     #[test]

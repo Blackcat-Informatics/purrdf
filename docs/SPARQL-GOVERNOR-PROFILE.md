@@ -153,6 +153,13 @@ corpus's `boundary` band (ceiling = the metered cost) must **complete** while it
 Charging saturates at `u64::MAX` rather than overflowing: an arithmetic panic in a
 resource meter would turn an exhausted budget into a crash.
 
+The scratch ceiling is observed at each operator commit boundary, after that operator's
+value construction has made its exact arena growth knowable. It is not a reservation
+system: the operator that first crosses the ceiling remains in the certified partial
+result, and reported consumption may exceed the ceiling by that one operator's growth.
+This post-mint boundary is deliberate; pre-admitting `CONCAT`, `REPLACE`, aggregate, and
+extension-function output would require guessing bytes before the value exists.
+
 ## 4. The charge schedule (normative)
 
 `fuel` is a count of **observable evaluation events**. Every point costs one unit,
@@ -453,8 +460,8 @@ than trusting the numbers in the file.
 
 ### 11.1 The corpus digest, and how to pin it
 
-```
-GOVERNOR_CORPUS_DIGEST = ccc1d04a8118cf6ade4bea5768ea8be0496d8929fefdf28d212a3862a339b1ba
+```text
+GOVERNOR_CORPUS_DIGEST = dc716d48199f79b7058f6547e5f6ee5fa0c291fa7e9cb73d4a35196536e9f884
 ```
 
 It is the SHA-256 of the corpus freeze manifest, which in turn covers every payload

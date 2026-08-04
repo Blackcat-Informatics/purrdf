@@ -667,6 +667,8 @@ int main(int argc, char **argv) {
     CHECK(rc == PURRDF_STATUS_OK && error == NULL, "governed query outcome");
     CHECK(query_outcome == PURRDF_QUERY_OUTCOME_KIND_BUDGET_EXHAUSTED,
           "governed query is typed exhaustion");
+    CHECK(result_kind == PURRDF_RESULT_KIND_SOLUTIONS,
+          "governed SELECT names its result kind");
     CHECK(query_evidence.trip.kind == PURRDF_GOVERNOR_TRIP_KIND_BUDGET &&
               query_evidence.trip.dimension ==
                   PURRDF_RESOURCE_DIMENSION_ANSWER_ROWS,
@@ -676,6 +678,7 @@ int main(int argc, char **argv) {
     if (partial_rows != NULL) {
         purrdf_rowcursor_free(partial_rows);
     }
+    CHECK(partial_graph == NULL, "a SELECT writes no partial graph");
 
     /* The entailment-aware carrier keeps phase two and its closure report together. */
     CHECK(purrdf_query_governors_init(&governors) == PURRDF_STATUS_OK,
@@ -694,7 +697,8 @@ int main(int argc, char **argv) {
     CHECK(rc == PURRDF_STATUS_OK && error == NULL,
           "governed entailment query outcome");
     CHECK(entailment_outcome == PURRDF_ENTAILMENT_QUERY_OUTCOME_KIND_COMPLETE &&
-              entailment_kind == 2 && entailment_boolean == 1,
+              entailment_kind == PURRDF_RESULT_KIND_BOOLEAN &&
+              entailment_boolean == 1,
           "governed entailment query answers");
     CHECK(entailment_evidence.query_ran == 1 && entailment_report != NULL,
           "governed entailment query carries both phases");

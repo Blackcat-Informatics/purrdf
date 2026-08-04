@@ -434,10 +434,22 @@ test("a negative ceiling is refused rather than wrapping into an unreachable one
   ]) {
     assert.throws(
       () => engine.queryGoverned(ds, NAMES, { [key]: -1 }),
+      new Error(
+        `governor ceiling \`${key}\` must be a non-negative integer, got -1 ` +
+          "(omit it to decline the ceiling; 0 is a valid ceiling that trips on the " +
+          "first charged unit of work)",
+      ),
       `a negative ${key} must be refused`,
     );
   }
   assert.throws(() => engine.queryGoverned(ds, NAMES, { fuel: 1.5 }), TypeError);
+  for (const value of ["", "   ", [], true, false]) {
+    assert.throws(
+      () => engine.queryGoverned(ds, NAMES, { fuel: value }),
+      TypeError,
+      `${JSON.stringify(value)} must not be silently coerced into an integer ceiling`,
+    );
+  }
 });
 
 // ---------------------------------------------------------------------------

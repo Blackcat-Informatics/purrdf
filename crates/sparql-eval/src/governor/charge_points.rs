@@ -594,18 +594,16 @@ fn ungoverned_evaluation_charges_nothing() {
     assert_eq!(governed.rows, ungoverned.rows);
     assert_eq!(governed.schema.vars(), ungoverned.schema.vars());
 
-    // A caller who set only a deadline pays no fuel-charge overhead either: the fuel
+    // A caller who set only a stop signal pays no fuel-charge overhead either: the fuel
     // dimension stays disengaged, so the counter is never reached.
-    let deadline_only = Arc::new(GovernorState::new(
+    let stop_only = Arc::new(GovernorState::new(
         &QueryGovernors::UNBOUNDED
             .with_stop_signal(Arc::new(crate::governor::CancellationFlag::new())),
     ));
-    let mut deadline_ctx = EvalCtx::new(&dataset).with_governors(Arc::clone(&deadline_only));
-    eval_evaluated(&pattern, &mut deadline_ctx).expect("evaluation must not fail");
+    let mut stop_ctx = EvalCtx::new(&dataset).with_governors(Arc::clone(&stop_only));
+    eval_evaluated(&pattern, &mut stop_ctx).expect("evaluation must not fail");
     assert_eq!(
-        deadline_only
-            .evidence()
-            .consumed_in(ResourceDimension::Fuel),
+        stop_only.evidence().consumed_in(ResourceDimension::Fuel),
         0,
         "engaging a stop signal must not engage the fuel counter"
     );

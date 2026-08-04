@@ -179,7 +179,7 @@ where
             let attempted = bounded.truncated.then(|| {
                 (bounded.solutions.rows.len() as u64)
                     .saturating_add(1)
-                    .saturating_mul(bounded.solutions.variables.len() as u64)
+                    .saturating_mul((bounded.solutions.variables.len() as u64).max(1))
             });
             (bounded.solutions, attempted)
         } else {

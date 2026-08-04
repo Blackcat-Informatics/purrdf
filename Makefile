@@ -40,7 +40,7 @@ BINARYEN_VERSION := 130
 # nine OWL reasoner services, the concrete domain, the conclusion-directed
 # entailment service with its seven mechanisms and its caller-supplied import
 # map AND the governed query/update lane with its typed outcome — measures
-# 9_963_673 bytes against the 12_112_500 ceiling, which is 17.741% headroom. That
+# 10_456_984 bytes against the 12_112_500 ceiling, which is 13.668% headroom. That
 # figure is recorded below (WASM_SIZE_MEASURED_BYTES) and REPORTED rather than
 # enforced; the ceiling is the check that fails.
 #
@@ -249,11 +249,18 @@ WASM_SIZE_BUDGET_BYTES := 12112500
 # machinery plus the five host-facing outcome classes over it rather than the wrappers.
 # It is a NEW CAPABILITY on this host, and the one it most needed: a browser tab runs the
 # evaluator on the UI thread, so before this an accidental cross product had no ceiling
-# and no deadline — it froze the page with no way back. Still 82% of
-# WASM_SIZE_BUDGET_BYTES, so this is a measurement update and NOT a ceiling raise.
+# and no deadline — it froze the page with no way back. The ceiling was unchanged, so
+# this was a measurement update and NOT a ceiling raise.
+#
+# The increase 9_963_673 -> 10_456_984 carries the rest of the governed contract into
+# the same artifact: entailment-query phase outcomes, certificate-safe partial filtering,
+# pre-allocation intermediate-cell admission, polynomial bounded property paths, and the
+# parser/evaluator nesting refusal. This is the optimized output measured with the pinned
+# wasm-bindgen 0.2.125 and binaryen 130 under rustc stable 1.97.1. The 12_112_500-byte
+# ceiling is unchanged; the current artifact leaves 13.668% headroom beneath it.
 #
 # The measured constant below is the CURRENT size, not any intermediate figure.
-WASM_SIZE_MEASURED_BYTES := 9963673
+WASM_SIZE_MEASURED_BYTES := 10456984
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
