@@ -29,8 +29,10 @@
 //! [`crate::materialize_dl_reported`] seam.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use purrdf_core::RdfDataset;
+use purrdf_datalog::StopSignal;
 
 use crate::EntailError;
 use crate::interner::Interner;
@@ -144,6 +146,19 @@ pub(crate) struct Kb {
     pub(crate) literal_class: BTreeMap<u32, u32>,
     /// The constructs this knowledge base could not fully handle, in `Construct` order.
     pub(crate) boundaries: BTreeSet<Construct>,
+    /// The caller's latching stop signal, polled at every search and saturation round.
+    ///
+    /// Held on the knowledge base rather than passed down through
+    /// [`hyper::decide`]/[`saturate::saturate`] and their private drivers because every one
+    /// of those already borrows a `&Kb`: putting it here reaches all of them without adding
+    /// a parameter to a dozen private functions, and it cannot be forgotten at one call
+    /// site and honoured at another.
+    ///
+    /// `None` — the state [`Kb::from_dataset`] builds — is a run nothing can stop, which is
+    /// exactly the behaviour this lane had before the field existed. It is NOT a budget: see
+    /// [`purrdf_datalog::stop`] for the distinction, which is what admits it into a crate
+    /// whose ceilings are deliberately constants.
+    pub(crate) stop: Option<Arc<dyn StopSignal>>,
 }
 
 impl Kb {
@@ -176,7 +191,23 @@ impl Kb {
             data_ranges: data::DataRangeTable::default(),
             literal_class: BTreeMap::new(),
             boundaries: BTreeSet::new(),
+            stop: None,
         }
+    }
+
+    /// This knowledge base, with `stop` polled at every search and saturation round.
+    ///
+    /// A builder rather than a parameter on [`Self::from_dataset`], so that the reverse
+    /// mapping keeps its signature and an ungoverned caller writes exactly what it wrote
+    /// before.
+    pub(crate) fn with_stop(mut self, stop: Option<Arc<dyn StopSignal>>) -> Self {
+        self.stop = stop;
+        self
+    }
+
+    /// Whether the caller has asked this run to stop.
+    pub(crate) fn stopped(&self) -> bool {
+        self.stop.as_ref().is_some_and(|stop| stop.stopped())
     }
 
     /// Reverse-map an [`RdfDataset`]'s default graph into a knowledge base.
@@ -490,7 +521,7 @@ mod tests {
     const OWL_FUNCTIONALPROPERTY: &str = "http://www.w3.org/2002/07/owl#FunctionalProperty";
 
     /// Build the `simple.ttl` fixture as a dataset (default graph).
-    fn simple_dataset() -> std::sync::Arc<RdfDataset> {
+    fn simple_dataset() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         let ty = vocab(&mut b, RDF_TYPE);
         let class = vocab(&mut b, OWL_CLASS);

@@ -128,6 +128,7 @@ use crate::plan::{
 use crate::seminaive::{
     BudgetReport, BudgetResource, MAX_JOIN_STEPS, MAX_STORED_FACTS, MAX_TERM_ARENA_BYTES,
 };
+use crate::stop::{StopSignal, is_stopped};
 use crate::store::{Bound, Fact, RelationStore};
 
 // ── The position dependency graph ───────────────────────────────────────────────
@@ -742,6 +743,16 @@ pub enum ChaseError {
         /// Consumption of all three ceilings when the chase stopped.
         report: BudgetReport,
     },
+    /// The caller's [`crate::stop::StopSignal`] fired at a round boundary.
+    ///
+    /// As total a refusal as [`Self::BudgetExhausted`]: the rounds already committed are not
+    /// a universal model of anything, and no witness the chase had minted crosses this
+    /// boundary. Distinct from it because a fixed ceiling being passed is a fact about the
+    /// program and the data, while this is a decision the host made about this one run.
+    Stopped {
+        /// Consumption of all three ceilings when the signal was observed.
+        report: BudgetReport,
+    },
 }
 
 impl fmt::Display for ChaseError {
@@ -787,6 +798,13 @@ impl fmt::Display for ChaseError {
                 report.join_steps(),
                 report.stored_facts(),
                 report.term_arena_bytes()
+            ),
+            Self::Stopped { report } => write!(
+                f,
+                "the chase was stopped by the caller's stop signal after {} join step(s), \
+                 holding {} fact(s): no universal model was computed",
+                report.join_steps(),
+                report.stored_facts()
             ),
         }
     }
@@ -1282,6 +1300,24 @@ impl ChaseOutcome {
 ///
 /// Any [`ChaseError`].
 pub fn chase(program: &[DlClause], edb: RelationStore) -> Result<ChaseOutcome, ChaseError> {
+    chase_until(program, edb, None)
+}
+
+/// [`chase`], polling a caller-owned [`StopSignal`] once per chase round.
+///
+/// Identical to [`chase`] but for the poll: if `stop` reports stopped at a round boundary
+/// the fixpoint refuses with [`ChaseError::Stopped`] rather than running the next round. It
+/// is not a budget — see [`crate::stop`] — and it cannot change an answer, because the only
+/// two outcomes are the answer [`chase`] would have given and no answer at all.
+///
+/// # Errors
+///
+/// [`ChaseError::Stopped`] if `stop` fired, and every error [`chase`] returns.
+pub fn chase_until(
+    program: &[DlClause],
+    edb: RelationStore,
+    stop: Option<&dyn StopSignal>,
+) -> Result<ChaseOutcome, ChaseError> {
     let termination = certify(program);
     if let ChaseTermination::Unbounded { violations } = termination {
         return Err(ChaseError::NonTerminating { violations });
@@ -1297,6 +1333,13 @@ pub fn chase(program: &[DlClause], edb: RelationStore) -> Result<ChaseOutcome, C
     state.check_budget()?;
 
     loop {
+        // The caller's stop signal, polled BEFORE the round it would prevent — the same
+        // place, and for the same reason, `crate::seminaive` polls it.
+        if is_stopped(stop) {
+            return Err(ChaseError::Stopped {
+                report: state.report(),
+            });
+        }
         // One round's candidate facts → the clause credited with them, in total lexical
         // order and deduplicated: two clauses deriving the same fact, or one clause firing
         // twice on one frontier, collapse here rather than racing to be committed first.
@@ -1489,6 +1532,72 @@ mod tests {
     /// The chase of `program` over `edb`, asserting it ran.
     fn run(program: &[DlClause], edb: RelationStore) -> ChaseOutcome {
         chase(program, edb).expect("the fixture program is certified and fireable")
+    }
+
+    // ── The caller's stop signal ────────────────────────────────────────────────
+
+    /// A stop signal fixed at one answer, honouring the latching contract trivially.
+    #[derive(Debug)]
+    struct Fixed(bool);
+
+    impl StopSignal for Fixed {
+        fn stopped(&self) -> bool {
+            self.0
+        }
+    }
+
+    /// A SIGNAL THAT NEVER FIRES CHANGES NOTHING the chase produces — the same universal
+    /// model, the same witnesses, the same budget.
+    ///
+    /// The property that makes a stop signal admissible where a caller-supplied ceiling is
+    /// refused: it is observationally nothing until it fires. A minted witness is addressed
+    /// by a content digest, so "the same witnesses" is a byte comparison rather than a shape
+    /// comparison.
+    #[test]
+    fn an_unfired_stop_signal_changes_no_universal_model() {
+        let program = [restriction()];
+        let edb = || store_of(&[("a", TYPE, A), ("b", TYPE, A)]);
+        let plain = chase(&program, edb()).expect("the fixture is certified");
+        let watched =
+            chase_until(&program, edb(), Some(&Fixed(false))).expect("the fixture is certified");
+        assert_eq!(plain.derived(), watched.derived());
+        assert_eq!(
+            plain.witnesses().witnesses().collect::<Vec<_>>(),
+            watched.witnesses().witnesses().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            format!("{:?}", plain.budget()),
+            format!("{:?}", watched.budget())
+        );
+    }
+
+    /// A SIGNAL THAT FIRES PRODUCES NO MODEL AND NO WITNESS.
+    ///
+    /// A stopped chase is a refusal, not a smaller universal model: there is no
+    /// [`ChaseOutcome`] to read a witness out of, which is what keeps a minted existential
+    /// from reaching a caller through a run that was cut short.
+    #[test]
+    fn a_fired_stop_signal_refuses_and_mints_nothing_a_caller_can_see() {
+        let program = [restriction()];
+        let error = chase_until(
+            &program,
+            store_of(&[("a", TYPE, A), ("b", TYPE, A)]),
+            Some(&Fixed(true)),
+        )
+        .expect_err("a signal that is already firing must stop the chase");
+        let ChaseError::Stopped { report } = &error else {
+            panic!("a stop is not a ceiling: {error:?}");
+        };
+        assert_eq!(report.join_steps(), 0, "nothing ran before the first round");
+        let rendered = error.to_string();
+        assert!(
+            rendered.contains("stopped by the caller's stop signal"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("no universal model was computed"),
+            "{rendered}"
+        );
     }
 
     // ── The restriction fires, terminates and mints blank nodes ─────────────────

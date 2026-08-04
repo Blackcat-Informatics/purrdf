@@ -6,7 +6,7 @@
 //!
 //! # The gap this closes
 //!
-//! [`materialize_dl_reported`]'s own module docs are exact
+//! [`materialize_dl_reported`](crate::materialize_dl_reported)'s own module docs are exact
 //! about what its query-independent augmentation delivers: certain answers for a basic
 //! graph pattern all of whose variables are DISTINGUISHED (projected). A query variable
 //! that is not projected — `?y` in `SELECT ?x WHERE { ?x r ?y . ?y a B }` — is
@@ -17,7 +17,7 @@
 //! TBox axiom `A ⊑ ∃r.B` only entails that SOME element is, not that a specific named one
 //! is. Answering that query over the whole-vocabulary augmentation therefore silently
 //! misses `x`, and nothing in the existing boundary machinery says so, because
-//! [`materialize_dl_reported`] only recognizes a query BLANK NODE as non-distinguished, not
+//! [`materialize_dl_reported`](crate::materialize_dl_reported) only recognizes a query BLANK NODE as non-distinguished, not
 //! an unprojected ordinary variable.
 //!
 //! # What this module does instead (Lutz/Toman/Wolter; Stefanoni/Motik/Horrocks)
@@ -33,7 +33,7 @@
 //!    witnesses as ordinary blank-node facts, frontier-addressed Skolem terms exactly as
 //!    every other existential rule in this crate mints them;
 //! 3. merges those witness-bearing facts with
-//!    [`materialize_dl_reported`]'s own whole-vocabulary augmentation of the NAMED part
+//!    [`materialize_dl_reported`](crate::materialize_dl_reported)'s own whole-vocabulary augmentation of the NAMED part
 //!    (classification, realization, entailed roles, `owl:sameAs`), so ordinary SPARQL BGP
 //!    matching over the union answers both the named and the anonymous parts of the query
 //!    at once — a non-distinguished variable is free to bind to a minted witness, which is
@@ -97,7 +97,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, TermValue};
-use purrdf_datalog::chase::{certify, chase};
+use purrdf_datalog::StopSignal;
+use purrdf_datalog::chase::{ChaseError, certify, chase_until};
 use purrdf_datalog::clause::{ClauseAtom, ClauseTerm, DlClause, HeadDisjunct};
 use purrdf_datalog::store::RelationStore;
 
@@ -111,7 +112,7 @@ use crate::vocab::{
     OWL_VERSIONINFO, RDF_PROPERTY, RDF_TYPE, RDFS_CLASS, RDFS_COMMENT, RDFS_DATATYPE,
     RDFS_ISDEFINEDBY, RDFS_LABEL, RDFS_SEEALSO, RDFS_SUBCLASSOF,
 };
-use crate::{EntailError, QTriple, materialize_dl_reported};
+use crate::{EntailError, QTriple, materialize_dl_reported_until};
 
 /// The reserved-vocabulary PREDICATES this module reads — the whole list, and the reason the
 /// applicability claim is checkable.
@@ -251,7 +252,7 @@ pub struct CombinedMaterialization {
 ///
 /// Returns `Ok(None)` when the ontology's TBox is not in the fragment this module can
 /// lower and chase — the caller falls back to
-/// [`materialize_dl_reported`] and discloses
+/// [`materialize_dl_reported`](crate::materialize_dl_reported) and discloses
 /// [`crate::Construct::NonHornTBox`] on the report it keeps using instead.
 ///
 /// # Errors
@@ -262,6 +263,26 @@ pub struct CombinedMaterialization {
 pub fn materialize_combined(
     ds: &RdfDataset,
     query_bgp: &[QTriple],
+) -> Result<Option<CombinedMaterialization>, EntailError> {
+    materialize_combined_until(ds, query_bgp, None)
+}
+
+/// [`materialize_combined`], with a caller-owned latching stop signal polled across BOTH
+/// halves of the combined approach — the named part's augmentation and the anonymous part's
+/// restricted chase.
+///
+/// It is not a budget and it changes no answer: see
+/// [`materialize_until`](crate::materialize_until). A stopped run mints no witness a caller
+/// can see, because it returns no [`CombinedMaterialization`] at all.
+///
+/// # Errors
+///
+/// [`EntailError::Stopped`] if the signal fired, plus every error [`materialize_combined`]
+/// returns.
+pub fn materialize_combined_until(
+    ds: &RdfDataset,
+    query_bgp: &[QTriple],
+    stop: Option<&Arc<dyn StopSignal>>,
 ) -> Result<Option<CombinedMaterialization>, EntailError> {
     let Some(clauses) = lower_horn_tbox(ds) else {
         return Ok(None);
@@ -276,7 +297,7 @@ pub fn materialize_combined(
     // report too, because the chase step below is a STRICT EXTENSION within a fragment this
     // function already certified terminating — it adds facts, it never revokes the
     // named-part guarantee the reused report already states.
-    let (named_dataset, report) = materialize_dl_reported(ds, query_bgp)?;
+    let (named_dataset, report) = materialize_dl_reported_until(ds, query_bgp, stop)?;
 
     if clauses.is_empty() {
         // No existential axiom at all: there is nothing for the chase to add.
@@ -308,7 +329,12 @@ pub fn materialize_combined(
         let _ = edb.insert(&ss, &ps, &os, RelationStore::DEFAULT_GRAPH);
     }
 
-    let outcome = chase(&clauses, edb).map_err(EntailError::Chase)?;
+    let outcome = chase_until(&clauses, edb, stop.map(|stop| &**stop as &dyn StopSignal)).map_err(
+        |error| match error {
+            ChaseError::Stopped { .. } => EntailError::Stopped,
+            other => EntailError::Chase(other),
+        },
+    )?;
     let witnesses: BTreeSet<&str> = outcome.witnesses().witnesses().collect();
 
     let mut b = RdfDatasetBuilder::new();

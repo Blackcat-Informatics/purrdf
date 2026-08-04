@@ -151,6 +151,13 @@ pub(crate) struct Decision {
     pub(crate) steps: u64,
     /// Whether the search stopped because it reached its step cap.
     pub(crate) exhausted: bool,
+    /// Whether the search stopped because the caller's stop signal fired.
+    ///
+    /// Distinct from [`Self::exhausted`] because the two are different facts about a run and
+    /// only one of them is about this library: a cap reached is a termination-bug backstop
+    /// tripping, while this is the host having asked for the run to end. `consistent` is
+    /// meaningless under either, and every consumer in this crate reads both before it.
+    pub(crate) stopped: bool,
 }
 
 /// The search reached its step cap. A private marker rather than an

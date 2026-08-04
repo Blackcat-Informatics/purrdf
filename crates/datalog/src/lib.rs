@@ -31,6 +31,12 @@
 //! arriving through a parameter instead. There is no wall-clock budget: it would
 //! break both wasm and reproducibility.
 //!
+//! A caller-owned [`stop::StopSignal`] is admitted, and is admitted for
+//! exactly that reason rather than in spite of it: it changes no answer. An unstopped run
+//! returns precisely what it would have returned with no signal attached, and a stopped one
+//! returns **nothing** — a typed refusal, never a truncated model. See [`stop`] for the
+//! full argument and for the contract an implementation is bound by.
+//!
 //! # Portability
 //!
 //! No filesystem, no clock, no RNG, no ambient I/O. The crate builds for
@@ -191,9 +197,12 @@ pub mod plan;
 pub mod proof;
 pub mod resolve_fol;
 pub mod seminaive;
+pub mod stop;
 pub mod store;
 pub mod term;
 pub mod unify;
+
+pub use stop::StopSignal;
 
 #[cfg(test)]
 pub(crate) mod synth_corpus;

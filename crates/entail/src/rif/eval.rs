@@ -28,6 +28,7 @@
 use std::sync::Arc;
 
 use purrdf_core::{FastMap, FastSet, RdfDataset, RdfDatasetBuilder, TermValue};
+use purrdf_datalog::StopSignal;
 use purrdf_datalog::seminaive::BudgetReport;
 
 use crate::engine::surface_of;
@@ -225,6 +226,26 @@ pub fn materialize_rif(
     ds: &RdfDataset,
     rules: &RuleSet,
 ) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
+    materialize_rif_until(ds, rules, None)
+}
+
+/// [`materialize_rif`], with a caller-owned latching stop signal polled once per semi-naive
+/// round of the RIF fixpoint.
+///
+/// It is not a budget and it changes no answer: see
+/// [`materialize_until`](crate::materialize_until) for the argument, which is this lane's
+/// too. A run the signal never stops derives exactly what [`materialize_rif`] derives; a run
+/// it stops derives nothing a caller can read.
+///
+/// # Errors
+///
+/// [`EntailError::Stopped`] if the signal fired, plus every error [`materialize_rif`]
+/// returns.
+pub fn materialize_rif_until(
+    ds: &RdfDataset,
+    rules: &RuleSet,
+    stop: Option<&Arc<dyn StopSignal>>,
+) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
     let mut terms = Terms::default();
 
     // Seed: the source dataset's default-graph triples, in dataset order. A quad outside
@@ -259,7 +280,9 @@ pub fn materialize_rif(
         .map(|r| compile_rule(r, &mut terms))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let stats = chase(&mut facts, seed, &compiled);
+    let Some(stats) = chase(&mut facts, seed, &compiled, stop) else {
+        return Err(EntailError::Stopped);
+    };
 
     // Emit: original quads (all graphs) + every seeded/derived fact that is not an
     // original default-graph triple, in a deterministic order.
@@ -404,12 +427,23 @@ fn compile_slot(term: &RifTerm, terms: &mut Terms, vars: &mut Vec<String>) -> Sl
 }
 
 /// Semi-naive forward chase to the least fixpoint.
-fn chase(facts: &mut FastSet<[u32; 3]>, seed: Vec<[u32; 3]>, rules: &[CompiledRule]) -> ChaseStats {
+fn chase(
+    facts: &mut FastSet<[u32; 3]>,
+    seed: Vec<[u32; 3]>,
+    rules: &[CompiledRule],
+    stop: Option<&Arc<dyn StopSignal>>,
+) -> Option<ChaseStats> {
     let mut all = FactIndex::from_facts(seed.clone());
     let mut delta = FactIndex::from_facts(seed);
     let mut derived: Vec<[u32; 3]> = Vec::new();
     let mut stats = ChaseStats::default();
     while !delta.is_empty() {
+        // The caller's stop signal, polled BEFORE the round it would prevent — the same
+        // boundary `purrdf-datalog` takes it at. `None` out means stopped: there is no
+        // partial fixpoint to hand back, so there is no field to hand one back in.
+        if stop.is_some_and(|stop| stop.stopped()) {
+            return None;
+        }
         derived.clear();
         for rule in rules {
             fire_rule(rule, &all, &delta, &mut derived, &mut stats);
@@ -422,7 +456,7 @@ fn chase(facts: &mut FastSet<[u32; 3]>, seed: Vec<[u32; 3]>, rules: &[CompiledRu
             }
         }
     }
-    stats
+    Some(stats)
 }
 
 /// Fire one rule semi-naively: for each body position `pivot`, bind that atom only
@@ -863,7 +897,7 @@ mod tests {
             num_vars: 3,
         };
 
-        let stats = chase(&mut facts, seed, &[rule]);
+        let stats = chase(&mut facts, seed, &[rule], None).expect("no stop signal was named");
         assert!(facts.contains(&[499, DERIVED, 2_000]));
         assert!(
             stats.candidate_facts_examined < 5_000,

@@ -521,11 +521,15 @@ fn explain_renders_the_ledger_and_is_byte_identical_across_runs() {
     );
 }
 
-/// `--explain` REFUSES WHAT IT CANNOT HONOR, and so does `--entailment`.
+/// `--explain` REFUSES WHAT IT CANNOT HONOR — and that is now the WHOLE list.
 ///
 /// Each refusal is a usage error (exit 2) naming the flag to drop, because the alternative
 /// is a ceiling an operator believes is in force and that nothing enforces — the most
 /// dangerous shape a silent no-op can take.
+///
+/// `--entailment` beside a governor flag used to be the third refusal and is deliberately
+/// absent: the entailment-aware query lane takes governors now, so the combination is
+/// exercised as a WORKING one by the tests below rather than pinned as a refusal here.
 #[test]
 fn unenforceable_flag_combinations_are_refused_by_name() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -552,27 +556,161 @@ fn unenforceable_flag_combinations_are_refused_by_name() {
         "{}",
         stderr(&explain_and_entailment)
     );
+}
 
-    let entailment_and_ceiling = run(&[
+/// `--entailment REGIME --fuel N` TRIPS OVER THE CLOSURE AND EXITS 3.
+///
+/// The combination used to exit 2 by name. It now runs: the RDFS closure is materialized,
+/// the query is evaluated over it under the ceiling, and the ceiling is reached — so the
+/// contract a shell tests is the ordinary governed one (report on stderr, exit 3), reached
+/// through a lane that previously refused to start.
+///
+/// `--fuel 1` is enough to trip because the closure is large: RDFS asserts the axiomatic
+/// triples and re-types every term, so a scan over it costs far more than one charge.
+#[test]
+fn an_entailment_query_under_a_fuel_ceiling_trips_and_exits_three() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ttl = write_file(dir.path(), "data.ttl", DATA_TTL);
+
+    let out = run(&[
         "query",
         "--data",
         &ttl,
         "--entailment",
         "rdfs",
-        "--max-answers",
+        "--fuel",
         "1",
         KNOWS,
     ]);
     assert_eq!(
-        code(&entailment_and_ceiling),
-        2,
-        "a ceiling the entailment lane cannot enforce must be refused, not ignored; \
-         stdout:\n{}",
-        stdout(&entailment_and_ceiling)
+        code(&out),
+        3,
+        "a fuel ceiling over an entailed closure must TRIP, not be refused and not be \
+         ignored; stderr:\n{}",
+        stderr(&out)
     );
-    let message = stderr(&entailment_and_ceiling);
-    assert!(message.contains("--max-answers"), "{message}");
-    assert!(message.contains("bound nothing"), "{message}");
+    let report = stderr(&out);
+    assert!(report.contains("purrdf-governor-report 1"), "{report}");
+    assert!(report.contains("tripped fuel-exhausted"), "{report}");
+    assert!(report.contains("limit fuel 1"), "{report}");
+    // The trip report is on stderr and nothing of it is interleaved into the document.
+    assert!(!stdout(&out).contains("purrdf-governor-report"), "{report}");
+}
+
+/// The SAME query WITHOUT a ceiling still answers over the closure, so the trip above is a
+/// governor doing its job rather than the entailment lane having broken.
+#[test]
+fn an_ungoverned_entailment_query_is_unchanged() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ttl = write_file(dir.path(), "data.ttl", DATA_TTL);
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--entailment",
+        "rdfs",
+        "--results-format",
+        "tsv",
+        KNOWS,
+    ]);
+    assert_eq!(code(&out), 0, "stderr:\n{}", stderr(&out));
+    let body = stdout(&out);
+    assert_eq!(body.lines().count(), 4, "header plus three rows: {body}");
+
+    // …and a ceiling above the query's cost is not a trip either: the governed lane over a
+    // closure completes exactly like the ungoverned one when nothing is reached.
+    let governed = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--entailment",
+        "rdfs",
+        "--results-format",
+        "tsv",
+        "--max-answers",
+        "100",
+        KNOWS,
+    ]);
+    assert_eq!(code(&governed), 0, "stderr:\n{}", stderr(&governed));
+    assert_eq!(
+        stdout(&governed),
+        body,
+        "an unreached ceiling must not change a byte of the answer"
+    );
+}
+
+/// AN ANSWER CAP REACHES THE EVALUATION OVER THE CLOSURE and cuts it there.
+///
+/// The cap is 1 over a query with three answers, so the run trips, prints one certified row,
+/// and exits 3 — the ceiling is enforced against the entailed closure rather than against
+/// the raw view or against nothing.
+#[test]
+fn an_answer_cap_cuts_a_query_over_an_entailed_closure() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ttl = write_file(dir.path(), "data.ttl", DATA_TTL);
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--entailment",
+        "rdfs",
+        "--results-format",
+        "tsv",
+        "--max-answers",
+        "1",
+        KNOWS,
+    ]);
+    assert_eq!(code(&out), 3, "stderr:\n{}", stderr(&out));
+    let report = stderr(&out);
+    assert!(report.contains("tripped answer-cap-exhausted"), "{report}");
+    assert!(report.contains("answers certain"), "{report}");
+    let body = stdout(&out);
+    assert_eq!(
+        body.lines().count(),
+        2,
+        "header plus the one certified row: {body}"
+    );
+}
+
+/// A DEADLINE THAT HAS ALREADY EXPIRED STOPS THE CLOSURE ITSELF, and claims nothing.
+///
+/// `--deadline 0ms` is expired the moment it is built — before the first fixpoint round — so
+/// the run stops in phase one, where there is no query result to truncate. The report says
+/// exactly that: `deadline-exceeded`, `answers withheld`, and a barrier naming the closure
+/// rather than an algebra operator. stdout is EMPTY, because an empty result set there would
+/// be the claim "this query has no answers" and this run never asked it.
+///
+/// This is the half of the contract a stop signal buys that a charge schedule could not: a
+/// wall deadline over an entailment-regime query is honest even when the closure is the
+/// expensive half.
+#[test]
+fn an_expired_deadline_stops_the_closure_and_claims_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ttl = write_file(dir.path(), "data.ttl", DATA_TTL);
+
+    let out = run(&[
+        "query",
+        "--data",
+        &ttl,
+        "--entailment",
+        "rdfs",
+        "--deadline",
+        "0ms",
+        KNOWS,
+    ]);
+    assert_eq!(code(&out), 3, "stderr:\n{}", stderr(&out));
+    let report = stderr(&out);
+    assert!(report.contains("purrdf-governor-report 1"), "{report}");
+    assert!(report.contains("tripped deadline-exceeded"), "{report}");
+    assert!(report.contains("answers withheld"), "{report}");
+    assert!(report.contains("barrier entailment-closure"), "{report}");
+    assert_eq!(
+        stdout(&out),
+        "",
+        "a run that computed no closure must claim no answers"
+    );
 }
 
 /// A GOVERNED QUERY THAT MATCHES THROUGH AN RDF 1.2 TRIPLE TERM certifies its partial rows

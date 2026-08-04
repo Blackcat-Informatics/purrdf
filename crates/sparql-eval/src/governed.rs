@@ -273,6 +273,20 @@ impl PartialAnswers {
     pub const fn is_certain(&self) -> bool {
         matches!(self, Self::Certain(_))
     }
+
+    /// These answers with `withhold` applied to the rows in hand, when there are any.
+    ///
+    /// See [`PartialSparqlResult::withholding`] for the contract `withhold` is bound by and
+    /// for why removal — and only removal — preserves both bounds. [`Self::Unknown`] passes
+    /// through untouched, because there are structurally no rows there to withhold from.
+    #[must_use]
+    pub fn withholding(self, withhold: impl FnOnce(&mut SparqlResult) -> bool) -> Self {
+        match self {
+            Self::Certain(partial) => Self::Certain(partial.withholding(withhold)),
+            Self::AtMost(partial) => Self::AtMost(partial.withholding(withhold)),
+            Self::Unknown(barrier) => Self::Unknown(barrier),
+        }
+    }
 }
 
 /// A materialized result computed from the rows a governor left in hand.
@@ -322,6 +336,38 @@ impl PartialSparqlResult {
     #[must_use]
     pub const fn is_positional_prefix(&self) -> bool {
         self.positional_prefix
+    }
+
+    /// This partial result with `withhold` applied to the rows in hand.
+    ///
+    /// # What `withhold` is allowed to do, and why only that
+    ///
+    /// It may **remove**, and nothing else: every term it leaves must have been there
+    /// already, and it must never add, reorder or rewrite one. Under that restriction both
+    /// certificates survive, which is the only reason a partial answer may be edited at all
+    /// after the evaluator certified it:
+    ///
+    /// * a [`PartialAnswers::Certain`] lower bound stays a lower bound, because a sub-bag of
+    ///   "every row here is an answer" is still every-row-here-is-an-answer;
+    /// * a [`PartialAnswers::AtMost`] upper bound stays an upper bound **provided** the
+    ///   removed rows are not answers. That proviso is the caller's to discharge, and it is
+    ///   discharged by construction for the one caller in this workspace: `purrdf`'s
+    ///   OWL-Direct combined approach withholds exactly the triples that mention a
+    ///   chase-minted existential witness, and a minted witness is by definition not in the
+    ///   scoping graph a SPARQL entailment regime draws its answers from.
+    ///
+    /// `withhold` returns whether it actually removed anything. When it did, the positional
+    /// claim is dropped: rows with holes in them are no longer the true output's FIRST rows
+    /// in order, and keeping [`Self::is_positional_prefix`] would licence a resumption that
+    /// silently skips whatever was withheld. When it removed nothing, the value is
+    /// untouched — which is the ordinary case, since the workspace's one caller runs the
+    /// filter only when a witness exists at all.
+    #[must_use]
+    pub fn withholding(mut self, withhold: impl FnOnce(&mut SparqlResult) -> bool) -> Self {
+        if withhold(&mut self.result) {
+            self.positional_prefix = false;
+        }
+        self
     }
 }
 

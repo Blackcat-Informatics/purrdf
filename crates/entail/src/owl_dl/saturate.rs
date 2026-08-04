@@ -118,6 +118,15 @@ pub(crate) struct Taxonomy {
     bottom: u32,
     /// Whether the knowledge base lies in the fragment this calculus is complete for.
     complete: bool,
+    /// Whether the caller's stop signal ended the saturation before its fixpoint.
+    ///
+    /// A stopped saturation still holds every pair it HAD derived, and every one of those is
+    /// entailed — each rule of the table is sound, so a derivation is a proof and stopping
+    /// the queue revokes none of them. What it loses is the negative reading, which is
+    /// exactly what [`Self::is_complete`] licenses; so this field is folded into that answer
+    /// rather than offered beside it, and a stopped taxonomy can never say "this pair is not
+    /// entailed".
+    stopped: bool,
 }
 
 impl Taxonomy {
@@ -127,8 +136,17 @@ impl Taxonomy {
     /// See the [module docs](self) for the exact fragment condition. A `false` here does not
     /// weaken any derived answer; it says only that the underivable pairs still need
     /// deciding some other way.
+    ///
+    /// A saturation the caller STOPPED answers `false` whatever fragment the ontology lies
+    /// in: the queue did not reach its fixpoint, so a pair it did not derive is a pair it did
+    /// not get to rather than one the calculus refuted.
     pub(crate) const fn is_complete(&self) -> bool {
-        self.complete
+        self.complete && !self.stopped
+    }
+
+    /// Whether the caller's stop signal ended this saturation before its fixpoint.
+    pub(crate) const fn was_stopped(&self) -> bool {
+        self.stopped
     }
 
     /// Whether `KB ⊨ sub ⊑ sup` was DERIVED.
@@ -163,13 +181,14 @@ pub(crate) fn saturate(kb: &Kb, seeds: &[u32]) -> Taxonomy {
     for &seed in seeds {
         engine.context(seed);
     }
-    engine.run();
+    let stopped = !engine.run(kb);
     Taxonomy {
         slot_of: engine.slot_of,
         supers: engine.supers,
         top: kb.top,
         bottom: kb.bottom,
         complete: normalized.complete,
+        stopped,
     }
 }
 
@@ -507,9 +526,18 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// Close the queue to its least fixpoint.
-    fn run(&mut self) {
+    /// Close the queue to its least fixpoint, or stop early at the caller's request.
+    ///
+    /// Returns whether the fixpoint was REACHED: `false` means `kb`'s stop signal fired and
+    /// the queue still held work. The poll is per work item rather than per round because
+    /// this calculus has no rounds — the queue is the loop — and one item is a handful of
+    /// map lookups, so it is the finest boundary that exists here and the cheapest one to
+    /// take.
+    fn run(&mut self, kb: &Kb) -> bool {
         while let Some(work) = self.queue.pop_front() {
+            if kb.stopped() {
+                return false;
+            }
             match work {
                 Work::Concept { context, concept } => self.on_concept(context, concept),
                 Work::Edge {
@@ -519,6 +547,7 @@ impl<'a> Engine<'a> {
                 } => self.on_edge(subject, role, object),
             }
         }
+        true
     }
 
     /// Apply every rule triggered by `concept ∈ S(context)`.

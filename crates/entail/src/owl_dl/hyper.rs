@@ -209,6 +209,13 @@ struct Hyper<'a> {
     steps: u64,
     /// Hard round cap; exceeding it is a hard error (a termination-bug backstop).
     cap: u64,
+    /// Whether the caller's stop signal — not the cap — ended the search.
+    ///
+    /// Recorded on the driver rather than carried in [`Exhausted`] so that the private
+    /// `Result<_, Exhausted>` plumbing every rule and branch is written against stays
+    /// exactly what it was: the two stops travel out of the search identically and are
+    /// separated once, where the [`Decision`] is assembled.
+    stopped: bool,
 }
 
 /// Decide whether the knowledge base plus `assumptions` has a consistent completion,
@@ -221,11 +228,16 @@ pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, cap: u64) -> Decisi
             consistent,
             steps: h.steps,
             exhausted: false,
+            stopped: false,
         },
+        // One private refusal, two public facts: `stopped` is what the driver recorded when
+        // it turned the poll into an `Exhausted`, and `exhausted` is therefore reserved for
+        // the cap it is named after.
         Err(Exhausted) => Decision {
             consistent: false,
             steps: h.steps,
-            exhausted: true,
+            exhausted: !h.stopped,
+            stopped: h.stopped,
         },
     }
 }
@@ -237,6 +249,9 @@ pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, cap: u64) -> Decisi
 /// [`EntailError::Build`] if the step cap is exceeded (a termination-bug backstop).
 pub(crate) fn consistent(kb: &Kb, assumptions: &Assumptions<'_>) -> Result<bool, EntailError> {
     let decision = decide(kb, assumptions, step_cap(kb));
+    if decision.stopped {
+        return Err(EntailError::Stopped);
+    }
     if decision.exhausted {
         return Err(EntailError::Build(
             "OWL-Direct hypertableau exceeded its step cap (possible non-termination)".to_owned(),
@@ -254,6 +269,7 @@ impl<'a> Hyper<'a> {
             g,
             steps: 0,
             cap,
+            stopped: false,
         }
     }
 
@@ -346,6 +362,12 @@ impl<'a> Hyper<'a> {
     }
 
     fn tick(&mut self) -> Result<(), Exhausted> {
+        // The caller's stop signal, polled once per derivation round — the same boundary the
+        // cap is charged at, so a search that can be capped can be stopped.
+        if self.g.kb().stopped() {
+            self.stopped = true;
+            return Err(Exhausted);
+        }
         if self.steps >= self.cap {
             return Err(Exhausted);
         }

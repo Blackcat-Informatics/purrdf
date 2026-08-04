@@ -5,11 +5,12 @@
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use purrdf_datalog::seminaive::BudgetReport;
 use purrdf_entail::{
     Construct, EntailError, Materialization, QNode, QTriple, ReasoningReport, Regime, RuleSet,
-    materialize_combined,
+    materialize_combined, materialize_combined_until,
 };
 use purrdf_rdf::{
     RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfQuad, RdfTerm, RdfTextDirection,
@@ -19,7 +20,10 @@ use purrdf_sparql_algebra::{
     AggregateExpression, BaseDirection, BlankNode, Expression, GraphPattern, GroundTerm, Literal,
     NamedNodePattern, Query, TermPattern, TriplePattern, Variable,
 };
-use purrdf_sparql_eval::{NativeSparqlEngine, PreparedQuery};
+use purrdf_sparql_eval::{
+    BudgetExhausted, GovernedOutcome, NativeSparqlEngine, PreparedQuery, QueryGovernors, StopCause,
+    StopSignal, TrippedGovernor,
+};
 
 /// A reasoning session over one ontology — the OWL 2 Direct-Semantics services, held
 /// open so that asking N questions costs one parse and one reverse mapping.
@@ -216,8 +220,341 @@ pub fn query_with_entailment(
     });
     let plan = restricted.as_ref().unwrap_or(&prepared_query);
     let mut result = engine.query_prepared(&prepared, plan, request.substitutions)?;
-    withhold_surrogate_triples(&mut result, &surrogates);
+    let _ = withhold_surrogate_triples(&mut result, &surrogates);
     Ok((result, report))
+}
+
+/// What a governed entailment-regime query produced.
+///
+/// # Why this is not `(GovernedOutcome, ReasoningReport)`
+///
+/// Because an entailment-regime query is TWO phases and only one of them has a partial
+/// answer to give. Phase one materializes the regime's closure; phase two evaluates SPARQL
+/// over that frozen closure. [`GovernedOutcome`] is exactly the right shape for phase two —
+/// a complete result, or an exhausted budget carrying certified partial answers — and it is
+/// the wrong shape for phase one, because a closure that was stopped mid-fixpoint is not a
+/// smaller closure. There are no certified rows to carry, and there is no
+/// [`ReasoningReport`] either: a report is the certificate of a run that produced a closure,
+/// and this run produced none.
+///
+/// Folding that case into a `BudgetExhausted` with empty rows would state, in the only
+/// vocabulary the caller has for reading it, that a query was evaluated and yielded nothing
+/// — which is a claim about the DATA. Nothing was evaluated. So it gets its own arm, and the
+/// arm structurally carries no rows and no report, in the same way
+/// [`GovernedUpdateOutcome`](purrdf_sparql_eval::GovernedUpdateOutcome) structurally carries
+/// no partial mutation.
+#[derive(Debug)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the large arm is the ORDINARY one — a GovernedOutcome plus the reasoning \
+              certificate, both of which the caller then reads — and the small arm is the \
+              rare stop. Boxing the common payload would put an allocation on every \
+              governed entailment query to shrink a value that is moved once, and it would \
+              force a caller to deref through a Box to reach the outcome they asked for"
+)]
+pub enum GovernedEntailment {
+    /// The closure was computed and the query was evaluated over it.
+    ///
+    /// The `outcome` is phase two's, so every ceiling the caller named — fuel, answer cap,
+    /// intermediate cells, scratch bytes, remote requests — was in force over the closure,
+    /// and a trip here carries the partial answers the evaluation reached. The `report` is
+    /// the certificate of the closure those answers were drawn from, and it travels on BOTH
+    /// arms of the outcome: a truncated answer over an OWL 2 RL closure is unreadable
+    /// without knowing what closed it, exactly as a complete one is.
+    Answered {
+        /// Phase two's outcome: complete, or stopped by a governor with certified partials.
+        outcome: GovernedOutcome,
+        /// The certificate of the reasoning run that produced the queried closure.
+        report: ReasoningReport,
+    },
+    /// The caller's stop signal fired while the CLOSURE was still being computed.
+    ///
+    /// Nothing was evaluated, nothing is certified, and nothing is claimed — there is no
+    /// field on this arm to read a row or a report out of, because there is none to read.
+    /// Only a stop signal (a cancellation or a wall deadline) can produce it: the numeric
+    /// ceilings are charged by the SPARQL evaluator and reach phase two alone, which is
+    /// stated where [`query_with_entailment_governed`] documents what it governs.
+    ClosureStopped {
+        /// The stop signal that ended the run, in the shared governor vocabulary.
+        tripped: TrippedGovernor,
+    },
+}
+
+impl GovernedEntailment {
+    /// Phase two's outcome, when the closure was computed at all.
+    #[must_use]
+    pub const fn outcome(&self) -> Option<&GovernedOutcome> {
+        match self {
+            Self::Answered { outcome, .. } => Some(outcome),
+            Self::ClosureStopped { .. } => None,
+        }
+    }
+
+    /// The reasoning certificate, when a closure was produced.
+    #[must_use]
+    pub const fn report(&self) -> Option<&ReasoningReport> {
+        match self {
+            Self::Answered { report, .. } => Some(report),
+            Self::ClosureStopped { .. } => None,
+        }
+    }
+
+    /// The governor that stopped this run, in either phase, or `None` if it completed.
+    ///
+    /// One accessor over both phases, so a caller deciding an exit code or a retry writes
+    /// the decision once rather than per phase.
+    #[must_use]
+    pub const fn tripped(&self) -> Option<TrippedGovernor> {
+        match self {
+            Self::Answered { outcome, .. } => outcome.tripped(),
+            Self::ClosureStopped { tripped } => Some(*tripped),
+        }
+    }
+
+    /// Whether the closure was computed AND the query over it completed under every ceiling.
+    #[must_use]
+    pub const fn is_complete(&self) -> bool {
+        match self {
+            Self::Answered { outcome, .. } => outcome.is_complete(),
+            Self::ClosureStopped { .. } => false,
+        }
+    }
+}
+
+/// A SPARQL execution's [`StopSignal`] seen through the reasoner's own stop trait.
+///
+/// The two traits are deliberately not one. `purrdf-datalog` has no dependency on
+/// `purrdf-core` and must acquire none — it is the substrate every rule engine sits on — so
+/// it declares the two-line yes/no question it needs, and `purrdf-sparql-eval` declares the
+/// richer one its evaluator needs (a [`StopCause`], for the receipt). This adapter is the
+/// one place they meet, and it is one method long.
+///
+/// The observed cause is REMEMBERED rather than re-polled. Both traits' contracts say a
+/// signal latches, so re-polling would answer the same thing — but "the reason this run
+/// stopped" is then a fact about a value the caller owns, and this way it is a fact about
+/// what actually happened here.
+#[derive(Debug)]
+struct ClosureStop {
+    /// The SPARQL execution's own signal, shared with the evaluation phase.
+    signal: Arc<dyn StopSignal>,
+    /// The cause observed the first time the signal fired, as a [`StopCause`] discriminant
+    /// (`0` = never fired, `1` = cancelled, `2` = deadline).
+    observed: AtomicU8,
+}
+
+impl ClosureStop {
+    /// The cause this signal fired with, if it fired while the closure was being computed.
+    fn cause(&self) -> Option<StopCause> {
+        match self.observed.load(Ordering::Relaxed) {
+            1 => Some(StopCause::Cancelled),
+            2 => Some(StopCause::Deadline),
+            _ => None,
+        }
+    }
+}
+
+impl purrdf_datalog::StopSignal for ClosureStop {
+    fn stopped(&self) -> bool {
+        let Some(cause) = self.signal.poll() else {
+            return false;
+        };
+        self.observed.store(
+            match cause {
+                StopCause::Cancelled => 1,
+                StopCause::Deadline => 2,
+            },
+            Ordering::Relaxed,
+        );
+        true
+    }
+}
+
+/// Evaluate SPARQL under an explicit native entailment regime, under caller-supplied
+/// execution governors, and say what the reasoner did.
+///
+/// The governed sibling of [`query_with_entailment`], which keeps its signature and its
+/// behaviour exactly: an ungoverned entailment query is the same call it always was.
+///
+/// # What is governed, and by what
+///
+/// An entailment-regime query is two phases, and they are governed by different halves of
+/// [`QueryGovernors`] for a reason that is about semantics rather than about effort.
+///
+/// **Phase two — the SPARQL evaluation over the materialized closure — is governed
+/// completely.** It runs through [`NativeSparqlEngine::query_prepared_governed_view`], so
+/// every ceiling the caller named is in force over the closure exactly as it is over any
+/// other frozen dataset: fuel, the answer cap, intermediate cells, scratch bytes, remote
+/// requests, and the stop signal. A trip there is a [`GovernedOutcome::BudgetExhausted`]
+/// carrying certified partial answers, and it arrives on
+/// [`GovernedEntailment::Answered`] beside the closure's [`ReasoningReport`].
+///
+/// **Phase one — materializing the closure — honours the STOP SIGNAL and nothing else.**
+/// That is not an omission and it is not a smaller version of the ceilings; it is the only
+/// thing that can be honoured there without changing what a closure IS. A numeric ceiling on
+/// a reasoning run is a *charge schedule* — some tally of rounds, facts or steps, priced per
+/// lane — and a caller-settable one would mean two callers materializing the same regime
+/// over the same data get different closures, which is the semantic optionality
+/// `purrdf-datalog` states its [fixed
+/// budgets](purrdf_datalog#budgets-are-constants-not-knobs) to prevent. A stop signal has no
+/// such property: it either lets the closure finish, in which case it is bit-for-bit the
+/// closure [`query_with_entailment`] would have computed, or it ends the run with
+/// [`GovernedEntailment::ClosureStopped`] and nothing at all. See
+/// [`purrdf_entail::materialize_until`] for the boundaries each lane polls it at.
+///
+/// # The combined approach's witnesses cannot escape through a PARTIAL answer
+///
+/// The OWL-Direct lane's filtration is the same one [`query_with_entailment`] applies, and
+/// it is applied at the same two points — but the governed path has a third place a witness
+/// could reach a caller, and it is closed here rather than assumed shut:
+///
+/// * a solution sequence is restricted **before** evaluation — every leaf that binds a term
+///   is wrapped in a `MINUS` against the witness list — so the algebra the governed evaluator
+///   runs is already the restricted one. A partial answer is a prefix or a sub-bag of THAT evaluation's
+///   rows, so no observable variable can bind a witness in a partial answer either — the
+///   restriction is upstream of the truncation, not applied to its output.
+/// * a constructed graph is scrubbed **after**, because a `DESCRIBE` reaches triples no
+///   variable names — and the scrub runs over the partial answers as well as the complete
+///   result, through [`purrdf_sparql_eval::PartialAnswers::withholding`], which preserves
+///   both bounds under removal and drops the positional-prefix claim when it removes
+///   anything.
+///
+/// # Errors
+///
+/// Returns [`ReasoningError::Query`] for SPARQL failures and
+/// [`ReasoningError::Entailment`] for malformed or inconsistent knowledge bases. A tripped
+/// governor is **not** an error in either phase: it is one of the two arms of
+/// [`GovernedEntailment`].
+pub fn query_with_entailment_governed(
+    engine: &NativeSparqlEngine,
+    dataset: &Arc<RdfDataset>,
+    request: SparqlRequest<'_>,
+    entailment: QueryEntailment<'_>,
+    governors: &QueryGovernors,
+) -> Result<GovernedEntailment, ReasoningError> {
+    // Parse first, exactly as the ungoverned lane does: an invalid query is a failure rather
+    // than a budget, and it must be one before any closure work is charged for.
+    let prepared_query = engine.prepare_query(request.query, request.base_iri)?;
+    let pattern = match entailment {
+        QueryEntailment::OwlDirect => collect_query_bgp(&prepared_query.query),
+        _ => Vec::new(),
+    };
+    // The execution's stop signal, wearing the reasoner's trait. Built once and shared by
+    // both phases, so a deadline that has already expired when the closure finishes is the
+    // SAME latched deadline the evaluator then observes — a query cannot outrun it by
+    // crossing the phase boundary.
+    let stop: Option<Arc<ClosureStop>> = governors.stop_signal().map(|signal| {
+        Arc::new(ClosureStop {
+            signal: Arc::clone(signal),
+            observed: AtomicU8::new(0),
+        })
+    });
+    let closure_stop: Option<Arc<dyn purrdf_datalog::StopSignal>> = stop
+        .as_ref()
+        .map(|stop| Arc::clone(stop) as Arc<dyn purrdf_datalog::StopSignal>);
+    let closure_stop = closure_stop.as_ref();
+
+    let mut combined_surrogates = None;
+    let materialized = match entailment {
+        QueryEntailment::Simple => Ok((Arc::clone(dataset), simple_report())),
+        QueryEntailment::Rdf => {
+            purrdf_entail::materialize_until(dataset, Materialization::Rdf, closure_stop)
+        }
+        QueryEntailment::Rdfs => {
+            purrdf_entail::materialize_until(dataset, Materialization::Rdfs, closure_stop)
+        }
+        QueryEntailment::OwlRl => {
+            purrdf_entail::materialize_until(dataset, Materialization::OwlRl, closure_stop)
+        }
+        QueryEntailment::D => {
+            purrdf_entail::materialize_until(dataset, Materialization::D, closure_stop)
+        }
+        QueryEntailment::OwlDirect => {
+            match materialize_combined_until(dataset, &pattern, closure_stop) {
+                Ok(Some(combined)) => {
+                    combined_surrogates = Some(combined.surrogates);
+                    Ok((combined.dataset, combined.report))
+                }
+                Ok(None) => purrdf_entail::materialize_until(
+                    dataset,
+                    Materialization::OwlDirect(&pattern),
+                    closure_stop,
+                )
+                .map(|(closure, report)| (closure, report.with_boundary(Construct::NonHornTBox))),
+                Err(error) => Err(error),
+            }
+        }
+        QueryEntailment::Rif(ruleset) => {
+            purrdf_entail::materialize_until(dataset, Materialization::Rif(ruleset), closure_stop)
+        }
+    };
+    let (prepared, report) = match materialized {
+        Ok(pair) => pair,
+        // The one refusal that is an OUTCOME rather than a failure. The cause is what the
+        // adapter observed when it fired, so the receipt names the caller's own signal.
+        Err(EntailError::Stopped) => {
+            return Ok(GovernedEntailment::ClosureStopped {
+                tripped: TrippedGovernor::Stopped {
+                    cause: stop.as_ref().and_then(|stop| stop.cause()).unwrap_or(
+                        // Unreachable through either shipped signal: `EntailError::Stopped`
+                        // is produced only by the adapter above, which records the cause on
+                        // the same call that returns `true`. A host signal that answered
+                        // `Some` once and `None` afterwards would violate the latching
+                        // contract both traits state; it is reported as a cancellation
+                        // rather than invented as a deadline, because a deadline is a
+                        // measurement and there would be none to report.
+                        StopCause::Cancelled,
+                    ),
+                },
+            });
+        }
+        Err(error) => return Err(error.into()),
+    };
+
+    // The combined approach's filtration, in the SAME two places and the same order the
+    // ungoverned lane applies it: the restriction is in the algebra (so it is upstream of
+    // any truncation), and the scrub is over the result (so it reaches a `DESCRIBE`'s
+    // triples). See this function's documentation for why a partial answer needs both.
+    let surrogates = combined_surrogates.unwrap_or_default();
+    let restricted = (!surrogates.is_empty()).then(|| PreparedQuery {
+        query: restrict_witness_bindings(&prepared_query.query, &surrogates),
+    });
+    let plan = restricted.as_ref().unwrap_or(&prepared_query);
+    let outcome =
+        engine.query_prepared_governed_view(&*prepared, plan, request.substitutions, governors)?;
+    Ok(GovernedEntailment::Answered {
+        outcome: withhold_surrogates_from_outcome(outcome, &surrogates),
+        report,
+    })
+}
+
+/// Scrub every chase-minted witness out of a governed outcome, complete or partial.
+///
+/// A no-op when the run minted no witness, which is every lane but the OWL-Direct combined
+/// approach — so the ordinary governed query pays one `is_empty` for the guarantee.
+fn withhold_surrogates_from_outcome(
+    outcome: GovernedOutcome,
+    surrogates: &BTreeSet<String>,
+) -> GovernedOutcome {
+    if surrogates.is_empty() {
+        return outcome;
+    }
+    match outcome {
+        GovernedOutcome::Complete {
+            mut result,
+            evidence,
+        } => {
+            withhold_surrogate_triples(&mut result, surrogates);
+            GovernedOutcome::Complete { result, evidence }
+        }
+        GovernedOutcome::BudgetExhausted(exhausted) => {
+            GovernedOutcome::BudgetExhausted(BudgetExhausted {
+                partial: exhausted
+                    .partial
+                    .withholding(|result| withhold_surrogate_triples(result, surrogates)),
+                ..exhausted
+            })
+        }
+    }
 }
 
 /// The query's OBSERVABLE variable names — the ones whose binding a caller can read off, or
@@ -711,12 +1048,12 @@ fn exclude_witnesses<'a>(
 /// The graph is rebuilt only if a witness is actually present, so the ordinary case pays
 /// nothing and the RDF 1.2 statement-layer overlay of an untouched result is carried through
 /// by identity rather than by a copy.
-fn withhold_surrogate_triples(result: &mut SparqlResult, surrogates: &BTreeSet<String>) {
+fn withhold_surrogate_triples(result: &mut SparqlResult, surrogates: &BTreeSet<String>) -> bool {
     if surrogates.is_empty() {
-        return;
+        return false;
     }
     let SparqlResult::Graph(graph) = result else {
-        return;
+        return false;
     };
     let mentions = |term: &RdfTerm| term_mentions_surrogate(term, surrogates);
     let quad_offends = |quad: &RdfQuad| {
@@ -739,7 +1076,7 @@ fn withhold_surrogate_triples(result: &mut SparqlResult, surrogates: &BTreeSet<S
         || graph.owned_reifiers().any(|r| reifier_offends(&r))
         || graph.owned_annotations().any(|a| annotation_offends(&a));
     if !offends {
-        return;
+        return false;
     }
     let mut builder = RdfDatasetBuilder::new();
     for quad in graph.owned_quads() {
@@ -766,6 +1103,7 @@ fn withhold_surrogate_triples(result: &mut SparqlResult, surrogates: &BTreeSet<S
     *graph = builder
         .freeze()
         .expect("a subset of an already-frozen dataset's quads is itself a valid dataset");
+    true
 }
 
 /// Whether `term` IS a chase-minted witness, or quotes one at any depth.

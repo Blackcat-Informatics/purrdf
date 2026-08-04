@@ -51,7 +51,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use purrdf_sparql_eval::{
-    BudgetExhausted, PartialAnswers, QueryGovernors, ResourceDimension, WallDeadline,
+    BudgetExhausted, PartialAnswers, QueryGovernors, ResourceDimension, TrippedGovernor,
+    WallDeadline,
 };
 
 /// The banner line every governor report starts with.
@@ -270,6 +271,33 @@ pub(crate) fn render_trip(exhausted: &BudgetExhausted) -> String {
             writeln!(out, "limit {} unbounded", dimension.label())
         };
     }
+    out
+}
+
+/// Render a CLOSURE stop as the same deterministic, line-oriented governor report.
+///
+/// The `--entailment` lane can be stopped in a place [`render_trip`] has no vocabulary for:
+/// while the regime's closure is still being MATERIALIZED, before any query was evaluated.
+/// There are then no answers, no bound on any, and no consumption vector — the SPARQL
+/// evaluator never ran, so it charged nothing and reporting its zeroes would describe an
+/// execution that did not happen.
+///
+/// So the report says exactly the four things that are true, under the same banner and the
+/// same `key value` grammar a shell already parses: the outcome, which signal fired, its
+/// prose, and the fact that no query was evaluated. `answers withheld` is the honest reading
+/// of "there are no rows on stdout" — the same word [`render_trip`] uses when no bound
+/// survived — and the `barrier` line names the phase rather than an algebra operator,
+/// because the phase is what withheld them.
+pub(crate) fn render_closure_stop(tripped: TrippedGovernor) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::new();
+    let _ = writeln!(out, "{GOVERNOR_REPORT_BANNER}");
+    let _ = writeln!(out, "outcome budget-exhausted");
+    let _ = writeln!(out, "tripped {}", tripped.label());
+    let _ = writeln!(out, "detail {tripped}");
+    let _ = writeln!(out, "answers withheld");
+    let _ = writeln!(out, "barrier entailment-closure");
     out
 }
 

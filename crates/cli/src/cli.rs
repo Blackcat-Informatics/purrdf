@@ -56,6 +56,13 @@
 //! bounding one, so accepting a ceiling it cannot enforce would be a governor that governs
 //! nothing. The refusal is written where the reason can be given, in
 //! [`query`](crate::query), rather than as a bare clap conflict.
+//!
+//! `--entailment` DOES take them. All six bound the SPARQL evaluation over the materialized
+//! closure, exactly as they bound one over a raw view; `--deadline` alone additionally bounds
+//! computing the closure, because a stop signal changes no answer while a caller-settable
+//! numeric ceiling on a reasoning run would change the closure itself. That split is stated
+//! on `--entailment`'s own help — an operator meets it at the flag rather than in a refusal
+//! after the fact — and argued in [`query`](crate::query).
 
 use std::path::PathBuf;
 
@@ -213,7 +220,13 @@ pub(crate) enum Command {
         #[arg(long, value_name = "IRI")]
         base: Option<String>,
         /// Materialize an entailment regime's closure in memory before querying
-        /// (the query then runs over the closure, not the raw view).
+        /// (the query then runs over the closure, not the raw view). Combines with
+        /// every governor flag: the ceilings bound the QUERY over the closure, and
+        /// `--deadline` additionally bounds computing the closure itself — a numeric
+        /// ceiling cannot, because a caller-settable budget on a reasoning run would
+        /// make the closure itself depend on the caller. A deadline that expires while
+        /// the closure is still being computed prints the governor report, writes no
+        /// rows, and exits 3.
         #[arg(long, value_enum, value_name = "REGIME")]
         entailment: Option<CliRegime>,
         /// RIF-in-XML rule document for `rif`; required by that regime and

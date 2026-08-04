@@ -1059,6 +1059,9 @@ pub(crate) fn build(ds: &RdfDataset) -> Result<Kb, EntailError> {
         data_ranges: ranges,
         literal_class,
         boundaries: acc.boundaries,
+        // The reverse mapping is not the place a caller's stop signal is named:
+        // `Kb::with_stop` installs it on the knowledge base the caller then reasons over.
+        stop: None,
     })
 }
 

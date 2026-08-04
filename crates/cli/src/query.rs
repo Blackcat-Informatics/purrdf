@@ -12,16 +12,20 @@
 //! Without `--entailment` the query runs over the raw view (text `RdfDataset` or a
 //! zero-copy `PackView`). With `--entailment REGIME` the pipeline reconstructs an
 //! owned `Arc<RdfDataset>` up front (a pack is rebuilt via [`source::load_dataset`])
-//! and answers the query UNDER the regime through [`purrdf::query_with_entailment`] —
-//! the library's own entailment-aware query entry point — using the same
-//! `EntailmentPlan` `reason` resolves, so `--rules` means the same thing here. The
-//! run's reasoning report is surfaced under `--report`, so a solution set drawn from a
-//! closure can be read beside the evidence of what closed it.
+//! and answers the query UNDER the regime through
+//! [`purrdf::query_with_entailment_governed`] — the library's own entailment-aware query
+//! entry point — using the same `EntailmentPlan` `reason` resolves, so `--rules` means the
+//! same thing here. The run's reasoning report is surfaced under `--report`, so a solution
+//! set drawn from a closure can be read beside the evidence of what closed it.
 //!
 //! Calling that entry point rather than open-coding "materialize the closure, then
 //! evaluate over it" is load-bearing and not a refactor: the OWL-Direct lane is
 //! QUERY-DIRECTED, and a pipeline that materializes first has no query to direct it
 //! with. See [`entailed_query`] for the answer that behaviour cost.
+//!
+//! It is the GOVERNED entry point unconditionally, with `QueryGovernors::UNBOUNDED` when
+//! the operator named no ceiling — so `--entailment` and a governor flag are one lane rather
+//! than two, and there is no second code path for the combination to be forgotten on.
 //!
 //! ## The result-shape × format-kind dispatch
 //!
@@ -47,7 +51,9 @@
 //! [`GovernedOutcome`]: complete, or stopped by a governor and carrying the certificate of
 //! what the rows in hand bound. Without a governor flag the ungoverned call is made
 //! verbatim — the governed lane is a branch rather than a wrapper, so an ungoverned query
-//! costs exactly what it cost before governors existed.
+//! costs exactly what it cost before governors existed. (`--entailment` is the exception, and
+//! deliberately: that lane takes a `QueryGovernors` on every call, `UNBOUNDED` when no flag
+//! was named, so its two-phase governing is written once.)
 //!
 //! A trip is not a failure ([`CliOutcome`], and `error`'s module documentation for why it
 //! is exit 3), so it prints:
@@ -84,7 +90,10 @@
 //! --explain` would print the receipt of a run that was never bounded by 1000. It refuses
 //! `--entailment` for the same shape of reason — the entailment-aware query lane is a
 //! different entry point with no explanation to give — and both refusals name what to drop.
+//! Those two are now the WHOLE refusal list: `--entailment` beside a governor flag used to
+//! be a third, and it runs instead (see [`refuse_unenforceable_combinations`]).
 
+use purrdf::GovernedEntailment;
 use purrdf_core::{DatasetView, LossLedger, SparqlRequest, SparqlResult};
 use purrdf_entail::EntailError;
 use purrdf_rdf::JsonLdSerializeOptions;
@@ -238,8 +247,24 @@ fn emit_result(
     }
 }
 
-/// Answer `query` over `dataset` under the resolved entailment plan, surfacing the run's
-/// reasoning report to `--report` either way.
+/// Answer `query` over `dataset` under the resolved entailment plan AND the caller's
+/// execution governors, surfacing the run's reasoning report to `--report` either way.
+///
+/// # Why this is not the ungoverned call with a ceiling bolted on
+///
+/// An entailment-regime query is two phases — materialize the regime's closure, then
+/// evaluate SPARQL over that frozen closure — and
+/// [`purrdf::query_with_entailment_governed`] governs both, differently and on purpose. The
+/// EVALUATION is governed completely: every one of the six flags is in force over the
+/// closure exactly as it is over a raw view. The CLOSURE honours the stop signal alone, so
+/// `--deadline` bounds it and a numeric ceiling does not — a caller-settable charge schedule
+/// on a reasoning run would mean two operators materializing the same regime over the same
+/// data get different closures, and `--fuel 1000` is not worth that. `--entailment`'s own
+/// help states the split, so the flag combination is accepted with its scope written down
+/// rather than refused with an apology.
+///
+/// A closure the deadline stopped is [`purrdf::GovernedEntailment::ClosureStopped`]: nothing
+/// ran, nothing is on stdout, and the exit is 3 like any other trip.
 ///
 /// # Why this is not `materialize` + `query_prepared`
 ///
@@ -264,17 +289,30 @@ fn entailed_query(
     query: &str,
     base: Option<&str>,
     plan: &reason::EntailmentPlan,
+    governors: &QueryGovernors,
     report_target: &ReportTarget,
-) -> Result<SparqlResult, CliError> {
+) -> Result<GovernedEntailment, CliError> {
     let request = SparqlRequest {
         query,
         base_iri: base,
         substitutions: &[],
     };
-    match purrdf::query_with_entailment(engine, dataset, request, plan.query_entailment()) {
-        Ok((result, report)) => {
-            report::surface(report_target, &report)?;
-            Ok(result)
+    match purrdf::query_with_entailment_governed(
+        engine,
+        dataset,
+        request,
+        plan.query_entailment(),
+        governors,
+    ) {
+        Ok(answered) => {
+            // The certificate is surfaced for the run that HAPPENED. A closure the stop
+            // signal ended produced none, so there is nothing to write and nothing is
+            // written — `--report` is refused without `--entailment` for the same reason a
+            // report of a run that did not happen is not printed here.
+            if let Some(report) = answered.report() {
+                report::surface(report_target, report)?;
+            }
+            Ok(answered)
         }
         Err(purrdf::ReasoningError::Entailment(EntailError::Inconsistent(run))) => {
             report::surface(report_target, run.report())?;
@@ -359,27 +397,26 @@ pub(crate) fn run(
     if let Some(regime) = options.entailment {
         // The `--entailment` lane: reconstruct an owned dataset (a pack is rebuilt) and
         // answer the query UNDER the regime through the library's own entailment-aware
-        // query entry point.
+        // query entry point — governed, so a ceiling named beside `--entailment` is in force
+        // rather than refused.
         let plan = reason::EntailmentPlan::resolve(regime, options.rules)?;
         let dataset = source::load_dataset(options.data, data_format, options.base)?;
+        // Built HERE, with the source already read and the closure not yet started, for the
+        // reason `GovernedQueryOp` states: a `--deadline` is a budget for the work the flag
+        // names, and reading a large file is not that work.
+        let governors = options.governors.to_governors();
         // The rows go to stdout and the certificate to `--report`: a solution set that
         // depends on a closure is not readable without knowing what closed it.
-        let result = entailed_query(
+        let answered = entailed_query(
             &engine,
             &dataset,
             options.query,
             options.base,
             &plan,
+            &governors,
             report_target,
         )?;
-        emit_result(
-            &result,
-            options.results_format,
-            options.base,
-            options.jsonld_options,
-            ledger_target,
-        )?;
-        return Ok(CliOutcome::Complete);
+        return emit_entailed(options, answered, ledger_target);
     }
 
     if options.governors.is_engaged() {
@@ -418,44 +455,41 @@ pub(crate) fn run(
     Ok(CliOutcome::Complete)
 }
 
-/// Refuse the three flag combinations this lane cannot honor, naming what to drop.
+/// Refuse the two flag combinations this lane cannot honor, naming what to drop.
 ///
-/// All three exist because the alternative is a flag that silently does nothing — the
-/// shape this pipeline refuses everywhere else, and the most dangerous shape a GOVERNOR can
-/// take: a ceiling an operator believes is in force and that nothing enforces is worse than
-/// no ceiling at all, because it is relied upon.
+/// Both exist because the alternative is a flag that silently does nothing — the shape this
+/// pipeline refuses everywhere else, and the most dangerous shape a GOVERNOR can take: a
+/// ceiling an operator believes is in force and that nothing enforces is worse than no
+/// ceiling at all, because it is relied upon.
 ///
 /// * `--explain` with a governor flag. `--explain` runs under the metering profile — every
 ///   counter engaged at a ceiling nothing can reach — so a ceiling handed to it would be
 ///   printed in the receipt and enforced nowhere.
-/// * `--entailment` with a governor flag. That lane answers through
-///   [`purrdf::query_with_entailment`], which materializes a closure and takes no
-///   governors, so a ceiling handed to it would bound nothing. The refusal is what the
-///   binary can say truthfully today; answering a governed query UNDER an entailment regime
-///   needs a governed entry point on that library lane, not a second opinion here.
-/// * `--explain` with `--entailment`, for the same reason from the other side: that lane
-///   has no plan this prices, so an explanation printed beside it would describe work the
-///   answer did not come from.
+/// * `--explain` with `--entailment`: that lane has no plan this prices, so an explanation
+///   printed beside it would describe work the answer did not come from.
+///
+/// # `--entailment` with a governor flag is NOT refused
+///
+/// It used to be, and the refusal was honest about a real gap rather than about a real
+/// impossibility: the library's entailment-aware query lane took no governors, so a ceiling
+/// handed to it would have bounded nothing. It takes them now
+/// ([`purrdf::query_with_entailment_governed`]), so the combination WORKS and the flags mean
+/// what their help says over a closure just as they do over a raw view. The one asymmetry —
+/// only `--deadline` reaches the closure's own computation, because a numeric ceiling on a
+/// reasoning run would be a caller-settable charge schedule and therefore a caller-settable
+/// closure — is documented on `--entailment` itself, where an operator reading the flag
+/// meets it. It is a stated scope, not a silent no-op: a `--fuel` beside `--entailment` is
+/// enforced over every step of the evaluation it names.
 fn refuse_unenforceable_combinations(options: &QueryOptions<'_>) -> Result<(), CliError> {
     let named = options.governors.named();
-    if !named.is_empty() {
+    if !named.is_empty() && options.explain {
         let named = named.join(", ");
-        if options.explain {
-            return Err(CliError::Usage(format!(
-                "--explain MEASURES a run rather than bounding one: it evaluates the query \
-                 with every counter engaged at a ceiling nothing can reach, so {named} would \
-                 be reported and never enforced. Drop --explain to run under the ceiling, or \
-                 drop {named} to explain the query"
-            )));
-        }
-        if options.entailment.is_some() {
-            return Err(CliError::Usage(format!(
-                "--entailment answers through the entailment-aware query lane, which \
-                 materializes a closure and takes no execution governors, so {named} would \
-                 bound nothing. Drop --entailment to govern the evaluation, or drop {named} \
-                 to query the closure"
-            )));
-        }
+        return Err(CliError::Usage(format!(
+            "--explain MEASURES a run rather than bounding one: it evaluates the query \
+             with every counter engaged at a ceiling nothing can reach, so {named} would \
+             be reported and never enforced. Drop --explain to run under the ceiling, or \
+             drop {named} to explain the query"
+        )));
     }
     if options.explain && options.entailment.is_some() {
         return Err(CliError::Usage(
@@ -466,6 +500,29 @@ fn refuse_unenforceable_combinations(options: &QueryOptions<'_>) -> Result<(), C
         ));
     }
     Ok(())
+}
+
+/// Emit a governed ENTAILMENT outcome, returning the exit classification it carries.
+///
+/// Two arms rather than [`emit_governed`]'s two, because an entailment-regime query has a
+/// third thing that can happen to it: the stop signal can end the CLOSURE, before any query
+/// was evaluated. That case prints the governor banner and the trip on stderr and **nothing**
+/// on stdout — there are no rows, not even an empty result set, because an empty result set
+/// on stdout is the claim "this query has no answers" and this run never asked it.
+fn emit_entailed(
+    options: &QueryOptions<'_>,
+    answered: GovernedEntailment,
+    ledger_target: &LedgerTarget,
+) -> Result<CliOutcome, CliError> {
+    match answered {
+        GovernedEntailment::Answered { outcome, .. } => {
+            emit_governed(options, &outcome, ledger_target)
+        }
+        GovernedEntailment::ClosureStopped { tripped } => {
+            eprint!("{}", governors::render_closure_stop(tripped));
+            Ok(CliOutcome::BudgetExhausted)
+        }
+    }
 }
 
 /// Emit a governed outcome, returning the exit classification it carries.

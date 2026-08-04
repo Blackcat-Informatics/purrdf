@@ -91,9 +91,10 @@ use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermId, TermValue};
 use purrdf_datalog::cache::PlanCache;
-use purrdf_datalog::chase::chase;
+use purrdf_datalog::chase::{ChaseError, chase_until};
 use purrdf_datalog::clause::{ClauseTerm, DlClause, HeadForm};
-use purrdf_datalog::seminaive::{Derivation, evaluate};
+use purrdf_datalog::seminaive::{Derivation, EvalError, evaluate_until};
+use purrdf_datalog::stop::StopSignal;
 use purrdf_datalog::store::RelationStore;
 
 use crate::axioms::axioms_for;
@@ -281,6 +282,7 @@ pub(crate) fn term_positions(ds: &RdfDataset) -> impl Iterator<Item = TermId> + 
 pub(crate) fn close(
     ds: &RdfDataset,
     regime: Regime,
+    stop: Option<&Arc<dyn StopSignal>>,
 ) -> Result<(Arc<RdfDataset>, RunStats), EntailError> {
     let (program, attribution) = program_with_attribution(regime);
 
@@ -305,7 +307,7 @@ pub(crate) fn close(
     // presents exactly one program and the second slot is slack rather than a policy.
     let mut plans = PlanCache::new(2);
     let mut stats = RunStats::none();
-    let default_run = close_graph(ds, regime, &program, &attribution, None, &mut plans)?;
+    let default_run = close_graph(ds, regime, &program, &attribution, None, &mut plans, stop)?;
     stats.absorb(default_run.budget);
     stats.drop_generalized(default_run.generalized_rdf_drops);
     stats.drop_surrogate(default_run.surrogate_drops);
@@ -326,7 +328,22 @@ pub(crate) fn close(
         emit(&mut b, conclusion, None);
     }
     for graph in named.values() {
-        let run = close_graph(ds, regime, &program, &attribution, Some(graph), &mut plans)?;
+        // A dataset is closed graph by graph, so the loop over the named graphs is a
+        // boundary of the CLOSURE just as a fixpoint round is — and it is the only one that
+        // sees the copying and emission between two evaluations. Polling here is what stops
+        // a hundred-graph dataset from having ninety-nine unpollable seams.
+        if stop.is_some_and(|stop| stop.stopped()) {
+            return Err(EntailError::Stopped);
+        }
+        let run = close_graph(
+            ds,
+            regime,
+            &program,
+            &attribution,
+            Some(graph),
+            &mut plans,
+            stop,
+        )?;
         stats.absorb(run.budget);
         stats.drop_generalized(run.generalized_rdf_drops);
         stats.drop_surrogate(run.surrogate_drops);
@@ -345,6 +362,28 @@ pub(crate) fn close(
     }
     let dataset = b.freeze().map_err(|e| EntailError::Build(e.to_string()))?;
     Ok((dataset, stats))
+}
+
+/// The semi-naive evaluator's refusal, wrapped in this crate's vocabulary.
+///
+/// A STOPPED run is not an evaluation failure and is not reported as one: it says the host
+/// ended the run, which is a fact about the caller rather than about the program or the
+/// data, so it keeps its own variant all the way out. Every other refusal is what
+/// [`EntailError::Evaluate`] has always meant.
+fn evaluate_error(error: EvalError) -> EntailError {
+    match error {
+        EvalError::Stopped { .. } => EntailError::Stopped,
+        other => EntailError::Evaluate(other),
+    }
+}
+
+/// The restricted chase's refusal, wrapped in this crate's vocabulary. See
+/// [`evaluate_error`] for why a stop keeps its own variant.
+fn chase_error(error: ChaseError) -> EntailError {
+    match error {
+        ChaseError::Stopped { .. } => EntailError::Stopped,
+        other => EntailError::Chase(other),
+    }
 }
 
 /// The refusal an inconsistent run owes its caller: the witness AND the run's report.
@@ -459,6 +498,7 @@ fn close_graph(
     attribution: &[ChaseRule],
     graph: Option<&TermValue>,
     plans: &mut PlanCache,
+    stop: Option<&Arc<dyn StopSignal>>,
 ) -> Result<GraphRun, EntailError> {
     let (edb, terms) = seed(ds, regime, program, graph)?;
 
@@ -470,7 +510,7 @@ fn close_graph(
         .iter()
         .any(|clause| clause.head_form() == HeadForm::Existential)
     {
-        return chase_graph(program, attribution, edb, &terms);
+        return chase_graph(program, attribution, edb, &terms, stop);
     }
 
     // The plan is a pure function of the clause program, and `close` hands every graph of
@@ -482,7 +522,12 @@ fn close_graph(
         .get_or_compile(&calculus_contract_hash(regime).to_hex(), program.to_vec())
         .into_plan()
         .map_err(EntailError::Evaluate)?;
-    let evaluation = evaluate(&executable, edb).map_err(EntailError::Evaluate)?;
+    let evaluation = evaluate_until(
+        &executable,
+        edb,
+        stop.map(|stop| &**stop as &dyn StopSignal),
+    )
+    .map_err(evaluate_error)?;
 
     // AN INCONSISTENCY IS DECIDED BEFORE AN ANSWER IS BUILT. Seventeen OWL 2 RL rules
     // conclude `false`, and a match on one of them says the knowledge base entails
@@ -698,8 +743,10 @@ fn chase_graph(
     attribution: &[ChaseRule],
     edb: RelationStore,
     terms: &Terms,
+    stop: Option<&Arc<dyn StopSignal>>,
 ) -> Result<GraphRun, EntailError> {
-    let outcome = chase(program, edb).map_err(EntailError::Chase)?;
+    let outcome = chase_until(program, edb, stop.map(|stop| &**stop as &dyn StopSignal))
+        .map_err(chase_error)?;
     let witnesses: BTreeSet<&str> = outcome.witnesses().witnesses().collect();
     let mut run = GraphRun {
         conclusions: Vec::new(),
@@ -1078,7 +1125,9 @@ impl Refuter {
             .get_or_compile(&self.contract, program)
             .into_plan()
             .map_err(EntailError::Evaluate)?;
-        evaluate(&executable, edb).map_err(EntailError::Evaluate)
+        // The incremental re-evaluation seam names no stop signal: it re-runs one delta over
+        // an already-seeded store for an explanation, not the caller's closure.
+        evaluate_until(&executable, edb, None).map_err(evaluate_error)
     }
 }
 
@@ -1663,7 +1712,7 @@ mod tests {
     /// table.
     #[test]
     fn no_internal_id_reaches_a_serialized_closure() {
-        let closed = close(&collection_fixture(), Regime::OwlRl)
+        let closed = close(&collection_fixture(), Regime::OwlRl, None)
             .expect("the fixture's collections are well formed")
             .0;
         let nquads = purrdf_core::canonicalize(&closed).nquads;
@@ -1693,7 +1742,7 @@ mod tests {
     /// internal id, whether or not a quad mentions it.
     #[test]
     fn no_term_of_the_closure_is_internal() {
-        let closed = close(&collection_fixture(), Regime::OwlRl)
+        let closed = close(&collection_fixture(), Regime::OwlRl, None)
             .expect("the fixture's collections are well formed")
             .0;
         for quad in closed.quads() {
@@ -1709,13 +1758,13 @@ mod tests {
     fn a_malformed_collection_refuses_the_run() {
         // …and no rdf:rest, so the cell is not a collection cell.
         let ds = dataset_of(&[(EX_C, OWL_INTERSECTIONOF, EX_L0), (EX_L0, RDF_FIRST, EX_A)]);
-        let error = close(&ds, Regime::OwlRl).expect_err("a malformed collection is refused");
+        let error = close(&ds, Regime::OwlRl, None).expect_err("a malformed collection is refused");
         let rendered = error.to_string();
         assert!(rendered.contains("carries no rdf:rest"), "{rendered}");
         assert!(rendered.contains(EX_L0), "{rendered}");
         // The RDFS lane says nothing about `owl:intersectionOf`, so the same graph is
         // ordinary data there and closes without complaint.
-        assert!(close(&ds, Regime::Rdfs).is_ok());
+        assert!(close(&ds, Regime::Rdfs, None).is_ok());
     }
 
     /// A CYCLIC collection terminates with a refusal rather than hanging.
@@ -1728,7 +1777,7 @@ mod tests {
             (EX_L1, RDF_FIRST, EX_B),
             (EX_L1, RDF_REST, EX_L0),
         ]);
-        let error = close(&ds, Regime::OwlRl).expect_err("a cycle is refused");
+        let error = close(&ds, Regime::OwlRl, None).expect_err("a cycle is refused");
         assert!(error.to_string().contains("cyclic"), "{error}");
     }
 
@@ -1755,7 +1804,7 @@ mod tests {
         b.push_quad(subject, sub, object, Some(graph));
         let ds = b.freeze().expect("the fixture freezes");
 
-        let closed = close(&ds, Regime::OwlRl).expect("owl-rl closes it").0;
+        let closed = close(&ds, Regime::OwlRl, None).expect("owl-rl closes it").0;
         let nquads = purrdf_core::canonicalize(&closed).nquads;
         let labels: BTreeSet<&str> = nquads
             .split_whitespace()
@@ -1831,6 +1880,7 @@ mod tests {
                 &attribution,
                 graph.as_ref(),
                 &mut plans,
+                None,
             )
             .expect("each graph closes");
             compiles += usize::from(plans.len() > before);
@@ -1889,12 +1939,20 @@ mod tests {
 
         let (program, attribution) = program_with_attribution(Regime::OwlRl);
         let conclusions = |plans: &mut PlanCache, graph: Option<&TermValue>| {
-            close_graph(&ds, Regime::OwlRl, &program, &attribution, graph, plans)
-                .expect("the graph closes")
-                .conclusions
-                .iter()
-                .map(Conclusion::key)
-                .collect::<Vec<_>>()
+            close_graph(
+                &ds,
+                Regime::OwlRl,
+                &program,
+                &attribution,
+                graph,
+                plans,
+                None,
+            )
+            .expect("the graph closes")
+            .conclusions
+            .iter()
+            .map(Conclusion::key)
+            .collect::<Vec<_>>()
         };
 
         let target = TermValue::iri(EX_H);
