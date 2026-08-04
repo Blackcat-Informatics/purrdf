@@ -4,10 +4,27 @@
 //! The evaluator's typed error channel.
 //!
 //! Per the project `no-optionality` / hard-fail doctrine, every condition that is
-//! not a valid in-scope result is a typed error — there is no lenient mode, no
-//! partial solution sequence, and no silent degradation. An out-of-S6-scope
-//! algebra node or an unimplemented builtin is [`EvalError::Unsupported`], not a
-//! best-effort answer.
+//! not a valid in-scope result is a typed error — there is no lenient mode and no
+//! silent degradation. An unsupported algebra node or an unimplemented builtin is
+//! [`EvalError::Unsupported`], not a best-effort answer.
+//!
+//! # This channel is disjoint from the governor channel, and outranks it
+//!
+//! A governed execution can end in a **truncated** solution sequence
+//! ([`GovernedOutcome::BudgetExhausted`](crate::GovernedOutcome)), which is not a
+//! contradiction of the paragraph above and is deliberately not an [`EvalError`]. The
+//! doctrine bans answering a question *wrongly*; a governor answers a different, honestly
+//! labelled question — "what had been established when the ceiling was reached" — and it
+//! can only do so because the certificate travelling with those rows says which bound they
+//! are. A partial sequence that arrived here instead would be exactly the silent
+//! degradation the doctrine forbids, because an [`EvalError`] carries no such certificate
+//! and a caller reducing one to "the query failed" would discard rows it could have used.
+//!
+//! The two channels therefore never merge, and where they meet the precedence is fixed: an
+//! [`EvalError`] outranks **every** governor. Reporting an exhausted budget for a query
+//! that could not have been answered at all would hand a caller a partial answer to a
+//! question that has none — which is the same falsehood the hard-fail rule exists to
+//! prevent, merely wearing a receipt.
 
 use purrdf_sparql_algebra::ParseError;
 

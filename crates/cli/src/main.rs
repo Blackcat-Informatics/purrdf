@@ -3,10 +3,11 @@
 
 //! The `purrdf` command-line interface.
 //!
-//! A single `Source → [transform] → Sink` pipeline exposed as six subcommands:
+//! A single `Source → [transform] → Sink` pipeline exposed as seven subcommands:
 //!
 //! * `convert` — transcode RDF between the native syntaxes and the pack container;
 //! * `query` — evaluate a SPARQL query over an RDF or pack source;
+//! * `update` — atomically apply a SPARQL UPDATE to an RDF source;
 //! * `reason` — materialize an entailment regime's closure over a source graph;
 //! * `entails` — decide whether a premise entails a conclusion, or answer a basic
 //!   graph pattern's certain answers, under an entailment regime;
@@ -29,12 +30,16 @@
 //! its own failures the same way — usage errors → **2**, every other runtime
 //! failure → **1** (see [`error::CliError`]). Nothing is swallowed: the error's
 //! message is printed to stderr and its category becomes the process exit code.
+//! A `query` or `update` whose caller-set governor tripped is not a failure and exits
+//! **3**. A query carries its certified answers on stdout; an update emits no dataset
+//! because the mutation was not applied — see [`error::CliOutcome`].
 
 mod cli;
 mod convert;
 mod entails;
 mod error;
 mod format;
+mod governors;
 mod ledger;
 mod projection;
 mod query;
@@ -42,6 +47,7 @@ mod reason;
 mod report;
 mod sink;
 mod source;
+mod update;
 
 use std::fs::File;
 use std::io::Read as _;
@@ -50,19 +56,34 @@ use clap::Parser;
 use purrdf_rdf::{JsonLdContextLimits, JsonLdSerializeOptions};
 
 use crate::cli::{Cli, Command, ReportTarget};
-use crate::error::CliError;
+use crate::error::{CliError, CliOutcome};
+use crate::governors::GovernorFlags;
 
 fn main() {
     let parsed = Cli::parse();
-    if let Err(error) = dispatch(&parsed) {
-        eprintln!("purrdf: {error}");
-        std::process::exit(error.exit_code());
+    match dispatch(&parsed) {
+        // The ordinary success path returns from `main`, so stdout's own drop-time flush
+        // still runs; every write the pipeline makes is already flushed by `sink::write_out`.
+        Ok(CliOutcome::Complete) => {}
+        // A tripped governor is not an error: nothing is printed here, because the lane
+        // that tripped has already written its report to stderr. A query also wrote its
+        // certified answers to stdout; an update deliberately wrote no dataset. Only the
+        // exit code is left to carry.
+        Ok(outcome) => std::process::exit(outcome.exit_code()),
+        Err(error) => {
+            eprintln!("purrdf: {error}");
+            std::process::exit(error.exit_code());
+        }
     }
 }
 
 /// Route a parsed command line to its subcommand, threading the decoded global
 /// `--loss-ledger` target through.
-fn dispatch(cli: &Cli) -> Result<(), CliError> {
+///
+/// Every arm but `query` and `update` reports [`CliOutcome::Complete`]: a governor bounds
+/// a SPARQL evaluation or mutation, and the remaining subcommands run neither, so there
+/// is no outcome of theirs a third exit code could describe.
+fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
     let ledger_target = cli.ledger_target();
     let jsonld_options = cli
         .jsonld_options
@@ -106,7 +127,8 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             output,
             &ledger_target,
             &ReportTarget::decode(report.as_ref()),
-        ),
+        )
+        .map(|()| CliOutcome::Complete),
         Command::Query {
             data,
             base,
@@ -114,17 +136,67 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             rules,
             report,
             results_format,
+            fuel,
+            deadline,
+            max_answers,
+            max_intermediate_cells,
+            max_scratch_bytes,
+            max_remote_requests,
+            explain,
             query,
         } => query::run(
-            data,
-            base.as_deref(),
-            *entailment,
-            rules.as_deref(),
-            *results_format,
-            query,
-            jsonld_options.as_ref(),
+            &query::QueryOptions {
+                data,
+                base: base.as_deref(),
+                entailment: *entailment,
+                rules: rules.as_deref(),
+                results_format: *results_format,
+                query,
+                governors: GovernorFlags {
+                    fuel: *fuel,
+                    deadline: *deadline,
+                    max_answers: *max_answers,
+                    max_intermediate_cells: *max_intermediate_cells,
+                    max_scratch_bytes: *max_scratch_bytes,
+                    max_remote_requests: *max_remote_requests,
+                },
+                explain: *explain,
+                jsonld_options: jsonld_options.as_ref(),
+            },
             &ledger_target,
             &ReportTarget::decode(report.as_ref()),
+        ),
+        Command::Update {
+            data,
+            from,
+            output,
+            to,
+            base,
+            fuel,
+            deadline,
+            max_intermediate_cells,
+            max_scratch_bytes,
+            max_remote_requests,
+            update,
+        } => update::run(
+            &update::UpdateOptions {
+                data,
+                from: *from,
+                output,
+                to: *to,
+                base: base.as_deref(),
+                update,
+                governors: GovernorFlags {
+                    fuel: *fuel,
+                    deadline: *deadline,
+                    max_answers: None,
+                    max_intermediate_cells: *max_intermediate_cells,
+                    max_scratch_bytes: *max_scratch_bytes,
+                    max_remote_requests: *max_remote_requests,
+                },
+                jsonld_options: jsonld_options.as_ref(),
+            },
+            &ledger_target,
         ),
         Command::Reason {
             regime,
@@ -146,7 +218,8 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             jsonld_options.as_ref(),
             &ledger_target,
             &ReportTarget::decode(report.as_ref()),
-        ),
+        )
+        .map(|()| CliOutcome::Complete),
         Command::Entails {
             regime,
             premise,
@@ -173,7 +246,8 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             output,
             &ledger_target,
             &ReportTarget::decode(report.as_ref()),
-        ),
+        )
+        .map(|()| CliOutcome::Complete),
         Command::Project {
             profile,
             config,
@@ -192,7 +266,8 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             output,
             jsonld_options.as_ref(),
             &ledger_target,
-        ),
+        )
+        .map(|()| CliOutcome::Complete),
         Command::Lift {
             profile,
             config,
@@ -209,6 +284,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             output,
             jsonld_options.as_ref(),
             &ledger_target,
-        ),
+        )
+        .map(|()| CliOutcome::Complete),
     }
 }

@@ -82,6 +82,7 @@ use crate::plan::{
     POSITION_GRAPH, POSITION_OBJECT, POSITION_PREDICATE, POSITION_SUBJECT, Parsed, PositionPlan,
     RulePlan, datalog_head, predicate_symbol,
 };
+use crate::stop::{StopSignal, is_stopped};
 use crate::store::{Bound, Fact, PartitionRef, RelationStore};
 
 // ── Budgets ─────────────────────────────────────────────────────────────────────
@@ -323,6 +324,20 @@ pub enum EvalError {
         /// Consumption of all three ceilings when evaluation stopped.
         report: BudgetReport,
     },
+    /// The caller's [`crate::stop::StopSignal`] fired at a round boundary.
+    ///
+    /// A refusal exactly as total as [`Self::BudgetExhausted`]: there is no partial least
+    /// model here either, and the rounds already committed are not an answer to anything.
+    /// It is a DISTINCT variant because the two say different things to a caller — a fixed
+    /// ceiling was passed by the program and the data, whereas this run was stopped by the
+    /// host that asked for it — and only one of them is a reason to change the input.
+    ///
+    /// The report is accurate at the point evaluation stopped, so a host can say what the
+    /// stopped run had already consumed rather than only that it was stopped.
+    Stopped {
+        /// Consumption of all three ceilings when the signal was observed.
+        report: BudgetReport,
+    },
 }
 
 impl fmt::Display for EvalError {
@@ -355,6 +370,12 @@ impl fmt::Display for EvalError {
                 resource.name(),
                 resource.observed(*report),
                 resource.limit()
+            ),
+            Self::Stopped { report } => write!(
+                f,
+                "evaluation was stopped by the caller's stop signal after {} join steps, \
+                 holding {} facts: no least model was computed",
+                report.join_steps, report.stored_facts
             ),
         }
     }
@@ -1986,7 +2007,45 @@ impl FixpointState {
 /// [`EvalError::BudgetExhausted`] if the run passes any of the three fixed ceilings. There
 /// is no partial answer: a budget refusal is total.
 pub fn evaluate(exe: &Executable, edb: RelationStore) -> Result<Evaluation, EvalError> {
-    evaluate_with(exe, edb, RoundExecution::Parallel, JoinStrategy::Planned)
+    evaluate_with(
+        exe,
+        edb,
+        None,
+        RoundExecution::Parallel,
+        JoinStrategy::Planned,
+    )
+}
+
+/// [`evaluate`], polling a caller-owned [`StopSignal`] once per semi-naive round.
+///
+/// Identical to [`evaluate`] in every respect but one: if `stop` reports stopped at a round
+/// boundary the fixpoint refuses with [`EvalError::Stopped`] instead of running the next
+/// round. It is not a budget — see [`crate::stop`] for why the distinction is the whole
+/// reason this entry point may exist beside a crate that refuses caller-supplied ceilings —
+/// and it cannot change an answer: an unstopped run does exactly what [`evaluate`] does,
+/// and a stopped one produces no [`Evaluation`] at all.
+///
+/// The poll is at the ROUND boundary, which is the granularity the fixpoint has: one round
+/// joins every fireable rule of a stratum against the accumulated store, so a signal that
+/// fires mid-round is observed when that round commits. That is the honest resolution of
+/// this entry point, and a host that needs a finer one is asking for a charge schedule
+/// rather than a stop signal.
+///
+/// # Errors
+///
+/// [`EvalError::Stopped`] if `stop` fired, and every error [`evaluate`] returns.
+pub fn evaluate_until(
+    exe: &Executable,
+    edb: RelationStore,
+    stop: Option<&dyn StopSignal>,
+) -> Result<Evaluation, EvalError> {
+    evaluate_with(
+        exe,
+        edb,
+        stop,
+        RoundExecution::Parallel,
+        JoinStrategy::Planned,
+    )
 }
 
 /// The policy-selectable implementation behind [`evaluate`].
@@ -1996,6 +2055,7 @@ pub fn evaluate(exe: &Executable, edb: RelationStore) -> Result<Evaluation, Eval
 fn evaluate_with(
     exe: &Executable,
     edb: RelationStore,
+    stop: Option<&dyn StopSignal>,
     execution: RoundExecution,
     strategy: JoinStrategy,
 ) -> Result<Evaluation, EvalError> {
@@ -2019,7 +2079,9 @@ fn evaluate_with(
         if exe.stratum_is_empty(stratum) {
             continue;
         }
-        run_stratum(exe, &runtimes, stratum, &mut state, execution, strategy)?;
+        run_stratum(
+            exe, &runtimes, stratum, &mut state, stop, execution, strategy,
+        )?;
     }
 
     // Derivations are produced in per-round lexical order; sorting the whole vector makes
@@ -2063,6 +2125,7 @@ fn run_stratum(
     runtimes: &[RuleRuntime],
     stratum: usize,
     state: &mut FixpointState,
+    stop: Option<&dyn StopSignal>,
     execution: RoundExecution,
     strategy: JoinStrategy,
 ) -> Result<(), EvalError> {
@@ -2072,6 +2135,14 @@ fn run_stratum(
     let mut delta = Delta::all(state.rel.row_count());
 
     loop {
+        // The caller's stop signal, polled BEFORE the round it would prevent. Checking here
+        // rather than after the round is what makes the refusal cost bounded by one round
+        // rather than by two, and it is the same place `check_budget` is decided from.
+        if is_stopped(stop) {
+            return Err(EvalError::Stopped {
+                report: state.report(),
+            });
+        }
         let allowance = MAX_JOIN_STEPS
             .saturating_sub(state.join_steps)
             .saturating_add(1);
@@ -2721,6 +2792,105 @@ mod tests {
         ));
     }
 
+    // ── The caller's stop signal ────────────────────────────────────────────────
+
+    /// A stop signal that fires from its `n`-th poll onward, and latches.
+    #[derive(Debug)]
+    struct StopsAfter {
+        /// Polls remaining before the signal fires. Saturates at zero, which is what makes
+        /// it latch.
+        remaining: std::sync::atomic::AtomicU64,
+    }
+
+    impl StopSignal for StopsAfter {
+        fn stopped(&self) -> bool {
+            use std::sync::atomic::Ordering;
+            let left = self.remaining.load(Ordering::Relaxed);
+            if left == 0 {
+                return true;
+            }
+            self.remaining.store(left - 1, Ordering::Relaxed);
+            false
+        }
+    }
+
+    /// A SIGNAL THAT NEVER FIRES CHANGES NOTHING — not the relations, not the derivations,
+    /// not the budget report.
+    ///
+    /// This is the property that admits a stop signal into a crate whose budgets are
+    /// deliberately constants: attaching one is observationally nothing until it fires.
+    /// Asserted over the whole synthetic corpus rather than over one program, and against
+    /// the ungoverned [`evaluate`] rather than against itself.
+    #[test]
+    fn an_unfired_stop_signal_changes_no_answer() {
+        let never = StopsAfter {
+            remaining: std::sync::atomic::AtomicU64::new(u64::MAX),
+        };
+        for workload in synth_corpus::all() {
+            let exe = compile(workload.rules.clone()).expect("the corpus program compiles");
+            let plain = evaluate(&exe, workload.edb()).expect("inside every ceiling");
+            let watched =
+                evaluate_until(&exe, workload.edb(), Some(&never)).expect("inside every ceiling");
+            assert_eq!(
+                plain.facts().facts_sorted(),
+                watched.facts().facts_sorted(),
+                "{}: facts",
+                workload.name
+            );
+            assert_eq!(
+                plain.derivations(),
+                watched.derivations(),
+                "{}: derivations",
+                workload.name
+            );
+            assert_eq!(
+                format!("{:?}", plain.budget()),
+                format!("{:?}", watched.budget()),
+                "{}: budget",
+                workload.name
+            );
+        }
+    }
+
+    /// A SIGNAL THAT FIRES PRODUCES NO ANSWER AT ALL — never a truncated one.
+    ///
+    /// The refusal is its own variant rather than a budget's, because "the host stopped this
+    /// run" and "the program passed a fixed ceiling" are different facts and only one of them
+    /// is a reason to change the input. The report is the consumption measured at the point
+    /// the signal was observed, so a stopped run can still say what it had spent.
+    #[test]
+    fn a_fired_stop_signal_refuses_rather_than_truncating() {
+        for workload in synth_corpus::all() {
+            let exe = compile(workload.rules.clone()).expect("the corpus program compiles");
+            // Fires at the FIRST round boundary, before any rule of any stratum has run.
+            let immediate = StopsAfter {
+                remaining: std::sync::atomic::AtomicU64::new(0),
+            };
+            let error = evaluate_until(&exe, workload.edb(), Some(&immediate))
+                .expect_err("a signal that is already firing must stop the fixpoint");
+            let EvalError::Stopped { report } = error else {
+                panic!("{}: a stop is not a ceiling: {error:?}", workload.name);
+            };
+            assert_eq!(
+                report.join_steps, 0,
+                "{}: nothing was enumerated before the first round",
+                workload.name
+            );
+            assert!(
+                error_mentions_stop(&EvalError::Stopped { report }),
+                "{}: the message must say the run was stopped",
+                workload.name
+            );
+        }
+    }
+
+    /// Whether an error renders as a stop rather than as a ceiling.
+    fn error_mentions_stop(error: &EvalError) -> bool {
+        let rendered = error.to_string();
+        rendered.contains("stopped by the caller's stop signal")
+            && rendered.contains("no least model was computed")
+    }
+
     // ── The synthetic corpus against its analytic goldens ───────────────────────
 
     /// Every corpus program's computed relations equal their analytically-known goldens
@@ -2805,6 +2975,7 @@ mod tests {
             let planned = evaluate_with(
                 &exe,
                 workload.edb(),
+                None,
                 RoundExecution::Parallel,
                 JoinStrategy::Planned,
             )
@@ -2812,6 +2983,7 @@ mod tests {
             let binary = evaluate_with(
                 &exe,
                 workload.edb(),
+                None,
                 RoundExecution::Parallel,
                 JoinStrategy::ForcedBinary,
             )
@@ -2907,6 +3079,7 @@ mod tests {
             let sequential = evaluate_with(
                 &exe,
                 workload.edb(),
+                None,
                 RoundExecution::Sequential,
                 JoinStrategy::Planned,
             )
@@ -2914,6 +3087,7 @@ mod tests {
             let parallel = evaluate_with(
                 &exe,
                 workload.edb(),
+                None,
                 RoundExecution::Parallel,
                 JoinStrategy::Planned,
             )

@@ -37,10 +37,10 @@ BINARYEN_VERSION := 130
 # dataset-description/research-object projection profiles, the compiled JSON-LD
 # context/options/registry engine, validation-scoped asserted-subclass
 # membership shared by native SHACL and SHACL-SPARQL, the entailment engine, the
-# nine OWL reasoner services, the concrete domain AND the conclusion-directed
+# nine OWL reasoner services, the concrete domain, the conclusion-directed
 # entailment service with its seven mechanisms and its caller-supplied import
-# map — measures
-# 9_765_497 bytes against the 12_112_500 ceiling, which is 19.377% headroom. That
+# map AND the governed query/update lane with its typed outcome — measures
+# 10_458_685 bytes against the 12_112_500 ceiling, which is 13.654% headroom. That
 # figure is recorded below (WASM_SIZE_MEASURED_BYTES) and REPORTED rather than
 # enforced; the ceiling is the check that fails.
 #
@@ -238,8 +238,34 @@ WASM_SIZE_BUDGET_BYTES := 12112500
 # stack for XML-literal canonicalization. It buys documents that used to kill the host
 # returning an ordinary located diagnostic.
 #
+# The increase 9_765_497 -> 9_963_673 is the GOVERNED evaluation lane reaching the
+# artifact. `query_governed`, `update_governed` and `explain_query` were already in the
+# workspace and reachable from no wasm-exported symbol, so the linker dead-code-eliminated
+# all of them: the per-node charge ledger and its plan survey, the predictive admission
+# check, the partial-lift channel with the exhaustive soundness visitor that decides what
+# a truncated bag still certifies about the root answer, the answer-cap pushdown, the
+# order-stable chunk-local charge fold, and the wall-deadline clock. `queryGoverned`,
+# `updateGoverned` and `explainQuery` now reach every one of them, and the growth is that
+# machinery plus the five host-facing outcome classes over it rather than the wrappers.
+# It is a NEW CAPABILITY on this host, and the one it most needed: a browser tab runs the
+# evaluator on the UI thread, so before this an accidental cross product had no ceiling
+# and no deadline — it froze the page with no way back. The ceiling was unchanged, so
+# this was a measurement update and NOT a ceiling raise.
+#
+# The increase 9_963_673 -> 10_456_984 carries the rest of the governed contract into
+# the same artifact: entailment-query phase outcomes, certificate-safe partial filtering,
+# pre-allocation intermediate-cell admission, polynomial bounded property paths, and the
+# parser/evaluator nesting refusal. This is the optimized output measured with the pinned
+# wasm-bindgen 0.2.125 and binaryen 130 under rustc stable 1.97.1. The 12_112_500-byte
+# ceiling was unchanged.
+#
+# The increase 10_456_984 -> 10_458_685 makes governed OWL reverse mapping poll the
+# caller's stop signal before and throughout its dataset-sized construction passes,
+# including high-fanout role expansion. The ceiling remains unchanged; the current
+# artifact leaves 13.654% headroom beneath it.
+#
 # The measured constant below is the CURRENT size, not any intermediate figure.
-WASM_SIZE_MEASURED_BYTES := 9765497
+WASM_SIZE_MEASURED_BYTES := 10458685
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'

@@ -20,7 +20,9 @@ use std::sync::Arc;
 
 use ::purrdf::{DatasetView, RdfDataset};
 use ::purrdf::{SparqlRequest, SparqlResult, TermValue};
-use purrdf_sparql_eval::{NativeSparqlEngine, UserFunctionRegistry};
+use purrdf_sparql_eval::{
+    GovernedOutcome, GovernorState, NativeSparqlEngine, ShaclPrebinding, UserFunctionRegistry,
+};
 
 use crate::model::xsd;
 use crate::report::{Severity, ValidationResult};
@@ -459,6 +461,134 @@ thread_local! {
     /// the SPARQL engine do NOT read this — they receive the registry through
     /// `EvalCtx` (propagated in `fork_for_worker`).
     static CURRENT_FUNCTIONS: RefCell<Option<Arc<UserFunctionRegistry>>> = const { RefCell::new(None) };
+
+    /// The execution governors in force for the current validation, set by
+    /// [`enter_governor_scope`]. Every SPARQL query this module runs charges the state
+    /// found here, and a validation with nothing installed runs exactly as it always did
+    /// — no counters, no atomics, no cost.
+    ///
+    /// **One state for the whole validation, not one per query.** SHACL runs one query
+    /// per focus node, so a per-query budget would silently hand an N-focus validation N
+    /// times the ceiling its caller set. Governed focus validation runs serially in source
+    /// order so scheduling cannot change which query trips or what the evidence consumed;
+    /// the `Arc` still lets nested evaluator workers share the one operation-owned state.
+    static CURRENT_GOVERNORS: RefCell<Option<Arc<GovernorState>>> = const { RefCell::new(None) };
+}
+
+/// An RAII scope that installs `state` as the governor accounting for every SPARQL query
+/// run on this thread for the duration of a validation, restoring the previous value on
+/// drop (so nested validations compose). The twin of [`FunctionScope`].
+#[must_use]
+#[derive(Debug)]
+pub struct GovernorScope {
+    previous: Option<Arc<GovernorState>>,
+    /// A thread-local restoration guard must be dropped on the thread where it
+    /// was created; this marker makes that invariant compile-time enforced.
+    _not_send: PhantomData<Rc<()>>,
+}
+
+impl Drop for GovernorScope {
+    fn drop(&mut self) {
+        let restore = self.previous.take();
+        CURRENT_GOVERNORS.with(|slot| *slot.borrow_mut() = restore);
+    }
+}
+
+/// Install `state` as the governor accounting for every SPARQL query this thread runs,
+/// returning a guard that restores the previous state when dropped.
+pub fn enter_governor_scope(state: Arc<GovernorState>) -> GovernorScope {
+    let previous = CURRENT_GOVERNORS.with(|slot| slot.borrow_mut().replace(state));
+    GovernorScope {
+        previous,
+        _not_send: PhantomData,
+    }
+}
+
+/// The governor accounting installed on this thread, if a validation installed one.
+///
+/// Read on the orchestrating thread and handed to each focus worker's
+/// [`enter_governor_scope`], because a thread-local is not visible from the workers a
+/// thread forks.
+#[must_use]
+pub fn current_governors() -> Option<Arc<GovernorState>> {
+    CURRENT_GOVERNORS.with(|slot| slot.borrow().clone())
+}
+
+/// Run one SHACL-driven SPARQL query against `dataset`, under this validation's governors
+/// when one is installed.
+///
+/// The single place any SHACL path reaches the SPARQL engine. Collapsing the four callers
+/// here is what makes governor inheritance a property of the *module* rather than of four
+/// separately-remembered call sites: a new SHACL query path cannot be added that quietly
+/// runs ungoverned, because there is nowhere else for it to run.
+///
+/// # A tripped governor is an error *here*
+///
+/// The evaluator is careful to report a trip as an outcome rather than a failure, because
+/// a partial answer is useful to a caller who asked for one. A conformance verdict is not
+/// such a caller. "This focus node has no violating solution" computed over a truncated
+/// bag is indistinguishable from the same sentence computed over the whole bag, and
+/// folding it into a report would produce a `conforms` that means nothing. So the trip
+/// becomes an `Err` on the spot; the governed validation entry recovers the *typed* trip
+/// from the shared state, which latched it, and reports that instead of a report.
+fn run_query_view<D: DatasetView + Sync>(
+    dataset: &D,
+    query: &str,
+    substitutions: &[(String, TermValue)],
+    prebind: ShaclPrebinding,
+) -> Result<SparqlResult, String> {
+    // Snapshot both ambient scopes (an `Arc` clone each) BEFORE evaluating, so no
+    // `RefCell` borrow is held across the query: a `sh:sparql` body whose evaluation
+    // re-enters SHACL validation (a nested shape / SHACL-AF function) installs its own
+    // scopes via `borrow_mut`, which would panic ("already borrowed") if an outer
+    // immutable borrow were still live.
+    let functions = CURRENT_FUNCTIONS.with(|slot| slot.borrow().clone());
+    let governors = current_governors();
+    let registry = functions.as_deref().filter(|reg| !reg.is_empty());
+    let request = SparqlRequest {
+        query,
+        base_iri: None,
+        substitutions,
+    };
+
+    let Some(state) = governors else {
+        return SPARQL_ENGINE
+            .with(|engine| match (prebind, registry) {
+                (ShaclPrebinding::Applied, Some(reg)) => engine
+                    .query_with_shacl_prebinding_and_functions_view(
+                        dataset,
+                        query,
+                        None,
+                        substitutions,
+                        reg,
+                    ),
+                (ShaclPrebinding::Applied, None) => {
+                    engine.query_with_shacl_prebinding_view(dataset, query, None, substitutions)
+                }
+                (ShaclPrebinding::None, Some(reg)) => {
+                    engine.query_with_user_functions_view(dataset, request, reg)
+                }
+                (ShaclPrebinding::None, None) => {
+                    let prepared = engine.prepare_query(query, None)?;
+                    engine.query_prepared_view(dataset, &prepared, substitutions)
+                }
+            })
+            .map_err(|e| format!("query evaluation error: {e}"));
+    };
+
+    let outcome = SPARQL_ENGINE
+        .with(|engine| {
+            engine.query_governed_in_operation(dataset, request, prebind, registry, &state)
+        })
+        .map_err(|e| format!("query evaluation error: {e}"))?;
+    match outcome {
+        GovernedOutcome::Complete { result, .. } => Ok(result),
+        GovernedOutcome::BudgetExhausted(exhausted) => Err(format!(
+            "validation budget exhausted: {}; a conformance verdict cannot be computed \
+             from a truncated solution bag",
+            exhausted.tripped
+        )),
+    }
 }
 
 /// An RAII scope that installs `registry` as the current SHACL-AF function table for
@@ -501,28 +631,7 @@ pub(crate) fn run_select_generic_view<D: DatasetView + Sync>(
     select: &str,
     substitutions: &[(String, TermValue)],
 ) -> Result<SelectRows, String> {
-    let request = SparqlRequest {
-        query: select,
-        base_iri: None,
-        substitutions,
-    };
-    // Snapshot the SHACL-AF function registry (an `Arc` clone) BEFORE evaluating, so
-    // no `CURRENT_FUNCTIONS` borrow is held across the query: a `sh:sparql` body whose
-    // evaluation re-enters SHACL validation (a nested shape / SHACL-AF function) installs
-    // its own scope via `enter_function_scope` (a `borrow_mut`), which would panic
-    // ("already borrowed") if the outer immutable borrow were still live.
-    let functions = CURRENT_FUNCTIONS.with(|slot| slot.borrow().clone());
-    let result = SPARQL_ENGINE
-        .with(|engine| match functions.as_ref() {
-            Some(registry) if !registry.is_empty() => {
-                engine.query_with_user_functions_view(dataset, request, registry)
-            }
-            _ => {
-                let prepared = engine.prepare_query(request.query, request.base_iri)?;
-                engine.query_prepared_view(dataset, &prepared, request.substitutions)
-            }
-        })
-        .map_err(|e| format!("query evaluation error: {e}"))?;
+    let result = run_query_view(dataset, select, substitutions, ShaclPrebinding::None)?;
     match result {
         SparqlResult::Solutions {
             variables, rows, ..
@@ -556,19 +665,7 @@ pub(crate) fn run_select_with_shacl_prebinding_view<D: DatasetView + Sync>(
         subs.push(("currentShape".to_owned(), shape.to_term_value()));
     }
 
-    // Snapshot the function registry before evaluating (see the generic path above): a
-    // re-entrant `enter_function_scope` from a nested validation must not collide with a
-    // still-live `CURRENT_FUNCTIONS` borrow.
-    let functions = CURRENT_FUNCTIONS.with(|slot| slot.borrow().clone());
-    let result = SPARQL_ENGINE
-        .with(|engine| match functions.as_ref() {
-            Some(registry) if !registry.is_empty() => engine
-                .query_with_shacl_prebinding_and_functions_view(
-                    dataset, select, None, &subs, registry,
-                ),
-            _ => engine.query_with_shacl_prebinding_view(dataset, select, None, &subs),
-        })
-        .map_err(|e| format!("query evaluation error: {e}"))?;
+    let result = run_query_view(dataset, select, &subs, ShaclPrebinding::Applied)?;
     match result {
         SparqlResult::Solutions {
             variables, rows, ..
@@ -610,19 +707,7 @@ pub(crate) fn run_construct_with_shacl_prebinding_view<D: DatasetView + Sync>(
         subs.push(("currentShape".to_owned(), shape.to_term_value()));
     }
 
-    // Snapshot the function registry before evaluating (see the generic path above): a
-    // re-entrant `enter_function_scope` from a nested validation must not collide with a
-    // still-live `CURRENT_FUNCTIONS` borrow.
-    let functions = CURRENT_FUNCTIONS.with(|slot| slot.borrow().clone());
-    let result = SPARQL_ENGINE
-        .with(|engine| match functions.as_ref() {
-            Some(registry) if !registry.is_empty() => engine
-                .query_with_shacl_prebinding_and_functions_view(
-                    dataset, construct, None, &subs, registry,
-                ),
-            _ => engine.query_with_shacl_prebinding_view(dataset, construct, None, &subs),
-        })
-        .map_err(|e| format!("query evaluation error: {e}"))?;
+    let result = run_query_view(dataset, construct, &subs, ShaclPrebinding::Applied)?;
     match result {
         SparqlResult::Graph(graph) => Ok(graph),
         SparqlResult::Solutions { .. } => {
@@ -650,19 +735,7 @@ pub(crate) fn run_ask_with_shacl_prebinding_view<D: DatasetView + Sync>(
         subs.push(("currentShape".to_owned(), shape.to_term_value()));
     }
 
-    // Snapshot the function registry before evaluating (see the generic path above): a
-    // re-entrant `enter_function_scope` from a nested validation must not collide with a
-    // still-live `CURRENT_FUNCTIONS` borrow.
-    let functions = CURRENT_FUNCTIONS.with(|slot| slot.borrow().clone());
-    let result = SPARQL_ENGINE
-        .with(|engine| match functions.as_ref() {
-            Some(registry) if !registry.is_empty() => engine
-                .query_with_shacl_prebinding_and_functions_view(
-                    dataset, ask, None, &subs, registry,
-                ),
-            _ => engine.query_with_shacl_prebinding_view(dataset, ask, None, &subs),
-        })
-        .map_err(|e| format!("query evaluation error: {e}"))?;
+    let result = run_query_view(dataset, ask, &subs, ShaclPrebinding::Applied)?;
     match result {
         SparqlResult::Boolean(b) => Ok(b),
         SparqlResult::Solutions { .. } => {

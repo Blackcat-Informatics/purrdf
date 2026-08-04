@@ -188,6 +188,22 @@ ownership, and all limits. Complete examples are in
   formats. SELECT `rows` are a single-owner iterable; use `take(index)`,
   `toArray()`, or iteration, and call `free()` when abandoning unconsumed rows.
   `Dataset.query(...)` remains as the compatibility raw-string helper.
+- `QueryEngine.queryGoverned(dataset, sparql, options?)` /
+  `updateGoverned(dataset, sparql, options?)` — the same evaluator under caller-supplied
+  execution governors: `fuel`, `deadlineMs`, `maxAnswers`, `maxIntermediateCells`,
+  `maxScratchBytes`, `maxRemoteRequests`, and a `CancellationToken`. Every ceiling is
+  inclusive, and `0` is a valid ceiling that trips on the first charged unit of work.
+  **A trip is a returned outcome, never a throw**: read `isComplete`, then `result`, or
+  `tripped` with `partial` — where `partial.certainty` states what the rows in hand
+  certify (`"certain"` = a lower bound, safe to admit; `"at-most"` = an upper bound;
+  `"unknown"` = no rows at all, plus the operator that withheld them). Both paths carry
+  `evidence`, the per-dimension consumption and ceiling maps a caller sizes the next
+  budget from. A tripped UPDATE applies **nothing**. This is the ceiling a browser tab
+  needs: the evaluator runs on the UI thread, so an accidental cross product with no
+  deadline freezes the page.
+- `QueryEngine.explainQuery(dataset, sparql, options?)` / `governorDimensions()` — the
+  metered charge ledger a budget is sized from (join orders, plan estimates, per-node
+  cost) and the engine's dimension vocabulary, which keys every `evidence` map.
 - `shaclValidateToSarif(shapesTtl, dataNt)` / `shaclEntail(shapesTtl, dataNt)` — SHACL
   validation to a SARIF 2.1.0 report and SHACL-AF `sh:rule` entailment to N-Triples.
 - `entailMaterialize(document, regime, program)` — SPARQL entailment-**regime**

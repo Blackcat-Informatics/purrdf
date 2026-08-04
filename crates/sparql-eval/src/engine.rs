@@ -11,6 +11,13 @@
 //! [`FallibleDatasetView`] entry points, which return a completeness certificate or
 //! a typed operational failure with evidence.
 //!
+//! One entry point per outcome type, and per-call governors only. The ordinary `query*`
+//! methods are exactly ungoverned and exactly complete; a caller that wants execution
+//! ceilings names them at the call
+//! ([`NativeSparqlEngine::query_governed`]) and receives a [`GovernedOutcome`], which
+//! distinguishes a complete result from an exhausted budget with certified partial
+//! answers. No governor state is ever held on the engine.
+//!
 //! The [`PlanCache`] memoizes parsing so the static generated query corpus compiles
 //! to algebra once, not per run. Full cost-based planning is out of scope here; the
 //! cache holds only the parsed [`Query`].
@@ -27,11 +34,17 @@ use purrdf_sparql_algebra::{ParserOptions, Query, SparqlParser};
 use crate::DetHashMap;
 use crate::dataset_spec::ActiveDataset;
 use crate::eval::{
-    BgpOrderCache, EvalCtx, EvalOptions, LossVocabulary, Outcome, StandpointPredicates,
-    evaluate_query,
+    BgpOrderCache, EvalCtx, EvalOptions, EvaluatedOutcome, LossVocabulary, Outcome,
+    StandpointPredicates, evaluate_query, evaluate_query_evaluated, query_pattern,
 };
-use crate::update::{GraphResolver, eval_update};
-use crate::{CompleteSparqlResult, FallibleSparqlError, FallibleSparqlResult};
+use crate::governor::ledger::ChargeLedger;
+use crate::governor::soundness::SpineClass;
+use crate::governor::{GovernorState, NonMonotoneBarrier, QueryExplanation, QueryGovernors};
+use crate::update::{GraphResolver, UpdateAbort, eval_update};
+use crate::{
+    BudgetExhausted, CompleteSparqlResult, FallibleSparqlError, FallibleSparqlResult,
+    GovernedEvidence, GovernedOutcome, GovernedUpdateOutcome, PartialAnswers, PartialSparqlResult,
+};
 
 /// A parsed, ready-to-evaluate query (the cached unit of the [`PlanCache`]).
 #[derive(Debug)]
@@ -277,6 +290,420 @@ impl NativeSparqlEngine {
         self.query_prepared_fallible_view(dataset, &prepared, request.substitutions)
     }
 
+    /// Parse and execute one request under caller-supplied execution governors.
+    ///
+    /// The governed sibling of [`SparqlEngine::query`], and the only public entry point
+    /// through which a governor trip is an *outcome* rather than a failure: it returns a
+    /// [`GovernedOutcome`], which is either the complete result or the exhausted budget
+    /// with the partial answers the execution reached (see [`PartialAnswers`] for what
+    /// those are allowed to claim). A genuine parse or evaluation failure is still an
+    /// [`RdfDiagnostic`] — a query that has no answer must never be reported as a query
+    /// that ran out of budget.
+    ///
+    /// # Governors are per call, never per engine
+    ///
+    /// The live accounting state is built fresh here, for this execution, and dropped with
+    /// it. There is deliberately no `with_governors` builder on the engine: consumption is
+    /// cumulative, so a state held on the engine would drain one query's budget into the
+    /// next and produce an intermittent "this query was fine yesterday" bug that no single
+    /// test run can catch. This is the same rule the demand-paging tier states for
+    /// [`PagedQueryView`](purrdf_core::ir::PagedQueryView) — caches, evidence, and limits
+    /// are operation-local.
+    ///
+    /// Pass [`QueryGovernors::UNBOUNDED`] to decline every ceiling explicitly, or
+    /// [`QueryGovernors::METERED`] to measure an execution without bounding it.
+    ///
+    /// # Errors
+    ///
+    /// Propagates parse and evaluation errors as an [`RdfDiagnostic`]. A tripped governor
+    /// is **not** an error and does not surface here.
+    pub fn query_governed(
+        &self,
+        dataset: &Arc<RdfDataset>,
+        request: SparqlRequest<'_>,
+        governors: &QueryGovernors,
+    ) -> Result<GovernedOutcome, RdfDiagnostic> {
+        let prepared = self.prepare_query(request.query, request.base_iri)?;
+        self.query_prepared_governed_view(&**dataset, &prepared, request.substitutions, governors)
+    }
+
+    /// [`Self::query_governed`] over any operationally infallible [`DatasetView`] backend,
+    /// for a plan already returned by [`Self::prepare_query`].
+    ///
+    /// Governors are per call here too — `governors` configures this one execution and
+    /// nothing else, so the same `prepared` plan can be run under different budgets
+    /// without one run's consumption reaching the next.
+    ///
+    /// # Errors
+    ///
+    /// Propagates evaluation errors as an [`RdfDiagnostic`]. A tripped governor is **not**
+    /// an error and does not surface here.
+    pub fn query_prepared_governed_view<D: DatasetView + Sync>(
+        &self,
+        dataset: &D,
+        prepared: &PreparedQuery,
+        substitutions: &[(String, TermValue)],
+        governors: &QueryGovernors,
+    ) -> Result<GovernedOutcome, RdfDiagnostic> {
+        let state = Arc::new(GovernorState::new(governors));
+        if let Some(refused) = self.admit(dataset, &prepared.query, &state) {
+            return refused;
+        }
+        let mut ctx = self.eval_ctx(dataset).with_governors(Arc::clone(&state));
+        let evaluated = evaluate_governed_with_substitutions(prepared, substitutions, &mut ctx)?;
+        Ok(materialize_governed(evaluated, &ctx, &state))
+    }
+
+    /// [`Self::query_governed`] with a
+    /// [`RemoteQuerySource`](crate::remote::RemoteQuerySource) injected, so `SERVICE`
+    /// clauses resolve through it.
+    ///
+    /// The governed sibling of [`Self::query_with_source`], and the entry a federated
+    /// caller needs: without it, governing a federated query would mean choosing between
+    /// a budget and a `SERVICE` clause. The source is handed this execution's stop signal
+    /// through the evaluation context exactly as the ungoverned path hands it nothing, so
+    /// a deadline can *prevent* a remote request rather than only be noticed once one has
+    /// returned.
+    ///
+    /// # Errors
+    ///
+    /// Propagates parse and evaluation errors as an [`RdfDiagnostic`]. A tripped governor
+    /// is **not** an error and does not surface here.
+    pub fn query_governed_with_source(
+        &self,
+        dataset: &Arc<RdfDataset>,
+        request: SparqlRequest<'_>,
+        source: &(dyn crate::remote::RemoteQuerySource + Sync),
+        governors: &QueryGovernors,
+    ) -> Result<GovernedOutcome, RdfDiagnostic> {
+        self.query_governed_with_source_view(&**dataset, request, source, governors)
+    }
+
+    /// [`Self::query_governed_with_source`] over any [`DatasetView`] backend whose id type
+    /// is the production [`TermId`](purrdf_core::TermId).
+    ///
+    /// # Errors
+    ///
+    /// Propagates parse and evaluation errors as an [`RdfDiagnostic`]. A tripped governor
+    /// is **not** an error and does not surface here.
+    pub fn query_governed_with_source_view<D: DatasetView + Sync>(
+        &self,
+        dataset: &D,
+        request: SparqlRequest<'_>,
+        source: &(dyn crate::remote::RemoteQuerySource + Sync),
+        governors: &QueryGovernors,
+    ) -> Result<GovernedOutcome, RdfDiagnostic> {
+        let prepared = self.cache.borrow_mut().prepare_with(
+            request.query,
+            request.base_iri,
+            &self.parser_options,
+        )?;
+        let state = Arc::new(GovernorState::new(governors));
+        if let Some(refused) = self.admit(dataset, &prepared.query, &state) {
+            return refused;
+        }
+        let mut ctx = self
+            .eval_ctx(dataset)
+            .with_governors(Arc::clone(&state))
+            .with_remote(source);
+        let evaluated =
+            evaluate_governed_with_substitutions(&prepared, request.substitutions, &mut ctx)?;
+        Ok(materialize_governed(evaluated, &ctx, &state))
+    }
+
+    /// One governed query of a **multi-query operation**, charged against a
+    /// `state` the caller owns and reuses across every query of that operation.
+    ///
+    /// # Why a shared state, when `query_governed` forbids exactly that
+    ///
+    /// [`Self::query_governed`] builds its state per call and has no `with_governors`
+    /// builder, because a state held on the *engine* would drain one caller's budget into
+    /// an unrelated caller's query. That rule is about the **engine**, and it is not
+    /// weakened here: the state is still owned by whoever is running the operation, still
+    /// built per operation, and still dropped with it.
+    ///
+    /// The distinction this entry exists for is that some operations are not one query.
+    /// A SHACL validation runs one `sh:sparql` query **per focus node** — hundreds of them
+    /// for one call — and every one of those is the same caller's single request. Handing
+    /// each a fresh [`QueryGovernors`] would give an N-focus validation N times the budget
+    /// it asked for, which is not a budget. So the operation builds one
+    /// [`GovernorState`] and every query inside it charges the same one; the state is
+    /// `Sync`, so the operation may run its queries on workers.
+    ///
+    /// `functions` is the SHACL-AF function registry, if the caller has one in scope.
+    /// `prebind` selects the SHACL pre-binding rewrite (`sh:sparql` constraint and
+    /// component bodies, `sh:SPARQLRule`, `sh:ask`/`sh:select` validators) over the
+    /// ordinary substitution rewrite (SHACL-AF node expressions and `sh:SPARQLTarget`).
+    ///
+    /// # Errors
+    ///
+    /// Propagates parse and evaluation errors as an [`RdfDiagnostic`]. A tripped governor
+    /// is **not** an error and does not surface here.
+    pub fn query_governed_in_operation<D: DatasetView + Sync>(
+        &self,
+        dataset: &D,
+        request: SparqlRequest<'_>,
+        prebind: ShaclPrebinding,
+        functions: Option<&crate::user_fn::UserFunctionRegistry>,
+        state: &Arc<GovernorState>,
+    ) -> Result<GovernedOutcome, RdfDiagnostic> {
+        let prepared = self.cache.borrow_mut().prepare_with(
+            request.query,
+            request.base_iri,
+            &self.parser_options,
+        )?;
+        if let Some(refused) = self.admit(dataset, &prepared.query, state) {
+            return refused;
+        }
+        let mut ctx = self.eval_ctx(dataset).with_governors(Arc::clone(state));
+        if let Some(registry) = functions {
+            ctx = ctx.with_user_functions(registry);
+        }
+        let evaluated = match prebind {
+            ShaclPrebinding::Applied => {
+                evaluate_governed_with_shacl_prebinding(&prepared, request.substitutions, &mut ctx)?
+            }
+            ShaclPrebinding::None => {
+                evaluate_governed_with_substitutions(&prepared, request.substitutions, &mut ctx)?
+            }
+        };
+        Ok(materialize_governed(evaluated, &ctx, state))
+    }
+
+    /// Parse and execute one request under caller-supplied governors over an
+    /// operationally fallible view.
+    ///
+    /// The governed sibling of [`Self::query_fallible_view`], carrying both meters: the
+    /// evidence type is a [`GovernedEvidence`] pair, so every outcome reports the view's
+    /// pages and bytes **and** this execution's fuel, rows, and cells. Evaluation is
+    /// sequential inside this operation for the same reason the ungoverned fallible path
+    /// is — page-request order and exact budget boundaries stay deterministic.
+    ///
+    /// A trip is reported as [`FallibleSparqlError::BudgetExhausted`] rather than as an
+    /// `Ok`, because [`CompleteSparqlResult`] is a completeness certificate and is never
+    /// built from partial rows. The partial answers travel with it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FallibleSparqlError::Operational`] when either checkpoint or any lazy
+    /// read fails — that root cause outranks both an evaluator diagnostic and a governor
+    /// trip derived after data became unavailable. Returns
+    /// [`FallibleSparqlError::Query`] when the view remained ready and parsing or
+    /// evaluation failed, and [`FallibleSparqlError::BudgetExhausted`] when the view
+    /// remained ready and a governor stopped the execution.
+    #[allow(
+        clippy::result_large_err,
+        reason = "the Err side carries the two receipts a governed caller reads (the \
+                  view's evidence and this execution's ResourceVectors) plus the certified \
+                  partial answers; boxing it would put an allocation on the reporting path \
+                  of every non-complete outcome to save one move per query"
+    )]
+    pub fn query_governed_fallible_view<D>(
+        &self,
+        dataset: &D,
+        request: SparqlRequest<'_>,
+        governors: &QueryGovernors,
+    ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>>
+    where
+        D: FallibleDatasetView + Sync,
+    {
+        self.query_governed_fallible_view_inner(dataset, request, None, governors)
+    }
+
+    /// [`Self::query_governed_fallible_view`] with a federation source injected.
+    ///
+    /// This is the composed carrier boundary for a lazy local view plus remote
+    /// `SERVICE` calls: the returned [`GovernedEvidence`] contains the local view's
+    /// page/byte receipt and the evaluator's remote-request, fuel, row, and cell receipt
+    /// from the same operation. Operational failure keeps its usual precedence over an
+    /// evaluator diagnostic or governor trip.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same typed outcomes as [`Self::query_governed_fallible_view`]. A
+    /// federation failure while the view remains ready is a query diagnostic; a local
+    /// view failure remains [`FallibleSparqlError::Operational`].
+    #[allow(
+        clippy::result_large_err,
+        reason = "the Err side carries both operation receipts and certified partial answers"
+    )]
+    pub fn query_governed_fallible_with_source_view<'a, D>(
+        &self,
+        dataset: &'a D,
+        request: SparqlRequest<'_>,
+        source: &'a (dyn crate::remote::RemoteQuerySource + Sync),
+        governors: &QueryGovernors,
+    ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>>
+    where
+        D: FallibleDatasetView + Sync,
+    {
+        self.query_governed_fallible_view_inner(dataset, request, Some(source), governors)
+    }
+
+    #[allow(
+        clippy::result_large_err,
+        reason = "the Err side carries both operation receipts and certified partial answers"
+    )]
+    fn query_governed_fallible_view_inner<'a, D>(
+        &self,
+        dataset: &'a D,
+        request: SparqlRequest<'_>,
+        source: Option<&'a (dyn crate::remote::RemoteQuerySource + Sync)>,
+        governors: &QueryGovernors,
+    ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>>
+    where
+        D: FallibleDatasetView + Sync,
+    {
+        // Built before the preflight so that a view that failed on the way in still
+        // reports a (zeroed, honest) governor receipt beside its root cause.
+        let state = Arc::new(GovernorState::new(governors));
+        if let ViewOperationStatus::Failed { error, evidence } = dataset.operation_status() {
+            return Err(FallibleSparqlError::Operational {
+                error,
+                evidence: GovernedEvidence::new(evidence, state.evidence()),
+            });
+        }
+        let prepared = match self.prepare_query(request.query, request.base_iri) {
+            Ok(prepared) => prepared,
+            Err(diagnostic) => {
+                return finish_governed_fallible_query(dataset, &state, Err(diagnostic));
+            }
+        };
+        if let Some(refused) = self.admit(dataset, &prepared.query, &state) {
+            return finish_governed_fallible_query(dataset, &state, refused);
+        }
+        let evaluation = {
+            let _sequential = crate::parallel::force_sequential_operation();
+            let mut ctx = self.eval_ctx(dataset).with_governors(Arc::clone(&state));
+            if let Some(source) = source {
+                ctx = ctx.with_remote(source);
+            }
+            match evaluate_governed_with_substitutions(&prepared, request.substitutions, &mut ctx) {
+                Ok(evaluated) => Ok(materialize_governed(evaluated, &ctx, &state)),
+                Err(diagnostic) => Err(diagnostic),
+            }
+        };
+        finish_governed_fallible_query(dataset, &state, evaluation)
+    }
+
+    /// Parse and execute one SPARQL **UPDATE** request under caller-supplied execution
+    /// governors.
+    ///
+    /// The governed sibling of [`SparqlEngine::update`], and the only entry through which a
+    /// governor trip on a mutation is an *outcome* rather than a failure: it returns a
+    /// [`GovernedUpdateOutcome`], which says the request applied or that a governor stopped
+    /// it. A genuine parse or evaluation failure is still an [`RdfDiagnostic`].
+    ///
+    /// # A trip applies nothing — that is the contract, not a best effort
+    ///
+    /// On [`GovernedUpdateOutcome::BudgetExhausted`] the caller's `dataset` handle is left
+    /// **exactly** as it was found: not re-frozen, not equal-but-rebuilt, the same `Arc`.
+    /// That holds however far the request got — a five-operation request whose fifth
+    /// operation trips discards the first four with it, because a store carrying part of a
+    /// request nobody was told about is corrupt in a way no later query can detect. It is
+    /// structural rather than defensive: every operation applies to a copy-on-write branch
+    /// of the frozen base, and the single assignment that publishes that branch sits on the
+    /// applied path alone (see [`crate::update`] for the full mutation model).
+    ///
+    /// There is deliberately no partial-mutation payload on the outcome, for the reason
+    /// [`GovernedUpdateOutcome`] states.
+    ///
+    /// # Which ceilings bind a mutation
+    ///
+    /// Everything an UPDATE's `WHERE` clause does is charged exactly as the same pattern
+    /// inside a `SELECT` is — fuel, the intermediate-cell peak, scratch bytes, remote
+    /// requests, the recursion guard — and the stop signal is polled at the evaluator's
+    /// charge points, before each operation of the request, and before the `LOAD` host seam
+    /// issues any I/O.
+    ///
+    /// [`QueryGovernors::with_max_answers`] is the one ceiling that does **not** apply: it
+    /// bounds the answer sequence a caller receives, and an UPDATE has none. A request's
+    /// size is bounded by the ceilings on the work that computes it, which is what those
+    /// other dimensions are. Setting only an answer cap on an update therefore governs
+    /// nothing, and is stated here rather than silently approximated by capping some
+    /// unrelated quantity.
+    ///
+    /// # Governors are per call, never per engine
+    ///
+    /// The live accounting state is built here, for this request, and dropped with it —
+    /// the same rule, for the same reason, as [`Self::query_governed`].
+    ///
+    /// # Errors
+    ///
+    /// Propagates parse and evaluation errors as an [`RdfDiagnostic`]. A tripped governor
+    /// is **not** an error and does not surface here.
+    pub fn update_governed(
+        &self,
+        dataset: &mut Arc<RdfDataset>,
+        request: SparqlRequest<'_>,
+        governors: &QueryGovernors,
+    ) -> Result<GovernedUpdateOutcome, RdfDiagnostic> {
+        let update = self.parse_update(&request)?;
+        let state = Arc::new(GovernorState::new(governors));
+        let mut m = MutableDataset::new(Arc::clone(dataset));
+        let cfg = crate::update::UpdateEvalConfig {
+            standpoint_predicates: self.standpoint_predicates.as_ref(),
+            order_cache: &self.order_cache,
+            governors: Some(&state),
+        };
+        let tripped = match eval_update(&update, &mut m, self.resolver.as_deref(), &cfg) {
+            // A request that ran to the end still does not publish while a trip is latched
+            // on the state. The two are normally the same fact — every site that observes a
+            // governor also aborts the request — but "normally" is the wrong strength for
+            // the one assignment that can corrupt a store, so the publish seam asks the
+            // state directly rather than inferring the answer from the control flow that
+            // reached it. This is what makes `Applied` mean "no governor stopped this",
+            // rather than "no governor stopped this on any path anybody has thought of".
+            Ok(()) => {
+                // A stop that fired during the final operation must be observed before
+                // the only publication assignment. Polling here is deliberately
+                // independent of fuel engagement.
+                let _ = state.poll_stop();
+                state.tripped()
+            }
+            Err(UpdateAbort::Failed(diagnostic)) => return Err(diagnostic),
+            Err(UpdateAbort::Tripped(tripped)) => Some(tripped),
+        };
+        match tripped {
+            None => {
+                // The one place the branch is published, and it is on this arm only.
+                *dataset = m.freeze()?;
+                Ok(GovernedUpdateOutcome::Applied {
+                    evidence: state.evidence(),
+                })
+            }
+            Some(tripped) => {
+                // `m` is dropped here with every mutation the request had reached in it.
+                // Dropping the branch IS the rollback; `*dataset` was never written.
+                drop(m);
+                Ok(GovernedUpdateOutcome::BudgetExhausted {
+                    tripped,
+                    evidence: state.evidence(),
+                })
+            }
+        }
+    }
+
+    /// Parse one UPDATE request into algebra.
+    ///
+    /// UPDATE deliberately bypasses the plan cache: these requests are side-effecting and
+    /// are not the hot static-query set the cache exists for; caching a mutating statement
+    /// would be a correctness hazard. Shared by the two UPDATE seams so that a governed and
+    /// an ungoverned request of the same text parse identically — including the base IRI and
+    /// the engine's [`ParserOptions`].
+    fn parse_update(
+        &self,
+        request: &SparqlRequest<'_>,
+    ) -> Result<purrdf_sparql_algebra::Update, RdfDiagnostic> {
+        let mut parser = SparqlParser::new();
+        if let Some(base) = request.base_iri {
+            parser = parser.with_base_iri(base);
+        }
+        parser
+            .parse_update_with(request.query, &self.parser_options)
+            .map_err(|e| RdfDiagnostic::error("native-sparql-update-parse", e.to_string()))
+    }
+
     /// A fresh engine with an empty plan cache and no `LOAD` resolver.
     pub fn new() -> Self {
         Self::default()
@@ -351,25 +778,41 @@ impl NativeSparqlEngine {
         ctx
     }
 
-    /// Explain the cost-based BGP join order the engine would choose for
-    /// `query_text` against `dataset`.
+    /// Explain what the engine will do with `query_text` against `dataset`, and what it
+    /// costs: the cost-based BGP join orders, the per-node charge ledger, the planner's
+    /// prediction beside the cardinality that actually materialised, and the identity of
+    /// the charge schedule all of it was priced under.
     ///
-    /// Returns an ordered list of triple-pattern strings: for every BGP in the
-    /// query with at least two triple patterns, the patterns are listed in the
-    /// order the planner selected. BGPs are visited in a left-to-right DFS over
-    /// the algebra, so subqueries, OPTIONAL/UNION branches, and GRAPH blocks are
-    /// all represented in query-text order. This is a pure-introspection API: it
-    /// does not evaluate the query and does not mutate the engine state.
+    /// [`QueryExplanation::join_orders`] is the value this method used to return: for every
+    /// BGP with at least two triple patterns, its patterns in the order the planner
+    /// selected, with BGPs visited in a left-to-right DFS over the algebra so subqueries,
+    /// `OPTIONAL`/`UNION` branches, and `GRAPH` blocks all appear in query-text order.
+    ///
+    /// # This **evaluates** the query
+    ///
+    /// It has to. A ledger of what a query cost cannot be derived from its text, and the
+    /// planner's error — the one thing an EXPLAIN is for — is only observable by putting
+    /// the estimate beside the count. The evaluation runs under
+    /// [`QueryGovernors::METERED`], which engages every counter at a ceiling nothing can
+    /// reach: the query is measured, never bounded, so the explanation describes the run a
+    /// caller would actually get. Engine state is still not mutated (the plan cache's
+    /// memoized parse aside, exactly as every other entry point warms it).
+    ///
+    /// The consequence to expect is that a query which fails to *evaluate* now fails to
+    /// explain, with the same diagnostic — a `SERVICE` clause on an engine with no
+    /// federation source being the practical case. That is the honest report: there is no
+    /// cost to describe for work that cannot be done.
     ///
     /// # Errors
     ///
-    /// Returns an [`RdfDiagnostic`] if the query text does not parse.
+    /// Returns an [`RdfDiagnostic`] if the query text does not parse, or if evaluating it
+    /// fails.
     pub fn explain_query(
         &self,
         dataset: &Arc<RdfDataset>,
         query_text: &str,
         base_iri: Option<&str>,
-    ) -> Result<Vec<String>, RdfDiagnostic> {
+    ) -> Result<QueryExplanation, RdfDiagnostic> {
         self.explain_query_view(&**dataset, query_text, base_iri)
     }
 
@@ -379,32 +822,141 @@ impl NativeSparqlEngine {
     ///
     /// # Errors
     ///
-    /// Returns an [`RdfDiagnostic`] if the query text does not parse.
+    /// Returns an [`RdfDiagnostic`] if the query text does not parse, or if evaluating it
+    /// fails.
     pub fn explain_query_view<D: DatasetView + Sync>(
         &self,
         dataset: &D,
         query_text: &str,
         base_iri: Option<&str>,
-    ) -> Result<Vec<String>, RdfDiagnostic> {
+    ) -> Result<QueryExplanation, RdfDiagnostic> {
         let prepared =
             self.cache
                 .borrow_mut()
                 .prepare_with(query_text, base_iri, &self.parser_options)?;
-        let active_dataset = ActiveDataset::from_query_dataset(prepared.query.dataset(), dataset);
-        let mut out = Vec::new();
-        let pattern = match &prepared.query {
-            Query::Select { pattern, .. } | Query::Ask { pattern, .. } => pattern,
-            Query::Construct { pattern, .. } | Query::Describe { pattern, .. } => pattern,
-        };
-        crate::bgp::explain_pattern_orders(
+        let survey = self.survey_plan(dataset, &prepared.query)?;
+        // The ledger's node table is fixed against the plan that is about to be evaluated.
+        // No substitutions are applied on this path, so the addresses the ledger records
+        // are the addresses the evaluator visits.
+        let ledger = Arc::new(ChargeLedger::for_plan(
+            query_pattern(&prepared.query),
+            &survey.estimates,
+        ));
+        let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
+        let mut ctx = self
+            .eval_ctx(dataset)
+            .with_governors(Arc::clone(&state))
+            .with_charge_ledger(Arc::clone(&ledger));
+        evaluate_query_evaluated(&prepared.query, &mut ctx)
+            .map_err(|e| RdfDiagnostic::error("native-sparql-query-explain", e.to_string()))?;
+        Ok(QueryExplanation::new(
+            survey.orders,
+            ledger.snapshot(),
+            state.evidence(),
+        ))
+    }
+
+    /// Walk `query`'s plan against `dataset`'s statistics without evaluating it: the join
+    /// order the cost model chooses for every BGP, and the cardinality it predicts.
+    ///
+    /// One walk feeds both consumers — admission control, which refuses a plan whose
+    /// predicted peak already exceeds the caller's ceiling, and the ledger, which prints
+    /// that prediction beside the count that materialised.
+    fn survey_plan<D: DatasetView + Sync>(
+        &self,
+        dataset: &D,
+        query: &Query,
+    ) -> Result<crate::bgp::PlanSurvey, RdfDiagnostic> {
+        let _ = self;
+        let active_dataset = ActiveDataset::from_query_dataset(query.dataset(), dataset);
+        let mut survey = crate::bgp::PlanSurvey::default();
+        crate::bgp::survey_pattern_plans(
             dataset,
             &active_dataset,
             GraphMatch::Default,
-            pattern,
-            &mut out,
+            query_pattern(query),
+            &mut survey,
         )
         .map_err(|e| RdfDiagnostic::error("native-sparql-query-explain", e.to_string()))?;
-        Ok(out)
+        Ok(survey)
+    }
+
+    /// Decide whether `query` may be evaluated at all under `state`'s ceilings, refusing it
+    /// when the cost planner already predicts a breach.
+    ///
+    /// # Why refusing beats reporting
+    ///
+    /// Every other governor is a *meter*: it observes consumption and stops the execution
+    /// once a ceiling is crossed, which means the work that crossed it has already been
+    /// done. For fuel or a row count that is fine — the overshoot is one charge point. For
+    /// the intermediate-cardinality ceiling it is not, because the work that crosses it is
+    /// a single allocation of the bag that crossed it: by the time the meter can report a
+    /// materialized cross product, the cross product is in memory. On `wasm32` the
+    /// distinction is total rather than merely uncomfortable — an allocation trap aborts
+    /// the module, so there is no execution left to return a [`GovernedOutcome`] at all.
+    /// Admission is the only mechanism that can act before that point.
+    ///
+    /// # Determinism, and what an estimate is allowed to claim
+    ///
+    /// The decision is a pure function of the query as written, the dataset's cardinality
+    /// statistics, and the ceiling. The cost model probes the same statistics the join
+    /// planner probes, composes them with order-stable arithmetic, and the plan walk visits
+    /// nodes in algebra order — so the same query over the same data under the same ceiling
+    /// is refused, or admitted, identically on every run and every machine. Nothing here
+    /// reads a clock, a thread count, or a hash-map iteration order.
+    ///
+    /// "As written" is exact: pre-binding substitutions are applied *after* this decision,
+    /// so the estimate is the un-substituted plan's. That direction is the safe one — a
+    /// substitution can only bind a variable, never free one, so the plan it produces is no
+    /// larger than the one priced here — and it is also what keeps the decision independent
+    /// of which substitutions a caller happened to pass. The cost is that a heavily
+    /// pre-bound query can be refused on its unbound shape; the live ceiling would then have
+    /// admitted it, and raising the ceiling to the reported estimate is what gets it run.
+    ///
+    /// An estimate is an estimate, so the refusal is stated as one: it is reported as
+    /// [`TrippedGovernor::Refused`](purrdf_core::TrippedGovernor::Refused), which carries
+    /// the *estimate* rather than a consumption it never measured, and it is never a
+    /// completeness claim — the outcome is a budget-exhausted one whose certified partial
+    /// answer is empty for row- and graph-producing forms. A refused `ASK` is unknown:
+    /// its materialized `false` shape cannot soundly represent an unsettled boolean. An
+    /// over-estimate therefore costs a caller an answer; it cannot hand them a wrong one.
+    /// An under-estimate changes nothing: the live ceiling is still in force and still
+    /// trips.
+    fn admit<D: DatasetView + Sync>(
+        &self,
+        dataset: &D,
+        query: &Query,
+        state: &GovernorState,
+    ) -> Option<Result<GovernedOutcome, RdfDiagnostic>> {
+        let dimension = purrdf_core::ResourceDimension::IntermediateCells;
+        if !state.is_engaged_in(dimension) {
+            return None;
+        }
+        let limit = state.limits().get(dimension);
+        let estimate = match self.survey_plan(dataset, query) {
+            Ok(survey) => survey.peak_cells(),
+            Err(diagnostic) => return Some(Err(diagnostic)),
+        };
+        if estimate <= limit {
+            return None;
+        }
+        // Latched through the same door an evaluator-side trip uses, so a stop signal that
+        // was already firing outranks the refusal exactly as `resolve_precedence` says it
+        // should, and the evidence reports one governor rather than two.
+        let tripped = state.record_trip(purrdf_core::TrippedGovernor::Refused {
+            dimension,
+            limit,
+            estimate,
+        });
+        Some(Ok(GovernedOutcome::BudgetExhausted(BudgetExhausted {
+            tripped,
+            evidence: state.evidence(),
+            // For SELECT and graph forms this is a certified lower bound over nothing:
+            // every item here is an answer, and there are none. ASK has no public witness
+            // set, however; its `false` value would read as a settled answer, so the helper
+            // withholds it as unknown.
+            partial: certain_partial(empty_result_for(query), true),
+        })))
     }
 
     /// Evaluate a SPARQL query under SHACL-SPARQL pre-binding semantics.
@@ -611,6 +1163,56 @@ where
     }
 }
 
+/// Report a governed query over a fallible view at its final checkpoint.
+///
+/// The precedence is the ungoverned lane's, extended by one rule: an operational failure
+/// still outranks everything derived after data became unavailable — including a governor
+/// trip, because a budget that ran out while the data was already gone says nothing about
+/// the budget.
+#[allow(
+    clippy::result_large_err,
+    reason = "reports the same typed outcome its caller returns; see \
+              `NativeSparqlEngine::query_governed_fallible_view`"
+)]
+fn finish_governed_fallible_query<D>(
+    dataset: &D,
+    state: &GovernorState,
+    evaluation: Result<GovernedOutcome, RdfDiagnostic>,
+) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>>
+where
+    D: FallibleDatasetView + Sync,
+{
+    let governors = state.evidence();
+    match dataset.operation_status() {
+        ViewOperationStatus::Failed { error, evidence } => Err(FallibleSparqlError::Operational {
+            error,
+            evidence: GovernedEvidence::new(evidence, governors),
+        }),
+        ViewOperationStatus::Ready { evidence } => {
+            let evidence = GovernedEvidence::new(evidence, governors);
+            match evaluation {
+                // The governor evidence inside the complete outcome is the same snapshot
+                // as the one paired above, so it is read from one place rather than
+                // carried twice.
+                Ok(GovernedOutcome::Complete { result, .. }) => {
+                    Ok(CompleteSparqlResult { result, evidence })
+                }
+                Ok(GovernedOutcome::BudgetExhausted(exhausted)) => {
+                    Err(FallibleSparqlError::BudgetExhausted {
+                        tripped: exhausted.tripped,
+                        partial: exhausted.partial,
+                        evidence,
+                    })
+                }
+                Err(diagnostic) => Err(FallibleSparqlError::Query {
+                    diagnostic,
+                    evidence,
+                }),
+            }
+        }
+    }
+}
+
 /// Evaluate `prepared`, applying any pre-binding `substitutions` first (GAP-A).
 ///
 /// When there are no substitutions the cached parse is evaluated directly (the hot
@@ -630,6 +1232,56 @@ fn evaluate_with_substitutions<D: DatasetView + Sync>(
     let substituted =
         crate::substitute::apply_substitutions(prepared.query.clone(), substitutions)?;
     evaluate_query(&substituted, ctx).map_err(eval_err)
+}
+
+/// [`evaluate_with_substitutions`], on the trip-aware channel.
+///
+/// The one difference is the evaluator entry point: this one may answer "a governor
+/// stopped here, and these rows are what it left", which the completion-only
+/// [`evaluate_query`] refuses by contract.
+fn evaluate_governed_with_substitutions<D: DatasetView + Sync>(
+    prepared: &PreparedQuery,
+    substitutions: &[(String, TermValue)],
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<EvaluatedOutcome<D::Id>, RdfDiagnostic> {
+    let eval_err = |e: crate::error::EvalError| {
+        RdfDiagnostic::error("native-sparql-query-eval", e.to_string())
+    };
+    if substitutions.is_empty() {
+        return evaluate_query_evaluated(&prepared.query, ctx).map_err(eval_err);
+    }
+    let substituted =
+        crate::substitute::apply_substitutions(prepared.query.clone(), substitutions)?;
+    evaluate_query_evaluated(&substituted, ctx).map_err(eval_err)
+}
+
+/// Which rewrite [`NativeSparqlEngine::query_governed_in_operation`] applies to a
+/// request's substitutions before evaluating it.
+///
+/// A named two-state enum rather than a `bool`, because the two rewrites are not "on and
+/// off" — they are different SPARQL semantics (SHACL §5.3's pre-binding versus the
+/// ordinary substitution path), and a call site reading `true` says neither of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ShaclPrebinding {
+    /// Apply the SHACL pre-binding rewrite: `sh:sparql` constraint and component bodies,
+    /// `sh:SPARQLRule`, and `sh:ask`/`sh:select` validators.
+    Applied,
+    /// Apply the ordinary substitution rewrite: SHACL-AF node expressions,
+    /// `sh:SPARQLTarget`, and every non-SHACL caller.
+    None,
+}
+
+/// [`evaluate_with_shacl_prebinding`], on the trip-aware channel — the same relationship
+/// [`evaluate_governed_with_substitutions`] has to [`evaluate_with_substitutions`].
+fn evaluate_governed_with_shacl_prebinding<D: DatasetView + Sync>(
+    prepared: &PreparedQuery,
+    substitutions: &[(String, TermValue)],
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<EvaluatedOutcome<D::Id>, RdfDiagnostic> {
+    let substituted =
+        crate::substitute::apply_shacl_prebinding(prepared.query.clone(), substitutions)?;
+    evaluate_query_evaluated(&substituted, ctx)
+        .map_err(|e| RdfDiagnostic::error("native-sparql-query-eval", e.to_string()))
 }
 
 fn evaluate_with_shacl_prebinding<D: DatasetView + Sync>(
@@ -660,16 +1312,7 @@ impl SparqlEngine for NativeSparqlEngine {
         dataset: &mut Self::Dataset,
         request: SparqlRequest<'_>,
     ) -> Result<(), RdfDiagnostic> {
-        // UPDATE deliberately bypasses the plan cache: these requests are
-        // side-effecting and are not the hot static-query set the cache exists for;
-        // caching a mutating statement would be a correctness hazard.
-        let mut parser = SparqlParser::new();
-        if let Some(base) = request.base_iri {
-            parser = parser.with_base_iri(base);
-        }
-        let update = parser
-            .parse_update_with(request.query, &self.parser_options)
-            .map_err(|e| RdfDiagnostic::error("native-sparql-update-parse", e.to_string()))?;
+        let update = self.parse_update(&request)?;
         // Atomicity is structural: branch a COW MutableDataset off the frozen base,
         // apply every op to the delta, and only on FULL success freeze back. Any
         // error drops `m` and leaves `*dataset` untouched.
@@ -677,8 +1320,25 @@ impl SparqlEngine for NativeSparqlEngine {
         let cfg = crate::update::UpdateEvalConfig {
             standpoint_predicates: self.standpoint_predicates.as_ref(),
             order_cache: &self.order_cache,
+            // Exactly ungoverned, exactly as this seam was before governors existed —
+            // `None` is the absence of the state, not an unbounded one, so no charge site
+            // or stop poll is reachable from here at all. A caller who wants ceilings on a
+            // mutation names them at `NativeSparqlEngine::update_governed`.
+            governors: None,
         };
-        eval_update(&update, &mut m, self.resolver.as_deref(), &cfg)?;
+        match eval_update(&update, &mut m, self.resolver.as_deref(), &cfg) {
+            Ok(()) => {}
+            Err(UpdateAbort::Failed(diagnostic)) => return Err(diagnostic),
+            // Unreachable by construction: a trip can only originate from the
+            // `GovernorState` this seam declines to build, so there is no governor here to
+            // stop anything. Stated as an invariant rather than re-rendered as a
+            // diagnostic, because a diagnostic on this arm would be a place for a real
+            // trip to hide if the invariant ever broke.
+            Err(UpdateAbort::Tripped(tripped)) => unreachable!(
+                "the ungoverned UPDATE seam attaches no GovernorState, yet {} was reported",
+                tripped.label()
+            ),
+        }
         *dataset = m.freeze()?;
         Ok(())
     }
@@ -703,6 +1363,116 @@ fn materialize<D: DatasetView + Sync>(
         }
         Outcome::Graph(graph) => SparqlResult::Graph(graph),
         Outcome::Boolean(value) => SparqlResult::Boolean(value),
+    }
+}
+
+/// A frozen dataset with nothing in it — the auxiliary graph of a solution set that
+/// invented no terms, and the whole result of a graph-producing query that did not run.
+fn empty_dataset() -> Arc<RdfDataset> {
+    purrdf_core::RdfDatasetBuilder::new()
+        .freeze()
+        .expect("an empty dataset is positionally valid")
+}
+
+/// The empty result of `query`'s form — what an execution that produced nothing produced.
+///
+/// Shaped by form rather than always `Solutions`, so a caller matching on the result of a
+/// refused `CONSTRUCT` finds the `Graph` arm it would find on every other path. The
+/// variable list is empty because a refused query never chose one: this engine fixes a
+/// solution's column ORDER during evaluation (a BGP's columns appear in the order the
+/// cost-based join order visits them), so naming columns for a plan that was never run
+/// would be a guess — the same reason, stated in [`crate::governor`], that a truncated
+/// binary operator reports its left arm's columns and no more.
+fn empty_result_for(query: &Query) -> SparqlResult {
+    match query {
+        Query::Select { .. } => SparqlResult::Solutions {
+            variables: Vec::new(),
+            rows: Vec::new(),
+            aux: empty_dataset(),
+        },
+        Query::Ask { .. } => SparqlResult::Boolean(false),
+        Query::Construct { .. } | Query::Describe { .. } => SparqlResult::Graph(empty_dataset()),
+    }
+}
+
+/// Restate a certified lower bound without forging a settled `ASK false` answer.
+///
+/// Row and graph results have a useful empty lower bound. A boolean result does not expose
+/// the witness rows that make that interpretation possible: `false` is the complete
+/// negative answer in [`SparqlResult`], so emitting it under [`PartialAnswers::Certain`]
+/// would let a stopped search deny an answer it had not reached. `ASK true` remains a
+/// certain lower bound because one reached witness settles the boolean positively.
+fn certain_partial(result: SparqlResult, positional_prefix: bool) -> PartialAnswers {
+    if matches!(result, SparqlResult::Boolean(false)) {
+        PartialAnswers::Unknown(NonMonotoneBarrier::named("ask-unsettled"))
+    } else {
+        PartialAnswers::Certain(PartialSparqlResult::new(result, positional_prefix))
+    }
+}
+
+/// Materialize a trip-aware [`EvaluatedOutcome`] into the public [`GovernedOutcome`].
+///
+/// This is the boundary the whole governed surface is built around. Two things happen here
+/// and nowhere else:
+///
+/// 1. **The rows are materialized while `ctx` is still alive.** A partial row may bind a
+///    term minted into this execution's scratch arena, which dies with the context, so the
+///    partial answers are turned into owned [`TermValue`]s here through the very same
+///    [`materialize`] a complete result goes through. Nothing dataset-dependent crosses.
+/// 2. **The certificate is restated in the egress vocabulary.** The evaluator's internal
+///    three-way classification maps one-for-one onto [`PartialAnswers`], so the public
+///    claim is the analysis's claim rather than a second, hand-maintained reading of it.
+fn materialize_governed<D: DatasetView + Sync>(
+    evaluated: EvaluatedOutcome<D::Id>,
+    ctx: &EvalCtx<'_, D>,
+    state: &GovernorState,
+) -> GovernedOutcome {
+    match evaluated {
+        EvaluatedOutcome::Complete(outcome) => {
+            let result = materialize(outcome, ctx);
+            let evidence = state.evidence();
+            match evidence.tripped {
+                None => GovernedOutcome::Complete { result, evidence },
+                Some(tripped) => GovernedOutcome::BudgetExhausted(BudgetExhausted {
+                    tripped,
+                    evidence,
+                    partial: certain_partial(result, true),
+                }),
+            }
+        }
+        EvaluatedOutcome::Truncated {
+            outcome,
+            certificate,
+        } => {
+            let partial = match certificate.bound() {
+                // No bound survived, so no row may cross and there is nothing to
+                // materialize: the actionable half is the operator that withheld them. A
+                // collapsed bound is only ever reached through the ascent that records
+                // that operator at the same moment it collapses the class, so the two are
+                // one fact and cannot disagree.
+                SpineClass::Unknown => PartialAnswers::Unknown(
+                    certificate
+                        .barrier()
+                        .expect("a collapsed bound names the operator that collapsed it"),
+                ),
+                bound => {
+                    let result = materialize(outcome, ctx);
+                    if bound == SpineClass::Certain {
+                        certain_partial(result, certificate.is_positional_prefix())
+                    } else {
+                        PartialAnswers::AtMost(PartialSparqlResult::new(
+                            result,
+                            certificate.is_positional_prefix(),
+                        ))
+                    }
+                }
+            };
+            GovernedOutcome::BudgetExhausted(BudgetExhausted {
+                tripped: certificate.tripped(),
+                evidence: state.evidence(),
+                partial,
+            })
+        }
     }
 }
 
@@ -1268,7 +2038,10 @@ mod tests {
         ds: Arc<RdfDataset>,
     }
     impl GraphResolver for TestResolver {
-        fn resolve(&self, _iri: &str) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+        fn resolve(
+            &self,
+            _request: crate::update::GraphResolveRequest<'_>,
+        ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
             Ok(self.ds.clone())
         }
     }
@@ -2052,7 +2825,7 @@ mod tests {
     fn explain_query_returns_non_empty_order_for_multi_pattern_bgp() {
         let ds = social();
         let engine = NativeSparqlEngine::new();
-        let plan = engine
+        let explanation = engine
             .explain_query(
                 &ds,
                 "SELECT ?o ?n WHERE { \
@@ -2061,6 +2834,7 @@ mod tests {
                 None,
             )
             .expect("explain");
+        let plan = explanation.join_orders();
         assert!(
             plan.len() >= 2,
             "expected at least two triple-pattern strings, got {plan:?}"

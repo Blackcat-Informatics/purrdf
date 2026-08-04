@@ -29,8 +29,10 @@
 //! [`crate::materialize_dl_reported`] seam.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use purrdf_core::RdfDataset;
+use purrdf_datalog::StopSignal;
 
 use crate::EntailError;
 use crate::interner::Interner;
@@ -144,6 +146,21 @@ pub(crate) struct Kb {
     pub(crate) literal_class: BTreeMap<u32, u32>,
     /// The constructs this knowledge base could not fully handle, in `Construct` order.
     pub(crate) boundaries: BTreeSet<Construct>,
+    /// The caller's latching stop signal, polled at every search and saturation round.
+    ///
+    /// Held on the knowledge base rather than passed down through
+    /// [`hyper::decide`]/[`saturate::saturate`] and their private drivers because every one
+    /// of those already borrows a `&Kb`: putting it here reaches all of them without adding
+    /// a parameter to a dozen private functions, and it cannot be forgotten at one call
+    /// site and honoured at another.
+    ///
+    /// `None` — the state [`Kb::from_dataset`] builds — is a run nothing can stop, which is
+    /// exactly the behaviour this lane had before the field existed. The stop-aware
+    /// constructor installs this before key inference, so a key-bearing ontology cannot
+    /// enter an uninterruptible tableau before the public governed path attaches its signal.
+    /// It is NOT a budget: see [`purrdf_datalog::stop`] for the distinction, which is what
+    /// admits it into a crate whose ceilings are deliberately constants.
+    pub(crate) stop: Option<Arc<dyn StopSignal>>,
 }
 
 impl Kb {
@@ -176,7 +193,13 @@ impl Kb {
             data_ranges: data::DataRangeTable::default(),
             literal_class: BTreeMap::new(),
             boundaries: BTreeSet::new(),
+            stop: None,
         }
+    }
+
+    /// Whether the caller has asked this run to stop.
+    pub(crate) fn stopped(&self) -> bool {
+        self.stop.as_ref().is_some_and(|stop| stop.stopped())
     }
 
     /// Reverse-map an [`RdfDataset`]'s default graph into a knowledge base.
@@ -189,7 +212,27 @@ impl Kb {
     /// that is already unsatisfiable (every identification would then be entailed, so the
     /// key says nothing).
     pub(crate) fn from_dataset(ds: &RdfDataset) -> Result<Self, EntailError> {
-        let mut kb = parser::build(ds)?;
+        Self::from_dataset_until(ds, None)
+    }
+
+    /// Reverse-map `ds`, polling `stop` during parsing, and retain it for key inference.
+    ///
+    /// # Errors
+    ///
+    /// The same failures as [`Self::from_dataset`], plus [`EntailError::Stopped`] when the
+    /// signal fires before or during reverse mapping or key inference.
+    pub(crate) fn from_dataset_until(
+        ds: &RdfDataset,
+        stop: Option<Arc<dyn StopSignal>>,
+    ) -> Result<Self, EntailError> {
+        if stop.as_deref().is_some_and(StopSignal::stopped) {
+            return Err(EntailError::Stopped);
+        }
+        let mut kb = parser::build_until(ds, stop.as_deref())?;
+        kb.stop = stop;
+        if kb.stopped() {
+            return Err(EntailError::Stopped);
+        }
         kb.apply_keys()?;
         Ok(kb)
     }
@@ -488,9 +531,40 @@ mod tests {
     const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
     const OWL_OBJECTPROPERTY: &str = "http://www.w3.org/2002/07/owl#ObjectProperty";
     const OWL_FUNCTIONALPROPERTY: &str = "http://www.w3.org/2002/07/owl#FunctionalProperty";
+    const OWL_HASKEY: &str = "http://www.w3.org/2002/07/owl#hasKey";
+    const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
+    const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
+    const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
+
+    #[derive(Debug)]
+    struct StopAtPoll {
+        polls: std::sync::atomic::AtomicU64,
+        fire_at: u64,
+    }
+
+    impl StopAtPoll {
+        fn new(fire_at: u64) -> Self {
+            Self {
+                polls: std::sync::atomic::AtomicU64::new(0),
+                fire_at,
+            }
+        }
+
+        fn polls(&self) -> u64 {
+            self.polls.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    impl StopSignal for StopAtPoll {
+        fn stopped(&self) -> bool {
+            self.polls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                >= self.fire_at
+        }
+    }
 
     /// Build the `simple.ttl` fixture as a dataset (default graph).
-    fn simple_dataset() -> std::sync::Arc<RdfDataset> {
+    fn simple_dataset() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         let ty = vocab(&mut b, RDF_TYPE);
         let class = vocab(&mut b, OWL_CLASS);
@@ -560,6 +634,72 @@ mod tests {
         let mut expected = [a, bb, cc, dd];
         expected.sort_unstable();
         assert_eq!(kb.instances_of(or_bc).unwrap(), expected.to_vec());
+    }
+
+    #[test]
+    fn governed_construction_refuses_an_already_cancelled_request_before_parsing() {
+        let stop = Arc::new(StopAtPoll::new(0));
+        let signal: Arc<dyn StopSignal> = stop.clone();
+        let Err(error) = Kb::from_dataset_until(&simple_dataset(), Some(signal)) else {
+            panic!("an already-cancelled construction must refuse");
+        };
+        assert!(matches!(error, EntailError::Stopped));
+        assert_eq!(
+            stop.polls(),
+            1,
+            "the parser must not start after cancellation"
+        );
+    }
+
+    #[test]
+    fn governed_construction_stops_during_reverse_mapping() {
+        // Poll 0 is the API preflight, poll 1 is the parser preflight, and the following
+        // polls are dataset cells. Firing at poll 3 therefore proves the signal is observed
+        // inside the quad scan rather than only after a complete knowledge base exists.
+        let stop = Arc::new(StopAtPoll::new(3));
+        let signal: Arc<dyn StopSignal> = stop.clone();
+        let Err(error) = Kb::from_dataset_until(&simple_dataset(), Some(signal)) else {
+            panic!("reverse mapping must observe cancellation during its quad scan");
+        };
+        assert!(matches!(error, EntailError::Stopped));
+        assert_eq!(stop.polls(), 4);
+    }
+
+    #[test]
+    fn governed_construction_installs_stop_before_key_inference() {
+        let mut b = RdfDatasetBuilder::new();
+        let ty = vocab(&mut b, RDF_TYPE);
+        let has_key = vocab(&mut b, OWL_HASKEY);
+        let first = vocab(&mut b, RDF_FIRST);
+        let rest = vocab(&mut b, RDF_REST);
+        let nil = vocab(&mut b, RDF_NIL);
+        let class = iri(&mut b, "Keyed");
+        let property = iri(&mut b, "key");
+        let list = iri(&mut b, "key-list");
+        let left = iri(&mut b, "left");
+        let right = iri(&mut b, "right");
+        let value = iri(&mut b, "value");
+        b.push_quad(class, has_key, list, None);
+        b.push_quad(list, first, property, None);
+        b.push_quad(list, rest, nil, None);
+        b.push_quad(left, ty, class, None);
+        b.push_quad(right, ty, class, None);
+        b.push_quad(left, property, value, None);
+        b.push_quad(right, property, value, None);
+        let dataset = b.freeze().expect("key fixture freezes");
+
+        // Measure the parser's deterministic poll count, then let the API preflight, every
+        // parser poll, and the post-build check pass. The next poll is inside the first
+        // key-membership proof and must still carry the same signal.
+        let parser_counter = StopAtPoll::new(u64::MAX);
+        parser::build_until(&dataset, Some(&parser_counter)).expect("count parser polls");
+        let stop = Arc::new(StopAtPoll::new(parser_counter.polls() + 2));
+        let signal: Arc<dyn StopSignal> = stop.clone();
+        let Err(error) = Kb::from_dataset_until(&dataset, Some(signal)) else {
+            panic!("the first key-inference poll must stop construction");
+        };
+        assert!(matches!(error, EntailError::Stopped));
+        assert!(stop.polls() > parser_counter.polls() + 2);
     }
 
     /// Build the `parent.ttl` knowledge base directly (Concepts + axioms).

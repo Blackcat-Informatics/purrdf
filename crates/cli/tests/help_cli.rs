@@ -27,7 +27,9 @@ fn run(args: &[&str]) -> (i32, String, String) {
 fn top_level_help_lists_all_subcommands() {
     let (code, stdout, _) = run(&["--help"]);
     assert_eq!(code, 0, "`--help` exits 0");
-    for subcommand in ["convert", "query", "reason", "entails", "project", "lift"] {
+    for subcommand in [
+        "convert", "query", "update", "reason", "entails", "project", "lift",
+    ] {
         assert!(
             stdout.contains(subcommand),
             "top-level help must list `{subcommand}`; got:\n{stdout}"
@@ -136,6 +138,63 @@ fn query_help_lists_options_and_results_choices() {
             "query help must list the `{choice}` results format; got:\n{stdout}"
         );
     }
+}
+
+/// `query --help` lists every execution governor, plus `--explain`.
+///
+/// A governor the help does not name is a ceiling no operator will set, which is the same
+/// as not having it. The help must also say what `--deadline` accepts (its value is the one
+/// flag whose grammar cannot be guessed from a type name) and what a trip does, since the
+/// exit code is the only thing a shell can test.
+#[test]
+fn query_help_lists_every_execution_governor() {
+    let (code, stdout, _) = run(&["query", "--help"]);
+    assert_eq!(code, 0, "`query --help` exits 0");
+    for option in [
+        "--fuel",
+        "--deadline",
+        "--max-answers",
+        "--max-intermediate-cells",
+        "--max-scratch-bytes",
+        "--max-remote-requests",
+        "--explain",
+    ] {
+        assert!(
+            stdout.contains(option),
+            "query help must list `{option}`; got:\n{stdout}"
+        );
+    }
+    assert!(
+        stdout.contains("1m30s"),
+        "the deadline's help must show the accepted spelling; got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("exits 3"),
+        "the help must say what a trip does to the exit code; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn update_help_lists_applicable_governors_and_no_answer_cap() {
+    let (code, stdout, _) = run(&["update", "--help"]);
+    assert_eq!(code, 0, "`update --help` exits 0");
+    for option in [
+        "--fuel",
+        "--deadline",
+        "--max-intermediate-cells",
+        "--max-scratch-bytes",
+        "--max-remote-requests",
+    ] {
+        assert!(
+            stdout.contains(option),
+            "update help must list `{option}`; got:\n{stdout}"
+        );
+    }
+    assert!(
+        !stdout.contains("--max-answers"),
+        "UPDATE has no answer sequence to bound: {stdout}"
+    );
+    assert!(stdout.contains("exits 3"), "{stdout}");
 }
 
 #[test]

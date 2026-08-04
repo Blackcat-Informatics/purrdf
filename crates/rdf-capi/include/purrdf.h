@@ -29,7 +29,7 @@
 /**
  * ABI minor version.
  */
-#define PURRDF_ABI_MINOR 1
+#define PURRDF_ABI_MINOR 3
 
 /**
  * ABI patch version.
@@ -210,10 +210,318 @@ typedef int32_t PurrdfGraphMatchKind;
 #endif // __cplusplus
 
 /**
+ * The result-form discriminant written to every query entry point's `out_kind`.
+ */
+enum PurrdfResultKind
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : int32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+    /**
+     * A SELECT solution sequence returned through `PurrdfRowCursor`.
+     */
+    PURRDF_RESULT_KIND_SOLUTIONS = 0,
+    /**
+     * A CONSTRUCT or DESCRIBE graph returned through `PurrdfDataset`.
+     */
+    PURRDF_RESULT_KIND_GRAPH = 1,
+    /**
+     * An ASK boolean returned through `uint8_t`.
+     */
+    PURRDF_RESULT_KIND_BOOLEAN = 2,
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum PurrdfResultKind PurrdfResultKind;
+#else
+typedef int32_t PurrdfResultKind;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+
+/**
+ * Bit values for [`PurrdfQueryGovernors::enabled`].
+ *
+ * The struct stores a plain `uint32_t`, not this enum, so C may combine values safely.
+ */
+enum PurrdfGovernorFlag
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : uint32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+    /**
+     * Enforce `fuel`.
+     */
+    PURRDF_GOVERNOR_FLAG_FUEL = (1 << 0),
+    /**
+     * Enforce `max_answers` (query only; UPDATE rejects this flag).
+     */
+    PURRDF_GOVERNOR_FLAG_MAX_ANSWERS = (1 << 1),
+    /**
+     * Enforce `max_intermediate_cells`.
+     */
+    PURRDF_GOVERNOR_FLAG_MAX_INTERMEDIATE_CELLS = (1 << 2),
+    /**
+     * Enforce `max_scratch_bytes`.
+     */
+    PURRDF_GOVERNOR_FLAG_MAX_SCRATCH_BYTES = (1 << 3),
+    /**
+     * Enforce `max_remote_requests`.
+     */
+    PURRDF_GOVERNOR_FLAG_MAX_REMOTE_REQUESTS = (1 << 4),
+    /**
+     * Enforce `deadline_millis` from the start of the call.
+     */
+    PURRDF_GOVERNOR_FLAG_DEADLINE_MILLIS = (1 << 5),
+    /**
+     * Poll `cancellation`.
+     */
+    PURRDF_GOVERNOR_FLAG_CANCELLATION = (1 << 6),
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum PurrdfGovernorFlag PurrdfGovernorFlag;
+#else
+typedef uint32_t PurrdfGovernorFlag;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+
+/**
+ * Stable C discriminants for governed resource dimensions.
+ */
+enum PurrdfResourceDimension
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : int32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+    /**
+     * Abstract execution fuel.
+     */
+    PURRDF_RESOURCE_DIMENSION_FUEL = 0,
+    /**
+     * Final answer sequence units.
+     */
+    PURRDF_RESOURCE_DIMENSION_ANSWER_ROWS = 1,
+    /**
+     * Peak intermediate cells.
+     */
+    PURRDF_RESOURCE_DIMENSION_INTERMEDIATE_CELLS = 2,
+    /**
+     * Scratch-arena bytes.
+     */
+    PURRDF_RESOURCE_DIMENSION_SCRATCH_BYTES = 3,
+    /**
+     * Remote requests.
+     */
+    PURRDF_RESOURCE_DIMENSION_REMOTE_REQUESTS = 4,
+    /**
+     * UDF recursion depth.
+     */
+    PURRDF_RESOURCE_DIMENSION_UDF_DEPTH = 5,
+    /**
+     * Demand-paged pages.
+     */
+    PURRDF_RESOURCE_DIMENSION_PAGES = 6,
+    /**
+     * Demand-paged bytes.
+     */
+    PURRDF_RESOURCE_DIMENSION_BYTES = 7,
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum PurrdfResourceDimension PurrdfResourceDimension;
+#else
+typedef int32_t PurrdfResourceDimension;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+
+/**
+ * Stable C discriminants for the shape of a tripped governor.
+ */
+enum PurrdfGovernorTripKind
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : int32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+    /**
+     * No governor tripped.
+     */
+    PURRDF_GOVERNOR_TRIP_KIND_NONE = 0,
+    /**
+     * An observed resource ceiling was exceeded.
+     */
+    PURRDF_GOVERNOR_TRIP_KIND_BUDGET = 1,
+    /**
+     * A cancellation or deadline fired.
+     */
+    PURRDF_GOVERNOR_TRIP_KIND_STOPPED = 2,
+    /**
+     * Admission rejected a plan estimate before evaluation.
+     */
+    PURRDF_GOVERNOR_TRIP_KIND_REFUSED = 3,
+    /**
+     * A future kernel trip this ABI version cannot decode.
+     */
+    PURRDF_GOVERNOR_TRIP_KIND_UNKNOWN = 4,
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum PurrdfGovernorTripKind PurrdfGovernorTripKind;
+#else
+typedef int32_t PurrdfGovernorTripKind;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+
+/**
+ * Stable C discriminants for stop causes.
+ */
+enum PurrdfStopCause
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : int32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+    /**
+     * No stop signal fired.
+     */
+    PURRDF_STOP_CAUSE_NONE = 0,
+    /**
+     * Explicit cancellation.
+     */
+    PURRDF_STOP_CAUSE_CANCELLED = 1,
+    /**
+     * Wall deadline expired.
+     */
+    PURRDF_STOP_CAUSE_DEADLINE = 2,
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum PurrdfStopCause PurrdfStopCause;
+#else
+typedef int32_t PurrdfStopCause;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+
+/**
+ * The outcome discriminant written by [`purrdf_query_governed`].
+ */
+enum PurrdfQueryOutcomeKind
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : int32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+    /**
+     * The query completed and the returned result is exhaustive.
+     */
+    PURRDF_QUERY_OUTCOME_KIND_COMPLETE = 0,
+    /**
+     * A governor stopped the query; consult the partial certificate and evidence.
+     */
+    PURRDF_QUERY_OUTCOME_KIND_BUDGET_EXHAUSTED = 1,
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum PurrdfQueryOutcomeKind PurrdfQueryOutcomeKind;
+#else
+typedef int32_t PurrdfQueryOutcomeKind;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+
+/**
+ * The two-phase outcome discriminant written by [`purrdf_query_entailment_governed`].
+ */
+enum PurrdfEntailmentQueryOutcomeKind
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : int32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+    /**
+     * Closure and query both completed.
+     */
+    PURRDF_ENTAILMENT_QUERY_OUTCOME_KIND_COMPLETE = 0,
+    /**
+     * Closure completed, but a query governor tripped; partial certificate is available.
+     */
+    PURRDF_ENTAILMENT_QUERY_OUTCOME_KIND_QUERY_BUDGET_EXHAUSTED = 1,
+    /**
+     * A cancellation/deadline stopped closure; no query ran and no report exists.
+     */
+    PURRDF_ENTAILMENT_QUERY_OUTCOME_KIND_CLOSURE_STOPPED = 2,
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum PurrdfEntailmentQueryOutcomeKind PurrdfEntailmentQueryOutcomeKind;
+#else
+typedef int32_t PurrdfEntailmentQueryOutcomeKind;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+
+/**
+ * The outcome discriminant written by [`purrdf_update_governed`].
+ */
+enum PurrdfUpdateOutcomeKind
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : int32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+    /**
+     * The entire request applied.
+     */
+    PURRDF_UPDATE_OUTCOME_KIND_APPLIED = 0,
+    /**
+     * A governor stopped the request and no mutation applied.
+     */
+    PURRDF_UPDATE_OUTCOME_KIND_BUDGET_EXHAUSTED = 1,
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum PurrdfUpdateOutcomeKind PurrdfUpdateOutcomeKind;
+#else
+typedef int32_t PurrdfUpdateOutcomeKind;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+
+/**
+ * What a governed query's partial result certifies.
+ */
+enum PurrdfPartialKind
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : int32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+    /**
+     * A complete query has no partial certificate.
+     */
+    PURRDF_PARTIAL_KIND_NONE = 0,
+    /**
+     * Every returned item is certainly an answer; more may exist.
+     */
+    PURRDF_PARTIAL_KIND_CERTAIN = 1,
+    /**
+     * Every true answer is in the returned result; some returned items may be extra.
+     */
+    PURRDF_PARTIAL_KIND_AT_MOST = 2,
+    /**
+     * No sound bound survived; no result item crosses the ABI.
+     */
+    PURRDF_PARTIAL_KIND_UNKNOWN = 3,
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum PurrdfPartialKind PurrdfPartialKind;
+#else
+typedef int32_t PurrdfPartialKind;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+
+/**
  * An owned byte buffer. Opaque to C; read via `purrdf_buffer_data`, release
  * with `purrdf_buffer_free`.
  */
 typedef struct PurrdfBuffer PurrdfBuffer;
+
+/**
+ * A shareable, monotone cancellation handle. Create one per cancellation lifetime.
+ */
+typedef struct PurrdfCancellation PurrdfCancellation;
 
 /**
  * A pattern-quad cursor. It holds an `Arc<RdfDataset>` clone (`pin`) so the
@@ -364,6 +672,180 @@ typedef struct {
      */
     PurrdfTermView name;
 } PurrdfGraphMatch;
+
+/**
+ * Caller-supplied governors for one C-ABI query or UPDATE call.
+ *
+ * Set the corresponding [`PurrdfGovernorFlag`] bit in `enabled` for every field that is
+ * meaningful. Zero is a valid inclusive ceiling. Unset numeric fields are ignored, and
+ * every governed call still meters them at the native `METERED` ceiling so its evidence
+ * is useful. `reserved` must be zero. `cancellation`, when enabled, must remain a live
+ * handle until the synchronous call returns.
+ */
+typedef struct {
+    /**
+     * OR-ed [`PurrdfGovernorFlag`] values.
+     */
+    uint32_t enabled;
+    /**
+     * Reserved for ABI-compatible extension; must be zero.
+     */
+    uint32_t reserved;
+    /**
+     * Inclusive fuel ceiling.
+     */
+    uint64_t fuel;
+    /**
+     * Inclusive query-answer ceiling.
+     */
+    uint64_t max_answers;
+    /**
+     * Inclusive peak intermediate-cell ceiling.
+     */
+    uint64_t max_intermediate_cells;
+    /**
+     * Inclusive scratch-byte ceiling.
+     */
+    uint64_t max_scratch_bytes;
+    /**
+     * Inclusive remote-request ceiling.
+     */
+    uint64_t max_remote_requests;
+    /**
+     * Relative wall-clock budget in milliseconds.
+     */
+    uint64_t deadline_millis;
+    /**
+     * Optional shareable cancellation handle.
+     */
+    const PurrdfCancellation *cancellation;
+} PurrdfQueryGovernors;
+
+/**
+ * A fixed, named C representation of the kernel's eight-dimensional resource vector.
+ */
+typedef struct {
+    /**
+     * Fuel units.
+     */
+    uint64_t fuel;
+    /**
+     * Final answer units.
+     */
+    uint64_t answer_rows;
+    /**
+     * Peak intermediate cells.
+     */
+    uint64_t intermediate_cells;
+    /**
+     * Scratch bytes.
+     */
+    uint64_t scratch_bytes;
+    /**
+     * Remote requests.
+     */
+    uint64_t remote_requests;
+    /**
+     * UDF recursion depth.
+     */
+    uint64_t udf_depth;
+    /**
+     * Demand-paged pages.
+     */
+    uint64_t pages;
+    /**
+     * Demand-paged bytes.
+     */
+    uint64_t bytes;
+} PurrdfResourceVector;
+
+/**
+ * Typed details of the governor that stopped an execution.
+ */
+typedef struct {
+    /**
+     * [`PurrdfGovernorTripKind`] discriminant.
+     */
+    int32_t kind;
+    /**
+     * [`PurrdfResourceDimension`] discriminant, or `-1` for a stop/none/unknown.
+     */
+    int32_t dimension;
+    /**
+     * [`PurrdfStopCause`] discriminant.
+     */
+    int32_t stop_cause;
+    /**
+     * Inclusive ceiling for a budget/refusal; zero otherwise.
+     */
+    uint64_t limit;
+    /**
+     * Observed consumption for a budget trip; zero otherwise.
+     */
+    uint64_t consumed;
+    /**
+     * Planner estimate for an admission refusal; zero otherwise.
+     */
+    uint64_t estimate;
+} PurrdfGovernorTrip;
+
+/**
+ * One governed execution's deterministic accounting receipt.
+ */
+typedef struct {
+    /**
+     * Consumption charged per dimension.
+     */
+    PurrdfResourceVector consumed;
+    /**
+     * Ceilings in force per dimension.
+     */
+    PurrdfResourceVector limits;
+    /**
+     * The terminal trip, or `kind == NONE` on completion.
+     */
+    PurrdfGovernorTrip trip;
+} PurrdfGovernorEvidence;
+
+/**
+ * The certificate paired with a governed query result.
+ */
+typedef struct {
+    /**
+     * [`PurrdfPartialKind`] discriminant.
+     */
+    int32_t kind;
+    /**
+     * `1` when the returned items are the true output's ordered prefix.
+     */
+    uint8_t positional_prefix;
+    /**
+     * Operator label when `kind == UNKNOWN`; process-lifetime borrowed UTF-8 otherwise empty.
+     */
+    PurrdfStr barrier;
+} PurrdfPartialCertificate;
+
+/**
+ * Evidence for both phases of a governed entailment-aware query.
+ */
+typedef struct {
+    /**
+     * `1` when closure completed and phase two ran; `0` on closure stop.
+     */
+    uint8_t query_ran;
+    /**
+     * Reserved for ABI-compatible extension; always zero in ABI 0.3.
+     */
+    uint8_t reserved[7];
+    /**
+     * Phase-two evidence, or an all-zero carrier when `query_ran == 0`.
+     */
+    PurrdfGovernorEvidence query;
+    /**
+     * Closure-phase stop, or `kind == NONE` when closure completed.
+     */
+    PurrdfGovernorTrip closure_trip;
+} PurrdfGovernedEntailmentEvidence;
 
 /**
  * The SemVer ABI version reported by `purrdf_abi_version`.
@@ -1164,6 +1646,47 @@ const char *purrdf_error_message(const PurrdfError *err);
 void purrdf_error_free(PurrdfError *err);
 
 /**
+ * Initialize `*out` as a metered governed call with no finite caller ceiling.
+ *
+ * # Safety
+ * `out` must be writable.
+ */
+int32_t purrdf_query_governors_init(PurrdfQueryGovernors *out);
+
+/**
+ * Allocate a fresh, uncancelled handle in `*out`.
+ *
+ * # Safety
+ * `out` must be writable.
+ */
+int32_t purrdf_cancellation_new(PurrdfCancellation **out);
+
+/**
+ * Latch `cancellation`. Idempotent and safe to call from another thread.
+ *
+ * # Safety
+ * `cancellation` must be a live handle.
+ */
+int32_t purrdf_cancellation_cancel(const PurrdfCancellation *cancellation);
+
+/**
+ * Write `1` when `cancellation` has latched, otherwise `0`.
+ *
+ * # Safety
+ * `cancellation` must be live and `out` writable.
+ */
+int32_t purrdf_cancellation_is_cancelled(const PurrdfCancellation *cancellation, uint8_t *out);
+
+/**
+ * Release a cancellation handle. No-op on null.
+ *
+ * # Safety
+ * `cancellation` must be null or a live handle not already freed. A handle referenced by
+ * an active governed call must remain live until that call returns.
+ */
+void purrdf_cancellation_free(PurrdfCancellation *cancellation);
+
+/**
  * Branch a single-threaded mutable COW graph off a frozen dataset. `*out_graph`
  * is a caller-owned handle (free with `purrdf_graph_free`); the source dataset
  * is unaffected and may be freed independently.
@@ -1407,6 +1930,86 @@ int32_t purrdf_query_json(const PurrdfDataset *dataset,
                           const char *base_iri,
                           PurrdfBuffer **out_buffer,
                           PurrdfError **out_error);
+
+/**
+ * Execute a SPARQL query under caller-supplied governors.
+ *
+ * `*out_outcome` is a [`PurrdfQueryOutcomeKind`]. A complete outcome writes the ordinary
+ * typed result and `partial.kind == NONE`. An exhausted outcome is still status `OK`:
+ * `*out_evidence` names the trip, and `*out_partial` says whether the typed result is a
+ * certain lower bound, an at-most upper bound, or withheld (`UNKNOWN`, `out_kind == -1`).
+ * Result kinds retain `purrdf_query`'s `0` solutions / `1` graph / `2` boolean values.
+ *
+ * # Safety
+ * `dataset`, `query`, and `governors` must remain live for the call. `out_outcome`,
+ * `out_kind`, `out_evidence`, and `out_partial` must be writable. The shape-specific
+ * result pointer must be writable when that shape is returned. Any enabled cancellation
+ * handle must remain live until the call returns.
+ */
+int32_t purrdf_query_governed(const PurrdfDataset *dataset,
+                              const char *query,
+                              const char *base_iri,
+                              const PurrdfQueryGovernors *governors,
+                              int32_t *out_outcome,
+                              int32_t *out_kind,
+                              PurrdfRowCursor **out_rows,
+                              PurrdfDataset **out_graph,
+                              uint8_t *out_boolean,
+                              PurrdfGovernorEvidence *out_evidence,
+                              PurrdfPartialCertificate *out_partial,
+                              PurrdfError **out_error);
+
+/**
+ * Execute SPARQL over an explicitly named entailment closure under governors.
+ *
+ * `regime` uses the shared spellings (`simple`, `rdf`, `rdfs`, `owl-rl`,
+ * `owl-direct`, `rif`, `d`). `program` must be empty except for `rif`, where it is the
+ * required RIF-in-XML document. On `COMPLETE` or `QUERY_BUDGET_EXHAUSTED`,
+ * `*out_report` owns a byte-stable reasoning report (free with `purrdf_buffer_free`) and
+ * the ordinary result/partial carriers describe phase two. On `CLOSURE_STOPPED`, no
+ * query ran: result kind is `-1`, report is null, and `closure_trip` names the stop.
+ *
+ * # Safety
+ * All input strings and handles must remain live for the synchronous call. Required
+ * out-pointers must be writable; any enabled cancellation handle must remain live until
+ * return. Shape-specific result pointers are required when that shape is returned.
+ */
+int32_t purrdf_query_entailment_governed(const PurrdfDataset *dataset,
+                                         const char *query,
+                                         const char *base_iri,
+                                         const char *regime,
+                                         const char *program,
+                                         const PurrdfQueryGovernors *governors,
+                                         int32_t *out_outcome,
+                                         int32_t *out_kind,
+                                         PurrdfRowCursor **out_rows,
+                                         PurrdfDataset **out_graph,
+                                         uint8_t *out_boolean,
+                                         PurrdfGovernedEntailmentEvidence *out_evidence,
+                                         PurrdfPartialCertificate *out_partial,
+                                         PurrdfBuffer **out_report,
+                                         PurrdfError **out_error);
+
+/**
+ * Apply one SPARQL UPDATE request under caller-supplied governors.
+ *
+ * `*out_outcome` is a [`PurrdfUpdateOutcomeKind`]. On `APPLIED`, the dataset handle now
+ * owns the new frozen snapshot. On `BUDGET_EXHAUSTED`, the handle retains the exact same
+ * `Arc` and no mutation applied. Both outcomes return status `OK` plus evidence. An
+ * enabled `MAX_ANSWERS` flag is invalid because UPDATE has no answer sequence.
+ *
+ * # Safety
+ * `dataset` must be a live, exclusively borrowed handle; `request` a NUL-terminated C
+ * string; `governors` live for the call; and both output pointers writable. Any enabled
+ * cancellation handle must remain live until the call returns.
+ */
+int32_t purrdf_update_governed(PurrdfDataset *dataset,
+                               const char *request,
+                               const char *base_iri,
+                               const PurrdfQueryGovernors *governors,
+                               int32_t *out_outcome,
+                               PurrdfGovernorEvidence *out_evidence,
+                               PurrdfError **out_error);
 
 /**
  * Write the number of result variables (columns) to `*out`.

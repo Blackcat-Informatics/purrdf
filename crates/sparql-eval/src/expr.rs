@@ -38,7 +38,8 @@ use sha2::Digest; // brings the Digest trait in scope for all RustCrypto hash ca
 
 use crate::DetHashSet;
 use crate::error::EvalError;
-use crate::eval::{EvalCtx, eval};
+use crate::eval::{EvalCtx, eval_evaluated};
+use crate::governor::lift::{Evaluated, Lift, Truncation};
 use crate::scratch::SolutionTerm;
 use crate::solution::{SolutionSeq, VarSchema};
 
@@ -179,14 +180,39 @@ pub(crate) fn eval_ebv<D: DatasetView + Sync>(
 /// surviving rows are the ORIGINAL rows (never a value derived from the child's
 /// scratch), so each forked child's scratch is discarded after use — nothing to
 /// re-intern via [`crate::parallel::reintern_minted_row`].
+///
+/// # Under a truncated child
+///
+/// A `FILTER`'s own data child is prefix-monotone: the predicate is evaluated in full
+/// over every row that reaches it and no surviving row moves, so filtering a prefix
+/// yields a prefix. A truncation **inside an `EXISTS` in the predicate** is a different
+/// matter — it is an opaque edge, because a truncated `EXISTS` inner bag drops rows the
+/// true query keeps and a truncated `NOT EXISTS` inner bag fabricates rows outright — so
+/// the whole output is withheld and only the barrier crosses.
 pub(crate) fn eval_filter<D: DatasetView + Sync>(
+    node: &GraphPattern,
     expr: &Expression,
     inner: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<SolutionSeq<D::Id>, EvalError> {
-    let seq = eval(inner, ctx)?;
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let mut lift = Lift::at(node);
+    let Some(mut seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
+        return Ok(lift.withheld());
+    };
     let schema = seq.schema.clone();
-    let rows = if crate::parallel::is_parallel_safe(expr, ctx.user_functions) {
+    // The `row-expression-evaluation` charge point, charged **per row** rather than per
+    // sub-expression so that the cost of a `FILTER` is a property of the data it sees
+    // and not of how the planner happened to shape the predicate. Charged before the
+    // predicate runs and against the rows in source order, so the admitted set is a
+    // positional prefix and the refused rows are never evaluated at all — a governor
+    // that only reported the cost after paying it would bound nothing. The trip itself
+    // is latched in the governor state, which is where `eval` reads it to certify this
+    // node's output.
+    let _ = ctx.admit_rows(
+        &mut seq.rows,
+        crate::governor::ChargePoint::RowExpressionEvaluation,
+    );
+    let rows = if ctx.may_fork_row_loop(expr) {
         crate::parallel::par_chunk_try_map_init(
             &seq.rows,
             || ctx.fork_for_worker(),
@@ -206,7 +232,14 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
         }
         rows
     };
-    Ok(SolutionSeq { schema, rows })
+    if let Some(tripped) = ctx.expression_barrier.observed() {
+        return Ok(Evaluated::Truncated(Truncation::barred_at(
+            node,
+            tripped,
+            schema.clone(),
+        )));
+    }
+    Ok(lift.finish(SolutionSeq { schema, rows }))
 }
 
 /// `Extend(inner, var, expr)` (BIND): add `var` bound to `expr`'s value for each
@@ -220,18 +253,34 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
 /// function re-interns each portable row against `ctx.scratch` afterwards, in
 /// source-index order, via [`crate::parallel::reintern_portable_row`].
 pub(crate) fn eval_extend<D: DatasetView + Sync>(
+    node: &GraphPattern,
     inner: &GraphPattern,
     var: &Variable,
     expr: &Expression,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<SolutionSeq<D::Id>, EvalError> {
-    let seq = eval(inner, ctx)?;
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let mut lift = Lift::at(node);
+    let Some(mut seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
+        let mut schema = lift.absorbed_schema().map_or_else(
+            || (*crate::eval::syntactic_schema(inner)).clone(),
+            |s| (*s).clone(),
+        );
+        schema.push(var.clone());
+        return Ok(lift.finish(SolutionSeq::empty(Arc::new(schema))));
+    };
+    // The `row-expression-evaluation` charge point; see `eval_filter` for why it is per
+    // row rather than per sub-expression, and why the refused rows are cut before the
+    // expression runs rather than after.
+    let _ = ctx.admit_rows(
+        &mut seq.rows,
+        crate::governor::ChargePoint::RowExpressionEvaluation,
+    );
     let mut schema = (*seq.schema).clone();
     let col = schema.push(var.clone());
     let width = schema.len();
     let schema = Arc::new(schema);
 
-    let rows = if crate::parallel::is_parallel_safe(expr, ctx.user_functions) {
+    let rows = if ctx.may_fork_row_loop(expr) {
         // Parallel path: `is_parallel_safe` excludes `BNODE` (every arity), so the
         // per-solution `BNODE(strExpr)` memo (`ctx.current_row`/`ctx.bnode_memo`) is
         // never observed here — no per-row `current_row` bookkeeping is needed.
@@ -267,7 +316,15 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
         }
         rows
     };
-    Ok(SolutionSeq { schema, rows })
+    // An `EXISTS` inside the bound expression is an opaque edge; see `eval_filter`.
+    if let Some(tripped) = ctx.expression_barrier.observed() {
+        return Ok(Evaluated::Truncated(Truncation::barred_at(
+            node,
+            tripped,
+            schema.clone(),
+        )));
+    }
+    Ok(lift.finish(SolutionSeq { schema, rows }))
 }
 
 // ---------------------------------------------------------------------------
@@ -915,10 +972,19 @@ fn exists<D: DatasetView + Sync>(
         // correctly.
         let prev_in_substituted_exists = ctx.in_substituted_exists;
         ctx.in_substituted_exists = true;
-        let inner = eval(&substituted, ctx);
+        let inner = eval_evaluated(&substituted, ctx);
         ctx.in_substituted_exists = prev_in_substituted_exists;
         let inner = inner?;
-        Ok(!inner.is_empty())
+        if let Evaluated::Truncated(truncation) = &inner {
+            // A truncated `EXISTS` inner bag can only turn its boolean from true to
+            // false, and a truncated `NOT EXISTS` one from false to true — a fabricated
+            // row. Neither is a bound, so the trip is reported to the enclosing operator,
+            // which withholds its whole output. The boolean returned here is therefore
+            // never observed in any row that reaches a caller.
+            ctx.expression_barrier.record(truncation.tripped());
+            return Ok(false);
+        }
+        Ok(!inner.rows().is_empty())
     } else {
         // Fast memoized path: the inner pattern result is independent of the outer
         // row's values in expression contexts, so evaluate it — and build the probe
@@ -944,7 +1010,19 @@ fn exists<D: DatasetView + Sync>(
         let entry = match cached {
             Some(entry) => entry,
             None => {
-                let inner = Arc::new(eval(pattern, ctx)?);
+                let evaluated = eval_evaluated(pattern, ctx)?;
+                if let Evaluated::Truncated(truncation) = &evaluated {
+                    // Never memoized: a truncated inner bag cached under this site's key
+                    // would make every subsequent probe — including one under a larger budget
+                    // in the same query — read a bag that is not the inner pattern's
+                    // answer. See the correlated branch above for why the boolean is
+                    // irrelevant once the barrier is recorded.
+                    ctx.expression_barrier.record(truncation.tripped());
+                    return Ok(false);
+                }
+                let inner = Arc::new(evaluated.into_complete().unwrap_or_else(|_| {
+                    unreachable!("a non-truncated result is complete by construction")
+                }));
                 // `shared` is computed against the FULL outer schema (not just the
                 // row's bound vars), so one index serves every row: an outer var
                 // unbound in a given row is `None` in the probe and matches anything
@@ -2792,6 +2870,7 @@ fn make_uuid<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>) -> (String, [u8; 1
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::eval::eval;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder};
     use purrdf_sparql_algebra::{Literal, NamedNode};
 
@@ -3705,7 +3784,7 @@ mod tests {
         //
         // Driven directly via `eval`/`eval_ebv` on ONE shared `ctx`, rather than
         // through `evaluate_query`'s FILTER node: this EXISTS reaches no unsafe
-        // builtin, so (Task 5) `eval_filter` routes it through
+        // builtin, so `eval_filter` routes it through
         // `crate::parallel::par_chunk_try_map_init`, which runs the per-row loop on a
         // FORKED child context — the memo would land on that (discarded-after-use)
         // child, not on a `ctx` inspected from outside `evaluate_query`. This
@@ -3834,9 +3913,9 @@ mod tests {
         //
         // Driven directly via `eval`/`eval_ebv` on ONE shared `ctx` rather than
         // through `evaluate_query`'s FILTER node — see
-        // `exists_memo_populates_cache_once`'s comment: Task 5 routes this
-        // parallel-safe FILTER through a forked child context, so the memo would
-        // land there, not on a `ctx` inspected from outside `evaluate_query`.
+        // `exists_memo_populates_cache_once`'s comment: a parallel-safe FILTER is
+        // routed through a forked child context, so the memo would land there, not
+        // on a `ctx` inspected from outside `evaluate_query`.
         use purrdf_sparql_algebra::{
             NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
         };
@@ -3869,6 +3948,185 @@ mod tests {
             ctx.exists_inner_cache.len(),
             1,
             "uncorrelated EXISTS must still populate the memo cache"
+        );
+    }
+
+    // ── EXISTS memo under a governor trip ─────────────────────────────────────
+    //
+    // The memo holds ROW DATA keyed by the inner pattern's address, and a forked worker
+    // inherits a clone of it. A bag the budget cut short, memoized under that key, is
+    // read back by each subsequent probe as though it were the inner pattern's answer:
+    // `EXISTS` then reports `false` where the answer is `true`, and `NOT EXISTS` — which
+    // is where it really bites — reports `true`, FABRICATING an outer row that the true
+    // answer does not contain. A missing row is a bound; an invented one is not.
+
+    /// Four outer subjects, each with one `:knows` edge, of which two (`s1`, `s3`) also
+    /// have a `:member` triple. `EXISTS { ?s :member ?c }` is therefore true for half the
+    /// outer rows and false for the other half, so a memo poisoned with an empty or short
+    /// inner bag changes the answer instead of merely shortening it.
+    fn exists_governor_ds() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let knows = b.intern_iri("http://example.org/knows");
+        let member = b.intern_iri("http://example.org/member");
+        let club = b.intern_iri("http://example.org/club");
+        for i in 1..=4 {
+            let s = b.intern_iri(&format!("http://example.org/s{i}"));
+            let o = b.intern_iri(&format!("http://example.org/o{i}"));
+            b.push_quad(s, knows, o, None);
+            if i % 2 == 1 {
+                b.push_quad(s, member, club, None);
+            }
+        }
+        b.freeze().expect("freeze")
+    }
+
+    /// `{ ?s :knows ?o }` and `{ ?s :member ?c }` — the outer pattern and the `EXISTS`
+    /// inner pattern over [`exists_governor_ds`]. They share `?s` in a triple-pattern
+    /// position (never in an expression), so `exists` takes the memoized fast path and
+    /// probes the shared index — the path that owns the cache under test.
+    fn exists_governor_patterns() -> (GraphPattern, GraphPattern) {
+        use purrdf_sparql_algebra::{NamedNodePattern, TermPattern, TriplePattern};
+        let vp = |n: &str| TermPattern::Variable(Variable::new(n));
+        let pred = |iri: &str| NamedNodePattern::NamedNode(NamedNode::new_unchecked(iri));
+        let bgp = |s, p, o| GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: s,
+                predicate: p,
+                object: o,
+            }],
+        };
+        (
+            bgp(vp("s"), pred("http://example.org/knows"), vp("o")),
+            bgp(vp("s"), pred("http://example.org/member"), vp("c")),
+        )
+    }
+
+    #[test]
+    fn a_truncated_exists_inner_is_never_memoized() {
+        use crate::eval::eval_evaluated;
+        use crate::governor::lift::Evaluated;
+
+        let ds = exists_governor_ds();
+        let (outer, inner) = exists_governor_patterns();
+
+        // The inner pattern's true, complete bag — the only bag the memo may ever hold.
+        let mut reference_ctx = EvalCtx::new(&ds);
+        let reference = eval(&inner, &mut reference_ctx).expect("inner");
+        assert!(
+            !reference.rows.is_empty(),
+            "the fixture must match the inner"
+        );
+
+        let exists_expr = Expression::Exists(Box::new(inner));
+        let mut saw_truncated_inner = false;
+        let mut saw_memo = false;
+
+        // Sweep the budget rather than tuning one number to the current charge schedule:
+        // the point is that NO budget can leave a short bag in the memo, and a swept
+        // budget keeps proving that when the schedule moves.
+        for fuel in 1..=64_u64 {
+            let governors = crate::QueryGovernors::UNBOUNDED.with_fuel(fuel);
+            let state = Arc::new(crate::GovernorState::new(&governors));
+            let mut ctx = EvalCtx::new(&ds).with_governors(Arc::clone(&state));
+
+            let outer_rows = match eval_evaluated(&outer, &mut ctx).expect("outer") {
+                Evaluated::Complete(seq) => seq,
+                Evaluated::Truncated(truncation) => truncation.split().0,
+            };
+            for row in &outer_rows.rows {
+                eval_ebv(&exists_expr, row, &outer_rows.schema, &mut ctx).expect("ebv");
+            }
+
+            if ctx.expression_barrier.observed().is_some() {
+                // The inner was cut short at this budget: nothing may have been written
+                // under the site's key, so the next probe re-evaluates instead of reading
+                // a bag that is not the inner pattern's answer.
+                saw_truncated_inner = true;
+                assert!(
+                    ctx.exists_inner_cache.is_empty(),
+                    "fuel {fuel}: a truncated EXISTS inner was memoized"
+                );
+            }
+            for entry in ctx.exists_inner_cache.values() {
+                saw_memo = true;
+                assert_eq!(
+                    entry.inner.rows, reference.rows,
+                    "fuel {fuel}: a memoized EXISTS inner must be the complete inner bag"
+                );
+            }
+        }
+
+        assert!(
+            saw_truncated_inner,
+            "no budget in the sweep stopped the execution inside the EXISTS inner, so \
+             the test proves nothing about a truncated one"
+        );
+        assert!(
+            saw_memo,
+            "no budget in the sweep let the inner complete and populate the memo, so the \
+             test would also pass against an evaluator that never memoizes at all"
+        );
+    }
+
+    #[test]
+    fn a_truncated_subtree_cannot_poison_a_later_evaluation() {
+        use crate::eval::eval_evaluated;
+        use crate::governor::lift::Evaluated;
+
+        // Every governor latches: fuel and the cell/scratch counters only ever rise, and
+        // a stop signal that has fired keeps firing, so once an execution has tripped it
+        // stays tripped and there is no "and now a clean subtree" left INSIDE that
+        // execution. The poisoning question therefore has to be asked across executions,
+        // of everything a tripped one can write into and a later one can read: the plan
+        // (the same value, so every address-keyed memo sees the same keys), the dataset,
+        // and the engine-lived BGP join-order cache. Anything per-execution is discarded
+        // with the context; anything that is not, this test reaches.
+        let ds = exists_governor_ds();
+        let (outer, inner) = exists_governor_patterns();
+        let plan = GraphPattern::Filter {
+            expr: Expression::Not(Box::new(Expression::Exists(Box::new(inner)))),
+            inner: Box::new(outer),
+        };
+        let order_cache = crate::eval::BgpOrderCache::default();
+
+        // `NOT EXISTS` keeps exactly the outer rows whose subject has no `:member`. A
+        // short inner bag makes the negation true for rows it is false for, so poisoning
+        // shows up here as EXTRA rows — the failure mode a subset-only certificate cannot
+        // rule out and this assertion can.
+        let mut baseline_ctx = EvalCtx::new(&ds);
+        let baseline = eval(&plan, &mut baseline_ctx).expect("ungoverned");
+        assert_eq!(
+            baseline.rows.len(),
+            2,
+            "the fixture must keep exactly the two subjects without :member"
+        );
+
+        let mut saw_trip = false;
+        for fuel in 1..=80_u64 {
+            let governors = crate::QueryGovernors::UNBOUNDED.with_fuel(fuel);
+            let state = Arc::new(crate::GovernorState::new(&governors));
+            {
+                let mut governed = EvalCtx::new(&ds)
+                    .with_order_cache(&order_cache)
+                    .with_governors(Arc::clone(&state));
+                saw_trip |= matches!(
+                    eval_evaluated(&plan, &mut governed).expect("governed"),
+                    Evaluated::Truncated(_)
+                );
+            }
+
+            let mut after = EvalCtx::new(&ds).with_order_cache(&order_cache);
+            let again = eval(&plan, &mut after).expect("after the tripped run");
+            assert_eq!(
+                again.rows, baseline.rows,
+                "fuel {fuel}: an execution stopped by a governor changed what a later, \
+                 ungoverned execution of the same plan answered"
+            );
+        }
+        assert!(
+            saw_trip,
+            "no budget in the sweep stopped the execution, so no truncated subtree was \
+             ever produced to poison anything"
         );
     }
 
@@ -4172,7 +4430,7 @@ mod tests {
         );
     }
 
-    /// Determinism smoke test (Task 6): a chained `BIND` — `BIND(?o + 5 AS ?sum)`
+    /// Determinism smoke test: a chained `BIND` — `BIND(?o + 5 AS ?sum)`
     /// then `BIND(CONCAT("v-", STR(?sum)) AS ?label)` over three rows — mints both
     /// a NUMERIC (`?sum`) and a STRING (`?label`) `Computed` term per row, each of
     /// which must escape a forked child via [`crate::parallel::portable_row`]/

@@ -41,6 +41,7 @@ use crate::convert::{ground_term_pattern_to_value, named_node_to_value};
 use crate::dataset_spec::{ActiveDataset, GraphScope};
 use crate::error::EvalError;
 use crate::eval::{BgpOrderCache, EvalCtx};
+use crate::governor::ledger::PlanEstimate;
 use crate::scratch::SolutionTerm;
 use crate::solution::{Solution, SolutionSeq, VarSchema};
 use std::sync::Arc;
@@ -86,6 +87,13 @@ struct CompiledPattern<I: ViewTermId = TermId> {
 
 /// Evaluate a basic graph pattern to a multiset of solutions over its real
 /// (non-blank) variables.
+/// # A leaf of the partial-lift channel
+///
+/// A basic graph pattern has no sub-pattern, so there is no child truncation to compose:
+/// it is where a truncation ORIGINATES rather than somewhere one passes through. The
+/// dispatch in [`crate::eval::eval`] therefore wraps this result directly, and this
+/// function keeps its `&EvalCtx` (shared, not exclusive) borrow — the property that lets
+/// a parallel worker call it from a shared context.
 pub(crate) fn eval_bgp<D: DatasetView + Sync>(
     patterns: &[TriplePattern],
     ctx: &EvalCtx<'_, D>,
@@ -141,9 +149,42 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
         .dataset
         .term_id_by_value(&purrdf_core::TermValue::Iri(RDF_REIFIES.to_owned()));
 
-    // Index-nested-loop evaluation. Rows start as a single all-unbound solution.
+    // Whether this execution charges fuel at all. Read once, outside the pattern loop:
+    // an ungoverned run (and a run whose caller set only a deadline or only an answer
+    // cap) answers `false` here and allocates no charge ledger, so the index-nested-loop
+    // below is byte-for-byte the loop it was before governors existed.
+    let metered = ctx
+        .governor_state()
+        .is_some_and(|state| state.is_engaged_in(purrdf_core::ResourceDimension::Fuel));
+    // A latching stop signal is inherently a sequential observation boundary. Keeping
+    // this scan on one worker makes the rows accepted before the firing poll a genuine
+    // source-order prefix instead of a scheduling-dependent mixture of later chunks.
+    let stop_observable = ctx.stop_signal().is_some();
+
+    // The answer-cap / `LIMIT` pushdown's verdict for this BGP: the number of output rows
+    // past which nothing this node produces can reach the query's answer. `None` is every
+    // BGP the plan did not license a ceiling for, and costs one hash probe.
+    //
+    // It is applied to the **last** pattern of the join order and to no other, because
+    // only there are the loop's accumulated rows this node's OUTPUT rows. Cutting an
+    // earlier stage would cut *intermediate* rows, and an intermediate row that a later
+    // pattern fails to extend contributes no output row at all — so `k` intermediates can
+    // yield fewer than `k` answers, and the query would report a short answer as a
+    // complete one. The last stage has no such gap: its rows are the answer rows, in
+    // order, so stopping at `k` of them yields exactly the first `k`.
+    let ceiling = ctx.row_ceiling();
+    let last_stage = order.len().saturating_sub(1);
+
+    // Index-nested-loop evaluation. Rows start as a single all-unbound solution. That
+    // seed is itself a working-width intermediate row, so a ceiling narrower than one row
+    // refuses it before the `SmallVec` is allocated.
+    let cell_ceiling = ctx.cell_row_ceiling(working.len());
+    if cell_ceiling == Some(0) {
+        let _ = ctx.observe_cells(1, working.len());
+        return Ok(empty_over_real_vars(&working));
+    }
     let mut rows: Vec<Solution<D::Id>> = vec![smallvec::smallvec![None; working.len()]];
-    for &i in order.iter() {
+    for (stage, &i) in order.iter().enumerate() {
         let cp = &compiled[i];
         // The probe's bound-axis shape is fixed across this slot's rows (a variable is
         // bound by an earlier pattern for every row or for none), so the permutation
@@ -160,7 +201,9 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
             )),
             GraphScope::Merge(_) => None,
         };
-        let next = crate::parallel::par_chunk_map(&rows, |acc, row| {
+        let expand = |acc: &mut crate::parallel::RowSink<'_, Solution<D::Id>>,
+                      fuel: &mut u64,
+                      row: &Solution<D::Id>| {
             let s = query_id(&cp.s, row);
             let p = query_id(&cp.p, row);
             let o = query_id(&cp.o, row);
@@ -170,8 +213,24 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
                 GraphScope::One(gm) => {
                     let plan = plan.expect("plan computed above for GraphScope::One");
                     for quad in ctx.dataset.quads_for_pattern_with_plan(&plan, s, p, o, *gm) {
+                        if ctx.stop_check().is_some() {
+                            return;
+                        }
+                        // The `bgp-candidate-quad` charge point: one unit per candidate
+                        // EXAMINED, not per candidate that binds. Charging only the ones
+                        // that bind would let the single most expensive shape in the
+                        // evaluator — a highly selective pattern scanned over a large
+                        // index — cost nothing at all.
+                        *fuel = fuel.saturating_add(1);
                         if let Some(extended) = bind_row(row, cp, &quad, ctx.dataset) {
                             acc.push(extended);
+                        }
+                        // The pushed row ceiling, applied INSIDE the scan. This is the
+                        // whole point of the pushdown: a `LIMIT 10` over a million-quad
+                        // store stops here, having examined eleven candidates, instead
+                        // of materialising a million rows for the root to discard.
+                        if acc.is_full() {
+                            return;
                         }
                     }
                     // The RDF 1.2 reification layer is a side-table outside `quads`, so
@@ -181,6 +240,10 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
                     // shows only when the scope admits the default graph (unchanged),
                     // and a `GRAPH :g`-scoped reifier shows only under that named graph.
                     emit_virtual_candidates(ctx.dataset, cp, s, p, o, reifies_id, *gm, |quad| {
+                        if acc.is_full() || ctx.stop_check().is_some() {
+                            return;
+                        }
+                        *fuel = fuel.saturating_add(1);
                         if let Some(extended) = bind_row(row, cp, &quad, ctx.dataset) {
                             acc.push(extended);
                         }
@@ -197,18 +260,102 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
                     let mut seen: DetHashSet<(D::Id, D::Id, D::Id)> = DetHashSet::default();
                     for &g in gs {
                         for quad in ctx.dataset.quads_for_pattern(s, p, o, GraphMatch::Named(g)) {
+                            if ctx.stop_check().is_some() {
+                                return;
+                            }
+                            *fuel = fuel.saturating_add(1);
                             if !seen.insert((quad.s, quad.p, quad.o)) {
                                 continue;
                             }
                             if let Some(extended) = bind_row(row, cp, &quad, ctx.dataset) {
                                 acc.push(extended);
                             }
+                            if acc.is_full() {
+                                return;
+                            }
                         }
                     }
                 }
             }
-        });
+        };
+        // The bounded driver is sequential; see `parallel::bounded_chunk_map_metered` for
+        // why a per-chunk ceiling would stop nothing. Every other stage — and every BGP
+        // with no ceiling at all — takes the parallel driver unchanged.
+        let semantic_ceiling = ceiling.filter(|_| stage == last_stage);
+        // A semantic ceiling (LIMIT or the answer-cap + 1 pushdown) may stop exactly at its
+        // bound: rows beyond it provably cannot affect the query. The allocation ceiling is
+        // different and inclusive, so it must probe for one more *qualifying* row before it
+        // can call an exactly-full bag truncated. When the semantic ceiling is tighter, it
+        // wins and no cell overflow exists to discover.
+        let cell_governs =
+            cell_ceiling.filter(|cell| semantic_ceiling.is_none_or(|semantic| *cell < semantic));
+        let (next, ledger, cell_overflowed) = if let Some(cell) = cell_governs {
+            crate::parallel::cell_bounded_chunk_map_metered(&rows, metered, cell, expand)
+        } else {
+            let effective_ceiling =
+                semantic_ceiling.or_else(|| stop_observable.then_some(usize::MAX));
+            let (next, ledger) = match effective_ceiling {
+                Some(ceiling) => {
+                    crate::parallel::bounded_chunk_map_metered(&rows, metered, ceiling, expand)
+                }
+                None => crate::parallel::par_chunk_map_metered(&rows, metered, expand),
+            };
+            (next, ledger, false)
+        };
         rows = next;
+        if cell_overflowed {
+            // The sink refused (and did not store) row `cell + 1`; record precisely that
+            // attempted peak. `commit_node_output` will wrap the retained prefix in the
+            // ordinary leaf-origin certificate.
+            let _ = ctx.observe_cells(rows.len().saturating_add(1), working.len());
+            if stage != last_stage {
+                // These are working rows waiting for a later triple pattern, not answers.
+                // Publishing them would leave that later pattern's variables unbound and
+                // certify rows the complete BGP never contains. The empty bag is the only
+                // sound lower bound when an internal stage is what crossed the ceiling;
+                // a final-stage cut, by contrast, is already a genuine answer prefix.
+                rows.clear();
+            }
+        }
+        // The ordered fold. Chunk workers accumulated their per-item charges with no
+        // atomics and nothing shared; this walks the concatenated ledger in source-item
+        // order on one thread, so the item at which the budget runs out is the same one
+        // whatever the worker count, chunk geometry, or scheduling was. The certified
+        // partial is the extension of the input rows strictly before that item — a
+        // positional prefix of what this pattern would have produced, which is what
+        // `eval` then wraps as the truncation's certificate.
+        //
+        // `GovernorState::should_abandon` is deliberately NOT consulted here, and not by
+        // the workers either. It is a `Relaxed` read, so what it reports depends on which
+        // thread asked and when — and a worker that stopped early on it would hand this
+        // fold a ledger missing the very entries the crossing sits among, making the
+        // reported trip point a function of scheduling. The honest consequence is stated
+        // rather than papered over: the actual work of one pattern expansion can overshoot
+        // the reported trip point by the remainder of that expansion. Reported work is
+        // exact; the overshoot is bounded by one pattern, and the next pattern never
+        // starts.
+        if let Some(state) = ctx.governor_state() {
+            if state.tripped().is_some() {
+                break;
+            } else if metered {
+                let crossing = state.commit_ordered_items(&ledger);
+                // The ledger line for this BGP node. The fold charged every item strictly
+                // before the crossing plus the crossing item itself (the charge is applied
+                // and then compared), so the same prefix is what is reported — the ledger
+                // records what the schedule spent, never what it would have spent.
+                let charged = crossing.map_or(ledger.len(), |(index, _, _)| index + 1);
+                ctx.note_fuel(
+                    crate::governor::ChargePoint::BgpCandidateQuad,
+                    ledger[..charged.min(ledger.len())]
+                        .iter()
+                        .fold(0_u64, |sum, item| sum.saturating_add(item.fuel)),
+                );
+                if let Some((_, committed, _)) = crossing {
+                    rows.truncate(usize::try_from(committed).unwrap_or(usize::MAX));
+                    break;
+                }
+            }
+        }
         if rows.is_empty() {
             break;
         }
@@ -1124,59 +1271,121 @@ fn literal_to_string(l: &Literal) -> String {
     }
 }
 
-/// Recursively walk `pattern`, compute the cost-based order for every BGP with at
-/// least two triple patterns, and append human-readable triple-pattern strings to
-/// `out` in the order the planner chose. Scope changes from `GRAPH` blocks are
-/// tracked so cardinality estimates use the right graph filter.
+/// What one planner-side walk of a query learns about it, without evaluating it: the
+/// join order the cost model chose for every BGP, and the cardinality that model
+/// predicted.
 ///
-/// This is a pure-introspection path: it does not evaluate the query, and it
-/// falls back to source order for BGPs whose constants are absent from the dataset
-/// (those BGPs are empty regardless of order).
-pub(crate) fn explain_pattern_orders<D: DatasetView>(
+/// Both halves come from one walk because both are read from the same probe of the
+/// dataset's statistics, and doing it twice would let the explained order and the refused
+/// estimate describe two different plans.
+#[derive(Debug, Default)]
+pub(crate) struct PlanSurvey {
+    /// Human-readable triple-pattern strings, in the order the planner chose, for every
+    /// BGP with at least two patterns. The historical `explain_query` output.
+    pub(crate) orders: Vec<String>,
+    /// The planner's prediction per BGP node, keyed by the node's address in the plan.
+    pub(crate) estimates: crate::DetHashMap<usize, PlanEstimate>,
+}
+
+impl PlanSurvey {
+    /// The largest predicted intermediate bag anywhere in the plan, in cells, together
+    /// with nothing else — this is the single number admission control compares against
+    /// the caller's intermediate-cardinality ceiling.
+    ///
+    /// A maximum rather than a sum, because that is what the ceiling itself is: it bounds
+    /// how large one operator's materialized bag may get, never how many bags a query may
+    /// build. Comparing a sum against a peak ceiling would refuse long, cheap queries and
+    /// admit the single catastrophic one.
+    pub(crate) fn peak_cells(&self) -> u64 {
+        self.estimates
+            .values()
+            .map(PlanEstimate::peak_cells)
+            .max()
+            .unwrap_or(0)
+    }
+}
+
+/// Recursively walk `pattern`, compute the cost-based order and cardinality estimate for
+/// every BGP, and record both into `survey`. Scope changes from `GRAPH` blocks are tracked
+/// so cardinality estimates use the right graph filter.
+///
+/// This is a pure-introspection path: it does not evaluate the query, and it falls back to
+/// source order for BGPs whose constants are absent from the dataset (those BGPs are empty
+/// regardless of order — and their estimate is zero, which is the truth).
+///
+/// The join-order **strings** are still only emitted for BGPs with at least two patterns,
+/// because a one-pattern BGP has no order to choose. The **estimate** is recorded for every
+/// BGP, one-pattern ones included: a single unconstrained triple pattern over a large store
+/// is exactly the shape a cardinality ceiling exists to refuse.
+pub(crate) fn survey_pattern_plans<D: DatasetView>(
     dataset: &D,
     active_dataset: &ActiveDataset<D::Id>,
     active_graph: GraphMatch<D::Id>,
     pattern: &GraphPattern,
-    out: &mut Vec<String>,
+    survey: &mut PlanSurvey,
 ) -> Result<(), EvalError> {
     match pattern {
         GraphPattern::Bgp { patterns } => {
-            if patterns.len() >= 2 {
-                let scope = active_dataset.scope_for(active_graph);
-                let mut working = VarSchema::new();
-                for pattern in patterns {
-                    for key in slot_keys(pattern) {
-                        working.push(key);
-                    }
-                }
-                let mut compiled = Vec::with_capacity(patterns.len());
-                let mut any_absent = false;
-                for pattern in patterns {
-                    match compile_pattern(pattern, &working, dataset)? {
-                        Some(cp) => compiled.push(cp),
-                        None => {
-                            any_absent = true;
-                            break;
-                        }
-                    }
-                }
-                let order: Vec<usize> = if any_absent {
-                    (0..patterns.len()).collect()
-                } else {
-                    cost_based_order(&compiled, dataset, &scope)
-                };
-                for &i in &order {
-                    out.push(triple_pattern_to_string(&patterns[i]));
+            if patterns.is_empty() {
+                return Ok(());
+            }
+            let scope = active_dataset.scope_for(active_graph);
+            let mut working = VarSchema::new();
+            for pattern in patterns {
+                for key in slot_keys(pattern) {
+                    working.push(key);
                 }
             }
+            let mut compiled = Vec::with_capacity(patterns.len());
+            let mut any_absent = false;
+            for pattern in patterns {
+                match compile_pattern(pattern, &working, dataset)? {
+                    Some(cp) => compiled.push(cp),
+                    None => {
+                        any_absent = true;
+                        break;
+                    }
+                }
+            }
+            let order: Vec<usize> = if any_absent {
+                (0..patterns.len()).collect()
+            } else {
+                cost_based_order(&compiled, dataset, &scope)
+            };
+            if patterns.len() >= 2 {
+                for &i in &order {
+                    survey.orders.push(triple_pattern_to_string(&patterns[i]));
+                }
+            }
+            let columns = real_var_schema(&working).len() as u64;
+            let estimate = if any_absent {
+                // A ground constant absent from the dataset makes the whole BGP empty, so
+                // the honest prediction is zero rows — not the product the cost model
+                // would compute from cardinalities it never probed.
+                PlanEstimate {
+                    rows: 0,
+                    peak_rows: 0,
+                    columns,
+                }
+            } else {
+                let (rows, peak_rows) = replay_cost_estimate(&compiled, dataset, &scope, &order);
+                PlanEstimate {
+                    rows,
+                    peak_rows,
+                    columns,
+                }
+            };
+            survey
+                .estimates
+                .insert(std::ptr::from_ref(pattern) as usize, estimate);
         }
         GraphPattern::Join { left, right }
         | GraphPattern::Union { left, right }
         | GraphPattern::LeftJoin { left, right, .. }
         | GraphPattern::Minus { left, right }
         | GraphPattern::Lateral { left, right } => {
-            explain_pattern_orders(dataset, active_dataset, active_graph, left, out)?;
-            explain_pattern_orders(dataset, active_dataset, active_graph, right, out)?;
+            survey_pattern_plans(dataset, active_dataset, active_graph, left, survey)?;
+            survey_pattern_plans(dataset, active_dataset, active_graph, right, survey)?;
         }
         GraphPattern::Filter { inner, .. }
         | GraphPattern::Extend { inner, .. }
@@ -1186,7 +1395,7 @@ pub(crate) fn explain_pattern_orders<D: DatasetView>(
         | GraphPattern::Slice { inner, .. }
         | GraphPattern::OrderBy { inner, .. }
         | GraphPattern::Group { inner, .. } => {
-            explain_pattern_orders(dataset, active_dataset, active_graph, inner, out)?;
+            survey_pattern_plans(dataset, active_dataset, active_graph, inner, survey)?;
         }
         GraphPattern::Graph { name, inner } => {
             let inner_graph = match name {
@@ -1195,11 +1404,53 @@ pub(crate) fn explain_pattern_orders<D: DatasetView>(
                     .map_or(GraphMatch::Default, GraphMatch::Named),
                 NamedNodePattern::Variable(_) => GraphMatch::Any,
             };
-            explain_pattern_orders(dataset, active_dataset, inner_graph, inner, out)?;
+            survey_pattern_plans(dataset, active_dataset, inner_graph, inner, survey)?;
         }
         GraphPattern::Path { .. } | GraphPattern::Values { .. } | GraphPattern::Service { .. } => {}
     }
     Ok(())
+}
+
+/// Replay `order` through the same cost model [`cost_based_order`] minimised, returning the
+/// running estimate at the last stage and the largest running estimate at any stage — the
+/// BGP's predicted output size and its predicted peak.
+///
+/// Replayed rather than returned from the search because the search's two strategies (the
+/// subset DP and the greedy walk) carry their costs differently, and a second, shared
+/// evaluation of the *chosen* order is one place where "what the planner predicted" is
+/// defined, instead of two that can disagree.
+///
+/// Saturating `f64`-to-`u64` conversion: Rust's `as` cast saturates rather than wrapping,
+/// so an estimate beyond `u64::MAX` becomes `u64::MAX` and a negative one — which the
+/// model cannot produce, every factor being non-negative — would become zero.
+fn replay_cost_estimate<D: DatasetView>(
+    compiled: &[CompiledPattern<D::Id>],
+    dataset: &D,
+    scope: &GraphScope<D::Id>,
+    order: &[usize],
+) -> (u64, u64) {
+    let base: Vec<f64> = compiled
+        .iter()
+        .map(|cp| base_cardinality(dataset, cp, scope) as f64)
+        .collect();
+    let t = dataset.term_count().max(1) as f64;
+    let mut n_cols = 0usize;
+    for cp in compiled {
+        for pos in [&cp.s, &cp.p, &cp.o] {
+            for_each_slot(pos, &mut |c| n_cols = n_cols.max(c + 1));
+        }
+    }
+
+    let mut bound = vec![false; n_cols];
+    let mut running = 1.0f64;
+    let mut peak = 0.0f64;
+    for &i in order {
+        let joins = join_positions(&compiled[i], &bound);
+        running = step_size(running, base[i], joins, t);
+        peak = peak.max(running);
+        mark_bound(&compiled[i], &mut bound);
+    }
+    (running as u64, peak as u64)
 }
 
 /// An empty solution sequence over only the real (non-blank) variables of `working`.

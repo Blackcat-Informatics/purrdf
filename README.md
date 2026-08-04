@@ -255,6 +255,7 @@ for drift. Built with cargo-c: `make capi-build`.
   crate; every member crate links its own docs.rs page from the crate map above.
 - **Specs & reports** — [GTS spec](./docs/GTS-SPEC.md),
   [RDF 1.2 canonicalization profile](./docs/RDF12-CANON-PROFILE.md),
+  [SPARQL execution governor profile](./docs/SPARQL-GOVERNOR-PROFILE.md),
   [conformance scoreboard](./docs/CONFORMANCE.md),
   [benchmarks](./docs/BENCHMARKS.md), [release process](./docs/RELEASE.md).
 

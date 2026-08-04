@@ -52,17 +52,20 @@
 //! and that per-call state would merge into a forked child instead of `ctx`).
 
 use purrdf_core::{DatasetView, TermId, TermValue, ViewTermId};
-use purrdf_sparql_algebra::{
-    AggregateExpression, Expression, Function, GraphPattern, OrderExpression,
-};
+use purrdf_sparql_algebra::{Expression, Function, GraphPattern};
 
 use crate::error::EvalError;
+use crate::governor::ItemCharge;
+use crate::governor::soundness::{
+    ExpressionPart, PatternPart, visit_expression_parts, visit_pattern_parts,
+};
 use crate::scratch::{ScratchInterner, SolutionTerm};
 use crate::solution::Solution;
 use crate::user_fn::{UserFunctionRegistry, Volatility};
 
 /// Rows/groups at or below this stay sequential (thread spin-up would dominate
-/// the work for small inputs). Initial value; Task 7's bench tunes it.
+/// the work for small inputs). Tuned against the criterion benches in
+/// `crates/sparql-eval/benches/`, which are report-only and assert no timing.
 pub(crate) const PARALLEL_MIN_ROWS: usize = 1024;
 
 /// Floor on a chunk's item count: below this, splitting further would hand
@@ -243,6 +246,53 @@ pub(crate) fn is_parallel_safe(expr: &Expression, registry: Option<&UserFunction
     !expr_reaches_unsafe_builtin(expr, registry)
 }
 
+/// Whether evaluating `expr` for one row can **re-enter whole-pattern evaluation**, and
+/// therefore charge a governor, from inside a forked worker.
+///
+/// # Why this question is asked separately from [`is_parallel_safe`]
+///
+/// The two fork lanes account for a budget in fundamentally different ways.
+/// [`par_chunk_map_metered`] hands each chunk a private, atomic-free
+/// [`ItemCharge`] ledger and the caller folds those in source-item order, so its reported
+/// consumption is a pure function of `(query, data, budget)`. The fork-per-worker lane
+/// ([`par_chunk_try_map_init`]) has no ledger at all: each worker forks a child
+/// [`EvalCtx`](crate::eval::EvalCtx) that shares one `Arc<GovernorState>`, so anything the
+/// closure charges goes straight into shared atomics with no ordering.
+///
+/// For every expression that stays *within* expression evaluation that is harmless,
+/// because expression evaluation charges nothing — the row's whole cost is charged once,
+/// before the loop, at the operator's own `row-expression-evaluation` charge point on the
+/// main thread. Exactly one construct escapes that: an expression-embedded `EXISTS`, which
+/// calls back into `eval_evaluated` and charges the full per-node schedule for its inner
+/// pattern. And because each *chunk* forks its own child — whose `exists_inner_cache` is a
+/// snapshot taken at fork time — the inner pattern is evaluated once per chunk, and the
+/// chunk count is derived from `rayon::current_num_threads()`. The reported fuel would
+/// then be a function of the machine's thread count, which is exactly the dependence the
+/// ordered fold exists to remove; measured on a 1500-row `FILTER EXISTS`, one worker
+/// reported 13507 fuel and eight reported 57036 for the identical query and data.
+///
+/// A SPARQL-bodied user function is the other construct that re-enters evaluation, and it
+/// needs no mention here because [`function_is_unsafe`] already classifies it UNSAFE
+/// outright, so it never reaches a worker on any path.
+///
+/// So the rule the evaluator applies is: **a governed execution does not fork a row loop
+/// whose expression can re-enter evaluation.** Ungoverned execution is untouched (there is
+/// no meter to be exact about), a governed expression that cannot re-enter keeps full
+/// parallelism (it charges nothing from a worker), and the narrow remainder runs
+/// sequentially — where the charge order is the row order by construction.
+pub(crate) fn expression_re_enters_evaluation(expr: &Expression) -> bool {
+    let mut found = false;
+    visit_expression_parts(expr, &mut |part| {
+        found |= match part {
+            ExpressionPart::Sub(sub) => expression_re_enters_evaluation(sub),
+            ExpressionPart::Call(_) => false,
+            ExpressionPart::Exists(_) => true,
+        };
+        found
+    });
+    found
+}
+
 /// Whether `pattern` (recursively) is safe to evaluate under the fork-join
 /// parallel model — the pattern-level twin of [`is_parallel_safe`], for callers
 /// (e.g. `UNION`) that must gate a whole sub-pattern rather than a single
@@ -258,51 +308,27 @@ pub(crate) fn is_parallel_safe_pattern(
 
 /// `true` iff `expr` (recursively) reaches an unsafe builtin — see
 /// [`is_parallel_safe`].
+///
+/// The structural decomposition is [`crate::governor::soundness`]'s, not this
+/// module's: the recursion below only decides what to *do* at each part. That
+/// module owns the single exhaustive, wildcard-free match over [`Expression`],
+/// so a new expression variant is one compile error there rather than a silent
+/// omission here (which would classify an unsafe builtin SAFE and let it run
+/// under fork-join). The short-circuit is preserved exactly — the visitor stops
+/// the moment this closure returns `true` — so the answer is identical to the
+/// `||` chain this replaces, including for expressions whose later arms would
+/// have been skipped.
 fn expr_reaches_unsafe_builtin(expr: &Expression, registry: Option<&UserFunctionRegistry>) -> bool {
-    match expr {
-        Expression::NamedNode(_)
-        | Expression::Literal(_)
-        | Expression::Variable(_)
-        | Expression::Bound(_) => false,
-        Expression::Or(a, b)
-        | Expression::And(a, b)
-        | Expression::Equal(a, b)
-        | Expression::SameTerm(a, b)
-        | Expression::Greater(a, b)
-        | Expression::GreaterOrEqual(a, b)
-        | Expression::Less(a, b)
-        | Expression::LessOrEqual(a, b)
-        | Expression::Add(a, b)
-        | Expression::Subtract(a, b)
-        | Expression::Multiply(a, b)
-        | Expression::Divide(a, b) => {
-            expr_reaches_unsafe_builtin(a, registry) || expr_reaches_unsafe_builtin(b, registry)
-        }
-        Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
-            expr_reaches_unsafe_builtin(a, registry)
-        }
-        Expression::In(head, list) => {
-            expr_reaches_unsafe_builtin(head, registry)
-                || list
-                    .iter()
-                    .any(|e| expr_reaches_unsafe_builtin(e, registry))
-        }
-        Expression::If(a, b, c) => {
-            expr_reaches_unsafe_builtin(a, registry)
-                || expr_reaches_unsafe_builtin(b, registry)
-                || expr_reaches_unsafe_builtin(c, registry)
-        }
-        Expression::Coalesce(list) => list
-            .iter()
-            .any(|e| expr_reaches_unsafe_builtin(e, registry)),
-        Expression::FunctionCall(f, args) => {
-            function_is_unsafe(f, registry)
-                || args
-                    .iter()
-                    .any(|e| expr_reaches_unsafe_builtin(e, registry))
-        }
-        Expression::Exists(pattern) => pattern_reaches_unsafe_builtin(pattern, registry),
-    }
+    let mut found = false;
+    visit_expression_parts(expr, &mut |part| {
+        found |= match part {
+            ExpressionPart::Sub(sub) => expr_reaches_unsafe_builtin(sub, registry),
+            ExpressionPart::Call(f) => function_is_unsafe(f, registry),
+            ExpressionPart::Exists(pattern) => pattern_reaches_unsafe_builtin(pattern, registry),
+        };
+        found
+    });
+    found
 }
 
 /// Whether `f` is itself one of the stateful-mint builtins (see
@@ -354,66 +380,29 @@ fn function_is_unsafe(f: &Function, registry: Option<&UserFunctionRegistry>) -> 
 
 /// `true` iff `pattern` (recursively) reaches an unsafe builtin through any
 /// expression-bearing variant — see [`is_parallel_safe`].
+///
+/// Expressed in terms of [`crate::governor::soundness::visit_pattern_parts`],
+/// the one exhaustive, wildcard-free walk over [`GraphPattern`] this crate owns.
+/// The [`ChildEdge`](crate::governor::soundness::ChildEdge) that walk attaches to
+/// each child is the answer-completeness certificate's business, not this gate's,
+/// so it is discarded here: parallel safety is a property of the builtins a
+/// subtree can reach, and every child can reach them regardless of how a
+/// truncation would propagate through it. Sharing the *decomposition* is the
+/// point — a new algebra variant must be one compile error, not three
+/// independent edits of which only two get found.
 fn pattern_reaches_unsafe_builtin(
     pattern: &GraphPattern,
     registry: Option<&UserFunctionRegistry>,
 ) -> bool {
-    match pattern {
-        GraphPattern::Bgp { .. } | GraphPattern::Path { .. } | GraphPattern::Values { .. } => false,
-        GraphPattern::Join { left, right }
-        | GraphPattern::Lateral { left, right }
-        | GraphPattern::Union { left, right }
-        | GraphPattern::Minus { left, right } => {
-            pattern_reaches_unsafe_builtin(left, registry)
-                || pattern_reaches_unsafe_builtin(right, registry)
-        }
-        GraphPattern::Graph { inner, .. }
-        | GraphPattern::Service { inner, .. }
-        | GraphPattern::Distinct { inner }
-        | GraphPattern::Reduced { inner }
-        | GraphPattern::Slice { inner, .. }
-        | GraphPattern::Project { inner, .. } => pattern_reaches_unsafe_builtin(inner, registry),
-        GraphPattern::Filter { expr, inner } => {
-            expr_reaches_unsafe_builtin(expr, registry)
-                || pattern_reaches_unsafe_builtin(inner, registry)
-        }
-        GraphPattern::Extend {
-            inner, expression, ..
-        } => {
-            expr_reaches_unsafe_builtin(expression, registry)
-                || pattern_reaches_unsafe_builtin(inner, registry)
-        }
-        GraphPattern::LeftJoin {
-            left,
-            right,
-            expression,
-        } => {
-            pattern_reaches_unsafe_builtin(left, registry)
-                || pattern_reaches_unsafe_builtin(right, registry)
-                || expression
-                    .as_ref()
-                    .is_some_and(|e| expr_reaches_unsafe_builtin(e, registry))
-        }
-        GraphPattern::OrderBy { inner, expression } => {
-            pattern_reaches_unsafe_builtin(inner, registry)
-                || expression.iter().any(|oe| match oe {
-                    OrderExpression::Asc(e) | OrderExpression::Desc(e) => {
-                        expr_reaches_unsafe_builtin(e, registry)
-                    }
-                })
-        }
-        GraphPattern::Group {
-            inner, aggregates, ..
-        } => {
-            pattern_reaches_unsafe_builtin(inner, registry)
-                || aggregates.iter().any(|(_, agg)| match agg {
-                    AggregateExpression::CountStar { .. } => false,
-                    AggregateExpression::FunctionCall { expression, .. } => {
-                        expr_reaches_unsafe_builtin(expression, registry)
-                    }
-                })
-        }
-    }
+    let mut found = false;
+    visit_pattern_parts(pattern, &mut |part| {
+        found |= match part {
+            PatternPart::Child(child, _edge) => pattern_reaches_unsafe_builtin(child, registry),
+            PatternPart::Expression(expr) => expr_reaches_unsafe_builtin(expr, registry),
+        };
+        found
+    });
+    found
 }
 
 /// Chunk-based, infallible parallel collect: split `items` into index-ordered
@@ -465,6 +454,245 @@ where
         out.extend(chunk_out);
     }
     out
+}
+
+/// The output accumulator an operator's row loop pushes into, carrying the row ceiling the
+/// answer-cap pushdown put on this node.
+///
+/// # Why an accumulator type rather than a `Vec` and a length check
+///
+/// The pushdown has to stop a scan **inside** one input item, not merely between items:
+/// the plan that motivates it is `SELECT * WHERE { ?s ?p ?o } LIMIT 10`, whose row loop has
+/// exactly **one** input item — the all-unbound seed row — and whose entire cost is the
+/// index scan that item performs. A driver that could only stop between items would save
+/// nothing at all on precisely the query the cap exists to protect.
+///
+/// So the ceiling travels with the accumulator and the operator asks it, and the two
+/// drivers below differ only in whether the ceiling is finite. The unbounded sink compiles
+/// to the `Vec` push it replaces plus one `usize` compare against `usize::MAX`.
+#[derive(Debug)]
+pub(crate) struct RowSink<'a, R> {
+    /// The rows accumulated for the current chunk.
+    out: &'a mut Vec<R>,
+    /// The total this sink will accept. `usize::MAX` is "no ceiling".
+    ceiling: usize,
+    /// Whether reaching the ceiling itself closes the sink (semantic LIMIT/answer-cap
+    /// pushdown), or whether the sink stays open until a further row is refused
+    /// (intermediate-cell governance, whose inclusive boundary must distinguish exactly
+    /// full from overflowing).
+    stop_when_full: bool,
+    /// A qualifying row was offered after `ceiling` rows were already stored.
+    overflowed: bool,
+}
+
+impl<'a, R> RowSink<'a, R> {
+    /// A sink that accepts every row.
+    fn unbounded(out: &'a mut Vec<R>) -> Self {
+        Self {
+            out,
+            ceiling: usize::MAX,
+            stop_when_full: true,
+            overflowed: false,
+        }
+    }
+
+    /// A sink that accepts rows until `out` holds `ceiling` of them.
+    fn bounded(out: &'a mut Vec<R>, ceiling: usize) -> Self {
+        Self {
+            out,
+            ceiling,
+            stop_when_full: true,
+            overflowed: false,
+        }
+    }
+
+    /// A sink for an inclusive allocation ceiling: retain at most `ceiling` rows, but keep
+    /// probing until a qualifying row beyond it is offered. The refused row is never
+    /// stored, and its existence is the proof that the exactly-full bag was not complete.
+    fn overflow_bounded(out: &'a mut Vec<R>, ceiling: usize) -> Self {
+        Self {
+            out,
+            ceiling,
+            stop_when_full: false,
+            overflowed: false,
+        }
+    }
+
+    /// Accept `row`, unless this sink is already full.
+    ///
+    /// Silently dropping the row past the ceiling rather than returning a refusal is the
+    /// right shape here: a caller that ignores [`Self::is_full`] then produces exactly the
+    /// ceiling's worth of rows, which is a prefix of what it would have produced — never a
+    /// different bag.
+    #[inline]
+    pub(crate) fn push(&mut self, row: R) {
+        if self.out.len() < self.ceiling {
+            self.out.push(row);
+        } else {
+            self.overflowed = true;
+        }
+    }
+
+    /// Whether this sink has reached its ceiling, so the loop feeding it may stop.
+    #[inline]
+    pub(crate) fn is_full(&self) -> bool {
+        if self.stop_when_full {
+            self.out.len() >= self.ceiling
+        } else {
+            self.overflowed
+        }
+    }
+
+    /// Whether this sink refused a qualifying row beyond its inclusive ceiling.
+    #[inline]
+    fn overflowed(&self) -> bool {
+        self.overflowed
+    }
+}
+
+/// The **bounded, sequential** sibling of [`par_chunk_map_metered`]: fold `items` in source
+/// order into at most `ceiling` output rows, stopping the moment the ceiling is reached.
+///
+/// Sequential on purpose. Parallel chunks would each have to be given the whole ceiling —
+/// no worker can know how many rows the chunks before it produced — so the ceiling would
+/// stop nothing until the chunks were concatenated, which is the materialisation it exists
+/// to prevent. The bounded path is entered only when the plan proved a ceiling applies, so
+/// the work it forgoes parallelising is bounded by that ceiling.
+///
+/// The returned ledger covers exactly the items that were folded, so the caller's
+/// [`crate::governor::GovernorState::commit_ordered_items`] charges for the work that was
+/// actually done and no more.
+pub(crate) fn bounded_chunk_map_metered<T, R>(
+    items: &[T],
+    metered: bool,
+    ceiling: usize,
+    push: impl Fn(&mut RowSink<'_, R>, &mut u64, &T),
+) -> (Vec<R>, Vec<ItemCharge>) {
+    let mut out = Vec::new();
+    let mut ledger = Vec::with_capacity(if metered { items.len() } else { 0 });
+    for item in items {
+        if out.len() >= ceiling {
+            break;
+        }
+        let before = out.len();
+        let mut fuel = 0_u64;
+        push(&mut RowSink::bounded(&mut out, ceiling), &mut fuel, item);
+        if metered {
+            ledger.push(ItemCharge {
+                fuel,
+                committed: (out.len() - before) as u64,
+            });
+        }
+    }
+    (out, ledger)
+}
+
+/// The allocation-ceiling sibling of [`bounded_chunk_map_metered`]. It is sequential for
+/// the same reason, but reaching `ceiling` does not itself stop the fold: an inclusive
+/// ceiling admits an exactly-full bag. The fold stops only when the producer offers one
+/// further qualifying row; that row is refused before vector growth and `true` is returned
+/// as the overflow flag.
+pub(crate) fn cell_bounded_chunk_map_metered<T, R>(
+    items: &[T],
+    metered: bool,
+    ceiling: usize,
+    push: impl Fn(&mut RowSink<'_, R>, &mut u64, &T),
+) -> (Vec<R>, Vec<ItemCharge>, bool) {
+    let mut out = Vec::with_capacity(ceiling.min(items.len()));
+    let mut ledger = Vec::with_capacity(if metered { items.len() } else { 0 });
+    let mut overflowed = false;
+    for item in items {
+        let before = out.len();
+        let mut fuel = 0_u64;
+        let mut sink = RowSink::overflow_bounded(&mut out, ceiling);
+        push(&mut sink, &mut fuel, item);
+        overflowed = sink.overflowed();
+        if metered {
+            ledger.push(ItemCharge {
+                fuel,
+                committed: (out.len() - before) as u64,
+            });
+        }
+        if overflowed {
+            break;
+        }
+    }
+    (out, ledger, overflowed)
+}
+
+/// [`par_chunk_map`] with a **deterministic charge meter**: alongside its output rows,
+/// each chunk worker records what every input item spent, so a governed caller can find
+/// the exact item at which a ceiling is crossed.
+///
+/// # How a governed parallel run stays deterministic
+///
+/// A shared atomic counter would make the *total* correct and the *trip point* a lottery:
+/// whichever worker reached the counter first would decide which item was blamed. What is
+/// recorded here instead is per-item and chunk-local — no atomics, no contention, and no
+/// shared counter to double-charge — and the chunk ledgers concatenate in chunk (hence
+/// source) order exactly like the rows do. The caller then folds them through
+/// [`crate::governor::GovernorState::commit_ordered_items`], which walks that one fixed sequence on one
+/// thread. The trip point is therefore a pure function of `(query, data, budget)`:
+/// independent of worker count, of chunk geometry, and of scheduling.
+///
+/// `metered` is the caller's short-circuit. When it is `false` — an ungoverned execution,
+/// or one whose fuel dimension carries no ceiling — the returned ledger is empty and this
+/// function is [`par_chunk_map`] exactly: the `&mut u64` handed to `push` is a stack
+/// local, so no per-item record is written and nothing is allocated.
+///
+/// The ledger costs two `u64` per input item on the metered path, which is why it is a
+/// dedicated compact record rather than a full per-item resource vector — see
+/// [`ItemCharge`] for both halves of that reasoning.
+pub(crate) fn par_chunk_map_metered<T, R>(
+    items: &[T],
+    metered: bool,
+    push: impl Fn(&mut RowSink<'_, R>, &mut u64, &T) + Sync,
+) -> (Vec<R>, Vec<ItemCharge>)
+where
+    T: Sync,
+    R: Send,
+{
+    /// Fold one chunk, recording each item's charge when `metered`.
+    fn run_chunk<T, R>(
+        chunk: &[T],
+        metered: bool,
+        push: &(impl Fn(&mut RowSink<'_, R>, &mut u64, &T) + Sync),
+    ) -> (Vec<R>, Vec<ItemCharge>) {
+        let mut out = Vec::new();
+        let mut ledger = Vec::with_capacity(if metered { chunk.len() } else { 0 });
+        for item in chunk {
+            let before = out.len();
+            let mut fuel = 0_u64;
+            push(&mut RowSink::unbounded(&mut out), &mut fuel, item);
+            if metered {
+                ledger.push(ItemCharge {
+                    fuel,
+                    committed: (out.len() - before) as u64,
+                });
+            }
+        }
+        (out, ledger)
+    }
+
+    if !should_parallelize(items.len()) {
+        return run_chunk(items, metered, &push);
+    }
+
+    use rayon::prelude::*;
+
+    let size = chunk_size_for(items.len());
+    let per_chunk: Vec<(Vec<R>, Vec<ItemCharge>)> = items
+        .par_chunks(size)
+        .map(|chunk| run_chunk(chunk, metered, &push))
+        .collect();
+
+    let mut rows = Vec::with_capacity(per_chunk.iter().map(|(out, _)| out.len()).sum());
+    let mut ledger = Vec::with_capacity(per_chunk.iter().map(|(_, l)| l.len()).sum());
+    for (chunk_rows, chunk_ledger) in per_chunk {
+        rows.extend(chunk_rows);
+        ledger.extend(chunk_ledger);
+    }
+    (rows, ledger)
 }
 
 /// The fallible, fork-per-worker sibling of [`par_chunk_map`]: each rayon

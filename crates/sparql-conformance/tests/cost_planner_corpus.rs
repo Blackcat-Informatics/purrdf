@@ -28,6 +28,7 @@ fn make_engine(cost: bool) -> NativeSparqlEngine {
     let options = EvalOptions {
         exists_memo: true,
         force_structural_bgp_order: !cost,
+        force_sequential: false,
     };
     NativeSparqlEngine::new()
         .with_parser_options(ParserOptions {

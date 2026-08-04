@@ -9,7 +9,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use purrdf_core::{
     InMemoryPageProvider, PackBuilder, PackView, PageFault, PageGeneration, PageId,
     PageMaterialization, PageProvider, PagedDataset, PagedQueryError, PagedQueryEvidence,
-    PagedQueryLimits, RdfDataset, RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue,
+    PagedQueryLimits, RdfDataset, RdfDatasetBuilder, SparqlRequest, SparqlResult, StopCause,
+    TermValue,
 };
 use purrdf_sparql_eval::{FallibleSparqlError, NativeSparqlEngine};
 
@@ -151,8 +152,9 @@ fn query_time_failure_cannot_masquerade_as_an_empty_result() {
         FallibleSparqlError::Operational { error, evidence } => {
             assert_eq!(
                 error,
-                PagedQueryError::Cancelled {
+                PagedQueryError::Stopped {
                     page: PageId(0),
+                    cause: StopCause::Cancelled,
                     message: "cancelled by host".to_owned(),
                 }
             );
@@ -189,8 +191,9 @@ fn operational_root_cause_wins_over_a_derived_evaluator_error() {
     assert!(matches!(
         error,
         FallibleSparqlError::Operational {
-            error: PagedQueryError::Cancelled {
+            error: PagedQueryError::Stopped {
                 page: PageId(0),
+                cause: StopCause::Cancelled,
                 ..
             },
             ..
@@ -518,14 +521,16 @@ fn operational_failure_taxonomy_is_not_an_empty_answer() {
                 }
             ) | (
                 ScriptedFault::Cancelled,
-                PagedQueryError::Cancelled {
+                PagedQueryError::Stopped {
                     page: PageId(0),
+                    cause: StopCause::Cancelled,
                     ..
                 }
             ) | (
                 ScriptedFault::Deadline,
-                PagedQueryError::DeadlineExceeded {
+                PagedQueryError::Stopped {
                     page: PageId(0),
+                    cause: StopCause::Deadline,
                     ..
                 }
             ) | (
@@ -593,13 +598,22 @@ fn identical_executions_have_identical_results_status_and_evidence() {
         }
     }
 
-    let mut expected_failure = None;
+    let mut expected_failure: Option<(PagedQueryError, PagedQueryEvidence)> = None;
     for _ in 0..4 {
         let failing = two_page_faulting_dataset(ScriptedFault::Provider);
         let view = failing.query_view(PagedQueryLimits::UNBOUNDED);
-        let current = engine
+        let failure = engine
             .query_fallible_view(&view, request("SELECT * WHERE { ?s ?p ?o }"))
             .expect_err("identical failed execution");
+        // The error type carries a materialized `SparqlResult` on its budget-exhausted
+        // arm and is therefore not comparable as a whole. What an identical execution has
+        // to reproduce is the discriminant, the root cause, and the evidence — each
+        // comparable on its own, and together a strictly more precise claim than
+        // whole-value equality, because the arm is now asserted by name.
+        let FallibleSparqlError::Operational { error, evidence } = failure else {
+            panic!("a provider fault is an operational failure: {failure:?}");
+        };
+        let current = (error, evidence);
         if let Some(expected) = &expected_failure {
             assert_eq!(&current, expected);
         } else {

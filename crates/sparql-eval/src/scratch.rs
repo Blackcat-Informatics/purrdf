@@ -122,6 +122,41 @@ pub struct ScratchInterner {
     values: Vec<TermValue>,
     /// Store-once value index: ids only; equality resolves through `values`.
     index: HashTable<ScratchId>,
+    /// The running total of [`value_bytes`] over every value ever minted into
+    /// `values`, which is what [`Self::minted_bytes`] reports and what the
+    /// scratch-arena resource ceiling is charged against.
+    minted_bytes: u64,
+}
+
+/// A deterministic byte size for one computed value: the payload it owns, plus a fixed
+/// per-term constant for the id, the discriminant, and the table slot.
+///
+/// This is a *deterministic proxy*, not a true heap measurement, and deliberately so.
+/// True heap bytes depend on allocator behaviour and on the interner's growth history,
+/// so a ceiling compared against them would trip at a different point on a different
+/// allocator — which is not a governor. This function is a pure function of the value,
+/// so the same query over the same data mints the same number of bytes on every target.
+fn value_bytes(value: &TermValue) -> u64 {
+    /// The per-term constant: the `ScratchId`, the index slot, and the enum
+    /// discriminant, none of which vary with the value's payload.
+    const TERM_OVERHEAD: u64 = 32;
+
+    let payload = match value {
+        TermValue::Iri(iri) => iri.len() as u64,
+        TermValue::Blank { label, .. } => label.len() as u64,
+        TermValue::Literal {
+            lexical_form,
+            datatype,
+            language,
+            ..
+        } => {
+            (lexical_form.len() + datatype.len() + language.as_ref().map_or(0, String::len)) as u64
+        }
+        TermValue::Triple { s, p, o } => value_bytes(s)
+            .saturating_add(value_bytes(p))
+            .saturating_add(value_bytes(o)),
+    };
+    payload.saturating_add(TERM_OVERHEAD)
 }
 
 fn hash_value(value: &TermValue) -> u64 {
@@ -153,10 +188,28 @@ impl ScratchInterner {
             return SolutionTerm::Computed(sid);
         }
         let sid = ScratchId::from_index(self.values.len());
+        self.minted_bytes = self.minted_bytes.saturating_add(value_bytes(&value));
         self.values.push(value);
         self.index
             .insert_unique(hash, sid, |sid| hash_value(&self.values[sid.index()]));
         SolutionTerm::Computed(sid)
+    }
+
+    /// The deterministic byte size of everything minted into this arena so far: each
+    /// value's owned payload plus a fixed per-term constant, which makes the total a pure
+    /// function of the values rather than of the allocator.
+    ///
+    /// This is the meter behind the scratch-arena resource ceiling. It is its own
+    /// dimension because arena growth is independent of any row or cell count:
+    /// `CONCAT`, `GROUP_CONCAT`, `REPLACE`, and the list constructors mint arbitrarily
+    /// large owned values, so a query can exhaust memory with a row count and a cell
+    /// count that both sit comfortably inside their ceilings.
+    ///
+    /// Monotone: de-duplicated interns add nothing, and nothing ever removes a value, so
+    /// a caller can charge the difference since its last reading without double-counting.
+    #[must_use]
+    pub fn minted_bytes(&self) -> u64 {
+        self.minted_bytes
     }
 
     /// Materialize a [`SolutionTerm`] to an owned, dataset-independent [`TermValue`].

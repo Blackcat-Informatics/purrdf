@@ -1,0 +1,7 @@
+PREFIX ex: <http://example.org/>
+
+SELECT ?x ?y
+WHERE {
+  SERVICE <https://example.org/sparql/a> { ?x ex:p ?xo }
+  SERVICE <https://example.org/sparql/b> { ?y ex:p ?yo }
+}

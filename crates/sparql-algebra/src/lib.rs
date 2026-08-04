@@ -92,5 +92,5 @@ pub use ast::{
     QuadPattern, TermPattern, TriplePattern, Variable,
 };
 pub use error::{ParseError, Result};
-pub use parser::{ParserOptions, SparqlParser};
+pub use parser::{MAX_GRAPH_PATTERN_DEPTH, ParserOptions, SparqlParser};
 pub use serialize::pattern_to_select_query;

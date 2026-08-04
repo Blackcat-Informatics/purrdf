@@ -22,7 +22,8 @@ use purrdf_core::{DatasetView, TermId, ViewTermId};
 use purrdf_sparql_algebra::{Expression, GraphPattern};
 
 use crate::error::EvalError;
-use crate::eval::{EvalCtx, eval};
+use crate::eval::{EvalCtx, eval_evaluated};
+use crate::governor::lift::{Evaluated, Lift, Truncation};
 use crate::scratch::SolutionTerm;
 use crate::solution::{Solution, SolutionSeq, VarSchema, compatible};
 use crate::{DetHashMap, DetHasher};
@@ -45,14 +46,33 @@ pub(crate) enum JoinKey<I: ViewTermId = TermId> {
 }
 
 /// Evaluate `left . right` (algebra `Join`) as a hash join on shared variables.
+///
+/// # Under a truncated child
+///
+/// A join's output is a function of **both** inputs, so a truncated left arm leaves
+/// nothing computable: the right arm is deliberately not evaluated (that would be an
+/// unbounded scan after the budget is spent — see [`Lift`]) and the node yields the empty
+/// bag, which is a sound lower bound. A truncated right arm joins normally against the
+/// rows in hand and yields a sub-bag of the true output — sound as a multiset, and
+/// classified [`crate::governor::soundness::PrefixFidelity::BagOnly`] because the missing
+/// rows come from the middle of each left row's block rather than from the end.
 pub(crate) fn eval_join<D: DatasetView + Sync>(
+    node: &GraphPattern,
     left: &GraphPattern,
     right: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<SolutionSeq<D::Id>, EvalError> {
-    let l = eval(left, ctx)?;
-    let r = eval(right, ctx)?;
-    Ok(hash_join(&l, &r))
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let mut lift = Lift::at(node);
+    let Some(l) = lift.absorb(0, eval_evaluated(left, ctx)?) else {
+        return Ok(lift.withheld());
+    };
+    if lift.is_truncated() {
+        return Ok(lift.finish(SolutionSeq::empty(l.schema)));
+    }
+    let Some(r) = lift.absorb(1, eval_evaluated(right, ctx)?) else {
+        return Ok(lift.withheld());
+    };
+    Ok(lift.finish(hash_join(&l, &r, ctx)))
 }
 
 /// Evaluate `LATERAL` (a correlated join): for each left solution μ, evaluate
@@ -64,12 +84,27 @@ pub(crate) fn eval_join<D: DatasetView + Sync>(
 /// μ, the sole case being a variable-endpoint `SERVICE ?g` whose endpoint IRI is
 /// bound by μ. Reuses the correlated-EXISTS substitution machinery, including the
 /// address-keyed-cache ABA guard (`in_substituted_exists`) around the inner eval.
+///
+/// # Under a truncated child
+///
+/// The right side is evaluated once per left row, so a trip inside it is a trip **in
+/// flight**: the left row being processed has not finished producing its output and is
+/// discarded whole, while every left row already processed keeps its complete block. That
+/// is the commit-per-input-row rule, and it is what makes the surviving rows a sound
+/// sub-bag rather than a mixture of complete and half-complete blocks.
 pub(crate) fn eval_lateral<D: DatasetView + Sync>(
+    node: &GraphPattern,
     left: &GraphPattern,
     right: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<SolutionSeq<D::Id>, EvalError> {
-    let l = eval(left, ctx)?;
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let mut lift = Lift::at(node);
+    let Some(l) = lift.absorb(0, eval_evaluated(left, ctx)?) else {
+        return Ok(lift.withheld());
+    };
+    if lift.is_truncated() {
+        return Ok(lift.finish(SolutionSeq::empty(l.schema)));
+    }
     let left_schema = Arc::clone(&l.schema);
     let left_len = left_schema.len();
 
@@ -88,9 +123,19 @@ pub(crate) fn eval_lateral<D: DatasetView + Sync>(
         // bypassed, and restore afterwards (even on error) so nesting is correct.
         let prev = ctx.in_substituted_exists;
         ctx.in_substituted_exists = true;
-        let r = eval(&substituted, ctx);
+        let r = eval_evaluated(&substituted, ctx);
         ctx.in_substituted_exists = prev;
-        let r = r?;
+        let r = match r? {
+            Evaluated::Complete(seq) => seq,
+            truncated @ Evaluated::Truncated(_) => {
+                // Commit granularity: this left row's block is incomplete, so it is
+                // discarded entirely rather than emitted short. Absorbing here (rather
+                // than merging the partial block) is what keeps the surviving rows a
+                // sound bound instead of a bag with one truncated block inside it.
+                drop(lift.absorb(1, truncated));
+                break;
+            }
+        };
         for v in r.schema.vars() {
             right_schema.push(v.clone());
         }
@@ -99,34 +144,40 @@ pub(crate) fn eval_lateral<D: DatasetView + Sync>(
 
     let out = Arc::new(left_schema.union(&right_schema));
     let out_len = out.len();
-    let mut rows: Vec<Solution<D::Id>> = Vec::new();
-    for (mu, r) in &per_row {
+    let cell_ceiling = ctx.cell_row_ceiling(out_len);
+    let mut rows: Vec<Solution<D::Id>> =
+        Vec::with_capacity(cell_ceiling.map_or(per_row.len(), |cap| cap.min(per_row.len())));
+    'left: for (mu, r) in &per_row {
         let right_to_out = right_to_out_map(&r.schema, &out);
         for nu in &r.rows {
-            // Start from μ: left columns are out[0..left_len] in the same order.
+            // Test compatibility before allocating the joined row. The cell ceiling is
+            // an admission boundary, so the first over-limit emit-worthy candidate must
+            // be refused before its output storage is constructed.
+            let compatible_row = nu.iter().enumerate().all(|(j, cell)| {
+                let oi = right_to_out[j];
+                !matches!((cell, mu.get(oi).copied().flatten()), (Some(t), Some(existing)) if *t != existing)
+            });
+            if !compatible_row {
+                continue;
+            }
+            if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
+                let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+                break 'left;
+            }
+
+            // Start from μ: left columns are out[0..left_len] in the same order, then
+            // overlay the now-known-compatible ν cells.
             let mut row = smallvec::smallvec![None; out_len];
             row[..left_len].copy_from_slice(mu);
-            // Overlay ν, requiring compatibility on any column μ already bound
-            // (disjoint for SERVICE, so this never rejects there).
-            let mut compatible_row = true;
             for (j, cell) in nu.iter().enumerate() {
-                if let Some(t) = cell {
-                    let oi = right_to_out[j];
-                    match row[oi] {
-                        Some(existing) if existing != *t => {
-                            compatible_row = false;
-                            break;
-                        }
-                        _ => row[oi] = Some(*t),
-                    }
+                if let Some(term) = cell {
+                    row[right_to_out[j]] = Some(*term);
                 }
             }
-            if compatible_row {
-                rows.push(row);
-            }
+            rows.push(row);
         }
     }
-    Ok(SolutionSeq { schema: out, rows })
+    Ok(lift.finish(SolutionSeq { schema: out, rows }))
 }
 
 /// Evaluate `left UNION right` as a multiset concatenation over the union schema.
@@ -143,18 +194,60 @@ pub(crate) fn eval_lateral<D: DatasetView + Sync>(
 /// re-intern them back into `ctx.scratch`, left branch first then right, via
 /// [`crate::parallel::reintern_portable_row`] — reproducing the sequential
 /// concat's exact row order (left rows, then right rows) and column layout.
+///
+/// # Under a truncated child: ONE rule, both paths
+///
+/// `UNION` is a concatenation, and the rule is stated so that the result depends on the
+/// query, the data, and the budget — and on nothing else:
+///
+/// > A truncated `UNION` yields the rows of the branches that COMPLETED, in branch order.
+/// > If the LEFT branch truncates, the union carries only the left branch's rows and the
+/// > right branch contributes nothing **even if it was already computed**. If the left
+/// > completes and the right truncates, the union carries the left rows followed by the
+/// > right branch's partial rows.
+///
+/// The clause about already-computed rows is the whole point. `rayon::join` starts both
+/// branches, so on the parallel path the right branch's rows may well exist by the time
+/// the left branch's truncation is known — and admitting them would make a governed
+/// result larger *because a second thread got there*. Same query, same data, same budget
+/// would then give different partial answers on different machines and under different
+/// scheduling, which is precisely the property the order-stable reduction exists to
+/// guarantee. Being "more informative" is not a licence a governor has; the result is
+/// truncated to the branch-ordered prefix on both paths and the extra rows are dropped.
+///
+/// The soundness half is the `MONOTONE_BAG` / `MONOTONE` split the one visitor already
+/// records for this node, which the lift reads rather than restating: truncating the LEFT
+/// branch removes rows from the middle of the concatenation (a sub-bag, not a prefix),
+/// while truncating the RIGHT branch removes them from the end (a genuine prefix).
 pub(crate) fn eval_union<D: DatasetView + Sync>(
+    node: &GraphPattern,
     left: &GraphPattern,
     right: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<SolutionSeq<D::Id>, EvalError> {
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let mut lift = Lift::at(node);
     if crate::parallel::sequential_operation_required()
+        // A governed `UNION` evaluates its arms in source order on one thread: both arms
+        // charge the same shared `GovernorState`, so forking them makes the budget — and
+        // with it the trip point and the certified rows — a lottery. See
+        // `EvalCtx::may_fork_sibling_patterns`.
+        || !ctx.may_fork_sibling_patterns()
         || !crate::parallel::is_parallel_safe_pattern(left, ctx.user_functions)
         || !crate::parallel::is_parallel_safe_pattern(right, ctx.user_functions)
     {
-        let l = eval(left, ctx)?;
-        let r = eval(right, ctx)?;
-        return Ok(concat_union(&l, &r));
+        let Some(l) = lift.absorb(0, eval_evaluated(left, ctx)?) else {
+            return Ok(lift.withheld());
+        };
+        if lift.is_truncated() {
+            // The right arm is never started: the rows in hand ARE the union's output
+            // so far, and evaluating a fresh subtree after the budget is spent is the
+            // unbounded work the lift's own budget rule forbids.
+            return Ok(lift.finish(l));
+        }
+        let Some(r) = lift.absorb(1, eval_evaluated(right, ctx)?) else {
+            return Ok(lift.withheld());
+        };
+        return Ok(lift.finish(concat_union(&l, &r, ctx)));
     }
 
     let base = ctx.scratch.computed_count();
@@ -169,20 +262,46 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
     // branch) is kept as-is with zero extra allocation, and only a row
     // carrying a genuinely fresh cell pays for the portable-materialize round
     // trip. The child (and its scratch) does not survive past this closure.
-    let eval_branch = |pattern: &GraphPattern| -> Result<PortableBranch<D::Id>, EvalError> {
+    let eval_branch = |pattern: &GraphPattern| -> Result<UnionBranch<crate::parallel::MintedRow<D::Id>>, EvalError> {
         let mut child = ctx_ref.fork_for_worker();
-        let seq = eval(pattern, &mut child)?;
-        let minted: Vec<_> = seq
-            .rows
+        let evaluated = eval_evaluated(pattern, &mut child)?;
+        let truncated = evaluated.is_truncated();
+        // The branch's rows are materialized against the child's scratch either way; a
+        // truncated branch's certificate rides back separately because the portable-row
+        // round trip below has to happen while the child is still alive.
+        let (schema, rows, certificate) = match evaluated {
+            Evaluated::Complete(seq) => (seq.schema, seq.rows, None),
+            Evaluated::Truncated(truncation) => {
+                let (seq, certificate) = truncation.split();
+                (seq.schema, seq.rows, Some(certificate))
+            }
+        };
+        debug_assert_eq!(truncated, certificate.is_some());
+        let minted: Vec<_> = rows
             .into_iter()
             .map(|row| crate::parallel::minted_row(&child.scratch, base, row))
             .collect();
-        Ok((seq.schema, minted))
+        Ok(UnionBranch {
+            schema,
+            rows: minted,
+            certificate,
+        })
     };
 
     let (left_result, right_result) = rayon::join(|| eval_branch(left), || eval_branch(right));
-    let (l_schema, l_minted) = left_result?;
-    let (r_schema, r_minted) = right_result?;
+    // The branch-order rule, applied before a single row is concatenated: see
+    // `union_branch_order` for why a computed-but-discarded right branch is the point.
+    let (left_branch, right_branch, governing) = union_branch_order(left_result?, right_result?);
+    let UnionBranch {
+        schema: l_schema,
+        rows: l_minted,
+        certificate: _,
+    } = left_branch;
+    let UnionBranch {
+        schema: r_schema,
+        rows: r_minted,
+        certificate: _,
+    } = right_branch;
 
     let out = l_schema.union(&r_schema);
     let out_len = out.len();
@@ -207,30 +326,51 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
         rows.push(row);
     }
 
-    Ok(SolutionSeq {
+    let united = SolutionSeq {
         schema: Arc::new(out),
         rows,
-    })
+    };
+    let Some((ordinal, certificate)) = governing else {
+        return Ok(lift.finish(united));
+    };
+    if lift.absorb_certificate(ordinal, certificate) {
+        return Ok(lift.finish(united));
+    }
+    Ok(lift.finish(SolutionSeq::empty(united.schema)))
 }
 
 /// The sequential `UNION` body: concatenate `l` then `r` over the ordered
 /// union schema (left columns first). Shared by both the sequential fallback
 /// and (conceptually) documents the exact row shape the parallel path in
 /// [`eval_union`] must reproduce.
-fn concat_union<I: ViewTermId>(l: &SolutionSeq<I>, r: &SolutionSeq<I>) -> SolutionSeq<I> {
+fn concat_union<D: DatasetView + Sync>(
+    l: &SolutionSeq<D::Id>,
+    r: &SolutionSeq<D::Id>,
+    ctx: &EvalCtx<'_, D>,
+) -> SolutionSeq<D::Id> {
     let out = l.schema.union(&r.schema);
     let out_len = out.len();
     let left_len = l.schema.len();
     let right_to_out = right_to_out_map(&r.schema, &out);
 
-    let mut rows = Vec::with_capacity(l.rows.len() + r.rows.len());
+    let expected = l.rows.len().saturating_add(r.rows.len());
+    let cell_ceiling = ctx.cell_row_ceiling(out_len);
+    let mut rows = Vec::with_capacity(cell_ceiling.map_or(expected, |cap| cap.min(expected)));
     for lrow in &l.rows {
+        if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
+            let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+            break;
+        }
         // Left columns are out[0..left_len] in order; pad the rest with None.
         let mut row = smallvec::smallvec![None; out_len];
         row[..left_len].copy_from_slice(lrow);
         rows.push(row);
     }
     for rrow in &r.rows {
+        if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
+            let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+            break;
+        }
         let mut row = smallvec::smallvec![None; out_len];
         for (j, &cell) in rrow.iter().enumerate() {
             row[right_to_out[j]] = cell;
@@ -244,11 +384,71 @@ fn concat_union<I: ViewTermId>(l: &SolutionSeq<I>, r: &SolutionSeq<I>) -> Soluti
     }
 }
 
-/// One `UNION` branch's forked-child result: its output schema plus every
-/// result row classified via [`crate::parallel::minted_row`] — `Direct` (no
-/// remap needed) or `Portable` (materialized while the branch's forked child
-/// is still alive) — so it survives that child being dropped.
-type PortableBranch<I> = (Arc<VarSchema>, Vec<crate::parallel::MintedRow<I>>);
+/// One `UNION` branch's forked-child result: its output schema plus every result row
+/// classified via [`crate::parallel::minted_row`] — `Direct` (no remap needed) or
+/// `Portable` (materialized while the branch's forked child is still alive) — so it
+/// survives that child being dropped, together with the certificate when the branch
+/// truncated.
+///
+/// Generic over the row payload so the branch-order rule ([`union_branch_order`]) can be
+/// exercised without building a forked worker's interned rows: the rule is a function of
+/// the certificates alone, and it must be checkable for the branch combination only true
+/// concurrency can produce.
+#[derive(Debug)]
+struct UnionBranch<T> {
+    /// The branch's output schema.
+    schema: Arc<VarSchema>,
+    /// The branch's rows.
+    rows: Vec<T>,
+    /// The certificate, when a governor stopped the arm short.
+    certificate: Option<crate::governor::lift::Certificate>,
+}
+
+/// The `UNION` branch-order truncation rule, applied.
+///
+/// > A truncated `UNION` yields the rows of the branches that COMPLETED, in branch order.
+/// > If the LEFT branch truncates, only its rows survive and the right branch contributes
+/// > nothing **even if it was already computed**; if the left completes and the right
+/// > truncates, both contribute and the right's partial rows are a genuine suffix.
+///
+/// The "even if it was already computed" clause is the reason this is a function rather
+/// than an `if` inside the sequential body. The sequential body never starts the right
+/// branch after the left truncates, but `rayon::join` starts both, so on the parallel
+/// path the right branch's rows can exist by the time the left branch's trip is known.
+/// Admitting them would make a governed result larger *because a second thread got
+/// there* — the same query, data, and budget would then produce different partial answers
+/// under different scheduling. Emptying the right branch here is what makes the two paths
+/// one observable rule.
+///
+/// Returns the surviving branches plus the ordinal of the branch whose certificate
+/// governs (left before right, so a simultaneous trip reports the branch a sequential
+/// evaluation would have reached first — the same source-order reduction
+/// [`crate::parallel`] applies to errors).
+fn union_branch_order<T>(
+    left: UnionBranch<T>,
+    mut right: UnionBranch<T>,
+) -> (
+    UnionBranch<T>,
+    UnionBranch<T>,
+    Option<(usize, ChildCertificate)>,
+) {
+    if let Some(certificate) = left.certificate.clone() {
+        // Discarded, not concatenated. An empty schema unions to the left schema, so the
+        // concatenation downstream reproduces the sequential body's output exactly.
+        right.rows = Vec::new();
+        right.schema = Arc::new(VarSchema::new());
+        right.certificate = None;
+        return (left, right, Some((0, certificate)));
+    }
+    let governing = right
+        .certificate
+        .clone()
+        .map(|certificate| (1, certificate));
+    (left, right, governing)
+}
+
+/// The certificate half of a [`UnionBranch`], named for readability at the boundary.
+type ChildCertificate = crate::governor::lift::Certificate;
 
 /// The mapping from a right operand's column ordinal to its ordinal in `out`.
 fn right_to_out_map(right: &VarSchema, out: &VarSchema) -> Vec<usize> {
@@ -319,7 +519,11 @@ pub(crate) fn probe_has_match<I: ViewTermId>(
 }
 
 /// Hash-join two solution sequences on their shared variables.
-fn hash_join<I: ViewTermId>(l: &SolutionSeq<I>, r: &SolutionSeq<I>) -> SolutionSeq<I> {
+fn hash_join<D: DatasetView + Sync>(
+    l: &SolutionSeq<D::Id>,
+    r: &SolutionSeq<D::Id>,
+    ctx: &EvalCtx<'_, D>,
+) -> SolutionSeq<D::Id> {
     let out = l.schema.union(&r.schema);
     let out_len = out.len();
     let left_len = l.schema.len();
@@ -337,34 +541,78 @@ fn hash_join<I: ViewTermId>(l: &SolutionSeq<I>, r: &SolutionSeq<I>) -> SolutionS
     // row sequence. Captures only read-only borrows: `keyed`/`wild`/`r.rows` (the
     // prebuilt index), `right_to_out`/`shared` (pure layout), `left_len`/`out_len`
     // (`Copy`), and `merge`/`compatible` (pure fns).
-    let rows = crate::parallel::par_chunk_map(&l.rows, |acc, lrow| {
-        match bound_key(lrow, &shared, KeySide::Left) {
-            // Probe is fully bound on shared columns: hit the matching bucket
-            // (exact key ⇒ compatible) plus any wild build rows it is compatible
-            // with (a wild row's None shared column matches anything).
-            Some(key) => {
-                if let Some(idxs) = keyed.get(&key) {
-                    for &idx in idxs {
-                        acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+    let rows = if let Some(cell_ceiling) = ctx.cell_row_ceiling(out_len) {
+        // A global allocation bound cannot be divided among parallel chunks without each
+        // chunk receiving (and allocating) the whole allowance. Keep this governed lane in
+        // source order and test the ceiling before `merge` constructs the next row.
+        let worst_case = l.rows.len().saturating_mul(r.rows.len());
+        let mut rows = Vec::with_capacity(cell_ceiling.min(worst_case));
+        'left: for lrow in &l.rows {
+            match bound_key(lrow, &shared, KeySide::Left) {
+                Some(key) => {
+                    if let Some(idxs) = keyed.get(&key) {
+                        for &idx in idxs {
+                            if rows.len() >= cell_ceiling {
+                                let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+                                break 'left;
+                            }
+                            rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                        }
+                    }
+                    for &idx in &wild {
+                        if compatible(lrow, &r.rows[idx], &shared) {
+                            if rows.len() >= cell_ceiling {
+                                let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+                                break 'left;
+                            }
+                            rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                        }
                     }
                 }
-                for &idx in &wild {
-                    if compatible(lrow, &r.rows[idx], &shared) {
-                        acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
-                    }
-                }
-            }
-            // Probe has an unbound shared column: it can match any build row, so
-            // fall back to a compatibility scan over all of them.
-            None => {
-                for rrow in &r.rows {
-                    if compatible(lrow, rrow, &shared) {
-                        acc.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
+                None => {
+                    for rrow in &r.rows {
+                        if compatible(lrow, rrow, &shared) {
+                            if rows.len() >= cell_ceiling {
+                                let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+                                break 'left;
+                            }
+                            rows.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
+                        }
                     }
                 }
             }
         }
-    });
+        rows
+    } else {
+        crate::parallel::par_chunk_map(&l.rows, |acc, lrow| {
+            match bound_key(lrow, &shared, KeySide::Left) {
+                // Probe is fully bound on shared columns: hit the matching bucket
+                // (exact key ⇒ compatible) plus any wild build rows it is compatible
+                // with (a wild row's None shared column matches anything).
+                Some(key) => {
+                    if let Some(idxs) = keyed.get(&key) {
+                        for &idx in idxs {
+                            acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                        }
+                    }
+                    for &idx in &wild {
+                        if compatible(lrow, &r.rows[idx], &shared) {
+                            acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                        }
+                    }
+                }
+                // Probe has an unbound shared column: it can match any build row, so
+                // fall back to a compatibility scan over all of them.
+                None => {
+                    for rrow in &r.rows {
+                        if compatible(lrow, rrow, &shared) {
+                            acc.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
+                        }
+                    }
+                }
+            }
+        })
+    };
 
     SolutionSeq {
         schema: Arc::new(out),
@@ -417,6 +665,12 @@ fn merge<I: ViewTermId>(
     right_to_out: &[usize],
     out_len: usize,
 ) -> Solution<I> {
+    #[cfg(test)]
+    MERGE_COUNT.with(|count| {
+        if let Some(current) = count.get() {
+            count.set(Some(current.saturating_add(1)));
+        }
+    });
     debug_assert_eq!(left_row.len(), left_len);
     // One exact-size allocation, initialized from the left row directly (no
     // write-None-then-overwrite pass over the left prefix).
@@ -432,20 +686,121 @@ fn merge<I: ViewTermId>(
     merged
 }
 
+#[cfg(test)]
+std::thread_local! {
+    /// Per-test proof that a cell-bounded cross product checks the sink before constructing
+    /// row `limit + 1`. `None` keeps ordinary tests and production builds free.
+    static MERGE_COUNT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn counting_merges<T>(run: impl FnOnce() -> T) -> (T, usize) {
+    let previous = MERGE_COUNT.with(|count| count.replace(Some(0)));
+    let output = run();
+    let observed = MERGE_COUNT.with(|count| count.replace(previous).unwrap_or(0));
+    (output, observed)
+}
+
 /// Evaluate `left OPTIONAL { right }` (algebra `LeftJoin`) as a left outer join,
 /// with an optional inline `FILTER` condition evaluated on the merged solution.
+///
+/// # Under a truncated child: the fabrication hazard
+///
+/// A left outer join emits a left row **padded with unbound** exactly when no compatible
+/// right row exists — a claim about the *whole* right bag. So:
+///
+/// - **Truncated left arm.** The right arm is not evaluated at all, and the left rows in
+///   hand are NOT emitted padded. Padding them would assert "the OPTIONAL matched
+///   nothing" for rows whose right bag was never looked at: a fabricated answer, not a
+///   missing one. The node yields the empty bag, a sound lower bound.
+/// - **Truncated right arm.** Padding is **suppressed** and the operator degenerates to
+///   an inner join over the partial right bag. This is the same fabrication hazard, one
+///   step down: a left row whose only match lies past the cut would come out padded, and
+///   that padded row asserts "the OPTIONAL matched nothing" about a right bag the
+///   evaluator only holds a prefix of.
+///
+///   Padding it is not merely imprecise, it is **unsound in both directions**. It is not
+///   a lower bound — the padded row is not an answer. And it is not an upper bound
+///   either, which is the subtler half: emitting `l` padded *in place of* the true rows
+///   `l ⋈ m` for every `m` past the cut means those true answers are absent from the
+///   result, so the one licence an upper bound grants — "a row absent from this result is
+///   definitively not an answer" — is false of exactly the rows the cut hid.
+///
+///   Suppressing the padding restores a bound: what is emitted is `{l ⋈ m : m ∈ R'}` for
+///   the partial right bag `R' ⊆ R`, and every such row is in the true output, so the
+///   result is a certified sub-bag. That is why `LeftJoin`'s right edge is classified
+///   [`ChildEdge::MONOTONE_BAG`] — identical to `Join`'s right edge, which is exactly what
+///   this operator becomes once its right bag is known to be incomplete.
+///
+/// [`ChildEdge::MONOTONE_BAG`]: crate::governor::soundness::ChildEdge::MONOTONE_BAG
 pub(crate) fn eval_left_join<D: DatasetView + Sync>(
+    node: &GraphPattern,
     left: &GraphPattern,
     right: &GraphPattern,
     expression: Option<&Expression>,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<SolutionSeq<D::Id>, EvalError> {
-    let l = eval(left, ctx)?;
-    let r = eval(right, ctx)?;
-    match expression {
-        None => Ok(left_outer_join(&l, &r)),
-        Some(expr) => left_outer_join_filtered(&l, &r, expr, ctx),
+) -> Result<Evaluated<D::Id>, EvalError> {
+    left_join_lift(
+        node,
+        eval_evaluated(left, ctx)?,
+        |ctx| eval_evaluated(right, ctx),
+        expression,
+        ctx,
+    )
+}
+
+/// The `LeftJoin` lift, given the left arm's result and a **lazy** right arm.
+///
+/// The right arm arrives as a closure rather than as a value for a reason that is part of
+/// the contract: when the left arm has already truncated, the right arm is *never
+/// evaluated*. Handing this function a value would make that impossible to express, and
+/// would license a full scan of the right arm after the budget was spent.
+///
+/// Split out from [`eval_left_join`] so the fabrication hazard can be tested by feeding
+/// the arms directly, rather than only through a whole query whose trip point depends on
+/// a charge schedule.
+fn left_join_lift<D: DatasetView + Sync>(
+    node: &GraphPattern,
+    left: Evaluated<D::Id>,
+    right: impl FnOnce(&mut EvalCtx<'_, D>) -> Result<Evaluated<D::Id>, EvalError>,
+    expression: Option<&Expression>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let mut lift = Lift::at(node);
+    let Some(l) = lift.absorb(0, left) else {
+        return Ok(lift.withheld());
+    };
+    if lift.is_truncated() {
+        // The right arm is NOT evaluated, and the left rows in hand are NOT emitted
+        // padded with unbound: padding asserts "the OPTIONAL matched nothing", which is a
+        // claim about a right bag that was never looked at. The empty bag is a sound
+        // lower bound; a padded row would be a fabricated answer.
+        return Ok(lift.finish(SolutionSeq::empty(l.schema)));
     }
+    let Some(r) = lift.absorb(1, right(ctx)?) else {
+        return Ok(lift.withheld());
+    };
+    // The left arm did not truncate (that returned above), so the lift is truncated here
+    // exactly when the RIGHT arm did — i.e. exactly when `r` is a prefix of the right bag
+    // rather than the whole of it, and "no compatible right row exists" is therefore not
+    // a fact this operator holds about any left row. See this operator's doc comment for
+    // why padding then bounds the answer on neither side.
+    let pad_unmatched = !lift.is_truncated();
+    let joined = match expression {
+        None => left_outer_join(&l, &r, ctx, pad_unmatched),
+        Some(expr) => left_outer_join_filtered(&l, &r, expr, ctx, pad_unmatched)?,
+    };
+    // An `EXISTS` inside the inline condition is an opaque edge: a trip inside it makes
+    // every emitted row's condition a boolean computed over a truncated bag, so the whole
+    // output is withheld rather than certified.
+    if let Some(tripped) = ctx.expression_barrier.observed() {
+        return Ok(Evaluated::Truncated(Truncation::barred_at(
+            node,
+            tripped,
+            Arc::clone(&joined.schema),
+        )));
+    }
+    Ok(lift.finish(joined))
 }
 
 /// A left outer join whose right-side pairings must additionally satisfy `expr`
@@ -461,11 +816,16 @@ pub(crate) fn eval_left_join<D: DatasetView + Sync>(
 /// nothing — see its doc comment), so nothing new escapes a forked child's
 /// scratch and it is discarded after use — no re-interning via
 /// [`crate::parallel::reintern_minted_row`] is needed.
+///
+/// `pad_unmatched` is `false` exactly when `r` is a *prefix* of the right bag rather than
+/// the whole of it, in which case "no pairing passes" is not a fact this operator holds
+/// and the left-alone row must not be emitted; see [`eval_left_join`].
 fn left_outer_join_filtered<D: DatasetView + Sync>(
     l: &SolutionSeq<D::Id>,
     r: &SolutionSeq<D::Id>,
     expr: &Expression,
     ctx: &mut EvalCtx<'_, D>,
+    pad_unmatched: bool,
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
     let out = Arc::new(l.schema.union(&r.schema));
     let out_len = out.len();
@@ -474,7 +834,8 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
     let shared = l.schema.shared_columns(&r.schema);
 
     // A left outer join emits at least one row per left row.
-    let rows = if crate::parallel::is_parallel_safe(expr, ctx.user_functions) {
+    let cell_ceiling = ctx.cell_row_ceiling(out_len);
+    let rows = if cell_ceiling.is_none() && ctx.may_fork_row_loop(expr) {
         crate::parallel::par_chunk_try_map_init(
             &l.rows,
             || ctx.fork_for_worker(),
@@ -489,7 +850,7 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                         acc.push(merged);
                     }
                 }
-                if acc.len() == before {
+                if pad_unmatched && acc.len() == before {
                     let mut row = smallvec::smallvec![None; out_len];
                     row[..left_len].copy_from_slice(lrow);
                     acc.push(row);
@@ -498,8 +859,9 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
             },
         )?
     } else {
-        let mut rows = Vec::with_capacity(l.rows.len());
-        for lrow in &l.rows {
+        let mut rows =
+            Vec::with_capacity(cell_ceiling.map_or(l.rows.len(), |cap| cap.min(l.rows.len())));
+        'left: for lrow in &l.rows {
             let mut matched = false;
             for rrow in &r.rows {
                 if !compatible(lrow, rrow, &shared) {
@@ -507,11 +869,19 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                 }
                 let merged = merge(lrow, rrow, left_len, &right_to_out, out_len);
                 if crate::expr::eval_ebv(expr, &merged, &out, ctx)? == Some(true) {
+                    if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
+                        let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+                        break 'left;
+                    }
                     rows.push(merged);
                     matched = true;
                 }
             }
-            if !matched {
+            if pad_unmatched && !matched {
+                if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
+                    let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+                    break;
+                }
                 let mut row = smallvec::smallvec![None; out_len];
                 row[..left_len].copy_from_slice(lrow);
                 rows.push(row);
@@ -524,7 +894,18 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
 
 /// Left outer join: every left solution merged with each compatible right
 /// solution, or emitted alone (right columns unbound) when none is compatible.
-fn left_outer_join<I: ViewTermId>(l: &SolutionSeq<I>, r: &SolutionSeq<I>) -> SolutionSeq<I> {
+///
+/// `pad_unmatched` is `false` exactly when `r` is a *prefix* of the right bag rather than
+/// the whole of it, in which case "no compatible right row exists" is not a fact this
+/// operator holds and the left-alone row must not be emitted; see [`eval_left_join`]. The
+/// operator then computes an inner join, which is what a `LeftJoin` over an incomplete
+/// right bag soundly is.
+fn left_outer_join<D: DatasetView + Sync>(
+    l: &SolutionSeq<D::Id>,
+    r: &SolutionSeq<D::Id>,
+    ctx: &EvalCtx<'_, D>,
+    pad_unmatched: bool,
+) -> SolutionSeq<D::Id> {
     let out = l.schema.union(&r.schema);
     let out_len = out.len();
     let left_len = l.schema.len();
@@ -538,37 +919,89 @@ fn left_outer_join<I: ViewTermId>(l: &SolutionSeq<I>, r: &SolutionSeq<I>) -> Sol
     // none match, the single padded left-alone row — reproducing the existing "emit
     // alone iff no match" per-row semantics inside the worker so flattening in index
     // order is byte-identical to the sequential path.
-    let rows = crate::parallel::par_chunk_map(&l.rows, |acc, lrow| {
-        let before = acc.len();
-        match bound_key(lrow, &shared, KeySide::Left) {
-            Some(key) => {
-                if let Some(idxs) = keyed.get(&key) {
-                    for &idx in idxs {
-                        acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+    let cell_ceiling = ctx.cell_row_ceiling(out_len);
+    let rows = if let Some(cell_ceiling) = cell_ceiling {
+        let worst_case = l.rows.len().saturating_mul(r.rows.len().max(1));
+        let mut rows = Vec::with_capacity(cell_ceiling.min(worst_case));
+        'left: for lrow in &l.rows {
+            let before = rows.len();
+            match bound_key(lrow, &shared, KeySide::Left) {
+                Some(key) => {
+                    if let Some(idxs) = keyed.get(&key) {
+                        for &idx in idxs {
+                            if rows.len() >= cell_ceiling {
+                                let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+                                break 'left;
+                            }
+                            rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                        }
+                    }
+                    for &idx in &wild {
+                        if compatible(lrow, &r.rows[idx], &shared) {
+                            if rows.len() >= cell_ceiling {
+                                let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+                                break 'left;
+                            }
+                            rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                        }
                     }
                 }
-                for &idx in &wild {
-                    if compatible(lrow, &r.rows[idx], &shared) {
-                        acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                None => {
+                    for rrow in &r.rows {
+                        if compatible(lrow, rrow, &shared) {
+                            if rows.len() >= cell_ceiling {
+                                let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+                                break 'left;
+                            }
+                            rows.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
+                        }
                     }
                 }
             }
-            None => {
-                for rrow in &r.rows {
-                    if compatible(lrow, rrow, &shared) {
-                        acc.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
+            if pad_unmatched && rows.len() == before {
+                if rows.len() >= cell_ceiling {
+                    let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+                    break;
+                }
+                let mut row = smallvec::smallvec![None; out_len];
+                row[..left_len].copy_from_slice(lrow);
+                rows.push(row);
+            }
+        }
+        rows
+    } else {
+        crate::parallel::par_chunk_map(&l.rows, |acc, lrow| {
+            let before = acc.len();
+            match bound_key(lrow, &shared, KeySide::Left) {
+                Some(key) => {
+                    if let Some(idxs) = keyed.get(&key) {
+                        for &idx in idxs {
+                            acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                        }
+                    }
+                    for &idx in &wild {
+                        if compatible(lrow, &r.rows[idx], &shared) {
+                            acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                        }
+                    }
+                }
+                None => {
+                    for rrow in &r.rows {
+                        if compatible(lrow, rrow, &shared) {
+                            acc.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
+                        }
                     }
                 }
             }
-        }
-        // No compatible right solution → keep the left solution alone (the OPTIONAL
-        // contributed nothing, its variables stay unbound).
-        if acc.len() == before {
-            let mut row = smallvec::smallvec![None; out_len];
-            row[..left_len].copy_from_slice(lrow);
-            acc.push(row);
-        }
-    });
+            // No compatible right solution → keep the left solution alone (the OPTIONAL
+            // contributed nothing, its variables stay unbound).
+            if pad_unmatched && acc.len() == before {
+                let mut row = smallvec::smallvec![None; out_len];
+                row[..left_len].copy_from_slice(lrow);
+                acc.push(row);
+            }
+        })
+    };
 
     SolutionSeq {
         schema: Arc::new(out),
@@ -583,13 +1016,30 @@ fn left_outer_join<I: ViewTermId>(l: &SolutionSeq<I>, r: &SolutionSeq<I>) -> Sol
 /// SPARQL §18.5): solutions with disjoint domains never remove, so `MINUS` over
 /// patterns with no common variable is a no-op. The result schema is the left
 /// schema (MINUS introduces no right columns) and left multiplicity is preserved.
+///
+/// # Under a truncated child
+///
+/// Removal is a claim about the *whole* right bag, so a truncated LEFT arm yields the
+/// empty bag rather than left rows that were never checked for removal — emitting them
+/// would fabricate rows `MINUS` would have deleted. A truncated RIGHT arm subtracts less
+/// than the true query would, so the output contains the true answer: an upper bound, not
+/// a black hole.
 pub(crate) fn eval_minus<D: DatasetView + Sync>(
+    node: &GraphPattern,
     left: &GraphPattern,
     right: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<SolutionSeq<D::Id>, EvalError> {
-    let l = eval(left, ctx)?;
-    let r = eval(right, ctx)?;
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let mut lift = Lift::at(node);
+    let Some(l) = lift.absorb(0, eval_evaluated(left, ctx)?) else {
+        return Ok(lift.withheld());
+    };
+    if lift.is_truncated() {
+        return Ok(lift.finish(SolutionSeq::empty(l.schema)));
+    }
+    let Some(r) = lift.absorb(1, eval_evaluated(right, ctx)?) else {
+        return Ok(lift.withheld());
+    };
     let shared = l.schema.shared_columns(&r.schema);
 
     let rows = crate::parallel::par_retain(&l.rows, |lrow| {
@@ -602,18 +1052,87 @@ pub(crate) fn eval_minus<D: DatasetView + Sync>(
         })
     });
 
-    Ok(SolutionSeq {
+    Ok(lift.finish(SolutionSeq {
         schema: l.schema,
         rows,
-    })
+    }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::eval::EvalCtx;
+    use crate::eval::eval;
+    use crate::governor::{
+        GovernorState as TestGovernorState, QueryGovernors as TestQueryGovernors,
+    };
+
+    // The operators take the algebra node itself (it names the barrier and supplies the
+    // child edge classification), so these tests build the node and drive the ordinary
+    // dispatch — which is also what keeps them testing the wiring rather than a private
+    // entry point no query ever reaches.
+    fn eval_join<D: DatasetView<Id = TermId> + Sync>(
+        left: &GraphPattern,
+        right: &GraphPattern,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<SolutionSeq, EvalError> {
+        eval(
+            &GraphPattern::Join {
+                left: Box::new(left.clone()),
+                right: Box::new(right.clone()),
+            },
+            ctx,
+        )
+    }
+
+    fn eval_union<D: DatasetView<Id = TermId> + Sync>(
+        left: &GraphPattern,
+        right: &GraphPattern,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<SolutionSeq, EvalError> {
+        eval(
+            &GraphPattern::Union {
+                left: Box::new(left.clone()),
+                right: Box::new(right.clone()),
+            },
+            ctx,
+        )
+    }
+
+    fn eval_left_join<D: DatasetView<Id = TermId> + Sync>(
+        left: &GraphPattern,
+        right: &GraphPattern,
+        expression: Option<&Expression>,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<SolutionSeq, EvalError> {
+        eval(
+            &GraphPattern::LeftJoin {
+                left: Box::new(left.clone()),
+                right: Box::new(right.clone()),
+                expression: expression.cloned(),
+            },
+            ctx,
+        )
+    }
+
+    fn eval_minus<D: DatasetView<Id = TermId> + Sync>(
+        left: &GraphPattern,
+        right: &GraphPattern,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<SolutionSeq, EvalError> {
+        eval(
+            &GraphPattern::Minus {
+                left: Box::new(left.clone()),
+                right: Box::new(right.clone()),
+            },
+            ctx,
+        )
+    }
     use pretty_assertions::assert_eq;
-    use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
+    use purrdf_core::{
+        RdfDataset, RdfDatasetBuilder, ResourceDimension as TestResourceDimension, TermValue,
+        TrippedGovernor as TestTrippedGovernor,
+    };
     use purrdf_sparql_algebra::{
         Literal, NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
     };
@@ -702,6 +1221,51 @@ mod tests {
         let right = bgp(vp("p"), pred("http://ex/likes"), vp("q")); // 2 rows
         let seq = eval_join(&left, &right, &mut ctx).expect("join");
         assert_eq!(seq.len(), 2); // 1 × 2.
+    }
+
+    #[test]
+    fn cell_bounded_cross_product_refuses_before_constructing_limit_plus_one() {
+        let ds = graph();
+        let left_id = ds
+            .term_id_by_value(&TermValue::Iri("http://ex/a".to_owned()))
+            .expect("left term");
+        let right_id = ds
+            .term_id_by_value(&TermValue::Iri("http://ex/b".to_owned()))
+            .expect("right term");
+        let left = SolutionSeq {
+            schema: Arc::new(VarSchema::from_vars([Variable::new("left")])),
+            rows: (0..100)
+                .map(|_| smallvec::smallvec![Some(SolutionTerm::Existing(left_id))])
+                .collect(),
+        };
+        let right = SolutionSeq {
+            schema: Arc::new(VarSchema::from_vars([Variable::new("right")])),
+            rows: (0..100)
+                .map(|_| smallvec::smallvec![Some(SolutionTerm::Existing(right_id))])
+                .collect(),
+        };
+        // Two columns, four cells: exactly two rows fit. The 10,000-row unbounded cross
+        // product must construct only those two; candidate three records six attempted
+        // cells without calling `merge`.
+        let state = Arc::new(TestGovernorState::new(
+            &TestQueryGovernors::UNBOUNDED.with_max_intermediate_cells(4),
+        ));
+        let ctx = EvalCtx::new(&ds).with_governors(Arc::clone(&state));
+        let (joined, merges) = counting_merges(|| hash_join(&left, &right, &ctx));
+
+        assert_eq!(joined.rows.len(), 2);
+        assert_eq!(
+            merges, 2,
+            "row three must be refused before merge allocates it"
+        );
+        assert_eq!(
+            state.tripped(),
+            Some(TestTrippedGovernor::Budget {
+                dimension: TestResourceDimension::IntermediateCells,
+                limit: 4,
+                consumed: 6,
+            })
+        );
     }
 
     #[test]
@@ -1052,7 +1616,7 @@ mod tests {
         assert_eq!(seq.len(), 2);
     }
 
-    /// Determinism smoke test (Task 6): a 3-branch `UNION` (the `d_union_4` bench
+    /// Determinism smoke test: a 3-branch `UNION` (the `d_union_4` bench
     /// shape) where each branch `BIND`s a freshly-computed value — two branches
     /// minting the SAME value (`11`), one minting a DISJOINT value (`12`) — so the
     /// escaping-computed-term merge in [`eval_union`] is exercised both ways.
@@ -1173,5 +1737,500 @@ mod tests {
             })
             .collect();
         assert_eq!(got_sums, expected_sums);
+    }
+
+    // -----------------------------------------------------------------------
+    // The partial-lift channel
+    // -----------------------------------------------------------------------
+
+    /// A fuel trip, so the certificate under test names the governor the invariant is
+    /// stated about rather than whichever one happens to be easiest to fire.
+    const FUEL: purrdf_core::TrippedGovernor = purrdf_core::TrippedGovernor::Budget {
+        dimension: purrdf_core::ResourceDimension::Fuel,
+        limit: 4,
+        consumed: 5,
+    };
+
+    #[test]
+    fn fuel_trip_mid_optional_probe_never_emits_an_unbound_extension() {
+        // `{ ?x :knows ?y } OPTIONAL { ?y :likes ?z }`. Ungoverned, `x=a, y=b` finds
+        // `z=tea`, so the true answer binds `?z`. The hazard is a partial evaluation that
+        // emits `x=a, y=b, z=UNBOUND` — a row the true query never returns, and one a
+        // caller reading a lower bound would admit as an answer.
+        let ds = graph();
+        let left = bgp(vp("x"), pred("http://ex/knows"), vp("y"));
+        let right_arm = bgp(vp("y"), pred("http://ex/likes"), vp("z"));
+        let node = GraphPattern::LeftJoin {
+            left: Box::new(left.clone()),
+            right: Box::new(right_arm.clone()),
+            expression: None,
+        };
+
+        let mut ctx = EvalCtx::new(&ds);
+        let full = eval(&node, &mut ctx).expect("ungoverned optional");
+        assert_eq!(full.len(), 1);
+        assert!(
+            full.rows[0].iter().all(Option::is_some),
+            "ungoverned, the OPTIONAL binds ?z"
+        );
+
+        // Case 1: the LEFT arm truncates. The right arm has not been looked at, so the
+        // left rows in hand must NOT be padded — no row may be emitted at all.
+        let left_rows = eval(&left, &mut ctx).expect("left arm");
+        let truncated_left = Evaluated::Truncated(Truncation::origin(left_rows.clone(), FUEL));
+        let lifted = left_join_lift(
+            &node,
+            truncated_left,
+            |_ctx| -> Result<Evaluated<TermId>, EvalError> {
+                panic!("the right arm must not be evaluated once the left arm truncated")
+            },
+            None,
+            &mut ctx,
+        )
+        .expect("lift over a truncated left arm");
+        let Evaluated::Truncated(certificate) = lifted else {
+            panic!("a truncated child must stay truncated");
+        };
+        assert_eq!(
+            certificate.bound(),
+            crate::governor::soundness::SpineClass::Certain,
+            "the empty bag is a sound lower bound"
+        );
+        assert!(
+            certificate.rows().is_empty(),
+            "a left row padded with unbound here would assert that the OPTIONAL matched \
+             nothing, about a right bag that was never evaluated: a fabricated answer"
+        );
+
+        // Case 2: the RIGHT arm truncates to nothing. Padding is the SAME fabrication
+        // hazard one step down: a left row emitted alone asserts that the whole right bag
+        // held no match, about a bag the evaluator holds only a prefix of. Worse, it is
+        // emitted INSTEAD of the true rows the cut hid, so it is not an upper bound
+        // either — the answers `l ⋈ m` past the cut would be missing from a result whose
+        // only licence is "absent means definitively not an answer".
+        let empty_right = SolutionSeq::empty(Arc::new(VarSchema::from_vars([
+            Variable::new("y"),
+            Variable::new("z"),
+        ])));
+        let lifted = left_join_lift(
+            &node,
+            Evaluated::Complete(left_rows.clone()),
+            move |_ctx| Ok(Evaluated::Truncated(Truncation::origin(empty_right, FUEL))),
+            None,
+            &mut ctx,
+        )
+        .expect("lift over a truncated right arm");
+        let Evaluated::Truncated(certificate) = lifted else {
+            panic!("a truncated child must stay truncated");
+        };
+        assert_eq!(
+            certificate.bound(),
+            crate::governor::soundness::SpineClass::Certain,
+            "with the padding suppressed the operator is an inner join over a prefix of \
+             the right bag, so every row it does emit is an answer"
+        );
+        assert!(
+            certificate.rows().is_empty(),
+            "the empty right prefix pairs with nothing, and the left rows must NOT be \
+             padded out in its place"
+        );
+        assert_eq!(certificate.tripped(), FUEL);
+
+        // And a NON-empty right prefix still emits the pairings it actually found: the
+        // suppression removes fabricated rows, not real ones.
+        let right_rows = eval(&right_arm, &mut ctx).expect("right arm");
+        assert!(!right_rows.is_empty(), "the fixture's OPTIONAL does match");
+        let lifted = left_join_lift(
+            &node,
+            Evaluated::Complete(left_rows),
+            move |_ctx| Ok(Evaluated::Truncated(Truncation::origin(right_rows, FUEL))),
+            None,
+            &mut ctx,
+        )
+        .expect("lift over a truncated right arm");
+        let Evaluated::Truncated(certificate) = lifted else {
+            panic!("a truncated child must stay truncated");
+        };
+        assert_eq!(
+            certificate.bound(),
+            crate::governor::soundness::SpineClass::Certain
+        );
+        assert_eq!(certificate.rows().len(), 1);
+        assert!(
+            certificate.rows().rows[0].iter().all(Option::is_some),
+            "the surviving row is a genuine pairing, not a padded one"
+        );
+        assert!(
+            certificate.certain_rows().is_some(),
+            "and a genuine pairing IS reachable through the certified-answer channel"
+        );
+    }
+
+    #[test]
+    fn ungoverned_evaluation_is_unchanged_and_always_complete() {
+        // Every binary operator over the same fixture, driven through the ordinary
+        // dispatch with no governors attached: each must answer `Complete`, and the rows
+        // must be exactly what the completion-required entry point returns.
+        let ds = graph();
+        let knows = bgp(vp("x"), pred("http://ex/knows"), vp("y"));
+        let likes = bgp(vp("y"), pred("http://ex/likes"), vp("z"));
+        let plans = [
+            GraphPattern::Join {
+                left: Box::new(knows.clone()),
+                right: Box::new(likes.clone()),
+            },
+            GraphPattern::Union {
+                left: Box::new(knows.clone()),
+                right: Box::new(likes.clone()),
+            },
+            GraphPattern::LeftJoin {
+                left: Box::new(knows.clone()),
+                right: Box::new(likes.clone()),
+                expression: None,
+            },
+            GraphPattern::Minus {
+                left: Box::new(knows.clone()),
+                right: Box::new(likes.clone()),
+            },
+            GraphPattern::Lateral {
+                left: Box::new(knows),
+                right: Box::new(likes),
+            },
+        ];
+
+        for plan in plans {
+            let mut ctx = EvalCtx::new(&ds);
+            let evaluated = eval_evaluated(&plan, &mut ctx).expect("ungoverned eval");
+            assert!(
+                !evaluated.is_truncated(),
+                "an ungoverned execution has no ceiling to exceed and no signal to \
+                 observe, so it can only be complete"
+            );
+            let via_channel = evaluated.rows().clone();
+
+            let mut ctx = EvalCtx::new(&ds);
+            let via_entry = eval(&plan, &mut ctx).expect("completion entry point");
+            assert_eq!(via_channel.schema, via_entry.schema);
+            assert_eq!(
+                via_channel.rows, via_entry.rows,
+                "the channel must not change a single row of an ungoverned result"
+            );
+        }
+    }
+
+    /// A [`crate::StopSignal`] that fires on its `n`-th poll and latches thereafter.
+    #[derive(Debug)]
+    struct StopOnPoll {
+        /// Polls remaining before the signal fires.
+        remaining: std::sync::atomic::AtomicU64,
+    }
+
+    impl crate::StopSignal for StopOnPoll {
+        fn poll(&self) -> Option<purrdf_core::StopCause> {
+            let previous = self
+                .remaining
+                .fetch_update(
+                    std::sync::atomic::Ordering::Relaxed,
+                    std::sync::atomic::Ordering::Relaxed,
+                    |left| Some(left.saturating_sub(1)),
+                )
+                .unwrap_or(0);
+            (previous == 0).then_some(purrdf_core::StopCause::Cancelled)
+        }
+    }
+
+    /// A three-edge `knows` chain with `likes` edges, so the `UNION`'s left branch has
+    /// several per-input-row commit boundaries to be stopped between.
+    fn wide_graph() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let knows = b.intern_iri("https://example.org/knows");
+        let likes = b.intern_iri("https://example.org/likes");
+        let a = b.intern_iri("https://example.org/a");
+        let bb = b.intern_iri("https://example.org/b");
+        let c = b.intern_iri("https://example.org/c");
+        let d = b.intern_iri("https://example.org/d");
+        let tea = b.intern_iri("https://example.org/tea");
+        let cake = b.intern_iri("https://example.org/cake");
+        b.push_quad(a, knows, bb, None);
+        b.push_quad(bb, knows, c, None);
+        b.push_quad(c, knows, d, None);
+        b.push_quad(bb, likes, tea, None);
+        b.push_quad(c, likes, cake, None);
+        b.push_quad(d, likes, tea, None);
+        b.freeze().expect("freeze")
+    }
+
+    /// `{ LATERAL { ?x :knows ?y } { ?y :likes ?z } } UNION { ?p :likes ?q }`.
+    ///
+    /// The left branch commits one block per left row, so a stop lands *between* blocks
+    /// with rows already in hand; the right branch is non-empty, so a result that
+    /// wrongly admitted it would be visibly larger.
+    fn union_over_lateral() -> GraphPattern {
+        GraphPattern::Union {
+            left: Box::new(GraphPattern::Lateral {
+                left: Box::new(bgp(vp("x"), pred("https://example.org/knows"), vp("y"))),
+                right: Box::new(bgp(vp("y"), pred("https://example.org/likes"), vp("z"))),
+            }),
+            right: Box::new(bgp(vp("p"), pred("https://example.org/likes"), vp("q"))),
+        }
+    }
+
+    /// Everything about one evaluation that a caller can observe, rendered so two runs
+    /// over the same dataset compare structurally rather than by interner identity.
+    type UnionObservation = (bool, Option<String>, Vec<String>, Vec<Vec<Option<String>>>);
+
+    fn observe(ds: &RdfDataset, evaluated: &Evaluated<TermId>) -> UnionObservation {
+        let scratch = crate::scratch::ScratchInterner::new();
+        let seq = evaluated.rows();
+        let truncated = match evaluated {
+            Evaluated::Complete(_) => None,
+            Evaluated::Truncated(truncation) => Some(truncation.describe()),
+        };
+        let vars = seq
+            .schema
+            .vars()
+            .iter()
+            .map(|v| v.as_str().to_owned())
+            .collect();
+        let rows = seq
+            .rows
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|cell| {
+                        cell.map(|t| match scratch.value_of(ds, t) {
+                            TermValue::Iri(iri) => iri,
+                            other => format!("{other:?}"),
+                        })
+                    })
+                    .collect()
+            })
+            .collect();
+        (evaluated.is_truncated(), truncated, vars, rows)
+    }
+
+    /// Evaluate `plan` under a stop signal that fires on its `budget`-th poll.
+    fn run_under_budget(ds: &RdfDataset, plan: &GraphPattern, budget: u64) -> Evaluated<TermId> {
+        let signal = Arc::new(StopOnPoll {
+            remaining: std::sync::atomic::AtomicU64::new(budget),
+        });
+        let governors = crate::QueryGovernors::UNBOUNDED.with_stop_signal(signal);
+        let state = Arc::new(crate::GovernorState::new(&governors));
+        let mut ctx = EvalCtx::new(ds).with_governors(state);
+        eval_evaluated(plan, &mut ctx).expect("governed eval")
+    }
+
+    #[test]
+    fn union_truncation_is_identical_under_forced_parallel_and_forced_sequential() {
+        // A governor may not report more rows because a second thread got there, and
+        // under engaged governors it now cannot: `EvalCtx::may_fork_sibling_patterns` is
+        // false, so a governed `UNION` evaluates its arms in source order on one thread
+        // whatever the scheduler wants. (It did not always. Forking them let the two arms
+        // race the one shared fuel counter, and the same query, data and budget produced
+        // seven different answers across sixty runs — see
+        // `tests/governor_correctness.rs`'s
+        // `a_governed_union_reports_one_outcome_however_it_is_scheduled`.)
+        //
+        // What this test pins is therefore the *parallel gate's* irrelevance to a governed
+        // result: driving `force_parallel_for_test` and `force_sequential_operation`
+        // against each other, over a whole ladder of budgets, must not move a single row.
+        // The one-worker pool keeps the poll-counting signal comparable across the two
+        // runs; the DISCARD rule that the fork used to need is pinned directly on
+        // `union_branch_order` at the bottom of this test, where it does not depend on
+        // winning a race to be exercised.
+        //
+        // `force_parallel_for_test` governs the chunked row loops rather than the UNION
+        // fork — the fork's own gate is `force_sequential_operation` — so both are driven
+        // here, each on the thread that will read it.
+        {
+            let ds = wide_graph();
+            let governors = crate::QueryGovernors::UNBOUNDED.with_fuel(64);
+            let state = Arc::new(crate::GovernorState::new(&governors));
+            let governed = EvalCtx::new(&ds).with_governors(state);
+            assert!(
+                !governed.may_fork_sibling_patterns(),
+                "an engaged governor must refuse the UNION fork outright"
+            );
+            assert!(
+                EvalCtx::new(&ds).may_fork_sibling_patterns(),
+                "an ungoverned UNION has no counter to race, so it keeps the fork"
+            );
+            let unbounded = Arc::new(crate::GovernorState::new(&crate::QueryGovernors::UNBOUNDED));
+            assert!(
+                EvalCtx::new(&ds)
+                    .with_governors(unbounded)
+                    .may_fork_sibling_patterns(),
+                "UNBOUNDED declines the accounting as well as the ceilings, so it has no \
+                 counter to race either"
+            );
+        }
+        let ds = wide_graph();
+        let plan = union_over_lateral();
+
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .expect("one-worker pool");
+
+        let mut saw_truncated_with_rows = false;
+        let mut saw_complete = false;
+        for budget in 1..=40_u64 {
+            let sequential = {
+                let _sequential = crate::parallel::force_sequential_operation();
+                let evaluated = run_under_budget(&ds, &plan, budget);
+                observe(&ds, &evaluated)
+            };
+            let parallel = pool.install(|| {
+                let _parallel = crate::parallel::force_parallel_for_test(true);
+                let evaluated = run_under_budget(&ds, &plan, budget);
+                observe(&ds, &evaluated)
+            });
+
+            assert_eq!(
+                sequential, parallel,
+                "budget {budget}: the same query, data and budget must yield the same \
+                 partial result whichever path evaluated it"
+            );
+            saw_complete |= !sequential.0;
+            saw_truncated_with_rows |= sequential.0 && !sequential.3.is_empty();
+        }
+
+        assert!(
+            saw_complete,
+            "the largest budgets must let the query finish, or the complete path is untested"
+        );
+        assert!(
+            saw_truncated_with_rows,
+            "some budget must stop the UNION with left-branch rows already committed, or \
+             the rule under test is never reached"
+        );
+
+        // The combination above cannot reach: a LEFT branch that truncated beside a RIGHT
+        // branch that COMPLETED with rows. A latched signal stops everything evaluated
+        // after it, so only genuine concurrency — the right branch finishing before the
+        // left branch's trip becomes known — produces it, and racing for it would be a
+        // test that passes by luck. The rule is therefore pinned directly on the function
+        // the parallel path calls: the computed right rows are discarded, so the result
+        // is the same one the sequential body (which never starts the right branch)
+        // produces.
+        let truncated_left = UnionBranch {
+            schema: Arc::new(VarSchema::from_vars([Variable::new("x")])),
+            rows: vec!["left-1", "left-2"],
+            certificate: Some(crate::governor::lift::Certificate::origin(
+                purrdf_core::TrippedGovernor::Stopped {
+                    cause: purrdf_core::StopCause::Cancelled,
+                },
+            )),
+        };
+        let complete_right = UnionBranch {
+            schema: Arc::new(VarSchema::from_vars([Variable::new("p")])),
+            rows: vec!["right-1", "right-2", "right-3"],
+            certificate: None,
+        };
+        let (left_branch, right_branch, governing) =
+            union_branch_order(truncated_left, complete_right);
+        assert_eq!(left_branch.rows, vec!["left-1", "left-2"]);
+        assert!(
+            right_branch.rows.is_empty(),
+            "a right branch computed only because rayon started it must not enlarge a \
+             governed result"
+        );
+        assert!(right_branch.schema.is_empty());
+        assert_eq!(
+            governing.map(|(ordinal, _)| ordinal),
+            Some(0),
+            "the left branch's truncation governs"
+        );
+
+        // And the mirror case: a completed left beside a truncated right keeps both,
+        // because the right's partial rows are a genuine suffix of the concatenation.
+        let complete_left = UnionBranch {
+            schema: Arc::new(VarSchema::from_vars([Variable::new("x")])),
+            rows: vec!["left-1"],
+            certificate: None,
+        };
+        let truncated_right = UnionBranch {
+            schema: Arc::new(VarSchema::from_vars([Variable::new("p")])),
+            rows: vec!["right-1"],
+            certificate: Some(crate::governor::lift::Certificate::origin(
+                purrdf_core::TrippedGovernor::Stopped {
+                    cause: purrdf_core::StopCause::Cancelled,
+                },
+            )),
+        };
+        let (left_branch, right_branch, governing) =
+            union_branch_order(complete_left, truncated_right);
+        assert_eq!(left_branch.rows, vec!["left-1"]);
+        assert_eq!(right_branch.rows, vec!["right-1"]);
+        assert_eq!(governing.map(|(ordinal, _)| ordinal), Some(1));
+    }
+
+    #[test]
+    fn a_truncated_left_arm_reports_the_evaluated_arms_schema() {
+        // The stated contract, pinned: see this crate's `governor` module documentation.
+        // When the LEFT arm of a JOIN / OPTIONAL / LATERAL / UNION truncates, the right
+        // arm is never evaluated, and this engine chooses column ORDER during evaluation
+        // (a BGP's columns appear in cost-based join order), so the right arm's columns
+        // are not derivable without the work that was just refused. The partial result
+        // therefore reports the LEFT arm's columns. No row is affected — none cross —
+        // but a caller diffing column lists must expect the narrower list.
+        let ds = wide_graph();
+        let left = bgp(vp("x"), pred("https://example.org/knows"), vp("y"));
+        let right = bgp(vp("p"), pred("https://example.org/likes"), vp("q"));
+        let node = GraphPattern::Join {
+            left: Box::new(left.clone()),
+            right: Box::new(right),
+        };
+
+        let mut ctx = EvalCtx::new(&ds);
+        let complete = eval(&node, &mut ctx).expect("ungoverned join");
+        assert_eq!(
+            complete
+                .schema
+                .vars()
+                .iter()
+                .map(|v| v.as_str().to_owned())
+                .collect::<Vec<_>>(),
+            vec!["x", "y", "p", "q"],
+            "a complete join reports both arms' columns"
+        );
+
+        let left_rows = {
+            let mut ctx = EvalCtx::new(&ds);
+            eval(&left, &mut ctx).expect("left arm")
+        };
+        let mut lift = Lift::at(&node);
+        let absorbed = lift
+            .absorb(
+                0,
+                Evaluated::Truncated(Truncation::origin(
+                    left_rows,
+                    purrdf_core::TrippedGovernor::Stopped {
+                        cause: purrdf_core::StopCause::Cancelled,
+                    },
+                )),
+            )
+            .expect("a monotone edge keeps its rows");
+        assert!(lift.is_truncated());
+        let Evaluated::Truncated(truncation) =
+            lift.finish(SolutionSeq::<TermId>::empty(absorbed.schema))
+        else {
+            panic!("a truncated child must stay truncated");
+        };
+        assert_eq!(
+            truncation
+                .rows()
+                .schema
+                .vars()
+                .iter()
+                .map(|v| v.as_str().to_owned())
+                .collect::<Vec<_>>(),
+            vec!["x", "y"],
+            "the partial result reports the evaluated arm's columns"
+        );
+        assert!(
+            truncation.rows().is_empty(),
+            "and no row crosses, so the narrower column list describes an empty bag"
+        );
     }
 }

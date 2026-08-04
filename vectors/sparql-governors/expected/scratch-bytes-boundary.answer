@@ -1,0 +1,5 @@
+outcome	complete
+variables	wide
+row	"alpha-0123456789012345678901234567890123456789"^^<http://www.w3.org/2001/XMLSchema#string>
+row	"bravo-0123456789012345678901234567890123456789"^^<http://www.w3.org/2001/XMLSchema#string>
+row	"charlie-0123456789012345678901234567890123456789"^^<http://www.w3.org/2001/XMLSchema#string>

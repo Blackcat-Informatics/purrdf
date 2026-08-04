@@ -444,7 +444,7 @@ int main(int argc, char **argv) {
     PurrdfAbiVersion version;
     CHECK(purrdf_abi_version(&version) == PURRDF_STATUS_OK, "abi_version");
     printf("libpurrdf ABI %u.%u.%u\n", version.major, version.minor, version.patch);
-    CHECK(version.major == 0 && version.minor == 1, "abi 0.1.x");
+    CHECK(version.major == 0 && version.minor == 3, "abi 0.3.x");
 
     /* parse */
     const char *doc = "<http://a> <http://b> <http://c> .";
@@ -645,6 +645,101 @@ int main(int argc, char **argv) {
     purrdf_buffer_data(json, &jbytes, &jlen);
     CHECK(jlen > 0, "sparql-json bytes present");
     purrdf_buffer_free(json);
+
+    /* governed SPARQL: exhaustion is an OK outcome carrying typed evidence and a
+     * certified result, never a query error or a complete answer. */
+    PurrdfQueryGovernors governors;
+    CHECK(purrdf_query_governors_init(&governors) == PURRDF_STATUS_OK,
+          "governor initializer");
+    governors.enabled = PURRDF_GOVERNOR_FLAG_MAX_ANSWERS;
+    governors.max_answers = 0;
+    int32_t query_outcome = -1;
+    int32_t result_kind = -1;
+    PurrdfRowCursor *partial_rows = NULL;
+    PurrdfDataset *partial_graph = NULL;
+    uint8_t partial_boolean = 0;
+    PurrdfGovernorEvidence query_evidence;
+    PurrdfPartialCertificate partial_certificate;
+    rc = purrdf_query_governed(
+        dataset, "SELECT ?s WHERE { ?s ?p ?o }", NULL, &governors,
+        &query_outcome, &result_kind, &partial_rows, &partial_graph,
+        &partial_boolean, &query_evidence, &partial_certificate, &error);
+    CHECK(rc == PURRDF_STATUS_OK && error == NULL, "governed query outcome");
+    CHECK(query_outcome == PURRDF_QUERY_OUTCOME_KIND_BUDGET_EXHAUSTED,
+          "governed query is typed exhaustion");
+    CHECK(result_kind == PURRDF_RESULT_KIND_SOLUTIONS,
+          "governed SELECT names its result kind");
+    CHECK(query_evidence.trip.kind == PURRDF_GOVERNOR_TRIP_KIND_BUDGET &&
+              query_evidence.trip.dimension ==
+                  PURRDF_RESOURCE_DIMENSION_ANSWER_ROWS,
+          "governed query carries answer-cap evidence");
+    CHECK(partial_certificate.kind == PURRDF_PARTIAL_KIND_CERTAIN,
+          "governed query carries a certain lower bound");
+    if (partial_rows != NULL) {
+        purrdf_rowcursor_free(partial_rows);
+    }
+    CHECK(partial_graph == NULL, "a SELECT writes no partial graph");
+
+    /* The entailment-aware carrier keeps phase two and its closure report together. */
+    CHECK(purrdf_query_governors_init(&governors) == PURRDF_STATUS_OK,
+          "entailment governor initializer");
+    int32_t entailment_outcome = -1;
+    int32_t entailment_kind = -1;
+    uint8_t entailment_boolean = 0;
+    PurrdfGovernedEntailmentEvidence entailment_evidence;
+    PurrdfPartialCertificate entailment_partial;
+    PurrdfBuffer *entailment_report = NULL;
+    rc = purrdf_query_entailment_governed(
+        dataset, "ASK { ?s ?p ?o }", NULL, "simple", "", &governors,
+        &entailment_outcome, &entailment_kind, NULL, NULL,
+        &entailment_boolean, &entailment_evidence, &entailment_partial,
+        &entailment_report, &error);
+    CHECK(rc == PURRDF_STATUS_OK && error == NULL,
+          "governed entailment query outcome");
+    CHECK(entailment_outcome == PURRDF_ENTAILMENT_QUERY_OUTCOME_KIND_COMPLETE &&
+              entailment_kind == PURRDF_RESULT_KIND_BOOLEAN &&
+              entailment_boolean == 1,
+          "governed entailment query answers");
+    CHECK(entailment_evidence.query_ran == 1 && entailment_report != NULL,
+          "governed entailment query carries both phases");
+    purrdf_buffer_free(entailment_report);
+
+    /* C cancellation is a shareable monotone handle. */
+    PurrdfCancellation *cancellation = NULL;
+    uint8_t cancelled = 0;
+    CHECK(purrdf_cancellation_new(&cancellation) == PURRDF_STATUS_OK &&
+              cancellation != NULL,
+          "cancellation new");
+    CHECK(purrdf_cancellation_cancel(cancellation) == PURRDF_STATUS_OK,
+          "cancellation cancel");
+    CHECK(purrdf_cancellation_is_cancelled(cancellation, &cancelled) ==
+                  PURRDF_STATUS_OK &&
+              cancelled == 1,
+          "cancellation latch");
+    purrdf_cancellation_free(cancellation);
+
+    /* Governed UPDATE publishes all or nothing. Zero fuel must preserve the same
+     * dataset contents and report exhaustion through the shared evidence carrier. */
+    CHECK(purrdf_query_governors_init(&governors) == PURRDF_STATUS_OK,
+          "update governor initializer");
+    governors.enabled = PURRDF_GOVERNOR_FLAG_FUEL;
+    governors.fuel = 0;
+    int32_t update_outcome = -1;
+    PurrdfGovernorEvidence update_evidence;
+    rc = purrdf_update_governed(
+        dataset,
+        "INSERT DATA { <http://new> <http://predicate> <http://value> }", NULL,
+        &governors, &update_outcome, &update_evidence, &error);
+    CHECK(rc == PURRDF_STATUS_OK && error == NULL, "governed update outcome");
+    CHECK(update_outcome == PURRDF_UPDATE_OUTCOME_KIND_BUDGET_EXHAUSTED,
+          "governed update is typed exhaustion");
+    CHECK(update_evidence.trip.dimension == PURRDF_RESOURCE_DIMENSION_FUEL,
+          "governed update carries fuel evidence");
+    size_t after_update_count = 0;
+    CHECK(purrdf_dataset_quad_count(dataset, &after_update_count) ==
+                  PURRDF_STATUS_OK &&
+              after_update_count == 1,
+          "exhausted update applied no mutation");
 
     /* error path: malformed input produces a readable error, no abort */
     const char *bad = "<http://a> <http://b> @@@";

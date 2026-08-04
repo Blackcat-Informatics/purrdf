@@ -1,0 +1,4 @@
+outcome	budget-exhausted
+tripped	stopped	cancelled
+certificate	certain	positional-prefix=true
+variables	x	y

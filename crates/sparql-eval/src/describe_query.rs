@@ -18,22 +18,31 @@
 //! The union SCBD of that subject set is returned as a frozen dataset.
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
 
 use purrdf_core::describe::Describer;
-use purrdf_core::{DatasetView, RdfDataset, TermValue};
+use purrdf_core::{DatasetView, TermValue};
 use purrdf_sparql_algebra::{GraphPattern, NamedNodePattern};
 
+use std::sync::Arc;
+
+use crate::construct::ConstructedGraph;
 use crate::error::EvalError;
-use crate::eval::{EvalCtx, eval, materialize_solutions};
+use crate::eval::{EvalCtx, eval_evaluated, materialize_solutions};
+use crate::governor::lift::Evaluated;
+use crate::solution::{SolutionSeq, VarSchema};
 
 /// Evaluate a `DESCRIBE` query to a frozen IR dataset: the union Symmetric CBD of its
 /// resolved subject IRIs.
+///
+/// The `WHERE`'s certificate travels beside the graph for the same reason it does for
+/// `CONSTRUCT`: a description built from a certified lower bound describes a subset of
+/// the true subjects, and only the caller holding the certificate can tell that from a
+/// complete description.
 pub(crate) fn eval_describe<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     targets: &[NamedNodePattern],
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<Arc<RdfDataset>, EvalError> {
+) -> Result<ConstructedGraph<D::Id>, EvalError> {
     // A `BTreeSet` gives a deterministic, deduplicated subject order.
     let mut subjects: BTreeSet<String> = BTreeSet::new();
     let mut var_targets: Vec<&str> = Vec::new();
@@ -50,8 +59,16 @@ pub(crate) fn eval_describe<D: DatasetView + Sync>(
     // projects; an explicit variable describes just that one. Either way we need the
     // solutions. Concrete `DESCRIBE <iri>` targets skip evaluation entirely.
     let describe_all = targets.is_empty();
-    if describe_all || !var_targets.is_empty() {
-        let seq = eval(pattern, ctx)?;
+    // The `WHERE`'s certificate, and its rows kept past the subject scan so the answer cap
+    // can certify a graph-level trip against what the pattern actually bound.
+    let (certificate, where_rows) = if describe_all || !var_targets.is_empty() {
+        let (seq, certificate) = match eval_evaluated(pattern, ctx)? {
+            Evaluated::Complete(seq) => (seq, None),
+            Evaluated::Truncated(truncation) => {
+                let rows = truncation.rows().clone();
+                (rows, Some(truncation))
+            }
+        };
         let (vars, rows) = materialize_solutions(&seq, ctx);
         for (col, name) in vars.iter().enumerate() {
             if !describe_all && !var_targets.contains(&name.as_str()) {
@@ -65,16 +82,48 @@ pub(crate) fn eval_describe<D: DatasetView + Sync>(
                 }
             }
         }
-    }
+        (certificate, seq)
+    } else {
+        // A `DESCRIBE <iri>` with no variable target evaluates no pattern at all, and the
+        // empty sequence is the honest statement of that.
+        (None, SolutionSeq::empty(Arc::new(VarSchema::new())))
+    };
 
-    Describer::new(ctx.dataset)
+    let graph = Describer::new(ctx.dataset)
         .describe_iris(subjects.iter().map(String::as_str))
-        .map_err(|d| EvalError::internal(format!("DESCRIBE output failed to build: {d:?}")))
+        .map_err(|d| EvalError::internal(format!("DESCRIBE output failed to build: {d:?}")))?;
+    // The cap denominates the description's triples, exactly as it does a `CONSTRUCT`'s —
+    // and it matters more here, because a `DESCRIBE` whose `WHERE` bound a single subject
+    // can still return that subject's entire concise bounded description.
+    Ok(crate::construct::commit_answer_triples(
+        graph,
+        certificate,
+        &where_rows,
+        ctx,
+    ))
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use purrdf_core::RdfDataset;
+
     use super::*;
+
+    /// The ungoverned `DESCRIBE`, which is complete by construction.
+    fn eval_describe<D: DatasetView + Sync>(
+        pattern: &GraphPattern,
+        targets: &[NamedNodePattern],
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<Arc<RdfDataset>, EvalError> {
+        let (graph, certificate) = super::eval_describe(pattern, targets, ctx)?;
+        assert!(
+            certificate.is_none(),
+            "an ungoverned DESCRIBE cannot truncate"
+        );
+        Ok(graph)
+    }
     use purrdf_core::RdfDatasetBuilder;
     use purrdf_sparql_algebra::{NamedNode, TermPattern, TriplePattern, Variable};
 

@@ -1545,6 +1545,7 @@ dependencies = [
  "js-sys",
  "md-5",
  "pretty_assertions",
+ "proptest",
  "purrdf-core",
  "purrdf-iri",
  "purrdf-sparql-algebra",

@@ -18,5 +18,5 @@
 pub mod eval;
 pub mod model;
 
-pub use eval::materialize_rif;
+pub use eval::{materialize_rif, materialize_rif_until};
 pub use model::{Atom, Fact, RifTerm, Rule, RuleSet};

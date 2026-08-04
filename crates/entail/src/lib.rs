@@ -117,6 +117,7 @@
 use std::sync::Arc;
 
 use purrdf_core::RdfDataset;
+use purrdf_datalog::StopSignal;
 
 pub(crate) mod axioms;
 pub(crate) mod calculus;
@@ -137,7 +138,7 @@ pub(crate) mod surrogates;
 pub(crate) mod vocab;
 
 pub use calculus::calculus_program;
-pub use combined::{CombinedMaterialization, materialize_combined};
+pub use combined::{CombinedMaterialization, materialize_combined, materialize_combined_until};
 pub use entails::{
     Binding, CertainAnswers, CompositeWarrant, ComprehensionWarrant, DataRangeWarrant,
     EntailmentCertificate, EntailmentMechanism, EntailmentOutcome, EntailmentWarrant,
@@ -149,7 +150,7 @@ pub use entails::{
 pub use explain::{
     BackwardCheck, ChaseProof, ExplainError, Justification, explain_conclusion, justify,
 };
-pub use owl_dl::query::{QNode, QTriple, materialize_dl_reported};
+pub use owl_dl::query::{QNode, QTriple, materialize_dl_reported, materialize_dl_reported_until};
 pub use reasoner::{
     Certified, ClassHierarchy, ConservativeKeep, DlAxiom, DlCertificate, DlCompleteness,
     ModuleExtraction, ModuleMethod, OwlProfile, ProfileCertificate, ProfileViolation, Realization,
@@ -159,7 +160,7 @@ pub use report::{
     Boundary, Completeness, Construct, InconsistencyWitness, InconsistentRun, ReasoningReport,
     TerminationCertificate, WitnessTriple,
 };
-pub use rif::{Atom, Fact, RifTerm, Rule, RuleSet, materialize_rif};
+pub use rif::{Atom, Fact, RifTerm, Rule, RuleSet, materialize_rif, materialize_rif_until};
 pub use rif_xml::{ParsedRifDocument, RifImport, parse_rif_xml, resolve_rif_imports};
 pub use rules::{ParseRuleIdError, RuleId, extensions, implemented, rules};
 
@@ -401,6 +402,26 @@ pub enum EntailError {
     /// target — and it is an error rather than a verdict because "I stopped looking" and
     /// "there is nothing to find" are different claims and only one of them is true.
     MatchBudget,
+    /// The caller's [`purrdf_datalog::StopSignal`] fired while the closure was
+    /// still being computed.
+    ///
+    /// # Not a budget, and not a partial closure
+    ///
+    /// This crate's ceilings are constants for the reason
+    /// [`purrdf_datalog`](purrdf_datalog#budgets-are-constants-not-knobs) states: a
+    /// caller-supplied ceiling would make the ANSWER depend on the caller. A stop signal
+    /// does not — it either lets the run finish, in which case the closure is bit-for-bit
+    /// the one an ungoverned run produces, or it ends the run with nothing. This variant is
+    /// the "with nothing" case, and it carries no partial closure by construction: there is
+    /// no field on it a caller could read one out of.
+    ///
+    /// It is deliberately distinct from [`Self::Evaluate`] and [`Self::Chase`], which report
+    /// a FIXED ceiling being passed by the program and the data. That is a reason to change
+    /// the input; this is not a statement about the input at all.
+    ///
+    /// Reachable only from the `*_until` entry points ([`materialize_until`]); an ungoverned
+    /// call names no signal and so can never see it.
+    Stopped,
 }
 
 impl std::fmt::Display for EntailError {
@@ -438,6 +459,11 @@ impl std::fmt::Display for EntailError {
                 f,
                 "the blank-node match exceeded its {MATCH_BUDGET}-candidate budget"
             ),
+            Self::Stopped => write!(
+                f,
+                "the caller's stop signal ended the run before the closure was computed: no \
+                 closure was produced and none is claimed"
+            ),
         }
     }
 }
@@ -471,7 +497,8 @@ impl std::error::Error for EntailError {
             | Self::Unsatisfiable
             | Self::UnsupportedRegime(_)
             | Self::UnresolvedImport(_)
-            | Self::MatchBudget => None,
+            | Self::MatchBudget
+            | Self::Stopped => None,
         }
     }
 }
@@ -576,17 +603,74 @@ pub fn materialize(
     ds: &RdfDataset,
     plan: Materialization<'_>,
 ) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
+    materialize_until(ds, plan, None)
+}
+
+/// [`materialize`], with a caller-owned latching stop signal polled across the closure.
+///
+/// # What a stop signal is, and what it is emphatically not
+///
+/// It is **not** a budget. `purrdf-datalog`'s three ceilings are constants for a stated
+/// reason — [budgets are constants, not
+/// knobs](purrdf_datalog#budgets-are-constants-not-knobs) — and nothing here weakens it: no
+/// charge is configurable, no schedule is named, and no number a caller passes can change
+/// which triples a closure holds. A [`purrdf_datalog::StopSignal`] is answer-blind by
+/// construction. There are exactly two outcomes:
+///
+/// * the signal never fires, and this function returns **bit-for-bit** what [`materialize`]
+///   returns for the same input — the poll is a load and a branch at a boundary the fixpoint
+///   was going to cross anyway; or
+/// * the signal fires, and this function returns [`EntailError::Stopped`] — **no** closure,
+///   **no** report, nothing partial and nothing claimed.
+///
+/// So there is no pinnable profile here to get wrong, and no third outcome a consumer could
+/// mistake for a complete closure. What it buys is the honesty of a host's wall deadline: a
+/// materialized closure is routinely the expensive half of an entailment-regime query, and a
+/// deadline that bounds only the query evaluated over the finished closure is a deadline
+/// that expires exactly when it cannot be enforced.
+///
+/// # Where it is polled
+///
+/// Every lane, at the finest boundary that lane HAS:
+///
+/// * `Rdf`, `Rdfs` — once per restricted-chase round (`purrdf-datalog`'s
+///   [`chase_until`](purrdf_datalog::chase::chase_until));
+/// * `OwlRl`, `D` — once per semi-naive round
+///   ([`evaluate_until`](purrdf_datalog::seminaive::evaluate_until));
+/// * every rule-table lane, additionally once per NAMED GRAPH, because a dataset is closed
+///   graph by graph and the copying between two evaluations is otherwise unpollable;
+/// * `OwlDirect` — once per hypertableau derivation round and once per work item of the
+///   consequence-based saturation, which are the boundaries its own step cap is charged at;
+/// * `Rif` — once per semi-naive round of the RIF evaluator;
+/// * `Simple` — before the copy. An identity closure runs no fixpoint, so there is no round
+///   boundary inside it to take.
+///
+/// `stop` of `None` is exactly [`materialize`].
+///
+/// # Errors
+///
+/// [`EntailError::Stopped`] if the signal fired, plus every error [`materialize`] returns.
+pub fn materialize_until(
+    ds: &RdfDataset,
+    plan: Materialization<'_>,
+    stop: Option<&Arc<dyn StopSignal>>,
+) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
+    if stop.is_some_and(|stop| stop.stopped()) {
+        return Err(EntailError::Stopped);
+    }
     let regime = plan.regime();
     let (closure, stats) = match plan {
         Materialization::Simple => (engine::copy_of(ds)?, report::RunStats::none()),
         Materialization::Rdf
         | Materialization::Rdfs
         | Materialization::OwlRl
-        | Materialization::D => engine::close(ds, regime)?,
+        | Materialization::D => engine::close(ds, regime, stop)?,
         // The two query-directed lanes are DELEGATED, not restated: each already assembles
         // its own report, so returning here is what keeps one implementation per lane.
-        Materialization::OwlDirect(query_bgp) => return materialize_dl_reported(ds, query_bgp),
-        Materialization::Rif(rules) => return materialize_rif(ds, rules),
+        Materialization::OwlDirect(query_bgp) => {
+            return materialize_dl_reported_until(ds, query_bgp, stop);
+        }
+        Materialization::Rif(rules) => return materialize_rif_until(ds, rules, stop),
     };
     Ok((closure, ReasoningReport::of_run(ds, regime, &stats)))
 }

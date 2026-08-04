@@ -98,6 +98,9 @@ struct Tableau<'a> {
     steps: u64,
     /// Hard step cap; exceeding it is a hard error (a termination-bug backstop).
     cap: u64,
+    /// Whether the caller's stop signal — not the cap — ended the search. Recorded for the
+    /// reason [`crate::owl_dl::hyper`]'s driver records it: one private refusal, two facts.
+    stopped: bool,
 }
 
 /// Decide whether the knowledge base plus `assumptions` has a consistent completion,
@@ -110,11 +113,13 @@ pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, cap: u64) -> Decisi
             consistent,
             steps: t.steps,
             exhausted: false,
+            stopped: false,
         },
         Err(Exhausted) => Decision {
             consistent: false,
             steps: t.steps,
-            exhausted: true,
+            exhausted: !t.stopped,
+            stopped: t.stopped,
         },
     }
 }
@@ -126,6 +131,9 @@ pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, cap: u64) -> Decisi
 /// [`EntailError::Build`] if the step cap is exceeded (a termination-bug backstop).
 pub(crate) fn consistent(kb: &Kb, assumptions: &Assumptions<'_>) -> Result<bool, EntailError> {
     let decision = decide(kb, assumptions, step_cap(kb));
+    if decision.stopped {
+        return Err(EntailError::Stopped);
+    }
     if decision.exhausted {
         return Err(EntailError::Build(
             "OWL-Direct tableau exceeded its step cap (possible non-termination)".to_owned(),
@@ -141,6 +149,7 @@ impl<'a> Tableau<'a> {
             g: Graph::new(kb),
             steps: 0,
             cap,
+            stopped: false,
         }
     }
 
@@ -186,6 +195,13 @@ impl<'a> Tableau<'a> {
 
     /// Consume one step against the cap.
     fn tick(&mut self) -> Result<(), Exhausted> {
+        // The caller's stop signal, polled at the same boundary the cap is charged at — see
+        // [`crate::owl_dl::hyper::Hyper::tick`], whose reading this mirrors so the reference
+        // procedure and the incumbent stop on the same knowledge bases.
+        if self.g.kb().stopped() {
+            self.stopped = true;
+            return Err(Exhausted);
+        }
         if self.steps >= self.cap {
             return Err(Exhausted);
         }

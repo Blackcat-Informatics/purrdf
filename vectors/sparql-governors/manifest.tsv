@@ -1,0 +1,47 @@
+# purrdf-sparql-governors profile v4 — normative vector manifest.
+# Columns: case <TAB> data <TAB> query <TAB> source <TAB> governors <TAB> band <TAB> outcome
+#   source     none | http   (http wires the injected transport described in transport.tsv)
+#   governors  comma-separated <setting>=<value>; a ceiling names a caller-settable
+#              dimension (fuel, answer-rows, intermediate-cells, scratch-bytes,
+#              remote-requests); "deadline-polls" names the deterministic injected
+#              deadline; and "stop" names a signal (cancelled, cancellation,
+#              deadline-zero).
+#   band       zero       the ceiling is 0 and admits no charged work
+#              boundary   the ceiling IS the metered cost, so the run MUST complete
+#              over-bound the ceiling is the metered cost minus one, so the run MUST trip
+#              n/a        not a band case
+#   outcome    complete | budget-exhausted <dimension> | refused <dimension> |
+#              stopped <cancelled|deadline>
+#
+# Band ceilings and outcomes are DERIVED, never authored: they are written by the
+# corpus regeneration step from a QueryGovernors::METERED run of the same case, and
+# the harness re-derives and re-checks them on every ordinary run.
+fuel-zero	cases/chain.ttl	cases/chain.rq	none	fuel=0	zero	budget-exhausted fuel
+fuel-boundary	cases/chain.ttl	cases/chain.rq	none	fuel=17	boundary	complete
+fuel-over-bound	cases/chain.ttl	cases/chain.rq	none	fuel=16	over-bound	budget-exhausted fuel
+answer-rows-zero	cases/chain.ttl	cases/chain.rq	none	answer-rows=0	zero	budget-exhausted answer-rows
+answer-rows-boundary	cases/chain.ttl	cases/chain.rq	none	answer-rows=5	boundary	complete
+answer-rows-over-bound	cases/chain.ttl	cases/chain.rq	none	answer-rows=4	over-bound	budget-exhausted answer-rows
+intermediate-cells-zero	cases/join.ttl	cases/join.rq	none	intermediate-cells=0	zero	refused intermediate-cells
+intermediate-cells-boundary	cases/join.ttl	cases/join.rq	none	intermediate-cells=9	boundary	complete
+intermediate-cells-over-bound	cases/join.ttl	cases/join.rq	none	intermediate-cells=8	over-bound	refused intermediate-cells
+scratch-bytes-zero	cases/concat.ttl	cases/concat.rq	none	scratch-bytes=0	zero	budget-exhausted scratch-bytes
+scratch-bytes-boundary	cases/concat.ttl	cases/concat.rq	none	scratch-bytes=353	boundary	complete
+scratch-bytes-over-bound	cases/concat.ttl	cases/concat.rq	none	scratch-bytes=352	over-bound	budget-exhausted scratch-bytes
+remote-requests-zero	cases/federated.ttl	cases/federated.rq	http	remote-requests=0	zero	budget-exhausted remote-requests
+remote-requests-boundary	cases/federated.ttl	cases/federated.rq	http	remote-requests=2	boundary	complete
+remote-requests-over-bound	cases/federated.ttl	cases/federated.rq	http	remote-requests=1	over-bound	budget-exhausted remote-requests
+rdf12-reifier-fuel-boundary	cases/rdf12.ttl	cases/rdf12-select.rq	none	fuel=11	boundary	complete
+rdf12-reifier-fuel-over-bound	cases/rdf12.ttl	cases/rdf12-select.rq	none	fuel=10	over-bound	budget-exhausted fuel
+rdf12-reifier-answer-boundary	cases/rdf12.ttl	cases/rdf12-select.rq	none	answer-rows=3	boundary	complete
+rdf12-reifier-answer-over-bound	cases/rdf12.ttl	cases/rdf12-select.rq	none	answer-rows=2	over-bound	budget-exhausted answer-rows
+rdf12-construct-answer-zero	cases/rdf12.ttl	cases/rdf12-construct.rq	none	answer-rows=0	zero	budget-exhausted answer-rows
+rdf12-construct-answer-boundary	cases/rdf12.ttl	cases/rdf12-construct.rq	none	answer-rows=6	boundary	complete
+rdf12-construct-answer-over-bound	cases/rdf12.ttl	cases/rdf12-construct.rq	none	answer-rows=5	over-bound	budget-exhausted answer-rows
+service-deaf-transport-request-ceiling	cases/federated.ttl	cases/federated.rq	http	remote-requests=1	n/a	budget-exhausted remote-requests
+service-deaf-transport-cancel-mid-exchange	cases/federated.ttl	cases/federated.rq	http	stop=cancellation	n/a	stopped cancelled
+service-honouring-transport-cancel-mid-exchange	cases/federated.ttl	cases/federated.rq	http	stop=cancellation	n/a	stopped cancelled
+deadline-injected-zero	cases/chain.ttl	cases/chain.rq	none	deadline-polls=0	zero	stopped deadline
+deadline-injected-boundary	cases/chain.ttl	cases/chain.rq	none	deadline-polls=11	boundary	complete
+deadline-injected-over-bound	cases/chain.ttl	cases/chain.rq	none	deadline-polls=10	over-bound	stopped deadline
+deadline-zero-budget	cases/chain.ttl	cases/chain.rq	none	stop=deadline-zero	n/a	stopped deadline

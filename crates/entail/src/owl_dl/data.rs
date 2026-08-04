@@ -284,7 +284,10 @@ pub(crate) struct LiteralClasses {
 /// values of different families are never one value, so a bucket boundary can never separate
 /// two literals that should share a class. The buckets are an insertion-ordered `Vec` rather
 /// than a map because there are at most as many of them as there are value spaces.
-pub(crate) fn literal_classes(literals: &[(u32, LiteralValue)]) -> LiteralClasses {
+pub(crate) fn literal_classes_until<E>(
+    literals: &[(u32, LiteralValue)],
+    mut poll: impl FnMut() -> Result<(), E>,
+) -> Result<LiteralClasses, E> {
     let mut out = LiteralClasses {
         class_of: BTreeMap::new(),
         any_unmodelled: false,
@@ -292,10 +295,18 @@ pub(crate) fn literal_classes(literals: &[(u32, LiteralValue)]) -> LiteralClasse
     let mut buckets: Vec<(&'static str, Vec<(XsdValue, u32)>)> = Vec::new();
     let mut next_class = 0u32;
     for (term, value) in literals {
+        poll()?;
         match value {
             LiteralValue::Value(value) => {
                 let family = family_of(value);
-                let position = buckets.iter().position(|(name, _)| *name == family);
+                let mut position = None;
+                for (index, (name, _)) in buckets.iter().enumerate() {
+                    poll()?;
+                    if *name == family {
+                        position = Some(index);
+                        break;
+                    }
+                }
                 let index = match position {
                     Some(index) => index,
                     None => {
@@ -304,10 +315,14 @@ pub(crate) fn literal_classes(literals: &[(u32, LiteralValue)]) -> LiteralClasse
                     }
                 };
                 let bucket = &mut buckets[index].1;
-                let existing = bucket
-                    .iter()
-                    .find(|(candidate, _)| purrdf_xsd::range::same_value(candidate, value))
-                    .map(|&(_, class)| class);
+                let mut existing = None;
+                for (candidate, class) in bucket.iter() {
+                    poll()?;
+                    if purrdf_xsd::range::same_value(candidate, value) {
+                        existing = Some(*class);
+                        break;
+                    }
+                }
                 let class = existing.unwrap_or_else(|| {
                     let class = next_class;
                     bucket.push((value.clone(), class));
@@ -329,7 +344,7 @@ pub(crate) fn literal_classes(literals: &[(u32, LiteralValue)]) -> LiteralClasse
             LiteralValue::IllTyped => {}
         }
     }
-    out
+    Ok(out)
 }
 
 /// A stable name for the VALUE SPACE a value inhabits, used only to bucket the

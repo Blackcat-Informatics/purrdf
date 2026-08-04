@@ -1,0 +1,4 @@
+outcome	complete
+variables	x	y
+row	<http://example.org/x1>	<http://example.org/y1>
+row	<http://example.org/x2>	<http://example.org/y1>

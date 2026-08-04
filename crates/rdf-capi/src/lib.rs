@@ -23,7 +23,7 @@
 //!   **never** `free()`s a `PurrdfStr.ptr`.
 //! - **SemVer-frozen ABI.** The status enum is append-only; the committed
 //!   `include/purrdf.h` is the contract. This is the project's one sanctioned
-//!   no-backwards-compat exception. The current ABI is **0.1.0 (beta)**.
+//!   no-backwards-compat exception. The current ABI is **0.3.0 (beta)**.
 //!
 //! ## Thread-safety (per handle)
 //! - [`handles::PurrdfDataset`] wraps `Arc<RdfDataset>` — `Send + Sync`; it may
@@ -83,6 +83,7 @@ pub mod buffer;
 pub mod cursor;
 pub mod entail;
 pub mod error;
+pub mod governor;
 pub mod graph;
 pub mod gts;
 pub mod handles;

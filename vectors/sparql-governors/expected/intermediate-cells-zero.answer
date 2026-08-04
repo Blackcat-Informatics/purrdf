@@ -1,0 +1,4 @@
+outcome	budget-exhausted
+tripped	refused	intermediate-cells	cardinality-admission-refused	limit=0	estimate=9
+certificate	certain	positional-prefix=true
+variables

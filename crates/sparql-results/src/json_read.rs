@@ -23,6 +23,12 @@ const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const RDF_LANGSTRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
 const RDF_DIR_LANGSTRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
 
+/// Dense decoded row and bounded row-prefix result aliases keep the streaming reader's
+/// signatures readable without changing the public model.
+type BindingRow = Vec<Option<TermValue>>;
+type BoundedRows = (Vec<BindingRow>, bool);
+type BoundedRowsResult = Result<BoundedRows, Error>;
+
 /// A decoded `SELECT` result set: ordered variable names plus dense rows. A
 /// `None` cell is an unbound (absent) binding for that variable in that row.
 ///
@@ -34,6 +40,17 @@ pub struct ParsedSolutions {
     pub variables: Vec<String>,
     /// One row per binding; `rows[i][j]` is the value of `variables[j]`.
     pub rows: Vec<Vec<Option<TermValue>>>,
+}
+
+/// A bounded decode result. `truncated` means the document contained at least one binding
+/// beyond the supplied intermediate-cell ceiling; `solutions.rows` is the ordered prefix
+/// that fit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundedParsedSolutions {
+    /// The decoded, cell-bounded solution prefix.
+    pub solutions: ParsedSolutions,
+    /// Whether a further binding was present and deliberately not materialized.
+    pub truncated: bool,
 }
 
 /// Parse a SPARQL Results JSON `SELECT` document into [`ParsedSolutions`].
@@ -112,6 +129,107 @@ pub fn from_json(bytes: &[u8]) -> Result<ParsedSolutions, Error> {
         rows.push(row);
     }
     Ok(ParsedSolutions { variables, rows })
+}
+
+/// Parse a SPARQL Results JSON `SELECT` document without materializing more than
+/// `max_cells` cells (`rows * head.vars.len()`).
+///
+/// The document is scanned twice. The first pass reads only `head.vars`; the second decodes
+/// bindings in source order until the inclusive ceiling is full, then structurally skips
+/// the suffix without constructing its JSON tree or owned RDF terms. Two passes over bytes
+/// are cheaper than building an attacker-sized response tree, and retain JSON's
+/// order-independence (`results` may precede `head`).
+///
+/// A zero-column result has zero cells regardless of row count and is therefore decoded in
+/// full. Callers that need to bound unit rows must use a row/answer governor.
+///
+/// # Errors
+///
+/// Returns [`Error::Format`] under the same structural conditions as [`from_json`]. JSON in
+/// the deliberately skipped over-limit suffix is still syntax-validated, but its SPARQL
+/// binding shape is not decoded because the cell governor has already refused that work.
+pub fn from_json_bounded(bytes: &[u8], max_cells: u64) -> Result<BoundedParsedSolutions, Error> {
+    let variables = scan_variables(bytes)?;
+    let row_limit = if variables.is_empty() {
+        None
+    } else {
+        let width = u64::try_from(variables.len()).unwrap_or(u64::MAX);
+        Some(usize::try_from(max_cells / width).unwrap_or(usize::MAX))
+    };
+    let (rows, truncated) = scan_bindings(bytes, &variables, row_limit)?;
+    Ok(BoundedParsedSolutions {
+        solutions: ParsedSolutions { variables, rows },
+        truncated,
+    })
+}
+
+/// First bounded-decoder pass: locate and decode `head.vars`, skipping every other value
+/// without building a JSON tree.
+fn scan_variables(bytes: &[u8]) -> Result<Vec<String>, Error> {
+    let mut parser = JsonParser::new(bytes);
+    parser.skip_ws();
+    parser.expect(b'{', "top level is not an object")?;
+    let mut variables = None;
+    parser.skip_ws();
+    if parser.peek() != Some(b'}') {
+        loop {
+            let key = parser.parse_object_key()?;
+            if key == "head" && variables.is_none() {
+                variables = Some(parser.parse_head_variables()?);
+            } else {
+                parser.skip_value()?;
+            }
+            if parser.finish_entry(b'}', "expected `,` or `}` in object")? {
+                break;
+            }
+        }
+    } else {
+        parser.pos += 1;
+    }
+    parser.finish_document()?;
+    variables.ok_or_else(|| fmt("missing `head` object"))
+}
+
+/// Second bounded-decoder pass: locate `results.bindings`, materializing only the prefix
+/// admitted by `row_limit`.
+fn scan_bindings(
+    bytes: &[u8],
+    variables: &[String],
+    row_limit: Option<usize>,
+) -> BoundedRowsResult {
+    let mut parser = JsonParser::new(bytes);
+    parser.skip_ws();
+    parser.expect(b'{', "top level is not an object")?;
+    let mut result = None;
+    let mut saw_boolean = false;
+    parser.skip_ws();
+    if parser.peek() != Some(b'}') {
+        loop {
+            let key = parser.parse_object_key()?;
+            match key.as_str() {
+                "boolean" => {
+                    saw_boolean = true;
+                    parser.skip_value()?;
+                }
+                "results" if result.is_none() => {
+                    result = Some(parser.parse_bounded_results(variables, row_limit)?);
+                }
+                _ => parser.skip_value()?,
+            }
+            if parser.finish_entry(b'}', "expected `,` or `}` in object")? {
+                break;
+            }
+        }
+    } else {
+        parser.pos += 1;
+    }
+    parser.finish_document()?;
+    if saw_boolean {
+        return Err(fmt(
+            "expected SELECT results, got an ASK (boolean) document",
+        ));
+    }
+    result.ok_or_else(|| fmt("missing `results` object"))
 }
 
 /// Parse a SPARQL Results JSON `ASK` document into its boolean.
@@ -300,6 +418,215 @@ impl<'a> JsonParser<'a> {
             } else {
                 break;
             }
+        }
+    }
+
+    /// Consume `byte` after whitespace, or return a format error with `message`.
+    fn expect(&mut self, byte: u8, message: &str) -> Result<(), Error> {
+        self.skip_ws();
+        if self.peek() != Some(byte) {
+            return Err(fmt(message));
+        }
+        self.pos += 1;
+        Ok(())
+    }
+
+    /// Finish a streaming object/array entry. Returns `true` when `closing` was consumed.
+    fn finish_entry(&mut self, closing: u8, message: &str) -> Result<bool, Error> {
+        self.skip_ws();
+        match self.peek() {
+            Some(b',') => {
+                self.pos += 1;
+                Ok(false)
+            }
+            Some(found) if found == closing => {
+                self.pos += 1;
+                Ok(true)
+            }
+            _ => Err(fmt(message)),
+        }
+    }
+
+    /// Validate that the streaming pass consumed the whole document.
+    fn finish_document(&mut self) -> Result<(), Error> {
+        self.skip_ws();
+        if self.pos == self.bytes.len() {
+            Ok(())
+        } else {
+            Err(fmt("trailing data after JSON value"))
+        }
+    }
+
+    /// Parse one object key and its following colon.
+    fn parse_object_key(&mut self) -> Result<String, Error> {
+        self.skip_ws();
+        if self.peek() != Some(b'"') {
+            return Err(fmt("expected string key in object"));
+        }
+        let key = self.parse_string()?;
+        self.expect(b':', "expected `:` after object key")?;
+        Ok(key)
+    }
+
+    /// Decode the first `vars` array in a `head` object, skipping other fields.
+    fn parse_head_variables(&mut self) -> Result<Vec<String>, Error> {
+        self.expect(b'{', "missing `head` object")?;
+        let mut variables = None;
+        self.skip_ws();
+        if self.peek() == Some(b'}') {
+            self.pos += 1;
+            return Ok(Vec::new());
+        }
+        loop {
+            let key = self.parse_object_key()?;
+            if key == "vars" && variables.is_none() && self.peek_after_ws() == Some(b'[') {
+                variables = Some(self.parse_string_array("`head.vars` entry is not a string")?);
+            } else {
+                self.skip_value()?;
+            }
+            if self.finish_entry(b'}', "expected `,` or `}` in object")? {
+                break;
+            }
+        }
+        Ok(variables.unwrap_or_default())
+    }
+
+    /// Parse a string-only JSON array.
+    fn parse_string_array(&mut self, item_error: &str) -> Result<Vec<String>, Error> {
+        self.expect(b'[', "expected array")?;
+        let mut items = Vec::new();
+        self.skip_ws();
+        if self.peek() == Some(b']') {
+            self.pos += 1;
+            return Ok(items);
+        }
+        loop {
+            self.skip_ws();
+            if self.peek() != Some(b'"') {
+                return Err(fmt(item_error));
+            }
+            items.push(self.parse_string()?);
+            if self.finish_entry(b']', "expected `,` or `]` in array")? {
+                break;
+            }
+        }
+        Ok(items)
+    }
+
+    /// Parse the first `bindings` array in a `results` object through a bounded sink.
+    fn parse_bounded_results(
+        &mut self,
+        variables: &[String],
+        row_limit: Option<usize>,
+    ) -> BoundedRowsResult {
+        self.expect(b'{', "missing `results` object")?;
+        let mut result = None;
+        self.skip_ws();
+        if self.peek() == Some(b'}') {
+            self.pos += 1;
+            return Err(fmt("missing `results.bindings` array"));
+        }
+        loop {
+            let key = self.parse_object_key()?;
+            if key == "bindings" && result.is_none() {
+                result = Some(self.parse_bounded_binding_array(variables, row_limit)?);
+            } else {
+                self.skip_value()?;
+            }
+            if self.finish_entry(b'}', "expected `,` or `}` in object")? {
+                break;
+            }
+        }
+        result.ok_or_else(|| fmt("missing `results.bindings` array"))
+    }
+
+    /// Decode the prefix of a bindings array that fits `row_limit`, then syntax-scan the
+    /// suffix without constructing its tree.
+    fn parse_bounded_binding_array(
+        &mut self,
+        variables: &[String],
+        row_limit: Option<usize>,
+    ) -> BoundedRowsResult {
+        self.expect(b'[', "missing `results.bindings` array")?;
+        let mut rows = Vec::new();
+        let mut truncated = false;
+        self.skip_ws();
+        if self.peek() == Some(b']') {
+            self.pos += 1;
+            return Ok((rows, false));
+        }
+        loop {
+            if row_limit.is_none_or(|limit| rows.len() < limit) {
+                let binding = self.parse_value()?;
+                let row_obj = binding
+                    .as_object()
+                    .ok_or_else(|| fmt("`results.bindings` entry is not an object"))?;
+                let mut row = vec![None; variables.len()];
+                for (index, variable) in variables.iter().enumerate() {
+                    if let Some(cell) = obj_get(row_obj, variable) {
+                        row[index] = Some(decode_binding(cell)?);
+                    }
+                }
+                rows.push(row);
+            } else {
+                truncated = true;
+                self.skip_value()?;
+            }
+            if self.finish_entry(b']', "expected `,` or `]` in array")? {
+                break;
+            }
+        }
+        Ok((rows, truncated))
+    }
+
+    /// Peek after insignificant whitespace without changing the parser's final position.
+    fn peek_after_ws(&mut self) -> Option<u8> {
+        self.skip_ws();
+        self.peek()
+    }
+
+    /// Syntax-validate and discard one JSON value without building its recursive tree.
+    fn skip_value(&mut self) -> Result<(), Error> {
+        self.skip_ws();
+        match self.peek() {
+            Some(b'{') => {
+                self.pos += 1;
+                self.skip_ws();
+                if self.peek() == Some(b'}') {
+                    self.pos += 1;
+                    return Ok(());
+                }
+                loop {
+                    drop(self.parse_object_key()?);
+                    self.skip_value()?;
+                    if self.finish_entry(b'}', "expected `,` or `}` in object")? {
+                        return Ok(());
+                    }
+                }
+            }
+            Some(b'[') => {
+                self.pos += 1;
+                self.skip_ws();
+                if self.peek() == Some(b']') {
+                    self.pos += 1;
+                    return Ok(());
+                }
+                loop {
+                    self.skip_value()?;
+                    if self.finish_entry(b']', "expected `,` or `]` in array")? {
+                        return Ok(());
+                    }
+                }
+            }
+            Some(b'"') => {
+                drop(self.parse_string()?);
+                Ok(())
+            }
+            Some(b't') => self.parse_lit("true", Json::Bool(true)).map(drop),
+            Some(b'f') => self.parse_lit("false", Json::Bool(false)).map(drop),
+            Some(b'n') => self.parse_lit("null", Json::Null).map(drop),
+            Some(c) if c == b'-' || c.is_ascii_digit() => self.parse_number().map(drop),
+            _ => Err(fmt("unexpected token while parsing a value")),
         }
     }
 
@@ -588,6 +915,38 @@ mod tests {
         );
         assert_eq!(parsed.rows[1][1], None);
         assert_eq!(parsed.rows[1][3], None);
+    }
+
+    #[test]
+    fn bounded_reader_stops_before_the_limit_plus_one_binding() {
+        // `results` deliberately precedes `head`: the two-pass reader may not rely on the
+        // conventional field order when deriving the two-column row ceiling.
+        let srj = br#"{
+          "results":{"bindings":[
+            {"x":{"type":"uri","value":"http://example.org/0"}},
+            {"x":{"type":"uri","value":"http://example.org/1"}},
+            {"x":{"type":"uri","value":"http://example.org/2"}}
+          ]},
+          "head":{"vars":["x","y"]}
+        }"#;
+
+        let bounded = from_json_bounded(srj, 4).expect("two two-cell rows fit");
+        assert_eq!(bounded.solutions.variables, ["x", "y"]);
+        assert_eq!(bounded.solutions.rows.len(), 2);
+        assert!(bounded.truncated, "the third binding is the overflow proof");
+
+        let exact = from_json_bounded(srj, 6).expect("the exact boundary is inclusive");
+        assert_eq!(exact.solutions.rows.len(), 3);
+        assert!(!exact.truncated);
+        assert_eq!(exact.solutions, from_json(srj).expect("ordinary decode"));
+    }
+
+    #[test]
+    fn bounded_reader_does_not_invent_a_row_bound_for_zero_columns() {
+        let srj = br#"{"head":{"vars":[]},"results":{"bindings":[{},{},{}]}}"#;
+        let bounded = from_json_bounded(srj, 0).expect("unit rows consume zero cells");
+        assert_eq!(bounded.solutions.rows.len(), 3);
+        assert!(!bounded.truncated);
     }
 
     #[test]

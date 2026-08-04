@@ -21,8 +21,8 @@ use std::sync::Arc;
 use purrdf_core::{
     CountingDemandProvider, DatasetView, GraphMatch, InMemoryPageProvider, PageFault,
     PageFaultKind, PageGeneration, PageId, PageMaterialization, PageProvider, PagedDataset,
-    PagedFreezeError, PagedQuadTable, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId, TermRef,
-    TermValue, render_canonical_turtle,
+    PagedFreezeError, PagedQuadTable, RdfDataset, RdfDatasetBuilder, RdfLiteral, StopCause, TermId,
+    TermRef, TermValue, render_canonical_turtle,
 };
 
 // The standard RDF Collection vocabulary (crate-internal constants are not public;
@@ -945,11 +945,11 @@ fn provider_fault_categories_remain_distinct() {
     );
     assert_eq!(
         PageFault::cancelled(page, "cancelled by host").kind,
-        PageFaultKind::Cancelled
+        PageFaultKind::Stopped(StopCause::Cancelled)
     );
     assert_eq!(
         PageFault::deadline_exceeded(page, "host deadline elapsed").kind,
-        PageFaultKind::DeadlineExceeded
+        PageFaultKind::Stopped(StopCause::Deadline)
     );
     assert_eq!(
         PageFault::invalid_data(page, "corrupt payload").kind,

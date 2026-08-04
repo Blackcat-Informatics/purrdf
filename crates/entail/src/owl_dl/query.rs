@@ -78,6 +78,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermId, TermValue};
+use purrdf_datalog::StopSignal;
 
 use crate::EntailError;
 use crate::interner::{Interner, intern_into};
@@ -218,7 +219,32 @@ pub fn materialize_dl_reported(
     ds: &RdfDataset,
     query_bgp: &[QTriple],
 ) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
-    let mut kb = Kb::from_dataset(ds)?;
+    materialize_dl_reported_until(ds, query_bgp, None)
+}
+
+/// [`materialize_dl_reported`], with a caller-owned latching stop signal polled across the
+/// augmentation.
+///
+/// The signal reaches the two places this lane spends its time — the hypertableau's
+/// derivation rounds and the consequence-based classifier's work queue, which are exactly the
+/// boundaries its own step cap is charged at — by riding on the knowledge base every one of
+/// those procedures already borrows.
+///
+/// It is not a budget and it changes no answer: see
+/// [`materialize_until`](crate::materialize_until) for the argument. A run the signal never
+/// stops augments exactly what [`materialize_dl_reported`] augments; a run it stops produces
+/// no dataset, no report and no witness.
+///
+/// # Errors
+///
+/// [`EntailError::Stopped`] if the signal fired, plus every error
+/// [`materialize_dl_reported`] returns.
+pub fn materialize_dl_reported_until(
+    ds: &RdfDataset,
+    query_bgp: &[QTriple],
+    stop: Option<&Arc<dyn StopSignal>>,
+) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
+    let mut kb = Kb::from_dataset_until(ds, stop.cloned())?;
     if !kb.is_consistent()? {
         return Err(EntailError::Unsatisfiable);
     }
@@ -290,6 +316,11 @@ pub fn materialize_dl_reported(
     // reads the TBox only.
     let seeds: Vec<u32> = named_cid.values().copied().collect();
     let taxonomy = saturate(&kb, &seeds);
+    // A saturation the caller stopped is not a smaller taxonomy — it is no answer at all
+    // here, because the injections below read it as the WHOLE subsumption relation.
+    if taxonomy.was_stopped() {
+        return Err(EntailError::Stopped);
+    }
 
     inject_classification(&mut b, &kb, &named_cid, &taxonomy)?;
     inject_realization(&mut b, &kb, &named_cid)?;

@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-cli"
-description = "PurRDF command-line interface: the `purrdf` convert/query/reason pipeline over the native codecs, pack container, SPARQL engine, and entailment closures"
+description = "PurRDF command-line interface: the `purrdf` convert/query/update/reason pipeline over the native codecs, pack container, SPARQL engine, and entailment closures"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

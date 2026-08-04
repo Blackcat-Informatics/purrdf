@@ -86,6 +86,12 @@ js-sys = { workspace = true }
 [dev-dependencies]
 # Colored line-diffs on assert_eq! failure (repo convention).
 pretty_assertions = { workspace = true }
+# Property-based generation for the governor differential harness
+# (`tests/governor_correctness.rs`): every governed run is checked against the SAME
+# query and data run UNGOVERNED, over generated (dataset, query, budget) triples.
+# Already a workspace dev-dependency of seven sibling crates; version lives in the root
+# `[workspace.dependencies]`.
+proptest = { workspace = true }
 # Criterion for the EXISTS-decorrelation perf bench. Defaults off
 # (no plotters/rayon) like the sibling crates, so `make bench` stays lean and no
 # oxigraph-family edge enters the dev tree (gated by `make rdf-core-hygiene`).
@@ -104,6 +110,22 @@ harness = false
 # OPTIONAL, UNION, GROUP BY aggregates, transitive property path, ORDER BY+LIMIT.
 # Report-only; `make bench` lane only — excluded from `make check`.
 name = "query_eval"
+harness = false
+
+[[bench]]
+# Large exact property-path ranges over disjoint coprime cycles. This is the
+# regression watch for binary relation powering: runtime must follow graph size
+# and exponent bits, not the period of frontier sets or the numeric range value.
+# Report-only; `make bench` lane only — excluded from `make check`.
+name = "path_range"
+harness = false
+
+[[bench]]
+# Execution-governor cost envelope: the ordinary fast path, the governed carrier,
+# metered receipts through ordered parallel and forced-sequential folds, and
+# logarithmic-exponent property-path scaling. Report-only; `make bench` lane only
+# — excluded from `make check`.
+name = "governed_eval"
 harness = false
 
 [[bench]]

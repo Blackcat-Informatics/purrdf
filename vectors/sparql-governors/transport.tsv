@@ -1,0 +1,22 @@
+# Injected-transport wiring and expectation, for every case whose manifest `source` is
+# `http` — and for no other case.
+# Columns: case <TAB> stop-handling <TAB> on-first-post <TAB> posts
+#   stop-handling  honours  the transport polls HttpRequest::stop and abandons the
+#                           exchange on a fired signal — what a transport CAN do
+#                  ignores  the transport never reads HttpRequest::stop at all — what a
+#                           transport that cannot abandon an in-flight exchange does
+#   on-first-post  nothing  the exchange has no effect on the caller's signal
+#                  cancel   the exchange cancels the caller's cancellation flag, standing
+#                           in for a host that cancels while the evaluator is blocked
+#                           inside the transport and can poll nothing
+#   posts          the exact number of exchanges the transport must be asked to perform
+#
+# `posts` is DERIVED by the corpus regeneration step and re-checked on every run. It is
+# the observation that separates "the request was prevented" from "the request was made
+# and its answer discarded", which no governor evidence can distinguish.
+remote-requests-zero	honours	nothing	0
+remote-requests-boundary	honours	nothing	2
+remote-requests-over-bound	honours	nothing	1
+service-deaf-transport-request-ceiling	ignores	nothing	1
+service-deaf-transport-cancel-mid-exchange	ignores	cancel	1
+service-honouring-transport-cancel-mid-exchange	honours	cancel	1

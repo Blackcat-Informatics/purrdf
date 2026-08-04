@@ -288,6 +288,102 @@ class QueryTriples:
 class QueryBoolean:
     def __bool__(self) -> bool: ...
 
+# ── Execution governors ─────────────────────────────────────────────────────────
+#
+# The governed query/update surface (bindings/python/src/py_store/query.rs). A
+# tripped governor is an OUTCOME, never an exception: `query_governed` returns a
+# `QueryOutcome` on both paths so the rows a budget already paid for survive, with
+# the certificate that says what they bound. The one stop cause that raises is a
+# `KeyboardInterrupt`, which the governed call polls for while the GIL is released.
+
+# Which kind of governor stopped an execution. `"unknown"` is reachable only if a
+# future kernel adds a governor kind this build cannot name; `label` still names it.
+type GovernorKind = TypingLiteral["budget", "stopped", "refused", "unknown"]
+# What a truncated execution's rows certify about the query's true answer.
+type PartialCertainty = TypingLiteral["certain", "at-most", "unknown"]
+
+class CancellationToken:
+    def __init__(self) -> None: ...
+    def cancel(self) -> None: ...
+    @property
+    def cancelled(self) -> bool: ...
+
+class TrippedGovernor:
+    @property
+    def kind(self) -> GovernorKind: ...
+    @property
+    def label(self) -> str: ...
+    @property
+    def dimension(self) -> str | None: ...
+    @property
+    def limit(self) -> int | None: ...
+    @property
+    def consumed(self) -> int | None: ...
+    @property
+    def estimate(self) -> int | None: ...
+    @property
+    def cause(self) -> str | None: ...
+    def __str__(self) -> str: ...
+
+class GovernorEvidence:
+    @property
+    def consumed(self) -> dict[str, int]: ...
+    @property
+    def limits(self) -> dict[str, int]: ...
+    @property
+    def tripped(self) -> TrippedGovernor | None: ...
+    @property
+    def is_complete(self) -> bool: ...
+    def consumed_in(self, dimension: str) -> int: ...
+    def limit_for(self, dimension: str) -> int: ...
+
+class PartialAnswers:
+    @property
+    def certainty(self) -> PartialCertainty: ...
+    @property
+    def is_certain(self) -> bool: ...
+    @property
+    def result(self) -> QuerySolutions | QueryTriples | QueryBoolean | None: ...
+    @property
+    def is_positional_prefix(self) -> bool | None: ...
+    @property
+    def barrier(self) -> str | None: ...
+
+class QueryOutcome:
+    @property
+    def is_complete(self) -> bool: ...
+    # The COMPLETE result only; `None` when a governor tripped. The rows a trip
+    # reached are on `partial`, behind the certificate that says what they bound.
+    @property
+    def result(self) -> QuerySolutions | QueryTriples | QueryBoolean | None: ...
+    @property
+    def partial(self) -> PartialAnswers | None: ...
+    @property
+    def tripped(self) -> TrippedGovernor | None: ...
+    @property
+    def evidence(self) -> GovernorEvidence: ...
+
+class EntailmentQueryOutcome:
+    @property
+    def phase(self) -> TypingLiteral["answered", "closure-stopped"]: ...
+    @property
+    def is_complete(self) -> bool: ...
+    @property
+    def outcome(self) -> QueryOutcome | None: ...
+    @property
+    def report(self) -> str | None: ...
+    @property
+    def tripped(self) -> TrippedGovernor | None: ...
+
+class UpdateOutcome:
+    # `False` means NOTHING applied, never "not all of it applied".
+    @property
+    def is_applied(self) -> bool: ...
+    @property
+    def tripped(self) -> TrippedGovernor | None: ...
+    @property
+    def evidence(self) -> GovernorEvidence: ...
+
 # ── Store / Dataset ─────────────────────────────────────────────────────────────
 
 class QuadIter:
@@ -326,6 +422,44 @@ class Store:
         extension_namespaces: list[str] | None = ...,
         standpoint_predicates: tuple[str, str] | None = ...,
     ) -> QuerySolutions | QueryTriples | QueryBoolean: ...
+    # Governed sibling of `query`: every ceiling is inclusive; an omitted dimension
+    # remains metered at an effectively unreachable ceiling. `deadline_ms` is a
+    # wall-clock budget in milliseconds. A trip is returned in the `QueryOutcome`,
+    # never raised.
+    def query_governed(
+        self,
+        query: str,
+        *,
+        substitutions: dict[Variable, _Term] | None = ...,
+        extension_namespaces: list[str] | None = ...,
+        standpoint_predicates: tuple[str, str] | None = ...,
+        fuel: int | None = ...,
+        deadline_ms: int | None = ...,
+        max_answers: int | None = ...,
+        max_intermediate_cells: int | None = ...,
+        max_scratch_bytes: int | None = ...,
+        max_remote_requests: int | None = ...,
+        cancel: CancellationToken | None = ...,
+    ) -> QueryOutcome: ...
+    # Governed two-phase entailment query. `outcome` and `report` are absent only
+    # when the closure phase itself was stopped.
+    def query_entailment_governed(
+        self,
+        query: str,
+        entailment: str,
+        *,
+        program: str = ...,
+        substitutions: dict[Variable, _Term] | None = ...,
+        extension_namespaces: list[str] | None = ...,
+        standpoint_predicates: tuple[str, str] | None = ...,
+        fuel: int | None = ...,
+        deadline_ms: int | None = ...,
+        max_answers: int | None = ...,
+        max_intermediate_cells: int | None = ...,
+        max_scratch_bytes: int | None = ...,
+        max_remote_requests: int | None = ...,
+        cancel: CancellationToken | None = ...,
+    ) -> EntailmentQueryOutcome: ...
     def update(
         self,
         update: str,
@@ -333,6 +467,21 @@ class Store:
         extension_namespaces: list[str] | None = ...,
         standpoint_predicates: tuple[str, str] | None = ...,
     ) -> None: ...
+    # Governed sibling of `update`. No `max_answers`: it bounds an answer sequence
+    # an UPDATE does not have.
+    def update_governed(
+        self,
+        update: str,
+        *,
+        extension_namespaces: list[str] | None = ...,
+        standpoint_predicates: tuple[str, str] | None = ...,
+        fuel: int | None = ...,
+        deadline_ms: int | None = ...,
+        max_intermediate_cells: int | None = ...,
+        max_scratch_bytes: int | None = ...,
+        max_remote_requests: int | None = ...,
+        cancel: CancellationToken | None = ...,
+    ) -> UpdateOutcome: ...
     @overload
     def dump(
         self,
@@ -411,6 +560,40 @@ class MutableDataset:
         extension_namespaces: list[str] | None = ...,
         standpoint_predicates: tuple[str, str] | None = ...,
     ) -> QuerySolutions | QueryTriples | QueryBoolean: ...
+    # Governed siblings: keywords, outcome, and Ctrl-C interaction exactly as on
+    # `Store.query_governed` / `Store.update_governed`.
+    def query_governed(
+        self,
+        query: str,
+        *,
+        substitutions: dict[Variable, _Term] | None = ...,
+        extension_namespaces: list[str] | None = ...,
+        standpoint_predicates: tuple[str, str] | None = ...,
+        fuel: int | None = ...,
+        deadline_ms: int | None = ...,
+        max_answers: int | None = ...,
+        max_intermediate_cells: int | None = ...,
+        max_scratch_bytes: int | None = ...,
+        max_remote_requests: int | None = ...,
+        cancel: CancellationToken | None = ...,
+    ) -> QueryOutcome: ...
+    def query_entailment_governed(
+        self,
+        query: str,
+        entailment: str,
+        *,
+        program: str = ...,
+        substitutions: dict[Variable, _Term] | None = ...,
+        extension_namespaces: list[str] | None = ...,
+        standpoint_predicates: tuple[str, str] | None = ...,
+        fuel: int | None = ...,
+        deadline_ms: int | None = ...,
+        max_answers: int | None = ...,
+        max_intermediate_cells: int | None = ...,
+        max_scratch_bytes: int | None = ...,
+        max_remote_requests: int | None = ...,
+        cancel: CancellationToken | None = ...,
+    ) -> EntailmentQueryOutcome: ...
     def update(
         self,
         update: str,
@@ -418,6 +601,19 @@ class MutableDataset:
         extension_namespaces: list[str] | None = ...,
         standpoint_predicates: tuple[str, str] | None = ...,
     ) -> None: ...
+    def update_governed(
+        self,
+        update: str,
+        *,
+        extension_namespaces: list[str] | None = ...,
+        standpoint_predicates: tuple[str, str] | None = ...,
+        fuel: int | None = ...,
+        deadline_ms: int | None = ...,
+        max_intermediate_cells: int | None = ...,
+        max_scratch_bytes: int | None = ...,
+        max_remote_requests: int | None = ...,
+        cancel: CancellationToken | None = ...,
+    ) -> UpdateOutcome: ...
     def compact(self) -> None: ...
     def __len__(self) -> int: ...
 

@@ -24,12 +24,17 @@ use pyo3::types::{PyBytes, PyCapsule, PyDict};
 
 use super::canon::PyCanonicalizationAlgorithm;
 use super::io::{PyRdfFormat, dataset_from_quads_verbatim, parse_quads, read_input};
-use super::query::{build_engine, materialize_results};
+use super::query::{
+    GovernorArgs, PyCancellationToken, PyEntailmentQueryOutcome, PyQueryOutcome, PyUpdateOutcome,
+    build_engine, materialize_entailment_outcome, materialize_outcome, materialize_results,
+    materialize_update_outcome, run_governed,
+};
 use super::term::{PyQuad, PyVariable, extract_graph_name, extract_term};
 use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs};
 use crate::{
-    BlankScope, DatasetMut, GraphMatchValue, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfQuad,
-    RdfTerm, RdfTriple, SerializeGraph, SparqlEngine, SparqlRequest, TermValue, serialize_dataset,
+    BlankScope, DatasetMut, GraphMatchValue, QueryEntailmentPlan, RdfDataset, RdfDatasetBuilder,
+    RdfLiteral, RdfQuad, RdfTerm, RdfTriple, SerializeGraph, SparqlEngine, SparqlRequest,
+    TermValue, query_with_entailment_governed, serialize_dataset,
     serialize_dataset_with_jsonld_options,
 };
 
@@ -159,6 +164,167 @@ impl PyStore {
         materialize_results(py, result)
     }
 
+    /// Run a SPARQL query under caller-supplied execution governors, returning a
+    /// `QueryOutcome` rather than the results directly.
+    ///
+    /// Every governor keyword is optional. An omitted dimension remains metered at an
+    /// effectively unreachable ceiling; an explicit value replaces that ceiling. `fuel`
+    /// bounds abstract execution steps, `deadline_ms` a wall-clock budget in milliseconds,
+    /// `max_answers` the answer sequence (solution rows for SELECT, output statements for
+    /// CONSTRUCT/DESCRIBE, nothing for ASK),
+    /// `max_intermediate_cells` the largest intermediate bag in `rows * columns`,
+    /// `max_scratch_bytes` the per-query scratch arena, and `max_remote_requests`
+    /// federated requests. Every ceiling is **inclusive**: consumption equal to it is
+    /// admitted, and zero is a valid ceiling that trips on the first charged unit of
+    /// work. `cancel` takes a `CancellationToken` another thread can flip while this
+    /// call runs.
+    ///
+    /// A tripped governor is an **outcome, not an exception** — see
+    /// [`materialize_outcome`](super::query::materialize_outcome). The one stop cause
+    /// that does raise is a `KeyboardInterrupt`: this call polls the interpreter's
+    /// pending-signal flag while the GIL is released, so Ctrl-C stops the query instead
+    /// of being noticed only once it has finished.
+    ///
+    /// `substitutions` / `extension_namespaces` / `standpoint_predicates` behave exactly
+    /// as on [`query`](Self::query).
+    #[pyo3(signature = (
+        query,
+        *,
+        substitutions=None,
+        extension_namespaces=None,
+        standpoint_predicates=None,
+        fuel=None,
+        deadline_ms=None,
+        max_answers=None,
+        max_intermediate_cells=None,
+        max_scratch_bytes=None,
+        max_remote_requests=None,
+        cancel=None,
+    ))]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each governed dimension is named explicitly at the call site; a bag \
+                  argument would make an unset ceiling and a misspelt one look alike"
+    )]
+    fn query_governed(
+        &self,
+        py: Python<'_>,
+        query: &str,
+        substitutions: Option<&Bound<'_, PyDict>>,
+        extension_namespaces: Option<Vec<String>>,
+        standpoint_predicates: Option<(String, String)>,
+        fuel: Option<u64>,
+        deadline_ms: Option<u64>,
+        max_answers: Option<u64>,
+        max_intermediate_cells: Option<u64>,
+        max_scratch_bytes: Option<u64>,
+        max_remote_requests: Option<u64>,
+        cancel: Option<&PyCancellationToken>,
+    ) -> PyResult<Py<PyQueryOutcome>> {
+        let subs = collect_substitutions(substitutions)?;
+        let args = GovernorArgs {
+            fuel,
+            deadline_ms,
+            max_answers,
+            max_intermediate_cells,
+            max_scratch_bytes,
+            max_remote_requests,
+        };
+        let inner = &self.inner;
+        // Snapshot + engine build + governed evaluation run detached (GIL released), so
+        // the thread holding `cancel` keeps running while this one is in the engine.
+        let outcome = run_governed(py, args, cancel, move |governors| {
+            let dataset = inner
+                .freeze()
+                .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
+            let engine = build_engine(extension_namespaces, standpoint_predicates);
+            engine
+                .query_governed(
+                    &dataset,
+                    SparqlRequest {
+                        query,
+                        base_iri: None,
+                        substitutions: &subs,
+                    },
+                    governors,
+                )
+                .map_err(|e| PyValueError::new_err(format!("query evaluation error: {e}")))
+        })?;
+        materialize_outcome(py, outcome)
+    }
+
+    /// Run a governed SPARQL query over a closure produced by the named entailment
+    /// regime, carrying both the query outcome and the reasoning report.
+    #[pyo3(signature = (
+        query,
+        entailment,
+        *,
+        program="",
+        substitutions=None,
+        extension_namespaces=None,
+        standpoint_predicates=None,
+        fuel=None,
+        deadline_ms=None,
+        max_answers=None,
+        max_intermediate_cells=None,
+        max_scratch_bytes=None,
+        max_remote_requests=None,
+        cancel=None,
+    ))]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the regime plus each governed dimension is named explicitly at the host boundary"
+    )]
+    fn query_entailment_governed(
+        &self,
+        py: Python<'_>,
+        query: &str,
+        entailment: &str,
+        program: &str,
+        substitutions: Option<&Bound<'_, PyDict>>,
+        extension_namespaces: Option<Vec<String>>,
+        standpoint_predicates: Option<(String, String)>,
+        fuel: Option<u64>,
+        deadline_ms: Option<u64>,
+        max_answers: Option<u64>,
+        max_intermediate_cells: Option<u64>,
+        max_scratch_bytes: Option<u64>,
+        max_remote_requests: Option<u64>,
+        cancel: Option<&PyCancellationToken>,
+    ) -> PyResult<Py<PyEntailmentQueryOutcome>> {
+        let subs = collect_substitutions(substitutions)?;
+        let plan =
+            QueryEntailmentPlan::parse(entailment, program).map_err(PyValueError::new_err)?;
+        let args = GovernorArgs {
+            fuel,
+            deadline_ms,
+            max_answers,
+            max_intermediate_cells,
+            max_scratch_bytes,
+            max_remote_requests,
+        };
+        let inner = &self.inner;
+        let outcome = run_governed(py, args, cancel, move |governors| {
+            let dataset = inner
+                .freeze()
+                .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
+            let engine = build_engine(extension_namespaces, standpoint_predicates);
+            query_with_entailment_governed(
+                &engine,
+                &dataset,
+                SparqlRequest {
+                    query,
+                    base_iri: None,
+                    substitutions: &subs,
+                },
+                plan.entailment(),
+                governors,
+            )
+            .map_err(|e| PyValueError::new_err(format!("entailment query failed: {e}")))
+        })?;
+        materialize_entailment_outcome(py, outcome)
+    }
+
     /// Run a SPARQL UPDATE against the store (COW-atomic: a failed update leaves the
     /// store unchanged). `extension_namespaces` / `standpoint_predicates` configure
     /// the engine exactly as on [`query`](Self::query).
@@ -193,6 +359,86 @@ impl PyStore {
         // The UPDATE produced a fresh frozen base; adopt it as the new COW base.
         self.inner = MutableDataset::new(dataset);
         Ok(())
+    }
+
+    /// Run a SPARQL UPDATE under caller-supplied execution governors, returning an
+    /// `UpdateOutcome` rather than `None`.
+    ///
+    /// The governor keywords are those of
+    /// [`query_governed`](Self::query_governed) minus `max_answers`, which bounds an
+    /// answer sequence an UPDATE does not have. A request's size is bounded by the
+    /// ceilings on the work that computes it.
+    ///
+    /// **A tripped request applies nothing.** Not "not all of it": the store is left
+    /// exactly as it was found, whichever operation the governor stopped and however much
+    /// work the earlier operations of the same request had already done. As on the query
+    /// path the trip is an outcome rather than an exception, and a `KeyboardInterrupt`
+    /// raises.
+    #[pyo3(signature = (
+        update,
+        *,
+        extension_namespaces=None,
+        standpoint_predicates=None,
+        fuel=None,
+        deadline_ms=None,
+        max_intermediate_cells=None,
+        max_scratch_bytes=None,
+        max_remote_requests=None,
+        cancel=None,
+    ))]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each governed dimension is named explicitly at the call site; a bag \
+                  argument would make an unset ceiling and a misspelt one look alike"
+    )]
+    fn update_governed(
+        &mut self,
+        py: Python<'_>,
+        update: &str,
+        extension_namespaces: Option<Vec<String>>,
+        standpoint_predicates: Option<(String, String)>,
+        fuel: Option<u64>,
+        deadline_ms: Option<u64>,
+        max_intermediate_cells: Option<u64>,
+        max_scratch_bytes: Option<u64>,
+        max_remote_requests: Option<u64>,
+        cancel: Option<&PyCancellationToken>,
+    ) -> PyResult<Py<PyUpdateOutcome>> {
+        let args = GovernorArgs {
+            fuel,
+            deadline_ms,
+            max_answers: None,
+            max_intermediate_cells,
+            max_scratch_bytes,
+            max_remote_requests,
+        };
+        let inner = &self.inner;
+        // Snapshot + governed evaluation run detached (GIL released).
+        let (outcome, dataset) = run_governed(py, args, cancel, move |governors| {
+            let mut dataset = inner
+                .freeze()
+                .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
+            let outcome = build_engine(extension_namespaces, standpoint_predicates)
+                .update_governed(
+                    &mut dataset,
+                    SparqlRequest {
+                        query: update,
+                        base_iri: None,
+                        substitutions: &[],
+                    },
+                    governors,
+                )
+                .map_err(|e| PyValueError::new_err(format!("update evaluation error: {e}")))?;
+            Ok((outcome, dataset))
+        })?;
+        // The engine publishes into its own `Arc` only on the applied path, so adopting
+        // the returned base on a trip would adopt a base nothing was written to. Adopt it
+        // only when the request applied, and the tripped path leaves this store's COW
+        // base untouched.
+        if outcome.is_applied() {
+            self.inner = MutableDataset::new(dataset);
+        }
+        materialize_update_outcome(py, &outcome)
     }
 
     /// Dump the whole store (or one graph, via `from_graph`) in `format`. Mirrors

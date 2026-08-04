@@ -33,7 +33,8 @@ use purrdf_sparql_algebra::{GraphPattern, NamedNodePattern, TermPattern, TripleP
 
 use crate::DetHashMap;
 use crate::error::EvalError;
-use crate::eval::{EvalCtx, eval};
+use crate::eval::{EvalCtx, eval_evaluated};
+use crate::governor::lift::{Evaluated, Truncation};
 use crate::solution::{Solution, VarSchema};
 use crate::template::{instantiate_predicate, instantiate_term, positionally_ill_formed};
 
@@ -56,12 +57,161 @@ const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 /// behaves like a plain `CONSTRUCT`. When the `WHERE` has no `rdf:reifies`
 /// pattern at all the detection does zero extra work and the output is
 /// byte-identical to a plain `CONSTRUCT`.
+///
+/// # Under a truncation
+///
+/// The template is instantiated over whatever rows the `WHERE` produced, and the `WHERE`'s
+/// certificate is handed back beside the graph rather than folded into it: a graph built
+/// from a certified lower bound is a **subgraph** of the true `CONSTRUCT` output, one
+/// built from an upper bound is a supergraph, and one built from no bound at all is built
+/// from no rows. Only the caller that receives the certificate can tell those apart, so
+/// the certificate travels rather than being discarded here.
+/// A `CONSTRUCT`/`DESCRIBE` result: the graph, and the `WHERE`'s certificate when a
+/// governor stopped it short.
+pub(crate) type ConstructedGraph<I> = (Arc<RdfDataset>, Option<Truncation<I>>);
+
+/// Charge the answer cap against a graph-producing query form's output, truncating the
+/// graph to the prefix the cap admits.
+///
+/// # What the cap denominates for `CONSTRUCT` and `DESCRIBE`
+///
+/// **Output triples.** For a `SELECT` the answer sequence is its rows and the cap counts
+/// rows; for a graph form the answer *is* the graph, so the cap counts the triples in it —
+/// every ordinary quad, every RDF 1.2 reifier binding, and every annotation, each one
+/// being a statement the caller receives. Counting solution rows instead would leave the
+/// governor measuring the wrong thing entirely: one `CONSTRUCT` row can instantiate a
+/// twenty-triple template, and a `DESCRIBE` of one row's subject can pull in a thousand.
+/// A caller who caps a query at a thousand answers and receives a hundred thousand
+/// triples has no governor at all, which is exactly the hole this closes.
+///
+/// The boundary is the `SELECT` boundary, inclusively: a graph whose triple count equals
+/// the cap is **complete**, and one triple more is a trip.
+///
+/// # Why the frozen order, and why a rebuild
+///
+/// The count runs over the frozen dataset's canonical order — the order `freeze` sorts and
+/// de-duplicates into — so "the first *n* triples" is a property of the output graph and
+/// not of the accident of template evaluation. That makes the truncated graph a genuine
+/// positional prefix of the complete one: under a larger deterministic cap these same
+/// triples come first, which is the resumption property
+/// [`PartialSparqlResult::is_positional_prefix`](crate::PartialSparqlResult::is_positional_prefix)
+/// promises. Counting emissions instead would make the cap depend on how many duplicates a
+/// template happened to produce, and the reported size would not match the graph handed
+/// back.
+///
+/// A truncated graph has to be rebuilt rather than sliced because a frozen dataset owns its
+/// term table; the ids are re-interned through [`TermValue`], which is dataset-independent
+/// and carries nested triple terms structurally.
+pub(crate) fn commit_answer_triples<D: DatasetView + Sync>(
+    graph: Arc<RdfDataset>,
+    certificate: Option<Truncation<D::Id>>,
+    rows: &crate::solution::SolutionSeq<D::Id>,
+    ctx: &EvalCtx<'_, D>,
+) -> ConstructedGraph<D::Id> {
+    let Some(state) = ctx.governor_state() else {
+        return (graph, certificate);
+    };
+    if !state.is_engaged_in(purrdf_core::ResourceDimension::AnswerRows) {
+        return (graph, certificate);
+    }
+    let total = graph_triple_count(&graph);
+    let mut admitted = 0_usize;
+    let mut tripped = state.tripped();
+    let mut cap_cut = false;
+    for _ in 0..total {
+        if let Err(cap) = state.charge_final_output(purrdf_core::ResourceDimension::AnswerRows, 1) {
+            tripped.get_or_insert(cap);
+            cap_cut = true;
+            break;
+        }
+        admitted += 1;
+    }
+
+    match (certificate, tripped, cap_cut) {
+        (None, None, _) => (graph, None),
+        (None, Some(tripped), _) => (
+            truncate_graph(&graph, admitted),
+            // The rows are the `WHERE`'s complete output — the cap stopped the *graph*,
+            // not the pattern — so they are their own positional prefix and certify a
+            // lower bound, which is what `origin` states.
+            Some(Truncation::origin(rows.clone(), tripped)),
+        ),
+        (Some(certificate), _, true) => {
+            let (certificate_rows, certificate) = certificate.split();
+            (
+                truncate_graph(&graph, admitted),
+                Some(Truncation::after_answer_cap(certificate_rows, certificate)),
+            )
+        }
+        (Some(certificate), _, false) => (graph, Some(certificate)),
+    }
+}
+
+/// The number of statements a graph result carries: quads plus the RDF 1.2 statement
+/// layer's reifier bindings and annotations.
+///
+/// [`RdfDataset::quad_count`] alone would undercount a reification-bearing `CONSTRUCT`,
+/// whose reifier and annotation rows live in side tables rather than in `quads` — and a
+/// governor that cannot see a whole encoding layer is one a query can be written around.
+fn graph_triple_count(graph: &RdfDataset) -> usize {
+    graph.quad_count() + graph.reifiers().count() + graph.annotations().count()
+}
+
+/// Rebuild `graph` from its first `admitted` statements, in the frozen canonical order the
+/// count above walks: quads, then reifier bindings, then annotations.
+fn truncate_graph(graph: &RdfDataset, admitted: usize) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let mut remaining = admitted;
+    let intern = |builder: &mut RdfDatasetBuilder, id: TermId| {
+        let value = graph.term_value(id);
+        builder.intern_value(&value)
+    };
+    for quad in graph.quads() {
+        if remaining == 0 {
+            break;
+        }
+        let s = intern(&mut builder, quad.s);
+        let p = intern(&mut builder, quad.p);
+        let o = intern(&mut builder, quad.o);
+        let g = quad.g.map(|g| intern(&mut builder, g));
+        builder.push_quad(s, p, o, g);
+        remaining -= 1;
+    }
+    for (reifier, triple, graph_id) in graph.reifiers_with_graph() {
+        if remaining == 0 {
+            break;
+        }
+        let reifier = intern(&mut builder, reifier);
+        let triple = intern(&mut builder, triple);
+        let graph_id = graph_id.map(|g| intern(&mut builder, g));
+        builder.push_reifier_in_graph(reifier, triple, graph_id);
+        remaining -= 1;
+    }
+    for (reifier, predicate, object, graph_id) in graph.annotations_with_graph() {
+        if remaining == 0 {
+            break;
+        }
+        let reifier = intern(&mut builder, reifier);
+        let predicate = intern(&mut builder, predicate);
+        let object = intern(&mut builder, object);
+        let graph_id = graph_id.map(|g| intern(&mut builder, g));
+        builder.push_annotation_in_graph(reifier, predicate, object, graph_id);
+        remaining -= 1;
+    }
+    builder
+        .freeze()
+        .expect("a prefix of a frozen dataset is positionally valid by construction")
+}
+
 pub(crate) fn eval_construct<D: DatasetView + Sync>(
     template: &[TriplePattern],
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<Arc<RdfDataset>, EvalError> {
-    let seq = eval(pattern, ctx)?;
+) -> Result<ConstructedGraph<D::Id>, EvalError> {
+    let (seq, certificate) = match eval_evaluated(pattern, ctx)? {
+        Evaluated::Complete(seq) => (seq, None),
+        Evaluated::Truncated(truncation) => (truncation.rows().clone(), Some(truncation)),
+    };
     let schema = seq.schema.clone();
     let mut builder = RdfDatasetBuilder::new();
 
@@ -202,9 +352,10 @@ pub(crate) fn eval_construct<D: DatasetView + Sync>(
         }
     }
 
-    builder
+    let graph = builder
         .freeze()
-        .map_err(|d| EvalError::internal(format!("CONSTRUCT output failed to freeze: {d:?}")))
+        .map_err(|d| EvalError::internal(format!("CONSTRUCT output failed to freeze: {d:?}")))?;
+    Ok(commit_answer_triples(graph, certificate, &seq, ctx))
 }
 
 /// A reifies-pattern in the `WHERE` whose reifier variable the template drops.
@@ -493,6 +644,21 @@ fn instantiate<D: DatasetView + Sync>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The ungoverned `CONSTRUCT`, which is complete by construction: these tests assert
+    /// the graph, and the certificate half is exercised by the lift's own tests.
+    fn eval_construct<D: DatasetView + Sync>(
+        template: &[TriplePattern],
+        pattern: &GraphPattern,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<Arc<RdfDataset>, EvalError> {
+        let (graph, certificate) = super::eval_construct(template, pattern, ctx)?;
+        assert!(
+            certificate.is_none(),
+            "an ungoverned CONSTRUCT cannot truncate"
+        );
+        Ok(graph)
+    }
     use purrdf_core::{RdfLiteral, TermRef};
     use purrdf_sparql_algebra::{NamedNode, NamedNodePattern, TermPattern, Variable};
 
@@ -639,7 +805,7 @@ mod tests {
 
     /// A dataset with one reifier `:r rdf:reifies <<( :alice :age 42 )>>`, with two
     /// annotations on `:r` (confidence + accordingTo). The reifier query layer comes
-    /// from the BGP virtual-candidate machinery (Task 1).
+    /// from the BGP virtual-candidate machinery in [`crate::bgp`].
     fn reified_graph() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         // `rdf:reifies` MUST be interned for the reifier-query layer to fire

@@ -90,9 +90,11 @@ pub(crate) fn materialize_reported(
 /// * [`ReportTarget::File`] — write the rendering to the given path.
 ///
 /// Reachable from the `query` lane as well as from [`materialize_reported`]: that lane
-/// materializes THROUGH `purrdf::query_with_entailment` (the only entry point that runs the
-/// query-directed combined approach), so it holds the report rather than obtaining it here,
-/// and it surfaces it through this one function so the two lanes cannot render differently.
+/// materializes THROUGH `purrdf::query_with_entailment_governed` (the only entry point that
+/// runs the query-directed combined approach), so it holds the report rather than obtaining
+/// it here, and it surfaces it through this one function so the two lanes cannot render
+/// differently. A run a stop signal ended computed no closure and so holds no report; that
+/// lane surfaces nothing rather than an empty one.
 pub(crate) fn surface(target: &ReportTarget, report: &ReasoningReport) -> Result<(), CliError> {
     surface_rendered(target, &render_reasoning_report(report))
 }

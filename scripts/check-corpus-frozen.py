@@ -31,7 +31,9 @@ from pathlib import Path
 
 # Each guarded root -> its manifest file (repo-relative). A root is frozen whole:
 # every payload file beneath it is hashed. These are the corpora the SHACL/shexTest
-# conformance runners consume, the first-party frozen SHACL corpus, the vendored
+# conformance runners consume, the first-party frozen SHACL corpus, the first-party
+# execution-governor corpus (whose freeze manifest is itself the preimage of the
+# `GOVERNOR_CORPUS_DIGEST` a consumer pins), the vendored
 # W3C OWL 2 suite the entailment (DL-consistency) row grades against, and the
 # vendored W3C OWL 2 *entailment* suite (premise + conclusion pairs, plus the
 # 489-row upstream `census.tsv`) the OWL 2 RL row grades against — all declared
@@ -41,6 +43,9 @@ from pathlib import Path
 # until it appears here.)
 GUARDED_ROOTS: dict[str, str] = {
     "vectors/rdf12-canon": "scripts/conformance-frozen/vectors-rdf12-canon.sha256",
+    "vectors/sparql-governors": (
+        "scripts/conformance-frozen/vectors-sparql-governors.sha256"
+    ),
     "vectors/shacl": "scripts/conformance-frozen/vectors-shacl.sha256",
     "vectors/shexTest": "scripts/conformance-frozen/vectors-shexTest.sha256",
     "crates/shapes/corpus": "scripts/conformance-frozen/shapes-corpus.sha256",

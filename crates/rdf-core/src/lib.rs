@@ -52,6 +52,11 @@ pub mod diagnostic;
 // PyO3-free; the `purrdf-slice` FnO emitter builds a `FnoCatalog` from the slice
 // framework and serializes it here, replacing rdflib `emit_fno`/`_emit_fnom`.
 pub mod fno;
+// The one execution-governance vocabulary: stop causes, governed resource
+// dimensions, tripped-governor reports, and evidence. Named by the demand-paging
+// tier and the compute tier alike, so there is no parallel taxonomy. Clock-free,
+// allocation-free, wasm-clean.
+pub mod governor;
 // The workspace's single fixed-key ahash determinism policy: FastHasher and the
 // FastMap/FastSet/IdSet lookup-table aliases (determinism comes from id-sorting,
 // never hash order).
@@ -105,6 +110,9 @@ pub use diagnostic::{RdfDiagnostic, RdfLocation, RdfSeverity};
 pub use fno::{
     FnFunction, FnImpl, FnMapping, FnOutput, FnParam, FnParamMapping, FnReturnMapping, FnoCatalog,
     to_ntriples as fno_to_ntriples, to_quads as fno_to_quads,
+};
+pub use governor::{
+    GovernorEvidence, ResourceDimension, ResourceVector, StopCause, TrippedGovernor,
 };
 pub use hash::{FastHasher, FastMap, FastSet, IdSet};
 /// Deterministic embedding companions bound to exact PurRDF packs.

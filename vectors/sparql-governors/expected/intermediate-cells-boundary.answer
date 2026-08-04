@@ -1,0 +1,5 @@
+outcome	complete
+variables	s	m	z
+row	<http://example.org/s1>	<http://example.org/m1>	<http://example.org/z1>
+row	<http://example.org/s2>	<http://example.org/m2>	<http://example.org/z2>
+row	<http://example.org/s3>	<http://example.org/m3>	<http://example.org/z3>

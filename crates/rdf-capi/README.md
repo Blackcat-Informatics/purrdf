@@ -102,7 +102,7 @@ executes that example against the generated shared library and committed header.
 - **`int32_t` status + out-params.** Fallible functions return a
   `PurrdfStatus` value (as `int32_t`) and write results through out-pointers. On
 - **SemVer-frozen ABI.** The status enum is append-only; new fields/functions are
-  additive. The current ABI is **0.1.0 (beta)** — the freeze *discipline* is in
+  additive. The current ABI is **0.3.0 (beta)** — the freeze *discipline* is in
   place, but the version stays pre-1.0 until a real C consumer and the rdflib
   shim exercise it. `purrdf_abi_version` reports it.
 
@@ -122,6 +122,17 @@ executes that example against the generated shared library and committed header.
 | `PURRDF_STATUS_CURSOR_EXHAUSTED` | 9 | no more rows (a non-error terminal signal, `> 0`) |
 | `PURRDF_STATUS_GTS_ERROR` | 10 | GTS container read/write failed |
 | `PURRDF_STATUS_PANIC` | 100 | a panic was caught at the boundary |
+
+## Governed execution
+
+`purrdf_query_governed` returns either a complete query result or a typed exhausted
+outcome with governor evidence and a partial-answer certificate.
+`purrdf_query_entailment_governed` additionally keeps the closure-phase report or stop
+beside that query outcome. Budget exhaustion is not a query error: depending on the
+certificate, the call may still populate the `PurrdfRowCursor` or graph-result
+out-parameter. Every populated row cursor must be released with `purrdf_rowcursor_free`,
+every graph dataset with `purrdf_dataset_free`, and every report buffer with
+`purrdf_buffer_free`, on complete and exhausted paths alike.
 
 ## Ownership
 
@@ -155,6 +166,7 @@ executes that example against the generated shared library and committed header.
 | `PurrdfGraph` | single-threaded mutable (COW delta); external locking required to share |
 | `PurrdfCursor` / `PurrdfRowCursor` | single-threaded |
 | `PurrdfReasoner` | `Send`, **not `Sync`** — answering mutates the shared knowledge base, so one handle may move between threads but not be used by two at once; open one per thread |
+| `PurrdfCancellation` | `Send + Sync` — a shared monotone cancellation bit; one thread may cancel while another runs a governed call |
 | `PurrdfBuffer` / `PurrdfError` | immutable once returned; read from any thread, free once |
 
 ## Term crossing

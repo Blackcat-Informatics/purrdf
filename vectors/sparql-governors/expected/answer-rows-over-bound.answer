@@ -1,0 +1,8 @@
+outcome	budget-exhausted
+tripped	budget	answer-rows	answer-cap-exhausted	limit=4	consumed=5
+certificate	certain	positional-prefix=true
+variables	s	o
+row	<http://example.org/s1>	<http://example.org/o1>
+row	<http://example.org/s2>	<http://example.org/o2>
+row	<http://example.org/s3>	<http://example.org/o3>
+row	<http://example.org/s4>	<http://example.org/o4>

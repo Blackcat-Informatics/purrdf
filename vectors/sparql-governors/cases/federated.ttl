@@ -1,0 +1,3 @@
+@prefix ex: <http://example.org/> .
+
+ex:local ex:p ex:seed .

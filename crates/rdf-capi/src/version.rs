@@ -13,7 +13,7 @@ use crate::status::{PurrdfAbiVersion, PurrdfCapabilities, PurrdfStatus};
 /// version stays pre-1.0 until a real C consumer + the rdflib shim exercise it.
 pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// ABI minor version.
-pub const PURRDF_ABI_MINOR: u32 = 1;
+pub const PURRDF_ABI_MINOR: u32 = 3;
 /// ABI patch version.
 pub const PURRDF_ABI_PATCH: u32 = 0;
 

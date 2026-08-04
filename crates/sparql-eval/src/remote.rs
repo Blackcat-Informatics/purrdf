@@ -27,15 +27,39 @@
 //! undecodable response: a **non-silent** `SERVICE` raises [`EvalError::Remote`]
 //! (the query aborts), while `SERVICE SILENT` swallows the failure to the join
 //! identity (one empty row) so the surrounding query proceeds unchanged.
+//!
+//! # `SILENT` is about the endpoint, never about this engine's budget
+//!
+//! `SILENT` says "a federated endpoint I do not control may be unreachable, and I would
+//! rather have the rest of my answer than an error". It says nothing about the caller's
+//! own governors, so a governor trip reached through a `SERVICE` clause is
+//! **non-silenceable**: it propagates as a truncation whether or not `SILENT` is present
+//! (see [`RemoteError::Governed`]). Swallowing a trip to the join identity would leave the
+//! surrounding join a no-op and the final result indistinguishable from a complete one —
+//! an answer that looks complete and is wrong, which is worse than either an error or an
+//! honest partial.
+//!
+//! # A federated call is governed at both ends
+//!
+//! The seam takes the execution's [`StopSignal`], and it is polled **before** dispatch, so
+//! an expired deadline prevents the request rather than observing it after the network
+//! call has already gone out. The signal is also handed to the source itself, so a host
+//! transport can consult it while this evaluator is blocked inside the call — the one
+//! window in which nothing else can. Both the request and every ingested row are charged,
+//! and the response is measured against the intermediate-cell ceiling before a single row
+//! of it is interned, so a response arriving from outside the dataset cannot walk past
+//! ceilings that bound everything computed inside it.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use purrdf_core::{DatasetView, RdfDataset, TermValue, ViewTermId};
+use purrdf_core::{DatasetView, RdfDataset, TermValue, TrippedGovernor, ViewTermId};
 use purrdf_sparql_algebra::{GraphPattern, NamedNodePattern, Variable};
 
 use crate::error::EvalError;
-use crate::eval::{EvalCtx, materialize_solutions};
+use crate::eval::{EvalCtx, EvaluatedOutcome, Outcome, materialize_solutions};
+use crate::governor::lift::{Evaluated, Truncation};
+use crate::governor::{GovernorState, QueryGovernors, StopSignal};
 use crate::solution::{SolutionSeq, VarSchema};
 
 /// One remote `SELECT` result set, dataset-independent (egress [`TermValue`]
@@ -46,10 +70,15 @@ pub struct ResolvedBindings {
     pub variables: Vec<Variable>,
     /// One row per solution; `rows[i][j]` is the value of `variables[j]`.
     pub rows: Vec<Vec<Option<TermValue>>>,
+    /// Exact cell count of the first response prefix the supplied ceiling refused, when
+    /// the source deliberately stopped before materializing it. `rows` is the ordered
+    /// prefix that fit.
+    pub cell_limit_exceeded_at: Option<u64>,
 }
 
 /// A failure while resolving a `SERVICE` step. Whether it aborts the query or is
-/// swallowed is decided by `eval_service` from the `SILENT` flag, not here.
+/// swallowed is decided by `eval_service` from the `SILENT` flag, not here — with the one
+/// exception of [`Self::Governed`], which `SILENT` cannot swallow.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RemoteError {
@@ -59,6 +88,22 @@ pub enum RemoteError {
     Decode(String),
     /// Federation is disabled for this source.
     Disabled,
+    /// **This engine's own** governor stopped the exchange: the caller's stop signal
+    /// fired, or a ceiling was crossed inside the forwarded evaluation.
+    ///
+    /// Not an endpoint failure and therefore not silenceable — see the module
+    /// documentation. A source returns this only for a governor it was handed (the stop
+    /// signal threaded into [`RemoteQuerySource::query`]); an endpoint's own overload,
+    /// throttling, or timeout is [`Self::Transport`], because that is the caller's
+    /// endpoint misbehaving rather than the caller's budget running out.
+    Governed(TrippedGovernor),
+    /// The host exchange completed after this execution's stop signal fired, so its
+    /// response was discarded before decode or ingest.
+    ///
+    /// This is distinct from [`Self::Governed`] because completing and discarding a
+    /// response removes the positional-prefix/resumption claim even though the lower
+    /// answer bound remains sound. `SERVICE SILENT` may not swallow either variant.
+    GovernedAfterCompletion(TrippedGovernor),
 }
 
 impl core::fmt::Display for RemoteError {
@@ -67,6 +112,10 @@ impl core::fmt::Display for RemoteError {
             Self::Transport(m) => write!(f, "transport: {m}"),
             Self::Decode(m) => write!(f, "decode: {m}"),
             Self::Disabled => write!(f, "federation disabled"),
+            Self::Governed(governor) => write!(f, "governed: {governor}"),
+            Self::GovernedAfterCompletion(governor) => {
+                write!(f, "governed after completed exchange: {governor}")
+            }
         }
     }
 }
@@ -79,11 +128,67 @@ pub trait RemoteQuerySource {
     /// Forward `query_text` (a complete `SELECT * WHERE { … }`) to `endpoint` and
     /// return its bindings.
     ///
+    /// `stop` is the executing query's [`StopSignal`], or `None` when the caller set no
+    /// deadline and no cancellation. An implementation **must** poll it before it starts
+    /// the exchange, and should poll it again anywhere it would otherwise wait: this is
+    /// the only governor that can act while the evaluator is blocked inside this call, and
+    /// a federated call is where an unbounded wait is most likely. Report a fired signal as
+    /// [`RemoteError::Governed`] — never as [`RemoteError::Transport`], which `SILENT` is
+    /// entitled to swallow.
+    ///
+    /// # What a transport that cannot abandon an exchange still gets, and what it loses
+    ///
+    /// Polling mid-exchange is a capability, not an obligation: plenty of HTTP clients
+    /// cannot cancel a request they are already inside, and nothing here forces a host to
+    /// write one that can. So the contract is stated for both cases, and the difference
+    /// between them is pinned by the frozen governor corpus
+    /// (`vectors/sparql-governors/`, the `service-*-transport-*` cases) rather than left
+    /// to a reader's judgement.
+    ///
+    /// A transport that **ignores** `stop` still degrades only to **per-request
+    /// granularity**, never to unboundedness. The signal is polled by the evaluator
+    /// immediately before dispatch and the request is charged before it is issued, so a
+    /// signal that was already firing prevents the call, and one that fires during the
+    /// call is observed the moment control returns. The corpus pins that a cancellation
+    /// raised while a deaf transport is mid-exchange reaches the same outcome
+    /// (`stopped cancelled`) and the same exchange count (one) as it does through an
+    /// honouring transport.
+    ///
+    /// What the deaf transport loses is the **positional-prefix claim** on the
+    /// certificate. The distinction is not about how much was computed — both cases carry
+    /// the same rows — but about what a caller may do next. An honouring transport
+    /// *abandons* the exchange, so the answer that would have followed was never
+    /// established and the rows in hand are still the true output's first rows, in order:
+    /// [`PartialSparqlResult::is_positional_prefix`](crate::PartialSparqlResult::is_positional_prefix)
+    /// stays `true`, preserving the relation needed to resume under a deterministic
+    /// ceiling. A deaf transport *completes* the exchange and the evaluator then discards its response,
+    /// so rows that would have been established are absent from the middle of the answer
+    /// rather than from its end; the positional claim is withdrawn (`false`) and with it
+    /// the resumption licence. The multiset bound is unaffected — the certificate is
+    /// [`PartialAnswers::Certain`](crate::PartialAnswers::Certain) either way — because
+    /// every row handed back was genuinely established.
+    ///
+    /// Both halves are worth stating plainly: honouring `stop` is not required for
+    /// soundness, and it does buy the caller something concrete.
+    ///
+    /// `max_intermediate_cells` is the executing query's inclusive peak-cell ceiling. A
+    /// source that decodes or evaluates bindings itself must stop before materializing a
+    /// response prefix wider than that bound and report the exact first refused size in
+    /// [`ResolvedBindings::cell_limit_exceeded_at`]. The evaluator repeats the check during
+    /// ingest, so a source that cannot implement bounded decode remains sound, but it gives
+    /// up the allocation protection at its own side of the seam.
+    ///
     /// # Errors
     ///
-    /// Returns [`RemoteError`] on transport or decode failure; `eval_service`
-    /// decides whether `SILENT` swallows it.
-    fn query(&self, endpoint: &str, query_text: &str) -> Result<ResolvedBindings, RemoteError>;
+    /// Returns [`RemoteError`] on transport or decode failure, which `eval_service` may
+    /// swallow under `SILENT`, or [`RemoteError::Governed`], which it never swallows.
+    fn query(
+        &self,
+        endpoint: &str,
+        query_text: &str,
+        stop: Option<&Arc<dyn StopSignal>>,
+        max_intermediate_cells: Option<u64>,
+    ) -> Result<ResolvedBindings, RemoteError>;
 }
 
 /// Evaluate a `SERVICE [SILENT] name { inner }` node to the remote result bag.
@@ -95,12 +200,23 @@ pub trait RemoteQuerySource {
 ///
 /// Returns [`EvalError::Remote`] for a non-silent failure (no source, variable
 /// endpoint, transport/decode error).
+///
+/// # Under a truncation
+///
+/// The inner pattern is serialized and sent to the endpoint rather than evaluated here,
+/// so there is no child result to lift: this node is a leaf as far as the partial-lift
+/// channel is concerned. Its result is a complete bag, a typed failure, or a truncation
+/// this node itself originates — from the stop signal, from the request charge, from the
+/// cell ceiling, or from a governor the source reports through [`RemoteError::Governed`].
+/// None of those four is silenceable.
 pub(crate) fn eval_service<D: DatasetView + Sync>(
+    node: &GraphPattern,
     name: &NamedNodePattern,
     inner: &GraphPattern,
     silent: bool,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<SolutionSeq<D::Id>, EvalError> {
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let _ = node;
     // Resolve the endpoint IRI. A variable endpoint needs per-row (lateral)
     // resolution, which the engine defers — so it is a hard error unless SILENT.
     let endpoint = match name {
@@ -109,7 +225,8 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
             return silent_or_err(silent, || {
                 "SERVICE with a variable endpoint is not supported (needs lateral evaluation)"
                     .to_owned()
-            });
+            })
+            .map(Evaluated::Complete);
         }
     };
 
@@ -118,18 +235,109 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
     let Some(source) = ctx.remote else {
         return silent_or_err(silent, || {
             format!("no remote query source configured for SERVICE <{endpoint}>")
-        });
+        })
+        .map(Evaluated::Complete);
     };
 
+    // Poll the stop signal immediately before dispatch. The node-entry poll happens before
+    // this node's work begins; a deadline that expires in between must still PREVENT the
+    // request, because a signal observed only after the call returned is not a governor —
+    // the call is the wait it exists to bound. Highest precedence, so it is tested ahead
+    // of the charge below.
+    if let Some(tripped) = ctx.stop_check() {
+        return Ok(Evaluated::Truncated(Truncation::origin(
+            SolutionSeq::empty(crate::eval::syntactic_schema(inner)),
+            tripped,
+        )));
+    }
+
+    // The `remote-request-issued` charge point, plus the request against the remote
+    // request ceiling — charged **before** the call, so an exhausted budget prevents the
+    // request rather than merely observing it afterwards. A budget trip is deliberately
+    // NOT silenceable here: `SILENT` is a statement about the endpoint, not about this
+    // engine's budget, and swallowing a trip to the join identity would return a result
+    // that looks complete and is wrong.
+    if let Err(tripped) = ctx
+        .charge(crate::governor::ChargePoint::RemoteRequestIssued)
+        .and_then(|()| ctx.charge_amount(purrdf_core::ResourceDimension::RemoteRequests, 1))
+    {
+        // The empty bag, never the join identity: the identity row is what makes a
+        // surrounding join a no-op, so returning it here would claim the remote endpoint
+        // had been consulted and had imposed nothing. An empty bag claims only that no
+        // remote row was established, which is exactly true and is a sound lower bound.
+        return Ok(Evaluated::Truncated(Truncation::origin(
+            SolutionSeq::empty(crate::eval::syntactic_schema(inner)),
+            tripped,
+        )));
+    }
+
     let query_text = purrdf_sparql_algebra::pattern_to_select_query(inner);
-    let resolved = match source.query(&endpoint, &query_text) {
-        Ok(resolved) => resolved,
+    // The signal travels WITH the call: while the evaluator is blocked inside it, nothing
+    // else is in a position to poll.
+    let stop = ctx.stop_signal().map(Arc::clone);
+    let max_intermediate_cells = ctx.governor_state().and_then(|state| {
+        let dimension = purrdf_core::ResourceDimension::IntermediateCells;
+        state
+            .is_engaged_in(dimension)
+            .then(|| state.limits().get(dimension))
+    });
+    let response = source.query(
+        &endpoint,
+        &query_text,
+        stop.as_ref(),
+        max_intermediate_cells,
+    );
+    // Always inspect the signal immediately after control returns. A source is permitted
+    // to be unable to abandon an in-flight request; without this checkpoint a terminal
+    // SERVICE could launder a cancellation into `Complete` because no later operator
+    // would ever poll it.
+    let post_return_trip = ctx.stop_check();
+    let resolved = match response {
+        Ok(resolved) => {
+            if let Some(tripped) = post_return_trip {
+                let schema = Arc::new(VarSchema::from_vars(resolved.variables));
+                return Ok(Evaluated::Truncated(Truncation::bag_only_origin(
+                    SolutionSeq::empty(schema),
+                    tripped,
+                )));
+            }
+            resolved
+        }
+        // A governor the source was handed. Not the endpoint's failure and so not
+        // silenceable — latched into the evidence so the receipt names the same governor
+        // the result does.
+        Err(RemoteError::Governed(governor)) => {
+            return Ok(Evaluated::Truncated(Truncation::origin(
+                SolutionSeq::empty(crate::eval::syntactic_schema(inner)),
+                ctx.record_trip(governor),
+            )));
+        }
+        Err(RemoteError::GovernedAfterCompletion(governor)) => {
+            return Ok(Evaluated::Truncated(Truncation::bag_only_origin(
+                SolutionSeq::empty(crate::eval::syntactic_schema(inner)),
+                ctx.record_trip(governor),
+            )));
+        }
         Err(e) => {
-            return silent_or_err(silent, || format!("SERVICE <{endpoint}>: {e}"));
+            // A real endpoint failure outranks a simultaneous stop. Under SILENT the
+            // endpoint failure is deliberately erased, so the stop becomes the surviving
+            // fact and must remain non-silenceable.
+            if silent && let Some(tripped) = post_return_trip {
+                return Ok(Evaluated::Truncated(Truncation::bag_only_origin(
+                    SolutionSeq::empty(crate::eval::syntactic_schema(inner)),
+                    tripped,
+                )));
+            }
+            return silent_or_err(silent, || format!("SERVICE <{endpoint}>: {e}"))
+                .map(Evaluated::Complete);
         }
     };
 
-    Ok(ingest(resolved, ctx))
+    let (seq, tripped) = ingest(resolved, ctx);
+    Ok(match tripped {
+        None => Evaluated::Complete(seq),
+        Some(tripped) => Evaluated::Truncated(Truncation::origin(seq, tripped)),
+    })
 }
 
 /// On `SILENT`, return the join identity (one empty row, a no-op for the
@@ -158,14 +366,47 @@ fn identity_seq<I: ViewTermId>() -> SolutionSeq<I> {
 /// yielding a [`SolutionSeq`] over the result schema. (Mirrors `modifier::eval_values`
 /// but carries `TermValue` directly, so remote blank nodes survive — `GroundTerm`
 /// has no blank-node variant.)
+/// Returns the interned bag together with the governor that stopped the ingest, if one
+/// did: the `remote-row-ingested` charge point is charged per row **as it is interned**,
+/// so an unbounded remote response cannot walk past the caller's ceilings by arriving
+/// from outside the dataset. Charging in row order makes the ingested prefix a positional
+/// prefix of the endpoint's answer, which is what lets the caller certify it.
+///
+/// # The cell ceiling is tested before each row is interned
+///
+/// A remote bag is an intermediate bag like any other, so it is measured against
+/// [`ResourceDimension::IntermediateCells`](purrdf_core::ResourceDimension::IntermediateCells)
+/// — and measured before the next interned row grows the local bag. Every other operator's
+/// bag is bounded by data the ceiling was sized against; this one is bounded by whatever a
+/// remote endpoint chose to send, which is the only bag in the evaluator an attacker (or
+/// a mistake) can size directly. The source seam receives the same bound so a built-in
+/// decoder can avoid constructing an over-limit owned response in the first place; this
+/// check remains the mandatory backstop for injected sources.
 fn ingest<D: DatasetView + Sync>(
     resolved: ResolvedBindings,
     ctx: &mut EvalCtx<'_, D>,
-) -> SolutionSeq<D::Id> {
-    let schema = Arc::new(VarSchema::from_vars(resolved.variables));
+) -> (SolutionSeq<D::Id>, Option<TrippedGovernor>) {
+    let ResolvedBindings {
+        variables,
+        rows: resolved_rows,
+        cell_limit_exceeded_at,
+    } = resolved;
+    let schema = Arc::new(VarSchema::from_vars(variables));
     let width = schema.len();
-    let mut rows = Vec::with_capacity(resolved.rows.len());
-    for binding in resolved.rows {
+    let cell_ceiling = ctx.cell_row_ceiling(width);
+    let mut rows = Vec::with_capacity(
+        cell_ceiling.map_or(resolved_rows.len(), |cap| cap.min(resolved_rows.len())),
+    );
+    let mut tripped = None;
+    for binding in resolved_rows {
+        if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
+            tripped = ctx.observe_cells(rows.len().saturating_add(1), width).err();
+            break;
+        }
+        if let Err(governor) = ctx.charge(crate::governor::ChargePoint::RemoteRowIngested) {
+            tripped = Some(governor);
+            break;
+        }
         let mut row = smallvec::smallvec![None; width];
         for (i, cell) in binding.into_iter().enumerate().take(width) {
             if let Some(value) = cell {
@@ -174,7 +415,12 @@ fn ingest<D: DatasetView + Sync>(
         }
         rows.push(row);
     }
-    SolutionSeq { schema, rows }
+    if tripped.is_none()
+        && let Some(attempted_cells) = cell_limit_exceeded_at
+    {
+        tripped = ctx.observe_cell_count(attempted_cells).err();
+    }
+    (SolutionSeq { schema, rows }, tripped)
 }
 
 /// An in-memory [`RemoteQuerySource`] that **dog-foods the native engine**: each
@@ -203,7 +449,31 @@ impl LocalRemoteQuerySource {
 }
 
 impl RemoteQuerySource for LocalRemoteQuerySource {
-    fn query(&self, endpoint: &str, query_text: &str) -> Result<ResolvedBindings, RemoteError> {
+    /// # The forwarded evaluation is governed by the caller's signal
+    ///
+    /// The forwarded query is a whole evaluation of its own, and an in-memory endpoint is
+    /// not a bounded amount of work — a cyclic property path or a cross product costs the
+    /// same here as it does anywhere else. So the caller's [`StopSignal`] is installed on
+    /// the forwarded context, which polls it at every operator boundary, and a signal that
+    /// fires part-way through is reported as [`RemoteError::Governed`] rather than as a
+    /// decode failure. Reporting it as a failure would make it silenceable, which is
+    /// exactly the laundering `SILENT` must not perform.
+    ///
+    /// The forwarded evaluation carries the caller's intermediate-cell ceiling, so an
+    /// in-memory endpoint cannot materialize a bag the caller already bounded. It carries
+    /// no *charge* ceilings: fuel spent here is already charged at the calling seam, per
+    /// request and per ingested row, and charging it twice would make one query's budget
+    /// depend on how a federation happened to be split up.
+    fn query(
+        &self,
+        endpoint: &str,
+        query_text: &str,
+        stop: Option<&Arc<dyn StopSignal>>,
+        max_intermediate_cells: Option<u64>,
+    ) -> Result<ResolvedBindings, RemoteError> {
+        if let Some(cause) = stop.and_then(|signal| signal.poll()) {
+            return Err(RemoteError::Governed(TrippedGovernor::Stopped { cause }));
+        }
         let dataset = self
             .datasets
             .get(endpoint)
@@ -215,19 +485,57 @@ impl RemoteQuerySource for LocalRemoteQuerySource {
         // inside the forwarded query resolves against the same in-memory sources
         // rather than hard-failing on a missing remote.
         let mut ctx = EvalCtx::new(&**dataset).with_remote(self);
-        match crate::eval::evaluate_query(&parsed, &mut ctx)
+        if stop.is_some() || max_intermediate_cells.is_some() {
+            let mut governors = QueryGovernors::UNBOUNDED;
+            if let Some(signal) = stop {
+                governors = governors.with_stop_signal(Arc::clone(signal));
+            }
+            if let Some(cells) = max_intermediate_cells {
+                governors = governors.with_max_intermediate_cells(cells);
+            }
+            ctx = ctx.with_governors(Arc::new(GovernorState::new(&governors)));
+        }
+        match crate::eval::evaluate_query_evaluated(&parsed, &mut ctx)
             .map_err(|e| RemoteError::Decode(e.to_string()))?
         {
-            crate::eval::Outcome::Solutions(seq) => {
+            EvaluatedOutcome::Complete(Outcome::Solutions(seq)) => {
                 let (variables, rows) = materialize_solutions(&seq, &ctx);
                 Ok(ResolvedBindings {
                     variables: variables.into_iter().map(Variable::new).collect(),
                     rows,
+                    cell_limit_exceeded_at: None,
                 })
             }
-            _ => Err(RemoteError::Decode(
+            EvaluatedOutcome::Complete(_) => Err(RemoteError::Decode(
                 "SERVICE expects a SELECT query".to_owned(),
             )),
+            EvaluatedOutcome::Truncated {
+                outcome: Outcome::Solutions(seq),
+                certificate,
+            } if matches!(
+                certificate.tripped(),
+                TrippedGovernor::Budget {
+                    dimension: purrdf_core::ResourceDimension::IntermediateCells,
+                    ..
+                }
+            ) =>
+            {
+                // The forwarded evaluator may have crossed its ceiling below a
+                // non-monotone operator, so do not promote its possibly-unknown rows to a
+                // remote prefix. The empty prefix is always a sound lower bound; the flag
+                // makes the outer evaluator record the same typed cell trip.
+                Ok(ResolvedBindings {
+                    variables: seq.schema.vars().to_vec(),
+                    rows: Vec::new(),
+                    cell_limit_exceeded_at: match certificate.tripped() {
+                        TrippedGovernor::Budget { consumed, .. } => Some(consumed),
+                        _ => None,
+                    },
+                })
+            }
+            EvaluatedOutcome::Truncated { certificate, .. } => {
+                Err(RemoteError::Governed(certificate.tripped()))
+            }
         }
     }
 }
@@ -236,8 +544,15 @@ impl RemoteQuerySource for LocalRemoteQuerySource {
 mod tests {
     use super::*;
     use crate::NativeSparqlEngine;
-    use purrdf_core::{RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest, SparqlResult};
+    use crate::governor::WallDeadline;
+    use crate::remote_http::{HttpRemoteQuerySource, HttpRequest};
+    use purrdf_core::{
+        RdfDatasetBuilder, RdfLiteral, ResourceDimension, SparqlEngine, SparqlRequest,
+        SparqlResult, StopCause,
+    };
+    use purrdf_sparql_algebra::{GroundTerm, NamedNode, TermPattern, TriplePattern};
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
 
     /// `:a :knows :x`, `:a :knows :y` (the local graph).
     fn local() -> Arc<RdfDataset> {
@@ -273,7 +588,7 @@ mod tests {
         let mut ctx = EvalCtx::new(ds).with_remote(source);
         let outcome = evaluate_query(&parsed, &mut ctx)?;
         Ok(match outcome {
-            crate::eval::Outcome::Solutions(seq) => {
+            Outcome::Solutions(seq) => {
                 let (variables, rows) = materialize_solutions(&seq, &ctx);
                 let aux = ctx.constructed_dataset(&rows);
                 SparqlResult::Solutions {
@@ -282,8 +597,8 @@ mod tests {
                     aux,
                 }
             }
-            crate::eval::Outcome::Boolean(b) => SparqlResult::Boolean(b),
-            crate::eval::Outcome::Graph(g) => SparqlResult::Graph(g),
+            Outcome::Boolean(b) => SparqlResult::Boolean(b),
+            Outcome::Graph(g) => SparqlResult::Graph(g),
         })
     }
 
@@ -438,9 +753,16 @@ mod tests {
     }
 
     impl RemoteQuerySource for CountingSource<'_> {
-        fn query(&self, endpoint: &str, query_text: &str) -> Result<ResolvedBindings, RemoteError> {
+        fn query(
+            &self,
+            endpoint: &str,
+            query_text: &str,
+            stop: Option<&Arc<dyn StopSignal>>,
+            max_intermediate_cells: Option<u64>,
+        ) -> Result<ResolvedBindings, RemoteError> {
             self.count.fetch_add(1, Ordering::Relaxed);
-            self.inner.query(endpoint, query_text)
+            self.inner
+                .query(endpoint, query_text, stop, max_intermediate_cells)
         }
     }
 
@@ -465,6 +787,371 @@ mod tests {
             "variable SERVICE should forward once per distinct endpoint"
         );
         assert_eq!(row_strings(&result).len(), n);
+    }
+
+    // ── Federation under governors ────────────────────────────────────────────
+
+    /// The namespace every governed-federation fixture uses.
+    const EX: &str = "http://example.org/";
+
+    /// A source that answers any endpoint with `rows` fixed single-column rows, counting
+    /// every call it receives.
+    ///
+    /// Fixed rows rather than a forwarded evaluation, so a test can state the response
+    /// size — and therefore the exact charge — directly. The call counter is incremented
+    /// **before** the signal is polled, so a test asserting zero calls is really asserting
+    /// that the request was never issued, not that the source declined it.
+    #[derive(Debug)]
+    struct FixtureSource {
+        /// How many rows every response carries.
+        rows: usize,
+        /// How many times `query` has been called.
+        calls: AtomicUsize,
+    }
+
+    impl FixtureSource {
+        /// A source answering with `rows` rows.
+        fn new(rows: usize) -> Self {
+            Self {
+                rows,
+                calls: AtomicUsize::new(0),
+            }
+        }
+
+        /// How many requests this source has been given.
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::Relaxed)
+        }
+    }
+
+    impl RemoteQuerySource for FixtureSource {
+        fn query(
+            &self,
+            _endpoint: &str,
+            _query_text: &str,
+            stop: Option<&Arc<dyn StopSignal>>,
+            max_intermediate_cells: Option<u64>,
+        ) -> Result<ResolvedBindings, RemoteError> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            if let Some(cause) = stop.and_then(|signal| signal.poll()) {
+                return Err(RemoteError::Governed(TrippedGovernor::Stopped { cause }));
+            }
+            let admitted = max_intermediate_cells
+                .and_then(|cells| usize::try_from(cells).ok())
+                .unwrap_or(self.rows)
+                .min(self.rows);
+            Ok(ResolvedBindings {
+                variables: vec![Variable::new("n")],
+                rows: (0..admitted)
+                    .map(|i| vec![Some(TermValue::Iri(format!("{EX}r{i}")))])
+                    .collect(),
+                cell_limit_exceeded_at: (self.rows > admitted)
+                    .then(|| (admitted as u64).saturating_add(1)),
+            })
+        }
+    }
+
+    /// A source that reports a governor of the **executing engine** rather than an
+    /// endpoint failure — what a real source returns when the stop signal it was handed
+    /// fires mid-exchange.
+    #[derive(Debug)]
+    struct StoppedSource(StopCause);
+
+    impl RemoteQuerySource for StoppedSource {
+        fn query(
+            &self,
+            _endpoint: &str,
+            _query_text: &str,
+            _stop: Option<&Arc<dyn StopSignal>>,
+            _max_intermediate_cells: Option<u64>,
+        ) -> Result<ResolvedBindings, RemoteError> {
+            Err(RemoteError::Governed(TrippedGovernor::Stopped {
+                cause: self.0,
+            }))
+        }
+    }
+
+    /// `SERVICE [SILENT] <http://example.org/sparql> { ?s ?p ?o }`.
+    fn service_pattern(silent: bool) -> GraphPattern {
+        GraphPattern::Service {
+            name: NamedNodePattern::NamedNode(NamedNode::new_unchecked(format!("{EX}sparql"))),
+            inner: Box::new(GraphPattern::Bgp {
+                patterns: vec![TriplePattern {
+                    subject: TermPattern::Variable(Variable::new("s")),
+                    predicate: NamedNodePattern::Variable(Variable::new("p")),
+                    object: TermPattern::Variable(Variable::new("o")),
+                }],
+            }),
+            silent,
+        }
+    }
+
+    /// The same query with the `SERVICE` clause gone and its `rows` rows supplied inline:
+    /// one node entry and the same committed rows over the same one-column schema, and
+    /// nothing else. Every charge the two patterns share therefore cancels, which is what
+    /// makes the difference between them exactly the federation's own charges.
+    fn inline_pattern(rows: usize) -> GraphPattern {
+        GraphPattern::Values {
+            variables: vec![Variable::new("n")],
+            bindings: (0..rows)
+                .map(|i| {
+                    vec![Some(GroundTerm::NamedNode(NamedNode::new_unchecked(
+                        format!("{EX}r{i}"),
+                    )))]
+                })
+                .collect(),
+        }
+    }
+
+    /// An empty dataset: every fixture here answers from the remote source, so the local
+    /// side contributes no rows and no charges of its own.
+    fn empty_dataset() -> Arc<RdfDataset> {
+        RdfDatasetBuilder::new()
+            .freeze()
+            .expect("an empty dataset is positionally valid")
+    }
+
+    /// What one governed federated evaluation observed.
+    #[derive(Debug)]
+    struct GovernedRun {
+        /// Whether the result came back truncated rather than complete.
+        truncated: bool,
+        /// The rows it kept.
+        rows: usize,
+        /// The columns those rows carry.
+        columns: usize,
+        /// The governor that stopped it, if one did.
+        tripped: Option<TrippedGovernor>,
+        /// Fuel charged.
+        fuel: u64,
+    }
+
+    /// Evaluate `pattern` over an empty dataset under `governors`, with `source` injected.
+    fn run_governed(
+        pattern: &GraphPattern,
+        source: &(dyn RemoteQuerySource + Sync),
+        governors: &QueryGovernors,
+    ) -> GovernedRun {
+        let dataset = empty_dataset();
+        let state = Arc::new(GovernorState::new(governors));
+        let mut ctx = EvalCtx::new(&*dataset)
+            .with_remote(source)
+            .with_governors(Arc::clone(&state));
+        let evaluated =
+            crate::eval::eval_evaluated(pattern, &mut ctx).expect("evaluation must not fail");
+        let evidence = state.evidence();
+        GovernedRun {
+            truncated: evaluated.is_truncated(),
+            rows: evaluated.rows().len(),
+            columns: evaluated.rows().schema.len(),
+            tripped: evidence.tripped(),
+            fuel: evidence.consumed_in(ResourceDimension::Fuel),
+        }
+    }
+
+    #[test]
+    fn service_silent_cannot_swallow_a_budget_trip() {
+        // A remote-request ceiling of zero trips at the request charge, before dispatch —
+        // and does so under SILENT.
+        let source = FixtureSource::new(3);
+        let run = run_governed(
+            &service_pattern(true),
+            &source,
+            &QueryGovernors::UNBOUNDED.with_max_remote_requests(0),
+        );
+
+        assert_eq!(source.calls(), 0, "the refused request must not be issued");
+        assert!(
+            run.truncated,
+            "SILENT is a statement about the endpoint, never about this engine's budget"
+        );
+        assert_eq!(
+            run.tripped,
+            Some(TrippedGovernor::Budget {
+                dimension: ResourceDimension::RemoteRequests,
+                limit: 0,
+                consumed: 1,
+            })
+        );
+        assert_eq!(
+            run.rows, 0,
+            "the empty bag, never the join identity: an identity row makes the surrounding \
+             join a no-op, so the final result would look complete and be wrong"
+        );
+        assert_eq!(
+            run.columns, 3,
+            "an immediate trip still carries the SERVICE pattern's declared schema"
+        );
+
+        // The identical SILENT clause with the ceiling lifted really does complete, so the
+        // assertions above are about the governor and not about the query.
+        let unbounded = run_governed(
+            &service_pattern(true),
+            &FixtureSource::new(3),
+            &QueryGovernors::UNBOUNDED,
+        );
+        assert!(!unbounded.truncated);
+        assert_eq!(unbounded.rows, 3);
+    }
+
+    #[test]
+    fn a_governor_the_source_reports_is_not_silenceable_either() {
+        // A source handed the stop signal can observe it firing DURING the exchange, when
+        // nothing else can. What it reports back is a governor, not an endpoint failure,
+        // so SILENT does not swallow it — and the evidence names the same governor the
+        // result does.
+        let run = run_governed(
+            &service_pattern(true),
+            &StoppedSource(StopCause::Cancelled),
+            &QueryGovernors::UNBOUNDED,
+        );
+        assert!(run.truncated);
+        assert_eq!(
+            run.tripped,
+            Some(TrippedGovernor::Stopped {
+                cause: StopCause::Cancelled
+            })
+        );
+        assert_eq!(run.rows, 0);
+        assert_eq!(
+            run.columns, 3,
+            "a source-reported trip still carries the SERVICE pattern's declared schema"
+        );
+    }
+
+    #[test]
+    fn an_expired_deadline_prevents_the_remote_request_from_being_issued() {
+        let source = FixtureSource::new(3);
+        let deadline: Arc<dyn StopSignal> = Arc::new(WallDeadline::after(Duration::ZERO));
+        let run = run_governed(
+            &service_pattern(false),
+            &source,
+            &QueryGovernors::UNBOUNDED.with_stop_signal(Arc::clone(&deadline)),
+        );
+
+        assert_eq!(
+            source.calls(),
+            0,
+            "zero invocations is the only assertion that pins ordering: an implementation \
+             that polled AFTER the network call returned would also report a trip"
+        );
+        assert!(run.truncated);
+        assert_eq!(
+            run.tripped,
+            Some(TrippedGovernor::Stopped {
+                cause: StopCause::Deadline
+            })
+        );
+        assert_eq!(run.rows, 0);
+        assert_eq!(
+            run.columns, 3,
+            "a pre-dispatch stop still carries the SERVICE pattern's declared schema"
+        );
+
+        // …and the seam refuses on its own account, not merely the evaluator around it: a
+        // source handed an already-latched signal never reaches its transport.
+        let posts = AtomicUsize::new(0);
+        let source = HttpRemoteQuerySource::new(|request: HttpRequest<'_>| {
+            assert!(
+                request.stop.is_some(),
+                "the signal must travel with the call"
+            );
+            posts.fetch_add(1, Ordering::Relaxed);
+            Ok(Vec::new())
+        });
+        let err = source
+            .query(
+                &format!("{EX}sparql"),
+                "SELECT * WHERE { ?s ?p ?o }",
+                Some(&deadline),
+                None,
+            )
+            .expect_err("an expired deadline refuses the request");
+        assert_eq!(
+            err,
+            RemoteError::Governed(TrippedGovernor::Stopped {
+                cause: StopCause::Deadline
+            })
+        );
+        assert_eq!(
+            posts.load(Ordering::Relaxed),
+            0,
+            "the transport must never be reached"
+        );
+    }
+
+    #[test]
+    fn remote_requests_and_ingested_rows_are_charged() {
+        const N: usize = 5;
+
+        // METERED, not UNBOUNDED: an ungoverned execution charges nothing by design, so
+        // UNBOUNDED would report zero for both runs and the comparison would be vacuous.
+        let source = FixtureSource::new(N);
+        let federated = run_governed(&service_pattern(false), &source, &QueryGovernors::METERED);
+        assert_eq!(federated.tripped, None, "the metering run must complete");
+        assert_eq!(federated.rows, N);
+        assert_eq!(source.calls(), 1);
+
+        let inline = run_governed(
+            &inline_pattern(N),
+            &FixtureSource::new(0),
+            &QueryGovernors::METERED,
+        );
+        assert_eq!(inline.tripped, None);
+        assert_eq!(inline.rows, N);
+
+        // Schedule v1: one `remote-request-issued`, then one `remote-row-ingested` per row
+        // of the response. Everything else the two runs do is identical and cancels.
+        assert_eq!(
+            federated.fuel,
+            inline.fuel + 1 + N as u64,
+            "the federation costs exactly one request plus one unit per ingested row"
+        );
+
+        // A cell ceiling below the response's size trips the cardinality governor. The
+        // source materializes only the admitted prefix and reports the first refused row;
+        // ingest interns that prefix but never allocates the overflowing row.
+        let source = FixtureSource::new(N);
+        let cells = N as u64 - 1; // one column, so cells == rows
+        let capped = run_governed(
+            &service_pattern(false),
+            &source,
+            &QueryGovernors::METERED.with_max_intermediate_cells(cells),
+        );
+        assert!(capped.truncated);
+        assert_eq!(
+            capped.tripped,
+            Some(TrippedGovernor::Budget {
+                dimension: ResourceDimension::IntermediateCells,
+                limit: cells,
+                consumed: N as u64,
+            }),
+            "a remote bag is an intermediate bag: arriving from outside the dataset is not \
+             a way past the memory ceiling"
+        );
+        assert_eq!(
+            capped.rows,
+            N - 1,
+            "the admitted prefix is useful, and the limit+1 row is never materialized"
+        );
+    }
+
+    #[test]
+    fn a_transport_error_under_silent_still_yields_the_join_identity() {
+        // The regression guard: `SILENT` is about the endpoint, and an unreachable
+        // endpoint IS the endpoint. Governed or not, the behaviour is exactly what it was
+        // before governors existed — one empty row, so the surrounding join is a no-op.
+        let source = LocalRemoteQuerySource::new(); // nothing registered
+        for governors in [QueryGovernors::UNBOUNDED, QueryGovernors::METERED] {
+            let run = run_governed(&service_pattern(true), &source, &governors);
+            assert!(
+                !run.truncated,
+                "a transport error under SILENT is a swallowed failure, not a truncation"
+            );
+            assert_eq!(run.tripped, None);
+            assert_eq!(run.rows, 1, "the join identity is one row");
+            assert_eq!(run.columns, 0, "…and it binds nothing");
+        }
     }
 
     #[test]
