@@ -39,7 +39,19 @@ prefix = ""
 # as `int32_t` in the structs (to prevent enum-discriminant UB when C writes an
 # out-of-range value), so cbindgen would drop them — force-export them so C
 # callers retain the named constants.
-include = ["PurrdfStatus", "PurrdfTermKind", "PurrdfDirection", "PurrdfGraphMatchKind"]
+include = [
+    "PurrdfStatus",
+    "PurrdfTermKind",
+    "PurrdfDirection",
+    "PurrdfGraphMatchKind",
+    "PurrdfGovernorFlag",
+    "PurrdfResourceDimension",
+    "PurrdfGovernorTripKind",
+    "PurrdfStopCause",
+    "PurrdfQueryOutcomeKind",
+    "PurrdfUpdateOutcomeKind",
+    "PurrdfPartialKind",
+]
 
 [enum]
 # `QualifiedScreamingSnakeCase` already qualifies each variant with the enum name

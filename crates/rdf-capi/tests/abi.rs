@@ -152,7 +152,7 @@ unsafe fn buffer_bytes(buf: *const PurrdfBuffer) -> Vec<u8> {
 }
 
 #[test]
-fn abi_version_is_beta_0_1_0() {
+fn abi_version_is_beta_0_2_0() {
     let mut version = PurrdfAbiVersion {
         major: 9,
         minor: 9,
@@ -163,7 +163,7 @@ fn abi_version_is_beta_0_1_0() {
     assert_eq!(version.major, PURRDF_ABI_MAJOR);
     assert_eq!(version.minor, PURRDF_ABI_MINOR);
     assert_eq!(version.patch, PURRDF_ABI_PATCH);
-    assert_eq!((version.major, version.minor, version.patch), (0, 1, 0));
+    assert_eq!((version.major, version.minor, version.patch), (0, 2, 0));
 }
 
 #[test]

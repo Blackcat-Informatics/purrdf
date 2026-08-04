@@ -7,19 +7,83 @@
 use std::os::raw::c_char;
 
 use purrdf_rs::{SparqlEngine, SparqlRequest, SparqlResult};
-use purrdf_sparql_eval::NativeSparqlEngine;
+use purrdf_sparql_eval::{
+    BudgetExhausted, GovernedOutcome, GovernedUpdateOutcome, NativeSparqlEngine, PartialAnswers,
+};
 
 use crate::buffer::PurrdfBuffer;
 use crate::error::PurrdfError;
+use crate::governor::{
+    PurrdfGovernorEvidence, PurrdfQueryGovernors, decode_governors, encode_evidence,
+    validate_update_governors,
+};
 use crate::handles::PurrdfDataset;
 use crate::rowcursor::PurrdfRowCursor;
 use crate::status::PurrdfStatus;
+use crate::term::PurrdfStr;
 use crate::{cstr_to_str, opt_cstr_to_str};
 
 /// The discriminant written to `purrdf_query`'s `out_kind`.
 const KIND_SOLUTIONS: i32 = 0;
 const KIND_GRAPH: i32 = 1;
 const KIND_BOOLEAN: i32 = 2;
+const KIND_NONE: i32 = -1;
+
+/// The outcome discriminant written by [`purrdf_query_governed`].
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PurrdfQueryOutcomeKind {
+    /// The query completed and the returned result is exhaustive.
+    Complete = 0,
+    /// A governor stopped the query; consult the partial certificate and evidence.
+    BudgetExhausted = 1,
+}
+
+/// The outcome discriminant written by [`purrdf_update_governed`].
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PurrdfUpdateOutcomeKind {
+    /// The entire request applied.
+    Applied = 0,
+    /// A governor stopped the request and no mutation applied.
+    BudgetExhausted = 1,
+}
+
+/// What a governed query's partial result certifies.
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PurrdfPartialKind {
+    /// A complete query has no partial certificate.
+    None = 0,
+    /// Every returned item is certainly an answer; more may exist.
+    Certain = 1,
+    /// Every true answer is in the returned result; some returned items may be extra.
+    AtMost = 2,
+    /// No sound bound survived; no result item crosses the ABI.
+    Unknown = 3,
+}
+
+/// The certificate paired with a governed query result.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct PurrdfPartialCertificate {
+    /// [`PurrdfPartialKind`] discriminant.
+    pub kind: i32,
+    /// `1` when the returned items are the true output's ordered prefix.
+    pub positional_prefix: u8,
+    /// Operator label when `kind == UNKNOWN`; process-lifetime borrowed UTF-8 otherwise empty.
+    pub barrier: PurrdfStr,
+}
+
+impl PurrdfPartialCertificate {
+    fn none() -> Self {
+        Self {
+            kind: PurrdfPartialKind::None as i32,
+            positional_prefix: 0,
+            barrier: PurrdfStr::empty(),
+        }
+    }
+}
 
 /// The native SPARQL engine for the C ABI. `NOW()`/`RAND()`/`UUID()`/`STRUUID()`
 /// are live by construction — `EvalCtx::new` samples the real host wall clock and
@@ -53,6 +117,71 @@ unsafe fn run_query(
             .map_err(|diagnostic| {
                 PurrdfError::from_diagnostic(PurrdfStatus::QueryError, &diagnostic)
             })
+    }
+}
+
+/// Clear whichever optional result outputs the caller supplied.
+unsafe fn clear_result_outputs(
+    out_kind: *mut i32,
+    out_rows: *mut *mut PurrdfRowCursor,
+    out_graph: *mut *mut PurrdfDataset,
+    out_boolean: *mut u8,
+) {
+    unsafe {
+        *out_kind = KIND_NONE;
+        if !out_rows.is_null() {
+            *out_rows = std::ptr::null_mut();
+        }
+        if !out_graph.is_null() {
+            *out_graph = std::ptr::null_mut();
+        }
+        if !out_boolean.is_null() {
+            *out_boolean = 0;
+        }
+    }
+}
+
+/// Store one ordinary complete-or-certified-partial result through the existing C result
+/// carriers.
+unsafe fn store_result(
+    result: SparqlResult,
+    out_kind: *mut i32,
+    out_rows: *mut *mut PurrdfRowCursor,
+    out_graph: *mut *mut PurrdfDataset,
+    out_boolean: *mut u8,
+) -> Result<(), PurrdfError> {
+    unsafe {
+        match result {
+            SparqlResult::Solutions {
+                variables, rows, ..
+            } => {
+                if out_rows.is_null() {
+                    return Err(PurrdfError::new(
+                        PurrdfStatus::NullPointer,
+                        "out_rows is null for a SELECT result",
+                    ));
+                }
+                *out_kind = KIND_SOLUTIONS;
+                *out_rows = PurrdfRowCursor::new(variables, rows).into_raw();
+            }
+            SparqlResult::Graph(graph) => {
+                if out_graph.is_null() {
+                    return Err(PurrdfError::new(
+                        PurrdfStatus::NullPointer,
+                        "out_graph is null for a CONSTRUCT/DESCRIBE result",
+                    ));
+                }
+                *out_kind = KIND_GRAPH;
+                *out_graph = PurrdfDataset::into_raw(graph);
+            }
+            SparqlResult::Boolean(value) => {
+                *out_kind = KIND_BOOLEAN;
+                if !out_boolean.is_null() {
+                    *out_boolean = u8::from(value);
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -164,9 +293,205 @@ pub unsafe extern "C" fn purrdf_query_json(
     }
 }
 
+/// Execute a SPARQL query under caller-supplied governors.
+///
+/// `*out_outcome` is a [`PurrdfQueryOutcomeKind`]. A complete outcome writes the ordinary
+/// typed result and `partial.kind == NONE`. An exhausted outcome is still status `OK`:
+/// `*out_evidence` names the trip, and `*out_partial` says whether the typed result is a
+/// certain lower bound, an at-most upper bound, or withheld (`UNKNOWN`, `out_kind == -1`).
+/// Result kinds retain `purrdf_query`'s `0` solutions / `1` graph / `2` boolean values.
+///
+/// # Safety
+/// `dataset`, `query`, and `governors` must remain live for the call. `out_outcome`,
+/// `out_kind`, `out_evidence`, and `out_partial` must be writable. The shape-specific
+/// result pointer must be writable when that shape is returned. Any enabled cancellation
+/// handle must remain live until the call returns.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_query_governed(
+    dataset: *const PurrdfDataset,
+    query: *const c_char,
+    base_iri: *const c_char,
+    governors: *const PurrdfQueryGovernors,
+    out_outcome: *mut i32,
+    out_kind: *mut i32,
+    out_rows: *mut *mut PurrdfRowCursor,
+    out_graph: *mut *mut PurrdfDataset,
+    out_boolean: *mut u8,
+    out_evidence: *mut PurrdfGovernorEvidence,
+    out_partial: *mut PurrdfPartialCertificate,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            if dataset.is_null()
+                || query.is_null()
+                || governors.is_null()
+                || out_outcome.is_null()
+                || out_kind.is_null()
+                || out_evidence.is_null()
+                || out_partial.is_null()
+            {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null required pointer argument to purrdf_query_governed",
+                ));
+            }
+            clear_result_outputs(out_kind, out_rows, out_graph, out_boolean);
+            *out_partial = PurrdfPartialCertificate::none();
+
+            let query = cstr_to_str(query)?;
+            let base_iri = opt_cstr_to_str(base_iri)?;
+            let governors = decode_governors(governors)?;
+            let outcome = engine()
+                .query_governed(
+                    PurrdfDataset::arc(dataset),
+                    SparqlRequest {
+                        query,
+                        base_iri,
+                        substitutions: &[],
+                    },
+                    &governors,
+                )
+                .map_err(|diagnostic| {
+                    PurrdfError::from_diagnostic(PurrdfStatus::QueryError, &diagnostic)
+                })?;
+
+            match outcome {
+                GovernedOutcome::Complete { result, evidence } => {
+                    *out_outcome = PurrdfQueryOutcomeKind::Complete as i32;
+                    *out_evidence = encode_evidence(&evidence);
+                    store_result(result, out_kind, out_rows, out_graph, out_boolean)?;
+                }
+                GovernedOutcome::BudgetExhausted(BudgetExhausted {
+                    evidence, partial, ..
+                }) => {
+                    *out_outcome = PurrdfQueryOutcomeKind::BudgetExhausted as i32;
+                    *out_evidence = encode_evidence(&evidence);
+                    match partial {
+                        PartialAnswers::Certain(partial) => {
+                            *out_partial = PurrdfPartialCertificate {
+                                kind: PurrdfPartialKind::Certain as i32,
+                                positional_prefix: u8::from(partial.is_positional_prefix()),
+                                barrier: PurrdfStr::empty(),
+                            };
+                            store_result(
+                                partial.into_result(),
+                                out_kind,
+                                out_rows,
+                                out_graph,
+                                out_boolean,
+                            )?;
+                        }
+                        PartialAnswers::AtMost(partial) => {
+                            *out_partial = PurrdfPartialCertificate {
+                                kind: PurrdfPartialKind::AtMost as i32,
+                                positional_prefix: u8::from(partial.is_positional_prefix()),
+                                barrier: PurrdfStr::empty(),
+                            };
+                            store_result(
+                                partial.into_result(),
+                                out_kind,
+                                out_rows,
+                                out_graph,
+                                out_boolean,
+                            )?;
+                        }
+                        PartialAnswers::Unknown(barrier) => {
+                            *out_partial = PurrdfPartialCertificate {
+                                kind: PurrdfPartialKind::Unknown as i32,
+                                positional_prefix: 0,
+                                barrier: PurrdfStr::from_str(barrier.operator()),
+                            };
+                        }
+                    }
+                }
+            }
+            Ok(PurrdfStatus::Ok)
+        })
+    }
+}
+
+/// Apply one SPARQL UPDATE request under caller-supplied governors.
+///
+/// `*out_outcome` is a [`PurrdfUpdateOutcomeKind`]. On `APPLIED`, the dataset handle now
+/// owns the new frozen snapshot. On `BUDGET_EXHAUSTED`, the handle retains the exact same
+/// `Arc` and no mutation applied. Both outcomes return status `OK` plus evidence. An
+/// enabled `MAX_ANSWERS` flag is invalid because UPDATE has no answer sequence.
+///
+/// # Safety
+/// `dataset` must be a live, exclusively borrowed handle; `request` a NUL-terminated C
+/// string; `governors` live for the call; and both output pointers writable. Any enabled
+/// cancellation handle must remain live until the call returns.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_update_governed(
+    dataset: *mut PurrdfDataset,
+    request: *const c_char,
+    base_iri: *const c_char,
+    governors: *const PurrdfQueryGovernors,
+    out_outcome: *mut i32,
+    out_evidence: *mut PurrdfGovernorEvidence,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            if dataset.is_null()
+                || request.is_null()
+                || governors.is_null()
+                || out_outcome.is_null()
+                || out_evidence.is_null()
+            {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null required pointer argument to purrdf_update_governed",
+                ));
+            }
+            validate_update_governors(governors)?;
+            let request = cstr_to_str(request)?;
+            let base_iri = opt_cstr_to_str(base_iri)?;
+            let governors = decode_governors(governors)?;
+            let outcome = engine()
+                .update_governed(
+                    &mut (*dataset).0,
+                    SparqlRequest {
+                        query: request,
+                        base_iri,
+                        substitutions: &[],
+                    },
+                    &governors,
+                )
+                .map_err(|diagnostic| {
+                    PurrdfError::from_diagnostic(PurrdfStatus::QueryError, &diagnostic)
+                })?;
+            match outcome {
+                GovernedUpdateOutcome::Applied { evidence } => {
+                    *out_outcome = PurrdfUpdateOutcomeKind::Applied as i32;
+                    *out_evidence = encode_evidence(&evidence);
+                }
+                GovernedUpdateOutcome::BudgetExhausted { evidence, .. } => {
+                    *out_outcome = PurrdfUpdateOutcomeKind::BudgetExhausted as i32;
+                    *out_evidence = encode_evidence(&evidence);
+                }
+            }
+            Ok(PurrdfStatus::Ok)
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::ffi::CString;
+    use std::mem::MaybeUninit;
+    use std::sync::Arc;
+
     use purrdf_core::{RdfDatasetBuilder, TermValue};
+
+    use crate::governor::{
+        PurrdfGovernorFlag, PurrdfGovernorTripKind, PurrdfResourceDimension, PurrdfStopCause,
+        purrdf_cancellation_cancel, purrdf_cancellation_free, purrdf_cancellation_new,
+        purrdf_query_governors_init,
+    };
+    use crate::handles::purrdf_dataset_free;
+    use crate::rowcursor::{purrdf_rowcursor_free, purrdf_rowcursor_next};
 
     use super::*;
 
@@ -200,5 +525,177 @@ mod tests {
             .parse()
             .unwrap_or_else(|e| panic!("?y `{lexical_form}` must parse as an integer: {e}"));
         assert!(year >= 2025, "year(NOW()) = {year}, expected >= 2025");
+    }
+
+    fn initialized_governors() -> PurrdfQueryGovernors {
+        let mut out = MaybeUninit::uninit();
+        assert_eq!(unsafe { purrdf_query_governors_init(out.as_mut_ptr()) }, 0);
+        unsafe { out.assume_init() }
+    }
+
+    fn query_dataset() -> *mut PurrdfDataset {
+        let mut builder = RdfDatasetBuilder::new();
+        let predicate = builder.intern_iri("http://example.org/p");
+        for index in 0..3 {
+            let subject = builder.intern_iri(&format!("http://example.org/s{index}"));
+            let object = builder.intern_iri(&format!("http://example.org/o{index}"));
+            builder.push_quad(subject, predicate, object, None);
+        }
+        PurrdfDataset::into_raw(builder.freeze().expect("freeze"))
+    }
+
+    #[test]
+    fn governed_query_carries_partial_certificate_and_evidence() {
+        let dataset = query_dataset();
+        let query = CString::new("SELECT ?s ?o WHERE { ?s <http://example.org/p> ?o }")
+            .expect("query C string");
+        let mut governors = initialized_governors();
+        governors.enabled = PurrdfGovernorFlag::MaxAnswers as u32;
+        governors.max_answers = 1;
+
+        let mut outcome = -1;
+        let mut kind = KIND_NONE;
+        let mut rows = std::ptr::null_mut();
+        let mut graph = std::ptr::null_mut();
+        let mut boolean = 0;
+        let mut evidence = MaybeUninit::uninit();
+        let mut partial = MaybeUninit::uninit();
+        let mut error = std::ptr::null_mut();
+        let status = unsafe {
+            purrdf_query_governed(
+                dataset,
+                query.as_ptr(),
+                std::ptr::null(),
+                &raw const governors,
+                &raw mut outcome,
+                &raw mut kind,
+                &raw mut rows,
+                &raw mut graph,
+                &raw mut boolean,
+                evidence.as_mut_ptr(),
+                partial.as_mut_ptr(),
+                &raw mut error,
+            )
+        };
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        assert_eq!(outcome, PurrdfQueryOutcomeKind::BudgetExhausted as i32);
+        assert_eq!(kind, KIND_SOLUTIONS);
+        assert!(graph.is_null());
+
+        let evidence = unsafe { evidence.assume_init() };
+        assert_eq!(evidence.trip.kind, PurrdfGovernorTripKind::Budget as i32);
+        assert_eq!(
+            evidence.trip.dimension,
+            PurrdfResourceDimension::AnswerRows as i32
+        );
+        assert_eq!(evidence.trip.limit, 1);
+        assert_eq!(evidence.trip.consumed, 2);
+
+        let partial = unsafe { partial.assume_init() };
+        assert_eq!(partial.kind, PurrdfPartialKind::Certain as i32);
+        assert_eq!(partial.positional_prefix, 1);
+        let mut count = 0;
+        loop {
+            match unsafe { purrdf_rowcursor_next(rows) } {
+                status if status == PurrdfStatus::Ok as i32 => count += 1,
+                status if status == PurrdfStatus::CursorExhausted as i32 => break,
+                status => panic!("unexpected row-cursor status {status}"),
+            }
+        }
+        assert_eq!(count, 1);
+
+        unsafe {
+            purrdf_rowcursor_free(rows);
+            purrdf_dataset_free(dataset);
+        }
+    }
+
+    #[test]
+    fn governed_update_trip_preserves_the_exact_dataset_arc() {
+        let dataset = query_dataset();
+        let before = unsafe { Arc::clone(&(*dataset).0) };
+        let request = CString::new(
+            "INSERT DATA { <http://example.org/new> <http://example.org/p> \
+             <http://example.org/value> }",
+        )
+        .expect("update C string");
+        let mut governors = initialized_governors();
+        governors.enabled = PurrdfGovernorFlag::Fuel as u32;
+        governors.fuel = 0;
+        let mut outcome = -1;
+        let mut evidence = MaybeUninit::uninit();
+        let mut error = std::ptr::null_mut();
+
+        let status = unsafe {
+            purrdf_update_governed(
+                dataset,
+                request.as_ptr(),
+                std::ptr::null(),
+                &raw const governors,
+                &raw mut outcome,
+                evidence.as_mut_ptr(),
+                &raw mut error,
+            )
+        };
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        assert_eq!(outcome, PurrdfUpdateOutcomeKind::BudgetExhausted as i32);
+        assert!(unsafe { Arc::ptr_eq(&before, &(*dataset).0) });
+        assert_eq!(unsafe { (*dataset).0.quad_count() }, 3);
+        let evidence = unsafe { evidence.assume_init() };
+        assert_eq!(
+            evidence.trip.dimension,
+            PurrdfResourceDimension::Fuel as i32
+        );
+
+        unsafe { purrdf_dataset_free(dataset) };
+    }
+
+    #[test]
+    fn governed_query_observes_a_prefired_c_cancellation() {
+        let dataset = query_dataset();
+        let query = CString::new("SELECT * WHERE { ?s ?p ?o }").expect("query C string");
+        let mut cancellation = std::ptr::null_mut();
+        assert_eq!(unsafe { purrdf_cancellation_new(&raw mut cancellation) }, 0);
+        assert_eq!(unsafe { purrdf_cancellation_cancel(cancellation) }, 0);
+        let mut governors = initialized_governors();
+        governors.enabled = PurrdfGovernorFlag::Cancellation as u32;
+        governors.cancellation = cancellation;
+
+        let mut outcome = -1;
+        let mut kind = KIND_NONE;
+        let mut rows = std::ptr::null_mut();
+        let mut evidence = MaybeUninit::uninit();
+        let mut partial = MaybeUninit::uninit();
+        let mut error = std::ptr::null_mut();
+        let status = unsafe {
+            purrdf_query_governed(
+                dataset,
+                query.as_ptr(),
+                std::ptr::null(),
+                &raw const governors,
+                &raw mut outcome,
+                &raw mut kind,
+                &raw mut rows,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                evidence.as_mut_ptr(),
+                partial.as_mut_ptr(),
+                &raw mut error,
+            )
+        };
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        assert_eq!(outcome, PurrdfQueryOutcomeKind::BudgetExhausted as i32);
+        let evidence = unsafe { evidence.assume_init() };
+        assert_eq!(evidence.trip.kind, PurrdfGovernorTripKind::Stopped as i32);
+        assert_eq!(evidence.trip.stop_cause, PurrdfStopCause::Cancelled as i32);
+
+        unsafe {
+            purrdf_rowcursor_free(rows);
+            purrdf_cancellation_free(cancellation);
+            purrdf_dataset_free(dataset);
+        }
     }
 }
