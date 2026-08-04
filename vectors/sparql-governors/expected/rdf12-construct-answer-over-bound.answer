@@ -1,0 +1,9 @@
+outcome	budget-exhausted
+tripped	budget	answer-rows	answer-cap-exhausted	limit=5	consumed=6
+certificate	certain	positional-prefix=true
+graph
+<http://example.org/r1> <urn:purrdf:rdfc:reifies> <<( <http://example.org/s1> <http://example.org/q> <http://example.org/o1> )>> .
+<http://example.org/r2> <urn:purrdf:rdfc:reifies> <<( <http://example.org/s2> <http://example.org/q> <http://example.org/o2> )>> .
+<http://example.org/s1> <http://example.org/q> <http://example.org/o1> .
+<http://example.org/s2> <http://example.org/q> <http://example.org/o2> .
+<http://example.org/s3> <http://example.org/q> <http://example.org/o3> .

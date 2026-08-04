@@ -1347,12 +1347,42 @@ pub static GOVERNOR_PROFILE_DIGEST: LazyLock<String> = LazyLock::new(|| {
 /// consumer can reproduce it with one `sha256sum` and without running any of this crate's
 /// code — a digest only its author can compute is not one anybody can independently check.
 ///
-/// While the profile has no frozen corpus, this is the SHA-256 of the empty byte string:
-/// the honest content-address of an empty manifest, and a well-formed value a consumer can
-/// pin, compare, and reproduce today. It is re-pinned by the same freeze step that writes
-/// the corpus manifest, and it moves the moment the corpus has any content at all.
+/// The corpus is `vectors/sparql-governors/`: for every caller-settable dimension, a zero
+/// ceiling, a ceiling equal to the measured cost that must be admitted, and a ceiling one
+/// below it that must trip — plus the RDF 1.2 statement layer, the federated `SERVICE`
+/// seam, and the certificate each truncation carries. Each case pins its outcome
+/// discriminant, its certified rows, and — recorded separately, because a schedule change
+/// that cut in the same place would leave the rows identical — what it spent.
+///
+/// Reproduce it with:
+///
+/// ```sh
+/// sha256sum scripts/conformance-frozen/vectors-sparql-governors.sha256
+/// ```
+///
+/// # What this digest does and does not certify
+///
+/// It pins the **evidence**, not the behaviour: two builds agreeing on this value agree
+/// about which cases and which expected numbers were on the table, which is what makes a
+/// disagreement about behaviour legible. Behaviour itself is pinned by
+/// [`GOVERNOR_PROFILE_DIGEST`], and the corpus is what demonstrates that this build
+/// implements it.
+///
+/// # Determinism is claimed per dimension, not blanket
+///
+/// Every case in the corpus that pins rows and a cost does so on the strength of the
+/// determinism stated in this module's documentation: [`ResourceDimension::Fuel`], the
+/// [`ResourceDimension::AnswerRows`] cap and the [`ResourceDimension::IntermediateCells`]
+/// peak charge identically on every run, worker count and hash seed, and the scratch-arena
+/// and remote-request counters are functions of the same fixed inputs.
+///
+/// A **wall deadline is excluded from that claim and from this corpus's pinned bytes.**
+/// The corpus carries exactly one deadline case, and it pins only what is guaranteed —
+/// that a trip happened and that it named the deadline. It has no expected rows and no
+/// expected cost, because a time-dependent trip point has none to publish. A consumer
+/// pinning this digest is pinning evidence about ceilings, not about clocks.
 pub const GOVERNOR_CORPUS_DIGEST: &str =
-    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+    "329c5ab135e7facb1ff95744373ea8a1e9dfbaa7c6b59ec897ece66586aac36e";
 
 #[cfg(test)]
 mod tests {
@@ -2063,6 +2093,20 @@ mod tests {
         );
     }
 
+    /// The pinned corpus digest is DERIVED here, from the corpus's freeze manifest, and
+    /// compared — never merely inspected for shape.
+    ///
+    /// A well-formedness check alone (64 lowercase hex bytes) is satisfied by any hash of
+    /// anything, including a hash of nothing. It would let the constant a consumer pins
+    /// drift away from the corpus it names while staying green, which is the one failure
+    /// this value exists to make impossible: a consumer pinning a stale digest would be
+    /// validating against evidence it never agreed to.
+    ///
+    /// The preimage is the freeze manifest rather than a bespoke traversal, so a consumer
+    /// reproduces it with one `sha256sum` and without running any of this crate's code.
+    /// `scripts/check-corpus-frozen.py` maintains that manifest and covers every payload
+    /// byte of the corpus, so the chain from these 64 characters to the corpus bytes is
+    /// complete and independently checkable at both links.
     #[test]
     fn the_corpus_digest_is_a_well_formed_reproducible_sha256() {
         assert_eq!(GOVERNOR_CORPUS_DIGEST.len(), 64);
@@ -2072,15 +2116,18 @@ mod tests {
                 .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
         );
 
-        let empty = sha2::Sha256::digest([]);
-        let mut hex = String::new();
-        for byte in empty {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/conformance-frozen/vectors-sparql-governors.sha256");
+        let bytes = std::fs::read(&manifest).expect("the corpus freeze manifest must exist");
+        let mut hex = String::with_capacity(64);
+        for byte in sha2::Sha256::digest(&bytes) {
             use std::fmt::Write as _;
             write!(hex, "{byte:02x}").expect("writing to a String cannot fail");
         }
         assert_eq!(
             GOVERNOR_CORPUS_DIGEST, hex,
-            "with no frozen corpus the digest is the content-address of an empty manifest"
+            "the frozen corpus at vectors/sparql-governors/ changed without \
+             GOVERNOR_CORPUS_DIGEST being re-pinned in the same commit"
         );
     }
 

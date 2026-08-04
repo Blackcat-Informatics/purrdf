@@ -281,6 +281,38 @@ def _suite_sparql() -> SuiteResult:
     )
 
 
+def _suite_governor_corpus() -> SuiteResult:
+    """First-party frozen execution-governor corpus.
+
+    Scrapes the harness's own scoreboard so the matrix reports the *case* count —
+    zero / boundary / over-bound per governor, plus the RDF 1.2 statement layer,
+    the federated SERVICE seam and the deadline case — rather than the handful of
+    test functions ``_suite_cargo`` would count. Every case is graded, so a
+    non-zero fail is impossible to reach without the harness itself going red.
+    """
+    cmd = [
+        "cargo", "test", "-p", "purrdf-sparql-conformance", "--locked",
+        "--test", "governor_corpus", "--", "--nocapture",
+    ]
+    rc, out = _run(cmd, _REPO_ROOT)
+    _, _, failed = _cargo_tally(out)
+    m = re.search(r"GOVERNOR-CORPUS: passed (\d+) total (\d+) bands (\d+)", out)
+    if m:
+        passed, total, bands = (int(m.group(i)) for i in (1, 2, 3))
+        detail = (
+            f"{passed}/{total} pinned cases; {bands} zero/boundary/over-bound bands, "
+            "frozen and content-addressed"
+        )
+        return SuiteResult(
+            "SPARQL execution governors", "purrdf-sparql-governors (first-party)",
+            passed=passed, xskip=0, failed=(total - passed),
+            detail=detail, ok=(rc == 0 and failed == 0 and passed == total), log=out,
+        )
+    return _suite_cargo(
+        "SPARQL execution governors", "purrdf-sparql-governors (first-party)", cmd
+    )
+
+
 def _suite_entailment() -> SuiteResult:
     """W3C OWL 2 suite graded against the native `OWL-Direct` SHOIQ(D) tableau.
 
@@ -589,6 +621,7 @@ def native_suites() -> list[SuiteResult]:
         ),
         _suite_codec(),
         _suite_sparql(),
+        _suite_governor_corpus(),
         _suite_entailment(),
         _suite_entailment_rl(),
         _suite_shacl_w3c(),
@@ -750,7 +783,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.write_doc and args.no_python:
-        # The committed doc block reflects the full 13-row matrix (11 native Rust
+        # The committed doc block reflects the full 15-row matrix (13 native Rust
         # suites + the 2 Python gates); a native-only run cannot reproduce it.
         parser.error("--write-doc requires the full suite (do not pass --no-python)")
 

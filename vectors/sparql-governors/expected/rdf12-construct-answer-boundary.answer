@@ -1,0 +1,8 @@
+outcome	complete
+graph
+<http://example.org/r1> <urn:purrdf:rdfc:reifies> <<( <http://example.org/s1> <http://example.org/q> <http://example.org/o1> )>> .
+<http://example.org/r2> <urn:purrdf:rdfc:reifies> <<( <http://example.org/s2> <http://example.org/q> <http://example.org/o2> )>> .
+<http://example.org/r3> <urn:purrdf:rdfc:reifies> <<( <http://example.org/s3> <http://example.org/q> <http://example.org/o3> )>> .
+<http://example.org/s1> <http://example.org/q> <http://example.org/o1> .
+<http://example.org/s2> <http://example.org/q> <http://example.org/o2> .
+<http://example.org/s3> <http://example.org/q> <http://example.org/o3> .

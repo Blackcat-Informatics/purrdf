@@ -1,0 +1,4 @@
+outcome	budget-exhausted
+tripped	budget	remote-requests	remote-exhausted	limit=1	consumed=2
+certificate	certain	positional-prefix=false
+variables	x	y
