@@ -37,7 +37,12 @@
 //! answer is a useful, certifiable thing; a partial *mutation* is not a thing at all. See
 //! that type for the argument.
 
-use purrdf_core::{GovernorEvidence, SparqlResult, TrippedGovernor};
+use std::sync::Arc;
+
+use purrdf_core::{
+    GovernorEvidence, RdfDataset, RdfDatasetBuilder, RdfTerm, SparqlResult, TermValue,
+    TrippedGovernor,
+};
 
 use crate::governor::NonMonotoneBarrier;
 
@@ -274,16 +279,37 @@ impl PartialAnswers {
         matches!(self, Self::Certain(_))
     }
 
-    /// These answers with `withhold` applied to the rows in hand, when there are any.
+    /// Withhold every solution row or graph item that mentions a blank node selected by
+    /// `withhold`, when there are rows in hand.
     ///
-    /// See [`PartialSparqlResult::withholding`] for the contract `withhold` is bound by and
-    /// for why removal — and only removal — preserves both bounds. [`Self::Unknown`] passes
-    /// through untouched, because there are structurally no rows there to withhold from.
+    /// The callback receives only an immutable blank-node label. The method itself performs
+    /// the removal, so a caller cannot add, reorder, or rewrite a certified row through this
+    /// API. A lower bound remains a lower bound after removal. Removing anything from an
+    /// upper bound is different: the removed item might have been a true answer, so the
+    /// upper-bound certificate is discarded and [`Self::Unknown`] names the
+    /// `blank-node-filter` boundary. An upper bound is retained only when the filter was a
+    /// no-op. Removing anything from a lower bound also clears its positional-prefix claim,
+    /// because the retained rows now have holes even though every one remains certain.
+    ///
+    /// Blank nodes nested inside RDF 1.2 triple terms are visited recursively. For a graph
+    /// result, ordinary quads, reifier bindings, annotations, and named-graph declarations
+    /// are all filtered. [`Self::Unknown`] passes through untouched because it carries no
+    /// rows to inspect.
     #[must_use]
-    pub fn withholding(self, withhold: impl FnOnce(&mut SparqlResult) -> bool) -> Self {
+    pub fn withholding_blank_nodes(self, mut withhold: impl FnMut(&str) -> bool) -> Self {
         match self {
-            Self::Certain(partial) => Self::Certain(partial.withholding(withhold)),
-            Self::AtMost(partial) => Self::AtMost(partial.withholding(withhold)),
+            Self::Certain(partial) => {
+                let (partial, _) = partial.withholding_blank_nodes(&mut withhold);
+                Self::Certain(partial)
+            }
+            Self::AtMost(partial) => {
+                let (partial, removed) = partial.withholding_blank_nodes(&mut withhold);
+                if removed {
+                    Self::Unknown(NonMonotoneBarrier::named("blank-node-filter"))
+                } else {
+                    Self::AtMost(partial)
+                }
+            }
             Self::Unknown(barrier) => Self::Unknown(barrier),
         }
     }
@@ -338,37 +364,150 @@ impl PartialSparqlResult {
         self.positional_prefix
     }
 
-    /// This partial result with `withhold` applied to the rows in hand.
-    ///
-    /// # What `withhold` is allowed to do, and why only that
-    ///
-    /// It may **remove**, and nothing else: every term it leaves must have been there
-    /// already, and it must never add, reorder or rewrite one. Under that restriction both
-    /// certificates survive, which is the only reason a partial answer may be edited at all
-    /// after the evaluator certified it:
-    ///
-    /// * a [`PartialAnswers::Certain`] lower bound stays a lower bound, because a sub-bag of
-    ///   "every row here is an answer" is still every-row-here-is-an-answer;
-    /// * a [`PartialAnswers::AtMost`] upper bound stays an upper bound **provided** the
-    ///   removed rows are not answers. That proviso is the caller's to discharge, and it is
-    ///   discharged by construction for the one caller in this workspace: `purrdf`'s
-    ///   OWL-Direct combined approach withholds exactly the triples that mention a
-    ///   chase-minted existential witness, and a minted witness is by definition not in the
-    ///   scoping graph a SPARQL entailment regime draws its answers from.
-    ///
-    /// `withhold` returns whether it actually removed anything. When it did, the positional
-    /// claim is dropped: rows with holes in them are no longer the true output's FIRST rows
-    /// in order, and keeping [`Self::is_positional_prefix`] would licence a resumption that
-    /// silently skips whatever was withheld. When it removed nothing, the value is
-    /// untouched — which is the ordinary case, since the workspace's one caller runs the
-    /// filter only when a witness exists at all.
-    #[must_use]
-    pub fn withholding(mut self, withhold: impl FnOnce(&mut SparqlResult) -> bool) -> Self {
-        if withhold(&mut self.result) {
+    /// Apply the structurally-removal-only blank-node filter behind
+    /// [`PartialAnswers::withholding_blank_nodes`].
+    fn withholding_blank_nodes(mut self, withhold: &mut impl FnMut(&str) -> bool) -> (Self, bool) {
+        let removed = withhold_blank_nodes_from_result(&mut self.result, withhold);
+        if removed {
             self.positional_prefix = false;
         }
-        self
+        (self, removed)
     }
+}
+
+/// Remove every output item containing a selected blank node.
+///
+/// The predicate never receives mutable result data. All reconstruction happens here, so
+/// the only possible transformation is a deterministic, order-preserving subset.
+fn withhold_blank_nodes_from_result(
+    result: &mut SparqlResult,
+    withhold: &mut impl FnMut(&str) -> bool,
+) -> bool {
+    match result {
+        SparqlResult::Solutions { rows, aux, .. } => {
+            let before = rows.len();
+            rows.retain(|row| {
+                !row.iter()
+                    .flatten()
+                    .any(|term| term_value_mentions_withheld_blank(term, withhold))
+            });
+            let removed_rows = rows.len() != before;
+            let removed_aux =
+                if let Some(filtered) = dataset_without_withheld_blank_nodes(aux, withhold) {
+                    *aux = filtered;
+                    true
+                } else {
+                    false
+                };
+            removed_rows || removed_aux
+        }
+        SparqlResult::Graph(graph) => {
+            if let Some(filtered) = dataset_without_withheld_blank_nodes(graph, withhold) {
+                *graph = filtered;
+                true
+            } else {
+                false
+            }
+        }
+        SparqlResult::Boolean(_) => false,
+    }
+}
+
+fn term_value_mentions_withheld_blank(
+    term: &TermValue,
+    withhold: &mut impl FnMut(&str) -> bool,
+) -> bool {
+    match term {
+        TermValue::Blank { label, .. } => withhold(label),
+        TermValue::Triple { s, p, o } => {
+            term_value_mentions_withheld_blank(s, withhold)
+                || term_value_mentions_withheld_blank(p, withhold)
+                || term_value_mentions_withheld_blank(o, withhold)
+        }
+        TermValue::Iri(_) | TermValue::Literal { .. } => false,
+    }
+}
+
+fn rdf_term_mentions_withheld_blank(
+    term: &RdfTerm,
+    withhold: &mut impl FnMut(&str) -> bool,
+) -> bool {
+    match term {
+        RdfTerm::BlankNode(label) => withhold(label),
+        RdfTerm::Triple(triple) => {
+            rdf_term_mentions_withheld_blank(&triple.subject, withhold)
+                || rdf_term_mentions_withheld_blank(&triple.object, withhold)
+        }
+        RdfTerm::Iri(_) | RdfTerm::Literal(_) => false,
+    }
+}
+
+/// Rebuild `dataset` without selected blank-bearing items, returning `None` for a no-op.
+///
+/// The one-pass rebuild is intentional: it invokes a stateful caller predicate exactly once
+/// per visited occurrence, so the reported `removed` fact is the transformation that was
+/// actually applied rather than the result of a separate preflight scan.
+fn dataset_without_withheld_blank_nodes(
+    dataset: &Arc<RdfDataset>,
+    withhold: &mut impl FnMut(&str) -> bool,
+) -> Option<Arc<RdfDataset>> {
+    let mut builder = RdfDatasetBuilder::new();
+    let mut removed = false;
+
+    for quad in dataset.owned_quads() {
+        let should_withhold = rdf_term_mentions_withheld_blank(&quad.subject, withhold)
+            || rdf_term_mentions_withheld_blank(&quad.object, withhold)
+            || quad
+                .graph_name
+                .as_ref()
+                .is_some_and(|graph| rdf_term_mentions_withheld_blank(graph, withhold));
+        if should_withhold {
+            removed = true;
+        } else {
+            builder.push_owned_quad(&quad);
+        }
+    }
+    for reifier in dataset.owned_reifiers() {
+        let should_withhold = rdf_term_mentions_withheld_blank(&reifier.reifier, withhold)
+            || rdf_term_mentions_withheld_blank(&reifier.statement.subject, withhold)
+            || rdf_term_mentions_withheld_blank(&reifier.statement.object, withhold)
+            || reifier
+                .graph
+                .as_ref()
+                .is_some_and(|graph| rdf_term_mentions_withheld_blank(graph, withhold));
+        if should_withhold {
+            removed = true;
+        } else {
+            builder.push_owned_reifier(&reifier);
+        }
+    }
+    for annotation in dataset.owned_annotations() {
+        let should_withhold = rdf_term_mentions_withheld_blank(&annotation.reifier, withhold)
+            || rdf_term_mentions_withheld_blank(&annotation.object, withhold)
+            || annotation
+                .graph
+                .as_ref()
+                .is_some_and(|graph| rdf_term_mentions_withheld_blank(graph, withhold));
+        if should_withhold {
+            removed = true;
+        } else {
+            builder.push_owned_annotation(&annotation);
+        }
+    }
+    for name in dataset.owned_named_graphs() {
+        if rdf_term_mentions_withheld_blank(&name, withhold) {
+            removed = true;
+        } else {
+            let id = builder.intern_owned_term(&name);
+            builder.declare_named_graph(id);
+        }
+    }
+
+    removed.then(|| {
+        builder
+            .freeze()
+            .expect("a subset of a frozen result dataset is itself a valid dataset")
+    })
 }
 
 /// The evidence a governed query over an operationally fallible view accumulates: the

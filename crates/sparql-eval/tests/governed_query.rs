@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use purrdf_core::{
-    GovernorEvidence, InMemoryPageProvider, PagedDataset, PagedQueryLimits, RdfDataset,
+    BlankScope, GovernorEvidence, InMemoryPageProvider, PagedDataset, PagedQueryLimits, RdfDataset,
     RdfDatasetBuilder, ResourceDimension, SparqlRequest, SparqlResult, StopCause, TrippedGovernor,
 };
 use purrdf_sparql_eval::{
@@ -38,6 +38,17 @@ fn fixture() -> Arc<RdfDataset> {
         builder.push_quad(s, p, o, None);
     }
     builder.freeze().expect("freeze fixture")
+}
+
+fn blank_fixture() -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let p = builder.intern_iri("http://example.org/p");
+    for index in 0..EDGES {
+        let s = builder.intern_blank(&format!("b{index}"), BlankScope::DEFAULT);
+        let o = builder.intern_iri(&format!("http://example.org/o{index}"));
+        builder.push_quad(s, p, o, None);
+    }
+    builder.freeze().expect("freeze blank fixture")
 }
 
 fn request(query: &str) -> SparqlRequest<'_> {
@@ -528,6 +539,60 @@ fn cutting_an_upper_bound_at_the_answer_cap_withholds_the_bound() {
     assert!(
         witnessed,
         "the fixture must reach a fuel-truncated MINUS upper bound that the cap cuts"
+    );
+}
+
+#[test]
+fn public_blank_node_filter_cannot_forge_an_upper_bound() {
+    let dataset = blank_fixture();
+    let query = "SELECT ?s WHERE { \
+        ?s <http://example.org/p> ?o \
+        MINUS { ?s <http://example.org/p> ?z } \
+    }";
+    let engine = NativeSparqlEngine::new();
+    let measured = engine
+        .query_governed(&dataset, request(query), &QueryGovernors::METERED)
+        .expect("metered query")
+        .evidence()
+        .consumed_in(ResourceDimension::Fuel);
+
+    let mut witnessed = false;
+    for fuel in 0..measured {
+        let outcome = engine
+            .query_governed(
+                &dataset,
+                request(query),
+                &QueryGovernors::UNBOUNDED.with_fuel(fuel),
+            )
+            .expect("a fuel trip is an outcome");
+        let Some(exhausted) = outcome.exhausted() else {
+            continue;
+        };
+        let PartialAnswers::AtMost(partial) = &exhausted.partial else {
+            continue;
+        };
+        if row_count(partial.result()) == 0 {
+            continue;
+        }
+
+        let untouched = exhausted.partial.clone().withholding_blank_nodes(|_| false);
+        assert!(
+            matches!(untouched, PartialAnswers::AtMost(_)),
+            "a no-op filter keeps the original upper bound"
+        );
+
+        let filtered = exhausted.partial.clone().withholding_blank_nodes(|_| true);
+        let PartialAnswers::Unknown(barrier) = filtered else {
+            panic!("removing a possible answer must discard the upper bound");
+        };
+        assert_eq!(barrier.operator(), "blank-node-filter");
+        witnessed = true;
+        break;
+    }
+
+    assert!(
+        witnessed,
+        "the fixture must expose a non-empty upper bound with blank-node rows"
     );
 }
 

@@ -414,9 +414,11 @@ impl purrdf_datalog::StopSignal for ClosureStop {
 ///   restriction is upstream of the truncation, not applied to its output.
 /// * a constructed graph is scrubbed **after**, because a `DESCRIBE` reaches triples no
 ///   variable names — and the scrub runs over the partial answers as well as the complete
-///   result, through [`purrdf_sparql_eval::PartialAnswers::withholding`], which preserves
-///   both bounds under removal and drops the positional-prefix claim when it removes
-///   anything.
+///   result, through
+///   [`purrdf_sparql_eval::PartialAnswers::withholding_blank_nodes`]. That API performs
+///   the removal itself rather than exposing mutable certified rows: it preserves a lower
+///   bound, and conservatively withholds an upper bound altogether if a witness-bearing
+///   item had to be removed.
 ///
 /// # Errors
 ///
@@ -550,7 +552,7 @@ fn withhold_surrogates_from_outcome(
             GovernedOutcome::BudgetExhausted(BudgetExhausted {
                 partial: exhausted
                     .partial
-                    .withholding(|result| withhold_surrogate_triples(result, surrogates)),
+                    .withholding_blank_nodes(|label| surrogates.contains(label)),
                 ..exhausted
             })
         }
