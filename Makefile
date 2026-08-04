@@ -40,7 +40,7 @@ BINARYEN_VERSION := 130
 # nine OWL reasoner services, the concrete domain, the conclusion-directed
 # entailment service with its seven mechanisms and its caller-supplied import
 # map AND the governed query/update lane with its typed outcome — measures
-# 10_456_984 bytes against the 12_112_500 ceiling, which is 13.668% headroom. That
+# 10_458_144 bytes against the 12_112_500 ceiling, which is 13.658% headroom. That
 # figure is recorded below (WASM_SIZE_MEASURED_BYTES) and REPORTED rather than
 # enforced; the ceiling is the check that fails.
 #
@@ -257,10 +257,14 @@ WASM_SIZE_BUDGET_BYTES := 12112500
 # pre-allocation intermediate-cell admission, polynomial bounded property paths, and the
 # parser/evaluator nesting refusal. This is the optimized output measured with the pinned
 # wasm-bindgen 0.2.125 and binaryen 130 under rustc stable 1.97.1. The 12_112_500-byte
-# ceiling is unchanged; the current artifact leaves 13.668% headroom beneath it.
+# ceiling was unchanged.
+#
+# The increase 10_456_984 -> 10_458_144 makes governed OWL reverse mapping poll the
+# caller's stop signal before and throughout its dataset-sized construction passes. The
+# ceiling remains unchanged; the current artifact leaves 13.658% headroom beneath it.
 #
 # The measured constant below is the CURRENT size, not any intermediate figure.
-WASM_SIZE_MEASURED_BYTES := 10456984
+WASM_SIZE_MEASURED_BYTES := 10458144
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'

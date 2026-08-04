@@ -215,17 +215,20 @@ impl Kb {
         Self::from_dataset_until(ds, None)
     }
 
-    /// Reverse-map `ds` and install `stop` before any key axiom starts reasoning.
+    /// Reverse-map `ds`, polling `stop` during parsing, and retain it for key inference.
     ///
     /// # Errors
     ///
     /// The same failures as [`Self::from_dataset`], plus [`EntailError::Stopped`] when the
-    /// signal fires before or during key inference.
+    /// signal fires before or during reverse mapping or key inference.
     pub(crate) fn from_dataset_until(
         ds: &RdfDataset,
         stop: Option<Arc<dyn StopSignal>>,
     ) -> Result<Self, EntailError> {
-        let mut kb = parser::build(ds)?;
+        if stop.as_deref().is_some_and(StopSignal::stopped) {
+            return Err(EntailError::Stopped);
+        }
+        let mut kb = parser::build_until(ds, stop.as_deref())?;
         kb.stop = stop;
         if kb.stopped() {
             return Err(EntailError::Stopped);
@@ -534,11 +537,29 @@ mod tests {
     const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
 
     #[derive(Debug)]
-    struct StopAfterFirstPoll(std::sync::atomic::AtomicU64);
+    struct StopAtPoll {
+        polls: std::sync::atomic::AtomicU64,
+        fire_at: u64,
+    }
 
-    impl StopSignal for StopAfterFirstPoll {
+    impl StopAtPoll {
+        fn new(fire_at: u64) -> Self {
+            Self {
+                polls: std::sync::atomic::AtomicU64::new(0),
+                fire_at,
+            }
+        }
+
+        fn polls(&self) -> u64 {
+            self.polls.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    impl StopSignal for StopAtPoll {
         fn stopped(&self) -> bool {
-            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= 1
+            self.polls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                >= self.fire_at
         }
     }
 
@@ -616,6 +637,35 @@ mod tests {
     }
 
     #[test]
+    fn governed_construction_refuses_an_already_cancelled_request_before_parsing() {
+        let stop = Arc::new(StopAtPoll::new(0));
+        let signal: Arc<dyn StopSignal> = stop.clone();
+        let Err(error) = Kb::from_dataset_until(&simple_dataset(), Some(signal)) else {
+            panic!("an already-cancelled construction must refuse");
+        };
+        assert!(matches!(error, EntailError::Stopped));
+        assert_eq!(
+            stop.polls(),
+            1,
+            "the parser must not start after cancellation"
+        );
+    }
+
+    #[test]
+    fn governed_construction_stops_during_reverse_mapping() {
+        // Poll 0 is the API preflight, poll 1 is the parser preflight, and the following
+        // polls are dataset cells. Firing at poll 3 therefore proves the signal is observed
+        // inside the quad scan rather than only after a complete knowledge base exists.
+        let stop = Arc::new(StopAtPoll::new(3));
+        let signal: Arc<dyn StopSignal> = stop.clone();
+        let Err(error) = Kb::from_dataset_until(&simple_dataset(), Some(signal)) else {
+            panic!("reverse mapping must observe cancellation during its quad scan");
+        };
+        assert!(matches!(error, EntailError::Stopped));
+        assert_eq!(stop.polls(), 4);
+    }
+
+    #[test]
     fn governed_construction_installs_stop_before_key_inference() {
         let mut b = RdfDatasetBuilder::new();
         let ty = vocab(&mut b, RDF_TYPE);
@@ -638,12 +688,18 @@ mod tests {
         b.push_quad(right, property, value, None);
         let dataset = b.freeze().expect("key fixture freezes");
 
-        let stop: Arc<dyn StopSignal> =
-            Arc::new(StopAfterFirstPoll(std::sync::atomic::AtomicU64::new(0)));
-        let Err(error) = Kb::from_dataset_until(&dataset, Some(stop)) else {
-            panic!("the second poll, inside key inference, must stop construction");
+        // Measure the parser's deterministic poll count, then let the API preflight, every
+        // parser poll, and the post-build check pass. The next poll is inside the first
+        // key-membership proof and must still carry the same signal.
+        let parser_counter = StopAtPoll::new(u64::MAX);
+        parser::build_until(&dataset, Some(&parser_counter)).expect("count parser polls");
+        let stop = Arc::new(StopAtPoll::new(parser_counter.polls() + 2));
+        let signal: Arc<dyn StopSignal> = stop.clone();
+        let Err(error) = Kb::from_dataset_until(&dataset, Some(signal)) else {
+            panic!("the first key-inference poll must stop construction");
         };
         assert!(matches!(error, EntailError::Stopped));
+        assert!(stop.polls() > parser_counter.polls() + 2);
     }
 
     /// Build the `parent.ttl` knowledge base directly (Concepts + axioms).

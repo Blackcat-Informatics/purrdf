@@ -69,6 +69,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_core::{RdfDataset, TermValue};
+use purrdf_datalog::StopSignal;
 use purrdf_xsd::XsdDatatype;
 use purrdf_xsd::range::{DataRange, Facet};
 
@@ -382,6 +383,9 @@ pub(crate) struct CeExtractor<'a> {
     /// Every role a NUMBER restriction counts over, so the caller can apply OWL 2 DL's
     /// simple-role condition once the transitivity axioms are known.
     counted_roles: BTreeSet<Role>,
+    /// The caller-owned cancellation signal for governed reverse mapping. Query-only
+    /// extraction leaves this absent.
+    stop: Option<&'a dyn StopSignal>,
 }
 
 impl<'a> CeExtractor<'a> {
@@ -393,6 +397,18 @@ impl<'a> CeExtractor<'a> {
         v: &'a Vocab,
         ranges: &'a mut DataRangeTable,
     ) -> Self {
+        Self::new_until(index, interner, v, ranges, None)
+    }
+
+    /// Build an extractor that polls `stop` while traversing class expressions and RDF
+    /// collections.
+    fn new_until(
+        index: &'a TripleIndex,
+        interner: &'a Interner,
+        v: &'a Vocab,
+        ranges: &'a mut DataRangeTable,
+        stop: Option<&'a dyn StopSignal>,
+    ) -> Self {
         Self {
             index,
             interner,
@@ -402,7 +418,13 @@ impl<'a> CeExtractor<'a> {
             in_progress: BTreeSet::new(),
             boundaries: BTreeSet::new(),
             counted_roles: BTreeSet::new(),
+            stop,
         }
+    }
+
+    /// Refuse promptly when the governed caller has cancelled reverse mapping.
+    fn poll(&self) -> Result<(), EntailError> {
+        poll(self.stop)
     }
 
     /// The boundaries raised so far.
@@ -440,6 +462,7 @@ impl<'a> CeExtractor<'a> {
     /// [`EntailError::Parse`] on a malformed class-expression graph, on a cyclic one, and on
     /// one nesting past [`MAX_EXPRESSION_DEPTH`].
     pub(crate) fn expr(&mut self, node: u32) -> Result<Concept, EntailError> {
+        self.poll()?;
         if let Some(c) = self.expr_cache.get(&node) {
             return Ok(c.clone());
         }
@@ -585,6 +608,7 @@ impl<'a> CeExtractor<'a> {
     /// [`EntailError::Parse`] on a malformed collection in a data-range position, on a cyclic
     /// data range, and on one nesting past [`MAX_EXPRESSION_DEPTH`].
     fn data_range(&self, node: u32, path: &mut Vec<u32>) -> Result<DataRange, EntailError> {
+        self.poll()?;
         if path.contains(&node) {
             return Err(EntailError::Parse("cyclic OWL data range".to_owned()));
         }
@@ -677,6 +701,7 @@ impl<'a> CeExtractor<'a> {
         let members = self.node_list(head)?;
         let mut values = Vec::with_capacity(members.len());
         for member in members {
+            self.poll()?;
             match data::literal_value(self.interner.value(member)) {
                 Some(LiteralValue::Value(value)) => values.push(value),
                 // An ill-typed member denotes nothing, so it contributes nothing: the
@@ -695,11 +720,13 @@ impl<'a> CeExtractor<'a> {
         let cells = self.node_list(head)?;
         let mut out = Vec::with_capacity(cells.len());
         for cell in cells {
+            self.poll()?;
             let Some(predicates) = index.get(&cell) else {
                 return Ok(None);
             };
             let mut stated = false;
             for (predicate, objects) in predicates {
+                self.poll()?;
                 let Some(slot) = self.facet_slot(*predicate) else {
                     continue;
                 };
@@ -925,6 +952,7 @@ impl<'a> CeExtractor<'a> {
         let mut seen = BTreeSet::new();
         let mut cur = head;
         while cur != self.v.nil {
+            self.poll()?;
             if !seen.insert(cur) {
                 return Err(EntailError::Parse("cyclic RDF list".to_owned()));
             }
@@ -959,13 +987,27 @@ impl<'a> CeExtractor<'a> {
     }
 }
 
-/// Parse `ds`'s default graph into a knowledge base.
+/// Poll the caller's latching cancellation signal at a reverse-mapping work boundary.
+fn poll(stop: Option<&dyn StopSignal>) -> Result<(), EntailError> {
+    if stop.is_some_and(StopSignal::stopped) {
+        Err(EntailError::Stopped)
+    } else {
+        Ok(())
+    }
+}
+
+/// Parse `ds`'s default graph into a knowledge base, polling `stop` throughout the
+/// dataset-sized reverse-mapping passes.
 ///
 /// # Errors
 ///
 /// [`EntailError::Parse`] on a malformed class-expression graph (a restriction with no
 /// `owl:onProperty`, a non-integer cardinality literal, a broken RDF list, …).
-pub(crate) fn build(ds: &RdfDataset) -> Result<Kb, EntailError> {
+pub(crate) fn build_until(
+    ds: &RdfDataset,
+    stop: Option<&dyn StopSignal>,
+) -> Result<Kb, EntailError> {
+    poll(stop)?;
     let mut interner = Interner::default();
     let v = Vocab::intern(&mut interner);
     let mut table = ConceptTable::default();
@@ -976,6 +1018,7 @@ pub(crate) fn build(ds: &RdfDataset) -> Result<Kb, EntailError> {
     let mut index: TripleIndex = BTreeMap::new();
     let mut triples: Vec<(u32, u32, u32)> = Vec::new();
     for q in ds.quads() {
+        poll(stop)?;
         if q.g.is_some() {
             continue;
         }
@@ -989,11 +1032,13 @@ pub(crate) fn build(ds: &RdfDataset) -> Result<Kb, EntailError> {
     let mut acc = Accums::default();
     let mut ranges = DataRangeTable::default();
     {
-        let mut ce = CeExtractor::new(&index, &interner, &v, &mut ranges);
+        let mut ce = CeExtractor::new_until(&index, &interner, &v, &mut ranges, stop);
         // The n-ary axioms are stated as a node carrying a list or a reification, so they
         // are read from the node rather than from any one of its triples.
         for (&node, preds) in &index {
+            ce.poll()?;
             for &axiom_class in preds.get(&v.ty).map_or(&[][..], Vec::as_slice) {
+                ce.poll()?;
                 axiom_node(&mut ce, &mut table, &mut acc, &v, node, axiom_class)?;
             }
             // A negative property assertion is identified by its VOCABULARY, not by its
@@ -1010,25 +1055,26 @@ pub(crate) fn build(ds: &RdfDataset) -> Result<Kb, EntailError> {
             }
         }
         for &spo in &triples {
+            ce.poll()?;
             axiom(&mut ce, &mut table, &mut acc, &v, &interner, spo)?;
         }
         acc.boundaries.extend(ce.boundaries().iter().copied());
         // OWL 2 DL forbids a number restriction over a NON-SIMPLE role. The transitivity
         // axioms are only all known now, so the condition is checked here rather than
         // while the restriction was being decoded.
-        if ce
-            .counted_roles()
-            .iter()
-            .any(|role| is_non_simple(*role, &acc))
-        {
-            acc.boundaries.insert(Construct::NonSimpleRole);
+        for &role in ce.counted_roles() {
+            ce.poll()?;
+            if is_non_simple(role, &acc, stop)? {
+                acc.boundaries.insert(Construct::NonSimpleRole);
+                break;
+            }
         }
     }
 
     // Every literal that reaches the knowledge base carries its VALUE into the completion
     // graph, and the literals' value classes decide which of them are one element of the data
     // domain and which are provably different ones.
-    let literal_class = register_literals(&interner, &mut table, &mut ranges, &mut acc);
+    let literal_class = register_literals(&interner, &mut table, &mut ranges, &mut acc, stop)?;
     // A data range this layer cannot decide EXACTLY is a reported boundary rather than a
     // silent weakening. The predicate is `purrdf-xsd`'s own, so the boundary and the decision
     // procedure cannot drift apart.
@@ -1036,7 +1082,8 @@ pub(crate) fn build(ds: &RdfDataset) -> Result<Kb, EntailError> {
         acc.boundaries.insert(Construct::DataRange);
     }
 
-    table.finalize();
+    table.finalize_until(|| poll(stop))?;
+    poll(stop)?;
     Ok(Kb {
         interner,
         table,
@@ -1096,28 +1143,37 @@ fn register_literals(
     table: &mut ConceptTable,
     ranges: &mut DataRangeTable,
     acc: &mut Accums,
-) -> BTreeMap<u32, u32> {
-    let mut terms: BTreeSet<u32> = acc
-        .abox_roles
-        .iter()
-        .map(|&(_, _, object)| object)
-        .collect();
+    stop: Option<&dyn StopSignal>,
+) -> Result<BTreeMap<u32, u32>, EntailError> {
+    let mut terms = BTreeSet::new();
+    for &(_, _, object) in &acc.abox_roles {
+        poll(stop)?;
+        terms.insert(object);
+    }
     for id in 0..table.len() {
+        poll(stop)?;
         if let Decomp::Nominal(members) | Decomp::NegNominal(members) =
             table.decomp(u32::try_from(id).expect("concept id fits u32"))
         {
-            terms.extend(members.iter().copied());
+            for &member in members {
+                poll(stop)?;
+                terms.insert(member);
+            }
         }
     }
-    let described: Vec<(u32, LiteralValue)> = terms
-        .into_iter()
-        .filter_map(|term| data::literal_value(interner.value(term)).map(|value| (term, value)))
-        .collect();
-    if described.is_empty() {
-        return BTreeMap::new();
+    let mut described = Vec::new();
+    for term in terms {
+        poll(stop)?;
+        if let Some(value) = data::literal_value(interner.value(term)) {
+            described.push((term, value));
+        }
     }
-    let classes = data::literal_classes(&described);
+    if described.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let classes = data::literal_classes_until(&described, || poll(stop))?;
     for (term, value) in &described {
+        poll(stop)?;
         let range = match value {
             LiteralValue::Value(value) => DataRange::OneOf(vec![value.clone()]),
             LiteralValue::IllTyped => DataRange::OneOf(Vec::new()),
@@ -1130,7 +1186,7 @@ fn register_literals(
     if classes.any_unmodelled {
         acc.boundaries.insert(Construct::DataRange);
     }
-    classes.class_of
+    Ok(classes.class_of)
 }
 
 /// Whether `role` is NON-SIMPLE — transitive, or the super-role of a transitive role.
@@ -1138,22 +1194,27 @@ fn register_literals(
 /// A role's inverse is simple exactly when the role is, so `Role::Inv(p)` is decided on
 /// `p`. The sub-role closure walks [`Accums::role_sub`], which is the same hierarchy the
 /// tableau's `achievers` walks, so the two agree on what a role's extension contains.
-fn is_non_simple(role: Role, acc: &Accums) -> bool {
+fn is_non_simple(
+    role: Role,
+    acc: &Accums,
+    stop: Option<&dyn StopSignal>,
+) -> Result<bool, EntailError> {
     let (Role::Named(head) | Role::Inv(head)) = role;
     let mut seen: BTreeSet<u32> = BTreeSet::new();
     let mut stack = vec![head];
     while let Some(current) = stack.pop() {
+        poll(stop)?;
         if !seen.insert(current) {
             continue;
         }
         if acc.transitive.contains(&current) {
-            return true;
+            return Ok(true);
         }
         if let Some(subs) = acc.role_sub.get(&current) {
             stack.extend(subs.iter().copied());
         }
     }
-    false
+    Ok(false)
 }
 
 /// The knowledge-base accumulators filled while scanning axioms.
@@ -1203,20 +1264,24 @@ fn axiom_node(
     node: u32,
     axiom_class: u32,
 ) -> Result<(), EntailError> {
+    ce.poll()?;
     if axiom_class == v.all_different {
         // Both spellings, and both are read: OWL 2 writes `owl:members`, OWL 1 wrote
         // `owl:distinctMembers`, and an ontology may carry either.
         for list_property in [v.members, v.distinct_members] {
+            ce.poll()?;
             let Some(head) = first_object(ce, node, list_property) else {
                 continue;
             };
             let members = ce.node_list(head)?;
             for (index, &left) in members.iter().enumerate() {
                 for &right in &members[index + 1..] {
+                    ce.poll()?;
                     acc.different_from.push((left, right));
                 }
             }
             for member in members {
+                ce.poll()?;
                 acc.individuals.insert(member);
             }
         }
@@ -1229,6 +1294,7 @@ fn axiom_node(
                 .collect::<Result<_, _>>()?;
             for (index, left) in concepts.iter().enumerate() {
                 for right in &concepts[index + 1..] {
+                    ce.poll()?;
                     gci(
                         table,
                         acc,
@@ -1243,6 +1309,7 @@ fn axiom_node(
             let members = ce.node_list(head)?;
             for (index, &left) in members.iter().enumerate() {
                 for &right in &members[index + 1..] {
+                    ce.poll()?;
                     acc.disjoint_roles.insert((left, right));
                     acc.disjoint_roles.insert((right, left));
                 }
@@ -1270,6 +1337,7 @@ fn negative_assertion(
     v: &Vocab,
     node: u32,
 ) -> Result<(), EntailError> {
+    ce.poll()?;
     let (Some(source), Some(property)) = (
         first_object(ce, node, v.source_individual),
         first_object(ce, node, v.assertion_property),
@@ -1308,6 +1376,7 @@ fn axiom(
     interner: &Interner,
     (s, p, o): (u32, u32, u32),
 ) -> Result<(), EntailError> {
+    ce.poll()?;
     if p == v.sub_class {
         let sub = ce.expr(s)?;
         let sup = ce.expr(o)?;
@@ -1390,6 +1459,7 @@ fn disjoint_union(
     gci(table, acc, union, whole);
     for (index, left) in parts.iter().enumerate() {
         for right in &parts[index + 1..] {
+            ce.poll()?;
             gci(
                 table,
                 acc,

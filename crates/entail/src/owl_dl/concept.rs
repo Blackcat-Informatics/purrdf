@@ -289,8 +289,21 @@ impl ConceptTable {
     /// Populate the negation id of every interned concept (a fixpoint, since
     /// negating one concept may intern a new one whose own negation is then filled).
     pub(crate) fn finalize(&mut self) {
+        match self.finalize_until(|| Ok::<(), std::convert::Infallible>(())) {
+            Ok(()) => {}
+            Err(never) => match never {},
+        }
+    }
+
+    /// [`Self::finalize`], polling a caller-supplied fallible work-boundary hook before
+    /// each concept is normalized.
+    pub(crate) fn finalize_until<E>(
+        &mut self,
+        mut poll: impl FnMut() -> Result<(), E>,
+    ) -> Result<(), E> {
         let mut i = 0usize;
         while i < self.concepts.len() {
+            poll()?;
             if self.neg[i].is_none() {
                 let neg = Concept::neg(self.concepts[i].clone());
                 let neg_id = self.intern_nnf(&neg.nnf());
@@ -302,6 +315,7 @@ impl ConceptTable {
             }
             i += 1;
         }
+        Ok(())
     }
 }
 
