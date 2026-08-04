@@ -39,7 +39,7 @@ use crate::eval::{
 };
 use crate::governor::ledger::ChargeLedger;
 use crate::governor::soundness::SpineClass;
-use crate::governor::{GovernorState, QueryExplanation, QueryGovernors};
+use crate::governor::{GovernorState, NonMonotoneBarrier, QueryExplanation, QueryGovernors};
 use crate::update::{GraphResolver, UpdateAbort, eval_update};
 use crate::{
     BudgetExhausted, CompleteSparqlResult, FallibleSparqlError, FallibleSparqlResult,
@@ -917,7 +917,8 @@ impl NativeSparqlEngine {
     /// [`TrippedGovernor::Refused`](purrdf_core::TrippedGovernor::Refused), which carries
     /// the *estimate* rather than a consumption it never measured, and it is never a
     /// completeness claim — the outcome is a budget-exhausted one whose certified partial
-    /// answer is empty, which is the truth about a query that did not run. An
+    /// answer is empty for row- and graph-producing forms. A refused `ASK` is unknown:
+    /// its materialized `false` shape cannot soundly represent an unsettled boolean. An
     /// over-estimate therefore costs a caller an answer; it cannot hand them a wrong one.
     /// An under-estimate changes nothing: the live ceiling is still in force and still
     /// trips.
@@ -950,15 +951,11 @@ impl NativeSparqlEngine {
         Some(Ok(GovernedOutcome::BudgetExhausted(BudgetExhausted {
             tripped,
             evidence: state.evidence(),
-            // A certified LOWER bound over nothing: every row here is an answer, and there
-            // are none. That is the strongest true statement about a query that did not
-            // run, and it is a positional prefix of the true answer for the same reason
-            // the empty sequence is a prefix of everything — so a caller who raises the
-            // ceiling and re-runs gets these (zero) answers first, trivially.
-            partial: PartialAnswers::Certain(PartialSparqlResult::new(
-                empty_result_for(query),
-                true,
-            )),
+            // For SELECT and graph forms this is a certified lower bound over nothing:
+            // every item here is an answer, and there are none. ASK has no public witness
+            // set, however; its `false` value would read as a settled answer, so the helper
+            // withholds it as unknown.
+            partial: certain_partial(empty_result_for(query), true),
         })))
     }
 
@@ -1398,6 +1395,21 @@ fn empty_result_for(query: &Query) -> SparqlResult {
     }
 }
 
+/// Restate a certified lower bound without forging a settled `ASK false` answer.
+///
+/// Row and graph results have a useful empty lower bound. A boolean result does not expose
+/// the witness rows that make that interpretation possible: `false` is the complete
+/// negative answer in [`SparqlResult`], so emitting it under [`PartialAnswers::Certain`]
+/// would let a stopped search deny an answer it had not reached. `ASK true` remains a
+/// certain lower bound because one reached witness settles the boolean positively.
+fn certain_partial(result: SparqlResult, positional_prefix: bool) -> PartialAnswers {
+    if matches!(result, SparqlResult::Boolean(false)) {
+        PartialAnswers::Unknown(NonMonotoneBarrier::named("ask-unsettled"))
+    } else {
+        PartialAnswers::Certain(PartialSparqlResult::new(result, positional_prefix))
+    }
+}
+
 /// Materialize a trip-aware [`EvaluatedOutcome`] into the public [`GovernedOutcome`].
 ///
 /// This is the boundary the whole governed surface is built around. Two things happen here
@@ -1424,7 +1436,7 @@ fn materialize_governed<D: DatasetView + Sync>(
                 Some(tripped) => GovernedOutcome::BudgetExhausted(BudgetExhausted {
                     tripped,
                     evidence,
-                    partial: PartialAnswers::Certain(PartialSparqlResult::new(result, true)),
+                    partial: certain_partial(result, true),
                 }),
             }
         }
@@ -1444,14 +1456,14 @@ fn materialize_governed<D: DatasetView + Sync>(
                         .expect("a collapsed bound names the operator that collapsed it"),
                 ),
                 bound => {
-                    let partial = PartialSparqlResult::new(
-                        materialize(outcome, ctx),
-                        certificate.is_positional_prefix(),
-                    );
+                    let result = materialize(outcome, ctx);
                     if bound == SpineClass::Certain {
-                        PartialAnswers::Certain(partial)
+                        certain_partial(result, certificate.is_positional_prefix())
                     } else {
-                        PartialAnswers::AtMost(partial)
+                        PartialAnswers::AtMost(PartialSparqlResult::new(
+                            result,
+                            certificate.is_positional_prefix(),
+                        ))
                     }
                 }
             };

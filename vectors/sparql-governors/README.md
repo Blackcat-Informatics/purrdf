@@ -37,7 +37,7 @@ regenerating a digest.
 
 | Path | Role |
 |---|---|
-| `manifest.tsv` | the case list: inputs, source, governors, band, outcome |
+| `manifest.tsv` | the case list: inputs, source, governors (numeric ceilings, stop signals, or injected deadline-poll ceilings), band, outcome |
 | `transport.tsv` | injected-transport wiring and exchange count, for federated cases |
 | `cases/<name>.ttl` | input dataset, in Turtle 1.2 |
 | `cases/<name>.rq` | input query |
@@ -78,20 +78,22 @@ silently wrong while the corpus stayed green.
 
 ## The boundary is measured, never guessed
 
-`expected/<case>.metered` is the consumption vector of the same case run under
-`QueryGovernors::METERED`, which engages every counter and bounds nothing. The
-band columns are defined against it:
+For a numeric ceiling, `expected/<case>.metered` is the consumption vector of
+the same case run under `QueryGovernors::METERED`, which engages every counter
+and bounds nothing. For an injected deadline, the harness instead counts the
+complete run's stop-signal polls with a never-firing deterministic signal. The
+band columns are defined against the applicable measurement:
 
 | Band | Ceiling | Must |
 |---|---|---|
 | `zero` | `0` | trip — a zero ceiling is valid and admits no charged work |
-| `boundary` | exactly the metered cost | **complete** — the ceiling is inclusive |
-| `over-bound` | the metered cost minus one | **trip** |
+| `boundary` | exactly the metered cost or complete-run poll count | **complete** — the ceiling is inclusive |
+| `over-bound` | the applicable measurement minus one | **trip** |
 
 The harness re-measures and re-derives that relation on every run rather than
-trusting the numbers in the file, so a charge-schedule change cannot leave a
-stale boundary behind looking authoritative: the metered cost moves, and the
-manifest's ceiling stops being the boundary it claims to be.
+trusting the numbers in the file, so a charge- or stop-poll-schedule change
+cannot leave a stale boundary behind looking authoritative: the measurement
+moves, and the manifest's ceiling stops being the boundary it claims to be.
 
 ## What determinism is claimed for — and what is not
 
@@ -101,17 +103,22 @@ counters are functions of the same fixed inputs. Every case above pins rows and
 a cost on that basis, and `the_corpus_is_reproducible_within_a_run` re-runs the
 whole corpus to check it.
 
-A **wall deadline** is time-dependent and carries no such claim. The single
-deadline case (`deadline-zero-budget`) therefore pins exactly what is
-guaranteed — that a trip happened, and that it named the deadline — and has no
-`.answer`, `.spend` or `.metered` sidecar at all. Publishing bytes for it would
-be publishing a promise this engine does not make.
+A caller-supplied stop signal can be deterministic even when its cause is
+`deadline`. The `deadline-injected-*` cases fire solely after a fixed number of
+polls, so their zero, boundary and over-bound outcomes, answers and receipts are
+pinned in full. They grade the evaluator's poll schedule, not elapsed time.
+
+A **wall deadline** is time-dependent and carries no such claim. The separate
+`deadline-zero-budget` smoke case therefore pins exactly what is guaranteed —
+that a trip happened, and that it named the deadline — and has no `.answer`,
+`.spend` or `.metered` sidecar at all. Publishing bytes for it would be
+publishing a promise this engine does not make.
 
 A **cancellation** is not a clock, so cancellation cases are pinned in full.
 
 ## Case inventory
 
-### The band matrix — one zero, one boundary, one over-bound per governor
+### The band matrix — one zero, one boundary, one over-bound per deterministic lane
 
 | Lane | Inputs | Covers |
 |---|---|---|
@@ -120,6 +127,7 @@ A **cancellation** is not a clock, so cancellation cases are pinned in full.
 | `intermediate-cells-*` | `join` | the largest intermediate bag; the zero and over-bound cases are refused at **admission**, because the planner's estimate already exceeds the ceiling |
 | `scratch-bytes-*` | `concat` | arena growth, which is independent of every row and cell count |
 | `remote-requests-*` | `federated` | requests issued to a federated endpoint |
+| `deadline-injected-*` | `chain` | deterministic stop-signal polling, independent of wall time |
 
 ### RDF 1.2 — the statement layer is inside the perimeter
 
@@ -155,6 +163,9 @@ completed-then-discarded one withdraws that licence.
 
 | Case | Covers |
 |---|---|
+| `deadline-injected-zero` | a deadline signal firing on its first poll stops before output |
+| `deadline-injected-boundary` | a ceiling equal to the complete run's measured poll count completes |
+| `deadline-injected-over-bound` | one poll fewer trips, exposing a moved or missing terminal poll |
 | `deadline-zero-budget` | a zero-budget wall deadline trips and names the deadline — and nothing further is pinned |
 
 ## Regenerating

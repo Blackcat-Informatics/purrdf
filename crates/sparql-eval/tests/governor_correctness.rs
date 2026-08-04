@@ -51,7 +51,7 @@ use proptest::prelude::*;
 use proptest::test_runner::{Config, TestRunner};
 use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, RdfLiteral, ResourceDimension, SparqlEngine, SparqlRequest,
-    SparqlResult, TermId,
+    SparqlResult, TermId, TrippedGovernor,
 };
 use purrdf_sparql_eval::{
     GovernedOutcome, NativeSparqlEngine, PartialAnswers, PartialSparqlResult, QueryGovernors,
@@ -451,6 +451,24 @@ fn oracle(dataset: &Arc<RdfDataset>, query: &str) -> Result<SparqlResult, String
         .map_err(|diagnostic| diagnostic.to_string())
 }
 
+/// A total image for comparing the public result arms, with graph blank nodes normalized.
+fn result_image(result: &SparqlResult) -> String {
+    match result {
+        SparqlResult::Boolean(value) => format!("boolean {value}"),
+        SparqlResult::Graph(graph) => {
+            format!("graph\n{}", purrdf_core::canonicalize(graph).nquads)
+        }
+        SparqlResult::Solutions {
+            variables,
+            rows,
+            aux,
+        } => format!(
+            "solutions {variables:?} {rows:?}\naux\n{}",
+            purrdf_core::canonicalize(aux).nquads
+        ),
+    }
+}
+
 /// The governed answer under `governors`.
 fn governed(
     dataset: &Arc<RdfDataset>,
@@ -460,6 +478,105 @@ fn governed(
     NativeSparqlEngine::new()
         .query_governed(dataset, request(query), governors)
         .map_err(|diagnostic| diagnostic.to_string())
+}
+
+#[test]
+fn every_non_select_result_form_matches_the_ungoverned_oracle() {
+    let dataset = build_dataset(DataShape {
+        edges: 5,
+        optional_edges: 3,
+        duplicate_edge: true,
+        reified: true,
+        named_graph: true,
+    });
+    let queries = [
+        ("ASK", format!("ASK WHERE {{ ?s <{EX}p> ?o }}")),
+        (
+            "CONSTRUCT with fresh blanks",
+            format!("CONSTRUCT {{ _:row <{EX}value> ?o }} WHERE {{ ?s <{EX}p> ?o }}"),
+        ),
+        ("DESCRIBE", format!("DESCRIBE ?s WHERE {{ ?s <{EX}p> ?o }}")),
+    ];
+
+    for (label, query) in queries {
+        let expected = oracle(&dataset, &query)
+            .unwrap_or_else(|error| panic!("the ungoverned {label} oracle must answer: {error}"));
+        let actual = governed(&dataset, &query, &QueryGovernors::UNBOUNDED)
+            .unwrap_or_else(|error| panic!("the governed {label} lane must answer: {error}"));
+        let GovernedOutcome::Complete { result, evidence } = actual else {
+            panic!("UNBOUNDED cannot truncate {label}: {actual:?}");
+        };
+        assert!(evidence.is_complete(), "{label} carried tripped evidence");
+        assert_eq!(
+            result_image(&result),
+            result_image(&expected),
+            "{label} diverged from the ordinary query path"
+        );
+    }
+}
+
+#[test]
+fn an_early_where_trip_is_sound_for_ask_construct_and_describe() {
+    let dataset = build_dataset(DataShape {
+        edges: 5,
+        optional_edges: 3,
+        duplicate_edge: false,
+        reified: false,
+        named_graph: false,
+    });
+    let queries = [
+        ("ASK", format!("ASK WHERE {{ ?s <{EX}p> ?o }}")),
+        (
+            "CONSTRUCT",
+            format!("CONSTRUCT {{ _:row <{EX}value> ?o }} WHERE {{ ?s <{EX}p> ?o }}"),
+        ),
+        ("DESCRIBE", format!("DESCRIBE ?s WHERE {{ ?s <{EX}p> ?o }}")),
+    ];
+
+    for (label, query) in queries {
+        let truth = oracle(&dataset, &query)
+            .unwrap_or_else(|error| panic!("the ungoverned {label} oracle must answer: {error}"));
+        match (label, &truth) {
+            ("ASK", SparqlResult::Boolean(true)) => {}
+            ("CONSTRUCT" | "DESCRIBE", SparqlResult::Graph(graph)) => {
+                assert!(
+                    graph.quad_count() > 0,
+                    "the {label} oracle must be non-empty"
+                );
+            }
+            _ => panic!("unexpected {label} oracle shape: {truth:?}"),
+        }
+
+        let outcome = governed(&dataset, &query, &QueryGovernors::UNBOUNDED.with_fuel(0))
+            .unwrap_or_else(|error| panic!("the governed {label} lane must not fail: {error}"));
+        let GovernedOutcome::BudgetExhausted(exhausted) = outcome else {
+            panic!("zero fuel must stop {label} inside its WHERE clause: {outcome:?}");
+        };
+        assert!(matches!(
+            exhausted.tripped,
+            TrippedGovernor::Budget {
+                dimension: ResourceDimension::Fuel,
+                ..
+            }
+        ));
+
+        match (label, exhausted.partial) {
+            ("ASK", PartialAnswers::Unknown(barrier)) => {
+                assert_eq!(barrier.operator(), "ask-unsettled");
+            }
+            ("CONSTRUCT" | "DESCRIBE", PartialAnswers::Certain(partial)) => {
+                let SparqlResult::Graph(graph) = partial.into_result() else {
+                    panic!("{label} partial crossed in the wrong result arm");
+                };
+                assert_eq!(
+                    graph.quad_count(),
+                    0,
+                    "an early {label} trip may certify only the empty graph prefix"
+                );
+            }
+            (_, partial) => panic!("unexpected early {label} certificate: {partial:?}"),
+        }
+    }
 }
 
 /// One solution row, canonicalized as its variable-to-value bindings.

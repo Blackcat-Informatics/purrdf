@@ -30,19 +30,24 @@
 //! # The boundary is measured, never guessed
 //!
 //! A "boundary" case whose ceiling was typed in by hand tests whatever its author
-//! believed. Each case therefore also carries `expected/<case>.metered`: the consumption
-//! vector of the *same* case run under [`QueryGovernors::METERED`], which engages every
-//! counter and bounds nothing. A `boundary` case's ceiling must equal that dimension's
-//! metered cost exactly and an `over-bound` case's exactly one less — and the relation is
-//! re-derived and re-checked on every run rather than trusted. A charge-schedule change
-//! therefore cannot leave a stale boundary behind looking authoritative.
+//! believed. Each numeric case therefore also carries `expected/<case>.metered`: the
+//! consumption vector of the *same* case run under [`QueryGovernors::METERED`], which
+//! engages every counter and bounds nothing. The injected-deadline cases analogously
+//! measure the complete run's stop-signal poll count with a never-firing signal. A
+//! `boundary` ceiling must equal that measurement exactly and an `over-bound` ceiling
+//! exactly one less — and the relation is re-derived and re-checked on every run rather
+//! than trusted. A charge- or poll-schedule change therefore cannot leave a stale
+//! boundary behind looking authoritative.
 //!
-//! # What is deliberately NOT pinned
+//! # Deterministic deadline polling, but not wall time
 //!
-//! A wall deadline is time-dependent and carries no determinism claim, so the one deadline
-//! case pins exactly what is guaranteed — that a trip happened and that it named the
-//! deadline — and carries no rows, no spend and no metered cost. Pinning bytes for it
-//! would publish a promise this engine does not make.
+//! Three cases inject a deterministic deadline signal whose only input is its poll count.
+//! They pin zero, boundary and over-bound behavior just like the numeric dimensions, so a
+//! moved stop-poll site is visible. A real wall deadline is time-dependent and carries no
+//! determinism claim, so the separate wall-clock smoke case pins exactly what is guaranteed
+//! — that a trip happened and that it named the deadline — and carries no rows, no spend
+//! and no metered cost. Pinning bytes for that case would publish a promise this engine does
+//! not make.
 //!
 //! # Regenerating
 //!
@@ -63,7 +68,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use purrdf_core::{
@@ -90,8 +95,8 @@ const PINNED_DIMENSIONS: [ResourceDimension; 5] = [
 ];
 
 /// The floor on the zero/boundary/over-bound matrix: one of each band for each of the five
-/// caller-settable dimensions.
-const REQUIRED_BAND_CASES: usize = 15;
+/// numeric dimensions, plus an injected deterministic deadline.
+const REQUIRED_BAND_CASES: usize = 18;
 
 // ---------------------------------------------------------------------------
 // Corpus locations
@@ -152,7 +157,7 @@ enum StopSpec {
     /// mid-execution.
     Cancellation,
     /// A zero-budget wall deadline: expired on its first poll, by construction.
-    DeadlineZero,
+    WallDeadlineZero,
 }
 
 impl StopSpec {
@@ -160,7 +165,7 @@ impl StopSpec {
         match token {
             "cancelled" => Self::Cancelled,
             "cancellation" => Self::Cancellation,
-            "deadline-zero" => Self::DeadlineZero,
+            "deadline-zero" => Self::WallDeadlineZero,
             other => panic!("manifest.tsv: unknown stop signal {other:?}"),
         }
     }
@@ -169,7 +174,7 @@ impl StopSpec {
         match self {
             Self::Cancelled => "cancelled",
             Self::Cancellation => "cancellation",
-            Self::DeadlineZero => "deadline-zero",
+            Self::WallDeadlineZero => "deadline-zero",
         }
     }
 }
@@ -186,6 +191,8 @@ struct Case {
     ceiling: Option<(ResourceDimension, u64)>,
     /// The stop signal this case attaches, if it attaches one.
     stop: Option<StopSpec>,
+    /// Polls a deterministic injected deadline admits before it fires.
+    deadline_polls: Option<u64>,
     band: Band,
     /// The pinned outcome discriminant.
     outcome: String,
@@ -197,7 +204,7 @@ impl Case {
     /// Every case does except the deadline one: a wall deadline trip is time-dependent, so
     /// the only honest pinned fact about it is that it happened and what it named.
     fn is_pinned_deterministic(&self) -> bool {
-        self.stop != Some(StopSpec::DeadlineZero)
+        self.stop != Some(StopSpec::WallDeadlineZero)
     }
 }
 
@@ -217,9 +224,14 @@ fn dimension_for(token: &str) -> ResourceDimension {
 fn parse_governors(
     cell: &str,
     line: usize,
-) -> (Option<(ResourceDimension, u64)>, Option<StopSpec>) {
+) -> (
+    Option<(ResourceDimension, u64)>,
+    Option<StopSpec>,
+    Option<u64>,
+) {
     let mut ceiling = None;
     let mut stop = None;
+    let mut deadline_polls = None;
     for setting in cell.split(',') {
         let (key, value) = setting
             .split_once('=')
@@ -227,6 +239,21 @@ fn parse_governors(
         if key == "stop" {
             assert!(stop.is_none(), "manifest.tsv line {line}: two stop signals");
             stop = Some(StopSpec::parse(value));
+        } else if key == "deadline-polls" {
+            assert!(
+                deadline_polls.is_none(),
+                "manifest.tsv line {line}: two injected deadlines"
+            );
+            deadline_polls = Some(if value == "?" {
+                u64::MAX
+            } else {
+                value.parse().unwrap_or_else(|error| {
+                    panic!(
+                        "manifest.tsv line {line}: {value:?} is not a deadline poll ceiling: \
+                         {error}"
+                    )
+                })
+            });
         } else {
             assert!(ceiling.is_none(), "manifest.tsv line {line}: two ceilings");
             // `?` is the placeholder a regeneration replaces with the measured value. It is
@@ -242,7 +269,11 @@ fn parse_governors(
             ceiling = Some((dimension_for(key), amount));
         }
     }
-    (ceiling, stop)
+    assert!(
+        stop.is_none() || deadline_polls.is_none(),
+        "manifest.tsv line {line}: wall and injected deadlines are mutually exclusive"
+    );
+    (ceiling, stop, deadline_polls)
 }
 
 /// Parse `manifest.tsv`. Blank lines and `#` comments are skipped; every other line must
@@ -268,9 +299,9 @@ fn load_manifest() -> Vec<Case> {
             "http" => true,
             other => panic!("manifest.tsv line {number}: unknown source {other:?}"),
         };
-        let (ceiling, stop) = parse_governors(fields[4], number);
+        let (ceiling, stop, deadline_polls) = parse_governors(fields[4], number);
         assert!(
-            ceiling.is_some() || stop.is_some(),
+            ceiling.is_some() || stop.is_some() || deadline_polls.is_some(),
             "manifest.tsv line {number}: a case must declare a governor"
         );
         cases.push(Case {
@@ -280,6 +311,7 @@ fn load_manifest() -> Vec<Case> {
             federated,
             ceiling,
             stop,
+            deadline_polls,
             band: Band::parse(fields[5]),
             outcome: fields[6].to_owned(),
         });
@@ -506,6 +538,8 @@ struct Observation {
     spend: String,
     /// Exchanges the injected transport was asked to perform.
     posts: usize,
+    /// Polls observed by an injected deterministic deadline.
+    stop_polls: u64,
 }
 
 /// The governors a case declares, together with the live cancellation flag they carry.
@@ -516,6 +550,38 @@ struct Observation {
 struct Configured {
     governors: QueryGovernors,
     flag: Option<CancellationFlag>,
+    deadline: Option<Arc<PollDeadline>>,
+}
+
+/// A deterministic deadline fixture: admit `allowed` polls and fire on the next.
+///
+/// This is deliberately not [`WallDeadline`]. A wall clock has no reproducible boundary;
+/// this signal gives the frozen corpus an injected timeline on which zero, exact-boundary,
+/// and one-before-boundary cases have stable meanings.
+#[derive(Debug)]
+struct PollDeadline {
+    allowed: u64,
+    polls: AtomicU64,
+}
+
+impl PollDeadline {
+    fn new(allowed: u64) -> Arc<Self> {
+        Arc::new(Self {
+            allowed,
+            polls: AtomicU64::new(0),
+        })
+    }
+
+    fn polls(&self) -> u64 {
+        self.polls.load(Ordering::Relaxed)
+    }
+}
+
+impl StopSignal for PollDeadline {
+    fn poll(&self) -> Option<StopCause> {
+        let previous = self.polls.fetch_add(1, Ordering::Relaxed);
+        (previous >= self.allowed).then_some(StopCause::Deadline)
+    }
 }
 
 fn governors_for(case: &Case) -> Configured {
@@ -537,7 +603,7 @@ fn governors_for(case: &Case) -> Configured {
     }
     match case.stop {
         None => {}
-        Some(StopSpec::DeadlineZero) => {
+        Some(StopSpec::WallDeadlineZero) => {
             governors = governors.with_stop_signal(Arc::new(WallDeadline::after(Duration::ZERO)));
         }
         Some(spec) => {
@@ -549,7 +615,15 @@ fn governors_for(case: &Case) -> Configured {
             flag = Some(cancellation);
         }
     }
-    Configured { governors, flag }
+    let deadline = case.deadline_polls.map(PollDeadline::new);
+    if let Some(deadline) = &deadline {
+        governors = governors.with_stop_signal(Arc::clone(deadline) as Arc<dyn StopSignal>);
+    }
+    Configured {
+        governors,
+        flag,
+        deadline,
+    }
 }
 
 /// Evaluate `case` under `configured`, with the transport wired as `spec` says.
@@ -589,6 +663,10 @@ fn observe(case: &Case, configured: &Configured, spec: Option<TransportSpec>) ->
         answer: render_answer(&outcome),
         spend: render_consumption(outcome.evidence()),
         posts: posts.load(Ordering::Relaxed),
+        stop_polls: configured
+            .deadline
+            .as_ref()
+            .map_or(0, |signal| signal.polls()),
     }
 }
 
@@ -597,10 +675,16 @@ fn observe(case: &Case, configured: &Configured, spec: Option<TransportSpec>) ->
 /// This is what every boundary is derived FROM, and it is spelled as the named constant
 /// rather than as a hand-written near-maximum ceiling so the corpus teaches the same way
 /// of sizing a budget the library documents.
-fn metered(case: &Case, spec: Option<TransportSpec>) -> String {
+struct Measurement {
+    spend: String,
+    stop_polls: u64,
+}
+
+fn metered(case: &Case, spec: Option<TransportSpec>) -> Measurement {
     let configured = Configured {
         governors: QueryGovernors::METERED,
         flag: None,
+        deadline: None,
     };
     let observation = observe(case, &configured, spec);
     assert_eq!(
@@ -609,7 +693,28 @@ fn metered(case: &Case, spec: Option<TransportSpec>) -> String {
          case has no derivable boundary at all",
         case.name
     );
-    observation.spend
+    let stop_polls = if case.deadline_polls.is_some() {
+        let deadline = PollDeadline::new(u64::MAX);
+        let configured = Configured {
+            governors: QueryGovernors::UNBOUNDED
+                .with_stop_signal(Arc::clone(&deadline) as Arc<dyn StopSignal>),
+            flag: None,
+            deadline: Some(deadline),
+        };
+        let deadline_observation = observe(case, &configured, spec);
+        assert_eq!(
+            deadline_observation.outcome, "complete",
+            "{}: a never-firing injected deadline must admit the whole query",
+            case.name
+        );
+        deadline_observation.stop_polls
+    } else {
+        0
+    };
+    Measurement {
+        spend: observation.spend,
+        stop_polls,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -913,11 +1018,15 @@ fn manifest_row(case: &Case, outcome: &str) -> String {
         .ceiling
         .map(|(dimension, amount)| format!("{}={amount}", dimension.label()));
     let stop = case.stop.map(|stop| format!("stop={}", stop.label()));
-    let settings = match (ceiling, stop) {
-        (Some(ceiling), Some(stop)) => format!("{ceiling},{stop}"),
-        (Some(only), None) | (None, Some(only)) => only,
-        (None, None) => unreachable!("the manifest loader rejects a case with no governor"),
-    };
+    let deadline = case
+        .deadline_polls
+        .map(|polls| format!("deadline-polls={polls}"));
+    let settings = [ceiling, stop, deadline]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(",");
+    assert!(!settings.is_empty(), "a case must name a governor");
     format!(
         "{}\t{}\t{}\t{}\t{settings}\t{}\t{outcome}",
         case.name,
@@ -937,13 +1046,17 @@ fn regenerate_case(
     let mut case = case.clone();
     if case.is_pinned_deterministic() {
         let measured = metered(&case, spec);
-        write_expected(&case, "metered", &measured);
+        write_expected(&case, "metered", &measured.spend);
         if case.band != Band::NotApplicable {
-            let (dimension, _) = case
-                .ceiling
-                .unwrap_or_else(|| panic!("{}: a band case must set a ceiling", case.name));
-            let derived = band_ceiling(&case, case.band, consumed_in(&measured, dimension));
-            case.ceiling = Some((dimension, derived));
+            if let Some((dimension, _)) = case.ceiling {
+                let derived =
+                    band_ceiling(&case, case.band, consumed_in(&measured.spend, dimension));
+                case.ceiling = Some((dimension, derived));
+            } else if case.deadline_polls.is_some() {
+                case.deadline_polls = Some(band_ceiling(&case, case.band, measured.stop_polls));
+            } else {
+                panic!("{}: a band case must set a ceiling", case.name);
+            }
         }
     }
 
@@ -1120,7 +1233,7 @@ fn every_boundary_is_derived_from_a_metered_run() {
         }
         let measured = metered(case, specs.get(&case.name).copied());
         assert_eq!(
-            measured,
+            measured.spend,
             read_expected(case, "metered"),
             "{}: the measuring run's cost moved without the corpus being regenerated",
             case.name
@@ -1130,17 +1243,26 @@ fn every_boundary_is_derived_from_a_metered_run() {
             continue;
         }
         bands += 1;
-        let (dimension, ceiling) = case
-            .ceiling
-            .unwrap_or_else(|| panic!("{}: a band case must set a ceiling", case.name));
-        assert_eq!(
-            ceiling,
-            band_ceiling(case, case.band, consumed_in(&measured, dimension)),
-            "{}: the manifest's {} ceiling is not the {} of the metered cost",
-            case.name,
-            dimension.label(),
-            case.band.label()
-        );
+        if let Some((dimension, ceiling)) = case.ceiling {
+            assert_eq!(
+                ceiling,
+                band_ceiling(case, case.band, consumed_in(&measured.spend, dimension),),
+                "{}: the manifest's {} ceiling is not the {} of the metered cost",
+                case.name,
+                dimension.label(),
+                case.band.label()
+            );
+        } else if let Some(deadline_polls) = case.deadline_polls {
+            assert_eq!(
+                deadline_polls,
+                band_ceiling(case, case.band, measured.stop_polls),
+                "{}: the injected deadline is not the {} of the measured poll count",
+                case.name,
+                case.band.label()
+            );
+        } else {
+            panic!("{}: a band case must set a ceiling", case.name);
+        }
     }
     assert!(
         bands >= REQUIRED_BAND_CASES,
@@ -1149,12 +1271,15 @@ fn every_boundary_is_derived_from_a_metered_run() {
     );
 }
 
-/// Every caller-settable dimension carries all three bands, and a boundary case really
-/// does complete while its zero and over-bound siblings really do trip.
+/// Every caller-settable dimension and the injected deadline carry all three bands, and a
+/// boundary case really does complete while its zero and over-bound siblings really trip.
 ///
 /// A count alone would pass on fifteen cases that all governed fuel.
 #[test]
 fn every_governor_carries_a_zero_a_boundary_and_an_over_bound_case() {
+    if updating() {
+        return;
+    }
     let cases = load_manifest();
     for dimension in PINNED_DIMENSIONS {
         let mut seen: BTreeMap<&'static str, usize> = BTreeMap::new();
@@ -1189,6 +1314,24 @@ fn every_governor_carries_a_zero_a_boundary_and_an_over_bound_case() {
             );
         }
     }
+
+    let mut deadline_bands = BTreeMap::new();
+    for case in &cases {
+        if case.deadline_polls.is_some() && case.band != Band::NotApplicable {
+            *deadline_bands.entry(case.band.label()).or_insert(0_usize) += 1;
+            match case.band {
+                Band::Boundary => assert_eq!(case.outcome, "complete"),
+                Band::Zero | Band::OverBound => assert_eq!(case.outcome, "stopped deadline"),
+                Band::NotApplicable => unreachable!("filtered above"),
+            }
+        }
+    }
+    for band in ["zero", "boundary", "over-bound"] {
+        assert!(
+            deadline_bands.contains_key(band),
+            "the injected deterministic deadline has no {band} case"
+        );
+    }
 }
 
 /// The RDF 1.2 statement layer is inside the governed perimeter, not beside it.
@@ -1201,6 +1344,9 @@ fn every_governor_carries_a_zero_a_boundary_and_an_over_bound_case() {
 /// layer.
 #[test]
 fn the_rdf12_statement_layer_is_governed() {
+    if updating() {
+        return;
+    }
     let cases = load_manifest();
 
     // The reifier expansion is charged at all.
@@ -1258,6 +1404,9 @@ fn the_rdf12_statement_layer_is_governed() {
 /// flight, and reaches an outcome indistinguishable from an honouring transport's.
 #[test]
 fn a_transport_that_ignores_the_stop_signal_is_bounded_per_request() {
+    if updating() {
+        return;
+    }
     let cases = load_manifest();
     let specs = load_transport();
 
@@ -1332,6 +1481,9 @@ fn the_corpus_is_reproducible_within_a_run() {
     let cases = load_manifest();
     let specs = load_transport();
     for case in &cases {
+        if !case.is_pinned_deterministic() {
+            continue;
+        }
         let spec = specs.get(&case.name).copied();
         let first = observe(case, &governors_for(case), spec);
         let second = observe(case, &governors_for(case), spec);

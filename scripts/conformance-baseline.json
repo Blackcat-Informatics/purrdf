@@ -23,7 +23,7 @@
     },
     "SPARQL execution governors": {
       "ledgered": 0,
-      "note": "no ledgered gaps: every case in vectors/sparql-governors/ is graded, and there is nothing a governor case could be excused for. The corpus carries a zero, a boundary (the ceiling IS the measured cost, and must be admitted) and an over-bound (the measured cost minus one, and must trip) case for each of the five caller-settable dimensions, plus the RDF 1.2 statement layer, the federated SERVICE transport seam, and one deadline case that pins only what a time-dependent trip can guarantee"
+      "note": "no ledgered gaps: every case in vectors/sparql-governors/ is graded, and there is nothing a governor case could be excused for. The corpus carries a zero, a boundary (the ceiling IS the measured cost or complete stop-poll count, and must be admitted) and an over-bound (one below that measurement, and must trip) case for each of the five caller-settable numeric dimensions and for a deterministic injected deadline signal, plus the RDF 1.2 statement layer and the federated SERVICE transport seam. A separate wall-deadline smoke case pins only what a time-dependent trip can guarantee"
     },
     "Entailment (OWL 2 DL consistency)": {
       "ledgered": 4,

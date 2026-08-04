@@ -1305,9 +1305,9 @@ fn admission_refuses_an_estimated_ceiling_breach_before_evaluating() {
         "the ceiling is inclusive at admission too: estimate == limit is admitted"
     );
 
-    // Admission governs every query form, and a refusal is shaped by the form it refused:
-    // a caller matching on the result of a refused `CONSTRUCT` finds the `Graph` arm it
-    // finds on every other path, never a solutions set standing in for a graph.
+    // Admission governs every query form. Graph-producing refusals retain the graph shape;
+    // ASK withholds its empty materialization because `false` would be a settled negative
+    // answer rather than a useful representation of an empty witness lower bound.
     for query in [
         "ASK { ?s <http://example.org/p> ?o }",
         "CONSTRUCT { ?s <http://example.org/q> ?o } \
@@ -1329,19 +1329,17 @@ fn admission_refuses_an_estimated_ceiling_breach_before_evaluating() {
             "{query}: {:?}",
             refused.tripped
         );
-        let empty = refused
-            .partial
-            .result()
-            .unwrap_or_else(|| panic!("{query}: the empty lower bound is still a bound"));
-        match (query.starts_with("ASK"), empty.result()) {
-            // A `false` reached without running is not a claim that no answer exists — it
-            // is only ever readable inside an exhausted budget, exactly as a `false`
-            // reached by a truncated search is.
-            (true, SparqlResult::Boolean(false)) => {}
-            (false, SparqlResult::Graph(graph)) => {
+        match (query.starts_with("ASK"), &refused.partial) {
+            (true, PartialAnswers::Unknown(barrier)) => {
+                assert_eq!(barrier.operator(), "ask-unsettled");
+            }
+            (false, PartialAnswers::Certain(empty)) => {
+                let SparqlResult::Graph(graph) = empty.result() else {
+                    panic!("{query}: a refusal must retain its graph result arm");
+                };
                 assert_eq!(statement_count(graph), 0, "{query}: nothing ran");
             }
-            (_, other) => panic!("{query}: a refusal must keep its form's shape: {other:?}"),
+            (_, other) => panic!("{query}: unexpected refusal certificate: {other:?}"),
         }
     }
 

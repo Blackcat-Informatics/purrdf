@@ -3,7 +3,8 @@
 #   source     none | http   (http wires the injected transport described in transport.tsv)
 #   governors  comma-separated <setting>=<value>; a ceiling names a caller-settable
 #              dimension (fuel, answer-rows, intermediate-cells, scratch-bytes,
-#              remote-requests), and "stop" names a signal (cancelled, cancellation,
+#              remote-requests); "deadline-polls" names the deterministic injected
+#              deadline; and "stop" names a signal (cancelled, cancellation,
 #              deadline-zero).
 #   band       zero       the ceiling is 0 and admits no charged work
 #              boundary   the ceiling IS the metered cost, so the run MUST complete
@@ -40,4 +41,7 @@ rdf12-construct-answer-over-bound	cases/rdf12.ttl	cases/rdf12-construct.rq	none	
 service-deaf-transport-request-ceiling	cases/federated.ttl	cases/federated.rq	http	remote-requests=1	n/a	budget-exhausted remote-requests
 service-deaf-transport-cancel-mid-exchange	cases/federated.ttl	cases/federated.rq	http	stop=cancellation	n/a	stopped cancelled
 service-honouring-transport-cancel-mid-exchange	cases/federated.ttl	cases/federated.rq	http	stop=cancellation	n/a	stopped cancelled
+deadline-injected-zero	cases/chain.ttl	cases/chain.rq	none	deadline-polls=0	zero	stopped deadline
+deadline-injected-boundary	cases/chain.ttl	cases/chain.rq	none	deadline-polls=11	boundary	complete
+deadline-injected-over-bound	cases/chain.ttl	cases/chain.rq	none	deadline-polls=10	over-bound	stopped deadline
 deadline-zero-budget	cases/chain.ttl	cases/chain.rq	none	stop=deadline-zero	n/a	stopped deadline

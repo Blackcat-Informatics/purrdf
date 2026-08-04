@@ -1405,15 +1405,17 @@ pub static GOVERNOR_PROFILE_DIGEST: LazyLock<String> = LazyLock::new(|| {
 /// determinism stated in this module's documentation: [`ResourceDimension::Fuel`], the
 /// [`ResourceDimension::AnswerRows`] cap and the [`ResourceDimension::IntermediateCells`]
 /// peak charge identically on every run, worker count and hash seed, and the scratch-arena
-/// and remote-request counters are functions of the same fixed inputs.
+/// and remote-request counters are functions of the same fixed inputs. The corpus also
+/// injects a deadline signal driven only by poll count, pinning zero, boundary and
+/// over-bound behavior for the stop-poll schedule independently of any clock.
 ///
 /// A **wall deadline is excluded from that claim and from this corpus's pinned bytes.**
-/// The corpus carries exactly one deadline case, and it pins only what is guaranteed —
-/// that a trip happened and that it named the deadline. It has no expected rows and no
-/// expected cost, because a time-dependent trip point has none to publish. A consumer
-/// pinning this digest is pinning evidence about ceilings, not about clocks.
+/// Its separate smoke case pins only what is guaranteed — that a trip happened and that
+/// it named the deadline. It has no expected rows and no expected cost, because a
+/// time-dependent trip point has none to publish. A consumer pinning this digest is
+/// pinning evidence about ceilings and polling, not about elapsed time.
 pub const GOVERNOR_CORPUS_DIGEST: &str =
-    "329c5ab135e7facb1ff95744373ea8a1e9dfbaa7c6b59ec897ece66586aac36e";
+    "ccc1d04a8118cf6ade4bea5768ea8be0496d8929fefdf28d212a3862a339b1ba";
 
 #[cfg(test)]
 mod tests {
