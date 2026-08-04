@@ -166,6 +166,14 @@ function normalizeGovernedOptions(options) {
   };
 }
 
+function normalizeEntailmentGovernedOptions(options) {
+  const governed = normalizeGovernedOptions(options);
+  return {
+    ...governed,
+    program: options?.program ?? undefined,
+  };
+}
+
 function visualizationOptionsJson(options) {
   if (options == null) return undefined;
   if (typeof options !== "object" || Array.isArray(options)) {
@@ -343,6 +351,25 @@ function queryOutcomeToObject(raw) {
   }
 }
 
+function entailmentQueryOutcomeToObject(raw) {
+  try {
+    const isComplete = raw.isComplete;
+    const closureStopped = raw.closureStopped;
+    const report = raw.report;
+    const outcome = raw.takeOutcome();
+    const tripped = raw.takeTripped();
+    return {
+      phase: closureStopped ? "closure-stopped" : "answered",
+      isComplete,
+      outcome: outcome === undefined ? undefined : queryOutcomeToObject(outcome),
+      report,
+      tripped: tripped === undefined ? undefined : trippedGovernorToObject(tripped),
+    };
+  } finally {
+    raw.free?.();
+  }
+}
+
 function updateOutcomeToObject(raw) {
   try {
     const isApplied = raw.isApplied;
@@ -477,6 +504,7 @@ export async function ready(wasmBytesOrUrl) {
     const wasmUpdate = QueryEngine.prototype.update;
     const wasmQueryRaw = QueryEngine.prototype.queryRaw;
     const wasmQueryGoverned = QueryEngine.prototype.queryGoverned;
+    const wasmQueryEntailmentGoverned = QueryEngine.prototype.queryEntailmentGoverned;
     const wasmUpdateGoverned = QueryEngine.prototype.updateGoverned;
     const wasmExplainQuery = QueryEngine.prototype.explainQuery;
 
@@ -517,6 +545,31 @@ export async function ready(wasmBytesOrUrl) {
           dataset,
           sparql,
           o.base,
+          o.fuel,
+          o.deadlineMs,
+          o.maxAnswers,
+          o.maxIntermediateCells,
+          o.maxScratchBytes,
+          o.maxRemoteRequests,
+          o.cancel,
+        ),
+      );
+    };
+    QueryEngine.prototype.queryEntailmentGoverned = function (
+      dataset,
+      sparql,
+      entailment,
+      options,
+    ) {
+      const o = normalizeEntailmentGovernedOptions(options);
+      return entailmentQueryOutcomeToObject(
+        wasmQueryEntailmentGoverned.call(
+          this,
+          dataset,
+          sparql,
+          o.base,
+          entailment,
+          o.program,
           o.fuel,
           o.deadlineMs,
           o.maxAnswers,

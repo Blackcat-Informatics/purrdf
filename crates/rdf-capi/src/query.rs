@@ -6,7 +6,10 @@
 
 use std::os::raw::c_char;
 
-use purrdf_rs::{SparqlEngine, SparqlRequest, SparqlResult};
+use purrdf_rs::{
+    GovernedEntailment, QueryEntailmentPlan, SparqlEngine, SparqlRequest, SparqlResult,
+    query_with_entailment_governed,
+};
 use purrdf_sparql_eval::{
     BudgetExhausted, GovernedOutcome, GovernedUpdateOutcome, NativeSparqlEngine, PartialAnswers,
 };
@@ -14,8 +17,8 @@ use purrdf_sparql_eval::{
 use crate::buffer::PurrdfBuffer;
 use crate::error::PurrdfError;
 use crate::governor::{
-    PurrdfGovernorEvidence, PurrdfQueryGovernors, decode_governors, encode_evidence,
-    validate_update_governors,
+    PurrdfGovernorEvidence, PurrdfGovernorTrip, PurrdfQueryGovernors, decode_governors,
+    encode_evidence, encode_trip, validate_update_governors,
 };
 use crate::handles::PurrdfDataset;
 use crate::rowcursor::PurrdfRowCursor;
@@ -47,6 +50,32 @@ pub enum PurrdfUpdateOutcomeKind {
     Applied = 0,
     /// A governor stopped the request and no mutation applied.
     BudgetExhausted = 1,
+}
+
+/// The two-phase outcome discriminant written by [`purrdf_query_entailment_governed`].
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PurrdfEntailmentQueryOutcomeKind {
+    /// Closure and query both completed.
+    Complete = 0,
+    /// Closure completed, but a query governor tripped; partial certificate is available.
+    QueryBudgetExhausted = 1,
+    /// A cancellation/deadline stopped closure; no query ran and no report exists.
+    ClosureStopped = 2,
+}
+
+/// Evidence for both phases of a governed entailment-aware query.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PurrdfGovernedEntailmentEvidence {
+    /// `1` when closure completed and phase two ran; `0` on closure stop.
+    pub query_ran: u8,
+    /// Reserved for ABI-compatible extension; always zero in ABI 0.3.
+    pub reserved: [u8; 7],
+    /// Phase-two evidence, or an all-zero carrier when `query_ran == 0`.
+    pub query: PurrdfGovernorEvidence,
+    /// Closure-phase stop, or `kind == NONE` when closure completed.
+    pub closure_trip: PurrdfGovernorTrip,
 }
 
 /// What a governed query's partial result certifies.
@@ -182,6 +211,70 @@ unsafe fn store_result(
             }
         }
         Ok(())
+    }
+}
+
+/// Store either arm of a governed query through the common C result/certificate carriers.
+unsafe fn store_governed_query_outcome(
+    outcome: GovernedOutcome,
+    out_kind: *mut i32,
+    out_rows: *mut *mut PurrdfRowCursor,
+    out_graph: *mut *mut PurrdfDataset,
+    out_boolean: *mut u8,
+    out_partial: *mut PurrdfPartialCertificate,
+) -> Result<(PurrdfQueryOutcomeKind, PurrdfGovernorEvidence), PurrdfError> {
+    unsafe {
+        match outcome {
+            GovernedOutcome::Complete { result, evidence } => {
+                store_result(result, out_kind, out_rows, out_graph, out_boolean)?;
+                Ok((PurrdfQueryOutcomeKind::Complete, encode_evidence(&evidence)))
+            }
+            GovernedOutcome::BudgetExhausted(BudgetExhausted {
+                evidence, partial, ..
+            }) => {
+                match partial {
+                    PartialAnswers::Certain(partial) => {
+                        *out_partial = PurrdfPartialCertificate {
+                            kind: PurrdfPartialKind::Certain as i32,
+                            positional_prefix: u8::from(partial.is_positional_prefix()),
+                            barrier: PurrdfStr::empty(),
+                        };
+                        store_result(
+                            partial.into_result(),
+                            out_kind,
+                            out_rows,
+                            out_graph,
+                            out_boolean,
+                        )?;
+                    }
+                    PartialAnswers::AtMost(partial) => {
+                        *out_partial = PurrdfPartialCertificate {
+                            kind: PurrdfPartialKind::AtMost as i32,
+                            positional_prefix: u8::from(partial.is_positional_prefix()),
+                            barrier: PurrdfStr::empty(),
+                        };
+                        store_result(
+                            partial.into_result(),
+                            out_kind,
+                            out_rows,
+                            out_graph,
+                            out_boolean,
+                        )?;
+                    }
+                    PartialAnswers::Unknown(barrier) => {
+                        *out_partial = PurrdfPartialCertificate {
+                            kind: PurrdfPartialKind::Unknown as i32,
+                            positional_prefix: 0,
+                            barrier: PurrdfStr::from_str(barrier.operator()),
+                        };
+                    }
+                }
+                Ok((
+                    PurrdfQueryOutcomeKind::BudgetExhausted,
+                    encode_evidence(&evidence),
+                ))
+            }
+        }
     }
 }
 
@@ -356,54 +449,130 @@ pub unsafe extern "C" fn purrdf_query_governed(
                     PurrdfError::from_diagnostic(PurrdfStatus::QueryError, &diagnostic)
                 })?;
 
+            let (kind, evidence) = store_governed_query_outcome(
+                outcome,
+                out_kind,
+                out_rows,
+                out_graph,
+                out_boolean,
+                out_partial,
+            )?;
+            *out_outcome = kind as i32;
+            *out_evidence = evidence;
+            Ok(PurrdfStatus::Ok)
+        })
+    }
+}
+
+/// Execute SPARQL over an explicitly named entailment closure under governors.
+///
+/// `regime` uses the shared spellings (`simple`, `rdf`, `rdfs`, `owl-rl`,
+/// `owl-direct`, `rif`, `d`). `program` must be empty except for `rif`, where it is the
+/// required RIF-in-XML document. On `COMPLETE` or `QUERY_BUDGET_EXHAUSTED`,
+/// `*out_report` owns a byte-stable reasoning report (free with `purrdf_buffer_free`) and
+/// the ordinary result/partial carriers describe phase two. On `CLOSURE_STOPPED`, no
+/// query ran: result kind is `-1`, report is null, and `closure_trip` names the stop.
+///
+/// # Safety
+/// All input strings and handles must remain live for the synchronous call. Required
+/// out-pointers must be writable; any enabled cancellation handle must remain live until
+/// return. Shape-specific result pointers are required when that shape is returned.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_query_entailment_governed(
+    dataset: *const PurrdfDataset,
+    query: *const c_char,
+    base_iri: *const c_char,
+    regime: *const c_char,
+    program: *const c_char,
+    governors: *const PurrdfQueryGovernors,
+    out_outcome: *mut i32,
+    out_kind: *mut i32,
+    out_rows: *mut *mut PurrdfRowCursor,
+    out_graph: *mut *mut PurrdfDataset,
+    out_boolean: *mut u8,
+    out_evidence: *mut PurrdfGovernedEntailmentEvidence,
+    out_partial: *mut PurrdfPartialCertificate,
+    out_report: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            if dataset.is_null()
+                || query.is_null()
+                || regime.is_null()
+                || program.is_null()
+                || governors.is_null()
+                || out_outcome.is_null()
+                || out_kind.is_null()
+                || out_evidence.is_null()
+                || out_partial.is_null()
+                || out_report.is_null()
+            {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null required pointer argument to purrdf_query_entailment_governed",
+                ));
+            }
+            clear_result_outputs(out_kind, out_rows, out_graph, out_boolean);
+            *out_partial = PurrdfPartialCertificate::none();
+            *out_report = std::ptr::null_mut();
+
+            let query = cstr_to_str(query)?;
+            let base_iri = opt_cstr_to_str(base_iri)?;
+            let regime = cstr_to_str(regime)?;
+            let program = cstr_to_str(program)?;
+            let plan = QueryEntailmentPlan::parse(regime, program)
+                .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
+            let governors = decode_governors(governors)?;
+            let outcome = query_with_entailment_governed(
+                &engine(),
+                PurrdfDataset::arc(dataset),
+                SparqlRequest {
+                    query,
+                    base_iri,
+                    substitutions: &[],
+                },
+                plan.entailment(),
+                &governors,
+            )
+            .map_err(|error| PurrdfError::new(PurrdfStatus::QueryError, error.to_string()))?;
+
             match outcome {
-                GovernedOutcome::Complete { result, evidence } => {
-                    *out_outcome = PurrdfQueryOutcomeKind::Complete as i32;
-                    *out_evidence = encode_evidence(&evidence);
-                    store_result(result, out_kind, out_rows, out_graph, out_boolean)?;
+                GovernedEntailment::Answered { outcome, report } => {
+                    let (kind, query_evidence) = store_governed_query_outcome(
+                        outcome,
+                        out_kind,
+                        out_rows,
+                        out_graph,
+                        out_boolean,
+                        out_partial,
+                    )?;
+                    *out_outcome = match kind {
+                        PurrdfQueryOutcomeKind::Complete => {
+                            PurrdfEntailmentQueryOutcomeKind::Complete as i32
+                        }
+                        PurrdfQueryOutcomeKind::BudgetExhausted => {
+                            PurrdfEntailmentQueryOutcomeKind::QueryBudgetExhausted as i32
+                        }
+                    };
+                    *out_evidence = PurrdfGovernedEntailmentEvidence {
+                        query_ran: 1,
+                        reserved: [0; 7],
+                        query: query_evidence,
+                        closure_trip: PurrdfGovernorTrip::NONE,
+                    };
+                    *out_report = PurrdfBuffer::into_raw(
+                        purrdf_validate::render_reasoning_report(&report).into_bytes(),
+                    );
                 }
-                GovernedOutcome::BudgetExhausted(BudgetExhausted {
-                    evidence, partial, ..
-                }) => {
-                    *out_outcome = PurrdfQueryOutcomeKind::BudgetExhausted as i32;
-                    *out_evidence = encode_evidence(&evidence);
-                    match partial {
-                        PartialAnswers::Certain(partial) => {
-                            *out_partial = PurrdfPartialCertificate {
-                                kind: PurrdfPartialKind::Certain as i32,
-                                positional_prefix: u8::from(partial.is_positional_prefix()),
-                                barrier: PurrdfStr::empty(),
-                            };
-                            store_result(
-                                partial.into_result(),
-                                out_kind,
-                                out_rows,
-                                out_graph,
-                                out_boolean,
-                            )?;
-                        }
-                        PartialAnswers::AtMost(partial) => {
-                            *out_partial = PurrdfPartialCertificate {
-                                kind: PurrdfPartialKind::AtMost as i32,
-                                positional_prefix: u8::from(partial.is_positional_prefix()),
-                                barrier: PurrdfStr::empty(),
-                            };
-                            store_result(
-                                partial.into_result(),
-                                out_kind,
-                                out_rows,
-                                out_graph,
-                                out_boolean,
-                            )?;
-                        }
-                        PartialAnswers::Unknown(barrier) => {
-                            *out_partial = PurrdfPartialCertificate {
-                                kind: PurrdfPartialKind::Unknown as i32,
-                                positional_prefix: 0,
-                                barrier: PurrdfStr::from_str(barrier.operator()),
-                            };
-                        }
-                    }
+                GovernedEntailment::ClosureStopped { tripped } => {
+                    *out_outcome = PurrdfEntailmentQueryOutcomeKind::ClosureStopped as i32;
+                    *out_evidence = PurrdfGovernedEntailmentEvidence {
+                        query_ran: 0,
+                        reserved: [0; 7],
+                        query: PurrdfGovernorEvidence::EMPTY,
+                        closure_trip: encode_trip(Some(tripped)),
+                    };
                 }
             }
             Ok(PurrdfStatus::Ok)
@@ -485,6 +654,7 @@ mod tests {
 
     use purrdf_core::{RdfDatasetBuilder, TermValue};
 
+    use crate::buffer::{purrdf_buffer_data, purrdf_buffer_free};
     use crate::governor::{
         PurrdfGovernorFlag, PurrdfGovernorTripKind, PurrdfResourceDimension, PurrdfStopCause,
         purrdf_cancellation_cancel, purrdf_cancellation_free, purrdf_cancellation_new,
@@ -541,6 +711,18 @@ mod tests {
             let object = builder.intern_iri(&format!("http://example.org/o{index}"));
             builder.push_quad(subject, predicate, object, None);
         }
+        PurrdfDataset::into_raw(builder.freeze().expect("freeze"))
+    }
+
+    fn entailment_dataset() -> *mut PurrdfDataset {
+        let mut builder = RdfDatasetBuilder::new();
+        let rdf_type = builder.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
+        let subclass = builder.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
+        let cat = builder.intern_iri("http://example.org/Cat");
+        let animal = builder.intern_iri("http://example.org/Animal");
+        let tom = builder.intern_iri("http://example.org/tom");
+        builder.push_quad(cat, subclass, animal, None);
+        builder.push_quad(tom, rdf_type, cat, None);
         PurrdfDataset::into_raw(builder.freeze().expect("freeze"))
     }
 
@@ -609,6 +791,130 @@ mod tests {
             purrdf_rowcursor_free(rows);
             purrdf_dataset_free(dataset);
         }
+    }
+
+    #[test]
+    fn governed_entailment_query_carries_answer_and_report() {
+        let dataset = entailment_dataset();
+        let query = CString::new(
+            "SELECT ?x WHERE { ?x <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+             <http://example.org/Animal> }",
+        )
+        .expect("query");
+        let regime = CString::new("rdfs").expect("regime");
+        let program = CString::new("").expect("program");
+        let governors = initialized_governors();
+        let mut outcome = -1;
+        let mut kind = KIND_NONE;
+        let mut rows = std::ptr::null_mut();
+        let mut evidence = MaybeUninit::uninit();
+        let mut partial = MaybeUninit::uninit();
+        let mut report = std::ptr::null_mut();
+        let mut error = std::ptr::null_mut();
+
+        let status = unsafe {
+            purrdf_query_entailment_governed(
+                dataset,
+                query.as_ptr(),
+                std::ptr::null(),
+                regime.as_ptr(),
+                program.as_ptr(),
+                &raw const governors,
+                &raw mut outcome,
+                &raw mut kind,
+                &raw mut rows,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                evidence.as_mut_ptr(),
+                partial.as_mut_ptr(),
+                &raw mut report,
+                &raw mut error,
+            )
+        };
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        assert_eq!(outcome, PurrdfEntailmentQueryOutcomeKind::Complete as i32);
+        assert_eq!(kind, KIND_SOLUTIONS);
+        let evidence = unsafe { evidence.assume_init() };
+        assert_eq!(evidence.query_ran, 1);
+        assert_eq!(
+            evidence.closure_trip.kind,
+            PurrdfGovernorTripKind::None as i32
+        );
+        assert!(!report.is_null());
+        let mut ptr = std::ptr::null();
+        let mut len = 0;
+        assert_eq!(
+            unsafe { purrdf_buffer_data(report, &raw mut ptr, &raw mut len) },
+            PurrdfStatus::Ok as i32
+        );
+        let report_text = std::str::from_utf8(unsafe { std::slice::from_raw_parts(ptr, len) })
+            .expect("UTF-8 report");
+        assert!(report_text.starts_with("purrdf-reasoning-report 4\n"));
+        assert!(report_text.contains("\nregime rdfs\n"));
+
+        unsafe {
+            purrdf_buffer_free(report);
+            purrdf_rowcursor_free(rows);
+            purrdf_dataset_free(dataset);
+        }
+    }
+
+    #[test]
+    fn governed_entailment_query_exposes_a_closure_stop_without_report() {
+        let dataset = entailment_dataset();
+        let query = CString::new("ASK { ?s ?p ?o }").expect("query");
+        let regime = CString::new("rdfs").expect("regime");
+        let program = CString::new("").expect("program");
+        let mut governors = initialized_governors();
+        governors.enabled = PurrdfGovernorFlag::DeadlineMillis as u32;
+        governors.deadline_millis = 0;
+        let mut outcome = -1;
+        let mut kind = KIND_NONE;
+        let mut evidence = MaybeUninit::uninit();
+        let mut partial = MaybeUninit::uninit();
+        let mut report = std::ptr::null_mut();
+        let mut error = std::ptr::null_mut();
+
+        let status = unsafe {
+            purrdf_query_entailment_governed(
+                dataset,
+                query.as_ptr(),
+                std::ptr::null(),
+                regime.as_ptr(),
+                program.as_ptr(),
+                &raw const governors,
+                &raw mut outcome,
+                &raw mut kind,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                evidence.as_mut_ptr(),
+                partial.as_mut_ptr(),
+                &raw mut report,
+                &raw mut error,
+            )
+        };
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        assert_eq!(
+            outcome,
+            PurrdfEntailmentQueryOutcomeKind::ClosureStopped as i32
+        );
+        assert_eq!(kind, KIND_NONE);
+        assert!(report.is_null());
+        let evidence = unsafe { evidence.assume_init() };
+        assert_eq!(evidence.query_ran, 0);
+        assert_eq!(
+            evidence.closure_trip.kind,
+            PurrdfGovernorTripKind::Stopped as i32
+        );
+        assert_eq!(
+            evidence.closure_trip.stop_cause,
+            PurrdfStopCause::Deadline as i32
+        );
+
+        unsafe { purrdf_dataset_free(dataset) };
     }
 
     #[test]

@@ -97,6 +97,11 @@ export interface QueryOptions extends GovernorOptions {
   readonly base?: string | null;
 }
 
+export interface EntailmentQueryOptions extends QueryOptions {
+  /** RIF-in-XML program for the `rif` regime; invalid on every fixed regime. */
+  readonly program?: string | null;
+}
+
 export interface QueryRawOptions extends QueryOptions {
   readonly format?: QueryRawFormat | string | null;
 }
@@ -186,6 +191,18 @@ export interface QueryOutcome {
   readonly tripped?: TrippedGovernor;
   /** This execution's consumption and ceilings, on both paths. */
   readonly evidence: GovernorEvidence;
+}
+
+/** Both phases of a governed entailment-aware query, without an answers-only state. */
+export interface EntailmentQueryOutcome {
+  readonly phase: "answered" | "closure-stopped";
+  readonly isComplete: boolean;
+  /** Phase-two outcome. Absent when closure stopped before any query ran. */
+  readonly outcome?: QueryOutcome;
+  /** Reasoning report for the queried closure. Absent when no closure was produced. */
+  readonly report?: string;
+  /** The governor that stopped either phase. */
+  readonly tripped?: TrippedGovernor;
 }
 
 /**
@@ -716,6 +733,16 @@ export class QueryEngine {
     sparql: string,
     options?: QueryOptions | null,
   ): QueryOutcome;
+  /**
+   * Run a governed query over the named entailment closure. The answer and reasoning
+   * report travel together; a closure-phase stop carries neither.
+   */
+  queryEntailmentGoverned(
+    dataset: Dataset,
+    sparql: string,
+    entailment: string,
+    options?: EntailmentQueryOptions | null,
+  ): EntailmentQueryOutcome;
   /**
    * Apply a SPARQL UPDATE under caller-supplied execution governors. A tripped request
    * applies NOTHING and leaves `dataset` exactly as it was found. `maxAnswers` is

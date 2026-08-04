@@ -444,7 +444,7 @@ int main(int argc, char **argv) {
     PurrdfAbiVersion version;
     CHECK(purrdf_abi_version(&version) == PURRDF_STATUS_OK, "abi_version");
     printf("libpurrdf ABI %u.%u.%u\n", version.major, version.minor, version.patch);
-    CHECK(version.major == 0 && version.minor == 2, "abi 0.2.x");
+    CHECK(version.major == 0 && version.minor == 3, "abi 0.3.x");
 
     /* parse */
     const char *doc = "<http://a> <http://b> <http://c> .";
@@ -676,6 +676,29 @@ int main(int argc, char **argv) {
     if (partial_rows != NULL) {
         purrdf_rowcursor_free(partial_rows);
     }
+
+    /* The entailment-aware carrier keeps phase two and its closure report together. */
+    CHECK(purrdf_query_governors_init(&governors) == PURRDF_STATUS_OK,
+          "entailment governor initializer");
+    int32_t entailment_outcome = -1;
+    int32_t entailment_kind = -1;
+    uint8_t entailment_boolean = 0;
+    PurrdfGovernedEntailmentEvidence entailment_evidence;
+    PurrdfPartialCertificate entailment_partial;
+    PurrdfBuffer *entailment_report = NULL;
+    rc = purrdf_query_entailment_governed(
+        dataset, "ASK { ?s ?p ?o }", NULL, "simple", "", &governors,
+        &entailment_outcome, &entailment_kind, NULL, NULL,
+        &entailment_boolean, &entailment_evidence, &entailment_partial,
+        &entailment_report, &error);
+    CHECK(rc == PURRDF_STATUS_OK && error == NULL,
+          "governed entailment query outcome");
+    CHECK(entailment_outcome == PURRDF_ENTAILMENT_QUERY_OUTCOME_KIND_COMPLETE &&
+              entailment_kind == 2 && entailment_boolean == 1,
+          "governed entailment query answers");
+    CHECK(entailment_evidence.query_ran == 1 && entailment_report != NULL,
+          "governed entailment query carries both phases");
+    purrdf_buffer_free(entailment_report);
 
     /* C cancellation is a shareable monotone handle. */
     PurrdfCancellation *cancellation = NULL;

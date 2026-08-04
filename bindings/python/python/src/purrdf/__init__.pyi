@@ -363,6 +363,18 @@ class QueryOutcome:
     @property
     def evidence(self) -> GovernorEvidence: ...
 
+class EntailmentQueryOutcome:
+    @property
+    def phase(self) -> TypingLiteral["answered", "closure-stopped"]: ...
+    @property
+    def is_complete(self) -> bool: ...
+    @property
+    def outcome(self) -> QueryOutcome | None: ...
+    @property
+    def report(self) -> str | None: ...
+    @property
+    def tripped(self) -> TrippedGovernor | None: ...
+
 class UpdateOutcome:
     # `False` means NOTHING applied, never "not all of it applied".
     @property
@@ -428,6 +440,25 @@ class Store:
         max_remote_requests: int | None = ...,
         cancel: CancellationToken | None = ...,
     ) -> QueryOutcome: ...
+    # Governed two-phase entailment query. `outcome` and `report` are absent only
+    # when the closure phase itself was stopped.
+    def query_entailment_governed(
+        self,
+        query: str,
+        entailment: str,
+        *,
+        program: str = ...,
+        substitutions: dict[Variable, _Term] | None = ...,
+        extension_namespaces: list[str] | None = ...,
+        standpoint_predicates: tuple[str, str] | None = ...,
+        fuel: int | None = ...,
+        deadline_ms: int | None = ...,
+        max_answers: int | None = ...,
+        max_intermediate_cells: int | None = ...,
+        max_scratch_bytes: int | None = ...,
+        max_remote_requests: int | None = ...,
+        cancel: CancellationToken | None = ...,
+    ) -> EntailmentQueryOutcome: ...
     def update(
         self,
         update: str,
@@ -545,6 +576,23 @@ class MutableDataset:
         max_remote_requests: int | None = ...,
         cancel: CancellationToken | None = ...,
     ) -> QueryOutcome: ...
+    def query_entailment_governed(
+        self,
+        query: str,
+        entailment: str,
+        *,
+        program: str = ...,
+        substitutions: dict[Variable, _Term] | None = ...,
+        extension_namespaces: list[str] | None = ...,
+        standpoint_predicates: tuple[str, str] | None = ...,
+        fuel: int | None = ...,
+        deadline_ms: int | None = ...,
+        max_answers: int | None = ...,
+        max_intermediate_cells: int | None = ...,
+        max_scratch_bytes: int | None = ...,
+        max_remote_requests: int | None = ...,
+        cancel: CancellationToken | None = ...,
+    ) -> EntailmentQueryOutcome: ...
     def update(
         self,
         update: str,

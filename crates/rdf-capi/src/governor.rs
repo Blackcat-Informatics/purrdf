@@ -257,6 +257,19 @@ pub struct PurrdfResourceVector {
     pub bytes: u64,
 }
 
+impl PurrdfResourceVector {
+    pub(crate) const ZERO: Self = Self {
+        fuel: 0,
+        answer_rows: 0,
+        intermediate_cells: 0,
+        scratch_bytes: 0,
+        remote_requests: 0,
+        udf_depth: 0,
+        pages: 0,
+        bytes: 0,
+    };
+}
+
 /// Typed details of the governor that stopped an execution.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -275,6 +288,17 @@ pub struct PurrdfGovernorTrip {
     pub estimate: u64,
 }
 
+impl PurrdfGovernorTrip {
+    pub(crate) const NONE: Self = Self {
+        kind: PurrdfGovernorTripKind::None as i32,
+        dimension: -1,
+        stop_cause: PurrdfStopCause::None as i32,
+        limit: 0,
+        consumed: 0,
+        estimate: 0,
+    };
+}
+
 /// One governed execution's deterministic accounting receipt.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -285,6 +309,14 @@ pub struct PurrdfGovernorEvidence {
     pub limits: PurrdfResourceVector,
     /// The terminal trip, or `kind == NONE` on completion.
     pub trip: PurrdfGovernorTrip,
+}
+
+impl PurrdfGovernorEvidence {
+    pub(crate) const EMPTY: Self = Self {
+        consumed: PurrdfResourceVector::ZERO,
+        limits: PurrdfResourceVector::ZERO,
+        trip: PurrdfGovernorTrip::NONE,
+    };
 }
 
 /// Build native governors from a validated C carrier.
@@ -414,15 +446,8 @@ fn encode_dimension(dimension: ResourceDimension) -> i32 {
     }
 }
 
-fn encode_trip(tripped: Option<TrippedGovernor>) -> PurrdfGovernorTrip {
-    let mut out = PurrdfGovernorTrip {
-        kind: PurrdfGovernorTripKind::None as i32,
-        dimension: -1,
-        stop_cause: PurrdfStopCause::None as i32,
-        limit: 0,
-        consumed: 0,
-        estimate: 0,
-    };
+pub(crate) fn encode_trip(tripped: Option<TrippedGovernor>) -> PurrdfGovernorTrip {
+    let mut out = PurrdfGovernorTrip::NONE;
     match tripped {
         None => {}
         Some(TrippedGovernor::Budget {

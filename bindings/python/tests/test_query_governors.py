@@ -364,6 +364,76 @@ def test_governed_query_over_an_rdf12_reifier() -> None:
     assert len(constructed.result) == 1
 
 
+# ── governed entailment query: both phases survive the host boundary ─────────────
+
+
+def _rdfs_store(kind: type[purrdf.Store] | type[purrdf.MutableDataset] = purrdf.Store):
+    store = kind()
+    store.load(
+        f"<{EX}Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <{EX}Animal> .\n"
+        f"<{EX}tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <{EX}Cat> .\n",
+        purrdf.RdfFormat.N_TRIPLES,
+    )
+    return store
+
+
+RDFS_QUERY = (
+    "SELECT ?x WHERE { ?x "
+    "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
+    f"<{EX}Animal> }}"
+)
+
+
+def test_entailment_query_carries_answer_and_reasoning_report() -> None:
+    outcome = _rdfs_store().query_entailment_governed(RDFS_QUERY, "rdfs")
+
+    assert isinstance(outcome, purrdf.EntailmentQueryOutcome)
+    assert outcome.phase == "answered"
+    assert outcome.is_complete
+    assert outcome.tripped is None
+    assert outcome.report is not None
+    assert outcome.report.startswith("purrdf-reasoning-report 4\n")
+    assert "\nregime rdfs\n" in outcome.report
+    assert outcome.outcome is not None and outcome.outcome.is_complete
+    assert len(outcome.outcome.result) == 1
+
+
+def test_entailment_query_keeps_report_when_query_phase_trips() -> None:
+    outcome = _rdfs_store().query_entailment_governed(
+        RDFS_QUERY, "rdfs", max_answers=0
+    )
+
+    assert outcome.phase == "answered"
+    assert not outcome.is_complete
+    assert outcome.report is not None
+    assert outcome.outcome is not None and not outcome.outcome.is_complete
+    assert outcome.tripped is not None
+    assert outcome.tripped.label == "answer-cap-exhausted"
+
+
+def test_entailment_query_exposes_a_closure_phase_stop_without_claiming_a_report() -> None:
+    outcome = _rdfs_store().query_entailment_governed(
+        RDFS_QUERY, "rdfs", deadline_ms=0
+    )
+
+    assert outcome.phase == "closure-stopped"
+    assert not outcome.is_complete
+    assert outcome.outcome is None
+    assert outcome.report is None
+    assert outcome.tripped is not None
+    assert outcome.tripped.cause == "deadline-exceeded"
+
+
+def test_mutable_dataset_carries_the_same_entailment_outcome() -> None:
+    outcome = _rdfs_store(purrdf.MutableDataset).query_entailment_governed(
+        RDFS_QUERY, "rdfs"
+    )
+
+    assert outcome.is_complete
+    assert outcome.outcome is not None
+    assert len(outcome.outcome.result) == 1
+
+
 # ── cancellation, from Python, while the engine runs ──────────────────────────────
 
 

@@ -3,7 +3,7 @@
 
 //! The clap command tree: the `purrdf` binary's argument model.
 //!
-//! One pipeline, six subcommands ([`Command`]), and one global flag
+//! One pipeline, seven subcommands ([`Command`]), and one global flag
 //! (`--loss-ledger`). The format / regime / results-format choices are modeled as
 //! [`clap::ValueEnum`] wrappers so `--help` enumerates the legal values and clap
 //! validates them at parse time, and each wrapper carries a total conversion into
@@ -78,7 +78,7 @@ use crate::format::CliFormat;
 #[command(
     name = "purrdf",
     version,
-    about = "PurRDF: convert, query, reason, decide entailment, project, and lift RDF 1.2 data",
+    about = "PurRDF: convert, query, update, reason, decide entailment, project, and lift RDF 1.2 data",
     propagate_version = true
 )]
 pub(crate) struct Cli {
@@ -169,7 +169,7 @@ impl Cli {
     }
 }
 
-/// The six pipeline subcommands.
+/// The seven pipeline subcommands.
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
     /// Convert RDF between syntaxes, and to/from the native pack container.
@@ -291,6 +291,42 @@ pub(crate) enum Command {
         explain: bool,
         /// The SPARQL query text.
         query: String,
+    },
+    /// Apply a SPARQL UPDATE and serialize the resulting RDF dataset.
+    Update {
+        /// Input dataset path; format is inferred from its extension unless `--from` is set.
+        #[arg(long)]
+        data: String,
+        /// Input format override, required when `--data -` reads stdin.
+        #[arg(long, value_enum)]
+        from: Option<CliRdfFormat>,
+        /// Output path, or `-` for stdout (the default).
+        #[arg(long, default_value = "-")]
+        output: String,
+        /// Output format override, required when `--output -` writes stdout.
+        #[arg(long, value_enum)]
+        to: Option<CliRdfFormat>,
+        /// Base IRI for parsing the data and UPDATE request.
+        #[arg(long, value_name = "IRI")]
+        base: Option<String>,
+        /// Bound abstract execution steps. Inclusive; zero trips on the first charge.
+        #[arg(long, value_name = "UNITS")]
+        fuel: Option<u64>,
+        /// Wall-clock UPDATE budget (`750ms`, `30s`, `1m30s`, `2h`). A trip applies
+        /// nothing, writes no dataset, prints its receipt, and exits 3.
+        #[arg(long, value_name = "DURATION", value_parser = crate::governors::parse_deadline)]
+        deadline: Option<std::time::Duration>,
+        /// Bound the largest intermediate solution bag in cells (rows × columns).
+        #[arg(long, value_name = "CELLS")]
+        max_intermediate_cells: Option<u64>,
+        /// Bound bytes minted into the per-request scratch arena.
+        #[arg(long, value_name = "BYTES")]
+        max_scratch_bytes: Option<u64>,
+        /// Bound remote/federated requests issued while computing the mutation.
+        #[arg(long, value_name = "REQUESTS")]
+        max_remote_requests: Option<u64>,
+        /// The SPARQL UPDATE text.
+        update: String,
     },
     /// Materialize an entailment regime's closure over a source graph.
     Reason {

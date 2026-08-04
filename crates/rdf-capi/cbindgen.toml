@@ -49,6 +49,7 @@ include = [
     "PurrdfGovernorTripKind",
     "PurrdfStopCause",
     "PurrdfQueryOutcomeKind",
+    "PurrdfEntailmentQueryOutcomeKind",
     "PurrdfUpdateOutcomeKind",
     "PurrdfPartialKind",
 ]

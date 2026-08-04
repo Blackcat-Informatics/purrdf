@@ -3,10 +3,11 @@
 
 //! The `purrdf` command-line interface.
 //!
-//! A single `Source → [transform] → Sink` pipeline exposed as six subcommands:
+//! A single `Source → [transform] → Sink` pipeline exposed as seven subcommands:
 //!
 //! * `convert` — transcode RDF between the native syntaxes and the pack container;
 //! * `query` — evaluate a SPARQL query over an RDF or pack source;
+//! * `update` — atomically apply a SPARQL UPDATE to an RDF source;
 //! * `reason` — materialize an entailment regime's closure over a source graph;
 //! * `entails` — decide whether a premise entails a conclusion, or answer a basic
 //!   graph pattern's certain answers, under an entailment regime;
@@ -29,8 +30,9 @@
 //! its own failures the same way — usage errors → **2**, every other runtime
 //! failure → **1** (see [`error::CliError`]). Nothing is swallowed: the error's
 //! message is printed to stderr and its category becomes the process exit code.
-//! A `query` whose caller-set governor tripped is not a failure and exits **3**,
-//! carrying its certified answers on stdout — see [`error::CliOutcome`].
+//! A `query` or `update` whose caller-set governor tripped is not a failure and exits
+//! **3**. A query carries its certified answers on stdout; an update emits no dataset
+//! because the mutation was not applied — see [`error::CliOutcome`].
 
 mod cli;
 mod convert;
@@ -45,6 +47,7 @@ mod reason;
 mod report;
 mod sink;
 mod source;
+mod update;
 
 use std::fs::File;
 use std::io::Read as _;
@@ -63,8 +66,9 @@ fn main() {
         // still runs; every write the pipeline makes is already flushed by `sink::write_out`.
         Ok(CliOutcome::Complete) => {}
         // A tripped governor is not an error: nothing is printed here, because the lane
-        // that tripped has already written its report to stderr and its certified answers
-        // to stdout. Only the exit code is left to carry.
+        // that tripped has already written its report to stderr. A query also wrote its
+        // certified answers to stdout; an update deliberately wrote no dataset. Only the
+        // exit code is left to carry.
         Ok(outcome) => std::process::exit(outcome.exit_code()),
         Err(error) => {
             eprintln!("purrdf: {error}");
@@ -161,6 +165,38 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             },
             &ledger_target,
             &ReportTarget::decode(report.as_ref()),
+        ),
+        Command::Update {
+            data,
+            from,
+            output,
+            to,
+            base,
+            fuel,
+            deadline,
+            max_intermediate_cells,
+            max_scratch_bytes,
+            max_remote_requests,
+            update,
+        } => update::run(
+            &update::UpdateOptions {
+                data,
+                from: *from,
+                output,
+                to: *to,
+                base: base.as_deref(),
+                update,
+                governors: GovernorFlags {
+                    fuel: *fuel,
+                    deadline: *deadline,
+                    max_answers: None,
+                    max_intermediate_cells: *max_intermediate_cells,
+                    max_scratch_bytes: *max_scratch_bytes,
+                    max_remote_requests: *max_remote_requests,
+                },
+                jsonld_options: jsonld_options.as_ref(),
+            },
+            &ledger_target,
         ),
         Command::Reason {
             regime,

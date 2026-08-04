@@ -507,6 +507,53 @@ impl NativeSparqlEngine {
     where
         D: FallibleDatasetView + Sync,
     {
+        self.query_governed_fallible_view_inner(dataset, request, None, governors)
+    }
+
+    /// [`Self::query_governed_fallible_view`] with a federation source injected.
+    ///
+    /// This is the composed carrier boundary for a lazy local view plus remote
+    /// `SERVICE` calls: the returned [`GovernedEvidence`] contains the local view's
+    /// page/byte receipt and the evaluator's remote-request, fuel, row, and cell receipt
+    /// from the same operation. Operational failure keeps its usual precedence over an
+    /// evaluator diagnostic or governor trip.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same typed outcomes as [`Self::query_governed_fallible_view`]. A
+    /// federation failure while the view remains ready is a query diagnostic; a local
+    /// view failure remains [`FallibleSparqlError::Operational`].
+    #[allow(
+        clippy::result_large_err,
+        reason = "the Err side carries both operation receipts and certified partial answers"
+    )]
+    pub fn query_governed_fallible_with_source_view<'a, D>(
+        &self,
+        dataset: &'a D,
+        request: SparqlRequest<'_>,
+        source: &'a (dyn crate::remote::RemoteQuerySource + Sync),
+        governors: &QueryGovernors,
+    ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>>
+    where
+        D: FallibleDatasetView + Sync,
+    {
+        self.query_governed_fallible_view_inner(dataset, request, Some(source), governors)
+    }
+
+    #[allow(
+        clippy::result_large_err,
+        reason = "the Err side carries both operation receipts and certified partial answers"
+    )]
+    fn query_governed_fallible_view_inner<'a, D>(
+        &self,
+        dataset: &'a D,
+        request: SparqlRequest<'_>,
+        source: Option<&'a (dyn crate::remote::RemoteQuerySource + Sync)>,
+        governors: &QueryGovernors,
+    ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>>
+    where
+        D: FallibleDatasetView + Sync,
+    {
         // Built before the preflight so that a view that failed on the way in still
         // reports a (zeroed, honest) governor receipt beside its root cause.
         let state = Arc::new(GovernorState::new(governors));
@@ -528,6 +575,9 @@ impl NativeSparqlEngine {
         let evaluation = {
             let _sequential = crate::parallel::force_sequential_operation();
             let mut ctx = self.eval_ctx(dataset).with_governors(Arc::clone(&state));
+            if let Some(source) = source {
+                ctx = ctx.with_remote(source);
+            }
             match evaluate_governed_with_substitutions(&prepared, request.substitutions, &mut ctx) {
                 Ok(evaluated) => Ok(materialize_governed(evaluated, &ctx, &state)),
                 Err(diagnostic) => Err(diagnostic),

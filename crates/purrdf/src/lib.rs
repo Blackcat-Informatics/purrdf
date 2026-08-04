@@ -77,8 +77,8 @@ pub mod profile;
 pub use profile::{OntologyProfile, ReifierVocab};
 pub mod reasoning;
 pub use reasoning::{
-    GovernedEntailment, QueryEntailment, ReasoningError, query_with_entailment,
-    query_with_entailment_governed,
+    GovernedEntailment, QueryEntailment, QueryEntailmentPlan, ReasoningError,
+    query_with_entailment, query_with_entailment_governed,
 };
 
 /// Bidirectional, byte-deterministic five-table Parquet codec.

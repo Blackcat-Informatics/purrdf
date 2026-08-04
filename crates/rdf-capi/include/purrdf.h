@@ -29,7 +29,7 @@
 /**
  * ABI minor version.
  */
-#define PURRDF_ABI_MINOR 2
+#define PURRDF_ABI_MINOR 3
 
 /**
  * ABI patch version.
@@ -393,6 +393,35 @@ enum PurrdfQueryOutcomeKind
 typedef enum PurrdfQueryOutcomeKind PurrdfQueryOutcomeKind;
 #else
 typedef int32_t PurrdfQueryOutcomeKind;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+
+/**
+ * The two-phase outcome discriminant written by [`purrdf_query_entailment_governed`].
+ */
+enum PurrdfEntailmentQueryOutcomeKind
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : int32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+    /**
+     * Closure and query both completed.
+     */
+    PURRDF_ENTAILMENT_QUERY_OUTCOME_KIND_COMPLETE = 0,
+    /**
+     * Closure completed, but a query governor tripped; partial certificate is available.
+     */
+    PURRDF_ENTAILMENT_QUERY_OUTCOME_KIND_QUERY_BUDGET_EXHAUSTED = 1,
+    /**
+     * A cancellation/deadline stopped closure; no query ran and no report exists.
+     */
+    PURRDF_ENTAILMENT_QUERY_OUTCOME_KIND_CLOSURE_STOPPED = 2,
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum PurrdfEntailmentQueryOutcomeKind PurrdfEntailmentQueryOutcomeKind;
+#else
+typedef int32_t PurrdfEntailmentQueryOutcomeKind;
 #endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
@@ -766,6 +795,28 @@ typedef struct {
      */
     PurrdfStr barrier;
 } PurrdfPartialCertificate;
+
+/**
+ * Evidence for both phases of a governed entailment-aware query.
+ */
+typedef struct {
+    /**
+     * `1` when closure completed and phase two ran; `0` on closure stop.
+     */
+    uint8_t query_ran;
+    /**
+     * Reserved for ABI-compatible extension; always zero in ABI 0.3.
+     */
+    uint8_t reserved[7];
+    /**
+     * Phase-two evidence, or an all-zero carrier when `query_ran == 0`.
+     */
+    PurrdfGovernorEvidence query;
+    /**
+     * Closure-phase stop, or `kind == NONE` when closure completed.
+     */
+    PurrdfGovernorTrip closure_trip;
+} PurrdfGovernedEntailmentEvidence;
 
 /**
  * The SemVer ABI version reported by `purrdf_abi_version`.
@@ -1878,6 +1929,37 @@ int32_t purrdf_query_governed(const PurrdfDataset *dataset,
                               PurrdfGovernorEvidence *out_evidence,
                               PurrdfPartialCertificate *out_partial,
                               PurrdfError **out_error);
+
+/**
+ * Execute SPARQL over an explicitly named entailment closure under governors.
+ *
+ * `regime` uses the shared spellings (`simple`, `rdf`, `rdfs`, `owl-rl`,
+ * `owl-direct`, `rif`, `d`). `program` must be empty except for `rif`, where it is the
+ * required RIF-in-XML document. On `COMPLETE` or `QUERY_BUDGET_EXHAUSTED`,
+ * `*out_report` owns a byte-stable reasoning report (free with `purrdf_buffer_free`) and
+ * the ordinary result/partial carriers describe phase two. On `CLOSURE_STOPPED`, no
+ * query ran: result kind is `-1`, report is null, and `closure_trip` names the stop.
+ *
+ * # Safety
+ * All input strings and handles must remain live for the synchronous call. Required
+ * out-pointers must be writable; any enabled cancellation handle must remain live until
+ * return. Shape-specific result pointers are required when that shape is returned.
+ */
+int32_t purrdf_query_entailment_governed(const PurrdfDataset *dataset,
+                                         const char *query,
+                                         const char *base_iri,
+                                         const char *regime,
+                                         const char *program,
+                                         const PurrdfQueryGovernors *governors,
+                                         int32_t *out_outcome,
+                                         int32_t *out_kind,
+                                         PurrdfRowCursor **out_rows,
+                                         PurrdfDataset **out_graph,
+                                         uint8_t *out_boolean,
+                                         PurrdfGovernedEntailmentEvidence *out_evidence,
+                                         PurrdfPartialCertificate *out_partial,
+                                         PurrdfBuffer **out_report,
+                                         PurrdfError **out_error);
 
 /**
  * Apply one SPARQL UPDATE request under caller-supplied governors.

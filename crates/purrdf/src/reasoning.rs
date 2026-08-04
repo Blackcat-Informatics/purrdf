@@ -77,6 +77,59 @@ pub enum QueryEntailment<'a> {
     Rif(&'a RuleSet),
 }
 
+/// Owned, host-neutral configuration for one entailment-aware SPARQL query.
+///
+/// Language bindings receive a regime spelling plus a string program rather than a
+/// borrowed [`RuleSet`]. This type resolves those two values once through the shared
+/// boundary vocabulary and then lends [`QueryEntailment`] to the native orchestrator.
+/// Keeping the validation here prevents Python, WebAssembly, and C from acquiring three
+/// subtly different readings of an empty RIF program or an unexpected program on RDFS.
+#[derive(Debug)]
+pub struct QueryEntailmentPlan {
+    regime: Regime,
+    rules: RuleSet,
+}
+
+impl QueryEntailmentPlan {
+    /// Parse the exact cross-host regime spelling and its regime-owned program.
+    ///
+    /// `rif` requires a RIF-in-XML program and rejects imports because this in-memory
+    /// boundary performs no I/O. Every other regime requires `program` to be empty.
+    ///
+    /// # Errors
+    ///
+    /// Returns the shared boundary diagnostic for an unknown regime, an invalid program,
+    /// a missing RIF program, or a program supplied to a regime whose calculus is fixed.
+    pub fn parse(regime: &str, program: &str) -> Result<Self, String> {
+        let parsed = purrdf_validate::regime::parse_regime(regime)?;
+        let rules = purrdf_validate::regime::regime_rule_set(parsed, regime, program)?;
+        Ok(Self {
+            regime: parsed,
+            rules,
+        })
+    }
+
+    /// Borrow this owned configuration in the native query orchestrator's form.
+    #[must_use]
+    pub const fn entailment(&self) -> QueryEntailment<'_> {
+        match self.regime {
+            Regime::Simple => QueryEntailment::Simple,
+            Regime::Rdf => QueryEntailment::Rdf,
+            Regime::Rdfs => QueryEntailment::Rdfs,
+            Regime::OwlRl => QueryEntailment::OwlRl,
+            Regime::D => QueryEntailment::D,
+            Regime::OwlDirect => QueryEntailment::OwlDirect,
+            Regime::Rif => QueryEntailment::Rif(&self.rules),
+        }
+    }
+
+    /// The resolved native regime.
+    #[must_use]
+    pub const fn regime(&self) -> Regime {
+        self.regime
+    }
+}
+
 /// Failure from entailment-aware query preparation or evaluation.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -1273,6 +1326,31 @@ mod tests {
         builder.push_quad(cat, subclass, animal, None);
         builder.push_quad(lillith, rdf_type, cat, None);
         builder.freeze().unwrap()
+    }
+
+    #[test]
+    fn host_query_plan_uses_the_shared_regime_and_program_contract() {
+        let rdfs = QueryEntailmentPlan::parse("rdfs", "").expect("fixed regime plan");
+        assert!(matches!(rdfs.entailment(), QueryEntailment::Rdfs));
+        assert_eq!(rdfs.regime(), Regime::Rdfs);
+
+        let wrong_program = QueryEntailmentPlan::parse("rdfs", "not ignored")
+            .expect_err("a fixed calculus cannot silently discard caller rules");
+        assert!(
+            wrong_program.contains("takes no rule document"),
+            "{wrong_program}"
+        );
+
+        let missing_rif = QueryEntailmentPlan::parse("rif", "")
+            .expect_err("RIF has no caller-independent rule table");
+        assert!(missing_rif.contains("rule document"), "{missing_rif}");
+
+        let unknown =
+            QueryEntailmentPlan::parse("RDFS", "").expect_err("the cross-host spelling is exact");
+        assert!(
+            unknown.contains("owl-direct") && unknown.contains("rif"),
+            "{unknown}"
+        );
     }
 
     /// Run the fixture ASK under `mode`, returning both halves of the answer.

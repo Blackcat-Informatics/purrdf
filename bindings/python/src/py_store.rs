@@ -80,6 +80,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<query::PyGovernorEvidence>()?;
     m.add_class::<query::PyPartialAnswers>()?;
     m.add_class::<query::PyQueryOutcome>()?;
+    m.add_class::<query::PyEntailmentQueryOutcome>()?;
     m.add_class::<query::PyUpdateOutcome>()?;
     m.add_class::<store::PyStore>()?;
     m.add_class::<store::PyDataset>()?;

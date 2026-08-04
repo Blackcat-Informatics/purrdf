@@ -19,9 +19,9 @@ use purrdf_core::{
 };
 use purrdf_sparql_eval::{
     CHARGE_SCHEDULE, CancellationFlag, ChargePoint, FallibleSparqlError, GOVERNOR_PROFILE_DIGEST,
-    GOVERNOR_PROFILE_ID, GOVERNOR_PROFILE_VERSION, GovernedOutcome, NativeSparqlEngine,
-    PartialAnswers, QueryExplanation, QueryGovernors, STOP_POLL_FUEL, StopSignal, WallDeadline,
-    resolve_precedence,
+    GOVERNOR_PROFILE_ID, GOVERNOR_PROFILE_VERSION, GovernedOutcome, HttpRemoteQuerySource,
+    HttpRequest, NativeSparqlEngine, PartialAnswers, QueryExplanation, QueryGovernors, RemoteError,
+    STOP_POLL_FUEL, StopSignal, WallDeadline, resolve_precedence,
 };
 
 /// The number of `ex:p` edges in the fixture dataset.
@@ -57,6 +57,16 @@ fn request(query: &str) -> SparqlRequest<'_> {
         base_iri: None,
         substitutions: &[],
     }
+}
+
+fn one_remote_binding(_: HttpRequest<'_>) -> Result<Vec<u8>, RemoteError> {
+    Ok(br#"{
+      "head": { "vars": ["remote"] },
+      "results": { "bindings": [
+        { "remote": { "type": "literal", "value": "ok" } }
+      ] }
+    }"#
+    .to_vec())
 }
 
 /// The all-rows SELECT the ceiling tests bound.
@@ -977,6 +987,57 @@ fn a_fallible_view_reports_a_trip_as_budget_exhausted_with_both_meters() {
         error.diagnostic().is_none() && error.operational_error().is_none(),
         "an exhausted budget is neither a query failure nor a view failure"
     );
+}
+
+#[test]
+fn a_fallible_federated_view_composes_page_and_remote_evidence() {
+    let paged = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(vec![fixture()])))
+        .expect("seal page");
+    let source = HttpRemoteQuerySource::new(one_remote_binding);
+    let query = "SELECT ?s ?remote WHERE {
+        ?s <http://example.org/p> ?o
+        SERVICE <https://query.example/sparql> { BIND(\"ok\" AS ?remote) }
+    }";
+    let engine = NativeSparqlEngine::new();
+
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    let complete = engine
+        .query_governed_fallible_with_source_view(
+            &view,
+            request(query),
+            &source,
+            &QueryGovernors::METERED,
+        )
+        .expect("the local page and remote response are both ready");
+    assert_eq!(row_count(&complete.result), EDGES);
+    assert_eq!(complete.evidence.view.consumed_pages, 1);
+    assert!(complete.evidence.view.consumed_bytes > 0);
+    assert_eq!(
+        complete
+            .evidence
+            .governors
+            .consumed_in(ResourceDimension::RemoteRequests),
+        1
+    );
+    let complete_fuel = complete
+        .evidence
+        .governors
+        .consumed_in(ResourceDimension::Fuel);
+
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    let exhausted = engine
+        .query_governed_fallible_with_source_view(
+            &view,
+            request(query),
+            &source,
+            &QueryGovernors::UNBOUNDED.with_fuel(complete_fuel - 1),
+        )
+        .expect_err("the final fuel unit prevents a completeness certificate");
+    let FallibleSparqlError::BudgetExhausted { evidence, .. } = exhausted else {
+        panic!("expected a typed governor trip")
+    };
+    assert_eq!(evidence.view.consumed_pages, 1);
+    assert!(evidence.governors.tripped().is_some());
 }
 
 // ---------------------------------------------------------------------------

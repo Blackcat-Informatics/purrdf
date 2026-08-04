@@ -41,6 +41,19 @@ ex:b ex:name "Bob" .
 // measured against.
 const NAMES = "PREFIX ex: <https://example.org/> SELECT ?name WHERE { ?p ex:name ?name } ORDER BY ?name";
 
+const RDFS = `
+@prefix ex: <https://example.org/> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+ex:Cat rdfs:subClassOf ex:Animal .
+ex:tom rdf:type ex:Cat .
+`;
+const RDFS_QUERY = `
+PREFIX ex: <https://example.org/>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+SELECT ?x WHERE { ?x rdf:type ex:Animal }
+`;
+
 // A value-CONSTRUCTING query: the only shape that mints bytes into the per-query scratch
 // arena, and therefore the only one a scratch ceiling can bind on.
 const CONCAT =
@@ -129,6 +142,35 @@ test("queryGoverned with no ceiling completes and still hands back a receipt", (
   assert.equal(outcome.evidence.limits["answer-rows"], METERED_CEILING);
   assert.ok(outcome.evidence.consumed.fuel > 0n, "a metered query must charge fuel");
   assert.equal(outcome.evidence.consumed["answer-rows"], 2n);
+});
+
+test("queryEntailmentGoverned carries the query outcome and closure report together", () => {
+  const engine = new QueryEngine();
+  const ds = Dataset.parse(RDFS, "turtle");
+  const outcome = engine.queryEntailmentGoverned(ds, RDFS_QUERY, "rdfs");
+
+  assert.equal(outcome.phase, "answered");
+  assert.equal(outcome.isComplete, true);
+  assert.equal(outcome.tripped, undefined);
+  assert.match(outcome.report, /^purrdf-reasoning-report 4\n/);
+  assert.match(outcome.report, /\nregime rdfs\n/);
+  assert.equal(outcome.outcome.isComplete, true);
+  assert.equal(outcome.outcome.result.kind, "select");
+  assert.equal(outcome.outcome.result.rowCount, 1);
+});
+
+test("queryEntailmentGoverned exposes a closure stop without an answer or report", () => {
+  const engine = new QueryEngine();
+  const ds = Dataset.parse(RDFS, "turtle");
+  const outcome = engine.queryEntailmentGoverned(ds, RDFS_QUERY, "rdfs", {
+    deadlineMs: 0,
+  });
+
+  assert.equal(outcome.phase, "closure-stopped");
+  assert.equal(outcome.isComplete, false);
+  assert.equal(outcome.outcome, undefined);
+  assert.equal(outcome.report, undefined);
+  assert.equal(outcome.tripped.cause, "deadline-exceeded");
 });
 
 test("the evidence maps are keyed by the engine's own dimension vocabulary", () => {

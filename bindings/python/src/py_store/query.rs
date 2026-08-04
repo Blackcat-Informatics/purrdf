@@ -43,7 +43,7 @@ use pyo3::types::{PyBytes, PyDict, PyString};
 
 use super::io::{PyRdfFormat, serialize_triples};
 use super::term::{PyTriple, PyVariable, term_to_py};
-use crate::{RdfDataset, RdfTerm, RdfTriple, SparqlResult, TermValue};
+use crate::{GovernedEntailment, RdfDataset, RdfTerm, RdfTriple, SparqlResult, TermValue};
 
 /// Build the [`NativeSparqlEngine`] for one query/update call from the optional
 /// Python-surface engine configuration (shared by `Store` and `MutableDataset`):
@@ -912,6 +912,65 @@ impl PyQueryOutcome {
     }
 }
 
+/// The two-phase outcome of one governed entailment-aware query.
+///
+/// An answered run carries the ordinary [`PyQueryOutcome`] plus the byte-stable
+/// reasoning report for the closure it queried. A closure stop carries neither: no query
+/// ran and no closure exists to certify. [`tripped`](Self::tripped) spans both phases so a
+/// host can make one retry/exit-code decision without erasing where the stop happened.
+#[pyclass(name = "EntailmentQueryOutcome", frozen)]
+#[derive(Debug)]
+pub struct PyEntailmentQueryOutcome {
+    phase: &'static str,
+    outcome: Option<Py<PyQueryOutcome>>,
+    report: Option<String>,
+    tripped: Option<Py<PyTrippedGovernor>>,
+}
+
+#[pymethods]
+impl PyEntailmentQueryOutcome {
+    /// `"answered"` when closure completed, or `"closure-stopped"` when it did not.
+    #[getter]
+    const fn phase(&self) -> &'static str {
+        self.phase
+    }
+
+    /// Whether both closure and query completed under every governor.
+    #[getter]
+    const fn is_complete(&self) -> bool {
+        self.tripped.is_none()
+    }
+
+    /// Phase-two query outcome, absent when phase one stopped.
+    #[getter]
+    fn outcome(&self, py: Python<'_>) -> Option<Py<PyQueryOutcome>> {
+        self.outcome.as_ref().map(|outcome| outcome.clone_ref(py))
+    }
+
+    /// Byte-stable reasoning report for the queried closure, absent when closure stopped.
+    #[getter]
+    fn report(&self) -> Option<&str> {
+        self.report.as_deref()
+    }
+
+    /// The governor that stopped either phase, or `None` when both completed.
+    #[getter]
+    fn tripped(&self, py: Python<'_>) -> Option<Py<PyTrippedGovernor>> {
+        self.tripped.as_ref().map(|tripped| tripped.clone_ref(py))
+    }
+
+    fn __repr__(&self) -> String {
+        match &self.tripped {
+            None => "<EntailmentQueryOutcome answered complete>".to_owned(),
+            Some(tripped) => format!(
+                "<EntailmentQueryOutcome {} tripped={}>",
+                self.phase,
+                tripped.get().label()
+            ),
+        }
+    }
+}
+
 /// The outcome of one governed SPARQL UPDATE.
 ///
 /// Deliberately not a [`PyQueryOutcome`] and deliberately without a partial arm: a
@@ -1008,6 +1067,40 @@ pub(crate) fn materialize_outcome(
                 partial: Some(materialize_partial(py, partial)?),
                 tripped: Some(Py::new(py, PyTrippedGovernor { inner: tripped })?),
                 evidence: Py::new(py, PyGovernorEvidence { inner: evidence })?,
+            },
+        ),
+    }
+}
+
+/// Convert the native two-phase entailment carrier without dropping either phase's
+/// evidence.
+pub(crate) fn materialize_entailment_outcome(
+    py: Python<'_>,
+    outcome: GovernedEntailment,
+) -> PyResult<Py<PyEntailmentQueryOutcome>> {
+    match outcome {
+        GovernedEntailment::Answered { outcome, report } => {
+            let tripped = outcome
+                .tripped()
+                .map(|inner| Py::new(py, PyTrippedGovernor { inner }))
+                .transpose()?;
+            Py::new(
+                py,
+                PyEntailmentQueryOutcome {
+                    phase: "answered",
+                    outcome: Some(materialize_outcome(py, outcome)?),
+                    report: Some(purrdf_validate::render_reasoning_report(&report)),
+                    tripped,
+                },
+            )
+        }
+        GovernedEntailment::ClosureStopped { tripped } => Py::new(
+            py,
+            PyEntailmentQueryOutcome {
+                phase: "closure-stopped",
+                outcome: None,
+                report: None,
+                tripped: Some(Py::new(py, PyTrippedGovernor { inner: tripped })?),
             },
         ),
     }

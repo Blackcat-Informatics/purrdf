@@ -1,12 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The `query` governor flags: what they mean, what they build, and what a trip prints.
+//! The `query` and `update` governor flags: what they mean, what they build, and what a
+//! trip prints.
 //!
 //! `purrdf query` reaches the engine's governed lane through six flags — `--fuel`,
 //! `--deadline`, `--max-answers`, `--max-intermediate-cells`, `--max-scratch-bytes`, and
 //! `--max-remote-requests`. [`GovernorFlags`] is what clap parsed; [`GovernorFlags::to_governors`]
-//! is the one place they become a [`QueryGovernors`].
+//! is the one place they become a [`QueryGovernors`]. `purrdf update` uses the same
+//! contract except that `--max-answers` does not apply to a mutation.
 //!
 //! # `UNBOUNDED` is named here, exactly once
 //!
@@ -51,8 +53,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use purrdf_sparql_eval::{
-    BudgetExhausted, PartialAnswers, QueryGovernors, ResourceDimension, TrippedGovernor,
-    WallDeadline,
+    BudgetExhausted, GovernorEvidence, PartialAnswers, QueryGovernors, ResourceDimension,
+    TrippedGovernor, WallDeadline,
 };
 
 /// The banner line every governor report starts with.
@@ -61,7 +63,7 @@ use purrdf_sparql_eval::{
 /// rather than silently reshaping a document they parse.
 pub(crate) const GOVERNOR_REPORT_BANNER: &str = "purrdf-governor-report 1";
 
-/// The `query` subcommand's governor flags, exactly as clap parsed them.
+/// A `query` or `update` subcommand's governor flags, exactly as clap parsed them.
 ///
 /// Every field is `Option`: `None` is "the operator named no ceiling on this dimension",
 /// which is the only thing that may become an unbounded dimension. There is deliberately
@@ -266,6 +268,37 @@ pub(crate) fn render_trip(exhausted: &BudgetExhausted) -> String {
     for dimension in ResourceDimension::ALL {
         let limit = exhausted.evidence.limit_for(dimension);
         let _ = if exhausted.evidence.limits().is_bounded(dimension) {
+            writeln!(out, "limit {} {limit}", dimension.label())
+        } else {
+            writeln!(out, "limit {} unbounded", dimension.label())
+        };
+    }
+    out
+}
+
+/// Render a governed UPDATE trip. The request is atomic, so there is deliberately no
+/// partial-result vocabulary: `mutation none` is the complete mutation receipt.
+pub(crate) fn render_update_trip(tripped: TrippedGovernor, evidence: &GovernorEvidence) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::new();
+    let _ = writeln!(out, "{GOVERNOR_REPORT_BANNER}");
+    let _ = writeln!(out, "outcome budget-exhausted");
+    let _ = writeln!(out, "operation update");
+    let _ = writeln!(out, "tripped {}", tripped.label());
+    let _ = writeln!(out, "detail {tripped}");
+    let _ = writeln!(out, "mutation none");
+    for dimension in ResourceDimension::ALL {
+        let _ = writeln!(
+            out,
+            "consumed {} {}",
+            dimension.label(),
+            evidence.consumed_in(dimension)
+        );
+    }
+    for dimension in ResourceDimension::ALL {
+        let limit = evidence.limit_for(dimension);
+        let _ = if evidence.limits().is_bounded(dimension) {
             writeln!(out, "limit {} {limit}", dimension.label())
         } else {
             writeln!(out, "limit {} unbounded", dimension.label())

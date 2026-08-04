@@ -17,6 +17,7 @@ import {
   governorDimensions,
   type DirectionalLanguage,
   type GovernorEvidence,
+  type EntailmentQueryOutcome,
   type PartialAnswers,
   type QueryOutcome,
   type TrippedGovernor,
@@ -191,6 +192,13 @@ const applied: UpdateOutcome = engine.updateGoverned(
   "INSERT DATA { <https://example.org/u> <https://example.org/p> <https://example.org/o> }",
   { fuel: 100_000 },
 );
+const entailed: EntailmentQueryOutcome = engine.queryEntailmentGoverned(
+  matched,
+  "SELECT ?s WHERE { ?s ?p ?o }",
+  "rdfs",
+  { fuel: 100_000, program: null },
+);
+const entailmentPhase: "answered" | "closure-stopped" = entailed.phase;
 const ledger: string = engine.explainQuery(matched, "SELECT ?s WHERE { ?s ?p ?o }");
 
 const result: QueryResult = engine.query(matched, "ASK { ?s ?p ?o }");
@@ -208,6 +216,7 @@ void okfTermsProfile;
 void dcatRdfProfile;
 void voidProfile;
 void invalidCuratedLift;
+void entailmentPhase;
 void invalidOkfTermsLift;
 void invalidDcatRdfLift;
 void invalidVoidLift;

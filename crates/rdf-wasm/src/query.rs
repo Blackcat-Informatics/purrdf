@@ -51,7 +51,10 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use purrdf::ir::MutableDataset;
-use purrdf::{JsonLdSerializeOptions, SerializeGraph, serialize_dataset};
+use purrdf::{
+    GovernedEntailment, JsonLdSerializeOptions, QueryEntailmentPlan, SerializeGraph,
+    query_with_entailment_governed, serialize_dataset,
+};
 use purrdf_core::{SparqlEngine, SparqlRequest, SparqlResult};
 use purrdf_sparql_eval::{
     BudgetExhausted, CancellationFlag, GovernedOutcome, GovernedUpdateOutcome,
@@ -756,6 +759,57 @@ impl QueryOutcome {
     }
 }
 
+/// The two-phase outcome of a governed entailment-aware query.
+///
+/// `takeOutcome()` and `report` are present together only after closure completed. A
+/// closure-phase stop carries neither, preventing a host from treating an incomplete
+/// closure as queryable data or as a reasoning certificate.
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct EntailmentQueryOutcome {
+    outcome: Option<QueryOutcome>,
+    report: Option<String>,
+    tripped: Option<TrippedGovernor>,
+    complete: bool,
+    closure_stopped: bool,
+}
+
+#[wasm_bindgen]
+impl EntailmentQueryOutcome {
+    /// Whether both closure and query completed under every governor.
+    #[wasm_bindgen(getter, js_name = isComplete)]
+    #[must_use]
+    pub fn is_complete(&self) -> bool {
+        self.complete
+    }
+
+    /// Whether the stop happened before a closure existed.
+    #[wasm_bindgen(getter, js_name = closureStopped)]
+    #[must_use]
+    pub fn closure_stopped(&self) -> bool {
+        self.closure_stopped
+    }
+
+    /// Byte-stable reasoning report, absent when closure stopped.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn report(&self) -> Option<String> {
+        self.report.clone()
+    }
+
+    /// Move phase two's governed query outcome out, or `undefined` if closure stopped.
+    #[wasm_bindgen(js_name = takeOutcome)]
+    pub fn take_outcome(&mut self) -> Option<QueryOutcome> {
+        self.outcome.take()
+    }
+
+    /// Move the governor that stopped either phase out, or `undefined` on completion.
+    #[wasm_bindgen(js_name = takeTripped)]
+    pub fn take_tripped(&mut self) -> Option<TrippedGovernor> {
+        self.tripped.take()
+    }
+}
+
 /// The outcome of one governed SPARQL UPDATE.
 ///
 /// Deliberately not a [`QueryOutcome`] and deliberately without a partial arm: a query's
@@ -983,6 +1037,57 @@ impl QueryEngine {
             .query_governed(&frozen, sparql_request(sparql, base.as_deref()), &governors)
             .map_err(|e| diag_to_err(&e))?;
         query_outcome_from_governed(outcome)
+    }
+
+    /// Run a governed SPARQL query over a closure produced by `regime`, carrying the
+    /// closure report and query outcome together.
+    ///
+    /// # Errors
+    ///
+    /// An invalid regime/program, query parse/evaluation failure, entailment failure, or
+    /// malformed ceiling. A governor trip is returned in [`EntailmentQueryOutcome`].
+    #[wasm_bindgen(js_name = queryEntailmentGoverned)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the regime plus each governed dimension is named explicitly at the boundary"
+    )]
+    pub fn query_entailment_governed(
+        &self,
+        dataset: &Dataset,
+        sparql: &str,
+        base: Option<String>,
+        regime: &str,
+        program: Option<String>,
+        fuel: Option<i64>,
+        deadline_ms: Option<i64>,
+        max_answers: Option<i64>,
+        max_intermediate_cells: Option<i64>,
+        max_scratch_bytes: Option<i64>,
+        max_remote_requests: Option<i64>,
+        cancel: Option<CancellationToken>,
+    ) -> Result<EntailmentQueryOutcome, JsError> {
+        let plan = QueryEntailmentPlan::parse(regime, program.as_deref().unwrap_or(""))
+            .map_err(|error| JsError::new(&error))?;
+        let args = GovernorArgs {
+            fuel: decode_ceiling("fuel", fuel)?,
+            deadline_ms: decode_ceiling("deadlineMs", deadline_ms)?,
+            max_answers: decode_ceiling("maxAnswers", max_answers)?,
+            max_intermediate_cells: decode_ceiling("maxIntermediateCells", max_intermediate_cells)?,
+            max_scratch_bytes: decode_ceiling("maxScratchBytes", max_scratch_bytes)?,
+            max_remote_requests: decode_ceiling("maxRemoteRequests", max_remote_requests)?,
+        };
+        let governors = args.engage(cancel.as_ref());
+        let frozen = dataset.inner.freeze().map_err(|e| diag_to_err(&e))?;
+        let outcome = query_with_entailment_governed(
+            &self.inner,
+            &frozen,
+            sparql_request(sparql, base.as_deref()),
+            plan.entailment(),
+            &governors,
+        )
+        .map_err(|error| JsError::new(&error.to_string()))?;
+        entailment_query_outcome_from_native(outcome)
     }
 
     /// Apply a SPARQL UPDATE under caller-supplied execution governors, returning an
@@ -1229,6 +1334,30 @@ fn query_outcome_from_governed(outcome: GovernedOutcome) -> Result<QueryOutcome,
             tripped: Some(TrippedGovernor { inner: tripped }),
             evidence: Some(GovernorEvidence { inner: evidence }),
             complete: false,
+        }),
+    }
+}
+
+fn entailment_query_outcome_from_native(
+    outcome: GovernedEntailment,
+) -> Result<EntailmentQueryOutcome, JsError> {
+    match outcome {
+        GovernedEntailment::Answered { outcome, report } => {
+            let tripped = outcome.tripped().map(|inner| TrippedGovernor { inner });
+            Ok(EntailmentQueryOutcome {
+                complete: tripped.is_none(),
+                outcome: Some(query_outcome_from_governed(outcome)?),
+                report: Some(purrdf_validate::render_reasoning_report(&report)),
+                tripped,
+                closure_stopped: false,
+            })
+        }
+        GovernedEntailment::ClosureStopped { tripped } => Ok(EntailmentQueryOutcome {
+            outcome: None,
+            report: None,
+            tripped: Some(TrippedGovernor { inner: tripped }),
+            complete: false,
+            closure_stopped: true,
         }),
     }
 }
