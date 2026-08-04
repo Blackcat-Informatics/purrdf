@@ -1366,10 +1366,18 @@ fn materialize_governed<D: DatasetView + Sync>(
     state: &GovernorState,
 ) -> GovernedOutcome {
     match evaluated {
-        EvaluatedOutcome::Complete(outcome) => GovernedOutcome::Complete {
-            result: materialize(outcome, ctx),
-            evidence: state.evidence(),
-        },
+        EvaluatedOutcome::Complete(outcome) => {
+            let result = materialize(outcome, ctx);
+            let evidence = state.evidence();
+            match evidence.tripped {
+                None => GovernedOutcome::Complete { result, evidence },
+                Some(tripped) => GovernedOutcome::BudgetExhausted(BudgetExhausted {
+                    tripped,
+                    evidence,
+                    partial: PartialAnswers::Certain(PartialSparqlResult::new(result, true)),
+                }),
+            }
+        }
         EvaluatedOutcome::Truncated {
             outcome,
             certificate,

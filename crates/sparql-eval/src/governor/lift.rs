@@ -146,6 +146,11 @@ impl NonMonotoneBarrier {
         }
     }
 
+    /// A barrier introduced at an egress boundary rather than by an algebra node.
+    pub(crate) const fn named(operator: &'static str) -> Self {
+        Self { operator }
+    }
+
     /// The algebra variant label of the operator that withheld the rows.
     #[must_use]
     pub const fn operator(self) -> &'static str {
@@ -230,6 +235,20 @@ impl Certificate {
         if self.spine().class() == SpineClass::Unknown && before != SpineClass::Unknown {
             self.barrier = Some(NonMonotoneBarrier::at(parent));
         }
+    }
+
+    /// Collapse an upper bound whose rows had to be removed at the answer cap.
+    ///
+    /// Removing from a lower bound is sound; removing an arbitrary member of an upper
+    /// bound is not, because the removed member may be a true answer. This root-level
+    /// barrier makes that loss structural: [`Truncation::new`] empties the rows and the
+    /// public outcome names `answer-cap` instead of exposing a forged upper bound.
+    fn with_answer_cap_barrier(mut self) -> Self {
+        if self.spine().class() == SpineClass::Possible {
+            self.path.push(ChildEdge::OPAQUE);
+            self.barrier = Some(NonMonotoneBarrier::named("answer-cap"));
+        }
+        self
     }
 }
 
@@ -387,6 +406,12 @@ impl<I: ViewTermId> Truncation<I> {
     /// thread afterwards.
     pub(crate) fn split(self) -> (SolutionSeq<I>, Certificate) {
         (self.rows, self.certificate)
+    }
+
+    /// Rebuild this truncation after an answer-cap cut, collapsing an upper bound when
+    /// removal would make it unsound.
+    pub(crate) fn after_answer_cap(rows: SolutionSeq<I>, certificate: Certificate) -> Self {
+        Self::new(rows, certificate.with_answer_cap_barrier())
     }
 }
 

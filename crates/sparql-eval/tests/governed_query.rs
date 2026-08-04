@@ -376,11 +376,11 @@ fn ac2_trip_is_neither_complete_nor_error() {
 }
 
 #[test]
-fn ac2_ask_with_a_nonempty_certain_set_is_complete_true_despite_a_trip() {
+fn ac2_ask_with_a_nonempty_certain_set_keeps_the_trip_and_carries_true() {
     // `ASK` asks whether ANY solution exists, so one row that is certainly an answer
-    // settles it outright — whichever governor stopped the search. Reporting "budget
-    // exhausted" for a question the evaluator has already answered would throw away a
-    // complete result, so the governed surface must not degrade it.
+    // settles its semantic value outright. The execution still stopped operationally,
+    // however, so the true value travels as a certified partial under BudgetExhausted;
+    // reporting Complete beside evidence that says a governor tripped is contradictory.
     let ask = "ASK { ?s <http://example.org/p> ?o }";
     let metered = governed(ask, &QueryGovernors::METERED);
     let cost = metered
@@ -392,23 +392,160 @@ fn ac2_ask_with_a_nonempty_certain_set_is_complete_true_despite_a_trip() {
     for fuel in 0..cost {
         // Strictly below the measured cost, the search cannot have finished.
         let outcome = governed(ask, &QueryGovernors::UNBOUNDED.with_fuel(fuel));
-        if let GovernedOutcome::Complete { result, .. } = &outcome {
-            assert!(
-                matches!(result, SparqlResult::Boolean(true)),
-                "a search that could not finish may only answer true, never false: {result:?}"
-            );
+        assert!(
+            !outcome.is_complete(),
+            "a sub-boundary execution cannot be Complete: {outcome:?}"
+        );
+        let (_, partial, evidence) = exhausted(&outcome);
+        assert_eq!(outcome.tripped(), evidence.tripped);
+        if partial
+            .result()
+            .is_some_and(|partial| matches!(partial.result(), SparqlResult::Boolean(true)))
+        {
             settled_early += 1;
-        } else {
-            // The other outcome is honest exhaustion, never a fabricated `false`
-            // presented as complete.
-            let (_, partial, _) = exhausted(&outcome);
-            assert!(partial.result().is_some() || partial.barrier().is_some());
         }
     }
     assert!(
         settled_early > 0,
         "a certain row must be able to settle ASK before the budget does"
     );
+}
+
+#[test]
+fn an_earlier_fuel_trip_cannot_bypass_the_answer_cap_on_any_result_sequence() {
+    let queries = [
+        ALL_ROWS,
+        "CONSTRUCT { ?s <http://example.org/q> ?o } WHERE { ?s <http://example.org/p> ?o }",
+        "DESCRIBE ?s WHERE { ?s <http://example.org/p> ?o }",
+    ];
+
+    for query in queries {
+        let metered = governed(query, &QueryGovernors::METERED)
+            .evidence()
+            .consumed_in(ResourceDimension::Fuel);
+        let mut witnessed = false;
+        for fuel in 0..metered {
+            let outcome = governed(
+                query,
+                &QueryGovernors::UNBOUNDED
+                    .with_fuel(fuel)
+                    .with_max_answers(1),
+            );
+            let Some(exhausted) = outcome.exhausted() else {
+                continue;
+            };
+            if !matches!(
+                exhausted.tripped,
+                TrippedGovernor::Budget {
+                    dimension: ResourceDimension::Fuel,
+                    ..
+                }
+            ) || exhausted
+                .evidence
+                .consumed_in(ResourceDimension::AnswerRows)
+                != 2
+            {
+                continue;
+            }
+
+            let payload_size =
+                exhausted
+                    .partial
+                    .result()
+                    .map_or(0, |partial| match partial.result() {
+                        SparqlResult::Solutions { rows, .. } => rows.len(),
+                        SparqlResult::Graph(graph) => statement_count(graph),
+                        SparqlResult::Boolean(_) => 1,
+                    });
+            assert!(
+                payload_size <= 1,
+                "the first trip stayed fuel but the cap leaked {payload_size} answers for {query}"
+            );
+            witnessed = true;
+            break;
+        }
+        assert!(
+            witnessed,
+            "the fixture must exercise a fuel-first then answer-cap cut for {query}"
+        );
+    }
+}
+
+#[test]
+fn cutting_an_upper_bound_at_the_answer_cap_withholds_the_bound() {
+    // A trip in the right arm of MINUS leaves an upper bound: subtracting only the
+    // right rows reached so far can leave false-positive rows, but it cannot omit a true
+    // answer. Removing an arbitrary row from that upper bound at the answer cap would
+    // break precisely that guarantee, because the removed row could be a true answer.
+    let query = "SELECT ?s WHERE { \
+        ?s <http://example.org/p> ?o \
+        MINUS { ?s <http://example.org/p> ?z } \
+    }";
+    let measured = governed(query, &QueryGovernors::METERED)
+        .evidence()
+        .consumed_in(ResourceDimension::Fuel);
+
+    let mut witnessed = false;
+    for fuel in 0..measured {
+        let outcome = governed(
+            query,
+            &QueryGovernors::UNBOUNDED
+                .with_fuel(fuel)
+                .with_max_answers(1),
+        );
+        let Some(exhausted) = outcome.exhausted() else {
+            continue;
+        };
+        if !matches!(
+            exhausted.tripped,
+            TrippedGovernor::Budget {
+                dimension: ResourceDimension::Fuel,
+                ..
+            }
+        ) || exhausted
+            .evidence
+            .consumed_in(ResourceDimension::AnswerRows)
+            != 2
+        {
+            continue;
+        }
+
+        let PartialAnswers::Unknown(barrier) = &exhausted.partial else {
+            panic!(
+                "answer-cap removal must not leave a forged upper bound: {:?}",
+                exhausted.partial
+            );
+        };
+        assert_eq!(barrier.operator(), "answer-cap");
+        assert!(
+            exhausted.partial.result().is_none(),
+            "no row may cross after the upper-bound certificate collapses"
+        );
+        witnessed = true;
+        break;
+    }
+
+    assert!(
+        witnessed,
+        "the fixture must reach a fuel-truncated MINUS upper bound that the cap cuts"
+    );
+}
+
+#[test]
+fn every_complete_outcome_has_complete_evidence() {
+    for query in [
+        ALL_ROWS,
+        "ASK { ?s <http://example.org/p> ?o }",
+        "CONSTRUCT { ?s <http://example.org/q> ?o } WHERE { ?s <http://example.org/p> ?o }",
+        "DESCRIBE ?s WHERE { ?s <http://example.org/p> ?o }",
+    ] {
+        let outcome = governed(query, &QueryGovernors::METERED);
+        let GovernedOutcome::Complete { evidence, .. } = outcome else {
+            panic!("an unreachable ceiling must complete for {query}")
+        };
+        assert!(evidence.is_complete(), "complete outcome had {evidence:?}");
+        assert_eq!(evidence.tripped, None);
+    }
 }
 
 #[test]

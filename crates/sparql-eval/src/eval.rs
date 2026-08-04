@@ -1411,20 +1411,23 @@ fn commit_answer_rows<D: DatasetView + Sync>(
     };
 
     let mut tripped = state.tripped();
-    if tripped.is_none() {
-        for admitted in 0..rows.rows.len() {
-            if let Err(cap) = state.charge(purrdf_core::ResourceDimension::AnswerRows, 1) {
-                rows.rows.truncate(admitted);
-                tripped = Some(cap);
-                break;
-            }
+    let mut cap_cut = false;
+    for admitted in 0..rows.rows.len() {
+        if let Err(cap) = state.charge_final_output(purrdf_core::ResourceDimension::AnswerRows, 1) {
+            rows.rows.truncate(admitted);
+            tripped.get_or_insert(cap);
+            cap_cut = true;
+            break;
         }
     }
 
-    match (certificate, tripped) {
-        (None, None) => Evaluated::Complete(rows),
-        (None, Some(tripped)) => Evaluated::Truncated(Truncation::origin(rows, tripped)),
-        (Some(certificate), _) => Evaluated::Truncated(Truncation::new(rows, certificate)),
+    match (certificate, tripped, cap_cut) {
+        (None, None, _) => Evaluated::Complete(rows),
+        (None, Some(tripped), _) => Evaluated::Truncated(Truncation::origin(rows, tripped)),
+        (Some(certificate), _, true) => {
+            Evaluated::Truncated(Truncation::after_answer_cap(rows, certificate))
+        }
+        (Some(certificate), _, false) => Evaluated::Truncated(Truncation::new(rows, certificate)),
     }
 }
 
@@ -1676,19 +1679,18 @@ pub(crate) fn evaluate_query_evaluated<D: DatasetView + Sync>(
             Evaluated::Complete(seq) => Ok(EvaluatedOutcome::Complete(Outcome::Boolean(
                 !seq.is_empty(),
             ))),
-            Evaluated::Truncated(certificate) => {
-                if certificate
-                    .certain_rows()
-                    .is_some_and(|rows| !rows.is_empty())
-                {
-                    // A row that is certainly an answer settles the question.
-                    return Ok(EvaluatedOutcome::Complete(Outcome::Boolean(true)));
-                }
-                Ok(EvaluatedOutcome::Truncated {
-                    outcome: Outcome::Boolean(!certificate.rows().is_empty()),
-                    certificate,
-                })
-            }
+            Evaluated::Truncated(certificate) => Ok(EvaluatedOutcome::Truncated {
+                // A non-empty certain lower bound settles the semantic value `true`, but
+                // the execution still stopped operationally. Keep the typed exhaustion
+                // and carry that settled boolean as its certified partial instead of
+                // contradicting the evidence with `Complete + tripped`.
+                outcome: Outcome::Boolean(
+                    certificate
+                        .certain_rows()
+                        .is_some_and(|rows| !rows.is_empty()),
+                ),
+                certificate,
+            }),
         },
         Query::Construct {
             template, pattern, ..

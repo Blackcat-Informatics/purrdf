@@ -114,41 +114,36 @@ pub(crate) fn commit_answer_triples<D: DatasetView + Sync>(
     if !state.is_engaged_in(purrdf_core::ResourceDimension::AnswerRows) {
         return (graph, certificate);
     }
-    // Already stopped below: the graph in hand was built from the rows the budget already
-    // paid for, so charging its triples a second time would refuse output the certificate
-    // has already been written for.
-    if let Some(tripped) = state.tripped() {
-        return (
-            graph,
-            Some(match certificate {
-                None => Truncation::origin(rows.clone(), tripped),
-                Some(certificate) => certificate,
-            }),
-        );
-    }
-
     let total = graph_triple_count(&graph);
     let mut admitted = 0_usize;
-    let mut tripped = None;
+    let mut tripped = state.tripped();
+    let mut cap_cut = false;
     for _ in 0..total {
-        if let Err(cap) = state.charge(purrdf_core::ResourceDimension::AnswerRows, 1) {
-            tripped = Some(cap);
+        if let Err(cap) = state.charge_final_output(purrdf_core::ResourceDimension::AnswerRows, 1) {
+            tripped.get_or_insert(cap);
+            cap_cut = true;
             break;
         }
         admitted += 1;
     }
 
-    match (certificate, tripped) {
-        (None, None) => (graph, None),
-        (None, Some(tripped)) => (
+    match (certificate, tripped, cap_cut) {
+        (None, None, _) => (graph, None),
+        (None, Some(tripped), _) => (
             truncate_graph(&graph, admitted),
             // The rows are the `WHERE`'s complete output — the cap stopped the *graph*,
             // not the pattern — so they are their own positional prefix and certify a
             // lower bound, which is what `origin` states.
             Some(Truncation::origin(rows.clone(), tripped)),
         ),
-        (Some(certificate), None) => (graph, Some(certificate)),
-        (Some(certificate), Some(_)) => (truncate_graph(&graph, admitted), Some(certificate)),
+        (Some(certificate), _, true) => {
+            let (certificate_rows, certificate) = certificate.split();
+            (
+                truncate_graph(&graph, admitted),
+                Some(Truncation::after_answer_cap(certificate_rows, certificate)),
+            )
+        }
+        (Some(certificate), _, false) => (graph, Some(certificate)),
     }
 }
 

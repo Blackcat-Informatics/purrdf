@@ -967,6 +967,37 @@ impl GovernorState {
         }
     }
 
+    /// Charge a final-output dimension even after another governor has already latched.
+    ///
+    /// Ordinarily a latched trip stops every later charge immediately. The answer cap is
+    /// the one exception: it constrains the payload crossing the public boundary, so a
+    /// prior fuel/deadline/cell trip must not license more rows or graph statements than
+    /// the caller allowed. This method advances the requested counter and reports the
+    /// already-latched governor on overflow, preserving first-trip precedence. With no
+    /// prior trip it is exactly [`Self::charge`].
+    pub(crate) fn charge_final_output(
+        &self,
+        dimension: ResourceDimension,
+        amount: u64,
+    ) -> Result<(), TrippedGovernor> {
+        let Some(latched) = self.tripped() else {
+            return self.charge(dimension, amount);
+        };
+
+        let slot = &self.consumed[Self::slot(dimension)];
+        let previous = slot
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(current.saturating_add(amount))
+            })
+            .unwrap_or(0);
+        let updated = previous.saturating_add(amount);
+        if updated > self.limits.get(dimension) {
+            Err(latched)
+        } else {
+            Ok(())
+        }
+    }
+
     /// Charge one occurrence of `point` against fuel, only if fuel carries a ceiling.
     ///
     /// # Errors
