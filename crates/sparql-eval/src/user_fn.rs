@@ -390,8 +390,11 @@ fn matches_node_kind(value: &TermValue, nk: NodeKind) -> bool {
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] on an arity or type-constraint violation or on exceeding
-/// the user-function recursion bound; propagates body evaluation errors.
+/// [`EvalError::Function`] on an arity or type-constraint violation, or on exceeding the
+/// user-function recursion bound during an ungoverned execution; propagates body evaluation
+/// errors. During a governed execution, fuel and depth exhaustion are recorded on the
+/// expression truncation channel and return `Ok(None)` here so they cannot masquerade as a
+/// function failure.
 pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     func: &UserFunction,
     iri: &str,
@@ -432,13 +435,14 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     // evaluation then charges through the shared state, so a query cannot evade its
     // ceiling by moving work into a function.
     if let Err(tripped) = ctx.charge(crate::governor::ChargePoint::UserFunctionInvocation) {
-        return Err(EvalError::function(format!(
-            "SHACL-AF function <{iri}> was not invoked: {tripped}"
-        )));
+        ctx.expression_barrier.record(tripped);
+        return Ok(None);
     }
 
     // Recursion-bounded child context (guards mutually-recursive functions).
-    let mut child = ctx.child_for_user_fn()?;
+    let Some(mut child) = ctx.child_for_user_fn()? else {
+        return Ok(None);
+    };
     let substituted = crate::substitute::apply_substitutions((*func.body).clone(), &substitutions)
         .map_err(|d| EvalError::function(d.to_string()))?;
     let outcome = match evaluate_query_evaluated(&substituted, &mut child)? {
@@ -569,11 +573,15 @@ mod tests {
     use std::sync::Arc;
 
     use purrdf_core::{
-        RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, TermValue,
+        RdfDataset, RdfDatasetBuilder, RdfLiteral, ResourceDimension, SparqlRequest, SparqlResult,
+        TermValue, TrippedGovernor,
     };
     use purrdf_sparql_algebra::SparqlParser;
 
-    use crate::NativeSparqlEngine;
+    use crate::{
+        GovernedOutcome, GovernorState, NativeSparqlEngine, PartialAnswers, QueryGovernors,
+        ShaclPrebinding,
+    };
 
     const EX_INC: &str = "http://example.org/ns#inc";
     const EX_EVEN: &str = "http://example.org/ns#isEven";
@@ -1042,6 +1050,79 @@ mod tests {
             err.to_string().contains("recursion"),
             "expected recursion-bound error, got {err}"
         );
+    }
+
+    #[test]
+    fn fuel_exhaustion_at_the_invocation_boundary_is_an_expression_trip() {
+        let function = UserFunction {
+            params: Vec::new(),
+            required: 0,
+            body: parse("SELECT (1 AS ?result) WHERE {}"),
+            kind: UserFnBody::Select,
+            return_constraint: TypeConstraint::default(),
+        };
+        let dataset = empty_dataset();
+        let governors = QueryGovernors::UNBOUNDED.with_fuel(0);
+        let state = Arc::new(GovernorState::new(&governors));
+        let mut ctx = EvalCtx::new(&*dataset).with_governors(Arc::clone(&state));
+
+        let value = eval_user_function(&function, EX_INC, &[], &mut ctx)
+            .expect("a governor trip is not a function error");
+        assert_eq!(value, None, "the refused body produces no expression value");
+        let expected = TrippedGovernor::Budget {
+            dimension: ResourceDimension::Fuel,
+            limit: 0,
+            consumed: 1,
+        };
+        assert_eq!(state.evidence().tripped, Some(expected));
+        assert_eq!(ctx.expression_barrier.observed(), Some(expected));
+    }
+
+    #[test]
+    fn governed_recursion_depth_is_typed_exhaustion_not_a_function_error() {
+        let mut registry = UserFunctionRegistry::new();
+        registry.insert(
+            EX_LOOP,
+            UserFunction {
+                params: vec![int_param("n")],
+                required: 1,
+                body: parse(&format!("SELECT ((<{EX_LOOP}>(?n)) AS ?result) WHERE {{}}")),
+                kind: UserFnBody::Select,
+                return_constraint: TypeConstraint::default(),
+            },
+        );
+        let dataset = empty_dataset();
+        let query = format!("SELECT ((<{EX_LOOP}>(1)) AS ?v) WHERE {{}}");
+        let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
+        let outcome = NativeSparqlEngine::new()
+            .query_governed_in_operation(
+                &*dataset,
+                SparqlRequest {
+                    query: &query,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                ShaclPrebinding::None,
+                Some(&registry),
+                &state,
+            )
+            .expect("a governed recursion ceiling is an outcome");
+
+        let GovernedOutcome::BudgetExhausted(exhausted) = outcome else {
+            panic!("the fixed recursion ceiling must stop this call");
+        };
+        assert_eq!(
+            exhausted.tripped,
+            TrippedGovernor::Budget {
+                dimension: ResourceDimension::UdfDepth,
+                limit: u64::from(crate::eval::MAX_UDF_DEPTH),
+                consumed: u64::from(crate::eval::MAX_UDF_DEPTH) + 1,
+            }
+        );
+        let PartialAnswers::Unknown(barrier) = exhausted.partial else {
+            panic!("a function expression stopped before its value was knowable");
+        };
+        assert_eq!(barrier.operator(), "Extend");
     }
 
     /// `sh:returnType` is informational (SHACL-AF §5.3) and MAY be a class IRI, so

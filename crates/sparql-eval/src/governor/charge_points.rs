@@ -497,15 +497,27 @@ fn udf_depth_is_reported_through_evidence_without_being_relaxable() {
     // thousand times at depth one has reached depth one.
     let state = Arc::new(GovernorState::new(&QueryGovernors::UNBOUNDED));
     let root = EvalCtx::new(&*dataset).with_governors(Arc::clone(&state));
-    let first = root.child_for_user_fn().expect("depth 1");
-    let second = first.child_for_user_fn().expect("depth 2");
-    let _third = second.child_for_user_fn().expect("depth 3");
+    let first = root
+        .child_for_user_fn()
+        .expect("depth 1 is not an error")
+        .expect("depth 1 is admitted");
+    let second = first
+        .child_for_user_fn()
+        .expect("depth 2 is not an error")
+        .expect("depth 2 is admitted");
+    let _third = second
+        .child_for_user_fn()
+        .expect("depth 3 is not an error")
+        .expect("depth 3 is admitted");
     assert_eq!(
         state.evidence().consumed_in(ResourceDimension::UdfDepth),
         3,
         "the depth reached is reported through the same evidence as every other dimension"
     );
-    let sibling = first.child_for_user_fn().expect("depth 2 again");
+    let sibling = first
+        .child_for_user_fn()
+        .expect("depth 2 again is not an error")
+        .expect("depth 2 again is admitted");
     drop(sibling);
     assert_eq!(
         state.evidence().consumed_in(ResourceDimension::UdfDepth),
@@ -521,14 +533,20 @@ fn udf_depth_is_reported_through_evidence_without_being_relaxable() {
     for _ in 0..MAX_UDF_DEPTH {
         governed = governed
             .child_for_user_fn()
-            .expect("inside the depth bound");
+            .expect("inside the governed depth bound is not an error")
+            .expect("inside the governed depth bound is admitted");
         ungoverned = ungoverned
             .child_for_user_fn()
-            .expect("inside the depth bound");
+            .expect("inside the ungoverned depth bound is not an error")
+            .expect("inside the ungoverned depth bound is admitted");
     }
     assert!(
-        governed.child_for_user_fn().is_err(),
-        "a caller must not be able to buy their way past the recursion guard"
+        governed
+            .child_for_user_fn()
+            .expect("a governed ceiling is an outcome, not an error")
+            .is_none(),
+        "a caller must not be able to buy their way past the recursion guard, and the \
+         governed trip must remain typed"
     );
     assert!(ungoverned.child_for_user_fn().is_err());
 }
@@ -606,7 +624,10 @@ fn a_forked_worker_shares_one_accounting_state() {
     let parent = EvalCtx::new(&*dataset).with_governors(Arc::clone(&state));
 
     let worker = parent.fork_for_worker();
-    let callee = parent.child_for_user_fn().expect("depth 1");
+    let callee = parent
+        .child_for_user_fn()
+        .expect("depth 1 is not an error")
+        .expect("depth 1 is admitted");
     for context in [&parent, &worker, &callee] {
         assert!(
             std::ptr::eq(
@@ -737,12 +758,27 @@ fn metered_does_not_relax_the_udf_depth_ceiling() {
     let mut metered = EvalCtx::new(&*dataset)
         .with_governors(Arc::new(GovernorState::new(&QueryGovernors::METERED)));
     for _ in 0..MAX_UDF_DEPTH {
-        metered = metered.child_for_user_fn().expect("inside the depth bound");
+        metered = metered
+            .child_for_user_fn()
+            .expect("inside the depth bound is not an evaluation error")
+            .expect("inside the depth bound does not trip");
     }
     assert!(
-        metered.child_for_user_fn().is_err(),
-        "asking to be measured must not buy a deeper stack"
+        metered
+            .child_for_user_fn()
+            .expect("a governed ceiling is an outcome, not an evaluation error")
+            .is_none(),
+        "asking to be measured must not buy a deeper stack, and the trip stays typed"
     );
+    assert!(matches!(
+        metered.expression_barrier.observed(),
+        Some(TrippedGovernor::Budget {
+            dimension: ResourceDimension::UdfDepth,
+            limit,
+            consumed,
+        }) if limit == u64::from(MAX_UDF_DEPTH)
+            && consumed == u64::from(MAX_UDF_DEPTH) + 1
+    ));
 }
 
 /// The type parameter is spelled out in a couple of places above; this keeps the

@@ -1145,11 +1145,16 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// remote source and function registry, but starts fresh mutable evaluation state
     /// (the body is an independent query) and increments the call depth.
     ///
+    /// `Ok(None)` means a governed execution reached its fixed UDF-depth ceiling. The
+    /// trip is recorded on the shared expression barrier, so the operator owning the call
+    /// returns typed exhaustion rather than an ordinary function error.
+    ///
     /// # Errors
     ///
-    /// [`EvalError::Function`] if the call depth would exceed [`MAX_UDF_DEPTH`] —
-    /// mutually-recursive functions fail closed rather than overflow the stack.
-    pub(crate) fn child_for_user_fn(&self) -> Result<Self, EvalError> {
+    /// [`EvalError::Function`] if an **ungoverned** call would exceed
+    /// [`MAX_UDF_DEPTH`] — mutually-recursive functions still fail closed rather than
+    /// overflow the stack when there is no governed outcome channel.
+    pub(crate) fn child_for_user_fn(&self) -> Result<Option<Self>, EvalError> {
         let next_depth = self.udf_depth + 1;
         // The recursion guard is a governed dimension whose ceiling is a build constant.
         // `QueryGovernors::UNBOUNDED` already carries `MAX_UDF_DEPTH` on
@@ -1164,18 +1169,21 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         // reading that as "recursion too deep" would report the wrong cause; and a
         // caller-relaxable stack-recursion bound is not a bound, so the constant stays
         // the authority on both the governed and the ungoverned path.
-        if let Some(state) = self.governors.as_ref() {
-            let _ = state.observe_peak(
+        if let Some(state) = self.governors.as_ref()
+            && let Err(tripped) = state.observe_peak(
                 purrdf_core::ResourceDimension::UdfDepth,
                 u64::from(next_depth),
-            );
+            )
+        {
+            self.expression_barrier.record(tripped);
+            return Ok(None);
         }
         if next_depth > MAX_UDF_DEPTH {
             return Err(EvalError::function(format!(
                 "SHACL-AF function recursion exceeded the depth bound of {MAX_UDF_DEPTH}"
             )));
         }
-        Ok(Self {
+        Ok(Some(Self {
             dataset: self.dataset,
             // Fresh: the body is an independent query that mints its own computed
             // terms; its parameter inputs ride in as ground substitutions, not
@@ -1227,7 +1235,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // node a reader of the ledger can act on.
             ledger: self.ledger.clone(),
             ledger_node: self.ledger_node,
-        })
+        }))
     }
 
     /// A compact hashable encoding of the active graph, for [`ExistsCacheKey`].
