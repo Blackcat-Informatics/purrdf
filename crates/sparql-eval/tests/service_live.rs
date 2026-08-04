@@ -46,11 +46,27 @@ fn fixture_transport(request: HttpRequest<'_>) -> Result<Vec<u8>, RemoteError> {
 fn http_transport_decodes_remote_bindings() {
     let source = HttpRemoteQuerySource::new(fixture_transport);
     let resolved = source
-        .query(ENDPOINT, "SELECT ?x WHERE { BIND(1 AS ?x) }", None)
+        .query(ENDPOINT, "SELECT ?x WHERE { BIND(1 AS ?x) }", None, None)
         .expect("injected transport");
     assert_eq!(resolved.variables, vec![Variable::new("x")]);
     assert_eq!(resolved.rows.len(), 1, "expected exactly one binding row");
     assert!(resolved.rows[0][0].is_some(), "?x must be bound");
+}
+
+#[test]
+fn http_transport_cell_bound_decodes_no_limit_plus_one_row() {
+    let source = HttpRemoteQuerySource::new(fixture_transport);
+    let resolved = source
+        .query(ENDPOINT, "SELECT ?x WHERE { BIND(1 AS ?x) }", None, Some(0))
+        .expect("the bounded response is a typed prefix, not a decode error");
+
+    assert_eq!(resolved.variables, vec![Variable::new("x")]);
+    assert!(resolved.rows.is_empty(), "zero cells admit no one-cell row");
+    assert_eq!(
+        resolved.cell_limit_exceeded_at,
+        Some(1),
+        "the decoder reports the first row it skipped without materializing it"
+    );
 }
 
 #[test]
@@ -75,7 +91,7 @@ fn the_stop_signal_travels_with_the_request_and_gates_it() {
 
     let query = "SELECT ?x WHERE { BIND(1 AS ?x) }";
     source
-        .query(ENDPOINT, query, Some(&signal))
+        .query(ENDPOINT, query, Some(&signal), None)
         .expect("an unfired signal does not gate the request");
     assert_eq!(posts.load(Ordering::Relaxed), 1);
 
@@ -83,7 +99,7 @@ fn the_stop_signal_travels_with_the_request_and_gates_it() {
     // only be observed after the exchange returned would not bound the exchange.
     flag.cancel();
     let err = source
-        .query(ENDPOINT, query, Some(&signal))
+        .query(ENDPOINT, query, Some(&signal), None)
         .expect_err("a fired signal refuses the request");
     assert_eq!(
         err,

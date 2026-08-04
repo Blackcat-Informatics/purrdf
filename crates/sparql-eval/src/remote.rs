@@ -70,6 +70,10 @@ pub struct ResolvedBindings {
     pub variables: Vec<Variable>,
     /// One row per solution; `rows[i][j]` is the value of `variables[j]`.
     pub rows: Vec<Vec<Option<TermValue>>>,
+    /// Exact cell count of the first response prefix the supplied ceiling refused, when
+    /// the source deliberately stopped before materializing it. `rows` is the ordered
+    /// prefix that fit.
+    pub cell_limit_exceeded_at: Option<u64>,
 }
 
 /// A failure while resolving a `SERVICE` step. Whether it aborts the query or is
@@ -167,6 +171,13 @@ pub trait RemoteQuerySource {
     /// Both halves are worth stating plainly: honouring `stop` is not required for
     /// soundness, and it does buy the caller something concrete.
     ///
+    /// `max_intermediate_cells` is the executing query's inclusive peak-cell ceiling. A
+    /// source that decodes or evaluates bindings itself must stop before materializing a
+    /// response prefix wider than that bound and report the exact first refused size in
+    /// [`ResolvedBindings::cell_limit_exceeded_at`]. The evaluator repeats the check during
+    /// ingest, so a source that cannot implement bounded decode remains sound, but it gives
+    /// up the allocation protection at its own side of the seam.
+    ///
     /// # Errors
     ///
     /// Returns [`RemoteError`] on transport or decode failure, which `eval_service` may
@@ -176,6 +187,7 @@ pub trait RemoteQuerySource {
         endpoint: &str,
         query_text: &str,
         stop: Option<&Arc<dyn StopSignal>>,
+        max_intermediate_cells: Option<u64>,
     ) -> Result<ResolvedBindings, RemoteError>;
 }
 
@@ -263,7 +275,18 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
     // The signal travels WITH the call: while the evaluator is blocked inside it, nothing
     // else is in a position to poll.
     let stop = ctx.stop_signal().map(Arc::clone);
-    let response = source.query(&endpoint, &query_text, stop.as_ref());
+    let max_intermediate_cells = ctx.governor_state().and_then(|state| {
+        let dimension = purrdf_core::ResourceDimension::IntermediateCells;
+        state
+            .is_engaged_in(dimension)
+            .then(|| state.limits().get(dimension))
+    });
+    let response = source.query(
+        &endpoint,
+        &query_text,
+        stop.as_ref(),
+        max_intermediate_cells,
+    );
     // Always inspect the signal immediately after control returns. A source is permitted
     // to be unable to abandon an in-flight request; without this checkpoint a terminal
     // SERVICE could launder a cancellation into `Complete` because no later operator
@@ -349,29 +372,37 @@ fn identity_seq<I: ViewTermId>() -> SolutionSeq<I> {
 /// from outside the dataset. Charging in row order makes the ingested prefix a positional
 /// prefix of the endpoint's answer, which is what lets the caller certify it.
 ///
-/// # The cell ceiling is tested before the first row is interned
+/// # The cell ceiling is tested before each row is interned
 ///
 /// A remote bag is an intermediate bag like any other, so it is measured against
 /// [`ResourceDimension::IntermediateCells`](purrdf_core::ResourceDimension::IntermediateCells)
-/// — and measured **up front**, from the response's own row count and width, rather than
-/// after interning. Every other operator's bag is bounded by the data the ceiling was
-/// sized against; this one is bounded by whatever a remote endpoint chose to send, which
-/// is the only bag in the evaluator an attacker (or a mistake) can size directly. A
-/// ceiling that reports the breach after the allocation has already been made is not a
-/// memory ceiling, and on wasm the allocation trap it is meant to prevent kills the module
-/// instance before any typed outcome can be returned at all.
+/// — and measured before the next interned row grows the local bag. Every other operator's
+/// bag is bounded by data the ceiling was sized against; this one is bounded by whatever a
+/// remote endpoint chose to send, which is the only bag in the evaluator an attacker (or
+/// a mistake) can size directly. The source seam receives the same bound so a built-in
+/// decoder can avoid constructing an over-limit owned response in the first place; this
+/// check remains the mandatory backstop for injected sources.
 fn ingest<D: DatasetView + Sync>(
     resolved: ResolvedBindings,
     ctx: &mut EvalCtx<'_, D>,
 ) -> (SolutionSeq<D::Id>, Option<TrippedGovernor>) {
-    let schema = Arc::new(VarSchema::from_vars(resolved.variables));
+    let ResolvedBindings {
+        variables,
+        rows: resolved_rows,
+        cell_limit_exceeded_at,
+    } = resolved;
+    let schema = Arc::new(VarSchema::from_vars(variables));
     let width = schema.len();
-    if let Err(governor) = ctx.observe_cells(resolved.rows.len(), width) {
-        return (SolutionSeq::empty(schema), Some(governor));
-    }
-    let mut rows = Vec::with_capacity(resolved.rows.len());
+    let cell_ceiling = ctx.cell_row_ceiling(width);
+    let mut rows = Vec::with_capacity(
+        cell_ceiling.map_or(resolved_rows.len(), |cap| cap.min(resolved_rows.len())),
+    );
     let mut tripped = None;
-    for binding in resolved.rows {
+    for binding in resolved_rows {
+        if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
+            tripped = ctx.observe_cells(rows.len().saturating_add(1), width).err();
+            break;
+        }
         if let Err(governor) = ctx.charge(crate::governor::ChargePoint::RemoteRowIngested) {
             tripped = Some(governor);
             break;
@@ -383,6 +414,11 @@ fn ingest<D: DatasetView + Sync>(
             }
         }
         rows.push(row);
+    }
+    if tripped.is_none()
+        && let Some(attempted_cells) = cell_limit_exceeded_at
+    {
+        tripped = ctx.observe_cell_count(attempted_cells).err();
     }
     (SolutionSeq { schema, rows }, tripped)
 }
@@ -432,6 +468,7 @@ impl RemoteQuerySource for LocalRemoteQuerySource {
         endpoint: &str,
         query_text: &str,
         stop: Option<&Arc<dyn StopSignal>>,
+        max_intermediate_cells: Option<u64>,
     ) -> Result<ResolvedBindings, RemoteError> {
         if let Some(cause) = stop.and_then(|signal| signal.poll()) {
             return Err(RemoteError::Governed(TrippedGovernor::Stopped { cause }));
@@ -447,8 +484,14 @@ impl RemoteQuerySource for LocalRemoteQuerySource {
         // inside the forwarded query resolves against the same in-memory sources
         // rather than hard-failing on a missing remote.
         let mut ctx = EvalCtx::new(&**dataset).with_remote(self);
-        if let Some(signal) = stop {
-            let governors = QueryGovernors::UNBOUNDED.with_stop_signal(Arc::clone(signal));
+        if stop.is_some() || max_intermediate_cells.is_some() {
+            let mut governors = QueryGovernors::UNBOUNDED;
+            if let Some(signal) = stop {
+                governors = governors.with_stop_signal(Arc::clone(signal));
+            }
+            if let Some(cells) = max_intermediate_cells {
+                governors = governors.with_max_intermediate_cells(cells);
+            }
             ctx = ctx.with_governors(Arc::new(GovernorState::new(&governors)));
         }
         match crate::eval::evaluate_query_evaluated(&parsed, &mut ctx)
@@ -459,11 +502,36 @@ impl RemoteQuerySource for LocalRemoteQuerySource {
                 Ok(ResolvedBindings {
                     variables: variables.into_iter().map(Variable::new).collect(),
                     rows,
+                    cell_limit_exceeded_at: None,
                 })
             }
             EvaluatedOutcome::Complete(_) => Err(RemoteError::Decode(
                 "SERVICE expects a SELECT query".to_owned(),
             )),
+            EvaluatedOutcome::Truncated {
+                outcome: Outcome::Solutions(seq),
+                certificate,
+            } if matches!(
+                certificate.tripped(),
+                TrippedGovernor::Budget {
+                    dimension: purrdf_core::ResourceDimension::IntermediateCells,
+                    ..
+                }
+            ) =>
+            {
+                // The forwarded evaluator may have crossed its ceiling below a
+                // non-monotone operator, so do not promote its possibly-unknown rows to a
+                // remote prefix. The empty prefix is always a sound lower bound; the flag
+                // makes the outer evaluator record the same typed cell trip.
+                Ok(ResolvedBindings {
+                    variables: seq.schema.vars().to_vec(),
+                    rows: Vec::new(),
+                    cell_limit_exceeded_at: match certificate.tripped() {
+                        TrippedGovernor::Budget { consumed, .. } => Some(consumed),
+                        _ => None,
+                    },
+                })
+            }
             EvaluatedOutcome::Truncated { certificate, .. } => {
                 Err(RemoteError::Governed(certificate.tripped()))
             }
@@ -689,9 +757,11 @@ mod tests {
             endpoint: &str,
             query_text: &str,
             stop: Option<&Arc<dyn StopSignal>>,
+            max_intermediate_cells: Option<u64>,
         ) -> Result<ResolvedBindings, RemoteError> {
             self.count.fetch_add(1, Ordering::Relaxed);
-            self.inner.query(endpoint, query_text, stop)
+            self.inner
+                .query(endpoint, query_text, stop, max_intermediate_cells)
         }
     }
 
@@ -759,16 +829,23 @@ mod tests {
             _endpoint: &str,
             _query_text: &str,
             stop: Option<&Arc<dyn StopSignal>>,
+            max_intermediate_cells: Option<u64>,
         ) -> Result<ResolvedBindings, RemoteError> {
             self.calls.fetch_add(1, Ordering::Relaxed);
             if let Some(cause) = stop.and_then(|signal| signal.poll()) {
                 return Err(RemoteError::Governed(TrippedGovernor::Stopped { cause }));
             }
+            let admitted = max_intermediate_cells
+                .and_then(|cells| usize::try_from(cells).ok())
+                .unwrap_or(self.rows)
+                .min(self.rows);
             Ok(ResolvedBindings {
                 variables: vec![Variable::new("n")],
-                rows: (0..self.rows)
+                rows: (0..admitted)
                     .map(|i| vec![Some(TermValue::Iri(format!("{EX}r{i}")))])
                     .collect(),
+                cell_limit_exceeded_at: (self.rows > admitted)
+                    .then(|| (admitted as u64).saturating_add(1)),
             })
         }
     }
@@ -785,6 +862,7 @@ mod tests {
             _endpoint: &str,
             _query_text: &str,
             _stop: Option<&Arc<dyn StopSignal>>,
+            _max_intermediate_cells: Option<u64>,
         ) -> Result<ResolvedBindings, RemoteError> {
             Err(RemoteError::Governed(TrippedGovernor::Stopped {
                 cause: self.0,
@@ -973,6 +1051,7 @@ mod tests {
                 &format!("{EX}sparql"),
                 "SELECT * WHERE { ?s ?p ?o }",
                 Some(&deadline),
+                None,
             )
             .expect_err("an expired deadline refuses the request");
         assert_eq!(
@@ -1016,9 +1095,9 @@ mod tests {
             "the federation costs exactly one request plus one unit per ingested row"
         );
 
-        // A cell ceiling below the response's size trips the cardinality governor — and
-        // trips it BEFORE a row is interned, so the ceiling bounds the allocation instead
-        // of reporting on one already made.
+        // A cell ceiling below the response's size trips the cardinality governor. The
+        // source materializes only the admitted prefix and reports the first refused row;
+        // ingest interns that prefix but never allocates the overflowing row.
         let source = FixtureSource::new(N);
         let cells = N as u64 - 1; // one column, so cells == rows
         let capped = run_governed(
@@ -1038,8 +1117,9 @@ mod tests {
              a way past the memory ceiling"
         );
         assert_eq!(
-            capped.rows, 0,
-            "not one row of an oversized response is interned"
+            capped.rows,
+            N - 1,
+            "the admitted prefix is useful, and the limit+1 row is never materialized"
         );
     }
 

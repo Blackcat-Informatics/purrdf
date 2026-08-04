@@ -73,7 +73,9 @@ mod xml_read;
 pub use csv::to_csv;
 pub use error::Error;
 pub use json::to_json;
-pub use json_read::{ParsedSolutions, from_json, from_json_boolean};
+pub use json_read::{
+    BoundedParsedSolutions, ParsedSolutions, from_json, from_json_boolean, from_json_bounded,
+};
 pub use model::{ResultProvenance, SolutionProvenance};
 pub use tsv::to_tsv;
 pub use xml::to_xml;

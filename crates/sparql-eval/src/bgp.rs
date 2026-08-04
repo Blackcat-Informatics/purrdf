@@ -175,7 +175,14 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
     let ceiling = ctx.row_ceiling();
     let last_stage = order.len().saturating_sub(1);
 
-    // Index-nested-loop evaluation. Rows start as a single all-unbound solution.
+    // Index-nested-loop evaluation. Rows start as a single all-unbound solution. That
+    // seed is itself a working-width intermediate row, so a ceiling narrower than one row
+    // refuses it before the `SmallVec` is allocated.
+    let cell_ceiling = ctx.cell_row_ceiling(working.len());
+    if cell_ceiling == Some(0) {
+        let _ = ctx.observe_cells(1, working.len());
+        return Ok(empty_over_real_vars(&working));
+    }
     let mut rows: Vec<Solution<D::Id>> = vec![smallvec::smallvec![None; working.len()]];
     for (stage, &i) in order.iter().enumerate() {
         let cp = &compiled[i];
@@ -274,16 +281,42 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
         // The bounded driver is sequential; see `parallel::bounded_chunk_map_metered` for
         // why a per-chunk ceiling would stop nothing. Every other stage — and every BGP
         // with no ceiling at all — takes the parallel driver unchanged.
-        let effective_ceiling = ceiling
-            .filter(|_| stage == last_stage)
-            .or_else(|| stop_observable.then_some(usize::MAX));
-        let (next, ledger) = match effective_ceiling {
-            Some(ceiling) => {
-                crate::parallel::bounded_chunk_map_metered(&rows, metered, ceiling, expand)
-            }
-            None => crate::parallel::par_chunk_map_metered(&rows, metered, expand),
+        let semantic_ceiling = ceiling.filter(|_| stage == last_stage);
+        // A semantic ceiling (LIMIT or the answer-cap + 1 pushdown) may stop exactly at its
+        // bound: rows beyond it provably cannot affect the query. The allocation ceiling is
+        // different and inclusive, so it must probe for one more *qualifying* row before it
+        // can call an exactly-full bag truncated. When the semantic ceiling is tighter, it
+        // wins and no cell overflow exists to discover.
+        let cell_governs =
+            cell_ceiling.filter(|cell| semantic_ceiling.is_none_or(|semantic| *cell < semantic));
+        let (next, ledger, cell_overflowed) = if let Some(cell) = cell_governs {
+            crate::parallel::cell_bounded_chunk_map_metered(&rows, metered, cell, expand)
+        } else {
+            let effective_ceiling =
+                semantic_ceiling.or_else(|| stop_observable.then_some(usize::MAX));
+            let (next, ledger) = match effective_ceiling {
+                Some(ceiling) => {
+                    crate::parallel::bounded_chunk_map_metered(&rows, metered, ceiling, expand)
+                }
+                None => crate::parallel::par_chunk_map_metered(&rows, metered, expand),
+            };
+            (next, ledger, false)
         };
         rows = next;
+        if cell_overflowed {
+            // The sink refused (and did not store) row `cell + 1`; record precisely that
+            // attempted peak. `commit_node_output` will wrap the retained prefix in the
+            // ordinary leaf-origin certificate.
+            let _ = ctx.observe_cells(rows.len().saturating_add(1), working.len());
+            if stage != last_stage {
+                // These are working rows waiting for a later triple pattern, not answers.
+                // Publishing them would leave that later pattern's variables unbound and
+                // certify rows the complete BGP never contains. The empty bag is the only
+                // sound lower bound when an internal stage is what crossed the ceiling;
+                // a final-stage cut, by contrast, is already a genuine answer prefix.
+                rows.clear();
+            }
+        }
         // The ordered fold. Chunk workers accumulated their per-item charges with no
         // atomics and nothing shared; this walks the concatenated ledger in source-item
         // order on one thread, so the item at which the budget runs out is the same one

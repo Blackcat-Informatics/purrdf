@@ -475,6 +475,13 @@ pub(crate) struct RowSink<'a, R> {
     out: &'a mut Vec<R>,
     /// The total this sink will accept. `usize::MAX` is "no ceiling".
     ceiling: usize,
+    /// Whether reaching the ceiling itself closes the sink (semantic LIMIT/answer-cap
+    /// pushdown), or whether the sink stays open until a further row is refused
+    /// (intermediate-cell governance, whose inclusive boundary must distinguish exactly
+    /// full from overflowing).
+    stop_when_full: bool,
+    /// A qualifying row was offered after `ceiling` rows were already stored.
+    overflowed: bool,
 }
 
 impl<'a, R> RowSink<'a, R> {
@@ -483,12 +490,31 @@ impl<'a, R> RowSink<'a, R> {
         Self {
             out,
             ceiling: usize::MAX,
+            stop_when_full: true,
+            overflowed: false,
         }
     }
 
     /// A sink that accepts rows until `out` holds `ceiling` of them.
     fn bounded(out: &'a mut Vec<R>, ceiling: usize) -> Self {
-        Self { out, ceiling }
+        Self {
+            out,
+            ceiling,
+            stop_when_full: true,
+            overflowed: false,
+        }
+    }
+
+    /// A sink for an inclusive allocation ceiling: retain at most `ceiling` rows, but keep
+    /// probing until a qualifying row beyond it is offered. The refused row is never
+    /// stored, and its existence is the proof that the exactly-full bag was not complete.
+    fn overflow_bounded(out: &'a mut Vec<R>, ceiling: usize) -> Self {
+        Self {
+            out,
+            ceiling,
+            stop_when_full: false,
+            overflowed: false,
+        }
     }
 
     /// Accept `row`, unless this sink is already full.
@@ -501,13 +527,25 @@ impl<'a, R> RowSink<'a, R> {
     pub(crate) fn push(&mut self, row: R) {
         if self.out.len() < self.ceiling {
             self.out.push(row);
+        } else {
+            self.overflowed = true;
         }
     }
 
     /// Whether this sink has reached its ceiling, so the loop feeding it may stop.
     #[inline]
     pub(crate) fn is_full(&self) -> bool {
-        self.out.len() >= self.ceiling
+        if self.stop_when_full {
+            self.out.len() >= self.ceiling
+        } else {
+            self.overflowed
+        }
+    }
+
+    /// Whether this sink refused a qualifying row beyond its inclusive ceiling.
+    #[inline]
+    fn overflowed(&self) -> bool {
+        self.overflowed
     }
 }
 
@@ -546,6 +584,39 @@ pub(crate) fn bounded_chunk_map_metered<T, R>(
         }
     }
     (out, ledger)
+}
+
+/// The allocation-ceiling sibling of [`bounded_chunk_map_metered`]. It is sequential for
+/// the same reason, but reaching `ceiling` does not itself stop the fold: an inclusive
+/// ceiling admits an exactly-full bag. The fold stops only when the producer offers one
+/// further qualifying row; that row is refused before vector growth and `true` is returned
+/// as the overflow flag.
+pub(crate) fn cell_bounded_chunk_map_metered<T, R>(
+    items: &[T],
+    metered: bool,
+    ceiling: usize,
+    push: impl Fn(&mut RowSink<'_, R>, &mut u64, &T),
+) -> (Vec<R>, Vec<ItemCharge>, bool) {
+    let mut out = Vec::with_capacity(ceiling.min(items.len()));
+    let mut ledger = Vec::with_capacity(if metered { items.len() } else { 0 });
+    let mut overflowed = false;
+    for item in items {
+        let before = out.len();
+        let mut fuel = 0_u64;
+        let mut sink = RowSink::overflow_bounded(&mut out, ceiling);
+        push(&mut sink, &mut fuel, item);
+        overflowed = sink.overflowed();
+        if metered {
+            ledger.push(ItemCharge {
+                fuel,
+                committed: (out.len() - before) as u64,
+            });
+        }
+        if overflowed {
+            break;
+        }
+    }
+    (out, ledger, overflowed)
 }
 
 /// [`par_chunk_map`] with a **deterministic charge meter**: alongside its output rows,

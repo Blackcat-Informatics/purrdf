@@ -146,6 +146,7 @@ where
         endpoint: &str,
         query_text: &str,
         stop: Option<&Arc<dyn StopSignal>>,
+        max_intermediate_cells: Option<u64>,
     ) -> Result<ResolvedBindings, RemoteError> {
         if let Some(cause) = stop.and_then(|signal| signal.poll()) {
             return Err(RemoteError::Governed(TrippedGovernor::Stopped { cause }));
@@ -170,13 +171,28 @@ where
             ));
         }
 
-        let parsed = purrdf_sparql_results::from_json(&body).map_err(|e| {
-            RemoteError::Decode(format!("SPARQL-results JSON from <{endpoint}>: {e}"))
-        })?;
+        let (parsed, cell_limit_exceeded_at) = if let Some(max_cells) = max_intermediate_cells {
+            let bounded =
+                purrdf_sparql_results::from_json_bounded(&body, max_cells).map_err(|e| {
+                    RemoteError::Decode(format!("SPARQL-results JSON from <{endpoint}>: {e}"))
+                })?;
+            let attempted = bounded.truncated.then(|| {
+                (bounded.solutions.rows.len() as u64)
+                    .saturating_add(1)
+                    .saturating_mul(bounded.solutions.variables.len() as u64)
+            });
+            (bounded.solutions, attempted)
+        } else {
+            let parsed = purrdf_sparql_results::from_json(&body).map_err(|e| {
+                RemoteError::Decode(format!("SPARQL-results JSON from <{endpoint}>: {e}"))
+            })?;
+            (parsed, None)
+        };
 
         Ok(ResolvedBindings {
             variables: parsed.variables.into_iter().map(Variable::new).collect(),
             rows: parsed.rows,
+            cell_limit_exceeded_at,
         })
     }
 }

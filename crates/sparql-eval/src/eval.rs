@@ -620,6 +620,34 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         Some(usize::try_from(ceiling).unwrap_or(usize::MAX))
     }
 
+    /// The largest number of `columns`-wide rows one materialized operator bag may hold
+    /// under the intermediate-cell ceiling.
+    ///
+    /// `None` is the zero-cost lane: the dimension is not engaged, the schema is empty
+    /// (zero cells however many unit rows it carries), or the ceiling cannot be reached by
+    /// a `usize`-addressable allocation on this target. Callers branch on this once before
+    /// entering their row loop, so an ungoverned execution keeps its existing allocation
+    /// and parallel path byte-for-byte.
+    ///
+    /// This only computes the inclusive bound; it does not record a trip. A producer must
+    /// continue until it encounters the first qualifying row past this count, call
+    /// [`Self::observe_cells`] for that attempted size, and decline to store the row. That
+    /// distinction is what tells an exactly-full (complete) bag from an overflowing one
+    /// without ever allocating row `limit + 1`.
+    pub(crate) fn cell_row_ceiling(&self, columns: usize) -> Option<usize> {
+        if columns == 0 {
+            return None;
+        }
+        let state = self.governors.as_ref()?;
+        let dimension = purrdf_core::ResourceDimension::IntermediateCells;
+        if !state.is_engaged_in(dimension) {
+            return None;
+        }
+        let columns = u64::try_from(columns).unwrap_or(u64::MAX);
+        let rows = state.limits().get(dimension) / columns;
+        usize::try_from(rows).ok()
+    }
+
     /// Enter `pattern` as the node being evaluated, returning the cursors to restore.
     ///
     /// Both cursors move together, except that the ledger's only moves when `pattern` is a
@@ -856,13 +884,21 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// The governor that stopped this execution, once one has.
     #[inline]
     pub(crate) fn observe_cells(&self, rows: usize, columns: usize) -> Result<(), TrippedGovernor> {
+        let cells = (rows as u64).saturating_mul(columns as u64);
+        self.observe_cell_count(cells)
+    }
+
+    /// Record an already cell-denominated intermediate observation. Federation uses this
+    /// when a bounded source reports the exact first response size it refused without
+    /// materializing; ordinary in-engine producers use [`Self::observe_cells`].
+    #[inline]
+    pub(crate) fn observe_cell_count(&self, cells: u64) -> Result<(), TrippedGovernor> {
         let Some(state) = self.governors.as_ref() else {
             return Ok(());
         };
         if !state.is_engaged_in(purrdf_core::ResourceDimension::IntermediateCells) {
             return Ok(());
         }
-        let cells = (rows as u64).saturating_mul(columns as u64);
         if let Some(ledger) = self.ledger.as_ref() {
             ledger.record_cells(self.ledger_node, cells);
         }

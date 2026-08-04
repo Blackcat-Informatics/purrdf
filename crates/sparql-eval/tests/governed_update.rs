@@ -833,6 +833,45 @@ fn an_intermediate_cell_ceiling_refuses_an_update_whose_where_would_breach_it() 
     assert_eq!(store_image(&dataset), image_before);
 }
 
+#[test]
+fn an_intermediate_cell_ceiling_bounds_update_staging_before_limit_plus_one() {
+    // One one-cell WHERE row fits easily. Its template expands to three quads, so an
+    // eight-cell staging ceiling admits two four-position quads and refuses the third
+    // before either staging vector grows. UPDATE remains all-or-nothing: even the admitted
+    // prefix is not published.
+    let update = format!(
+        "{PREFIX}INSERT {{
+           ex:new ex:a ?value .
+           ex:new ex:b ?value .
+           ex:new ex:c ?value
+         }} WHERE {{ VALUES ?value {{ ex:value }} }}"
+    );
+    let engine = NativeSparqlEngine::new();
+    let mut dataset = fixture();
+    let handle_before = Arc::clone(&dataset);
+    let image_before = store_image(&dataset);
+
+    let outcome = engine
+        .update_governed(
+            &mut dataset,
+            request(&update),
+            &QueryGovernors::UNBOUNDED.with_max_intermediate_cells(8),
+        )
+        .expect("a staging trip is an outcome, not an update error");
+
+    assert_eq!(
+        outcome.tripped(),
+        Some(TrippedGovernor::Budget {
+            dimension: ResourceDimension::IntermediateCells,
+            limit: 8,
+            consumed: 12,
+        })
+    );
+    assert!(!outcome.is_applied());
+    assert_eq!(store_image(&dataset), image_before);
+    assert!(Arc::ptr_eq(&dataset, &handle_before));
+}
+
 /// The answer cap does not apply to an UPDATE, and is not silently approximated by capping
 /// something else.
 ///

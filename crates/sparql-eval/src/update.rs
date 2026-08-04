@@ -523,6 +523,10 @@ fn delete_insert(
                 &mut ctx,
                 with_value.as_ref(),
             ) {
+                observe_staged_mutation(
+                    cfg.governors,
+                    to_remove.len().saturating_add(to_insert.len()),
+                )?;
                 to_remove.push(q);
             }
         }
@@ -536,6 +540,10 @@ fn delete_insert(
                 &mut ctx,
                 with_value.as_ref(),
             ) {
+                observe_staged_mutation(
+                    cfg.governors,
+                    to_remove.len().saturating_add(to_insert.len()),
+                )?;
                 to_insert.push(q);
             }
         }
@@ -556,6 +564,27 @@ fn delete_insert(
         m.insert(q);
     }
     Ok(())
+}
+
+/// Admit one more quad into an UPDATE's all-or-nothing mutation staging area before either
+/// staging vector grows. A quad occupies four RDF positions (the graph position is a cell
+/// even when it is the default graph), so the query-wide intermediate-cell ceiling also
+/// bounds a template that expands one WHERE row into an arbitrarily large mutation batch.
+fn observe_staged_mutation(
+    governors: Option<&Arc<GovernorState>>,
+    already_staged: usize,
+) -> Result<(), UpdateAbort> {
+    let Some(state) = governors else {
+        return Ok(());
+    };
+    let dimension = ResourceDimension::IntermediateCells;
+    if !state.is_engaged_in(dimension) {
+        return Ok(());
+    }
+    let attempted = (already_staged as u64).saturating_add(1).saturating_mul(4);
+    state
+        .observe_peak(dimension, attempted)
+        .map_err(UpdateAbort::Tripped)
 }
 
 /// Refuse an UPDATE's `WHERE` whose predicted peak intermediate bag already breaches the

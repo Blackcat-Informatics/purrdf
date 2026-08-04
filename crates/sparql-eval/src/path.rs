@@ -270,12 +270,26 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
     // order is the traversal order below, and the loops that can be stopped are stopped at
     // the top of an iteration — so what is skipped is whole `node_reach` traversals, which
     // is where a path's cost lives, not merely the row that would have been pushed.
-    let ceiling = ctx.row_ceiling().unwrap_or(usize::MAX);
+    let semantic_ceiling = ctx.row_ceiling();
+    let cell_ceiling = ctx.cell_row_ceiling(width);
 
     let mut rows: Vec<Solution<D::Id>> = Vec::new();
-    let push_pair = |rows: &mut Vec<Solution<D::Id>>,
+    let push_pair = |ctx: &EvalCtx<'_, D>,
+                     rows: &mut Vec<Solution<D::Id>>,
                      s_id: Option<SolutionTerm<D::Id>>,
-                     o_id: Option<SolutionTerm<D::Id>>| {
+                     o_id: Option<SolutionTerm<D::Id>>|
+     -> bool {
+        // LIMIT / answer-cap pushdown proves rows at and beyond this point irrelevant to
+        // the query and may stop exactly at its bound. A cell ceiling is inclusive and
+        // therefore stops only when a further qualifying row exists; record that attempted
+        // row before constructing its `SmallVec`, then decline the allocation.
+        if semantic_ceiling.is_some_and(|cap| rows.len() >= cap) {
+            return false;
+        }
+        if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
+            let _ = ctx.observe_cells(rows.len().saturating_add(1), width);
+            return false;
+        }
         let mut row = smallvec::smallvec![None; width];
         if let (Some(c), Some(id)) = (s_col, s_id) {
             row[c] = Some(id);
@@ -284,6 +298,7 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
             row[c] = Some(id);
         }
         rows.push(row);
+        true
     };
 
     match (s_end, o_end) {
@@ -293,7 +308,9 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
         (Endpoint::Bound(sid), Endpoint::Bound(oid)) => {
             let count = node_reach(sid, true).iter().filter(|&&y| y == oid).count();
             for _ in 0..count {
-                rows.push(smallvec::smallvec![None; width]);
+                if !push_pair(ctx, &mut rows, None, None) {
+                    break;
+                }
             }
         }
         // Both ground but absent from the dataset entirely: the only way they can
@@ -301,7 +318,7 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
         // SAME term (an absent node has no edges to traverse for anything else).
         (Endpoint::BoundAbsent(sval), Endpoint::BoundAbsent(oval)) => {
             if sval == oval && path_is_reflexive(path) {
-                rows.push(smallvec::smallvec![None; width]);
+                let _ = push_pair(ctx, &mut rows, None, None);
             }
         }
         // One side present in the dataset, the other absent: they cannot be the
@@ -312,14 +329,14 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
         // Subject ground, object variable: walk forward from the subject.
         (Endpoint::Bound(sid), Endpoint::Free { .. }) => {
             for y in node_reach(sid, true) {
-                if rows.len() >= ceiling {
-                    break;
-                }
-                push_pair(
+                if !push_pair(
+                    ctx,
                     &mut rows,
                     Some(SolutionTerm::Existing(sid)),
                     Some(SolutionTerm::Existing(y)),
-                );
+                ) {
+                    break;
+                }
             }
         }
         // Subject ground but absent from the dataset, object variable: only the
@@ -327,20 +344,20 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
         (Endpoint::BoundAbsent(sval), Endpoint::Free { .. }) => {
             if path_is_reflexive(path) {
                 let term = ctx.scratch.intern(dataset, sval);
-                push_pair(&mut rows, Some(term), Some(term));
+                let _ = push_pair(ctx, &mut rows, Some(term), Some(term));
             }
         }
         // Object ground, subject variable: walk backward from the object.
         (Endpoint::Free { .. }, Endpoint::Bound(oid)) => {
             for x in node_reach(oid, false) {
-                if rows.len() >= ceiling {
-                    break;
-                }
-                push_pair(
+                if !push_pair(
+                    ctx,
                     &mut rows,
                     Some(SolutionTerm::Existing(x)),
                     Some(SolutionTerm::Existing(oid)),
-                );
+                ) {
+                    break;
+                }
             }
         }
         // Object ground but absent from the dataset, subject variable: symmetric
@@ -348,7 +365,7 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
         (Endpoint::Free { .. }, Endpoint::BoundAbsent(oval)) => {
             if path_is_reflexive(path) {
                 let term = ctx.scratch.intern(dataset, oval);
-                push_pair(&mut rows, Some(term), Some(term));
+                let _ = push_pair(ctx, &mut rows, Some(term), Some(term));
             }
         }
         // Both variable: enumerate the node universe (so zero-length `*`/`?`/`{0,…}`
@@ -365,43 +382,43 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
                 // require an actual traversal to discover whether x cycles back to
                 // itself — and for a bag path, count EACH derivation as its own row.
                 let reflexive = path_is_reflexive(path);
-                for x in node_universe(&pctx) {
-                    if rows.len() >= ceiling {
-                        break;
-                    }
+                'nodes: for x in node_universe(&pctx) {
                     if reflexive {
-                        push_pair(
+                        if !push_pair(
+                            ctx,
                             &mut rows,
                             Some(SolutionTerm::Existing(x)),
                             Some(SolutionTerm::Existing(x)),
-                        );
+                        ) {
+                            break;
+                        }
                     } else {
                         let count = node_reach(x, true).into_iter().filter(|&y| y == x).count();
                         for _ in 0..count {
-                            push_pair(
+                            if !push_pair(
+                                ctx,
                                 &mut rows,
                                 Some(SolutionTerm::Existing(x)),
                                 Some(SolutionTerm::Existing(x)),
-                            );
+                            ) {
+                                break 'nodes;
+                            }
                         }
                     }
                 }
             } else {
                 // PINNED: spec-mandated distinct-var enumeration — enumerate every node
                 // in the universe and materialise all forward reachability. DO NOT alter.
-                for x in node_universe(&pctx) {
-                    if rows.len() >= ceiling {
-                        break;
-                    }
+                'nodes: for x in node_universe(&pctx) {
                     for y in node_reach(x, true) {
-                        if rows.len() >= ceiling {
-                            break;
-                        }
-                        push_pair(
+                        if !push_pair(
+                            ctx,
                             &mut rows,
                             Some(SolutionTerm::Existing(x)),
                             Some(SolutionTerm::Existing(y)),
-                        );
+                        ) {
+                            break 'nodes;
+                        }
                     }
                 }
             }

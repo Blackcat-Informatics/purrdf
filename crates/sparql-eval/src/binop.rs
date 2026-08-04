@@ -72,7 +72,7 @@ pub(crate) fn eval_join<D: DatasetView + Sync>(
     let Some(r) = lift.absorb(1, eval_evaluated(right, ctx)?) else {
         return Ok(lift.withheld());
     };
-    Ok(lift.finish(hash_join(&l, &r)))
+    Ok(lift.finish(hash_join(&l, &r, ctx)))
 }
 
 /// Evaluate `LATERAL` (a correlated join): for each left solution μ, evaluate
@@ -144,8 +144,10 @@ pub(crate) fn eval_lateral<D: DatasetView + Sync>(
 
     let out = Arc::new(left_schema.union(&right_schema));
     let out_len = out.len();
-    let mut rows: Vec<Solution<D::Id>> = Vec::new();
-    for (mu, r) in &per_row {
+    let cell_ceiling = ctx.cell_row_ceiling(out_len);
+    let mut rows: Vec<Solution<D::Id>> =
+        Vec::with_capacity(cell_ceiling.map_or(per_row.len(), |cap| cap.min(per_row.len())));
+    'left: for (mu, r) in &per_row {
         let right_to_out = right_to_out_map(&r.schema, &out);
         for nu in &r.rows {
             // Start from μ: left columns are out[0..left_len] in the same order.
@@ -167,6 +169,10 @@ pub(crate) fn eval_lateral<D: DatasetView + Sync>(
                 }
             }
             if compatible_row {
+                if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
+                    let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+                    break 'left;
+                }
                 rows.push(row);
             }
         }
@@ -241,7 +247,7 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
         let Some(r) = lift.absorb(1, eval_evaluated(right, ctx)?) else {
             return Ok(lift.withheld());
         };
-        return Ok(lift.finish(concat_union(&l, &r)));
+        return Ok(lift.finish(concat_union(&l, &r, ctx)));
     }
 
     let base = ctx.scratch.computed_count();
@@ -337,20 +343,34 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
 /// union schema (left columns first). Shared by both the sequential fallback
 /// and (conceptually) documents the exact row shape the parallel path in
 /// [`eval_union`] must reproduce.
-fn concat_union<I: ViewTermId>(l: &SolutionSeq<I>, r: &SolutionSeq<I>) -> SolutionSeq<I> {
+fn concat_union<D: DatasetView + Sync>(
+    l: &SolutionSeq<D::Id>,
+    r: &SolutionSeq<D::Id>,
+    ctx: &EvalCtx<'_, D>,
+) -> SolutionSeq<D::Id> {
     let out = l.schema.union(&r.schema);
     let out_len = out.len();
     let left_len = l.schema.len();
     let right_to_out = right_to_out_map(&r.schema, &out);
 
-    let mut rows = Vec::with_capacity(l.rows.len() + r.rows.len());
+    let expected = l.rows.len().saturating_add(r.rows.len());
+    let cell_ceiling = ctx.cell_row_ceiling(out_len);
+    let mut rows = Vec::with_capacity(cell_ceiling.map_or(expected, |cap| cap.min(expected)));
     for lrow in &l.rows {
+        if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
+            let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+            break;
+        }
         // Left columns are out[0..left_len] in order; pad the rest with None.
         let mut row = smallvec::smallvec![None; out_len];
         row[..left_len].copy_from_slice(lrow);
         rows.push(row);
     }
     for rrow in &r.rows {
+        if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
+            let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+            break;
+        }
         let mut row = smallvec::smallvec![None; out_len];
         for (j, &cell) in rrow.iter().enumerate() {
             row[right_to_out[j]] = cell;
@@ -499,7 +519,11 @@ pub(crate) fn probe_has_match<I: ViewTermId>(
 }
 
 /// Hash-join two solution sequences on their shared variables.
-fn hash_join<I: ViewTermId>(l: &SolutionSeq<I>, r: &SolutionSeq<I>) -> SolutionSeq<I> {
+fn hash_join<D: DatasetView + Sync>(
+    l: &SolutionSeq<D::Id>,
+    r: &SolutionSeq<D::Id>,
+    ctx: &EvalCtx<'_, D>,
+) -> SolutionSeq<D::Id> {
     let out = l.schema.union(&r.schema);
     let out_len = out.len();
     let left_len = l.schema.len();
@@ -517,34 +541,78 @@ fn hash_join<I: ViewTermId>(l: &SolutionSeq<I>, r: &SolutionSeq<I>) -> SolutionS
     // row sequence. Captures only read-only borrows: `keyed`/`wild`/`r.rows` (the
     // prebuilt index), `right_to_out`/`shared` (pure layout), `left_len`/`out_len`
     // (`Copy`), and `merge`/`compatible` (pure fns).
-    let rows = crate::parallel::par_chunk_map(&l.rows, |acc, lrow| {
-        match bound_key(lrow, &shared, KeySide::Left) {
-            // Probe is fully bound on shared columns: hit the matching bucket
-            // (exact key ⇒ compatible) plus any wild build rows it is compatible
-            // with (a wild row's None shared column matches anything).
-            Some(key) => {
-                if let Some(idxs) = keyed.get(&key) {
-                    for &idx in idxs {
-                        acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+    let rows = if let Some(cell_ceiling) = ctx.cell_row_ceiling(out_len) {
+        // A global allocation bound cannot be divided among parallel chunks without each
+        // chunk receiving (and allocating) the whole allowance. Keep this governed lane in
+        // source order and test the ceiling before `merge` constructs the next row.
+        let worst_case = l.rows.len().saturating_mul(r.rows.len());
+        let mut rows = Vec::with_capacity(cell_ceiling.min(worst_case));
+        'left: for lrow in &l.rows {
+            match bound_key(lrow, &shared, KeySide::Left) {
+                Some(key) => {
+                    if let Some(idxs) = keyed.get(&key) {
+                        for &idx in idxs {
+                            if rows.len() >= cell_ceiling {
+                                let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+                                break 'left;
+                            }
+                            rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                        }
+                    }
+                    for &idx in &wild {
+                        if compatible(lrow, &r.rows[idx], &shared) {
+                            if rows.len() >= cell_ceiling {
+                                let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+                                break 'left;
+                            }
+                            rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                        }
                     }
                 }
-                for &idx in &wild {
-                    if compatible(lrow, &r.rows[idx], &shared) {
-                        acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
-                    }
-                }
-            }
-            // Probe has an unbound shared column: it can match any build row, so
-            // fall back to a compatibility scan over all of them.
-            None => {
-                for rrow in &r.rows {
-                    if compatible(lrow, rrow, &shared) {
-                        acc.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
+                None => {
+                    for rrow in &r.rows {
+                        if compatible(lrow, rrow, &shared) {
+                            if rows.len() >= cell_ceiling {
+                                let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+                                break 'left;
+                            }
+                            rows.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
+                        }
                     }
                 }
             }
         }
-    });
+        rows
+    } else {
+        crate::parallel::par_chunk_map(&l.rows, |acc, lrow| {
+            match bound_key(lrow, &shared, KeySide::Left) {
+                // Probe is fully bound on shared columns: hit the matching bucket
+                // (exact key ⇒ compatible) plus any wild build rows it is compatible
+                // with (a wild row's None shared column matches anything).
+                Some(key) => {
+                    if let Some(idxs) = keyed.get(&key) {
+                        for &idx in idxs {
+                            acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                        }
+                    }
+                    for &idx in &wild {
+                        if compatible(lrow, &r.rows[idx], &shared) {
+                            acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                        }
+                    }
+                }
+                // Probe has an unbound shared column: it can match any build row, so
+                // fall back to a compatibility scan over all of them.
+                None => {
+                    for rrow in &r.rows {
+                        if compatible(lrow, rrow, &shared) {
+                            acc.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
+                        }
+                    }
+                }
+            }
+        })
+    };
 
     SolutionSeq {
         schema: Arc::new(out),
@@ -597,6 +665,12 @@ fn merge<I: ViewTermId>(
     right_to_out: &[usize],
     out_len: usize,
 ) -> Solution<I> {
+    #[cfg(test)]
+    MERGE_COUNT.with(|count| {
+        if let Some(current) = count.get() {
+            count.set(Some(current.saturating_add(1)));
+        }
+    });
     debug_assert_eq!(left_row.len(), left_len);
     // One exact-size allocation, initialized from the left row directly (no
     // write-None-then-overwrite pass over the left prefix).
@@ -610,6 +684,21 @@ fn merge<I: ViewTermId>(
         }
     }
     merged
+}
+
+#[cfg(test)]
+std::thread_local! {
+    /// Per-test proof that a cell-bounded cross product checks the sink before constructing
+    /// row `limit + 1`. `None` keeps ordinary tests and production builds free.
+    static MERGE_COUNT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn counting_merges<T>(run: impl FnOnce() -> T) -> (T, usize) {
+    let previous = MERGE_COUNT.with(|count| count.replace(Some(0)));
+    let output = run();
+    let observed = MERGE_COUNT.with(|count| count.replace(previous).unwrap_or(0));
+    (output, observed)
 }
 
 /// Evaluate `left OPTIONAL { right }` (algebra `LeftJoin`) as a left outer join,
@@ -698,7 +787,7 @@ fn left_join_lift<D: DatasetView + Sync>(
     // why padding then bounds the answer on neither side.
     let pad_unmatched = !lift.is_truncated();
     let joined = match expression {
-        None => left_outer_join(&l, &r, pad_unmatched),
+        None => left_outer_join(&l, &r, ctx, pad_unmatched),
         Some(expr) => left_outer_join_filtered(&l, &r, expr, ctx, pad_unmatched)?,
     };
     // An `EXISTS` inside the inline condition is an opaque edge: a trip inside it makes
@@ -745,7 +834,8 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
     let shared = l.schema.shared_columns(&r.schema);
 
     // A left outer join emits at least one row per left row.
-    let rows = if ctx.may_fork_row_loop(expr) {
+    let cell_ceiling = ctx.cell_row_ceiling(out_len);
+    let rows = if cell_ceiling.is_none() && ctx.may_fork_row_loop(expr) {
         crate::parallel::par_chunk_try_map_init(
             &l.rows,
             || ctx.fork_for_worker(),
@@ -769,8 +859,9 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
             },
         )?
     } else {
-        let mut rows = Vec::with_capacity(l.rows.len());
-        for lrow in &l.rows {
+        let mut rows =
+            Vec::with_capacity(cell_ceiling.map_or(l.rows.len(), |cap| cap.min(l.rows.len())));
+        'left: for lrow in &l.rows {
             let mut matched = false;
             for rrow in &r.rows {
                 if !compatible(lrow, rrow, &shared) {
@@ -778,11 +869,19 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                 }
                 let merged = merge(lrow, rrow, left_len, &right_to_out, out_len);
                 if crate::expr::eval_ebv(expr, &merged, &out, ctx)? == Some(true) {
+                    if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
+                        let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+                        break 'left;
+                    }
                     rows.push(merged);
                     matched = true;
                 }
             }
             if pad_unmatched && !matched {
+                if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
+                    let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+                    break;
+                }
                 let mut row = smallvec::smallvec![None; out_len];
                 row[..left_len].copy_from_slice(lrow);
                 rows.push(row);
@@ -801,11 +900,12 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
 /// operator holds and the left-alone row must not be emitted; see [`eval_left_join`]. The
 /// operator then computes an inner join, which is what a `LeftJoin` over an incomplete
 /// right bag soundly is.
-fn left_outer_join<I: ViewTermId>(
-    l: &SolutionSeq<I>,
-    r: &SolutionSeq<I>,
+fn left_outer_join<D: DatasetView + Sync>(
+    l: &SolutionSeq<D::Id>,
+    r: &SolutionSeq<D::Id>,
+    ctx: &EvalCtx<'_, D>,
     pad_unmatched: bool,
-) -> SolutionSeq<I> {
+) -> SolutionSeq<D::Id> {
     let out = l.schema.union(&r.schema);
     let out_len = out.len();
     let left_len = l.schema.len();
@@ -819,37 +919,89 @@ fn left_outer_join<I: ViewTermId>(
     // none match, the single padded left-alone row — reproducing the existing "emit
     // alone iff no match" per-row semantics inside the worker so flattening in index
     // order is byte-identical to the sequential path.
-    let rows = crate::parallel::par_chunk_map(&l.rows, |acc, lrow| {
-        let before = acc.len();
-        match bound_key(lrow, &shared, KeySide::Left) {
-            Some(key) => {
-                if let Some(idxs) = keyed.get(&key) {
-                    for &idx in idxs {
-                        acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+    let cell_ceiling = ctx.cell_row_ceiling(out_len);
+    let rows = if let Some(cell_ceiling) = cell_ceiling {
+        let worst_case = l.rows.len().saturating_mul(r.rows.len().max(1));
+        let mut rows = Vec::with_capacity(cell_ceiling.min(worst_case));
+        'left: for lrow in &l.rows {
+            let before = rows.len();
+            match bound_key(lrow, &shared, KeySide::Left) {
+                Some(key) => {
+                    if let Some(idxs) = keyed.get(&key) {
+                        for &idx in idxs {
+                            if rows.len() >= cell_ceiling {
+                                let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+                                break 'left;
+                            }
+                            rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                        }
+                    }
+                    for &idx in &wild {
+                        if compatible(lrow, &r.rows[idx], &shared) {
+                            if rows.len() >= cell_ceiling {
+                                let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+                                break 'left;
+                            }
+                            rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                        }
                     }
                 }
-                for &idx in &wild {
-                    if compatible(lrow, &r.rows[idx], &shared) {
-                        acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                None => {
+                    for rrow in &r.rows {
+                        if compatible(lrow, rrow, &shared) {
+                            if rows.len() >= cell_ceiling {
+                                let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+                                break 'left;
+                            }
+                            rows.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
+                        }
                     }
                 }
             }
-            None => {
-                for rrow in &r.rows {
-                    if compatible(lrow, rrow, &shared) {
-                        acc.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
+            if pad_unmatched && rows.len() == before {
+                if rows.len() >= cell_ceiling {
+                    let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+                    break;
+                }
+                let mut row = smallvec::smallvec![None; out_len];
+                row[..left_len].copy_from_slice(lrow);
+                rows.push(row);
+            }
+        }
+        rows
+    } else {
+        crate::parallel::par_chunk_map(&l.rows, |acc, lrow| {
+            let before = acc.len();
+            match bound_key(lrow, &shared, KeySide::Left) {
+                Some(key) => {
+                    if let Some(idxs) = keyed.get(&key) {
+                        for &idx in idxs {
+                            acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                        }
+                    }
+                    for &idx in &wild {
+                        if compatible(lrow, &r.rows[idx], &shared) {
+                            acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                        }
+                    }
+                }
+                None => {
+                    for rrow in &r.rows {
+                        if compatible(lrow, rrow, &shared) {
+                            acc.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
+                        }
                     }
                 }
             }
-        }
-        // No compatible right solution → keep the left solution alone (the OPTIONAL
-        // contributed nothing, its variables stay unbound).
-        if pad_unmatched && acc.len() == before {
-            let mut row = smallvec::smallvec![None; out_len];
-            row[..left_len].copy_from_slice(lrow);
-            acc.push(row);
-        }
-    });
+            // No compatible right solution → keep the left solution alone (the OPTIONAL
+            // contributed nothing, its variables stay unbound).
+            if pad_unmatched && acc.len() == before {
+                let mut row = smallvec::smallvec![None; out_len];
+                row[..left_len].copy_from_slice(lrow);
+                acc.push(row);
+            }
+        })
+    };
 
     SolutionSeq {
         schema: Arc::new(out),
@@ -911,6 +1063,9 @@ mod tests {
     use super::*;
     use crate::eval::EvalCtx;
     use crate::eval::eval;
+    use crate::governor::{
+        GovernorState as TestGovernorState, QueryGovernors as TestQueryGovernors,
+    };
 
     // The operators take the algebra node itself (it names the barrier and supplies the
     // child edge classification), so these tests build the node and drive the ordinary
@@ -974,7 +1129,10 @@ mod tests {
         )
     }
     use pretty_assertions::assert_eq;
-    use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
+    use purrdf_core::{
+        RdfDataset, RdfDatasetBuilder, ResourceDimension as TestResourceDimension, TermValue,
+        TrippedGovernor as TestTrippedGovernor,
+    };
     use purrdf_sparql_algebra::{
         Literal, NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
     };
@@ -1063,6 +1221,51 @@ mod tests {
         let right = bgp(vp("p"), pred("http://ex/likes"), vp("q")); // 2 rows
         let seq = eval_join(&left, &right, &mut ctx).expect("join");
         assert_eq!(seq.len(), 2); // 1 × 2.
+    }
+
+    #[test]
+    fn cell_bounded_cross_product_refuses_before_constructing_limit_plus_one() {
+        let ds = graph();
+        let left_id = ds
+            .term_id_by_value(&TermValue::Iri("http://ex/a".to_owned()))
+            .expect("left term");
+        let right_id = ds
+            .term_id_by_value(&TermValue::Iri("http://ex/b".to_owned()))
+            .expect("right term");
+        let left = SolutionSeq {
+            schema: Arc::new(VarSchema::from_vars([Variable::new("left")])),
+            rows: (0..100)
+                .map(|_| smallvec::smallvec![Some(SolutionTerm::Existing(left_id))])
+                .collect(),
+        };
+        let right = SolutionSeq {
+            schema: Arc::new(VarSchema::from_vars([Variable::new("right")])),
+            rows: (0..100)
+                .map(|_| smallvec::smallvec![Some(SolutionTerm::Existing(right_id))])
+                .collect(),
+        };
+        // Two columns, four cells: exactly two rows fit. The 10,000-row unbounded cross
+        // product must construct only those two; candidate three records six attempted
+        // cells without calling `merge`.
+        let state = Arc::new(TestGovernorState::new(
+            &TestQueryGovernors::UNBOUNDED.with_max_intermediate_cells(4),
+        ));
+        let ctx = EvalCtx::new(&ds).with_governors(Arc::clone(&state));
+        let (joined, merges) = counting_merges(|| hash_join(&left, &right, &ctx));
+
+        assert_eq!(joined.rows.len(), 2);
+        assert_eq!(
+            merges, 2,
+            "row three must be refused before merge allocates it"
+        );
+        assert_eq!(
+            state.tripped(),
+            Some(TestTrippedGovernor::Budget {
+                dimension: TestResourceDimension::IntermediateCells,
+                limit: 4,
+                consumed: 6,
+            })
+        );
     }
 
     #[test]

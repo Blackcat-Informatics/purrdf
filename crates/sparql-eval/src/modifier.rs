@@ -41,12 +41,23 @@ pub(crate) fn eval_values<D: DatasetView + Sync>(
     // simply how many of them are worth interning. Interning is not free — every ground
     // term goes through the scratch arena's value hash — so a `VALUES` block of ten
     // thousand rows under a `LIMIT 5` stops after five.
-    let bindings = match ctx.row_ceiling() {
-        Some(ceiling) if ceiling < bindings.len() => &bindings[..ceiling],
-        Some(_) | None => bindings,
-    };
-    let mut rows = Vec::with_capacity(bindings.len());
+    let semantic_ceiling = ctx.row_ceiling();
+    let cell_ceiling = ctx.cell_row_ceiling(width);
+    let capacity = semantic_ceiling
+        .into_iter()
+        .chain(cell_ceiling)
+        .min()
+        .unwrap_or(bindings.len())
+        .min(bindings.len());
+    let mut rows = Vec::with_capacity(capacity);
     for binding in bindings {
+        if semantic_ceiling.is_some_and(|cap| rows.len() >= cap) {
+            break;
+        }
+        if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
+            let _ = ctx.observe_cells(rows.len().saturating_add(1), width);
+            break;
+        }
         let mut row = smallvec::smallvec![None; width];
         for (i, cell) in binding.iter().enumerate() {
             if let Some(ground) = cell {
