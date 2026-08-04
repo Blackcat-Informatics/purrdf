@@ -1161,7 +1161,7 @@ fn register_literals(
             }
         }
     }
-    let mut described = Vec::new();
+    let mut described = Vec::with_capacity(terms.len());
     for term in terms {
         poll(stop)?;
         if let Some(value) = data::literal_value(interner.value(term)) {
@@ -1211,7 +1211,10 @@ fn is_non_simple(
             return Ok(true);
         }
         if let Some(subs) = acc.role_sub.get(&current) {
-            stack.extend(subs.iter().copied());
+            for &sub in subs {
+                poll(stop)?;
+                stack.push(sub);
+            }
         }
     }
     Ok(false)
