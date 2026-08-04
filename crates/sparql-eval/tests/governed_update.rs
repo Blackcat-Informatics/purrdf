@@ -147,8 +147,43 @@ impl CountingResolver {
 }
 
 impl GraphResolver for CountingResolver {
-    fn resolve(&self, _iri: &str) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    fn resolve(
+        &self,
+        _request: purrdf_sparql_eval::GraphResolveRequest<'_>,
+    ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
         self.calls.fetch_add(1, Ordering::Relaxed);
+        Ok(Arc::clone(&self.document))
+    }
+}
+
+#[derive(Debug)]
+struct CancellingResolver {
+    calls: AtomicUsize,
+    flag: CancellationFlag,
+    document: Arc<RdfDataset>,
+}
+
+impl CancellingResolver {
+    fn new(flag: CancellationFlag) -> Arc<Self> {
+        let base = CountingResolver::new();
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            flag,
+            document: Arc::clone(&base.document),
+        })
+    }
+}
+
+impl GraphResolver for CancellingResolver {
+    fn resolve(
+        &self,
+        request: purrdf_sparql_eval::GraphResolveRequest<'_>,
+    ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        assert!(request.stop.is_some(), "LOAD must carry the stop signal");
+        // Complete the fetch after firing cancellation: the engine's post-return poll,
+        // not resolver cooperation, must prevent publication.
+        self.flag.cancel();
         Ok(Arc::clone(&self.document))
     }
 }
@@ -406,6 +441,37 @@ fn load_silent_does_not_launder_a_governor_trip_into_a_noop_success() {
         !outcome.is_applied(),
         "SILENT reported a stopped request as applied: {outcome:?}"
     );
+}
+
+#[test]
+fn load_returning_after_cancellation_is_discarded_before_publication() {
+    for silent in [false, true] {
+        let flag = CancellationFlag::new();
+        let resolver = CancellingResolver::new(flag.clone());
+        let engine = NativeSparqlEngine::new().with_resolver(Arc::clone(&resolver) as Arc<_>);
+        let mut dataset = fixture();
+        let handle_before = Arc::clone(&dataset);
+        let image_before = store_image(&dataset);
+        let silent = if silent { " SILENT" } else { "" };
+
+        let outcome = engine
+            .update_governed(
+                &mut dataset,
+                request(&format!("{PREFIX}LOAD{silent} ex:doc")),
+                &QueryGovernors::UNBOUNDED.with_stop_signal(Arc::new(flag)),
+            )
+            .expect("a post-return stop is an outcome");
+
+        assert_eq!(resolver.calls.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            outcome.tripped(),
+            Some(TrippedGovernor::Stopped {
+                cause: StopCause::Cancelled
+            })
+        );
+        assert_eq!(store_image(&dataset), image_before);
+        assert!(Arc::ptr_eq(&dataset, &handle_before));
+    }
 }
 
 /// A `LOAD` whose document is larger than the caller's remaining fuel trips on the

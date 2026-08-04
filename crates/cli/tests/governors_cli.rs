@@ -232,6 +232,30 @@ fn a_deadline_stops_the_query_and_names_the_stop_cause() {
     );
 }
 
+#[test]
+fn a_nonzero_deadline_stops_work_inside_the_final_operator() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut ttl = String::from("@prefix ex: <http://example.org/> .\n");
+    for index in 0..120 {
+        ttl.push_str(&format!("ex:s{index} ex:p ex:o{index} .\n"));
+    }
+    let ttl = write_file(dir.path(), "wide.ttl", &ttl);
+    let cross_product = concat!(
+        "SELECT ?a ?b ?c WHERE { ",
+        "?sa <http://example.org/p> ?a . ",
+        "?sb <http://example.org/p> ?b . ",
+        "?sc <http://example.org/p> ?c }",
+    );
+
+    let out = run(&["query", "--data", &ttl, "--deadline", "1ms", cross_product]);
+    assert_eq!(code(&out), 3, "stderr:\n{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("\ntripped deadline-exceeded\n"),
+        "{}",
+        stderr(&out)
+    );
+}
+
 /// A UNITLESS DEADLINE IS REFUSED rather than assumed to be seconds, and the refusal teaches
 /// the spelling. Exit 2, the usage code, because the command line is what is wrong.
 #[test]

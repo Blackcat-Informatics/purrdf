@@ -156,6 +156,10 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
     let metered = ctx
         .governor_state()
         .is_some_and(|state| state.is_engaged_in(purrdf_core::ResourceDimension::Fuel));
+    // A latching stop signal is inherently a sequential observation boundary. Keeping
+    // this scan on one worker makes the rows accepted before the firing poll a genuine
+    // source-order prefix instead of a scheduling-dependent mixture of later chunks.
+    let stop_observable = ctx.stop_signal().is_some();
 
     // The answer-cap / `LIMIT` pushdown's verdict for this BGP: the number of output rows
     // past which nothing this node produces can reach the query's answer. `None` is every
@@ -202,6 +206,9 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
                 GraphScope::One(gm) => {
                     let plan = plan.expect("plan computed above for GraphScope::One");
                     for quad in ctx.dataset.quads_for_pattern_with_plan(&plan, s, p, o, *gm) {
+                        if ctx.stop_check().is_some() {
+                            return;
+                        }
                         // The `bgp-candidate-quad` charge point: one unit per candidate
                         // EXAMINED, not per candidate that binds. Charging only the ones
                         // that bind would let the single most expensive shape in the
@@ -226,7 +233,7 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
                     // shows only when the scope admits the default graph (unchanged),
                     // and a `GRAPH :g`-scoped reifier shows only under that named graph.
                     emit_virtual_candidates(ctx.dataset, cp, s, p, o, reifies_id, *gm, |quad| {
-                        if acc.is_full() {
+                        if acc.is_full() || ctx.stop_check().is_some() {
                             return;
                         }
                         *fuel = fuel.saturating_add(1);
@@ -246,6 +253,9 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
                     let mut seen: DetHashSet<(D::Id, D::Id, D::Id)> = DetHashSet::default();
                     for &g in gs {
                         for quad in ctx.dataset.quads_for_pattern(s, p, o, GraphMatch::Named(g)) {
+                            if ctx.stop_check().is_some() {
+                                return;
+                            }
                             *fuel = fuel.saturating_add(1);
                             if !seen.insert((quad.s, quad.p, quad.o)) {
                                 continue;
@@ -264,7 +274,10 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
         // The bounded driver is sequential; see `parallel::bounded_chunk_map_metered` for
         // why a per-chunk ceiling would stop nothing. Every other stage — and every BGP
         // with no ceiling at all — takes the parallel driver unchanged.
-        let (next, ledger) = match ceiling.filter(|_| stage == last_stage) {
+        let effective_ceiling = ceiling
+            .filter(|_| stage == last_stage)
+            .or_else(|| stop_observable.then_some(usize::MAX));
+        let (next, ledger) = match effective_ceiling {
             Some(ceiling) => {
                 crate::parallel::bounded_chunk_map_metered(&rows, metered, ceiling, expand)
             }
@@ -289,7 +302,9 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
         // exact; the overshoot is bounded by one pattern, and the next pattern never
         // starts.
         if let Some(state) = ctx.governor_state() {
-            if metered {
+            if state.tripped().is_some() {
+                break;
+            } else if metered {
                 let crossing = state.commit_ordered_items(&ledger);
                 // The ledger line for this BGP node. The fold charged every item strictly
                 // before the crossing plus the crossing item itself (the charge is applied

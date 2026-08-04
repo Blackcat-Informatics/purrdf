@@ -117,6 +117,9 @@ impl<D: DatasetView + Sync> PathCtx<'_, D> {
         let Some(state) = self.governors.as_ref() else {
             return true;
         };
+        if state.tripped().is_some() || state.poll_stop().is_some() {
+            return false;
+        }
         let point = crate::governor::ChargePoint::PathFrontierExpansion;
         let charged = state.charge_point_if_engaged(point).is_ok();
         if charged && let Some((ledger, node)) = self.ledger.as_ref() {
@@ -134,7 +137,7 @@ impl<D: DatasetView + Sync> PathCtx<'_, D> {
     fn stopped(&self) -> bool {
         self.governors
             .as_ref()
-            .is_some_and(|state| state.tripped().is_some())
+            .is_some_and(|state| state.tripped().is_some() || state.poll_stop().is_some())
     }
 }
 

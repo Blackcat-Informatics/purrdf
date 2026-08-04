@@ -10,6 +10,7 @@
 //! are written from exactly the vantage a consumer has.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use purrdf_core::{
@@ -109,6 +110,98 @@ fn exhausted(outcome: &GovernedOutcome) -> (TrippedGovernor, &PartialAnswers, &G
             (exhausted.tripped, &exhausted.partial, &exhausted.evidence)
         }
     }
+}
+
+#[derive(Debug)]
+struct PollCountdown {
+    quiet: usize,
+    polls: AtomicUsize,
+    latched: AtomicBool,
+}
+
+impl PollCountdown {
+    fn new(quiet: usize) -> Arc<Self> {
+        Arc::new(Self {
+            quiet,
+            polls: AtomicUsize::new(0),
+            latched: AtomicBool::new(false),
+        })
+    }
+}
+
+impl StopSignal for PollCountdown {
+    fn poll(&self) -> Option<StopCause> {
+        if self.latched.load(Ordering::Relaxed) {
+            return Some(StopCause::Cancelled);
+        }
+        if self.polls.fetch_add(1, Ordering::Relaxed) < self.quiet {
+            return None;
+        }
+        self.latched.store(true, Ordering::Relaxed);
+        Some(StopCause::Cancelled)
+    }
+}
+
+fn large_fixture(edges: usize) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let p = builder.intern_iri("http://example.org/p");
+    for index in 0..edges {
+        let s = builder.intern_iri(&format!("http://example.org/n{index}"));
+        let o = builder.intern_iri(&format!("http://example.org/n{}", index + 1));
+        builder.push_quad(s, p, o, None);
+    }
+    builder.freeze().expect("freeze large fixture")
+}
+
+fn stopped_partial_rows(dataset: &Arc<RdfDataset>, query: &str) -> usize {
+    let outcome = NativeSparqlEngine::new()
+        .query_governed(
+            dataset,
+            request(query),
+            &QueryGovernors::UNBOUNDED.with_stop_signal(PollCountdown::new(16)),
+        )
+        .expect("a stop is an outcome");
+    let (tripped, partial, _) = exhausted(&outcome);
+    assert_eq!(
+        tripped,
+        TrippedGovernor::Stopped {
+            cause: StopCause::Cancelled
+        }
+    );
+    let partial = partial
+        .result()
+        .expect("these monotone plans keep a lower bound");
+    row_count(partial.result())
+}
+
+#[test]
+fn stop_only_governors_checkpoint_inside_large_bgp_path_and_expression_loops() {
+    const SIZE: usize = 256;
+    let dataset = large_fixture(SIZE);
+
+    let bgp = stopped_partial_rows(
+        &dataset,
+        "SELECT ?s ?o WHERE { ?s <http://example.org/p> ?o }",
+    );
+    assert!((1..SIZE).contains(&bgp), "BGP stopped at {bgp} rows");
+
+    let path = stopped_partial_rows(
+        &dataset,
+        "SELECT ?o WHERE { <http://example.org/n0> <http://example.org/p>+ ?o }",
+    );
+    assert!((1..SIZE).contains(&path), "path stopped at {path} rows");
+
+    let values = (0..SIZE)
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let expression_query =
+        format!("SELECT ?x WHERE {{ VALUES ?x {{ {values} }} FILTER(?x >= 0) }}");
+    let expression = stopped_partial_rows(&dataset, &expression_query);
+    assert!(
+        (1..SIZE).contains(&expression),
+        "expression loop stopped at {expression} rows"
+    );
 }
 
 #[test]

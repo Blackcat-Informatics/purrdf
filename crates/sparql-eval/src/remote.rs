@@ -93,6 +93,13 @@ pub enum RemoteError {
     /// throttling, or timeout is [`Self::Transport`], because that is the caller's
     /// endpoint misbehaving rather than the caller's budget running out.
     Governed(TrippedGovernor),
+    /// The host exchange completed after this execution's stop signal fired, so its
+    /// response was discarded before decode or ingest.
+    ///
+    /// This is distinct from [`Self::Governed`] because completing and discarding a
+    /// response removes the positional-prefix/resumption claim even though the lower
+    /// answer bound remains sound. `SERVICE SILENT` may not swallow either variant.
+    GovernedAfterCompletion(TrippedGovernor),
 }
 
 impl core::fmt::Display for RemoteError {
@@ -102,6 +109,9 @@ impl core::fmt::Display for RemoteError {
             Self::Decode(m) => write!(f, "decode: {m}"),
             Self::Disabled => write!(f, "federation disabled"),
             Self::Governed(governor) => write!(f, "governed: {governor}"),
+            Self::GovernedAfterCompletion(governor) => {
+                write!(f, "governed after completed exchange: {governor}")
+            }
         }
     }
 }
@@ -121,6 +131,41 @@ pub trait RemoteQuerySource {
     /// a federated call is where an unbounded wait is most likely. Report a fired signal as
     /// [`RemoteError::Governed`] — never as [`RemoteError::Transport`], which `SILENT` is
     /// entitled to swallow.
+    ///
+    /// # What a transport that cannot abandon an exchange still gets, and what it loses
+    ///
+    /// Polling mid-exchange is a capability, not an obligation: plenty of HTTP clients
+    /// cannot cancel a request they are already inside, and nothing here forces a host to
+    /// write one that can. So the contract is stated for both cases, and the difference
+    /// between them is pinned by the frozen governor corpus
+    /// (`vectors/sparql-governors/`, the `service-*-transport-*` cases) rather than left
+    /// to a reader's judgement.
+    ///
+    /// A transport that **ignores** `stop` still degrades only to **per-request
+    /// granularity**, never to unboundedness. The signal is polled by the evaluator
+    /// immediately before dispatch and the request is charged before it is issued, so a
+    /// signal that was already firing prevents the call, and one that fires during the
+    /// call is observed the moment control returns. The corpus pins that a cancellation
+    /// raised while a deaf transport is mid-exchange reaches the same outcome
+    /// (`stopped cancelled`) and the same exchange count (one) as it does through an
+    /// honouring transport.
+    ///
+    /// What the deaf transport loses is the **positional-prefix claim** on the
+    /// certificate. The distinction is not about how much was computed — both cases carry
+    /// the same rows — but about what a caller may do next. An honouring transport
+    /// *abandons* the exchange, so the answer that would have followed was never
+    /// established and the rows in hand are still the true output's first rows, in order:
+    /// [`PartialSparqlResult::is_positional_prefix`](crate::PartialSparqlResult::is_positional_prefix)
+    /// stays `true` and re-running under a larger budget resumes from them. A deaf
+    /// transport *completes* the exchange and the evaluator then discards its response,
+    /// so rows that would have been established are absent from the middle of the answer
+    /// rather than from its end; the positional claim is withdrawn (`false`) and with it
+    /// the resumption licence. The multiset bound is unaffected — the certificate is
+    /// [`PartialAnswers::Certain`](crate::PartialAnswers::Certain) either way — because
+    /// every row handed back was genuinely established.
+    ///
+    /// Both halves are worth stating plainly: honouring `stop` is not required for
+    /// soundness, and it does buy the caller something concrete.
     ///
     /// # Errors
     ///
@@ -218,8 +263,23 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
     // The signal travels WITH the call: while the evaluator is blocked inside it, nothing
     // else is in a position to poll.
     let stop = ctx.stop_signal().map(Arc::clone);
-    let resolved = match source.query(&endpoint, &query_text, stop.as_ref()) {
-        Ok(resolved) => resolved,
+    let response = source.query(&endpoint, &query_text, stop.as_ref());
+    // Always inspect the signal immediately after control returns. A source is permitted
+    // to be unable to abandon an in-flight request; without this checkpoint a terminal
+    // SERVICE could launder a cancellation into `Complete` because no later operator
+    // would ever poll it.
+    let post_return_trip = ctx.stop_check();
+    let resolved = match response {
+        Ok(resolved) => {
+            if let Some(tripped) = post_return_trip {
+                let schema = Arc::new(VarSchema::from_vars(resolved.variables));
+                return Ok(Evaluated::Truncated(Truncation::bag_only_origin(
+                    SolutionSeq::empty(schema),
+                    tripped,
+                )));
+            }
+            resolved
+        }
         // A governor the source was handed. Not the endpoint's failure and so not
         // silenceable — latched into the evidence so the receipt names the same governor
         // the result does.
@@ -229,7 +289,22 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
                 ctx.record_trip(governor),
             )));
         }
+        Err(RemoteError::GovernedAfterCompletion(governor)) => {
+            return Ok(Evaluated::Truncated(Truncation::bag_only_origin(
+                SolutionSeq::empty(Arc::new(VarSchema::new())),
+                ctx.record_trip(governor),
+            )));
+        }
         Err(e) => {
+            // A real endpoint failure outranks a simultaneous stop. Under SILENT the
+            // endpoint failure is deliberately erased, so the stop becomes the surviving
+            // fact and must remain non-silenceable.
+            if silent && let Some(tripped) = post_return_trip {
+                return Ok(Evaluated::Truncated(Truncation::bag_only_origin(
+                    SolutionSeq::empty(Arc::new(VarSchema::new())),
+                    tripped,
+                )));
+            }
             return silent_or_err(silent, || format!("SERVICE <{endpoint}>: {e}"))
                 .map(Evaluated::Complete);
         }

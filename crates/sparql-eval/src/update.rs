@@ -96,7 +96,7 @@ use crate::DetHashMap;
 use crate::convert::named_node_to_value;
 use crate::dataset_spec::ActiveDataset;
 use crate::eval::{BgpOrderCache, EvalCtx, StandpointPredicates, eval_evaluated};
-use crate::governor::{ChargePoint, GovernorState};
+use crate::governor::{ChargePoint, GovernorState, StopSignal};
 use crate::solution::{Solution, VarSchema};
 use crate::template::{
     instantiate_ground_term, instantiate_predicate, instantiate_term, positionally_ill_formed,
@@ -187,6 +187,7 @@ fn charge_host_fetch(governors: Option<&Arc<GovernorState>>) -> Result<(), Updat
     let Some(state) = governors else {
         return Ok(());
     };
+    check_stop(governors)?;
     state
         .charge_point_if_engaged(ChargePoint::RemoteRequestIssued)
         .and_then(|()| state.charge_if_engaged(ResourceDimension::RemoteRequests, 1))
@@ -216,12 +217,37 @@ fn charge_mutations(
     let Some(state) = governors else {
         return Ok(());
     };
+    // A deadline/cancellation-only request deliberately leaves fuel unbounded, but every
+    // mutation boundary must still observe its stop signal.
+    check_stop(governors)?;
     let units = u64::try_from(quads)
         .unwrap_or(u64::MAX)
         .saturating_mul(ChargePoint::UpdateMutatedQuad.cost());
     state
         .charge_if_engaged(ResourceDimension::Fuel, units)
         .map_err(UpdateAbort::Tripped)
+}
+
+/// One governed request handed to a SPARQL `LOAD` host resolver.
+#[derive(Clone, Copy)]
+pub struct GraphResolveRequest<'a> {
+    /// Absolute source IRI from the parsed `LOAD` operation.
+    pub iri: &'a str,
+    /// The executing request's latching stop signal, when one was supplied.
+    ///
+    /// A resolver that can abandon an in-flight fetch should poll it while waiting. The
+    /// evaluator also polls immediately after [`GraphResolver::resolve`] returns, so a
+    /// resolver that cannot abandon still cannot publish work completed after a stop.
+    pub stop: Option<&'a dyn StopSignal>,
+}
+
+impl core::fmt::Debug for GraphResolveRequest<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("GraphResolveRequest")
+            .field("iri", &self.iri)
+            .field("stop", &self.stop.is_some())
+            .finish()
+    }
 }
 
 /// Host seam for SPARQL `LOAD <iri>`: resolves a source IRI to a frozen dataset.
@@ -231,8 +257,8 @@ fn charge_mutations(
 /// a resolver: it is responsible for fetching the IRI and parsing the response into
 /// a frozen [`RdfDataset`]. Without a resolver, `LOAD` hard-fails (unless `SILENT`).
 pub trait GraphResolver {
-    /// Resolve `iri` to a frozen dataset, or a diagnostic on fetch/parse failure.
-    fn resolve(&self, iri: &str) -> Result<Arc<RdfDataset>, RdfDiagnostic>;
+    /// Resolve `request.iri` to a frozen dataset, or a diagnostic on fetch/parse failure.
+    fn resolve(&self, request: GraphResolveRequest<'_>) -> Result<Arc<RdfDataset>, RdfDiagnostic>;
 }
 
 /// Apply a parsed [`Update`] to `m` in request order.
@@ -266,6 +292,8 @@ pub(crate) fn eval_update(
     let mut bnode_counter: u64 = 0;
     for op in &update.operations {
         apply_operation(op, m, resolver, cfg, &mut bnode_counter)?;
+        // Close the single-operation terminal hole as well as the gap between operations.
+        check_stop(cfg.governors)?;
     }
     Ok(())
 }
@@ -630,10 +658,21 @@ fn load(
     };
     check_stop(governors)?;
     charge_host_fetch(governors)?;
-    let loaded = match resolver.resolve(source) {
-        Ok(ds) => ds,
+    let stop = governors.and_then(|state| state.stop_signal().map(Arc::as_ref));
+    let resolved = resolver.resolve(GraphResolveRequest { iri: source, stop });
+    let post_return_trip = check_stop(governors).err();
+    let loaded = match resolved {
+        Ok(ds) => {
+            if let Some(tripped) = post_return_trip {
+                return Err(tripped);
+            }
+            ds
+        }
         Err(e) => {
             if silent {
+                if let Some(tripped) = post_return_trip {
+                    return Err(tripped);
+                }
                 return Ok(());
             }
             return Err(UpdateAbort::Failed(e));
@@ -1134,7 +1173,10 @@ mod tests {
         ds: Arc<RdfDataset>,
     }
     impl GraphResolver for TestResolver {
-        fn resolve(&self, _iri: &str) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+        fn resolve(
+            &self,
+            _request: GraphResolveRequest<'_>,
+        ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
             Ok(self.ds.clone())
         }
     }

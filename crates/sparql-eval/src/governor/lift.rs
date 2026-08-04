@@ -190,6 +190,22 @@ impl Certificate {
         }
     }
 
+    /// A certificate for work that completed behind a blocking host seam after the stop
+    /// signal fired and was therefore discarded.
+    ///
+    /// The surviving rows are still a lower bound, but they are no longer licensed as a
+    /// positional prefix: the discarded host response may have belonged between rows the
+    /// surrounding plan had already committed. Encoding that loss as the same
+    /// [`ChildEdge::MONOTONE_BAG`] the ordinary lift uses keeps the interval algebra as the
+    /// single source of truth.
+    pub(crate) fn bag_only_origin(tripped: TrippedGovernor) -> Self {
+        Self {
+            path: vec![ChildEdge::MONOTONE_BAG],
+            tripped,
+            barrier: None,
+        }
+    }
+
     /// The composed classification: what the rows this certificate describes bound,
     /// relative to the true output of the node currently holding them.
     ///
@@ -250,6 +266,11 @@ impl<I: ViewTermId> Truncation<I> {
     /// and `rows` are the rows this node committed before it did.
     pub(crate) fn origin(rows: SolutionSeq<I>, tripped: TrippedGovernor) -> Self {
         Self::new(rows, Certificate::origin(tripped))
+    }
+
+    /// A truncation whose rows remain a lower bound but are not a positional prefix.
+    pub(crate) fn bag_only_origin(rows: SolutionSeq<I>, tripped: TrippedGovernor) -> Self {
+        Self::new(rows, Certificate::bag_only_origin(tripped))
     }
 
     /// A truncation originating at `node` from **inside one of its expressions** — an

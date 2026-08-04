@@ -107,7 +107,7 @@ pub use remote::{LocalRemoteQuerySource, RemoteError, RemoteQuerySource, Resolve
 pub use remote_http::{HttpRemoteQuerySource, HttpRequest, HttpTransport};
 pub use scratch::{ScratchId, ScratchInterner, SolutionTerm};
 pub use solution::{Solution, SolutionSeq, VarSchema, compatible};
-pub use update::GraphResolver;
+pub use update::{GraphResolveRequest, GraphResolver};
 pub use user_fn::{
     Arity, NativeFnBody, NativeFunction, NodeKind, TypeConstraint, UserFnBody, UserFnParam,
     UserFunction, UserFunctionRegistry, Volatility,

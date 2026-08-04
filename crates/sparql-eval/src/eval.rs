@@ -802,6 +802,14 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         match self.governors.as_ref() {
             None => Ok(()),
             Some(state) => {
+                // A stop signal is independent of fuel engagement. Every logical charge
+                // point is also a bounded work checkpoint even when the caller selected
+                // only a deadline or cancellation and deliberately left fuel unbounded.
+                if !state.is_engaged_in(purrdf_core::ResourceDimension::Fuel)
+                    && let Some(tripped) = self.stop_check()
+                {
+                    return Err(tripped);
+                }
                 let result = state.charge_point_if_engaged(point);
                 if result.is_ok()
                     && self.ledger.is_some()
@@ -910,17 +918,17 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         point: crate::governor::ChargePoint,
     ) -> Option<TrippedGovernor> {
         let state = self.governors.as_ref()?;
-        if !state.is_engaged_in(purrdf_core::ResourceDimension::Fuel) {
+        if !state.is_engaged_in(purrdf_core::ResourceDimension::Fuel)
+            && state.stop_signal().is_none()
+        {
             return None;
         }
         for admitted in 0..rows.len() {
-            if let Err(tripped) = state.charge_point_if_engaged(point) {
+            if let Err(tripped) = self.charge(point) {
                 rows.truncate(admitted);
-                self.note_fuel(point, point.cost().saturating_mul(admitted as u64));
                 return Some(tripped);
             }
         }
-        self.note_fuel(point, point.cost().saturating_mul(rows.len() as u64));
         None
     }
 
@@ -1289,6 +1297,15 @@ pub(crate) fn eval_evaluated<D: DatasetView + Sync>(
     // child happened to be evaluated last.
     ctx.enter_node(pattern);
     let committed = commit_node_output(evaluated, ctx);
+    // The post-operator checkpoint closes the terminal-node hole: a signal that fires
+    // while the final operator is running must not be returned as `Complete` merely
+    // because there is no next node whose entry poll could observe it.
+    let committed = match (committed, ctx.stop_check()) {
+        (Evaluated::Complete(rows), Some(tripped)) => {
+            Evaluated::Truncated(Truncation::origin(rows, tripped))
+        }
+        (evaluated, _) => evaluated,
+    };
     ctx.leave_node(restore);
     Ok(committed)
 }

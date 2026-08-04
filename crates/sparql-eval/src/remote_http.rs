@@ -55,6 +55,31 @@ pub struct HttpRequest<'a> {
     ///
     /// Polling it is *observing a decision*, not reading a clock — the deadline arithmetic
     /// happened when the caller built the signal.
+    ///
+    /// # Honouring it is optional, and the corpus pins exactly what it is worth
+    ///
+    /// Not every HTTP client can cancel a request it has already issued, so ignoring this
+    /// field is a supported way to implement [`HttpTransport`] and not a bug. A deaf
+    /// transport is still bounded at **per-request granularity** — the evaluator polls the
+    /// signal and charges the request before dispatch, and inspects the outcome the moment
+    /// [`HttpTransport::post`] returns — so it reaches the same governor outcome and
+    /// performs the same number of exchanges as an honouring one.
+    ///
+    /// The one thing that differs is the certificate the truncation carries, and it is
+    /// pinned rather than smoothed over
+    /// (`vectors/sparql-governors/`, the `service-*-transport-cancel-mid-exchange` pair).
+    /// An honouring transport *abandons* the exchange, so the rows in hand remain the true
+    /// output's first rows in order and the partial answer keeps
+    /// `is_positional_prefix == true`, which is the caller's licence to resume by raising
+    /// the ceiling. A deaf transport *completes* the exchange and has its response
+    /// discarded, so the rows it would have contributed are missing from the middle of the
+    /// answer rather than from its end: the positional claim is withdrawn
+    /// (`is_positional_prefix == false`) and resumption is no longer licensed. The
+    /// multiset bound survives in both cases — every row returned was genuinely
+    /// established — so the loss is resumability, never soundness.
+    ///
+    /// See [`crate::remote::RemoteQuerySource::query`] for the
+    /// same contract stated over the seam this adapter implements.
     pub stop: Option<&'a dyn StopSignal>,
 }
 
@@ -134,6 +159,16 @@ where
             accept: "application/sparql-results+json",
             stop: stop.map(|signal| &**signal),
         })?;
+
+        // A transport may be unable to abandon an in-flight exchange. Poll immediately
+        // after it returns and before decoding or allocating bindings, then preserve the
+        // fact that a completed response was discarded so the evaluator can withdraw the
+        // positional-prefix claim.
+        if let Some(cause) = stop.and_then(|signal| signal.poll()) {
+            return Err(RemoteError::GovernedAfterCompletion(
+                TrippedGovernor::Stopped { cause },
+            ));
+        }
 
         let parsed = purrdf_sparql_results::from_json(&body).map_err(|e| {
             RemoteError::Decode(format!("SPARQL-results JSON from <{endpoint}>: {e}"))

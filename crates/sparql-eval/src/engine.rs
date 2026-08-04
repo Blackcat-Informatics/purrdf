@@ -604,7 +604,13 @@ impl NativeSparqlEngine {
             // state directly rather than inferring the answer from the control flow that
             // reached it. This is what makes `Applied` mean "no governor stopped this",
             // rather than "no governor stopped this on any path anybody has thought of".
-            Ok(()) => state.tripped(),
+            Ok(()) => {
+                // A stop that fired during the final operation must be observed before
+                // the only publication assignment. Polling here is deliberately
+                // independent of fuel engagement.
+                let _ = state.poll_stop();
+                state.tripped()
+            }
             Err(UpdateAbort::Failed(diagnostic)) => return Err(diagnostic),
             Err(UpdateAbort::Tripped(tripped)) => Some(tripped),
         };
@@ -1962,7 +1968,10 @@ mod tests {
         ds: Arc<RdfDataset>,
     }
     impl GraphResolver for TestResolver {
-        fn resolve(&self, _iri: &str) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+        fn resolve(
+            &self,
+            _request: crate::update::GraphResolveRequest<'_>,
+        ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
             Ok(self.ds.clone())
         }
     }

@@ -261,10 +261,10 @@ fn fuel_and_stop_signal_due_at_the_same_charge_point_resolve_by_precedence() {
     assert_eq!(dimension, ResourceDimension::Fuel);
     assert!(consumed > budget, "the ceiling was genuinely crossed");
 
-    // The same budget, plus a signal aimed at the instant the ceiling is crossed. This
-    // plan is one algebra node, so poll one is its operator-boundary stop check and poll
-    // two is the one the charge path makes the moment fuel crosses its ceiling. The
-    // budget is far below `STOP_POLL_FUEL`, so no interval poll falls in between.
+    // The same budget, plus a signal aimed at the first bounded work checkpoint inside
+    // the node. Poll one is the operator entry and poll two is the first candidate scan.
+    // A stop-only configuration must not wait for the later ordered fuel fold merely
+    // because that fold is where the numeric ceiling would have crossed.
     assert!(
         budget < crate::governor::STOP_POLL_FUEL,
         "the fixture must not reach a periodic poll, or the two would not be simultaneous"
@@ -280,20 +280,20 @@ fn fuel_and_stop_signal_due_at_the_same_charge_point_resolve_by_precedence() {
     assert_eq!(
         signal.polls.load(Ordering::Relaxed),
         2,
-        "the signal must have fired at the crossing, not before it"
+        "the signal must fire at the first in-node checkpoint"
     );
     assert_eq!(
         both.tripped,
         Some(TrippedGovernor::Stopped {
             cause: StopCause::Cancelled
         }),
-        "an explicit cancellation outranks a simultaneous fuel crossing"
+        "an explicit cancellation stops before the deferred fuel fold"
     );
-    // The resolution is by precedence over what is true, not by which was checked
-    // first: the fuel counter did cross its ceiling, and is reported as having done so.
+    // Candidate work is metered in an order-stable fold after the scan. Cancellation at
+    // the scan checkpoint prevents that fold from claiming work beyond the stop.
     assert!(
-        both.fuel > budget,
-        "fuel spent {} must have crossed the ceiling {budget}",
+        both.fuel <= budget,
+        "fuel spent {} must not cross the ceiling {budget} after cancellation",
         both.fuel
     );
 
