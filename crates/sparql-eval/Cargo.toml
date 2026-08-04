@@ -113,6 +113,14 @@ name = "query_eval"
 harness = false
 
 [[bench]]
+# Large exact property-path ranges over disjoint coprime cycles. This is the
+# regression watch for binary relation powering: runtime must follow graph size
+# and exponent bits, not the period of frontier sets or the numeric range value.
+# Report-only; `make bench` lane only — excluded from `make check`.
+name = "path_range"
+harness = false
+
+[[bench]]
 # Cost-based BGP join-planner latency on a skewed multi-join star, at two scales.
 # A regression watch on planning + eval cost (the structural heuristic was removed,
 # so there is no wall-time A/B; the deterministic win is a `bgp` unit test).

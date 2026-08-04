@@ -79,6 +79,7 @@ struct NegatedSets<I: ViewTermId = TermId> {
 type NegatedCache<I = TermId> = BTreeMap<usize, NegatedSets<I>>;
 type ReachKey<I = TermId> = (usize, I, bool);
 type ReachCache<I = TermId> = RefCell<DetHashMap<ReachKey<I>, Rc<BTreeSet<I>>>>;
+type PowerReachCache<I = TermId> = BTreeMap<(u32, I), Rc<BTreeSet<I>>>;
 
 /// The immutable, traversal-wide context shared by every `reach` recursion: the
 /// frozen dataset, the active dataset graph scope (§13: a single graph, or a
@@ -103,17 +104,17 @@ struct PathCtx<'a, D: DatasetView + Sync> {
 }
 
 impl<D: DatasetView + Sync> PathCtx<'_, D> {
-    /// The `path-frontier-expansion` charge point: one unit per frontier node expanded.
+    /// The `path-frontier-expansion` charge point: one unit per candidate relation edge
+    /// examined.
     ///
     /// A property path is the one place in the evaluator where the work is unbounded in
-    /// the *graph* rather than in the query — a transitive closure over a cyclic graph
-    /// re-enters the same nodes at every repetition count — so the frontier expansion,
-    /// not the emitted row, is the quantity a budget has to bound. Returns `false` when
-    /// the execution has stopped, which every traversal loop treats as "return what has
-    /// been reached so far": a partially explored frontier reaches a subset of the truly
-    /// reachable nodes, which is a sound lower bound.
+    /// the *graph* rather than in the query. Charging only once for a frontier node makes a
+    /// million-edge star cost the same as a leaf; charging each indexed quad candidate and
+    /// each relation-composition candidate bounds the work that fan-out actually creates.
+    /// Returns `false` when execution has stopped. Traversal loops then retain only nodes
+    /// already proven reachable, which is a sound lower bound.
     #[inline]
-    fn charge_frontier(&self) -> bool {
+    fn charge_candidate(&self) -> bool {
         let Some(state) = self.governors.as_ref() else {
             return true;
         };
@@ -506,7 +507,7 @@ fn node_universe<D: DatasetView + Sync>(ctx: &PathCtx<'_, D>) -> BTreeSet<D::Id>
         if stopped {
             return;
         }
-        if !ctx.charge_frontier() {
+        if !ctx.charge_candidate() {
             stopped = true;
             return;
         }
@@ -533,6 +534,9 @@ fn reach_cached<D: DatasetView + Sync>(
     forward: bool,
     ctx: &PathCtx<'_, D>,
 ) -> Rc<BTreeSet<D::Id>> {
+    if ctx.stopped() {
+        return Rc::new(BTreeSet::new());
+    }
     let key = (
         std::ptr::from_ref::<PropertyPathExpression>(path) as usize,
         node,
@@ -705,14 +709,29 @@ fn step_predicate<D: DatasetView + Sync>(
         return BTreeSet::new();
     };
     let mut out = BTreeSet::new();
+    let mut stopped = false;
     if forward {
         ctx.scope
             .for_each_quad(ctx.dataset, Some(node), Some(pid), None, |q| {
+                if stopped {
+                    return;
+                }
+                if !ctx.charge_candidate() {
+                    stopped = true;
+                    return;
+                }
                 out.insert(q.o);
             });
     } else {
         ctx.scope
             .for_each_quad(ctx.dataset, None, Some(pid), Some(node), |q| {
+                if stopped {
+                    return;
+                }
+                if !ctx.charge_candidate() {
+                    stopped = true;
+                    return;
+                }
                 out.insert(q.s);
             });
     }
@@ -752,9 +771,17 @@ fn step_excluding<D: DatasetView + Sync>(
     ctx: &PathCtx<'_, D>,
 ) -> BTreeSet<D::Id> {
     let mut out = BTreeSet::new();
+    let mut stopped = false;
     if forward {
         ctx.scope
             .for_each_quad(ctx.dataset, Some(node), None, None, |q| {
+                if stopped {
+                    return;
+                }
+                if !ctx.charge_candidate() {
+                    stopped = true;
+                    return;
+                }
                 if !excluded.contains(&q.p) {
                     out.insert(q.o);
                 }
@@ -762,6 +789,13 @@ fn step_excluding<D: DatasetView + Sync>(
     } else {
         ctx.scope
             .for_each_quad(ctx.dataset, None, None, Some(node), |q| {
+                if stopped {
+                    return;
+                }
+                if !ctx.charge_candidate() {
+                    stopped = true;
+                    return;
+                }
                 if !excluded.contains(&q.p) {
                     out.insert(q.s);
                 }
@@ -788,9 +822,17 @@ fn step_wildcard<D: DatasetView + Sync>(
         }
     };
     let mut out = BTreeSet::new();
+    let mut stopped = false;
     if forward {
         ctx.scope
             .for_each_quad(ctx.dataset, Some(node), None, None, |q| {
+                if stopped {
+                    return;
+                }
+                if !ctx.charge_candidate() {
+                    stopped = true;
+                    return;
+                }
                 if pred_ok(q.p) {
                     out.insert(q.o);
                 }
@@ -798,6 +840,13 @@ fn step_wildcard<D: DatasetView + Sync>(
     } else {
         ctx.scope
             .for_each_quad(ctx.dataset, None, None, Some(node), |q| {
+                if stopped {
+                    return;
+                }
+                if !ctx.charge_candidate() {
+                    stopped = true;
+                    return;
+                }
                 if pred_ok(q.p) {
                     out.insert(q.s);
                 }
@@ -830,9 +879,7 @@ fn closure<D: DatasetView + Sync>(
         if !visited.insert(n) {
             continue;
         }
-        // The `path-frontier-expansion` charge point. Returning the frontier reached so
-        // far is sound: fewer expansions can only reach fewer nodes.
-        if !ctx.charge_frontier() {
+        if ctx.stopped() {
             break;
         }
         result.insert(n);
@@ -867,8 +914,7 @@ fn closure_multi<D: DatasetView + Sync>(
         if !visited.insert(n) {
             continue;
         }
-        // The `path-frontier-expansion` charge point; see `closure`.
-        if !ctx.charge_frontier() {
+        if ctx.stopped() {
             break;
         }
         result.insert(n);
@@ -882,41 +928,21 @@ fn closure_multi<D: DatasetView + Sync>(
 }
 
 /// `inner{min,max}` — the union over `k ∈ [min, max]` of the nodes reachable in
-/// **exactly** `k` applications of `inner`. The per-level frontier is a fresh set
-/// (re-entrant per `k`), so a node reachable at multiple repetition counts is
-/// reported. `max == None` (`{n,}`) applies `inner` exactly `min` times then takes
-/// the `*`-closure of that frontier.
+/// **exactly** `k` applications of `inner`. The per-level frontier is a fresh set, so a
+/// node reachable at several repetition counts remains present in the set result.
+/// `max == None` (`{n,}`) applies `inner` exactly `min` times and then takes the `*`
+/// closure of that frontier.
 ///
-/// # Why this cannot iterate `max` times
+/// The prefix cannot be walked literally: `min` is a `u32`, and a hostile
+/// `p{4000000000}` must not perform four billion graph levels. [`advance_to_min`] uses
+/// binary relation powers for large prefixes. For a reachable node universe `V`, its memo
+/// has at most `|V| * 32` entries, every entry is a subset of `V`, and composition is
+/// polynomial (`O(|V|^3 log min)` time, `O(|V|^2 log min)` stored ids), rather than cycle
+/// detection over the exponential `2^|V|` space of frontier sets.
 ///
-/// `min` and `max` are `u32`, so reading the definition literally makes `p{4000000000,}`
-/// over a cyclic graph a four-billion-level breadth-first search: work bounded by the
-/// *query text* rather than by the data, which no caller can wait out and no budget can
-/// make correct — a budget turns a hang into a truncated answer, where the answer here is
-/// small, exact, and cheap to compute. Two identities bound the iteration by the **graph**
-/// instead. Write `S_k` for the set of nodes reachable in exactly `k` applications, so
-/// `S_{k+1} = step(S_k)` with `step(A) = ⋃_{y ∈ A} reach(y)`. `step` distributes over
-/// union (`step(A ∪ B) = step(A) ∪ step(B)`), which is what both arguments turn on.
-///
-/// 1. **At or above `min`, the first level that adds nothing is the last that could.**
-///    Let `A_k = ⋃_{j=min..k} S_j` be the accumulated output. If `S_k ⊆ A_{k-1}` then
-///    `S_{k+1} = step(S_k) ⊆ step(A_{k-1}) = ⋃_{j=min+1..k} S_j ⊆ A_k = A_{k-1}`, and the
-///    same step applies again to `S_{k+2}`, so *every* later level is already inside
-///    `A_{k-1}`. Each level that does not end the loop therefore contributes at least one
-///    node, and a level set holds only nodes of the graph — which is the reachable-node
-///    cap on the accumulating phase, derived rather than asserted.
-/// 2. **Below `min`, the level sequence is eventually periodic.** `step` is a
-///    deterministic function of the whole set, so a single repeat `S_a == S_b` (`a < b`)
-///    forces `S_{a+t} == S_{b+t}` for every `t`: from `a` on, the sequence cycles with
-///    period `b - a`. [`advance_to_min`] finds such a repeat with Brent's cycle detection
-///    — one saved frontier and one set comparison per level, never a second walk of the
-///    sequence — and then reaches `S_min` by advancing `(min - b) mod (b - a)` further
-///    levels instead of `min - b` of them.
-///
-/// Neither identity truncates a result. `p{n,m}` keeps exact multiset semantics; the
-/// levels not walked are proven to recompute sets the answer already holds. (`p*`/`p+`
-/// are a different shape: [`closure`]/[`closure_multi`] carry a visited-set guard and
-/// already terminate on a cyclic graph.)
+/// Once level `min` is reached, the accumulating walk is already graph-bounded. If a
+/// level adds no new node to the union, distributivity of relation composition proves no
+/// later level can add one either; every continuing level therefore adds a member of `V`.
 fn range_reach<D: DatasetView + Sync>(
     inner: &PropertyPathExpression,
     node: D::Id,
@@ -971,18 +997,14 @@ fn range_reach<D: DatasetView + Sync>(
     out
 }
 
-/// Advance `current` from level 0 to level `min`, reporting whether a level-`min`
-/// frontier survives to accumulate.
+/// Small prefixes are cheaper to walk directly than to populate a power memo. Above this
+/// constant, the direct lane's query-text bound gives way to the polynomial relation lane.
+const LINEAR_RANGE_PREFIX: u32 = 64;
+
+/// Advance `current` from level zero to level `min`.
 ///
-/// `false` means the frontier emptied out — or the execution's budget stopped the walk —
-/// before level `min`, so no repetition count at or above `min` reaches anything.
-///
-/// Brent's cycle detection runs alongside the advance: `tortoise` is a frontier already
-/// seen, `lam` levels behind the live one, and `power` is the next milestone at which the
-/// tortoise jumps forward. It costs one saved frontier and one set comparison per level —
-/// the live sequence is walked once, never twice — and finds a repeat in
-/// `O(pre-period + period)` levels, which is a property of the graph rather than of
-/// `min`. See [`range_reach`] for why a repeat licenses skipping whole levels exactly.
+/// `false` means the frontier died, or a governor stopped a composition. Large prefixes
+/// are applied from the set bits of `min`; power `b` denotes `inner^(2^b)`.
 fn advance_to_min<D: DatasetView + Sync>(
     inner: &PropertyPathExpression,
     current: &mut BTreeSet<D::Id>,
@@ -990,43 +1012,108 @@ fn advance_to_min<D: DatasetView + Sync>(
     min: u32,
     ctx: &PathCtx<'_, D>,
 ) -> bool {
-    let mut tortoise = current.clone();
-    let mut power: u64 = 1;
-    let mut lam: u64 = 0;
-    let mut level: u32 = 0;
-
-    while level < min {
-        let Some(next) = step_level(inner, current, forward, ctx) else {
-            return false;
-        };
-        *current = next;
-        if current.is_empty() {
-            return false;
-        }
-        level += 1;
-        lam += 1;
-
-        if *current == tortoise {
-            // `S_{level - lam} == S_level`, so from level `level - lam` on the sequence
-            // has period `lam` and every level congruent to `level` modulo `lam` holds
-            // exactly this set. Walk out the residue only; the levels stepped over are
-            // proven equal to levels already stepped.
-            let skip = u64::from(min - level) % lam;
-            for _ in 0..skip {
-                let Some(next) = step_level(inner, current, forward, ctx) else {
-                    return false;
-                };
-                *current = next;
+    if min <= LINEAR_RANGE_PREFIX {
+        for _ in 0..min {
+            let Some(next) = step_level(inner, current, forward, ctx) else {
+                return false;
+            };
+            *current = next;
+            if current.is_empty() {
+                return false;
             }
-            return !current.is_empty();
         }
-        if lam == power {
-            tortoise.clone_from(current);
-            power = power.saturating_mul(2);
-            lam = 0;
+        return true;
+    }
+
+    let mut powers = PowerReachCache::new();
+    let mut remaining = min;
+    let mut bit = 0;
+    while remaining != 0 {
+        if remaining & 1 == 1 {
+            let Some(next) = apply_power(inner, current, forward, bit, ctx, &mut powers) else {
+                return false;
+            };
+            *current = next;
+            if current.is_empty() {
+                return false;
+            }
+        }
+        remaining >>= 1;
+        bit += 1;
+    }
+    true
+}
+
+/// Apply `inner^(2^bit)` to every source in `current`.
+fn apply_power<D: DatasetView + Sync>(
+    inner: &PropertyPathExpression,
+    current: &BTreeSet<D::Id>,
+    forward: bool,
+    bit: u32,
+    ctx: &PathCtx<'_, D>,
+    powers: &mut PowerReachCache<D::Id>,
+) -> Option<BTreeSet<D::Id>> {
+    let mut out = BTreeSet::new();
+    for source in current {
+        let reached = power_reach(inner, *source, forward, bit, ctx, powers);
+        if ctx.stopped() {
+            return None;
+        }
+        for target in reached.iter().copied() {
+            if !ctx.charge_candidate() {
+                return None;
+            }
+            out.insert(target);
         }
     }
-    !current.is_empty()
+    Some(out)
+}
+
+/// The nodes reachable from `node` by exactly `2^bit` applications of `inner`.
+///
+/// Each complete entry is memoized. A governor-cut entry is returned only to its caller
+/// and never cached as though it were the full relation.
+fn power_reach<D: DatasetView + Sync>(
+    inner: &PropertyPathExpression,
+    node: D::Id,
+    forward: bool,
+    bit: u32,
+    ctx: &PathCtx<'_, D>,
+    powers: &mut PowerReachCache<D::Id>,
+) -> Rc<BTreeSet<D::Id>> {
+    let key = (bit, node);
+    if let Some(cached) = powers.get(&key) {
+        return Rc::clone(cached);
+    }
+
+    note_power_expansion();
+    let reached = if bit == 0 {
+        reach_cached(inner, node, forward, ctx)
+    } else {
+        let first = power_reach(inner, node, forward, bit - 1, ctx, powers);
+        if ctx.stopped() {
+            return Rc::new(BTreeSet::new());
+        }
+        let mut out = BTreeSet::new();
+        for mid in first.iter().copied() {
+            let second = power_reach(inner, mid, forward, bit - 1, ctx, powers);
+            if ctx.stopped() {
+                return Rc::new(out);
+            }
+            for target in second.iter().copied() {
+                if !ctx.charge_candidate() {
+                    return Rc::new(out);
+                }
+                out.insert(target);
+            }
+        }
+        Rc::new(out)
+    };
+
+    if !ctx.stopped() {
+        powers.insert(key, Rc::clone(&reached));
+    }
+    reached
 }
 
 /// One frontier advance: the nodes reachable in one further application of `inner` from
@@ -1042,13 +1129,19 @@ fn step_level<D: DatasetView + Sync>(
     note_level_advance();
     let mut next = BTreeSet::new();
     for n in current {
-        // The `path-frontier-expansion` charge point. A `{n,m}` range re-enters the same
-        // nodes at every repetition count by design, so the frontier expansion — not the
-        // level — is the quantity a budget bounds.
-        if !ctx.charge_frontier() {
+        let reached = reach_cached(inner, *n, forward, ctx);
+        if ctx.stopped() {
             return None;
         }
-        next.extend(reach_cached(inner, *n, forward, ctx).iter().copied());
+        // A cached relation still has to be composed into this level. Charge each
+        // candidate edge consumed, not merely the source frontier node, so fan-out is
+        // represented in deterministic fuel.
+        for target in reached.iter().copied() {
+            if !ctx.charge_candidate() {
+                return None;
+            }
+            next.insert(target);
+        }
     }
     Some(next)
 }
@@ -1058,6 +1151,8 @@ thread_local! {
     /// Test-only instrumentation: the number of range-path frontier advances performed on
     /// this thread since [`counting_level_advances`] last reset it.
     static LEVEL_ADVANCES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Test-only count of distinct `(power bit, source node)` relation entries computed.
+    static POWER_EXPANSIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// Record one range-path frontier advance.
@@ -1072,6 +1167,13 @@ fn note_level_advance() {
     LEVEL_ADVANCES.with(|advances| advances.set(advances.get().saturating_add(1)));
 }
 
+/// Record one binary-power cache miss. Compiled out of production builds.
+#[inline]
+fn note_power_expansion() {
+    #[cfg(test)]
+    POWER_EXPANSIONS.with(|expansions| expansions.set(expansions.get().saturating_add(1)));
+}
+
 /// Run `body`, returning its value with the number of range-path frontier advances it
 /// performed on this thread.
 #[cfg(test)]
@@ -1081,11 +1183,21 @@ fn counting_level_advances<T>(body: impl FnOnce() -> T) -> (T, u64) {
     (value, LEVEL_ADVANCES.with(std::cell::Cell::get))
 }
 
+/// Run `body`, returning its value with the number of distinct binary relation entries it
+/// computed on this thread.
+#[cfg(test)]
+fn counting_power_expansions<T>(body: impl FnOnce() -> T) -> (T, u64) {
+    POWER_EXPANSIONS.with(|expansions| expansions.set(0));
+    let value = body();
+    (value, POWER_EXPANSIONS.with(std::cell::Cell::get))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::governor::{GovernorState, QueryGovernors};
     use pretty_assertions::assert_eq;
-    use purrdf_core::{RdfDataset, RdfDatasetBuilder};
+    use purrdf_core::{RdfDataset, RdfDatasetBuilder, ResourceDimension, TrippedGovernor};
     use purrdf_sparql_algebra::NamedNode;
 
     const EX: &str = "http://ex/";
@@ -1234,6 +1346,45 @@ mod tests {
         let rev = PropertyPathExpression::Reverse(Box::new(named("p")));
         let rows = run(&ds, &ground("b"), &rev, &var("s"), &["s"]);
         assert_eq!(rows, col1(&["a"]));
+    }
+
+    #[test]
+    fn star_fanout_charges_each_candidate_edge() {
+        let ds = graph_of(&[
+            ("a", "p", "n0"),
+            ("a", "p", "n1"),
+            ("a", "p", "n2"),
+            ("a", "p", "n3"),
+            ("a", "p", "n4"),
+            ("a", "p", "n5"),
+            ("a", "p", "n6"),
+            ("a", "p", "n7"),
+        ]);
+        let path = named("p");
+        let sid = ds
+            .term_id_by_value(&named_node_to_value(&nn("a")))
+            .expect("start present");
+        let state = Arc::new(GovernorState::new(&QueryGovernors::UNBOUNDED.with_fuel(3)));
+        let pctx = PathCtx {
+            dataset: &*ds,
+            scope: GraphScope::One(purrdf_core::GraphMatch::Default),
+            cache: build_negated_cache(&path, &*ds),
+            reach_cache: RefCell::new(DetHashMap::default()),
+            governors: Some(Arc::clone(&state)),
+            ledger: None,
+        };
+
+        let reached = reach_cached(&path, sid, true, &pctx);
+        assert_eq!(reached.len(), 3, "only three candidate edges fit");
+        assert_eq!(
+            state.tripped(),
+            Some(TrippedGovernor::Budget {
+                dimension: ResourceDimension::Fuel,
+                limit: 3,
+                consumed: 4,
+            }),
+            "the fourth edge, not the single source node, crosses the budget"
+        );
     }
 
     #[test]
@@ -1391,14 +1542,14 @@ mod tests {
              node, walked {advances}"
         );
 
-        // A huge `min` with an open tail: the prefix is skipped by periodicity, not
-        // walked.
+        // A huge `min` with an open tail: the prefix is composed from binary relation
+        // powers, not walked.
         let (locals, advances) =
             counting_level_advances(|| reach_locals(&ds, &rng(4_000_000_000, None), "a", true));
         assert_eq!(locals, all);
         assert!(
             advances <= 16,
-            "a {{4000000000,}} range over a 3-node cycle must detect the period instead \
+            "a {{4000000000,}} range over a 3-node cycle must compose the prefix instead \
              of walking to it, walked {advances}"
         );
 
@@ -1411,6 +1562,40 @@ mod tests {
             advances <= 16,
             "a {{4000000000,u32::MAX}} range over a 3-node cycle must bound both the \
              prefix and the accumulation, walked {advances}"
+        );
+    }
+
+    #[test]
+    fn large_exact_range_uses_polynomial_powers_on_coprime_cycles() {
+        // `a` fans into disjoint 3- and 4-cycles. The combined frontier sequence has
+        // period 12; families of pairwise-coprime cycles make that frontier-set period
+        // exponential in the node count, so cycle detection is not an acceptable bound.
+        const NODES: u64 = 8;
+        let ds = graph_of(&[
+            ("a", "p", "b0"),
+            ("b0", "p", "b1"),
+            ("b1", "p", "b2"),
+            ("b2", "p", "b0"),
+            ("a", "p", "c0"),
+            ("c0", "p", "c1"),
+            ("c1", "p", "c2"),
+            ("c2", "p", "c3"),
+            ("c3", "p", "c0"),
+        ]);
+        let exactly = PropertyPathExpression::Range {
+            inner: Box::new(named("p")),
+            min: 4_000_000_000,
+            max: Some(4_000_000_000),
+        };
+
+        // By hand: (4_000_000_000 - 1) mod 3 = 0 and mod 4 = 3.
+        let (locals, expansions) =
+            counting_power_expansions(|| reach_locals(&ds, &exactly, "a", true));
+        assert_eq!(locals, vec!["b0".to_owned(), "c3".to_owned()]);
+        assert!(
+            expansions <= NODES * u64::from(u32::BITS),
+            "one memo entry per reachable node and exponent bit is the polynomial bound; \
+             computed {expansions} entries"
         );
     }
 
