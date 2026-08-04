@@ -30,6 +30,7 @@
 //! is pinned, over an annotation-syntax template; [`a_reifier_query_certifies_its_partial_rows`]
 //! governs a SELECT whose pattern matches through a triple term.
 
+use std::fmt::Write as _;
 use std::process::{Command, Output};
 
 /// The path to the built `purrdf` binary this integration test target links against.
@@ -237,7 +238,8 @@ fn a_nonzero_deadline_stops_work_inside_the_final_operator() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut ttl = String::from("@prefix ex: <http://example.org/> .\n");
     for index in 0..120 {
-        ttl.push_str(&format!("ex:s{index} ex:p ex:o{index} .\n"));
+        writeln!(&mut ttl, "ex:s{index} ex:p ex:o{index} .")
+            .expect("writing to a String cannot fail");
     }
     let ttl = write_file(dir.path(), "wide.ttl", &ttl);
     let cross_product = concat!(
