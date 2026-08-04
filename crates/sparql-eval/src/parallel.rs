@@ -64,7 +64,8 @@ use crate::solution::Solution;
 use crate::user_fn::{UserFunctionRegistry, Volatility};
 
 /// Rows/groups at or below this stay sequential (thread spin-up would dominate
-/// the work for small inputs). Initial value; Task 7's bench tunes it.
+/// the work for small inputs). Tuned against the criterion benches in
+/// `crates/sparql-eval/benches/`, which are report-only and assert no timing.
 pub(crate) const PARALLEL_MIN_ROWS: usize = 1024;
 
 /// Floor on a chunk's item count: below this, splitting further would hand

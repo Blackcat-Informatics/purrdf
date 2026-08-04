@@ -25,11 +25,12 @@
 //!
 //! # A governor never changes an answer, only an outcome
 //!
-//! A resource ceiling decides whether a caller receives the complete answer or a
-//! certified subset plus a typed cause. The rows themselves are never different. That is
-//! what separates a governor from semantic optionality: two callers running the same
-//! query over the same data with different budgets never disagree about *which* rows are
-//! answers, only about *how many* of them were reached.
+//! A resource ceiling decides whether a caller receives the complete answer or a certified
+//! interval plus a typed cause. [`PartialAnswers::Certain`](crate::PartialAnswers::Certain)
+//! exposes only proven answers; [`PartialAnswers::AtMost`](crate::PartialAnswers::AtMost)
+//! exposes only an upper bound; and [`PartialAnswers::Unknown`](crate::PartialAnswers::Unknown)
+//! exposes no rows. That is what separates a governor from semantic optionality: it does
+//! not alter the query's complete answer, and it never labels an uncertified row as one.
 //!
 //! # Determinism
 //!
@@ -40,8 +41,9 @@
 //! because charges are accumulated **chunk-locally** ([`ItemCharge`], one record per
 //! input row, no atomics and nothing shared) and folded in source-item order
 //! ([`GovernorState::commit_ordered_items`]) — the same order-stable reduction
-//! `crate::parallel` already uses for errors. A deadline trip is inherently
-//! time-dependent and carries no such determinism claim.
+//! `crate::parallel` already uses for errors. A wall-deadline trip is inherently
+//! time-dependent and carries no such determinism claim; an injected deadline signal
+//! driven by a deterministic poll count does, and the corpus grades that poll schedule.
 //!
 //! # The schema of a partial result (a stated contract, not an accident)
 //!
@@ -1123,6 +1125,9 @@ impl GovernorState {
 /// This is an IDENTIFIER, not a vocabulary term: a bare token rather than an IRI,
 /// precisely so nothing can dereference it, assert with it, or mistake it for an ontology
 /// PurRDF does not publish.
+///
+/// `docs/SPARQL-GOVERNOR-PROFILE.md` is the consumer-facing specification of everything
+/// these four constants name.
 pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 
 /// The version of [`GOVERNOR_PROFILE_ID`] this build implements.

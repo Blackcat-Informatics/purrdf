@@ -3,20 +3,23 @@
 
 //! The one execution-governance vocabulary shared by every PurRDF tier.
 //!
-//! A governor never changes an answer, only an outcome: it decides whether a caller
-//! receives the complete answer or a certified subset plus a typed cause. The rows
-//! themselves are never different. That is what distinguishes a resource ceiling from
-//! semantic optionality, and it is why the vocabulary is a kernel type rather than a
-//! per-tier invention.
+//! A governor never changes the complete answer, only the outcome returned before that
+//! answer is finished. A truncated query carries a certified interval: a lower bound, an
+//! upper bound, or neither (with no rows exposed), plus a typed cause. That is what
+//! distinguishes a resource ceiling from semantic optionality, and it is why the
+//! vocabulary is a kernel type rather than a per-tier invention.
 //!
 //! The demand-paging tier ([`crate::ir::PagedQueryError`]) and the compute tier both
 //! name these types, so a consumer writes exactly one budget renderer and one stop-cause
 //! renderer. Adding a governed resource is a row in [`ResourceDimension`], not a new
 //! taxonomy.
 //!
-//! Nothing here reads a clock, draws randomness, allocates a thread, or performs I/O.
-//! A deadline is always host-owned and arrives as a [`StopCause::Deadline`] report; the
-//! module stays `wasm32-unknown-unknown` compatible.
+//! Nothing here reads a clock, draws randomness, allocates a thread, or performs I/O. A
+//! deadline arrives as a [`StopCause::Deadline`] *report* — this module names the outcome
+//! and never measures it — so the module stays `wasm32-unknown-unknown` compatible. Who
+//! took the measurement depends on the tier: a page provider reports its host's, while the
+//! evaluation tier reports its own shipped `WallDeadline`, the single clock reader on the
+//! governor path.
 
 use std::ops::Index;
 
@@ -29,7 +32,15 @@ use std::ops::Index;
 pub enum StopCause {
     /// The caller or host cancelled the operation.
     Cancelled,
-    /// A host-owned deadline expired. PurRDF itself never reads a clock.
+    /// A deadline expired, as measured by whoever owns the clock.
+    ///
+    /// **This crate never reads one** — see the module documentation — so a `Deadline`
+    /// reaching the paging tier is always a provider reporting a host's measurement. The
+    /// evaluation tier reports the same cause from its own shipped reader
+    /// (`purrdf_sparql_eval::governor::WallDeadline`), which is where the one clock read
+    /// on the governor path lives. The cause alone makes no determinism claim: an injected
+    /// poll-count signal can be reproducible, while a wall deadline cannot because elapsed
+    /// time is a property of the machine.
     Deadline,
 }
 

@@ -163,8 +163,9 @@ export interface PartialAnswers {
   readonly certainty: PartialCertainty;
   readonly isCertain: boolean;
   /**
-   * Whether these rows are the true answer's FIRST rows, in order — the resumption
-   * property. Absent on `"unknown"`.
+   * Whether these rows are the true answer's FIRST rows, in order. This licenses
+   * resumption under a deterministic ceiling; wall-deadline reruns are fresh. Absent on
+   * `"unknown"`.
    */
   readonly isPositionalPrefix?: boolean;
   /** The algebra operator that withheld the rows, on `"unknown"` only. */

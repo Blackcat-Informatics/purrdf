@@ -678,9 +678,9 @@ impl PartialAnswers {
         self.result.take()
     }
 
-    /// Whether these rows are the true answer's **first** rows, in order — the resumption
-    /// property: re-running the same query over the same data under a larger budget
-    /// returns these same rows first. `undefined` on the `"unknown"` class.
+    /// Whether these rows are the true answer's **first** rows, in order. This licenses
+    /// resumption by raising a deterministic ceiling; a wall-deadline rerun is fresh and
+    /// may stop sooner. `undefined` on the `"unknown"` class.
     #[wasm_bindgen(getter, js_name = isPositionalPrefix)]
     #[must_use]
     pub fn is_positional_prefix(&self) -> Option<bool> {

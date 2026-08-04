@@ -296,7 +296,26 @@ sample `FallibleDatasetView::operation_status` before evaluation and after resul
 materialization. Only a final ready checkpoint produces `CompleteSparqlResult`.
 Provider failure, snapshot drift, budget exhaustion, cancellation, deadline, or
 invalid data produces `FallibleSparqlError::Operational`; any internal partial rows
-are discarded. PurRDF intentionally exposes no partial-result mode.
+are discarded.
+
+That discard is specific to **operational** failure, and it is not a blanket refusal
+of partial results. A page that could not be read bounds nothing: what it held is
+unknown, so the rows computed without it are neither a subset nor a superset of the
+answer, and there is no statement that could honestly be attached to them. A
+**governed** execution is the opposite case — every page it needed was read, and the
+engine then declined work it was able to do — so what the rows in hand bound *is*
+derivable, and the evaluation tier hands them back:
+`NativeSparqlEngine::query_governed` returns `GovernedOutcome::BudgetExhausted`
+carrying `PartialAnswers`, which is `Certain` (a certified lower bound), `AtMost` (a
+certified upper bound), or `Unknown` — a named non-monotone barrier and, structurally,
+no rows at all.
+
+The invariant the old sentence was protecting survives in a stronger form: **a
+truncated result is never returned in the shape of a complete one.** `SparqlResult`
+and `CompleteSparqlResult` still mean "this is the answer"; a partial answer is
+reachable only through a distinct outcome type and only while carrying the
+certificate that says which of the two bounds it is. See
+[`SPARQL-GOVERNOR-PROFILE.md`](../SPARQL-GOVERNOR-PROFILE.md).
 
 Directly passing an operationally fallible provider-backed `PagedDataset` to an
 ordinary query entry point violates this contract: iterator exhaustion is not proof
@@ -319,6 +338,28 @@ produce the same request order, totals, and terminal status. A genuinely empty
 answer is therefore distinguishable from operational incompleteness: it is wrapped
 in `CompleteSparqlResult` with final ready evidence.
 
+Since the evaluation tier can now stop an execution that read every page it needed,
+there is a **third** terminal state to keep distinguishable from those two, and it is
+kept distinguishable by type: a governed truncation is
+`GovernedOutcome::BudgetExhausted`, never `CompleteSparqlResult` and never
+`FallibleSparqlError::Operational`. The two tiers share one vocabulary rather than
+duplicating it — `PagedQueryLimits::to_resource_vector` projects this clause's page
+and byte ceilings into the kernel `ResourceVector` whose remaining slots the
+evaluation tier fills, and `TrippedGovernor` / `GovernorEvidence` are read by both —
+so a consumer writes one budget renderer for the pair.
+
+The exactness this clause claims for pages and bytes is claimed for the compute tier
+**per dimension, not blanket**. Fuel, the answer cap and the intermediate-cell peak
+are exact and reproducible in the same sense: parallel evaluation accumulates charges
+chunk-locally and folds them in source-item order, so the trip point is a function of
+`(snapshot, query, ceilings)` and not of the worker count. Scratch bytes and remote
+requests are functions of the same fixed inputs. A **wall deadline is excluded from
+that claim**: where elapsed time runs out is a property of the machine, so its smoke
+case pins only that a trip happened and named the deadline. The separate injected
+deadline matrix is driven by poll count and pins zero, boundary and over-bound receipts
+in full. Page and byte evidence is untouched by this either way — it is exact because
+the guarded evaluator runs the operation sequentially, which no governor changes.
+
 ### G9 — every operation is bound to its sealed snapshot
 
 The provider generation, page count, per-page translation, capabilities, quad count,
@@ -330,9 +371,29 @@ Status checkpoints also verify generation even when a query reads no page.
 
 The first operational failure is sticky and no later read yields data. Provider,
 stale-generation, cancellation, deadline, and invalid-data failures remain distinct;
-page-budget and byte-budget exhaustion are separate query errors. PurRDF never reads
-a wall clock: a host enforces cancellation or a deadline and reports the corresponding
-typed `PageFault` from `materialize`.
+page-budget and byte-budget exhaustion are separate query errors.
+
+**The paging tier never reads a wall clock.** A host enforces cancellation or a
+deadline and reports the corresponding typed `PageFault` from `materialize`. That is
+what keeps this clause's admission path free of any time source: whether an operation
+is still bound to its snapshot is decided by generation equality alone, so replaying
+the same provider states in the same order reproduces the same verdicts on any
+machine, at any speed. Nothing in the G-clauses is allowed to acquire a clock.
+
+It is no longer true of PurRDF as a whole, and the sentence that said so has been
+narrowed rather than deleted. The **evaluation** tier ships exactly one clock reader,
+`purrdf_sparql_eval::governor::WallDeadline`, so that obtaining a deadline is not a
+caller obligation — requiring every caller to hand-roll a `StopSignal` would leave two
+callers with two different notions of "expired", which is the optionality this
+document exists to refuse. It is target-split (`std::time::Instant` natively,
+`js_sys::Date::now()` on `wasm32-unknown-unknown`), so it costs the wasm build
+nothing, and it latches: the first poll that observes expiry — or that observes the
+clock stepping backwards behind the start snapshot, which on a steppable wall clock
+would otherwise make a deadline un-trippable — sets a bit every later poll
+short-circuits on. What that wall-clock reader deliberately does **not** carry is a
+determinism claim: only its trip and named cause are pinned. A test-injected deadline
+can report the same cause while remaining deterministic when its input is a poll count;
+the profile keeps those two cases distinct.
 
 ---
 

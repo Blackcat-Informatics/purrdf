@@ -60,7 +60,8 @@ pub enum PageFaultKind {
         actual: PageGeneration,
     },
     /// A host-supplied stop signal fired: the caller cancelled the operation, or a
-    /// host-owned deadline expired. PurRDF itself never reads a clock.
+    /// host-owned deadline expired. A provider reports the host's measurement; nothing
+    /// in this crate reads a clock (see [`crate::StopCause`]).
     Stopped(StopCause),
     /// The provider returned data or metadata that violates the sealed page
     /// contract.

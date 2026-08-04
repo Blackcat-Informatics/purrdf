@@ -822,9 +822,9 @@ impl PyPartialAnswers {
         self.result.as_ref().map(|result| result.clone_ref(py))
     }
 
-    /// Whether these rows are the true answer's **first** rows, in order — the resumption
-    /// property: re-running the same query over the same data under a larger budget
-    /// returns these same rows first. `None` on the `"unknown"` class.
+    /// Whether these rows are the true answer's **first** rows, in order. This licenses
+    /// resumption by raising a deterministic ceiling; a wall-deadline rerun is fresh and
+    /// may stop sooner. `None` on the `"unknown"` class.
     #[getter]
     const fn is_positional_prefix(&self) -> Option<bool> {
         self.positional_prefix

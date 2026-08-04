@@ -1616,7 +1616,7 @@ mod tests {
         assert_eq!(seq.len(), 2);
     }
 
-    /// Determinism smoke test (Task 6): a 3-branch `UNION` (the `d_union_4` bench
+    /// Determinism smoke test: a 3-branch `UNION` (the `d_union_4` bench
     /// shape) where each branch `BIND`s a freshly-computed value — two branches
     /// minting the SAME value (`11`), one minting a DISJOINT value (`12`) — so the
     /// escaping-computed-term merge in [`eval_union`] is exercised both ways.

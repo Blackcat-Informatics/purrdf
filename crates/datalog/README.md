@@ -53,8 +53,19 @@ ran instead of a claim about which rules were meant to.
   Identical input yields byte-identical output, on every target.
 * **Budgets are constants, not knobs.** Step, fact and arena ceilings are fixed
   workspace constants and their consumption is *reported*, never configured —
-  two callers with the same input always get the same answer. There is no
-  wall-clock budget: it would break both wasm and reproducibility.
+  two callers with the same input always get the same answer. Nothing numeric is
+  caller-settable here: a settable ceiling drags a charge schedule behind it, and
+  a reasoner's step count is an artifact of the plan, so pinning one would pin the
+  planner and make a caller's *model* move when the join order does.
+* **A stop signal is admitted, because it is answer-blind.** `StopSignal` is a
+  two-line trait polled at round boundaries the fixpoint was going to reach
+  anyway. It carries no number and cannot be asked *where* to stop, only whether
+  to: an unstopped run returns exactly what it would have with no signal, and a
+  stopped one returns a typed refusal and **no model at all**. There is no third
+  outcome, so there is no schedule to version and no partial closure to mistake
+  for a complete one. This crate still reads no clock — a host's wall deadline
+  arrives already reduced to a yes/no question, which is what keeps the
+  nondeterministic input outside the crate.
 * **wasm-clean.** No threads-only constructs, no filesystem, no clock, no RNG.
   Where work is parallelised it uses indexed `par_chunks`/`par_iter` reduced in
   source order — never `par_sort` or `par_bridge`, which are not order-stable —

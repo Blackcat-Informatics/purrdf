@@ -14,6 +14,17 @@
 //! do — but only after being materialized into the ordinary egress model and labelled with
 //! what they bound ([`PartialAnswers`]), which is a different thing entirely: the
 //! interned, arena-backed rows the evaluator holds still stop here.
+//!
+//! The two halves of that sentence are refusals for two unrelated reasons, and neither
+//! weakens the other. Rows stop here as a matter of **representation**: an evaluator row
+//! carries [`SolutionTerm`](crate::SolutionTerm)s interned in a per-query scratch table
+//! that dies with the evaluation context, so handing one out would be handing out a
+//! dangling reference in all but name. [`FallibleSparqlError::Operational`] discards its
+//! rows for a second, independent reason — **soundness**: a page that could not be read
+//! bounds nothing, so the rows computed without it are neither a subset nor a superset of
+//! the answer and there is no certificate to attach. A governed truncation is the case
+//! where both objections lift at once: the rows are materialized out of the arena first,
+//! and the engine chose to stop work it could have done, so what they bound is derivable.
 
 use purrdf_core::{RdfDiagnostic, SparqlResult, TrippedGovernor};
 

@@ -353,12 +353,14 @@ impl PartialSparqlResult {
 
     /// Whether these rows are the true answer's **first** rows, in order.
     ///
-    /// The resumption property: when this holds, re-running the same query over the same
-    /// data under a larger budget returns these same rows first, so a caller can page
-    /// through a query by raising the ceiling. When it does not, the rows are a sound
-    /// sub-bag (or super-bag) of the answer whose *positions* mean nothing — sorting,
-    /// `UNION`, and a truncated join input all cost the positional relation while keeping
-    /// the multiset one.
+    /// This is a relation to the complete output, not by itself a cross-run timing promise.
+    /// For deterministic ceilings, re-running the same query and snapshot under a larger
+    /// ceiling returns these rows first, so a caller can page by raising that ceiling. A
+    /// wall deadline is not deterministic: a later run can stop sooner even with a longer
+    /// duration, so it must be treated as a fresh run. When this bit is false, the rows are
+    /// only a sound sub-bag (or super-bag) whose positions mean nothing — sorting, `UNION`,
+    /// and a truncated join input all cost the positional relation while keeping the
+    /// multiset one.
     #[must_use]
     pub const fn is_positional_prefix(&self) -> bool {
         self.positional_prefix

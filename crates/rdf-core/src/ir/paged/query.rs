@@ -151,7 +151,15 @@ pub enum PagedQueryError {
         page_bytes: u64,
     },
     /// A host-supplied stop signal fired: the host or caller cancelled the
-    /// operation, or a host-owned deadline expired. PurRDF never reads a clock.
+    /// operation, or a host-owned deadline expired.
+    ///
+    /// The deadline is always the **host's** measurement, never this crate's: nothing on
+    /// the paging path reads a clock, so which pages an operation admitted stays a
+    /// function of the provider states it saw and of nothing else. The evaluation tier
+    /// does ship a clock reader — `purrdf_sparql_eval::governor::WallDeadline`, so that a
+    /// caller need not hand-roll a stop signal to get a deadline — and it reports its trip
+    /// through this same [`StopCause`] vocabulary. It cannot reach this variant, which is
+    /// raised only by a provider.
     Stopped {
         /// The requested page.
         page: PageId,

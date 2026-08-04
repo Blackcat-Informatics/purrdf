@@ -258,7 +258,7 @@ fn an_ungoverned_validation_is_unchanged() {
     assert_eq!(
         evidence.consumed_in(ResourceDimension::Fuel),
         0,
-        "UNBOUNDED declines the accounting as well as the ceilings, so a governed-but-\
-         unbounded validation costs exactly what an ungoverned one costs"
+        "UNBOUNDED declines the accounting as well as the ceilings, so it must record no \
+         governed fuel consumption"
     );
 }

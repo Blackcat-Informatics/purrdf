@@ -328,8 +328,8 @@ impl<I: ViewTermId> Truncation<I> {
     ///
     /// This is [`SpineContext::admits_cap_pushdown`] read for its other purpose: the
     /// predicate that licenses stopping a scan early is, word for word, the predicate
-    /// that says a partial bag is a genuine positional prefix — which is what makes a
-    /// re-run under a larger budget return these same rows first.
+    /// that says a partial bag is a genuine positional prefix. That licenses cross-run
+    /// resumption for deterministic ceilings; it does not make wall time reproducible.
     pub(crate) fn is_positional_prefix(&self) -> bool {
         self.certificate.spine().admits_cap_pushdown()
     }
@@ -359,9 +359,9 @@ impl<I: ViewTermId> Truncation<I> {
     /// has to explain a partial result to a human.
     ///
     /// Reports all three facts a caller acts on, because they are genuinely independent:
-    /// which side of the interval the rows bound, whether their *positions* mean
-    /// anything, and whether re-running under a larger budget returns these same rows
-    /// first (the resumption property, which needs both a lower bound and order).
+    /// which side of the interval the rows bound and whether their *positions* mean
+    /// anything. A positional lower bound licenses resumption under a deterministic
+    /// ceiling; the diagnostic deliberately makes no promise about wall-clock reruns.
     pub(crate) fn describe(&self) -> String {
         let bound = match self.bound() {
             SpineClass::Certain => "a certified lower bound",
@@ -373,7 +373,7 @@ impl<I: ViewTermId> Truncation<I> {
             PrefixFidelity::BagOnly => "bag-only",
         };
         let stable = if self.is_positional_prefix() {
-            "; a larger budget returns these rows first"
+            "; rows are an ordered prefix of the complete result"
         } else {
             ""
         };

@@ -177,10 +177,11 @@ Every ceiling is **inclusive**, so `0` is a valid one that trips at the first ch
 `--max-answers` is an operational ceiling and never `LIMIT`: `LIMIT` is query
 semantics and applies before the cap is tested. `--max-intermediate-cells` is also
 checked against the planner's *estimate* before evaluation begins, so a plan
-predicted to exceed it is refused rather than started. `--deadline` starts when
-evaluation starts — reading and parsing the data source happen before it — and the
-engine observes it on entry to an algebra node, so an evaluation overruns it by at
-most one operator; it is not a timeout on the process. `--max-remote-requests` is
+predicted to exceed it is refused rather than started. On a raw query, `--deadline`
+starts after the data and query have been read and parsed; with `--entailment`, it also
+covers closure materialization. The evaluator observes it at operator entry and exit,
+at logical charge points, and around a federated request; it is not a timeout on the
+process. `--max-remote-requests` is
 enforced and reported like any other ceiling, and this binary configures no
 federation source, so a `SERVICE` clause fails to evaluate before it can be charged.
 
@@ -204,9 +205,11 @@ plan, so *no row is printed at all* and a `barrier` line names the operator that
 withheld them — printing an empty result there would be an "there are no answers"
 claim the run cannot make.
 
-`--entailment` takes no governor flag and refuses one by name (exit 2): that lane
-answers through the entailment-aware query entry point, which materializes a closure
-and takes no ceilings, so accepting one would be a ceiling that bounds nothing.
+`--entailment` accepts the same six flags. Every numeric ceiling bounds the SPARQL
+evaluation over the completed closure. `--deadline` additionally reaches closure
+materialization through its stop signal: a stopped closure returns no model and no
+query result, while a completed closure is evaluated through the ordinary governed
+query outcome. Numeric ceilings deliberately do not truncate a reasoning closure.
 
 ### `--explain`
 

@@ -3779,7 +3779,7 @@ mod tests {
         //
         // Driven directly via `eval`/`eval_ebv` on ONE shared `ctx`, rather than
         // through `evaluate_query`'s FILTER node: this EXISTS reaches no unsafe
-        // builtin, so (Task 5) `eval_filter` routes it through
+        // builtin, so `eval_filter` routes it through
         // `crate::parallel::par_chunk_try_map_init`, which runs the per-row loop on a
         // FORKED child context — the memo would land on that (discarded-after-use)
         // child, not on a `ctx` inspected from outside `evaluate_query`. This
@@ -3908,9 +3908,9 @@ mod tests {
         //
         // Driven directly via `eval`/`eval_ebv` on ONE shared `ctx` rather than
         // through `evaluate_query`'s FILTER node — see
-        // `exists_memo_populates_cache_once`'s comment: Task 5 routes this
-        // parallel-safe FILTER through a forked child context, so the memo would
-        // land there, not on a `ctx` inspected from outside `evaluate_query`.
+        // `exists_memo_populates_cache_once`'s comment: a parallel-safe FILTER is
+        // routed through a forked child context, so the memo would land there, not
+        // on a `ctx` inspected from outside `evaluate_query`.
         use purrdf_sparql_algebra::{
             NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
         };
@@ -4425,7 +4425,7 @@ mod tests {
         );
     }
 
-    /// Determinism smoke test (Task 6): a chained `BIND` — `BIND(?o + 5 AS ?sum)`
+    /// Determinism smoke test: a chained `BIND` — `BIND(?o + 5 AS ?sum)`
     /// then `BIND(CONCAT("v-", STR(?sum)) AS ?label)` over three rows — mints both
     /// a NUMERIC (`?sum`) and a STRING (`?label`) `Computed` term per row, each of
     /// which must escape a forked child via [`crate::parallel::portable_row`]/

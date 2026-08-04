@@ -1058,9 +1058,8 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         self
     }
 
-    /// Fork a `Send` child context for a parallel worker (Task 4-6's fork-join
-    /// evaluation), sharing this context's immutable/read-only state and starting
-    /// its mutable evaluation state fresh.
+    /// Fork a `Send` child context for a parallel worker, sharing this context's
+    /// immutable/read-only state and starting its mutable evaluation state fresh.
     ///
     /// The split is what makes fork-join deterministic under [`crate::parallel`]:
     ///
@@ -1110,8 +1109,8 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     ///   actually observed divergently across workers — copying it here is
     ///   harmless rather than load-bearing.
     ///
-    /// Called by `expr::eval_filter` and `binop::left_outer_join_filtered` (Task 5)
-    /// to give each FILTER-predicate worker its own child context.
+    /// Called by `expr::eval_filter` and `binop::left_outer_join_filtered` to give
+    /// each FILTER-predicate worker its own child context.
     #[must_use]
     pub(crate) fn fork_for_worker(&self) -> Self {
         Self {
@@ -2030,7 +2029,7 @@ mod tests {
 
         // The `ctx.exists_inner_cache.len()` check this test used to make against
         // `ctx` directly no longer applies: this EXISTS reaches no unsafe builtin,
-        // so (Task 5) `expr::eval_filter` routes it through
+        // so `expr::eval_filter` routes it through
         // `crate::parallel::par_chunk_try_map_init`, which runs the per-row loop on
         // a FORKED child context (`EvalCtx::fork_for_worker`), not `ctx` itself —
         // even below the parallel threshold, exactly one child is forked and reused
@@ -2079,14 +2078,15 @@ mod tests {
         );
     }
 
-    /// Determinism smoke test (Task 4): a query exercising BGP, JOIN, a
+    /// Determinism smoke test: a query exercising BGP, JOIN, a
     /// non-filtered OPTIONAL, and MINUS evaluated once with the parallel path
     /// FORCED (via [`crate::parallel::force_parallel_for_test`]) and once with
     /// the sequential path FORCED must produce byte-identical `Vec<Solution>`
     /// rows (schema and row order both). This is a narrower, faster-running
-    /// tripwire than the full Task 7 gate — it catches an ordering regression
-    /// in any of the four read-only nodes wired in this task immediately,
-    /// something the conformance suite's multiset comparisons would not.
+    /// tripwire than the full [`crate::parallel_determinism_gate`] sweep — it
+    /// catches an ordering regression in any of those four read-only nodes
+    /// immediately, something the conformance suite's multiset comparisons
+    /// would not.
     #[test]
     fn parallel_and_sequential_paths_agree_bit_for_bit() {
         use purrdf_sparql_algebra::{
@@ -2171,7 +2171,7 @@ mod tests {
         assert_eq!(rows_seq.len(), 1);
     }
 
-    /// Determinism smoke test (Task 5): `FILTER(REGEX(...) && ?a > k)` — the
+    /// Determinism smoke test: `FILTER(REGEX(...) && ?a > k)` — the
     /// `b_scan_filter` bench shape — evaluated once with the parallel path FORCED
     /// and once with the sequential path FORCED must produce byte-identical rows.
     #[test]
@@ -2269,7 +2269,7 @@ mod tests {
         assert_eq!(rows_seq.len(), 1);
     }
 
-    /// Determinism smoke test (Task 5): `FILTER EXISTS { ... }` evaluated once with
+    /// Determinism smoke test: `FILTER EXISTS { ... }` evaluated once with
     /// the parallel FILTER path FORCED and once with the sequential path FORCED
     /// must produce byte-identical rows. `EXISTS` reaches no stateful builtin, so
     /// [`crate::parallel::is_parallel_safe`] must accept it.
@@ -2338,7 +2338,7 @@ mod tests {
         assert_eq!(rows_seq.len(), 2);
     }
 
-    /// Determinism smoke test (Task 5): `OPTIONAL { ... FILTER ... }` (the inline
+    /// Determinism smoke test: `OPTIONAL { ... FILTER ... }` (the inline
     /// `LeftJoin` filter, [`crate::binop`]'s `left_outer_join_filtered`) evaluated
     /// once with the parallel path FORCED and once with the sequential path FORCED
     /// must produce byte-identical rows, including left-alone padded rows for a

@@ -1458,7 +1458,7 @@ mod tests {
         assert!(report.results.is_empty());
     }
 
-    // ── Task 4 tests ───────────────────────────────────────────────────────────
+    // ── Core constraint components over a targeted focus node ──────────────────
 
     // Test 1: targetClass + minCount — violating case (no ex:name on ex:alice)
     #[test]

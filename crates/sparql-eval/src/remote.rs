@@ -160,8 +160,8 @@ pub trait RemoteQuerySource {
     /// *abandons* the exchange, so the answer that would have followed was never
     /// established and the rows in hand are still the true output's first rows, in order:
     /// [`PartialSparqlResult::is_positional_prefix`](crate::PartialSparqlResult::is_positional_prefix)
-    /// stays `true` and re-running under a larger budget resumes from them. A deaf
-    /// transport *completes* the exchange and the evaluator then discards its response,
+    /// stays `true`, preserving the relation needed to resume under a deterministic
+    /// ceiling. A deaf transport *completes* the exchange and the evaluator then discards its response,
     /// so rows that would have been established are absent from the middle of the answer
     /// rather than from its end; the positional claim is withdrawn (`false`) and with it
     /// the resumption licence. The multiset bound is unaffected — the certificate is

@@ -50,10 +50,9 @@
 //! point instead, over the same view, and comes back as a
 //! [`GovernedOutcome`]: complete, or stopped by a governor and carrying the certificate of
 //! what the rows in hand bound. Without a governor flag the ungoverned call is made
-//! verbatim — the governed lane is a branch rather than a wrapper, so an ungoverned query
-//! costs exactly what it cost before governors existed. (`--entailment` is the exception, and
-//! deliberately: that lane takes a `QueryGovernors` on every call, `UNBOUNDED` when no flag
-//! was named, so its two-phase governing is written once.)
+//! verbatim — the governed lane is a branch rather than a wrapper. (`--entailment` is the
+//! exception, deliberately: that lane takes a `QueryGovernors` on every call, `UNBOUNDED`
+//! when no flag was named, so its two-phase governing is written once.)
 //!
 //! A trip is not a failure ([`CliOutcome`], and `error`'s module documentation for why it
 //! is exit 3), so it prints:

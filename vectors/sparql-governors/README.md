@@ -3,7 +3,8 @@
 
 # `purrdf-sparql-governors` — normative vector corpus
 
-The executable half of the execution-governor profile. A fuel budget is a number
+The executable half of
+[`docs/SPARQL-GOVERNOR-PROFILE.md`](../../docs/SPARQL-GOVERNOR-PROFILE.md). A fuel budget is a number
 about *one* charge schedule, so a consumer that pins **(profile id, profile
 version, profile digest, corpus digest)** needs a body of evidence saying what
 those numbers buy. This corpus is that evidence: running it against a linked
@@ -156,8 +157,8 @@ call it is already inside, and nothing forces a host to write one.
 The last two reach the **same** outcome and the **same** exchange count, which
 is the claim: ignoring `stop` degrades to per-request granularity, not to
 unboundedness. The one thing that differs is pinned rather than smoothed over —
-an abandoned exchange leaves a resumable positional prefix, a
-completed-then-discarded one withdraws that licence.
+an abandoned exchange preserves the positional-prefix relation needed for
+deterministic resumption, while a completed-then-discarded one withdraws it.
 
 ### Deadlines
 

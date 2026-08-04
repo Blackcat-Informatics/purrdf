@@ -31,8 +31,22 @@
 //!   `path` module.
 //! - **Hard-fail, no degraded fallback.** A well-formed but out-of-scope algebra
 //!   node (`SERVICE`, `LATERAL`, SPARQL `UPDATE`) or an unimplemented builtin is a
-//!   typed [`EvalError::Unsupported`] — never a partial or wrong answer (the project
-//!   `no-optionality` doctrine).
+//!   typed [`EvalError::Unsupported`] — never a wrong answer, and never a partial one
+//!   *offered as complete* (the project `no-optionality` doctrine).
+//! - **Governed execution, when a caller asks for it.** A caller may attach ceilings
+//!   and a stop signal ([`governor::QueryGovernors`]) and run
+//!   [`NativeSparqlEngine::query_governed`], which either completes or returns
+//!   [`GovernedOutcome::BudgetExhausted`] — the rows already reached, plus a
+//!   machine-checked [`PartialAnswers`] certificate saying whether they are a lower
+//!   bound, an upper bound, or neither. This does not soften the pillar above; it is
+//!   what lets the pillar stay absolute. A ceiling changes only the **outcome**, never
+//!   the query's complete answer: different ceilings may expose different sides of that
+//!   interval, but none labels an uncertified row as an answer. And a truncation is
+//!   unrepresentable in the shape of a complete result — it is a distinct type, reachable
+//!   only while carrying its certificate — so the engine still never hands anyone a
+//!   partial answer they could mistake for the whole one. An ungoverned query takes the
+//!   direct evaluator path before any governor charge, ledger, or stop probe. See
+//!   [`governor`] and `docs/SPARQL-GOVERNOR-PROFILE.md`.
 //!
 //! The crate carries **zero oxigraph-family dependencies** and builds for
 //! `wasm32-unknown-unknown` (the wasm query path); both invariants are

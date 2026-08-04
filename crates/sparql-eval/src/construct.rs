@@ -92,8 +92,8 @@ pub(crate) type ConstructedGraph<I> = (Arc<RdfDataset>, Option<Truncation<I>>);
 /// The count runs over the frozen dataset's canonical order — the order `freeze` sorts and
 /// de-duplicates into — so "the first *n* triples" is a property of the output graph and
 /// not of the accident of template evaluation. That makes the truncated graph a genuine
-/// positional prefix of the complete one: re-running under a larger cap returns these same
-/// triples first, which is the resumption property
+/// positional prefix of the complete one: under a larger deterministic cap these same
+/// triples come first, which is the resumption property
 /// [`PartialSparqlResult::is_positional_prefix`](crate::PartialSparqlResult::is_positional_prefix)
 /// promises. Counting emissions instead would make the cap depend on how many duplicates a
 /// template happened to produce, and the reported size would not match the graph handed
@@ -805,7 +805,7 @@ mod tests {
 
     /// A dataset with one reifier `:r rdf:reifies <<( :alice :age 42 )>>`, with two
     /// annotations on `:r` (confidence + accordingTo). The reifier query layer comes
-    /// from the BGP virtual-candidate machinery (Task 1).
+    /// from the BGP virtual-candidate machinery in [`crate::bgp`].
     fn reified_graph() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         // `rdf:reifies` MUST be interned for the reifier-query layer to fire

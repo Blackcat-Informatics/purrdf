@@ -1623,7 +1623,7 @@ mod tests {
         }
     }
 
-    /// Determinism smoke test (Task 6): `GROUP BY ?cat` with `COUNT(*)`/`AVG(?val)`/
+    /// Determinism smoke test: `GROUP BY ?cat` with `COUNT(*)`/`AVG(?val)`/
     /// `MAX(?val)` over 220 groups (the `e_group_aggregate` bench shape) evaluated
     /// once with the parallel per-group path FORCED and once with the sequential
     /// path FORCED must produce byte-identical rows — group ORDER (first-seen) is
