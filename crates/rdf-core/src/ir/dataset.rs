@@ -1598,9 +1598,9 @@ impl RdfDataset {
     ///
     /// # Content addressing
     ///
-    /// If the inputs agree on a [`ContentIdScheme`] (see
-    /// [`agreed_content_addressing`](Self::agreed_content_addressing) for the
-    /// exact rule), the merged output is built with that scheme configured, so
+    /// If the inputs agree on a [`ContentIdScheme`] (see the private
+    /// `agreed_content_addressing` helper below for the exact rule), the
+    /// merged output is built with that scheme configured, so
     /// `content_id`/`content_ids` RE-DERIVE over the merged IRI bytes and the
     /// derivation-predecessor index resolves over the merged annotation table.
     /// Disagreeing inputs carry none forward — no fabricated compromise.
