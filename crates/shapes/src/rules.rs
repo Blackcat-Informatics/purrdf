@@ -420,16 +420,17 @@ fn sparql_rule_producer(
         // A CONSTRUCT template blank is minted from a per-evaluation counter that
         // resets each call, so two focus nodes would both mint `_:c1` and
         // conflate. The evaluation therefore mints under a per-focus prefix
-        // (`{tag}_`, installed on the engine below): every minted label is
-        // spelled `{tag}_c{n}` AT MINT TIME, so distinct focus nodes mint
-        // distinct blanks while data blanks carried through CONSTRUCT variables
-        // pass through untouched — preserving their co-reference with the base
-        // graph across fixpoint rounds. The tag is deterministic, so a
-        // re-derivation in a later round produces the identical label and the
-        // fixpoint converges. The identity must be encoded injectively (a lossy
-        // sanitization would conflate foci such as `<urn:x/y>` and `<urn:x#y>`)
-        // and every byte must stay inside the serializable BLANK_NODE_LABEL
-        // alphabet, or the entailed dataset cannot round-trip.
+        // (`tag`, installed on the engine below, already carrying its trailing
+        // `_` separator): every minted label is spelled `{tag}c{n}` AT MINT
+        // TIME, so distinct focus nodes mint distinct blanks while data blanks
+        // carried through CONSTRUCT variables pass through untouched —
+        // preserving their co-reference with the base graph across fixpoint
+        // rounds. The tag is deterministic, so a re-derivation in a later round
+        // produces the identical label and the fixpoint converges. The identity
+        // must be encoded injectively (a lossy sanitization would conflate foci
+        // such as `<urn:x/y>` and `<urn:x#y>`) and every byte must stay inside
+        // the serializable BLANK_NODE_LABEL alphabet, or the entailed dataset
+        // cannot round-trip.
         let tag = focus_tag(focus);
         // SHACL-AF pre-binds `$this`, `$shapesGraph`, and `$currentShape` for a
         // `sh:SPARQLRule` CONSTRUCT, mirroring the SHACL-SPARQL constraint path.
@@ -439,7 +440,7 @@ fn sparql_rule_producer(
             &subs,
             shapes_graph_iri,
             Some(&shape.id),
-            Some(&format!("{tag}_")),
+            Some(tag.as_str()),
         )?;
         for quad in quads_for_pattern_ids(graph.as_ref(), None, None, None, GraphFilter::AnyGraph) {
             let s = term_id_to_native(graph.as_ref(), quad.s);
@@ -489,20 +490,28 @@ fn conditions_hold(
     Ok(true)
 }
 
-/// The focus node's identity encoded into the blank-node-label alphabet.
+/// The focus node's identity encoded into the blank-node-label alphabet,
+/// followed by the `_` separator that terminates the mint-time prefix — the
+/// returned string IS the evaluation's blank-mint prefix, ready to hand to
+/// [`crate::sparql::run_construct_with_shacl_prebinding_view`] unmodified.
 ///
 /// Every ASCII-alphanumeric byte of the focus rendering passes through; every
 /// other byte becomes `-` plus two lowercase hex digits. The encoding is
 /// injective: `-` itself is escaped (`-2d`), so each `-` in the output opens a
 /// fixed-width escape and decoding is unambiguous — two distinct foci can never
-/// produce the same tag. `_` never appears in a tag (escaped as `-5f`), so the
-/// `{tag}_{label}` join in the mint-time prefix (`{tag}_` is installed as the
-/// evaluation's blank-mint prefix) stays bijective, and the output matches
-/// `f[A-Za-z0-9-]*`: a legal `BLANK_NODE_LABEL`, a legal `rdf:nodeID` NCName,
-/// and unambiguous with `BlankScope`'s `.s{n}` qualification.
+/// produce the same tag, and appending the constant `_` separator preserves
+/// that injectivity. `_` never appears ahead of the separator (escaped as
+/// `-5f`), so the `{tag}{label}` join at mint time stays bijective, and the
+/// output matches `f[A-Za-z0-9-]*_`: a legal `BLANK_NODE_LABEL` prefix, a
+/// legal `rdf:nodeID` NCName prefix, and unambiguous with `BlankScope`'s
+/// `.s{n}` qualification.
 fn focus_tag(focus: &Term) -> String {
     let rendered = focus.to_string();
-    let mut tag = String::with_capacity(rendered.len() + 8);
+    // Every non-alphanumeric byte expands to a 3-byte `-XX` escape, so the
+    // worst case (an all-escaped rendering, e.g. an IRI's `<>:/#.` bytes) is
+    // `3 * rendered.len()`. Add 1 for the leading `f` and 1 for the trailing
+    // `_` separator so the buffer never reallocates.
+    let mut tag = String::with_capacity(rendered.len() * 3 + 2);
     const HEX: &[u8; 16] = b"0123456789abcdef";
     tag.push('f');
     for byte in rendered.bytes() {
@@ -514,6 +523,7 @@ fn focus_tag(focus: &Term) -> String {
             tag.push(char::from(HEX[usize::from(byte & 0x0f)]));
         }
     }
+    tag.push('_');
     tag
 }
 
@@ -1550,8 +1560,9 @@ mod tests {
 
     /// The per-focus tag is injective across every focus kind — foci whose
     /// renderings differ only in an escaped byte (`/` vs `#`, `/` vs a literal
-    /// `-2f-`) must get distinct tags — and every minted `{tag}_c{n}` label is a
-    /// serializable `BLANK_NODE_LABEL`.
+    /// `-2f-`) must get distinct tags — and every minted `{tag}c{n}` label
+    /// (`tag` already carries its trailing `_` separator) is a serializable
+    /// `BLANK_NODE_LABEL`.
     #[test]
     fn focus_tag_is_injective_across_focus_kinds() {
         use crate::term::{Literal, NamedNode, Triple};
@@ -1583,16 +1594,17 @@ mod tests {
                 assert_ne!(left, right, "foci {focus} and {other} must not share a tag");
             }
             assert!(
-                ::purrdf::blank_label::is_valid_blank_node_label(&format!("{left}_c1")),
-                "the minted label for focus {focus} must be serializable: {left}_c1"
+                ::purrdf::blank_label::is_valid_blank_node_label(&format!("{left}c1")),
+                "the minted label for focus {focus} must be serializable: {left}c1"
             );
         }
     }
 
     /// Byte sweep over the escape classes: whatever bytes the focus rendering
     /// carries (alphanumeric, `-`, `_`, a raw C0 control, a space, multi-byte
-    /// UTF-8), the tag stays inside `f[A-Za-z0-9-]*` and distinct inputs give
-    /// distinct tags. Blank-node foci are used because their labels render raw.
+    /// UTF-8), the tag stays inside `f[A-Za-z0-9-]*_` (the trailing `_` is the
+    /// constant mint-time separator) and distinct inputs give distinct tags.
+    /// Blank-node foci are used because their labels render raw.
     #[test]
     fn focus_tag_byte_sweep_stays_in_alphabet() {
         let inputs = ["a", "Z", "9", "-", "_", "\u{1f}", " ", "é", "日"];
@@ -1602,11 +1614,11 @@ mod tests {
             .collect();
         for (input, tag) in inputs.iter().zip(&tags) {
             assert!(tag.starts_with('f'), "{input:?} → {tag}");
+            assert!(tag.ends_with('_'), "{input:?} → {tag}");
+            let body = &tag[1..tag.len() - 1];
             assert!(
-                tag[1..]
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '-'),
-                "the tag must match f[A-Za-z0-9-]*: {input:?} → {tag}"
+                body.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
+                "the tag must match f[A-Za-z0-9-]*_: {input:?} → {tag}"
             );
         }
         for (i, left) in tags.iter().enumerate() {
@@ -1614,11 +1626,18 @@ mod tests {
                 assert_ne!(left, right, "distinct inputs must give distinct tags");
             }
         }
+        // Pin the exact output for a couple of representative inputs: an
+        // alphanumeric byte passes through untouched and an escaped byte
+        // becomes `-` + two lowercase hex digits, all inside `_:<label>`
+        // (blank-node `Display` renders as `_:a`), terminated by `_`.
+        assert_eq!(tags[0], "f-5f-3aa_", "blank(\"a\") → _:a → f-5f-3aa_");
+        assert_eq!(tags[3], "f-5f-3a-2d_", "blank(\"-\") → _:- → f-5f-3a-2d_");
     }
 
-    /// A minted `{tag}_c{n}` label is dot-free by construction (`.` is escaped as
-    /// `-2e`), so the `.s{n}` scope-suffix parser must never mis-split one — even
-    /// when the focus rendering itself contains a `.s{n}`-shaped substring.
+    /// A minted `{tag}c{n}` label (`tag` already carries its trailing `_`
+    /// separator) is dot-free by construction (`.` is escaped as `-2e`), so the
+    /// `.s{n}` scope-suffix parser must never mis-split one — even when the
+    /// focus rendering itself contains a `.s{n}`-shaped substring.
     #[test]
     fn minted_labels_are_never_scope_split() {
         let foci = [
@@ -1629,7 +1648,7 @@ mod tests {
             Term::blank("b1"),
         ];
         for focus in &foci {
-            let label = format!("{}_c1", focus_tag(focus));
+            let label = format!("{}c1", focus_tag(focus));
             assert!(!label.contains('.'), "minted labels are dot-free: {label}");
             assert_eq!(
                 ::purrdf::BlankScope::unqualify_label(&label),
