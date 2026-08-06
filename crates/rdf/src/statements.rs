@@ -14,7 +14,7 @@
 //! Both emitters write full-IRI Turtle (no prefix compaction); the drift gate
 //! compares RDFC-1.0 canonical quad sets (graph isomorphism), so banners and
 //! prefixes are immaterial — the triple/reifier/annotation *structure* is what
-//! must round-trip (CONSTITUTION Principle 7, verified by construction).
+//! must round-trip losslessly, verified by construction — never a silent drop.
 //!
 //! The RDF 1.2 triple-term form `<<( s p o )>>` is emitted (matching the SPARQL
 //! codecs and what oxigraph/Jena both parse), not the RDF-star `<< s p o >>`
@@ -74,14 +74,31 @@ fn simplify_term(term: &RdfTerm) -> RdfTerm {
     }
 }
 
-/// Serialize a term to Turtle, normalizing simple literals first.
-fn emit(term: &RdfTerm) -> String {
+/// Serialize a term to Turtle, normalizing simple literals first. Fallible:
+/// the kernel emitter refuses a blank-node label outside the Turtle
+/// `BLANK_NODE_LABEL` alphabet rather than writing an unparsable document.
+fn emit(term: &RdfTerm) -> Result<String, RdfDiagnostic> {
     crate::emit_term(&simplify_term(term))
 }
 
+/// Render a term for sort keys and diagnostics (deterministic, infallible —
+/// this is report/key identity, not document egress).
+fn display(term: &RdfTerm) -> String {
+    crate::display_term(&simplify_term(term))
+}
+
 /// Emit an RDF 1.2 triple term `<<( <s> <p> <o> )>>`.
-fn emit_triple_term(subject: &RdfTerm, predicate: &str, object: &RdfTerm) -> String {
-    format!("<<( {} <{}> {} )>>", emit(subject), predicate, emit(object))
+fn emit_triple_term(
+    subject: &RdfTerm,
+    predicate: &str,
+    object: &RdfTerm,
+) -> Result<String, RdfDiagnostic> {
+    Ok(format!(
+        "<<( {} <{}> {} )>>",
+        emit(subject)?,
+        predicate,
+        emit(object)?
+    ))
 }
 
 /// Require an IRI term (predicates must be IRIs).
@@ -100,8 +117,8 @@ fn require_iri(term: &RdfTerm, context: &str) -> Result<String, RdfDiagnostic> {
 /// A duplicate triple carrying the *same* object is the idempotent re-assertion of
 /// one triple (RDF is a set) and is accepted. A duplicate carrying a *different*
 /// object means two contradictory structural triples share one subject — a corrupt
-/// input the codec must **reject**, never silently last-write-win (CONSTITUTION
-/// Principle 7; no-optionality / hard-fail).
+/// input the codec must **reject**, never silently last-write-win — conflicting
+/// structure is a hard failure, not an option to paper over.
 fn set_once_or_error<T: PartialEq>(
     slot: &mut Option<T>,
     value: T,
@@ -114,7 +131,7 @@ fn set_once_or_error<T: PartialEq>(
                 "statements-conflicting-structural",
                 format!(
                     "{} has conflicting {field} triples (one subject carries two different values)",
-                    crate::emit_term(subject)
+                    crate::display_term(subject)
                 ),
             ));
         }
@@ -150,7 +167,7 @@ pub fn project_owl_to_rdf12(owl_ttl: &str) -> Result<String, RdfDiagnostic> {
 
     let mut axioms: BTreeMap<String, AxiomAccum> = BTreeMap::new();
     for quad in &quads {
-        let acc = axioms.entry(crate::emit_term(&quad.subject)).or_default();
+        let acc = axioms.entry(display(&quad.subject)).or_default();
         if acc.subject.is_none() {
             acc.subject = Some(quad.subject.clone());
         }
@@ -194,7 +211,7 @@ pub fn project_owl_to_rdf12(owl_ttl: &str) -> Result<String, RdfDiagnostic> {
         let missing = |what: &str| {
             RdfDiagnostic::error(
                 "statements-malformed-axiom",
-                format!("owl:Axiom {} lacks {what}", crate::emit_term(subject)),
+                format!("owl:Axiom {} lacks {what}", display(subject)),
             )
         };
         let source = acc
@@ -215,23 +232,23 @@ pub fn project_owl_to_rdf12(owl_ttl: &str) -> Result<String, RdfDiagnostic> {
         let _ = writeln!(
             out,
             "{} <{}> {} .",
-            emit(source),
+            emit(source)?,
             property_iri,
-            emit(target)
+            emit(target)?
         );
 
         // ?axiom rdf:reifies <<( ?s ?p ?o )>> ; ?annProp ?annVal ; … .
         let mut annotations: Vec<(String, String)> = acc
             .annotations
             .iter()
-            .map(|(predicate, object)| (predicate.clone(), emit(object)))
-            .collect();
+            .map(|(predicate, object)| Ok((predicate.clone(), emit(object)?)))
+            .collect::<Result<_, RdfDiagnostic>>()?;
         annotations.sort();
         let mut line = format!(
             "{} <{}> {}",
-            emit(subject),
+            emit(subject)?,
             RDF_REIFIES,
-            emit_triple_term(source, &property_iri, target)
+            emit_triple_term(source, &property_iri, target)?
         );
         for (predicate, object) in &annotations {
             let _ = write!(line, " ;\n   <{predicate}> {object}");
@@ -266,7 +283,7 @@ pub fn normalize_rdf12_to_owl(rdf12_ttl: &str) -> Result<String, RdfDiagnostic> 
 
     let mut by_subject: BTreeMap<String, ReifierAccum> = BTreeMap::new();
     for quad in &quads {
-        let key = crate::emit_term(&quad.subject);
+        let key = display(&quad.subject);
         let acc = by_subject.entry(key).or_insert_with(|| ReifierAccum {
             subject: quad.subject.clone(),
             reified: None,
@@ -307,20 +324,20 @@ pub fn normalize_rdf12_to_owl(rdf12_ttl: &str) -> Result<String, RdfDiagnostic> 
         let (s, p, o) = (&reified.subject, &reified.predicate, &reified.object);
 
         // ?s ?p ?o .
-        let _ = writeln!(out, "{} <{}> {} .", emit(s), p, emit(o));
+        let _ = writeln!(out, "{} <{}> {} .", emit(s)?, p, emit(o)?);
 
         // ?reifier a owl:Axiom ; owl:annotated* … ; ?annProp ?annVal .
         let mut properties: Vec<(String, String)> = vec![
             (RDF_TYPE.to_owned(), format!("<{OWL_AXIOM}>")),
-            (OWL_ANNOTATED_SOURCE.to_owned(), emit(s)),
+            (OWL_ANNOTATED_SOURCE.to_owned(), emit(s)?),
             (OWL_ANNOTATED_PROPERTY.to_owned(), format!("<{p}>")),
-            (OWL_ANNOTATED_TARGET.to_owned(), emit(o)),
+            (OWL_ANNOTATED_TARGET.to_owned(), emit(o)?),
         ];
         for (predicate, object) in &acc.annotations {
-            properties.push((predicate.clone(), emit(object)));
+            properties.push((predicate.clone(), emit(object)?));
         }
         properties.sort();
-        let mut line = emit(&acc.subject);
+        let mut line = emit(&acc.subject)?;
         for (index, (predicate, object)) in properties.iter().enumerate() {
             let sep = if index == 0 { " " } else { " ;\n   " };
             let _ = write!(line, "{sep}<{predicate}> {object}");
@@ -356,7 +373,7 @@ ex:ax a owl:Axiom ;
         parse_quads(ttl)
             .expect("parse")
             .iter()
-            .map(crate::emit_quad)
+            .map(|quad| crate::emit_quad(quad).expect("legal labels emit"))
             .collect()
     }
 

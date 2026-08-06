@@ -1113,6 +1113,8 @@ fn contains_triple(term: &ProjectionTerm) -> bool {
 fn term_label(term: &ProjectionTerm) -> String {
     match term {
         ProjectionTerm::Iri { value } => value.clone(),
+        // Internal mapping key (`_:{scope}:{label}`), never serialized into an
+        // RDF document — label syntax is not enforced here.
         ProjectionTerm::Blank { label, scope } => format!("_:{scope}:{label}"),
         ProjectionTerm::Literal { lexical, .. } => format!("literal:{lexical}"),
         ProjectionTerm::Triple { .. } => {

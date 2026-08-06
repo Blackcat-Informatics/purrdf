@@ -946,6 +946,10 @@ fn validate_iri(value: &str) -> Result<(), RdfDiagnostic> {
 /// The blank-node label contract the prior purrdf-gts `BlankNode::new` enforced: a first
 /// char that is ASCII alphanumeric or `_`, inner chars adding `-`/`.`, and no trailing
 /// `.`.
+///
+/// This ASCII-narrow PARSE contract is deliberate (frozen ingress compatibility); the
+/// exact egress alphabets live in `purrdf_core::blank_label` and are enforced at the
+/// `SerGraph` ingress on the write side.
 fn validate_blank_label(label: &str) -> Result<(), RdfDiagnostic> {
     let mut chars = label.chars();
     let Some(first) = chars.next() else {

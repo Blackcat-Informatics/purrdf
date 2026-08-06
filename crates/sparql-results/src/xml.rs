@@ -20,6 +20,7 @@
 use crate::SerializeOutcome;
 use crate::error::Error;
 use crate::model::ResultProvenance;
+use purrdf_core::blank_label::{LabelAlphabet, is_valid_label};
 use purrdf_core::{SparqlResult, TermValue};
 
 /// The `xsd:string` IRI; a literal carrying it (with no language) serializes
@@ -149,9 +150,19 @@ fn write_term(value: &TermValue, out: &mut String) -> Result<(), Error> {
             xml_escape_text(iri, out)?;
             out.push_str("</uri>");
         }
-        TermValue::Blank { label, .. } => {
+        TermValue::Blank { label, scope } => {
+            // A `<bnode>` id is opaque escaped element text, so the alphabet is
+            // Unconstrained: any non-empty scope-qualified label round-trips
+            // and only emptiness is refused (a hard error, never a remap).
+            let qualified = scope.qualify_label(label);
+            if !is_valid_label(&qualified, LabelAlphabet::Unconstrained) {
+                return Err(Error::Format(format!(
+                    "invalid blank-node label {qualified:?} for an unconstrained \
+                     (non-empty) label: a result binding cannot carry an empty bnode id"
+                )));
+            }
             out.push_str("<bnode>");
-            xml_escape_text(label, out)?;
+            xml_escape_text(&qualified, out)?;
             out.push_str("</bnode>");
         }
         TermValue::Literal {

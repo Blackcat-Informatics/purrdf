@@ -82,7 +82,7 @@
 use core::fmt;
 use core::fmt::Write as _;
 
-use purrdf_core::{RdfLiteral, RdfTerm, RdfTriple, TermValue, emit_term};
+use purrdf_core::{RdfLiteral, RdfTerm, RdfTriple, TermValue, display_term};
 use purrdf_entail::{
     ChaseProof, Completeness, DlAxiom, DlCertificate, DlCompleteness, EntailError,
     EntailmentCertificate, EntailmentMechanism, EntailmentOutcome, ImportMap, Justification,
@@ -1197,11 +1197,14 @@ impl ReasoningAnswer {
 /// Render `term` in N-Triples term syntax (`<iri>`, `_:label`, `"lex"@en`,
 /// `<<( s p o )>>`).
 ///
-/// The escaping is [`purrdf_core::emit_term`]'s, so a term rendered here and the
-/// same term rendered by the native serializers escape identically. Triple terms
-/// recurse HERE rather than through `emit_term`'s owned model, because the owned
-/// model requires a triple term's predicate to be an IRI and this function must be
-/// total over [`TermValue`].
+/// The escaping is [`purrdf_core::display_term`]'s, so a term rendered here and
+/// the same term rendered by the native serializers escape identically. This is
+/// report/diagnostic identity text (answer and certificate lines), not RDF
+/// document egress, so blank-node label alphabets are deliberately not enforced
+/// here and the function stays total. Triple terms recurse HERE rather than
+/// through `display_term`'s owned model, because the owned model requires a
+/// triple term's predicate to be an IRI and this function must be total over
+/// [`TermValue`].
 ///
 /// N-Triples terms are self-delimiting — `<…>` ends at the unescaped `>`, `_:…` at
 /// whitespace, `"…"` at the unescaped closing quote — which is what makes a
@@ -1209,8 +1212,8 @@ impl ReasoningAnswer {
 /// lexical form may contain a space.
 fn emit(term: &TermValue) -> String {
     match term {
-        TermValue::Iri(iri) => emit_term(&RdfTerm::iri(iri.clone())),
-        TermValue::Blank { label, scope } => emit_term(&RdfTerm::blank_node(
+        TermValue::Iri(iri) => display_term(&RdfTerm::iri(iri.clone())),
+        TermValue::Blank { label, scope } => display_term(&RdfTerm::blank_node(
             scope.qualify_label(label).into_owned(),
         )),
         TermValue::Literal {
@@ -1218,14 +1221,14 @@ fn emit(term: &TermValue) -> String {
             datatype,
             language,
             direction,
-        } => emit_term(&RdfTerm::literal(RdfLiteral {
+        } => display_term(&RdfTerm::literal(RdfLiteral {
             lexical_form: lexical_form.clone(),
             datatype: Some(datatype.clone()),
             language: language.clone(),
             direction: *direction,
         })),
         TermValue::Triple { s, p, o } => match p.as_iri() {
-            Some(predicate) => emit_term(&RdfTerm::triple(RdfTriple::new(
+            Some(predicate) => display_term(&RdfTerm::triple(RdfTriple::new(
                 to_owned_term(s),
                 predicate.to_owned(),
                 to_owned_term(o),

@@ -25,6 +25,41 @@ use super::media_type::{NativeRdfFormat, classify};
 use super::ser_model::{SerAnnotationRow, SerGraph, SerReifierRow, SerTerm, SerTermKind};
 use crate::ir::TermRef;
 use crate::{DatasetView, RdfDiagnostic, RdfTextDirection, SerializeGraph, TermValue};
+use purrdf_core::blank_label::{LabelAlphabet, is_valid_label};
+
+/// The blank-node label alphabet the TARGET format's codec can legally emit —
+/// the egress contract enforced at the [`SerGraph`] ingress so no codec can
+/// silently write a label that is illegal in ITS syntax.
+///
+/// - The line/Turtle-family codecs write `_:{label}` tokens, so their labels
+///   must satisfy the exact W3C Turtle/SPARQL `BLANK_NODE_LABEL` production.
+/// - RDF/XML writes labels into `rdf:nodeID` attributes, whose value the RDF/XML
+///   grammar constrains to an XML `NCName`.
+/// - The structured codecs (TriX `<id>` element text, HexTuples/JSON-LD/YAML-LD
+///   JSON strings) escape the label as opaque text, so any non-empty string
+///   re-reads losslessly and only emptiness is rejected.
+const fn blank_label_alphabet(format: NativeRdfFormat) -> LabelAlphabet {
+    match format {
+        NativeRdfFormat::Turtle
+        | NativeRdfFormat::TriG
+        | NativeRdfFormat::NTriples
+        | NativeRdfFormat::NQuads => LabelAlphabet::BlankNodeLabel,
+        NativeRdfFormat::RdfXml => LabelAlphabet::NcName,
+        NativeRdfFormat::TriX
+        | NativeRdfFormat::HexTuples
+        | NativeRdfFormat::JsonLd
+        | NativeRdfFormat::YamlLd => LabelAlphabet::Unconstrained,
+    }
+}
+
+/// The human-readable name of a [`LabelAlphabet`], for the hard-error diagnostic.
+const fn alphabet_name(alphabet: LabelAlphabet) -> &'static str {
+    match alphabet {
+        LabelAlphabet::BlankNodeLabel => "the Turtle/SPARQL BLANK_NODE_LABEL alphabet",
+        LabelAlphabet::NcName => "the XML NCName alphabet",
+        LabelAlphabet::Unconstrained => "an unconstrained (non-empty) label",
+    }
+}
 
 /// The `xsd:string` datatype IRI: a literal of this datatype with no language is a
 /// plain literal and is emitted WITHOUT an explicit `^^<…>`, so it round-trips back to
@@ -82,7 +117,7 @@ pub fn serialize_dataset_with_jsonld_options<D: DatasetView>(
 /// This is the projection egress for star-incapable targets in the transcode
 /// loss contract: the dropped statement-row count is the caller's to record as
 /// declared loss (`rdf12-star-unrepresentable` / `rdf12-star-jsonld-rejected`) — the
-/// drop here is never silent (CONSTITUTION P7), it is the realized count the caller
+/// drop here is never silent: it is the realized count the caller
 /// attaches to the loss ledger.
 pub fn serialize_dataset_base_only<D: DatasetView>(
     dataset: &D,
@@ -134,8 +169,7 @@ pub struct SerializeOutcome {
     /// The number of base-quad object literals whose RDF-1.2 base direction was
     /// dropped because the target format has no direction surface (TriX / HexTuples
     /// keep the language tag but cannot carry `--ltr` / `--rtl`). Zero for every
-    /// direction-capable format. Recorded as declared loss — never a silent drop
-    /// (CONSTITUTION P7).
+    /// direction-capable format. Recorded as declared loss — never a silent drop.
     pub directional_literals_dropped: usize,
 }
 
@@ -227,7 +261,7 @@ fn jsonld_options_unused(format: NativeRdfFormat) -> RdfDiagnostic {
 /// Count the base-quad OBJECT literals whose resolved term carries an RDF-1.2 base
 /// direction. Used to record declared loss when serializing to a format with no
 /// direction surface (TriX / HexTuples) — the drop is the realized count the caller
-/// attaches to the loss ledger, never a silent loss (CONSTITUTION P7).
+/// attaches to the loss ledger, never a silent loss.
 fn count_directional_object_literals<D: DatasetView>(dataset: &D) -> usize {
     dataset
         .quads()
@@ -255,7 +289,8 @@ pub(crate) fn build_ser_graph<D: DatasetView>(
     selection: SerializeGraph<'_>,
     include_statement_layer: bool,
 ) -> Result<SerGraph, RdfDiagnostic> {
-    let mut interner = SerGraphInterner::with_capacity(dataset.term_count());
+    let mut interner =
+        SerGraphInterner::with_capacity(dataset.term_count(), blank_label_alphabet(format));
 
     // Which quad rows to emit, and whether the statement layer (reifiers/annotations)
     // participates — matching the oxigraph backend's filter exactly.
@@ -374,7 +409,6 @@ fn push_statement_rows<D: DatasetView>(
 
 /// Builds the first-party term table from the frozen IR, deduplicating terms by value
 /// and materializing literal datatypes + quoted-triple reifier bindings.
-#[derive(Default)]
 struct SerGraphInterner {
     terms: Vec<SerTerm>,
     /// Reifier-id → `(s, p, o)` bindings. Carries both the statement-layer reifiers
@@ -385,15 +419,20 @@ struct SerGraphInterner {
     /// Value → term-id memo so equal terms collapse to one term, matching the fold the
     /// reader produces.
     memo: HashMap<TermValue, usize>,
+    /// The TARGET codec's blank-node label alphabet ([`blank_label_alphabet`]).
+    /// Every qualified blank label is validated against it at intern time, so no
+    /// downstream emitter can silently write a label illegal in its syntax.
+    alphabet: LabelAlphabet,
 }
 
 impl SerGraphInterner {
-    fn with_capacity(term_count: usize) -> Self {
+    fn with_capacity(term_count: usize, alphabet: LabelAlphabet) -> Self {
         Self {
             terms: Vec::with_capacity(term_count),
             reifiers: Vec::new(),
             annotations: Vec::new(),
             memo: HashMap::with_capacity(term_count),
+            alphabet,
         }
     }
 
@@ -412,14 +451,32 @@ impl SerGraphInterner {
                 direction: None,
                 reifier: None,
             }),
-            TermRef::Blank { label, scope } => self.push_term(SerTerm {
-                kind: SerTermKind::Bnode,
-                value: Some(scope.qualify_label(label).into_owned()),
-                datatype: None,
-                lang: None,
-                direction: None,
-                reifier: None,
-            }),
+            TermRef::Blank { label, scope } => {
+                // Validate the QUALIFIED label (what the codec will actually
+                // write) against the TARGET format's alphabet. An out-of-alphabet
+                // label is a hard error — never a silent remap, which would
+                // invisibly change the caller's blank-node identity story.
+                let qualified = scope.qualify_label(label).into_owned();
+                if !is_valid_label(&qualified, self.alphabet) {
+                    return Err(RdfDiagnostic::error(
+                        "native-codec-write",
+                        format!(
+                            "invalid blank-node label {qualified:?} for {}: the target \
+                             syntax cannot represent it and the serializer refuses to \
+                             emit an unreadable document",
+                            alphabet_name(self.alphabet)
+                        ),
+                    ));
+                }
+                self.push_term(SerTerm {
+                    kind: SerTermKind::Bnode,
+                    value: Some(qualified),
+                    datatype: None,
+                    lang: None,
+                    direction: None,
+                    reifier: None,
+                })
+            }
             TermRef::Literal {
                 lexical,
                 datatype,

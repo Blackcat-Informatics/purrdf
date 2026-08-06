@@ -1293,6 +1293,10 @@ fn write_surface(value: &TermValue, out: &mut String) {
             out.push('>');
         }
         TermValue::Blank { label, scope } => {
+            // Internal store-surface identity key (scope-first form; injective
+            // because the digit-only scope ends at the first dot) plus the
+            // diagnostics built on it — never RDF document egress, so label
+            // syntax is not enforced here.
             let _ = write!(out, "_:{}.{label}", scope.ordinal());
         }
         TermValue::Literal {

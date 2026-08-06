@@ -256,7 +256,7 @@ impl NativeRdfFormat {
     /// Whether this format can carry an RDF-1.2 literal base direction. Every format
     /// except TriX and HexTuples emits the direction losslessly; those two have a
     /// language slot but no direction surface, so they drop it as declared loss
-    /// (recorded on the loss ledger — never a silent drop; CONSTITUTION P7).
+    /// (recorded on the loss ledger — never a silent drop).
     pub fn carries_direction(self) -> bool {
         descriptor(self).carries_direction
     }

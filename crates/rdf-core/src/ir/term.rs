@@ -125,15 +125,31 @@ impl BlankScope {
     /// scope so two same-label blanks from DIFFERENT scopes never collapse into one
     /// owned blank for legacy consumers (compat bridge / oxigraph / SHACL).
     ///
-    /// The DEFAULT scope keeps the bare label verbatim, so real single-scope data is
-    /// byte-unchanged; a non-default scope `n` qualifies as `"{label}.s{n}"` (C0.2).
+    /// The encoding is INJECTIVE over `(label, scope)`: every raw `.` in the label
+    /// is doubled to `..`, then a non-default scope `n` appends the single-dot
+    /// suffix `.s{n}` (C0.2). Raw dots therefore always surface as even-length dot
+    /// runs, so the scope suffix is unambiguously the trailing `s{digits}` preceded
+    /// by an ODD-length dot run — raw `"a.s1"` at the DEFAULT scope (qualifying to
+    /// `"a..s1"`) can never collide with raw `"a"` at scope 1 (qualifying to
+    /// `"a.s1"`). A dot-free DEFAULT-scope label is returned verbatim (borrowed),
+    /// so real single-scope data is byte-unchanged.
     #[inline]
     pub fn qualify_label(self, label: &str) -> std::borrow::Cow<'_, str> {
-        if self == Self::DEFAULT {
-            std::borrow::Cow::Borrowed(label)
-        } else {
-            std::borrow::Cow::Owned(format!("{label}.s{}", self.0))
+        if self == Self::DEFAULT && !label.contains('.') {
+            return std::borrow::Cow::Borrowed(label);
         }
+        let mut qualified = String::with_capacity(label.len() + 8);
+        for ch in label.chars() {
+            qualified.push(ch);
+            if ch == '.' {
+                qualified.push('.');
+            }
+        }
+        if self != Self::DEFAULT {
+            use std::fmt::Write as _;
+            let _ = write!(qualified, ".s{}", self.0);
+        }
+        std::borrow::Cow::Owned(qualified)
     }
 }
 
@@ -498,6 +514,51 @@ mod tests {
             RDF_LANG_STRING,
             "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString"
         );
+    }
+
+    #[test]
+    fn qualify_label_dot_free_default_scope_is_verbatim() {
+        // Real single-scope data must stay byte-unchanged: borrowed, no rewrite.
+        let qualified = BlankScope::DEFAULT.qualify_label("b0");
+        assert_eq!(qualified, "b0");
+        assert!(matches!(qualified, std::borrow::Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn qualify_label_doubles_raw_dots_and_appends_scope_suffix() {
+        assert_eq!(BlankScope(1).qualify_label("a"), "a.s1");
+        assert_eq!(BlankScope::DEFAULT.qualify_label("a.s1"), "a..s1");
+        assert_eq!(BlankScope(1).qualify_label("a.b"), "a..b.s1");
+        assert_eq!(BlankScope::DEFAULT.qualify_label("a.b"), "a..b");
+        assert_eq!(BlankScope(3).qualify_label("a."), "a...s3");
+    }
+
+    #[test]
+    fn qualify_label_is_injective_over_label_scope_pairs() {
+        // The historical conflation pair: raw "a" at scope 1 vs raw "a.s1" at the
+        // default scope used to both qualify to "a.s1". Dot-doubling keeps them
+        // apart, and pairwise-distinct across a hostile sample of (label, scope)
+        // pairs whose naive renderings collide.
+        let pairs: &[(&str, BlankScope)] = &[
+            ("a", BlankScope(1)),
+            ("a.s1", BlankScope::DEFAULT),
+            ("a.", BlankScope(1)),
+            ("a..s1", BlankScope::DEFAULT),
+            ("a.s1.s2", BlankScope::DEFAULT),
+            ("a.s1", BlankScope(2)),
+            ("a", BlankScope(12)),
+            ("a.s12", BlankScope::DEFAULT),
+        ];
+        let mut seen = std::collections::HashMap::new();
+        for &(label, scope) in pairs {
+            let qualified = scope.qualify_label(label).into_owned();
+            if let Some(previous) = seen.insert(qualified.clone(), (label, scope)) {
+                panic!(
+                    "qualified label {qualified:?} conflates {previous:?} with {:?}",
+                    (label, scope)
+                );
+            }
+        }
     }
 
     #[test]

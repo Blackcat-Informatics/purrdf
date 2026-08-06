@@ -5,8 +5,8 @@
 //! travels alongside a SPARQL result.
 //!
 //! When [`ResultProvenance`] is empty (the common case today) the serializers
-//! emit pure-W3C output. When populated, the JSON/XML writers (Tasks 2–3) append
-//! an additive `purrdf` extension block; the CSV/TSV writers cannot carry it and
+//! emit pure-W3C output. When populated, the JSON/XML writers append an
+//! additive `purrdf` extension block; the CSV/TSV writers cannot carry it and
 //! flag the drop via `SerializeOutcome::provenance_dropped`.
 //!
 //! Honesty note: population of this structure is **incremental**. The fields are

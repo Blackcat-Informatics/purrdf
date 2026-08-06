@@ -141,10 +141,15 @@ impl RdfTerm {
 
 /// Renders the term in its canonical form (`<iri>`, `_:label`, a typed/lang literal,
 /// or the RDF 1.2 triple-term shorthand `<< … >>`) — the single source of truth is
-/// [`crate::turtle::emit_term`], so `Display` and the serializer never diverge.
+/// [`crate::turtle::display_term`] (the unvalidated rendering the fallible
+/// serializer [`crate::turtle::emit_term`] also produces for a legal term), so
+/// `Display` and the serializer never diverge on emittable terms. `Display` is a
+/// diagnostic surface, not document egress: a blank-node label outside the Turtle
+/// alphabet still renders here verbatim so error messages can name it, while
+/// `emit_term` refuses it.
 impl core::fmt::Display for RdfTerm {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(&crate::turtle::emit_term(self))
+        f.write_str(&crate::turtle::display_term(self))
     }
 }
 
@@ -343,7 +348,10 @@ mod tests {
                 RdfTerm::iri("https://example.org/o"),
             )),
         ] {
-            assert_eq!(t.to_string(), crate::turtle::emit_term(&t));
+            assert_eq!(
+                t.to_string(),
+                crate::turtle::emit_term(&t).expect("legal term emits")
+            );
         }
     }
 }

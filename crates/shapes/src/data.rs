@@ -36,7 +36,7 @@ pub(crate) fn resolve_id(dataset: &RdfDataset, term: &Term) -> Option<TermId> {
             .term_id_by_blank(label, ::purrdf::BlankScope::DEFAULT)
             .or_else(|| {
                 let (label, scope) = split_scope_suffix(label)?;
-                dataset.term_id_by_blank(label, ::purrdf::BlankScope(scope))
+                dataset.term_id_by_blank(&label, ::purrdf::BlankScope(scope))
             }),
         Term::Literal(literal) => dataset.term_id_by_literal(
             literal.value(),

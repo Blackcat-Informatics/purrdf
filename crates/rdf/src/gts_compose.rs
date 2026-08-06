@@ -861,7 +861,7 @@ mod tests {
     #[test]
     fn conflicting_reifier_rebind_is_rejected() {
         // FINDING: two DIFFERENT `rdf:reifies` triple terms for one reifier
-        // subject is HARD-rejected (CONSTITUTION P7, never silently last-write-win).
+        // subject is HARD-rejected, never silently last-write-win.
         // The native `parse_dataset` folds the statement layer during parse and detects
         // the conflicting rebind there ("conflicting rdf:reifies binding"), before the
         // bytes ever reach `SnapshotBuilder::add_dataset`. The conflict is surfaced, not

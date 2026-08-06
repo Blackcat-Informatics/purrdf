@@ -80,7 +80,7 @@ pub fn to_tsv(
                 out.push('\t');
             }
             if let Some(Some(value)) = row.get(column) {
-                out.push_str(&ntriples_token(value));
+                out.push_str(&ntriples_token(value)?);
             }
             // None or missing column → empty field.
         }

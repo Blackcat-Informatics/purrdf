@@ -573,6 +573,8 @@ pub(crate) fn show_pattern(pat: &PatTriple) -> String {
         match position {
             Pat::Ground(term) => crate::entails::graph::show(term),
             Pat::Var(VarKey::Blank { label, scope }) => {
+                // Diagnostics-only rendering, never RDF document egress — label
+                // syntax is not enforced here.
                 format!("_:{label}#{}", scope.ordinal())
             }
             Pat::Var(VarKey::Projected(name)) => format!("?{name}"),

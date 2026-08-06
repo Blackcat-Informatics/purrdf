@@ -6,7 +6,7 @@
 //!
 //! The default (empty-provenance) output is byte-identical to the legacy
 //! `crates/rdf-capi` emitter (`result_to_json`) — the byte-identity oracle tests
-//! pin that contract so the Task 4 subsume is safe — **except** the CONSTRUCT
+//! pin that contract so subsuming that emitter stays safe — **except** the CONSTRUCT
 //! (`Graph`) branch, which here uses the wasm-clean [`crate::graph`] N-Triples
 //! writer (no oxigraph) and therefore additionally carries RDF-1.2-star
 //! reifier/annotation lines (maximal information flow).
@@ -21,6 +21,7 @@ use crate::SerializeOutcome;
 use crate::error::Error;
 use crate::graph::dataset_to_ntriples;
 use crate::model::ResultProvenance;
+use purrdf_core::blank_label::{LabelAlphabet, is_valid_label};
 use purrdf_core::{SparqlResult, TermValue};
 
 /// Serialize a [`SparqlResult`] to SPARQL Results JSON, appending the additive
@@ -143,7 +144,7 @@ fn write_base(result: &SparqlResult, out: &mut String) -> Result<(), Error> {
             // Wasm-clean deviation from rdf-capi: render N-Triples directly from
             // the rdf-core kernel (no oxigraph), additionally carrying
             // reifier/annotation lines.
-            let nt = dataset_to_ntriples(graph.as_ref());
+            let nt = dataset_to_ntriples(graph.as_ref())?;
             out.push_str("{\"graph\":");
             json_string(&nt, out);
             out.push('}');
@@ -233,9 +234,19 @@ fn json_binding(value: &TermValue, out: &mut String) -> Result<(), Error> {
             json_string(iri, out);
             out.push('}');
         }
-        TermValue::Blank { label, .. } => {
+        TermValue::Blank { label, scope } => {
+            // A JSON bnode id is an opaque escaped string, so the alphabet is
+            // Unconstrained: any non-empty scope-qualified label round-trips
+            // and only emptiness is refused (a hard error, never a remap).
+            let qualified = scope.qualify_label(label);
+            if !is_valid_label(&qualified, LabelAlphabet::Unconstrained) {
+                return Err(Error::Format(format!(
+                    "invalid blank-node label {qualified:?} for an unconstrained \
+                     (non-empty) label: a result binding cannot carry an empty bnode id"
+                )));
+            }
             out.push_str("{\"type\":\"bnode\",\"value\":");
-            json_string(label, out);
+            json_string(&qualified, out);
             out.push('}');
         }
         TermValue::Literal {
