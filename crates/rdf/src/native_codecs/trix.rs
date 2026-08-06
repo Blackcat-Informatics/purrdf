@@ -225,10 +225,11 @@ fn freeze_rows(
 fn intern_term(builder: &mut RdfDatasetBuilder, term: &TrixTerm) -> TermId {
     match term {
         TrixTerm::Iri(iri) => builder.intern_iri(iri),
-        // Text ingress: decode the scope qualification and alphabet escape this
-        // codec's serializer applied at egress, so a document it wrote re-parses to
-        // the very `(label, scope)` pair it was written from.
-        TrixTerm::Blank(label) => builder.intern_text_blank(label),
+        // Text ingress: decode the `(label, scope)` encoding this codec's serializer
+        // applied at egress, so a document it wrote re-parses to the very
+        // `(label, scope)` pair it was written from. A TriX `<id>` is XML character
+        // data, which is the alphabet the image test re-encodes against.
+        TrixTerm::Blank(label) => builder.intern_text_blank(label, LabelAlphabet::XmlText),
         TrixTerm::Literal(literal) => builder.intern_literal(literal.clone()),
     }
 }

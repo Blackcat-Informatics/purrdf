@@ -1177,8 +1177,8 @@ fn withhold_surrogate_triples(result: &mut SparqlResult, surrogates: &BTreeSet<S
 /// [`RdfTerm::BlankNode`] carries the SCOPE-QUALIFIED rendering of whatever label
 /// the dataset holds. Decoding the rendering is the exact inverse of that
 /// qualification, so the comparison is against the label that was actually
-/// minted; comparing the two spellings directly would silently match nothing and
-/// let every dotted witness through the filter it exists to enforce.
+/// minted — and a witness label carried at a non-default scope, whose rendering
+/// IS an envelope, still compares equal to the raw label it was minted as.
 fn label_is_surrogate(label: &str, surrogates: &BTreeSet<String>) -> bool {
     let (raw, _scope) = purrdf_rdf::BlankScope::unqualify_label(label);
     surrogates.contains(raw.as_ref())

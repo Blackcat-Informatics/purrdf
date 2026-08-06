@@ -512,8 +512,9 @@ fn conditions_hold(
 /// that injectivity. `_` never appears ahead of the separator (escaped as
 /// `-5f`), so the `{tag}{label}` join at mint time stays bijective, and the
 /// output matches `f[A-Za-z0-9-]*_`: a legal `BLANK_NODE_LABEL` prefix, a
-/// legal `rdf:nodeID` NCName prefix, and unambiguous with `BlankScope`'s
-/// `.s{n}` qualification.
+/// legal `rdf:nodeID` NCName prefix, and outside `BlankScope`'s reserved
+/// `purrdfesc` marker namespace, so a minted label is never mistaken for a
+/// scope envelope.
 fn focus_tag(focus: &Term) -> String {
     let rendered = focus.to_string();
     // Every non-alphanumeric byte expands to a 3-byte `-XX` escape, so the
@@ -1644,9 +1645,10 @@ mod tests {
     }
 
     /// A minted `{tag}c{n}` label (`tag` already carries its trailing `_`
-    /// separator) is dot-free by construction (`.` is escaped as `-2e`), so the
-    /// `.s{n}` scope-suffix parser must never mis-split one — even when the
-    /// focus rendering itself contains a `.s{n}`-shaped substring.
+    /// separator) starts with `f` and is dot-free by construction (`.` is
+    /// escaped as `-2e`), so it lands outside the reserved `purrdfesc` marker
+    /// namespace and the scope decode must return it verbatim — even when the
+    /// focus rendering itself contains a scope-suffix-shaped substring.
     #[test]
     fn minted_labels_are_never_scope_split() {
         let foci = [
@@ -1730,11 +1732,12 @@ mod tests {
     /// A dotted label is the one that survives the projection only if the owned
     /// round trip is exactly invertible: the projection, every fixpoint round,
     /// and the `$this` pre-binding each re-materialize the focus term, and a
-    /// second scope qualification would double the dot run and silently point
-    /// the derived triple at a node that does not exist.
+    /// re-encoding that rewrote the label would silently point the derived
+    /// triple at a node that does not exist.
     #[test]
     fn sparql_rule_preserves_a_dotted_data_blank_co_reference() {
-        // `_:a..b` is the wire spelling of the raw label `a.b`.
+        // `_:a..b` is a legal `BLANK_NODE_LABEL` and denotes the label `a..b`
+        // itself — every surface must carry it byte for byte.
         let data = "ex:alice ex:has _:a..b . _:a..b a ex:Contact .";
         let shapes = r#"
             ex:S a sh:NodeShape ; sh:targetSubjectsOf ex:has ;
@@ -1756,7 +1759,7 @@ mod tests {
             "the derived triple must reference the SAME dotted blank node: {nq}"
         );
 
-        // The label itself never grew: the entailed dataset still holds `a.b`.
+        // The label itself never grew: the entailed dataset still holds `a..b`.
         assert!(
             blank_labels(&entailed).contains(&"a..b".to_owned()),
             "the dotted label must survive un-requalified: {:?}",
@@ -1768,15 +1771,16 @@ mod tests {
     /// focus label, including the ones whose spelling collides with the
     /// blank-scope encoding.
     ///
-    /// `a.b`, `x` at scope 1 and `a.b.c` are the labels a non-invertible owned
-    /// round trip mangles; a mangled focus term denotes nothing in the
-    /// projection, so the rule derives NOTHING for it and `entail_dataset` still
-    /// returns `Ok` — a silent wrong answer, which is why every label is checked
-    /// rather than a representative one.
+    /// `a..b`, `x.s1` and `a..b..c` are the labels a non-invertible owned round
+    /// trip mangles; a mangled focus term denotes nothing in the projection, so
+    /// the rule derives NOTHING for it and `entail_dataset` still returns `Ok` —
+    /// a silent wrong answer, which is why every label is checked rather than a
+    /// representative one.
     #[test]
     fn every_blank_focus_label_derives_regardless_of_dots_and_scopes() {
-        // Wire spellings: `_:a..b` is raw `a.b`, `_:x.s1` is raw `x` at scope 1,
-        // `_:a..b..c` is raw `a.b.c`.
+        // Each token is a legal `BLANK_NODE_LABEL` denoting ITSELF: the dotted
+        // spellings and the scope-suffix-shaped `x.s1` are ordinary labels that
+        // every surface must carry through unchanged.
         let data = "\
             _:p a ex:Person .\n\
             _:ab a ex:Person .\n\

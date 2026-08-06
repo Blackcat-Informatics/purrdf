@@ -25,12 +25,13 @@ use super::media_type::{NativeRdfFormat, classify};
 use super::ser_model::{SerAnnotationRow, SerGraph, SerReifierRow, SerTerm, SerTermKind};
 use crate::ir::TermRef;
 use crate::{DatasetView, RdfDiagnostic, RdfTextDirection, SerializeGraph, TermValue};
-use purrdf_core::blank_label::{LabelAlphabet, escape_label};
+use purrdf_core::blank_label::{LabelAlphabet, encode_blank_label};
 
 /// The blank-node label alphabet the TARGET format's codec can legally emit —
 /// the egress contract applied at the [`SerGraph`] ingress so no codec can write
 /// a label that is illegal in ITS syntax. Exactly one alphabet per target
-/// syntax; a label outside it is escaped, never refused.
+/// syntax; a label outside it — or any label carrying a non-default scope — is
+/// enveloped, never refused.
 ///
 /// - The line/Turtle-family codecs write `_:{label}` tokens, so their labels
 ///   must satisfy the exact W3C Turtle/SPARQL `BLANK_NODE_LABEL` production.
@@ -416,9 +417,9 @@ struct SerGraphInterner {
     /// reader produces.
     memo: HashMap<TermValue, usize>,
     /// The TARGET codec's blank-node label alphabet ([`blank_label_alphabet`]).
-    /// Every qualified blank label is escaped into it at intern time, so no
-    /// downstream emitter can write a label illegal in its syntax and no codec
-    /// has to repeat the check.
+    /// Every blank node's `(label, scope)` pair is encoded into it at intern
+    /// time, so no downstream emitter can write a label illegal in its syntax
+    /// and no codec has to repeat the check.
     alphabet: LabelAlphabet,
 }
 
@@ -449,13 +450,12 @@ impl SerGraphInterner {
                 reifier: None,
             }),
             TermRef::Blank { label, scope } => {
-                // Escape the QUALIFIED label (what the codec will actually write)
-                // into the TARGET format's alphabet. A label already legal there
-                // passes through byte-identically; anything else is rewritten by
-                // the deterministic, injective escape, so serialization is total
+                // Encode the `(label, scope)` pair into the TARGET format's
+                // alphabet in ONE step. An unscoped label already legal there
+                // passes through byte-identically; anything else becomes the
+                // deterministic, injective envelope, so serialization is total
                 // and blank-node co-reference survives exactly.
-                let qualified = scope.qualify_label(label);
-                let emitted = escape_label(&qualified, self.alphabet).into_owned();
+                let emitted = encode_blank_label(label, scope, self.alphabet).into_owned();
                 self.push_term(SerTerm {
                     kind: SerTermKind::Bnode,
                     value: Some(emitted),

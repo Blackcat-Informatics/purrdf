@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Exact label alphabets for the syntax this workspace *emits* -- blank-node
-//! labels, XML `NCName`s, XML character data -- plus the deterministic,
-//! injective escape ([`escape_label`]) every serializer applies so an
-//! out-of-alphabet label never becomes an unreadable document.
+//! labels, XML `NCName`s, XML character data -- plus the deterministic
+//! `(label, scope)` <-> token codec ([`encode_blank_label`] /
+//! [`decode_blank_label`]) every serializer and every text parser goes through,
+//! so an out-of-alphabet label never becomes an unreadable document and two
+//! distinct blank nodes never become one.
 //!
 //! # Ingress-liberal, egress-exact
 //!
@@ -23,67 +25,89 @@
 //! and the XML 1.0 `NameStartChar`/`NameChar`/`Char` productions, not
 //! approximated.
 //!
-//! # The escape contract: serialization stays total
+//! # Two rules, and nothing else
 //!
-//! A blank-node label is *not* part of a graph's meaning: RDF identifies
-//! blank nodes only up to renaming, so swapping `_:x7` for another label is
-//! an isomorphism-preserving operation -- every triple's meaning, and the
-//! whole graph up to blank-node renaming, is identical before and after.
-//! Serializers therefore never refuse a label: [`escape_label`] rewrites an
-//! out-of-alphabet label into the target syntax's alphabet at egress, so
-//! `parse` -> `serialize` is **total** in every format this workspace emits.
+//! A serialized blank node has ONE string slot, but the IR identifies a blank
+//! node by a `(label, scope)` PAIR (C0.2), and the label can be any string at
+//! all -- including one the target syntax cannot spell. [`encode_blank_label`]
+//! is the total, injective, deterministic function from that pair to a token:
 //!
-//! The escape is:
+//! 1. **Foreign data is untouched.** A label at [`BlankScope::DEFAULT`] that is
+//!    legal under the target alphabet and does NOT begin with the reserved
+//!    [`ESCAPE_MARKER`] is written VERBATIM, byte for byte, borrowed. Every
+//!    label in every document this workspace did not write falls here, so a
+//!    parse/serialize pass over foreign data is a pure pass-through in both
+//!    directions and no external label can be rewritten, merged or churned.
+//! 2. **Everything else is enveloped.** A non-default scope, an
+//!    out-of-alphabet label, or a label inside the reserved marker namespace is
+//!    written as ONE self-describing envelope that carries both the scope and
+//!    the label:
 //!
-//! - **Deterministic** -- a pure function of `(label, alphabet)`, with no
-//!   clock, randomness, hash-iteration order, or document-level state, so the
-//!   same dataset always serializes to the same bytes.
-//! - **Injective by construction** -- distinct labels always escape to
-//!   distinct labels, and no *legal* label can collide with the escape of an
-//!   illegal one, because a legal label that itself begins with the reserved
-//!   [`ESCAPE_MARKER`] is escaped too (see [`escape_label`]). Co-reference is
-//!   therefore preserved exactly: two occurrences of one blank node stay one
-//!   blank node, and two distinct blank nodes stay distinct.
-//! - **Stateless and streaming-safe** -- no per-document collision map is
-//!   needed, which is what lets the row-at-a-time SPARQL-results writers use
-//!   the same escape as the whole-dataset RDF serializers.
-//! - **Pass-through for legal labels** -- a label already legal under the
-//!   target alphabet is returned borrowed and byte-identical, so real data
-//!   never churns.
+//!    ```text
+//!    envelope ::= 'purrdfesc' scope? '_' body
+//!    scope    ::= [1-9][0-9]*          -- canonical decimal, omitted for scope 0
+//!    body     ::= ( [A-Za-z0-9] | '_' HEX HEX HEX HEX HEX HEX )*
+//!    ```
 //!
-//! Injectivity and *idempotence* cannot both hold, and injectivity is the one
-//! that carries meaning. An idempotent escape would satisfy
-//! `escape(escape(x)) == escape(x)`, which maps the two distinct labels `x`
-//! and `escape(x)` onto one -- exactly the blank-node conflation injectivity
-//! exists to rule out.
+//!    The body encodes the label scalar by scalar: an ASCII letter or digit
+//!    passes through, every other scalar becomes `_` plus its code point as
+//!    exactly six UPPERCASE hex digits (`_0000D7` for `×`). The envelope is
+//!    therefore `[A-Za-z0-9_]+` starting with a letter, which is simultaneously
+//!    a legal `BLANK_NODE_LABEL`, a legal `NCName` and legal XML character
+//!    data -- one spelling satisfies every alphabet at once.
 //!
-//! # The marker is a reserved namespace, decoded at ingress
+//! The properties that follow, which callers actually rely on:
 //!
-//! An injective, non-idempotent egress transform is byte-stable across
-//! serialize/parse cycles only if something INVERTS it on the way back in, and
-//! [`unescape_label`] is that inverse: every native text codec decodes a
-//! blank-node token through it (together with
-//! [`BlankScope::unqualify_label`](crate::BlankScope::unqualify_label), the
-//! inverse of the scope qualification the escape is applied on top of) before
-//! interning. [`ESCAPE_MARKER`] is therefore a RESERVED label namespace: a
-//! document token that begins with it and whose body is a well-formed escape
-//! body denotes the label it decodes to, not itself. A marker-prefixed token
-//! whose body is NOT well-formed is not in the escape's image at all, so it
-//! passes through unchanged and is escaped on the way out like any other
-//! label -- its bytes can change on the first serialization, and are a fixed
-//! point from then on.
+//! - **Injective over `(label, scope)`** -- the verbatim and envelope images
+//!   are disjoint (an envelope always begins with the reserved marker, a
+//!   verbatim label never does), the scope digits are terminated by the first
+//!   `_`, and the body's `_` always introduces exactly six hex digits. Two
+//!   distinct pairs therefore never share a token, in any alphabet.
+//! - **Deterministic** -- a pure function of `(label, scope, alphabet)`: no
+//!   clock, randomness, hash-iteration order or document-level state, so the
+//!   same dataset always serializes to the same bytes, and the row-at-a-time
+//!   SPARQL-results writers can use the same codec as the whole-dataset RDF
+//!   serializers with no shared collision map.
+//! - **Total** -- serialization never refuses a label. A blank-node label is
+//!   not part of a graph's meaning (RDF identifies blank nodes only up to
+//!   renaming), so rewriting one preserves the graph exactly, while emitting an
+//!   out-of-alphabet label would produce a document no conforming parser could
+//!   read back.
 //!
-//! The composite consequence, which is what callers actually rely on:
-//! `serialize(parse(serialize(D)))` is byte-identical to `serialize(D)` for
-//! every dataset and every text format with a parser, and a well-formed round
-//! trip restores blank-node label IDENTITY, not merely isomorphism.
+//! # Ingress: pass-through, or an image-checked envelope
 //!
-//! Callers that want a *chosen* relabeling rather than a mechanical escape
+//! [`decode_blank_label`] is the single text-ingress inverse, and it accepts an
+//! envelope ONLY when re-encoding what it decoded reproduces the token BYTE
+//! EXACTLY (the image test):
+//!
+//! - a token that does not begin with [`ESCAPE_MARKER`] is `(token, DEFAULT)`,
+//!   with no transformation whatsoever -- so `_:a.b`, `_:a..b` and `_:a...b`
+//!   are three distinct nodes, exactly as the document spells them;
+//! - a marker-prefixed token that decodes to `(label, scope)` is accepted iff
+//!   `encode_blank_label(label, scope, alphabet)` is the token again; otherwise
+//!   it is `(token, DEFAULT)` verbatim, because no serializer could have
+//!   written it.
+//!
+//! `decode(t) == (l, s)` with the image test passing therefore holds **iff**
+//! `encode(l, s, alphabet) == t`, which is what makes the round trip restore
+//! blank-node label IDENTITY rather than mere isomorphism, and makes
+//! `serialize(parse(serialize(D)))` byte-identical to `serialize(D)`.
+//!
+//! The one thing a caller must know about the reserved namespace: a foreign
+//! token like `_:purrdfesc_abc` is NOT in the encoder's image (the encoder
+//! would have written `_:abc` for the label `abc`), so it fails the image test
+//! and is kept verbatim as the label `purrdfesc_abc` -- distinct from the label
+//! `abc`, which is the whole point. On the way back out it is marker-prefixed,
+//! so it is enveloped, and THAT envelope is in the image: the bytes move once,
+//! on the first write, and are a fixed point from then on.
+//!
+//! Callers that want a *chosen* relabeling rather than a mechanical envelope
 //! have explicit recourse operations -- `canonical_relabel`, `skolemize` and
 //! `deskolemize` in [`crate::ir`] -- which rewrite the dataset before egress
-//! so the labels in the document are the caller's, not the escape's.
-//! Canonicalization's `c14n{n}` labels are legal in every alphabet, so the
-//! escape is the identity on them and their bytes never move.
+//! so the labels in the document are the caller's, not the codec's.
+//! Canonicalization's `c14n{n}` labels are legal in every alphabet and outside
+//! the reserved namespace, so the encoding is the identity on them and their
+//! bytes never move.
 //!
 //! # Relabeling vs. canonicalization: consistent doctrines, different roles
 //!
@@ -96,8 +120,8 @@
 //! identity was computed over. It never needs to: canonicalization mints
 //! `c14n0`, `c14n1`, … labels (see [`crate::ir::canon`]) whose ASCII letters
 //! and digits are a subset of every alphabet this module defines, so a
-//! canonical label is legal everywhere and [`escape_label`] is the identity
-//! on it.
+//! canonical label is legal everywhere and [`encode_blank_label`] is the
+//! identity on it.
 
 use core::cmp::Ordering;
 use std::borrow::Cow;
@@ -120,98 +144,222 @@ pub enum LabelAlphabet {
     /// Non-empty text that XML 1.0 character data carries through unchanged;
     /// see [`is_valid_xml_text`]. The alphabet of the TriX `<id>` element.
     XmlText,
+    /// No syntactic constraint at all: EVERY string is legal, including the
+    /// empty one. This is the alphabet of the OWNED term model
+    /// ([`RdfTerm::BlankNode`](crate::RdfTerm::BlankNode)), whose blank-node
+    /// slot is a plain `String` rather than a token in some document syntax —
+    /// the surface [`BlankScope::qualify_label`] and
+    /// [`BlankScope::unqualify_label`] encode for.
+    ///
+    /// The reserved marker namespace still applies here (it is what keeps the
+    /// encoding injective), so a scoped or marker-prefixed label is enveloped
+    /// on this surface exactly as it would be in a document; only the
+    /// *alphabet* constraint is lifted, so an owned label may hold any scalar.
+    Unconstrained,
 }
 
-/// The reserved prefix [`escape_label`] writes in front of every escaped
-/// label. A label that begins with it is always escaped -- even when it is
-/// otherwise legal -- which is what makes the escape injective without any
-/// document-level state.
-pub const ESCAPE_MARKER: &str = "purrdfesc_";
+/// The reserved marker that opens every envelope [`encode_blank_label`]
+/// writes: `purrdfesc` followed by the scope's canonical decimal digits (none
+/// at [`BlankScope::DEFAULT`]), an `_`, and the encoded body.
+///
+/// It names a RESERVED label namespace. A label that begins with it is always
+/// enveloped — even when it is otherwise legal and unscoped — which is exactly
+/// what keeps the encoding injective without any document-level state: the
+/// verbatim and envelope images can then never overlap.
+pub const ESCAPE_MARKER: &str = "purrdfesc";
 
 /// Whether `label` is legal under `alphabet`.
 ///
 /// Dispatches to [`is_valid_blank_node_label`], [`is_valid_ncname`], or
-/// [`is_valid_xml_text`], per [`LabelAlphabet`].
+/// [`is_valid_xml_text`], per [`LabelAlphabet`];
+/// [`Unconstrained`](LabelAlphabet::Unconstrained) admits every string.
 #[must_use]
 pub fn is_valid_label(label: &str, alphabet: LabelAlphabet) -> bool {
     match alphabet {
         LabelAlphabet::BlankNodeLabel => is_valid_blank_node_label(label),
         LabelAlphabet::NcName => is_valid_ncname(label),
         LabelAlphabet::XmlText => is_valid_xml_text(label),
+        LabelAlphabet::Unconstrained => true,
     }
 }
 
-/// Rewrite `label` into `alphabet`, returning it BORROWED and byte-identical
-/// when it is already legal.
+/// Encode a `(label, scope)` pair into `alphabet`'s single-slot token,
+/// returning the label BORROWED and byte-identical when it can be written
+/// verbatim.
 ///
-/// This is the egress escape every serializer applies to a scope-qualified
-/// blank-node label. It is a pure, deterministic, stateless function, and it
-/// is **injective** for a fixed `alphabet`: distinct inputs always produce
-/// distinct outputs, so blank-node co-reference survives serialization exactly
-/// (relabeling a blank node preserves the graph up to isomorphism, which is
-/// the only identity RDF gives a blank node).
+/// The one egress function every serializer goes through. Pure, deterministic,
+/// stateless, and **injective** for a fixed `alphabet`: distinct pairs always
+/// produce distinct tokens, so blank-node co-reference survives serialization
+/// exactly and two distinct blank nodes can never merge.
 ///
-/// # The encoding
+/// # The two rules
 ///
-/// An escaped label is [`ESCAPE_MARKER`] followed by the input encoded
-/// character by character: an ASCII letter or digit passes through as itself,
-/// and every other scalar becomes `_` plus its code point as exactly six
-/// uppercase hex digits (`_0000D7` for `×`). The escaped body is therefore
-/// always `[A-Za-z0-9_]*`, which is simultaneously legal `BLANK_NODE_LABEL`,
-/// legal `NCName` and legal XML character data -- so one encoding satisfies
-/// every alphabet in the strictest sense, including the `BLANK_NODE_LABEL`
-/// rule that a label may not end in `.`.
+/// - `scope` is [`BlankScope::DEFAULT`], `label` is legal under `alphabet`, and
+///   `label` does not begin with [`ESCAPE_MARKER`] → the label itself,
+///   borrowed, byte for byte. This is where all foreign data lands.
+/// - otherwise → the envelope `purrdfesc{scope}_{body}` (the scope digits are
+///   omitted at [`BlankScope::DEFAULT`]), where `body` encodes the label scalar
+///   by scalar: an ASCII letter or digit passes through as itself, every other
+///   scalar becomes `_` plus its code point as exactly six uppercase hex digits
+///   (`_0000D7` for `×`).
 ///
-/// Decoding is unambiguous (a `_` always introduces exactly six hex digits,
-/// and no pass-through character is `_`), so the encoding is injective. The
-/// escape *image* cannot collide with a pass-through label either, because a
-/// label that already begins with [`ESCAPE_MARKER`] is escaped as well, even
-/// when it is legal -- the one case where a legal label does not pass through.
+/// The envelope is always `[A-Za-z0-9_]+` beginning with a letter, so it is
+/// simultaneously a legal `BLANK_NODE_LABEL` (including the rule that a label
+/// may not end in `.`), a legal `NCName`, and legal XML character data — one
+/// spelling satisfies every alphabet at once.
+///
+/// Decoding an envelope is unambiguous: the scope digits are the maximal digit
+/// run after the marker and are always terminated by the `_` that opens the
+/// body, and inside the body a `_` always introduces exactly six hex digits
+/// while no pass-through character is `_`. The envelope image cannot collide
+/// with a verbatim label either, because a label that already begins with
+/// [`ESCAPE_MARKER`] is enveloped as well, even when it is legal and unscoped —
+/// the one case where a default-scope legal label does not pass through.
 #[must_use]
-pub fn escape_label(label: &str, alphabet: LabelAlphabet) -> Cow<'_, str> {
-    if is_valid_label(label, alphabet) && !label.starts_with(ESCAPE_MARKER) {
+pub fn encode_blank_label(label: &str, scope: BlankScope, alphabet: LabelAlphabet) -> Cow<'_, str> {
+    if scope == BlankScope::DEFAULT
+        && is_valid_label(label, alphabet)
+        && !label.starts_with(ESCAPE_MARKER)
+    {
         return Cow::Borrowed(label);
     }
-    let mut escaped = String::with_capacity(ESCAPE_MARKER.len() + label.len() + 8);
-    escaped.push_str(ESCAPE_MARKER);
+    let mut encoded = String::with_capacity(ESCAPE_MARKER.len() + label.len() + 16);
+    encoded.push_str(ESCAPE_MARKER);
+    if scope != BlankScope::DEFAULT {
+        use std::fmt::Write as _;
+        // Canonical decimal, never zero-padded: the decode below accepts only
+        // this spelling, so the encoding stays injective over scopes.
+        let _ = write!(encoded, "{}", scope.ordinal());
+    }
+    encoded.push('_');
     for ch in label.chars() {
         if ch.is_ascii_alphanumeric() {
-            escaped.push(ch);
+            encoded.push(ch);
         } else {
-            escaped.push('_');
-            push_hex6(ch as u32, &mut escaped);
+            encoded.push('_');
+            push_hex6(ch as u32, &mut encoded);
         }
     }
     debug_assert!(
-        is_valid_label(&escaped, alphabet),
-        "escape_label must always produce a label legal under the target alphabet"
+        is_valid_label(&encoded, alphabet),
+        "encode_blank_label must always produce a token legal under the target alphabet"
     );
-    Cow::Owned(escaped)
+    debug_assert!(
+        decode_envelope(&encoded).is_some_and(|(l, s)| l == label && s == scope),
+        "every envelope must decode back to the pair it encodes"
+    );
+    Cow::Owned(encoded)
 }
 
-/// Decode an escaped label, returning it BORROWED and byte-identical when it is
-/// not a well-formed escape.
+/// Encode `label` at [`BlankScope::DEFAULT`] into `alphabet` — the unscoped
+/// shorthand for [`encode_blank_label`].
 ///
-/// The exact inverse of [`escape_label`] on that function's image:
-/// `unescape_label(escape_label(label, alphabet)) == label` for every `label`
-/// and every alphabet. This is the ingress half of the text round trip — every
-/// native codec decodes a parsed blank-node token through it, so an escaped
-/// label re-parses as the label it encodes rather than as a fresh
-/// marker-prefixed one that egress would escape a second time.
-///
-/// # What counts as well formed
-///
-/// [`ESCAPE_MARKER`] followed by a body in which every ASCII letter or digit is
-/// a pass-through and every `_` introduces exactly six UPPERCASE hex digits
-/// naming a Unicode scalar — precisely the shape [`escape_label`] writes. A
-/// marker-prefixed label whose body violates any of that (a short or
-/// lowercase hex group, a non-alphanumeric pass-through, a group naming a
-/// surrogate or an out-of-range code point) is NOT in the escape's image, so it
-/// is returned unchanged.
+/// This is what a caller holding a RAW label and no scope (an owned-model
+/// rendering, a diagnostic, a kernel emitter) applies at egress. See
+/// [`encode_blank_label`] for the encoding and its properties.
 #[must_use]
-pub fn unescape_label(label: &str) -> Cow<'_, str> {
-    let Some(body) = label.strip_prefix(ESCAPE_MARKER) else {
-        return Cow::Borrowed(label);
+pub fn escape_label(label: &str, alphabet: LabelAlphabet) -> Cow<'_, str> {
+    encode_blank_label(label, BlankScope::DEFAULT, alphabet)
+}
+
+/// Decode a parsed blank-node token into the `(label, scope)` pair it denotes —
+/// the single text-ingress inverse of [`encode_blank_label`].
+///
+/// # The two rules, and the image test
+///
+/// - A token that does NOT begin with [`ESCAPE_MARKER`] is `(token, DEFAULT)`,
+///   borrowed and byte for byte, with no transformation whatsoever. Every token
+///   in every document this workspace did not write falls here, so distinct
+///   foreign labels always stay distinct nodes.
+/// - A marker-prefixed token is decoded as an envelope, and the result is
+///   ACCEPTED only if re-encoding it reproduces the token BYTE EXACTLY:
+///   `encode_blank_label(label, scope, alphabet) == token`. A token that fails
+///   the test — a malformed body, a zero-padded or zero scope, or an envelope
+///   the encoder would never have written for that pair (`purrdfesc_abc`, since
+///   the label `abc` is written verbatim) — is kept verbatim as
+///   `(token, DEFAULT)`.
+///
+/// So `decode_blank_label(t, α) == (l, s)` by the envelope branch **iff**
+/// `encode_blank_label(l, s, α) == t`. That equivalence is what makes a
+/// parse/serialize cycle byte-stable and label-identity-preserving, and it is
+/// asserted in debug builds on every accepted envelope.
+#[must_use]
+pub fn decode_blank_label(token: &str, alphabet: LabelAlphabet) -> (Cow<'_, str>, BlankScope) {
+    // The hot path for real data: one prefix compare, no allocation, no scan.
+    if !token.starts_with(ESCAPE_MARKER) {
+        return (Cow::Borrowed(token), BlankScope::DEFAULT);
+    }
+    let Some((label, scope)) = decode_envelope(token) else {
+        return (Cow::Borrowed(token), BlankScope::DEFAULT);
+    };
+    if encode_blank_label(&label, scope, alphabet).as_ref() != token {
+        // Not in the encoder's image under this alphabet, so no serializer
+        // could have written it: it denotes itself.
+        return (Cow::Borrowed(token), BlankScope::DEFAULT);
+    }
+    (Cow::Owned(label), scope)
+}
+
+/// Re-target an OWNED-model blank label — the
+/// [`Unconstrained`](LabelAlphabet::Unconstrained) spelling
+/// [`BlankScope::qualify_label`] writes into
+/// [`RdfTerm::BlankNode`](crate::RdfTerm::BlankNode)'s single string slot —
+/// into `alphabet`'s token space.
+///
+/// # Why a re-target, and not a second escape
+///
+/// The owned model already carries an ENCODED label, so applying the egress
+/// encoding to it again would envelope an envelope: the document would spell a
+/// scoped or marker-prefixed node one layer deeper than ingress unwraps, and
+/// the round trip would stop restoring label identity. Decoding the owned
+/// spelling first and re-encoding the `(label, scope)` pair it denotes makes
+/// the composition EXACT —
+/// `retarget_owned_label(qualify_label(l, s), α) == encode_blank_label(l, s, α)`
+/// for every pair and every alphabet — so an owned-model detour costs nothing.
+///
+/// A label a caller MINTED by hand rather than read out of the owned rendering
+/// is not an envelope, so it decodes to itself at [`BlankScope::DEFAULT`] and
+/// is simply escaped into `alphabet`: egress stays total either way.
+#[must_use]
+pub fn retarget_owned_label(owned: &str, alphabet: LabelAlphabet) -> Cow<'_, str> {
+    match decode_blank_label(owned, LabelAlphabet::Unconstrained) {
+        (Cow::Borrowed(label), scope) => encode_blank_label(label, scope, alphabet),
+        (Cow::Owned(label), scope) => {
+            Cow::Owned(encode_blank_label(&label, scope, alphabet).into_owned())
+        }
+    }
+}
+
+/// Parse `token` as an envelope: [`ESCAPE_MARKER`], the scope's canonical
+/// decimal digits (absent at [`BlankScope::DEFAULT`]), `_`, and the encoded
+/// body. `None` when any part is malformed.
+///
+/// This is the syntactic half of the decode; [`decode_blank_label`] adds the
+/// image test that rejects a well-formed envelope the encoder would not have
+/// written.
+fn decode_envelope(token: &str) -> Option<(String, BlankScope)> {
+    let rest = token.strip_prefix(ESCAPE_MARKER)?;
+    // The scope digits are the maximal digit run, always terminated by the `_`
+    // that opens the body — so the split is unambiguous even when the body
+    // itself starts with digits.
+    let digits_len = rest.bytes().take_while(u8::is_ascii_digit).count();
+    let (digits, body) = rest.split_at(digits_len);
+    let body = body.strip_prefix('_')?;
+    let scope = if digits.is_empty() {
+        BlankScope::DEFAULT
+    } else {
+        // `encode_blank_label` writes a canonical, non-zero decimal, so a
+        // zero-padded or zero ordinal is outside its image and must not decode
+        // (the image test below would reject it anyway; refusing here keeps the
+        // grammar's statement exact).
+        if digits.starts_with('0') {
+            return None;
+        }
+        let ordinal = digits.parse::<u32>().ok()?;
+        if ordinal == 0 {
+            return None;
+        }
+        BlankScope(ordinal)
     };
     let mut decoded = String::with_capacity(body.len());
     let mut chars = body.chars();
@@ -221,44 +369,15 @@ pub fn unescape_label(label: &str) -> Cow<'_, str> {
             continue;
         }
         if ch != '_' {
-            return Cow::Borrowed(label);
+            return None;
         }
         let mut cp: u32 = 0;
         for _ in 0..6 {
-            let Some(digit) = chars.next().and_then(hex6_digit) else {
-                return Cow::Borrowed(label);
-            };
-            cp = cp * 16 + digit;
+            cp = cp * 16 + chars.next().and_then(hex6_digit)?;
         }
-        let Some(scalar) = char::from_u32(cp) else {
-            return Cow::Borrowed(label);
-        };
-        decoded.push(scalar);
+        decoded.push(char::from_u32(cp)?);
     }
-    Cow::Owned(decoded)
-}
-
-/// Decode a parsed blank-node token into the `(label, scope)` pair it denotes —
-/// the single text-ingress inverse of the egress transform every serializer
-/// applies.
-///
-/// Egress is `(label, scope)` → [`qualify_label`](BlankScope::qualify_label) →
-/// [`escape_label`]; ingress is therefore [`unescape_label`] →
-/// [`unqualify_label`](BlankScope::unqualify_label), in that order. Composed
-/// with the egress pair this is the identity for every `(label, scope)` and
-/// every alphabet, which is what makes a parse/serialize cycle byte-stable and
-/// label-identity-preserving.
-#[must_use]
-pub fn decode_blank_label(token: &str) -> (Cow<'_, str>, BlankScope) {
-    match unescape_label(token) {
-        // The escape passed through, so the scope decode can borrow the token
-        // itself and the whole ingress stays allocation-free for real data.
-        Cow::Borrowed(unescaped) => BlankScope::unqualify_label(unescaped),
-        Cow::Owned(unescaped) => {
-            let (label, scope) = BlankScope::unqualify_label(&unescaped);
-            (Cow::Owned(label.into_owned()), scope)
-        }
-    }
+    Some((decoded, scope))
 }
 
 /// One digit of a fixed-width escape group: `0-9` or UPPERCASE `A-F`, matching
@@ -465,30 +584,46 @@ fn is_pn_chars(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        ESCAPE_MARKER, LabelAlphabet, decode_blank_label, escape_label, is_pn_chars, is_pn_chars_u,
-        is_valid_blank_node_label, is_valid_blank_node_label_prefix, is_valid_label,
-        is_valid_ncname, is_valid_xml_text, unescape_label,
+        ESCAPE_MARKER, LabelAlphabet, decode_blank_label, encode_blank_label, escape_label,
+        is_pn_chars, is_pn_chars_u, is_valid_blank_node_label, is_valid_blank_node_label_prefix,
+        is_valid_label, is_valid_ncname, is_valid_xml_text, retarget_owned_label,
     };
     use crate::BlankScope;
     use std::borrow::Cow;
     use std::collections::BTreeMap;
 
-    /// Every alphabet a serializer targets, for sweeps that must hold on all
-    /// of them.
+    /// Every alphabet the codec targets, for sweeps that must hold on all of
+    /// them — the three document syntaxes plus the owned model's unconstrained
+    /// surface.
     const ALL_ALPHABETS: &[LabelAlphabet] = &[
         LabelAlphabet::BlankNodeLabel,
         LabelAlphabet::NcName,
         LabelAlphabet::XmlText,
+        LabelAlphabet::Unconstrained,
+    ];
+
+    /// The scopes every sweep crosses its labels with, including the `u32`
+    /// boundary the envelope's scope decimal must survive.
+    const ALL_SCOPES: &[BlankScope] = &[
+        BlankScope::DEFAULT,
+        BlankScope(1),
+        BlankScope(2),
+        BlankScope(12),
+        BlankScope(u32::MAX),
     ];
 
     /// Adversarial labels: control characters, whitespace, delimiters, the
-    /// alphabet boundary gaps, non-ASCII letters, the empty label, and labels
-    /// that collide with the reserved escape marker.
+    /// alphabet boundary gaps, non-ASCII letters, the empty label, the dotted
+    /// family the old dot-doubling folded together, and labels inside the
+    /// reserved marker namespace.
     const HOSTILE_LABELS: &[&str] = &[
         "",
         "a",
         "0abc",
         "a.b",
+        "a..b",
+        "a...b",
+        "a.s1",
         "trailing.",
         "-lead",
         ".lead",
@@ -503,8 +638,10 @@ mod tests {
         "\u{d7}y",
         "日本",
         "c14n0",
+        "purrdfesc",
         "purrdfesc_a",
         "purrdfesc_",
+        "purrdfesc1_a",
         "purrdfesc_a_000020b",
     ];
 
@@ -784,50 +921,109 @@ mod tests {
         assert!(is_valid_xml_text("\u{7f}"));
     }
 
-    // ── escape_label ────────────────────────────────────────────────────────
+    // ── encode_blank_label ──────────────────────────────────────────────────
 
     #[test]
-    fn legal_labels_are_borrowed_byte_identically() {
-        // The one legal label that does NOT pass through is a label carrying
-        // the reserved marker, which must be escaped away from the image.
+    fn unscoped_legal_labels_are_borrowed_byte_identically() {
+        // The one legal label that does NOT pass through is a label inside the
+        // reserved marker namespace, which must be enveloped away from it.
         let legal: &[(&str, LabelAlphabet)] = &[
             ("alpha", LabelAlphabet::BlankNodeLabel),
             ("beta.s2", LabelAlphabet::BlankNodeLabel),
+            ("a.b", LabelAlphabet::BlankNodeLabel),
+            ("a..b", LabelAlphabet::BlankNodeLabel),
+            ("a...b", LabelAlphabet::BlankNodeLabel),
             ("0abc", LabelAlphabet::BlankNodeLabel),
             ("日本", LabelAlphabet::BlankNodeLabel),
             ("c14n0", LabelAlphabet::BlankNodeLabel),
             ("alpha", LabelAlphabet::NcName),
             ("trailing.", LabelAlphabet::NcName),
             ("<urn:x>", LabelAlphabet::XmlText),
+            ("a b", LabelAlphabet::Unconstrained),
+            ("", LabelAlphabet::Unconstrained),
         ];
         for &(label, alphabet) in legal {
-            let escaped = escape_label(label, alphabet);
+            let encoded = encode_blank_label(label, BlankScope::DEFAULT, alphabet);
             assert!(
-                matches!(escaped, Cow::Borrowed(_)),
+                matches!(encoded, Cow::Borrowed(_)),
                 "{label:?} under {alphabet:?} must pass through borrowed"
             );
-            assert_eq!(escaped, label);
+            assert_eq!(encoded, label);
         }
     }
 
+    /// The adversary's probe, at the unit level: five distinct legal labels that
+    /// an encoder mapping the alphabet onto a proper subset of itself would fold
+    /// together. Each must reach the wire as ITSELF, and each must decode back.
     #[test]
-    fn escape_output_is_always_legal_under_the_target_alphabet() {
+    fn the_dotted_and_marker_family_stays_five_distinct_labels() {
+        const PROBE: &[&str] = &["a.b", "a..b", "a...b", "purrdfesc_abc", "abc"];
+        let mut tokens: BTreeMap<String, &str> = BTreeMap::new();
+        for label in PROBE {
+            let token =
+                encode_blank_label(label, BlankScope::DEFAULT, LabelAlphabet::BlankNodeLabel)
+                    .into_owned();
+            if let Some(previous) = tokens.insert(token.clone(), label) {
+                panic!("{previous:?} and {label:?} both encode to {token:?}");
+            }
+            let (decoded, scope) = decode_blank_label(&token, LabelAlphabet::BlankNodeLabel);
+            assert_eq!(
+                (decoded.as_ref(), scope),
+                (*label, BlankScope::DEFAULT),
+                "{label:?} did not survive its token {token:?}"
+            );
+        }
+        // The four labels outside the reserved namespace reach the wire verbatim;
+        // only the marker-prefixed one is enveloped.
+        assert!(tokens.contains_key("a.b"));
+        assert!(tokens.contains_key("a..b"));
+        assert!(tokens.contains_key("a...b"));
+        assert!(tokens.contains_key("abc"));
+        assert!(tokens.contains_key("purrdfesc_purrdfesc_00005Fabc"));
+    }
+
+    #[test]
+    fn encode_output_is_always_legal_under_the_target_alphabet() {
         for &alphabet in ALL_ALPHABETS {
             for label in HOSTILE_LABELS {
-                let escaped = escape_label(label, alphabet);
-                assert!(
-                    is_valid_label(&escaped, alphabet),
-                    "escape of {label:?} under {alphabet:?} is illegal: {escaped:?}"
-                );
+                for &scope in ALL_SCOPES {
+                    let encoded = encode_blank_label(label, scope, alphabet);
+                    assert!(
+                        is_valid_label(&encoded, alphabet),
+                        "encoding of {label:?} @ {scope:?} under {alphabet:?} is illegal: \
+                         {encoded:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// An ENVELOPE is legal in every alphabet at once, whichever one it was
+    /// written for — the property that lets one spelling serve every syntax.
+    #[test]
+    fn every_envelope_is_legal_in_every_alphabet() {
+        for label in HOSTILE_LABELS {
+            for &scope in ALL_SCOPES {
+                let Cow::Owned(envelope) =
+                    encode_blank_label(label, scope, LabelAlphabet::BlankNodeLabel)
+                else {
+                    continue;
+                };
+                for &alphabet in ALL_ALPHABETS {
+                    assert!(
+                        is_valid_label(&envelope, alphabet),
+                        "{envelope:?} (from {label:?} @ {scope:?}) is illegal under {alphabet:?}"
+                    );
+                }
             }
         }
     }
 
     /// Property sweep: EVERY single-scalar label over a broad code-point range,
-    /// plus that scalar in an inner position, escapes to a legal label under
+    /// plus that scalar in an inner position, encodes to a legal token under
     /// every alphabet.
     #[test]
-    fn escape_output_is_legal_for_every_scalar_position() {
+    fn encode_output_is_legal_for_every_scalar_position() {
         for cp in (0u32..=0x2FFF).chain([
             0xD7FF,
             0xE000,
@@ -842,10 +1038,66 @@ mod tests {
             };
             for label in [c.to_string(), format!("a{c}"), format!("{c}z")] {
                 for &alphabet in ALL_ALPHABETS {
-                    let escaped = escape_label(&label, alphabet);
+                    let encoded = escape_label(&label, alphabet);
                     assert!(
-                        is_valid_label(&escaped, alphabet),
-                        "escape of {label:?} ({cp:#06x}) under {alphabet:?} is illegal: {escaped:?}"
+                        is_valid_label(&encoded, alphabet),
+                        "encoding of {label:?} ({cp:#06x}) under {alphabet:?} is illegal: \
+                         {encoded:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Injectivity over `(label, scope)` PAIRS, which is what blank-node
+    /// identity actually rests on: no two pairs may share a token.
+    #[test]
+    fn encode_is_injective_over_label_scope_pairs() {
+        for &alphabet in ALL_ALPHABETS {
+            let mut seen: BTreeMap<String, (&str, BlankScope)> = BTreeMap::new();
+            for label in HOSTILE_LABELS {
+                for &scope in ALL_SCOPES {
+                    let encoded = encode_blank_label(label, scope, alphabet).into_owned();
+                    if let Some(previous) = seen.insert(encoded.clone(), (label, scope)) {
+                        panic!(
+                            "{alphabet:?} maps {previous:?} and {:?} both to {encoded:?}",
+                            (label, scope)
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The marker-collision case stated explicitly: a LEGAL label that happens
+    /// to equal the envelope of an illegal one must itself be enveloped, so the
+    /// two never conflate.
+    #[test]
+    fn a_legal_label_equal_to_an_envelope_is_encoded_away_from_it() {
+        let illegal = "a b";
+        let image = escape_label(illegal, LabelAlphabet::BlankNodeLabel).into_owned();
+        assert_eq!(image, "purrdfesc_a_000020b");
+        assert!(
+            is_valid_blank_node_label(&image),
+            "the envelope is itself a legal label"
+        );
+        let twin = escape_label(&image, LabelAlphabet::BlankNodeLabel).into_owned();
+        assert_ne!(
+            twin, image,
+            "a legal label matching an envelope must be encoded away from it"
+        );
+        assert!(twin.starts_with(ESCAPE_MARKER));
+    }
+
+    #[test]
+    fn encode_is_deterministic_across_runs() {
+        for &alphabet in ALL_ALPHABETS {
+            for label in HOSTILE_LABELS {
+                for &scope in ALL_SCOPES {
+                    assert_eq!(
+                        encode_blank_label(label, scope, alphabet),
+                        encode_blank_label(label, scope, alphabet),
+                        "{label:?} @ {scope:?} under {alphabet:?}"
                     );
                 }
             }
@@ -853,53 +1105,8 @@ mod tests {
     }
 
     #[test]
-    fn escape_is_injective_over_the_hostile_table() {
-        for &alphabet in ALL_ALPHABETS {
-            let mut seen: BTreeMap<String, &str> = BTreeMap::new();
-            for label in HOSTILE_LABELS {
-                let escaped = escape_label(label, alphabet).into_owned();
-                if let Some(previous) = seen.insert(escaped.clone(), label) {
-                    panic!("{alphabet:?} maps {previous:?} and {label:?} both to {escaped:?}");
-                }
-            }
-        }
-    }
-
-    /// The marker-collision case stated explicitly: a LEGAL label that happens
-    /// to equal the escape of an illegal one must itself be escaped, so the
-    /// two never conflate.
-    #[test]
-    fn a_legal_label_equal_to_an_escape_image_is_escaped_away_from_it() {
-        let illegal = "a b";
-        let image = escape_label(illegal, LabelAlphabet::BlankNodeLabel).into_owned();
-        assert_eq!(image, "purrdfesc_a_000020b");
-        assert!(
-            is_valid_blank_node_label(&image),
-            "the escape image is itself a legal label"
-        );
-        let twin = escape_label(&image, LabelAlphabet::BlankNodeLabel).into_owned();
-        assert_ne!(
-            twin, image,
-            "a legal label matching the escape image must be escaped away from it"
-        );
-        assert!(twin.starts_with(ESCAPE_MARKER));
-    }
-
-    #[test]
-    fn escape_is_deterministic_across_runs() {
-        for &alphabet in ALL_ALPHABETS {
-            for label in HOSTILE_LABELS {
-                assert_eq!(
-                    escape_label(label, alphabet),
-                    escape_label(label, alphabet),
-                    "{label:?} under {alphabet:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn escape_encoding_is_the_documented_marker_plus_fixed_width_hex() {
+    fn the_envelope_is_the_documented_grammar() {
+        // Default scope: no scope digits, the marker's `_` opens the body.
         assert_eq!(
             escape_label("bad\u{1f}label", LabelAlphabet::BlankNodeLabel),
             "purrdfesc_bad_00001Flabel"
@@ -908,35 +1115,82 @@ mod tests {
             escape_label("0abc", LabelAlphabet::NcName),
             "purrdfesc_0abc"
         );
-        assert_eq!(escape_label("", LabelAlphabet::NcName), ESCAPE_MARKER);
+        assert_eq!(escape_label("", LabelAlphabet::NcName), "purrdfesc_");
         assert_eq!(
             escape_label("\u{10FFFF}", LabelAlphabet::BlankNodeLabel),
             "purrdfesc__10FFFF"
         );
+        // Non-default scope: canonical decimal digits between the marker and the
+        // body separator, and the SAME envelope in every alphabet.
+        for &alphabet in ALL_ALPHABETS {
+            assert_eq!(
+                encode_blank_label("x", BlankScope(2), alphabet),
+                "purrdfesc2_x"
+            );
+            assert_eq!(
+                encode_blank_label("a.b", BlankScope(12), alphabet),
+                "purrdfesc12_a_00002Eb"
+            );
+            assert_eq!(
+                encode_blank_label("x", BlankScope(u32::MAX), alphabet),
+                "purrdfesc4294967295_x"
+            );
+        }
     }
 
-    // ── unescape_label / decode_blank_label ─────────────────────────────────
+    // ── decode_blank_label ──────────────────────────────────────────────────
 
-    /// The load-bearing inverse property: unescaping an escaped label returns the
-    /// original bytes, for every hostile label and every alphabet.
+    /// The load-bearing equivalence, over the hostile table crossed with every
+    /// scope and every alphabet:
+    /// `decode(t, α) == (l, s)` **iff** `encode(l, s, α) == t`.
+    ///
+    /// The forward half (every encoded token decodes back to its pair) is what
+    /// makes a round trip identity-preserving; the reverse half (a token the
+    /// encoder would not have written is never decoded) is what stops two
+    /// distinct document labels merging into one node.
     #[test]
-    fn unescape_inverts_escape_over_the_hostile_table() {
+    fn decode_inverts_encode_and_accepts_nothing_else() {
         for &alphabet in ALL_ALPHABETS {
             for label in HOSTILE_LABELS {
-                let escaped = escape_label(label, alphabet);
+                for &scope in ALL_SCOPES {
+                    let token = encode_blank_label(label, scope, alphabet);
+                    let (decoded, decoded_scope) = decode_blank_label(&token, alphabet);
+                    assert_eq!(
+                        (decoded.as_ref(), decoded_scope),
+                        (*label, scope),
+                        "{label:?} @ {scope:?} under {alphabet:?} encoded as {token:?}"
+                    );
+                }
+                // The reverse direction, over the tokens a conforming document
+                // can actually carry (legal under the alphabet) and outside the
+                // reserved namespace — i.e. every token in every foreign
+                // document: whatever the token decodes to must re-encode to
+                // exactly that token, which is what makes the decode injective
+                // there. (A marker-prefixed token the encoder would not have
+                // written is the documented reserved-namespace exception: it
+                // denotes itself and is enveloped on the way out.)
+                if !is_valid_label(label, alphabet) || label.starts_with(ESCAPE_MARKER) {
+                    continue;
+                }
+                let (decoded, decoded_scope) = decode_blank_label(label, alphabet);
                 assert_eq!(
-                    unescape_label(&escaped).as_ref(),
+                    (decoded.as_ref(), decoded_scope),
+                    (*label, BlankScope::DEFAULT),
+                    "{label:?} under {alphabet:?} must decode verbatim"
+                );
+                assert_eq!(
+                    encode_blank_label(&decoded, decoded_scope, alphabet).as_ref(),
                     *label,
-                    "{label:?} under {alphabet:?} escaped to {escaped:?}"
+                    "decode of {label:?} under {alphabet:?} is not in the encoder's image"
                 );
             }
         }
     }
 
     /// The same inverse over an exhaustive scalar sweep, in every character
-    /// position the escape distinguishes.
+    /// position the encoding distinguishes.
     #[test]
-    fn unescape_inverts_escape_for_every_scalar_position() {
+    fn decode_inverts_encode_for_every_scalar_position() {
         for cp in (0u32..=0x2FFF).chain([
             0xD7FF,
             0xE000,
@@ -951,64 +1205,100 @@ mod tests {
             };
             for label in [c.to_string(), format!("a{c}"), format!("{c}z")] {
                 for &alphabet in ALL_ALPHABETS {
-                    let escaped = escape_label(&label, alphabet);
+                    let token = escape_label(&label, alphabet);
+                    let (decoded, scope) = decode_blank_label(&token, alphabet);
                     assert_eq!(
-                        unescape_label(&escaped).as_ref(),
-                        label.as_str(),
-                        "{label:?} ({cp:#06x}) under {alphabet:?} escaped to {escaped:?}"
+                        (decoded.as_ref(), scope),
+                        (label.as_str(), BlankScope::DEFAULT),
+                        "{label:?} ({cp:#06x}) under {alphabet:?} encoded as {token:?}"
                     );
                 }
             }
         }
     }
 
-    /// A label that is not a well-formed escape passes through byte-identically
-    /// and without allocating — including a marker-prefixed label whose body the
-    /// escape could never have written.
+    /// A token outside the reserved marker namespace is interned VERBATIM,
+    /// without allocating and without any transformation at all — the rule that
+    /// makes every foreign document a pure pass-through.
     #[test]
-    fn unescape_passes_through_labels_outside_the_escape_image() {
-        for label in [
-            "",
-            "a",
-            "a.b",
-            "purrdfesc",
-            "purrdfesc__12",     // a hex group shorter than six digits
-            "purrdfesc__00002e", // lowercase hex is not what the escape writes
-            "purrdfesc_a.b",     // '.' is not a pass-through character
-            "purrdfesc__00D800", // a surrogate code point is not a scalar
-            "purrdfesc__110000", // beyond the last Unicode scalar
-            "purrdfesc_日本",    // a non-ASCII pass-through never survives escape
+    fn a_token_outside_the_reserved_namespace_is_verbatim() {
+        for token in [
+            "", "a", "a.b", "a..b", "a...b", "a.s1", "x.s01", "c1.s5", "purrdfes", "日本",
         ] {
-            let decoded = unescape_label(label);
-            assert_eq!(decoded.as_ref(), label, "{label:?}");
-            assert!(
-                matches!(decoded, Cow::Borrowed(_)),
-                "{label:?} must pass through without allocating"
-            );
+            for &alphabet in ALL_ALPHABETS {
+                let (decoded, scope) = decode_blank_label(token, alphabet);
+                assert_eq!(decoded.as_ref(), token, "{token:?} under {alphabet:?}");
+                assert_eq!(scope, BlankScope::DEFAULT, "{token:?}");
+                assert!(
+                    matches!(decoded, Cow::Borrowed(_)),
+                    "{token:?} must pass through without allocating"
+                );
+            }
         }
     }
 
-    /// The composite ingress decode inverts the composite egress transform for
-    /// every `(label, scope)` pair and every alphabet — the property the
-    /// byte-stability of a parse/serialize cycle rests on.
+    /// A marker-prefixed token that the encoder could not have written fails the
+    /// image test and stands for ITSELF, so it can never merge with the label it
+    /// superficially names.
     #[test]
-    fn decode_blank_label_inverts_qualify_then_escape() {
-        let scopes = [
-            BlankScope::DEFAULT,
-            BlankScope(1),
-            BlankScope(2),
-            BlankScope(u32::MAX),
-        ];
+    fn a_marker_token_outside_the_image_is_verbatim() {
+        for token in [
+            "purrdfesc",
+            "purrdfesc1",
+            "purrdfesc_abc",         // the label `abc` is written verbatim
+            "purrdfesc01_a",         // zero-padded scope digits
+            "purrdfesc0_a",          // scope 0 never spells its ordinal
+            "purrdfesc4294967296_a", // out of `u32` range
+            "purrdfesc__12",         // a hex group shorter than six digits
+            "purrdfesc__00002e",     // lowercase hex is not what the encoder writes
+            "purrdfesc_a.b",         // '.' is not a body pass-through character
+            "purrdfesc__00D800",     // a surrogate code point is not a scalar
+            "purrdfesc__110000",     // beyond the last Unicode scalar
+            "purrdfesc_日本",        // a non-ASCII pass-through never survives encoding
+        ] {
+            let (decoded, scope) = decode_blank_label(token, LabelAlphabet::BlankNodeLabel);
+            assert_eq!(decoded.as_ref(), token, "{token:?}");
+            assert_eq!(scope, BlankScope::DEFAULT, "{token:?}");
+        }
+        // …and the label it stands for is enveloped on the way back out, so the
+        // token space stabilizes after ONE write.
+        let label = "purrdfesc_abc";
+        let token = escape_label(label, LabelAlphabet::BlankNodeLabel).into_owned();
+        assert_eq!(token, "purrdfesc_purrdfesc_00005Fabc");
+        assert_eq!(
+            decode_blank_label(&token, LabelAlphabet::BlankNodeLabel),
+            (Cow::Owned(label.to_owned()), BlankScope::DEFAULT)
+        );
+    }
+
+    /// The `abc` / `purrdfesc_abc` pair the image test exists for: two tokens in
+    /// ONE document must stay two labels.
+    #[test]
+    fn a_marker_token_never_merges_with_the_label_it_names() {
         for &alphabet in ALL_ALPHABETS {
-            for label in HOSTILE_LABELS {
-                for &scope in &scopes {
-                    let qualified = scope.qualify_label(label);
-                    let emitted = escape_label(&qualified, alphabet);
-                    let (decoded, decoded_scope) = decode_blank_label(&emitted);
+            let plain = decode_blank_label("abc", alphabet);
+            let marked = decode_blank_label("purrdfesc_abc", alphabet);
+            assert_ne!(plain, marked, "under {alphabet:?}");
+        }
+    }
+
+    // ── retarget_owned_label ────────────────────────────────────────────────
+
+    /// The owned-model detour is EXACT: re-targeting the owned rendering of a
+    /// pair into an alphabet is the same as encoding that pair for the alphabet
+    /// directly, so a term that travels through [`crate::RdfTerm`] reaches the
+    /// wire spelled exactly as the IR would have spelled it.
+    #[test]
+    fn retarget_owned_label_equals_a_direct_encode() {
+        for label in HOSTILE_LABELS {
+            for &scope in ALL_SCOPES {
+                let owned = scope.qualify_label(label);
+                for &alphabet in ALL_ALPHABETS {
                     assert_eq!(
-                        (decoded.as_ref(), decoded_scope),
-                        (*label, scope),
-                        "{label:?} @ {scope:?} under {alphabet:?} emitted as {emitted:?}"
+                        retarget_owned_label(&owned, alphabet),
+                        encode_blank_label(label, scope, alphabet),
+                        "{label:?} @ {scope:?} through the owned rendering {owned:?} \
+                         under {alphabet:?}"
                     );
                 }
             }
@@ -1022,15 +1312,17 @@ mod tests {
     fn rewritten_labels_are_ascii_word_characters_only() {
         for &alphabet in ALL_ALPHABETS {
             for label in HOSTILE_LABELS {
-                let Cow::Owned(escaped) = escape_label(label, alphabet) else {
-                    continue;
-                };
-                assert!(
-                    escaped
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '_'),
-                    "{escaped:?}"
-                );
+                for &scope in ALL_SCOPES {
+                    let Cow::Owned(encoded) = encode_blank_label(label, scope, alphabet) else {
+                        continue;
+                    };
+                    assert!(
+                        encoded
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '_'),
+                        "{encoded:?}"
+                    );
+                }
             }
         }
     }

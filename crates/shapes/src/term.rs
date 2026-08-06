@@ -500,8 +500,8 @@ impl Term {
     ///
     /// For most terms this is a single key ([`to_term_value`](Self::to_term_value)).
     /// A blank node is the exception: [`term_ref_to_native`] flattens the IR's
-    /// `(label, scope)` into ONE qualified label string (raw dots doubled, plus a
-    /// `.s{n}` suffix for a non-default scope `n`), and
+    /// `(label, scope)` into ONE qualified label string (the raw label itself at
+    /// the default scope, otherwise the `purrdfesc{n}_{body}` envelope), and
     /// [`to_term_value`](Self::to_term_value) decodes that spelling back to the
     /// `(label, scope)` pair the dataset holds. That decoded key is the right one
     /// for any dataset that stores the IR pair faithfully.
@@ -591,8 +591,9 @@ fn escape_literal(s: &str) -> String {
 /// components via the dataset's [`resolve`](RdfDataset::resolve).
 ///
 /// Blank labels are scope-qualified so two same-label blanks from different
-/// [`BlankScope`](::purrdf::BlankScope)s never conflate (C0.2); a dot-free
-/// DEFAULT-scope label stays bare so single-scope data is byte-unchanged.
+/// [`BlankScope`](::purrdf::BlankScope)s never conflate (C0.2); a DEFAULT-scope
+/// label outside the reserved marker namespace stays bare so single-scope data
+/// is byte-unchanged.
 pub fn term_ref_to_native(dataset: &RdfDataset, term: TermRef<'_>) -> Term {
     match term {
         TermRef::Iri(iri) => Term::NamedNode(NamedNode::new_unchecked(iri)),

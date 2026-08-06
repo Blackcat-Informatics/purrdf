@@ -21,7 +21,7 @@ use crate::SerializeOutcome;
 use crate::error::Error;
 use crate::graph::dataset_to_ntriples;
 use crate::model::ResultProvenance;
-use purrdf_core::blank_label::{LabelAlphabet, escape_label};
+use purrdf_core::blank_label::{LabelAlphabet, encode_blank_label};
 use purrdf_core::{SparqlResult, TermValue};
 
 /// Serialize a [`SparqlResult`] to SPARQL Results JSON, appending the additive
@@ -236,13 +236,12 @@ fn json_binding(value: &TermValue, out: &mut String) -> Result<(), Error> {
         }
         TermValue::Blank { label, scope } => {
             // A SPARQL-results JSON bnode `value` is a blank-node LABEL, not
-            // free text, so the scope-qualified label is escaped into the W3C
+            // free text, so the `(label, scope)` pair is encoded into the W3C
             // BLANK_NODE_LABEL alphabet — the same alphabet the CSV/TSV writers
             // emit, so one result never disagrees with itself across formats.
-            let qualified = scope.qualify_label(label);
             out.push_str("{\"type\":\"bnode\",\"value\":");
             json_string(
-                &escape_label(&qualified, LabelAlphabet::BlankNodeLabel),
+                &encode_blank_label(label, *scope, LabelAlphabet::BlankNodeLabel),
                 out,
             );
             out.push('}');

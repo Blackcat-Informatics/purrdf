@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use hashbrown::HashTable;
 
+use crate::blank_label::LabelAlphabet;
 use crate::{
     Blake3ContentId, ContentIdScheme, RdfAnnotation, RdfLiteral, RdfQuad, RdfReifier, RdfTerm,
     RdfTextDirection,
@@ -515,23 +516,29 @@ impl RdfDatasetBuilder {
     }
 
     /// Intern a blank node from a **text codec's** parsed `_:` token, decoding the
-    /// egress transform the serializers applied on the way out.
+    /// egress encoding the serializers applied on the way out.
     ///
     /// This is the ingress choke point every native text codec (Turtle family,
     /// RDF/XML, TriX, HexTuples, JSON-LD / YAML-LD) routes its blank-node tokens
     /// through. The token is decoded by
     /// [`decode_blank_label`](crate::blank_label::decode_blank_label) — the exact
-    /// inverse of `qualify_label` followed by `escape_label` — so a document this
-    /// workspace wrote re-parses to the very `(label, scope)` pair it was written
-    /// from. Without that inverse the egress transform would be re-applied to an
-    /// already-transformed label on every cycle, doubling dot runs and layering
-    /// escape markers without bound.
+    /// inverse of [`encode_blank_label`](crate::blank_label::encode_blank_label)
+    /// — so a document this workspace wrote re-parses to the very
+    /// `(label, scope)` pair it was written from, and a token no serializer could
+    /// have written (which is every token in a foreign document) is interned
+    /// VERBATIM at [`BlankScope::DEFAULT`], byte for byte.
+    ///
+    /// `alphabet` is the label alphabet of the syntax the token was READ FROM —
+    /// `BLANK_NODE_LABEL` for the Turtle family / HexTuples / JSON-LD, `NCName`
+    /// for RDF/XML's `rdf:nodeID`, XML text for TriX's `<id>`. It is what the
+    /// decode's image test re-encodes against, so ingress inverts exactly the
+    /// egress that syntax performs and nothing else.
     ///
     /// Carrier formats (GTS, columnar, pack, OKF) deliberately do NOT use this:
     /// they store the IR's `(label, scope)` pair structurally, so their labels
-    /// were never transformed and must stay opaque.
-    pub fn intern_text_blank(&mut self, token: &str) -> TermId {
-        let (label, scope) = crate::blank_label::decode_blank_label(token);
+    /// were never encoded and must stay opaque.
+    pub fn intern_text_blank(&mut self, token: &str, alphabet: LabelAlphabet) -> TermId {
+        let (label, scope) = crate::blank_label::decode_blank_label(token, alphabet);
         self.intern_blank(&label, scope)
     }
 
@@ -597,7 +604,7 @@ impl RdfDatasetBuilder {
     /// merely isomorphism. Re-materializing a dataset through the owned model —
     /// which the SHACL projection, the SHACL rules fixpoint, and the reasoning
     /// withholding passes all do, repeatedly — therefore leaves its labels
-    /// untouched instead of qualifying an already-qualified label once per pass.
+    /// untouched instead of encoding an already-encoded label once per pass.
     ///
     /// A caller minting a blank label of its own passes a label it has NOT
     /// qualified, and the decode leaves any such label alone unless it is spelled
@@ -753,7 +760,8 @@ impl RdfDatasetBuilder {
     /// reserved for direct `push_owned_*` pushes). Blank nodes from different source
     /// datasets can therefore never collide even when they share the same label
     /// (e.g. both datasets have `_:b0`). The qualified label rendered for legacy
-    /// consumers is `"{label}.s{n}"` per [`BlankScope::qualify_label`] (C0.2).
+    /// consumers is the scope envelope `"purrdfesc{n}_{body}"` per
+    /// [`BlankScope::qualify_label`] (C0.2).
     pub fn push_dataset(&mut self, other: &RdfDataset) {
         // Allocate one fresh scope for this entire `other` dataset.
         let scope = BlankScope(self.next_merge_scope);
@@ -1304,9 +1312,9 @@ mod tests {
     }
 
     /// `dataset → owned → dataset` preserves blank-node `(label, scope)` IDENTITY:
-    /// the owned rendering qualifies, and re-interning at the default scope
+    /// the owned rendering encodes, and re-interning at the default scope
     /// decodes, so a re-materialized dataset holds the SAME nodes rather than a
-    /// doubly-qualified copy of them.
+    /// doubly-encoded copy of them.
     #[test]
     fn the_owned_round_trip_preserves_blank_label_identity() {
         for &(label, scope) in &[

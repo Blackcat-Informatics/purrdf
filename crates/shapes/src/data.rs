@@ -36,6 +36,8 @@ pub(crate) fn resolve_id(dataset: &RdfDataset, term: &Term) -> Option<TermId> {
         // rendered; decode it back to the `(label, scope)` pair the dataset holds.
         // A label a caller MINTED rather than read out of a dataset is raw, not
         // qualified, so the verbatim default-scope lookup is kept as the fallback.
+        // (The two spellings differ only for a scoped or marker-prefixed label;
+        // every other label is its own qualification.)
         Term::BlankNode(label) => {
             let (decoded, scope) = ::purrdf::BlankScope::unqualify_label(label);
             dataset

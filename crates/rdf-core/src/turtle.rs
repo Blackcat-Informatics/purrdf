@@ -30,38 +30,45 @@
 //!
 //! ## Blank-node labels
 //!
-//! Every `_:` term this module writes goes through one escape helper, which
-//! passes a label already legal under the exact W3C `BLANK_NODE_LABEL`
-//! production straight through (byte-identical) and otherwise rewrites it with
-//! the deterministic, injective escape in [`crate::blank_label`]. Emission is
-//! therefore **total** — every dataset serializes — and the emitted document
-//! always re-lexes. Because a blank-node label carries no meaning (RDF
-//! identifies blank nodes only up to renaming) and the escape is injective, the
-//! escaped document is isomorphic to the input: co-reference is preserved and
-//! distinct blank nodes stay distinct. Callers wanting labels of their own
-//! choosing rewrite the dataset first with the explicit recourse operations
-//! (`canonical_relabel` / `skolemize` / `deskolemize`).
+//! Every `_:` term this module writes goes through one encode helper, which
+//! passes an unscoped label already legal under the exact W3C
+//! `BLANK_NODE_LABEL` production straight through (byte-identical) and
+//! otherwise rewrites it as the deterministic, injective envelope in
+//! [`crate::blank_label`]. Emission is therefore **total** — every dataset
+//! serializes — and the emitted document always re-lexes. Because a blank-node
+//! label carries no meaning (RDF identifies blank nodes only up to renaming)
+//! and the encoding is injective, the emitted document is isomorphic to the
+//! input: co-reference is preserved and distinct blank nodes stay distinct.
+//! Callers wanting labels of their own choosing rewrite the dataset first with
+//! the explicit recourse operations (`canonical_relabel` / `skolemize` /
+//! `deskolemize`).
 
 use crate::{
     QuadIds, RdfAnnotation, RdfDataset, RdfLiteral, RdfQuad, RdfReifier, RdfTerm, RdfTriple,
     TermId, TermRef,
-    blank_label::{LabelAlphabet, escape_label},
+    blank_label::{LabelAlphabet, encode_blank_label, retarget_owned_label},
 };
 use std::borrow::Cow;
 use std::fmt::Write as _;
 
-/// The blank-node label this emitter writes after `_:`: the caller's label when
-/// it is already legal under the exact W3C Turtle/SPARQL `BLANK_NODE_LABEL`
-/// production, otherwise its deterministic, injective escape
-/// ([`escape_label`]).
+/// The blank-node label this emitter writes after `_:` for an OWNED-model term:
+/// the caller's label when it is already legal under the exact W3C
+/// Turtle/SPARQL `BLANK_NODE_LABEL` production, otherwise the deterministic,
+/// injective envelope ([`retarget_owned_label`]).
 ///
-/// Escaping rather than refusing keeps serialization total: a blank-node label
+/// The input is an [`RdfTerm::BlankNode`](crate::RdfTerm::BlankNode) slot, which
+/// already carries a `(label, scope)` pair encoded under the owned model's
+/// unconstrained alphabet — so this RE-TARGETS that encoding into the Turtle
+/// alphabet rather than escaping it a second time (which would envelope an
+/// envelope and stop the round trip restoring label identity).
+///
+/// Encoding rather than refusing keeps serialization total: a blank-node label
 /// carries no meaning (RDF identifies blank nodes only up to renaming), so a
 /// rewritten label preserves the graph up to isomorphism, while an emitted
 /// out-of-alphabet label would produce a document no conforming parser —
 /// including PurRDF's own — could read back.
 fn emit_blank_label(label: &str) -> Cow<'_, str> {
-    escape_label(label, LabelAlphabet::BlankNodeLabel)
+    retarget_owned_label(label, LabelAlphabet::BlankNodeLabel)
 }
 
 /// Percent-encode a string the way Python's `urllib.parse.quote(value, safe="")`
@@ -183,9 +190,9 @@ fn write_iri_escaped(iri: &str, out: &mut String) {
 ///
 /// This is the borrowed counterpart of [`emit_term`]: it resolves directly from
 /// the frozen dataset and allocates neither an owned term tree nor an intermediate
-/// rendered string. The scope-qualified blank-node label is escaped into the
-/// Turtle `BLANK_NODE_LABEL` alphabet (via [`escape_label`]) if it is not already
-/// legal there, so the buffer always holds a re-parsable term.
+/// rendered string. The blank node's `(label, scope)` pair is encoded into the
+/// Turtle `BLANK_NODE_LABEL` alphabet in ONE step (via [`encode_blank_label`]),
+/// so the buffer always holds a re-parsable term.
 pub fn write_dataset_term(dataset: &RdfDataset, id: TermId, out: &mut String) {
     match dataset.resolve(id) {
         TermRef::Iri(iri) => {
@@ -194,9 +201,12 @@ pub fn write_dataset_term(dataset: &RdfDataset, id: TermId, out: &mut String) {
             out.push('>');
         }
         TermRef::Blank { label, scope } => {
-            let qualified = scope.qualify_label(label);
             out.push_str("_:");
-            out.push_str(&emit_blank_label(&qualified));
+            out.push_str(&encode_blank_label(
+                label,
+                scope,
+                LabelAlphabet::BlankNodeLabel,
+            ));
         }
         TermRef::Literal {
             lexical,
@@ -309,9 +319,9 @@ pub fn display_term(term: &RdfTerm) -> String {
 /// Serialize an [`RdfTerm`] to its Turtle form (full `<iri>`, `_:bnode`, literal,
 /// or the RDF 1.2 non-asserting triple term `<<( <s> <p> <o> )>>`).
 ///
-/// A blank-node label outside the Turtle `BLANK_NODE_LABEL` alphabet is escaped
-/// (via [`escape_label`]) rather than refused, so the rendered term always
-/// re-lexes; the escape is deterministic and injective, so blank-node
+/// A blank-node label outside the Turtle `BLANK_NODE_LABEL` alphabet is encoded
+/// (via [`retarget_owned_label`]) rather than refused, so the rendered term
+/// always re-lexes; the encoding is deterministic and injective, so blank-node
 /// co-reference is preserved exactly.
 #[must_use]
 pub fn emit_term(term: &RdfTerm) -> String {
@@ -677,10 +687,10 @@ mod tests {
     }
 
     #[test]
-    fn write_dataset_term_escapes_the_qualified_label() {
-        // The borrowed writer escapes the SCOPE-QUALIFIED label: a legal raw
-        // label stays legal after qualification (dots double, suffix appended)
-        // and is written verbatim, while an illegal raw label is rewritten.
+    fn write_dataset_term_encodes_the_label_and_scope_together() {
+        // The borrowed writer encodes the `(label, scope)` pair in ONE step: a
+        // legal raw label at the default scope is written verbatim, while a
+        // scoped pair or an illegal raw label becomes the envelope.
         let mut builder = crate::RdfDatasetBuilder::new();
         let good = builder.intern_blank("a.b", crate::BlankScope(4));
         let bad = builder.intern_blank("a b", crate::BlankScope::DEFAULT);
@@ -690,7 +700,10 @@ mod tests {
 
         let mut out = String::new();
         write_dataset_term(&dataset, good, &mut out);
-        assert_eq!(out, "_:a..b.s4", "raw dots double before the scope suffix");
+        assert_eq!(
+            out, "_:purrdfesc4_a_00002Eb",
+            "a scoped pair is written as its envelope"
+        );
 
         let mut out = String::new();
         write_dataset_term(&dataset, bad, &mut out);
@@ -702,7 +715,7 @@ mod tests {
         }
         assert_eq!(
             lines,
-            "_:a..b.s4 <http://example.org/p> _:purrdfesc_a_000020b .\n"
+            "_:purrdfesc4_a_00002Eb <http://example.org/p> _:purrdfesc_a_000020b .\n"
         );
     }
 

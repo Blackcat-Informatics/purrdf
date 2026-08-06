@@ -20,7 +20,7 @@
 use crate::SerializeOutcome;
 use crate::error::Error;
 use crate::model::ResultProvenance;
-use purrdf_core::blank_label::{LabelAlphabet, escape_label};
+use purrdf_core::blank_label::{LabelAlphabet, encode_blank_label};
 use purrdf_core::{SparqlResult, TermValue};
 
 /// The `xsd:string` IRI; a literal carrying it (with no language) serializes
@@ -152,13 +152,12 @@ fn write_term(value: &TermValue, out: &mut String) -> Result<(), Error> {
         }
         TermValue::Blank { label, scope } => {
             // A `<bnode>` id is a blank-node LABEL, not free text, so the
-            // scope-qualified label is escaped into the W3C BLANK_NODE_LABEL
+            // `(label, scope)` pair is encoded into the W3C BLANK_NODE_LABEL
             // alphabet — matching the JSON/CSV/TSV writers, and incidentally
             // removing every character XML 1.0 cannot represent.
-            let qualified = scope.qualify_label(label);
             out.push_str("<bnode>");
             xml_escape_text(
-                &escape_label(&qualified, LabelAlphabet::BlankNodeLabel),
+                &encode_blank_label(label, *scope, LabelAlphabet::BlankNodeLabel),
                 out,
             )?;
             out.push_str("</bnode>");

@@ -5,24 +5,22 @@
 //! byte-identical to `serialize(D)`, for every dataset and every native text
 //! format that has a parser.
 //!
-//! The egress transform a serializer applies to a blank node — scope
-//! qualification (`BlankScope::qualify_label`) followed by the target syntax's
-//! alphabet escape (`blank_label::escape_label`) — is injective and therefore
-//! NOT idempotent: applying it twice is not the same as applying it once. That
-//! is only sound because ingress inverts it exactly
-//! (`blank_label::decode_blank_label`). Without the inverse, every
-//! serialize/parse cycle re-encodes an already-encoded label: raw dot runs
-//! double each pass (`a.b` → `a..b` → `a....b` → …, exponential in the number
-//! of cycles) and escape markers layer (`purrdfesc_purrdfesc_…`), so a document
-//! that merely passes through a conversion pipeline grows without bound and its
-//! blank nodes stop denoting the nodes they came from.
+//! The egress encoding a serializer applies to a blank node
+//! (`blank_label::encode_blank_label`) is injective and therefore NOT
+//! idempotent on the reserved marker namespace: enveloping an envelope is not
+//! the same as enveloping once. That is only sound because ingress inverts it
+//! exactly (`blank_label::decode_blank_label`, image-checked). Without the
+//! inverse, every serialize/parse cycle would re-encode an already-encoded
+//! label and the markers would layer (`purrdfesc_purrdfesc_…`), so a document
+//! that merely passes through a conversion pipeline would grow without bound
+//! and its blank nodes would stop denoting the nodes they came from.
 //!
 //! Three layers are pinned here:
 //!
 //! 1. **Byte-fixpoint property** — arbitrary datasets over a hostile label
-//!    generator (interior dots, scope-suffix look-alikes, non-default scopes,
-//!    out-of-alphabet scalars, escape-marker collisions), crossed with every
-//!    media type in the native codec registry.
+//!    generator (interior dots, envelope look-alikes, non-default scopes,
+//!    out-of-alphabet scalars, marker collisions), crossed with every media
+//!    type in the native codec registry.
 //! 2. **Label identity** — a well-formed round trip restores the exact
 //!    `(label, scope)` pair, not merely an isomorphic relabeling.
 //! 3. **Named regressions** — `_:a.b` and `_:x` at scope 2 through N-Triples and
@@ -80,8 +78,8 @@ fn blank_subject_dataset(label: &str, scope: BlankScope) -> Arc<RdfDataset> {
 }
 
 /// Raw blank labels a producer can hand the serializer, chosen to attack the
-/// encoding: every dot position, strings that MIMIC the `.s{n}` scope suffix,
-/// the reserved escape marker, and scalars outside each target alphabet.
+/// encoding: every dot position, strings that MIMIC an envelope, the reserved
+/// marker namespace, and scalars outside each target alphabet.
 const HOSTILE_LABELS: &[&str] = &[
     "b0",
     "a.b",
@@ -92,6 +90,11 @@ const HOSTILE_LABELS: &[&str] = &[
     "a.s1",
     "a..s1",
     "x.s2",
+    "a...b",
+    "purrdfesc",
+    "purrdfesc1_a",
+    "purrdfesc_abc",
+    "abc",
     "s0.b0",
     "c1.s5",
     "0abc",
@@ -217,43 +220,71 @@ fn assert_stable_across_cycles(
     String::from_utf8(first).expect("native text output is UTF-8")
 }
 
-/// Named regression: a raw interior dot (`_:a.b`) surfaces DOUBLED on the wire,
-/// decodes back to the raw label, and the bytes never move again.
+/// Named regression: a raw interior dot (`_:a.b`) reaches the wire VERBATIM,
+/// re-parses as the same label, and the bytes never move.
 #[test]
 fn dotted_label_is_stable_across_three_cycles() {
     let dataset = blank_subject_dataset("a.b", BlankScope::DEFAULT);
     for format in [NativeRdfFormat::NTriples, NativeRdfFormat::Turtle] {
         let text = assert_stable_across_cycles(dataset.as_ref(), format, 3);
         assert!(
-            text.contains("_:a..b"),
-            "{} must double the raw dot on the wire: {text}",
+            text.contains("_:a.b "),
+            "{} must write the raw dot verbatim: {text}",
             format.media_type()
         );
         assert!(
-            !text.contains("_:a....b"),
-            "{} must not re-qualify an already-qualified label: {text}",
+            !text.contains("_:a..b"),
+            "{} must not rewrite a legal dotted label: {text}",
             format.media_type()
         );
     }
 }
 
-/// Named regression: a NON-DEFAULT scope surfaces as the `.s{n}` suffix, decodes
-/// back to the same `(label, scope)` pair, and the bytes never move again.
+/// Named regression: a NON-DEFAULT scope surfaces as the `purrdfesc{n}_` scope
+/// envelope, decodes back to the same `(label, scope)` pair, and the bytes never
+/// move again.
 #[test]
-fn scope_suffixed_label_is_stable_across_three_cycles() {
+fn scoped_label_is_stable_across_three_cycles() {
     let dataset = blank_subject_dataset("x", BlankScope(2));
     for format in [NativeRdfFormat::NTriples, NativeRdfFormat::Turtle] {
         let text = assert_stable_across_cycles(dataset.as_ref(), format, 3);
         assert!(
-            text.contains("_:x.s2"),
-            "{} must write the scope suffix: {text}",
+            text.contains("_:purrdfesc2_x"),
+            "{} must write the scope envelope: {text}",
             format.media_type()
         );
         assert!(
-            !text.contains("_:x..s2"),
-            "{} must not re-qualify an already-qualified label: {text}",
+            !text.contains("purrdfesc_purrdfesc"),
+            "{} must not envelope an already-enveloped label: {text}",
             format.media_type()
         );
+    }
+}
+
+/// The reserved namespace's one-step settling, pinned end to end: a label that
+/// LOOKS like an envelope (`purrdfesc_abc`) is not one the encoder would have
+/// written, so it is enveloped on the first write, re-parses to itself, and is a
+/// byte fixpoint from then on — never merging with the label `abc`.
+#[test]
+fn an_envelope_shaped_label_settles_after_one_write() {
+    let mut b = RdfDatasetBuilder::new();
+    let p = b.intern_iri("https://example.org/p");
+    let o = b.intern_iri("https://example.org/o");
+    for label in ["purrdfesc_abc", "abc"] {
+        let s = b.intern_blank(label, BlankScope::DEFAULT);
+        b.push_quad(s, p, o, None);
+    }
+    let dataset = b.freeze().expect("dataset freezes");
+    for format in [NativeRdfFormat::NTriples, NativeRdfFormat::Turtle] {
+        let first = serialize(dataset.as_ref(), format);
+        let once = parse(&first, format);
+        assert_eq!(
+            blank_nodes(once.as_ref()),
+            BTreeSet::from([("abc".to_owned(), 0), ("purrdfesc_abc".to_owned(), 0)]),
+            "{} must keep the two labels apart",
+            format.media_type()
+        );
+        assert_stable_across_cycles(once.as_ref(), format, 3);
     }
 }
 
@@ -277,17 +308,18 @@ fn escaped_label_is_stable_across_three_cycles() {
     }
 }
 
-/// A marker-prefixed label whose body is NOT a well-formed escape is not in the
-/// escape's image, so its bytes may move on the FIRST serialization — and are a
-/// fixed point from then on, which is the whole contract.
+/// A marker-prefixed label whose body is NOT a well-formed envelope is not in
+/// the encoder's image, so its bytes may move on the FIRST serialization — and
+/// are a fixed point from then on, which is the whole contract.
 #[test]
 fn a_malformed_marker_label_is_a_fixed_point_from_the_first_cycle() {
     let dataset = blank_subject_dataset("purrdfesc__12", BlankScope::DEFAULT);
     for format in [NativeRdfFormat::NTriples, NativeRdfFormat::Turtle] {
         let first = serialize(dataset.as_ref(), format);
         let once = parse(&first, format);
-        // The escape rewrote it away from the reserved namespace, so the label
-        // it re-parses to is the original one, and the document is stable.
+        // The encoding rewrote it away from the reserved namespace, so the
+        // label it re-parses to is the original one, and the document is
+        // stable.
         assert_eq!(
             blank_nodes(once.as_ref()),
             BTreeSet::from([("purrdfesc__12".to_owned(), 0)]),

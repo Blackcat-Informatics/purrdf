@@ -376,17 +376,12 @@ proptest! {
     /// vector or golden can churn.
     ///
     /// `dataset_from_quads` builds the fixture through `push_owned_quad`, the
-    /// OWNED ingress boundary — and per
-    /// [`BlankScope::unqualify_label`](purrdf_rdf::BlankScope::unqualify_label)'s
-    /// contract, `intern_owned_term_scoped` DECODES any raw label shaped like
-    /// its own `.s{n}` encoder output (e.g. the dotted generator branch can
-    /// emit `a.s1`, which decodes to `("a", scope 1)` rather than interning
-    /// literally as `("a.s1", scope 0)`). The wire form the serializer emits is
-    /// therefore whatever the owned boundary actually interned, not a bare
-    /// DEFAULT-scope qualification of the raw generated string — so the
-    /// expectation is the decode-then-requalify FIXPOINT
-    /// (`unqualify_label` then `qualify_label`), which mirrors that boundary
-    /// exactly rather than assuming every generated label survives it verbatim.
+    /// OWNED ingress boundary, which decodes each label per
+    /// [`BlankScope::unqualify_label`](purrdf_rdf::BlankScope::unqualify_label).
+    /// A generated label is outside the reserved marker namespace, so that
+    /// decode is the identity and the wire form is the label itself; the
+    /// expectation is nonetheless written as the decode-then-requalify FIXPOINT,
+    /// which mirrors the boundary exactly rather than assuming it.
     #[test]
     fn legal_blank_labels_pass_through_unescaped(label in arb_bnode_label()) {
         let dataset = dataset_from_quads(vec![RdfQuad::new(
@@ -405,10 +400,8 @@ proptest! {
     /// label lands in `rdf:nodeID` verbatim.
     ///
     /// See `legal_blank_labels_pass_through_unescaped` above: `dataset_from_quads`
-    /// goes through the owned-ingress boundary, which decodes a raw label shaped
-    /// like the `.s{n}` scope encoding before interning it, so the expected wire
-    /// token is the decode-then-requalify fixpoint, not a bare DEFAULT-scope
-    /// qualification of the generated string.
+    /// goes through the owned-ingress boundary, so the expected wire token is
+    /// the decode-then-requalify fixpoint of the generated string.
     #[test]
     fn legal_ncname_labels_pass_through_unescaped(label in arb_ncname_label()) {
         let dataset = dataset_from_quads(vec![RdfQuad::new(
@@ -449,16 +442,16 @@ fn dotted_label_dataset() -> std::sync::Arc<RdfDataset> {
     )])
 }
 
-/// A raw interior dot is doubled on the N-Quads wire (`_:a.b` → `_:a..b`), the
-/// doubled token lexes back as ONE blank node, and the round trip is canonical.
+/// A raw interior dot reaches the N-Quads wire VERBATIM (`_:a.b`), the token
+/// lexes back as ONE blank node, and the round trip is canonical.
 #[test]
-fn nquads_dotted_label_doubles_on_wire_and_stays_one_node() {
+fn nquads_dotted_label_is_verbatim_on_wire_and_stays_one_node() {
     let dataset = dotted_label_dataset();
     let bytes = serialize(dataset.as_ref(), NativeRdfFormat::NQuads);
     let text = std::str::from_utf8(&bytes).expect("N-Quads output is UTF-8");
     assert!(
-        text.contains("_:a..b "),
-        "the raw interior dot must be doubled on the wire: {text}"
+        text.contains("_:a.b "),
+        "the raw interior dot must reach the wire verbatim: {text}"
     );
     let after = parse(&bytes, NativeRdfFormat::NQuads);
     assert_eq!(
@@ -539,19 +532,17 @@ fn trig_dotted_label_followed_by_close_brace() {
     );
 }
 
-/// The exact class that flaked `legal_blank_labels_pass_through_unescaped` /
-/// `legal_ncname_labels_pass_through_unescaped` before their fix: a raw label
-/// shaped exactly like the `.s{n}` scope encoding (`a.s1`) is a FIXPOINT of
-/// `push_owned_quad`'s decode step — `unqualify_label("a.s1")` decodes to
-/// `("a", scope 1)`, and re-qualifying that pair (`BlankScope(1).qualify_label("a")`)
-/// yields `"a.s1"` right back — so the wire token is `a.s1` in BOTH formats,
-/// not `a..s1` (the DEFAULT-scope doubled-dot spelling a naive raw-string
-/// qualification would predict). Pinned as a standalone, non-random regression
-/// so this exact class can never flake silently again.
+/// The class that used to flake `legal_blank_labels_pass_through_unescaped` /
+/// `legal_ncname_labels_pass_through_unescaped`: a raw label shaped like a
+/// scope encoding (`a.s1`). It is now simply a LITERAL label — the owned
+/// boundary decodes it to itself at the default scope, and every serializer
+/// writes it back byte for byte — so the wire token is `a.s1` in both formats.
+/// Pinned as a standalone, non-random regression so this exact class can never
+/// flake silently again.
 #[test]
-fn dotted_scope_suffix_shaped_label_is_a_decode_requalify_fixpoint() {
+fn a_scope_suffix_shaped_label_is_a_literal_label() {
     let (decoded, scope) = BlankScope::unqualify_label("a.s1");
-    assert_eq!((decoded.as_ref(), scope.ordinal()), ("a", 1));
+    assert_eq!((decoded.as_ref(), scope.ordinal()), ("a.s1", 0));
     assert_eq!(scope.qualify_label(&decoded), "a.s1");
 
     let dataset = dataset_from_quads(vec![RdfQuad::new(
@@ -564,14 +555,14 @@ fn dotted_scope_suffix_shaped_label_is_a_decode_requalify_fixpoint() {
     let nt_text = String::from_utf8(nt_bytes).expect("utf-8");
     assert!(
         nt_text.starts_with("_:a.s1 "),
-        "N-Triples must emit the fixpoint token verbatim: {nt_text}"
+        "N-Triples must emit the literal label verbatim: {nt_text}"
     );
 
     let xml_bytes = serialize(dataset.as_ref(), NativeRdfFormat::RdfXml);
     let xml_text = String::from_utf8(xml_bytes).expect("utf-8");
     assert!(
         xml_text.contains("rdf:nodeID=\"a.s1\""),
-        "RDF/XML must emit the fixpoint token verbatim: {xml_text}"
+        "RDF/XML must emit the literal label verbatim: {xml_text}"
     );
 }
 

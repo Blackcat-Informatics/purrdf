@@ -19,17 +19,17 @@
 //! 2. **Injectivity across the document** — two distinct blank nodes never
 //!    conflate on egress, including the adversarial case where one node's
 //!    label equals the escape image of the other's.
-//! 3. **Byte-stability golden** — a legal dot-free-label dataset serializes
+//! 3. **Byte-stability golden** — a legal-label dataset serializes
 //!    byte-identically to the pre-escape serializer for every line codec (zero
 //!    golden churn for real single-scope data).
 //! 4. **Scope-conflation regression** — `(label "a", scope 1)` and
 //!    `(label "a.s1", scope 0)` serialize to DISTINCT labels and re-parse as
-//!    two nodes (the dot-doubling injectivity fix).
+//!    two nodes: the scoped pair as its envelope, the literal label verbatim.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use purrdf_rdf::blank_label::{LabelAlphabet, escape_label, is_valid_label};
+use purrdf_rdf::blank_label::{LabelAlphabet, encode_blank_label, is_valid_label};
 use purrdf_rdf::{
     BlankScope, NativeRdfFormat, RdfDataset, RdfDatasetBuilder, SerializeGraph, TermRef,
     datasets_isomorphic, parse_dataset, serialize_dataset,
@@ -71,12 +71,16 @@ const HOSTILE_LABELS: &[&str] = &[
     "<urn:x>",             // IRI delimiters
     "0abc",                // digit start: legal BLANK_NODE_LABEL, illegal NCName
     "a.b",                 // interior dot
+    "a..b",                // a doubled interior dot: a DIFFERENT label from `a.b`
+    "a...b",               // …and a tripled one
     "trailing.",           // BLANK_NODE_LABEL forbids a final '.'; NCName does not
     "-lead",               // '-' is inner-only in both name alphabets
     "\u{d7}y",             // U+00D7 ×: the gap just past [#xC0-#xD6]
     "日本",                // PN_CHARS_BASE / NameStartChar
     "c14n0",               // canonicalization labels are legal everywhere
-    "purrdfesc_a_000020b", // the escape image of "a b": must not conflate with it
+    "purrdfesc_a_000020b", // the envelope of "a b": must not conflate with it
+    "purrdfesc_abc",       // an envelope-SHAPED label: must not conflate with `abc`
+    "abc",                 // …and the label it would conflate with
 ];
 
 /// The blank-node label alphabet a format's codec emits. The `match` is
@@ -132,11 +136,10 @@ fn every_hostile_label_serializes_and_reparses_isomorphically() {
 
             // The token the serializer wrote is legal under the format's own
             // alphabet, so an external conforming parser reads it too. Restated
-            // from the egress contract (`qualify` then `escape`) rather than read
+            // from the egress contract (`encode_blank_label`) rather than read
             // back off the re-parsed dataset, because ingress now DECODES that
             // token — which is what the identity assertion below pins.
-            let qualified = BlankScope::DEFAULT.qualify_label(label);
-            let emitted = escape_label(&qualified, alphabet);
+            let emitted = encode_blank_label(label, BlankScope::DEFAULT, alphabet);
             assert!(
                 is_valid_label(&emitted, alphabet),
                 "{media_type} emitted {emitted:?} for {label:?}, illegal under {alphabet:?}"
@@ -274,33 +277,49 @@ fn okf_writer_accepts_every_hostile_label_without_error() {
 }
 
 #[test]
-fn interior_dot_label_round_trips_to_one_node_via_dot_doubling() {
-    // `a.b` is legal BLANK_NODE_LABEL syntax; the injective scope encoding
-    // doubles the raw dot on egress (`_:a..b`), which must re-parse as a
-    // SINGLE blank node.
-    let ds = blank_subject_dataset("a.b");
+fn the_dotted_family_stays_distinct_and_verbatim_on_the_wire() {
+    // `a.b`, `a..b` and `a...b` are three DISTINCT legal `BLANK_NODE_LABEL`s.
+    // Each reaches the wire byte for byte, and a document holding all three
+    // re-parses to three blank nodes — the class the old dot-doubling egress
+    // silently merged into one.
+    let mut b = RdfDatasetBuilder::new();
+    let p = b.intern_iri("https://example.org/p");
+    let o = b.intern_iri("https://example.org/o");
+    for label in ["a.b", "a..b", "a...b"] {
+        let s = b.intern_blank(label, BlankScope::DEFAULT);
+        b.push_quad(s, p, o, None);
+    }
+    let ds = b.freeze().expect("dataset freezes");
+    assert_eq!(blank_nodes(&ds).len(), 3, "three distinct nodes in the IR");
+
     for media_type in ["text/turtle", "application/n-triples"] {
         let bytes = serialize_dataset(&ds, media_type, SerializeGraph::Dataset)
-            .expect("interior-dot label serializes");
+            .expect("interior-dot labels serialize");
         let text = String::from_utf8(bytes).expect("utf-8");
-        assert!(
-            text.contains("_:a..b"),
-            "{media_type} doubles the raw dot: {text}"
-        );
+        for label in ["_:a.b ", "_:a..b ", "_:a...b "] {
+            assert!(
+                text.contains(label),
+                "{media_type} must write {label:?} verbatim: {text}"
+            );
+        }
         let reparsed =
             parse_dataset(text.as_bytes(), media_type, None).expect("emitted document re-parses");
         assert_eq!(
             blank_nodes(&reparsed).len(),
-            1,
-            "{media_type} re-parses to exactly one blank node: {text}"
+            3,
+            "{media_type} re-parses to exactly three blank nodes: {text}"
+        );
+        assert!(
+            datasets_isomorphic(&ds, &reparsed),
+            "{media_type} round trip is not isomorphic: {text}"
         );
     }
 }
 
 // ── byte-stability golden ────────────────────────────────────────────────────
 
-/// A legal dot-free-label dataset: `_:alpha` (default scope) linked to
-/// `_:beta` (scope 2), plus one IRI object.
+/// A legal-label dataset: `_:alpha` (default scope) linked to `_:beta` (scope
+/// 2), plus one IRI object.
 fn dot_free_blank_dataset() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
     let alpha = b.intern_blank("alpha", BlankScope::DEFAULT);
@@ -313,35 +332,37 @@ fn dot_free_blank_dataset() -> Arc<RdfDataset> {
 }
 
 #[test]
-fn dot_free_labels_serialize_byte_identically_to_the_pre_escape_serializer() {
+fn unscoped_legal_labels_serialize_byte_identically_to_the_pre_escape_serializer() {
     // Golden literals captured from the pre-change serializer output (this
-    // exact fixture, serialized by the serializer WITHOUT the egress escape):
-    // legal dot-free labels must not churn a single byte.
+    // exact fixture, serialized by the serializer WITHOUT the egress encoding):
+    // an unscoped legal label must not churn a single byte. The scoped node is
+    // the one spelling that moves, because a scope has to be carried somewhere:
+    // it is the `purrdfesc{n}_{body}` envelope.
     let goldens: &[(&str, &str)] = &[
         (
             "text/turtle",
             "@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n\
              @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\
              \n\
-             _:alpha <https://example.org/p> _:beta.s2 .\n\
-             _:beta.s2 <https://example.org/p> <https://example.org/o> .\n",
+             _:alpha <https://example.org/p> _:purrdfesc2_beta .\n\
+             _:purrdfesc2_beta <https://example.org/p> <https://example.org/o> .\n",
         ),
         (
             "application/trig",
             "@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n\
              \n\
-             _:alpha <https://example.org/p> _:beta.s2 .\n\
-             _:beta.s2 <https://example.org/p> <https://example.org/o> .\n",
+             _:alpha <https://example.org/p> _:purrdfesc2_beta .\n\
+             _:purrdfesc2_beta <https://example.org/p> <https://example.org/o> .\n",
         ),
         (
             "application/n-triples",
-            "_:alpha <https://example.org/p> _:beta.s2 .\n\
-             _:beta.s2 <https://example.org/p> <https://example.org/o> .\n",
+            "_:alpha <https://example.org/p> _:purrdfesc2_beta .\n\
+             _:purrdfesc2_beta <https://example.org/p> <https://example.org/o> .\n",
         ),
         (
             "application/n-quads",
-            "_:alpha <https://example.org/p> _:beta.s2 .\n\
-             _:beta.s2 <https://example.org/p> <https://example.org/o> .\n",
+            "_:alpha <https://example.org/p> _:purrdfesc2_beta .\n\
+             _:purrdfesc2_beta <https://example.org/p> <https://example.org/o> .\n",
         ),
     ];
     let ds = dot_free_blank_dataset();
@@ -360,8 +381,10 @@ fn dot_free_labels_serialize_byte_identically_to_the_pre_escape_serializer() {
 
 #[test]
 fn scoped_label_and_naive_qualified_twin_never_conflate() {
-    // Before dot-doubling, raw "a" at scope 1 and raw "a.s1" at scope 0 BOTH
-    // qualified to "a.s1" — two distinct nodes conflated into one on egress.
+    // Historically, raw "a" at scope 1 and raw "a.s1" at scope 0 BOTH qualified
+    // to "a.s1" — two distinct nodes conflated into one on egress. Now the
+    // scoped pair is an envelope and the literal label passes through, so the
+    // two spellings cannot meet.
     let mut b = RdfDatasetBuilder::new();
     let scoped = b.intern_blank("a", BlankScope(1));
     let naive_twin = b.intern_blank("a.s1", BlankScope::DEFAULT);
@@ -375,10 +398,13 @@ fn scoped_label_and_naive_qualified_twin_never_conflate() {
     let bytes = serialize_dataset(&ds, "application/n-triples", SerializeGraph::Dataset)
         .expect("both labels are legal");
     let text = String::from_utf8(bytes).expect("utf-8");
-    assert!(text.contains("_:a.s1 "), "scoped node keeps `.s1`: {text}");
     assert!(
-        text.contains("_:a..s1 "),
-        "raw-dot twin doubles its dot: {text}"
+        text.contains("_:purrdfesc1_a "),
+        "the scoped pair is written as its envelope: {text}"
+    );
+    assert!(
+        text.contains("_:a.s1 "),
+        "the literal label is written verbatim: {text}"
     );
 
     let reparsed = parse_dataset(text.as_bytes(), "application/n-triples", None)

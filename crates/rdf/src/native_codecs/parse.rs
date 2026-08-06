@@ -30,6 +30,7 @@ use super::text_parse::LineParseMode;
 use crate::{
     BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, RdfTextDirection, TermId,
 };
+use purrdf_core::blank_label::LabelAlphabet;
 
 /// The `rdf:reifies` predicate IRI: a triple-term object under this predicate is the
 /// RDF 1.2 reifier binding the statement layer folds out of the base quad table.
@@ -313,7 +314,13 @@ pub(crate) fn dataset_from_ser_graph(graph: &SerGraph) -> Result<Arc<RdfDataset>
 
 /// [`dataset_from_ser_graph`] for a graph a TEXT codec just parsed: every blank
 /// label is decoded through [`RdfDatasetBuilder::intern_text_blank`], inverting
-/// the scope qualification and alphabet escape the serializers applied at egress.
+/// the `(label, scope)` encoding the serializers applied at egress.
+///
+/// Only the line/Turtle family reaches this entry point, and all four of its
+/// syntaxes write `_:` tokens, so the decode's image test runs against
+/// [`LabelAlphabet::BlankNodeLabel`] — exactly the alphabet those serializers
+/// encode into. (RDF/XML, TriX and HexTuples intern their tokens directly, each
+/// naming its own alphabet.)
 ///
 /// The carrier entry point above stays [`BlankIngress::Opaque`] on purpose: a GTS
 /// bundle stores the IR's `(label, scope)` pair structurally, so its labels were
@@ -322,7 +329,11 @@ pub(crate) fn dataset_from_ser_graph(graph: &SerGraph) -> Result<Arc<RdfDataset>
 pub(crate) fn dataset_from_text_ser_graph(
     graph: &SerGraph,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    dataset_from_ser_graph_impl(graph, false, BlankIngress::TextDecoded)
+    dataset_from_ser_graph_impl(
+        graph,
+        false,
+        BlankIngress::TextDecoded(LabelAlphabet::BlankNodeLabel),
+    )
 }
 
 /// Like [`dataset_from_ser_graph`], but folds **every** named graph into the default
@@ -345,9 +356,11 @@ pub(crate) enum BlankIngress {
     /// The labels are a carrier's stored `(label, scope)` labels, never
     /// transformed — intern them verbatim.
     Opaque,
-    /// The labels are a text document's tokens, scope-qualified and
-    /// alphabet-escaped at egress — decode them back to `(label, scope)`.
-    TextDecoded,
+    /// The labels are a text document's tokens, encoded at egress into the
+    /// wrapped alphabet — decode them back to `(label, scope)` against that
+    /// same alphabet, so ingress inverts exactly the egress that syntax
+    /// performs.
+    TextDecoded(LabelAlphabet),
 }
 
 fn dataset_from_ser_graph_impl(
@@ -511,7 +524,9 @@ impl SerInterner<'_> {
                     .unwrap_or_else(|| format!("gts_bnode_{gts_id}"));
                 Ok(FoldNode::Term(match self.blanks {
                     BlankIngress::Opaque => builder.intern_blank(&label, BlankScope::DEFAULT),
-                    BlankIngress::TextDecoded => builder.intern_text_blank(&label),
+                    BlankIngress::TextDecoded(alphabet) => {
+                        builder.intern_text_blank(&label, alphabet)
+                    }
                 }))
             }
             SerTermKind::Literal => {

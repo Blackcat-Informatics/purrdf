@@ -189,10 +189,12 @@ fn freeze_rows(
 fn intern_term(builder: &mut RdfDatasetBuilder, term: &HexTerm) -> TermId {
     match term {
         HexTerm::Iri(iri) => builder.intern_iri(iri),
-        // Text ingress: decode the scope qualification and alphabet escape this
-        // codec's serializer applied at egress, so a document it wrote re-parses to
-        // the very `(label, scope)` pair it was written from.
-        HexTerm::Blank(label) => builder.intern_text_blank(label),
+        // Text ingress: decode the `(label, scope)` encoding this codec's serializer
+        // applied at egress, so a document it wrote re-parses to the very
+        // `(label, scope)` pair it was written from. HexTuples types its blank ids
+        // as `BLANK_NODE_LABEL`s, which is the alphabet the image test re-encodes
+        // against.
+        HexTerm::Blank(label) => builder.intern_text_blank(label, LabelAlphabet::BlankNodeLabel),
         HexTerm::Literal(literal) => builder.intern_literal(literal.clone()),
     }
 }

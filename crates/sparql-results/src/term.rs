@@ -33,6 +33,11 @@ const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 pub(crate) fn term_value_to_rdf_term(value: &TermValue) -> Result<RdfTerm, Error> {
     match value {
         TermValue::Iri(s) => Ok(RdfTerm::iri(s.clone())),
+        // The owned model has ONE string slot for a blank node, so the
+        // `(label, scope)` pair is encoded into it under the unconstrained owned
+        // alphabet. The kernel emitter RE-TARGETS that spelling into
+        // `BLANK_NODE_LABEL` when it writes the `_:` token, so the CSV/TSV cell
+        // carries exactly what the JSON/XML writers encode directly.
         TermValue::Blank { label, scope } => {
             Ok(RdfTerm::blank_node(scope.qualify_label(label).into_owned()))
         }

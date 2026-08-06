@@ -823,10 +823,13 @@ fn intern_term(builder: &mut RdfDatasetBuilder, term: &XmlTerm) -> Result<TermId
 fn intern_node(builder: &mut RdfDatasetBuilder, term: &XmlTerm) -> Result<FoldNode, RdfDiagnostic> {
     match term {
         XmlTerm::Iri(iri) => Ok(FoldNode::Term(builder.intern_iri(iri))),
-        // Text ingress: decode the scope qualification and alphabet escape this
-        // codec's serializer applied at egress, so a document it wrote re-parses to
-        // the very `(label, scope)` pair it was written from.
-        XmlTerm::Blank(label) => Ok(FoldNode::Term(builder.intern_text_blank(label))),
+        // Text ingress: decode the `(label, scope)` encoding this codec's serializer
+        // applied at egress, so a document it wrote re-parses to the very
+        // `(label, scope)` pair it was written from. `rdf:nodeID` carries an XML
+        // `NCName`, which is the alphabet the image test re-encodes against.
+        XmlTerm::Blank(label) => Ok(FoldNode::Term(
+            builder.intern_text_blank(label, LabelAlphabet::NcName),
+        )),
         XmlTerm::Literal(literal) => Ok(FoldNode::Term(builder.intern_literal(literal.clone()))),
         XmlTerm::Triple(components) => {
             let (subject, predicate, object) = components.as_ref();
