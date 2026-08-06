@@ -46,6 +46,15 @@ use crate::expression::{NodeExpr, RecursionGuard, eval_node_expr};
 use crate::shapes::{Shape, Shapes};
 use crate::term::{Term, term_id_to_native};
 
+/// The fixed non-default [`::purrdf::BlankScope`] the shapes document's blanks
+/// are standardized apart into when exposed as `$shapesGraph` (see
+/// [`build_round_base`]): disjoint from [`::purrdf::BlankScope::DEFAULT`], which
+/// the base data and derived facts share. Named so a future second scoped push
+/// cannot silently reuse the bare literal `1` and conflate two documents'
+/// blanks — every additional shapes-graph-scope push in this module must use
+/// this constant.
+const SHAPES_BLANK_SCOPE: ::purrdf::BlankScope = ::purrdf::BlankScope(1);
+
 // ── Model ───────────────────────────────────────────────────────────────────────
 
 /// The head of a SHACL-AF rule.
@@ -640,7 +649,7 @@ fn build_round_base(
     let graph_term = RdfTerm::iri(graph_iri);
     for mut quad in shapes.shapes_dataset.owned_quads() {
         quad.graph_name = Some(graph_term.clone());
-        builder.push_owned_quad_scoped(&quad, ::purrdf::BlankScope(1));
+        builder.push_owned_quad_scoped(&quad, SHAPES_BLANK_SCOPE);
     }
 
     builder.freeze().map_err(|e| e.to_string())

@@ -484,15 +484,8 @@ impl NativeSparqlEngine {
         if let Some(refused) = self.admit(dataset, &prepared.query, state) {
             return refused;
         }
-        let mut ctx = self.eval_ctx(dataset).with_governors(Arc::clone(state));
-        if let Some(registry) = options.functions {
-            ctx = ctx.with_user_functions(registry);
-        }
-        if let Some(prefix) = options.bnode_mint_prefix {
-            ctx = ctx.with_bnode_mint_prefix(prefix).map_err(|e| {
-                RdfDiagnostic::error("native-sparql-bnode-mint-prefix", e.to_string())
-            })?;
-        }
+        let ctx = self.eval_ctx(dataset).with_governors(Arc::clone(state));
+        let mut ctx = apply_shacl_query_options(ctx, options)?;
         let evaluated = match options.prebinding {
             ShaclPrebinding::Applied => {
                 evaluate_governed_with_shacl_prebinding(&prepared, request.substitutions, &mut ctx)?
@@ -1109,15 +1102,8 @@ impl NativeSparqlEngine {
             self.cache
                 .borrow_mut()
                 .prepare_with(query, base_iri, &self.parser_options)?;
-        let mut ctx = self.eval_ctx(dataset);
-        if let Some(registry) = options.functions {
-            ctx = ctx.with_user_functions(registry);
-        }
-        if let Some(prefix) = options.bnode_mint_prefix {
-            ctx = ctx.with_bnode_mint_prefix(prefix).map_err(|e| {
-                RdfDiagnostic::error("native-sparql-bnode-mint-prefix", e.to_string())
-            })?;
-        }
+        let ctx = self.eval_ctx(dataset);
+        let mut ctx = apply_shacl_query_options(ctx, options)?;
         let outcome = match options.prebinding {
             ShaclPrebinding::Applied => {
                 evaluate_with_shacl_prebinding(&prepared, substitutions, &mut ctx)?
@@ -1374,6 +1360,34 @@ pub struct ShaclQueryOptions<'a> {
     /// per-focus-node identity tag — and must never be derived from time, RNG,
     /// or iteration order.
     pub bnode_mint_prefix: Option<&'a str>,
+}
+
+/// Apply the two independently-optional [`ShaclQueryOptions`] pieces that are
+/// wired identically on both SHACL-facing query entries
+/// ([`NativeSparqlEngine::query_shacl_view`] and
+/// [`NativeSparqlEngine::query_governed_in_operation_with_options`]): the
+/// SHACL-AF function registry ([`EvalCtx::with_user_functions`]) and the
+/// deterministic blank-mint prefix ([`EvalCtx::with_bnode_mint_prefix`]).
+/// Centralized so a future `ShaclQueryOptions` field is wired once instead of
+/// at each call site.
+///
+/// # Errors
+///
+/// Returns [`RdfDiagnostic`] when `options.bnode_mint_prefix` is not a legal
+/// `BLANK_NODE_LABEL` prefix.
+fn apply_shacl_query_options<'d, D: DatasetView + Sync>(
+    mut ctx: EvalCtx<'d, D>,
+    options: ShaclQueryOptions<'d>,
+) -> Result<EvalCtx<'d, D>, RdfDiagnostic> {
+    if let Some(registry) = options.functions {
+        ctx = ctx.with_user_functions(registry);
+    }
+    if let Some(prefix) = options.bnode_mint_prefix {
+        ctx = ctx
+            .with_bnode_mint_prefix(prefix)
+            .map_err(|e| RdfDiagnostic::error("native-sparql-bnode-mint-prefix", e.to_string()))?;
+    }
+    Ok(ctx)
 }
 
 /// [`evaluate_with_shacl_prebinding`], on the trip-aware channel — the same relationship

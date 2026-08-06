@@ -278,6 +278,11 @@ pub(crate) fn eval_construct<D: DatasetView + Sync>(
     let graph = match tracker.freshness_remap(&graph) {
         None => graph,
         Some(remap) => {
+            // `tracker.minted`/`.data` are intentionally NOT cleared before this
+            // second pass: `eval_construct` computes `freshness_remap` exactly
+            // once per evaluation, so the re-pass never re-reads those sets for
+            // a fresh collision check — only `remap` (just set) and `enabled`
+            // are consulted below.
             tracker.remap = remap;
             ctx.bnode_counter = counter_start;
             build_construct_graph(&plan, &seq, ctx, &mut tracker)?
