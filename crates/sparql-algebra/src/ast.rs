@@ -272,6 +272,20 @@ pub enum GroundTerm {
     /// single-row `VALUES`-join rewrite the IRI/literal/triple cases use, keeping the
     /// substitution path uniform across every term kind. The evaluator interns it as
     /// an ordinary blank (`purrdf-core` `TermValue::Blank`).
+    ///
+    /// # The label's contract
+    ///
+    /// This variant's [`BlankNode`] has ONE string slot, so it carries an
+    /// evaluator-side `(label, scope)` pair the same way every other
+    /// single-slot blank surface in this workspace does: the string is the
+    /// SCOPE-QUALIFIED spelling — `purrdf-core`'s `BlankScope::qualify_label(label)`
+    /// — not the raw label read literally. The evaluator decodes it with the
+    /// exact inverse, `BlankScope::unqualify_label`, before interning, so a
+    /// value built from an already-resolved dataset node round-trips to that
+    /// SAME node rather than to a fresh, unrelated one. A caller that means the
+    /// label **literally** must pass it in its qualified spelling instead: every
+    /// raw `.` doubled, so the literal label `a.s1` is spelled `a..s1` (spelling
+    /// it unqualified, `a.s1`, decodes as label `a` at scope 1).
     BlankNode(BlankNode),
 }
 

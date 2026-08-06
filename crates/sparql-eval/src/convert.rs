@@ -100,6 +100,12 @@ pub(crate) fn ground_term_to_value(term: &GroundTerm) -> TermValue {
         // single string slot, so decoding it is the exact inverse and restores
         // the `(label, scope)` pair `term_id_by_value` resolves against. A label
         // that was never qualified decodes to itself at the default scope.
+        //
+        // This is the documented contract on `GroundTerm::BlankNode` and
+        // `Query::substitute_variable`: the string in this slot is read as a
+        // scope-qualified spelling, not a literal label — a caller that means the
+        // label literally must pass its qualified spelling (the literal label
+        // `a.s1` is spelled `a..s1`).
         GroundTerm::BlankNode(b) => {
             let (label, scope) = purrdf_core::BlankScope::unqualify_label(b.as_str());
             TermValue::Blank {
