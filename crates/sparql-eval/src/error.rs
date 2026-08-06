@@ -80,6 +80,16 @@ pub enum EvalError {
     /// inside the closure). Per the hard-fail doctrine a mis-invoked function
     /// aborts the query rather than yielding a wrong or unbound value.
     Function(String),
+
+    /// A caller supplied an invalid evaluation-configuration parameter to an
+    /// `EvalCtx` builder method -- e.g. a deterministic blank-mint prefix
+    /// (`EvalCtx::with_bnode_mint_prefix`) that is not a legal
+    /// `BLANK_NODE_LABEL` prefix. Distinct from [`EvalError::Data`], which is
+    /// about the dataset being evaluated rather than the caller's evaluation
+    /// configuration: per the hard-fail doctrine, an out-of-alphabet
+    /// configuration parameter is rejected at the setter rather than left to
+    /// surface later as a silently rewritten label at egress.
+    Config(String),
 }
 
 impl EvalError {
@@ -107,6 +117,11 @@ impl EvalError {
     pub fn function(what: impl Into<String>) -> Self {
         Self::Function(what.into())
     }
+
+    /// Construct an [`EvalError::Config`] from any displayable message.
+    pub fn config(what: impl Into<String>) -> Self {
+        Self::Config(what.into())
+    }
 }
 
 impl core::fmt::Display for EvalError {
@@ -120,6 +135,7 @@ impl core::fmt::Display for EvalError {
             Self::Remote(msg) => write!(f, "SERVICE federation error: {msg}"),
             Self::Data(msg) => write!(f, "malformed RDF input: {msg}"),
             Self::Function(msg) => write!(f, "user function error: {msg}"),
+            Self::Config(msg) => write!(f, "invalid evaluation configuration: {msg}"),
         }
     }
 }

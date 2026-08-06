@@ -1104,7 +1104,9 @@ mod tests {
     #[test]
     fn prefixed_template_blanks_carry_the_prefix() {
         let ds = knows_graph();
-        let mut ctx = EvalCtx::new(&ds).with_bnode_mint_prefix("fX_");
+        let mut ctx = EvalCtx::new(&ds)
+            .with_bnode_mint_prefix("fX_")
+            .expect("fX_ is a legal BLANK_NODE_LABEL prefix");
         let template = vec![TriplePattern {
             subject: TermPattern::BlankNode(purrdf_sparql_algebra::BlankNode::new("b")),
             predicate: pred(RELATED),

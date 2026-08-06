@@ -2742,10 +2742,8 @@ fn next_u64<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>) -> u64 {
 /// `bnode{n}`, byte-identical to an unprefixed evaluation.
 fn mint_bnode<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>) -> SolutionTerm<D::Id> {
     ctx.bnode_counter += 1;
-    let label = match ctx.bnode_mint_prefix.as_deref() {
-        Some(prefix) => format!("{prefix}bnode{}", ctx.bnode_counter),
-        None => format!("bnode{}", ctx.bnode_counter),
-    };
+    let label =
+        crate::eval::minted_label(ctx.bnode_mint_prefix.as_deref(), "bnode", ctx.bnode_counter);
     intern(
         ctx,
         TermValue::Blank {

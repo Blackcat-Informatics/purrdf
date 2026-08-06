@@ -316,6 +316,38 @@ pub fn is_valid_blank_node_label(label: &str) -> bool {
     !trailing_dot
 }
 
+/// Whether `prefix` is legal as a mint-time PREFIX for [`is_valid_blank_node_label`]:
+/// a string a caller can safely splice in front of every label an evaluator mints,
+/// so `{prefix}{stem}{n}` (`stem` one of this workspace's fixed mint stems --
+/// `c`, `bnode`, `lc` -- and `n` a decimal counter) is always a legal
+/// `BLANK_NODE_LABEL`.
+///
+/// # Why this differs from [`is_valid_blank_node_label`]
+///
+/// A PREFIX never occupies the FINAL position of the label it seeds -- the mint
+/// stem's first letter and the counter's digits always follow it -- so the
+/// `BLANK_NODE_LABEL` grammar's "the last character is never `.`" rule does not
+/// apply to a prefix's own last character; it applies to the *mint stem's* last
+/// character instead, which is always a decimal digit and therefore always
+/// legal. Every OTHER position in the prefix is exactly as constrained as it
+/// would be inside a full label: the first character must be a legal
+/// `BLANK_NODE_LABEL` lead (`PN_CHARS_U` or a digit) and every character after
+/// it must be `PN_CHARS` or `.`.
+///
+/// The empty prefix is legal: it is exactly "no prefix", and every mint stem
+/// already starts with a legal lead character on its own.
+#[must_use]
+pub fn is_valid_blank_node_label_prefix(prefix: &str) -> bool {
+    let mut chars = prefix.chars();
+    let Some(first) = chars.next() else {
+        return true;
+    };
+    if !(is_pn_chars_u(first) || first.is_ascii_digit()) {
+        return false;
+    }
+    chars.all(|ch| is_pn_chars(ch) || ch == '.')
+}
+
 /// Whether `label` is a legal XML 1.0 `NCName`.
 ///
 /// Implements the exact production `NCName ::= NCNameStartChar NCNameChar*`,
@@ -433,8 +465,8 @@ fn is_pn_chars(c: char) -> bool {
 mod tests {
     use super::{
         ESCAPE_MARKER, LabelAlphabet, decode_blank_label, escape_label, is_pn_chars, is_pn_chars_u,
-        is_valid_blank_node_label, is_valid_label, is_valid_ncname, is_valid_xml_text,
-        unescape_label,
+        is_valid_blank_node_label, is_valid_blank_node_label_prefix, is_valid_label,
+        is_valid_ncname, is_valid_xml_text, unescape_label,
     };
     use crate::BlankScope;
     use std::borrow::Cow;
@@ -638,6 +670,51 @@ mod tests {
             "a\nb",
         ] {
             assert!(!is_valid_blank_node_label(label), "{label:?}");
+        }
+    }
+
+    #[test]
+    fn structural_blank_node_label_prefix() {
+        // Legal prefixes, including ones a full-label check would reject:
+        // empty (no prefix), and a trailing '.' (illegal as a FULL label's
+        // last character, legal here because the mint stem always follows).
+        for prefix in [
+            "",
+            "f",
+            "fTag_",
+            "f-3c1a2d_",
+            "trailing.",
+            "0abc",
+            "日本",
+            "_x",
+        ] {
+            assert!(is_valid_blank_node_label_prefix(prefix), "{prefix:?}");
+        }
+        // Illegal prefixes: a bad lead character, or a body character outside
+        // PN_CHARS/'.'.
+        for prefix in ["-lead", ".lead", "a b", "a\tb", "a:b", "<urn:x>", "a/b"] {
+            assert!(!is_valid_blank_node_label_prefix(prefix), "{prefix:?}");
+        }
+    }
+
+    /// Every legal prefix, concatenated in front of every one of this
+    /// workspace's fixed mint stems plus a decimal counter, must produce a
+    /// full legal `BLANK_NODE_LABEL` -- the property the prefix check exists
+    /// to guarantee.
+    #[test]
+    fn legal_prefix_always_yields_a_legal_minted_label() {
+        const STEMS: &[&str] = &["c", "bnode", "lc"];
+        for prefix in ["", "f", "fTag_", "f-3c1a2d_", "trailing.", "0abc", "日本"] {
+            assert!(is_valid_blank_node_label_prefix(prefix), "{prefix:?}");
+            for stem in STEMS {
+                for n in [0u64, 1, 42] {
+                    let minted = format!("{prefix}{stem}{n}");
+                    assert!(
+                        is_valid_blank_node_label(&minted),
+                        "prefix {prefix:?} + stem {stem:?} + {n} = {minted:?}"
+                    );
+                }
+            }
         }
     }
 

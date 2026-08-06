@@ -156,10 +156,7 @@ pub(crate) fn mint_blank(
         };
     }
     *counter += 1;
-    let fresh = match prefix {
-        Some(prefix) => format!("{prefix}c{counter}"),
-        None => format!("c{counter}"),
-    };
+    let fresh = crate::eval::minted_label(prefix, "c", *counter);
     blanks.insert(template_label.to_owned(), fresh.clone());
     TermValue::Blank {
         label: fresh,

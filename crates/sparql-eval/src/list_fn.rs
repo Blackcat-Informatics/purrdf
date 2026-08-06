@@ -199,10 +199,11 @@ fn materialize_list<D: DatasetView + Sync>(
             ctx.bnode_counter += 1;
             // Honors the deterministic mint prefix like every other
             // `bnode_counter` mint; `None` keeps the exact `lc{n}` spelling.
-            let label = match ctx.bnode_mint_prefix.as_deref() {
-                Some(prefix) => format!("{prefix}lc{}", ctx.bnode_counter),
-                None => format!("lc{}", ctx.bnode_counter),
-            };
+            let label = crate::eval::minted_label(
+                ctx.bnode_mint_prefix.as_deref(),
+                "lc",
+                ctx.bnode_counter,
+            );
             TermValue::Blank {
                 label,
                 scope: BlankScope::DEFAULT,

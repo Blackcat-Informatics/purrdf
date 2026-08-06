@@ -489,7 +489,9 @@ impl NativeSparqlEngine {
             ctx = ctx.with_user_functions(registry);
         }
         if let Some(prefix) = options.bnode_mint_prefix {
-            ctx = ctx.with_bnode_mint_prefix(prefix);
+            ctx = ctx.with_bnode_mint_prefix(prefix).map_err(|e| {
+                RdfDiagnostic::error("native-sparql-bnode-mint-prefix", e.to_string())
+            })?;
         }
         let evaluated = match options.prebinding {
             ShaclPrebinding::Applied => {
@@ -1112,7 +1114,9 @@ impl NativeSparqlEngine {
             ctx = ctx.with_user_functions(registry);
         }
         if let Some(prefix) = options.bnode_mint_prefix {
-            ctx = ctx.with_bnode_mint_prefix(prefix);
+            ctx = ctx.with_bnode_mint_prefix(prefix).map_err(|e| {
+                RdfDiagnostic::error("native-sparql-bnode-mint-prefix", e.to_string())
+            })?;
         }
         let outcome = match options.prebinding {
             ShaclPrebinding::Applied => {
