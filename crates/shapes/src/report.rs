@@ -293,7 +293,25 @@ impl ValidationReport {
             }
         }
 
+        // `freeze` only rejects structural violations (out-of-range term ids, a
+        // literal subject, a non-IRI predicate/graph name, reifier/annotation
+        // targets that are not triple terms, triple-term cycles) — none of which
+        // this builder can produce: every quad above is pushed with a fixed IRI
+        // predicate and a well-formed subject/object built from validated report
+        // data. Blank-node LABEL content is never checked here; it is opaque to
+        // the IR and is escaped, never rejected, at codec egress (see below).
         let dataset = builder.freeze().expect("report quads freeze into the IR");
+        // `serialize_dataset` is `Result` for two reasons that both provably do
+        // not apply here: (1) `classify(media_type)` can reject an unknown media
+        // type, but `"application/n-quads"` is a constant, always-valid literal;
+        // (2) the interner can fail on a reifier target that is not a triple term
+        // or a literal datatype that is not an IRI, but this dataset never
+        // populates the reifier/annotation side table and every literal is built
+        // from `RdfLiteral::typed`/`simple`, which always carry an IRI datatype.
+        // A blank label illegal in the N-Triples `BLANK_NODE_LABEL` grammar
+        // (e.g. `a×b`, a C0 control) is escaped at intern time, never refused —
+        // see `to_ntriples_survives_hostile_blank_labels_in_focus_nodes` below,
+        // which proves this claim against exactly that hostile input.
         let buf = serialize_dataset(
             &dataset,
             "application/n-quads",
@@ -631,6 +649,76 @@ mod tests {
         assert_eq!(
             parsed, expected,
             "round-trip tuples must match original tuples"
+        );
+    }
+
+    /// Regression: a SHACL validation report whose focus nodes are blank nodes
+    /// with labels illegal in EVERY native text syntax — `a×b` (out-of-alphabet
+    /// `BLANK_NODE_LABEL` byte) and `bad\u{1f}label` (a C0 control) — must still
+    /// serialize to valid, re-parseable N-Triples. Before the blank-label escape-
+    /// at-egress fix, `to_ntriples()` panicked (`.expect`) on exactly this input:
+    /// the focus node came straight from data PurRDF itself had parsed, so the
+    /// SHACL engine could not have rejected it upstream.
+    ///
+    /// The data graph is built through the `RdfDatasetBuilder` API (never through
+    /// N-Triples/Turtle text) because a hostile label like `a×b` is not
+    /// expressible in the `BLANK_NODE_LABEL` text grammar in the first place —
+    /// exactly the class of value that only round-trips through the IR itself
+    /// (e.g. a GTS-backed store, or SHACL-SPARQL `BIND`/`CONSTRUCT` output).
+    #[test]
+    fn to_ntriples_survives_hostile_blank_labels_in_focus_nodes() {
+        use ::purrdf::{RdfQuad, RdfTerm};
+
+        let hostile_labels = ["a\u{d7}b", "bad\u{1f}label"];
+
+        let mut builder = RdfDatasetBuilder::new();
+        for label in hostile_labels {
+            builder.push_owned_quad(&RdfQuad::new(
+                RdfTerm::blank_node(label),
+                rdf::TYPE,
+                RdfTerm::iri("http://example.org/Thing"),
+            ));
+        }
+        let data = builder
+            .freeze()
+            .expect("hostile blank labels are opaque IR content, not a structural violation");
+
+        let shapes_ttl = "\
+            @prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+            @prefix ex: <http://example.org/> .\n\
+            ex:ThingShape a sh:NodeShape ;\n\
+                sh:targetClass ex:Thing ;\n\
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .\n";
+        let shapes = crate::engine::parse_shapes(shapes_ttl).expect("shapes must parse");
+
+        let report = crate::engine::validate_dataset(data.as_ref(), &shapes)
+            .expect("validation over a well-formed dataset must not hard-fail");
+        assert!(
+            !report.conforms,
+            "both hostile-labelled focus nodes are missing ex:required"
+        );
+        assert_eq!(report.results.len(), hostile_labels.len());
+
+        // The actual regression: this must not panic, regardless of how hostile
+        // the blank labels embedded in the report are.
+        let nt = report.to_ntriples();
+
+        // Prove the claim: re-parse the emitted text as N-Triples. A hostile
+        // label that leaked through unescaped would break the grammar here.
+        let reparsed = ::purrdf::parse_dataset(nt.as_bytes(), "application/n-triples", None)
+            .expect("to_ntriples() output must be valid, re-parseable N-Triples");
+        assert!(
+            reparsed.quad_count() > 0,
+            "re-parsed report must carry the emitted triples"
+        );
+
+        // The result tuples must still round-trip identically through text.
+        let parsed =
+            tuples_from_ntriples(&nt).expect("N-Triples from to_ntriples() must parse cleanly");
+        assert_eq!(
+            parsed,
+            report.result_tuples(),
+            "round-trip tuples must match original tuples even with hostile blank labels"
         );
     }
 
