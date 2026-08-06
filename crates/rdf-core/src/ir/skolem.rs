@@ -85,9 +85,11 @@ pub const GENID_WELL_KNOWN_PATH: &str = "/.well-known/genid/";
 #[non_exhaustive]
 pub enum SkolemError {
     /// The caller-supplied authority cannot prefix an IRI: empty, whitespace or
-    /// control characters, characters the IRI grammar forbids, no scheme, or a
-    /// trailing `/` (the operation supplies the path separator itself). PurRDF
-    /// hardcodes no default authority, so there is no fallback.
+    /// control characters, characters the IRI grammar forbids, a `#` or `?`
+    /// (either would land the minted genid path inside a fragment or query
+    /// string rather than a well-known path), no scheme, or a trailing `/`
+    /// (the operation supplies the path separator itself). PurRDF hardcodes no
+    /// default authority, so there is no fallback.
     InvalidAuthority {
         /// The authority exactly as supplied.
         authority: Box<str>,
@@ -190,6 +192,18 @@ fn genid_prefix(authority: &str) -> Result<String, SkolemError> {
         .any(|c| matches!(c, '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`' | '\\'))
     {
         return Err(refuse("it contains a character the IRI grammar forbids"));
+    }
+    if authority.contains('#') {
+        return Err(refuse(
+            "it contains '#' (the genid path would land inside the fragment, not a well-known \
+             path)",
+        ));
+    }
+    if authority.contains('?') {
+        return Err(refuse(
+            "it contains '?' (the genid path would land inside the query string, not a \
+             well-known path)",
+        ));
     }
     let Some(colon) = authority.find(':') else {
         return Err(refuse("it has no IRI scheme (no ':')"));
@@ -599,10 +613,10 @@ fn existing_blanks(ds: &RdfDataset) -> BTreeSet<(Box<str>, BlankScope)> {
 ///
 /// # Errors
 /// [`SkolemError::InvalidAuthority`] if `authority` is empty, carries
-/// whitespace/control or IRI-forbidden characters, has no scheme, or ends with
-/// `/`; [`SkolemError::ReservedGenid`] if the dataset already carries an IRI
-/// under `{authority}/.well-known/genid/` (skolemizing it would make the
-/// operation non-invertible).
+/// whitespace/control or IRI-forbidden characters, carries a `#` or `?`, has
+/// no scheme, or ends with `/`; [`SkolemError::ReservedGenid`] if the dataset
+/// already carries an IRI under `{authority}/.well-known/genid/` (skolemizing
+/// it would make the operation non-invertible).
 pub fn skolemize(dataset: &RdfDataset, authority: &str) -> Result<RdfDataset, SkolemError> {
     let prefix = genid_prefix(authority)?;
     rebuild_dataset(dataset, &mut Skolemizer { prefix })
@@ -840,6 +854,8 @@ mod tests {
             "https://example.org/",
             "http://exa mple.org",
             "http://x<y>",
+            "https://example.org#frag",
+            "https://example.org?q=1",
         ] {
             assert!(
                 matches!(
