@@ -13,14 +13,15 @@
 //! native [`purrdf_rdf::canonical_flat_nquads`], the same comparator the
 //! production native canonicalizer wraps.
 //!
-//! # Single generator, three codecs ( — native only)
+//! # One generator family, four codec paths ( — native only)
 //!
-//! One generator authors a frozen [`RdfDataset`] fixture; the native text codecs
+//! One generator family authors frozen [`RdfDataset`] fixtures; the native text codecs
 //! ([`purrdf_rdf::serialize_dataset`] / [`purrdf_rdf::parse_dataset`]) serialize and
-//! re-parse it for N-Quads and TriG, and the GTS fold/unfold path covers the third
-//! codec.  removed oxigraph, so this gate now exercises the native codecs
-//! against the native RDFC-1.0 comparator directly (it is no longer a cross-check
-//! against an independent oxigraph implementation — the native engine is the sole
+//! re-parse them for N-Quads and TriG, the GTS fold/unfold path covers the third
+//! codec, and an NCName-restricted generator drives the RDF/XML round-trip. With
+//! oxigraph removed, this gate exercises the native codecs against the native
+//! RDFC-1.0 comparator directly (it is no longer a cross-check against an
+//! independent oxigraph implementation — the native engine is the sole
 //! authority). The native text codec's own isomorphism round-trips additionally live
 //! in `crates/rdf/src/native_codecs/mod.rs`.
 //!
@@ -100,13 +101,40 @@ fn arb_iri() -> impl Strategy<Value = String> {
     "[a-z][a-z0-9]{0,6}".prop_map(|s| format!("https://example.org/{s}"))
 }
 
+/// A handful of non-ASCII `PN_CHARS_BASE` starters, exercising the exact
+/// Unicode ranges of the W3C `BLANK_NODE_LABEL` production (Latin-1 letters,
+/// combining-accent precomposed letters, CJK).
+fn arb_pn_chars_base_nonascii() -> impl Strategy<Value = &'static str> {
+    prop::sample::select(vec!["ü", "é", "日", "本", "ñ"])
+}
+
+/// The FULL legal `BLANK_NODE_LABEL` surface: leading lowercase letter, leading
+/// digit, leading underscore, interior dots (never trailing), interior hyphens,
+/// and non-ASCII `PN_CHARS_BASE` starters. Every generated label satisfies
+/// [`purrdf_rdf::blank_label::is_valid_blank_node_label`] (proved by
+/// `bnode_label_generator_is_in_contract` below).
 fn arb_bnode_label() -> impl Strategy<Value = String> {
-    "[a-z][a-z0-9]{0,6}".prop_map(String::from)
+    prop_oneof![
+        // Plain lowercase ASCII.
+        "[a-z][a-z0-9]{0,6}".prop_map(String::from),
+        // Leading digit (legal for BLANK_NODE_LABEL, illegal for NCName).
+        "[0-9][a-z0-9]{0,6}".prop_map(String::from),
+        // Leading underscore (PN_CHARS_U).
+        "_[a-z0-9]{0,6}".prop_map(String::from),
+        // Interior dot — legal mid-label, never trailing (the tail class
+        // excludes '.', so the final character is always PN_CHARS).
+        "[a-z][a-z0-9]{0,2}\\.[a-z0-9]{1,3}".prop_map(String::from),
+        // Interior hyphen (PN_CHARS includes '-').
+        "[a-z][a-z0-9]{0,2}-[a-z0-9]{1,3}".prop_map(String::from),
+        // Non-ASCII PN_CHARS_BASE starter with an ASCII tail.
+        (arb_pn_chars_base_nonascii(), "[a-z0-9]{0,4}")
+            .prop_map(|(head, tail)| format!("{head}{tail}")),
+    ]
 }
 
 fn arb_text() -> impl Strategy<Value = String> {
     // Printable ASCII without quote/backslash/control chars so GTS and the text codecs
-    // escaping cannot diverge; widening this is a follow-up, not a v1 concern.
+    // escaping cannot diverge.
     "[A-Za-z0-9._-]{0,12}".prop_map(String::from)
 }
 
@@ -220,6 +248,40 @@ fn arb_dataset_star() -> impl Strategy<Value = std::sync::Arc<RdfDataset>> {
     prop::collection::vec(quad, 0..16).prop_map(dataset_from_quads)
 }
 
+/// NCName-LEGAL blank labels for the RDF/XML round-trip: letter or underscore
+/// start (never a digit — `rdf:nodeID` values are XML `NCName`s), ASCII tails,
+/// interior hyphens and interior dots. ASCII-only by the codec's own contract:
+/// the RDF/XML PARSER enforces a deliberately ASCII-narrow ingress label
+/// alphabet (see `validate_blank_label` in `native_codecs/rdfxml.rs`), so a
+/// round-trippable label must sit in the intersection of the NCName egress
+/// alphabet and that ingress contract. Non-ASCII `PN_CHARS_BASE` coverage
+/// lives in [`arb_bnode_label`] for the text codecs.
+fn arb_ncname_label() -> impl Strategy<Value = String> {
+    prop_oneof![
+        "[a-z][a-z0-9]{0,6}".prop_map(String::from),
+        "_[a-z0-9]{0,6}".prop_map(String::from),
+        "[a-z][a-z0-9]{0,2}-[a-z0-9]{1,3}".prop_map(String::from),
+        "[a-z][a-z0-9]{0,2}\\.[a-z0-9]{1,3}".prop_map(String::from),
+    ]
+}
+
+/// Dataset over the RDF/XML-faithful surface: default graph only (RDF/XML is a
+/// single-graph syntax), no quoted triples (star-incapable), and blank labels
+/// drawn from the NCName-legal generator.
+fn arb_dataset_rdfxml() -> impl Strategy<Value = std::sync::Arc<RdfDataset>> {
+    let subject = prop_oneof![
+        arb_iri().prop_map(RdfTerm::iri),
+        arb_ncname_label().prop_map(RdfTerm::blank_node),
+    ];
+    let object = prop_oneof![
+        arb_iri().prop_map(RdfTerm::iri),
+        arb_ncname_label().prop_map(RdfTerm::blank_node),
+        arb_literal().prop_map(RdfTerm::literal),
+    ];
+    let quad = (subject, arb_iri(), object).prop_map(|(s, p, o)| RdfQuad::new(s, p, o));
+    prop::collection::vec(quad, 0..16).prop_map(dataset_from_quads)
+}
+
 // ── Config ──────────────────────────────────────────────────────────────────────
 
 fn config() -> ProptestConfig {
@@ -273,4 +335,175 @@ proptest! {
             canonical(&flat(after.dataset.as_ref()))
         );
     }
+
+    /// The blank-label generator itself is in-contract: every label it emits is a
+    /// legal `BLANK_NODE_LABEL` under the exact egress alphabet.
+    #[test]
+    fn bnode_label_generator_is_in_contract(label in arb_bnode_label()) {
+        prop_assert!(
+            purrdf_rdf::blank_label::is_valid_blank_node_label(&label),
+            "generated label is outside the BLANK_NODE_LABEL contract: {label:?}"
+        );
+    }
+
+    /// The NCName-label generator is in-contract for BOTH alphabets it must
+    /// satisfy: the XML `NCName` grammar (RDF/XML `rdf:nodeID`) and the
+    /// `BLANK_NODE_LABEL` grammar (so the same fixtures stay text-codec-legal).
+    #[test]
+    fn ncname_label_generator_is_in_contract(label in arb_ncname_label()) {
+        prop_assert!(
+            purrdf_rdf::blank_label::is_valid_ncname(&label),
+            "generated label is outside the NCName contract: {label:?}"
+        );
+        prop_assert!(
+            purrdf_rdf::blank_label::is_valid_blank_node_label(&label),
+            "generated label is outside the BLANK_NODE_LABEL contract: {label:?}"
+        );
+    }
+
+    /// RDF/XML: serialize → parse round-trips the same canonical quad set for
+    /// NCName-legal blank labels (letters/underscore start).
+    #[test]
+    fn rdfxml_roundtrip(dataset in arb_dataset_rdfxml()) {
+        let bytes = serialize(dataset.as_ref(), NativeRdfFormat::RdfXml);
+        let after = parse(&bytes, NativeRdfFormat::RdfXml);
+        prop_assert_eq!(canonical(&flat(dataset.as_ref())), canonical(after.as_ref()));
+    }
+}
+
+// ── Named regressions: dotted labels at the lexer hazard positions ──────────────
+
+/// The distinct blank-node labels of a dataset (owned rendering, i.e. the
+/// scope-qualified label the serializer writes).
+fn distinct_blank_labels(dataset: &RdfDataset) -> std::collections::BTreeSet<String> {
+    let mut labels = std::collections::BTreeSet::new();
+    for quad in dataset.owned_quads() {
+        for term in [&quad.subject, &quad.object] {
+            if let RdfTerm::BlankNode(label) = term {
+                labels.insert(label.clone());
+            }
+        }
+    }
+    labels
+}
+
+/// One default-graph quad whose subject blank carries the raw label `a.b`.
+fn dotted_label_dataset() -> std::sync::Arc<RdfDataset> {
+    dataset_from_quads(vec![RdfQuad::new(
+        RdfTerm::blank_node("a.b"),
+        "https://example.org/p",
+        RdfTerm::iri("https://example.org/o"),
+    )])
+}
+
+/// A raw interior dot is doubled on the N-Quads wire (`_:a.b` → `_:a..b`), the
+/// doubled token lexes back as ONE blank node, and the round trip is canonical.
+#[test]
+fn nquads_dotted_label_doubles_on_wire_and_stays_one_node() {
+    let dataset = dotted_label_dataset();
+    let bytes = serialize(dataset.as_ref(), NativeRdfFormat::NQuads);
+    let text = std::str::from_utf8(&bytes).expect("N-Quads output is UTF-8");
+    assert!(
+        text.contains("_:a..b "),
+        "the raw interior dot must be doubled on the wire: {text}"
+    );
+    let after = parse(&bytes, NativeRdfFormat::NQuads);
+    assert_eq!(
+        distinct_blank_labels(after.as_ref()).len(),
+        1,
+        "the dotted label must lex as exactly one blank node"
+    );
+    assert_eq!(
+        canonical(&flat(dataset.as_ref())),
+        canonical(after.as_ref())
+    );
+}
+
+/// Round-trip `text` through `format` (parse → serialize → parse) and assert
+/// the canonical quad set is stable and the blank-node count is `blanks`.
+fn assert_text_roundtrip(text: &str, format: NativeRdfFormat, blanks: usize) {
+    let first = parse(text.as_bytes(), format);
+    assert_eq!(
+        distinct_blank_labels(first.as_ref()).len(),
+        blanks,
+        "distinct blank nodes after the first parse of {text:?}"
+    );
+    let bytes = serialize(first.as_ref(), format);
+    let second = parse(&bytes, format);
+    assert_eq!(
+        canonical(first.as_ref()),
+        canonical(second.as_ref()),
+        "re-serialization must round-trip {text:?}"
+    );
+    assert_eq!(
+        distinct_blank_labels(second.as_ref()).len(),
+        blanks,
+        "distinct blank nodes after the round trip of {text:?}"
+    );
+}
+
+/// Turtle predicate-list position: a dotted blank label immediately followed by
+/// `;` must end at the `b` (never consume the `;`), yielding one node.
+#[test]
+fn turtle_dotted_label_followed_by_semicolon() {
+    assert_text_roundtrip(
+        "<https://example.org/s> <https://example.org/p> _:a..b;<https://example.org/q> \
+         <https://example.org/o> .\n",
+        NativeRdfFormat::Turtle,
+        1,
+    );
+}
+
+/// Turtle object-list position: a dotted blank label immediately followed by `,`.
+#[test]
+fn turtle_dotted_label_followed_by_comma() {
+    assert_text_roundtrip(
+        "<https://example.org/s> <https://example.org/p> _:a..b,<https://example.org/o> .\n",
+        NativeRdfFormat::Turtle,
+        1,
+    );
+}
+
+/// Turtle bracketed property-list position: a dotted blank label immediately
+/// followed by `]` (one dotted node plus the anonymous bracket node).
+#[test]
+fn turtle_dotted_label_followed_by_close_bracket() {
+    assert_text_roundtrip(
+        "<https://example.org/s> <https://example.org/p> [ <https://example.org/q> _:a..b] .\n",
+        NativeRdfFormat::Turtle,
+        2,
+    );
+}
+
+/// TriG graph-block position: a dotted blank label immediately followed by `}`
+/// (the block's final triple may omit its `.`).
+#[test]
+fn trig_dotted_label_followed_by_close_brace() {
+    assert_text_roundtrip(
+        "<https://example.org/g> { <https://example.org/s> <https://example.org/p> _:a..b}\n",
+        NativeRdfFormat::TriG,
+        1,
+    );
+}
+
+/// The RDF/XML serializer REFUSES an NCName-illegal blank label (`rdf:nodeID`
+/// cannot carry a digit-led label) with a diagnostic naming the label.
+#[test]
+fn rdfxml_rejects_ncname_illegal_blank_label_with_diagnostic() {
+    let dataset = dataset_from_quads(vec![RdfQuad::new(
+        RdfTerm::blank_node("0abc"),
+        "https://example.org/p",
+        RdfTerm::iri("https://example.org/o"),
+    )]);
+    let err = serialize_dataset(
+        dataset.as_ref(),
+        NativeRdfFormat::RdfXml.media_type(),
+        SerializeGraph::Dataset,
+    )
+    .expect_err("an NCName-illegal blank label must be refused, never silently remapped");
+    let message = err.to_string();
+    assert!(
+        message.contains("0abc"),
+        "the diagnostic must name the offending label: {message}"
+    );
 }

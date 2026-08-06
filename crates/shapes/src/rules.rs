@@ -1683,4 +1683,179 @@ mod tests {
         let again = entail_dataset(first.as_ref(), &shapes_parsed).expect("re-entailment");
         assert_eq!(canon(&first), canon(&again));
     }
+
+    // ── Hostile-focus serialization round-trips ──────────────────────────────────
+    //
+    // End-to-end net over the full pipeline: a `sh:SPARQLRule` whose CONSTRUCT
+    // template mints anonymous property-shape blanks (`ex:property [ ex:path … ;
+    // ex:minCount 1 ]`), run against focus nodes whose renderings carry bytes
+    // OUTSIDE the blank-node-label alphabet (`#`, `:`, `/`). The minted per-focus
+    // labels must stay serializable, survive Turtle and N-Triples egress
+    // byte-clean, and re-parse into an isomorphic dataset.
+
+    /// Two focus IRIs whose renderings are hostile to naive label minting: a
+    /// fragment IRI and a colon-riddled URN.
+    const HOSTILE_FOCI_DATA: &str = "\
+        <http://example.org/p#frag> a ex:Thing .\n\
+        <urn:maplib:69e3353f-2246-4469-bb83-a068cdaa9f1c> a ex:Thing .";
+
+    /// A `sh:SPARQLRule` whose CONSTRUCT template carries an anonymous
+    /// property-shape-style blank (bracketed, so the engine mints its label).
+    const PROPERTY_MINTING_SHAPES: &str = r#"
+        ex:S a sh:NodeShape ; sh:targetClass ex:Thing ;
+          sh:rule [ a sh:SPARQLRule ; sh:construct
+            "CONSTRUCT { $this ex:property [ ex:path ex:name ; ex:minCount 1 ] } WHERE { $this a ex:Thing }" ] ."#;
+
+    /// The distinct blank-node labels of `ds`, as serialized (scope-qualified).
+    fn blank_labels(ds: &RdfDataset) -> Vec<String> {
+        let mut labels: Vec<String> =
+            quads_for_pattern_ids(ds, None, None, None, GraphFilter::AnyGraph)
+                .flat_map(|q| [q.s, q.p, q.o])
+                .filter_map(|id| {
+                    term_id_to_native(ds, id)
+                        .blank_label()
+                        .map(ToOwned::to_owned)
+                })
+                .collect();
+        labels.sort();
+        labels.dedup();
+        labels
+    }
+
+    /// Every `_:` token of a serialized document (from `_:` up to whitespace)
+    /// must be free of `<`, `>`, and raw C0 control bytes — the raw-focus-bytes
+    /// leak signature.
+    fn assert_blank_tokens_clean(bytes: &[u8], media: &str) {
+        let text = std::str::from_utf8(bytes).expect("serialized RDF text is UTF-8");
+        let mut rest = text;
+        while let Some(pos) = rest.find("_:") {
+            let token = rest[pos..]
+                .split_whitespace()
+                .next()
+                .expect("a found token has a non-whitespace head");
+            assert!(
+                !token.contains('<') && !token.contains('>') && !token.contains('\u{1f}'),
+                "{media}: blank token carries raw focus bytes: {token:?}"
+            );
+            rest = &rest[pos + 2..];
+        }
+    }
+
+    /// Serialize `entailed` to Turtle and N-Triples, assert every blank token is
+    /// byte-clean, re-parse each document, and assert the re-parsed dataset is
+    /// isomorphic to the entailed one (canonical N-Quads equality).
+    fn assert_serialization_roundtrip(entailed: &RdfDataset) {
+        for media in ["text/turtle", "application/n-triples"] {
+            let bytes =
+                ::purrdf::serialize_dataset(entailed, media, ::purrdf::SerializeGraph::Dataset)
+                    .unwrap_or_else(|e| panic!("{media} serialization must succeed: {e}"));
+            assert_blank_tokens_clean(&bytes, media);
+            let reparsed = ::purrdf::parse_dataset(&bytes, media, None)
+                .unwrap_or_else(|e| panic!("{media} re-parse must succeed: {e}"));
+            assert_eq!(
+                canon(entailed),
+                canon(reparsed.as_ref()),
+                "{media} round-trip must be isomorphic to the entailed dataset"
+            );
+        }
+    }
+
+    /// Hostile IRI foci (fragment IRI + colon-riddled URN): every minted blank
+    /// label is a legal `BLANK_NODE_LABEL`, both text egresses succeed byte-clean,
+    /// and both round-trip isomorphically.
+    #[test]
+    fn hostile_iri_foci_entail_and_roundtrip_through_text() {
+        let entailed = entail(HOSTILE_FOCI_DATA, PROPERTY_MINTING_SHAPES);
+        let labels = blank_labels(&entailed);
+        assert!(!labels.is_empty(), "the rule must mint template blanks");
+        for label in &labels {
+            assert!(
+                ::purrdf::blank_label::is_valid_blank_node_label(label),
+                "minted label must be a legal BLANK_NODE_LABEL: {label:?}"
+            );
+        }
+        assert_serialization_roundtrip(&entailed);
+    }
+
+    /// Blank-node foci (via `sh:targetObjectsOf`): the minted labels encode a
+    /// `_:` rendering and must satisfy the same egress contract end-to-end.
+    #[test]
+    fn blank_foci_entail_and_roundtrip_through_text() {
+        let data = "\
+            ex:alice ex:hasContact [ a ex:Contact ] .\n\
+            ex:bob   ex:hasContact [ a ex:Contact ] .";
+        let shapes = r#"
+            ex:S a sh:NodeShape ; sh:targetObjectsOf ex:hasContact ;
+              sh:rule [ a sh:SPARQLRule ; sh:construct
+                "CONSTRUCT { $this ex:property [ ex:path ex:name ; ex:minCount 1 ] } WHERE { $this a ex:Contact }" ] ."#;
+        let entailed = entail(data, shapes);
+        let labels = blank_labels(&entailed);
+        // Two data blanks (the contacts) plus two minted template blanks.
+        assert!(
+            labels.len() >= 4,
+            "expected data + minted blanks: {labels:?}"
+        );
+        for label in &labels {
+            assert!(
+                ::purrdf::blank_label::is_valid_blank_node_label(label),
+                "label must be a legal BLANK_NODE_LABEL: {label:?}"
+            );
+        }
+        assert_serialization_roundtrip(&entailed);
+    }
+
+    /// Two foci each mint a template blank; after Turtle egress and re-parse the
+    /// two blanks are still DISTINCT nodes (no conflation on the wire).
+    #[test]
+    fn multi_focus_minted_blanks_stay_distinct_after_serialization() {
+        let entailed = entail(HOSTILE_FOCI_DATA, PROPERTY_MINTING_SHAPES);
+        assert_eq!(
+            blank_labels(&entailed).len(),
+            2,
+            "two foci mint one template blank each"
+        );
+        let bytes = ::purrdf::serialize_dataset(
+            entailed.as_ref(),
+            "text/turtle",
+            ::purrdf::SerializeGraph::Dataset,
+        )
+        .expect("Turtle serialization must succeed");
+        let reparsed =
+            ::purrdf::parse_dataset(&bytes, "text/turtle", None).expect("re-parse must succeed");
+        assert_eq!(
+            blank_labels(reparsed.as_ref()).len(),
+            2,
+            "the two per-focus blanks must stay distinct through the wire"
+        );
+        // Each focus's ex:property edge points at its OWN blank.
+        let property_objects: FastSet<String> = triples(reparsed.as_ref())
+            .into_iter()
+            .filter(|(_, p, _)| *p == ex("property"))
+            .map(|(_, _, o)| o)
+            .collect();
+        assert_eq!(
+            property_objects.len(),
+            2,
+            "distinct foci must keep distinct property-shape blanks"
+        );
+    }
+
+    /// Two independent entailment runs serialize to byte-identical Turtle.
+    #[test]
+    fn entailed_serialization_is_byte_identical_across_runs() {
+        let serialize = || {
+            let entailed = entail(HOSTILE_FOCI_DATA, PROPERTY_MINTING_SHAPES);
+            ::purrdf::serialize_dataset(
+                entailed.as_ref(),
+                "text/turtle",
+                ::purrdf::SerializeGraph::Dataset,
+            )
+            .expect("Turtle serialization must succeed")
+        };
+        assert_eq!(
+            serialize(),
+            serialize(),
+            "independent entailment runs must serialize byte-identically"
+        );
+    }
 }
