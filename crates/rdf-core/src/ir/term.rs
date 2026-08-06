@@ -170,8 +170,9 @@ impl BlankScope {
     ///
     /// - a trailing `.s{digits}` whose preceding dot run has ODD length is the
     ///   scope suffix (the last dot of the run is the separator, the even
-    ///   remainder is doubled raw dots); `{digits}` is a bare decimal that must
-    ///   parse as a non-zero `u32`;
+    ///   remainder is doubled raw dots); `{digits}` is the CANONICAL decimal
+    ///   spelling of a non-zero `u32` — no leading zeros — because that is the
+    ///   only spelling [`qualify_label`](Self::qualify_label) ever writes;
     /// - every remaining `..` pair collapses to one raw `.`.
     ///
     /// Everything else is returned verbatim at [`BlankScope::DEFAULT`], so an
@@ -196,14 +197,25 @@ impl BlankScope {
 /// `qualified`, returning the still-dot-doubled body and the decoded scope.
 ///
 /// The suffix is recognized ONLY as a trailing `s{digits}` (a bare non-zero
-/// decimal `u32`) whose preceding dot run has ODD length: raw dots always surface
-/// doubled, so an even run means the `s{digits}` tail is part of the raw label.
+/// decimal `u32`, spelled with no leading zero) whose preceding dot run has ODD
+/// length: raw dots always surface doubled, so an even run means the `s{digits}`
+/// tail is part of the raw label.
 fn split_scope_suffix(qualified: &str) -> (&str, BlankScope) {
     let Some(dot) = qualified.rfind(".s") else {
         return (qualified, BlankScope::DEFAULT);
     };
     let digits = &qualified[dot + 2..];
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return (qualified, BlankScope::DEFAULT);
+    }
+    if digits.len() > 1 && digits.starts_with('0') {
+        // `qualify_label` never pads the scope ordinal, so "01", "00", "010", …
+        // are outside its image. Accepting them here would let a document that
+        // spells BOTH `x.s1` and `x.s01` decode to the SAME (label, scope) pair —
+        // `x.s01` would silently conflate with the genuine scope-1 qualification
+        // of `x` instead of standing as its own label at the default scope, and
+        // `unqualify_label(x.s01)` would not round-trip back through
+        // `qualify_label` (not a parse -> serialize byte fixpoint).
         return (qualified, BlankScope::DEFAULT);
     }
     let Ok(scope) = digits.parse::<u32>() else {
@@ -671,6 +683,8 @@ mod tests {
         "c1.s5",
         "x.s0",
         "x.s01",
+        "x.s00",
+        "x.s010",
         "x.s4294967296",
         "purrdfesc_a",
         "a\u{d7}b",
@@ -768,6 +782,9 @@ mod tests {
             "x..s1",         // even dot run: the tail is part of the raw label
             "x....s1",       // even dot run
             "x.s1.s2extra",  // trailing text after the digits
+            "x.s01",         // leading zero: outside qualify_label's image
+            "x.s00",         // leading zero, and the digits are all zero
+            "x.s010",        // leading zero ahead of a non-zero tail
         ] {
             let (decoded, scope) = BlankScope::unqualify_label(label);
             assert_eq!(scope, BlankScope::DEFAULT, "{label:?}");

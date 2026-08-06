@@ -631,6 +631,43 @@ mod tests {
     }
 
     #[test]
+    fn leading_zero_scope_suffix_does_not_conflate_with_canonical_suffix() {
+        // FB-3 regression: `qualify_label` never pads a scope ordinal, so `.s01`
+        // is outside its image — a document that spells BOTH the genuine
+        // scope-1 qualification `_:x.s1` and the non-canonical `_:x.s01` must
+        // keep two distinct blank nodes, not conflate `x.s01` into ("x", scope 1).
+        let nt = "_:x.s1 <https://e/p> \"a\" .\n_:x.s01 <https://e/p> \"b\" .\n";
+        let ds = parse_dataset(nt.as_bytes(), "application/n-triples", None).expect("parse");
+        assert_eq!(ds.quad_count(), 2, "two distinct blank-node subjects");
+        let canonical = ds
+            .term_id_by_blank("x", BlankScope(1))
+            .expect("`_:x.s1` decodes to (\"x\", scope 1)");
+        let verbatim = ds
+            .term_id_by_blank("x.s01", BlankScope::DEFAULT)
+            .expect("`_:x.s01` decodes verbatim at the default scope");
+        assert_ne!(
+            canonical, verbatim,
+            "the non-canonical spelling must not collapse onto the canonical one"
+        );
+
+        // The parse -> serialize -> parse cycle is a byte fixpoint: re-serializing
+        // the round-tripped dataset produces identical bytes a second time.
+        let once = serialize_dataset(&ds, "application/n-triples", SerializeGraph::Dataset)
+            .expect("serialize");
+        let reparsed = parse_dataset(&once, "application/n-triples", None).expect("re-parse");
+        let twice = serialize_dataset(&reparsed, "application/n-triples", SerializeGraph::Dataset)
+            .expect("serialize again");
+        assert_eq!(
+            once, twice,
+            "parse -> serialize round trip is a byte fixpoint"
+        );
+        assert!(
+            datasets_isomorphic(&ds, &reparsed),
+            "round trip via N-Triples must be isomorphic"
+        );
+    }
+
+    #[test]
     fn lexical_form_is_preserved_verbatim() {
         // B2 fidelity: the native path must NOT canonicalize typed literals the way the
         // oxigraph Store does. "0.70", a "+00:00" dateTime, and "1.0E0" survive
