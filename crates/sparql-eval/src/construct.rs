@@ -246,6 +246,14 @@ pub(crate) fn eval_construct<D: DatasetView + Sync>(
         .map(|(i, _)| i)
         .collect();
 
+    // Scanned ONCE before the row loop (see `template_has_blank_node`'s doc
+    // comment for why this exact condition is what makes minted-label tracking
+    // worth doing at all): a template with no blank-node position can never
+    // populate `MintTracker::minted`, which makes every `track_minted` /
+    // `track_minted_predicate` call — and the `BTreeSet` insert + `String`
+    // clone each performs — dead weight for every row of this evaluation.
+    let has_blank_positions = template_has_blank_node(template);
+
     let plan = ConstructPlan {
         template,
         dropped: &dropped,
@@ -256,7 +264,7 @@ pub(crate) fn eval_construct<D: DatasetView + Sync>(
     // Pass 1: the ordinary single-pass build, additionally recording which blank
     // labels the template MINTED versus which arrived DATA-CARRIED in bindings.
     let counter_start = ctx.bnode_counter;
-    let mut tracker = MintTracker::default();
+    let mut tracker = MintTracker::new(has_blank_positions);
     let graph = build_construct_graph(&plan, &seq, ctx, &mut tracker)?;
 
     // §16.2 freshness: a template blank must denote a blank node distinct from
@@ -432,7 +440,6 @@ fn build_construct_graph<D: DatasetView + Sync>(
 /// template minted and which arrived data-carried — classification follows the
 /// **template position** that produced each term (never the label text), so a
 /// data blank that happens to spell like a mint is still counted as data.
-#[derive(Default)]
 struct MintTracker {
     /// Labels minted at template blank-node positions this evaluation.
     minted: BTreeSet<String>,
@@ -443,9 +450,31 @@ struct MintTracker {
     /// The freshness re-pass relabeling for colliding minted labels; empty on the
     /// first pass, so the first pass rewrites nothing.
     remap: DetHashMap<String, String>,
+    /// `false` when [`template_has_blank_node`] found no `TermPattern::BlankNode`
+    /// position anywhere in the template. `track_minted`/`track_minted_predicate`
+    /// check this once per call and, when it is `false`, pass their value through
+    /// unchanged with no `BTreeSet` insert and no `String` clone: `minted` can
+    /// never become non-empty for such a template (its only insertion site is
+    /// gated on a `TermPattern::BlankNode` match), so `freshness_remap`'s
+    /// `minted.intersection(&data)` is provably empty regardless of what `data`
+    /// would have accumulated — recording it at all would be dead weight on the
+    /// hottest path of every `CONSTRUCT` row.
+    enabled: bool,
 }
 
 impl MintTracker {
+    /// A tracker for one `CONSTRUCT` evaluation. `enabled` is
+    /// `template_has_blank_node(template)`, decided once before the row loop
+    /// starts.
+    fn new(enabled: bool) -> Self {
+        Self {
+            minted: BTreeSet::new(),
+            data: BTreeSet::new(),
+            remap: DetHashMap::default(),
+            enabled,
+        }
+    }
+
     /// The deterministic freshness remap for minted labels colliding with a
     /// data-carried label, or `None` when the closed result is already fresh.
     ///
@@ -513,10 +542,38 @@ fn graph_blank_labels(graph: &RdfDataset) -> BTreeSet<String> {
 }
 
 /// Recursively collect every blank-node label inside an owned term value.
+///
+/// A label already present in `out` is left alone rather than re-inserted: a
+/// `BTreeSet<String>` insert of an already-present key still requires the
+/// caller to have an owned `String` to offer it, so `label.clone()` would run
+/// unconditionally on every call otherwise. Checking membership by `&str`
+/// first (no allocation) and cloning only on the *first* sighting of a given
+/// label matters here because a data-carried blank's label routinely repeats —
+/// the same blank subject spans every triple it participates in, within a row
+/// and often across rows — so the common case is a set that has already seen
+/// the label. This is unconditionally sound: it changes nothing about *which*
+/// labels end up in `out`, only how many times an already-recorded one is
+/// cloned to no effect.
+///
+/// A stronger-looking optimization — skip recording `data` labels entirely
+/// until the first mint happens, since [`MintTracker::freshness_remap`] only
+/// cares about labels that intersect `minted` — was considered and rejected as
+/// unsound: template positions are walked subject-then-predicate-then-object
+/// per triple, and triples in template order, so a data-carrying position
+/// (e.g. a plain variable in subject position) routinely precedes a minting
+/// position (e.g. a blank node later in the same triple, or in a later
+/// template triple) within the very same row. A data label recorded "too
+/// early" under that scheme would be silently dropped from `data`, and a mint
+/// that later collides with it would go undetected — a real freshness bug, not
+/// just a missed optimization. `MintTracker`'s sets are also accumulated
+/// across the *entire* row loop and checked only once at the end, so there is
+/// no valid "before the first mint" window to skip in the first place.
 fn collect_value_blank_labels(value: &TermValue, out: &mut BTreeSet<String>) {
     match value {
         TermValue::Blank { label, .. } => {
-            out.insert(label.clone());
+            if !out.contains(label.as_str()) {
+                out.insert(label.clone());
+            }
         }
         TermValue::Triple { s, p, o } => {
             collect_value_blank_labels(s, out);
@@ -535,7 +592,13 @@ fn collect_value_blank_labels(value: &TermValue, out: &mut BTreeSet<String>) {
 /// [`TermPattern::BlankNode`] position holds a label the mint produced; every
 /// other position's blanks (however deeply nested in a bound triple term) came
 /// from the data. Nested quoted-triple templates recurse position-by-position.
+///
+/// A no-op pass-through when `tracker.enabled` is `false` — see the field's doc
+/// comment for why that is sound, not just fast, for a blank-free template.
 fn track_minted(pattern: &TermPattern, value: TermValue, tracker: &mut MintTracker) -> TermValue {
+    if !tracker.enabled {
+        return value;
+    }
     match (pattern, value) {
         (TermPattern::BlankNode(_), TermValue::Blank { label, scope }) => {
             tracker.minted.insert(label.clone());
@@ -562,12 +625,15 @@ fn track_minted(pattern: &TermPattern, value: TermValue, tracker: &mut MintTrack
 /// The predicate-position twin of [`track_minted`]: a predicate can never be a
 /// template blank, so only a variable-bound value can carry data blanks (inside a
 /// nested triple term) worth recording.
+///
+/// A no-op pass-through when `tracker.enabled` is `false`, for the same reason
+/// as [`track_minted`].
 fn track_minted_predicate(
     pattern: &NamedNodePattern,
     value: TermValue,
     tracker: &mut MintTracker,
 ) -> TermValue {
-    if matches!(pattern, NamedNodePattern::Variable(_)) {
+    if tracker.enabled && matches!(pattern, NamedNodePattern::Variable(_)) {
         collect_value_blank_labels(&value, &mut tracker.data);
     }
     value
@@ -836,6 +902,11 @@ fn loss_node_label(code: &str, inner: &TermValue) -> String {
 /// data-carried blank labels) — after the ill-formed gate, so a skipped triple
 /// contributes no labels to the freshness accounting — and the freshness
 /// re-pass remap is applied at the minted positions on the way in.
+///
+/// `track_minted`/`track_minted_predicate` are called unconditionally here —
+/// the `template_has_blank_node` fast path lives inside `tracker.enabled`
+/// (checked by those two functions themselves, see their doc comments) rather
+/// than as a parameter here, so this signature stays independent of it.
 fn instantiate<D: DatasetView + Sync>(
     tp: &TriplePattern,
     row: &Solution<D::Id>,
@@ -864,6 +935,39 @@ fn instantiate<D: DatasetView + Sync>(
         builder.intern_value(&p),
         builder.intern_value(&o),
     ))
+}
+
+/// `true` when `template` holds a `TermPattern::BlankNode` at any subject or
+/// object position, including nested inside an RDF 1.2 quoted-triple position.
+/// Predicate positions can never hold a blank node — [`NamedNodePattern`] admits
+/// only an IRI or a variable — so only subject/object need scanning.
+///
+/// This is exactly the condition under which [`MintTracker::minted`] can ever
+/// become non-empty: [`track_minted`]'s minting arm fires only on the pattern
+/// pair `(TermPattern::BlankNode(_), TermValue::Blank { .. })`. When no such
+/// position exists anywhere in the template, `minted` is the empty set for the
+/// whole evaluation no matter how many rows run, so
+/// [`MintTracker::freshness_remap`]'s `minted.intersection(&data)` is *provably*
+/// empty regardless of what `data` holds — which makes every `data`-side
+/// classification dead weight for such a template. This is the flag that lets
+/// `instantiate` skip tracking altogether rather than merely skip acting on it.
+fn template_has_blank_node(template: &[TriplePattern]) -> bool {
+    template.iter().any(triple_pattern_has_blank_node)
+}
+
+/// The [`TriplePattern`] half of [`template_has_blank_node`]'s scan.
+fn triple_pattern_has_blank_node(tp: &TriplePattern) -> bool {
+    term_pattern_has_blank_node(&tp.subject) || term_pattern_has_blank_node(&tp.object)
+}
+
+/// The [`TermPattern`] half of [`template_has_blank_node`]'s scan, recursing
+/// through nested quoted-triple positions.
+fn term_pattern_has_blank_node(term: &TermPattern) -> bool {
+    match term {
+        TermPattern::BlankNode(_) => true,
+        TermPattern::Triple(inner) => triple_pattern_has_blank_node(inner),
+        TermPattern::NamedNode(_) | TermPattern::Literal(_) | TermPattern::Variable(_) => false,
+    }
 }
 
 #[cfg(test)]

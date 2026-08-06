@@ -26,16 +26,27 @@
 //! - `g_order_by_limit`   — whole-relation ORDER BY (numeric DESC, tiebreak) + LIMIT.
 //! - `h_distinct_dept`    — SELECT DISTINCT collapsing 30k rows to 200 keys, the
 //!   entry-API dedup path in `modifier.rs`.
+//! - `i_construct_blank_free` — a `CONSTRUCT` template with NO blank-node position,
+//!   over 30k rows each carrying a **data** blank object (`ex:note`). Exercises
+//!   `construct.rs::instantiate`'s fast path: `MintTracker::minted` can never become
+//!   non-empty for this template, so `track_minted`/`track_minted_predicate` are
+//!   skipped outright rather than run only to record dead-weight `data` labels.
+//! - `j_construct_blank_bearing` — the SAME `WHERE`, but the template mints a fresh
+//!   blank node per row, so the tracked path (§16.2 freshness bookkeeping) runs for
+//!   real. Comparing this against `i_construct_blank_free` at equal row/data-blank
+//!   volume is what makes the fast path's savings visible in the report.
 //!
 //! Report-only, `cargo bench -p purrdf-sparql-eval --bench query_eval` (the
-//! `make bench` lane) — excluded from `make check`.
+//! `make bench` lane) — excluded from `make check`. Timings are not asserted;
+//! this target documents relative cost, it does not gate it.
 
 use std::sync::Arc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
 use purrdf_core::{
-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest, SparqlResult,
+    BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest,
+    SparqlResult,
 };
 use purrdf_sparql_eval::NativeSparqlEngine;
 
@@ -59,6 +70,9 @@ const EX: &str = "https://example.org/";
 /// - `ex:knows` ×3 (ring +1, +17, +97)           (90k rows — the hot predicate)
 /// - `ex:email "p{i}@example.org"` for `i % 10 == 0` (3k rows — the sparse predicate)
 /// - `ex:reportsTo ex:person{(i-1)/2}` for `i>0` (30k-1 rows — a binary tree, depth ~15)
+/// - `ex:note _:note{i}`                          (30k rows — a DATA-carried blank
+///   object per person, one distinct blank per row; feeds the `i_construct_blank_free`
+///   / `j_construct_blank_bearing` CONSTRUCT cases)
 fn people_dataset() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
     let rdf_type = b.intern_iri(RDF_TYPE);
@@ -71,6 +85,7 @@ fn people_dataset() -> Arc<RdfDataset> {
     let p_knows = b.intern_iri(&format!("{EX}knows"));
     let p_email = b.intern_iri(&format!("{EX}email"));
     let p_reports = b.intern_iri(&format!("{EX}reportsTo"));
+    let p_note = b.intern_iri(&format!("{EX}note"));
 
     let people: Vec<_> = (0..PEOPLE)
         .map(|i| b.intern_iri(&format!("{EX}person{i}")))
@@ -111,6 +126,9 @@ fn people_dataset() -> Arc<RdfDataset> {
         if i > 0 {
             b.push_quad(s, p_reports, people[(i - 1) / 2], None);
         }
+
+        let note = b.intern_blank(&format!("note{i}"), BlankScope::DEFAULT);
+        b.push_quad(s, p_note, note, None);
     }
 
     b.freeze().expect("freeze people dataset")
@@ -193,6 +211,28 @@ SELECT DISTINCT ?d WHERE {
   ?p ex:dept ?d .
 }";
 
+/// (i) `CONSTRUCT` with a BLANK-FREE template over 30k rows that each carry a
+/// DATA blank (`ex:note`) in object position. The template mints nothing —
+/// `?p`/`?n` are both plain variables — so `construct.rs::instantiate` takes the
+/// untracked fast path: `MintTracker::minted` can never become non-empty for
+/// this template, so no label is ever inserted into either tracker set.
+const Q_I: &str = "\
+PREFIX ex: <https://example.org/>
+CONSTRUCT { ?p ex:related ?n } WHERE {
+  ?p ex:note ?n .
+}";
+
+/// (j) The same `WHERE` as (i), but the template MINTS a fresh blank node per
+/// row instead of carrying the data blank through. Same row/data-blank volume
+/// as (i), but every row now runs the full §16.2 freshness bookkeeping
+/// (`track_minted` populates `MintTracker::minted`, and the eventual
+/// `freshness_remap` check actually has something to intersect).
+const Q_J: &str = "\
+PREFIX ex: <https://example.org/>
+CONSTRUCT { ?p ex:related _:x } WHERE {
+  ?p ex:note ?n .
+}";
+
 /// The full case list as `(criterion id, query text, minimum expected rows)`.
 /// The row floor is a sanity check that every case does real work (an empty
 /// result would silently benchmark a no-op plan).
@@ -205,6 +245,8 @@ const CASES: &[(&str, &str, usize)] = &[
     ("f_path_transitive", Q_F, PEOPLE - 1),
     ("g_order_by_limit", Q_G, 10),
     ("h_distinct_dept", Q_H, 200),
+    ("i_construct_blank_free", Q_I, PEOPLE),
+    ("j_construct_blank_bearing", Q_J, PEOPLE),
 ];
 
 /// Run one query end-to-end through the engine, returning its solution count.
@@ -221,7 +263,8 @@ fn run(engine: &NativeSparqlEngine, ds: &Arc<RdfDataset>, query: &str) -> usize 
         .expect("query evaluates");
     match result {
         SparqlResult::Solutions { rows, .. } => rows.len(),
-        SparqlResult::Boolean(_) | SparqlResult::Graph(_) => 0,
+        SparqlResult::Graph(graph) => graph.quad_count(),
+        SparqlResult::Boolean(_) => 0,
     }
 }
 
