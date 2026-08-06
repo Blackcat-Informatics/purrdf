@@ -78,6 +78,25 @@ fn label_between<'a>(text: &'a str, open: &str, close: &str) -> &'a str {
     &rest[..end]
 }
 
+/// Every blank-node label a document wrote, in order, extracted between each
+/// successive `open`/`close` pair — the multi-row generalization of
+/// [`label_between`], used where a document carries more than one binding and
+/// the assertion needs each row's label rather than just the first.
+fn all_labels_between<'a>(text: &'a str, open: &str, close: &str) -> Vec<&'a str> {
+    let mut labels = Vec::new();
+    let mut cursor = 0usize;
+    while let Some(rel_start) = text[cursor..].find(open) {
+        let start = cursor + rel_start + open.len();
+        let Some(rel_end) = text[start..].find(close) else {
+            break;
+        };
+        let end = start + rel_end;
+        labels.push(&text[start..end]);
+        cursor = end + close.len();
+    }
+    labels
+}
+
 #[test]
 fn every_writer_emits_a_legal_blank_node_label() {
     let provenance = ResultProvenance::default();
@@ -190,19 +209,33 @@ fn distinct_blank_nodes_stay_distinct_in_every_writer() {
         aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
     };
 
-    for (name, bytes) in [
-        ("TSV", to_tsv(&result, &provenance).expect("TSV").bytes),
-        ("CSV", to_csv(&result, &provenance).expect("CSV").bytes),
-        ("JSON", to_json(&result, &provenance).expect("JSON").bytes),
-        ("XML", to_xml(&result, &provenance).expect("XML").bytes),
+    let tsv = text_of(to_tsv(&result, &provenance).expect("TSV").bytes);
+    let csv = text_of(to_csv(&result, &provenance).expect("CSV").bytes);
+    let json = text_of(to_json(&result, &provenance).expect("JSON").bytes);
+    let xml = text_of(to_xml(&result, &provenance).expect("XML").bytes);
+
+    for (name, labels) in [
+        ("TSV", all_labels_between(&tsv, "_:", "\n")),
+        ("CSV", all_labels_between(&csv, "_:", "\r\n")),
+        (
+            "JSON",
+            all_labels_between(&json, "\"bnode\",\"value\":\"", "\""),
+        ),
+        ("XML", all_labels_between(&xml, "<bnode>", "</bnode>")),
     ] {
-        let text = text_of(bytes);
-        let first = text
-            .find("purrdfesc_a_000020b")
-            .unwrap_or_else(|| panic!("{name} lost the escaped label: {text}"));
-        assert!(
-            text[first + 1..].contains("purrdfesc_"),
-            "{name} must emit two DISTINCT escaped labels: {text}"
+        assert_eq!(
+            labels.len(),
+            2,
+            "{name} must emit exactly two blank-node labels, one per row: {labels:?}"
+        );
+        // Extracting the two labels (rather than just counting `purrdfesc_`
+        // occurrences) is the load-bearing part of this assertion: a
+        // non-injective escape could still print `purrdfesc_` twice while
+        // collapsing both rows onto the SAME label.
+        assert_ne!(
+            labels[0], labels[1],
+            "{name} must emit two DISTINCT escaped labels, not collide the illegal \
+             label's escape with the already-escaped-looking legal label: {labels:?}"
         );
     }
 }
