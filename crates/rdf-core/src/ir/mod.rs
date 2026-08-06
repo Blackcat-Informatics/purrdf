@@ -44,6 +44,10 @@ pub mod paged;
 // The succinct, dependency-free dataset pack. Its builder/view/restore surface is
 // public; the bit-packing implementation modules remain doc-hidden.
 pub mod pack;
+// Caller-invoked blank-node recourse: RDF 1.2 skolemize/deskolemize under a
+// caller-supplied authority, plus the whole-dataset term-rewrite driver that
+// `canon::canonical_relabel` shares. Never a serializer mode.
+pub mod skolem;
 pub mod term;
 pub mod validate;
 
@@ -52,8 +56,8 @@ pub use bundle::{GtsBundle, RdfEnvelope};
 pub use canon::{
     BudgetExceeded, CANON_CORPUS_DIGEST, CANON_PROFILE_ID, CANON_PROFILE_VERSION, CanonError,
     CanonHash, Canonicalized, RDFC_CALL_LIMIT, RESERVED_NAMESPACE, ReservedVocabulary,
-    TermPosition, canonicalize, canonicalize_with, check_admissible, try_canonicalize,
-    try_canonicalize_with,
+    TermPosition, canonical_relabel, canonicalize, canonicalize_with, check_admissible,
+    try_canonicalize, try_canonicalize_with,
 };
 pub use compare::{DatasetDiff, dataset_diff, datasets_isomorphic};
 pub use dataset::{
@@ -76,4 +80,5 @@ pub use paged::{
     PagedQueryView, SubsetPageProvider,
 };
 pub use pipeline_bundle::{HandleEntry, HandleKey, PipelineBundle, PipelineBundleError};
+pub use skolem::{GENID_WELL_KNOWN_PATH, SkolemError, deskolemize, skolemize};
 pub use term::{BlankScope, TermId, TermValue};

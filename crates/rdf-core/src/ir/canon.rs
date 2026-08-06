@@ -82,7 +82,8 @@ use std::fmt::Write as _;
 use sha2::{Digest, Sha256, Sha384};
 
 use super::dataset::{RdfDataset, TermRef};
-use super::term::TermId;
+use super::skolem::{TermMapper, rebuild_dataset};
+use super::term::{BlankScope, TermId};
 
 /// `xsd:string` — the implicit datatype that N-Quads writes bare (no `^^<…>`).
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
@@ -257,6 +258,14 @@ pub struct Canonicalized {
     pub nquads: String,
     /// Each blank [`TermId`] mapped to its canonical label (`"c14n0"`, …) WITHOUT
     /// the leading `_:`.
+    ///
+    /// This map is the PRINCIPLED blank-label assignment: the labels are issued
+    /// purely from graph structure, so they are isomorphism-invariant (two
+    /// isomorphic datasets assign corresponding blanks the same label), and their
+    /// alphabet is ASCII alphanumerics only — legal under every constrained
+    /// egress alphabet (`BLANK_NODE_LABEL`, XML `NCName`; see
+    /// [`crate::blank_label`]). [`canonical_relabel`] applies it as a dataset
+    /// rewrite.
     pub labels: BTreeMap<TermId, Box<str>>,
 }
 
@@ -323,6 +332,103 @@ pub fn try_canonicalize_with(
     hash: CanonHash,
 ) -> Result<Canonicalized, CanonError> {
     CanonState::new(ds, hash).run_fallible()
+}
+
+/// Relabel every blank node of `ds` to its canonical `c14n{n}` label at
+/// [`BlankScope::DEFAULT`], returning a NEW frozen dataset with all other
+/// terms, quads, reifiers, annotations, named-graph declarations, and quad
+/// source locations preserved.
+///
+/// This is the "make any dataset serializable in every alphabet" recourse: the
+/// serializers hard-fail on a blank label that is illegal in the target
+/// syntax's alphabet (see [`crate::blank_label`]) rather than relabel silently,
+/// and this operation is the caller-invoked, principled fix. The `c14n{n}`
+/// labels come from [`try_canonicalize`], so they are ASCII alphanumerics
+/// (legal as `BLANK_NODE_LABEL` and as an XML `NCName` alike) and
+/// isomorphism-invariant — two isomorphic inputs relabel to the same canonical
+/// labeling, and relabeling is idempotent (relabeling a relabeled dataset
+/// changes nothing up to canonical bytes).
+///
+/// Collapsing every blank to [`BlankScope::DEFAULT`] is sound because canonical
+/// labels are already unique across the whole dataset, so no two distinct
+/// blanks can collide in the single scope.
+///
+/// A blank node that canonicalization cannot observe — a blank DECLARED as a
+/// named graph that owns no quads (declaration-only) — still gets a fresh
+/// `c14n{n}` label, continuing the canonical numbering in ascending
+/// `(label, scope)` value order, so the output never leaks a hostile label.
+///
+/// # Errors
+/// Propagates [`try_canonicalize`]'s refusals unchanged:
+/// [`CanonError::ReservedVocabulary`] if any term is an IRI in
+/// [`RESERVED_NAMESPACE`]; [`CanonError::BudgetExceeded`] on a pathologically
+/// symmetric blank graph (adversarial input never panics here).
+pub fn canonical_relabel(ds: &RdfDataset) -> Result<RdfDataset, CanonError> {
+    let canonical = try_canonicalize(ds)?;
+    // Declaration-only blank graphs are invisible to canonicalization (they own
+    // no statement), so continue the canonical numbering over them in a
+    // value-deterministic order.
+    let mut unseen: Vec<(&str, BlankScope, TermId)> = ds
+        .named_graphs()
+        .filter(|g| !canonical.labels.contains_key(g))
+        .filter_map(|g| match ds.resolve(g) {
+            TermRef::Blank { label, scope } => Some((label, scope, g)),
+            _ => None,
+        })
+        .collect();
+    unseen.sort_unstable();
+    let extra: BTreeMap<TermId, Box<str>> = unseen
+        .iter()
+        .enumerate()
+        .map(|(i, &(_, _, id))| {
+            let label = format!("{CANON_PREFIX}{}", canonical.labels.len() + i);
+            (id, label.into_boxed_str())
+        })
+        .collect();
+    rebuild_dataset(
+        ds,
+        &mut CanonicalRelabeler {
+            labels: &canonical.labels,
+            extra,
+        },
+    )
+}
+
+/// The [`canonical_relabel`] mapper: blanks take their issued `c14n{n}` label
+/// at [`BlankScope::DEFAULT`]; every other term passes through unchanged.
+struct CanonicalRelabeler<'a> {
+    /// The canonicalization's issued labels ([`Canonicalized::labels`]).
+    labels: &'a BTreeMap<TermId, Box<str>>,
+    /// Continuation labels for declaration-only blank graphs.
+    extra: BTreeMap<TermId, Box<str>>,
+}
+
+impl TermMapper for CanonicalRelabeler<'_> {
+    type Error = CanonError;
+
+    fn map_blank(
+        &mut self,
+        builder: &mut super::builder::RdfDatasetBuilder,
+        id: TermId,
+        _label: &str,
+        _scope: BlankScope,
+    ) -> Result<TermId, CanonError> {
+        let label = self
+            .labels
+            .get(&id)
+            .or_else(|| self.extra.get(&id))
+            .expect("every blank node holds a canonical or continuation label");
+        Ok(builder.intern_blank(label, BlankScope::DEFAULT))
+    }
+
+    fn map_iri(
+        &mut self,
+        builder: &mut super::builder::RdfDatasetBuilder,
+        iri: &str,
+        _iri_only: bool,
+    ) -> Result<TermId, CanonError> {
+        Ok(builder.intern_iri(iri))
+    }
 }
 
 /// Whether `ds` is admissible to canonicalization under profile
@@ -1567,7 +1673,7 @@ mod tests {
         // A wide symmetric blank ring: every blank has identical first-degree
         // structure, which is what drives the n-degree search.
         let blanks: Vec<TermId> = (0..24)
-            .map(|i| b.intern_blank(&format!("b{i}"), crate::BlankScope(0)))
+            .map(|i| b.intern_blank(&format!("b{i}"), BlankScope(0)))
             .collect();
         for w in blanks.windows(2) {
             b.push_quad(w[0], pred, w[1], None);
@@ -1917,6 +2023,138 @@ mod tests {
             ca,
             canon(&asym),
             "an asymmetric nested-triple graph must not canonicalize to the symmetric one"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // canonical_relabel: the caller-invoked recourse for egress-illegal labels
+    // -----------------------------------------------------------------------
+
+    /// The blank `(label, scope)` pairs the dataset's TERM TABLE carries.
+    fn output_blanks(ds: &RdfDataset) -> BTreeSet<(String, BlankScope)> {
+        (0..ds.term_count())
+            .filter_map(|i| match ds.resolve(TermId::from_index(i as u32)) {
+                TermRef::Blank { label, scope } => Some((label.to_owned(), scope)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A dataset whose blanks carry labels illegal in every constrained egress
+    /// alphabet, across every blank surface (quads, graph name, quoted triple,
+    /// reifier, annotation) and across scopes.
+    fn hostile_blank_dataset() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let p = iri(&mut b, "p");
+        let o = iri(&mut b, "o");
+        let bad = b.intern_blank("bad label", BlankScope::DEFAULT);
+        let ctl = b.intern_blank("ctl\u{1}byte", BlankScope::DEFAULT);
+        let uni = b.intern_blank("日本 空白", BlankScope(3));
+        let bg = b.intern_blank("graph blank", BlankScope(2));
+        b.push_quad(bad, p, ctl, None);
+        b.push_quad(uni, p, o, Some(bg));
+        let qs = b.intern_blank("quoted subject", BlankScope::DEFAULT);
+        let triple = b.intern_triple(qs, p, o);
+        b.push_quad(bad, p, triple, None);
+        let r = b.intern_blank("reifier blank", BlankScope(5));
+        b.push_reifier(r, triple);
+        b.push_annotation(r, p, ctl);
+        b.freeze().expect("valid")
+    }
+
+    #[test]
+    fn canonical_relabel_output_labels_are_exactly_the_c14n_set() {
+        use crate::blank_label::{LabelAlphabet, is_valid_label};
+        let ds = hostile_blank_dataset();
+        let canonical = canonicalize(&ds);
+        let out = canonical_relabel(&ds).expect("relabel");
+        let expected: BTreeSet<(String, BlankScope)> = canonical
+            .labels
+            .values()
+            .map(|l| (l.to_string(), BlankScope::DEFAULT))
+            .collect();
+        let got = output_blanks(&out);
+        assert_eq!(got, expected, "output blanks must be exactly the c14n set");
+        for (label, scope) in &got {
+            assert_eq!(*scope, BlankScope::DEFAULT);
+            // Legal under EVERY constrained egress alphabet (the serializer
+            // gates for Turtle-family BLANK_NODE_LABEL and RDF/XML NCName).
+            for alphabet in [
+                LabelAlphabet::BlankNodeLabel,
+                LabelAlphabet::NcName,
+                LabelAlphabet::Unconstrained,
+            ] {
+                assert!(
+                    is_valid_label(label, alphabet),
+                    "{label:?} must be legal under {alphabet:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn canonical_relabel_is_idempotent_and_isomorphism_preserving() {
+        let ds = hostile_blank_dataset();
+        let once = canonical_relabel(&ds).expect("relabel once");
+        let twice = canonical_relabel(&once).expect("relabel twice");
+        assert_eq!(
+            canonicalize(&once).nquads,
+            canonicalize(&ds).nquads,
+            "relabeling must preserve the isomorphism class"
+        );
+        assert_eq!(
+            canonicalize(&twice).nquads,
+            canonicalize(&once).nquads,
+            "relabeling a relabeled dataset must change nothing (canonical bytes)"
+        );
+        assert_eq!(
+            output_blanks(&twice),
+            output_blanks(&once),
+            "relabel twice = once, label for label"
+        );
+    }
+
+    #[test]
+    fn canonical_relabel_covers_a_declaration_only_blank_graph() {
+        use crate::blank_label::{LabelAlphabet, is_valid_label};
+        let mut b = RdfDatasetBuilder::new();
+        let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+        let seen = b.intern_blank("seen blank", BlankScope::DEFAULT);
+        b.push_quad(seen, p, o, None);
+        let _ = s;
+        // A blank named graph that owns no quads: invisible to canonicalization,
+        // still relabeled (continuation numbering).
+        let empty_graph = b.intern_blank("empty graph blank", BlankScope(4));
+        b.declare_named_graph(empty_graph);
+        let ds = b.freeze().expect("valid");
+        let out = canonical_relabel(&ds).expect("relabel");
+        let got = output_blanks(&out);
+        assert_eq!(got.len(), 2, "both blanks survive: {got:?}");
+        for (label, scope) in &got {
+            assert_eq!(*scope, BlankScope::DEFAULT);
+            assert!(label.starts_with(CANON_PREFIX), "{label:?}");
+            assert!(is_valid_label(label, LabelAlphabet::BlankNodeLabel));
+            assert!(is_valid_label(label, LabelAlphabet::NcName));
+        }
+        assert!(
+            out.named_graphs().count() >= 1,
+            "the declaration survives the rewrite"
+        );
+    }
+
+    #[test]
+    fn canonical_relabel_propagates_canonicalization_refusals() {
+        let mut b = RdfDatasetBuilder::new();
+        let (s, o) = (iri(&mut b, "s"), iri(&mut b, "o"));
+        let bad = b.intern_iri(SENTINEL_REIFIES);
+        b.push_quad(s, bad, o, None);
+        let ds = b.freeze().expect("valid");
+        assert!(
+            matches!(
+                canonical_relabel(&ds),
+                Err(CanonError::ReservedVocabulary(_))
+            ),
+            "the relabel recourse must refuse exactly what canonicalization refuses"
         );
     }
 }
