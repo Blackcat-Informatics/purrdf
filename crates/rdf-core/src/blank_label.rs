@@ -401,8 +401,9 @@ type CharRange = (u32, u32);
 
 /// `PN_CHARS_BASE` from the W3C Turtle/SPARQL grammar, which is also
 /// character-for-character the XML 1.0 `NameStartChar` production minus
-/// `':'`. Ranges are sorted and non-overlapping, which [`in_ranges`] relies
-/// on for binary search.
+/// `':'` and `'_'` (`'_'` is folded into `PN_CHARS_U` instead, see
+/// [`is_pn_chars_u`]). Ranges are sorted and non-overlapping, which
+/// [`in_ranges`] relies on for binary search.
 const PN_CHARS_BASE_RANGES: &[CharRange] = &[
     (0x0041, 0x005A),   // [A-Z]
     (0x0061, 0x007A),   // [a-z]
@@ -445,7 +446,7 @@ fn in_ranges(cp: u32, ranges: &[CharRange]) -> bool {
         .is_ok()
 }
 
-/// `PN_CHARS_BASE` (== XML `NameStartChar - ':'`).
+/// `PN_CHARS_BASE` (== XML `NameStartChar - ':' - '_'`).
 fn is_pn_chars_base(c: char) -> bool {
     in_ranges(c as u32, PN_CHARS_BASE_RANGES)
 }
