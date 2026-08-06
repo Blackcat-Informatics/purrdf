@@ -374,6 +374,19 @@ proptest! {
     /// `BLANK_NODE_LABEL` reaches the N-Triples document byte-identically (up
     /// to the scope qualification every writer applies first), so no fixture,
     /// vector or golden can churn.
+    ///
+    /// `dataset_from_quads` builds the fixture through `push_owned_quad`, the
+    /// OWNED ingress boundary — and per
+    /// [`BlankScope::unqualify_label`](purrdf_rdf::BlankScope::unqualify_label)'s
+    /// contract, `intern_owned_term_scoped` DECODES any raw label shaped like
+    /// its own `.s{n}` encoder output (e.g. the dotted generator branch can
+    /// emit `a.s1`, which decodes to `("a", scope 1)` rather than interning
+    /// literally as `("a.s1", scope 0)`). The wire form the serializer emits is
+    /// therefore whatever the owned boundary actually interned, not a bare
+    /// DEFAULT-scope qualification of the raw generated string — so the
+    /// expectation is the decode-then-requalify FIXPOINT
+    /// (`unqualify_label` then `qualify_label`), which mirrors that boundary
+    /// exactly rather than assuming every generated label survives it verbatim.
     #[test]
     fn legal_blank_labels_pass_through_unescaped(label in arb_bnode_label()) {
         let dataset = dataset_from_quads(vec![RdfQuad::new(
@@ -383,12 +396,19 @@ proptest! {
         )]);
         let bytes = serialize(dataset.as_ref(), NativeRdfFormat::NTriples);
         let text = String::from_utf8(bytes).expect("utf-8");
-        let qualified = BlankScope::DEFAULT.qualify_label(&label);
+        let (decoded, scope) = BlankScope::unqualify_label(&label);
+        let qualified = scope.qualify_label(&decoded);
         prop_assert!(text.starts_with(&format!("_:{qualified} ")), "{}", text);
     }
 
     /// The same inertness for the RDF/XML `NCName` alphabet: an in-alphabet
     /// label lands in `rdf:nodeID` verbatim.
+    ///
+    /// See `legal_blank_labels_pass_through_unescaped` above: `dataset_from_quads`
+    /// goes through the owned-ingress boundary, which decodes a raw label shaped
+    /// like the `.s{n}` scope encoding before interning it, so the expected wire
+    /// token is the decode-then-requalify fixpoint, not a bare DEFAULT-scope
+    /// qualification of the generated string.
     #[test]
     fn legal_ncname_labels_pass_through_unescaped(label in arb_ncname_label()) {
         let dataset = dataset_from_quads(vec![RdfQuad::new(
@@ -398,7 +418,8 @@ proptest! {
         )]);
         let bytes = serialize(dataset.as_ref(), NativeRdfFormat::RdfXml);
         let text = String::from_utf8(bytes).expect("utf-8");
-        let qualified = BlankScope::DEFAULT.qualify_label(&label);
+        let (decoded, scope) = BlankScope::unqualify_label(&label);
+        let qualified = scope.qualify_label(&decoded);
         prop_assert!(text.contains(&format!("rdf:nodeID=\"{qualified}\"")), "{}", text);
     }
 }
@@ -515,6 +536,42 @@ fn trig_dotted_label_followed_by_close_brace() {
         "<https://example.org/g> { <https://example.org/s> <https://example.org/p> _:a..b}\n",
         NativeRdfFormat::TriG,
         1,
+    );
+}
+
+/// The exact class that flaked `legal_blank_labels_pass_through_unescaped` /
+/// `legal_ncname_labels_pass_through_unescaped` before their fix: a raw label
+/// shaped exactly like the `.s{n}` scope encoding (`a.s1`) is a FIXPOINT of
+/// `push_owned_quad`'s decode step — `unqualify_label("a.s1")` decodes to
+/// `("a", scope 1)`, and re-qualifying that pair (`BlankScope(1).qualify_label("a")`)
+/// yields `"a.s1"` right back — so the wire token is `a.s1` in BOTH formats,
+/// not `a..s1` (the DEFAULT-scope doubled-dot spelling a naive raw-string
+/// qualification would predict). Pinned as a standalone, non-random regression
+/// so this exact class can never flake silently again.
+#[test]
+fn dotted_scope_suffix_shaped_label_is_a_decode_requalify_fixpoint() {
+    let (decoded, scope) = BlankScope::unqualify_label("a.s1");
+    assert_eq!((decoded.as_ref(), scope.ordinal()), ("a", 1));
+    assert_eq!(scope.qualify_label(&decoded), "a.s1");
+
+    let dataset = dataset_from_quads(vec![RdfQuad::new(
+        RdfTerm::blank_node("a.s1"),
+        "https://example.org/p",
+        RdfTerm::iri("https://example.org/o"),
+    )]);
+
+    let nt_bytes = serialize(dataset.as_ref(), NativeRdfFormat::NTriples);
+    let nt_text = String::from_utf8(nt_bytes).expect("utf-8");
+    assert!(
+        nt_text.starts_with("_:a.s1 "),
+        "N-Triples must emit the fixpoint token verbatim: {nt_text}"
+    );
+
+    let xml_bytes = serialize(dataset.as_ref(), NativeRdfFormat::RdfXml);
+    let xml_text = String::from_utf8(xml_bytes).expect("utf-8");
+    assert!(
+        xml_text.contains("rdf:nodeID=\"a.s1\""),
+        "RDF/XML must emit the fixpoint token verbatim: {xml_text}"
     );
 }
 
