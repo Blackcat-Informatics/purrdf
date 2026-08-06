@@ -36,8 +36,8 @@
 // ---------------------------------------------------------------------------
 pub mod gts_write;
 pub use purrdf_core::{
-    backend, bundle, content_store, dataset_view, diagnostic, fno, ir, lookaside, loss, model,
-    provenance, sssom, store, turtle, turtle_render,
+    backend, blank_label, bundle, content_store, dataset_view, diagnostic, fno, ir, lookaside,
+    loss, model, provenance, sssom, store, turtle, turtle_render,
 };
 
 pub mod gts;

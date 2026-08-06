@@ -30,6 +30,8 @@
     html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]
 
+// Blank-node label syntax shared by parser and serializer egress contracts.
+pub mod blank_label;
 pub mod bundle;
 // Narrow purrdf backend traits (P2d): term interning, parser ingress,
 // SPARQL execution, and serializer egress. PyO3-free, oxigraph-free — pure
