@@ -197,8 +197,14 @@ fn materialize_list<D: DatasetView + Sync>(
     let cells: Vec<TermValue> = (0..n)
         .map(|_| {
             ctx.bnode_counter += 1;
+            // Honors the deterministic mint prefix like every other
+            // `bnode_counter` mint; `None` keeps the exact `lc{n}` spelling.
+            let label = match ctx.bnode_mint_prefix.as_deref() {
+                Some(prefix) => format!("{prefix}lc{}", ctx.bnode_counter),
+                None => format!("lc{}", ctx.bnode_counter),
+            };
             TermValue::Blank {
-                label: format!("lc{}", ctx.bnode_counter),
+                label,
                 scope: BlankScope::DEFAULT,
             }
         })

@@ -44,7 +44,7 @@ use crate::data::{GraphFilter, ShaclData, quads_for_pattern_ids};
 use crate::engine::{FocusNode, ValidationPlan, resolve_focus_nodes};
 use crate::expression::{NodeExpr, RecursionGuard, eval_node_expr};
 use crate::shapes::{Shape, Shapes};
-use crate::term::{Term, Triple, term_id_to_native};
+use crate::term::{Term, term_id_to_native};
 
 // ── Model ───────────────────────────────────────────────────────────────────────
 
@@ -274,7 +274,7 @@ pub fn apply_rules(data: &ShaclData, shapes: &Shapes) -> Result<Arc<RdfDataset>,
     inferred.sort_by_cached_key(triple_sort_key);
 
     let mut builder = RdfDatasetBuilder::new();
-    builder.push_dataset(base.as_ref());
+    push_projection(&mut builder, base.as_ref());
     for triple in &inferred {
         push_fact(&mut builder, triple)?;
     }
@@ -417,6 +417,20 @@ fn sparql_rule_producer(
             continue;
         }
         let subs = [("this".to_owned(), focus.to_term_value())];
+        // A CONSTRUCT template blank is minted from a per-evaluation counter that
+        // resets each call, so two focus nodes would both mint `_:c1` and
+        // conflate. The evaluation therefore mints under a per-focus prefix
+        // (`{tag}_`, installed on the engine below): every minted label is
+        // spelled `{tag}_c{n}` AT MINT TIME, so distinct focus nodes mint
+        // distinct blanks while data blanks carried through CONSTRUCT variables
+        // pass through untouched — preserving their co-reference with the base
+        // graph across fixpoint rounds. The tag is deterministic, so a
+        // re-derivation in a later round produces the identical label and the
+        // fixpoint converges. The identity must be encoded injectively (a lossy
+        // sanitization would conflate foci such as `<urn:x/y>` and `<urn:x#y>`)
+        // and every byte must stay inside the serializable BLANK_NODE_LABEL
+        // alphabet, or the entailed dataset cannot round-trip.
+        let tag = focus_tag(focus);
         // SHACL-AF pre-binds `$this`, `$shapesGraph`, and `$currentShape` for a
         // `sh:SPARQLRule` CONSTRUCT, mirroring the SHACL-SPARQL constraint path.
         let graph = crate::sparql::run_construct_with_shacl_prebinding_view(
@@ -425,18 +439,12 @@ fn sparql_rule_producer(
             &subs,
             shapes_graph_iri,
             Some(&shape.id),
+            Some(&format!("{tag}_")),
         )?;
-        // A CONSTRUCT template blank is minted `_:c{n}` from a per-evaluation
-        // counter that resets each call, so two focus nodes would both mint `_:c1`
-        // and conflate. Relabel every minted blank with the focus's identity so
-        // distinct focus nodes get distinct blanks — deterministically, so a
-        // re-derivation in a later round produces the identical label and the
-        // fixpoint converges.
-        let tag = focus.to_string();
         for quad in quads_for_pattern_ids(graph.as_ref(), None, None, None, GraphFilter::AnyGraph) {
-            let s = relabel_blanks(term_id_to_native(graph.as_ref(), quad.s), &tag);
+            let s = term_id_to_native(graph.as_ref(), quad.s);
             let p = term_id_to_native(graph.as_ref(), quad.p);
-            let o = relabel_blanks(term_id_to_native(graph.as_ref(), quad.o), &tag);
+            let o = term_id_to_native(graph.as_ref(), quad.o);
             if !s.is_subject() {
                 return Err(format!(
                     "sh:SPARQLRule {rule_id} CONSTRUCT produced an illegal subject {s}"
@@ -481,17 +489,58 @@ fn conditions_hold(
     Ok(true)
 }
 
-/// Recursively rename every blank-node label in `term` by prefixing it with `tag`
-/// (a deterministic per-focus identity), preserving co-reference.
-fn relabel_blanks(term: Term, tag: &str) -> Term {
-    match term {
-        Term::BlankNode(label) => Term::BlankNode(format!("{tag}\u{1f}{label}")),
-        Term::Triple(inner) => Term::Triple(Box::new(Triple::new(
-            relabel_blanks(inner.subject, tag),
-            inner.predicate,
-            relabel_blanks(inner.object, tag),
-        ))),
-        other => other,
+/// The focus node's identity encoded into the blank-node-label alphabet.
+///
+/// Every ASCII-alphanumeric byte of the focus rendering passes through; every
+/// other byte becomes `-` plus two lowercase hex digits. The encoding is
+/// injective: `-` itself is escaped (`-2d`), so each `-` in the output opens a
+/// fixed-width escape and decoding is unambiguous — two distinct foci can never
+/// produce the same tag. `_` never appears in a tag (escaped as `-5f`), so the
+/// `{tag}_{label}` join in the mint-time prefix (`{tag}_` is installed as the
+/// evaluation's blank-mint prefix) stays bijective, and the output matches
+/// `f[A-Za-z0-9-]*`: a legal `BLANK_NODE_LABEL`, a legal `rdf:nodeID` NCName,
+/// and unambiguous with `BlankScope`'s `.s{n}` qualification.
+fn focus_tag(focus: &Term) -> String {
+    let rendered = focus.to_string();
+    let mut tag = String::with_capacity(rendered.len() + 8);
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    tag.push('f');
+    for byte in rendered.bytes() {
+        if byte.is_ascii_alphanumeric() {
+            tag.push(char::from(byte));
+        } else {
+            tag.push('-');
+            tag.push(char::from(HEX[usize::from(byte >> 4)]));
+            tag.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+    }
+    tag
+}
+
+/// Seed `builder` with the base projection's statements, keeping every blank's
+/// (scope-qualified) label at the DEFAULT blank scope.
+///
+/// Deliberately NOT [`RdfDatasetBuilder::push_dataset`]: that standardizes the
+/// source apart into a fresh blank scope, which is right when merging unrelated
+/// documents but wrong here — the rules driver re-materializes the SAME
+/// document every round, and a derived fact that references a base blank
+/// carries that blank's label ([`push_fact`] pushes owned terms at the DEFAULT
+/// scope). Re-scoping the base would sever exactly that co-reference: a rule
+/// copying a data blank through a CONSTRUCT variable would materialize a
+/// spurious fresh node instead of referencing the base one, and re-derivations
+/// of base facts containing blanks would be miscounted as new inference. The
+/// base is the SHACL projection, whose owned labels are already
+/// scope-qualified and single-scoped, so a DEFAULT-scope re-push is
+/// label-preserving and injective.
+fn push_projection(builder: &mut RdfDatasetBuilder, base: &RdfDataset) {
+    for quad in base.owned_quads() {
+        builder.push_owned_quad(&quad);
+    }
+    for reifier in base.owned_reifiers() {
+        builder.push_owned_reifier(&reifier);
+    }
+    for annotation in base.owned_annotations() {
+        builder.push_owned_annotation(&annotation);
     }
 }
 
@@ -572,12 +621,16 @@ fn build_round_base(
     };
 
     let mut builder = RdfDatasetBuilder::new();
-    builder.push_dataset(base.as_ref());
+    push_projection(&mut builder, base.as_ref());
 
+    // The shapes document's blanks are standardized apart from the data's (a
+    // fixed non-default scope — deterministic, and disjoint from the DEFAULT
+    // scope the base and the derived facts share): two documents' same-label
+    // blanks must never co-refer.
     let graph_term = RdfTerm::iri(graph_iri);
     for mut quad in shapes.shapes_dataset.owned_quads() {
         quad.graph_name = Some(graph_term.clone());
-        builder.push_owned_quad(&quad);
+        builder.push_owned_quad_scoped(&quad, ::purrdf::BlankScope(1));
     }
 
     builder.freeze().map_err(|e| e.to_string())
@@ -591,7 +644,7 @@ fn rebuild_dataset(
     original: &FastSet<[Term; 3]>,
 ) -> Result<Arc<RdfDataset>, String> {
     let mut builder = RdfDatasetBuilder::new();
-    builder.push_dataset(base.as_ref());
+    push_projection(&mut builder, base.as_ref());
     for triple in facts {
         if !original.contains(triple) {
             push_fact(&mut builder, triple)?;
@@ -1374,9 +1427,10 @@ mod tests {
     fn blank_focus_blank_minting_is_distinct_and_stable() {
         // Two DISTINCT blank nodes are the objects of ex:hasContact; a shape
         // targeting those blanks (sh:targetObjectsOf) runs a sh:SPARQLRule whose
-        // CONSTRUCT mints a fresh blank per focus and links it. `relabel_blanks` tags
-        // the minted blank with `focus.to_string()` — for a BLANK focus that tag is a
-        // `_:...`-style label, a corner the IRI-focus minting test never exercises.
+        // CONSTRUCT mints a fresh blank per focus and links it. The mint-time
+        // prefix tags the minted blank with `focus_tag(focus)`, which encodes the
+        // focus's `_:...` rendering — a corner the IRI-focus minting test never
+        // exercises.
         // We prove: (i) it works at all with a blank focus; (ii) the two blank foci
         // do NOT conflate (distinct minted blanks); (iii) re-derivation in a later
         // fixpoint round produces the identical label so the fixpoint converges and
@@ -1490,5 +1544,143 @@ mod tests {
             canon(&b),
             "isomorphic inputs (blank relabeled) must entail identically"
         );
+    }
+
+    // ── Focus tags and mint-time blank labels ────────────────────────────────────
+
+    /// The per-focus tag is injective across every focus kind — foci whose
+    /// renderings differ only in an escaped byte (`/` vs `#`, `/` vs a literal
+    /// `-2f-`) must get distinct tags — and every minted `{tag}_c{n}` label is a
+    /// serializable `BLANK_NODE_LABEL`.
+    #[test]
+    fn focus_tag_is_injective_across_focus_kinds() {
+        use crate::term::{Literal, NamedNode, Triple};
+        let foci = vec![
+            Term::NamedNode(NamedNode::new_unchecked("http://example.org/x/y")),
+            Term::NamedNode(NamedNode::new_unchecked("http://example.org/x#y")),
+            Term::NamedNode(NamedNode::new_unchecked("urn:x/y")),
+            Term::NamedNode(NamedNode::new_unchecked("urn:x-2f-y")),
+            Term::blank("b1"),
+            Term::blank("b_1"),
+            Term::Literal(Literal::new_directional_language_tagged_literal_unchecked(
+                "x",
+                "en",
+                ::purrdf::RdfTextDirection::Ltr,
+            )),
+            Term::Literal(Literal::new_typed_literal(
+                "x",
+                NamedNode::new_unchecked("http://example.org/dt"),
+            )),
+            Term::Triple(Box::new(Triple::new(
+                Term::NamedNode(NamedNode::new_unchecked("http://example.org/s")),
+                NamedNode::new_unchecked("http://example.org/p"),
+                Term::blank("o1"),
+            ))),
+        ];
+        let tags: Vec<String> = foci.iter().map(focus_tag).collect();
+        for (i, (focus, left)) in foci.iter().zip(&tags).enumerate() {
+            for (other, right) in foci.iter().zip(&tags).skip(i + 1) {
+                assert_ne!(left, right, "foci {focus} and {other} must not share a tag");
+            }
+            assert!(
+                ::purrdf::blank_label::is_valid_blank_node_label(&format!("{left}_c1")),
+                "the minted label for focus {focus} must be serializable: {left}_c1"
+            );
+        }
+    }
+
+    /// Byte sweep over the escape classes: whatever bytes the focus rendering
+    /// carries (alphanumeric, `-`, `_`, a raw C0 control, a space, multi-byte
+    /// UTF-8), the tag stays inside `f[A-Za-z0-9-]*` and distinct inputs give
+    /// distinct tags. Blank-node foci are used because their labels render raw.
+    #[test]
+    fn focus_tag_byte_sweep_stays_in_alphabet() {
+        let inputs = ["a", "Z", "9", "-", "_", "\u{1f}", " ", "é", "日"];
+        let tags: Vec<String> = inputs
+            .iter()
+            .map(|s| focus_tag(&Term::blank((*s).to_owned())))
+            .collect();
+        for (input, tag) in inputs.iter().zip(&tags) {
+            assert!(tag.starts_with('f'), "{input:?} → {tag}");
+            assert!(
+                tag[1..]
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-'),
+                "the tag must match f[A-Za-z0-9-]*: {input:?} → {tag}"
+            );
+        }
+        for (i, left) in tags.iter().enumerate() {
+            for right in &tags[i + 1..] {
+                assert_ne!(left, right, "distinct inputs must give distinct tags");
+            }
+        }
+    }
+
+    /// A minted `{tag}_c{n}` label is dot-free by construction (`.` is escaped as
+    /// `-2e`), so the `.s{n}` scope-suffix parser must never mis-split one — even
+    /// when the focus rendering itself contains a `.s{n}`-shaped substring.
+    #[test]
+    fn minted_labels_are_never_scope_split() {
+        let foci = [
+            Term::NamedNode(crate::term::NamedNode::new_unchecked(
+                "http://example.org/x.s5",
+            )),
+            Term::blank("b.s2"),
+            Term::blank("b1"),
+        ];
+        for focus in &foci {
+            let label = format!("{}_c1", focus_tag(focus));
+            assert!(!label.contains('.'), "minted labels are dot-free: {label}");
+            assert_eq!(crate::term::split_scope_suffix(&label), None, "{label}");
+        }
+        // The §16.2 freshness suffix `r{k}` is alphanumeric, so a reminted label
+        // is equally immune.
+        assert_eq!(crate::term::split_scope_suffix("fb1_c1r0"), None);
+    }
+
+    /// A `sh:SPARQLRule` carrying a DATA blank through a CONSTRUCT variable must
+    /// preserve co-reference: the derived triple references the SAME blank node
+    /// as the base triple (mint-time prefixing touches only minted blanks), the
+    /// fixpoint closes without error, and entailment is stable under repetition.
+    #[test]
+    fn sparql_rule_preserves_data_blank_co_reference() {
+        let data = "ex:alice ex:has _:contact . _:contact a ex:Contact .";
+        let shapes = r#"
+            ex:S a sh:NodeShape ; sh:targetSubjectsOf ex:has ;
+              sh:rule [ a sh:SPARQLRule ; sh:construct
+                "CONSTRUCT { $this ex:copied ?b } WHERE { $this ex:has ?b }" ] ."#;
+
+        // The fixpoint is reached without error (`entail` unwraps) and repeated
+        // entailment is byte-stable.
+        let first = entail(data, shapes);
+        let second = entail(data, shapes);
+        assert_eq!(canon(&first), canon(&second));
+
+        // RDFC canonical labels: the blank in the base ex:has triple and in the
+        // derived ex:copied triple must canonicalize to the SAME label.
+        let nq = canon(&first);
+        let object_of = |predicate: &str| -> String {
+            nq.lines()
+                .find(|line| line.contains(predicate))
+                .and_then(|line| line.split_whitespace().nth(2))
+                .unwrap_or_else(|| panic!("no triple with {predicate} in {nq}"))
+                .to_owned()
+        };
+        let has_object = object_of("ns#has>");
+        let copied_object = object_of("ns#copied>");
+        assert!(
+            has_object.starts_with("_:"),
+            "the base object is a blank: {has_object}"
+        );
+        assert_eq!(
+            has_object, copied_object,
+            "the derived triple must reference the SAME blank node as the base triple"
+        );
+
+        // Entailing the entailed dataset derives nothing new: the derived triple
+        // already co-refers with the base blank, so the closure is stable.
+        let shapes_parsed = parse_shapes(shapes);
+        let again = entail_dataset(first.as_ref(), &shapes_parsed).expect("re-entailment");
+        assert_eq!(canon(&first), canon(&again));
     }
 }

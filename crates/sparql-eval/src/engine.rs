@@ -447,6 +447,35 @@ impl NativeSparqlEngine {
         functions: Option<&crate::user_fn::UserFunctionRegistry>,
         state: &Arc<GovernorState>,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
+        self.query_governed_in_operation_with_options(
+            dataset,
+            request,
+            ShaclQueryOptions {
+                prebinding: prebind,
+                functions,
+                bnode_mint_prefix: None,
+            },
+            state,
+        )
+    }
+
+    /// [`Self::query_governed_in_operation`] with the full [`ShaclQueryOptions`]
+    /// surface — in particular a deterministic blank-mint prefix
+    /// ([`EvalCtx::with_bnode_mint_prefix`]), so a governed SHACL rules run can
+    /// give each focus node its own mint identity exactly like the ungoverned
+    /// [`Self::query_shacl_view`] path.
+    ///
+    /// # Errors
+    ///
+    /// Propagates parse and evaluation errors as an [`RdfDiagnostic`]. A tripped governor
+    /// is **not** an error and does not surface here.
+    pub fn query_governed_in_operation_with_options<D: DatasetView + Sync>(
+        &self,
+        dataset: &D,
+        request: SparqlRequest<'_>,
+        options: ShaclQueryOptions<'_>,
+        state: &Arc<GovernorState>,
+    ) -> Result<GovernedOutcome, RdfDiagnostic> {
         let prepared = self.cache.borrow_mut().prepare_with(
             request.query,
             request.base_iri,
@@ -456,10 +485,13 @@ impl NativeSparqlEngine {
             return refused;
         }
         let mut ctx = self.eval_ctx(dataset).with_governors(Arc::clone(state));
-        if let Some(registry) = functions {
+        if let Some(registry) = options.functions {
             ctx = ctx.with_user_functions(registry);
         }
-        let evaluated = match prebind {
+        if let Some(prefix) = options.bnode_mint_prefix {
+            ctx = ctx.with_bnode_mint_prefix(prefix);
+        }
+        let evaluated = match options.prebinding {
             ShaclPrebinding::Applied => {
                 evaluate_governed_with_shacl_prebinding(&prepared, request.substitutions, &mut ctx)?
             }
@@ -1048,6 +1080,49 @@ impl NativeSparqlEngine {
         Ok(materialize(outcome, &ctx))
     }
 
+    /// The one **ungoverned** SHACL-facing query entry, parameterized by
+    /// [`ShaclQueryOptions`]: selects the substitution rewrite
+    /// ([`ShaclQueryOptions::prebinding`]), optionally injects a SHACL-AF function
+    /// registry, and optionally installs a deterministic blank-mint prefix
+    /// ([`EvalCtx::with_bnode_mint_prefix`]) so every blank this evaluation mints
+    /// carries a caller-supplied identity — the seam the SHACL rules engine uses
+    /// to make distinct focus nodes mint distinct `CONSTRUCT` blanks at mint
+    /// time. With default-shaped options this behaves exactly like the narrower
+    /// entries above.
+    ///
+    /// # Errors
+    ///
+    /// Propagates parse/evaluation errors as an [`RdfDiagnostic`].
+    pub fn query_shacl_view<D: DatasetView + Sync>(
+        &self,
+        dataset: &D,
+        query: &str,
+        base_iri: Option<&str>,
+        substitutions: &[(String, TermValue)],
+        options: ShaclQueryOptions<'_>,
+    ) -> Result<SparqlResult, RdfDiagnostic> {
+        let prepared =
+            self.cache
+                .borrow_mut()
+                .prepare_with(query, base_iri, &self.parser_options)?;
+        let mut ctx = self.eval_ctx(dataset);
+        if let Some(registry) = options.functions {
+            ctx = ctx.with_user_functions(registry);
+        }
+        if let Some(prefix) = options.bnode_mint_prefix {
+            ctx = ctx.with_bnode_mint_prefix(prefix);
+        }
+        let outcome = match options.prebinding {
+            ShaclPrebinding::Applied => {
+                evaluate_with_shacl_prebinding(&prepared, substitutions, &mut ctx)?
+            }
+            ShaclPrebinding::None => {
+                evaluate_with_substitutions(&prepared, substitutions, &mut ctx)?
+            }
+        };
+        Ok(materialize(outcome, &ctx))
+    }
+
     /// Like [`SparqlEngine::query`], but with a
     /// [`RemoteQuerySource`](crate::remote::RemoteQuerySource) injected so
     /// `SERVICE` clauses resolve through it. Without this, the default
@@ -1269,6 +1344,30 @@ pub enum ShaclPrebinding {
     /// Apply the ordinary substitution rewrite: SHACL-AF node expressions,
     /// `sh:SPARQLTarget`, and every non-SHACL caller.
     None,
+}
+
+/// Per-call options for the SHACL-facing query entries
+/// ([`NativeSparqlEngine::query_shacl_view`] and
+/// [`NativeSparqlEngine::query_governed_in_operation_with_options`]).
+///
+/// Bundles the three independently optional pieces every SHACL query path
+/// selects from: which substitution rewrite to apply, whether a SHACL-AF
+/// function registry is in scope, and whether minted blank-node labels carry a
+/// deterministic caller-supplied prefix (see
+/// [`EvalCtx::with_bnode_mint_prefix`](crate::eval::EvalCtx::with_bnode_mint_prefix)).
+#[derive(Debug, Clone, Copy)]
+pub struct ShaclQueryOptions<'a> {
+    /// Which substitution rewrite to apply (see [`ShaclPrebinding`]).
+    pub prebinding: ShaclPrebinding,
+    /// The SHACL-AF function registry in scope, if any; `None` behaves exactly
+    /// like the registry-free entries.
+    pub functions: Option<&'a crate::user_fn::UserFunctionRegistry>,
+    /// A deterministic prefix for every blank-node label the evaluation mints;
+    /// `None` (the pre-existing behavior) leaves minted labels unprefixed. The
+    /// prefix is caller-supplied data — the SHACL rules engine passes a
+    /// per-focus-node identity tag — and must never be derived from time, RNG,
+    /// or iteration order.
+    pub bnode_mint_prefix: Option<&'a str>,
 }
 
 /// [`evaluate_with_shacl_prebinding`], on the trip-aware channel — the same relationship
@@ -1783,6 +1882,70 @@ mod tests {
             panic!("expected solutions");
         };
         assert_eq!(rows.len(), 3, "normal path must see all three subjects");
+    }
+
+    #[test]
+    fn shacl_query_options_mint_prefix_prefixes_construct_blanks() {
+        // The public plumbing test for the deterministic blank-mint prefix: the
+        // options-driven SHACL entry must install the prefix on the evaluation so
+        // a CONSTRUCT template blank mints `{prefix}c{n}` — the seam the SHACL
+        // rules engine uses to give each focus node its own mint identity.
+        let ds = subst_ds();
+        let engine = NativeSparqlEngine::new();
+        let result = engine
+            .query_shacl_view(
+                &*ds,
+                "CONSTRUCT { ?s <http://ex/derived> _:b } WHERE { ?s <http://ex/p> <http://ex/x> }",
+                None,
+                &[],
+                ShaclQueryOptions {
+                    prebinding: ShaclPrebinding::Applied,
+                    functions: None,
+                    bnode_mint_prefix: Some("fTag_"),
+                },
+            )
+            .expect("construct");
+        let SparqlResult::Graph(graph) = result else {
+            panic!("CONSTRUCT must return a graph");
+        };
+        assert_eq!(graph.quad_count(), 1);
+        let quad = graph.quads().next().expect("one quad");
+        let purrdf_core::TermRef::Blank { label, .. } = graph.resolve(quad.o) else {
+            panic!("the object must be the minted blank");
+        };
+        assert_eq!(
+            label, "fTag_c1",
+            "minted labels must carry the caller-supplied prefix"
+        );
+    }
+
+    #[test]
+    fn shacl_query_options_without_prefix_mint_exact_c_labels() {
+        // `bnode_mint_prefix: None` must be byte-identical to the pre-options
+        // entries: the first minted template blank is exactly `c1`.
+        let ds = subst_ds();
+        let engine = NativeSparqlEngine::new();
+        let result = engine
+            .query_shacl_view(
+                &*ds,
+                "CONSTRUCT { ?s <http://ex/derived> _:b } WHERE { ?s <http://ex/p> <http://ex/x> }",
+                None,
+                &[],
+                ShaclQueryOptions {
+                    prebinding: ShaclPrebinding::Applied,
+                    functions: None,
+                    bnode_mint_prefix: None,
+                },
+            )
+            .expect("construct");
+        let SparqlResult::Graph(graph) = result else {
+            panic!("CONSTRUCT must return a graph");
+        };
+        let quad = graph.quads().next().expect("one quad");
+        let purrdf_core::TermRef::Blank { label, .. } = graph.resolve(quad.o) else {
+            panic!("the object must be the minted blank");
+        };
+        assert_eq!(label, "c1", "no prefix ⇒ byte-identical mint labels");
     }
 
     #[test]
