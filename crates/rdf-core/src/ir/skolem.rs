@@ -10,7 +10,7 @@
 //! and injectively, so no dataset fails to serialize. A caller who wants the
 //! labels in the document to be of their own choosing — rather than the
 //! escape's mechanical rewrite of, say, a JSON-LD `_:has space` — rewrites the
-//! dataset first, with one of two total operations:
+//! dataset first, with one of two explicit, deterministic operations:
 //!
 //! - [`super::canon::canonical_relabel`]: relabel every blank to its canonical
 //!   `c14n{n}` label (ASCII alphanumerics — legal in every alphabet).
@@ -603,8 +603,8 @@ fn existing_blanks(ds: &RdfDataset) -> BTreeSet<(Box<str>, BlankScope)> {
 /// AND scopes). All other terms, quads, reifiers, annotations, and quad source
 /// locations are preserved. The non-serialized derived side tables
 /// (`content_ids`, `predecessors`/`predecessor_chain`) survive the rewrite too
-/// (see [`rebuild_dataset`] for the exact contract): content addressing
-/// re-derives from the output's IRI bytes under `dataset`'s own
+/// (the crate-private `rebuild_dataset` helper implements the exact contract):
+/// content addressing re-derives from the output's IRI bytes under `dataset`'s own
 /// [`ContentIdScheme`](crate::ContentIdScheme), and the predecessor index
 /// resolves over the carried-forward annotation table.
 ///
@@ -629,8 +629,8 @@ pub fn skolemize(dataset: &RdfDataset, authority: &str) -> Result<RdfDataset, Sk
 /// under any OTHER authority's genid path are untouched. The exact inverse of
 /// [`skolemize`] under the same authority. As with [`skolemize`], the
 /// non-serialized derived side tables (`content_ids`,
-/// `predecessors`/`predecessor_chain`) survive the rewrite (see
-/// [`rebuild_dataset`]).
+/// `predecessors`/`predecessor_chain`) survive the rewrite (see the
+/// crate-private `rebuild_dataset` helper).
 ///
 /// Deterministic: a pure function of `(dataset, authority)`.
 ///
