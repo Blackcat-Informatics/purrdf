@@ -353,6 +353,12 @@ pub fn try_canonicalize_with(
 /// labels are already unique across the whole dataset, so no two distinct
 /// blanks can collide in the single scope.
 ///
+/// The non-serialized derived side tables (`content_ids`,
+/// `predecessors`/`predecessor_chain`) reset on the output: a frozen dataset
+/// does not expose its `ContentIdScheme`, so the rewrite cannot re-establish
+/// content addressing; callers that need those indexes rebuild them with
+/// their own scheme configuration.
+///
 /// A blank node that canonicalization cannot observe — a blank DECLARED as a
 /// named graph that owns no quads (declaration-only) — still gets a fresh
 /// `c14n{n}` label, continuing the canonical numbering in ascending

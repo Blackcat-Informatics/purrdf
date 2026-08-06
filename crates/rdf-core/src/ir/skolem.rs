@@ -364,6 +364,14 @@ fn reintern<M: TermMapper>(
 /// `mapper`, preserving all statement surfaces: quads (with their source
 /// locations), reifier bindings, annotations, and named-graph declarations.
 ///
+/// NON-SERIALIZED derived side tables are NOT carried over: the output is
+/// built without content addressing, so `content_id`/`content_ids` and the
+/// derivation-predecessor index (`predecessors`/`predecessor_chain`) are
+/// empty on the result even when the underlying IRI bytes are unchanged.
+/// A frozen dataset does not expose its `ContentIdScheme`, so the rewrite
+/// cannot re-establish it; callers that need those indexes rebuild them on
+/// the output with their own scheme configuration.
+///
 /// # Panics
 /// Never on a mapper that keeps positional validity (the [`TermMapper::map_iri`]
 /// `iri_only` contract): a positionally valid rewrite of a valid dataset
@@ -557,7 +565,10 @@ fn existing_blanks(ds: &RdfDataset) -> BTreeSet<(Box<str>, BlankScope)> {
 /// blank's `(label, scope)` documented at module level, so [`deskolemize`]
 /// under the same authority reconstructs the original dataset exactly (labels
 /// AND scopes). All other terms, quads, reifiers, annotations, and quad source
-/// locations are preserved.
+/// locations are preserved. The non-serialized derived side tables
+/// (`content_ids`, `predecessors`/`predecessor_chain`) reset on the output:
+/// a frozen dataset does not expose its `ContentIdScheme`, so the rewrite
+/// cannot re-establish content addressing.
 ///
 /// Deterministic: a pure function of `(dataset, authority)` — no RNG, no
 /// clocks, no global state.
@@ -578,7 +589,9 @@ pub fn skolemize(dataset: &RdfDataset, authority: &str) -> Result<RdfDataset, Sk
 /// `{authority}/.well-known/genid/` are decoded back to the blank nodes
 /// (`label`, `scope`) they encode, in every position blanks may occupy. IRIs
 /// under any OTHER authority's genid path are untouched. The exact inverse of
-/// [`skolemize`] under the same authority.
+/// [`skolemize`] under the same authority. As with [`skolemize`], the
+/// non-serialized derived side tables (`content_ids`,
+/// `predecessors`/`predecessor_chain`) reset on the output.
 ///
 /// Deterministic: a pure function of `(dataset, authority)`.
 ///
@@ -937,5 +950,36 @@ mod tests {
             .expect("deskolemize");
         assert_eq!(canonicalize(&relabeled).nquads, canonicalize(&ds).nquads);
         assert_eq!(canonicalize(&round).nquads, canonicalize(&ds).nquads);
+    }
+
+    #[test]
+    fn rewrites_reset_the_derived_content_addressing_side_table() {
+        // The documented contract: statement surfaces survive the rewrite,
+        // the NON-SERIALIZED derived side tables do not — a frozen dataset
+        // does not expose its ContentIdScheme, so the rewrite cannot
+        // re-establish content addressing.
+        let scheme = crate::content_id::ContentIdScheme::new("blake3:").expect("valid scheme");
+        let mut b = RdfDatasetBuilder::with_content_addressing(scheme, None);
+        let s =
+            b.intern_iri("blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_blank("hostile label", BlankScope::DEFAULT);
+        b.push_quad(s, p, o, None);
+        let ds = b.freeze().expect("freeze");
+        assert_eq!(
+            ds.content_ids().count(),
+            1,
+            "source recognizes its content IRI"
+        );
+
+        let sk = skolemize(&ds, AUTHORITY).expect("skolemize");
+        let relabeled = canonical_relabel(&ds).expect("relabel");
+        for (name, out) in [("skolemize", &sk), ("canonical_relabel", &relabeled)] {
+            assert_eq!(
+                out.content_ids().count(),
+                0,
+                "{name}: derived side tables reset on the rewritten dataset"
+            );
+        }
     }
 }
