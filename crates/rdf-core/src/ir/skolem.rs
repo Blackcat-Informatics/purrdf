@@ -5,10 +5,12 @@
 //! **deskolemization** over the frozen IR, plus the shared whole-dataset
 //! term-rewrite driver that `canonical_relabel` (see [`super::canon`]) rides on.
 //!
-//! Serializer egress hard-fails on a blank label that is illegal in the target
-//! syntax's alphabet (see [`crate::blank_label`]); it never relabels silently. A
-//! caller whose dataset carries egress-illegal labels — e.g. parsed from JSON-LD
-//! `_:has space` — resolves that explicitly, with one of two total operations:
+//! Serializer egress is total: a blank label illegal in the target syntax's
+//! alphabet is escaped into it (see [`crate::blank_label`]), deterministically
+//! and injectively, so no dataset fails to serialize. A caller who wants the
+//! labels in the document to be of their own choosing — rather than the
+//! escape's mechanical rewrite of, say, a JSON-LD `_:has space` — rewrites the
+//! dataset first, with one of two total operations:
 //!
 //! - [`super::canon::canonical_relabel`]: relabel every blank to its canonical
 //!   `c14n{n}` label (ASCII alphanumerics — legal in every alphabet).

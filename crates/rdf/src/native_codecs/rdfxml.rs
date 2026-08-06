@@ -49,6 +49,7 @@ use crate::nesting::guard_xml_nesting;
 use crate::{
     BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, RdfTextDirection, TermId,
 };
+use purrdf_core::blank_label::{LabelAlphabet, is_valid_label};
 
 /// The RDF/XML codec: a standalone (non-line-family) [`RdfCodec`] over the in-repo W3C
 /// RDF/XML grammar. RDF/XML is treated as star-INcapable under the transcode loss
@@ -943,33 +944,20 @@ fn validate_iri(value: &str) -> Result<(), RdfDiagnostic> {
     Ok(())
 }
 
-/// The blank-node label contract the prior purrdf-gts `BlankNode::new` enforced: a first
-/// char that is ASCII alphanumeric or `_`, inner chars adding `-`/`.`, and no trailing
-/// `.`.
+/// The blank-node label contract for an `rdf:nodeID` / `rdf:annotationNodeID`
+/// attribute value.
 ///
-/// This ASCII-narrow PARSE contract is deliberate (frozen ingress compatibility); the
-/// exact egress alphabets live in `purrdf_core::blank_label` and are enforced at the
-/// `SerGraph` ingress on the write side.
+/// Ingress is deliberately the LIBERAL union of the two alphabets a producer can
+/// legitimately have written: the XML `NCName` this codec itself EMITS (the
+/// RDF/XML grammar's own constraint on `rdf:nodeID`), and the Turtle/SPARQL
+/// `BLANK_NODE_LABEL`, which admits the digit-led labels the text codecs carry.
+/// Accepting the union means every document this workspace writes re-parses,
+/// while a genuinely malformed identifier (whitespace, delimiters, control
+/// characters) is still a hard parse failure.
 fn validate_blank_label(label: &str) -> Result<(), RdfDiagnostic> {
-    let mut chars = label.chars();
-    let Some(first) = chars.next() else {
-        return Err(parse_err("invalid blank-node identifier \"\""));
-    };
-    if !first.is_ascii_alphanumeric() && first != '_' {
-        return Err(parse_err(format!(
-            "invalid blank-node identifier {label:?}"
-        )));
-    }
-    let mut last = first;
-    for ch in chars {
-        if !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-' && ch != '.' {
-            return Err(parse_err(format!(
-                "invalid blank-node identifier {label:?}"
-            )));
-        }
-        last = ch;
-    }
-    if last == '.' {
+    if !is_valid_label(label, LabelAlphabet::NcName)
+        && !is_valid_label(label, LabelAlphabet::BlankNodeLabel)
+    {
         return Err(parse_err(format!(
             "invalid blank-node identifier {label:?}"
         )));

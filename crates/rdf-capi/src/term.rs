@@ -463,14 +463,6 @@ pub unsafe extern "C" fn purrdf_term_to_ntriples(
                 ));
             }
             let view = &*view;
-            // The kernel emitter refuses a blank-node label outside the Turtle
-            // BLANK_NODE_LABEL alphabet (hard error, never a silent remap);
-            // surface that refusal through the FFI error out-param.
-            let emit_checked = |term: &RdfTerm| {
-                emit_term(term).map_err(|diagnostic| {
-                    PurrdfError::new(PurrdfStatus::InvalidArgument, diagnostic.message)
-                })
-            };
             let token = match decode_id(view.term_id) {
                 Some(id) => {
                     if dataset.is_null() {
@@ -479,9 +471,9 @@ pub unsafe extern "C" fn purrdf_term_to_ntriples(
                             "a view with a dataset term_id requires its dataset to render N-Triples",
                         ));
                     }
-                    emit_checked(&PurrdfDataset::dataset(dataset).to_owned_term(id))?
+                    emit_term(&PurrdfDataset::dataset(dataset).to_owned_term(id))
                 }
-                None => emit_checked(&view_to_rdf_term(view)?)?,
+                None => emit_term(&view_to_rdf_term(view)?),
             };
             *out_buffer = PurrdfBuffer::into_raw(token.into_bytes());
             Ok(PurrdfStatus::Ok)

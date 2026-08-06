@@ -74,10 +74,11 @@ fn simplify_term(term: &RdfTerm) -> RdfTerm {
     }
 }
 
-/// Serialize a term to Turtle, normalizing simple literals first. Fallible:
-/// the kernel emitter refuses a blank-node label outside the Turtle
-/// `BLANK_NODE_LABEL` alphabet rather than writing an unparsable document.
-fn emit(term: &RdfTerm) -> Result<String, RdfDiagnostic> {
+/// Serialize a term to Turtle, normalizing simple literals first. Total: the
+/// kernel emitter escapes a blank-node label outside the Turtle
+/// `BLANK_NODE_LABEL` alphabet into it rather than writing an unparsable
+/// document.
+fn emit(term: &RdfTerm) -> String {
     crate::emit_term(&simplify_term(term))
 }
 
@@ -88,17 +89,8 @@ fn display(term: &RdfTerm) -> String {
 }
 
 /// Emit an RDF 1.2 triple term `<<( <s> <p> <o> )>>`.
-fn emit_triple_term(
-    subject: &RdfTerm,
-    predicate: &str,
-    object: &RdfTerm,
-) -> Result<String, RdfDiagnostic> {
-    Ok(format!(
-        "<<( {} <{}> {} )>>",
-        emit(subject)?,
-        predicate,
-        emit(object)?
-    ))
+fn emit_triple_term(subject: &RdfTerm, predicate: &str, object: &RdfTerm) -> String {
+    format!("<<( {} <{}> {} )>>", emit(subject), predicate, emit(object))
 }
 
 /// Require an IRI term (predicates must be IRIs).
@@ -232,23 +224,23 @@ pub fn project_owl_to_rdf12(owl_ttl: &str) -> Result<String, RdfDiagnostic> {
         let _ = writeln!(
             out,
             "{} <{}> {} .",
-            emit(source)?,
+            emit(source),
             property_iri,
-            emit(target)?
+            emit(target)
         );
 
         // ?axiom rdf:reifies <<( ?s ?p ?o )>> ; ?annProp ?annVal ; … .
         let mut annotations: Vec<(String, String)> = acc
             .annotations
             .iter()
-            .map(|(predicate, object)| Ok((predicate.clone(), emit(object)?)))
-            .collect::<Result<_, RdfDiagnostic>>()?;
+            .map(|(predicate, object)| (predicate.clone(), emit(object)))
+            .collect();
         annotations.sort();
         let mut line = format!(
             "{} <{}> {}",
-            emit(subject)?,
+            emit(subject),
             RDF_REIFIES,
-            emit_triple_term(source, &property_iri, target)?
+            emit_triple_term(source, &property_iri, target)
         );
         for (predicate, object) in &annotations {
             let _ = write!(line, " ;\n   <{predicate}> {object}");
@@ -324,20 +316,20 @@ pub fn normalize_rdf12_to_owl(rdf12_ttl: &str) -> Result<String, RdfDiagnostic> 
         let (s, p, o) = (&reified.subject, &reified.predicate, &reified.object);
 
         // ?s ?p ?o .
-        let _ = writeln!(out, "{} <{}> {} .", emit(s)?, p, emit(o)?);
+        let _ = writeln!(out, "{} <{}> {} .", emit(s), p, emit(o));
 
         // ?reifier a owl:Axiom ; owl:annotated* … ; ?annProp ?annVal .
         let mut properties: Vec<(String, String)> = vec![
             (RDF_TYPE.to_owned(), format!("<{OWL_AXIOM}>")),
-            (OWL_ANNOTATED_SOURCE.to_owned(), emit(s)?),
+            (OWL_ANNOTATED_SOURCE.to_owned(), emit(s)),
             (OWL_ANNOTATED_PROPERTY.to_owned(), format!("<{p}>")),
-            (OWL_ANNOTATED_TARGET.to_owned(), emit(o)?),
+            (OWL_ANNOTATED_TARGET.to_owned(), emit(o)),
         ];
         for (predicate, object) in &acc.annotations {
-            properties.push((predicate.clone(), emit(object)?));
+            properties.push((predicate.clone(), emit(object)));
         }
         properties.sort();
-        let mut line = emit(&acc.subject)?;
+        let mut line = emit(&acc.subject);
         for (index, (predicate, object)) in properties.iter().enumerate() {
             let sep = if index == 0 { " " } else { " ;\n   " };
             let _ = write!(line, "{sep}<{predicate}> {object}");
@@ -373,7 +365,7 @@ ex:ax a owl:Axiom ;
         parse_quads(ttl)
             .expect("parse")
             .iter()
-            .map(|quad| crate::emit_quad(quad).expect("legal labels emit"))
+            .map(crate::emit_quad)
             .collect()
     }
 

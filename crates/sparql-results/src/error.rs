@@ -5,10 +5,11 @@
 //!
 //! Serialization of a [`crate::SparqlResult`] to the W3C result formats can
 //! surface structural problems (a malformed term, a format that cannot carry
-//! the result kind, an out-of-alphabet blank-node label), so every public
-//! `serialize` entry point returns `Result<_, Error>` rather than panicking —
-//! library code in this crate never `unwrap`/`expect`/`panic!`s on caller
-//! input.
+//! the result kind), so every public `serialize` entry point returns
+//! `Result<_, Error>` rather than panicking — library code in this crate never
+//! `unwrap`/`expect`/`panic!`s on caller input. Blank-node label syntax is NOT
+//! among those problems: the writers escape an out-of-alphabet label into the
+//! W3C `BLANK_NODE_LABEL` alphabet instead of failing.
 
 use std::fmt;
 
@@ -21,8 +22,8 @@ pub enum Error {
     /// human-readable description of what was malformed.
     MalformedTerm(String),
     /// A format-specific egress constraint was violated in a way the caller must
-    /// be told about (an unsupported result kind for the format, an
-    /// XML-unrepresentable character, or an out-of-alphabet blank-node label).
+    /// be told about (an unsupported result kind for the format, or an
+    /// XML-unrepresentable character in a literal or IRI).
     Format(String),
     /// An internal invariant failed. Used sparingly; prefer a specific variant.
     Internal(String),

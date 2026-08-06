@@ -11,9 +11,8 @@
 //! dropped. The kernel `emit_*` primitives are the single source of term/line
 //! syntax.
 
-use crate::error::Error;
 use purrdf_core::{
-    RdfDataset, RdfDiagnostic, write_dataset_annotation, write_dataset_quad, write_dataset_reifier,
+    RdfDataset, write_dataset_annotation, write_dataset_quad, write_dataset_reifier,
 };
 
 /// Serialize a CONSTRUCT-result dataset to N-Triples (plus RDF-1.2-star
@@ -21,33 +20,24 @@ use purrdf_core::{
 /// output with `\n`, so the parts are concatenated in order: quads, then
 /// annotations, then reifiers.
 ///
-/// Fallible: every emitted line must re-lex as N-Triples, so the kernel writers
-/// refuse a scope-qualified blank-node label outside the Turtle
-/// `BLANK_NODE_LABEL` alphabet — a hard error, never a silent remap.
-pub(crate) fn dataset_to_ntriples(dataset: &RdfDataset) -> Result<String, Error> {
+/// Total: every emitted line re-lexes as N-Triples because the kernel writers
+/// escape a scope-qualified blank-node label outside the Turtle
+/// `BLANK_NODE_LABEL` alphabet into it (deterministically and injectively), so
+/// no dataset can fail to serialize on label syntax.
+pub(crate) fn dataset_to_ntriples(dataset: &RdfDataset) -> String {
     let statement_count =
         dataset.quad_count() + dataset.annotations().count() + dataset.reifiers().count();
     let mut out = String::with_capacity(statement_count.saturating_mul(96));
     for quad in dataset.quads() {
-        write_dataset_quad(dataset, quad, &mut out).map_err(|e| graph_write_error(&e))?;
+        write_dataset_quad(dataset, quad, &mut out);
     }
     for (reifier, predicate, object) in dataset.annotations() {
-        write_dataset_annotation(dataset, reifier, predicate, object, &mut out)
-            .map_err(|e| graph_write_error(&e))?;
+        write_dataset_annotation(dataset, reifier, predicate, object, &mut out);
     }
     for (reifier, statement) in dataset.reifiers() {
-        write_dataset_reifier(dataset, reifier, statement, &mut out)
-            .map_err(|e| graph_write_error(&e))?;
+        write_dataset_reifier(dataset, reifier, statement, &mut out);
     }
-    Ok(out)
-}
-
-/// Bridge a kernel emit diagnostic into the crate error type.
-fn graph_write_error(diagnostic: &RdfDiagnostic) -> Error {
-    Error::Format(format!(
-        "CONSTRUCT graph cannot be serialized to N-Triples: {}",
-        diagnostic.message
-    ))
+    out
 }
 
 #[cfg(test)]
@@ -71,7 +61,7 @@ mod tests {
         });
         let dataset = builder.freeze().expect("dataset freezes");
 
-        let nt = dataset_to_ntriples(&dataset).expect("legal labels serialize");
+        let nt = dataset_to_ntriples(&dataset);
         assert_eq!(
             nt,
             "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n"
@@ -81,10 +71,7 @@ mod tests {
     #[test]
     fn empty_dataset_is_empty_string() {
         let dataset = RdfDatasetBuilder::new().freeze().expect("empty freezes");
-        assert_eq!(
-            dataset_to_ntriples(&dataset).expect("legal labels serialize"),
-            ""
-        );
+        assert_eq!(dataset_to_ntriples(&dataset), "");
     }
 
     #[test]
@@ -104,7 +91,7 @@ mod tests {
         builder.push_quad(outer_subject, outer_predicate, statement, None);
         let dataset = builder.freeze().expect("dataset freezes");
 
-        let nt = dataset_to_ntriples(&dataset).expect("legal labels serialize");
+        let nt = dataset_to_ntriples(&dataset);
         assert_eq!(
             nt,
             "<http://example.org/outer> <http://example.org/concludes> \
@@ -136,18 +123,15 @@ mod tests {
 
         let mut expected = String::new();
         for quad in dataset.owned_quads() {
-            expected.push_str(&emit_quad(&quad).expect("legal labels emit"));
+            expected.push_str(&emit_quad(&quad));
         }
         for annotation in dataset.owned_annotations() {
-            expected.push_str(&emit_annotation(&annotation).expect("legal labels emit"));
+            expected.push_str(&emit_annotation(&annotation));
         }
         for reifier in dataset.owned_reifiers() {
-            expected.push_str(&emit_reifier(&reifier, &[]).expect("legal labels emit"));
+            expected.push_str(&emit_reifier(&reifier, &[]));
         }
 
-        assert_eq!(
-            dataset_to_ntriples(&dataset).expect("legal labels serialize"),
-            expected
-        );
+        assert_eq!(dataset_to_ntriples(&dataset), expected);
     }
 }

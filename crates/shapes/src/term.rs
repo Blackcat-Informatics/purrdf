@@ -497,7 +497,7 @@ impl Term {
     /// correctly when the dataset stored the blank at the DEFAULT scope (the
     /// SHACL-projected dataset re-interns owned blanks there), but NOT when the
     /// dataset preserves the original raw `(label, scope)` pair (the raw shapes
-    /// dataset). So for a blank whose qualified form decodes ([`split_scope_suffix`])
+    /// dataset). So for a blank whose qualified form decodes (scope-suffix split)
     /// we ALSO offer the de-qualified `(label, scope)` key; the caller tries each
     /// until one resolves. The verbatim DEFAULT-scope key stays FIRST so
     /// single-scope data keeps its fast path.

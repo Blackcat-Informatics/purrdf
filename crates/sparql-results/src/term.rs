@@ -10,7 +10,6 @@
 //! TSV lexicalization. The four W3C result-document writers (JSON/XML/CSV/TSV)
 //! all consume these helpers so term syntax has exactly one source of truth.
 
-use crate::error::Error;
 use purrdf_core::{RdfLiteral, RdfTerm, RdfTriple, TermValue, display_term, emit_term};
 
 /// The IRI of `xsd:string`, the implicit datatype of a plain (untyped,
@@ -100,16 +99,12 @@ fn predicate_iri(p: &TermValue) -> String {
 /// bridged owned term (`<iri>`, `_:label`, `"lex"` / `"lex"@lang` /
 /// `"lex"^^<dt>`, or the non-asserting triple term `<<( s p o )>>`).
 ///
-/// Fallible: these tokens must re-lex as Turtle terms, so the kernel refuses a
-/// blank-node label outside the Turtle `BLANK_NODE_LABEL` alphabet — a hard
-/// error, never a silent remap.
-pub(crate) fn ntriples_token(value: &TermValue) -> Result<String, Error> {
-    emit_term(&term_value_to_rdf_term(value)).map_err(|diagnostic| {
-        Error::Format(format!(
-            "result term cannot be lexicalized as an N-Triples token: {}",
-            diagnostic.message
-        ))
-    })
+/// Total: these tokens must re-lex as Turtle terms, and the kernel guarantees
+/// that by escaping a blank-node label outside the Turtle `BLANK_NODE_LABEL`
+/// alphabet into it — deterministically and injectively, so distinct blank
+/// nodes stay distinct across the whole result document.
+pub(crate) fn ntriples_token(value: &TermValue) -> String {
+    emit_term(&term_value_to_rdf_term(value))
 }
 
 #[cfg(test)]
@@ -118,15 +113,10 @@ mod tests {
     use pretty_assertions::assert_eq;
     use purrdf_core::BlankScope;
 
-    /// Test shorthand: a legal cell always tokenizes.
-    fn token(value: &TermValue) -> String {
-        ntriples_token(value).expect("legal term tokenizes")
-    }
-
     #[test]
     fn iri_token() {
         let v = TermValue::Iri("http://example.org/s".to_string());
-        assert_eq!(token(&v), "<http://example.org/s>");
+        assert_eq!(ntriples_token(&v), "<http://example.org/s>");
     }
 
     #[test]
@@ -135,7 +125,7 @@ mod tests {
             label: "b0".to_string(),
             scope: BlankScope(0),
         };
-        let token = token(&v);
+        let token = ntriples_token(&v);
         assert!(token.starts_with("_:"), "expected blank node, got {token}");
     }
 
@@ -150,7 +140,7 @@ mod tests {
             scope: BlankScope(7),
         };
         // Different scopes qualify the same label distinctly.
-        assert_ne!(token(&a), token(&b));
+        assert_ne!(ntriples_token(&a), ntriples_token(&b));
     }
 
     #[test]
@@ -161,7 +151,7 @@ mod tests {
             language: None,
             direction: None,
         };
-        assert_eq!(token(&v), "\"x\"");
+        assert_eq!(ntriples_token(&v), "\"x\"");
     }
 
     #[test]
@@ -173,7 +163,7 @@ mod tests {
             direction: None,
         };
         assert_eq!(
-            token(&v),
+            ntriples_token(&v),
             "\"5\"^^<http://www.w3.org/2001/XMLSchema#integer>"
         );
     }
@@ -186,7 +176,7 @@ mod tests {
             language: Some("en".to_string()),
             direction: None,
         };
-        assert_eq!(token(&v), "\"x\"@en");
+        assert_eq!(ntriples_token(&v), "\"x\"@en");
     }
 
     #[test]
@@ -197,7 +187,7 @@ mod tests {
             o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
         };
         assert_eq!(
-            token(&v),
+            ntriples_token(&v),
             "<<( <http://example.org/s> <http://example.org/p> <http://example.org/o> )>>"
         );
     }
@@ -211,7 +201,7 @@ mod tests {
             language: Some("en".to_string()),
             direction: Some(RdfTextDirection::Ltr),
         };
-        let token = token(&v);
+        let token = ntriples_token(&v);
         assert!(
             token.contains("--ltr"),
             "expected --ltr direction suffix in token, got: {token}"

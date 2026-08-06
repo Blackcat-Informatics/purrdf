@@ -1,31 +1,38 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Egress enforcement for blank-node labels: no native text codec may silently
-//! emit a label that is illegal in ITS target syntax.
+//! Egress totality for blank-node labels: every native text codec serializes
+//! EVERY label, escaping the ones its target syntax cannot spell, and the
+//! document it writes re-parses into an isomorphic dataset.
 //!
-//! Three layers are pinned here:
+//! Four layers are pinned here:
 //!
-//! 1. **Hostile-label matrix** — a table of adversarial labels crossed with
-//!    EVERY media type in the native codec registry
-//!    ([`NativeRdfFormat::all`]), asserting the per-alphabet accept/reject
-//!    verdicts (line codecs → `BLANK_NODE_LABEL`, RDF/XML → `NCName`,
-//!    structured codecs → unconstrained non-empty). Enumerating the registry
-//!    means any codec added to it is auto-covered: the verdict `match` below
-//!    fails to compile until the new format is classified.
-//! 2. **Byte-stability golden** — a legal dot-free-label dataset serializes
-//!    byte-identically to the pre-enforcement serializer for every line codec
-//!    (zero golden churn for real single-scope data).
-//! 3. **Scope-conflation regression** — `(label "a", scope 1)` and
+//! 1. **Escape-and-reparse matrix** — a table of adversarial labels crossed
+//!    with EVERY media type in the native codec registry
+//!    ([`NativeRdfFormat::all`]): serialization always succeeds, the emitted
+//!    label is legal under the format's own alphabet, and re-parsing the
+//!    document yields a dataset isomorphic to the input (blank identity is
+//!    preserved structurally — labels may differ, co-reference may not).
+//!    Enumerating the registry means any codec added to it is auto-covered:
+//!    the alphabet `match` below fails to compile until the new format is
+//!    classified.
+//! 2. **Injectivity across the document** — two distinct blank nodes never
+//!    conflate on egress, including the adversarial case where one node's
+//!    label equals the escape image of the other's.
+//! 3. **Byte-stability golden** — a legal dot-free-label dataset serializes
+//!    byte-identically to the pre-escape serializer for every line codec (zero
+//!    golden churn for real single-scope data).
+//! 4. **Scope-conflation regression** — `(label "a", scope 1)` and
 //!    `(label "a.s1", scope 0)` serialize to DISTINCT labels and re-parse as
 //!    two nodes (the dot-doubling injectivity fix).
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use purrdf_rdf::blank_label::{LabelAlphabet, is_valid_label};
 use purrdf_rdf::{
     BlankScope, NativeRdfFormat, RdfDataset, RdfDatasetBuilder, SerializeGraph, TermRef,
-    parse_dataset, serialize_dataset,
+    datasets_isomorphic, parse_dataset, serialize_dataset,
 };
 
 /// One quad whose subject is a blank node with the given raw label at the
@@ -53,69 +60,185 @@ fn blank_nodes(ds: &RdfDataset) -> BTreeSet<(String, u32)> {
     blanks
 }
 
-/// The hostile-label table: `(label, legal as BLANK_NODE_LABEL, legal as
-/// NCName)`. The verdicts are restated here independently of
-/// `purrdf_core::blank_label` so this matrix cross-checks the serializer stack
-/// rather than echoing the validator. Every label is non-empty, so the
-/// unconstrained (structured-codec) verdict is always ACCEPT.
-const HOSTILE_LABELS: &[(&str, bool, bool)] = &[
-    ("bad\u{1f}label", false, false), // C0 control: no alphabet admits it
-    ("a b", false, false),            // whitespace splits the token
-    ("<urn:x>", false, false),        // IRI delimiters
-    ("0abc", true, false),            // digit start: legal PN_CHARS_U|[0-9], illegal NCName start
-    ("a.b", true, true),              // interior dot: legal in both
-    ("trailing.", false, true),       // BLANK_NODE_LABEL forbids a final '.'; NCName does not
-    ("-lead", false, false),          // '-' is inner-only in both alphabets
-    ("\u{d7}y", false, false),        // U+00D7 ×: the gap just past [#xC0-#xD6]
-    ("日本", true, true),             // PN_CHARS_BASE / NameStartChar
-    ("c14n0", true, true),            // canonicalization labels are legal everywhere
+/// The hostile-label table. Every entry is a label some producer can hand the
+/// serializer, and every entry must now SERIALIZE — the columns that used to
+/// record accept/reject verdicts are gone, because there is no reject.
+const HOSTILE_LABELS: &[&str] = &[
+    "",                    // no identifier at all
+    "bad\u{1f}label",      // C0 control: no syntax admits it, XML cannot spell it
+    "a b",                 // whitespace splits a `_:` token
+    "a\nb",                // a newline XML would normalize away
+    "<urn:x>",             // IRI delimiters
+    "0abc",                // digit start: legal BLANK_NODE_LABEL, illegal NCName
+    "a.b",                 // interior dot
+    "trailing.",           // BLANK_NODE_LABEL forbids a final '.'; NCName does not
+    "-lead",               // '-' is inner-only in both name alphabets
+    "\u{d7}y",             // U+00D7 ×: the gap just past [#xC0-#xD6]
+    "日本",                // PN_CHARS_BASE / NameStartChar
+    "c14n0",               // canonicalization labels are legal everywhere
+    "purrdfesc_a_000020b", // the escape image of "a b": must not conflate with it
 ];
 
-/// Which hostile-table verdict column applies to a format. The `match` is
+/// The blank-node label alphabet a format's codec emits. The `match` is
 /// EXHAUSTIVE on purpose: adding a codec to the registry fails this test's
-/// compile until its blank-label alphabet is classified here.
-fn expected_accept(format: NativeRdfFormat, bnl_ok: bool, ncname_ok: bool) -> bool {
+/// compile until its blank-label alphabet is classified here. Restated
+/// independently of the serializer's own table so the matrix cross-checks it.
+fn emitted_alphabet(format: NativeRdfFormat) -> LabelAlphabet {
     match format {
         NativeRdfFormat::Turtle
         | NativeRdfFormat::TriG
         | NativeRdfFormat::NTriples
-        | NativeRdfFormat::NQuads => bnl_ok,
-        NativeRdfFormat::RdfXml => ncname_ok,
-        // Structured codecs escape the label as opaque text: any non-empty
-        // label serializes without error.
-        NativeRdfFormat::TriX
+        | NativeRdfFormat::NQuads
         | NativeRdfFormat::HexTuples
         | NativeRdfFormat::JsonLd
-        | NativeRdfFormat::YamlLd => true,
+        | NativeRdfFormat::YamlLd => LabelAlphabet::BlankNodeLabel,
+        NativeRdfFormat::RdfXml => LabelAlphabet::NcName,
+        NativeRdfFormat::TriX => LabelAlphabet::XmlText,
     }
 }
 
 #[test]
-fn hostile_labels_are_enforced_per_alphabet_across_the_whole_registry() {
+fn every_hostile_label_serializes_and_reparses_isomorphically() {
     for format in NativeRdfFormat::all() {
         let media_type = format.media_type();
-        for &(label, bnl_ok, ncname_ok) in HOSTILE_LABELS {
+        let alphabet = emitted_alphabet(format);
+        for label in HOSTILE_LABELS {
             let ds = blank_subject_dataset(label);
-            let outcome = serialize_dataset(&ds, media_type, SerializeGraph::Dataset);
-            if expected_accept(format, bnl_ok, ncname_ok) {
-                assert!(
-                    outcome.is_ok(),
-                    "{media_type} must accept blank label {label:?}: {:?}",
-                    outcome.err()
-                );
-            } else {
-                let err = outcome.expect_err(&format!(
-                    "{media_type} must reject blank label {label:?} loudly"
-                ));
-                assert!(
-                    err.message.contains("invalid blank-node label"),
-                    "{media_type} error names the failure for {label:?}: {err:?}"
-                );
-                assert!(
-                    err.message.contains("alphabet"),
-                    "{media_type} error names the alphabet for {label:?}: {err:?}"
-                );
-            }
+            let bytes =
+                serialize_dataset(&ds, media_type, SerializeGraph::Dataset).unwrap_or_else(|e| {
+                    panic!("{media_type} must serialize blank label {label:?}: {e}")
+                });
+
+            // The document re-parses — the whole point of escaping instead of
+            // refusing — and carries the same graph up to blank renaming.
+            let reparsed = parse_dataset(&bytes, media_type, None).unwrap_or_else(|e| {
+                panic!(
+                    "{media_type} output for {label:?} must re-parse: {e}\n{}",
+                    String::from_utf8_lossy(&bytes)
+                )
+            });
+            assert!(
+                datasets_isomorphic(&ds, &reparsed),
+                "{media_type} round trip for {label:?} is not isomorphic:\n{}",
+                String::from_utf8_lossy(&bytes)
+            );
+
+            // Exactly one blank node in, exactly one blank node out.
+            assert_eq!(
+                blank_nodes(&reparsed).len(),
+                1,
+                "{media_type} re-parses {label:?} to one blank node"
+            );
+
+            // Whatever label reached the document is legal under the format's
+            // own alphabet, so an external conforming parser reads it too.
+            let (emitted, _) = blank_nodes(&reparsed)
+                .into_iter()
+                .next()
+                .expect("one blank node");
+            assert!(
+                is_valid_label(&emitted, alphabet),
+                "{media_type} emitted {emitted:?} for {label:?}, illegal under {alphabet:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_legal_label_passes_through_unescaped_in_every_format() {
+    // The escape must be inert on real data: a plain label is written verbatim
+    // in every syntax, so no fixture or golden can churn.
+    for format in NativeRdfFormat::all() {
+        let media_type = format.media_type();
+        let ds = blank_subject_dataset("alpha");
+        let bytes = serialize_dataset(&ds, media_type, SerializeGraph::Dataset)
+            .expect("a legal label always serializes");
+        let text = String::from_utf8(bytes).expect("utf-8");
+        assert!(
+            text.contains("alpha"),
+            "{media_type} must write the label verbatim: {text}"
+        );
+        assert!(
+            !text.contains("purrdfesc_"),
+            "{media_type} must not escape a legal label: {text}"
+        );
+    }
+}
+
+#[test]
+fn distinct_blank_nodes_never_conflate_on_egress() {
+    // The adversarial pair: one node whose label is ILLEGAL everywhere, and a
+    // second whose label is exactly the first one's escape image. A
+    // non-injective escape would fold them into one node.
+    let illegal = "a b";
+    let image = "purrdfesc_a_000020b";
+    let mut b = RdfDatasetBuilder::new();
+    let first = b.intern_blank(illegal, BlankScope::DEFAULT);
+    let second = b.intern_blank(image, BlankScope::DEFAULT);
+    let p = b.intern_iri("https://example.org/p");
+    let o = b.intern_iri("https://example.org/o");
+    b.push_quad(first, p, o, None);
+    b.push_quad(second, p, o, None);
+    let ds = b.freeze().expect("dataset freezes");
+    assert_eq!(blank_nodes(&ds).len(), 2, "two distinct nodes in the IR");
+
+    for format in NativeRdfFormat::all() {
+        let media_type = format.media_type();
+        let bytes = serialize_dataset(&ds, media_type, SerializeGraph::Dataset)
+            .expect("both labels serialize");
+        let reparsed = parse_dataset(&bytes, media_type, None).expect("output re-parses");
+        assert_eq!(
+            blank_nodes(&reparsed).len(),
+            2,
+            "{media_type} must keep the two nodes apart:\n{}",
+            String::from_utf8_lossy(&bytes)
+        );
+        assert!(
+            datasets_isomorphic(&ds, &reparsed),
+            "{media_type} round trip is not isomorphic:\n{}",
+            String::from_utf8_lossy(&bytes)
+        );
+    }
+}
+
+#[test]
+fn co_reference_survives_escaping() {
+    // One illegally-labelled blank node used TWICE must stay one node after
+    // the escape: `_:x p _:x` may not become two nodes.
+    let mut b = RdfDatasetBuilder::new();
+    let node = b.intern_blank("a b", BlankScope::DEFAULT);
+    let p = b.intern_iri("https://example.org/p");
+    b.push_quad(node, p, node, None);
+    let ds = b.freeze().expect("dataset freezes");
+
+    for format in NativeRdfFormat::all() {
+        let media_type = format.media_type();
+        let bytes = serialize_dataset(&ds, media_type, SerializeGraph::Dataset)
+            .expect("the label serializes");
+        let reparsed = parse_dataset(&bytes, media_type, None).expect("output re-parses");
+        assert_eq!(
+            blank_nodes(&reparsed).len(),
+            1,
+            "{media_type} must keep the self-reference one node:\n{}",
+            String::from_utf8_lossy(&bytes)
+        );
+        assert!(datasets_isomorphic(&ds, &reparsed), "{media_type}");
+    }
+}
+
+#[test]
+fn serialization_is_byte_deterministic_for_escaped_labels() {
+    // The repo's determinism rule holds through the escape: same dataset, same
+    // bytes, every run and every format.
+    for format in NativeRdfFormat::all() {
+        let media_type = format.media_type();
+        for label in HOSTILE_LABELS {
+            let ds = blank_subject_dataset(label);
+            let first = serialize_dataset(&ds, media_type, SerializeGraph::Dataset)
+                .expect("serializes once");
+            let second = serialize_dataset(&ds, media_type, SerializeGraph::Dataset)
+                .expect("serializes twice");
+            assert_eq!(first, second, "{media_type} for {label:?}");
         }
     }
 }
@@ -123,33 +246,20 @@ fn hostile_labels_are_enforced_per_alphabet_across_the_whole_registry() {
 #[test]
 fn okf_writer_accepts_every_hostile_label_without_error() {
     // OKF is a structured (frontmatter/JSON-shaped) egress whose blank ids are
-    // unconstrained strings: no hostile label may turn into a write error
-    // (unrepresentable structure is declared loss, never a label-syntax
-    // failure).
+    // internal keys, never RDF document syntax: no hostile label may turn into
+    // a write error (unrepresentable structure is declared loss, never a
+    // label-syntax failure).
     let config = purrdf_rdf::OkfConfig::new(
         "https://example.org/okf#",
         "https://example.org/doc/",
         ["type", "title"],
     )
     .expect("valid caller profile");
-    for &(label, _, _) in HOSTILE_LABELS {
+    for label in HOSTILE_LABELS {
         let ds = blank_subject_dataset(label);
         purrdf_rdf::write_okf_bundle(&ds, &config).unwrap_or_else(|e| {
             panic!("OKF writer must accept blank label {label:?} without error: {e}")
         });
-    }
-}
-
-#[test]
-fn empty_label_is_rejected_by_every_codec() {
-    // Even the unconstrained structured codecs refuse an EMPTY label: there is
-    // no such thing as a blank node with no identifier in any target syntax.
-    for format in NativeRdfFormat::all() {
-        let ds = blank_subject_dataset("");
-        serialize_dataset(&ds, format.media_type(), SerializeGraph::Dataset).expect_err(&format!(
-            "{} must reject the empty blank label",
-            format.media_type()
-        ));
     }
 }
 
@@ -177,7 +287,7 @@ fn interior_dot_label_round_trips_to_one_node_via_dot_doubling() {
     }
 }
 
-// ── R6 byte-stability golden ─────────────────────────────────────────────────
+// ── byte-stability golden ────────────────────────────────────────────────────
 
 /// A legal dot-free-label dataset: `_:alpha` (default scope) linked to
 /// `_:beta` (scope 2), plus one IRI object.
@@ -193,9 +303,9 @@ fn dot_free_blank_dataset() -> Arc<RdfDataset> {
 }
 
 #[test]
-fn dot_free_labels_serialize_byte_identically_to_the_pre_enforcement_serializer() {
+fn dot_free_labels_serialize_byte_identically_to_the_pre_escape_serializer() {
     // Golden literals captured from the pre-change serializer output (this
-    // exact fixture, serialized by the serializer WITHOUT egress enforcement):
+    // exact fixture, serialized by the serializer WITHOUT the egress escape):
     // legal dot-free labels must not churn a single byte.
     let goldens: &[(&str, &str)] = &[
         (
@@ -231,7 +341,7 @@ fn dot_free_labels_serialize_byte_identically_to_the_pre_enforcement_serializer(
         assert_eq!(
             String::from_utf8(bytes).expect("utf-8"),
             *golden,
-            "{media_type} bytes must match the pre-enforcement serializer exactly"
+            "{media_type} bytes must match the pre-escape serializer exactly"
         );
     }
 }

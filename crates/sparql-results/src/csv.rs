@@ -94,7 +94,7 @@ pub fn to_csv(
                 out.push(',');
             }
             if let Some(Some(value)) = row.get(column) {
-                push_field(cell_value(value)?.as_ref(), &mut out);
+                push_field(cell_value(value).as_ref(), &mut out);
             }
             // None or missing column → empty field (nothing emitted between separators).
         }
@@ -111,20 +111,18 @@ pub fn to_csv(
 ///
 /// Returns a [`std::borrow::Cow`] to avoid cloning the lexical string for the
 /// two common cases (IRI and Literal); only blank-node labels and triple terms
-/// require an owned allocation. Fallible for those two arms: a blank token must
-/// re-lex as a Turtle `_:` term, so the kernel refuses an out-of-alphabet
-/// scope-qualified label rather than silently remapping it.
-fn cell_value(value: &TermValue) -> Result<std::borrow::Cow<'_, str>, Error> {
+/// require an owned allocation.
+fn cell_value(value: &TermValue) -> std::borrow::Cow<'_, str> {
     use std::borrow::Cow;
-    Ok(match value {
+    match value {
         TermValue::Iri(iri) => Cow::Borrowed(iri),
         TermValue::Literal { lexical_form, .. } => Cow::Borrowed(lexical_form),
-        // The kernel token is `_:{qualified-label}`, validated against the
-        // Turtle BLANK_NODE_LABEL alphabet.
-        TermValue::Blank { .. } => Cow::Owned(ntriples_token(value)?),
+        // The kernel token is `_:{qualified-label}`, escaped into the Turtle
+        // BLANK_NODE_LABEL alphabet so the cell re-lexes.
+        TermValue::Blank { .. } => Cow::Owned(ntriples_token(value)),
         // CSV predates RDF-1.2; the N-Triples token is a reasonable rendering.
-        TermValue::Triple { .. } => Cow::Owned(ntriples_token(value)?),
-    })
+        TermValue::Triple { .. } => Cow::Owned(ntriples_token(value)),
+    }
 }
 
 /// Append a single CSV field, applying RFC-4180 quoting only when required:

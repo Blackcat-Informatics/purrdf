@@ -339,10 +339,12 @@ pub fn try_canonicalize_with(
 /// terms, quads, reifiers, annotations, named-graph declarations, and quad
 /// source locations preserved.
 ///
-/// This is the "make any dataset serializable in every alphabet" recourse: the
-/// serializers hard-fail on a blank label that is illegal in the target
-/// syntax's alphabet (see [`crate::blank_label`]) rather than relabel silently,
-/// and this operation is the caller-invoked, principled fix. The `c14n{n}`
+/// This is the "choose the labels yourself" recourse. Serialization is already
+/// total — the serializers escape a blank label illegal in the target syntax's
+/// alphabet (see [`crate::blank_label`]) — but the escape is a mechanical
+/// rewrite of whatever the caller happened to hold, while this operation issues
+/// labels from graph structure, before egress, so the document carries a
+/// principled labeling the caller picked rather than an escape. The `c14n{n}`
 /// labels come from [`try_canonicalize`], so they are ASCII alphanumerics
 /// (legal as `BLANK_NODE_LABEL` and as an XML `NCName` alike) and
 /// isomorphism-invariant — two isomorphic inputs relabel to the same canonical
@@ -2070,7 +2072,7 @@ mod tests {
 
     #[test]
     fn canonical_relabel_output_labels_are_exactly_the_c14n_set() {
-        use crate::blank_label::{LabelAlphabet, is_valid_label};
+        use crate::blank_label::{LabelAlphabet, escape_label, is_valid_label};
         let ds = hostile_blank_dataset();
         let canonical = canonicalize(&ds);
         let out = canonical_relabel(&ds).expect("relabel");
@@ -2088,11 +2090,19 @@ mod tests {
             for alphabet in [
                 LabelAlphabet::BlankNodeLabel,
                 LabelAlphabet::NcName,
-                LabelAlphabet::Unconstrained,
+                LabelAlphabet::XmlText,
             ] {
                 assert!(
                     is_valid_label(label, alphabet),
                     "{label:?} must be legal under {alphabet:?}"
+                );
+                // …so the egress escape is the IDENTITY on a canonical label:
+                // relabeling before egress is the way to a byte-stable
+                // re-serialization.
+                assert_eq!(
+                    escape_label(label, alphabet),
+                    label.as_str(),
+                    "the escape must not touch a canonical label under {alphabet:?}"
                 );
             }
         }

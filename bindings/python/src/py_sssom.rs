@@ -97,12 +97,10 @@ fn sssom_to_rdf(py: Python<'_>, text: &str) -> PyResult<String> {
     // Parse + RDF projection run detached (GIL released).
     py.detach(|| {
         let set = sssom::parse_tsv(text).map_err(|e| PyValueError::new_err(e.to_string()))?;
-        sssom::to_rdf(&set)
+        Ok(sssom::to_rdf(&set)
             .iter()
-            .map(|quad| {
-                crate::turtle::emit_quad(quad).map_err(|e| PyValueError::new_err(e.to_string()))
-            })
-            .collect()
+            .map(crate::turtle::emit_quad)
+            .collect())
     })
 }
 

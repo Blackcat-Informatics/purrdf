@@ -1,36 +1,39 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Egress enforcement for blank-node labels across the four W3C result-document
+//! Egress totality for blank-node labels across the four W3C result-document
 //! writers and the CONSTRUCT-graph N-Triples writer.
 //!
-//! The TSV/CSV writers emit `_:label` tokens that must re-lex as Turtle terms,
-//! so they enforce the exact W3C `BLANK_NODE_LABEL` alphabet; the JSON/XML
-//! writers escape the label as an opaque string, so any NON-EMPTY label is
-//! accepted (only emptiness is refused). The CONSTRUCT-graph writer emits
-//! N-Triples lines and enforces `BLANK_NODE_LABEL` like the tabular writers.
-//! A rejection is always a hard [`Error`] — never a silent remap.
+//! A SPARQL result carries blank-node *labels*, not free text, in every one of
+//! its serializations: the TSV/CSV cell is a Turtle `_:` token, the JSON
+//! `"bnode"` `value` and the XML `<bnode>` element text are blank-node
+//! identifiers. All four therefore share ONE alphabet — the W3C
+//! `BLANK_NODE_LABEL` production — and all four escape an out-of-alphabet
+//! label into it rather than refusing, so serializing a result is total. The
+//! escape is deterministic and injective, so distinct blank nodes stay
+//! distinct across the whole document and across formats.
 
 use std::sync::Arc;
 
+use purrdf_core::blank_label::{LabelAlphabet, is_valid_label};
 use purrdf_core::{BlankScope, RdfDatasetBuilder, SparqlResult, TermValue};
 use purrdf_sparql_results::{ResultProvenance, to_csv, to_json, to_tsv, to_xml};
 
-/// The hostile-label table: `(label, legal as BLANK_NODE_LABEL)`. Restated
-/// independently of `purrdf_core::blank_label` so the matrix cross-checks the
-/// writer stack rather than echoing the validator. Every label is non-empty, so
-/// the JSON/XML (unconstrained) verdict is always ACCEPT.
-const HOSTILE_LABELS: &[(&str, bool)] = &[
-    ("bad\u{1f}label", false),
-    ("a b", false),
-    ("<urn:x>", false),
-    ("0abc", true),
-    ("a.b", true),
-    ("trailing.", false),
-    ("-lead", false),
-    ("\u{d7}y", false),
-    ("日本", true),
-    ("c14n0", true),
+/// The hostile-label table. Every entry must serialize in every writer; the
+/// accept/reject columns are gone because there is no reject.
+const HOSTILE_LABELS: &[&str] = &[
+    "",
+    "bad\u{1f}label",
+    "a b",
+    "a\u{d7}b",
+    "<urn:x>",
+    "0abc",
+    "a.b",
+    "trailing.",
+    "-lead",
+    "日本",
+    "c14n0",
+    "purrdfesc_a_000020b",
 ];
 
 /// A one-variable SELECT whose single binding is a blank node with the given
@@ -57,94 +60,191 @@ fn graph_with_blank(label: &str) -> SparqlResult {
     SparqlResult::Graph(Arc::clone(&b.freeze().expect("dataset freezes")))
 }
 
+fn text_of(bytes: Vec<u8>) -> String {
+    String::from_utf8(bytes).expect("writers emit utf-8")
+}
+
+/// The blank-node label a document wrote, extracted from the surrounding
+/// syntax so the assertion checks the LABEL rather than the whole line.
+fn label_between<'a>(text: &'a str, open: &str, close: &str) -> &'a str {
+    let start = text
+        .find(open)
+        .unwrap_or_else(|| panic!("no {open:?} in {text}"))
+        + open.len();
+    let rest = &text[start..];
+    let end = rest
+        .find(close)
+        .unwrap_or_else(|| panic!("no {close:?} after {open:?} in {text}"));
+    &rest[..end]
+}
+
 #[test]
-fn tabular_writers_enforce_the_blank_node_label_alphabet() {
+fn every_writer_emits_a_legal_blank_node_label() {
     let provenance = ResultProvenance::default();
-    for &(label, bnl_ok) in HOSTILE_LABELS {
+    for label in HOSTILE_LABELS {
         let result = select_with_blank(label);
-        for (name, outcome) in [
-            ("TSV", to_tsv(&result, &provenance)),
-            ("CSV", to_csv(&result, &provenance)),
-        ] {
-            if bnl_ok {
-                let out = outcome
-                    .unwrap_or_else(|e| panic!("{name} must accept blank label {label:?}: {e}"));
-                assert!(
-                    String::from_utf8(out.bytes).expect("utf-8").contains("_:"),
-                    "{name} emits the blank token for {label:?}"
-                );
-            } else {
-                let err =
-                    outcome.expect_err(&format!("{name} must reject blank label {label:?} loudly"));
-                assert!(
-                    err.to_string().contains("blank-node label"),
-                    "{name} error names the failure for {label:?}: {err}"
-                );
-            }
+
+        let tsv = text_of(
+            to_tsv(&result, &provenance)
+                .unwrap_or_else(|e| panic!("TSV must serialize {label:?}: {e}"))
+                .bytes,
+        );
+        let csv = text_of(
+            to_csv(&result, &provenance)
+                .unwrap_or_else(|e| panic!("CSV must serialize {label:?}: {e}"))
+                .bytes,
+        );
+        let json = text_of(
+            to_json(&result, &provenance)
+                .unwrap_or_else(|e| panic!("JSON must serialize {label:?}: {e}"))
+                .bytes,
+        );
+        let xml = text_of(
+            to_xml(&result, &provenance)
+                .unwrap_or_else(|e| panic!("XML must serialize {label:?}: {e}"))
+                .bytes,
+        );
+
+        let emitted = [
+            ("TSV", label_between(&tsv, "_:", "\n")),
+            ("CSV", label_between(&csv, "_:", "\r\n")),
+            ("JSON", label_between(&json, "\"bnode\",\"value\":\"", "\"")),
+            ("XML", label_between(&xml, "<bnode>", "</bnode>")),
+        ];
+        for (name, written) in emitted {
+            assert!(
+                is_valid_label(written, LabelAlphabet::BlankNodeLabel),
+                "{name} wrote {written:?} for {label:?}, which is not a legal blank-node label"
+            );
+        }
+
+        // One result, one blank-node identity: the four writers agree on the
+        // label, so a consumer joining across formats sees one node.
+        let tsv_label = emitted[0].1;
+        for (name, written) in emitted {
+            assert_eq!(
+                written, tsv_label,
+                "{name} disagrees with TSV on the blank-node label for {label:?}"
+            );
         }
     }
 }
 
 #[test]
-fn json_and_xml_writers_accept_any_non_empty_label() {
+fn the_hostile_label_reaches_json_and_xml_escaped_not_raw() {
+    // The concrete regression: `a×b` used to reach the JSON/XML documents
+    // verbatim (`{"type":"bnode","value":"a×b"}`), an identifier no consumer
+    // could feed back into a `_:` term, while CSV/TSV hard-failed on it.
     let provenance = ResultProvenance::default();
-    for &(label, _) in HOSTILE_LABELS {
-        let result = select_with_blank(label);
+    let result = select_with_blank("a\u{d7}b");
+    let expected = "purrdfesc_a_0000D7b";
+
+    let json = text_of(
         to_json(&result, &provenance)
-            .unwrap_or_else(|e| panic!("JSON must accept blank label {label:?}: {e}"));
-        // The XML LABEL alphabet is likewise unconstrained, but the XML 1.0
-        // DOCUMENT layer independently refuses characters XML cannot represent
-        // at all (C0 controls other than tab/LF/CR are illegal even as
-        // character references) — an orthogonal, pre-existing representability
-        // hard error, not a label-alphabet rejection.
-        let xml_representable = !label
-            .chars()
-            .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'));
-        let outcome = to_xml(&result, &provenance);
-        if xml_representable {
-            outcome.unwrap_or_else(|e| panic!("XML must accept blank label {label:?}: {e}"));
-        } else {
-            let err = outcome.expect_err(&format!(
-                "XML must reject the XML-unrepresentable label {label:?} loudly"
-            ));
-            assert!(
-                err.to_string().contains("cannot represent"),
-                "the rejection is the XML character constraint, not a label-alphabet check: {err}"
-            );
-        }
+            .expect("JSON serializes")
+            .bytes,
+    );
+    assert!(
+        json.contains(&format!("{{\"type\":\"bnode\",\"value\":\"{expected}\"}}")),
+        "JSON must carry the escaped id: {json}"
+    );
+    assert!(
+        !json.contains('\u{d7}'),
+        "the raw label must not leak: {json}"
+    );
+
+    let xml = text_of(to_xml(&result, &provenance).expect("XML serializes").bytes);
+    assert!(
+        xml.contains(&format!("<bnode>{expected}</bnode>")),
+        "XML must carry the escaped id: {xml}"
+    );
+    assert!(
+        !xml.contains('\u{d7}'),
+        "the raw label must not leak: {xml}"
+    );
+
+    // …and CSV/TSV, which used to refuse it, now agree with them.
+    let csv = text_of(to_csv(&result, &provenance).expect("CSV serializes").bytes);
+    let tsv = text_of(to_tsv(&result, &provenance).expect("TSV serializes").bytes);
+    assert!(csv.contains(&format!("_:{expected}")), "{csv}");
+    assert!(tsv.contains(&format!("_:{expected}")), "{tsv}");
+}
+
+#[test]
+fn distinct_blank_nodes_stay_distinct_in_every_writer() {
+    // The adversarial pair: an illegal label and a legal one equal to its
+    // escape image. A non-injective escape would merge the two rows.
+    let provenance = ResultProvenance::default();
+    let result = SparqlResult::Solutions {
+        variables: vec!["b".to_string()],
+        rows: vec![
+            vec![Some(TermValue::Blank {
+                label: "a b".to_string(),
+                scope: BlankScope::DEFAULT,
+            })],
+            vec![Some(TermValue::Blank {
+                label: "purrdfesc_a_000020b".to_string(),
+                scope: BlankScope::DEFAULT,
+            })],
+        ],
+        aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+    };
+
+    for (name, bytes) in [
+        ("TSV", to_tsv(&result, &provenance).expect("TSV").bytes),
+        ("CSV", to_csv(&result, &provenance).expect("CSV").bytes),
+        ("JSON", to_json(&result, &provenance).expect("JSON").bytes),
+        ("XML", to_xml(&result, &provenance).expect("XML").bytes),
+    ] {
+        let text = text_of(bytes);
+        let first = text
+            .find("purrdfesc_a_000020b")
+            .unwrap_or_else(|| panic!("{name} lost the escaped label: {text}"));
+        assert!(
+            text[first + 1..].contains("purrdfesc_"),
+            "{name} must emit two DISTINCT escaped labels: {text}"
+        );
     }
 }
 
 #[test]
-fn every_writer_rejects_the_empty_label() {
+fn construct_graph_writer_escapes_every_label() {
+    // The CONSTRUCT graph rides inside the JSON document as N-Triples text,
+    // through the same kernel writer, so its labels are escaped identically.
     let provenance = ResultProvenance::default();
-    let result = select_with_blank("");
-    to_tsv(&result, &provenance).expect_err("TSV rejects the empty label");
-    to_csv(&result, &provenance).expect_err("CSV rejects the empty label");
-    to_json(&result, &provenance).expect_err("JSON rejects the empty label");
-    to_xml(&result, &provenance).expect_err("XML rejects the empty label");
+    for label in HOSTILE_LABELS {
+        let result = graph_with_blank(label);
+        let bytes = to_json(&result, &provenance)
+            .unwrap_or_else(|e| panic!("the graph writer must serialize {label:?}: {e}"))
+            .bytes;
+        let text = text_of(bytes);
+        let emitted = label_between(&text, "_:", " ");
+        assert!(
+            is_valid_label(emitted, LabelAlphabet::BlankNodeLabel),
+            "the graph writer wrote {emitted:?} for {label:?}"
+        );
+    }
 }
 
 #[test]
-fn construct_graph_writer_enforces_the_blank_node_label_alphabet() {
-    // The CONSTRUCT graph rides inside the JSON document as N-Triples text, so
-    // its labels must satisfy BLANK_NODE_LABEL even though the JSON *bindings*
-    // alphabet is unconstrained.
+fn writers_are_byte_deterministic_for_escaped_labels() {
     let provenance = ResultProvenance::default();
-    for &(label, bnl_ok) in HOSTILE_LABELS {
-        let result = graph_with_blank(label);
-        let outcome = to_json(&result, &provenance);
-        if bnl_ok {
-            outcome
-                .unwrap_or_else(|e| panic!("graph writer must accept blank label {label:?}: {e}"));
-        } else {
-            let err = outcome.expect_err(&format!(
-                "graph writer must reject blank label {label:?} loudly"
-            ));
-            assert!(
-                err.to_string().contains("blank-node label"),
-                "graph-writer error names the failure for {label:?}: {err}"
-            );
-        }
+    for label in HOSTILE_LABELS {
+        let result = select_with_blank(label);
+        assert_eq!(
+            to_tsv(&result, &provenance).expect("TSV").bytes,
+            to_tsv(&result, &provenance).expect("TSV").bytes,
+            "{label:?}"
+        );
+        assert_eq!(
+            to_json(&result, &provenance).expect("JSON").bytes,
+            to_json(&result, &provenance).expect("JSON").bytes,
+            "{label:?}"
+        );
+        assert_eq!(
+            to_xml(&result, &provenance).expect("XML").bytes,
+            to_xml(&result, &provenance).expect("XML").bytes,
+            "{label:?}"
+        );
     }
 }

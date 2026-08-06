@@ -41,9 +41,9 @@
 
 use proptest::prelude::*;
 use purrdf_rdf::{
-    NativeRdfFormat, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfLookaside, RdfQuad, RdfTerm,
-    RdfTriple, SerializeGraph, canonical_flat_nquads, flat_rdf_quads_from_dataset, parse_dataset,
-    serialize_dataset,
+    BlankScope, NativeRdfFormat, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfLookaside, RdfQuad,
+    RdfTerm, RdfTriple, SerializeGraph, canonical_flat_nquads, flat_rdf_quads_from_dataset,
+    parse_dataset, serialize_dataset,
 };
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
@@ -249,19 +249,19 @@ fn arb_dataset_star() -> impl Strategy<Value = std::sync::Arc<RdfDataset>> {
 }
 
 /// NCName-LEGAL blank labels for the RDF/XML round-trip: letter or underscore
-/// start (never a digit — `rdf:nodeID` values are XML `NCName`s), ASCII tails,
-/// interior hyphens and interior dots. ASCII-only by the codec's own contract:
-/// the RDF/XML PARSER enforces a deliberately ASCII-narrow ingress label
-/// alphabet (see `validate_blank_label` in `native_codecs/rdfxml.rs`), so a
-/// round-trippable label must sit in the intersection of the NCName egress
-/// alphabet and that ingress contract. Non-ASCII `PN_CHARS_BASE` coverage
-/// lives in [`arb_bnode_label`] for the text codecs.
+/// start (never a digit — `rdf:nodeID` values are XML `NCName`s), interior
+/// hyphens, interior dots, and the non-ASCII `NCNameStartChar` range. The
+/// RDF/XML codec emits and re-reads the full `NCName` alphabet, so the
+/// generator covers it rather than an ASCII subset; the pass-through property
+/// below asserts these labels reach the document unescaped.
 fn arb_ncname_label() -> impl Strategy<Value = String> {
     prop_oneof![
         "[a-z][a-z0-9]{0,6}".prop_map(String::from),
         "_[a-z0-9]{0,6}".prop_map(String::from),
         "[a-z][a-z0-9]{0,2}-[a-z0-9]{1,3}".prop_map(String::from),
         "[a-z][a-z0-9]{0,2}\\.[a-z0-9]{1,3}".prop_map(String::from),
+        (arb_pn_chars_base_nonascii(), "[a-z0-9]{0,4}")
+            .prop_map(|(head, tail)| format!("{head}{tail}")),
     ]
 }
 
@@ -368,6 +368,38 @@ proptest! {
         let bytes = serialize(dataset.as_ref(), NativeRdfFormat::RdfXml);
         let after = parse(&bytes, NativeRdfFormat::RdfXml);
         prop_assert_eq!(canonical(&flat(dataset.as_ref())), canonical(after.as_ref()));
+    }
+
+    /// The egress escape is INERT on an in-alphabet label: a legal
+    /// `BLANK_NODE_LABEL` reaches the N-Triples document byte-identically (up
+    /// to the scope qualification every writer applies first), so no fixture,
+    /// vector or golden can churn.
+    #[test]
+    fn legal_blank_labels_pass_through_unescaped(label in arb_bnode_label()) {
+        let dataset = dataset_from_quads(vec![RdfQuad::new(
+            RdfTerm::blank_node(label.clone()),
+            "https://example.org/p",
+            RdfTerm::iri("https://example.org/o"),
+        )]);
+        let bytes = serialize(dataset.as_ref(), NativeRdfFormat::NTriples);
+        let text = String::from_utf8(bytes).expect("utf-8");
+        let qualified = BlankScope::DEFAULT.qualify_label(&label);
+        prop_assert!(text.starts_with(&format!("_:{qualified} ")), "{}", text);
+    }
+
+    /// The same inertness for the RDF/XML `NCName` alphabet: an in-alphabet
+    /// label lands in `rdf:nodeID` verbatim.
+    #[test]
+    fn legal_ncname_labels_pass_through_unescaped(label in arb_ncname_label()) {
+        let dataset = dataset_from_quads(vec![RdfQuad::new(
+            RdfTerm::blank_node(label.clone()),
+            "https://example.org/p",
+            RdfTerm::iri("https://example.org/o"),
+        )]);
+        let bytes = serialize(dataset.as_ref(), NativeRdfFormat::RdfXml);
+        let text = String::from_utf8(bytes).expect("utf-8");
+        let qualified = BlankScope::DEFAULT.qualify_label(&label);
+        prop_assert!(text.contains(&format!("rdf:nodeID=\"{qualified}\"")), "{}", text);
     }
 }
 
@@ -486,24 +518,31 @@ fn trig_dotted_label_followed_by_close_brace() {
     );
 }
 
-/// The RDF/XML serializer REFUSES an NCName-illegal blank label (`rdf:nodeID`
-/// cannot carry a digit-led label) with a diagnostic naming the label.
+/// The RDF/XML serializer ESCAPES an NCName-illegal blank label (`rdf:nodeID`
+/// cannot carry a digit-led label) instead of refusing, and the escaped
+/// document round-trips to an isomorphic dataset.
 #[test]
-fn rdfxml_rejects_ncname_illegal_blank_label_with_diagnostic() {
+fn rdfxml_escapes_an_ncname_illegal_blank_label() {
     let dataset = dataset_from_quads(vec![RdfQuad::new(
         RdfTerm::blank_node("0abc"),
         "https://example.org/p",
         RdfTerm::iri("https://example.org/o"),
     )]);
-    let err = serialize_dataset(
+    let bytes = serialize_dataset(
         dataset.as_ref(),
         NativeRdfFormat::RdfXml.media_type(),
         SerializeGraph::Dataset,
     )
-    .expect_err("an NCName-illegal blank label must be refused, never silently remapped");
-    let message = err.to_string();
+    .expect("an NCName-illegal blank label is escaped, never refused");
+    let text = String::from_utf8(bytes.clone()).expect("utf-8");
     assert!(
-        message.contains("0abc"),
-        "the diagnostic must name the offending label: {message}"
+        text.contains("rdf:nodeID=\"purrdfesc_0abc\""),
+        "the digit-led label must be escaped into an NCName: {text}"
+    );
+    let after = parse(&bytes, NativeRdfFormat::RdfXml);
+    assert_eq!(
+        canonical(&flat(dataset.as_ref())),
+        canonical(after.as_ref()),
+        "the escaped document is isomorphic to the input: {text}"
     );
 }

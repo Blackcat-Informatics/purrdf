@@ -233,15 +233,8 @@ pub fn list_functions_catalog(vocab: &crate::vocab::SliceVocab) -> purrdf::fno::
 /// `functions.fno.ttl` (§19 one-path), then retags the internal `@x-purrdf-english`
 /// language tag to the public `@en` and renders each quad as one N-Triples line.
 /// The content is fixed, so re-running is byte-identical.
-///
-/// # Errors
-///
-/// Returns an [`purrdf::RdfDiagnostic`] when a blank-node label in the catalog
-/// is not legal Turtle `BLANK_NODE_LABEL` syntax (the catalog mints only
-/// ASCII-safe labels, so this can only fire on a corrupted vocabulary).
-pub fn emit_list_functions(
-    vocab: &crate::vocab::SliceVocab,
-) -> Result<String, purrdf::RdfDiagnostic> {
+#[must_use]
+pub fn emit_list_functions(vocab: &crate::vocab::SliceVocab) -> String {
     let cat = list_functions_catalog(vocab);
     let tag_map: std::collections::BTreeMap<String, String> =
         std::collections::BTreeMap::from([("x-purrdf-english".to_owned(), "en".to_owned())]);
@@ -275,7 +268,7 @@ mod tests {
 
     /// Parse the emitted N-Triples into a dataset (the new committed-artifact form).
     fn emitted_store() -> Dataset {
-        let text = emit_list_functions(&vocab()).expect("legal labels emit");
+        let text = emit_list_functions(&vocab());
         Dataset::parse(
             text.as_bytes(),
             "application/n-triples",
@@ -383,9 +376,6 @@ mod tests {
 
     #[test]
     fn is_deterministic() {
-        assert_eq!(
-            emit_list_functions(&vocab()).expect("legal labels emit"),
-            emit_list_functions(&vocab()).expect("legal labels emit")
-        );
+        assert_eq!(emit_list_functions(&vocab()), emit_list_functions(&vocab()));
     }
 }

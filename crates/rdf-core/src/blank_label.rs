@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Exact label alphabets for the syntax this workspace *emits*: blank-node
-//! labels, XML `NCName`s, and the unconstrained catch-all used where a
-//! consumer imposes no grammar of its own.
+//! Exact label alphabets for the syntax this workspace *emits* -- blank-node
+//! labels, XML `NCName`s, XML character data -- plus the deterministic,
+//! injective escape ([`escape_label`]) every serializer applies so an
+//! out-of-alphabet label never becomes an unreadable document.
 //!
 //! # Ingress-liberal, egress-exact
 //!
@@ -19,75 +20,163 @@
 //! not this workspace's liberal approximation. This module is therefore the
 //! exact egress contract for label syntax -- the ranges below are transcribed
 //! verbatim from the W3C Turtle/SPARQL `PN_CHARS_BASE`/`PN_CHARS` productions
-//! and the XML 1.0 `NameStartChar`/`NameChar` productions, not approximated.
-//! A label that fails [`is_valid_label`] cannot be emitted by any codec
-//! without producing a document no conforming parser -- including PurRDF's
-//! own -- can read back.
+//! and the XML 1.0 `NameStartChar`/`NameChar`/`Char` productions, not
+//! approximated.
 //!
-//! # The three writers
+//! # The escape contract: serialization stays total
 //!
-//! This workspace has exactly three egress paths for blank-node identity,
-//! and each has a different relationship to this module:
+//! A blank-node label is *not* part of a graph's meaning: RDF identifies
+//! blank nodes only up to renaming, so swapping `_:x7` for another label is
+//! an isomorphism-preserving operation -- every triple's meaning, and the
+//! whole graph up to blank-node renaming, is identical before and after.
+//! Serializers therefore never refuse a label: [`escape_label`] rewrites an
+//! out-of-alphabet label into the target syntax's alphabet at egress, so
+//! `parse` -> `serialize` is **total** in every format this workspace emits.
 //!
-//! - `native_codecs` Turtle is **label-preserving**: it writes the blank
-//!   node's existing label back out verbatim, so an input label that is not
-//!   valid Turtle syntax would otherwise round-trip into an unparsable
-//!   document. That path is where [`is_valid_blank_node_label`] is the
-//!   validation gate.
-//! - `turtle_render` mints its own structural `_:bN` labels from a counter;
-//!   it never echoes a caller-supplied label, so it is immune to this
-//!   problem by construction and has no call into this module.
-//! - RDFC-1.0 canonicalization mints `c14n0`, `c14n1`, … labels (see
-//!   `crates::ir::canon`). Those labels are ASCII letters and digits only,
-//!   which is a subset of every alphabet this module defines, so canonical
-//!   labels are legal everywhere without needing a check.
+//! The escape is:
+//!
+//! - **Deterministic** -- a pure function of `(label, alphabet)`, with no
+//!   clock, randomness, hash-iteration order, or document-level state, so the
+//!   same dataset always serializes to the same bytes.
+//! - **Injective by construction** -- distinct labels always escape to
+//!   distinct labels, and no *legal* label can collide with the escape of an
+//!   illegal one, because a legal label that itself begins with the reserved
+//!   [`ESCAPE_MARKER`] is escaped too (see [`escape_label`]). Co-reference is
+//!   therefore preserved exactly: two occurrences of one blank node stay one
+//!   blank node, and two distinct blank nodes stay distinct.
+//! - **Stateless and streaming-safe** -- no per-document collision map is
+//!   needed, which is what lets the row-at-a-time SPARQL-results writers use
+//!   the same escape as the whole-dataset RDF serializers.
+//! - **Pass-through for legal labels** -- a label already legal under the
+//!   target alphabet is returned borrowed and byte-identical, so real data
+//!   never churns.
+//!
+//! Injectivity and *idempotence* cannot both hold, and injectivity is the one
+//! that carries meaning. An idempotent escape would satisfy
+//! `escape(escape(x)) == escape(x)`, which maps the two distinct labels `x`
+//! and `escape(x)` onto one -- exactly the blank-node conflation injectivity
+//! exists to rule out. So re-serializing a document whose labels were already
+//! escaped escapes them again: the graph is unchanged (still isomorphic, still
+//! the same co-reference), but the labels grow. A pipeline that wants a stable
+//! fixed point runs `canonical_relabel` (below) before egress -- its `c14n{n}`
+//! labels are legal in every alphabet, so the escape is the identity on them
+//! and re-serialization is byte-stable.
+//!
+//! Callers that want a *chosen* relabeling rather than a mechanical escape
+//! have explicit recourse operations -- `canonical_relabel`, `skolemize` and
+//! `deskolemize` in [`crate::ir`] -- which rewrite the dataset before egress
+//! so the labels in the document are the caller's, not the escape's.
 //!
 //! # Relabeling vs. canonicalization: consistent doctrines, different roles
 //!
-//! Serialization is free to relabel a blank node -- swapping `_:x7` for
-//! `_:x7_esc0` (or a `turtle_render` structural `_:bN`) is an
-//! isomorphism-preserving operation: it changes no triple's *meaning*: the
-//! graph up to blank-node renaming is identical before and after. Escaping
-//! or substituting an out-of-alphabet label is therefore always a legitimate
-//! move on a *serialization* label.
-//!
-//! RDFC-1.0 canonicalization refuses that same move for a different reason:
-//! its output bytes are not a rendering choice, they mint the dataset's
+//! RDFC-1.0 canonicalization refuses to relabel for a different reason: its
+//! output bytes are not a rendering choice, they mint the dataset's
 //! content-addressed identity (two isomorphic graphs must canonicalize to
 //! byte-identical output, and two non-isomorphic graphs must not collide).
 //! Relabeling a canonical label to dodge an alphabet constraint would be
 //! indistinguishable, downstream, from silently changing which graph the
-//! identity was computed over. Both doctrines refuse to let an invalid label
-//! leak into a document; they differ only in *how* they refuse -- a
-//! serialization writer may pick a fresh legal label, while a canonicalizer
-//! must never need to, because its alphabet (plain ASCII `cNNN` counters) was
-//! chosen to be legal everywhere in the first place.
+//! identity was computed over. It never needs to: canonicalization mints
+//! `c14n0`, `c14n1`, … labels (see [`crate::ir::canon`]) whose ASCII letters
+//! and digits are a subset of every alphabet this module defines, so a
+//! canonical label is legal everywhere and [`escape_label`] is the identity
+//! on it.
 
 use core::cmp::Ordering;
+use std::borrow::Cow;
 
 /// Which label grammar [`is_valid_label`] should check against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LabelAlphabet {
     /// The W3C Turtle/SPARQL `BLANK_NODE_LABEL` production (the part after
-    /// `_:`); see [`is_valid_blank_node_label`].
+    /// `_:`); see [`is_valid_blank_node_label`]. The alphabet of the Turtle
+    /// family (Turtle / TriG / N-Triples / N-Quads) and of every syntax whose
+    /// specification types a blank-node identifier as a `BLANK_NODE_LABEL`
+    /// rather than as free text (HexTuples, JSON-LD, YAML-LD, the SPARQL
+    /// result formats).
     BlankNodeLabel,
-    /// The XML 1.0 `NCName` production; see [`is_valid_ncname`].
+    /// The XML 1.0 `NCName` production; see [`is_valid_ncname`]. The alphabet
+    /// of the RDF/XML `rdf:nodeID` attribute.
     NcName,
-    /// No grammar beyond "non-empty": any string with at least one
-    /// `char` is accepted.
-    Unconstrained,
+    /// Non-empty text that XML 1.0 character data carries through unchanged;
+    /// see [`is_valid_xml_text`]. The alphabet of the TriX `<id>` element.
+    XmlText,
 }
+
+/// The reserved prefix [`escape_label`] writes in front of every escaped
+/// label. A label that begins with it is always escaped -- even when it is
+/// otherwise legal -- which is what makes the escape injective without any
+/// document-level state.
+pub const ESCAPE_MARKER: &str = "purrdfesc_";
 
 /// Whether `label` is legal under `alphabet`.
 ///
-/// Dispatches to [`is_valid_blank_node_label`], [`is_valid_ncname`], or a
-/// non-empty check, per [`LabelAlphabet`].
+/// Dispatches to [`is_valid_blank_node_label`], [`is_valid_ncname`], or
+/// [`is_valid_xml_text`], per [`LabelAlphabet`].
 #[must_use]
 pub fn is_valid_label(label: &str, alphabet: LabelAlphabet) -> bool {
     match alphabet {
         LabelAlphabet::BlankNodeLabel => is_valid_blank_node_label(label),
         LabelAlphabet::NcName => is_valid_ncname(label),
-        LabelAlphabet::Unconstrained => !label.is_empty(),
+        LabelAlphabet::XmlText => is_valid_xml_text(label),
+    }
+}
+
+/// Rewrite `label` into `alphabet`, returning it BORROWED and byte-identical
+/// when it is already legal.
+///
+/// This is the egress escape every serializer applies to a scope-qualified
+/// blank-node label. It is a pure, deterministic, stateless function, and it
+/// is **injective** for a fixed `alphabet`: distinct inputs always produce
+/// distinct outputs, so blank-node co-reference survives serialization exactly
+/// (relabeling a blank node preserves the graph up to isomorphism, which is
+/// the only identity RDF gives a blank node).
+///
+/// # The encoding
+///
+/// An escaped label is [`ESCAPE_MARKER`] followed by the input encoded
+/// character by character: an ASCII letter or digit passes through as itself,
+/// and every other scalar becomes `_` plus its code point as exactly six
+/// uppercase hex digits (`_0000D7` for `×`). The escaped body is therefore
+/// always `[A-Za-z0-9_]*`, which is simultaneously legal `BLANK_NODE_LABEL`,
+/// legal `NCName` and legal XML character data -- so one encoding satisfies
+/// every alphabet in the strictest sense, including the `BLANK_NODE_LABEL`
+/// rule that a label may not end in `.`.
+///
+/// Decoding is unambiguous (a `_` always introduces exactly six hex digits,
+/// and no pass-through character is `_`), so the encoding is injective. The
+/// escape *image* cannot collide with a pass-through label either, because a
+/// label that already begins with [`ESCAPE_MARKER`] is escaped as well, even
+/// when it is legal -- the one case where a legal label does not pass through.
+#[must_use]
+pub fn escape_label(label: &str, alphabet: LabelAlphabet) -> Cow<'_, str> {
+    if is_valid_label(label, alphabet) && !label.starts_with(ESCAPE_MARKER) {
+        return Cow::Borrowed(label);
+    }
+    let mut escaped = String::with_capacity(ESCAPE_MARKER.len() + label.len() + 8);
+    escaped.push_str(ESCAPE_MARKER);
+    for ch in label.chars() {
+        if ch.is_ascii_alphanumeric() {
+            escaped.push(ch);
+        } else {
+            escaped.push('_');
+            push_hex6(ch as u32, &mut escaped);
+        }
+    }
+    debug_assert!(
+        is_valid_label(&escaped, alphabet),
+        "escape_label must always produce a label legal under the target alphabet"
+    );
+    Cow::Owned(escaped)
+}
+
+/// Append `cp` as exactly six uppercase hex digits (24 bits covers the whole
+/// `0..=0x10FFFF` scalar range), the fixed-width escape body [`escape_label`]
+/// writes after each `_`.
+fn push_hex6(cp: u32, out: &mut String) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    for nibble in (0..6).rev() {
+        let index = ((cp >> (nibble * 4)) & 0xF) as usize;
+        out.push(char::from(HEX[index]));
     }
 }
 
@@ -144,6 +233,32 @@ pub fn is_valid_ncname(label: &str) -> bool {
         return false;
     }
     chars.all(|ch| is_pn_chars(ch) || ch == '.')
+}
+
+/// Whether `label` survives XML 1.0 character data unchanged.
+///
+/// Requires a non-empty string in which every scalar is a legal XML 1.0 `Char`
+/// (`#x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]`,
+/// so C0 controls and `U+FFFE`/`U+FFFF` are excluded; surrogates are not
+/// representable in a `str` at all) and no scalar is whitespace. XML has no
+/// representation whatsoever for a C0 control -- not even a character
+/// reference -- so such a label cannot be carried by an XML document at any
+/// escaping level. Whitespace is excluded for a second reason: XML normalizes
+/// line endings and collapses whitespace in attribute values, and this
+/// workspace's TriX reader trims `<id>` element text, so a whitespace-bearing
+/// label cannot carry identity through an XML round trip even though XML can
+/// represent the characters.
+#[must_use]
+pub fn is_valid_xml_text(label: &str) -> bool {
+    !label.is_empty() && label.chars().all(is_xml_text_char)
+}
+
+/// One scalar of [`is_valid_xml_text`]: a legal XML 1.0 `Char` that is not
+/// whitespace. `#x9`/`#xA`/`#xD` are legal `Char`s but are whitespace, so the
+/// whitespace test alone removes them from the `[#x20-…]` gap below.
+fn is_xml_text_char(c: char) -> bool {
+    !c.is_whitespace()
+        && matches!(c as u32, 0x20..=0xD7FF | 0xE000..=0xFFFD | 0x10000..=0x0010_FFFF)
 }
 
 /// Inclusive Unicode scalar-value range `[lo, hi]`.
@@ -214,9 +329,46 @@ fn is_pn_chars(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        LabelAlphabet, is_pn_chars, is_pn_chars_u, is_valid_blank_node_label, is_valid_label,
-        is_valid_ncname,
+        ESCAPE_MARKER, LabelAlphabet, escape_label, is_pn_chars, is_pn_chars_u,
+        is_valid_blank_node_label, is_valid_label, is_valid_ncname, is_valid_xml_text,
     };
+    use std::borrow::Cow;
+    use std::collections::BTreeMap;
+
+    /// Every alphabet a serializer targets, for sweeps that must hold on all
+    /// of them.
+    const ALL_ALPHABETS: &[LabelAlphabet] = &[
+        LabelAlphabet::BlankNodeLabel,
+        LabelAlphabet::NcName,
+        LabelAlphabet::XmlText,
+    ];
+
+    /// Adversarial labels: control characters, whitespace, delimiters, the
+    /// alphabet boundary gaps, non-ASCII letters, the empty label, and labels
+    /// that collide with the reserved escape marker.
+    const HOSTILE_LABELS: &[&str] = &[
+        "",
+        "a",
+        "0abc",
+        "a.b",
+        "trailing.",
+        "-lead",
+        ".lead",
+        "a b",
+        "a\tb",
+        "a\nb",
+        "bad\u{1f}label",
+        "\u{7f}",
+        "<urn:x>",
+        "a:b",
+        "a/b",
+        "\u{d7}y",
+        "日本",
+        "c14n0",
+        "purrdfesc_a",
+        "purrdfesc_",
+        "purrdfesc_a_000020b",
+    ];
 
     /// Independent re-transcription of `PN_CHARS_BASE` via `matches!` range
     /// patterns, kept deliberately separate from the production binary-search
@@ -423,16 +575,180 @@ mod tests {
         assert!(is_valid_label("a-b.c", LabelAlphabet::BlankNodeLabel));
         assert!(!is_valid_label("0b", LabelAlphabet::NcName));
         assert!(is_valid_label("b0", LabelAlphabet::NcName));
+        assert!(is_valid_label("<urn:x>", LabelAlphabet::XmlText));
     }
 
     #[test]
-    fn unconstrained_accepts_any_non_empty_string() {
-        for label in ["a b", "<urn:x>"] {
-            assert!(
-                is_valid_label(label, LabelAlphabet::Unconstrained),
-                "{label:?}"
-            );
+    fn xml_text_admits_representable_non_whitespace_and_refuses_the_rest() {
+        for label in ["a", "<urn:x>", "a.b", "trailing.", "日本", "\u{d7}y", "&"] {
+            assert!(is_valid_xml_text(label), "{label:?}");
         }
-        assert!(!is_valid_label("", LabelAlphabet::Unconstrained));
+        for label in [
+            "",
+            "a b",
+            "a\tb",
+            "a\nb",
+            "a\rb",
+            "bad\u{1f}label",
+            "\u{fffe}",
+            "\u{ffff}",
+            "\u{85}", // NEL: whitespace
+            "\u{a0}", // NBSP: whitespace
+        ] {
+            assert!(!is_valid_xml_text(label), "{label:?}");
+        }
+        // U+007F is a legal XML 1.0 Char (the exclusion is C0, not DEL).
+        assert!(is_valid_xml_text("\u{7f}"));
+    }
+
+    // ── escape_label ────────────────────────────────────────────────────────
+
+    #[test]
+    fn legal_labels_are_borrowed_byte_identically() {
+        // The one legal label that does NOT pass through is a label carrying
+        // the reserved marker, which must be escaped away from the image.
+        let legal: &[(&str, LabelAlphabet)] = &[
+            ("alpha", LabelAlphabet::BlankNodeLabel),
+            ("beta.s2", LabelAlphabet::BlankNodeLabel),
+            ("0abc", LabelAlphabet::BlankNodeLabel),
+            ("日本", LabelAlphabet::BlankNodeLabel),
+            ("c14n0", LabelAlphabet::BlankNodeLabel),
+            ("alpha", LabelAlphabet::NcName),
+            ("trailing.", LabelAlphabet::NcName),
+            ("<urn:x>", LabelAlphabet::XmlText),
+        ];
+        for &(label, alphabet) in legal {
+            let escaped = escape_label(label, alphabet);
+            assert!(
+                matches!(escaped, Cow::Borrowed(_)),
+                "{label:?} under {alphabet:?} must pass through borrowed"
+            );
+            assert_eq!(escaped, label);
+        }
+    }
+
+    #[test]
+    fn escape_output_is_always_legal_under_the_target_alphabet() {
+        for &alphabet in ALL_ALPHABETS {
+            for label in HOSTILE_LABELS {
+                let escaped = escape_label(label, alphabet);
+                assert!(
+                    is_valid_label(&escaped, alphabet),
+                    "escape of {label:?} under {alphabet:?} is illegal: {escaped:?}"
+                );
+            }
+        }
+    }
+
+    /// Property sweep: EVERY single-scalar label over a broad code-point range,
+    /// plus that scalar in an inner position, escapes to a legal label under
+    /// every alphabet.
+    #[test]
+    fn escape_output_is_legal_for_every_scalar_position() {
+        for cp in (0u32..=0x2FFF).chain([
+            0xD7FF,
+            0xE000,
+            0xFFFD,
+            0xFFFE,
+            0xFFFF,
+            0x0001_0000,
+            0x0010_FFFF,
+        ]) {
+            let Some(c) = char::from_u32(cp) else {
+                continue;
+            };
+            for label in [c.to_string(), format!("a{c}"), format!("{c}z")] {
+                for &alphabet in ALL_ALPHABETS {
+                    let escaped = escape_label(&label, alphabet);
+                    assert!(
+                        is_valid_label(&escaped, alphabet),
+                        "escape of {label:?} ({cp:#06x}) under {alphabet:?} is illegal: {escaped:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn escape_is_injective_over_the_hostile_table() {
+        for &alphabet in ALL_ALPHABETS {
+            let mut seen: BTreeMap<String, &str> = BTreeMap::new();
+            for label in HOSTILE_LABELS {
+                let escaped = escape_label(label, alphabet).into_owned();
+                if let Some(previous) = seen.insert(escaped.clone(), label) {
+                    panic!("{alphabet:?} maps {previous:?} and {label:?} both to {escaped:?}");
+                }
+            }
+        }
+    }
+
+    /// The marker-collision case stated explicitly: a LEGAL label that happens
+    /// to equal the escape of an illegal one must itself be escaped, so the
+    /// two never conflate.
+    #[test]
+    fn a_legal_label_equal_to_an_escape_image_is_escaped_away_from_it() {
+        let illegal = "a b";
+        let image = escape_label(illegal, LabelAlphabet::BlankNodeLabel).into_owned();
+        assert_eq!(image, "purrdfesc_a_000020b");
+        assert!(
+            is_valid_blank_node_label(&image),
+            "the escape image is itself a legal label"
+        );
+        let twin = escape_label(&image, LabelAlphabet::BlankNodeLabel).into_owned();
+        assert_ne!(
+            twin, image,
+            "a legal label matching the escape image must be escaped away from it"
+        );
+        assert!(twin.starts_with(ESCAPE_MARKER));
+    }
+
+    #[test]
+    fn escape_is_deterministic_across_runs() {
+        for &alphabet in ALL_ALPHABETS {
+            for label in HOSTILE_LABELS {
+                assert_eq!(
+                    escape_label(label, alphabet),
+                    escape_label(label, alphabet),
+                    "{label:?} under {alphabet:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn escape_encoding_is_the_documented_marker_plus_fixed_width_hex() {
+        assert_eq!(
+            escape_label("bad\u{1f}label", LabelAlphabet::BlankNodeLabel),
+            "purrdfesc_bad_00001Flabel"
+        );
+        assert_eq!(
+            escape_label("0abc", LabelAlphabet::NcName),
+            "purrdfesc_0abc"
+        );
+        assert_eq!(escape_label("", LabelAlphabet::NcName), ESCAPE_MARKER);
+        assert_eq!(
+            escape_label("\u{10FFFF}", LabelAlphabet::BlankNodeLabel),
+            "purrdfesc__10FFFF"
+        );
+    }
+
+    /// A REWRITTEN label's body is pure `[A-Za-z0-9_]`, which is why one
+    /// encoding satisfies every alphabet at once (a pass-through keeps the
+    /// caller's bytes and is exempt by construction).
+    #[test]
+    fn rewritten_labels_are_ascii_word_characters_only() {
+        for &alphabet in ALL_ALPHABETS {
+            for label in HOSTILE_LABELS {
+                let Cow::Owned(escaped) = escape_label(label, alphabet) else {
+                    continue;
+                };
+                assert!(
+                    escaped
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_'),
+                    "{escaped:?}"
+                );
+            }
+        }
     }
 }

@@ -29,6 +29,7 @@ use super::ser_model::{SerGraph, SerTerm, SerTermKind};
 use super::text_parse::LineParseMode;
 use crate::nesting::guard_xml_nesting;
 use crate::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId};
+use purrdf_core::blank_label::{LabelAlphabet, is_valid_label};
 
 /// The TriX codec: a standalone (non-line-family) [`RdfCodec`] over the "Triples in XML"
 /// quads syntax. A classic quad syntax with no RDF-1.2 triple-term surface, so it is
@@ -292,32 +293,18 @@ fn validate_iri(value: &str) -> Result<(), RdfDiagnostic> {
     Ok(())
 }
 
-/// Blank-node label contract (mirrors the `rdfxml` codec's contract).
+/// Blank-node label contract for `<id>` element text: the same
+/// [`LabelAlphabet::XmlText`] alphabet this codec EMITS, so every document the
+/// TriX serializer writes re-parses here (ingress and egress agree on one
+/// alphabet per syntax).
 fn validate_blank_label(label: &str) -> Result<(), RdfDiagnostic> {
-    let mut chars = label.chars();
-    let Some(first) = chars.next() else {
-        return Err(parse_err("empty blank-node identifier"));
-    };
-    if !first.is_ascii_alphanumeric() && first != '_' {
-        return Err(parse_err(format!(
+    if is_valid_label(label, LabelAlphabet::XmlText) {
+        Ok(())
+    } else {
+        Err(parse_err(format!(
             "invalid blank-node identifier {label:?}"
-        )));
+        )))
     }
-    let mut last = first;
-    for ch in chars {
-        if !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-' && ch != '.' {
-            return Err(parse_err(format!(
-                "invalid blank-node identifier {label:?}"
-            )));
-        }
-        last = ch;
-    }
-    if last == '.' {
-        return Err(parse_err(format!(
-            "invalid blank-node identifier {label:?}"
-        )));
-    }
-    Ok(())
 }
 
 // ───────────────────────────────────────────────────────────────────────────────

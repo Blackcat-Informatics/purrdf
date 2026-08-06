@@ -25,39 +25,35 @@ use super::media_type::{NativeRdfFormat, classify};
 use super::ser_model::{SerAnnotationRow, SerGraph, SerReifierRow, SerTerm, SerTermKind};
 use crate::ir::TermRef;
 use crate::{DatasetView, RdfDiagnostic, RdfTextDirection, SerializeGraph, TermValue};
-use purrdf_core::blank_label::{LabelAlphabet, is_valid_label};
+use purrdf_core::blank_label::{LabelAlphabet, escape_label};
 
 /// The blank-node label alphabet the TARGET format's codec can legally emit —
-/// the egress contract enforced at the [`SerGraph`] ingress so no codec can
-/// silently write a label that is illegal in ITS syntax.
+/// the egress contract applied at the [`SerGraph`] ingress so no codec can write
+/// a label that is illegal in ITS syntax. Exactly one alphabet per target
+/// syntax; a label outside it is escaped, never refused.
 ///
 /// - The line/Turtle-family codecs write `_:{label}` tokens, so their labels
 ///   must satisfy the exact W3C Turtle/SPARQL `BLANK_NODE_LABEL` production.
 /// - RDF/XML writes labels into `rdf:nodeID` attributes, whose value the RDF/XML
 ///   grammar constrains to an XML `NCName`.
-/// - The structured codecs (TriX `<id>` element text, HexTuples/JSON-LD/YAML-LD
-///   JSON strings) escape the label as opaque text, so any non-empty string
-///   re-reads losslessly and only emptiness is rejected.
+/// - TriX writes the label as `<id>` element text, so the constraint is what XML
+///   1.0 character data can carry unchanged: XML has NO representation for a C0
+///   control (not even a character reference), and XML whitespace normalization
+///   plus element-text trimming means whitespace cannot carry identity either.
+/// - HexTuples, JSON-LD and YAML-LD type their blank identifiers as
+///   `BLANK_NODE_LABEL`-shaped `_:` names in their own specifications, not as
+///   free text, so they take the same alphabet as the Turtle family.
 const fn blank_label_alphabet(format: NativeRdfFormat) -> LabelAlphabet {
     match format {
         NativeRdfFormat::Turtle
         | NativeRdfFormat::TriG
         | NativeRdfFormat::NTriples
-        | NativeRdfFormat::NQuads => LabelAlphabet::BlankNodeLabel,
-        NativeRdfFormat::RdfXml => LabelAlphabet::NcName,
-        NativeRdfFormat::TriX
+        | NativeRdfFormat::NQuads
         | NativeRdfFormat::HexTuples
         | NativeRdfFormat::JsonLd
-        | NativeRdfFormat::YamlLd => LabelAlphabet::Unconstrained,
-    }
-}
-
-/// The human-readable name of a [`LabelAlphabet`], for the hard-error diagnostic.
-const fn alphabet_name(alphabet: LabelAlphabet) -> &'static str {
-    match alphabet {
-        LabelAlphabet::BlankNodeLabel => "the Turtle/SPARQL BLANK_NODE_LABEL alphabet",
-        LabelAlphabet::NcName => "the XML NCName alphabet",
-        LabelAlphabet::Unconstrained => "an unconstrained (non-empty) label",
+        | NativeRdfFormat::YamlLd => LabelAlphabet::BlankNodeLabel,
+        NativeRdfFormat::RdfXml => LabelAlphabet::NcName,
+        NativeRdfFormat::TriX => LabelAlphabet::XmlText,
     }
 }
 
@@ -420,8 +416,9 @@ struct SerGraphInterner {
     /// reader produces.
     memo: HashMap<TermValue, usize>,
     /// The TARGET codec's blank-node label alphabet ([`blank_label_alphabet`]).
-    /// Every qualified blank label is validated against it at intern time, so no
-    /// downstream emitter can silently write a label illegal in its syntax.
+    /// Every qualified blank label is escaped into it at intern time, so no
+    /// downstream emitter can write a label illegal in its syntax and no codec
+    /// has to repeat the check.
     alphabet: LabelAlphabet,
 }
 
@@ -452,25 +449,16 @@ impl SerGraphInterner {
                 reifier: None,
             }),
             TermRef::Blank { label, scope } => {
-                // Validate the QUALIFIED label (what the codec will actually
-                // write) against the TARGET format's alphabet. An out-of-alphabet
-                // label is a hard error — never a silent remap, which would
-                // invisibly change the caller's blank-node identity story.
-                let qualified = scope.qualify_label(label).into_owned();
-                if !is_valid_label(&qualified, self.alphabet) {
-                    return Err(RdfDiagnostic::error(
-                        "native-codec-write",
-                        format!(
-                            "invalid blank-node label {qualified:?} for {}: the target \
-                             syntax cannot represent it and the serializer refuses to \
-                             emit an unreadable document",
-                            alphabet_name(self.alphabet)
-                        ),
-                    ));
-                }
+                // Escape the QUALIFIED label (what the codec will actually write)
+                // into the TARGET format's alphabet. A label already legal there
+                // passes through byte-identically; anything else is rewritten by
+                // the deterministic, injective escape, so serialization is total
+                // and blank-node co-reference survives exactly.
+                let qualified = scope.qualify_label(label);
+                let emitted = escape_label(&qualified, self.alphabet).into_owned();
                 self.push_term(SerTerm {
                     kind: SerTermKind::Bnode,
-                    value: Some(qualified),
+                    value: Some(emitted),
                     datatype: None,
                     lang: None,
                     direction: None,

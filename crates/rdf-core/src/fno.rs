@@ -539,13 +539,8 @@ fn attach_list(
 /// The returned text is full-IRI N-Triples (no `@prefix` block); the Python caller
 /// parses it back into a fresh rdflib `Graph` and the rdflib Turtle writer is the
 /// byte-stability layer.
-///
-/// # Errors
-///
-/// Returns an [`RdfDiagnostic`] when a blank-node label in the catalog is not
-/// legal Turtle `BLANK_NODE_LABEL` syntax (the catalog's own minted labels are
-/// ASCII-safe, so this can only fire on caller-supplied labels).
-pub fn to_ntriples(catalog: &FnoCatalog) -> Result<String, crate::RdfDiagnostic> {
+#[must_use]
+pub fn to_ntriples(catalog: &FnoCatalog) -> String {
     to_quads(catalog).iter().map(turtle::emit_quad).collect()
 }
 
@@ -756,7 +751,7 @@ mod tests {
             implementations: vec![],
             mappings: vec![],
         };
-        let text = to_ntriples(&empty).expect("legal labels serialize");
+        let text = to_ntriples(&empty);
         // The document node typing is always present.
         assert!(text.contains(&format!("<{OWL_ONTOLOGY}>")));
         assert!(text.contains(X_PURRDF_ENGLISH));
