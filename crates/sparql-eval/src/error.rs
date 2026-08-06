@@ -36,13 +36,18 @@ pub enum EvalError {
     /// parse error.
     Parse(String),
 
-    /// A well-formed but out-of-scope algebra node, query form, or builtin.
+    /// A well-formed construct this evaluator does not (or cannot) evaluate.
     ///
-    /// This is the hard-fail boundary: `SERVICE`, `LATERAL`, SPARQL `UPDATE`, and
-    /// not-yet-implemented builtins all surface here rather than being partially
-    /// evaluated. The string names the unsupported construct. (Property paths are now
-    /// evaluated in-engine — S8 — and `DESCRIBE` now evaluates via the canonical
-    /// Symmetric CBD, so neither is here.)
+    /// This is the hard-fail boundary. `SERVICE` federation, `LATERAL`, and SPARQL
+    /// `UPDATE` are all evaluated in-engine, so none of them surfaces here; what
+    /// remains is a narrow, enumerated residue: a variable-bound quoted-triple-term
+    /// component in a BGP or property-path pattern (structural triple-term matching
+    /// is out of scope), an unresolved custom SPARQL function or aggregate IRI,
+    /// `heldIn` called without a caller-supplied standpoint-predicate configuration,
+    /// and a manually constructed graph pattern whose nesting exceeds the parser's
+    /// safety bound. The string names the unsupported construct. (Property paths are
+    /// evaluated in-engine — S8 — and `DESCRIBE` evaluates via the canonical
+    /// Symmetric CBD, so neither is here either.)
     Unsupported(String),
 
     /// An internal invariant was violated — e.g. a solution row whose width does

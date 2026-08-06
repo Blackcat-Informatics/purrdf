@@ -996,8 +996,10 @@ impl NativeSparqlEngine {
     /// Pre-bound variables are substituted into FILTER/EXISTS expressions and
     /// `BOUND($v)` is rewritten to `true` for pre-bound variables, while
     /// triple-pattern positions still receive the VALUES-join rewrite. This is
-    /// the path used by the SHACL validator for `sh:select` / `sh:ask` bodies;
-    /// normal SPARQL evaluation uses [`SparqlEngine::query`].
+    /// a convenience wrapper equivalent to [`Self::query_shacl_view`] with
+    /// prebinding enabled and no function registry or mint prefix; the SHACL
+    /// validator itself drives [`Self::query_shacl_view`] directly. Normal
+    /// SPARQL evaluation uses [`SparqlEngine::query`].
     ///
     /// # Errors
     ///

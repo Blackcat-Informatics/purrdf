@@ -3863,7 +3863,9 @@ mod tests {
 
     #[test]
     fn predicate_wildcard_serializes_emit_only() {
-        // The wildcard is emit-only (no parse surface), per LOGIC-PATHS.md.
+        // The wildcard is emit-only: the grammar has no production for `<any>` /
+        // `<any:ns>`, so it can only be built through the algebra API (as here)
+        // and serialized via `Display`, never produced by parsing query text.
         let any = PropertyPathExpression::Wildcard { namespace: None };
         assert_eq!(any.to_string(), "<any>");
         let scoped = PropertyPathExpression::Wildcard {

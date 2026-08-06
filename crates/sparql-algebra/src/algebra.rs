@@ -679,7 +679,10 @@ impl core::fmt::Display for PropertyPathExpression {
     /// Serialize a property path to its SPARQL surface syntax.  The standard
     /// operators round-trip with the parser; the two PurRDF extensions render as
     /// `path{min,max}` (bounded repetition — round-trips) and `<any>` / `<any:ns>`
-    /// (predicate wildcard — **emit-only**, no parse, per `LOGIC-PATHS.md`).
+    /// (predicate wildcard — **emit-only**: constructed via the algebra API and
+    /// evaluated directly by the engine (`sparql-eval::path`), but the parser has
+    /// no grammar production for it, so this text does not round-trip back
+    /// through [`crate::parser::SparqlParser`]).
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::NamedNode(n) => write!(f, "<{}>", n.as_str()),

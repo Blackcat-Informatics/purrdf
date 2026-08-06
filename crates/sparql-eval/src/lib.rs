@@ -29,10 +29,16 @@
 //!   over the same indexed surface, wasm-safe, covering the full algebra
 //!   (`* + ? / | ^ !()` and the PurRDF `{n,m}` / `<any>` extensions) — see the
 //!   `path` module.
-//! - **Hard-fail, no degraded fallback.** A well-formed but out-of-scope algebra
-//!   node (`SERVICE`, `LATERAL`, SPARQL `UPDATE`) or an unimplemented builtin is a
-//!   typed [`EvalError::Unsupported`] — never a wrong answer, and never a partial one
-//!   *offered as complete* (the project `no-optionality` doctrine).
+//! - **Hard-fail, no degraded fallback.** `SERVICE` federation ([`remote`],
+//!   [`remote_http`]), `LATERAL` (`binop`), and SPARQL `UPDATE` ([`update`]) are all
+//!   evaluated in-engine — none of them is out of scope. What remains a typed
+//!   [`EvalError::Unsupported`] is a narrow, enumerated residue: a variable-bound
+//!   quoted-triple-term component in a BGP or property-path pattern (`convert`),
+//!   an unresolved custom SPARQL function or aggregate IRI (`expr`, `modifier`),
+//!   `heldIn` called without a caller-supplied standpoint-predicate configuration,
+//!   and a manually constructed graph pattern whose nesting exceeds the parser's
+//!   safety bound (`governor::soundness`). Never a wrong answer, and never a partial
+//!   one *offered as complete* (the project `no-optionality` doctrine).
 //! - **Governed execution, when a caller asks for it.** A caller may attach ceilings
 //!   and a stop signal ([`governor::QueryGovernors`]) and run
 //!   [`NativeSparqlEngine::query_governed`], which either completes or returns
