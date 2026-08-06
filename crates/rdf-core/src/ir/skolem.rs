@@ -366,13 +366,22 @@ fn reintern<M: TermMapper>(
 /// `mapper`, preserving all statement surfaces: quads (with their source
 /// locations), reifier bindings, annotations, and named-graph declarations.
 ///
-/// NON-SERIALIZED derived side tables are NOT carried over: the output is
-/// built without content addressing, so `content_id`/`content_ids` and the
-/// derivation-predecessor index (`predecessors`/`predecessor_chain`) are
-/// empty on the result even when the underlying IRI bytes are unchanged.
-/// A frozen dataset does not expose its `ContentIdScheme`, so the rewrite
-/// cannot re-establish it; callers that need those indexes rebuild them on
-/// the output with their own scheme configuration.
+/// The NON-SERIALIZED derived side tables survive the rewrite rather than
+/// resetting: `ds`'s [`ContentIdScheme`](crate::ContentIdScheme) (and
+/// derivation-predicate IRI, if configured) is read back via
+/// [`RdfDataset::content_id_scheme`] and threaded onto the fresh builder via
+/// [`RdfDatasetBuilder::with_content_addressing`], so `content_id`/`content_ids`
+/// on the output are RE-DERIVED from the rewritten IRI bytes — not copied: a
+/// term whose bytes a rewrite actually changed (e.g. the caller's own content
+/// IRIs, if any) is re-recognized against its NEW bytes, which is the correct
+/// semantics, not a stale copy. The derivation-predecessor index
+/// (`predecessors`/`predecessor_chain`) needs no separate remapping at all: it
+/// is not an independent stored table but a lazy decode of the (already
+/// carried-forward, unchanged) annotation rows against the configured
+/// derivation predicate, so once the predicate IRI is threaded through it
+/// resolves on the output exactly as it did on `ds`. When `ds` never
+/// configured content addressing, the output carries none either — no
+/// fabricated scheme.
 ///
 /// # Panics
 /// Never on a mapper that keeps positional validity (the [`TermMapper::map_iri`]
@@ -382,7 +391,18 @@ pub(crate) fn rebuild_dataset<M: TermMapper>(
     ds: &RdfDataset,
     mapper: &mut M,
 ) -> Result<RdfDataset, M::Error> {
-    let mut builder = RdfDatasetBuilder::new();
+    let mut builder = match ds.content_id_scheme() {
+        Some(scheme) => {
+            let derivation_predicate = ds.derivation_predicate().map(|id| match ds.resolve(id) {
+                TermRef::Iri(iri) => iri.to_owned(),
+                other => unreachable!(
+                    "the frozen derivation-predicate TermId must resolve to an IRI, got {other:?}"
+                ),
+            });
+            RdfDatasetBuilder::with_content_addressing(scheme.clone(), derivation_predicate)
+        }
+        None => RdfDatasetBuilder::new(),
+    };
     for (index, q) in ds.quads().enumerate() {
         let handle = builder.next_quad_handle();
         let s = reintern(ds, &mut builder, q.s, mapper, false)?;
@@ -568,9 +588,11 @@ fn existing_blanks(ds: &RdfDataset) -> BTreeSet<(Box<str>, BlankScope)> {
 /// under the same authority reconstructs the original dataset exactly (labels
 /// AND scopes). All other terms, quads, reifiers, annotations, and quad source
 /// locations are preserved. The non-serialized derived side tables
-/// (`content_ids`, `predecessors`/`predecessor_chain`) reset on the output:
-/// a frozen dataset does not expose its `ContentIdScheme`, so the rewrite
-/// cannot re-establish content addressing.
+/// (`content_ids`, `predecessors`/`predecessor_chain`) survive the rewrite too
+/// (see [`rebuild_dataset`] for the exact contract): content addressing
+/// re-derives from the output's IRI bytes under `dataset`'s own
+/// [`ContentIdScheme`](crate::ContentIdScheme), and the predecessor index
+/// resolves over the carried-forward annotation table.
 ///
 /// Deterministic: a pure function of `(dataset, authority)` — no RNG, no
 /// clocks, no global state.
@@ -593,7 +615,8 @@ pub fn skolemize(dataset: &RdfDataset, authority: &str) -> Result<RdfDataset, Sk
 /// under any OTHER authority's genid path are untouched. The exact inverse of
 /// [`skolemize`] under the same authority. As with [`skolemize`], the
 /// non-serialized derived side tables (`content_ids`,
-/// `predecessors`/`predecessor_chain`) reset on the output.
+/// `predecessors`/`predecessor_chain`) survive the rewrite (see
+/// [`rebuild_dataset`]).
 ///
 /// Deterministic: a pure function of `(dataset, authority)`.
 ///
@@ -954,33 +977,106 @@ mod tests {
         assert_eq!(canonicalize(&round).nquads, canonicalize(&ds).nquads);
     }
 
+    /// Find the [`TermId`] of an interned IRI by linear scan. A rewrite mints a
+    /// fresh term table, so a test that wants to assert on the OUTPUT's view of
+    /// a particular IRI (rather than the source's `TermId`, which is only valid
+    /// in the source) must look it up by value.
+    fn find_iri(ds: &RdfDataset, iri: &str) -> TermId {
+        (0..ds.term_count())
+            .map(|i| TermId::from_index(i as u32))
+            .find(|&id| matches!(ds.resolve(id), TermRef::Iri(found) if found == iri))
+            .unwrap_or_else(|| panic!("IRI {iri:?} not found in the rewritten dataset"))
+    }
+
     #[test]
-    fn rewrites_reset_the_derived_content_addressing_side_table() {
-        // The documented contract: statement surfaces survive the rewrite,
-        // the NON-SERIALIZED derived side tables do not — a frozen dataset
-        // does not expose its ContentIdScheme, so the rewrite cannot
-        // re-establish content addressing.
+    fn rewrites_carry_content_addressing_and_predecessors_forward() {
+        // The true contract (see `rebuild_dataset`): the source's ContentIdScheme
+        // and derivation predicate are threaded onto the rewrite's builder, so
+        // content addressing RE-DERIVES over the output's (here: unchanged, since
+        // only the blank node is rewritten) IRI bytes, and the predecessor index
+        // — a lazy decode of the carried-forward annotation table — resolves on
+        // the output exactly as it did on the source.
         let scheme = crate::content_id::ContentIdScheme::new("blake3:").expect("valid scheme");
-        let mut b = RdfDatasetBuilder::with_content_addressing(scheme, None);
-        let s =
-            b.intern_iri("blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        const DERIVED_FROM: &str = "http://example.org/derivedFrom";
+        const SUCCESSOR_IRI: &str =
+            "blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        const PREDECESSOR_IRI: &str =
+            "blake3:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+        let mut b =
+            RdfDatasetBuilder::with_content_addressing(scheme.clone(), Some(DERIVED_FROM.into()));
+        let successor = b.intern_iri(SUCCESSOR_IRI);
+        let predecessor = b.intern_iri(PREDECESSOR_IRI);
+        let derived_from = b.intern_iri(DERIVED_FROM);
         let p = b.intern_iri("http://example.org/p");
         let o = b.intern_blank("hostile label", BlankScope::DEFAULT);
-        b.push_quad(s, p, o, None);
+        b.push_quad(successor, p, o, None);
+        b.push_annotation(successor, derived_from, predecessor);
         let ds = b.freeze().expect("freeze");
+
         assert_eq!(
             ds.content_ids().count(),
-            1,
-            "source recognizes its content IRI"
+            2,
+            "source recognizes both content IRIs"
         );
+        assert_eq!(
+            ds.predecessors(successor),
+            &[predecessor],
+            "source resolves the configured derivation predicate"
+        );
+
+        let sk = skolemize(&ds, AUTHORITY).expect("skolemize");
+        let desk = deskolemize(&sk, AUTHORITY).expect("deskolemize");
+        let relabeled = canonical_relabel(&ds).expect("relabel");
+        for (name, out) in [
+            ("skolemize", &sk),
+            ("deskolemize", &desk),
+            ("canonical_relabel", &relabeled),
+        ] {
+            assert_eq!(
+                out.content_id_scheme(),
+                Some(&scheme),
+                "{name}: the ContentIdScheme survives the rewrite"
+            );
+            assert_eq!(
+                out.content_ids().count(),
+                2,
+                "{name}: content addressing re-derives over the rewritten output"
+            );
+            let out_successor = find_iri(out, SUCCESSOR_IRI);
+            let out_predecessor = find_iri(out, PREDECESSOR_IRI);
+            assert_eq!(
+                out.predecessors(out_successor),
+                &[out_predecessor],
+                "{name}: the predecessor index resolves on the rewritten output"
+            );
+        }
+    }
+
+    #[test]
+    fn rewrites_of_a_dataset_without_content_addressing_fabricate_nothing() {
+        // The other half of the contract: a source that never configured content
+        // addressing must not have one conjured for it — the output's scheme and
+        // content-id table stay exactly as absent/empty as the source's.
+        let ds = hostile_dataset();
+        assert_eq!(
+            ds.content_id_scheme(),
+            None,
+            "source never configured a scheme"
+        );
+        assert_eq!(ds.content_ids().count(), 0);
 
         let sk = skolemize(&ds, AUTHORITY).expect("skolemize");
         let relabeled = canonical_relabel(&ds).expect("relabel");
         for (name, out) in [("skolemize", &sk), ("canonical_relabel", &relabeled)] {
+            assert!(
+                out.content_id_scheme().is_none(),
+                "{name}: no scheme to fabricate"
+            );
             assert_eq!(
                 out.content_ids().count(),
                 0,
-                "{name}: derived side tables reset on the rewritten dataset"
+                "{name}: no content ids to fabricate"
             );
         }
     }

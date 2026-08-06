@@ -1035,6 +1035,7 @@ impl RdfDatasetBuilder {
             named_graphs.into_boxed_slice(),
             interner.index,
             interner.content_ids,
+            interner.content_scheme,
             derivation_predicate,
         )
     }

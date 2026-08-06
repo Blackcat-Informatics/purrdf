@@ -356,10 +356,12 @@ pub fn try_canonicalize_with(
 /// blanks can collide in the single scope.
 ///
 /// The non-serialized derived side tables (`content_ids`,
-/// `predecessors`/`predecessor_chain`) reset on the output: a frozen dataset
-/// does not expose its `ContentIdScheme`, so the rewrite cannot re-establish
-/// content addressing; callers that need those indexes rebuild them with
-/// their own scheme configuration.
+/// `predecessors`/`predecessor_chain`) survive the rewrite: `ds`'s
+/// [`ContentIdScheme`](crate::ContentIdScheme) (and derivation predicate, if
+/// configured) is carried forward onto the output via
+/// [`super::skolem::rebuild_dataset`], so content addressing re-derives from
+/// the (here, unchanged) IRI bytes and the predecessor index resolves over the
+/// carried-forward annotation table exactly as it did on `ds`.
 ///
 /// A blank node that canonicalization cannot observe — a blank DECLARED as a
 /// named graph that owns no quads (declaration-only) — still gets a fresh
