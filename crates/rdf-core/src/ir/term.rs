@@ -151,6 +151,94 @@ impl BlankScope {
         }
         std::borrow::Cow::Owned(qualified)
     }
+
+    /// Decode a qualified blank label back into its `(label, scope)` pair — the
+    /// EXACT inverse of [`qualify_label`](Self::qualify_label).
+    ///
+    /// `unqualify_label(qualify_label(label, scope)) == (label, scope)` for every
+    /// `(label, scope)` pair (the property is pinned by a sweep in this module's
+    /// tests). That inverse is what makes an owned-model or text round trip
+    /// **identity-preserving** rather than merely isomorphism-preserving: without
+    /// it, re-interning an already-qualified label would qualify it a second time,
+    /// doubling its dot runs on every pass and severing co-reference with the node
+    /// the label came from.
+    ///
+    /// # The grammar this decodes, and nothing else
+    ///
+    /// [`qualify_label`](Self::qualify_label) emits exactly two things, so exactly
+    /// two things are decoded:
+    ///
+    /// - a trailing `.s{digits}` whose preceding dot run has ODD length is the
+    ///   scope suffix (the last dot of the run is the separator, the even
+    ///   remainder is doubled raw dots); `{digits}` is a bare decimal that must
+    ///   parse as a non-zero `u32`;
+    /// - every remaining `..` pair collapses to one raw `.`.
+    ///
+    /// Everything else is returned verbatim at [`BlankScope::DEFAULT`], so an
+    /// external document's organically-dotted label is untouched: `s0.b0` carries
+    /// no `.s{n}` tail and no doubled dot, and decodes to itself.
+    ///
+    /// The two dotted spellings that DO decode are the two the encoder produces.
+    /// `c1.s5` decodes to `("c1", 5)` because that string is exactly what scope-5
+    /// qualification of `c1` emits. A raw label genuinely spelled `c1.s5` is
+    /// emitted as `c1..s5` (an even dot run before the tail), which decodes back
+    /// to `("c1.s5", 0)` — the two cases stay apart, which is the injectivity
+    /// [`qualify_label`](Self::qualify_label) was built for.
+    #[inline]
+    #[must_use]
+    pub fn unqualify_label(qualified: &str) -> (std::borrow::Cow<'_, str>, Self) {
+        let (body, scope) = split_scope_suffix(qualified);
+        (collapse_doubled_dots(body), scope)
+    }
+}
+
+/// Split the `.s{n}` scope suffix [`BlankScope::qualify_label`] appends off
+/// `qualified`, returning the still-dot-doubled body and the decoded scope.
+///
+/// The suffix is recognized ONLY as a trailing `s{digits}` (a bare non-zero
+/// decimal `u32`) whose preceding dot run has ODD length: raw dots always surface
+/// doubled, so an even run means the `s{digits}` tail is part of the raw label.
+fn split_scope_suffix(qualified: &str) -> (&str, BlankScope) {
+    let Some(dot) = qualified.rfind(".s") else {
+        return (qualified, BlankScope::DEFAULT);
+    };
+    let digits = &qualified[dot + 2..];
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return (qualified, BlankScope::DEFAULT);
+    }
+    let Ok(scope) = digits.parse::<u32>() else {
+        return (qualified, BlankScope::DEFAULT);
+    };
+    if scope == 0 {
+        // Scope 0 is DEFAULT, which never emits a suffix, so `.s0` is raw text.
+        return (qualified, BlankScope::DEFAULT);
+    }
+    let run = qualified[..=dot]
+        .bytes()
+        .rev()
+        .take_while(|&b| b == b'.')
+        .count();
+    if run % 2 == 0 {
+        return (qualified, BlankScope::DEFAULT);
+    }
+    (&qualified[..dot], BlankScope(scope))
+}
+
+/// Collapse the doubled dots [`BlankScope::qualify_label`] emitted back to single
+/// raw dots. Borrowed byte-identically when there is nothing to collapse.
+fn collapse_doubled_dots(doubled: &str) -> std::borrow::Cow<'_, str> {
+    if !doubled.contains("..") {
+        return std::borrow::Cow::Borrowed(doubled);
+    }
+    let mut out = String::with_capacity(doubled.len());
+    let mut chars = doubled.chars().peekable();
+    while let Some(ch) = chars.next() {
+        out.push(ch);
+        if ch == '.' && chars.peek() == Some(&'.') {
+            chars.next();
+        }
+    }
+    std::borrow::Cow::Owned(out)
 }
 
 impl Default for BlankScope {
@@ -558,6 +646,136 @@ mod tests {
                     (label, scope)
                 );
             }
+        }
+    }
+
+    /// The labels a hostile producer can put in the blank-node position: dots in
+    /// every position, strings that MIMIC the scope suffix, non-ASCII, controls,
+    /// and the empty label.
+    const HOSTILE_LABELS: &[&str] = &[
+        "",
+        "b0",
+        "a.b",
+        "a.b.c",
+        "a..b",
+        "a....b",
+        ".",
+        "..",
+        "...",
+        "a.",
+        ".a",
+        "a.s1",
+        "a..s1",
+        "a.s1.s2",
+        "s0.b0",
+        "c1.s5",
+        "x.s0",
+        "x.s01",
+        "x.s4294967296",
+        "purrdfesc_a",
+        "a\u{d7}b",
+        "bad\u{1f}label",
+        "日本",
+    ];
+
+    /// The scopes to sweep every hostile label against, including the `u32`
+    /// boundary the `.s{n}` decimal must survive.
+    const SWEEP_SCOPES: &[BlankScope] = &[
+        BlankScope::DEFAULT,
+        BlankScope(1),
+        BlankScope(2),
+        BlankScope(5),
+        BlankScope(12),
+        BlankScope(u32::MAX),
+    ];
+
+    /// The load-bearing property: qualification is EXACTLY invertible, so a term
+    /// that leaves the IR as a qualified label and comes back re-denotes the same
+    /// node rather than a second, doubly-qualified one.
+    #[test]
+    fn unqualify_label_inverts_qualify_label_for_every_label_and_scope() {
+        for &label in HOSTILE_LABELS {
+            for &scope in SWEEP_SCOPES {
+                let qualified = scope.qualify_label(label);
+                let (decoded, decoded_scope) = BlankScope::unqualify_label(&qualified);
+                assert_eq!(
+                    (decoded.as_ref(), decoded_scope),
+                    (label, scope),
+                    "round trip of {label:?} @ {scope:?} through {qualified:?}"
+                );
+            }
+        }
+    }
+
+    /// The same property over an exhaustive sweep of short dot/`s`/digit strings —
+    /// the alphabet the encoding actually reasons about — at several scopes.
+    #[test]
+    fn unqualify_label_inverts_qualify_label_over_an_exhaustive_short_alphabet() {
+        const ALPHABET: &[char] = &['.', 's', '1', 'a'];
+        let mut labels: Vec<String> = vec![String::new()];
+        let mut frontier: Vec<String> = vec![String::new()];
+        for _ in 0..4 {
+            let mut next = Vec::with_capacity(frontier.len() * ALPHABET.len());
+            for prefix in &frontier {
+                for &ch in ALPHABET {
+                    let mut candidate = prefix.clone();
+                    candidate.push(ch);
+                    next.push(candidate);
+                }
+            }
+            labels.extend(next.iter().cloned());
+            frontier = next;
+        }
+        for label in &labels {
+            for &scope in &[BlankScope::DEFAULT, BlankScope(1), BlankScope(11)] {
+                let qualified = scope.qualify_label(label);
+                let (decoded, decoded_scope) = BlankScope::unqualify_label(&qualified);
+                assert_eq!(
+                    (decoded.as_ref(), decoded_scope),
+                    (label.as_str(), scope),
+                    "round trip of {label:?} @ {scope:?} through {qualified:?}"
+                );
+            }
+        }
+    }
+
+    /// Decoding is IDEMPOTENT on labels that were never qualified in the shapes the
+    /// encoder emits: a label an external document authored organically comes back
+    /// verbatim at the default scope.
+    #[test]
+    fn unqualify_label_leaves_unencoded_labels_verbatim() {
+        for label in ["b0", "s0.b0", "a.b", "x.s0", "-lead", "", "日本"] {
+            let (decoded, scope) = BlankScope::unqualify_label(label);
+            assert_eq!(decoded.as_ref(), label, "{label:?}");
+            assert_eq!(scope, BlankScope::DEFAULT, "{label:?}");
+            assert!(
+                matches!(decoded, std::borrow::Cow::Borrowed(_)),
+                "{label:?} must decode without allocating"
+            );
+        }
+    }
+
+    /// A `.s{n}` tail is only a scope suffix when `{n}` is a bare, non-zero,
+    /// in-range decimal preceded by an odd dot run.
+    #[test]
+    fn unqualify_label_rejects_near_miss_scope_suffixes() {
+        for label in [
+            "x.s",           // no digits
+            "x.s0",          // scope 0 is DEFAULT and never emits a suffix
+            "x.s1a",         // not all digits
+            "x.s+1",         // not a bare decimal
+            "x.s4294967296", // out of `u32` range
+            "x..s1",         // even dot run: the tail is part of the raw label
+            "x....s1",       // even dot run
+            "x.s1.s2extra",  // trailing text after the digits
+        ] {
+            let (decoded, scope) = BlankScope::unqualify_label(label);
+            assert_eq!(scope, BlankScope::DEFAULT, "{label:?}");
+            assert_eq!(
+                decoded.as_ref(),
+                collapse_doubled_dots(label).as_ref(),
+                "{label:?}"
+            );
         }
     }
 

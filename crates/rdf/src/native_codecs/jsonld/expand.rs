@@ -1409,12 +1409,32 @@ fn reserve_blank_id(id: &str, output: &mut BTreeSet<String>) {
     }
 }
 
+/// Resolve a JSON-LD `@id` to its RDF term: a `_:`-prefixed identifier is a blank
+/// node, anything else an absolute IRI.
+///
+/// # Blank-label text ingress
+///
+/// A blank identifier is a document token, so it carries the egress transform the
+/// serializers applied: scope qualification, then the alphabet escape. This lane
+/// lowers through the OWNED model ([`RdfTerm`] has one string slot for a blank),
+/// so the two halves of the inverse are applied at the two places that can see
+/// them — the escape is undone here, where the syntax token is in hand, and the
+/// scope qualification is undone by
+/// [`RdfDatasetBuilder::intern_owned_term`](crate::RdfDatasetBuilder::intern_owned_term)
+/// when the owned quads are frozen, which is the only place a [`BlankScope`] can
+/// be attached. Composed, they are the exact inverse of egress, so a JSON-LD /
+/// YAML-LD document this workspace wrote re-parses to the `(label, scope)` pair it
+/// was written from.
+///
+/// [`BlankScope`]: crate::BlankScope
 fn id_term(id: &str) -> Result<RdfTerm, RdfDiagnostic> {
     if let Some(label) = id.strip_prefix("_:") {
         if label.is_empty() {
             return Err(decode("blank-node identifier cannot be empty"));
         }
-        Ok(RdfTerm::blank_node(label.to_owned()))
+        Ok(RdfTerm::blank_node(
+            purrdf_core::blank_label::unescape_label(label).into_owned(),
+        ))
     } else {
         validated_iri_term(id)
     }

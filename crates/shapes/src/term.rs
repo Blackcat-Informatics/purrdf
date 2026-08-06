@@ -470,9 +470,17 @@ impl Term {
     pub fn to_term_value(&self) -> TermValue {
         match self {
             Self::NamedNode(n) => TermValue::Iri(n.0.clone()),
-            // The IR conversion scope-qualified the label; round-trip it in the
-            // DEFAULT scope (single-scope data is byte-unchanged).
-            Self::BlankNode(b) => TermValue::blank(b.clone()),
+            // [`term_ref_to_native`] scope-qualified the label on the way out of the
+            // IR; decoding it here is the exact inverse, so a native term used as a
+            // SPARQL pre-binding denotes the SAME node the dataset holds rather than
+            // a second, doubly-qualified one.
+            Self::BlankNode(b) => {
+                let (label, scope) = ::purrdf::BlankScope::unqualify_label(b);
+                TermValue::Blank {
+                    label: label.into_owned(),
+                    scope,
+                }
+            }
             Self::Literal(l) => TermValue::Literal {
                 lexical_form: l.lexical.clone(),
                 datatype: l.datatype.clone(),
@@ -493,92 +501,30 @@ impl Term {
     /// For most terms this is a single key ([`to_term_value`](Self::to_term_value)).
     /// A blank node is the exception: [`term_ref_to_native`] flattens the IR's
     /// `(label, scope)` into ONE qualified label string (raw dots doubled, plus a
-    /// `.s{n}` suffix for a non-default scope `n`). That qualified label round-trips
-    /// correctly when the dataset stored the blank at the DEFAULT scope (the
-    /// SHACL-projected dataset re-interns owned blanks there), but NOT when the
-    /// dataset preserves the original raw `(label, scope)` pair (the raw shapes
-    /// dataset). So for a blank whose qualified form decodes (scope-suffix split)
-    /// we ALSO offer the de-qualified `(label, scope)` key; the caller tries each
-    /// until one resolves. The verbatim DEFAULT-scope key stays FIRST so
-    /// single-scope data keeps its fast path.
+    /// `.s{n}` suffix for a non-default scope `n`), and
+    /// [`to_term_value`](Self::to_term_value) decodes that spelling back to the
+    /// `(label, scope)` pair the dataset holds. That decoded key is the right one
+    /// for any dataset that stores the IR pair faithfully.
+    ///
+    /// A caller may nonetheless hand this a blank label it MINTED rather than read
+    /// out of a dataset (a hand-written shapes-graph label, a test fixture), which
+    /// is a raw label rather than a qualified one. Whenever the two spellings
+    /// differ, the verbatim DEFAULT-scope key is offered as a fallback and the
+    /// caller tries each until one resolves.
     pub fn lookup_term_values(&self) -> Vec<TermValue> {
         match self {
             Self::BlankNode(b) => {
-                let mut keys = vec![TermValue::blank(b.clone())];
-                if let Some((label, scope)) = split_scope_suffix(b) {
-                    keys.push(TermValue::Blank {
-                        label: label.into_owned(),
-                        scope: ::purrdf::BlankScope(scope),
-                    });
+                let decoded = self.to_term_value();
+                let verbatim = TermValue::blank(b.clone());
+                if decoded == verbatim {
+                    vec![decoded]
+                } else {
+                    vec![decoded, verbatim]
                 }
-                keys
             }
             other => vec![other.to_term_value()],
         }
     }
-}
-
-/// Decode a scope-qualified blank label back into `(raw_label, scope_ordinal)`,
-/// the inverse of [`BlankScope::qualify_label`](::purrdf::BlankScope::qualify_label).
-///
-/// `qualify_label` doubles every raw `.` and appends the single-dot suffix
-/// `.s{n}` for a non-default scope `n`, so the decode is unambiguous:
-///
-/// - a trailing `s{digits}` preceded by an ODD-length dot run is the scope
-///   suffix (the last dot is the separator; the even remainder is doubled raw
-///   dots), giving `(collapsed_label, n)`;
-/// - a label with doubled dots but no scope suffix decodes to
-///   `(collapsed_label, 0)` — a dotted raw label at the DEFAULT scope;
-/// - anything else is a bare default-scope label → `None`.
-pub(crate) fn split_scope_suffix(qualified: &str) -> Option<(std::borrow::Cow<'_, str>, u32)> {
-    if let Some((doubled, scope)) = split_qualified_scope(qualified) {
-        return Some((collapse_doubled_dots(doubled), scope));
-    }
-    if qualified.contains("..") {
-        return Some((collapse_doubled_dots(qualified), 0));
-    }
-    None
-}
-
-/// Recognize the `.s{n}` scope suffix: trailing digits after `s`, whose
-/// preceding dot run has ODD length (raw dots always surface doubled, so an
-/// even run means the `s{digits}` tail is part of the raw label).
-fn split_qualified_scope(qualified: &str) -> Option<(&str, u32)> {
-    let dot = qualified.rfind(".s")?;
-    let digits = &qualified[dot + 2..];
-    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let scope: u32 = digits.parse().ok()?;
-    if scope == 0 {
-        return None;
-    }
-    let run = qualified[..=dot]
-        .bytes()
-        .rev()
-        .take_while(|&b| b == b'.')
-        .count();
-    if run % 2 == 0 {
-        return None;
-    }
-    Some((&qualified[..dot], scope))
-}
-
-/// Collapse the doubled dots `qualify_label` emitted back to single raw dots.
-/// Borrowed when there is nothing to collapse.
-fn collapse_doubled_dots(doubled: &str) -> std::borrow::Cow<'_, str> {
-    if !doubled.contains("..") {
-        return std::borrow::Cow::Borrowed(doubled);
-    }
-    let mut out = String::with_capacity(doubled.len());
-    let mut bytes = doubled.chars().peekable();
-    while let Some(ch) = bytes.next() {
-        out.push(ch);
-        if ch == '.' && bytes.peek() == Some(&'.') {
-            bytes.next();
-        }
-    }
-    std::borrow::Cow::Owned(out)
 }
 
 impl NamedNode {

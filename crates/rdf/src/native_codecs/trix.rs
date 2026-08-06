@@ -28,7 +28,7 @@ use super::parse::{FoldNode, FoldRow, RDF_REIFIES, fold_statement_layer};
 use super::ser_model::{SerGraph, SerTerm, SerTermKind};
 use super::text_parse::LineParseMode;
 use crate::nesting::guard_xml_nesting;
-use crate::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId};
+use crate::{RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId};
 use purrdf_core::blank_label::{LabelAlphabet, is_valid_label};
 
 /// The TriX codec: a standalone (non-line-family) [`RdfCodec`] over the "Triples in XML"
@@ -225,7 +225,10 @@ fn freeze_rows(
 fn intern_term(builder: &mut RdfDatasetBuilder, term: &TrixTerm) -> TermId {
     match term {
         TrixTerm::Iri(iri) => builder.intern_iri(iri),
-        TrixTerm::Blank(label) => builder.intern_blank(label, BlankScope::DEFAULT),
+        // Text ingress: decode the scope qualification and alphabet escape this
+        // codec's serializer applied at egress, so a document it wrote re-parses to
+        // the very `(label, scope)` pair it was written from.
+        TrixTerm::Blank(label) => builder.intern_text_blank(label),
         TrixTerm::Literal(literal) => builder.intern_literal(literal.clone()),
     }
 }

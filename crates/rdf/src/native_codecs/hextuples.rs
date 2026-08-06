@@ -27,7 +27,7 @@ use super::media_type::NativeRdfFormat;
 use super::parse::{FoldNode, FoldRow, RDF_REIFIES, fold_statement_layer};
 use super::ser_model::{SerGraph, SerTerm, SerTermKind};
 use super::text_parse::LineParseMode;
-use crate::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId};
+use crate::{RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId};
 use purrdf_core::blank_label::{LabelAlphabet, is_valid_label};
 
 /// The HexTuples codec: a standalone (non-line-family) [`RdfCodec`] over the
@@ -189,7 +189,10 @@ fn freeze_rows(
 fn intern_term(builder: &mut RdfDatasetBuilder, term: &HexTerm) -> TermId {
     match term {
         HexTerm::Iri(iri) => builder.intern_iri(iri),
-        HexTerm::Blank(label) => builder.intern_blank(label, BlankScope::DEFAULT),
+        // Text ingress: decode the scope qualification and alphabet escape this
+        // codec's serializer applied at egress, so a document it wrote re-parses to
+        // the very `(label, scope)` pair it was written from.
+        HexTerm::Blank(label) => builder.intern_text_blank(label),
         HexTerm::Literal(literal) => builder.intern_literal(literal.clone()),
     }
 }

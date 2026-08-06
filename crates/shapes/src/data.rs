@@ -23,7 +23,7 @@ use ::purrdf::{DatasetView, GraphMatch, QuadIds};
 use ::purrdf::{RdfDataset, TermId};
 
 use crate::class_membership::ClassMembershipView;
-use crate::term::{NamedNode, Term, split_scope_suffix, term_id_to_native};
+use crate::term::{NamedNode, Term, term_id_to_native};
 
 /// Resolve a pattern term to its interned id using variant-specific dataset
 /// lookups, recursively resolving the components of a quoted triple. Returns
@@ -32,12 +32,16 @@ use crate::term::{NamedNode, Term, split_scope_suffix, term_id_to_native};
 pub(crate) fn resolve_id(dataset: &RdfDataset, term: &Term) -> Option<TermId> {
     match term {
         Term::NamedNode(node) => dataset.term_id_by_iri(node.as_str()),
-        Term::BlankNode(label) => dataset
-            .term_id_by_blank(label, ::purrdf::BlankScope::DEFAULT)
-            .or_else(|| {
-                let (label, scope) = split_scope_suffix(label)?;
-                dataset.term_id_by_blank(&label, ::purrdf::BlankScope(scope))
-            }),
+        // The native term carries the SCOPE-QUALIFIED label `term_id_to_native`
+        // rendered; decode it back to the `(label, scope)` pair the dataset holds.
+        // A label a caller MINTED rather than read out of a dataset is raw, not
+        // qualified, so the verbatim default-scope lookup is kept as the fallback.
+        Term::BlankNode(label) => {
+            let (decoded, scope) = ::purrdf::BlankScope::unqualify_label(label);
+            dataset
+                .term_id_by_blank(&decoded, scope)
+                .or_else(|| dataset.term_id_by_blank(label, ::purrdf::BlankScope::DEFAULT))
+        }
         Term::Literal(literal) => dataset.term_id_by_literal(
             literal.value(),
             literal.datatype_str(),

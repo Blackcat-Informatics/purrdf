@@ -46,9 +46,7 @@ use super::parse::{FoldNode, FoldRow, RDF_REIFIES as RDF_REIFIES_IRI, fold_state
 use super::ser_model::{SerGraph, SerTerm, SerTermKind, deterministic_blank_label_with_prefix};
 use super::text_parse::LineParseMode;
 use crate::nesting::guard_xml_nesting;
-use crate::{
-    BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, RdfTextDirection, TermId,
-};
+use crate::{RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, RdfTextDirection, TermId};
 use purrdf_core::blank_label::{LabelAlphabet, is_valid_label};
 
 /// The RDF/XML codec: a standalone (non-line-family) [`RdfCodec`] over the in-repo W3C
@@ -825,9 +823,10 @@ fn intern_term(builder: &mut RdfDatasetBuilder, term: &XmlTerm) -> Result<TermId
 fn intern_node(builder: &mut RdfDatasetBuilder, term: &XmlTerm) -> Result<FoldNode, RdfDiagnostic> {
     match term {
         XmlTerm::Iri(iri) => Ok(FoldNode::Term(builder.intern_iri(iri))),
-        XmlTerm::Blank(label) => Ok(FoldNode::Term(
-            builder.intern_blank(label, BlankScope::DEFAULT),
-        )),
+        // Text ingress: decode the scope qualification and alphabet escape this
+        // codec's serializer applied at egress, so a document it wrote re-parses to
+        // the very `(label, scope)` pair it was written from.
+        XmlTerm::Blank(label) => Ok(FoldNode::Term(builder.intern_text_blank(label))),
         XmlTerm::Literal(literal) => Ok(FoldNode::Term(builder.intern_literal(literal.clone()))),
         XmlTerm::Triple(components) => {
             let (subject, predicate, object) = components.as_ref();

@@ -606,7 +606,7 @@ fn withhold_surrogates_from_outcome(
             GovernedOutcome::BudgetExhausted(BudgetExhausted {
                 partial: exhausted
                     .partial
-                    .withholding_blank_nodes(|label| surrogates.contains(label)),
+                    .withholding_blank_nodes(|label| label_is_surrogate(label, surrogates)),
                 ..exhausted
             })
         }
@@ -914,9 +914,17 @@ fn collect_term_pattern_variable(term: &TermPattern, names: &mut BTreeSet<String
 /// out of one.
 fn restrict_witness_bindings(query: &Query, surrogates: &BTreeSet<String>) -> Query {
     let observable = observable_variables(query);
+    // The algebra's single blank slot carries the SCOPE-QUALIFIED rendering (the
+    // evaluator decodes it back to `(label, scope)`), and a witness is minted at
+    // the default scope, so the cell is the qualification of the raw label.
     let witnesses: Vec<Vec<Option<GroundTerm>>> = surrogates
         .iter()
-        .map(|label| vec![Some(GroundTerm::BlankNode(BlankNode::new(label.clone())))])
+        .map(|label| {
+            let qualified = purrdf_rdf::BlankScope::DEFAULT.qualify_label(label);
+            vec![Some(GroundTerm::BlankNode(BlankNode::new(
+                qualified.into_owned(),
+            )))]
+        })
         .collect();
     let restrict = |pattern: &GraphPattern| restrict_pattern(pattern, &observable, &witnesses);
     match query {
@@ -1162,10 +1170,24 @@ fn withhold_surrogate_triples(result: &mut SparqlResult, surrogates: &BTreeSet<S
     true
 }
 
+/// Whether an owned-model blank label denotes a chase-minted witness.
+///
+/// The surrogate set holds the RAW labels `combined::witness_label` minted (a
+/// digest under a reserved prefix, which contains `.` separators), while an owned
+/// [`RdfTerm::BlankNode`] carries the SCOPE-QUALIFIED rendering of whatever label
+/// the dataset holds. Decoding the rendering is the exact inverse of that
+/// qualification, so the comparison is against the label that was actually
+/// minted; comparing the two spellings directly would silently match nothing and
+/// let every dotted witness through the filter it exists to enforce.
+fn label_is_surrogate(label: &str, surrogates: &BTreeSet<String>) -> bool {
+    let (raw, _scope) = purrdf_rdf::BlankScope::unqualify_label(label);
+    surrogates.contains(raw.as_ref())
+}
+
 /// Whether `term` IS a chase-minted witness, or quotes one at any depth.
 fn term_mentions_surrogate(term: &RdfTerm, surrogates: &BTreeSet<String>) -> bool {
     match term {
-        RdfTerm::BlankNode(label) => surrogates.contains(label),
+        RdfTerm::BlankNode(label) => label_is_surrogate(label, surrogates),
         RdfTerm::Iri(_) | RdfTerm::Literal(_) => false,
         RdfTerm::Triple(triple) => {
             term_mentions_surrogate(&triple.subject, surrogates)

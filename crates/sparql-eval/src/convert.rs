@@ -95,13 +95,18 @@ pub(crate) fn ground_term_to_value(term: &GroundTerm) -> TermValue {
         GroundTerm::NamedNode(n) => named_node_to_value(n),
         GroundTerm::Literal(l) => literal_to_value(l),
         GroundTerm::Triple(t) => ground_triple_to_value(t),
-        // Injection-only (GAP-A): a substituted blank-node focus node. The
-        // default blank scope matches the dataset's interned blank identity for
-        // `term_id_by_value` resolution.
-        GroundTerm::BlankNode(b) => TermValue::Blank {
-            label: b.as_str().to_owned(),
-            scope: purrdf_core::BlankScope::DEFAULT,
-        },
+        // Injection-only: a substituted blank-node focus node. The label carries
+        // the scope-qualified rendering the injector wrote into the algebra's
+        // single string slot, so decoding it is the exact inverse and restores
+        // the `(label, scope)` pair `term_id_by_value` resolves against. A label
+        // that was never qualified decodes to itself at the default scope.
+        GroundTerm::BlankNode(b) => {
+            let (label, scope) = purrdf_core::BlankScope::unqualify_label(b.as_str());
+            TermValue::Blank {
+                label: label.into_owned(),
+                scope,
+            }
+        }
     }
 }
 

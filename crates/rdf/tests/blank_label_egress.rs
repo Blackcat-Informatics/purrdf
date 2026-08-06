@@ -11,8 +11,8 @@
 //!    with EVERY media type in the native codec registry
 //!    ([`NativeRdfFormat::all`]): serialization always succeeds, the emitted
 //!    label is legal under the format's own alphabet, and re-parsing the
-//!    document yields a dataset isomorphic to the input (blank identity is
-//!    preserved structurally — labels may differ, co-reference may not).
+//!    document restores the input's blank-node LABEL IDENTITY — ingress inverts
+//!    the egress transform exactly, so the round trip is not merely isomorphic.
 //!    Enumerating the registry means any codec added to it is auto-covered:
 //!    the alphabet `match` below fails to compile until the new format is
 //!    classified.
@@ -29,7 +29,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use purrdf_rdf::blank_label::{LabelAlphabet, is_valid_label};
+use purrdf_rdf::blank_label::{LabelAlphabet, escape_label, is_valid_label};
 use purrdf_rdf::{
     BlankScope, NativeRdfFormat, RdfDataset, RdfDatasetBuilder, SerializeGraph, TermRef,
     datasets_isomorphic, parse_dataset, serialize_dataset,
@@ -130,15 +130,25 @@ fn every_hostile_label_serializes_and_reparses_isomorphically() {
                 "{media_type} re-parses {label:?} to one blank node"
             );
 
-            // Whatever label reached the document is legal under the format's
-            // own alphabet, so an external conforming parser reads it too.
-            let (emitted, _) = blank_nodes(&reparsed)
-                .into_iter()
-                .next()
-                .expect("one blank node");
+            // The token the serializer wrote is legal under the format's own
+            // alphabet, so an external conforming parser reads it too. Restated
+            // from the egress contract (`qualify` then `escape`) rather than read
+            // back off the re-parsed dataset, because ingress now DECODES that
+            // token — which is what the identity assertion below pins.
+            let qualified = BlankScope::DEFAULT.qualify_label(label);
+            let emitted = escape_label(&qualified, alphabet);
             assert!(
                 is_valid_label(&emitted, alphabet),
                 "{media_type} emitted {emitted:?} for {label:?}, illegal under {alphabet:?}"
+            );
+
+            // Stronger than isomorphism: the round trip restores the blank node's
+            // LABEL IDENTITY, because ingress inverts the egress transform exactly.
+            assert_eq!(
+                blank_nodes(&reparsed).into_iter().next(),
+                Some(((*label).to_owned(), 0u32)),
+                "{media_type} round trip must restore {label:?} verbatim:\n{}",
+                String::from_utf8_lossy(&bytes)
             );
         }
     }

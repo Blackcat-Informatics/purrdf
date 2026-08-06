@@ -21,9 +21,9 @@
 
 use std::sync::Arc;
 
-use crate::ir::{RdfDataset, RdfDatasetBuilder, TermId};
+use crate::ir::{RdfDataset, RdfDatasetBuilder};
 use crate::native_quads::flat_rdf_quads_from_dataset;
-use crate::{BlankScope, NativeRdfFormat, RdfTerm, parse_dataset};
+use crate::{NativeRdfFormat, parse_dataset};
 
 /// The canonical, review-friendly Turtle renderer — the oxigraph-free half, now in
 /// the wasm-clean kernel. Re-exported so `purrdf::turtle_normalize::render`
@@ -50,26 +50,15 @@ fn ingest(input: &[u8]) -> Result<Arc<RdfDataset>, String> {
         .map_err(|e| format!("Turtle parse error: {e}"))?;
     let mut builder = RdfDatasetBuilder::new();
     for quad in flat_rdf_quads_from_dataset(&parsed) {
-        let s = intern_term(&mut builder, &quad.subject)?;
+        // `intern_owned_term` is the exact inverse of the owned rendering the flat
+        // stream carries, so a blank node's `(label, scope)` pair survives the
+        // re-intern verbatim rather than being scope-qualified a second time.
+        let s = builder.intern_owned_term(&quad.subject);
         let p = builder.intern_iri(&quad.predicate);
-        let o = intern_term(&mut builder, &quad.object)?;
+        let o = builder.intern_owned_term(&quad.object);
         builder.push_quad(s, p, o, None);
     }
     builder.freeze().map_err(|e| e.to_string())
-}
-
-fn intern_term(builder: &mut RdfDatasetBuilder, term: &RdfTerm) -> Result<TermId, String> {
-    Ok(match term {
-        RdfTerm::Iri(n) => builder.intern_iri(n),
-        RdfTerm::BlankNode(b) => builder.intern_blank(b, BlankScope::DEFAULT),
-        RdfTerm::Literal(l) => builder.intern_literal(l.clone()),
-        RdfTerm::Triple(t) => {
-            let s = intern_term(builder, &t.subject)?;
-            let p = builder.intern_iri(&t.predicate);
-            let o = intern_term(builder, &t.object)?;
-            builder.intern_triple(s, p, o)
-        }
-    })
 }
 
 #[cfg(test)]

@@ -789,23 +789,17 @@ fn blank_value_scoped(label: &str, scope: BlankScope) -> TermValue {
     }
 }
 
-/// Decode a surfaced blank label, reversing [`BlankScope::qualify_label`]: a label of
-/// the form `"{inner}.s{n}"` (with non-empty `inner` and `n > 0`) decodes to
-/// `Blank{inner, scope: n}`; any other label is a DEFAULT-scope blank verbatim.
+/// Decode a surfaced blank label through [`BlankScope::unqualify_label`], the
+/// EXACT inverse of the [`BlankScope::qualify_label`] rendering this surface
+/// emits: the `.s{n}` scope suffix is split off and the doubled dot runs are
+/// collapsed, so a label round-tripped through Python matches the stored node
+/// whatever dots it carries. A label Python authored itself decodes to itself at
+/// the default scope.
 fn blank_value_from_external_label(label: &str) -> TermValue {
-    if let Some((inner, raw_scope)) = label.rsplit_once(".s")
-        && !inner.is_empty()
-        && let Ok(scope) = raw_scope.parse::<u32>()
-        && scope > 0
-    {
-        return TermValue::Blank {
-            label: inner.to_owned(),
-            scope: BlankScope(scope),
-        };
-    }
+    let (label, scope) = BlankScope::unqualify_label(label);
     TermValue::Blank {
-        label: label.to_owned(),
-        scope: BlankScope::DEFAULT,
+        label: label.into_owned(),
+        scope,
     }
 }
 

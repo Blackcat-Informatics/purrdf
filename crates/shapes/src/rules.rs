@@ -1631,11 +1631,24 @@ mod tests {
         for focus in &foci {
             let label = format!("{}_c1", focus_tag(focus));
             assert!(!label.contains('.'), "minted labels are dot-free: {label}");
-            assert_eq!(crate::term::split_scope_suffix(&label), None, "{label}");
+            assert_eq!(
+                ::purrdf::BlankScope::unqualify_label(&label),
+                (
+                    std::borrow::Cow::Borrowed(label.as_str()),
+                    ::purrdf::BlankScope::DEFAULT
+                ),
+                "{label}"
+            );
         }
         // The §16.2 freshness suffix `r{k}` is alphanumeric, so a reminted label
         // is equally immune.
-        assert_eq!(crate::term::split_scope_suffix("fb1_c1r0"), None);
+        assert_eq!(
+            ::purrdf::BlankScope::unqualify_label("fb1_c1r0"),
+            (
+                std::borrow::Cow::Borrowed("fb1_c1r0"),
+                ::purrdf::BlankScope::DEFAULT
+            )
+        );
     }
 
     /// A `sh:SPARQLRule` carrying a DATA blank through a CONSTRUCT variable must
@@ -1682,6 +1695,89 @@ mod tests {
         let shapes_parsed = parse_shapes(shapes);
         let again = entail_dataset(first.as_ref(), &shapes_parsed).expect("re-entailment");
         assert_eq!(canon(&first), canon(&again));
+    }
+
+    /// The same co-reference guarantee for a data blank whose label is DOTTED.
+    ///
+    /// A dotted label is the one that survives the projection only if the owned
+    /// round trip is exactly invertible: the projection, every fixpoint round,
+    /// and the `$this` pre-binding each re-materialize the focus term, and a
+    /// second scope qualification would double the dot run and silently point
+    /// the derived triple at a node that does not exist.
+    #[test]
+    fn sparql_rule_preserves_a_dotted_data_blank_co_reference() {
+        // `_:a..b` is the wire spelling of the raw label `a.b`.
+        let data = "ex:alice ex:has _:a..b . _:a..b a ex:Contact .";
+        let shapes = r#"
+            ex:S a sh:NodeShape ; sh:targetSubjectsOf ex:has ;
+              sh:rule [ a sh:SPARQLRule ; sh:construct
+                "CONSTRUCT { $this ex:copied ?b } WHERE { $this ex:has ?b }" ] ."#;
+
+        let entailed = entail(data, shapes);
+        let nq = canon(&entailed);
+        let object_of = |predicate: &str| -> String {
+            nq.lines()
+                .find(|line| line.contains(predicate))
+                .and_then(|line| line.split_whitespace().nth(2))
+                .unwrap_or_else(|| panic!("no triple with {predicate} in {nq}"))
+                .to_owned()
+        };
+        assert_eq!(
+            object_of("ns#has>"),
+            object_of("ns#copied>"),
+            "the derived triple must reference the SAME dotted blank node: {nq}"
+        );
+
+        // The label itself never grew: the entailed dataset still holds `a.b`.
+        assert!(
+            blank_labels(&entailed).contains(&"a..b".to_owned()),
+            "the dotted label must survive un-requalified: {:?}",
+            blank_labels(&entailed)
+        );
+    }
+
+    /// The derivation matrix: a rule targeting blank foci must fire for EVERY
+    /// focus label, including the ones whose spelling collides with the
+    /// blank-scope encoding.
+    ///
+    /// `a.b`, `x` at scope 1 and `a.b.c` are the labels a non-invertible owned
+    /// round trip mangles; a mangled focus term denotes nothing in the
+    /// projection, so the rule derives NOTHING for it and `entail_dataset` still
+    /// returns `Ok` — a silent wrong answer, which is why every label is checked
+    /// rather than a representative one.
+    #[test]
+    fn every_blank_focus_label_derives_regardless_of_dots_and_scopes() {
+        // Wire spellings: `_:a..b` is raw `a.b`, `_:x.s1` is raw `x` at scope 1,
+        // `_:a..b..c` is raw `a.b.c`.
+        let data = "\
+            _:p a ex:Person .\n\
+            _:ab a ex:Person .\n\
+            _:a..b a ex:Person .\n\
+            _:x.s1 a ex:Person .\n\
+            _:a..b..c a ex:Person .";
+        let shapes = r#"
+            ex:S a sh:NodeShape ; sh:targetClass ex:Person ;
+              sh:rule [ a sh:SPARQLRule ; sh:construct
+                "CONSTRUCT { $this ex:seen true } WHERE { $this a ex:Person }" ] ."#;
+
+        let entailed = entail(data, shapes);
+        let seen: FastSet<String> = triples(&entailed)
+            .into_iter()
+            .filter(|(_, p, _)| *p == ex("seen"))
+            .map(|(s, _, _)| s)
+            .collect();
+        let people: FastSet<String> = triples(&entailed)
+            .into_iter()
+            .filter(|(_, p, o)| {
+                *p == "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>" && *o == ex("Person")
+            })
+            .map(|(s, _, _)| s)
+            .collect();
+        assert_eq!(people.len(), 5, "five distinct foci: {people:?}");
+        assert_eq!(
+            seen, people,
+            "every focus must derive ex:seen — a focus missing here derived NOTHING"
+        );
     }
 
     // ── Hostile-focus serialization round-trips ──────────────────────────────────

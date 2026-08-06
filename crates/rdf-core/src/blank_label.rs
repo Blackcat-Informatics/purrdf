@@ -55,17 +55,35 @@
 //! that carries meaning. An idempotent escape would satisfy
 //! `escape(escape(x)) == escape(x)`, which maps the two distinct labels `x`
 //! and `escape(x)` onto one -- exactly the blank-node conflation injectivity
-//! exists to rule out. So re-serializing a document whose labels were already
-//! escaped escapes them again: the graph is unchanged (still isomorphic, still
-//! the same co-reference), but the labels grow. A pipeline that wants a stable
-//! fixed point runs `canonical_relabel` (below) before egress -- its `c14n{n}`
-//! labels are legal in every alphabet, so the escape is the identity on them
-//! and re-serialization is byte-stable.
+//! exists to rule out.
+//!
+//! # The marker is a reserved namespace, decoded at ingress
+//!
+//! An injective, non-idempotent egress transform is byte-stable across
+//! serialize/parse cycles only if something INVERTS it on the way back in, and
+//! [`unescape_label`] is that inverse: every native text codec decodes a
+//! blank-node token through it (together with
+//! [`BlankScope::unqualify_label`](crate::BlankScope::unqualify_label), the
+//! inverse of the scope qualification the escape is applied on top of) before
+//! interning. [`ESCAPE_MARKER`] is therefore a RESERVED label namespace: a
+//! document token that begins with it and whose body is a well-formed escape
+//! body denotes the label it decodes to, not itself. A marker-prefixed token
+//! whose body is NOT well-formed is not in the escape's image at all, so it
+//! passes through unchanged and is escaped on the way out like any other
+//! label -- its bytes can change on the first serialization, and are a fixed
+//! point from then on.
+//!
+//! The composite consequence, which is what callers actually rely on:
+//! `serialize(parse(serialize(D)))` is byte-identical to `serialize(D)` for
+//! every dataset and every text format with a parser, and a well-formed round
+//! trip restores blank-node label IDENTITY, not merely isomorphism.
 //!
 //! Callers that want a *chosen* relabeling rather than a mechanical escape
 //! have explicit recourse operations -- `canonical_relabel`, `skolemize` and
 //! `deskolemize` in [`crate::ir`] -- which rewrite the dataset before egress
 //! so the labels in the document are the caller's, not the escape's.
+//! Canonicalization's `c14n{n}` labels are legal in every alphabet, so the
+//! escape is the identity on them and their bytes never move.
 //!
 //! # Relabeling vs. canonicalization: consistent doctrines, different roles
 //!
@@ -83,6 +101,8 @@
 
 use core::cmp::Ordering;
 use std::borrow::Cow;
+
+use crate::BlankScope;
 
 /// Which label grammar [`is_valid_label`] should check against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,6 +187,89 @@ pub fn escape_label(label: &str, alphabet: LabelAlphabet) -> Cow<'_, str> {
         "escape_label must always produce a label legal under the target alphabet"
     );
     Cow::Owned(escaped)
+}
+
+/// Decode an escaped label, returning it BORROWED and byte-identical when it is
+/// not a well-formed escape.
+///
+/// The exact inverse of [`escape_label`] on that function's image:
+/// `unescape_label(escape_label(label, alphabet)) == label` for every `label`
+/// and every alphabet. This is the ingress half of the text round trip — every
+/// native codec decodes a parsed blank-node token through it, so an escaped
+/// label re-parses as the label it encodes rather than as a fresh
+/// marker-prefixed one that egress would escape a second time.
+///
+/// # What counts as well formed
+///
+/// [`ESCAPE_MARKER`] followed by a body in which every ASCII letter or digit is
+/// a pass-through and every `_` introduces exactly six UPPERCASE hex digits
+/// naming a Unicode scalar — precisely the shape [`escape_label`] writes. A
+/// marker-prefixed label whose body violates any of that (a short or
+/// lowercase hex group, a non-alphanumeric pass-through, a group naming a
+/// surrogate or an out-of-range code point) is NOT in the escape's image, so it
+/// is returned unchanged.
+#[must_use]
+pub fn unescape_label(label: &str) -> Cow<'_, str> {
+    let Some(body) = label.strip_prefix(ESCAPE_MARKER) else {
+        return Cow::Borrowed(label);
+    };
+    let mut decoded = String::with_capacity(body.len());
+    let mut chars = body.chars();
+    while let Some(ch) = chars.next() {
+        if ch.is_ascii_alphanumeric() {
+            decoded.push(ch);
+            continue;
+        }
+        if ch != '_' {
+            return Cow::Borrowed(label);
+        }
+        let mut cp: u32 = 0;
+        for _ in 0..6 {
+            let Some(digit) = chars.next().and_then(hex6_digit) else {
+                return Cow::Borrowed(label);
+            };
+            cp = cp * 16 + digit;
+        }
+        let Some(scalar) = char::from_u32(cp) else {
+            return Cow::Borrowed(label);
+        };
+        decoded.push(scalar);
+    }
+    Cow::Owned(decoded)
+}
+
+/// Decode a parsed blank-node token into the `(label, scope)` pair it denotes —
+/// the single text-ingress inverse of the egress transform every serializer
+/// applies.
+///
+/// Egress is `(label, scope)` → [`qualify_label`](BlankScope::qualify_label) →
+/// [`escape_label`]; ingress is therefore [`unescape_label`] →
+/// [`unqualify_label`](BlankScope::unqualify_label), in that order. Composed
+/// with the egress pair this is the identity for every `(label, scope)` and
+/// every alphabet, which is what makes a parse/serialize cycle byte-stable and
+/// label-identity-preserving.
+#[must_use]
+pub fn decode_blank_label(token: &str) -> (Cow<'_, str>, BlankScope) {
+    match unescape_label(token) {
+        // The escape passed through, so the scope decode can borrow the token
+        // itself and the whole ingress stays allocation-free for real data.
+        Cow::Borrowed(unescaped) => BlankScope::unqualify_label(unescaped),
+        Cow::Owned(unescaped) => {
+            let (label, scope) = BlankScope::unqualify_label(&unescaped);
+            (Cow::Owned(label.into_owned()), scope)
+        }
+    }
+}
+
+/// One digit of a fixed-width escape group: `0-9` or UPPERCASE `A-F`, matching
+/// exactly what [`push_hex6`] writes. Lowercase is deliberately refused so the
+/// decode accepts only the escape's own image.
+fn hex6_digit(c: char) -> Option<u32> {
+    match c {
+        '0'..='9' => Some(c as u32 - '0' as u32),
+        'A'..='F' => Some(c as u32 - 'A' as u32 + 10),
+        _ => None,
+    }
 }
 
 /// Append `cp` as exactly six uppercase hex digits (24 bits covers the whole
@@ -329,9 +432,11 @@ fn is_pn_chars(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        ESCAPE_MARKER, LabelAlphabet, escape_label, is_pn_chars, is_pn_chars_u,
+        ESCAPE_MARKER, LabelAlphabet, decode_blank_label, escape_label, is_pn_chars, is_pn_chars_u,
         is_valid_blank_node_label, is_valid_label, is_valid_ncname, is_valid_xml_text,
+        unescape_label,
     };
+    use crate::BlankScope;
     use std::borrow::Cow;
     use std::collections::BTreeMap;
 
@@ -730,6 +835,106 @@ mod tests {
             escape_label("\u{10FFFF}", LabelAlphabet::BlankNodeLabel),
             "purrdfesc__10FFFF"
         );
+    }
+
+    // ── unescape_label / decode_blank_label ─────────────────────────────────
+
+    /// The load-bearing inverse property: unescaping an escaped label returns the
+    /// original bytes, for every hostile label and every alphabet.
+    #[test]
+    fn unescape_inverts_escape_over_the_hostile_table() {
+        for &alphabet in ALL_ALPHABETS {
+            for label in HOSTILE_LABELS {
+                let escaped = escape_label(label, alphabet);
+                assert_eq!(
+                    unescape_label(&escaped).as_ref(),
+                    *label,
+                    "{label:?} under {alphabet:?} escaped to {escaped:?}"
+                );
+            }
+        }
+    }
+
+    /// The same inverse over an exhaustive scalar sweep, in every character
+    /// position the escape distinguishes.
+    #[test]
+    fn unescape_inverts_escape_for_every_scalar_position() {
+        for cp in (0u32..=0x2FFF).chain([
+            0xD7FF,
+            0xE000,
+            0xFFFD,
+            0xFFFE,
+            0xFFFF,
+            0x0001_0000,
+            0x0010_FFFF,
+        ]) {
+            let Some(c) = char::from_u32(cp) else {
+                continue;
+            };
+            for label in [c.to_string(), format!("a{c}"), format!("{c}z")] {
+                for &alphabet in ALL_ALPHABETS {
+                    let escaped = escape_label(&label, alphabet);
+                    assert_eq!(
+                        unescape_label(&escaped).as_ref(),
+                        label.as_str(),
+                        "{label:?} ({cp:#06x}) under {alphabet:?} escaped to {escaped:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A label that is not a well-formed escape passes through byte-identically
+    /// and without allocating — including a marker-prefixed label whose body the
+    /// escape could never have written.
+    #[test]
+    fn unescape_passes_through_labels_outside_the_escape_image() {
+        for label in [
+            "",
+            "a",
+            "a.b",
+            "purrdfesc",
+            "purrdfesc__12",     // a hex group shorter than six digits
+            "purrdfesc__00002e", // lowercase hex is not what the escape writes
+            "purrdfesc_a.b",     // '.' is not a pass-through character
+            "purrdfesc__00D800", // a surrogate code point is not a scalar
+            "purrdfesc__110000", // beyond the last Unicode scalar
+            "purrdfesc_日本",    // a non-ASCII pass-through never survives escape
+        ] {
+            let decoded = unescape_label(label);
+            assert_eq!(decoded.as_ref(), label, "{label:?}");
+            assert!(
+                matches!(decoded, Cow::Borrowed(_)),
+                "{label:?} must pass through without allocating"
+            );
+        }
+    }
+
+    /// The composite ingress decode inverts the composite egress transform for
+    /// every `(label, scope)` pair and every alphabet — the property the
+    /// byte-stability of a parse/serialize cycle rests on.
+    #[test]
+    fn decode_blank_label_inverts_qualify_then_escape() {
+        let scopes = [
+            BlankScope::DEFAULT,
+            BlankScope(1),
+            BlankScope(2),
+            BlankScope(u32::MAX),
+        ];
+        for &alphabet in ALL_ALPHABETS {
+            for label in HOSTILE_LABELS {
+                for &scope in &scopes {
+                    let qualified = scope.qualify_label(label);
+                    let emitted = escape_label(&qualified, alphabet);
+                    let (decoded, decoded_scope) = decode_blank_label(&emitted);
+                    assert_eq!(
+                        (decoded.as_ref(), decoded_scope),
+                        (*label, scope),
+                        "{label:?} @ {scope:?} under {alphabet:?} emitted as {emitted:?}"
+                    );
+                }
+            }
+        }
     }
 
     /// A REWRITTEN label's body is pure `[A-Za-z0-9_]`, which is why one

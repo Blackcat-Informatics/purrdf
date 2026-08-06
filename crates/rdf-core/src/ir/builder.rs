@@ -514,6 +514,27 @@ impl RdfDatasetBuilder {
         self.interner.intern(TermLookup::Blank { label, scope })
     }
 
+    /// Intern a blank node from a **text codec's** parsed `_:` token, decoding the
+    /// egress transform the serializers applied on the way out.
+    ///
+    /// This is the ingress choke point every native text codec (Turtle family,
+    /// RDF/XML, TriX, HexTuples, JSON-LD / YAML-LD) routes its blank-node tokens
+    /// through. The token is decoded by
+    /// [`decode_blank_label`](crate::blank_label::decode_blank_label) — the exact
+    /// inverse of `qualify_label` followed by `escape_label` — so a document this
+    /// workspace wrote re-parses to the very `(label, scope)` pair it was written
+    /// from. Without that inverse the egress transform would be re-applied to an
+    /// already-transformed label on every cycle, doubling dot runs and layering
+    /// escape markers without bound.
+    ///
+    /// Carrier formats (GTS, columnar, pack, OKF) deliberately do NOT use this:
+    /// they store the IR's `(label, scope)` pair structurally, so their labels
+    /// were never transformed and must stay opaque.
+    pub fn intern_text_blank(&mut self, token: &str) -> TermId {
+        let (label, scope) = crate::blank_label::decode_blank_label(token);
+        self.intern_blank(&label, scope)
+    }
+
     /// Intern a literal, applying the C0.1 identity policy:
     ///
     /// - A language tag → datatype `rdf:langString`; the language is lowercased
@@ -564,9 +585,27 @@ impl RdfDatasetBuilder {
     /// at the owned boundary: tests and adapter edges that already hold
     /// [`RdfTerm`] values can freeze them into the concrete IR without detouring.
     ///
-    /// Blank nodes are interned under [`BlankScope::DEFAULT`]. For cross-dataset
-    /// merges use [`push_dataset`](Self::push_dataset), which assigns a fresh scope
-    /// per merged dataset (standardize-apart, C0.2).
+    /// # Blank labels are decoded, so the owned round trip is the identity
+    ///
+    /// The owned model has ONE string slot for a blank node, so
+    /// [`to_owned_quad`](super::dataset::RdfDataset::to_owned_quad) renders the
+    /// IR's `(label, scope)` pair into it through
+    /// [`BlankScope::qualify_label`]. This function is that rendering's exact
+    /// inverse: the label is decoded with
+    /// [`BlankScope::unqualify_label`] and interned at the scope it names, so
+    /// `dataset → owned → dataset` preserves blank-node IDENTITY rather than
+    /// merely isomorphism. Re-materializing a dataset through the owned model —
+    /// which the SHACL projection, the SHACL rules fixpoint, and the reasoning
+    /// withholding passes all do, repeatedly — therefore leaves its labels
+    /// untouched instead of qualifying an already-qualified label once per pass.
+    ///
+    /// A caller minting a blank label of its own passes a label it has NOT
+    /// qualified, and the decode leaves any such label alone unless it is spelled
+    /// exactly as the encoder's output (see
+    /// [`unqualify_label`](BlankScope::unqualify_label) for that grammar).
+    ///
+    /// For cross-dataset merges use [`push_dataset`](Self::push_dataset), which
+    /// assigns a fresh scope per merged dataset (standardize-apart, C0.2).
     pub fn intern_owned_term(&mut self, term: &RdfTerm) -> TermId {
         self.intern_owned_term_scoped(term, BlankScope::DEFAULT)
     }
@@ -580,9 +619,27 @@ impl RdfDatasetBuilder {
     /// — exactly the discipline [`push_dataset`](Self::push_dataset) applies
     /// internally. Direct `push_owned_*`/`intern_owned_term` pushes use
     /// [`BlankScope::DEFAULT`] (scope 0).
+    ///
+    /// # Why only the default scope decodes the label
+    ///
+    /// At [`BlankScope::DEFAULT`] this is the exact inverse of the owned
+    /// rendering, so the label is decoded (see
+    /// [`intern_owned_term`](Self::intern_owned_term)). An EXPLICIT non-default
+    /// scope is a standardize-apart RELABELING, not an inverse: the merged
+    /// source's own scopes are being collapsed into one fresh scope, and the
+    /// qualified rendering is precisely what keeps two blanks the source held
+    /// apart (`b` at its scope 0 and `b` at its scope 1) apart in the target
+    /// scope. Decoding there would map both to the label `b` under one scope and
+    /// silently conflate two distinct nodes, so the qualified spelling is kept
+    /// verbatim as the merged node's raw label — injective, which is the property
+    /// standardize-apart actually needs.
     pub fn intern_owned_term_scoped(&mut self, term: &RdfTerm, scope: BlankScope) -> TermId {
         match term {
             RdfTerm::Iri(iri) => self.intern_iri(iri),
+            RdfTerm::BlankNode(label) if scope == BlankScope::DEFAULT => {
+                let (label, scope) = BlankScope::unqualify_label(label);
+                self.intern_blank(&label, scope)
+            }
             RdfTerm::BlankNode(label) => self.intern_blank(label, scope),
             RdfTerm::Literal(literal) => self.intern_literal(literal.clone()),
             RdfTerm::Triple(triple) => {
@@ -1243,6 +1300,81 @@ mod tests {
     /// A small helper interning a fresh IRI by suffix.
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
         b.intern_iri(&format!("http://example.org/{n}"))
+    }
+
+    /// `dataset → owned → dataset` preserves blank-node `(label, scope)` IDENTITY:
+    /// the owned rendering qualifies, and re-interning at the default scope
+    /// decodes, so a re-materialized dataset holds the SAME nodes rather than a
+    /// doubly-qualified copy of them.
+    #[test]
+    fn the_owned_round_trip_preserves_blank_label_identity() {
+        for &(label, scope) in &[
+            ("b0", BlankScope::DEFAULT),
+            ("a.b", BlankScope::DEFAULT),
+            ("a.s1", BlankScope::DEFAULT),
+            ("x", BlankScope(2)),
+            ("a.b", BlankScope(3)),
+        ] {
+            let mut b = RdfDatasetBuilder::new();
+            let s = b.intern_blank(label, scope);
+            let (p, o) = (iri(&mut b, "p"), iri(&mut b, "o"));
+            b.push_quad(s, p, o, None);
+            let dataset = b.freeze().expect("valid");
+
+            let mut again = RdfDatasetBuilder::new();
+            for quad in dataset.owned_quads() {
+                again.push_owned_quad(&quad);
+            }
+            let round_tripped = again.freeze().expect("valid");
+
+            let blanks: Vec<(String, BlankScope)> = (0..round_tripped.term_count())
+                .filter_map(
+                    |index| match round_tripped.resolve(TermId::from_index(index as u32)) {
+                        TermRef::Blank { label, scope } => Some((label.to_owned(), scope)),
+                        _ => None,
+                    },
+                )
+                .collect();
+            assert_eq!(
+                blanks,
+                vec![(label.to_owned(), scope)],
+                "owned round trip of {label:?} @ {scope:?}"
+            );
+        }
+    }
+
+    /// Standardize-apart stays INJECTIVE: merging a dataset that holds the same
+    /// label at two different scopes keeps the two nodes apart in the merged
+    /// scope, which is why an explicit non-default scope keeps the qualified
+    /// spelling instead of decoding it.
+    #[test]
+    fn push_dataset_keeps_two_scopes_of_one_label_apart() {
+        let source = {
+            let mut b = RdfDatasetBuilder::new();
+            let zero = b.intern_blank("b", BlankScope::DEFAULT);
+            let one = b.intern_blank("b", BlankScope(1));
+            let (p, o) = (iri(&mut b, "p"), iri(&mut b, "o"));
+            b.push_quad(zero, p, o, None);
+            b.push_quad(one, p, o, None);
+            b.freeze().expect("valid")
+        };
+        let mut merged = RdfDatasetBuilder::new();
+        merged.push_dataset(&source);
+        let merged = merged.freeze().expect("valid");
+
+        let blanks: std::collections::BTreeSet<(String, BlankScope)> = (0..merged.term_count())
+            .filter_map(
+                |index| match merged.resolve(TermId::from_index(index as u32)) {
+                    TermRef::Blank { label, scope } => Some((label.to_owned(), scope)),
+                    _ => None,
+                },
+            )
+            .collect();
+        assert_eq!(
+            blanks.len(),
+            2,
+            "the merge must not conflate two scopes of one label: {blanks:?}"
+        );
     }
 
     #[test]
