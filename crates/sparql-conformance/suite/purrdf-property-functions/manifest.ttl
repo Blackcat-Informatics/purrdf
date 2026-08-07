@@ -1,0 +1,86 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# PurRDF property functions — a predicate IRI under a caller-configured namespace
+# that invokes a registered RELATION instead of matching data in the graph —
+# exercised through the W3C mf: harness.
+#
+# The three relations these cases call are spelled under the harness-configured
+# https://example.org/rel/ namespace and are registered by the harness itself
+# (`run::harness_relations`), because a relation is host code a deployment injects:
+# the rows do NOT come from the queried dataset. Most cases therefore declare no
+# qt:data at all — the call is the only row source in the query, and its answer is
+# the same over an empty dataset as over any other.
+#
+#   rel:memberOf  1 subject / 1 object  (ada alpha) (brian alpha) (chen beta)
+#   rel:teamSite  1 subject / 2 object  (alpha "Zurich" 2) (beta "Osaka" 1)
+#   rel:seeds     0 subject / 1 object  (alpha) (beta)
+#
+# The cases walk the access-pattern lattice (ff / bf / fb / bb), the multi-output
+# and empty-argument-vector shapes no ordinary triple pattern can express, the
+# scope rule (a FILTER in the same group sees an argument variable), a chain in
+# which one call's output is the next call's input, and a call driven by a bag of
+# rows the GRAPH produced.
+
+@prefix mf:  <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+@prefix qt:  <http://www.w3.org/2001/sw/DataAccess/tests/test-query#> .
+@prefix :    <http://purrdf.test/property-functions#> .
+
+:manifest a mf:Manifest ;
+    mf:entries ( :ffEnumeration :bfLookup :fbBoundOutput :bbMemberTrue :bbMemberFalse
+                 :naryOutput :filterOverCall :multiCallChain :emptySideCall
+                 :dataDrivenCall ) .
+
+:ffEnumeration a mf:QueryEvaluationTest ;
+    mf:name "a call with both sides free enumerates the whole relation" ;
+    mf:action [ qt:query <ff-enumeration.rq> ] ;
+    mf:result <ff-enumeration.srx> .
+
+:bfLookup a mf:QueryEvaluationTest ;
+    mf:name "a call with the subject side bound looks the object side up" ;
+    mf:action [ qt:query <bf-lookup.rq> ] ;
+    mf:result <bf-lookup.srx> .
+
+:fbBoundOutput a mf:QueryEvaluationTest ;
+    mf:name "a call with the object side bound returns every subject that reaches it" ;
+    mf:action [ qt:query <fb-bound-output.rq> ] ;
+    mf:result <fb-bound-output.srx> .
+
+:bbMemberTrue a mf:QueryEvaluationTest ;
+    mf:name "a fully bound call is a membership test that holds" ;
+    mf:action [ qt:query <bb-member-true.rq> ] ;
+    mf:result <bb-member-true.srx> .
+
+:bbMemberFalse a mf:QueryEvaluationTest ;
+    mf:name "a fully bound call is a membership test that fails" ;
+    mf:action [ qt:query <bb-member-false.rq> ] ;
+    mf:result <bb-member-false.srx> .
+
+:naryOutput a mf:QueryEvaluationTest ;
+    mf:name "an object-side argument vector binds two output positions at once" ;
+    mf:action [ qt:query <nary-output.rq> ] ;
+    mf:result <nary-output.srx> .
+
+# The scope rule: every argument variable is visible in the enclosing group graph
+# pattern, so a FILTER written beside the call constrains what the call bound.
+:filterOverCall a mf:QueryEvaluationTest ;
+    mf:name "a FILTER in the same group sees a call's argument variable" ;
+    mf:action [ qt:query <filter-over-call.rq> ] ;
+    mf:result <filter-over-call.srx> .
+
+:multiCallChain a mf:QueryEvaluationTest ;
+    mf:name "one call's output is the next call's input" ;
+    mf:action [ qt:query <multi-call-chain.rq> ] ;
+    mf:result <multi-call-chain.srx> .
+
+:emptySideCall a mf:QueryEvaluationTest ;
+    mf:name "an empty subject-side argument vector is a generator" ;
+    mf:action [ qt:query <empty-side-call.rq> ] ;
+    mf:result <empty-side-call.srx> .
+
+# The only case with data: the graph pattern written before the call produces the
+# driving bag, and the call is invoked once per row of it.
+:dataDrivenCall a mf:QueryEvaluationTest ;
+    mf:name "a call is driven by the rows the graph pattern before it bound" ;
+    mf:action [ qt:query <data-driven-call.rq> ; qt:data <data.ttl> ] ;
+    mf:result <data-driven-call.srx> .

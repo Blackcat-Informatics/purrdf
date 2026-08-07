@@ -12,7 +12,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use purrdf_core::{RdfDataset, SparqlEngine, SparqlRequest, SparqlResult};
+use purrdf_core::{RdfDataset, SparqlRequest, SparqlResult};
 use purrdf_sparql_algebra::{GraphPattern, Query, SparqlParser};
 use purrdf_sparql_conformance::manifest::{SparqlTestCase, TestKind};
 use purrdf_sparql_eval::{
@@ -33,6 +33,7 @@ fn make_engine(cost: bool) -> NativeSparqlEngine {
     NativeSparqlEngine::new()
         .with_parser_options(ParserOptions {
             extension_fn_namespaces: vec![EXT_NS.to_owned()],
+            property_fn_namespaces: vec![purrdf_sparql_conformance::run::REL_NS.to_owned()],
         })
         .with_standpoint_predicates(StandpointPredicates::new(
             format!("{EXT_NS}accordingTo"),
@@ -58,7 +59,11 @@ fn eval_case(
     };
     let result = match remote {
         Some(source) => engine.query_with_source(dataset, request, source),
-        None => engine.query(dataset, request),
+        None => engine.query_with_property_functions(
+            dataset,
+            request,
+            purrdf_sparql_conformance::run::harness_relations(),
+        ),
     }
     .map_err(|e| format!("evaluate {}: {e}", case.iri))?;
     Ok(result)

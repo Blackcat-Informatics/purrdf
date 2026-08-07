@@ -1,0 +1,2 @@
+PREFIX rel: <https://example.org/rel/>
+SELECT ?team WHERE { () rel:seeds ?team }

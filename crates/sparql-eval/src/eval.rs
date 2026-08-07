@@ -4,9 +4,15 @@
 //! The graph-pattern evaluation recursion and its [`EvalCtx`].
 //!
 //! [`eval`] maps a [`GraphPattern`] to a [`SolutionSeq`] over the dataset in
-//! [`EvalCtx`]. The recursion is filled in across the S6 build tasks; each
-//! not-yet-implemented variant hard-errors ([`EvalError::Unsupported`]) rather than
-//! returning a partial bag (the `no-optionality` doctrine).
+//! [`EvalCtx`]. Every algebra variant is evaluated here, the host-injected
+//! property-function call included: a
+//! [`GraphPattern::PropertyFunction`](purrdf_sparql_algebra::GraphPattern::PropertyFunction)
+//! is dispatched per driving row against the registry
+//! [`EvalCtx::with_property_functions`] injected (`crate::property_fn_eval`), and a
+//! call the host's table cannot answer is a typed error rather than a short row
+//! stream. Anything a variant cannot evaluate hard-errors
+//! ([`EvalError::Unsupported`], or [`EvalError::Function`] for a call into host code)
+//! rather than returning a partial bag (the `no-optionality` doctrine).
 //!
 //! Evaluation pins the **concrete** [`RdfDataset`] rather than a generic
 //! `DatasetView`: the value→id bridge [`RdfDataset::term_id_by_value`] (P4),

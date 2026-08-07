@@ -18,7 +18,7 @@ use purrdf_rdf::{
 };
 use purrdf_sparql_algebra::{
     AggregateExpression, BaseDirection, BlankNode, Expression, GraphPattern, GroundTerm, Literal,
-    NamedNodePattern, Query, TermPattern, TriplePattern, Variable,
+    NamedNodePattern, PropertyFunctionCall, Query, TermPattern, TriplePattern, Variable,
 };
 use purrdf_sparql_eval::{
     BudgetExhausted, GovernedOutcome, NativeSparqlEngine, PreparedQuery, QueryGovernors, StopCause,
@@ -758,7 +758,28 @@ fn collect_returned_value_variables(pattern: &GraphPattern, names: &mut BTreeSet
         | GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner }
         | GraphPattern::Slice { inner, .. } => collect_returned_value_variables(inner, names),
+        // A relation READS its argument variables and derives its output rows from what
+        // they are bound to. The relation is caller code, so any function of an input
+        // cell may appear in an output cell — a witness reaching an argument can surface
+        // as a returned VALUE exactly the way an `Extend` expression's would. Reporting
+        // both argument sides is therefore the honest answer as well as the conservative
+        // one: which side is input and which is output is decided per relation at
+        // evaluation time and is not visible in the algebra, and the output positions are
+        // returned bindings outright.
+        GraphPattern::PropertyFunction(call) => collect_call_variables(call, names),
         GraphPattern::Bgp { .. } | GraphPattern::Path { .. } | GraphPattern::Values { .. } => {}
+    }
+}
+
+/// Every variable of a property-function call's arguments — subject side, then object
+/// side.
+///
+/// One set over both sides because the node's arguments simply ARE its variables: the
+/// algebra does not say which side is bound on input and which is produced, and every one
+/// of them is visible in the enclosing group graph pattern.
+fn collect_call_variables(call: &PropertyFunctionCall, names: &mut BTreeSet<String>) {
+    for term in call.subject_args.iter().chain(&call.object_args) {
+        collect_term_pattern_variable(term, names);
     }
 }
 
@@ -860,6 +881,7 @@ fn collect_all_variables(pattern: &GraphPattern, names: &mut BTreeSet<String>) {
         | GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner }
         | GraphPattern::Slice { inner, .. } => collect_all_variables(inner, names),
+        GraphPattern::PropertyFunction(call) => collect_call_variables(call, names),
     }
 }
 
@@ -872,10 +894,16 @@ fn collect_triple_pattern_variables(triple: &TriplePattern, names: &mut BTreeSet
     collect_term_pattern_variable(&triple.object, names);
 }
 
-/// `term`'s variable name, if it is one.
+/// `term`'s variable name, if it is one — descending into an RDF 1.2 quoted triple,
+/// whose nested variables bind exactly the way a top-level one does and can therefore
+/// carry a witness just as visibly.
 fn collect_term_pattern_variable(term: &TermPattern, names: &mut BTreeSet<String>) {
-    if let TermPattern::Variable(variable) = term {
-        names.insert(variable.as_str().to_owned());
+    match term {
+        TermPattern::Variable(variable) => {
+            names.insert(variable.as_str().to_owned());
+        }
+        TermPattern::Triple(triple) => collect_triple_pattern_variables(triple, names),
+        TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
     }
 }
 
@@ -984,7 +1012,25 @@ fn restrict_pattern(
             collect_all_variables(pattern, &mut bound);
             exclude_witnesses(pattern.clone(), bound.intersection(observable), witnesses)
         }
-        GraphPattern::Values { .. } => pattern.clone(),
+        // A call and an inline `VALUES` are the two leaves that bind terms WITHOUT reading
+        // the entailed graph, so witness restriction over either of them is the identity.
+        //
+        // For a call the argument runs both ways, and both ways it holds. Nothing it emits
+        // can be a witness: its rows come from the injected relation registry, and a
+        // witness label is this module's own digest-prefixed string minted inside the
+        // chase, which no registry ever saw. Nothing it READS can be one either, because
+        // [`collect_returned_value_variables`] reports every argument variable of every
+        // call as observable, so whichever `Bgp` or `Path` binds one has already been
+        // wrapped against the witness `VALUES` by the arm above — the call is handed a
+        // witness-free row by construction.
+        //
+        // Wrapping it the way a `Bgp` is wrapped would be wrong twice over besides. The
+        // `MINUS` would land between the enclosing `Lateral` and the call, and
+        // `Lateral(left, PropertyFunction)` is the shape the evaluator dispatches a call
+        // on; and the arguments it would constrain include the call's INPUTS, which a
+        // relation may require to be bound — restricting them there could turn a relation
+        // that only offers a bound-input mode into an infeasible plan.
+        GraphPattern::Values { .. } | GraphPattern::PropertyFunction(_) => pattern.clone(),
         GraphPattern::Join { left, right } => GraphPattern::Join {
             left: recurse(left),
             right: recurse(right),
@@ -1256,7 +1302,13 @@ fn collect_bgp(pattern: &GraphPattern, output: &mut Vec<QTriple>) {
         | GraphPattern::Reduced { inner }
         | GraphPattern::Slice { inner, .. }
         | GraphPattern::Group { inner, .. } => collect_bgp(inner, output),
-        GraphPattern::Path { .. } | GraphPattern::Values { .. } => {}
+        // Leaves that hold no triple pattern. A property-function call matches no triple
+        // in any graph — its rows come from the relation registry — so it contributes
+        // nothing to the pattern that drives OWL Direct's query-directed augmentation,
+        // exactly as a `Path` or an inline `VALUES` contributes nothing.
+        GraphPattern::Path { .. }
+        | GraphPattern::Values { .. }
+        | GraphPattern::PropertyFunction(_) => {}
     }
 }
 
@@ -1337,6 +1389,74 @@ mod tests {
             source.source().is_none(),
             "an error that wraps nothing must end the chain"
         );
+    }
+
+    /// A property-function call reaches every algebra walker this module has, and each
+    /// one treats it as what it is: a leaf that BINDS its argument variables and READS
+    /// no graph.
+    ///
+    /// The three decisions asserted together, because they depend on each other. The
+    /// call's argument variables are observable, so whatever `Bgp` binds one is
+    /// witness-restricted; the call itself is therefore already handed witness-free
+    /// rows and needs no restriction of its own, which is what lets the restriction be
+    /// the identity over it — and that identity is also what preserves the
+    /// `Lateral(left, call)` shape the evaluator dispatches a call on.
+    #[test]
+    fn a_property_function_call_binds_its_arguments_and_reads_no_graph() {
+        use purrdf_sparql_algebra::{ParserOptions, SparqlParser};
+
+        let options = ParserOptions {
+            extension_fn_namespaces: Vec::new(),
+            property_fn_namespaces: vec!["https://example.org/rel/".to_owned()],
+        };
+        let query = SparqlParser::new()
+            .parse_query_with(
+                "PREFIX rel: <https://example.org/rel/>\n\
+                 SELECT ?team WHERE {\n\
+                   ?person <https://example.org/name> ?name .\n\
+                   ?person rel:memberOf ?team\n\
+                 }",
+                &options,
+            )
+            .expect("the query parses under the configured namespace");
+
+        // Both argument variables are observable. `?team` is projected; `?person` is an
+        // input the relation reads and may derive an output cell from, which is the same
+        // exposure an `Extend` expression's operand has. `?name` is neither.
+        let observable = observable_variables(&query);
+        assert!(observable.contains("person"), "{observable:?}");
+        assert!(observable.contains("team"), "{observable:?}");
+        assert!(!observable.contains("name"), "{observable:?}");
+
+        // The call scaffolds nothing for the query-directed OWL-Direct augmentation:
+        // only the one triple actually written in the query is there.
+        let bgp = collect_query_bgp(&query);
+        assert_eq!(bgp.len(), 1, "{bgp:?}");
+
+        // Witness restriction wraps the data leaf and leaves the call alone.
+        let surrogates: BTreeSet<String> = std::iter::once("chase.witness.0".to_owned()).collect();
+        let restricted = restrict_witness_bindings(&query, &surrogates);
+        let Query::Select { pattern, .. } = &restricted else {
+            panic!("a SELECT restricts to a SELECT");
+        };
+        let GraphPattern::Project { inner, .. } = pattern else {
+            panic!("a SELECT's algebra root is a Project, got {pattern:?}");
+        };
+        let GraphPattern::Lateral { left, right } = &**inner else {
+            panic!("the call's Lateral must survive the rewrite, got {inner:?}");
+        };
+        assert!(
+            matches!(&**left, GraphPattern::Minus { .. }),
+            "the data leaf binding an observable variable is excluded from the \
+             witnesses, got {left:?}"
+        );
+        let GraphPattern::PropertyFunction(call) = &**right else {
+            panic!(
+                "the Lateral's right operand must still be the bare call — anything \
+                 between them is a shape the evaluator does not dispatch on, got {right:?}"
+            );
+        };
+        assert_eq!(call.iri, "https://example.org/rel/memberOf");
     }
 
     fn hierarchy() -> Arc<RdfDataset> {

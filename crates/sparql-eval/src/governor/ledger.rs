@@ -275,6 +275,14 @@ pub struct QueryExplanation {
     join_orders: Vec<String>,
     /// One line per algebra node, in the plan's pre-order.
     ledger: Vec<NodeCharges>,
+    /// The IRIs of the property-function relations that were in scope, sorted.
+    ///
+    /// Part of the receipt because a relation is HOST code that produces rows no index
+    /// sized and no dataset holds: two runs of the same query text over the same dataset
+    /// can differ in nothing but which relations were injected, and an explanation that
+    /// did not name them would present those two runs as the same run. Sorted so the list
+    /// is a function of what was registered rather than of registration order.
+    relations: Vec<String>,
     /// The whole execution's consumption and ceilings, so a reader can check the ledger's
     /// fuel column against the total it decomposes.
     evidence: purrdf_core::GovernorEvidence,
@@ -318,12 +326,14 @@ impl QueryExplanation {
     pub(crate) fn new(
         join_orders: Vec<String>,
         ledger: Vec<NodeCharges>,
+        relations: Vec<String>,
         evidence: purrdf_core::GovernorEvidence,
     ) -> Self {
         Self {
             profile: ProfileIdentity::current(),
             join_orders,
             ledger,
+            relations,
             evidence,
         }
     }
@@ -350,6 +360,16 @@ impl QueryExplanation {
         &self.ledger
     }
 
+    /// The IRIs of the property-function relations that were in scope, sorted.
+    ///
+    /// Empty when the explanation was taken with no registry injected, which is the same
+    /// thing an empty registry means: no predicate in the query could resolve to a
+    /// relation.
+    #[must_use]
+    pub fn relations(&self) -> &[String] {
+        &self.relations
+    }
+
     /// The whole execution's consumption and ceilings.
     #[must_use]
     pub const fn evidence(&self) -> &purrdf_core::GovernorEvidence {
@@ -357,7 +377,7 @@ impl QueryExplanation {
     }
 
     /// The stable text rendering: a profile header, the charge schedule, the per-node
-    /// ledger, and the join orders.
+    /// ledger, the injected relations, and the join orders.
     ///
     /// Byte-deterministic for a given query, dataset, and build — every number in it is a
     /// counter and every string is either a pinned schedule label or an algebra variant
@@ -404,6 +424,13 @@ impl QueryExplanation {
                     let _ = writeln!(out, "{indent}  {}\t{units}", point.label());
                 }
             }
+        }
+        // Always emitted, empty or not: a block that appears only when something was
+        // registered would make "no relations were in scope" and "this build does not
+        // report relations" the same bytes.
+        let _ = writeln!(out, "relations");
+        for iri in &self.relations {
+            let _ = writeln!(out, "  {iri}");
         }
         let _ = writeln!(out, "join-orders");
         for pattern in &self.join_orders {

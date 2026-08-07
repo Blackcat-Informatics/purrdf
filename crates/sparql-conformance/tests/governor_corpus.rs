@@ -1364,17 +1364,27 @@ fn manifest_row(case: &Case, outcome: &str) -> String {
     )
 }
 
-/// Measure one case and produce its regenerated manifest row, its transport row, and its
+/// What regenerating one case produced: its manifest row, plus the measured sidecar row
+/// for each side table the case has one in, keyed by the case name.
+///
+/// A named record rather than a tuple, because the two sidecars are both
+/// `Option<(String, _)>` and nothing about their positions says which is which.
+struct Regenerated {
+    /// The case's `manifest.tsv` row.
+    manifest_row: String,
+    /// The `transport.tsv` row, for a federated case.
+    transport: Option<(String, TransportSpec)>,
+    /// The `relations.tsv` row, for a property-function case.
+    relation: Option<(String, RelationSpec)>,
+}
+
+/// Measure one case and produce its regenerated manifest row, its sidecar rows, and its
 /// `expected/` records.
 fn regenerate_case(
     case: &Case,
     spec: Option<TransportSpec>,
     relation_spec: Option<RelationSpec>,
-) -> (
-    String,
-    Option<(String, TransportSpec)>,
-    Option<(String, RelationSpec)>,
-) {
+) -> Regenerated {
     let mut case = case.clone();
     if case.is_pinned_deterministic() {
         let measured = metered(&case, spec, relation_spec);
@@ -1417,11 +1427,11 @@ fn regenerate_case(
             },
         )
     });
-    (
-        manifest_row(&case, &observation.outcome),
+    Regenerated {
+        manifest_row: manifest_row(&case, &observation.outcome),
         transport,
         relation,
-    )
+    }
 }
 
 /// Rewrite the derived cells of `manifest.tsv` and `transport.tsv`, and every `expected/`
@@ -1439,13 +1449,13 @@ fn regenerate(
     let mut transport_rows = BTreeMap::new();
     let mut relation_rows = BTreeMap::new();
     for case in cases {
-        let (row, transport, relation) = regenerate_case(
+        let regenerated = regenerate_case(
             case,
             specs.get(&case.name).copied(),
             relations.get(&case.name).copied(),
         );
-        manifest_rows.insert(case.name.clone(), row);
-        if let Some((name, spec)) = transport {
+        manifest_rows.insert(case.name.clone(), regenerated.manifest_row);
+        if let Some((name, spec)) = regenerated.transport {
             transport_rows.insert(
                 name.clone(),
                 format!(
@@ -1456,7 +1466,7 @@ fn regenerate(
                 ),
             );
         }
-        if let Some((name, spec)) = relation {
+        if let Some((name, spec)) = regenerated.relation {
             relation_rows.insert(
                 name.clone(),
                 format!(

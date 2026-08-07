@@ -2019,9 +2019,9 @@ fn format_plain_decimal(value: f64) -> String {
 /// [`crate::eval::StandpointPredicates`] table. Evaluating `heldIn` with **no**
 /// configured table is a hard [`EvalError`] — there is no fabricated default.
 ///
-/// Per CONSTITUTION Principle 17 the native logic solver is the sole reasoning
-/// authority: this does NOT walk/compute the `sharpens` transitive closure —
-/// it relies on the closure being materialized upstream as direct edges. It returns
+/// The reasoning authority is the entailment lane, not this builtin: it does NOT
+/// walk/compute the `sharpens` transitive closure — it relies on the closure being
+/// materialized upstream as direct edges. It returns
 /// true iff some vantage standpoint `T` of the reifier (the objects of the reifier's
 /// `accordingTo` annotations) either equals the queried standpoint or has a
 /// direct `(T, sharpens, standpoint)` quad (T is more specific than the

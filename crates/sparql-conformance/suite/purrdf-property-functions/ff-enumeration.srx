@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<sparql xmlns="http://www.w3.org/2005/sparql-results#">
+  <head><variable name="person"/><variable name="team"/></head>
+  <results>
+    <result>
+      <binding name="person"><uri>http://purrdf.test/relations#ada</uri></binding>
+      <binding name="team"><uri>http://purrdf.test/relations#alpha</uri></binding>
+    </result>
+    <result>
+      <binding name="person"><uri>http://purrdf.test/relations#brian</uri></binding>
+      <binding name="team"><uri>http://purrdf.test/relations#alpha</uri></binding>
+    </result>
+    <result>
+      <binding name="person"><uri>http://purrdf.test/relations#chen</uri></binding>
+      <binding name="team"><uri>http://purrdf.test/relations#beta</uri></binding>
+    </result>
+  </results>
+</sparql>

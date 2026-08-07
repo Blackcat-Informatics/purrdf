@@ -38,16 +38,20 @@ pub enum EvalError {
 
     /// A well-formed construct this evaluator does not (or cannot) evaluate.
     ///
-    /// This is the hard-fail boundary. `SERVICE` federation, `LATERAL`, and SPARQL
-    /// `UPDATE` are all evaluated in-engine, so none of them surfaces here; what
-    /// remains is a narrow, enumerated residue: a variable-bound quoted-triple-term
-    /// component in a BGP or property-path pattern (structural triple-term matching
-    /// is out of scope), an unresolved custom SPARQL function or aggregate IRI,
-    /// `heldIn` called without a caller-supplied standpoint-predicate configuration,
-    /// and a manually constructed graph pattern whose nesting exceeds the parser's
-    /// safety bound. The string names the unsupported construct. (Property paths are
-    /// evaluated in-engine — S8 — and `DESCRIBE` evaluates via the canonical
-    /// Symmetric CBD, so neither is here either.)
+    /// This is the hard-fail boundary. `SERVICE` federation, `LATERAL`,
+    /// property-function calls, and SPARQL `UPDATE` are all evaluated in-engine, so
+    /// none of them surfaces here; what remains is a narrow, enumerated residue: a
+    /// variable-bound quoted-triple-term component in a BGP or property-path pattern
+    /// (structural triple-term matching is out of scope), an unresolved custom SPARQL
+    /// function or aggregate IRI, `heldIn` called without a caller-supplied
+    /// standpoint-predicate configuration, and a manually constructed graph pattern
+    /// whose nesting exceeds the parser's safety bound. The string names the
+    /// unsupported construct. (Property paths are evaluated in-engine — S8 — and
+    /// `DESCRIBE` evaluates via the canonical Symmetric CBD, so neither is here
+    /// either. A property-function call whose predicate IRI resolves to no registered
+    /// relation, or whose access pattern no declared mode admits, is
+    /// [`EvalError::Function`]: the construct is supported and the host's table is
+    /// what does not answer it.)
     Unsupported(String),
 
     /// An internal invariant was violated — e.g. a solution row whose width does

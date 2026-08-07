@@ -929,6 +929,48 @@ impl NativeSparqlEngine {
         self.explain_query_view(&**dataset, query_text, base_iri)
     }
 
+    /// [`Self::explain_query`] with a property-function registry injected, so a query
+    /// whose predicates resolve to relations can be explained at all — and so the
+    /// explanation NAMES them.
+    ///
+    /// A relation is host code whose rows no index sized and no dataset holds, which
+    /// makes it part of what produced the answer in exactly the way the charge schedule
+    /// is: [`QueryExplanation::relations`] carries the registered IRIs, sorted, and
+    /// [`QueryExplanation::render`] prints them. Two hosts that ran the same query text
+    /// over the same dataset under two different registries therefore hold two receipts
+    /// that say so.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`RdfDiagnostic`] if the query text does not parse, or if evaluating it
+    /// fails.
+    pub fn explain_query_with_property_functions(
+        &self,
+        dataset: &Arc<RdfDataset>,
+        query_text: &str,
+        base_iri: Option<&str>,
+        registry: &crate::property_fn::PropertyFunctionRegistry,
+    ) -> Result<QueryExplanation, RdfDiagnostic> {
+        self.explain_query_with_property_functions_view(&**dataset, query_text, base_iri, registry)
+    }
+
+    /// [`Self::explain_query_with_property_functions`] over any [`DatasetView`] backend
+    /// whose id type is the production [`TermId`](purrdf_core::TermId).
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`RdfDiagnostic`] if the query text does not parse, or if evaluating it
+    /// fails.
+    pub fn explain_query_with_property_functions_view<D: DatasetView + Sync>(
+        &self,
+        dataset: &D,
+        query_text: &str,
+        base_iri: Option<&str>,
+        registry: &crate::property_fn::PropertyFunctionRegistry,
+    ) -> Result<QueryExplanation, RdfDiagnostic> {
+        self.explain_for(dataset, query_text, base_iri, Some(registry))
+    }
+
     /// [`Self::explain_query`] over any [`DatasetView`] backend whose id type is the
     /// production [`TermId`](purrdf_core::TermId). The cost-based join order is computed against the given
     /// view's cardinalities exactly as the concrete path does.
@@ -943,13 +985,24 @@ impl NativeSparqlEngine {
         query_text: &str,
         base_iri: Option<&str>,
     ) -> Result<QueryExplanation, RdfDiagnostic> {
-        let prepared =
-            self.cache
-                .borrow_mut()
-                .prepare_with(query_text, base_iri, &self.parser_options)?;
-        // `explain_query` parses without a registry, so the plan it explains carries no
-        // property-function call to price.
-        let survey = self.survey_plan(dataset, &prepared.query, None)?;
+        self.explain_for(dataset, query_text, base_iri, None)
+    }
+
+    /// The one explain body, parameterized by the property-function registry in scope.
+    ///
+    /// `relations` is threaded everywhere it changes the answer: into the parse (which is
+    /// where a predicate becomes a call node and the plan is feasibility-ordered), into
+    /// the survey (a relation's declared row bound is the only prediction a call has), and
+    /// into the receipt (which names the registered IRIs).
+    fn explain_for<D: DatasetView + Sync>(
+        &self,
+        dataset: &D,
+        query_text: &str,
+        base_iri: Option<&str>,
+        relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
+    ) -> Result<QueryExplanation, RdfDiagnostic> {
+        let prepared = self.prepare_for(query_text, base_iri, relations)?;
+        let survey = self.survey_plan(dataset, &prepared.query, relations)?;
         // The ledger's node table is fixed against the plan that is about to be evaluated.
         // No substitutions are applied on this path, so the addresses the ledger records
         // are the addresses the evaluator visits.
@@ -962,11 +1015,24 @@ impl NativeSparqlEngine {
             .eval_ctx(dataset)
             .with_governors(Arc::clone(&state))
             .with_charge_ledger(Arc::clone(&ledger));
+        if let Some(registry) = relations {
+            ctx = ctx.with_property_functions(registry);
+        }
         evaluate_query_evaluated(&prepared.query, &mut ctx)
             .map_err(|e| RdfDiagnostic::error("native-sparql-query-explain", e.to_string()))?;
+        // `describe()` is IRI-sorted, so the receipt's relation list is a function of what
+        // was registered and not of the order it was registered in.
+        let registered = relations.map_or_else(Vec::new, |registry| {
+            registry
+                .describe()
+                .into_iter()
+                .map(|descriptor| descriptor.iri)
+                .collect()
+        });
         Ok(QueryExplanation::new(
             survey.orders,
             ledger.snapshot(),
+            registered,
             state.evidence(),
         ))
     }
@@ -2128,6 +2194,80 @@ mod tests {
             without_rows, with_rows,
             "an empty registry must not change a single row"
         );
+    }
+
+    /// The explain receipt NAMES the relations that were in scope, sorted, so two runs
+    /// of the same query text over the same dataset under two different registries are
+    /// two distinguishable receipts.
+    ///
+    /// The rows a relation emits are host code's, not the dataset's: without the list, a
+    /// receipt would attribute an answer to a query and a dataset that between them do
+    /// not determine it.
+    #[test]
+    fn the_explain_receipt_names_the_registered_relations() {
+        let ds = subst_ds();
+        let engine = NativeSparqlEngine::new();
+        let query = "SELECT ?s ?o WHERE { ?s <http://ex/p> ?o } ORDER BY ?s ?o";
+        let table = || {
+            Arc::new(
+                crate::property_fn::MemoryRelation::new(
+                    1,
+                    1,
+                    vec![vec![
+                        TermValue::iri("http://example.org/a"),
+                        TermValue::iri("http://example.org/1"),
+                    ]],
+                )
+                .expect("a one-row two-column table"),
+            )
+        };
+
+        // Registered in the reverse of their sorted order, so a receipt that echoed
+        // registration order would disagree with one that sorted.
+        let mut left = crate::property_fn::PropertyFunctionRegistry::new();
+        left.register("http://example.org/rel/second", table());
+        left.register("http://example.org/rel/first", table());
+        let mut right = crate::property_fn::PropertyFunctionRegistry::new();
+        right.register("http://example.org/rel/first", table());
+
+        let explain = |registry: &crate::property_fn::PropertyFunctionRegistry| {
+            engine
+                .explain_query_with_property_functions(&ds, query, None, registry)
+                .expect("explain")
+        };
+        let left_receipt = explain(&left);
+        let right_receipt = explain(&right);
+
+        assert_eq!(
+            left_receipt.relations(),
+            [
+                "http://example.org/rel/first".to_owned(),
+                "http://example.org/rel/second".to_owned()
+            ],
+            "the receipt lists every registered IRI, sorted"
+        );
+        assert_eq!(
+            right_receipt.relations(),
+            ["http://example.org/rel/first".to_owned()]
+        );
+        assert_ne!(
+            left_receipt.render(),
+            right_receipt.render(),
+            "two registries must not render as the same receipt"
+        );
+        assert!(
+            left_receipt
+                .render()
+                .contains("relations\n  http://example.org/rel/first\n"),
+            "the rendering names them: {}",
+            left_receipt.render()
+        );
+
+        // With no registry the block is present and empty — "nothing was in scope",
+        // not "this build does not report what was".
+        let bare = engine.explain_query(&ds, query, None).expect("explain");
+        assert!(bare.relations().is_empty());
+        assert!(bare.render().contains("relations\njoin-orders"));
     }
 
     #[test]

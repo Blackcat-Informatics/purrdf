@@ -36,11 +36,11 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use purrdf_core::{RdfDataset, SparqlEngine, SparqlRequest, SparqlResult};
+use purrdf_core::{RdfDataset, SparqlRequest, SparqlResult};
 use purrdf_sparql_conformance::manifest::TestKind;
 use purrdf_sparql_eval::{
-    EvalOptions, GovernedOutcome, NativeSparqlEngine, ParserOptions, QueryGovernors,
-    StandpointPredicates,
+    EvalOptions, GovernedOutcome, GovernorState, NativeSparqlEngine, ParserOptions, QueryGovernors,
+    ShaclPrebinding, ShaclQueryOptions, StandpointPredicates,
 };
 
 /// The sentinel base the manifest loader resolves case IRIs against.
@@ -55,6 +55,7 @@ fn harness_engine() -> NativeSparqlEngine {
     NativeSparqlEngine::new()
         .with_parser_options(ParserOptions {
             extension_fn_namespaces: vec![EXT_NS.to_owned()],
+            property_fn_namespaces: vec![purrdf_sparql_conformance::run::REL_NS.to_owned()],
         })
         .with_standpoint_predicates(StandpointPredicates::new(
             format!("{EXT_NS}accordingTo"),
@@ -135,7 +136,11 @@ fn ungoverned(
 ) -> Result<SparqlResult, String> {
     match remote {
         Some(source) => engine.query_with_source(dataset, request(query), source),
-        None => engine.query(dataset, request(query)),
+        None => engine.query_with_property_functions(
+            dataset,
+            request(query),
+            purrdf_sparql_conformance::run::harness_relations(),
+        ),
     }
     .map_err(|error| error.to_string())
 }
@@ -195,10 +200,23 @@ fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
                     source,
                     &QueryGovernors::UNBOUNDED,
                 ),
-                None => governed_engine.query_governed(
-                    &dataset,
+                // The relation table travels on the governed path too, through the
+                // one governed entry that carries a property-function registry: a
+                // first-party relation case must be COMPARED here, and a governed
+                // run whose calls resolved to nothing would be comparing a
+                // different query against the oracle.
+                None => governed_engine.query_governed_in_operation_with_options(
+                    &*dataset,
                     request(&query),
-                    &QueryGovernors::UNBOUNDED,
+                    ShaclQueryOptions {
+                        prebinding: ShaclPrebinding::None,
+                        functions: None,
+                        property_functions: Some(
+                            purrdf_sparql_conformance::run::harness_relations(),
+                        ),
+                        bnode_mint_prefix: None,
+                    },
+                    &Arc::new(GovernorState::new(&QueryGovernors::UNBOUNDED)),
                 ),
             }
             .map_err(|error| error.to_string());

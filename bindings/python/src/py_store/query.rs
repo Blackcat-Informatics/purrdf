@@ -55,6 +55,13 @@ use crate::{GovernedEntailment, RdfDataset, RdfTerm, RdfTriple, SparqlResult, Te
 ///   IRIs threaded into [`NativeSparqlEngine::with_standpoint_predicates`], read
 ///   by `heldIn` and loss-aware `CONSTRUCT`. Unset means the engine default:
 ///   evaluating `heldIn` is a hard error (PurRDF mints no vocabulary of its own).
+///
+/// The property-function namespace list is the empty one this surface's relation
+/// table is: a call node is only ever resolved against a registry of host
+/// relations, this engine is built with none, and a namespace configured over an
+/// empty registry would turn an ordinary triple pattern into an unresolvable call.
+/// Empty is therefore the configuration that matches the injected relations, and
+/// it is the same default any host gets before it injects one.
 pub(super) fn build_engine(
     extension_namespaces: Option<Vec<String>>,
     standpoint_predicates: Option<(String, String)>,
@@ -63,6 +70,7 @@ pub(super) fn build_engine(
     if let Some(namespaces) = extension_namespaces {
         engine = engine.with_parser_options(ParserOptions {
             extension_fn_namespaces: namespaces,
+            property_fn_namespaces: Vec::new(),
         });
     }
     if let Some((according_to, sharpens)) = standpoint_predicates {

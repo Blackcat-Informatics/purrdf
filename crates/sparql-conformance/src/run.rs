@@ -3,7 +3,7 @@
 
 //! Running a discovered case: load data, parse + evaluate the query.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use purrdf::{SerializeGraph, serialize_dataset};
 use purrdf_core::{
@@ -15,7 +15,8 @@ use purrdf_sparql_algebra::{
     TriplePattern,
 };
 use purrdf_sparql_eval::{
-    LossVocabulary, NativeSparqlEngine, ParserOptions, RemoteQuerySource, StandpointPredicates,
+    LossVocabulary, MemoryRelation, NativeSparqlEngine, ParserOptions, PropertyFunctionRegistry,
+    RemoteQuerySource, StandpointPredicates,
 };
 
 use crate::manifest::{SparqlTestCase, TestKind};
@@ -31,6 +32,16 @@ const EXT_NS: &str = "https://example.org/ext/";
 /// The loss-declaration namespace used by the first-party loss-aware CONSTRUCT
 /// cases. Like `EXT_NS`, this is harness configuration, not an engine constant.
 const LOSS_NS: &str = "https://example.org/ext/loss/";
+
+/// The **property-function** namespace the first-party relation fixtures spell
+/// their calls under, and the prefix of every IRI `harness_relations` registers.
+/// Like `EXT_NS`, this is HARNESS configuration: PurRDF recognizes a predicate as
+/// a relation call only because this harness configured the namespace, and it
+/// mints no such namespace of its own.
+///
+/// Public because the differential corpora in `tests/` re-evaluate the same suite
+/// cases and must configure the parser identically to be comparing the same query.
+pub const REL_NS: &str = "https://example.org/rel/";
 
 /// The outcome of running a case (before comparison against the expected result).
 #[derive(Debug)]
@@ -52,6 +63,83 @@ pub enum RunOutcome {
         /// `true` when the query text parsed without error.
         parsed_ok: bool,
     },
+}
+
+/// The relation table the harness injects for every non-federated
+/// `QueryEvaluationTest`, built once and shared.
+///
+/// These are HARNESS configuration in exactly the sense `EXT_NS` is: three
+/// [`MemoryRelation`]s under `REL_NS`, whose rows are written here rather than in a
+/// fixture graph, because a relation is host code that a deployment injects — the
+/// point of the seam is that the rows do NOT come from the queried dataset. The
+/// tables are small and total, so every case's expected result is readable next to
+/// its query.
+///
+/// Registering them for every case is harmless for the vendored W3C suites: no
+/// vendored query spells a predicate under `REL_NS`, and a registered relation is
+/// only ever reached through a call node the parser mints from that namespace.
+///
+/// Public for the same reason `REL_NS` is: a differential corpus that re-runs a
+/// suite case has to inject the same relations, or it would be measuring a query
+/// whose calls resolve to nothing.
+#[must_use]
+pub fn harness_relations() -> &'static PropertyFunctionRegistry {
+    static RELATIONS: OnceLock<PropertyFunctionRegistry> = OnceLock::new();
+    RELATIONS.get_or_init(|| {
+        let iri = |local: &str| TermValue::iri(format!("http://purrdf.test/relations#{local}"));
+        let count = |n: &str| {
+            TermValue::typed_literal(n, "http://www.w3.org/2001/XMLSchema#integer".to_owned())
+        };
+        let mut registry = PropertyFunctionRegistry::new();
+        // person → team. One team has two members and one has one, so an `ff`
+        // enumeration, a `bf` lookup and an `fb` reverse lookup each return a
+        // different number of rows.
+        registry.register(
+            format!("{REL_NS}memberOf"),
+            Arc::new(
+                MemoryRelation::new(
+                    1,
+                    1,
+                    vec![
+                        vec![iri("ada"), iri("alpha")],
+                        vec![iri("brian"), iri("alpha")],
+                        vec![iri("chen"), iri("beta")],
+                    ],
+                )
+                .expect("every memberOf row is two values wide"),
+            ),
+        );
+        // team → (city, headcount): two OUTPUT positions on the object side, which
+        // no ordinary triple pattern can bind at once.
+        registry.register(
+            format!("{REL_NS}teamSite"),
+            Arc::new(
+                MemoryRelation::new(
+                    1,
+                    2,
+                    vec![
+                        vec![
+                            iri("alpha"),
+                            TermValue::simple_literal("Zurich"),
+                            count("2"),
+                        ],
+                        vec![iri("beta"), TermValue::simple_literal("Osaka"), count("1")],
+                    ],
+                )
+                .expect("every teamSite row is three values wide"),
+            ),
+        );
+        // A generator with an EMPTY subject side: `() rel:seeds ?t` takes no input
+        // and enumerates its whole table.
+        registry.register(
+            format!("{REL_NS}seeds"),
+            Arc::new(
+                MemoryRelation::new(0, 1, vec![vec![iri("alpha")], vec![iri("beta")]])
+                    .expect("every seeds row is one value wide"),
+            ),
+        );
+        registry
+    })
 }
 
 /// Load the case's `qt:data` and `qt:graphData` files into a combined dataset.
@@ -288,6 +376,7 @@ pub fn run(
             // suites, which never call the extension functions.
             let parser_options = ParserOptions {
                 extension_fn_namespaces: vec![EXT_NS.to_owned()],
+                property_fn_namespaces: vec![REL_NS.to_owned()],
             };
             let engine = NativeSparqlEngine::new()
                 .with_parser_options(parser_options.clone())
@@ -305,9 +394,16 @@ pub fn run(
                 base_iri: Some(BASE),
                 substitutions: &[],
             };
+            // A federated case resolves `SERVICE` through the injected source; every
+            // other case carries the harness relation table. The two injections are
+            // independent seams, and each entry supplies the one its cases need: the
+            // vendored federated fixtures spell no `REL_NS` predicate, and the
+            // first-party relation fixtures issue no `SERVICE`.
             let result = match remote {
                 Some(source) => engine.query_with_source(&dataset, request, source),
-                None => engine.query(&dataset, request),
+                None => {
+                    engine.query_with_property_functions(&dataset, request, harness_relations())
+                }
             }
             .map_err(|e| format!("evaluate {}: {e}", case.iri))?;
             let ordered = query_is_top_level_ordered(&query_text, &parser_options);
@@ -319,6 +415,7 @@ pub fn run(
             let mut dataset = build_dataset(&case.data, &case.graph_data)?;
             let engine = NativeSparqlEngine::new().with_parser_options(ParserOptions {
                 extension_fn_namespaces: vec![EXT_NS.to_owned()],
+                property_fn_namespaces: vec![REL_NS.to_owned()],
             });
             let request = SparqlRequest {
                 query: &query_text,
@@ -482,7 +579,13 @@ fn collect_bgp<'a>(p: &'a GraphPattern, out: &mut Vec<&'a TriplePattern>) {
         | GraphPattern::Reduced { inner }
         | GraphPattern::Slice { inner, .. }
         | GraphPattern::Group { inner, .. } => collect_bgp(inner, out),
-        GraphPattern::Path { .. } | GraphPattern::Values { .. } => {}
+        // Leaves that hold no triple pattern. A property-function call matches no
+        // triple in any graph — its rows come from the injected relation table — so
+        // it scaffolds no class expression for the OWL-Direct augmentation, exactly
+        // as a path or an inline `VALUES` scaffolds none.
+        GraphPattern::Path { .. }
+        | GraphPattern::Values { .. }
+        | GraphPattern::PropertyFunction(_) => {}
     }
 }
 
