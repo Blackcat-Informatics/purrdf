@@ -610,6 +610,62 @@ pub enum GraphPattern {
         /// The `(output variable, aggregate)` pairs.
         aggregates: Vec<(Variable, AggregateExpression)>,
     },
+    /// A **property-function** call — a predicate IRI under a *caller-configured*
+    /// property-function namespace that invokes a registered RELATION instead of
+    /// matching data in the graph (`subjectArgs <iri> objectArgs`).
+    ///
+    /// # Scope
+    ///
+    /// Every variable in either argument vector is VISIBLE in the enclosing group
+    /// graph pattern: the arguments are simultaneously the call's inputs and its
+    /// bindings (which side is input and which is output is decided per relation
+    /// at evaluation time, not here), so `SELECT *` projects them and a `FILTER`
+    /// in the same group sees them.
+    ///
+    /// # Argument grammar
+    ///
+    /// Each side of the predicate is an argument VECTOR:
+    ///
+    /// * a plain term — IRI, literal, blank node, variable, or an RDF 1.2 quoted
+    ///   triple — is a ONE-element vector;
+    /// * a collection `( … )` is the vector of its elements, taken STRUCTURALLY:
+    ///   it is NOT desugared into `rdf:first`/`rdf:rest` cons cells the way a
+    ///   collection in ordinary triple position is;
+    /// * the empty collection `()` is a ZERO-length vector, whereas a bare
+    ///   `rdf:nil` spelled as an IRI is a one-element vector holding that IRI —
+    ///   the two spellings are deliberately distinct;
+    /// * a nested collection inside an argument list is a hard parse error;
+    /// * a blank node is admitted as a non-distinguished variable (the evaluator
+    ///   gives it its synthetic-slot treatment); the parser passes it through.
+    ///
+    /// A repeated variable — within one side or across both — is passed through
+    /// as written; the equality semantics it implies belong to the evaluator.
+    ///
+    /// # Only ever produced from configuration
+    ///
+    /// The parser mints this node ONLY when the predicate IRI matches an entry of
+    /// [`crate::parser::ParserOptions::property_fn_namespaces`], whose default is
+    /// EMPTY. With no configured namespace the seam is off and such a triple is an
+    /// ordinary BGP triple pattern — PurRDF mints no vocabulary IRIs of its own,
+    /// so nothing is ever recognized by default.
+    PropertyFunction(PropertyFunctionCall),
+}
+
+/// A property-function call resolved at parse time: the predicate IRI plus the
+/// subject-side and object-side argument vectors.
+///
+/// See [`GraphPattern::PropertyFunction`] for the scope rule and the argument
+/// grammar. The IRI is retained BYTE-EXACT as the query author spelled it (after
+/// prefix/base resolution) so serialization re-emits exactly that IRI and never
+/// fabricates a namespace — the same contract as [`PurrdfCall::iri`].
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct PropertyFunctionCall {
+    /// The predicate IRI the call was parsed from, byte-exact.
+    pub iri: String,
+    /// The subject-side arguments, in written order (possibly empty).
+    pub subject_args: Vec<TermPattern>,
+    /// The object-side arguments, in written order (possibly empty).
+    pub object_args: Vec<TermPattern>,
 }
 
 /// One element of a negated property set list (`!(p1|^p2|...)`, SPARQL 1.1
