@@ -1406,7 +1406,14 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
             };
             survey_pattern_plans(dataset, active_dataset, inner_graph, inner, survey)?;
         }
-        GraphPattern::Path { .. } | GraphPattern::Values { .. } | GraphPattern::Service { .. } => {}
+        // Leaves that hold no BGP: there is no triple-pattern join order to choose and
+        // no base cardinality to probe. A property function's row count is its own
+        // declaration (`PropertyFunction::rows_per_invocation`), read where the call is
+        // planned rather than estimated from the dataset's term statistics here.
+        GraphPattern::Path { .. }
+        | GraphPattern::Values { .. }
+        | GraphPattern::Service { .. }
+        | GraphPattern::PropertyFunction(_) => {}
     }
     Ok(())
 }

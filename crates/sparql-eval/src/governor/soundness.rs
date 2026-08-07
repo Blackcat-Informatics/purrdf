@@ -441,6 +441,16 @@ where
             variables: _,
             bindings: _,
         } => false,
+        // A property-function call is a leaf too: its argument vectors are term
+        // positions, not nested graph patterns, so there is no child to classify and no
+        // expression to walk. It is a row source in the same sense `Bgp` and `Values`
+        // are — the relation emits a deterministic, contractually ordered sequence
+        // (see `crate::property_fn::PfCursor`) that the engine preserves — so it needs
+        // no edge of its own and inherits whatever context the spine above it carries,
+        // exactly like the other three leaves. That is also what makes a row ceiling
+        // applicable at this node: stopping the cursor after `k` rows yields the FIRST
+        // `k` rows of the call, not merely some `k` of them.
+        GraphPattern::PropertyFunction(_) => false,
 
         // A hash join's output is left-major (each left row's matches, in left order), so
         // a prefix of the left input yields a prefix of the output, while a prefix of the
@@ -808,7 +818,8 @@ pub(crate) const fn child_row_ceiling(
         | GraphPattern::Values {
             variables: _,
             bindings: _,
-        } => None,
+        }
+        | GraphPattern::PropertyFunction(_) => None,
 
         // One row in, one row out, in order: `BIND` adds a column, `GRAPH` rescopes, and
         // `PROJECT` drops columns. None of them drops, adds, or moves a row.
@@ -1014,13 +1025,31 @@ const fn pattern_label_index(pattern: &GraphPattern) -> usize {
             variables: _,
             aggregates: _,
         } => 17,
+        GraphPattern::PropertyFunction(_) => 18,
     }
 }
 
 /// Every [`GraphPattern`] variant's stable label, indexed by [`pattern_label_index`].
-pub(crate) const PATTERN_LABELS: [&str; 18] = [
-    "Bgp", "Path", "Join", "LeftJoin", "Lateral", "Filter", "Union", "Graph", "Extend", "Minus",
-    "Service", "Values", "OrderBy", "Project", "Distinct", "Reduced", "Slice", "Group",
+pub(crate) const PATTERN_LABELS: [&str; 19] = [
+    "Bgp",
+    "Path",
+    "Join",
+    "LeftJoin",
+    "Lateral",
+    "Filter",
+    "Union",
+    "Graph",
+    "Extend",
+    "Minus",
+    "Service",
+    "Values",
+    "OrderBy",
+    "Project",
+    "Distinct",
+    "Reduced",
+    "Slice",
+    "Group",
+    "PropertyFunction",
 ];
 
 /// `pattern`'s variant label, for diagnostics and for the coverage test.
@@ -1583,12 +1612,22 @@ mod tests {
             name: NamedNodePattern::NamedNode(NamedNode::new_unchecked("https://example.org/g")),
             inner: boxed(path),
         };
+        let property_function =
+            GraphPattern::PropertyFunction(purrdf_sparql_algebra::PropertyFunctionCall {
+                iri: "https://example.org/ns#split".to_owned(),
+                subject_args: vec![TermPattern::Variable(Variable::new("s"))],
+                object_args: vec![TermPattern::Variable(Variable::new("o"))],
+            });
         let joined = GraphPattern::Join {
             left: boxed(graph),
             right: boxed(values),
         };
-        let lateral = GraphPattern::Lateral {
+        let called = GraphPattern::Join {
             left: boxed(joined),
+            right: boxed(property_function),
+        };
+        let lateral = GraphPattern::Lateral {
+            left: boxed(called),
             right: boxed(service),
         };
         let optional = GraphPattern::LeftJoin {
@@ -1694,9 +1733,12 @@ mod tests {
 
         assert_eq!(
             leaves,
-            ["Bgp", "Path", "Values"].into_iter().collect(),
-            "only BGP, property paths and inline VALUES are leaves; anything else \
-             reporting no children means its subtree escaped classification"
+            ["Bgp", "Path", "PropertyFunction", "Values"]
+                .into_iter()
+                .collect(),
+            "only BGP, property paths, inline VALUES and property-function calls are \
+             leaves; anything else reporting no children means its subtree escaped \
+             classification"
         );
         assert_eq!(with_children.len(), PATTERN_LABELS.len() - leaves.len());
     }

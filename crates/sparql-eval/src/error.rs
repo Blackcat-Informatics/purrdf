@@ -72,19 +72,28 @@ pub enum EvalError {
     /// looping forever or guessing an answer.
     Data(String),
 
-    /// A user function call was invalid — either a SHACL-AF SPARQL-based function
-    /// (`sh:SPARQLFunction`: an arity mismatch, a
-    /// `sh:datatype`/`sh:nodeKind`/`sh:returnType` violation, or exceeding the
-    /// user-function recursion bound) or a native (host-Rust closure) function
-    /// (an arity mismatch, the closure's own returned `Err`, or a caught panic
-    /// inside the closure). Per the hard-fail doctrine a mis-invoked function
-    /// aborts the query rather than yielding a wrong or unbound value.
+    /// A call into caller-injected host code was invalid. Three kinds share this
+    /// variant, because all three are "the host's callee could not be invoked as
+    /// written":
+    ///
+    /// - a SHACL-AF SPARQL-based function (`sh:SPARQLFunction`: an arity mismatch, a
+    ///   `sh:datatype`/`sh:nodeKind`/`sh:returnType` violation, or exceeding the
+    ///   user-function recursion bound);
+    /// - a native (host-Rust closure) function (an arity mismatch, the closure's own
+    ///   returned `Err`, or a caught panic inside the closure);
+    /// - a property function (`crate::property_fn`: an argument-vector arity mismatch,
+    ///   the relation's own returned `Err`, or a caught panic inside `open`/`next`).
+    ///
+    /// Per the hard-fail doctrine a mis-invoked callee aborts the query rather than
+    /// yielding a wrong or unbound value — or, for a relation, a short row stream
+    /// offered as the complete one.
     Function(String),
 
-    /// A caller supplied an invalid evaluation-configuration parameter to an
-    /// `EvalCtx` builder method -- e.g. a deterministic blank-mint prefix
-    /// (`EvalCtx::with_bnode_mint_prefix`) that is not a legal
-    /// `BLANK_NODE_LABEL` prefix. Distinct from [`EvalError::Data`], which is
+    /// A caller supplied an invalid evaluation-configuration parameter -- e.g. a
+    /// deterministic blank-mint prefix (`EvalCtx::with_bnode_mint_prefix`) that is
+    /// not a legal `BLANK_NODE_LABEL` prefix, or an in-memory property-function
+    /// table (`crate::property_fn::MemoryRelation::new`) whose rows do not all
+    /// match its declared arity. Distinct from [`EvalError::Data`], which is
     /// about the dataset being evaluated rather than the caller's evaluation
     /// configuration: per the hard-fail doctrine, an out-of-alphabet
     /// configuration parameter is rejected at the setter rather than left to

@@ -453,6 +453,7 @@ impl NativeSparqlEngine {
             ShaclQueryOptions {
                 prebinding: prebind,
                 functions,
+                property_functions: None,
                 bnode_mint_prefix: None,
             },
             state,
@@ -1195,6 +1196,49 @@ impl NativeSparqlEngine {
         let outcome = evaluate_with_substitutions(&prepared, request.substitutions, &mut ctx)?;
         Ok(materialize(outcome, &ctx))
     }
+
+    /// Like [`SparqlEngine::query`], but with a caller-supplied property-function
+    /// registry injected, so a predicate IRI the parser lowered to a
+    /// [`GraphPattern::PropertyFunction`](purrdf_sparql_algebra::GraphPattern::PropertyFunction)
+    /// — which it does only under a configured
+    /// [`ParserOptions::property_fn_namespaces`](purrdf_sparql_algebra::ParserOptions)
+    /// entry — resolves to a registered relation. The registry is built once per host
+    /// configuration and borrowed for the call. An empty registry behaves exactly like
+    /// [`Self::query`].
+    ///
+    /// # Errors
+    ///
+    /// Propagates parse and evaluation errors as an [`RdfDiagnostic`].
+    pub fn query_with_property_functions(
+        &self,
+        dataset: &Arc<RdfDataset>,
+        request: SparqlRequest<'_>,
+        registry: &crate::property_fn::PropertyFunctionRegistry,
+    ) -> Result<SparqlResult, RdfDiagnostic> {
+        self.query_with_property_functions_view(&**dataset, request, registry)
+    }
+
+    /// [`Self::query_with_property_functions`] over any [`DatasetView`] backend whose
+    /// id type is the production [`TermId`](purrdf_core::TermId).
+    ///
+    /// # Errors
+    ///
+    /// Propagates parse and evaluation errors as an [`RdfDiagnostic`].
+    pub fn query_with_property_functions_view<D: DatasetView + Sync>(
+        &self,
+        dataset: &D,
+        request: SparqlRequest<'_>,
+        registry: &crate::property_fn::PropertyFunctionRegistry,
+    ) -> Result<SparqlResult, RdfDiagnostic> {
+        let prepared = self.cache.borrow_mut().prepare_with(
+            request.query,
+            request.base_iri,
+            &self.parser_options,
+        )?;
+        let mut ctx = self.eval_ctx(dataset).with_property_functions(registry);
+        let outcome = evaluate_with_substitutions(&prepared, request.substitutions, &mut ctx)?;
+        Ok(materialize(outcome, &ctx))
+    }
 }
 
 fn preflight_fallible_view<D>(dataset: &D) -> Result<(), FallibleSparqlError<D::Error, D::Evidence>>
@@ -1342,10 +1386,11 @@ pub enum ShaclPrebinding {
 /// ([`NativeSparqlEngine::query_shacl_view`] and
 /// [`NativeSparqlEngine::query_governed_in_operation_with_options`]).
 ///
-/// Bundles the three independently optional pieces every SHACL query path
+/// Bundles the four independently optional pieces every SHACL query path
 /// selects from: which substitution rewrite to apply, whether a SHACL-AF
-/// function registry is in scope, and whether minted blank-node labels carry a
-/// deterministic caller-supplied prefix (see
+/// function registry is in scope, whether a property-function registry is in
+/// scope, and whether minted blank-node labels carry a deterministic
+/// caller-supplied prefix (see
 /// [`EvalCtx::with_bnode_mint_prefix`](crate::eval::EvalCtx::with_bnode_mint_prefix)).
 #[derive(Debug, Clone, Copy)]
 pub struct ShaclQueryOptions<'a> {
@@ -1354,6 +1399,10 @@ pub struct ShaclQueryOptions<'a> {
     /// The SHACL-AF function registry in scope, if any; `None` behaves exactly
     /// like the registry-free entries.
     pub functions: Option<&'a crate::user_fn::UserFunctionRegistry>,
+    /// The property-function registry in scope, if any; `None` behaves exactly
+    /// like an empty registry (see
+    /// [`EvalCtx::with_property_functions`](crate::eval::EvalCtx::with_property_functions)).
+    pub property_functions: Option<&'a crate::property_fn::PropertyFunctionRegistry>,
     /// A deterministic prefix for every blank-node label the evaluation mints;
     /// `None` (the pre-existing behavior) leaves minted labels unprefixed. The
     /// prefix is caller-supplied data — the SHACL rules engine passes a
@@ -1362,11 +1411,12 @@ pub struct ShaclQueryOptions<'a> {
     pub bnode_mint_prefix: Option<&'a str>,
 }
 
-/// Apply the two independently-optional [`ShaclQueryOptions`] pieces that are
+/// Apply the independently-optional [`ShaclQueryOptions`] pieces that are
 /// wired identically on both SHACL-facing query entries
 /// ([`NativeSparqlEngine::query_shacl_view`] and
 /// [`NativeSparqlEngine::query_governed_in_operation_with_options`]): the
-/// SHACL-AF function registry ([`EvalCtx::with_user_functions`]) and the
+/// SHACL-AF function registry ([`EvalCtx::with_user_functions`]), the
+/// property-function registry ([`EvalCtx::with_property_functions`]), and the
 /// deterministic blank-mint prefix ([`EvalCtx::with_bnode_mint_prefix`]).
 /// Centralized so a future `ShaclQueryOptions` field is wired once instead of
 /// at each call site.
@@ -1381,6 +1431,9 @@ fn apply_shacl_query_options<'d, D: DatasetView + Sync>(
 ) -> Result<EvalCtx<'d, D>, RdfDiagnostic> {
     if let Some(registry) = options.functions {
         ctx = ctx.with_user_functions(registry);
+    }
+    if let Some(registry) = options.property_functions {
+        ctx = ctx.with_property_functions(registry);
     }
     if let Some(prefix) = options.bnode_mint_prefix {
         ctx = ctx
@@ -1921,6 +1974,7 @@ mod tests {
                 ShaclQueryOptions {
                     prebinding: ShaclPrebinding::Applied,
                     functions: None,
+                    property_functions: None,
                     bnode_mint_prefix: Some("fTag_"),
                 },
             )
@@ -1939,6 +1993,56 @@ mod tests {
         );
     }
 
+    /// An EMPTY property-function registry is indistinguishable from none: the same
+    /// query over the same data returns byte-identical results through
+    /// [`NativeSparqlEngine::query_with_property_functions`] and through the plain
+    /// registry-free entry.
+    ///
+    /// This pins the equivalence the registry's `None` handling rests on. Without it,
+    /// "no registry configured" and "a registry with nothing in it" could drift into
+    /// two different evaluation paths, and a host that wires an empty table — the
+    /// normal state of a host that has declared no relation yet — would silently get a
+    /// different engine from one that wires none.
+    #[test]
+    fn an_empty_property_function_registry_is_indistinguishable_from_none() {
+        let ds = subst_ds();
+        let engine = NativeSparqlEngine::new();
+        let query = "SELECT ?s ?o WHERE { ?s <http://ex/p> ?o } ORDER BY ?s ?o";
+        let request = || SparqlRequest {
+            query,
+            base_iri: None,
+            substitutions: &[],
+        };
+
+        let without = engine.query(&ds, request()).expect("registry-free query");
+        let registry = crate::property_fn::PropertyFunctionRegistry::new();
+        assert!(registry.is_empty());
+        let with_empty = engine
+            .query_with_property_functions(&ds, request(), &registry)
+            .expect("empty-registry query");
+
+        let (
+            SparqlResult::Solutions {
+                variables: without_vars,
+                rows: without_rows,
+                ..
+            },
+            SparqlResult::Solutions {
+                variables: with_vars,
+                rows: with_rows,
+                ..
+            },
+        ) = (without, with_empty)
+        else {
+            panic!("both queries must return solutions");
+        };
+        assert_eq!(without_vars, with_vars);
+        assert_eq!(
+            without_rows, with_rows,
+            "an empty registry must not change a single row"
+        );
+    }
+
     #[test]
     fn shacl_query_options_without_prefix_mint_exact_c_labels() {
         // `bnode_mint_prefix: None` must be byte-identical to the pre-options
@@ -1954,6 +2058,7 @@ mod tests {
                 ShaclQueryOptions {
                     prebinding: ShaclPrebinding::Applied,
                     functions: None,
+                    property_functions: None,
                     bnode_mint_prefix: None,
                 },
             )
@@ -2453,6 +2558,7 @@ mod tests {
         let configured = NativeSparqlEngine::new()
             .with_parser_options(ParserOptions {
                 extension_fn_namespaces: vec![GMEOW_NS.to_owned()],
+                property_fn_namespaces: Vec::new(),
             })
             .with_standpoint_predicates(StandpointPredicates::new(
                 format!("{GMEOW_NS}accordingTo"),
@@ -2484,6 +2590,7 @@ mod tests {
         // Same UPDATE, unconfigured engine: heldIn hard-errors (never a silent default).
         let unconfigured = NativeSparqlEngine::new().with_parser_options(ParserOptions {
             extension_fn_namespaces: vec![GMEOW_NS.to_owned()],
+            property_fn_namespaces: Vec::new(),
         });
         let mut unconfigured_ds = Arc::clone(&ds);
         let err = unconfigured
@@ -2592,6 +2699,7 @@ mod tests {
         let engine = NativeSparqlEngine::new()
             .with_parser_options(ParserOptions {
                 extension_fn_namespaces: vec![GMEOW_NS.to_owned()],
+                property_fn_namespaces: Vec::new(),
             })
             .with_standpoint_predicates(StandpointPredicates::new(
                 format!("{GMEOW_NS}accordingTo"),
@@ -2627,6 +2735,7 @@ mod tests {
         let ds = gmeow_standpoint_ds();
         let engine = NativeSparqlEngine::new().with_parser_options(ParserOptions {
             extension_fn_namespaces: vec![GMEOW_NS.to_owned()],
+            property_fn_namespaces: Vec::new(),
         });
         let q = format!(
             "PREFIX gmeow: <{GMEOW_NS}>\n\
@@ -2661,6 +2770,7 @@ mod tests {
         );
         let with_alias = ParserOptions {
             extension_fn_namespaces: vec![GMEOW_NS.to_owned()],
+            property_fn_namespaces: Vec::new(),
         };
         let a = cache
             .prepare_with(&q, None, &with_alias)

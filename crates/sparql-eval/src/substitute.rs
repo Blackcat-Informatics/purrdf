@@ -17,7 +17,8 @@ use std::collections::HashMap;
 use purrdf_core::{RdfDiagnostic, RdfTextDirection, TermValue};
 use purrdf_sparql_algebra::{
     AggregateExpression, BaseDirection, BlankNode, Expression, GraphPattern, GroundTerm,
-    GroundTriple, Literal, NamedNode, NamedNodePattern, OrderExpression, Query, Variable,
+    GroundTriple, Literal, NamedNode, NamedNodePattern, OrderExpression, Query, TermPattern,
+    Variable,
 };
 
 /// Apply every `(name, value)` substitution to `query` as a pre-binding rewrite,
@@ -233,6 +234,29 @@ fn substitute_in_graph_pattern(
             start,
             length,
         },
+        // A property function's arguments are INVOCATION INPUTS, evaluated per row like
+        // a function call's arguments rather than matched against the graph like a BGP
+        // term — so they are substituted here, on the same rule and for the same reason
+        // expression positions are. The VALUES-join rewrite alone would not reach an
+        // occurrence inside a sub-`SELECT` that does not project the pre-bound variable,
+        // because that inner variable is a separate scope the join cannot correlate
+        // with. IRI and literal values substitute; blank-node and quoted-triple values
+        // pass through to the VALUES join, exactly as in expression positions.
+        GraphPattern::PropertyFunction(call) => {
+            GraphPattern::PropertyFunction(purrdf_sparql_algebra::PropertyFunctionCall {
+                iri: call.iri,
+                subject_args: call
+                    .subject_args
+                    .into_iter()
+                    .map(|term| substitute_in_term_pattern(term, expr_subs))
+                    .collect(),
+                object_args: call
+                    .object_args
+                    .into_iter()
+                    .map(|term| substitute_in_term_pattern(term, expr_subs))
+                    .collect(),
+            })
+        }
         GraphPattern::Group {
             inner,
             variables,
@@ -245,6 +269,27 @@ fn substitute_in_graph_pattern(
                 .map(|(var, agg)| (var, substitute_in_aggregate(agg, expr_subs)))
                 .collect(),
         },
+    }
+}
+
+/// Replace a pre-bound variable in a property-function argument position with its
+/// constant term.
+///
+/// Only the IRI and literal cases substitute, matching
+/// [`expression_from_term_value`]: a blank-node or quoted-triple pre-binding has no
+/// constant expression form and rides the VALUES join instead. A non-variable argument
+/// is already a constant and passes through unchanged.
+fn substitute_in_term_pattern(
+    term: TermPattern,
+    expr_subs: &HashMap<String, Option<Expression>>,
+) -> TermPattern {
+    let TermPattern::Variable(var) = &term else {
+        return term;
+    };
+    match expr_subs.get(var.as_str()) {
+        Some(Some(Expression::NamedNode(node))) => TermPattern::NamedNode(node.clone()),
+        Some(Some(Expression::Literal(literal))) => TermPattern::Literal(literal.clone()),
+        _ => term,
     }
 }
 

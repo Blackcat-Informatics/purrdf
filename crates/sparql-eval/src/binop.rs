@@ -232,8 +232,8 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
         // with it the trip point and the certified rows — a lottery. See
         // `EvalCtx::may_fork_sibling_patterns`.
         || !ctx.may_fork_sibling_patterns()
-        || !crate::parallel::is_parallel_safe_pattern(left, ctx.user_functions)
-        || !crate::parallel::is_parallel_safe_pattern(right, ctx.user_functions)
+        || !crate::parallel::is_parallel_safe_pattern(left, ctx.safety_registries())
+        || !crate::parallel::is_parallel_safe_pattern(right, ctx.safety_registries())
     {
         let Some(l) = lift.absorb(0, eval_evaluated(left, ctx)?) else {
             return Ok(lift.withheld());

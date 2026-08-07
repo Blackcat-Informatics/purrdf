@@ -86,6 +86,7 @@ pub(crate) mod parallel;
 #[cfg(test)]
 mod parallel_determinism_gate;
 mod path;
+pub mod property_fn;
 pub mod remote;
 // HTTP-shaped SERVICE source. The actual POST transport is host-injected so this
 // crate stays wasm-portable.
@@ -125,6 +126,14 @@ pub use purrdf_core::{GovernorEvidence, ResourceDimension, StopCause, TrippedGov
 // (see [`NativeSparqlEngine::with_parser_options`]) without depending on the
 // front-end crate directly.
 pub use purrdf_sparql_algebra::ParserOptions;
+// The property-function seam: the relation trait a host implements, the argument /
+// row / arity types its calls speak in, the registry evaluation resolves a predicate
+// IRI against, and the in-memory reference relation. Re-exported so a host wires a
+// relation into the engine without naming the module path.
+pub use property_fn::{
+    MemoryRelation, PfArgs, PfArity, PfCursor, PfDescriptor, PfMode, PfRow, PropertyFunction,
+    PropertyFunctionRegistry,
+};
 pub use remote::{LocalRemoteQuerySource, RemoteError, RemoteQuerySource, ResolvedBindings};
 pub use remote_http::{HttpRemoteQuerySource, HttpRequest, HttpTransport};
 pub use scratch::{ScratchId, ScratchInterner, SolutionTerm};

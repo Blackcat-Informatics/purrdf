@@ -796,6 +796,26 @@ fn expr_vars(expr: &Expression, out: &mut DetHashSet<Variable>) {
     }
 }
 
+/// Collect the variables a term pattern mentions, descending into a quoted triple's
+/// own component positions.
+fn term_pattern_vars(term: &purrdf_sparql_algebra::TermPattern, out: &mut DetHashSet<Variable>) {
+    use purrdf_sparql_algebra::{NamedNodePattern, TermPattern};
+
+    match term {
+        TermPattern::Variable(variable) => {
+            out.insert(variable.clone());
+        }
+        TermPattern::Triple(triple) => {
+            term_pattern_vars(&triple.subject, out);
+            if let NamedNodePattern::Variable(variable) = &triple.predicate {
+                out.insert(variable.clone());
+            }
+            term_pattern_vars(&triple.object, out);
+        }
+        TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
+    }
+}
+
 /// Collect all variables referenced in *expression* positions within `pattern`.
 ///
 /// Expression positions are: `Filter` conditions, `Extend`/BIND expressions,
@@ -807,6 +827,20 @@ fn pattern_expr_vars(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
     match pattern {
         // Leaf nodes with no expression positions.
         GraphPattern::Bgp { .. } | GraphPattern::Path { .. } | GraphPattern::Values { .. } => {}
+
+        // A property function's arguments are INVOCATION INPUTS: the relation is
+        // called with whatever the row binds them to, and it produces rows from that.
+        // They are therefore expression-like, NOT join-constrained the way a triple
+        // term is — so every argument variable is reported here. Under-reporting would
+        // send a correlated `EXISTS` whose inner pattern calls a relation with an
+        // outer-bound argument down the UNCORRELATED path, where the inner result is
+        // evaluated once and reused across outer rows: the relation would be invoked
+        // with the first row's arguments and every later row would read that answer.
+        GraphPattern::PropertyFunction(call) => {
+            for term in call.subject_args.iter().chain(&call.object_args) {
+                term_pattern_vars(term, out);
+            }
+        }
 
         // Single-child wrappers with no expressions of their own.
         GraphPattern::Distinct { inner }
@@ -1074,6 +1108,28 @@ pub(crate) fn substitute_pattern(
                 .map(|tp| substitute_triple_pattern(tp, bindings))
                 .collect(),
         },
+        // A property function's argument vectors are term positions, substituted on
+        // exactly the rule `substitute_triple_pattern` applies to a BGP's: an
+        // outer-bound variable becomes a constant when the binding is an IRI, and stays
+        // a variable otherwise. Literal, blank-node and quoted-triple bindings are
+        // handled by the dispatch, which reads each argument's value from the outer row
+        // rather than from the rewritten node — the same division of labour that lets
+        // this helper stay IRI-only for triple patterns.
+        GraphPattern::PropertyFunction(call) => {
+            GraphPattern::PropertyFunction(purrdf_sparql_algebra::PropertyFunctionCall {
+                iri: call.iri.clone(),
+                subject_args: call
+                    .subject_args
+                    .iter()
+                    .map(|term| substitute_term_pattern(term, bindings))
+                    .collect(),
+                object_args: call
+                    .object_args
+                    .iter()
+                    .map(|term| substitute_term_pattern(term, bindings))
+                    .collect(),
+            })
+        }
         GraphPattern::Filter { expr, inner } => GraphPattern::Filter {
             expr: substitute_expr(expr, bindings),
             inner: Box::new(substitute_pattern(inner, bindings)),
@@ -1216,30 +1272,40 @@ fn substitute_triple_pattern(
     tp: &purrdf_sparql_algebra::TriplePattern,
     bindings: &[(Variable, Expression)],
 ) -> purrdf_sparql_algebra::TriplePattern {
-    use purrdf_sparql_algebra::{TermPattern, TriplePattern};
-
-    let subst_term = |term: &TermPattern| -> TermPattern {
-        if let TermPattern::Variable(v) = term {
-            for (bv, expr) in bindings {
-                if bv == v
-                    && let Expression::NamedNode(n) = expr
-                {
-                    return TermPattern::NamedNode(n.clone());
-                }
-                // Literal or other: leave as variable (the expr substitution
-                // in FILTER will handle value comparison).
-            }
-        }
-        term.clone()
-    };
+    use purrdf_sparql_algebra::TriplePattern;
 
     // Predicate is NamedNodePattern — it can be a variable but rarely is in practice;
     // leave as-is (IRI substitution there is uncommon and the Filter handles equality).
     TriplePattern {
-        subject: subst_term(&tp.subject),
+        subject: substitute_term_pattern(&tp.subject, bindings),
         predicate: tp.predicate.clone(),
-        object: subst_term(&tp.object),
+        object: substitute_term_pattern(&tp.object, bindings),
     }
+}
+
+/// Substitute outer-bound variables into ONE term position — the rule shared by a
+/// triple pattern's subject/object and a property function's argument vectors.
+///
+/// IRI-valued bindings only: a literal, blank-node or quoted-triple binding leaves the
+/// variable in place, and the substituted expression in the enclosing `FILTER` (for a
+/// triple pattern) or the per-row argument read (for a property function) supplies the
+/// value instead.
+fn substitute_term_pattern(
+    term: &purrdf_sparql_algebra::TermPattern,
+    bindings: &[(Variable, Expression)],
+) -> purrdf_sparql_algebra::TermPattern {
+    use purrdf_sparql_algebra::TermPattern;
+
+    if let TermPattern::Variable(v) = term {
+        for (bv, expr) in bindings {
+            if bv == v
+                && let Expression::NamedNode(n) = expr
+            {
+                return TermPattern::NamedNode(n.clone());
+            }
+        }
+    }
+    term.clone()
 }
 
 /// Substitute outer-bound variables in expression positions by replacing
