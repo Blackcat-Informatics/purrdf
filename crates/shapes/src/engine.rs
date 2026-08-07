@@ -527,10 +527,24 @@ fn evaluate_shape_focus_nodes(
         return Ok(out);
     }
 
+    // Both caller-injected tables travel to the workers together. A thread-local is
+    // invisible from the threads a chunk fork creates, so the property-function
+    // registry is snapshotted HERE, on the orchestrating thread, and re-installed per
+    // chunk beside the function registry — otherwise a `sh:select` body whose predicate
+    // is a property function would resolve on the sequential path and fail to resolve on
+    // the parallel one, which is a scheduling-dependent verdict.
+    let relations = crate::sparql::current_property_functions();
     crate::parallel::try_map_chunks(
         focus_nodes,
-        || crate::sparql::enter_function_scope(Arc::clone(&shapes.functions)),
-        |_function_scope, out, focus| {
+        || {
+            (
+                crate::sparql::enter_function_scope(Arc::clone(&shapes.functions)),
+                relations
+                    .clone()
+                    .map(crate::sparql::enter_property_function_scope),
+            )
+        },
+        |_scopes, out, focus| {
             if include_focus(focus) {
                 out.extend(crate::constraints::validate_shape_with_plan_at(
                     data,

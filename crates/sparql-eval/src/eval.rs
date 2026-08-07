@@ -385,7 +385,7 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// means no relation is registered, which is exactly equivalent to an empty
     /// registry: a predicate IRI only reaches this table when the parser already
     /// lowered it to a
-    /// [`GraphPattern::PropertyFunction`](purrdf_sparql_algebra::GraphPattern::PropertyFunction)
+    /// [`purrdf_sparql_algebra::GraphPattern::PropertyFunction`]
     /// under a caller-configured namespace, and an unresolved call is the same
     /// failure either way. Borrowed for the dataset lifetime like
     /// [`Self::user_functions`], so carrying it is a `Copy` pointer, never a clone.
@@ -1281,7 +1281,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
 
     /// Attach a caller-injected property-function registry for this evaluation, so a
     /// predicate IRI the parser lowered to a
-    /// [`GraphPattern::PropertyFunction`](purrdf_sparql_algebra::GraphPattern::PropertyFunction)
+    /// [`purrdf_sparql_algebra::GraphPattern::PropertyFunction`]
     /// resolves to a registered relation. The borrow shares the dataset lifetime `'d`.
     ///
     /// Attaching an EMPTY registry is exactly equivalent to attaching none: the
@@ -1724,10 +1724,13 @@ fn eval_node<D: DatasetView + Sync>(
         GraphPattern::Lateral { left, right } => {
             crate::binop::eval_lateral(pattern, left, right, ctx)
         }
-        GraphPattern::PropertyFunction(call) => Err(EvalError::unsupported(format!(
-            "property-function evaluation (<{}>)",
-            call.iri
-        ))),
+        // A call reached without an enclosing `Lateral` — nothing was written before it
+        // in its group — so it is driven over the identity table. The correlated shape
+        // (the parser's usual one) is intercepted by `binop::eval_lateral`, which hands
+        // the dispatch its left rows directly instead of substituting into this node.
+        GraphPattern::PropertyFunction(call) => {
+            crate::property_fn_eval::eval_property_function(call, ctx)
+        }
     }
 }
 

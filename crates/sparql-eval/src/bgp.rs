@@ -900,7 +900,13 @@ fn collect_term_slot_keys(term: &TermPattern, keys: &mut Vec<Variable>) {
 
 /// The synthetic slot variable for a blank-node label (NUL-prefixed; cannot collide
 /// with a parser-produced `?var`).
-fn blank_var(label: &str) -> Variable {
+///
+/// Shared with the property-function dispatch, which gives a blank-node ARGUMENT the
+/// same non-distinguished-variable treatment: one slot per label, consistency enforced
+/// across its occurrences, and the column projected away before the node's rows leave.
+/// One spelling of the synthetic name, so the two cannot disagree about what a blank
+/// slot is called.
+pub(crate) fn blank_var(label: &str) -> Variable {
     Variable::new(format!("{BLANK_VAR_PREFIX}bnode:{label}"))
 }
 

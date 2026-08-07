@@ -323,6 +323,13 @@ fn pattern_reaches_non_reproducible_builtin(pattern: &GraphPattern) -> bool {
                     }
                 })
         }
+        // A property-function call invokes a HOST-supplied relation, and whether that
+        // relation is reproducible is a property of the registry the *evaluation*
+        // carries — which is not available here, at shape-validation time, and cannot
+        // be inferred from the IRI. A dataset description must be byte-reproducible, so
+        // the unknowable case is refused: `true` conservatively classifies every call as
+        // non-reproducible.
+        GraphPattern::PropertyFunction(_) => true,
     }
 }
 

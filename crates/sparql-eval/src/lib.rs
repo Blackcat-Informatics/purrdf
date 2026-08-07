@@ -87,10 +87,13 @@ pub(crate) mod parallel;
 mod parallel_determinism_gate;
 mod path;
 pub mod property_fn;
+mod property_fn_eval;
+mod property_fn_plan;
 pub mod remote;
 // HTTP-shaped SERVICE source. The actual POST transport is host-injected so this
 // crate stays wasm-portable.
 pub mod remote_http;
+mod row_ingest;
 pub mod scratch;
 pub mod solution;
 mod substitute;
@@ -122,6 +125,10 @@ pub use governor::{
 // governed surface whose outcome types are unnameable from the crate that produces them
 // is one no consumer can match on.
 pub use purrdf_core::{GovernorEvidence, ResourceDimension, StopCause, TrippedGovernor};
+// The adornment lattice, re-exported for the same reason: it appears in
+// [`PropertyFunction`]'s own signature (`modes`, `rows_per_invocation`, `admits`), so a
+// host implementing the trait cannot write the impl without naming it.
+pub use purrdf_core::binding_pattern::BindingPattern;
 // Re-exported so engine hosts can configure the extension-function namespace set
 // (see [`NativeSparqlEngine::with_parser_options`]) without depending on the
 // front-end crate directly.

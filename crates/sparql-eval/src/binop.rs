@@ -105,6 +105,33 @@ pub(crate) fn eval_lateral<D: DatasetView + Sync>(
     if lift.is_truncated() {
         return Ok(lift.finish(SolutionSeq::empty(l.schema)));
     }
+    // A property-function call is driven PER LEFT ROW with the row in hand, rather than
+    // substituted into and re-evaluated like an ordinary right operand. The generic path
+    // below would work — the lateral join's compatibility test reconciles everything the
+    // IRI-only substitution could not carry — but it would hand the relation the wrong
+    // access pattern: a literal, blank-node or quoted-triple binding would arrive as a
+    // FREE position, so a relation that can only be invoked with that position bound
+    // would be refused an invocation the engine can make. See `crate::property_fn_eval`.
+    if let GraphPattern::PropertyFunction(call) = right {
+        let restore = ctx.enter_node(right);
+        // The node-entry charge the generic path pays on each of this node's
+        // evaluations, kept here so the call is metered exactly as an ordinary right
+        // operand is.
+        let evaluated = match ctx.charge(crate::governor::ChargePoint::AlgebraNodeEntry) {
+            Err(tripped) => Ok(Evaluated::Truncated(Truncation::origin(
+                SolutionSeq::empty(crate::eval::syntactic_schema(right)),
+                tripped,
+            ))),
+            Ok(()) => crate::property_fn_eval::eval_lateral_property_function(call, &l, ctx),
+        };
+        ctx.leave_node(restore);
+        let absorbed = lift.absorb(1, evaluated?);
+        return Ok(match absorbed {
+            Some(seq) => lift.finish(seq),
+            None => lift.withheld(),
+        });
+    }
+
     let left_schema = Arc::clone(&l.schema);
     let left_len = left_schema.len();
 

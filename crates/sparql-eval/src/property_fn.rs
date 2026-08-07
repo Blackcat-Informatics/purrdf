@@ -260,7 +260,7 @@ pub trait PfCursor {
 pub trait PropertyFunction: Send + Sync {
     /// The relation's determinism class. Read by the fork-join parallel gate exactly
     /// as [`crate::user_fn::NativeFunction`]'s is: only
-    /// [`Volatility::Stable`](Volatility::Stable) may run across workers, and a
+    /// [`Volatility::Stable`] may run across workers, and a
     /// relation that misdeclares itself diverges silently under parallel evaluation.
     fn volatility(&self) -> Volatility;
 
@@ -283,7 +283,7 @@ pub trait PropertyFunction: Send + Sync {
     /// group (a call that emits at most one row belongs before one that emits
     /// thousands), and to admit the call against a row ceiling before it runs. It is
     /// held to the same honesty contract as
-    /// [`DatasetView::cardinality_estimate`](purrdf_core::DatasetView::cardinality_estimate):
+    /// [`purrdf_core::DatasetView::cardinality_estimate`]:
     /// it must be an upper bound the relation actually respects, not a guess, because
     /// a bound that under-states reality turns an admission decision into a wrong one.
     /// A genuinely unbounded generator declares [`u64::MAX`].
@@ -329,7 +329,7 @@ pub trait PropertyFunction: Send + Sync {
 /// 2. **Panic containment.** A panicking relation becomes a clean
 ///    [`EvalError::Function`] rather than aborting a rayon worker. The message is
 ///    fixed and payload-free, so it is identical no matter which worker panicked —
-///    the same treatment [`crate::user_fn::eval_native_function`] gives a native
+///    the same treatment [`crate::user_fn`]'s native-function entry gives a native
 ///    closure, for the same determinism reason.
 ///
 /// # Errors
@@ -417,7 +417,7 @@ pub struct PfDescriptor {
 /// [`EvalCtx::with_property_functions`](crate::eval::EvalCtx::with_property_functions)
 /// or [`NativeSparqlEngine::query_with_property_functions`](crate::NativeSparqlEngine::query_with_property_functions).
 /// Deterministic by construction: the map is the crate's fixed-key
-/// [`DetHashMap`](crate::DetHashMap), and every ordered surface
+/// deterministic fixed-key hash map, and every ordered surface
 /// ([`describe`](Self::describe), [`Debug`]) sorts by IRI rather than reading
 /// iteration order.
 ///

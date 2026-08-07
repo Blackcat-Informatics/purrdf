@@ -54,7 +54,14 @@ pub struct PreparedQuery {
 }
 
 /// A parse-memoizing cache keyed on `(base IRI, extension-function namespace set,
-/// query text)`.
+/// property-function namespace set, property-function registry fingerprint, query
+/// text)`.
+///
+/// The last two are there because a cached entry is not merely a parse: a query
+/// carrying a property-function call is also **feasibility-ordered** against the
+/// registry's declarations before it is stored (the feasibility-ordering pass). Two
+/// differently-configured registries can order the same text differently, so a key
+/// without the registry's fingerprint would hand the second host the first host's plan.
 #[derive(Debug, Default)]
 pub struct PlanCache {
     entries: DetHashMap<String, Arc<PreparedQuery>>,
@@ -84,13 +91,42 @@ impl PlanCache {
         base_iri: Option<&str>,
         options: &ParserOptions,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
+        self.prepare_with_relations(query, base_iri, options, None)
+    }
+
+    /// [`Self::prepare_with`], resolving any property-function call against `relations`.
+    ///
+    /// This is where a call's **admission** happens, and it happens here rather than at
+    /// evaluation time on purpose: an unregistered IRI, an arity mismatch, and a chain
+    /// no relation can serve are all configuration errors, and a caller's governor
+    /// budget is for the work its query does, not for discovering the query could never
+    /// have run. `relations` of `None` (or an empty registry) does not soften any of
+    /// them — a call node with nothing to resolve against IS the unregistered case.
+    ///
+    /// # Errors
+    ///
+    /// An [`RdfDiagnostic`] if the query text does not parse (`native-sparql-query-parse`)
+    /// or if a property-function call cannot be admitted
+    /// (`native-sparql-property-function`).
+    pub fn prepare_with_relations(
+        &mut self,
+        query: &str,
+        base_iri: Option<&str>,
+        options: &ParserOptions,
+        relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
+    ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
         // The cache key must include the base IRI AND the extension-function
         // namespace set: the same text under a different base or namespace
-        // configuration parses to a different algebra.
+        // configuration parses to a different algebra. The property-function
+        // namespace set and the registry fingerprint join it for the same reason one
+        // step later: they decide which triples become calls, and how those calls are
+        // ordered.
         let key = format!(
-            "{}\u{0}{}\u{0}{}",
+            "{}\u{0}{}\u{0}{}\u{0}{}\u{0}{}",
             base_iri.unwrap_or(""),
             options.extension_fn_namespaces.join("\u{1}"),
+            options.property_fn_namespaces.join("\u{1}"),
+            crate::property_fn_plan::registry_fingerprint(relations),
             query
         );
         if let Some(prepared) = self.entries.get(&key) {
@@ -103,7 +139,11 @@ impl PlanCache {
         let parsed = parser
             .parse_query_with(query, options)
             .map_err(|e| RdfDiagnostic::error("native-sparql-query-parse", e.to_string()))?;
-        let prepared = Arc::new(PreparedQuery { query: parsed });
+        let planned = crate::property_fn_plan::plan_query(&parsed, relations)
+            .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
+        let prepared = Arc::new(PreparedQuery {
+            query: planned.unwrap_or(parsed),
+        });
         self.entries.insert(key, prepared.clone());
         Ok(prepared)
     }
@@ -477,11 +517,8 @@ impl NativeSparqlEngine {
         options: ShaclQueryOptions<'_>,
         state: &Arc<GovernorState>,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
-        let prepared = self.cache.borrow_mut().prepare_with(
-            request.query,
-            request.base_iri,
-            &self.parser_options,
-        )?;
+        let prepared =
+            self.prepare_for(request.query, request.base_iri, options.property_functions)?;
         if let Some(refused) = self.admit(dataset, &prepared.query, state) {
             return refused;
         }
@@ -793,6 +830,52 @@ impl NativeSparqlEngine {
     /// eval options) into it. `NOW()`/`RAND()`/`UUID()`/`STRUUID()` are already
     /// correct by construction: [`EvalCtx::new`] samples the real host wall clock
     /// and OS entropy itself.
+    /// Parse and feasibility-order one request against the property-function registry
+    /// that will be in scope for its evaluation.
+    ///
+    /// **The single point where a registry becomes parse configuration.** A relation is
+    /// reachable from SPARQL only if the parser lowered its predicate IRI to a call
+    /// node, and the parser does that only for an IRI under a configured
+    /// [`ParserOptions::property_fn_namespaces`] entry. Deriving those namespaces here,
+    /// from the very registry the evaluation will resolve against, is what keeps the two
+    /// from drifting: a host cannot register a relation the parser does not recognize,
+    /// and cannot configure a namespace whose calls resolve against a different table.
+    /// A host that wants a whole namespace recognized — including IRIs it has
+    /// deliberately left unregistered, so that spelling one is a hard error rather than
+    /// a silent data triple — still declares it through
+    /// [`Self::with_parser_options`]; the two sets are unioned.
+    ///
+    /// No registry (or an empty one) contributes nothing, so a query on a host that has
+    /// not configured the seam parses under exactly the options it always did.
+    fn prepare_for(
+        &self,
+        query: &str,
+        base_iri: Option<&str>,
+        relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
+    ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
+        let relations = relations.filter(|registry| !registry.is_empty());
+        let Some(registry) = relations else {
+            return self.cache.borrow_mut().prepare_with_relations(
+                query,
+                base_iri,
+                &self.parser_options,
+                None,
+            );
+        };
+        let mut options = self.parser_options.clone();
+        // `describe()` is IRI-sorted, so the derived set is a pure function of the
+        // registry's contents rather than of its registration order — which matters,
+        // because the set is part of the plan-cache key.
+        for descriptor in registry.describe() {
+            if !options.property_fn_namespaces.contains(&descriptor.iri) {
+                options.property_fn_namespaces.push(descriptor.iri);
+            }
+        }
+        self.cache
+            .borrow_mut()
+            .prepare_with_relations(query, base_iri, &options, relations)
+    }
+
     fn eval_ctx<'d, D: DatasetView + Sync>(&'d self, dataset: &'d D) -> EvalCtx<'d, D> {
         let mut ctx = EvalCtx::new(dataset)
             .with_order_cache(&self.order_cache)
@@ -1099,10 +1182,7 @@ impl NativeSparqlEngine {
         substitutions: &[(String, TermValue)],
         options: ShaclQueryOptions<'_>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
-        let prepared =
-            self.cache
-                .borrow_mut()
-                .prepare_with(query, base_iri, &self.parser_options)?;
+        let prepared = self.prepare_for(query, base_iri, options.property_functions)?;
         let ctx = self.eval_ctx(dataset);
         let mut ctx = apply_shacl_query_options(ctx, options)?;
         let outcome = match options.prebinding {
@@ -1230,11 +1310,7 @@ impl NativeSparqlEngine {
         request: SparqlRequest<'_>,
         registry: &crate::property_fn::PropertyFunctionRegistry,
     ) -> Result<SparqlResult, RdfDiagnostic> {
-        let prepared = self.cache.borrow_mut().prepare_with(
-            request.query,
-            request.base_iri,
-            &self.parser_options,
-        )?;
+        let prepared = self.prepare_for(request.query, request.base_iri, Some(registry))?;
         let mut ctx = self.eval_ctx(dataset).with_property_functions(registry);
         let outcome = evaluate_with_substitutions(&prepared, request.substitutions, &mut ctx)?;
         Ok(materialize(outcome, &ctx))

@@ -958,6 +958,16 @@ fn walk_graph_pattern(g: &purrdf_sparql_algebra::GraphPattern, out: &mut BTreeSe
             walk_expression(expr, out);
             walk_graph_pattern(inner, out);
         }
+        // A property-function call's predicate IRI is NOT a dependency edge: it names a
+        // host-injected relation resolved against a runtime registry, not a term any
+        // slice defines. Its ARGUMENTS are ordinary term positions, though, and an IRI
+        // constant written in one references the slice defining it exactly as the same
+        // IRI in a triple pattern would — so both vectors are walked.
+        G::PropertyFunction(call) => {
+            for arg in call.subject_args.iter().chain(&call.object_args) {
+                walk_term_pattern(arg, out);
+            }
+        }
         G::Graph { name, inner } => {
             walk_named_node_pattern(name, out);
             walk_graph_pattern(inner, out);

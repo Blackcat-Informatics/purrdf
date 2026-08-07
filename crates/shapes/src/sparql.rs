@@ -1101,6 +1101,197 @@ mod tests {
         assert_eq!(result, None);
     }
 
+    // ── property functions in a SHACL body ────────────────────────────────────
+
+    /// A relation that answers "is this value on the deny list?": invoked with its
+    /// subject bound (mode `bf`), it emits one row naming the reason when the value is
+    /// the banned literal, and nothing otherwise.
+    ///
+    /// Two things about it are load-bearing for the test below. It declares ONLY `bf`,
+    /// so the query is evaluable at all only if the engine invokes it with its argument
+    /// bound; and its argument is a LITERAL, which the IRI-only outer-binding
+    /// substitution could not have carried — so a passing test is evidence the dispatch
+    /// reads the row itself.
+    #[derive(Debug)]
+    struct DenyListRelation {
+        modes: [purrdf_sparql_eval::BindingPattern; 1],
+    }
+
+    impl DenyListRelation {
+        fn new() -> Self {
+            Self {
+                modes: [purrdf_sparql_eval::BindingPattern::from_code("bf")],
+            }
+        }
+    }
+
+    impl purrdf_sparql_eval::PropertyFunction for DenyListRelation {
+        fn volatility(&self) -> purrdf_sparql_eval::Volatility {
+            purrdf_sparql_eval::Volatility::Stable
+        }
+
+        fn arity(&self) -> purrdf_sparql_eval::PfArity {
+            purrdf_sparql_eval::PfArity::new(1, 1)
+        }
+
+        fn modes(&self) -> &[purrdf_sparql_eval::BindingPattern] {
+            &self.modes
+        }
+
+        fn rows_per_invocation(&self, _mode: purrdf_sparql_eval::BindingPattern) -> u64 {
+            1
+        }
+
+        fn open(
+            &self,
+            args: &purrdf_sparql_eval::PfArgs<'_>,
+            _ceiling: Option<u64>,
+        ) -> Result<Box<dyn purrdf_sparql_eval::PfCursor>, purrdf_sparql_eval::EvalError> {
+            let banned = matches!(
+                args.get(0),
+                Some(TermValue::Literal { lexical_form, .. }) if lexical_form == "banned"
+            );
+            let rows = if banned {
+                let subject = args.get(0).cloned().expect("the bound subject");
+                vec![vec![
+                    subject,
+                    TermValue::Literal {
+                        lexical_form: "on the deny list".to_owned(),
+                        datatype: "http://www.w3.org/2001/XMLSchema#string".to_owned(),
+                        language: None,
+                        direction: None,
+                    },
+                ]]
+            } else {
+                Vec::new()
+            };
+            Ok(Box::new(DenyListCursor { rows, next: 0 }))
+        }
+    }
+
+    struct DenyListCursor {
+        rows: Vec<purrdf_sparql_eval::PfRow>,
+        next: usize,
+    }
+
+    impl purrdf_sparql_eval::PfCursor for DenyListCursor {
+        fn next(
+            &mut self,
+        ) -> Result<Option<purrdf_sparql_eval::PfRow>, purrdf_sparql_eval::EvalError> {
+            let row = self.rows.get(self.next).cloned();
+            self.next += 1;
+            Ok(row)
+        }
+    }
+
+    /// A `sh:sparql` constraint whose body calls a property function actually INVOKES
+    /// the relation: the violation fires for exactly the focus node whose value the
+    /// relation reports, and not for the other one.
+    ///
+    /// The negative half is the point. A constraint whose body silently degraded — the
+    /// predicate read as an ordinary data triple that matches nothing — would report
+    /// zero violations and be indistinguishable from a conforming graph, which is the
+    /// always-passing failure mode this test exists to forbid.
+    #[test]
+    fn a_sparql_constraint_body_invokes_a_registered_property_function() {
+        let shapes_ttl = r#"
+            @prefix ex: <http://example.org/> .
+            @prefix sh: <http://www.w3.org/ns/shacl#> .
+            ex:Shape a sh:NodeShape ;
+                sh:targetClass ex:Thing ;
+                sh:sparql ex:Constraint .
+            ex:Constraint sh:select """
+                SELECT $this ?value
+                WHERE {
+                    $this <http://example.org/tag> ?value .
+                    ?value <http://example.org/pf/denied> ?why .
+                }
+            """ .
+        "#;
+        let shapes_dataset =
+            crate::text_ingest::parse_turtle_to_dataset(shapes_ttl).expect("valid shapes");
+        let prefixes = crate::text_ingest::extract_prefixes(shapes_ttl);
+        let shapes = crate::shapes::from_dataset_with_config(&shapes_dataset, &prefixes, None)
+            .expect("parse shapes");
+
+        let data = dataset_from_ntriples(&[
+            "<http://example.org/n1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+             <http://example.org/Thing> .",
+            "<http://example.org/n1> <http://example.org/tag> \"ok\" .",
+            "<http://example.org/n2> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+             <http://example.org/Thing> .",
+            "<http://example.org/n2> <http://example.org/tag> \"banned\" .",
+        ]);
+
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register(
+            "http://example.org/pf/denied",
+            Arc::new(DenyListRelation::new()),
+        );
+        let _scope = enter_property_function_scope(Arc::new(registry));
+
+        let report = crate::engine::validate_dataset(data.as_ref(), &shapes).expect("validate");
+        assert!(
+            !report.conforms,
+            "the relation reports the banned value, so the constraint must fire"
+        );
+        assert_eq!(
+            report.results.len(),
+            1,
+            "exactly the focus node whose value the relation named: {:?}",
+            report.results
+        );
+        assert_eq!(
+            report.results[0].focus_node,
+            named_term("http://example.org/n2")
+        );
+    }
+
+    /// The same shapes and data with an EMPTY registry in scope: the seam is off, the
+    /// predicate is ordinary data, and the constraint body matches nothing.
+    ///
+    /// The pair of tests is what makes each one mean something. This one shows the
+    /// graph is NOT intrinsically violating, so the violation the test above reports can
+    /// only have come from the relation actually running.
+    #[test]
+    fn an_empty_registry_leaves_the_constraint_body_s_predicate_as_ordinary_data() {
+        let shapes_ttl = r#"
+            @prefix ex: <http://example.org/> .
+            @prefix sh: <http://www.w3.org/ns/shacl#> .
+            ex:Shape a sh:NodeShape ;
+                sh:targetClass ex:Thing ;
+                sh:sparql ex:Constraint .
+            ex:Constraint sh:select """
+                SELECT $this ?value
+                WHERE {
+                    $this <http://example.org/tag> ?value .
+                    ?value <http://example.org/pf/denied> ?why .
+                }
+            """ .
+        "#;
+        let shapes_dataset =
+            crate::text_ingest::parse_turtle_to_dataset(shapes_ttl).expect("valid shapes");
+        let prefixes = crate::text_ingest::extract_prefixes(shapes_ttl);
+        let shapes = crate::shapes::from_dataset_with_config(&shapes_dataset, &prefixes, None)
+            .expect("parse shapes");
+        let data = dataset_from_ntriples(&[
+            "<http://example.org/n2> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+             <http://example.org/Thing> .",
+            "<http://example.org/n2> <http://example.org/tag> \"banned\" .",
+        ]);
+
+        // With an EMPTY registry in scope the predicate is not a configured
+        // property-function IRI at all, so the body reads it as data and matches
+        // nothing — the seam is off, exactly as it is for every host that never
+        // configured it.
+        let _scope = enter_property_function_scope(Arc::new(PropertyFunctionRegistry::new()));
+        let report = crate::engine::validate_dataset(data.as_ref(), &shapes).expect("validate");
+        assert!(
+            report.conforms,
+            "with the seam off the predicate is ordinary data that matches nothing"
+        );
+    }
+
     #[test]
     fn eval_sparql_constraint_shapes_graph_and_current_shape() {
         let shapes_ttl = r#"

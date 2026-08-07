@@ -217,6 +217,20 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let _ = node;
+    // A property-function call inside a forwarded body is a HARD refusal, and it is
+    // tested before anything else — before `SILENT`, before the endpoint, before any
+    // charge. The body is serialized and sent as SPARQL text, and a call serializes as
+    // an ordinary triple: the remote endpoint would match it against ITS data and return
+    // rows that are not the relation's, with no symptom anywhere. Silencing that under
+    // `SILENT` would be worse still, because `SILENT` promises an empty result from a
+    // failed endpoint, not a full one from a misread query.
+    if crate::property_fn_eval::pattern_reaches_property_function(inner) {
+        return Err(EvalError::unsupported(
+            "a property-function call inside a SERVICE body: the call would be forwarded as \
+             an ordinary triple pattern and matched against the remote endpoint's data, so \
+             the relation would never be invoked and the answer would be silently wrong",
+        ));
+    }
     // Resolve the endpoint IRI. A variable endpoint needs per-row (lateral)
     // resolution, which the engine defers — so it is a hard error unless SILENT.
     let endpoint = match name {
@@ -392,27 +406,26 @@ fn ingest<D: DatasetView + Sync>(
         cell_limit_exceeded_at,
     } = resolved;
     let schema = Arc::new(VarSchema::from_vars(variables));
-    let width = schema.len();
-    let cell_ceiling = ctx.cell_row_ceiling(width);
-    let mut rows = Vec::with_capacity(
-        cell_ceiling.map_or(resolved_rows.len(), |cap| cap.min(resolved_rows.len())),
+    // The shared admission sequence (see `crate::row_ingest`): ceiling observed before
+    // the row is interned, then the per-row charge, then the intern. `SERVICE` names its
+    // own charge point here; the sequence itself is the one a property-function call
+    // also runs, so the two cannot drift apart.
+    let ingest = crate::row_ingest::GovernedRowIngest::new(
+        ctx,
+        schema.len(),
+        Some(crate::governor::ChargePoint::RemoteRowIngested),
     );
+    let mut rows = Vec::with_capacity(ingest.capacity_for(resolved_rows.len()));
     let mut tripped = None;
     for binding in resolved_rows {
-        if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
-            tripped = ctx.observe_cells(rows.len().saturating_add(1), width).err();
-            break;
-        }
-        if let Err(governor) = ctx.charge(crate::governor::ChargePoint::RemoteRowIngested) {
-            tripped = Some(governor);
-            break;
-        }
-        let mut row = smallvec::smallvec![None; width];
-        for (i, cell) in binding.into_iter().enumerate().take(width) {
-            if let Some(value) = cell {
-                row[i] = Some(ctx.scratch.intern(ctx.dataset, value));
+        match ingest.admit(ctx, rows.len()) {
+            crate::row_ingest::RowAdmission::Abandoned(governor) => {
+                tripped = governor;
+                break;
             }
+            crate::row_ingest::RowAdmission::Admitted => {}
         }
+        let row = ingest.intern_row(ctx, binding);
         rows.push(row);
     }
     if tripped.is_none()
