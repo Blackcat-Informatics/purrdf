@@ -1,9 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The arity-generic **binding pattern** — the adornment lattice shared by the
-//! backward magic-sets demand keying and the forward evaluator's query-plan index
-//! selection.
+//! The arity-generic **binding pattern** — the adornment lattice shared by every
+//! consumer that must decide, for one atom or triple pattern, which argument
+//! positions are already bound before it runs: backward magic-sets demand
+//! keying, a forward evaluator's query-plan index selection, and a SPARQL
+//! property-function's access-pattern feasibility check alike.
 //!
 //! A [`BindingPattern`] is a bitset over an atom's argument positions: position `i`
 //! set means that position is **bound**, i.e. a constant, or a variable already
@@ -44,8 +46,8 @@
 /// A compact bitset over an atom's argument positions: bit `i` set means position
 /// `i` is bound.
 ///
-/// Positions are dense small integers, per the crate's dense-ID doctrine, and a
-/// `u64` bitset covers every arity the evaluator can carry.
+/// Positions are dense small integers, per the workspace's dense-ID doctrine, and
+/// a `u64` bitset covers every arity a caller can carry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BindingPattern {
     /// The atom's arity (number of argument positions). Positions `>= arity` are
@@ -213,7 +215,30 @@ impl BindingPattern {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::permute;
+
+    /// One step of the SplitMix64 mixing function — a pure, seed-driven integer
+    /// hash with no ambient state.
+    fn mix(state: &mut u64) -> u64 {
+        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = *state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    /// A deterministic permutation of `items` selected by `seed`.
+    ///
+    /// A Fisher-Yates shuffle driven by [`mix`]; the same `seed` always yields the
+    /// same order, on every target.
+    fn permute<T: Clone>(items: &[T], seed: u64) -> Vec<T> {
+        let mut out = items.to_vec();
+        let mut state = seed;
+        for i in (1..out.len()).rev() {
+            let j = (mix(&mut state) % (i as u64 + 1)) as usize;
+            out.swap(i, j);
+        }
+        out
+    }
 
     /// The 8 arity-3 patterns (every subset of `{0,1,2}`), for exhaustive
     /// lattice-law coverage.

@@ -32,6 +32,10 @@ path = "src/lib.rs"
 # (never `update_rayon`), so the workspace's `rayon` feature on blake3 costs this
 # crate no thread pool on any target, wasm32 included.
 blake3 = { workspace = true }
+# The arity-generic binding-pattern adornment lattice (backward magic-sets
+# demand keying, forward evaluator query-plan index selection) lives in the
+# shared kernel now that a second, non-Datalog consumer needs it too.
+purrdf-core = { workspace = true }
 # Fixed-key store-once interners and the arrangement's probe tables. Fixed-key
 # (not RandomState) because getrandom is absent on wasm32 and because iteration
 # order must never reach an output path.
