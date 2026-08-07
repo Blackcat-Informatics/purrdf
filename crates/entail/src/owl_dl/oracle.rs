@@ -1758,6 +1758,79 @@ fn role(i: usize) -> u32 {
     ROLE_NAMES[i]
 }
 
+/// The RDF encounter order that used to send both decision cores down an exponential branch.
+#[test]
+fn minimized_inverse_universal_cardinality_case_is_decided() {
+    use purrdf_core::{BlankScope, RdfDatasetBuilder, TermValue};
+    let mut b = RdfDatasetBuilder::new();
+    let mut iri = |value: &str| b.intern_iri(value);
+    let ex = |local: &str| format!("https://example.org/{local}");
+    let aa = iri(&ex("A"));
+    let ss = iri(&ex("S"));
+    let dd = iri(&ex("D"));
+    let rr = iri(&ex("r"));
+    let rii = iri(&ex("ri"));
+    let pp = iri(&ex("p"));
+    let cc = iri(&ex("c"));
+    let ind = iri(&ex("a"));
+    let sub = iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
+    let range = iri("http://www.w3.org/2000/01/rdf-schema#range");
+    let equiv = iri("http://www.w3.org/2002/07/owl#equivalentClass");
+    let inverse = iri("http://www.w3.org/2002/07/owl#inverseOf");
+    let ty = iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
+    let on = iri("http://www.w3.org/2002/07/owl#onProperty");
+    let all = iri("http://www.w3.org/2002/07/owl#allValuesFrom");
+    let intersection = iri("http://www.w3.org/2002/07/owl#intersectionOf");
+    let first = iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#first");
+    let rest = iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#rest");
+    let nil = iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#nil");
+    let cardinality = iri("http://www.w3.org/2002/07/owl#cardinality");
+    let u = b.intern_blank("u", BlankScope::DEFAULT);
+    let f = b.intern_blank("f", BlankScope::DEFAULT);
+    let inner = b.intern_blank("inner", BlankScope::DEFAULT);
+    let cell1 = b.intern_blank("cell1", BlankScope::DEFAULT);
+    let cell2 = b.intern_blank("cell2", BlankScope::DEFAULT);
+    let card = b.intern_blank("card", BlankScope::DEFAULT);
+    let one = crate::interner::intern_into(
+        &mut b,
+        &TermValue::typed_literal("1", "http://www.w3.org/2001/XMLSchema#integer"),
+    );
+    for (s, p, o) in [
+        (aa, sub, ss),
+        (aa, equiv, u),
+        (aa, equiv, card),
+        (ind, ty, aa),
+        (rr, inverse, rii),
+        (rii, range, ss),
+        (u, all, f),
+        (u, on, rr),
+        (f, intersection, cell1),
+        (inner, all, dd),
+        (inner, on, pp),
+        (cell1, first, ss),
+        (cell1, rest, cell2),
+        (cell2, first, inner),
+        (cell2, rest, nil),
+        (card, cardinality, one),
+        (card, on, cc),
+    ] {
+        b.push_quad(s, p, o, None);
+    }
+    let ds = b.freeze().expect("fixture freezes");
+    let kb = Kb::from_dataset(&ds).expect("fixture parses");
+    let cap = graph::step_cap(&kb);
+    let decision = hyper::decide(&kb, &Assumptions::of_kb(), cap);
+    let reference = tableau::decide(&kb, &Assumptions::of_kb(), cap);
+    assert!(
+        !decision.exhausted && decision.consistent,
+        "the RDF-parsed hypertableau should decide the minimized case"
+    );
+    assert!(
+        !reference.exhausted && reference.consistent,
+        "the RDF-parsed reference tableau should decide the minimized case"
+    );
+}
+
 /// `d : {a, b, c}` with nothing saying `d` differs from any member.
 ///
 /// SATISFIABLE. OWL 2 makes no unique name assumption, so `d` may simply BE one of the

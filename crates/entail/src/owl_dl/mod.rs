@@ -324,7 +324,7 @@ impl Kb {
         if matches!(sub, Concept::Named(_)) {
             self.unfold.entry(sub_id).or_default().push(sup_id);
         } else {
-            let meta = Concept::Or(vec![Concept::Not(Box::new(sub)), sup]);
+            let meta = Concept::Or(vec![sup, Concept::Not(Box::new(sub))]);
             let meta_id = self.table.intern(meta);
             self.meta.push(meta_id);
         }

@@ -1619,7 +1619,7 @@ fn gci(table: &mut ConceptTable, acc: &mut Accums, sub: Concept, sup: Concept) {
     if matches!(sub, Concept::Named(_)) {
         acc.unfold.entry(sub_id).or_default().push(sup_id);
     } else {
-        let meta = Concept::Or(vec![Concept::Not(Box::new(sub)), sup]);
+        let meta = Concept::Or(vec![sup, Concept::Not(Box::new(sub))]);
         acc.meta.push(table.intern(meta));
     }
 }
