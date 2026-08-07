@@ -1967,8 +1967,8 @@ fn build_gts_graph(statements: &[Statement]) -> Result<SerGraph, RdfDiagnostic> 
     })
 }
 
-/// Bind a reifier, hard-failing on a conflicting rebinding (CONSTITUTION P7: never
-/// silently last-write-win), idempotent on an identical rebind. Mirrors
+/// Bind a reifier, hard-failing on a conflicting rebinding — never silently
+/// last-write-win — and idempotent on an identical rebind. Mirrors
 /// `from_nquads`'s `set_reifier`.
 fn set_reifier(
     reifiers: &mut Vec<(usize, SerTriple3)>,

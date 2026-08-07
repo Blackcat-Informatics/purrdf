@@ -438,7 +438,19 @@ impl RdfDataset {
     /// A fresh owned `RdfDataset` snapshotting this one's frozen tables. The
     /// fallback for the rare case a freshly-frozen `Arc` is shared; the lazy caches
     /// rebuild on demand. Crate-internal — the public deep-copy path is
-    /// [`union`](RdfDataset::union) of a single input.
+    /// [`union`](RdfDataset::union) of a single input. A single-input union
+    /// trivially "agrees" with itself, so `self`'s
+    /// [`ContentIdScheme`](crate::ContentIdScheme) (if any) and derivation
+    /// predicate carry forward too — the CONTENT-ADDRESSING CONFIGURATION is a
+    /// lossless snapshot, not merely a statement-layer one.
+    ///
+    /// The snapshot is graph-ISOMORPHIC to `self`, not label-identical:
+    /// [`union`](RdfDataset::union) re-scopes every input's blank nodes under a
+    /// fresh [`BlankScope`](crate::BlankScope) (standardize-apart, C0.2) even in
+    /// this single-input case, so a blank node's `(label, scope)` pair in the
+    /// snapshot generally differs from the one in `self`, while the graph
+    /// structure — including every blank node's co-reference pattern — is
+    /// preserved exactly.
     pub(crate) fn owned_snapshot(&self) -> Self {
         Self::union(&[self])
     }

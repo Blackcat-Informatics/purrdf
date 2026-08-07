@@ -422,7 +422,14 @@ fn true_literal() -> Expression {
 fn ground_term_from_value(value: &TermValue) -> Result<GroundTerm, RdfDiagnostic> {
     match value {
         TermValue::Iri(iri) => Ok(GroundTerm::NamedNode(node(iri)?)),
-        TermValue::Blank { label, .. } => Ok(GroundTerm::BlankNode(BlankNode::new(label.clone()))),
+        // The algebra's `BlankNode` has ONE string slot, so a `(label, scope)`
+        // pair is carried in it the way every other single-slot blank surface
+        // carries one: as the scope-qualified rendering. `ground_term_to_value`
+        // decodes it back, so an injected blank focus node still denotes the
+        // dataset node it was resolved from rather than a fresh, unrelated one.
+        TermValue::Blank { label, scope } => Ok(GroundTerm::BlankNode(BlankNode::new(
+            scope.qualify_label(label).into_owned(),
+        ))),
         TermValue::Literal {
             lexical_form,
             datatype,

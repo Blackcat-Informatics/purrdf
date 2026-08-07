@@ -84,6 +84,8 @@ fn implicit_datatype(
 pub(crate) fn show(term: &TermValue) -> String {
     match term {
         TermValue::Iri(iri) => format!("<{iri}>"),
+        // Diagnostics-only rendering (`miss` lines / error text), never RDF
+        // document egress — label syntax is not enforced here.
         TermValue::Blank { label, scope } => format!("_:{label}#{}", scope.ordinal()),
         TermValue::Literal {
             lexical_form,

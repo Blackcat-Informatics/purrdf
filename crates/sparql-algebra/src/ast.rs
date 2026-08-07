@@ -272,6 +272,25 @@ pub enum GroundTerm {
     /// single-row `VALUES`-join rewrite the IRI/literal/triple cases use, keeping the
     /// substitution path uniform across every term kind. The evaluator interns it as
     /// an ordinary blank (`purrdf-core` `TermValue::Blank`).
+    ///
+    /// # The label's contract
+    ///
+    /// This variant's [`BlankNode`] has ONE string slot, so it carries an
+    /// evaluator-side `(label, scope)` pair the same way every other
+    /// single-slot blank surface in this workspace does: the string is the
+    /// SCOPE-QUALIFIED spelling — `purrdf-core`'s `BlankScope::qualify_label(label)`
+    /// — not necessarily the raw label read literally. The evaluator decodes it
+    /// with the exact inverse, `BlankScope::unqualify_label`, before interning,
+    /// so a value built from an already-resolved dataset node round-trips to
+    /// that SAME node rather than to a fresh, unrelated one.
+    ///
+    /// A label at the DEFAULT scope is its own qualified spelling — passed
+    /// through byte for byte, whatever dots or spaces it carries — so a caller
+    /// that means a label literally simply writes it (`a.s1` denotes the label
+    /// `a.s1`). Only a non-default scope, or a label inside the reserved
+    /// `purrdfesc` marker namespace, has a distinct qualified spelling: the
+    /// envelope `purrdfesc{n}_{body}` that carries both halves of the pair
+    /// (`("a", scope 1)` is spelled `purrdfesc1_a`).
     BlankNode(BlankNode),
 }
 

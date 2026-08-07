@@ -87,7 +87,7 @@ impl RdfCodec for LineCodec {
         // directly (a distinct monomorphization), so `NoSpans` stays zero-cost here.
         let graph =
             super::parse::text_parse_without_panicking(self.0, text, base_iri, mode, &mut NoSpans)?;
-        super::parse::dataset_from_ser_graph(&graph)
+        super::parse::dataset_from_text_ser_graph(&graph)
     }
 
     fn serialize_into(&self, graph: &SerGraph, out: &mut String) -> Result<(), RdfDiagnostic> {

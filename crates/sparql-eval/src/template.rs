@@ -50,7 +50,9 @@ pub(crate) fn instantiate_ground_term(
     match term {
         TermPattern::NamedNode(n) => Some(named_node_to_value(n)),
         TermPattern::Literal(l) => Some(literal_to_value(l)),
-        TermPattern::BlankNode(b) => Some(mint_blank(b.as_str(), blanks, counter)),
+        // The DATA path mints unprefixed: it is variable-free ingestion with a
+        // request-local counter, never a per-focus SHACL evaluation.
+        TermPattern::BlankNode(b) => Some(mint_blank(b.as_str(), blanks, counter, None)),
         TermPattern::Triple(t) => {
             let s = instantiate_ground_term(&t.subject, blanks, counter)?;
             let p = match &t.predicate {
@@ -118,23 +120,34 @@ pub(crate) fn instantiate_predicate<D: DatasetView + Sync>(
 /// first occurrence mints a globally-unique label from the **cross-row** monotonic
 /// `bnode_counter`, later occurrences in the same row reuse it (the `blanks` map
 /// resets per row, so the counter — not the map — is what makes two rows' blanks
-/// distinct).
+/// distinct). Minted labels carry the context's deterministic
+/// [`EvalCtx::bnode_mint_prefix`], when one is set.
 pub(crate) fn fresh_blank<D: DatasetView + Sync>(
     template_label: &str,
     blanks: &mut DetHashMap<String, String>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> TermValue {
-    mint_blank(template_label, blanks, &mut ctx.bnode_counter)
+    mint_blank(
+        template_label,
+        blanks,
+        &mut ctx.bnode_counter,
+        ctx.bnode_mint_prefix.as_deref(),
+    )
 }
 
 /// The blank-minting core (independent of [`EvalCtx`]): first occurrence of
 /// `template_label` mints a unique label from the monotonic `counter`, later
-/// occurrences in the same `blanks` scope reuse it. Used by [`fresh_blank`] (threading
-/// `ctx.bnode_counter`) and the variable-free DATA path (a local counter).
+/// occurrences in the same `blanks` scope reuse it. Used by [`fresh_blank`]
+/// (threading `ctx.bnode_counter` and the context's mint prefix) and the
+/// variable-free DATA path (a local counter, no prefix).
+///
+/// With `prefix: None` the minted label is exactly `c{n}` — byte-identical to
+/// every pre-prefix caller; with `Some(prefix)` it is `{prefix}c{n}`.
 pub(crate) fn mint_blank(
     template_label: &str,
     blanks: &mut DetHashMap<String, String>,
     counter: &mut u64,
+    prefix: Option<&str>,
 ) -> TermValue {
     if let Some(existing) = blanks.get(template_label) {
         return TermValue::Blank {
@@ -143,7 +156,7 @@ pub(crate) fn mint_blank(
         };
     }
     *counter += 1;
-    let fresh = format!("c{counter}");
+    let fresh = crate::eval::minted_label(prefix, "c", *counter);
     blanks.insert(template_label.to_owned(), fresh.clone());
     TermValue::Blank {
         label: fresh,

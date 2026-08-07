@@ -27,12 +27,49 @@
 //! - Literal: `"lex"`, `"lex"@lang`, `"lex"@lang--ltr`/`"lex"@lang--rtl`, `"lex"^^<datatype>` (escaped)
 //! - Triple term (RDF 1.2): `<<( <s> <p> <o> )>>` (non-asserting; distinct from
 //!   the bare `<< s p o >>` reifier shorthand, which asserts the triple)
+//!
+//! ## Blank-node labels
+//!
+//! Every `_:` term this module writes goes through one encode helper, which
+//! passes an unscoped label already legal under the exact W3C
+//! `BLANK_NODE_LABEL` production straight through (byte-identical) and
+//! otherwise rewrites it as the deterministic, injective envelope in
+//! [`crate::blank_label`]. Emission is therefore **total** — every dataset
+//! serializes — and the emitted document always re-lexes. Because a blank-node
+//! label carries no meaning (RDF identifies blank nodes only up to renaming)
+//! and the encoding is injective, the emitted document is isomorphic to the
+//! input: co-reference is preserved and distinct blank nodes stay distinct.
+//! Callers wanting labels of their own choosing rewrite the dataset first with
+//! the explicit recourse operations (`canonical_relabel` / `skolemize` /
+//! `deskolemize`).
 
 use crate::{
     QuadIds, RdfAnnotation, RdfDataset, RdfLiteral, RdfQuad, RdfReifier, RdfTerm, RdfTriple,
     TermId, TermRef,
+    blank_label::{LabelAlphabet, encode_blank_label, retarget_owned_label},
 };
+use std::borrow::Cow;
 use std::fmt::Write as _;
+
+/// The blank-node label this emitter writes after `_:` for an OWNED-model term:
+/// the caller's label when it is already legal under the exact W3C
+/// Turtle/SPARQL `BLANK_NODE_LABEL` production, otherwise the deterministic,
+/// injective envelope ([`retarget_owned_label`]).
+///
+/// The input is an [`RdfTerm::BlankNode`](crate::RdfTerm::BlankNode) slot, which
+/// already carries a `(label, scope)` pair encoded under the owned model's
+/// unconstrained alphabet — so this RE-TARGETS that encoding into the Turtle
+/// alphabet rather than escaping it a second time (which would envelope an
+/// envelope and stop the round trip restoring label identity).
+///
+/// Encoding rather than refusing keeps serialization total: a blank-node label
+/// carries no meaning (RDF identifies blank nodes only up to renaming), so a
+/// rewritten label preserves the graph up to isomorphism, while an emitted
+/// out-of-alphabet label would produce a document no conforming parser —
+/// including PurRDF's own — could read back.
+fn emit_blank_label(label: &str) -> Cow<'_, str> {
+    retarget_owned_label(label, LabelAlphabet::BlankNodeLabel)
+}
 
 /// Percent-encode a string the way Python's `urllib.parse.quote(value, safe="")`
 /// does: every byte that is not an *unreserved* URI character
@@ -153,7 +190,9 @@ fn write_iri_escaped(iri: &str, out: &mut String) {
 ///
 /// This is the borrowed counterpart of [`emit_term`]: it resolves directly from
 /// the frozen dataset and allocates neither an owned term tree nor an intermediate
-/// rendered string.
+/// rendered string. The blank node's `(label, scope)` pair is encoded into the
+/// Turtle `BLANK_NODE_LABEL` alphabet in ONE step (via [`encode_blank_label`]),
+/// so the buffer always holds a re-parsable term.
 pub fn write_dataset_term(dataset: &RdfDataset, id: TermId, out: &mut String) {
     match dataset.resolve(id) {
         TermRef::Iri(iri) => {
@@ -163,10 +202,11 @@ pub fn write_dataset_term(dataset: &RdfDataset, id: TermId, out: &mut String) {
         }
         TermRef::Blank { label, scope } => {
             out.push_str("_:");
-            out.push_str(label);
-            if scope != crate::BlankScope::DEFAULT {
-                let _ = write!(out, ".s{}", scope.ordinal());
-            }
+            out.push_str(&encode_blank_label(
+                label,
+                scope,
+                LabelAlphabet::BlankNodeLabel,
+            ));
         }
         TermRef::Literal {
             lexical,
@@ -258,24 +298,60 @@ pub fn write_dataset_reifier(
     out.push_str(" .\n");
 }
 
-/// Serialize an [`RdfTerm`] to its Turtle form (full `<iri>`, `_:bnode`, literal,
-/// or the RDF 1.2 non-asserting triple term `<<( <s> <p> <o> )>>`).
-pub fn emit_term(term: &RdfTerm) -> String {
+/// Render an [`RdfTerm`] in Turtle term syntax WITHOUT applying the blank-node
+/// label escape (full `<iri>`, `_:bnode`, literal, or the RDF 1.2 non-asserting
+/// triple term `<<( <s> <p> <o> )>>`).
+///
+/// This is a DISPLAY surface for diagnostics, report identity strings and
+/// `Display` impls — never document egress. A label outside the Turtle
+/// `BLANK_NODE_LABEL` alphabet renders verbatim here, so a message can name the
+/// caller's own label; [`emit_term`] is the egress form, which escapes it.
+#[must_use]
+pub fn display_term(term: &RdfTerm) -> String {
     match term {
         RdfTerm::Iri(iri) => format!("<{}>", escape_iri(iri)),
         RdfTerm::BlankNode(label) => format!("_:{label}"),
+        RdfTerm::Literal(literal) => emit_literal(literal),
+        RdfTerm::Triple(triple) => display_triple_term(triple),
+    }
+}
+
+/// Serialize an [`RdfTerm`] to its Turtle form (full `<iri>`, `_:bnode`, literal,
+/// or the RDF 1.2 non-asserting triple term `<<( <s> <p> <o> )>>`).
+///
+/// A blank-node label outside the Turtle `BLANK_NODE_LABEL` alphabet is encoded
+/// (via [`retarget_owned_label`]) rather than refused, so the rendered term
+/// always re-lexes; the encoding is deterministic and injective, so blank-node
+/// co-reference is preserved exactly.
+#[must_use]
+pub fn emit_term(term: &RdfTerm) -> String {
+    match term {
+        RdfTerm::Iri(iri) => format!("<{}>", escape_iri(iri)),
+        RdfTerm::BlankNode(label) => format!("_:{}", emit_blank_label(label)),
         RdfTerm::Literal(literal) => emit_literal(literal),
         RdfTerm::Triple(triple) => emit_triple_term(triple),
     }
 }
 
-/// Serialize an [`RdfTriple`] as an RDF 1.2 triple-term: `<<( <s> <p> <o> )>>`.
+/// Render an [`RdfTriple`] as an RDF 1.2 triple-term: `<<( <s> <p> <o> )>>`,
+/// without the label escape (the display-layer twin of [`emit_triple_term`]).
 ///
 /// The parens matter — the bare `<< s p o >>` form is a *reifying triple* that
 /// ALSO asserts `s p o` (and mints a reifier), so re-parsing it would grow the
 /// graph. A triple term denotes the triple without asserting it, which is what
 /// every embedded position (a triple-term object, or the `rdf:reifies` object
 /// via [`emit_reifier`]) requires.
+fn display_triple_term(triple: &RdfTriple) -> String {
+    format!(
+        "<<( {} <{}> {} )>>",
+        display_term(&triple.subject),
+        triple.predicate,
+        display_term(&triple.object)
+    )
+}
+
+/// Serialize an [`RdfTriple`] as an RDF 1.2 triple-term (`<<( <s> <p> <o> )>>`),
+/// escaping every blank-node label in the tree.
 fn emit_triple_term(triple: &RdfTriple) -> String {
     format!(
         "<<( {} <{}> {} )>>",
@@ -290,6 +366,7 @@ fn emit_triple_term(triple: &RdfTriple) -> String {
 /// The graph component (if any) is dropped — the emitter writes a single default
 /// graph Turtle document, matching the native-lane artifacts (worlds are carried
 /// as `purrdf:inWorld` annotations, not Turtle named graphs).
+#[must_use]
 pub fn emit_quad(quad: &RdfQuad) -> String {
     format!(
         "{} <{}> {} .\n",
@@ -313,7 +390,16 @@ pub fn emit_quad(quad: &RdfQuad) -> String {
 /// anonymous node disconnected from those triples, silently severing the
 /// reifier↔annotation link — so the blank node is emitted by its label instead.
 /// A named reifier is always emitted as its term.
-pub fn emit_reifier(reifier: &RdfReifier, annotations: &[(String, String)]) -> String {
+///
+/// Each `(predicate, object)` pair takes a bare-IRI predicate (matching the
+/// sibling [`RdfTriple`] / [`RdfAnnotation`] field convention) and a
+/// structured [`RdfTerm`] object, rendered through [`emit_term`] — so a
+/// blank-node object gets its label escaped and a literal object gets proper
+/// quoting, the same guarantee every other position in this module carries.
+/// A caller can no longer hand this function an already-rendered token that
+/// bypasses that escaping.
+#[must_use]
+pub fn emit_reifier(reifier: &RdfReifier, annotations: &[(String, RdfTerm)]) -> String {
     const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
     let subject = match &reifier.reifier {
         RdfTerm::BlankNode(_) if !annotations.is_empty() => "[]".to_owned(),
@@ -322,7 +408,7 @@ pub fn emit_reifier(reifier: &RdfReifier, annotations: &[(String, String)]) -> S
     let statement = emit_triple_term(&reifier.statement);
     let mut out = format!("{subject} <{RDF_REIFIES}> {statement}");
     for (predicate, object) in annotations {
-        let _ = write!(out, " ;\n   <{predicate}> {object}");
+        let _ = write!(out, " ;\n   <{predicate}> {}", emit_term(object));
     }
     out.push_str(" .\n");
     out
@@ -330,13 +416,18 @@ pub fn emit_reifier(reifier: &RdfReifier, annotations: &[(String, String)]) -> S
 
 /// Emit a free-standing resource: `<subject> a <type> ; <pred> <obj> ; … .`
 ///
-/// Each `(predicate, object)` pair is already serialized (predicate is a bare
-/// IRI string, object an already-emitted term string), so this is the generic
-/// "subject with a property list" writer the ledger / explanation builders use.
-pub fn emit_resource(subject: &str, properties: &[(String, String)]) -> String {
+/// Each `(predicate, object)` pair takes a bare-IRI predicate (matching the
+/// sibling [`RdfTriple`] / [`RdfAnnotation`] field convention) and a
+/// structured [`RdfTerm`] object, rendered through [`emit_term`] — the
+/// generic "subject with a property list" writer the ledger / explanation
+/// builders use. Routing the object through [`emit_term`] means a blank-node
+/// object is label-escaped and a literal object is properly quoted, rather
+/// than trusting the caller to have pre-rendered a safe token.
+pub fn emit_resource(subject: &str, properties: &[(String, RdfTerm)]) -> String {
     let mut out = format!("<{subject}>");
     let mut first = true;
     for (predicate, object) in properties {
+        let object = emit_term(object);
         if first {
             let _ = write!(out, " <{predicate}> {object}");
             first = false;
@@ -352,6 +443,7 @@ pub fn emit_resource(subject: &str, properties: &[(String, String)]) -> String {
 ///
 /// Mostly used in tests; the production builders fold annotations onto a reifier
 /// head via [`emit_reifier`].
+#[must_use]
 pub fn emit_annotation(annotation: &RdfAnnotation) -> String {
     format!(
         "{} <{}> {} .\n",
@@ -493,7 +585,7 @@ mod tests {
             &reifier,
             &[(
                 "https://purrdf.org/ontology#viaRule".to_owned(),
-                "<https://purrdf.org/rule/x>".to_owned(),
+                iri("https://purrdf.org/rule/x"),
             )],
         );
         // Anonymous reifier subject, rdf:reifies head, non-asserting triple term,
@@ -533,22 +625,195 @@ mod tests {
     }
 
     #[test]
+    fn emit_term_escapes_an_illegal_blank_label_in_every_position() {
+        use crate::blank_label::is_valid_blank_node_label;
+
+        // A label outside the Turtle BLANK_NODE_LABEL alphabet is escaped, never
+        // refused — in every emitting position, including nested inside a triple
+        // term — so emission stays total and the output re-lexes.
+        for label in ["a b", "<urn:x>", "trailing.", "-lead", "\u{D7}y"] {
+            let token = emit_term(&RdfTerm::blank_node(label));
+            let emitted = token
+                .strip_prefix("_:")
+                .expect("a blank term emits the `_:` prefix");
+            assert!(
+                is_valid_blank_node_label(emitted),
+                "{label:?} emitted as {emitted:?}, which is not a legal label"
+            );
+            assert_ne!(emitted, label, "an illegal label must be rewritten");
+
+            let triple = RdfTriple::new(
+                RdfTerm::blank_node(label),
+                "http://example.org/p",
+                iri("http://example.org/o"),
+            );
+            for rendered in [
+                emit_term(&RdfTerm::triple(triple.clone())),
+                emit_quad(&RdfQuad {
+                    subject: RdfTerm::blank_node(label),
+                    predicate: "http://example.org/p".to_string(),
+                    object: iri("http://example.org/o"),
+                    graph_name: None,
+                    location: None,
+                }),
+                emit_reifier(&RdfReifier::new(iri("http://example.org/r"), triple), &[]),
+            ] {
+                assert!(
+                    rendered.contains(emitted),
+                    "every emitting position writes the escaped label: {rendered}"
+                );
+                assert!(
+                    !rendered.contains(&format!("_:{label}")),
+                    "the raw label must never reach the document: {rendered}"
+                );
+            }
+        }
+        // display_term stays verbatim over the same labels: it is the diagnostic
+        // surface an error message renders through, not document egress.
+        assert_eq!(display_term(&RdfTerm::blank_node("a b")), "_:a b");
+    }
+
+    #[test]
+    fn emit_term_escape_preserves_distinctness_of_blank_nodes() {
+        // Two distinct labels — one legal, one whose escape could collide with
+        // it if the escape image were unreserved — stay distinct on egress.
+        let illegal = "a b";
+        let twin = "purrdfesc_a_000020b";
+        assert!(crate::blank_label::is_valid_blank_node_label(twin));
+        assert_ne!(
+            emit_term(&RdfTerm::blank_node(illegal)),
+            emit_term(&RdfTerm::blank_node(twin))
+        );
+    }
+
+    #[test]
+    fn write_dataset_term_encodes_the_label_and_scope_together() {
+        // The borrowed writer encodes the `(label, scope)` pair in ONE step: a
+        // legal raw label at the default scope is written verbatim, while a
+        // scoped pair or an illegal raw label becomes the envelope.
+        let mut builder = crate::RdfDatasetBuilder::new();
+        let good = builder.intern_blank("a.b", crate::BlankScope(4));
+        let bad = builder.intern_blank("a b", crate::BlankScope::DEFAULT);
+        let p = builder.intern_iri("http://example.org/p");
+        builder.push_quad(good, p, bad, None);
+        let dataset = builder.freeze().expect("dataset freezes");
+
+        let mut out = String::new();
+        write_dataset_term(&dataset, good, &mut out);
+        assert_eq!(
+            out, "_:purrdfesc4_a_00002Eb",
+            "a scoped pair is written as its envelope"
+        );
+
+        let mut out = String::new();
+        write_dataset_term(&dataset, bad, &mut out);
+        assert_eq!(out, "_:purrdfesc_a_000020b");
+
+        let mut lines = String::new();
+        for quad in dataset.quads() {
+            write_dataset_quad(&dataset, quad, &mut lines);
+        }
+        assert_eq!(
+            lines,
+            "_:purrdfesc4_a_00002Eb <http://example.org/p> _:purrdfesc_a_000020b .\n"
+        );
+    }
+
+    #[test]
     fn emit_resource_property_list() {
         let out = emit_resource(
             "https://purrdf.org/ontology#dl-el-crosscheck",
             &[
                 (
                     "http://www.w3.org/1999/02/22-rdf-syntax-ns#type".to_owned(),
-                    "<https://purrdf.org/ontology#CrosscheckLedger>".to_owned(),
+                    iri("https://purrdf.org/ontology#CrosscheckLedger"),
                 ),
                 (
                     "https://purrdf.org/ontology#consistent".to_owned(),
-                    "true".to_owned(),
+                    RdfTerm::Literal(RdfLiteral::typed(
+                        "true",
+                        "http://www.w3.org/2001/XMLSchema#boolean",
+                    )),
                 ),
             ],
         );
         assert!(out.contains("<https://purrdf.org/ontology#dl-el-crosscheck>"));
         assert!(out.contains("#type> <https://purrdf.org/ontology#CrosscheckLedger> ;"));
-        assert!(out.contains("#consistent> true ."));
+        assert!(
+            out.contains("#consistent> \"true\"^^<http://www.w3.org/2001/XMLSchema#boolean> .")
+        );
+    }
+
+    #[test]
+    fn emit_reifier_annotation_object_escapes_hostile_blank_label() {
+        // A structured annotation object whose blank label is illegal under
+        // BLANK_NODE_LABEL must be escaped, exactly like every other emitting
+        // position in this module — the caller can no longer hand this
+        // function an already-rendered token that bypasses that guarantee.
+        // (`crates/rdf/tests` carries the companion full-document round-trip
+        // through the native Turtle parser.)
+        use crate::blank_label::is_valid_blank_node_label;
+
+        let triple = RdfTriple::new(
+            iri("http://example.org/s"),
+            "http://example.org/p",
+            iri("http://example.org/o"),
+        );
+        let reifier = RdfReifier::new(iri("http://example.org/r"), triple);
+        for label in ["bad label", "a\u{d7}b"] {
+            let out = emit_reifier(
+                &reifier,
+                &[(
+                    "http://example.org/annotates".to_owned(),
+                    RdfTerm::blank_node(label),
+                )],
+            );
+            assert!(
+                !out.contains(&format!("_:{label}")),
+                "the raw hostile label must never reach the document: {out}"
+            );
+            let token = out
+                .rsplit("_:")
+                .next()
+                .expect("emitted annotation carries a blank-node token")
+                .trim_end_matches(" .\n");
+            assert!(
+                is_valid_blank_node_label(token),
+                "{label:?} emitted as {token:?}, which is not a legal label: {out}"
+            );
+            assert_ne!(token, label, "an illegal label must be rewritten");
+        }
+    }
+
+    #[test]
+    fn emit_resource_property_escapes_hostile_blank_label() {
+        // Same guarantee as emit_reifier, for the sibling property-list writer:
+        // a hostile blank-node object label must be escaped, not written
+        // verbatim.
+        use crate::blank_label::is_valid_blank_node_label;
+
+        for label in ["bad label", "a\u{d7}b"] {
+            let out = emit_resource(
+                "http://example.org/subject",
+                &[(
+                    "http://example.org/annotates".to_owned(),
+                    RdfTerm::blank_node(label),
+                )],
+            );
+            assert!(
+                !out.contains(&format!("_:{label}")),
+                "the raw hostile label must never reach the document: {out}"
+            );
+            let token = out
+                .rsplit("_:")
+                .next()
+                .expect("emitted resource carries a blank-node token")
+                .trim_end_matches(" .\n");
+            assert!(
+                is_valid_blank_node_label(token),
+                "hostile label emitted as {token:?}, which is not a legal label: {out}"
+            );
+            assert_ne!(token, label, "an illegal label must be rewritten");
+        }
     }
 }

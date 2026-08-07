@@ -30,6 +30,8 @@
     html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]
 
+// Blank-node label syntax shared by parser and serializer egress contracts.
+pub mod blank_label;
 pub mod bundle;
 // Narrow purrdf backend traits (P2d): term interning, parser ingress,
 // SPARQL execution, and serializer egress. PyO3-free, oxigraph-free — pure
@@ -121,15 +123,16 @@ pub use ir::embedding::*;
 pub use ir::{
     BlankScope, BudgetExceeded, CANON_CORPUS_DIGEST, CANON_PROFILE_ID, CANON_PROFILE_VERSION,
     CanonError, CanonHash, Canonicalized, CountingDemandProvider, DatasetDiff, DatasetSink,
-    FrozenDatasetSource, GlobalDictionary, GlobalTermId, GtsBundle, HandleEntry, HandleKey,
-    InMemoryPageProvider, MutableDataset, PageFault, PageFaultKind, PageGeneration, PageId,
-    PageMaterialization, PagePart, PageProvider, PageTranslation, PagedDataset, PagedFreezeError,
-    PagedQuadOverlap, PagedQuadTable, PagedQueryError, PagedQueryEvidence, PagedQueryLimits,
-    PagedQueryView, PipelineBundle, PipelineBundleError, QuadHandle, QuadIds, QuadPatternCursor,
-    QuadProbePlan, QuadRef, QuadValues, RDFC_CALL_LIMIT, RESERVED_NAMESPACE, RdfDataset,
-    RdfDatasetBuilder, RdfDatasetVisitor, RdfEnvelope, ReservedVocabulary, SubsetPageProvider,
-    TermId, TermPosition, TermRef, TermValue, ValidatedRdfDatasetBuilder, canonicalize,
-    canonicalize_with, check_admissible, dataset_diff, datasets_isomorphic, try_canonicalize,
+    FrozenDatasetSource, GENID_WELL_KNOWN_PATH, GlobalDictionary, GlobalTermId, GtsBundle,
+    HandleEntry, HandleKey, InMemoryPageProvider, MutableDataset, PageFault, PageFaultKind,
+    PageGeneration, PageId, PageMaterialization, PagePart, PageProvider, PageTranslation,
+    PagedDataset, PagedFreezeError, PagedQuadOverlap, PagedQuadTable, PagedQueryError,
+    PagedQueryEvidence, PagedQueryLimits, PagedQueryView, PipelineBundle, PipelineBundleError,
+    QuadHandle, QuadIds, QuadPatternCursor, QuadProbePlan, QuadRef, QuadValues, RDFC_CALL_LIMIT,
+    RESERVED_NAMESPACE, RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor, RdfEnvelope,
+    ReservedVocabulary, SkolemError, SubsetPageProvider, TermId, TermPosition, TermRef, TermValue,
+    ValidatedRdfDatasetBuilder, canonical_relabel, canonicalize, canonicalize_with,
+    check_admissible, dataset_diff, datasets_isomorphic, deskolemize, skolemize, try_canonicalize,
     try_canonicalize_with,
 };
 pub use ir::{
@@ -167,7 +170,7 @@ pub use sssom::{
 };
 pub use store::RdfStoreCapabilities;
 pub use turtle::{
-    emit_annotation, emit_quad, emit_reifier, emit_resource, emit_term, rule_iri,
+    display_term, emit_annotation, emit_quad, emit_reifier, emit_resource, emit_term, rule_iri,
     write_dataset_annotation, write_dataset_quad, write_dataset_reifier, write_dataset_term,
 };
 pub use turtle_render::render as render_canonical_turtle;

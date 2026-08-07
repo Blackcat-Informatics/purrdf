@@ -1735,8 +1735,10 @@ fn label_for_term(
                 || compact_iri(value),
                 |mapping| format!("{}:{}", mapping.prefix, &value[mapping.namespace.len()..]),
             ),
-        (_, TermValue::Blank { label, scope }) if scope.ordinal() == 0 => format!("_:{label}"),
-        (_, TermValue::Blank { label, scope }) => format!("_:{label}.s{}", scope.ordinal()),
+        // Visualization label only (rendered node text, not Turtle): the scope
+        // qualification is shown for node identity, but label syntax is not
+        // enforced here — egress validation lives in the codec serializers.
+        (_, TermValue::Blank { label, scope }) => format!("_:{}", scope.qualify_label(label)),
         (_, TermValue::Literal { lexical_form, .. }) => format!("\"{lexical_form}\""),
         (_, TermValue::Triple { .. }) => "quoted triple".to_owned(),
     }
@@ -1745,8 +1747,10 @@ fn label_for_term(
 fn full_term_label(value: &TermValue) -> String {
     match value {
         TermValue::Iri(iri) => format!("<{}>", escape_iri(iri)),
-        TermValue::Blank { label, scope } if scope.ordinal() == 0 => format!("_:{label}"),
-        TermValue::Blank { label, scope } => format!("_:{label}.s{}", scope.ordinal()),
+        // Visualization string, not Turtle — label syntax is deliberately not
+        // enforced on this display-only surface (literals render as bare quoted
+        // text here for the same reason).
+        TermValue::Blank { label, scope } => format!("_:{}", scope.qualify_label(label)),
         TermValue::Literal {
             lexical_form,
             datatype,

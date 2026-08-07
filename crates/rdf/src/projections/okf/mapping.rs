@@ -964,6 +964,8 @@ fn term_text(
 fn lexical_term_text(term: &ProjectionTerm) -> String {
     match term {
         ProjectionTerm::Iri { value } => value.clone(),
+        // Internal mapping key (`_:{scope}:{label}`), never serialized into an
+        // RDF document — label syntax is not enforced here.
         ProjectionTerm::Blank { label, scope } => format!("_:{scope}:{label}"),
         ProjectionTerm::Literal { lexical, .. } => lexical.clone(),
         ProjectionTerm::Triple {

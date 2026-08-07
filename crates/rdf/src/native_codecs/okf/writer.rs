@@ -938,6 +938,8 @@ impl<'a> Projector<'a> {
         match self.terms.get(id.index()) {
             Some(OwnedTerm::Iri(iri)) => iri.clone(),
             Some(OwnedTerm::Blank { label, scope }) => {
+                // Internal OKF key format (`_:{label}@{scope}`), never emitted
+                // into an RDF document — label syntax is not enforced here.
                 format!("_:{}@{}", label, scope.ordinal())
             }
             _ => format!("term#{}", id.index()),

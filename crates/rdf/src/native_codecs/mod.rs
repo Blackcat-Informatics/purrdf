@@ -611,8 +611,9 @@ mod tests {
 
     #[test]
     fn two_scope_blank_nodes_round_trip() {
-        // Two same-label blanks in different scopes are distinct; the qualified label
-        // (`x` vs `x.s1`) survives the round trip as two distinct blank nodes.
+        // Two same-label blanks in different scopes are distinct; the encoded
+        // token (`x` vs `purrdfesc1_x`) survives the round trip as two distinct
+        // blank nodes.
         let mut b = RdfDatasetBuilder::new();
         let s = b.intern_iri("https://e/s");
         let p = b.intern_iri("https://e/p");
@@ -628,6 +629,74 @@ mod tests {
             2,
             "two distinct blanks stay distinct"
         );
+    }
+
+    #[test]
+    fn distinct_legal_labels_never_conflate_on_a_text_round_trip() {
+        // The class the encoding must never fold: five labels that are all legal
+        // `BLANK_NODE_LABEL`s and all distinct. The dotted family (`a.b`, `a..b`,
+        // `a...b`) was merged by the old dot-doubling egress, and `purrdfesc_abc`
+        // was merged into `abc` by an un-image-checked marker decode. Each must
+        // stay its own node, and the document must be a byte fixpoint from the
+        // first write.
+        let nt = "_:a.b <https://e/p1> \"a\" .\n\
+                  _:a..b <https://e/p2> \"b\" .\n\
+                  _:a...b <https://e/p3> \"c\" .\n\
+                  _:purrdfesc_abc <https://e/p4> \"d\" .\n\
+                  _:abc <https://e/p5> \"e\" .\n";
+        let ds = parse_dataset(nt.as_bytes(), "application/n-triples", None).expect("parse");
+        assert_eq!(ds.quad_count(), 5, "five distinct blank-node subjects");
+        for label in ["a.b", "a..b", "a...b", "purrdfesc_abc", "abc"] {
+            assert!(
+                ds.term_id_by_blank(label, BlankScope::DEFAULT).is_some(),
+                "`_:{label}` must intern verbatim at the default scope"
+            );
+        }
+
+        // The parse -> serialize -> parse cycle is a byte fixpoint: re-serializing
+        // the round-tripped dataset produces identical bytes a second time.
+        let once = serialize_dataset(&ds, "application/n-triples", SerializeGraph::Dataset)
+            .expect("serialize");
+        let reparsed = parse_dataset(&once, "application/n-triples", None).expect("re-parse");
+        let twice = serialize_dataset(&reparsed, "application/n-triples", SerializeGraph::Dataset)
+            .expect("serialize again");
+        assert_eq!(
+            once, twice,
+            "parse -> serialize round trip is a byte fixpoint"
+        );
+        assert_eq!(reparsed.quad_count(), 5, "all five nodes survive the cycle");
+        assert!(
+            datasets_isomorphic(&ds, &reparsed),
+            "round trip via N-Triples must be isomorphic"
+        );
+    }
+
+    #[test]
+    fn a_scope_envelope_and_its_literal_twins_stay_three_nodes() {
+        // The scoped identity round trip: `("x", scope 2)` reaches the wire as its
+        // envelope, and a document that ALSO spells the literal labels `x` and
+        // `x.s2` keeps three distinct nodes.
+        let nt = "_:purrdfesc2_x <https://e/p1> \"a\" .\n\
+                  _:x <https://e/p2> \"b\" .\n\
+                  _:x.s2 <https://e/p3> \"c\" .\n";
+        let ds = parse_dataset(nt.as_bytes(), "application/n-triples", None).expect("parse");
+        assert_eq!(ds.quad_count(), 3, "three distinct blank-node subjects");
+        assert!(
+            ds.term_id_by_blank("x", BlankScope(2)).is_some(),
+            "the envelope decodes to (\"x\", scope 2)"
+        );
+        assert!(ds.term_id_by_blank("x", BlankScope::DEFAULT).is_some());
+        assert!(ds.term_id_by_blank("x.s2", BlankScope::DEFAULT).is_some());
+
+        let once = serialize_dataset(&ds, "application/n-triples", SerializeGraph::Dataset)
+            .expect("serialize");
+        assert_eq!(
+            String::from_utf8(once.clone()).expect("utf-8"),
+            nt,
+            "every one of the three spellings is written back verbatim"
+        );
+        let reparsed = parse_dataset(&once, "application/n-triples", None).expect("re-parse");
+        assert_eq!(reparsed.quad_count(), 3);
     }
 
     #[test]

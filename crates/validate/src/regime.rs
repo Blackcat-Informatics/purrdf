@@ -82,7 +82,7 @@
 use core::fmt;
 use core::fmt::Write as _;
 
-use purrdf_core::{RdfLiteral, RdfTerm, RdfTriple, TermValue, emit_term};
+use purrdf_core::{RdfLiteral, RdfTerm, RdfTriple, TermValue, display_term};
 use purrdf_entail::{
     ChaseProof, Completeness, DlAxiom, DlCertificate, DlCompleteness, EntailError,
     EntailmentCertificate, EntailmentMechanism, EntailmentOutcome, ImportMap, Justification,
@@ -1197,11 +1197,14 @@ impl ReasoningAnswer {
 /// Render `term` in N-Triples term syntax (`<iri>`, `_:label`, `"lex"@en`,
 /// `<<( s p o )>>`).
 ///
-/// The escaping is [`purrdf_core::emit_term`]'s, so a term rendered here and the
-/// same term rendered by the native serializers escape identically. Triple terms
-/// recurse HERE rather than through `emit_term`'s owned model, because the owned
-/// model requires a triple term's predicate to be an IRI and this function must be
-/// total over [`TermValue`].
+/// The escaping is [`purrdf_core::display_term`]'s, so a term rendered here and
+/// the same term rendered by the native serializers escape identically. This is
+/// report/diagnostic identity text (answer and certificate lines), not RDF
+/// document egress, so blank-node label alphabets are deliberately not enforced
+/// here and the function stays total. Triple terms recurse HERE rather than
+/// through `display_term`'s owned model, because the owned model requires a
+/// triple term's predicate to be an IRI and this function must be total over
+/// [`TermValue`].
 ///
 /// N-Triples terms are self-delimiting — `<…>` ends at the unescaped `>`, `_:…` at
 /// whitespace, `"…"` at the unescaped closing quote — which is what makes a
@@ -1209,8 +1212,8 @@ impl ReasoningAnswer {
 /// lexical form may contain a space.
 fn emit(term: &TermValue) -> String {
     match term {
-        TermValue::Iri(iri) => emit_term(&RdfTerm::iri(iri.clone())),
-        TermValue::Blank { label, scope } => emit_term(&RdfTerm::blank_node(
+        TermValue::Iri(iri) => display_term(&RdfTerm::iri(iri.clone())),
+        TermValue::Blank { label, scope } => display_term(&RdfTerm::blank_node(
             scope.qualify_label(label).into_owned(),
         )),
         TermValue::Literal {
@@ -1218,55 +1221,57 @@ fn emit(term: &TermValue) -> String {
             datatype,
             language,
             direction,
-        } => emit_term(&RdfTerm::literal(RdfLiteral {
+        } => display_term(&RdfTerm::literal(RdfLiteral {
             lexical_form: lexical_form.clone(),
             datatype: Some(datatype.clone()),
             language: language.clone(),
             direction: *direction,
         })),
-        TermValue::Triple { s, p, o } => match p.as_iri() {
-            Some(predicate) => emit_term(&RdfTerm::triple(RdfTriple::new(
-                to_owned_term(s),
-                predicate.to_owned(),
-                to_owned_term(o),
-            ))),
-            // A triple term whose predicate is not an IRI is not a well-formed RDF
-            // triple, so the owned model cannot hold it. Rendering it structurally
-            // is the honest option: the caller sees what the term actually is
-            // rather than a silently dropped component.
+        TermValue::Triple { s, p, o } => match to_owned_term(term) {
+            Some(owned) => display_term(&owned),
+            // A triple term whose predicate is not an IRI — at THIS nesting level or
+            // any level nested inside `s`/`o` — is not a well-formed RDF triple, so
+            // the owned model cannot hold it anywhere along the chain. Rendering it
+            // structurally is the honest option: the caller sees what the term
+            // actually is, including the real offending predicate, rather than a
+            // fabricated empty IRI standing in for it.
             None => format!("<<( {} {} {} )>>", emit(s), emit(p), emit(o)),
         },
     }
 }
 
-/// The owned-model twin of a non-recursive [`TermValue`], for [`emit`].
+/// The owned-model twin of a [`TermValue`], for [`emit`].
 ///
-/// A triple term nests through [`emit`]'s own recursion, so this only has to be
-/// correct for the three flat kinds; a nested triple term is rebuilt from its
-/// rendering rather than from this, which is why the fallback is an IRI-shaped
-/// term carrying the rendering instead of a panic.
-fn to_owned_term(term: &TermValue) -> RdfTerm {
+/// `None` iff `term` — or any triple term nested inside it, at any depth — has a
+/// predicate that is not an IRI. The owned model ([`RdfTriple`]) requires an IRI
+/// predicate by construction, so there is no owned value to return for such a
+/// term; callers fall back to [`emit`]'s structural `<<( … )>>` rendering, which
+/// shows the real offending term instead of a fabricated placeholder.
+fn to_owned_term(term: &TermValue) -> Option<RdfTerm> {
     match term {
-        TermValue::Iri(iri) => RdfTerm::iri(iri.clone()),
+        TermValue::Iri(iri) => Some(RdfTerm::iri(iri.clone())),
         TermValue::Blank { label, scope } => {
-            RdfTerm::blank_node(scope.qualify_label(label).into_owned())
+            Some(RdfTerm::blank_node(scope.qualify_label(label).into_owned()))
         }
         TermValue::Literal {
             lexical_form,
             datatype,
             language,
             direction,
-        } => RdfTerm::literal(RdfLiteral {
+        } => Some(RdfTerm::literal(RdfLiteral {
             lexical_form: lexical_form.clone(),
             datatype: Some(datatype.clone()),
             language: language.clone(),
             direction: *direction,
-        }),
-        TermValue::Triple { s, p, o } => RdfTerm::triple(RdfTriple::new(
-            to_owned_term(s),
-            p.as_iri().unwrap_or_default().to_owned(),
-            to_owned_term(o),
-        )),
+        })),
+        TermValue::Triple { s, p, o } => {
+            let predicate = p.as_iri()?;
+            Some(RdfTerm::triple(RdfTriple::new(
+                to_owned_term(s)?,
+                predicate.to_owned(),
+                to_owned_term(o)?,
+            )))
+        }
     }
 }
 
@@ -5523,6 +5528,50 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
             "\"hello world\"@en"
         );
         assert!(parse_one_term("\"hello\"").is_err());
+    }
+
+    /// A triple term nested INSIDE another triple term, with a non-IRI (literal or
+    /// blank) predicate, must render structurally — `<<( s p o )>>`, with the real,
+    /// offending predicate visible — rather than fabricating an empty IRI `<>` for
+    /// the position the owned model cannot hold. This is the diagnostic rendering
+    /// path every service line in this file goes through ([`emit`]), so a
+    /// malformed term surfacing in ANY answer or certificate line is covered by
+    /// this one check on the shared renderer.
+    #[test]
+    fn a_nested_malformed_predicate_renders_structurally_not_as_a_fabricated_empty_iri() {
+        for bad_predicate in [
+            TermValue::simple_literal("not a predicate"),
+            TermValue::blank("b0"),
+        ] {
+            let nested = TermValue::Triple {
+                s: Box::new(TermValue::iri("http://example.org/s")),
+                p: Box::new(bad_predicate.clone()),
+                o: Box::new(TermValue::iri("http://example.org/o")),
+            };
+            // Wrap it two deep: the outer triple term's OWN predicate is a well-formed
+            // IRI, so only the recursive check on the NESTED term can catch this.
+            let outer = TermValue::Triple {
+                s: Box::new(TermValue::iri("http://example.org/subject")),
+                p: Box::new(TermValue::iri("http://example.org/wraps")),
+                o: Box::new(nested.clone()),
+            };
+            let rendered = emit(&outer);
+            // The malformed nested triple renders structurally, carrying its real
+            // subject and object, rather than as an owned model whose bad predicate
+            // slot silently became "".
+            assert!(
+                rendered.contains("<<( <http://example.org/s>"),
+                "{rendered}"
+            );
+            assert!(
+                rendered.contains("<http://example.org/o> )>>"),
+                "{rendered}"
+            );
+            // The real, offending predicate is visible in the rendering...
+            assert!(rendered.contains(&emit(&bad_predicate)), "{rendered}");
+            // ...and no empty IRI was fabricated to stand in for it.
+            assert!(!rendered.contains("<>"), "{rendered}");
+        }
     }
 
     /// A malformed term, axiom or document is an error, never a silent empty answer.

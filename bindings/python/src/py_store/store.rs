@@ -775,9 +775,9 @@ fn rdf_term_to_value_scoped(term: &RdfTerm, scope: BlankScope) -> TermValue {
 /// Under a non-default `scope` (the per-load isolation path), the bare label is
 /// tagged with that scope verbatim. Under the DEFAULT scope (a blank node arriving
 /// FROM Python — `add`/`remove`/`contains`/a substitution/pattern), the label may
-/// already carry the `.s{n}` scope suffix [`BlankScope::qualify_label`] emitted on
-/// the way OUT; decode it back to its `(label, scope)` so a round-tripped blank
-/// matches the stored node (the inverse of `qualify_label`).
+/// already be the `purrdfesc{n}_{body}` scope envelope [`BlankScope::qualify_label`]
+/// emitted on the way OUT; decode it back to its `(label, scope)` so a
+/// round-tripped blank matches the stored node (the inverse of `qualify_label`).
 fn blank_value_scoped(label: &str, scope: BlankScope) -> TermValue {
     if scope == BlankScope::DEFAULT {
         blank_value_from_external_label(label)
@@ -789,23 +789,17 @@ fn blank_value_scoped(label: &str, scope: BlankScope) -> TermValue {
     }
 }
 
-/// Decode a surfaced blank label, reversing [`BlankScope::qualify_label`]: a label of
-/// the form `"{inner}.s{n}"` (with non-empty `inner` and `n > 0`) decodes to
-/// `Blank{inner, scope: n}`; any other label is a DEFAULT-scope blank verbatim.
+/// Decode a surfaced blank label through [`BlankScope::unqualify_label`], the
+/// EXACT inverse of the [`BlankScope::qualify_label`] rendering this surface
+/// emits: a `purrdfesc{n}_{body}` scope envelope is unwrapped back into its
+/// `(label, scope)` pair, so a label round-tripped through Python matches the
+/// stored node. A label Python authored itself is not an envelope, so it decodes
+/// to itself at the default scope, byte for byte, whatever dots it carries.
 fn blank_value_from_external_label(label: &str) -> TermValue {
-    if let Some((inner, raw_scope)) = label.rsplit_once(".s")
-        && !inner.is_empty()
-        && let Ok(scope) = raw_scope.parse::<u32>()
-        && scope > 0
-    {
-        return TermValue::Blank {
-            label: inner.to_owned(),
-            scope: BlankScope(scope),
-        };
-    }
+    let (label, scope) = BlankScope::unqualify_label(label);
     TermValue::Blank {
-        label: label.to_owned(),
-        scope: BlankScope::DEFAULT,
+        label: label.into_owned(),
+        scope,
     }
 }
 

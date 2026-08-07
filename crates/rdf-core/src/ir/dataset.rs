@@ -30,7 +30,7 @@ use std::sync::{Arc, OnceLock};
 
 use hashbrown::HashTable;
 
-use crate::content_id::Blake3ContentId;
+use crate::content_id::{Blake3ContentId, ContentIdScheme};
 use crate::dataset_view::GraphMatch;
 // Re-exported `pub(crate)` so the sibling `super::dataset::FastHasher` path used by
 // `builder.rs` keeps resolving; the single definition lives in `crate::hash`.
@@ -259,6 +259,16 @@ pub struct RdfDataset {
     /// sorted-by-`TermId` only (see [`content_ids`](Self::content_ids)); raw
     /// `HashMap` iteration order must never leak to a caller.
     content_ids: HashMap<TermId, Blake3ContentId, FastHasher>,
+    /// The caller-configured content-id recognition scheme (see
+    /// [`RdfDatasetBuilder::with_content_addressing`](super::builder::RdfDatasetBuilder::with_content_addressing)),
+    /// moved from the builder's [`Interner`](super::builder) at
+    /// [`materialize`](super::builder::RdfDatasetBuilder::materialize). `None`
+    /// when content-id recognition was never configured. NON-SERIALIZED: this is
+    /// config for readers (and for a caller re-deriving content addressing over a
+    /// rewritten copy of this dataset via [`content_id_scheme`](Self::content_id_scheme)),
+    /// never a byte-producing input — no serializer or the GTS writer may fold it
+    /// into their output.
+    content_scheme: Option<ContentIdScheme>,
     /// The derivation-predicate IRI's frozen [`TermId`], resolved at
     /// [`materialize`](super::builder::RdfDatasetBuilder::materialize) IFF that IRI
     /// was already interned. `None` covers BOTH "no derivation predicate
@@ -539,6 +549,7 @@ impl RdfDataset {
         named_graphs: Box<[TermId]>,
         term_index: HashTable<u32>,
         content_ids: HashMap<TermId, Blake3ContentId, FastHasher>,
+        content_scheme: Option<ContentIdScheme>,
         derivation_predicate: Option<TermId>,
     ) -> Self {
         Self {
@@ -553,6 +564,7 @@ impl RdfDataset {
             indexes: QuadIndexes::default(),
             named_graphs,
             content_ids,
+            content_scheme,
             derivation_predicate,
             predecessor_index: OnceLock::new(),
         }
@@ -1495,6 +1507,64 @@ impl RdfDataset {
             .map(|i| &self.locations[i].1)
     }
 
+    /// Decide whether [`union`](Self::union) can carry content addressing forward
+    /// onto the merged output, and with which config.
+    ///
+    /// **Agreement rule**: a scheme-less input is NEUTRAL — it neither confirms
+    /// nor breaks agreement — so a single scheme-carrying input among any number
+    /// of scheme-less ones still carries forward (this keeps
+    /// [`owned_snapshot`](Self::owned_snapshot)'s single-input union a lossless
+    /// round trip, which is the driving case: a rewrite that already computed the
+    /// right output must not have it silently stripped by the rare `Arc` fallback
+    /// path). If the inputs that DO carry a scheme carry more than one distinct
+    /// [`ContentIdScheme`], the merge cannot pick a winner without arbitrating
+    /// between disagreeing caller configs, so the union carries none — same
+    /// observable output as before this carried anything, just documented rather
+    /// than silently implicit.
+    ///
+    /// The derivation predicate follows the identical neutral-`None`,
+    /// single-distinct-value rule, evaluated only over the inputs that carry the
+    /// WINNING scheme (a predicate configured under a different, losing scheme
+    /// is not this merge's predicate to carry).
+    fn agreed_content_addressing(datasets: &[&Self]) -> Option<(ContentIdScheme, Option<String>)> {
+        let mut schemes: Vec<&ContentIdScheme> = Vec::new();
+        for ds in datasets {
+            if let Some(scheme) = ds.content_id_scheme()
+                && !schemes.contains(&scheme)
+            {
+                schemes.push(scheme);
+            }
+        }
+        let [winner] = schemes.as_slice() else {
+            return None;
+        };
+        let winner = (*winner).clone();
+
+        let mut predicates: Vec<String> = Vec::new();
+        for ds in datasets {
+            if ds.content_id_scheme() != Some(&winner) {
+                continue;
+            }
+            if let Some(id) = ds.derivation_predicate() {
+                let iri = match ds.resolve(id) {
+                    TermRef::Iri(iri) => iri.to_owned(),
+                    other => unreachable!(
+                        "the frozen derivation-predicate TermId must resolve to an IRI, got \
+                         {other:?}"
+                    ),
+                };
+                if !predicates.contains(&iri) {
+                    predicates.push(iri);
+                }
+            }
+        }
+        let derivation_predicate = match predicates.as_slice() {
+            [one] => Some(one.clone()),
+            _ => None,
+        };
+        Some((winner, derivation_predicate))
+    }
+
     /// Deterministically merge several datasets into one frozen dataset.
     ///
     /// Every input's quads, reifier bindings, and statement annotations are
@@ -1525,9 +1595,26 @@ impl RdfDataset {
     /// is hand-rolled here. The merge HARD-fails (`expect`) only if re-freezing a
     /// union of already-valid datasets somehow fails structural validation, which
     /// cannot happen for inputs that each froze successfully.
+    ///
+    /// # Content addressing
+    ///
+    /// If the inputs agree on a [`ContentIdScheme`] (see the private
+    /// `agreed_content_addressing` helper below for the exact rule), the
+    /// merged output is built with that scheme configured, so
+    /// `content_id`/`content_ids` RE-DERIVE over the merged IRI bytes and the
+    /// derivation-predecessor index resolves over the merged annotation table.
+    /// Disagreeing inputs carry none forward — no fabricated compromise.
     #[must_use]
     pub fn union(datasets: &[&Self]) -> Self {
-        let mut builder = super::builder::RdfDatasetBuilder::new();
+        let mut builder = match Self::agreed_content_addressing(datasets) {
+            Some((scheme, derivation_predicate)) => {
+                super::builder::RdfDatasetBuilder::with_content_addressing(
+                    scheme,
+                    derivation_predicate,
+                )
+            }
+            None => super::builder::RdfDatasetBuilder::new(),
+        };
         for ds in datasets {
             builder.push_dataset(ds);
         }
@@ -1558,6 +1645,7 @@ impl RdfDataset {
             indexes: QuadIndexes::default(),
             named_graphs: self.named_graphs.clone(),
             content_ids: self.content_ids.clone(),
+            content_scheme: self.content_scheme.clone(),
             derivation_predicate: self.derivation_predicate,
             predecessor_index: OnceLock::new(),
         }
@@ -1594,6 +1682,23 @@ impl RdfDataset {
         self.quads.len().hash(&mut h);
         self.terms.len().hash(&mut h);
         h.finish()
+    }
+
+    /// The caller-configured content-id recognition scheme (see
+    /// [`RdfDatasetBuilder::with_content_addressing`](super::builder::RdfDatasetBuilder::with_content_addressing)),
+    /// or `None` if content-id recognition was never configured for this dataset.
+    ///
+    /// Carried through freeze so a caller rebuilding a dataset from this one's
+    /// terms — for example the blank-node recourse operations
+    /// ([`skolemize`](super::skolem::skolemize),
+    /// [`deskolemize`](super::skolem::deskolemize),
+    /// [`canonical_relabel`](super::canon::canonical_relabel)) — can re-derive
+    /// content addressing on the rewritten output under the SAME scheme, without
+    /// the caller having to thread its own copy of the configuration through.
+    #[inline]
+    #[must_use]
+    pub fn content_id_scheme(&self) -> Option<&ContentIdScheme> {
+        self.content_scheme.as_ref()
     }
 
     /// The decoded [`Blake3ContentId`] of a content-addressed term, or `None` if
@@ -2474,6 +2579,128 @@ mod tests {
             canonicalize(&u).nquads,
             "single-input union is isomorphic to the input"
         );
+    }
+
+    /// Two inputs configured with the SAME [`ContentIdScheme`] and the same
+    /// derivation predicate: the union carries both forward, content addressing
+    /// re-derives over the merged output, and the predecessor index resolves.
+    #[test]
+    fn union_of_agreeing_content_schemes_carries_addressing_forward() {
+        const DERIVED_FROM: &str = "http://example.org/derivedFrom";
+        const IRI_A: &str =
+            "blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        const IRI_B: &str =
+            "blake3:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+
+        let first = {
+            let mut b = RdfDatasetBuilder::with_content_addressing(
+                scheme.clone(),
+                Some(DERIVED_FROM.into()),
+            );
+            let a = b.intern_iri(IRI_A);
+            let bb = b.intern_iri(IRI_B);
+            let derived_from = b.intern_iri(DERIVED_FROM);
+            let p = iri(&mut b, "p");
+            let o = iri(&mut b, "o");
+            b.push_quad(a, p, o, None);
+            b.push_annotation(a, derived_from, bb);
+            b.freeze().expect("first")
+        };
+        let second = {
+            // Same scheme, no derivation predicate of its own: neutral, does not
+            // break agreement.
+            let mut b = RdfDatasetBuilder::with_content_addressing(scheme.clone(), None);
+            let (s, p, o) = (iri(&mut b, "s2"), iri(&mut b, "p2"), iri(&mut b, "o2"));
+            b.push_quad(s, p, o, None);
+            b.freeze().expect("second")
+        };
+
+        let u = RdfDataset::union(&[&first, &second]);
+        assert_eq!(
+            u.content_id_scheme(),
+            Some(&scheme),
+            "the agreeing scheme survives the union"
+        );
+        assert_eq!(
+            u.content_ids().count(),
+            2,
+            "content addressing re-derives over the merged output"
+        );
+        let ua = u.term_id_by_iri(IRI_A).expect("A survives the merge");
+        let ub = u.term_id_by_iri(IRI_B).expect("B survives the merge");
+        assert_eq!(
+            u.predecessors(ua),
+            &[ub],
+            "the derivation predicate carried from `first` resolves on the merged output"
+        );
+    }
+
+    /// Two inputs configured with DIFFERING [`ContentIdScheme`]s: the union
+    /// arbitrates neither, so the output carries none — no fabricated compromise.
+    #[test]
+    fn union_of_disagreeing_content_schemes_fabricates_nothing() {
+        let scheme_a = ContentIdScheme::new("blake3:").expect("valid scheme");
+        let scheme_b = ContentIdScheme::new("sha256:").expect("valid scheme");
+
+        let first = {
+            let mut b = RdfDatasetBuilder::with_content_addressing(scheme_a, None);
+            let s = b.intern_iri(
+                "blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            );
+            let (p, o) = (iri(&mut b, "p"), iri(&mut b, "o"));
+            b.push_quad(s, p, o, None);
+            b.freeze().expect("first")
+        };
+        let second = {
+            let mut b = RdfDatasetBuilder::with_content_addressing(scheme_b, None);
+            let s = b.intern_iri(
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            );
+            let (p, o) = (iri(&mut b, "p2"), iri(&mut b, "o2"));
+            b.push_quad(s, p, o, None);
+            b.freeze().expect("second")
+        };
+
+        let u = RdfDataset::union(&[&first, &second]);
+        assert_eq!(
+            u.content_id_scheme(),
+            None,
+            "disagreeing schemes carry nothing forward, rather than an arbitrated guess"
+        );
+        assert_eq!(
+            u.content_ids().count(),
+            0,
+            "no content ids are fabricated without an agreed scheme"
+        );
+    }
+
+    /// [`RdfDataset::owned_snapshot`] is a single-input union, which trivially
+    /// "agrees" with itself: the scheme and derivation predicate must round-trip.
+    #[test]
+    fn owned_snapshot_carries_content_addressing_forward() {
+        const DERIVED_FROM: &str = "http://example.org/derivedFrom";
+        const IRI_A: &str =
+            "blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        const IRI_B: &str =
+            "blake3:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+        let mut b =
+            RdfDatasetBuilder::with_content_addressing(scheme.clone(), Some(DERIVED_FROM.into()));
+        let a = b.intern_iri(IRI_A);
+        let bb = b.intern_iri(IRI_B);
+        let derived_from = b.intern_iri(DERIVED_FROM);
+        let p = iri(&mut b, "p");
+        b.push_quad(a, p, bb, None);
+        b.push_annotation(a, derived_from, bb);
+        let ds = b.freeze().expect("freeze");
+
+        let snap = ds.owned_snapshot();
+        assert_eq!(snap.content_id_scheme(), Some(&scheme));
+        assert_eq!(snap.content_ids().count(), 2);
+        let sa = snap.term_id_by_iri(IRI_A).expect("A survives the snapshot");
+        let sb = snap.term_id_by_iri(IRI_B).expect("B survives the snapshot");
+        assert_eq!(snap.predecessors(sa), &[sb]);
     }
 
     #[test]

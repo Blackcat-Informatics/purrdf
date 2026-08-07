@@ -30,6 +30,7 @@ use super::text_parse::LineParseMode;
 use crate::{
     BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, RdfTextDirection, TermId,
 };
+use purrdf_core::blank_label::LabelAlphabet;
 
 /// The `rdf:reifies` predicate IRI: a triple-term object under this predicate is the
 /// RDF 1.2 reifier binding the statement layer folds out of the base quad table.
@@ -171,7 +172,7 @@ pub fn parse_dataset_with(
             LineParseMode::ForceSequential,
             &mut table,
         )?;
-        let dataset = dataset_from_ser_graph(&graph)?;
+        let dataset = dataset_from_text_ser_graph(&graph)?;
         Ok((dataset, Some(table)))
     } else {
         // RDF/XML, TriX, HexTuples: no span-carrying text tokenizer, so return an empty
@@ -308,7 +309,31 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
 /// interning is shared across all rows, so identical terms collapse to one id exactly as
 /// on the oxigraph path.
 pub(crate) fn dataset_from_ser_graph(graph: &SerGraph) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    dataset_from_ser_graph_impl(graph, false)
+    dataset_from_ser_graph_impl(graph, false, BlankIngress::Opaque)
+}
+
+/// [`dataset_from_ser_graph`] for a graph a TEXT codec just parsed: every blank
+/// label is decoded through [`RdfDatasetBuilder::intern_text_blank`], inverting
+/// the `(label, scope)` encoding the serializers applied at egress.
+///
+/// Only the line/Turtle family reaches this entry point, and all four of its
+/// syntaxes write `_:` tokens, so the decode's image test runs against
+/// [`LabelAlphabet::BlankNodeLabel`] — exactly the alphabet those serializers
+/// encode into. (RDF/XML, TriX and HexTuples intern their tokens directly, each
+/// naming its own alphabet.)
+///
+/// The carrier entry point above stays [`BlankIngress::Opaque`] on purpose: a GTS
+/// bundle stores the IR's `(label, scope)` pair structurally, so its labels were
+/// never transformed and decoding them would corrupt a label that merely LOOKS
+/// like an encoder's output.
+pub(crate) fn dataset_from_text_ser_graph(
+    graph: &SerGraph,
+) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    dataset_from_ser_graph_impl(
+        graph,
+        false,
+        BlankIngress::TextDecoded(LabelAlphabet::BlankNodeLabel),
+    )
 }
 
 /// Like [`dataset_from_ser_graph`], but folds **every** named graph into the default
@@ -321,15 +346,30 @@ pub(crate) fn dataset_from_ser_graph(graph: &SerGraph) -> Result<Arc<RdfDataset>
 pub(crate) fn flattened_dataset_from_ser_graph(
     graph: &SerGraph,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    dataset_from_ser_graph_impl(graph, true)
+    dataset_from_ser_graph_impl(graph, true, BlankIngress::Opaque)
+}
+
+/// How a [`SerGraph`]'s blank-node labels reached this fold, and therefore whether
+/// they carry the serializers' egress transform.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BlankIngress {
+    /// The labels are a carrier's stored `(label, scope)` labels, never
+    /// transformed — intern them verbatim.
+    Opaque,
+    /// The labels are a text document's tokens, encoded at egress into the
+    /// wrapped alphabet — decode them back to `(label, scope)` against that
+    /// same alphabet, so ingress inverts exactly the egress that syntax
+    /// performs.
+    TextDecoded(LabelAlphabet),
 }
 
 fn dataset_from_ser_graph_impl(
     graph: &SerGraph,
     flatten_to_default_graph: bool,
+    blanks: BlankIngress,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let mut builder = RdfDatasetBuilder::new();
-    let interner = SerInterner { graph };
+    let interner = SerInterner { graph, blanks };
 
     let mut rows: Vec<FoldRow> =
         Vec::with_capacity(graph.quads.len() + graph.reifiers.len() + graph.annotations.len());
@@ -420,11 +460,19 @@ fn dataset_from_ser_graph_impl(
 }
 
 /// Intern [`SerGraph`] terms into a builder, resolving quoted-triple terms through their
-/// reifier binding. Every folded blank node lands in [`BlankScope::DEFAULT`] (the
-/// folded graph has already collapsed per-segment scope — the documented
-/// `bnode-scope-flatten` loss, identical to `import_gts_graph`).
+/// reifier binding.
+///
+/// A blank node's landing scope depends on [`BlankIngress`]: an [`Opaque`](BlankIngress::Opaque)
+/// carrier graph folds every blank into [`BlankScope::DEFAULT`] (the folded graph has
+/// already collapsed per-segment scope — the documented `bnode-scope-flatten` loss,
+/// identical to `import_gts_graph`), while a [`TextDecoded`](BlankIngress::TextDecoded)
+/// document's token is decoded back to the `(label, scope)` pair the serializer wrote it
+/// from.
 struct SerInterner<'a> {
     graph: &'a SerGraph,
+    /// Whether the graph's blank labels carry the text serializers' egress
+    /// transform and must be decoded on the way in.
+    blanks: BlankIngress,
 }
 
 impl SerInterner<'_> {
@@ -474,9 +522,12 @@ impl SerInterner<'_> {
                     .value
                     .clone()
                     .unwrap_or_else(|| format!("gts_bnode_{gts_id}"));
-                Ok(FoldNode::Term(
-                    builder.intern_blank(&label, BlankScope::DEFAULT),
-                ))
+                Ok(FoldNode::Term(match self.blanks {
+                    BlankIngress::Opaque => builder.intern_blank(&label, BlankScope::DEFAULT),
+                    BlankIngress::TextDecoded(alphabet) => {
+                        builder.intern_text_blank(&label, alphabet)
+                    }
+                }))
             }
             SerTermKind::Literal => {
                 let datatype = match term.datatype {

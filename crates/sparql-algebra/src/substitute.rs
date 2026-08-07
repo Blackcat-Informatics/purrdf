@@ -53,6 +53,10 @@ impl Query {
     /// `value` may be any [`GroundTerm`] — IRI, literal, ground triple, or the
     /// injection-only [`GroundTerm::BlankNode`] (so a blank-node focus node is
     /// pre-bound through the identical rewrite).
+    ///
+    /// For [`GroundTerm::BlankNode`], the label is read as a scope-qualified
+    /// spelling rather than literally — see that variant's doc for the exact
+    /// contract and how to spell a label that must be read literally.
     #[must_use]
     pub fn substitute_variable(self, var: &Variable, value: GroundTerm) -> Self {
         let seed = GraphPattern::Values {

@@ -14,7 +14,7 @@
 //! Both emitters write full-IRI Turtle (no prefix compaction); the drift gate
 //! compares RDFC-1.0 canonical quad sets (graph isomorphism), so banners and
 //! prefixes are immaterial — the triple/reifier/annotation *structure* is what
-//! must round-trip (CONSTITUTION Principle 7, verified by construction).
+//! must round-trip losslessly, verified by construction — never a silent drop.
 //!
 //! The RDF 1.2 triple-term form `<<( s p o )>>` is emitted (matching the SPARQL
 //! codecs and what oxigraph/Jena both parse), not the RDF-star `<< s p o >>`
@@ -74,9 +74,18 @@ fn simplify_term(term: &RdfTerm) -> RdfTerm {
     }
 }
 
-/// Serialize a term to Turtle, normalizing simple literals first.
+/// Serialize a term to Turtle, normalizing simple literals first. Total: the
+/// kernel emitter escapes a blank-node label outside the Turtle
+/// `BLANK_NODE_LABEL` alphabet into it rather than writing an unparsable
+/// document.
 fn emit(term: &RdfTerm) -> String {
     crate::emit_term(&simplify_term(term))
+}
+
+/// Render a term for sort keys and diagnostics (deterministic, infallible —
+/// this is report/key identity, not document egress).
+fn display(term: &RdfTerm) -> String {
+    crate::display_term(&simplify_term(term))
 }
 
 /// Emit an RDF 1.2 triple term `<<( <s> <p> <o> )>>`.
@@ -100,8 +109,8 @@ fn require_iri(term: &RdfTerm, context: &str) -> Result<String, RdfDiagnostic> {
 /// A duplicate triple carrying the *same* object is the idempotent re-assertion of
 /// one triple (RDF is a set) and is accepted. A duplicate carrying a *different*
 /// object means two contradictory structural triples share one subject — a corrupt
-/// input the codec must **reject**, never silently last-write-win (CONSTITUTION
-/// Principle 7; no-optionality / hard-fail).
+/// input the codec must **reject**, never silently last-write-win — conflicting
+/// structure is a hard failure, not an option to paper over.
 fn set_once_or_error<T: PartialEq>(
     slot: &mut Option<T>,
     value: T,
@@ -114,7 +123,7 @@ fn set_once_or_error<T: PartialEq>(
                 "statements-conflicting-structural",
                 format!(
                     "{} has conflicting {field} triples (one subject carries two different values)",
-                    crate::emit_term(subject)
+                    crate::display_term(subject)
                 ),
             ));
         }
@@ -150,7 +159,7 @@ pub fn project_owl_to_rdf12(owl_ttl: &str) -> Result<String, RdfDiagnostic> {
 
     let mut axioms: BTreeMap<String, AxiomAccum> = BTreeMap::new();
     for quad in &quads {
-        let acc = axioms.entry(crate::emit_term(&quad.subject)).or_default();
+        let acc = axioms.entry(display(&quad.subject)).or_default();
         if acc.subject.is_none() {
             acc.subject = Some(quad.subject.clone());
         }
@@ -194,7 +203,7 @@ pub fn project_owl_to_rdf12(owl_ttl: &str) -> Result<String, RdfDiagnostic> {
         let missing = |what: &str| {
             RdfDiagnostic::error(
                 "statements-malformed-axiom",
-                format!("owl:Axiom {} lacks {what}", crate::emit_term(subject)),
+                format!("owl:Axiom {} lacks {what}", display(subject)),
             )
         };
         let source = acc
@@ -266,7 +275,7 @@ pub fn normalize_rdf12_to_owl(rdf12_ttl: &str) -> Result<String, RdfDiagnostic> 
 
     let mut by_subject: BTreeMap<String, ReifierAccum> = BTreeMap::new();
     for quad in &quads {
-        let key = crate::emit_term(&quad.subject);
+        let key = display(&quad.subject);
         let acc = by_subject.entry(key).or_insert_with(|| ReifierAccum {
             subject: quad.subject.clone(),
             reified: None,

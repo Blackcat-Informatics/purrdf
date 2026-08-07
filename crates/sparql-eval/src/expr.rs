@@ -2737,9 +2737,13 @@ fn next_u64<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>) -> u64 {
 }
 
 /// Mint a fresh blank node (`BNODE()`/`BNODE(strExpr)`'s cache-miss path).
+/// Honors the context's deterministic [`EvalCtx::bnode_mint_prefix`], like every
+/// other mint drawing on `bnode_counter`; with no prefix the label is exactly
+/// `bnode{n}`, byte-identical to an unprefixed evaluation.
 fn mint_bnode<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>) -> SolutionTerm<D::Id> {
     ctx.bnode_counter += 1;
-    let label = format!("bnode{}", ctx.bnode_counter);
+    let label =
+        crate::eval::minted_label(ctx.bnode_mint_prefix.as_deref(), "bnode", ctx.bnode_counter);
     intern(
         ctx,
         TermValue::Blank {

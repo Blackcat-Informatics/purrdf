@@ -470,9 +470,17 @@ impl Term {
     pub fn to_term_value(&self) -> TermValue {
         match self {
             Self::NamedNode(n) => TermValue::Iri(n.0.clone()),
-            // The IR conversion scope-qualified the label; round-trip it in the
-            // DEFAULT scope (single-scope data is byte-unchanged).
-            Self::BlankNode(b) => TermValue::blank(b.clone()),
+            // [`term_ref_to_native`] scope-qualified the label on the way out of the
+            // IR; decoding it here is the exact inverse, so a native term used as a
+            // SPARQL pre-binding denotes the SAME node the dataset holds rather than
+            // a second, doubly-qualified one.
+            Self::BlankNode(b) => {
+                let (label, scope) = ::purrdf::BlankScope::unqualify_label(b);
+                TermValue::Blank {
+                    label: label.into_owned(),
+                    scope,
+                }
+            }
             Self::Literal(l) => TermValue::Literal {
                 lexical_form: l.lexical.clone(),
                 datatype: l.datatype.clone(),
@@ -492,45 +500,31 @@ impl Term {
     ///
     /// For most terms this is a single key ([`to_term_value`](Self::to_term_value)).
     /// A blank node is the exception: [`term_ref_to_native`] flattens the IR's
-    /// `(label, scope)` into ONE qualified label string (`"{label}.s{n}"` for a
-    /// non-default scope `n`). That qualified label round-trips correctly when the
-    /// dataset stored the blank at the DEFAULT scope (the SHACL-projected dataset
-    /// re-interns owned blanks there), but NOT when the dataset preserves the original
-    /// non-default scope (the raw shapes dataset). So for a blank carrying a `.s{n}`
-    /// suffix we ALSO offer the de-qualified `(label, scope_n)` key; the caller tries
-    /// each until one resolves. The DEFAULT-scope key stays FIRST so single-scope data
-    /// keeps its fast path.
+    /// `(label, scope)` into ONE qualified label string (the raw label itself at
+    /// the default scope, otherwise the `purrdfesc{n}_{body}` envelope), and
+    /// [`to_term_value`](Self::to_term_value) decodes that spelling back to the
+    /// `(label, scope)` pair the dataset holds. That decoded key is the right one
+    /// for any dataset that stores the IR pair faithfully.
+    ///
+    /// A caller may nonetheless hand this a blank label it MINTED rather than read
+    /// out of a dataset (a hand-written shapes-graph label, a test fixture), which
+    /// is a raw label rather than a qualified one. Whenever the two spellings
+    /// differ, the verbatim DEFAULT-scope key is offered as a fallback and the
+    /// caller tries each until one resolves.
     pub fn lookup_term_values(&self) -> Vec<TermValue> {
         match self {
             Self::BlankNode(b) => {
-                let mut keys = vec![TermValue::blank(b.clone())];
-                if let Some((label, scope)) = split_scope_suffix(b) {
-                    keys.push(TermValue::Blank {
-                        label: label.to_owned(),
-                        scope: ::purrdf::BlankScope(scope),
-                    });
+                let decoded = self.to_term_value();
+                let verbatim = TermValue::blank(b.clone());
+                if decoded == verbatim {
+                    vec![decoded]
+                } else {
+                    vec![decoded, verbatim]
                 }
-                keys
             }
             other => vec![other.to_term_value()],
         }
     }
-}
-
-/// Split a scope-qualified blank label `"{label}.s{n}"` (n > 0) into `(label, n)`,
-/// the inverse of [`BlankScope::qualify_label`](::purrdf::BlankScope::qualify_label).
-/// Returns `None` for a bare (default-scope) label.
-pub(crate) fn split_scope_suffix(qualified: &str) -> Option<(&str, u32)> {
-    let dot = qualified.rfind(".s")?;
-    let digits = &qualified[dot + 2..];
-    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let scope: u32 = digits.parse().ok()?;
-    if scope == 0 {
-        return None;
-    }
-    Some((&qualified[..dot], scope))
 }
 
 impl NamedNode {
@@ -597,8 +591,9 @@ fn escape_literal(s: &str) -> String {
 /// components via the dataset's [`resolve`](RdfDataset::resolve).
 ///
 /// Blank labels are scope-qualified so two same-label blanks from different
-/// [`BlankScope`](::purrdf::BlankScope)s never conflate (C0.2); the DEFAULT
-/// scope keeps the bare label so single-scope data is byte-unchanged.
+/// [`BlankScope`](::purrdf::BlankScope)s never conflate (C0.2); a DEFAULT-scope
+/// label outside the reserved marker namespace stays bare so single-scope data
+/// is byte-unchanged.
 pub fn term_ref_to_native(dataset: &RdfDataset, term: TermRef<'_>) -> Term {
     match term {
         TermRef::Iri(iri) => Term::NamedNode(NamedNode::new_unchecked(iri)),

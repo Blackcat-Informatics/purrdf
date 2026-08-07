@@ -180,6 +180,26 @@ pub(crate) fn schema_fingerprint(schema: &VarSchema) -> u64 {
     h
 }
 
+/// Spell one minted blank-node label: `stem` followed by the decimal counter value
+/// `n`, with `prefix` spliced in front when the evaluation has a deterministic
+/// [`EvalCtx::bnode_mint_prefix`] installed.
+///
+/// The single formatting rule every mint site in this crate uses — CONSTRUCT
+/// template blanks (`stem = "c"`, [`crate::template::mint_blank`]), `BNODE()`
+/// (`stem = "bnode"`, [`crate::expr`]), and the PurRDF list constructors
+/// (`stem = "lc"`, [`crate::list_fn::materialize_list`]) all call this rather than
+/// re-deriving the `Some(prefix) => format!(...), None => format!(...)` match, so a
+/// fourth mint site added later cannot omit the prefix branch and reopen the
+/// cross-focus label collision [`EvalCtx::with_bnode_mint_prefix`] exists to
+/// prevent. With `prefix: None` the result is exactly `{stem}{n}`, byte-identical
+/// to every pre-prefix caller.
+pub(crate) fn minted_label(prefix: Option<&str>, stem: &str, n: u64) -> String {
+    match prefix {
+        Some(prefix) => format!("{prefix}{stem}{n}"),
+        None => format!("{stem}{n}"),
+    }
+}
+
 /// The shared, dataset-aware BGP join-order cache: maps `(dataset stats fingerprint,
 /// BGP shape key)` to a cached evaluation order. It lives on the engine and is threaded
 /// into evaluation by reference, so it persists across queries — the static query
@@ -215,6 +235,16 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// A monotonic counter for minting fresh blank nodes (`BNODE()` and CONSTRUCT
     /// template blanks).
     pub bnode_counter: u64,
+    /// An optional deterministic prefix for every blank-node label this evaluation
+    /// mints (CONSTRUCT template blanks, `BNODE()`, and the PurRDF list
+    /// constructors): a label the mint would spell `c{n}` becomes `{prefix}c{n}`.
+    /// `None` (the default) leaves minted labels byte-identical to an unprefixed
+    /// evaluation. The prefix is caller-supplied data — never derived from time,
+    /// RNG, or iteration order — so a prefixed evaluation is exactly as
+    /// deterministic as an unprefixed one. The SHACL rules engine supplies a
+    /// per-focus-node prefix so distinct focus nodes mint distinct blanks at mint
+    /// time (see [`Self::with_bnode_mint_prefix`]).
+    pub bnode_mint_prefix: Option<Arc<str>>,
     /// The row ordinal of the solution currently being extended, set by
     /// [`crate::expr::eval_extend`] right before it evaluates that row's
     /// expression. `BNODE(strExpr)` (SPARQL 1.1 §17.4.2.2) uses this to
@@ -426,6 +456,7 @@ impl<D: DatasetView + Sync> core::fmt::Debug for EvalCtx<'_, D> {
         f.debug_struct("EvalCtx")
             .field("active_graph", &self.active_graph)
             .field("bnode_counter", &self.bnode_counter)
+            .field("bnode_mint_prefix", &self.bnode_mint_prefix)
             .field("now", &self.now)
             .field("rng_state", &self.rng_state)
             .field("options", &self.options)
@@ -447,6 +478,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             active_graph: GraphMatch::Default,
             active_dataset: ActiveDataset::store_default(),
             bnode_counter: 0,
+            bnode_mint_prefix: None,
             current_row: 0,
             bnode_memo: DetHashMap::default(),
             now: now_val,
@@ -492,6 +524,41 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     pub(crate) fn with_rng_seed(mut self, seed: u64) -> Self {
         self.rng_state = seed;
         self
+    }
+
+    /// Supply a deterministic blank-mint prefix (see [`Self::bnode_mint_prefix`]):
+    /// every blank-node label this evaluation mints is spelled `{prefix}{label}`,
+    /// where `{label}` is exactly the label an unprefixed evaluation would mint.
+    /// The prefix must be caller-supplied, deterministic data — the SHACL rules
+    /// engine passes a per-focus-node identity tag so distinct focus nodes mint
+    /// distinct blanks.
+    ///
+    /// # Prefix validity contract
+    ///
+    /// `prefix` must satisfy
+    /// [`purrdf_core::blank_label::is_valid_blank_node_label_prefix`]: every
+    /// label this evaluation mints is `{prefix}{stem}{n}` for one of the fixed
+    /// mint stems (`c`, `bnode`, `lc`) followed by a decimal counter, and that
+    /// helper is exactly the check that every such concatenation stays a legal
+    /// `BLANK_NODE_LABEL`. Per the fail-fast doctrine this is enforced HERE, at
+    /// the setter, rather than left to surface later as a silently rewritten
+    /// label at serialization egress — an out-of-alphabet prefix would
+    /// otherwise mint fine and only visibly diverge from the caller's intent
+    /// once [`purrdf_core::blank_label::escape_label`] rewrites it on the way
+    /// out.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EvalError::Config`] if `prefix` is not a legal
+    /// `BLANK_NODE_LABEL` prefix.
+    pub fn with_bnode_mint_prefix(mut self, prefix: &str) -> Result<Self, EvalError> {
+        if !purrdf_core::blank_label::is_valid_blank_node_label_prefix(prefix) {
+            return Err(EvalError::config(format!(
+                "blank-node mint prefix {prefix:?} is not a legal BLANK_NODE_LABEL prefix"
+            )));
+        }
+        self.bnode_mint_prefix = Some(Arc::from(prefix));
+        Ok(self)
     }
 
     /// Supply the caller's standpoint predicate table (see
@@ -1121,6 +1188,10 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             active_graph: self.active_graph,
             active_dataset: self.active_dataset.clone(),
             bnode_counter: self.bnode_counter,
+            // Carried exactly like `bnode_counter`: the prefix is part of the mint
+            // state, so a worker that (hypothetically) minted would spell the same
+            // labels the parent would. A cheap `Arc` pointer clone.
+            bnode_mint_prefix: self.bnode_mint_prefix.clone(),
             // Per-row `BNODE(strExpr)` memo state. Like `bnode_counter`, only ever
             // observed by `Function::BNode`, which `is_parallel_safe` classifies
             // UNSAFE — so a worker never evaluates it and this state is never read
@@ -1240,6 +1311,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // Inherit the parent counter so body-minted blanks continue the
             // parent's sequence; the advanced value is merged back after the call.
             bnode_counter: self.bnode_counter,
+            // Inherited with the counter: a function body minting under the same
+            // evaluation must spell labels in the same (possibly prefixed) space.
+            bnode_mint_prefix: self.bnode_mint_prefix.clone(),
             current_row: 0,
             bnode_memo: DetHashMap::default(),
             now: self.now.clone(),
@@ -2063,6 +2137,35 @@ fn memoized_term_value<D: DatasetView>(
 mod tests {
     use super::*;
     use purrdf_core::RdfDatasetBuilder;
+
+    #[test]
+    fn bnode_mint_prefix_rejects_an_illegal_prefix() {
+        let ds = RdfDatasetBuilder::new().freeze().expect("freeze empty");
+        for illegal in ["a b", "-lead", "<urn:x>", "a\tb", "a/b"] {
+            let err = EvalCtx::new(&ds)
+                .with_bnode_mint_prefix(illegal)
+                .expect_err(&format!("{illegal:?} must be rejected"));
+            assert!(
+                matches!(err, EvalError::Config(_)),
+                "{illegal:?} -> {err:?}"
+            );
+            assert!(
+                err.to_string().contains(illegal) || err.to_string().contains("prefix"),
+                "error message should name the problem: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn bnode_mint_prefix_accepts_a_shapes_style_prefix() {
+        // The exact shape `focus_tag` (crates/shapes/src/rules.rs) mints:
+        // leading `f`, alphanumeric/`-`-hex-escaped body, trailing `_`.
+        let ds = RdfDatasetBuilder::new().freeze().expect("freeze empty");
+        let ctx = EvalCtx::new(&ds)
+            .with_bnode_mint_prefix("f2d616263-2d_")
+            .expect("shapes-style prefix must be accepted");
+        assert_eq!(ctx.bnode_mint_prefix.as_deref(), Some("f2d616263-2d_"));
+    }
 
     #[test]
     fn empty_bgp_is_the_unit_sequence() {

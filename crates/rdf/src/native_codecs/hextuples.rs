@@ -27,7 +27,8 @@ use super::media_type::NativeRdfFormat;
 use super::parse::{FoldNode, FoldRow, RDF_REIFIES, fold_statement_layer};
 use super::ser_model::{SerGraph, SerTerm, SerTermKind};
 use super::text_parse::LineParseMode;
-use crate::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId};
+use crate::{RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId};
+use purrdf_core::blank_label::{LabelAlphabet, is_valid_label};
 
 /// The HexTuples codec: a standalone (non-line-family) [`RdfCodec`] over the
 /// line-oriented NDJSON quads syntax. A classic quad syntax with no RDF-1.2 triple-term
@@ -188,7 +189,12 @@ fn freeze_rows(
 fn intern_term(builder: &mut RdfDatasetBuilder, term: &HexTerm) -> TermId {
     match term {
         HexTerm::Iri(iri) => builder.intern_iri(iri),
-        HexTerm::Blank(label) => builder.intern_blank(label, BlankScope::DEFAULT),
+        // Text ingress: decode the `(label, scope)` encoding this codec's serializer
+        // applied at egress, so a document it wrote re-parses to the very
+        // `(label, scope)` pair it was written from. HexTuples types its blank ids
+        // as `BLANK_NODE_LABEL`s, which is the alphabet the image test re-encodes
+        // against.
+        HexTerm::Blank(label) => builder.intern_text_blank(label, LabelAlphabet::BlankNodeLabel),
         HexTerm::Literal(literal) => builder.intern_literal(literal.clone()),
     }
 }
@@ -205,31 +211,17 @@ fn validate_iri(value: &str) -> Result<(), RdfDiagnostic> {
     Ok(())
 }
 
+/// Blank-node label contract for a `_:`-prefixed HexTuples identifier: the same
+/// [`LabelAlphabet::BlankNodeLabel`] alphabet this codec EMITS, so every document
+/// the HexTuples serializer writes re-parses here.
 fn validate_blank_label(label: &str) -> Result<(), RdfDiagnostic> {
-    let mut chars = label.chars();
-    let Some(first) = chars.next() else {
-        return Err(parse_err("empty blank-node identifier"));
-    };
-    if !first.is_ascii_alphanumeric() && first != '_' {
-        return Err(parse_err(format!(
+    if is_valid_label(label, LabelAlphabet::BlankNodeLabel) {
+        Ok(())
+    } else {
+        Err(parse_err(format!(
             "invalid blank-node identifier {label:?}"
-        )));
+        )))
     }
-    let mut last = first;
-    for ch in chars {
-        if !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-' && ch != '.' {
-            return Err(parse_err(format!(
-                "invalid blank-node identifier {label:?}"
-            )));
-        }
-        last = ch;
-    }
-    if last == '.' {
-        return Err(parse_err(format!(
-            "invalid blank-node identifier {label:?}"
-        )));
-    }
-    Ok(())
 }
 
 // ───────────────────────────────────────────────────────────────────────────────

@@ -21,7 +21,8 @@ use std::sync::Arc;
 use ::purrdf::{DatasetView, RdfDataset};
 use ::purrdf::{SparqlRequest, SparqlResult, TermValue};
 use purrdf_sparql_eval::{
-    GovernedOutcome, GovernorState, NativeSparqlEngine, ShaclPrebinding, UserFunctionRegistry,
+    GovernedOutcome, GovernorState, NativeSparqlEngine, ShaclPrebinding, ShaclQueryOptions,
+    UserFunctionRegistry,
 };
 
 use crate::model::xsd;
@@ -536,6 +537,7 @@ fn run_query_view<D: DatasetView + Sync>(
     query: &str,
     substitutions: &[(String, TermValue)],
     prebind: ShaclPrebinding,
+    bnode_mint_prefix: Option<&str>,
 ) -> Result<SparqlResult, String> {
     // Snapshot both ambient scopes (an `Arc` clone each) BEFORE evaluating, so no
     // `RefCell` borrow is held across the query: a `sh:sparql` body whose evaluation
@@ -550,35 +552,21 @@ fn run_query_view<D: DatasetView + Sync>(
         base_iri: None,
         substitutions,
     };
+    let options = ShaclQueryOptions {
+        prebinding: prebind,
+        functions: registry,
+        bnode_mint_prefix,
+    };
 
     let Some(state) = governors else {
         return SPARQL_ENGINE
-            .with(|engine| match (prebind, registry) {
-                (ShaclPrebinding::Applied, Some(reg)) => engine
-                    .query_with_shacl_prebinding_and_functions_view(
-                        dataset,
-                        query,
-                        None,
-                        substitutions,
-                        reg,
-                    ),
-                (ShaclPrebinding::Applied, None) => {
-                    engine.query_with_shacl_prebinding_view(dataset, query, None, substitutions)
-                }
-                (ShaclPrebinding::None, Some(reg)) => {
-                    engine.query_with_user_functions_view(dataset, request, reg)
-                }
-                (ShaclPrebinding::None, None) => {
-                    let prepared = engine.prepare_query(query, None)?;
-                    engine.query_prepared_view(dataset, &prepared, substitutions)
-                }
-            })
+            .with(|engine| engine.query_shacl_view(dataset, query, None, substitutions, options))
             .map_err(|e| format!("query evaluation error: {e}"));
     };
 
     let outcome = SPARQL_ENGINE
         .with(|engine| {
-            engine.query_governed_in_operation(dataset, request, prebind, registry, &state)
+            engine.query_governed_in_operation_with_options(dataset, request, options, &state)
         })
         .map_err(|e| format!("query evaluation error: {e}"))?;
     match outcome {
@@ -631,7 +619,7 @@ pub(crate) fn run_select_generic_view<D: DatasetView + Sync>(
     select: &str,
     substitutions: &[(String, TermValue)],
 ) -> Result<SelectRows, String> {
-    let result = run_query_view(dataset, select, substitutions, ShaclPrebinding::None)?;
+    let result = run_query_view(dataset, select, substitutions, ShaclPrebinding::None, None)?;
     match result {
         SparqlResult::Solutions {
             variables, rows, ..
@@ -665,7 +653,7 @@ pub(crate) fn run_select_with_shacl_prebinding_view<D: DatasetView + Sync>(
         subs.push(("currentShape".to_owned(), shape.to_term_value()));
     }
 
-    let result = run_query_view(dataset, select, &subs, ShaclPrebinding::Applied)?;
+    let result = run_query_view(dataset, select, &subs, ShaclPrebinding::Applied, None)?;
     match result {
         SparqlResult::Solutions {
             variables, rows, ..
@@ -688,6 +676,12 @@ pub(crate) fn run_select_with_shacl_prebinding_view<D: DatasetView + Sync>(
 /// `Arc<RdfDataset>`, so this is the sibling of
 /// [`run_select_with_shacl_prebinding_view`] that returns the `Graph` arm.
 ///
+/// `bnode_mint_prefix` is the deterministic blank-mint prefix installed on the
+/// evaluation ([`purrdf_sparql_eval::ShaclQueryOptions::bnode_mint_prefix`]): the
+/// rules engine passes a per-focus-node identity tag so every blank the CONSTRUCT
+/// mints carries the focus's identity at mint time, while data blanks carried
+/// through variables pass through untouched.
+///
 /// # Errors
 ///
 /// Returns `Err(String)` if execution fails or if the result is not a CONSTRUCT
@@ -698,6 +692,7 @@ pub(crate) fn run_construct_with_shacl_prebinding_view<D: DatasetView + Sync>(
     substitutions: &[(String, TermValue)],
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
+    bnode_mint_prefix: Option<&str>,
 ) -> Result<Arc<RdfDataset>, String> {
     let mut subs: Vec<(String, TermValue)> = substitutions.to_vec();
     if let Some(iri) = shapes_graph_iri {
@@ -707,7 +702,13 @@ pub(crate) fn run_construct_with_shacl_prebinding_view<D: DatasetView + Sync>(
         subs.push(("currentShape".to_owned(), shape.to_term_value()));
     }
 
-    let result = run_query_view(dataset, construct, &subs, ShaclPrebinding::Applied)?;
+    let result = run_query_view(
+        dataset,
+        construct,
+        &subs,
+        ShaclPrebinding::Applied,
+        bnode_mint_prefix,
+    )?;
     match result {
         SparqlResult::Graph(graph) => Ok(graph),
         SparqlResult::Solutions { .. } => {
@@ -735,7 +736,7 @@ pub(crate) fn run_ask_with_shacl_prebinding_view<D: DatasetView + Sync>(
         subs.push(("currentShape".to_owned(), shape.to_term_value()));
     }
 
-    let result = run_query_view(dataset, ask, &subs, ShaclPrebinding::Applied)?;
+    let result = run_query_view(dataset, ask, &subs, ShaclPrebinding::Applied, None)?;
     match result {
         SparqlResult::Boolean(b) => Ok(b),
         SparqlResult::Solutions { .. } => {

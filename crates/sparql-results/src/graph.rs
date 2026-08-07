@@ -19,8 +19,11 @@ use purrdf_core::{
 /// annotations and reifiers). Each kernel `emit_*` call already terminates its
 /// output with `\n`, so the parts are concatenated in order: quads, then
 /// annotations, then reifiers.
-// Consumed by the JSON CONSTRUCT-graph branch (`crate::json`) and, in Task 3, by
-// the remaining result-document writers.
+///
+/// Total: every emitted line re-lexes as N-Triples because the kernel writers
+/// escape a scope-qualified blank-node label outside the Turtle
+/// `BLANK_NODE_LABEL` alphabet into it (deterministically and injectively), so
+/// no dataset can fail to serialize on label syntax.
 pub(crate) fn dataset_to_ntriples(dataset: &RdfDataset) -> String {
     let statement_count =
         dataset.quad_count() + dataset.annotations().count() + dataset.reifiers().count();

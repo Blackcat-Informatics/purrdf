@@ -46,9 +46,8 @@ use super::parse::{FoldNode, FoldRow, RDF_REIFIES as RDF_REIFIES_IRI, fold_state
 use super::ser_model::{SerGraph, SerTerm, SerTermKind, deterministic_blank_label_with_prefix};
 use super::text_parse::LineParseMode;
 use crate::nesting::guard_xml_nesting;
-use crate::{
-    BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, RdfTextDirection, TermId,
-};
+use crate::{RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, RdfTextDirection, TermId};
+use purrdf_core::blank_label::{LabelAlphabet, is_valid_label};
 
 /// The RDF/XML codec: a standalone (non-line-family) [`RdfCodec`] over the in-repo W3C
 /// RDF/XML grammar. RDF/XML is treated as star-INcapable under the transcode loss
@@ -824,8 +823,12 @@ fn intern_term(builder: &mut RdfDatasetBuilder, term: &XmlTerm) -> Result<TermId
 fn intern_node(builder: &mut RdfDatasetBuilder, term: &XmlTerm) -> Result<FoldNode, RdfDiagnostic> {
     match term {
         XmlTerm::Iri(iri) => Ok(FoldNode::Term(builder.intern_iri(iri))),
+        // Text ingress: decode the `(label, scope)` encoding this codec's serializer
+        // applied at egress, so a document it wrote re-parses to the very
+        // `(label, scope)` pair it was written from. `rdf:nodeID` carries an XML
+        // `NCName`, which is the alphabet the image test re-encodes against.
         XmlTerm::Blank(label) => Ok(FoldNode::Term(
-            builder.intern_blank(label, BlankScope::DEFAULT),
+            builder.intern_text_blank(label, LabelAlphabet::NcName),
         )),
         XmlTerm::Literal(literal) => Ok(FoldNode::Term(builder.intern_literal(literal.clone()))),
         XmlTerm::Triple(components) => {
@@ -943,29 +946,20 @@ fn validate_iri(value: &str) -> Result<(), RdfDiagnostic> {
     Ok(())
 }
 
-/// The blank-node label contract the prior purrdf-gts `BlankNode::new` enforced: a first
-/// char that is ASCII alphanumeric or `_`, inner chars adding `-`/`.`, and no trailing
-/// `.`.
+/// The blank-node label contract for an `rdf:nodeID` / `rdf:annotationNodeID`
+/// attribute value.
+///
+/// Ingress is deliberately the LIBERAL union of the two alphabets a producer can
+/// legitimately have written: the XML `NCName` this codec itself EMITS (the
+/// RDF/XML grammar's own constraint on `rdf:nodeID`), and the Turtle/SPARQL
+/// `BLANK_NODE_LABEL`, which admits the digit-led labels the text codecs carry.
+/// Accepting the union means every document this workspace writes re-parses,
+/// while a genuinely malformed identifier (whitespace, delimiters, control
+/// characters) is still a hard parse failure.
 fn validate_blank_label(label: &str) -> Result<(), RdfDiagnostic> {
-    let mut chars = label.chars();
-    let Some(first) = chars.next() else {
-        return Err(parse_err("invalid blank-node identifier \"\""));
-    };
-    if !first.is_ascii_alphanumeric() && first != '_' {
-        return Err(parse_err(format!(
-            "invalid blank-node identifier {label:?}"
-        )));
-    }
-    let mut last = first;
-    for ch in chars {
-        if !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-' && ch != '.' {
-            return Err(parse_err(format!(
-                "invalid blank-node identifier {label:?}"
-            )));
-        }
-        last = ch;
-    }
-    if last == '.' {
+    if !is_valid_label(label, LabelAlphabet::NcName)
+        && !is_valid_label(label, LabelAlphabet::BlankNodeLabel)
+    {
         return Err(parse_err(format!(
             "invalid blank-node identifier {label:?}"
         )));

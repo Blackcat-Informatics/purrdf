@@ -47,7 +47,10 @@ use purrdf_core::{SparqlResult, TermValue};
 /// results, which W3C CSV does not define.  Returns [`Error::MalformedTerm`]
 /// if any solution row contains more bindings than there are projected
 /// variables (over-wide rows are an invariant violation; short rows are
-/// intentional and padded with empty fields for unbound variables).
+/// intentional and padded with empty fields for unbound variables), or if a
+/// triple-term cell (at any nesting depth) carries a predicate that is not an
+/// IRI — RDF 1.2 requires predicates to be IRIs, so a malformed predicate is
+/// rejected rather than laundered into a fabricated IRI cell.
 pub fn to_csv(
     result: &SparqlResult,
     provenance: &ResultProvenance,
@@ -94,7 +97,7 @@ pub fn to_csv(
                 out.push(',');
             }
             if let Some(Some(value)) = row.get(column) {
-                push_field(cell_value(value).as_ref(), &mut out);
+                push_field(cell_value(value)?.as_ref(), &mut out);
             }
             // None or missing column → empty field (nothing emitted between separators).
         }
@@ -112,15 +115,24 @@ pub fn to_csv(
 /// Returns a [`std::borrow::Cow`] to avoid cloning the lexical string for the
 /// two common cases (IRI and Literal); only blank-node labels and triple terms
 /// require an owned allocation.
-fn cell_value(value: &TermValue) -> std::borrow::Cow<'_, str> {
+///
+/// # Errors
+///
+/// Returns [`Error::MalformedTerm`] when `value` is a triple term (at any
+/// nesting depth) whose predicate is not an IRI — RDF 1.2 requires predicates
+/// to be IRIs, so this is rejected rather than laundered into a fabricated
+/// IRI cell.
+fn cell_value(value: &TermValue) -> Result<std::borrow::Cow<'_, str>, Error> {
     use std::borrow::Cow;
-    match value {
+    Ok(match value {
         TermValue::Iri(iri) => Cow::Borrowed(iri),
         TermValue::Literal { lexical_form, .. } => Cow::Borrowed(lexical_form),
-        TermValue::Blank { label, .. } => Cow::Owned(format!("_:{label}")),
+        // The kernel token is `_:{qualified-label}`, escaped into the Turtle
+        // BLANK_NODE_LABEL alphabet so the cell re-lexes.
+        TermValue::Blank { .. } => Cow::Owned(ntriples_token(value)?),
         // CSV predates RDF-1.2; the N-Triples token is a reasonable rendering.
-        TermValue::Triple { .. } => Cow::Owned(ntriples_token(value)),
-    }
+        TermValue::Triple { .. } => Cow::Owned(ntriples_token(value)?),
+    })
 }
 
 /// Append a single CSV field, applying RFC-4180 quoting only when required:
@@ -253,6 +265,79 @@ mod tests {
             "<<( <http://example.org/s> <http://example.org/p> <http://example.org/o> )>>\r\n",
         );
         assert_eq!(csv_text(&result, &ResultProvenance::default()), expected);
+    }
+
+    #[test]
+    fn triple_term_literal_predicate_is_malformed_term_error() {
+        let triple = TermValue::Triple {
+            s: Box::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: Box::new(lit("not-a-predicate", XSD_STRING)),
+            o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
+        };
+        let result = SparqlResult::Solutions {
+            variables: vec!["t".to_string()],
+            rows: vec![vec![Some(triple)]],
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+        };
+        let err = to_csv(&result, &ResultProvenance::default())
+            .expect_err("literal predicate must be rejected");
+        assert!(
+            matches!(err, Error::MalformedTerm(_)),
+            "expected MalformedTerm: {err:?}"
+        );
+    }
+
+    #[test]
+    fn triple_term_blank_predicate_is_malformed_term_error() {
+        let triple = TermValue::Triple {
+            s: Box::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: Box::new(TermValue::Blank {
+                label: "b0".to_string(),
+                scope: BlankScope(0),
+            }),
+            o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
+        };
+        let result = SparqlResult::Solutions {
+            variables: vec!["t".to_string()],
+            rows: vec![vec![Some(triple)]],
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+        };
+        let err = to_csv(&result, &ResultProvenance::default())
+            .expect_err("blank-node predicate must be rejected");
+        assert!(
+            matches!(err, Error::MalformedTerm(_)),
+            "expected MalformedTerm: {err:?}"
+        );
+    }
+
+    #[test]
+    fn nested_triple_term_non_iri_predicate_is_malformed_term_error() {
+        // The inner triple term (used as the outer subject) carries a
+        // non-IRI predicate; the outer triple term's own predicate is fine.
+        let inner = TermValue::Triple {
+            s: Box::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: Box::new(TermValue::Blank {
+                label: "b0".to_string(),
+                scope: BlankScope(0),
+            }),
+            o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
+        };
+        let outer = TermValue::Triple {
+            s: Box::new(inner),
+            p: Box::new(TermValue::Iri("http://example.org/concludes".to_string())),
+            o: Box::new(TermValue::Iri("http://example.org/o2".to_string())),
+        };
+        let result = SparqlResult::Solutions {
+            variables: vec!["t".to_string()],
+            rows: vec![vec![Some(outer)]],
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+        };
+        let err = to_csv(&result, &ResultProvenance::default())
+            .expect_err("nested malformed predicate must be rejected");
+        assert!(
+            matches!(err, Error::MalformedTerm(_)),
+            "expected MalformedTerm: {err:?}"
+        );
     }
 
     #[test]

@@ -32,7 +32,10 @@ use purrdf_core::SparqlResult;
 /// results, which W3C TSV does not define.  Returns [`Error::MalformedTerm`]
 /// if any solution row contains more bindings than there are projected
 /// variables (over-wide rows are an invariant violation; short rows are
-/// intentional and padded with empty fields for unbound variables).
+/// intentional and padded with empty fields for unbound variables), or if a
+/// triple-term cell (at any nesting depth) carries a predicate that is not an
+/// IRI — RDF 1.2 requires predicates to be IRIs, so a malformed predicate is
+/// rejected rather than laundered into a fabricated IRI cell.
 pub fn to_tsv(
     result: &SparqlResult,
     provenance: &ResultProvenance,
@@ -80,7 +83,7 @@ pub fn to_tsv(
                 out.push('\t');
             }
             if let Some(Some(value)) = row.get(column) {
-                out.push_str(&ntriples_token(value));
+                out.push_str(&ntriples_token(value)?);
             }
             // None or missing column → empty field.
         }
@@ -186,6 +189,79 @@ mod tests {
             "typed token: {text}"
         );
         assert!(text.contains("\"x\"@en"), "lang token: {text}");
+    }
+
+    #[test]
+    fn triple_term_literal_predicate_is_malformed_term_error() {
+        let triple = TermValue::Triple {
+            s: Box::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: Box::new(lit("not-a-predicate", XSD_STRING)),
+            o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
+        };
+        let result = SparqlResult::Solutions {
+            variables: vec!["t".to_string()],
+            rows: vec![vec![Some(triple)]],
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+        };
+        let err = to_tsv(&result, &ResultProvenance::default())
+            .expect_err("literal predicate must be rejected");
+        assert!(
+            matches!(err, Error::MalformedTerm(_)),
+            "expected MalformedTerm: {err:?}"
+        );
+    }
+
+    #[test]
+    fn triple_term_blank_predicate_is_malformed_term_error() {
+        let triple = TermValue::Triple {
+            s: Box::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: Box::new(TermValue::Blank {
+                label: "b0".to_string(),
+                scope: BlankScope(0),
+            }),
+            o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
+        };
+        let result = SparqlResult::Solutions {
+            variables: vec!["t".to_string()],
+            rows: vec![vec![Some(triple)]],
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+        };
+        let err = to_tsv(&result, &ResultProvenance::default())
+            .expect_err("blank-node predicate must be rejected");
+        assert!(
+            matches!(err, Error::MalformedTerm(_)),
+            "expected MalformedTerm: {err:?}"
+        );
+    }
+
+    #[test]
+    fn nested_triple_term_non_iri_predicate_is_malformed_term_error() {
+        // The inner triple term (used as the outer subject) carries a
+        // non-IRI predicate; the outer triple term's own predicate is fine.
+        let inner = TermValue::Triple {
+            s: Box::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: Box::new(TermValue::Blank {
+                label: "b0".to_string(),
+                scope: BlankScope(0),
+            }),
+            o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
+        };
+        let outer = TermValue::Triple {
+            s: Box::new(inner),
+            p: Box::new(TermValue::Iri("http://example.org/concludes".to_string())),
+            o: Box::new(TermValue::Iri("http://example.org/o2".to_string())),
+        };
+        let result = SparqlResult::Solutions {
+            variables: vec!["t".to_string()],
+            rows: vec![vec![Some(outer)]],
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+        };
+        let err = to_tsv(&result, &ResultProvenance::default())
+            .expect_err("nested malformed predicate must be rejected");
+        assert!(
+            matches!(err, Error::MalformedTerm(_)),
+            "expected MalformedTerm: {err:?}"
+        );
     }
 
     #[test]

@@ -539,6 +539,7 @@ fn attach_list(
 /// The returned text is full-IRI N-Triples (no `@prefix` block); the Python caller
 /// parses it back into a fresh rdflib `Graph` and the rdflib Turtle writer is the
 /// byte-stability layer.
+#[must_use]
 pub fn to_ntriples(catalog: &FnoCatalog) -> String {
     to_quads(catalog).iter().map(turtle::emit_quad).collect()
 }

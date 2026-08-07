@@ -130,8 +130,6 @@ PRE_EXISTING_PROCESS_REFERENCES: frozenset[tuple[str, str]] = frozenset(
         ("crates/shapes/src/shapes.rs", "Task 2"),
         ("crates/shapes/tests/rules_conformance.rs", "Task 6"),
         ("crates/sparql-eval/src/parallel_determinism_gate.rs", "Task 7"),
-        ("crates/sparql-results/src/graph.rs", "Task 3"),
-        ("crates/sparql-results/src/json.rs", "Task 4"),
         ("crates/xsd/src/ops.rs", "Task 4"),
     }
 )

@@ -79,7 +79,7 @@ impl SerGraph {
     /// quads in different orders. Sorting on the *rendered value* — a pure function of
     /// the term, identical across backends — makes the emitted document byte-identical
     /// regardless of backend and removes the interning-order dependence from the
-    /// serializer (CONSTITUTION: serializers are deterministic).
+    /// serializer — serializers are byte-deterministic.
     ///
     /// The lookup in [`Self::reifier`] is by id, so permuting `reifiers` never changes
     /// which binding a quoted-triple term resolves to; the self-reifier sentinel rows

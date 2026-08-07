@@ -419,25 +419,17 @@ mod tests {
     use super::*;
     use crate::ir::RdfDatasetBuilder;
     use crate::{
-        BlankScope, RdfAnnotation, RdfLiteral, RdfMetadataEntry, RdfMetadataValue, RdfQuad,
-        RdfReifier, RdfSuppressionRecord, RdfTerm, RdfTextDirection, RdfTriple, TermId,
+        RdfAnnotation, RdfLiteral, RdfMetadataEntry, RdfMetadataValue, RdfQuad, RdfReifier,
+        RdfSuppressionRecord, RdfTerm, RdfTextDirection, RdfTriple, TermId,
     };
     use std::sync::Arc;
 
-    /// Recursively intern an owned [`RdfTerm`] into a builder, returning its id —
-    /// the test-side inverse of the writer's owned-boundary resolution.
+    /// Intern an owned [`RdfTerm`] into a builder, returning its id — the
+    /// test-side inverse of the writer's owned-boundary resolution, which is
+    /// exactly what [`RdfDatasetBuilder::intern_owned_term`] is (blank labels
+    /// decoded back to their `(label, scope)` pair, triple terms recursed).
     fn intern_owned(b: &mut RdfDatasetBuilder, term: &RdfTerm) -> TermId {
-        match term {
-            RdfTerm::Iri(iri) => b.intern_iri(iri),
-            RdfTerm::BlankNode(label) => b.intern_blank(label, BlankScope::DEFAULT),
-            RdfTerm::Literal(lit) => b.intern_literal(lit.clone()),
-            RdfTerm::Triple(t) => {
-                let s = intern_owned(b, &t.subject);
-                let p = b.intern_iri(&t.predicate);
-                let o = intern_owned(b, &t.object);
-                b.intern_triple(s, p, o)
-            }
-        }
+        b.intern_owned_term(term)
     }
 
     /// Freeze owned rows (quads + RDF 1.2 statement layer) into the frozen IR the

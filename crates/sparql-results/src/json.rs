@@ -6,7 +6,7 @@
 //!
 //! The default (empty-provenance) output is byte-identical to the legacy
 //! `crates/rdf-capi` emitter (`result_to_json`) — the byte-identity oracle tests
-//! pin that contract so the Task 4 subsume is safe — **except** the CONSTRUCT
+//! pin that contract so subsuming that emitter stays safe — **except** the CONSTRUCT
 //! (`Graph`) branch, which here uses the wasm-clean [`crate::graph`] N-Triples
 //! writer (no oxigraph) and therefore additionally carries RDF-1.2-star
 //! reifier/annotation lines (maximal information flow).
@@ -21,6 +21,7 @@ use crate::SerializeOutcome;
 use crate::error::Error;
 use crate::graph::dataset_to_ntriples;
 use crate::model::ResultProvenance;
+use purrdf_core::blank_label::{LabelAlphabet, encode_blank_label};
 use purrdf_core::{SparqlResult, TermValue};
 
 /// Serialize a [`SparqlResult`] to SPARQL Results JSON, appending the additive
@@ -233,9 +234,16 @@ fn json_binding(value: &TermValue, out: &mut String) -> Result<(), Error> {
             json_string(iri, out);
             out.push('}');
         }
-        TermValue::Blank { label, .. } => {
+        TermValue::Blank { label, scope } => {
+            // A SPARQL-results JSON bnode `value` is a blank-node LABEL, not
+            // free text, so the `(label, scope)` pair is encoded into the W3C
+            // BLANK_NODE_LABEL alphabet — the same alphabet the CSV/TSV writers
+            // emit, so one result never disagrees with itself across formats.
             out.push_str("{\"type\":\"bnode\",\"value\":");
-            json_string(label, out);
+            json_string(
+                &encode_blank_label(label, *scope, LabelAlphabet::BlankNodeLabel),
+                out,
+            );
             out.push('}');
         }
         TermValue::Literal {
