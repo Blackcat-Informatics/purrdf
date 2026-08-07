@@ -248,7 +248,15 @@ fn order_chain(
 
 /// The invocation access pattern a call would have with `bound` already established: a
 /// position is bound iff its term is fully determined by constants and bound variables.
-fn invocation_mode(call: &PropertyFunctionCall, bound: &DetHashSet<Variable>) -> BindingPattern {
+///
+/// Shared with the plan survey (`crate::bgp::survey_pattern_plans`), which needs the same
+/// answer to read the relation's declared row bound for the mode a call is actually
+/// invoked in: a relation that is cheap bound and expensive free would otherwise be
+/// admitted, or refused, against a mode the query never uses.
+pub(crate) fn invocation_mode(
+    call: &PropertyFunctionCall,
+    bound: &DetHashSet<Variable>,
+) -> BindingPattern {
     BindingPattern::from_bools(
         call.subject_args
             .iter()
@@ -619,7 +627,7 @@ fn plan_aggregate(
 /// make. Erring the other way is harmless: at worst a feasible order is missed and the
 /// query is refused at prepare time with a message that names exactly what could not be
 /// bound.
-fn collect_certainly_bound(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
+pub(crate) fn collect_certainly_bound(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
     match pattern {
         GraphPattern::Bgp { patterns } => {
             for triple in patterns {

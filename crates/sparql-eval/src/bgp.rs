@@ -33,7 +33,8 @@
 
 use purrdf_core::{DatasetView, GraphMatch, QuadIds, TermId, TermRef, ViewTermId};
 use purrdf_sparql_algebra::{
-    GraphPattern, Literal, NamedNodePattern, TermPattern, TriplePattern, Variable,
+    GraphPattern, Literal, NamedNodePattern, PropertyFunctionCall, TermPattern, TriplePattern,
+    Variable,
 };
 
 use crate::DetHashSet;
@@ -1323,11 +1324,39 @@ impl PlanSurvey {
 /// because a one-pattern BGP has no order to choose. The **estimate** is recorded for every
 /// BGP, one-pattern ones included: a single unconstrained triple pattern over a large store
 /// is exactly the shape a cardinality ceiling exists to refuse.
+///
+/// # How a property-function call is priced, and what that composition rule is
+///
+/// A call's output bag is not predicted from the dataset — no index sized it — so its
+/// prediction is the relation's own declaration,
+/// [`PropertyFunction::rows_per_invocation`](crate::property_fn::PropertyFunction::rows_per_invocation),
+/// read for the access pattern the call is *actually* invoked in (the plan has already been
+/// feasibility-ordered, so that pattern is fixed by the time this walk runs).
+///
+/// The composition rule is stated exactly, because the survey has **no cross-node
+/// arithmetic at all**: [`PlanSurvey::peak_cells`] is a maximum over per-node peaks, and a
+/// `Join` of two basic graph patterns composes to neither node's product. So:
+///
+/// - A call contributes `rows_per_invocation(mode) × driving_rows` as its own peak, where
+///   `driving_rows` is the row count predicted for its **immediate left arm** — the bag it
+///   is invoked once per row of — when that arm is a node this walk predicts at all (a
+///   basic graph pattern, or the chain spine ending in another call). It is `1` otherwise,
+///   which is the truth for a call with nothing written before it and an honest
+///   under-count for a driving arm nothing predicts. An under-estimate costs a caller
+///   nothing: the live cell ceiling is still in force and still trips.
+/// - Its `columns` is the relation's flattened arity — the number of positions it fills on
+///   every row it emits. That is a declared quantity rather than a schema this walk would
+///   have to derive, and it is never zero, so a call can never be denominated out of a
+///   cell-denominated ceiling entirely.
+///
+/// A call whose IRI resolves against no supplied registry contributes nothing, exactly as
+/// every other unpredictable leaf does; evaluation refuses that query on its own terms.
 pub(crate) fn survey_pattern_plans<D: DatasetView>(
     dataset: &D,
     active_dataset: &ActiveDataset<D::Id>,
     active_graph: GraphMatch<D::Id>,
     pattern: &GraphPattern,
+    relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
     survey: &mut PlanSurvey,
 ) -> Result<(), EvalError> {
     match pattern {
@@ -1385,13 +1414,58 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
                 .estimates
                 .insert(std::ptr::from_ref(pattern) as usize, estimate);
         }
-        GraphPattern::Join { left, right }
-        | GraphPattern::Union { left, right }
+        // The two shapes a property-function call is attached through, and therefore the
+        // only place a call's driving side is in scope.
+        GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
+            survey_pattern_plans(
+                dataset,
+                active_dataset,
+                active_graph,
+                left,
+                relations,
+                survey,
+            )?;
+            if let GraphPattern::PropertyFunction(call) = &**right {
+                let mut bound = DetHashSet::default();
+                crate::property_fn_plan::collect_certainly_bound(left, &mut bound);
+                record_call_estimate(
+                    right,
+                    call,
+                    &bound,
+                    predicted_rows(left, survey).unwrap_or(1),
+                    relations,
+                    survey,
+                );
+            } else {
+                survey_pattern_plans(
+                    dataset,
+                    active_dataset,
+                    active_graph,
+                    right,
+                    relations,
+                    survey,
+                )?;
+            }
+        }
+        GraphPattern::Union { left, right }
         | GraphPattern::LeftJoin { left, right, .. }
-        | GraphPattern::Minus { left, right }
-        | GraphPattern::Lateral { left, right } => {
-            survey_pattern_plans(dataset, active_dataset, active_graph, left, survey)?;
-            survey_pattern_plans(dataset, active_dataset, active_graph, right, survey)?;
+        | GraphPattern::Minus { left, right } => {
+            survey_pattern_plans(
+                dataset,
+                active_dataset,
+                active_graph,
+                left,
+                relations,
+                survey,
+            )?;
+            survey_pattern_plans(
+                dataset,
+                active_dataset,
+                active_graph,
+                right,
+                relations,
+                survey,
+            )?;
         }
         GraphPattern::Filter { inner, .. }
         | GraphPattern::Extend { inner, .. }
@@ -1401,7 +1475,14 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
         | GraphPattern::Slice { inner, .. }
         | GraphPattern::OrderBy { inner, .. }
         | GraphPattern::Group { inner, .. } => {
-            survey_pattern_plans(dataset, active_dataset, active_graph, inner, survey)?;
+            survey_pattern_plans(
+                dataset,
+                active_dataset,
+                active_graph,
+                inner,
+                relations,
+                survey,
+            )?;
         }
         GraphPattern::Graph { name, inner } => {
             let inner_graph = match name {
@@ -1410,18 +1491,78 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
                     .map_or(GraphMatch::Default, GraphMatch::Named),
                 NamedNodePattern::Variable(_) => GraphMatch::Any,
             };
-            survey_pattern_plans(dataset, active_dataset, inner_graph, inner, survey)?;
+            survey_pattern_plans(
+                dataset,
+                active_dataset,
+                inner_graph,
+                inner,
+                relations,
+                survey,
+            )?;
+        }
+        // A call with nothing written before it: its driving bag is the identity table,
+        // which is one row, so its whole prediction is the relation's declared bound.
+        GraphPattern::PropertyFunction(call) => {
+            record_call_estimate(pattern, call, &DetHashSet::default(), 1, relations, survey);
         }
         // Leaves that hold no BGP: there is no triple-pattern join order to choose and
-        // no base cardinality to probe. A property function's row count is its own
-        // declaration (`PropertyFunction::rows_per_invocation`), read where the call is
-        // planned rather than estimated from the dataset's term statistics here.
-        GraphPattern::Path { .. }
-        | GraphPattern::Values { .. }
-        | GraphPattern::Service { .. }
-        | GraphPattern::PropertyFunction(_) => {}
+        // no base cardinality to probe.
+        GraphPattern::Path { .. } | GraphPattern::Values { .. } | GraphPattern::Service { .. } => {}
     }
     Ok(())
+}
+
+/// Record the survey's prediction for one property-function node, keyed by that node's
+/// address exactly as a basic graph pattern's is.
+///
+/// See [`survey_pattern_plans`] for the composition rule this implements.
+fn record_call_estimate(
+    node: &GraphPattern,
+    call: &PropertyFunctionCall,
+    bound: &DetHashSet<Variable>,
+    driving_rows: u64,
+    relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
+    survey: &mut PlanSurvey,
+) {
+    let Some(relation) = relations.and_then(|registry| registry.resolve(&call.iri)) else {
+        return;
+    };
+    let rows = relation
+        .rows_per_invocation(crate::property_fn_plan::invocation_mode(call, bound))
+        .saturating_mul(driving_rows);
+    // The positions the relation fills on every row it emits. Never zero, so a declared
+    // bound cannot be denominated out of a cell ceiling; saturating, because a `usize`
+    // arity beyond `u64` is already past any ceiling a caller can express.
+    let columns = u64::try_from(relation.arity().total())
+        .unwrap_or(u64::MAX)
+        .max(1);
+    survey.estimates.insert(
+        std::ptr::from_ref(node) as usize,
+        PlanEstimate {
+            rows,
+            peak_rows: rows,
+            columns,
+        },
+    );
+}
+
+/// The row count this walk predicts for `pattern`, when it predicts one at all.
+///
+/// A direct estimate is the answer. Failing that, a chain spine's row count is its last
+/// member's, because each member's own estimate already carries the product of everything
+/// to its left — which is what lets a chain of calls compose without this walk inventing
+/// join arithmetic the cost model does not have.
+fn predicted_rows(pattern: &GraphPattern, survey: &PlanSurvey) -> Option<u64> {
+    if let Some(estimate) = survey
+        .estimates
+        .get(&(std::ptr::from_ref(pattern) as usize))
+    {
+        return Some(estimate.rows);
+    }
+    match pattern {
+        GraphPattern::Lateral { right, .. } => predicted_rows(right, survey),
+        _ => None,
+    }
 }
 
 /// Replay `order` through the same cost model [`cost_based_order`] minimised, returning the

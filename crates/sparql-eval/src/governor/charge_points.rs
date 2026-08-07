@@ -779,6 +779,357 @@ fn metered_does_not_relax_the_udf_depth_ceiling() {
     ));
 }
 
+// ---------------------------------------------------------------------------
+// The property-function points
+// ---------------------------------------------------------------------------
+
+/// The predicate IRI every property-function fixture in this module is registered under.
+const PF: &str = "http://example.org/pf/emit";
+
+/// A relation that emits a fixed table on every invocation and COUNTS what it was asked
+/// for.
+///
+/// The count is the observation no governor evidence carries: evidence says what the
+/// engine spent, and only the relation can say whether it was entered at all. That is
+/// what separates "the ceiling prevented the call" from "the call was made and its rows
+/// discarded" — exactly the distinction the corpus's exchange counts draw for `SERVICE`.
+#[derive(Debug)]
+struct CountingRelation {
+    /// The rows every invocation emits, in this order.
+    rows: Vec<crate::property_fn::PfRow>,
+    /// The bound this relation DECLARES, which admission control reads and which is not
+    /// required to equal `rows.len()` — a relation that over-declares is the case a cell
+    /// ceiling exists to refuse before it runs.
+    declared: u64,
+    /// Invocations opened.
+    opens: Arc<AtomicU64>,
+    /// Rows pulled across every invocation.
+    pulls: Arc<AtomicU64>,
+    /// The single declared mode: the all-free pattern of this arity, which subsumes every
+    /// invocation of it.
+    modes: Vec<purrdf_core::binding_pattern::BindingPattern>,
+}
+
+impl CountingRelation {
+    /// A one-column relation emitting `count` IRIs per invocation, declaring the truth.
+    fn emitting(count: usize) -> Self {
+        Self {
+            rows: (0..count)
+                .map(|index| vec![purrdf_core::TermValue::iri(format!("{EX}r{index}"))])
+                .collect(),
+            declared: count as u64,
+            opens: Arc::new(AtomicU64::new(0)),
+            pulls: Arc::new(AtomicU64::new(0)),
+            modes: vec![crate::property_fn::PfArity::new(0, 1).all_free_mode()],
+        }
+    }
+
+    fn opens(&self) -> u64 {
+        self.opens.load(Ordering::Relaxed)
+    }
+}
+
+impl crate::property_fn::PropertyFunction for CountingRelation {
+    fn volatility(&self) -> crate::user_fn::Volatility {
+        crate::user_fn::Volatility::Stable
+    }
+
+    fn arity(&self) -> crate::property_fn::PfArity {
+        crate::property_fn::PfArity::new(0, 1)
+    }
+
+    fn modes(&self) -> &[purrdf_core::binding_pattern::BindingPattern] {
+        &self.modes
+    }
+
+    fn rows_per_invocation(&self, _mode: purrdf_core::binding_pattern::BindingPattern) -> u64 {
+        self.declared
+    }
+
+    fn open(
+        &self,
+        _args: &crate::property_fn::PfArgs<'_>,
+        _ceiling: Option<u64>,
+    ) -> Result<Box<dyn crate::property_fn::PfCursor>, crate::error::EvalError> {
+        self.opens.fetch_add(1, Ordering::Relaxed);
+        Ok(Box::new(CountingCursor {
+            rows: self.rows.clone(),
+            next: 0,
+            pulls: Arc::clone(&self.pulls),
+        }))
+    }
+}
+
+/// [`CountingRelation`]'s cursor: the table, in order, once.
+#[derive(Debug)]
+struct CountingCursor {
+    rows: Vec<crate::property_fn::PfRow>,
+    next: usize,
+    pulls: Arc<AtomicU64>,
+}
+
+impl crate::property_fn::PfCursor for CountingCursor {
+    fn next(&mut self) -> Result<Option<crate::property_fn::PfRow>, crate::error::EvalError> {
+        self.pulls.fetch_add(1, Ordering::Relaxed);
+        let row = self.rows.get(self.next).cloned();
+        self.next += 1;
+        Ok(row)
+    }
+}
+
+/// A registry holding `relation` under [`PF`].
+fn pf_registry(
+    relation: Arc<dyn crate::property_fn::PropertyFunction>,
+) -> crate::property_fn::PropertyFunctionRegistry {
+    let mut registry = crate::property_fn::PropertyFunctionRegistry::new();
+    registry.register(PF, relation);
+    registry
+}
+
+/// `{ ?s :p ?m . () <PF> ?x }` — one invocation per driving row, exactly the shape the
+/// feasibility-ordering pass rebuilds a chain into.
+fn pf_pattern() -> GraphPattern {
+    GraphPattern::Lateral {
+        left: Box::new(bgp(vec![triple(var("s"), "p", var("m"))])),
+        right: Box::new(GraphPattern::PropertyFunction(
+            purrdf_sparql_algebra::PropertyFunctionCall {
+                iri: PF.to_owned(),
+                subject_args: vec![],
+                object_args: vec![var("x")],
+            },
+        )),
+    }
+}
+
+/// A dataset of `links` driving rows for [`pf_pattern`].
+fn pf_dataset(links: usize) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let p = builder.intern_iri(&format!("{EX}p"));
+    for index in 0..links {
+        let s = builder.intern_iri(&format!("{EX}s{index}"));
+        let m = builder.intern_iri(&format!("{EX}m{index}"));
+        builder.push_quad(s, p, m, None);
+    }
+    builder.freeze().expect("dataset is positionally valid")
+}
+
+/// Evaluate `pattern` with `relations` wired, reporting what it kept and spent together
+/// with the per-node, per-charge-point ledger.
+///
+/// The ledger is what makes an "exactly this much invocation fuel" claim checkable at all:
+/// the evidence carries one fuel total, and a total cannot say which point spent it.
+fn run_with_relations(
+    pattern: &GraphPattern,
+    dataset: &RdfDataset,
+    relations: &crate::property_fn::PropertyFunctionRegistry,
+    governors: &QueryGovernors,
+) -> (Run, Vec<crate::governor::NodeCharges>) {
+    let state = Arc::new(GovernorState::new(governors));
+    let ledger = Arc::new(crate::governor::ledger::ChargeLedger::for_plan(
+        pattern,
+        &crate::DetHashMap::default(),
+    ));
+    let mut ctx = EvalCtx::new(dataset)
+        .with_governors(Arc::clone(&state))
+        .with_property_functions(relations)
+        .with_charge_ledger(Arc::clone(&ledger));
+    let evaluated = eval_evaluated(pattern, &mut ctx).expect("evaluation must not fail");
+    let evidence = state.evidence();
+    (
+        Run {
+            rows: evaluated.rows().len(),
+            fuel: evidence.consumed_in(ResourceDimension::Fuel),
+            tripped: evidence.tripped(),
+        },
+        ledger.snapshot(),
+    )
+}
+
+/// The fuel `point` accounts for across the whole ledger.
+fn ledger_fuel(
+    ledger: &[crate::governor::NodeCharges],
+    point: crate::governor::ChargePoint,
+) -> u64 {
+    ledger.iter().map(|node| node.fuel_at(point)).sum()
+}
+
+#[test]
+fn a_governed_property_function_query_spends_exactly_its_invocation_and_row_fuel() {
+    // Three driving rows, two emitted rows each: three invocations and six accepted rows,
+    // counted rather than approximated, because the whole point of a dedicated point is
+    // that a relation's work stops being invisible inside the generic per-node accounting.
+    let dataset = pf_dataset(3);
+    let relation = Arc::new(CountingRelation::emitting(2));
+    let registry =
+        pf_registry(Arc::clone(&relation) as Arc<dyn crate::property_fn::PropertyFunction>);
+    let pattern = pf_pattern();
+
+    let (measured, ledger) =
+        run_with_relations(&pattern, &dataset, &registry, &QueryGovernors::METERED);
+    assert_eq!(measured.tripped, None, "the measuring run must complete");
+    assert_eq!(
+        measured.rows, 6,
+        "three driving rows times two emitted rows"
+    );
+    assert_eq!(relation.opens(), 3, "one invocation per driving row");
+
+    assert_eq!(
+        ledger_fuel(
+            &ledger,
+            crate::governor::ChargePoint::PropertyFunctionInvocation
+        ),
+        3,
+        "the invocation point counts calls into host code, one per driving row"
+    );
+    assert_eq!(
+        ledger_fuel(&ledger, crate::governor::ChargePoint::PropertyFunctionRow),
+        6,
+        "the row point counts rows the relation emitted and this engine accepted"
+    );
+
+    // And the decomposition adds up to the single number the evidence reports: a ledger
+    // that did not would be a decomposition of some other quantity.
+    let total: u64 = ledger
+        .iter()
+        .map(crate::governor::NodeCharges::fuel_total)
+        .sum();
+    assert_eq!(total, measured.fuel);
+}
+
+#[test]
+fn a_property_function_call_trips_at_the_same_point_parallel_and_sequential() {
+    // Above `PARALLEL_MIN_ROWS`, so the driving row loop the call rides is genuinely a
+    // candidate for the rayon branch rather than merely reachable from it.
+    let dataset = pf_dataset(1500);
+    let relation = Arc::new(CountingRelation::emitting(2));
+    let registry =
+        pf_registry(Arc::clone(&relation) as Arc<dyn crate::property_fn::PropertyFunction>);
+    let pattern = pf_pattern();
+
+    let (measured, _) = run_with_relations(&pattern, &dataset, &registry, &QueryGovernors::METERED);
+    let budget = measured.fuel / 2;
+    assert!(budget > 0, "the fixture must cost something to halve");
+    let governors = QueryGovernors::UNBOUNDED.with_fuel(budget);
+
+    let parallel = {
+        let _guard = force_parallel_for_test(true);
+        run_with_relations(&pattern, &dataset, &registry, &governors).0
+    };
+    let sequential = {
+        let _guard = force_sequential_operation();
+        run_with_relations(&pattern, &dataset, &registry, &governors).0
+    };
+
+    assert!(parallel.tripped.is_some(), "the fixture must actually trip");
+    assert_eq!(
+        parallel, sequential,
+        "a relation's charges are folded in source-item order, so which strategy ran cannot \
+         move the trip point"
+    );
+}
+
+#[test]
+fn a_budget_below_the_first_emitted_row_truncates_rather_than_failing() {
+    let dataset = pf_dataset(3);
+    let relation = Arc::new(CountingRelation::emitting(2));
+    let registry =
+        pf_registry(Arc::clone(&relation) as Arc<dyn crate::property_fn::PropertyFunction>);
+    let pattern = pf_pattern();
+
+    // The cost of everything up to and including the first invocation charge, so the next
+    // charge the execution attempts is the first row's. It is refused, and the refusal
+    // travels on the governed channel: an empty certified bag, never an evaluation error.
+    let (metered, ledger) =
+        run_with_relations(&pattern, &dataset, &registry, &QueryGovernors::METERED);
+    assert_eq!(metered.tripped, None);
+    let rows_charged = ledger_fuel(&ledger, crate::governor::ChargePoint::PropertyFunctionRow);
+    assert!(
+        rows_charged > 0,
+        "the fixture must charge rows to cut below"
+    );
+
+    let mut budget = metered.fuel;
+    let mut cut = None;
+    // Walk the budget down until the run first trips, so the boundary is MEASURED rather
+    // than derived from an assumption about which points precede the first row.
+    while budget > 0 {
+        budget -= 1;
+        let (run, ledger) = run_with_relations(
+            &pattern,
+            &dataset,
+            &registry,
+            &QueryGovernors::UNBOUNDED.with_fuel(budget),
+        );
+        if run.tripped.is_some()
+            && ledger_fuel(&ledger, crate::governor::ChargePoint::PropertyFunctionRow) == 0
+        {
+            cut = Some(run);
+            break;
+        }
+    }
+    let cut = cut.expect("some budget refuses the first emitted row");
+    assert_eq!(
+        cut.rows, 0,
+        "no row was ever charged, so the call committed none"
+    );
+    assert!(matches!(
+        cut.tripped,
+        Some(TrippedGovernor::Budget {
+            dimension: ResourceDimension::Fuel,
+            ..
+        })
+    ));
+
+    // Deterministic: the same ceiling cuts in the same place, every time.
+    let again = run_with_relations(
+        &pattern,
+        &dataset,
+        &registry,
+        &QueryGovernors::UNBOUNDED.with_fuel(budget),
+    )
+    .0;
+    assert_eq!(again, cut);
+}
+
+#[test]
+fn a_zero_fuel_ceiling_never_enters_the_relation_at_all() {
+    let dataset = pf_dataset(3);
+    let relation = Arc::new(CountingRelation::emitting(2));
+    let registry =
+        pf_registry(Arc::clone(&relation) as Arc<dyn crate::property_fn::PropertyFunction>);
+
+    let (run, ledger) = run_with_relations(
+        &pf_pattern(),
+        &dataset,
+        &registry,
+        &QueryGovernors::UNBOUNDED.with_fuel(0),
+    );
+    assert!(
+        matches!(
+            run.tripped,
+            Some(TrippedGovernor::Budget {
+                dimension: ResourceDimension::Fuel,
+                limit: 0,
+                ..
+            })
+        ),
+        "a zero ceiling is valid and admits no charged work: {run:?}"
+    );
+    assert_eq!(run.rows, 0);
+    assert_eq!(
+        relation.opens(),
+        0,
+        "a ceiling that lets host code run once has already been exceeded by the time it \
+         is consulted"
+    );
+    for point in [
+        crate::governor::ChargePoint::PropertyFunctionInvocation,
+        crate::governor::ChargePoint::PropertyFunctionRow,
+    ] {
+        assert_eq!(ledger_fuel(&ledger, point), 0, "{point} was charged");
+    }
+}
+
 /// The type parameter is spelled out in a couple of places above; this keeps the
 /// production id type named so a change to it is a compile error here rather than a
 /// silent change of what these tests cover.

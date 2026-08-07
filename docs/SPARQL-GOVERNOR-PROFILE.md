@@ -178,6 +178,8 @@ units mean nothing outside this build.
 | `remote-request-issued` | 1 | request issued to a remote endpoint |
 | `remote-row-ingested` | 1 | row ingested from a remote endpoint's response |
 | `update-mutated-quad` | 1 | quad inserted into, or removed from, the store by SPARQL `UPDATE` |
+| `property-function-invocation` | 1 | invocation of a host-supplied property-function relation (one `open`, over one driving row) |
+| `property-function-row` | 1 | row a property-function relation emitted and this engine accepted |
 
 `update-mutated-quad` is the only point outside the query evaluator and the only one
 no algebra node raises. It exists because `CLEAR ALL`, `MOVE`, `COPY`, `ADD`, `LOAD`
@@ -187,6 +189,42 @@ ceiling and still have `CLEAR ALL` run to completion over a hundred million quad
 reporting zero consumption. It is charged **before** the quads are applied, per
 operation, so an operation whose mutation would breach the ceiling makes no mutation
 rather than a truncated one.
+
+The two `property-function-*` points are the second half of the same argument for the
+second producer whose bag size an outside party picks. A property-function call invokes
+host code from predicate position and ingests whatever rows that relation chooses to
+emit, so without them a call's whole cost would ride the generic per-node accounting —
+one `algebra-node-entry` in and one `committed-output-row` per committed row out — which
+prices a relation emitting a million rows from one invocation exactly as it prices one
+emitting ten, and prices a thousand invocations that each emit nothing at nothing at
+all.
+
+* `property-function-invocation` is charged **after** the call's admission refusals (an
+  arity mismatch, an access pattern no declared mode serves) and immediately before the
+  relation is entered — the same placement `user-function-invocation` uses, and for the
+  same reason: a refused invocation evaluated nothing, and charging for work that never
+  happened would make the schedule a description of the query text rather than of the
+  execution.
+* `property-function-row` is charged in emission order through the same governed ingest
+  core `remote-row-ingested` is charged through: after the intermediate-cell ceiling is
+  observed and before the row is interned. Charging in row order is what makes the
+  ingested bag a positional prefix of the relation's output, which is what lets a
+  truncation certificate describe it. A row the call *filters* — one disagreeing with a
+  bound argument position, or with an earlier occurrence of a repeated variable — is
+  never admitted and so never charged; it is an ordinary non-match, already accounted for
+  by the invocation that asked.
+
+Admission control prices a call too, and the composition rule is stated exactly because
+the plan survey has no cross-node arithmetic at all — the predicted peak is a **maximum**
+over per-node peaks, and a `JOIN` of two basic graph patterns composes to neither node's
+product. A property-function node contributes `rows_per_invocation(mode) × driving_rows`
+rows of `columns` = the relation's flattened arity, where `driving_rows` is the row count
+predicted for the call's immediate left arm when that arm is a node the survey predicts
+at all (a basic graph pattern, or a chain spine ending in another call), and `1`
+otherwise. `rows_per_invocation` is read for the access pattern the call is *actually*
+invoked in, which the feasibility-ordering pass has already fixed by the time the survey
+runs. An over-estimate costs a caller an answer and can never hand them a wrong one; an
+under-estimate changes nothing, because the live cell ceiling is still in force.
 
 Where the fuel went is readable per algebra node: `explain_query` runs under
 `METERED` and returns a `QueryExplanation` whose ledger decomposes the single fuel
@@ -373,6 +411,30 @@ the exact number of exchanges the transport was asked to perform. That count is 
 observation separating "the request was prevented" from "the request was made and its
 answer discarded", which no governor evidence can distinguish.
 
+### 8.1 The property-function relation seam
+
+`PfCursor::next` is likewise handed no signal it is obliged to read, and a relation that
+blocks forever inside one `next` degrades the stop-check granularity to one call. The
+contract is stronger here than for a transport, because a relation's output is a row
+**stream** rather than one atomic exchange:
+
+* The evaluator polls the stop signal before opening a cursor and between successive
+  pulls, and every emitted row crosses the per-row admission point on its way into the
+  bag. That point is itself a bounded-work checkpoint, so a fired signal is observed
+  there whether or not the relation ever looked at it.
+* A deaf relation is therefore bounded **per row**, not merely per invocation: its extra
+  row is pulled and then refused at admission rather than ingested.
+* The consequence is pinned by the corpus's `property-function-*-relation-cancel-mid-invocation`
+  pair, which fires the caller's flag at the identical pull through a cursor that abandons
+  the invocation and one that ignores the signal entirely: the two answers are
+  **byte-identical**, certificate included. Reading the signal inside an invocation is an
+  optimisation, never the thing that makes the query bounded.
+
+`rows_per_invocation` is a separate obligation and it is an **honesty contract**, not a
+hint: admission control refuses a plan whose declared bound already breaches the cell
+ceiling, so a bound that under-states reality turns an admission decision into a wrong
+one. A genuinely unbounded generator declares `u64::MAX`.
+
 ## 9. Evidence
 
 `GovernorEvidence` is returned on the **complete** path as well as the exhausted one,
@@ -390,7 +452,7 @@ next and produce an intermittent, essentially undiscoverable bug.
 | Constant | Value / how to read it |
 |---|---|
 | `GOVERNOR_PROFILE_ID` | `purrdf-sparql-governors` |
-| `GOVERNOR_PROFILE_VERSION` | `4` |
+| `GOVERNOR_PROFILE_VERSION` | `5` |
 | `GOVERNOR_PROFILE_DIGEST` | derived — see below |
 | `STOP_POLL_FUEL` | `4093` |
 
@@ -407,12 +469,13 @@ no entry encodes two ways and no two distinct schedules encode alike. A consumer
 therefore recompute it from this document alone:
 
 ```sh
-{ printf 'purrdf-sparql-governors\n4\n'
+{ printf 'purrdf-sparql-governors\n5\n'
   printf '%s\t1\n' algebra-node-entry committed-output-row bgp-candidate-quad \
     path-frontier-expansion row-expression-evaluation user-function-invocation \
-    remote-request-issued remote-row-ingested update-mutated-quad
+    remote-request-issued remote-row-ingested update-mutated-quad \
+    property-function-invocation property-function-row
 } | sha256sum
-# e8fb39f22279bd0a76f311ea30cd505fa5ac83fac8f9b5aa5a2af7fb393fa7b1
+# 1e8e8f2b340bf85addaa55e3e4b323ca75325ad9465b9846cf96ac13b557317e
 ```
 
 SHA-256 through the `sha2` crate, which is pure software with no entropy source, so
@@ -449,8 +512,8 @@ green.
 
 The wall-deadline smoke case is the deliberate exception: it has only the outcome
 discriminant because rows and spend depend on elapsed time. Across the corpus there
-are 29 cases total, of which 25 form zero, boundary, or over-bound lanes and the
-remaining four are transport/wall-clock seam cases.
+are 34 cases total, of which 28 form zero, boundary, or over-bound lanes and the
+remaining six are transport, relation, and wall-clock seam cases.
 
 Boundaries are **measured, never authored**. For each caller-settable dimension the
 corpus carries a `zero` ceiling (must trip), a ceiling equal to the metered cost (must
@@ -461,7 +524,7 @@ than trusting the numbers in the file.
 ### 11.1 The corpus digest, and how to pin it
 
 ```text
-GOVERNOR_CORPUS_DIGEST = dc716d48199f79b7058f6547e5f6ee5fa0c291fa7e9cb73d4a35196536e9f884
+GOVERNOR_CORPUS_DIGEST = 4533b01e942bc41a57740b9599b72b8477e036b9a04745d65f293af68afaabf3
 ```
 
 It is the SHA-256 of the corpus freeze manifest, which in turn covers every payload
@@ -501,7 +564,8 @@ increment it. That restraint is what makes the number worth pinning.
 | 1 | the initial schedule |
 | 2 | schedule byte-identical; an expression-embedded `EXISTS` stopped being re-evaluated once per rayon chunk, so its fuel stopped depending on the machine's thread count |
 | 3 | schedule byte-identical; the answer cap and `LIMIT` are pushed down the certified prefix-monotone spine, so a leaf under a row ceiling stops scanning at the ceiling instead of materialising its whole output. Also adds `Refused` and applies the answer cap to `CONSTRUCT`/`DESCRIBE` output statements |
-| **4** | the first version whose schedule is **not** byte-identical: `update-mutated-quad` is appended, because SPARQL `UPDATE` became governable and a mutation is work a budget must be able to bound. No *query* charges it |
+| 4 | the first version whose schedule is **not** byte-identical: `update-mutated-quad` is appended, because SPARQL `UPDATE` became governable and a mutation is work a budget must be able to bound. No *query* charges it |
+| **5** | `property-function-invocation` and `property-function-row` are appended, because the evaluator gained a second producer whose bag size an outside party picks: a host-supplied relation invoked from predicate position. Admission control also learns to price a call from the relation's declared row bound. No query without a registered property function charges either point |
 
 ### 12.1 What a consumer must re-verify when the version moves
 
@@ -513,8 +577,8 @@ a thing a pinned number can silently stop meaning:
    lying and must be rejected rather than reconciled.
 2. **Re-measure every fuel ceiling** under `QueryGovernors::METERED`, against your own
    representative queries. A ceiling sized against the previous version was sized
-   against work this build may no longer do (v3) or may now do (v4). Do not scale the
-   old number.
+   against work this build may no longer do (v3) or may now do (v4, v5). Do not scale
+   the old number.
 3. **Re-check ceilings you sized at or near a boundary.** Ceilings are inclusive, so a
    ceiling that was exactly the metered cost completed; after a bump it may be one
    short.
@@ -536,7 +600,7 @@ them at no extra cost.
 | Field | Source |
 |---|---|
 | profile id | `purrdf_sparql_eval::GOVERNOR_PROFILE_ID` → `purrdf-sparql-governors` |
-| profile version | `purrdf_sparql_eval::GOVERNOR_PROFILE_VERSION` → `4` |
+| profile version | `purrdf_sparql_eval::GOVERNOR_PROFILE_VERSION` → `5` |
 | profile digest | `purrdf_sparql_eval::GOVERNOR_PROFILE_DIGEST` (§10) |
 | stop-poll interval | `purrdf_sparql_eval::STOP_POLL_FUEL` → `4093` |
 | corpus digest | `purrdf_sparql_eval::GOVERNOR_CORPUS_DIGEST` (§11.1) |

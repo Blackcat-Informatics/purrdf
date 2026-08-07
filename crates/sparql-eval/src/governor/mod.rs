@@ -1186,12 +1186,43 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// No *query* charges it: a query mutates nothing, so a budget sized against v3 for a query
 /// buys exactly the same execution under v4. The number moves anyway, because the schedule
 /// moved and the schedule is what the digest describes.
-pub const GOVERNOR_PROFILE_VERSION: u32 = 4;
+///
+/// # v5
+///
+/// [`CHARGE_SCHEDULE`] gains two points, because the evaluator gained a second producer
+/// whose bag size an outside party picks: a **property-function call**
+/// ([`crate::property_fn::PropertyFunction`]) invokes host code from predicate position and
+/// ingests whatever rows that host relation chooses to emit.
+///
+/// - [`ChargePoint::PropertyFunctionInvocation`] is charged once per relation invocation —
+///   once per driving row, the unit of work a relation actually performs.
+/// - [`ChargePoint::PropertyFunctionRow`] is charged once per emitted row admitted into the
+///   call's bag, through the same governed ingest core `SERVICE` charges
+///   [`ChargePoint::RemoteRowIngested`] through.
+///
+/// Without them a call's whole cost rode the generic per-node accounting every algebra node
+/// pays — one [`ChargePoint::AlgebraNodeEntry`] on the way in and one
+/// [`ChargePoint::CommittedOutputRow`] per committed row on the way out — which prices a
+/// relation that emits a million rows from one invocation exactly as it prices one that
+/// emits ten, and prices a thousand invocations that each emit nothing at nothing at all. A
+/// ceiling that cannot see the work a host relation performs is not a ceiling on it.
+///
+/// No query without a registered property function charges either point, so a budget sized
+/// against v4 for such a query buys exactly the same execution under v5. The number moves
+/// anyway, because the schedule moved and the schedule is what the digest describes.
+///
+/// v5 also teaches admission control to price a call: a property-function node contributes
+/// [`PropertyFunction::rows_per_invocation`](crate::property_fn::PropertyFunction::rows_per_invocation)
+/// to the plan survey (see `crate::bgp::survey_pattern_plans`), so a relation that declares a
+/// bound above the caller's cell ceiling is refused before it opens a cursor rather than
+/// metered while it fills memory.
+pub const GOVERNOR_PROFILE_VERSION: u32 = 5;
 
 /// The charge schedule, as data rather than as scattered literals.
 ///
-/// Byte-identical from v1 through v3; v4 appends `update-mutated-quad` — see
-/// [`GOVERNOR_PROFILE_VERSION`] for what each version moved and why.
+/// Byte-identical from v1 through v3; v4 appends `update-mutated-quad` and v5 appends the
+/// two property-function points — see [`GOVERNOR_PROFILE_VERSION`] for what each version
+/// moved and why.
 ///
 /// Each entry is `(label, cost)`. The labels are a pinned contract — a frozen corpus and
 /// a per-node ledger record them — so renaming one is a breaking change, not a cosmetic
@@ -1203,7 +1234,9 @@ pub const GOVERNOR_PROFILE_VERSION: u32 = 4;
 /// caller can reason about and a corpus can pin, rather than a weighted score whose units
 /// mean nothing outside this build. `update-mutated-quad` is priced at one for the same
 /// reason: it is one observable event — one quad inserted into, or removed from, the store.
-pub const CHARGE_SCHEDULE: [(&str, u64); 9] = [
+/// So are `property-function-invocation` (one call into a host relation) and
+/// `property-function-row` (one row that relation emitted and this engine accepted).
+pub const CHARGE_SCHEDULE: [(&str, u64); 11] = [
     ("algebra-node-entry", 1),
     ("committed-output-row", 1),
     ("bgp-candidate-quad", 1),
@@ -1213,6 +1246,8 @@ pub const CHARGE_SCHEDULE: [(&str, u64); 9] = [
     ("remote-request-issued", 1),
     ("remote-row-ingested", 1),
     ("update-mutated-quad", 1),
+    ("property-function-invocation", 1),
+    ("property-function-row", 1),
 ];
 
 /// A deterministic counting point in the evaluator, and the type-safe index into
@@ -1251,6 +1286,33 @@ pub enum ChargePoint {
     /// Charged **before** the quads are applied, per operation, so an operation whose
     /// mutation would breach the ceiling makes no mutation rather than a truncated one.
     UpdateMutatedQuad,
+    /// One invocation of a host-supplied property-function relation — one `open`, over one
+    /// driving row.
+    ///
+    /// Charged **after** the call's admission refusals and immediately before the relation
+    /// is entered, on the same doctrine [`Self::UserFunctionInvocation`] follows: an
+    /// invocation the engine refused (an arity mismatch, an access pattern no declared mode
+    /// serves) evaluated nothing, and charging for work that never happened would make the
+    /// schedule a description of the query text rather than of the execution.
+    ///
+    /// This is the point that makes the *number of calls* visible to a budget. A relation
+    /// that returns nothing still costs a host call per driving row, and a query whose
+    /// driving side has a million rows makes a million of them.
+    PropertyFunctionInvocation,
+    /// One row emitted by a property-function relation and admitted into the call's bag.
+    ///
+    /// Charged through the shared governed ingest core (`crate::row_ingest`), in emission
+    /// order, immediately after the intermediate-cell ceiling is observed and before the
+    /// row is interned — the same sequence, in the same order, that
+    /// [`Self::RemoteRowIngested`] is charged in. Charging in row order is what makes the
+    /// ingested bag a positional prefix of the relation's output, which is what lets a
+    /// truncation certificate describe it.
+    ///
+    /// A row the call *filters* — one disagreeing with a bound argument position, or with
+    /// an earlier occurrence of a repeated variable — is never admitted and so never
+    /// charged here: it is an ordinary non-match, and it is the relation's own
+    /// [`Self::PropertyFunctionInvocation`] charge that already accounts for having asked.
+    PropertyFunctionRow,
 }
 
 impl ChargePoint {
@@ -1265,6 +1327,8 @@ impl ChargePoint {
         Self::RemoteRequestIssued,
         Self::RemoteRowIngested,
         Self::UpdateMutatedQuad,
+        Self::PropertyFunctionInvocation,
+        Self::PropertyFunctionRow,
     ];
 
     /// This point's row in [`CHARGE_SCHEDULE`], and its column in a
@@ -1285,6 +1349,8 @@ impl ChargePoint {
             Self::RemoteRequestIssued => 6,
             Self::RemoteRowIngested => 7,
             Self::UpdateMutatedQuad => 8,
+            Self::PropertyFunctionInvocation => 9,
+            Self::PropertyFunctionRow => 10,
         }
     }
 
@@ -1420,7 +1486,7 @@ pub static GOVERNOR_PROFILE_DIGEST: LazyLock<String> = LazyLock::new(|| {
 /// time-dependent trip point has none to publish. A consumer pinning this digest is
 /// pinning evidence about ceilings and polling, not about elapsed time.
 pub const GOVERNOR_CORPUS_DIGEST: &str =
-    "dc716d48199f79b7058f6547e5f6ee5fa0c291fa7e9cb73d4a35196536e9f884";
+    "4533b01e942bc41a57740b9599b72b8477e036b9a04745d65f293af68afaabf3";
 
 #[cfg(test)]
 mod tests {

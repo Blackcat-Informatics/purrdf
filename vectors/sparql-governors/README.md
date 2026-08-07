@@ -40,6 +40,7 @@ regenerating a digest.
 |---|---|
 | `manifest.tsv` | the case list: inputs, source, governors (numeric ceilings, stop signals, or injected deadline-poll ceilings), band, outcome |
 | `transport.tsv` | injected-transport wiring and exchange count, for federated cases |
+| `relations.tsv` | scripted property-function wiring, invocation count and pull count, for relation cases |
 | `cases/<name>.ttl` | input dataset, in Turtle 1.2 |
 | `cases/<name>.rq` | input query |
 | `cases/<name>.<endpoint>.srj` | a federated endpoint's pinned SPARQL-results JSON response |
@@ -124,6 +125,7 @@ A **cancellation** is not a clock, so cancellation cases are pinned in full.
 | Lane | Inputs | Covers |
 |---|---|---|
 | `fuel-*` | `chain` | abstract execution steps |
+| `property-function-fuel-*` | `property-function` | the two property-function charge points: one per invocation of a host relation, one per row it emits and this engine accepts |
 | `answer-rows-*` | `chain` | what the query commits to its answer sequence |
 | `intermediate-cells-*` | `join` | the largest intermediate bag; the zero and over-bound cases are refused at **admission**, because the planner's estimate already exceeds the ceiling |
 | `scratch-bytes-*` | `concat` | arena growth, which is independent of every row and cell count |
@@ -159,6 +161,33 @@ is the claim: ignoring `stop` degrades to per-request granularity, not to
 unboundedness. The one thing that differs is pinned rather than smoothed over —
 an abandoned exchange preserves the positional-prefix relation needed for
 deterministic resumption, while a completed-then-discarded one withdraws it.
+
+### The property-function relation seam
+
+`PfCursor::next` is handed no signal it is obliged to read, and nothing forces a
+host to write a cursor that stops early. The evaluator polls before opening a
+cursor and between successive pulls, so the seam is bounded per **invocation**
+whatever the relation does.
+
+| Case | Covers |
+|---|---|
+| `property-function-deaf-relation-cancel-mid-invocation` | the host cancels during the relation's second pull, through a cursor that never reads the signal |
+| `property-function-cooperating-relation-cancel-mid-invocation` | the same timeline, through a cursor that polls it and abandons the invocation |
+
+The two answers are **byte-identical** — same rows, same certificate — and that
+is a stronger statement than the `SERVICE` pair's. A relation's output is a row
+stream rather than one atomic exchange, and every row of it crosses the engine's
+per-row admission point on the way into the bag; that point is also a bounded
+work checkpoint, so a fired signal is observed there whether or not the cursor
+ever looked at it. The deaf cursor's extra row is therefore pulled and then
+*refused*, never ingested: ignoring the signal buys the relation nothing and
+costs the caller nothing.
+
+`relations.tsv` records the invocation and pull counts for the same reason
+`transport.tsv` records exchange counts: they are the only observations that
+separate "the ceiling prevented the work" from "the work was done and its rows
+discarded". Here they are what makes the paragraph above checkable — the deaf
+case is pulled exactly once more than it delivers.
 
 ### Deadlines
 

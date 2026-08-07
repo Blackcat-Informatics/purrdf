@@ -386,7 +386,7 @@ impl NativeSparqlEngine {
         governors: &QueryGovernors,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
         let state = Arc::new(GovernorState::new(governors));
-        if let Some(refused) = self.admit(dataset, &prepared.query, &state) {
+        if let Some(refused) = self.admit(dataset, &prepared.query, None, &state) {
             return refused;
         }
         let mut ctx = self.eval_ctx(dataset).with_governors(Arc::clone(&state));
@@ -439,7 +439,7 @@ impl NativeSparqlEngine {
             &self.parser_options,
         )?;
         let state = Arc::new(GovernorState::new(governors));
-        if let Some(refused) = self.admit(dataset, &prepared.query, &state) {
+        if let Some(refused) = self.admit(dataset, &prepared.query, None, &state) {
             return refused;
         }
         let mut ctx = self
@@ -519,7 +519,9 @@ impl NativeSparqlEngine {
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
         let prepared =
             self.prepare_for(request.query, request.base_iri, options.property_functions)?;
-        if let Some(refused) = self.admit(dataset, &prepared.query, state) {
+        if let Some(refused) =
+            self.admit(dataset, &prepared.query, options.property_functions, state)
+        {
             return refused;
         }
         let ctx = self.eval_ctx(dataset).with_governors(Arc::clone(state));
@@ -634,7 +636,7 @@ impl NativeSparqlEngine {
                 return finish_governed_fallible_query(dataset, &state, Err(diagnostic));
             }
         };
-        if let Some(refused) = self.admit(dataset, &prepared.query, &state) {
+        if let Some(refused) = self.admit(dataset, &prepared.query, None, &state) {
             return finish_governed_fallible_query(dataset, &state, refused);
         }
         let evaluation = {
@@ -945,7 +947,9 @@ impl NativeSparqlEngine {
             self.cache
                 .borrow_mut()
                 .prepare_with(query_text, base_iri, &self.parser_options)?;
-        let survey = self.survey_plan(dataset, &prepared.query)?;
+        // `explain_query` parses without a registry, so the plan it explains carries no
+        // property-function call to price.
+        let survey = self.survey_plan(dataset, &prepared.query, None)?;
         // The ledger's node table is fixed against the plan that is about to be evaluated.
         // No substitutions are applied on this path, so the addresses the ledger records
         // are the addresses the evaluator visits.
@@ -973,10 +977,15 @@ impl NativeSparqlEngine {
     /// One walk feeds both consumers — admission control, which refuses a plan whose
     /// predicted peak already exceeds the caller's ceiling, and the ledger, which prints
     /// that prediction beside the count that materialised.
+    ///
+    /// `relations` is the caller's property-function registry, when it supplied one. It is
+    /// what lets a call node be priced at all: a relation's declared row bound is the only
+    /// prediction there is for a bag no index sized.
     fn survey_plan<D: DatasetView + Sync>(
         &self,
         dataset: &D,
         query: &Query,
+        relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
     ) -> Result<crate::bgp::PlanSurvey, RdfDiagnostic> {
         let _ = self;
         let active_dataset = ActiveDataset::from_query_dataset(query.dataset(), dataset);
@@ -986,6 +995,7 @@ impl NativeSparqlEngine {
             &active_dataset,
             GraphMatch::Default,
             query_pattern(query),
+            relations,
             &mut survey,
         )
         .map_err(|e| RdfDiagnostic::error("native-sparql-query-explain", e.to_string()))?;
@@ -1037,6 +1047,7 @@ impl NativeSparqlEngine {
         &self,
         dataset: &D,
         query: &Query,
+        relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
         state: &GovernorState,
     ) -> Option<Result<GovernedOutcome, RdfDiagnostic>> {
         let dimension = purrdf_core::ResourceDimension::IntermediateCells;
@@ -1044,7 +1055,7 @@ impl NativeSparqlEngine {
             return None;
         }
         let limit = state.limits().get(dimension);
-        let estimate = match self.survey_plan(dataset, query) {
+        let estimate = match self.survey_plan(dataset, query, relations) {
             Ok(survey) => survey.peak_cells(),
             Err(diagnostic) => return Some(Err(diagnostic)),
         };

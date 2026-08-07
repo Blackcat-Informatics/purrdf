@@ -66,6 +66,7 @@ use purrdf_sparql_algebra::{
 use crate::DetHashMap;
 use crate::error::EvalError;
 use crate::eval::EvalCtx;
+use crate::governor::ChargePoint;
 use crate::governor::lift::{Evaluated, Truncation};
 use crate::property_fn::{PfArgs, PfArity, PropertyFunction, next_contained, open_contained};
 use crate::row_ingest::{GovernedRowIngest, RowAdmission};
@@ -323,11 +324,12 @@ fn eval_call_over<D: DatasetView + Sync>(
     // emits are the rows the plan licensed a ceiling against, so stopping at `k` of
     // them yields the first `k` — a genuine positional prefix.
     let semantic_ceiling = ctx.row_ceiling();
-    // No dedicated per-row charge point yet: a call's cost rides the generic per-node
-    // accounting (`AlgebraNodeEntry` on the way in, `CommittedOutputRow` over the
-    // committed bag on the way out) that every algebra node already pays. This is the
-    // one seam a dedicated point slots into.
-    let ingest = GovernedRowIngest::new(ctx, width, None);
+    // A call's own per-row point. It rides the shared governed ingest core exactly as
+    // `SERVICE`'s does, because a relation's output is the other bag in this evaluator
+    // whose size an outside party picks: the generic per-node accounting every algebra
+    // node pays would price a relation that emits a million rows from one invocation
+    // exactly as it prices one that emits ten.
+    let ingest = GovernedRowIngest::new(ctx, width, Some(ChargePoint::PropertyFunctionRow));
     let mut rows: Vec<Solution<D::Id>> = Vec::new();
     let mut tripped: Option<TrippedGovernor> = None;
 
@@ -349,6 +351,16 @@ fn eval_call_over<D: DatasetView + Sync>(
         let pf_args = PfArgs::new(subject, object);
         let mode = pf_args.mode();
         admit_mode(relation.as_ref(), &call.iri, mode)?;
+
+        // The `property-function-invocation` charge point. Charged once per invocation
+        // that actually reaches host code — the arity and access-pattern refusals above
+        // entered no relation, and charging for work that never happened would make the
+        // schedule a description of the query text rather than of the execution. This is
+        // the placement doctrine `crate::user_fn`'s invocation point already follows.
+        if let Err(governor) = ctx.charge(ChargePoint::PropertyFunctionInvocation) {
+            tripped = Some(governor);
+            break 'input;
+        }
 
         // Poll before entering host code: a relation may block for the whole of one
         // `open`, so the poll immediately before it is the last one that can prevent
@@ -1419,6 +1431,69 @@ mod tests {
             again.tripped(),
             exhausted.evidence.tripped(),
             "the same budget trips the same governor"
+        );
+    }
+
+    // ---- admission --------------------------------------------------------
+
+    #[test]
+    fn a_relation_that_declares_more_rows_than_the_cell_ceiling_is_refused_before_it_runs() {
+        // The cell ceiling is the one governor that must act BEFORE the work rather than
+        // after it: by the time a meter can report a materialized bag, the bag is in
+        // memory. A relation's bag is not predicted from any index, so the only prediction
+        // there is is the relation's own declaration — which is exactly why the
+        // declaration is held to an upper-bound honesty contract.
+        let declared = 1_000_000_u64;
+        let relation = Arc::new(
+            RecordingRelation::new(0, 1, &["f"], vec![vec![iri("r1")], vec![iri("r2")]])
+                .with_row_bound(declared),
+        );
+        let registry = registry_of(vec![(PF_SPLIT, relation.clone())]);
+        let query = format!("SELECT ?x WHERE {{ () <{PF_SPLIT}> ?x }}");
+
+        let refused = run_governed(
+            &query,
+            &registry,
+            &crate::governor::QueryGovernors::UNBOUNDED.with_max_intermediate_cells(10),
+        );
+        assert_eq!(
+            refused.tripped(),
+            Some(TrippedGovernor::Refused {
+                dimension: purrdf_core::ResourceDimension::IntermediateCells,
+                limit: 10,
+                // One flattened argument position, invoked once against the identity
+                // table: the composition rule's leaf case, stated exactly.
+                estimate: declared,
+            }),
+            "a declared bound above the ceiling is a refusal carrying the ESTIMATE, never a \
+             consumption nothing measured"
+        );
+        assert!(
+            relation.calls().is_empty(),
+            "a refused plan opens no cursor: admission acts before the allocation, not after"
+        );
+
+        // The same query, the same ceiling, an honest small declaration: admitted, and the
+        // relation runs. An estimate is what decides admission, so a truthful one is what
+        // gets a caller their answer.
+        let modest = Arc::new(
+            RecordingRelation::new(0, 1, &["f"], vec![vec![iri("r1")], vec![iri("r2")]])
+                .with_row_bound(2),
+        );
+        let admitted = run_governed(
+            &query,
+            &registry_of(vec![(PF_SPLIT, modest.clone())]),
+            &crate::governor::QueryGovernors::UNBOUNDED.with_max_intermediate_cells(10),
+        );
+        assert_eq!(
+            admitted.tripped(),
+            None,
+            "2 cells sit inside a 10-cell ceiling"
+        );
+        assert_eq!(
+            modest.calls(),
+            vec!["f".to_owned()],
+            "the relation really ran"
         );
     }
 

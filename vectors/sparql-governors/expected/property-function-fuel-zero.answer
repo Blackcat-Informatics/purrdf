@@ -1,0 +1,4 @@
+outcome	budget-exhausted
+tripped	budget	fuel	fuel-exhausted	limit=0	consumed=1
+certificate	certain	positional-prefix=true
+variables	s	x

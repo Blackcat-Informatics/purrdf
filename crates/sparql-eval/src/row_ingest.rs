@@ -69,12 +69,16 @@ pub(crate) struct GovernedRowIngest {
     cell_ceiling: Option<usize>,
     /// The per-row fuel charge point, when the operator has a dedicated one.
     ///
-    /// `None` is not "free": it means the operator's rows are metered by the generic
-    /// per-node accounting every algebra node already pays
-    /// ([`ChargePoint::AlgebraNodeEntry`] on the way in, and
+    /// Both of this core's callers do: `SERVICE` charges
+    /// [`ChargePoint::RemoteRowIngested`] and a property-function call charges
+    /// [`ChargePoint::PropertyFunctionRow`], which is what makes the two bags whose
+    /// size an outside party picks separately visible in a per-node ledger.
+    ///
+    /// `None` remains meaningful rather than vestigial: it is not "free", it means the
+    /// operator's rows are metered by the generic per-node accounting every algebra
+    /// node already pays ([`ChargePoint::AlgebraNodeEntry`] on the way in, and
     /// [`ChargePoint::CommittedOutputRow`] over the node's committed bag on the way
-    /// out) rather than by a point of its own. It is the single seam a dedicated
-    /// point slots into.
+    /// out) rather than by a point of its own.
     charge_point: Option<ChargePoint>,
 }
 

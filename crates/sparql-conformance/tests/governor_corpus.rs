@@ -49,6 +49,15 @@
 //! and no metered cost. Pinning bytes for that case would publish a promise this engine does
 //! not make.
 //!
+//! # The relation lane
+//!
+//! Three cases wire a **scripted property-function relation** instead of a remote
+//! endpoint. It is the second producer whose bag size an outside party picks, so it owes
+//! the same two records the transport lane owes: how many invocations host code was
+//! entered for, and how many rows it was asked to produce. Neither is derivable from
+//! governor evidence, and both are what separate "the ceiling prevented the work" from
+//! "the work was done and its rows discarded". `relations.tsv` holds them.
+//!
 //! # Regenerating
 //!
 //! ```sh
@@ -76,8 +85,10 @@ use purrdf_core::{
     StopCause, TermValue, TrippedGovernor,
 };
 use purrdf_sparql_eval::{
-    CancellationFlag, GovernedOutcome, HttpRemoteQuerySource, HttpRequest, HttpTransport,
-    NativeSparqlEngine, PartialAnswers, QueryGovernors, RemoteError, StopSignal, WallDeadline,
+    BindingPattern, CancellationFlag, EvalError, GovernedOutcome, GovernorState,
+    HttpRemoteQuerySource, HttpRequest, HttpTransport, NativeSparqlEngine, PartialAnswers, PfArgs,
+    PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, QueryGovernors,
+    RemoteError, ShaclPrebinding, ShaclQueryOptions, StopSignal, Volatility, WallDeadline,
 };
 
 /// The dimensions a case may set a ceiling on, in the order every pinned consumption
@@ -95,8 +106,9 @@ const PINNED_DIMENSIONS: [ResourceDimension; 5] = [
 ];
 
 /// The floor on the zero/boundary/over-bound matrix: one of each band for each of the five
-/// numeric dimensions, plus an injected deterministic deadline.
-const REQUIRED_BAND_CASES: usize = 18;
+/// numeric dimensions, an injected deterministic deadline, and the property-function
+/// charge points' own fuel lane.
+const REQUIRED_BAND_CASES: usize = 21;
 
 // ---------------------------------------------------------------------------
 // Corpus locations
@@ -179,14 +191,48 @@ impl StopSpec {
     }
 }
 
+/// Where a case's rows come from, beyond the dataset it loads.
+///
+/// A third value rather than a second boolean: the two injected seams — a remote endpoint
+/// and a host relation — are the two producers whose bag size an outside party picks, and
+/// a case wires exactly one of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Source {
+    /// The dataset and nothing else.
+    Dataset,
+    /// The injected HTTP transport described in `transport.tsv`.
+    Http,
+    /// The scripted property-function relation described in `relations.tsv`.
+    Relation,
+}
+
+impl Source {
+    fn parse(token: &str, line: usize) -> Self {
+        match token {
+            "none" => Self::Dataset,
+            "http" => Self::Http,
+            "relation" => Self::Relation,
+            other => panic!("manifest.tsv line {line}: unknown source {other:?}"),
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Dataset => "none",
+            Self::Http => "http",
+            Self::Relation => "relation",
+        }
+    }
+}
+
 /// One manifest row.
 #[derive(Debug, Clone)]
 struct Case {
     name: String,
     data: String,
     query: String,
-    /// Whether the case wires the injected HTTP transport.
-    federated: bool,
+    /// Which injected seam, if any, this case wires.
+    source: Source,
     /// The ceiling this case sets, if it sets one.
     ceiling: Option<(ResourceDimension, u64)>,
     /// The stop signal this case attaches, if it attaches one.
@@ -294,11 +340,7 @@ fn load_manifest() -> Vec<Case> {
             7,
             "manifest.tsv line {number} is malformed: {line:?}"
         );
-        let federated = match fields[3] {
-            "none" => false,
-            "http" => true,
-            other => panic!("manifest.tsv line {number}: unknown source {other:?}"),
-        };
+        let source = Source::parse(fields[3], number);
         let (ceiling, stop, deadline_polls) = parse_governors(fields[4], number);
         assert!(
             ceiling.is_some() || stop.is_some() || deadline_polls.is_some(),
@@ -308,7 +350,7 @@ fn load_manifest() -> Vec<Case> {
             name: fields[0].to_owned(),
             data: fields[1].to_owned(),
             query: fields[2].to_owned(),
-            federated,
+            source,
             ceiling,
             stop,
             deadline_polls,
@@ -414,6 +456,239 @@ fn load_transport() -> BTreeMap<String, TransportSpec> {
     specs
 }
 
+// ---------------------------------------------------------------------------
+// The relation table
+// ---------------------------------------------------------------------------
+
+/// The predicate IRI every relation-lane case's query calls, and the IRI the scripted
+/// relation is registered under.
+///
+/// A fixture IRI under `example.org`, exactly as every other fixture in this corpus is:
+/// the property-function seam is caller configuration, so the corpus supplies its own
+/// vocabulary rather than depending on one the engine mints.
+const RELATION_IRI: &str = "http://example.org/pf/emit";
+
+/// The subject value every emitted row echoes back into is the invocation's own bound
+/// subject, so a `bf` invocation's rows survive the engine's bound-position filter.
+const RELATION_OBJECT_PREFIX: &str = "http://example.org/pf/r";
+
+/// One `relations.tsv` row: how the scripted relation behaves, and how much work it must
+/// be asked to perform.
+#[derive(Debug, Clone, Copy)]
+struct RelationSpec {
+    /// Rows the relation emits per invocation, which is also the bound it declares —
+    /// the declaration is held to an upper-bound honesty contract, and the corpus keeps
+    /// it exact so a `rows_per_invocation` change is visible as a spend change.
+    emits: u64,
+    /// Whether the cursor polls the caller's stop signal and abandons the invocation on a
+    /// fired one — what a relation CAN do, never what makes the query bounded.
+    honours_stop: bool,
+    /// The 1-based pull at which the cursor fires the caller's cancellation flag, standing
+    /// in for a host that cancels while the evaluator is inside a relation and can poll
+    /// nothing.
+    cancel_on_pull: Option<u64>,
+    /// The exact number of invocations expected. `None` is the regeneration placeholder.
+    invocations: Option<u64>,
+    /// The exact number of row pulls expected. `None` is the regeneration placeholder.
+    pulls: Option<u64>,
+}
+
+impl RelationSpec {
+    const fn stop_handling(self) -> &'static str {
+        if self.honours_stop {
+            "honours"
+        } else {
+            "ignores"
+        }
+    }
+
+    fn cancel_cell(self) -> String {
+        self.cancel_on_pull
+            .map_or_else(|| "never".to_owned(), |pull| pull.to_string())
+    }
+}
+
+fn load_relations() -> BTreeMap<String, RelationSpec> {
+    let text =
+        std::fs::read_to_string(corpus_root().join("relations.tsv")).expect("relation table");
+    let mut specs = BTreeMap::new();
+    for (index, line) in text.lines().enumerate() {
+        if line.trim().is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let number = index + 1;
+        let fields: Vec<&str> = line.split('\t').collect();
+        assert_eq!(
+            fields.len(),
+            6,
+            "relations.tsv line {number} is malformed: {line:?}"
+        );
+        let emits = fields[1].parse().unwrap_or_else(|error| {
+            panic!(
+                "relations.tsv line {number}: {:?} is not a row count: {error}",
+                fields[1]
+            )
+        });
+        let honours_stop = match fields[2] {
+            "honours" => true,
+            "ignores" => false,
+            other => panic!("relations.tsv line {number}: unknown stop-handling {other:?}"),
+        };
+        let cancel_on_pull = if fields[3] == "never" {
+            None
+        } else {
+            Some(fields[3].parse().unwrap_or_else(|error| {
+                panic!(
+                    "relations.tsv line {number}: {:?} is not a pull ordinal: {error}",
+                    fields[3]
+                )
+            }))
+        };
+        let counted = |cell: &str| -> Option<u64> {
+            if cell == "?" {
+                None
+            } else {
+                Some(cell.parse().unwrap_or_else(|error| {
+                    panic!("relations.tsv line {number}: {cell:?} is not a count: {error}")
+                }))
+            }
+        };
+        let previous = specs.insert(
+            fields[0].to_owned(),
+            RelationSpec {
+                emits,
+                honours_stop,
+                cancel_on_pull,
+                invocations: counted(fields[4]),
+                pulls: counted(fields[5]),
+            },
+        );
+        assert!(
+            previous.is_none(),
+            "relations.tsv line {number}: {:?} is listed twice",
+            fields[0]
+        );
+    }
+    specs
+}
+
+/// The scripted property-function relation: a fixed-width table emitted per invocation,
+/// counting what it was asked for and optionally firing the caller's flag mid-iteration.
+///
+/// It mints nothing — every term it emits is under `example.org`, like every other fixture
+/// here — and it is deterministic by construction: its emission order is a pure function
+/// of the invocation's bound subject and the row count `relations.tsv` declares.
+#[derive(Debug)]
+struct ScriptedRelation {
+    spec: RelationSpec,
+    /// The declared mode, held so `modes` can borrow it.
+    modes: Vec<BindingPattern>,
+    /// The caller's cancellation flag, when the case attached one.
+    flag: Option<CancellationFlag>,
+    invocations: AtomicU64,
+    /// Shared with every cursor this relation opens: a cursor is `Box<dyn PfCursor>`, which
+    /// owns its contents, so the counter travels by handle rather than by borrow.
+    pulls: Arc<AtomicU64>,
+}
+
+impl ScriptedRelation {
+    fn new(spec: RelationSpec, flag: Option<CancellationFlag>) -> Self {
+        Self {
+            spec,
+            // `bf`: the subject is bound by the driving pattern, the object is the
+            // relation's output. Declaring only `bf` is what makes the feasibility
+            // ordering pass schedule the data pattern first.
+            modes: vec![BindingPattern::from_code("bf")],
+            flag,
+            invocations: AtomicU64::new(0),
+            pulls: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    fn invocations(&self) -> u64 {
+        self.invocations.load(Ordering::Relaxed)
+    }
+
+    fn pulls(&self) -> u64 {
+        self.pulls.load(Ordering::Relaxed)
+    }
+}
+
+impl PropertyFunction for ScriptedRelation {
+    fn volatility(&self) -> Volatility {
+        Volatility::Stable
+    }
+
+    fn arity(&self) -> PfArity {
+        PfArity::new(1, 1)
+    }
+
+    fn modes(&self) -> &[BindingPattern] {
+        &self.modes
+    }
+
+    fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
+        self.spec.emits
+    }
+
+    fn open(
+        &self,
+        args: &PfArgs<'_>,
+        _ceiling: Option<u64>,
+    ) -> Result<Box<dyn PfCursor>, EvalError> {
+        self.invocations.fetch_add(1, Ordering::Relaxed);
+        let subject = args.get(0).cloned().ok_or_else(|| {
+            EvalError::function(format!("<{RELATION_IRI}> needs a bound subject"))
+        })?;
+        Ok(Box::new(ScriptedCursor {
+            subject,
+            emitted: 0,
+            spec: self.spec,
+            flag: self.flag.clone(),
+            pulls: Arc::clone(&self.pulls),
+        }))
+    }
+}
+
+/// [`ScriptedRelation`]'s cursor: one invocation's rows, in order, once.
+struct ScriptedCursor {
+    subject: TermValue,
+    emitted: u64,
+    spec: RelationSpec,
+    flag: Option<CancellationFlag>,
+    pulls: Arc<AtomicU64>,
+}
+
+impl PfCursor for ScriptedCursor {
+    fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
+        let pull = self.pulls.fetch_add(1, Ordering::Relaxed) + 1;
+        if self.spec.cancel_on_pull == Some(pull)
+            && let Some(flag) = &self.flag
+        {
+            flag.cancel();
+        }
+        // A relation that declines to read the signal is the whole point of the deaf case:
+        // the poll below is what a host CAN write, never what makes the query bounded. The
+        // evaluator polls between successive pulls either way, so both readings are
+        // bounded — they differ only in how much of the invocation already in flight the
+        // caller pays for.
+        let abandon = self.spec.honours_stop
+            && self
+                .flag
+                .as_ref()
+                .is_some_and(CancellationFlag::is_cancelled);
+        if abandon || self.emitted >= self.spec.emits {
+            return Ok(None);
+        }
+        let row = vec![
+            self.subject.clone(),
+            TermValue::iri(format!("{RELATION_OBJECT_PREFIX}{}", self.emitted)),
+        ];
+        self.emitted += 1;
+        Ok(Some(row))
+    }
+}
+
 /// The injected transport: a counted, network-free exchange that answers from a pinned
 /// SPARQL-results JSON document per endpoint.
 ///
@@ -494,7 +769,7 @@ fn responses_for(case: &Case) -> BTreeMap<String, Vec<u8>> {
     }
     assert!(
         !responses.is_empty(),
-        "{} is federated but has no pinned endpoint responses",
+        "{} names the http source but has no pinned endpoint responses",
         case.name
     );
     responses
@@ -540,6 +815,10 @@ struct Observation {
     posts: usize,
     /// Polls observed by an injected deterministic deadline.
     stop_polls: u64,
+    /// Invocations the scripted relation was opened for.
+    invocations: u64,
+    /// Rows the scripted relation was asked to produce, across every invocation.
+    pulls: u64,
 }
 
 /// The governors a case declares, together with the live cancellation flag they carry.
@@ -627,7 +906,12 @@ fn governors_for(case: &Case) -> Configured {
 }
 
 /// Evaluate `case` under `configured`, with the transport wired as `spec` says.
-fn observe(case: &Case, configured: &Configured, spec: Option<TransportSpec>) -> Observation {
+fn observe(
+    case: &Case,
+    configured: &Configured,
+    spec: Option<TransportSpec>,
+    relation_spec: Option<RelationSpec>,
+) -> Observation {
     let dataset = load_dataset(case);
     let query = load_query(case);
     let engine = NativeSparqlEngine::new();
@@ -638,23 +922,57 @@ fn observe(case: &Case, configured: &Configured, spec: Option<TransportSpec>) ->
     };
 
     let posts = AtomicUsize::new(0);
-    let outcome = if case.federated {
-        let spec =
-            spec.unwrap_or_else(|| panic!("{} is federated with no transport row", case.name));
-        let responses = responses_for(case);
-        let source = HttpRemoteQuerySource::new(FixtureTransport {
-            responses: &responses,
-            posts: &posts,
-            honours_stop: spec.honours_stop,
-            cancel_on_first_post: if spec.cancel_on_first_post {
-                configured.flag.as_ref()
-            } else {
-                None
-            },
-        });
-        engine.query_governed_with_source(&dataset, request, &source, &configured.governors)
-    } else {
-        engine.query_governed(&dataset, request, &configured.governors)
+    let mut relation: Option<Arc<ScriptedRelation>> = None;
+    let outcome = match case.source {
+        Source::Http => {
+            let spec = spec.unwrap_or_else(|| {
+                panic!("{} names the http source with no transport row", case.name)
+            });
+            let responses = responses_for(case);
+            let source = HttpRemoteQuerySource::new(FixtureTransport {
+                responses: &responses,
+                posts: &posts,
+                honours_stop: spec.honours_stop,
+                cancel_on_first_post: if spec.cancel_on_first_post {
+                    configured.flag.as_ref()
+                } else {
+                    None
+                },
+            });
+            engine.query_governed_with_source(&dataset, request, &source, &configured.governors)
+        }
+        Source::Relation => {
+            let spec = relation_spec.unwrap_or_else(|| {
+                panic!(
+                    "{} names the relation source with no relations.tsv row",
+                    case.name
+                )
+            });
+            let scripted = Arc::new(ScriptedRelation::new(spec, configured.flag.clone()));
+            relation = Some(Arc::clone(&scripted));
+            let mut registry = PropertyFunctionRegistry::new();
+            registry.register(
+                RELATION_IRI,
+                Arc::clone(&scripted) as Arc<dyn PropertyFunction>,
+            );
+            // The relation lane runs through the operation entry, which is the only
+            // governed surface that carries a property-function registry. The state is
+            // built here and dropped with this call, exactly as `query_governed` builds
+            // its own: one execution, one budget.
+            let state = Arc::new(GovernorState::new(&configured.governors));
+            engine.query_governed_in_operation_with_options(
+                &*dataset,
+                request,
+                ShaclQueryOptions {
+                    prebinding: ShaclPrebinding::None,
+                    functions: None,
+                    property_functions: Some(&registry),
+                    bnode_mint_prefix: None,
+                },
+                &state,
+            )
+        }
+        Source::Dataset => engine.query_governed(&dataset, request, &configured.governors),
     }
     .unwrap_or_else(|error| panic!("{} must evaluate: {error}", case.name));
 
@@ -667,6 +985,10 @@ fn observe(case: &Case, configured: &Configured, spec: Option<TransportSpec>) ->
             .deadline
             .as_ref()
             .map_or(0, |signal| signal.polls()),
+        invocations: relation
+            .as_ref()
+            .map_or(0, |scripted| scripted.invocations()),
+        pulls: relation.as_ref().map_or(0, |scripted| scripted.pulls()),
     }
 }
 
@@ -680,13 +1002,17 @@ struct Measurement {
     stop_polls: u64,
 }
 
-fn metered(case: &Case, spec: Option<TransportSpec>) -> Measurement {
+fn metered(
+    case: &Case,
+    spec: Option<TransportSpec>,
+    relation_spec: Option<RelationSpec>,
+) -> Measurement {
     let configured = Configured {
         governors: QueryGovernors::METERED,
         flag: None,
         deadline: None,
     };
-    let observation = observe(case, &configured, spec);
+    let observation = observe(case, &configured, spec, relation_spec);
     assert_eq!(
         observation.outcome, "complete",
         "{}: the measuring run must complete — METERED bounds nothing, so a trip means the \
@@ -701,7 +1027,7 @@ fn metered(case: &Case, spec: Option<TransportSpec>) -> Measurement {
             flag: None,
             deadline: Some(deadline),
         };
-        let deadline_observation = observe(case, &configured, spec);
+        let deadline_observation = observe(case, &configured, spec, relation_spec);
         assert_eq!(
             deadline_observation.outcome, "complete",
             "{}: a never-firing injected deadline must admit the whole query",
@@ -1033,7 +1359,7 @@ fn manifest_row(case: &Case, outcome: &str) -> String {
         case.name,
         case.data,
         case.query,
-        if case.federated { "http" } else { "none" },
+        case.source.label(),
         case.band.label(),
     )
 }
@@ -1043,10 +1369,15 @@ fn manifest_row(case: &Case, outcome: &str) -> String {
 fn regenerate_case(
     case: &Case,
     spec: Option<TransportSpec>,
-) -> (String, Option<(String, TransportSpec)>) {
+    relation_spec: Option<RelationSpec>,
+) -> (
+    String,
+    Option<(String, TransportSpec)>,
+    Option<(String, RelationSpec)>,
+) {
     let mut case = case.clone();
     if case.is_pinned_deterministic() {
-        let measured = metered(&case, spec);
+        let measured = metered(&case, spec, relation_spec);
         write_expected(&case, "metered", &measured.spend);
         if case.band != Band::NotApplicable {
             if let Some((dimension, _)) = case.ceiling {
@@ -1062,7 +1393,7 @@ fn regenerate_case(
     }
 
     let configured = governors_for(&case);
-    let observation = observe(&case, &configured, spec);
+    let observation = observe(&case, &configured, spec, relation_spec);
     if case.is_pinned_deterministic() {
         write_expected(&case, "answer", &observation.answer);
         write_expected(&case, "spend", &observation.spend);
@@ -1076,7 +1407,21 @@ fn regenerate_case(
             },
         )
     });
-    (manifest_row(&case, &observation.outcome), transport)
+    let relation = relation_spec.map(|spec| {
+        (
+            case.name.clone(),
+            RelationSpec {
+                invocations: Some(observation.invocations),
+                pulls: Some(observation.pulls),
+                ..spec
+            },
+        )
+    });
+    (
+        manifest_row(&case, &observation.outcome),
+        transport,
+        relation,
+    )
 }
 
 /// Rewrite the derived cells of `manifest.tsv` and `transport.tsv`, and every `expected/`
@@ -1085,11 +1430,20 @@ fn regenerate_case(
 /// Driven from the ordinary test entry point under an environment variable rather than
 /// from a separate binary, so a regeneration and a verification share one code path and
 /// cannot drift into producing what the checker does not accept.
-fn regenerate(cases: &[Case], specs: &BTreeMap<String, TransportSpec>) {
+fn regenerate(
+    cases: &[Case],
+    specs: &BTreeMap<String, TransportSpec>,
+    relations: &BTreeMap<String, RelationSpec>,
+) {
     let mut manifest_rows = BTreeMap::new();
     let mut transport_rows = BTreeMap::new();
+    let mut relation_rows = BTreeMap::new();
     for case in cases {
-        let (row, transport) = regenerate_case(case, specs.get(&case.name).copied());
+        let (row, transport, relation) = regenerate_case(
+            case,
+            specs.get(&case.name).copied(),
+            relations.get(&case.name).copied(),
+        );
         manifest_rows.insert(case.name.clone(), row);
         if let Some((name, spec)) = transport {
             transport_rows.insert(
@@ -1102,9 +1456,25 @@ fn regenerate(cases: &[Case], specs: &BTreeMap<String, TransportSpec>) {
                 ),
             );
         }
+        if let Some((name, spec)) = relation {
+            relation_rows.insert(
+                name.clone(),
+                format!(
+                    "{name}\t{}\t{}\t{}\t{}\t{}",
+                    spec.emits,
+                    spec.stop_handling(),
+                    spec.cancel_cell(),
+                    spec.invocations
+                        .expect("a regenerated row carries its invocation count"),
+                    spec.pulls
+                        .expect("a regenerated row carries its pull count"),
+                ),
+            );
+        }
     }
     rewrite_table(&corpus_root().join("manifest.tsv"), &manifest_rows);
     rewrite_table(&corpus_root().join("transport.tsv"), &transport_rows);
+    rewrite_table(&corpus_root().join("relations.tsv"), &relation_rows);
 }
 
 /// Rewrite a TSV's data rows from `rows`, preserving its comment header and the authored
@@ -1142,27 +1512,58 @@ fn rewrite_table(path: &Path, rows: &BTreeMap<String, String>) {
 fn the_corpus_matches_its_pinned_expectations() {
     let cases = load_manifest();
     let specs = load_transport();
+    let relations = load_relations();
 
     if updating() {
-        regenerate(&cases, &specs);
+        regenerate(&cases, &specs, &relations);
         return;
     }
 
     for case in &cases {
         let spec = specs.get(&case.name).copied();
+        let relation_spec = relations.get(&case.name).copied();
         assert_eq!(
             spec.is_some(),
-            case.federated,
+            case.source == Source::Http,
             "{}: transport.tsv membership must match the manifest's source column",
             case.name
         );
+        assert_eq!(
+            relation_spec.is_some(),
+            case.source == Source::Relation,
+            "{}: relations.tsv membership must match the manifest's source column",
+            case.name
+        );
 
-        let observation = observe(case, &governors_for(case), spec);
+        let observation = observe(case, &governors_for(case), spec, relation_spec);
         assert_eq!(
             observation.outcome, case.outcome,
             "{} reached a different outcome than the manifest pins",
             case.name
         );
+
+        if let Some(spec) = relation_spec {
+            // The two counts no governor evidence carries: whether host code was entered
+            // at all, and how much of an invocation already in flight the caller paid for.
+            assert_eq!(
+                observation.invocations,
+                spec.invocations.unwrap_or_else(|| {
+                    panic!("{}: relations.tsv still carries a placeholder", case.name)
+                }),
+                "{} opened a different number of invocations than relations.tsv pins",
+                case.name
+            );
+            assert_eq!(
+                observation.pulls,
+                spec.pulls.unwrap_or_else(|| {
+                    panic!("{}: relations.tsv still carries a placeholder", case.name)
+                }),
+                "{} pulled a different number of rows than relations.tsv pins — the only \
+                 observation separating a prevented pull from one that was made and \
+                 discarded",
+                case.name
+            );
+        }
 
         if let Some(spec) = spec {
             let expected = spec.posts.unwrap_or_else(|| {
@@ -1226,13 +1627,18 @@ fn every_boundary_is_derived_from_a_metered_run() {
     }
     let cases = load_manifest();
     let specs = load_transport();
+    let relations = load_relations();
 
     let mut bands = 0_usize;
     for case in &cases {
         if !case.is_pinned_deterministic() {
             continue;
         }
-        let measured = metered(case, specs.get(&case.name).copied());
+        let measured = metered(
+            case,
+            specs.get(&case.name).copied(),
+            relations.get(&case.name).copied(),
+        );
         assert_eq!(
             measured.spend,
             read_expected(case, "metered"),
@@ -1468,6 +1874,113 @@ fn a_transport_that_ignores_the_stop_signal_is_bounded_per_request() {
     );
 }
 
+/// A host relation that cannot abandon an invocation it is already inside reaches the
+/// **same** certified outcome, row for row, as one that can.
+///
+/// The property-function seam's half of the deaf-transport doctrine, and it lands harder
+/// here than it does for `SERVICE`. `PfCursor::next` is handed no signal it is obliged to
+/// read, and nothing forces a host to write a cursor that stops early — but a relation's
+/// output is a row STREAM rather than one atomic exchange, and every row of it crosses the
+/// engine's per-row admission point on its way into the bag. That point is also a bounded
+/// work checkpoint, so a fired signal is observed there whether or not the relation ever
+/// looked at it.
+///
+/// The two cases below therefore fire the caller's flag at the identical pull through a
+/// cursor that abandons the invocation and one that ignores the signal entirely, and pin
+/// that the results are indistinguishable: the deaf cursor's extra row is pulled and then
+/// REFUSED at admission rather than ingested. Ignoring the signal buys the relation
+/// nothing and costs the caller nothing — which is what "an optimisation, never the thing
+/// that makes the query bounded" means, stated as evidence instead of as prose.
+#[test]
+fn a_relation_that_ignores_the_stop_signal_is_bounded_per_invocation() {
+    if updating() {
+        return;
+    }
+    let cases = load_manifest();
+    let relations = load_relations();
+
+    let deaf = case_named(
+        &cases,
+        "property-function-deaf-relation-cancel-mid-invocation",
+    );
+    let cooperating = case_named(
+        &cases,
+        "property-function-cooperating-relation-cancel-mid-invocation",
+    );
+    let deaf_spec = relations[&deaf.name];
+    let cooperating_spec = relations[&cooperating.name];
+    assert!(
+        !deaf_spec.honours_stop,
+        "the deaf case must actually be deaf, or it pins nothing"
+    );
+    assert!(
+        cooperating_spec.honours_stop,
+        "the contrast case must actually poll the signal"
+    );
+    assert_eq!(
+        deaf_spec.cancel_on_pull, cooperating_spec.cancel_on_pull,
+        "the two cases must fire the flag at the same pull, or they compare two timelines"
+    );
+    assert!(
+        deaf_spec.cancel_on_pull.is_some_and(|pull| pull > 1),
+        "the flag must fire PART WAY through an invocation; firing on the first pull would \
+         test the poll before the cursor rather than the one between its rows"
+    );
+    assert_eq!(
+        deaf.outcome, cooperating.outcome,
+        "the two relations must reach the same outcome: reading the signal inside the \
+         invocation is an optimisation, never the thing that makes the query bounded"
+    );
+
+    // Bounded per invocation: the flag fired inside the first one and neither relation was
+    // opened again, whatever it did with the signal it was never handed.
+    assert_eq!(deaf_spec.invocations, cooperating_spec.invocations);
+    assert_eq!(
+        deaf_spec.invocations,
+        Some(1),
+        "the flag fires inside the first invocation, so no second one may be opened"
+    );
+    let pulls = deaf_spec
+        .pulls
+        .expect("a pinned case carries its pull count");
+    assert_eq!(
+        pulls,
+        deaf_spec.cancel_on_pull.expect("checked above"),
+        "a deaf relation was pulled past the row that fired the flag: the degradation is \
+         then unbounded, not per-row"
+    );
+    assert_eq!(
+        deaf_spec.pulls, cooperating_spec.pulls,
+        "a cooperating cursor abandons the pull that fired the flag and a deaf one answers \
+         it; either way the engine asks exactly once more and then stops"
+    );
+
+    // And the answers: byte-identical, including the certificate. The deaf cursor answered
+    // its last pull and that row was REFUSED at the per-row admission point, so it never
+    // reached the bag the cooperating cursor also never filled.
+    let deaf_answer = read_expected(deaf, "answer");
+    let cooperating_answer = read_expected(cooperating, "answer");
+    assert_eq!(
+        deaf_answer, cooperating_answer,
+        "a deaf relation must not change what the caller receives, nor what those rows are \
+         certified to be"
+    );
+    assert!(
+        deaf_answer.contains("certificate\tcertain\t"),
+        "the rows in hand are every one an answer, so the bound is a certified lower one; \
+         got:\n{deaf_answer}"
+    );
+    let rows = answer_rows(&deaf_answer)
+        .lines()
+        .filter(|line| line.starts_with("row"))
+        .count();
+    assert!(
+        rows < usize::try_from(pulls).expect("a pull count fits a usize"),
+        "the deaf cursor emitted more rows than reached the answer; if every pulled row \
+         were ingested the per-row admission point would not be a checkpoint at all"
+    );
+}
+
 /// Two runs of the whole corpus agree, byte for byte, on rows and on cost.
 ///
 /// Determinism is the property the corpus exists to publish, so it is checked rather than
@@ -1481,13 +1994,15 @@ fn the_corpus_is_reproducible_within_a_run() {
     }
     let cases = load_manifest();
     let specs = load_transport();
+    let relations = load_relations();
     for case in &cases {
         if !case.is_pinned_deterministic() {
             continue;
         }
         let spec = specs.get(&case.name).copied();
-        let first = observe(case, &governors_for(case), spec);
-        let second = observe(case, &governors_for(case), spec);
+        let relation_spec = relations.get(&case.name).copied();
+        let first = observe(case, &governors_for(case), spec, relation_spec);
+        let second = observe(case, &governors_for(case), spec, relation_spec);
         assert_eq!(
             first, second,
             "{} did not reproduce: a governed run whose outcome depends on the run is not a \

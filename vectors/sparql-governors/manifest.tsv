@@ -1,6 +1,8 @@
-# purrdf-sparql-governors profile v4 — normative vector manifest.
+# purrdf-sparql-governors profile v5 — normative vector manifest.
 # Columns: case <TAB> data <TAB> query <TAB> source <TAB> governors <TAB> band <TAB> outcome
-#   source     none | http   (http wires the injected transport described in transport.tsv)
+#   source     none | http | relation
+#              http wires the injected transport described in transport.tsv;
+#              relation wires the scripted property function described in relations.tsv
 #   governors  comma-separated <setting>=<value>; a ceiling names a caller-settable
 #              dimension (fuel, answer-rows, intermediate-cells, scratch-bytes,
 #              remote-requests); "deadline-polls" names the deterministic injected
@@ -45,3 +47,8 @@ deadline-injected-zero	cases/chain.ttl	cases/chain.rq	none	deadline-polls=0	zero
 deadline-injected-boundary	cases/chain.ttl	cases/chain.rq	none	deadline-polls=11	boundary	complete
 deadline-injected-over-bound	cases/chain.ttl	cases/chain.rq	none	deadline-polls=10	over-bound	stopped deadline
 deadline-zero-budget	cases/chain.ttl	cases/chain.rq	none	stop=deadline-zero	n/a	stopped deadline
+property-function-fuel-zero	cases/property-function.ttl	cases/property-function.rq	relation	fuel=0	zero	budget-exhausted fuel
+property-function-fuel-boundary	cases/property-function.ttl	cases/property-function.rq	relation	fuel=31	boundary	complete
+property-function-fuel-over-bound	cases/property-function.ttl	cases/property-function.rq	relation	fuel=30	over-bound	budget-exhausted fuel
+property-function-deaf-relation-cancel-mid-invocation	cases/property-function.ttl	cases/property-function.rq	relation	stop=cancellation	n/a	stopped cancelled
+property-function-cooperating-relation-cancel-mid-invocation	cases/property-function.ttl	cases/property-function.rq	relation	stop=cancellation	n/a	stopped cancelled

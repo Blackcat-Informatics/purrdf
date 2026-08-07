@@ -627,6 +627,9 @@ fn admit_where(
         active_dataset,
         purrdf_core::GraphMatch::Default,
         pattern,
+        // A SPARQL `UPDATE` request carries no property-function registry: the update
+        // surface has no entry that supplies one, so a call node cannot appear here.
+        None,
         &mut survey,
     )
     .map_err(|e| RdfDiagnostic::error("native-sparql-update-eval", e.to_string()))?;
