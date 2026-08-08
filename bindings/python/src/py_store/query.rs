@@ -31,46 +31,66 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use purrdf_core::ResourceVector;
+use purrdf_core::{GraphMatch, ResourceVector};
 use purrdf_sparql_eval::{
     BudgetExhausted, CancellationFlag, GovernedOutcome, GovernedUpdateOutcome, GovernorEvidence,
-    NativeSparqlEngine, ParserOptions, PartialAnswers, QueryGovernors, ResourceDimension,
-    StandpointPredicates, StopCause, StopSignal, TrippedGovernor, WallDeadline,
+    MemoryRelation, NativeSparqlEngine, ParserOptions, PartialAnswers, PropertyFunctionRegistry,
+    QueryGovernors, ResourceDimension, StandpointPredicates, StopCause, StopSignal,
+    TrippedGovernor, WallDeadline,
 };
 use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyString};
 
 use super::io::{PyRdfFormat, serialize_triples};
-use super::term::{PyTriple, PyVariable, term_to_py};
+use super::term::{PyTriple, PyVariable, extract_term_value, term_to_py};
 use crate::{GovernedEntailment, RdfDataset, RdfTerm, RdfTriple, SparqlResult, TermValue};
 
+/// The optional per-call engine configuration the Python surface accepts, converted
+/// out of Python before the GIL is released and moved into the detached region whole.
+///
+/// One struct rather than four positional `Option`s because three of the four are
+/// `Option<Vec<String>>`: at a call site a swapped pair would still compile and would
+/// silently reclassify every predicate under a namespace.
+#[derive(Debug, Default)]
+pub(super) struct EngineConfig {
+    /// The extension-function namespace set threaded into [`ParserOptions`]. Unset
+    /// means the engine default (**extensions off**): a call-position IRI is an
+    /// ordinary custom function.
+    pub(super) extension_namespaces: Option<Vec<String>>,
+    /// The property-function namespace PREFIXES threaded into [`ParserOptions`]: a
+    /// predicate IRI under one is lowered to a call node rather than to a triple
+    /// pattern. Unset means the engine default (**prefix recognition off**), which is
+    /// all a caller who registers relations needs — the engine derives EXACT-IRI
+    /// recognition from the registry itself, so a registered relation is reachable
+    /// without also reclassifying every other IRI under its namespace. Declaring a
+    /// namespace is how a caller asks for the stricter reading, in which an
+    /// unregistered IRI under it is a hard error instead of an empty scan.
+    pub(super) property_fn_namespaces: Option<Vec<String>>,
+    /// The `(according_to, sharpens)` domain predicate IRIs threaded into
+    /// [`NativeSparqlEngine::with_standpoint_predicates`], read by `heldIn` and
+    /// loss-aware `CONSTRUCT`. Unset means the engine default: evaluating `heldIn`
+    /// is a hard error (PurRDF mints no vocabulary of its own).
+    pub(super) standpoint_predicates: Option<(String, String)>,
+}
+
 /// Build the [`NativeSparqlEngine`] for one query/update call from the optional
-/// Python-surface engine configuration (shared by `Store` and `MutableDataset`):
+/// Python-surface engine configuration (shared by `Store` and `MutableDataset`).
 ///
-/// * `extension_namespaces` — the extension-function namespace set threaded into
-///   [`ParserOptions`]. Unset means the engine default (**extensions off**): a
-///   call-position IRI is an ordinary custom function.
-/// * `standpoint_predicates` — the `(according_to, sharpens)` domain predicate
-///   IRIs threaded into [`NativeSparqlEngine::with_standpoint_predicates`], read
-///   by `heldIn` and loss-aware `CONSTRUCT`. Unset means the engine default:
-///   evaluating `heldIn` is a hard error (PurRDF mints no vocabulary of its own).
-///
-/// The property-function namespace list is the empty one this surface's relation
-/// table is: a call node is only ever resolved against a registry of host
-/// relations, this engine is built with none, and a namespace configured over an
-/// empty registry would turn an ordinary triple pattern into an unresolvable call.
-/// Empty is therefore the configuration that matches the injected relations, and
-/// it is the same default any host gets before it injects one.
-pub(super) fn build_engine(
-    extension_namespaces: Option<Vec<String>>,
-    standpoint_predicates: Option<(String, String)>,
-) -> NativeSparqlEngine {
+/// [`ParserOptions::property_fn_iris`] is left empty here on purpose: the exact-IRI
+/// recognition set is derived by the engine from the registry the call is evaluated
+/// under, one-to-one, so it cannot disagree with the relations actually injected.
+pub(super) fn build_engine(config: EngineConfig) -> NativeSparqlEngine {
+    let EngineConfig {
+        extension_namespaces,
+        property_fn_namespaces,
+        standpoint_predicates,
+    } = config;
     let mut engine = NativeSparqlEngine::new();
-    if let Some(namespaces) = extension_namespaces {
+    if extension_namespaces.is_some() || property_fn_namespaces.is_some() {
         engine = engine.with_parser_options(ParserOptions {
-            extension_fn_namespaces: namespaces,
-            property_fn_namespaces: Vec::new(),
+            extension_fn_namespaces: extension_namespaces.unwrap_or_default(),
+            property_fn_namespaces: property_fn_namespaces.unwrap_or_default(),
             property_fn_iris: Vec::new(),
         });
     }
@@ -79,6 +99,202 @@ pub(super) fn build_engine(
             engine.with_standpoint_predicates(StandpointPredicates::new(according_to, sharpens));
     }
     engine
+}
+
+/// One caller-declared property-function relation, converted out of Python **before**
+/// the GIL is released.
+///
+/// A relation the Python surface registers is pure data — a frozen table of
+/// [`TermValue`]s, or the head of one written in the store's own dataset — never a
+/// Python callable. That is what makes the seam GIL-free: nothing the engine invokes
+/// while detached can re-enter the interpreter, so a relation is `Send + Sync` owned
+/// data exactly as a Rust host's [`MemoryRelation`] is.
+#[derive(Debug)]
+pub(super) enum RelationSpec {
+    /// Rows supplied as Python data: `(subject_arity, object_arity, rows)`.
+    Rows {
+        /// The declared number of subject-side arguments.
+        subject_arity: usize,
+        /// The declared number of object-side arguments.
+        object_arity: usize,
+        /// The table, in emission order; each row holds its values in flattened
+        /// order (subject-side first, then object-side).
+        rows: Vec<Vec<TermValue>>,
+    },
+    /// Rows read out of the store's own dataset: the head of an `rdf:List` of
+    /// `rdf:List`s, one inner list per row.
+    Graph {
+        /// The term naming the table's head node.
+        head: TermValue,
+        /// The declared number of subject-side arguments.
+        subject_arity: usize,
+        /// The declared number of object-side arguments.
+        object_arity: usize,
+    },
+}
+
+/// Collect the `relations` / `relations_from_graph` keyword dicts into the ordered
+/// `(IRI, spec)` list one call registers.
+///
+/// # A duplicate IRI is refused here, not at registration
+///
+/// [`PropertyFunctionRegistry::register`] **panics** on a duplicate, deliberately: a
+/// shadowed relation silently changes which rows a graph pattern produces, and both
+/// spellings of the call are identical. Python dict keys are unique, so the only way
+/// to reach that panic from this surface is to name one IRI in both dicts — refused
+/// here as a `ValueError`, because a host misconfiguration crossing a language
+/// boundary is an exception, not an abort.
+///
+/// # Errors
+///
+/// `TypeError` if a key is not a `str` or a value is not the declared shape;
+/// `ValueError` if an IRI is declared twice.
+pub(super) fn collect_relations(
+    relations: Option<&Bound<'_, PyDict>>,
+    relations_from_graph: Option<&Bound<'_, PyDict>>,
+) -> PyResult<Vec<(String, RelationSpec)>> {
+    let mut specs: Vec<(String, RelationSpec)> = Vec::new();
+    for (dict, from_graph) in [(relations, false), (relations_from_graph, true)] {
+        let Some(dict) = dict else { continue };
+        for (key, value) in dict {
+            let iri = key.extract::<String>().map_err(|_| {
+                PyTypeError::new_err("property-function relation keys must be IRI strings")
+            })?;
+            if specs.iter().any(|(seen, _)| *seen == iri) {
+                return Err(PyValueError::new_err(format!(
+                    "property function <{iri}> is declared twice; a relation may not be \
+                     silently shadowed, because both spellings of the call are identical \
+                     and the only observable difference is which rows the query returns"
+                )));
+            }
+            let spec = if from_graph {
+                graph_relation_spec(&iri, &value)?
+            } else {
+                rows_relation_spec(&iri, &value)?
+            };
+            specs.push((iri, spec));
+        }
+    }
+    Ok(specs)
+}
+
+/// Parse one `relations` value: `(subject_arity, object_arity, rows)`.
+fn rows_relation_spec(iri: &str, value: &Bound<'_, PyAny>) -> PyResult<RelationSpec> {
+    let [subject_arity, object_arity, rows] =
+        relation_triple(iri, value, "(subject_arity, object_arity, rows)")?;
+    let subject_arity = arity(iri, &subject_arity)?;
+    let object_arity = arity(iri, &object_arity)?;
+    let mut table = Vec::new();
+    for row in rows.try_iter().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "property function <{iri}>: `rows` must be a sequence of rows"
+        ))
+    })? {
+        let row = row?;
+        let mut cells = Vec::new();
+        for cell in row.try_iter().map_err(|_| {
+            PyTypeError::new_err(format!(
+                "property function <{iri}>: each row must be a sequence of terms"
+            ))
+        })? {
+            cells.push(extract_term_value(&cell?)?);
+        }
+        table.push(cells);
+    }
+    Ok(RelationSpec::Rows {
+        subject_arity,
+        object_arity,
+        rows: table,
+    })
+}
+
+/// Parse one `relations_from_graph` value: `(head, subject_arity, object_arity)`.
+fn graph_relation_spec(iri: &str, value: &Bound<'_, PyAny>) -> PyResult<RelationSpec> {
+    let [head, subject_arity, object_arity] =
+        relation_triple(iri, value, "(head, subject_arity, object_arity)")?;
+    Ok(RelationSpec::Graph {
+        head: extract_term_value(&head)?,
+        subject_arity: arity(iri, &subject_arity)?,
+        object_arity: arity(iri, &object_arity)?,
+    })
+}
+
+/// Unpack a relation declaration into its three positions, naming the expected shape
+/// in the error rather than reporting an anonymous extraction failure.
+fn relation_triple<'py>(
+    iri: &str,
+    value: &Bound<'py, PyAny>,
+    shape: &str,
+) -> PyResult<[Bound<'py, PyAny>; 3]> {
+    let shape_error = || {
+        PyTypeError::new_err(format!(
+            "property function <{iri}> must be declared as {shape}"
+        ))
+    };
+    let items: Vec<Bound<'py, PyAny>> = value.extract().map_err(|_| shape_error())?;
+    <[Bound<'py, PyAny>; 3]>::try_from(items).map_err(|_| shape_error())
+}
+
+/// Read one declared arity position as a non-negative integer.
+fn arity(iri: &str, value: &Bound<'_, PyAny>) -> PyResult<usize> {
+    value.extract::<usize>().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "property function <{iri}>: an arity must be a non-negative integer"
+        ))
+    })
+}
+
+/// Build the registry one call evaluates under, from the already-converted `specs`
+/// and the frozen snapshot the call runs against.
+///
+/// Runs **inside** the detached region: every value it reads is owned Rust data, and
+/// [`RelationSpec::Graph`] needs the snapshot that only exists there. `None` — the
+/// no-relations case — is the absence of a registry rather than an empty one, so a
+/// caller who names no relation gets byte-for-byte the pre-existing evaluation.
+///
+/// # The graph a table head is read from
+///
+/// [`GraphMatch::Default`], matching the Rust harness: a relation table is
+/// *configuration* written beside the data, and the default graph is the one a store
+/// loaded without a graph name puts it in. Reading `Any` instead would let a table
+/// silently gain rows from an unrelated named graph.
+///
+/// # Errors
+///
+/// `ValueError` carrying the kernel's own diagnostic for a ragged table
+/// ([`MemoryRelation::new`]) or a torn, absent, or wrong-width list
+/// ([`MemoryRelation::from_graph`]).
+pub(super) fn build_relations(
+    specs: Vec<(String, RelationSpec)>,
+    dataset: &RdfDataset,
+) -> PyResult<Option<PropertyFunctionRegistry>> {
+    if specs.is_empty() {
+        return Ok(None);
+    }
+    let mut registry = PropertyFunctionRegistry::new();
+    for (iri, spec) in specs {
+        let table = match spec {
+            RelationSpec::Rows {
+                subject_arity,
+                object_arity,
+                rows,
+            } => MemoryRelation::new(subject_arity, object_arity, rows),
+            RelationSpec::Graph {
+                head,
+                subject_arity,
+                object_arity,
+            } => MemoryRelation::from_graph(
+                dataset,
+                &head,
+                GraphMatch::Default,
+                subject_arity,
+                object_arity,
+            ),
+        }
+        .map_err(|e| PyValueError::new_err(format!("property function <{iri}>: {e}")))?;
+        registry.register(iri, Arc::new(table));
+    }
+    Ok(Some(registry))
 }
 
 /// SELECT results, materialized. Mirrors the oxigraph Python `QuerySolutions`.
@@ -1205,7 +1421,7 @@ mod tests {
         // Unset = engine defaults: the call-position IRI is an ordinary custom
         // function, so the query PARSES (any failure is an evaluation error,
         // never the extension seam's parse-time unknown-local-name hard-fail).
-        if let Err(diag) = ask(&build_engine(None, None)) {
+        if let Err(diag) = ask(&build_engine(EngineConfig::default())) {
             assert!(
                 !diag.to_string().contains("parse"),
                 "extensions-off must not fail at parse time: {diag}"
@@ -1217,25 +1433,87 @@ mod tests {
     fn extension_namespaces_thread_into_parser_options() {
         // With the namespace configured, the UNKNOWN local name `nope` is a
         // parse-time hard error — proving the kwarg reached ParserOptions.
-        let engine = build_engine(Some(vec!["https://ex.example/fn/".to_owned()]), None);
+        let engine = build_engine(EngineConfig {
+            extension_namespaces: Some(vec!["https://ex.example/fn/".to_owned()]),
+            ..EngineConfig::default()
+        });
         let diag = ask(&engine).expect_err("unknown extension local name must hard-fail");
         assert_eq!(diag.code, "native-sparql-query-parse", "{diag}");
     }
 
     #[test]
     fn standpoint_predicates_thread_into_the_engine() {
-        let engine = build_engine(
-            None,
-            Some((
+        let engine = build_engine(EngineConfig {
+            standpoint_predicates: Some((
                 "https://ex.example/accordingTo".to_owned(),
                 "https://ex.example/sharpens".to_owned(),
             )),
-        );
+            ..EngineConfig::default()
+        });
         // The engine Debug surface reports the configured table (the engine's own
         // crate tests cover `heldIn` evaluation semantics end-to-end).
         assert!(
             format!("{engine:?}").contains("accordingTo"),
             "standpoint predicate table must be installed"
+        );
+    }
+
+    /// A property-function namespace configured with NO registry: a predicate under
+    /// it is lowered to a call node, and the call is refused as unregistered rather
+    /// than quietly scanning a dataset that holds no such triple.
+    #[test]
+    fn property_fn_namespaces_thread_into_parser_options() {
+        let engine = build_engine(EngineConfig {
+            property_fn_namespaces: Some(vec!["https://ex.example/rel/".to_owned()]),
+            ..EngineConfig::default()
+        });
+        let dataset = parse_dataset(b"", "application/n-triples", None).expect("empty dataset");
+        let diag = engine
+            .query(
+                &dataset,
+                SparqlRequest {
+                    query: "ASK { ?s <https://ex.example/rel/nope> ?o }",
+                    base_iri: None,
+                    substitutions: &[],
+                },
+            )
+            .expect_err("a call under a declared namespace with no relation must hard-fail");
+        assert!(
+            diag.to_string()
+                .contains("no property function is registered"),
+            "{diag}"
+        );
+    }
+
+    /// The registry the Python surface builds is the kernel's own, so a ragged table
+    /// is refused by [`MemoryRelation::new`] and surfaces as a Python `ValueError`.
+    #[test]
+    fn a_ragged_tuple_relation_is_refused() {
+        let specs = vec![(
+            "https://ex.example/rel/pairs".to_owned(),
+            RelationSpec::Rows {
+                subject_arity: 1,
+                object_arity: 1,
+                rows: vec![vec![TermValue::iri("https://ex.example/a")]],
+            },
+        )];
+        let dataset = parse_dataset(b"", "application/n-triples", None).expect("empty dataset");
+        let error = build_relations(specs, &dataset).expect_err("a one-cell row is not two wide");
+        assert!(
+            format!("{error}").contains("https://ex.example/rel/pairs"),
+            "the refusal must name the relation: {error}"
+        );
+    }
+
+    /// No declared relation is the ABSENCE of a registry, not an empty one — the
+    /// configuration every pre-existing call keeps.
+    #[test]
+    fn no_declared_relation_attaches_no_registry() {
+        let dataset = parse_dataset(b"", "application/n-triples", None).expect("empty dataset");
+        assert!(
+            build_relations(Vec::new(), &dataset)
+                .expect("no relations is not an error")
+                .is_none()
         );
     }
 }
