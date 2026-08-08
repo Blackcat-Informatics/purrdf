@@ -221,7 +221,12 @@ fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
             .map_err(|error| error.to_string());
 
             match (expected, actual) {
-                (Ok(expected), Ok(GovernedOutcome::Complete { result, evidence })) => {
+                (
+                    Ok(expected),
+                    Ok(GovernedOutcome::Complete {
+                        result, evidence, ..
+                    }),
+                ) => {
                     compared += 1;
                     if !evidence.is_complete() {
                         mismatches.push((

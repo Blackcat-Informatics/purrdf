@@ -1323,7 +1323,9 @@ fn graph_result_from_sparql(result: SparqlResult) -> Result<Dataset, JsError> {
 /// `Result` is the whole point of the type.
 fn query_outcome_from_governed(outcome: GovernedOutcome) -> Result<QueryOutcome, JsError> {
     match outcome {
-        GovernedOutcome::Complete { result, evidence } => Ok(QueryOutcome {
+        GovernedOutcome::Complete {
+            result, evidence, ..
+        } => Ok(QueryOutcome {
             result: Some(query_result_from_sparql(result)?),
             partial: None,
             tripped: None,
@@ -1334,6 +1336,7 @@ fn query_outcome_from_governed(outcome: GovernedOutcome) -> Result<QueryOutcome,
             tripped,
             evidence,
             partial,
+            ..
         }) => Ok(QueryOutcome {
             result: None,
             partial: Some(partial_answers_from_native(partial)?),

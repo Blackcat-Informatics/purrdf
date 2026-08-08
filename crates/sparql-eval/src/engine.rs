@@ -45,6 +45,7 @@ use crate::update::{GraphResolver, UpdateAbort, eval_update};
 use crate::{
     BudgetExhausted, CompleteSparqlResult, FallibleSparqlError, FallibleSparqlResult,
     GovernedEvidence, GovernedOutcome, GovernedUpdateOutcome, PartialAnswers, PartialSparqlResult,
+    RelationIdentity,
 };
 
 /// A parsed, ready-to-evaluate query (the cached unit of the [`PlanCache`]).
@@ -500,9 +501,17 @@ impl NativeSparqlEngine {
         state: &Arc<GovernorState>,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
         check_plan_matches_relations(prepared, options)?;
-        if let Some(refused) =
-            self.admit(dataset, &prepared.query, options.property_functions, state)
-        {
+        // `prepared.relations` is the registry fingerprint computed once at prepare and
+        // just validated against `options.property_functions` above — reused rather than
+        // re-derived, so this receipt's identity and the plan cache's key never disagree.
+        let identity = relation_identity(prepared, options.property_functions);
+        if let Some(refused) = self.admit(
+            dataset,
+            &prepared.query,
+            options.property_functions,
+            state,
+            &identity,
+        ) {
             return refused;
         }
         let mut ctx = self.eval_ctx(dataset).with_governors(Arc::clone(state));
@@ -518,7 +527,7 @@ impl NativeSparqlEngine {
                 evaluate_governed_with_substitutions(prepared, substitutions, &mut ctx)?
             }
         };
-        Ok(materialize_governed(evaluated, &ctx, state))
+        Ok(materialize_governed(evaluated, &ctx, state, identity))
     }
 
     /// [`Self::query_governed`] with a
@@ -1208,14 +1217,14 @@ impl NativeSparqlEngine {
         evaluate_query_evaluated(&prepared.query, &mut ctx)
             .map_err(|e| RdfDiagnostic::error("native-sparql-query-explain", e.to_string()))?;
         // `describe()` is IRI-sorted, so the receipt's relation list is a function of what
-        // was registered and not of the order it was registered in.
-        let registered = relations.map_or_else(Vec::new, |registry| {
-            registry
-                .describe()
-                .into_iter()
-                .map(|descriptor| descriptor.iri)
-                .collect()
-        });
+        // was registered and not of the order it was registered in. The full descriptor
+        // travels, not just the IRI: arity, declared modes, and volatility are all part of
+        // what a relation IS, and two impls sharing an IRI but disagreeing on any of them
+        // must render as two different receipts.
+        let registered = relations.map_or_else(
+            Vec::new,
+            crate::property_fn::PropertyFunctionRegistry::describe,
+        );
         Ok(QueryExplanation::new(
             survey.orders,
             ledger.snapshot(),
@@ -1302,6 +1311,7 @@ impl NativeSparqlEngine {
         query: &Query,
         relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
         state: &GovernorState,
+        identity: &RelationIdentity,
     ) -> Option<Result<GovernedOutcome, RdfDiagnostic>> {
         let dimension = purrdf_core::ResourceDimension::IntermediateCells;
         if !state.is_engaged_in(dimension) {
@@ -1326,6 +1336,7 @@ impl NativeSparqlEngine {
         Some(Ok(GovernedOutcome::BudgetExhausted(BudgetExhausted {
             tripped,
             evidence: state.evidence(),
+            relations: identity.clone(),
             // For SELECT and graph forms this is a certified lower bound over nothing:
             // every item here is an answer, and there are none. ASK has no public witness
             // set, however; its `false` value would read as a settled answer, so the helper
@@ -1860,6 +1871,35 @@ fn check_plan_matches_relations(
     ))
 }
 
+/// The [`RelationIdentity`] a governed outcome carries: `prepared`'s already-computed
+/// registry fingerprint — validated against `relations` by
+/// [`check_plan_matches_relations`] at every call site before this runs, so it is safe to
+/// reuse rather than re-derive — paired with the registered IRIs the fingerprint was
+/// taken over, sorted.
+///
+/// Called once per governed execution rather than per outcome arm, so the refusal path
+/// ([`NativeSparqlEngine::admit`]), the complete path, and the truncated path all carry
+/// the SAME identity for the SAME execution — there is exactly one place this is computed
+/// and every [`GovernedOutcome`] arm reads from it.
+fn relation_identity(
+    prepared: &PreparedQuery,
+    relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
+) -> RelationIdentity {
+    let iris = relations
+        .filter(|registry| !registry.is_empty())
+        .map_or_else(Vec::new, |registry| {
+            registry
+                .describe()
+                .into_iter()
+                .map(|descriptor| descriptor.iri)
+                .collect()
+        });
+    RelationIdentity {
+        fingerprint: prepared.relations.clone(),
+        iris,
+    }
+}
+
 pub(crate) fn apply_query_options<'d, D: DatasetView + Sync>(
     mut ctx: EvalCtx<'d, D>,
     options: QueryOptions<'d>,
@@ -2008,16 +2048,22 @@ fn materialize_governed<D: DatasetView + Sync>(
     evaluated: EvaluatedOutcome<D::Id>,
     ctx: &EvalCtx<'_, D>,
     state: &GovernorState,
+    relations: RelationIdentity,
 ) -> GovernedOutcome {
     match evaluated {
         EvaluatedOutcome::Complete(outcome) => {
             let result = materialize(outcome, ctx);
             let evidence = state.evidence();
             match evidence.tripped {
-                None => GovernedOutcome::Complete { result, evidence },
+                None => GovernedOutcome::Complete {
+                    result,
+                    evidence,
+                    relations,
+                },
                 Some(tripped) => GovernedOutcome::BudgetExhausted(BudgetExhausted {
                     tripped,
                     evidence,
+                    relations,
                     partial: certain_partial(result, true),
                 }),
             }
@@ -2052,6 +2098,7 @@ fn materialize_governed<D: DatasetView + Sync>(
             GovernedOutcome::BudgetExhausted(BudgetExhausted {
                 tripped: certificate.tripped(),
                 evidence: state.evidence(),
+                relations,
                 partial,
             })
         }
@@ -2497,18 +2544,34 @@ mod tests {
         let left_receipt = explain(&left);
         let right_receipt = explain(&right);
 
+        let left_iris: Vec<&str> = left_receipt
+            .relations()
+            .iter()
+            .map(|descriptor| descriptor.iri.as_str())
+            .collect();
         assert_eq!(
-            left_receipt.relations(),
+            left_iris,
             [
-                "http://example.org/rel/first".to_owned(),
-                "http://example.org/rel/second".to_owned()
+                "http://example.org/rel/first",
+                "http://example.org/rel/second"
             ],
             "the receipt lists every registered IRI, sorted"
         );
-        assert_eq!(
-            right_receipt.relations(),
-            ["http://example.org/rel/first".to_owned()]
-        );
+        let right_iris: Vec<&str> = right_receipt
+            .relations()
+            .iter()
+            .map(|descriptor| descriptor.iri.as_str())
+            .collect();
+        assert_eq!(right_iris, ["http://example.org/rel/first"]);
+
+        // The receipt is more than the bare IRI: arity, volatility, and declared modes
+        // all ride along, because two impls sharing an IRI can disagree on any of them.
+        let first = &left_receipt.relations()[0];
+        assert_eq!(first.subject_arity, 1);
+        assert_eq!(first.object_arity, 1);
+        assert_eq!(first.volatility, crate::Volatility::Stable);
+        assert!(!first.modes.is_empty());
+
         assert_ne!(
             left_receipt.render(),
             right_receipt.render(),
@@ -2517,8 +2580,8 @@ mod tests {
         assert!(
             left_receipt
                 .render()
-                .contains("relations\n  http://example.org/rel/first\n"),
-            "the rendering names them: {}",
+                .contains("http://example.org/rel/first arity=1,1 volatility=stable"),
+            "the rendering names them, with arity and volatility: {}",
             left_receipt.render()
         );
 
@@ -3338,6 +3401,178 @@ mod tests {
         assert!(
             matches!(&**a_inner, GraphPattern::PropertyFunction(_)),
             "with property_fn_iris configured the predicate becomes a call: {a_inner:?}"
+        );
+    }
+
+    /// A one-in-one-out relation whose declared [`Volatility`](crate::Volatility) is the
+    /// only thing the constructor varies — built to prove that the registry fingerprint
+    /// (and therefore the plan cache, and the governed receipt) is sensitive to
+    /// volatility rather than only to arity and declared modes.
+    #[derive(Debug)]
+    struct FixedVolatilityRelation {
+        volatility: crate::Volatility,
+        modes: [crate::BindingPattern; 1],
+    }
+
+    impl FixedVolatilityRelation {
+        fn new(volatility: crate::Volatility) -> Self {
+            let arity = crate::PfArity::new(1, 1);
+            Self {
+                volatility,
+                modes: [arity.all_free_mode()],
+            }
+        }
+    }
+
+    /// The empty cursor `FixedVolatilityRelation::open` hands out: these fixtures exist
+    /// to be registered and described, never dispatched.
+    struct EmptyCursor;
+
+    impl crate::PfCursor for EmptyCursor {
+        fn next(&mut self) -> Result<Option<crate::property_fn::PfRow>, crate::EvalError> {
+            Ok(None)
+        }
+    }
+
+    impl crate::property_fn::PropertyFunction for FixedVolatilityRelation {
+        fn volatility(&self) -> crate::Volatility {
+            self.volatility
+        }
+
+        fn arity(&self) -> crate::PfArity {
+            crate::PfArity::new(1, 1)
+        }
+
+        fn modes(&self) -> &[crate::BindingPattern] {
+            &self.modes
+        }
+
+        fn rows_per_invocation(&self, _mode: crate::BindingPattern) -> u64 {
+            0
+        }
+
+        fn open(
+            &self,
+            _args: &crate::PfArgs<'_>,
+            _ceiling: Option<u64>,
+        ) -> Result<Box<dyn crate::PfCursor>, crate::EvalError> {
+            Ok(Box::new(EmptyCursor))
+        }
+    }
+
+    /// GAP-7 (registry fingerprint): two registries that agree on IRI, arity, and every
+    /// declared mode — differing ONLY in volatility — must not share a plan-cache entry.
+    ///
+    /// Volatility is not read by the feasibility-ordering pass at all (it decides
+    /// whether a call may run on a fork-join worker, an EVALUATION-time question), so
+    /// before this fingerprint carried it, two such registries planned identically AND
+    /// shared a cache slot — silently handing one registry's plan to a call the other
+    /// registry declared unsafe to parallelize.
+    #[test]
+    fn plan_cache_keys_on_registry_volatility() {
+        let mut cache = PlanCache::new();
+        let iri = format!("{GMEOW_NS}rel");
+        let q = format!("SELECT ?s ?o WHERE {{ ?s <{iri}> ?o }}");
+        let options = ParserOptions {
+            extension_fn_namespaces: Vec::new(),
+            property_fn_namespaces: Vec::new(),
+            property_fn_iris: vec![iri.clone()],
+        };
+
+        let mut stable = crate::property_fn::PropertyFunctionRegistry::new();
+        stable.register(
+            iri.clone(),
+            Arc::new(FixedVolatilityRelation::new(crate::Volatility::Stable)),
+        );
+        let mut volatile = crate::property_fn::PropertyFunctionRegistry::new();
+        volatile.register(
+            iri,
+            Arc::new(FixedVolatilityRelation::new(crate::Volatility::Volatile)),
+        );
+
+        assert_ne!(
+            crate::property_fn_plan::registry_fingerprint(Some(&stable)),
+            crate::property_fn_plan::registry_fingerprint(Some(&volatile)),
+            "the fingerprint itself must be sensitive to volatility"
+        );
+
+        let a = cache
+            .prepare_with_relations(&q, None, &options, Some(&stable))
+            .expect("the stable registry admits and plans the call");
+        let b = cache
+            .prepare_with_relations(&q, None, &options, Some(&volatile))
+            .expect("the volatile registry admits and plans the call");
+        assert!(
+            !Arc::ptr_eq(&a, &b),
+            "registries differing only in declared volatility must not share a cache entry"
+        );
+    }
+
+    /// GAP-7 (governed receipt): two relation implementations registered under the SAME
+    /// IRI, differing only in declared volatility, must produce DISTINGUISHABLE governed
+    /// receipts and distinguishable explanations — never bytes that could be mistaken for
+    /// the same execution.
+    #[test]
+    fn same_iri_different_volatility_produces_distinguishable_governed_receipts() {
+        let ds = subst_ds();
+        let engine = NativeSparqlEngine::new();
+        let iri = "http://example.org/rel/shared";
+        let query = format!("SELECT ?s ?o WHERE {{ ?s <{iri}> ?o }}");
+
+        let mut stable = crate::property_fn::PropertyFunctionRegistry::new();
+        stable.register(
+            iri,
+            Arc::new(FixedVolatilityRelation::new(crate::Volatility::Stable)),
+        );
+        let mut volatile = crate::property_fn::PropertyFunctionRegistry::new();
+        volatile.register(
+            iri,
+            Arc::new(FixedVolatilityRelation::new(crate::Volatility::Volatile)),
+        );
+
+        let request = || SparqlRequest {
+            query: query.as_str(),
+            base_iri: None,
+            substitutions: &[],
+        };
+        let run = |registry: &crate::property_fn::PropertyFunctionRegistry| {
+            engine
+                .query_governed(
+                    &ds,
+                    request(),
+                    QueryOptions {
+                        property_functions: Some(registry),
+                        ..QueryOptions::EMPTY
+                    },
+                    &QueryGovernors::METERED,
+                )
+                .expect("METERED bounds nothing, so both registries must admit and complete")
+        };
+        let stable_outcome = run(&stable);
+        let volatile_outcome = run(&volatile);
+
+        assert_ne!(
+            stable_outcome.relations().fingerprint,
+            volatile_outcome.relations().fingerprint,
+            "two registries differing only in volatility must not carry the same \
+             governed-receipt identity"
+        );
+        assert_eq!(
+            stable_outcome.relations().iris,
+            volatile_outcome.relations().iris,
+            "the IRI list itself is identical — only the fingerprint tells them apart"
+        );
+
+        // The explain surface must disagree the same way.
+        let explain = |registry: &crate::property_fn::PropertyFunctionRegistry| {
+            engine
+                .explain_query_with_property_functions(&ds, &query, None, registry)
+                .expect("explain")
+        };
+        assert_ne!(
+            explain(&stable).render(),
+            explain(&volatile).render(),
+            "two relation impls sharing an IRI must not render as the same explanation"
         );
     }
 

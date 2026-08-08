@@ -237,7 +237,9 @@ unsafe fn store_governed_query_outcome(
 ) -> Result<(PurrdfQueryOutcomeKind, PurrdfGovernorEvidence), PurrdfError> {
     unsafe {
         match outcome {
-            GovernedOutcome::Complete { result, evidence } => {
+            GovernedOutcome::Complete {
+                result, evidence, ..
+            } => {
                 store_result(result, out_kind, out_rows, out_graph, out_boolean)?;
                 Ok((PurrdfQueryOutcomeKind::Complete, encode_evidence(&evidence)))
             }

@@ -113,7 +113,7 @@ pub use eval::{
 pub use fallible::{CompleteSparqlResult, FallibleSparqlError, FallibleSparqlResult};
 pub use governed::{
     BudgetExhausted, GovernedEvidence, GovernedOutcome, GovernedUpdateOutcome, PartialAnswers,
-    PartialSparqlResult,
+    PartialSparqlResult, RelationIdentity,
 };
 pub use governor::{
     CHARGE_SCHEDULE, CancellationFlag, ChargePoint, GOVERNOR_CORPUS_DIGEST,

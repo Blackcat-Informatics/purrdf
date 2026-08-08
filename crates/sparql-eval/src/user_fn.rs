@@ -186,6 +186,20 @@ pub enum Volatility {
     Volatile,
 }
 
+impl Volatility {
+    /// A stable diagnostic label for this determinism class — shared by the
+    /// property-function registry fingerprint (`crate::property_fn_plan::registry_fingerprint`)
+    /// and every receipt that renders a [`PfDescriptor`](crate::property_fn::PfDescriptor),
+    /// so both name the same class in the same words.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Stable => "stable",
+            Self::Volatile => "volatile",
+        }
+    }
+}
+
 /// A native function's declared argument arity, checked before the closure is
 /// ever invoked (fail-fast: a wrong-count call never hands the host closure a
 /// short or long slice).

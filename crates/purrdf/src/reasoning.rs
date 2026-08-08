@@ -613,9 +613,14 @@ fn withhold_surrogates_from_outcome(
         GovernedOutcome::Complete {
             mut result,
             evidence,
+            relations,
         } => {
             withhold_surrogate_triples(&mut result, surrogates);
-            GovernedOutcome::Complete { result, evidence }
+            GovernedOutcome::Complete {
+                result,
+                evidence,
+                relations,
+            }
         }
         GovernedOutcome::BudgetExhausted(exhausted) => {
             GovernedOutcome::BudgetExhausted(BudgetExhausted {

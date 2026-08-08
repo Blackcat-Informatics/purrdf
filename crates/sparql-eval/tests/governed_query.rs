@@ -242,7 +242,10 @@ fn ac1_query_governors_accepts_every_governor_and_reaches_evaluation() {
         .with_stop_signal(Arc::new(signal.clone()));
 
     let outcome = governed(ALL_ROWS, &governors);
-    let GovernedOutcome::Complete { result, evidence } = &outcome else {
+    let GovernedOutcome::Complete {
+        result, evidence, ..
+    } = &outcome
+    else {
         panic!("no governor could fire, so the query must complete: {outcome:?}");
     };
     assert_eq!(row_count(result), EDGES);
@@ -670,7 +673,10 @@ fn answer_cap_boundary_is_inclusive() {
         ALL_ROWS,
         &QueryGovernors::UNBOUNDED.with_max_answers(EDGES as u64),
     );
-    let GovernedOutcome::Complete { result, evidence } = &at_the_cap else {
+    let GovernedOutcome::Complete {
+        result, evidence, ..
+    } = &at_the_cap
+    else {
         panic!("cap == result size is complete: {at_the_cap:?}");
     };
     assert_eq!(row_count(result), EDGES);
@@ -740,7 +746,10 @@ fn metered_governors_measure_an_execution_without_bounding_it() {
     // The intended way to size a budget: run under METERED, read the cost, then set the
     // real ceilings from it. Nothing can trip, so the outcome is complete.
     let outcome = governed(ALL_ROWS, &QueryGovernors::METERED);
-    let GovernedOutcome::Complete { result, evidence } = &outcome else {
+    let GovernedOutcome::Complete {
+        result, evidence, ..
+    } = &outcome
+    else {
         panic!("METERED bounds nothing and cannot trip: {outcome:?}");
     };
     assert_eq!(row_count(result), EDGES);
@@ -926,7 +935,10 @@ fn prepared_plans_do_not_share_a_budget_across_runs() {
                 &governors,
             )
             .expect("prepared governed run");
-        let GovernedOutcome::Complete { result, evidence } = &outcome else {
+        let GovernedOutcome::Complete {
+            result, evidence, ..
+        } = &outcome
+        else {
             panic!("run {run} must complete under a budget sized for it: {outcome:?}");
         };
         assert_eq!(row_count(result), EDGES);
@@ -1583,7 +1595,10 @@ fn assert_graph_cap_boundary(query: &str) -> usize {
         query,
         &QueryGovernors::UNBOUNDED.with_max_answers(size as u64),
     );
-    let GovernedOutcome::Complete { result, evidence } = &at_the_cap else {
+    let GovernedOutcome::Complete {
+        result, evidence, ..
+    } = &at_the_cap
+    else {
         panic!("{query}: cap == size must be complete: {at_the_cap:?}");
     };
     assert_eq!(statement_count(graph_of(result)), size);

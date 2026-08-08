@@ -65,6 +65,7 @@ use purrdf_sparql_algebra::GraphPattern;
 use super::soundness::{pattern_label, walk_spine};
 use super::{CHARGE_SCHEDULE, ChargePoint};
 use crate::DetHashMap;
+use crate::property_fn::PfDescriptor;
 
 /// The cost planner's prediction for one basic graph pattern, recorded before evaluation
 /// so the ledger can print it beside the row count that actually materialised.
@@ -275,14 +276,22 @@ pub struct QueryExplanation {
     join_orders: Vec<String>,
     /// One line per algebra node, in the plan's pre-order.
     ledger: Vec<NodeCharges>,
-    /// The IRIs of the property-function relations that were in scope, sorted.
+    /// The full self-description of every property-function relation that was in
+    /// scope, sorted by IRI.
     ///
     /// Part of the receipt because a relation is HOST code that produces rows no index
     /// sized and no dataset holds: two runs of the same query text over the same dataset
     /// can differ in nothing but which relations were injected, and an explanation that
-    /// did not name them would present those two runs as the same run. Sorted so the list
-    /// is a function of what was registered rather than of registration order.
-    relations: Vec<String>,
+    /// did not name them would present those two runs as the same run. The full
+    /// descriptor rather than the bare IRI, because the IRI alone is not what a relation
+    /// IS: two impls registered under the SAME IRI with different arity, declared modes,
+    /// or volatility answer differently (and, for volatility, run under a different
+    /// parallel-safety classification), and a receipt that recorded only the IRI would
+    /// print the same bytes for both. Sorted so the list is a function of what was
+    /// registered rather than of registration order — see
+    /// [`PropertyFunctionRegistry::describe`](crate::property_fn::PropertyFunctionRegistry::describe),
+    /// which this is taken from verbatim.
+    relations: Vec<PfDescriptor>,
     /// The whole execution's consumption and ceilings, so a reader can check the ledger's
     /// fuel column against the total it decomposes.
     evidence: purrdf_core::GovernorEvidence,
@@ -326,7 +335,7 @@ impl QueryExplanation {
     pub(crate) fn new(
         join_orders: Vec<String>,
         ledger: Vec<NodeCharges>,
-        relations: Vec<String>,
+        relations: Vec<PfDescriptor>,
         evidence: purrdf_core::GovernorEvidence,
     ) -> Self {
         Self {
@@ -360,13 +369,14 @@ impl QueryExplanation {
         &self.ledger
     }
 
-    /// The IRIs of the property-function relations that were in scope, sorted.
+    /// The full self-description of every property-function relation that was in
+    /// scope, sorted by IRI.
     ///
     /// Empty when the explanation was taken with no registry injected, which is the same
     /// thing an empty registry means: no predicate in the query could resolve to a
     /// relation.
     #[must_use]
-    pub fn relations(&self) -> &[String] {
+    pub fn relations(&self) -> &[PfDescriptor] {
         &self.relations
     }
 
@@ -429,8 +439,19 @@ impl QueryExplanation {
         // registered would make "no relations were in scope" and "this build does not
         // report relations" the same bytes.
         let _ = writeln!(out, "relations");
-        for iri in &self.relations {
-            let _ = writeln!(out, "  {iri}");
+        for descriptor in &self.relations {
+            let _ = write!(
+                out,
+                "  {} arity={},{} volatility={}",
+                descriptor.iri,
+                descriptor.subject_arity,
+                descriptor.object_arity,
+                descriptor.volatility.label(),
+            );
+            for mode in &descriptor.modes {
+                let _ = write!(out, " {}={}", mode.code, mode.rows_per_invocation);
+            }
+            out.push('\n');
         }
         let _ = writeln!(out, "join-orders");
         for pattern in &self.join_orders {

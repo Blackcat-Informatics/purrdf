@@ -1060,7 +1060,9 @@ pub(crate) fn materialize_outcome(
     outcome: GovernedOutcome,
 ) -> PyResult<Py<PyQueryOutcome>> {
     match outcome {
-        GovernedOutcome::Complete { result, evidence } => Py::new(
+        GovernedOutcome::Complete {
+            result, evidence, ..
+        } => Py::new(
             py,
             PyQueryOutcome {
                 result: Some(materialize_results(py, result)?),
@@ -1073,6 +1075,7 @@ pub(crate) fn materialize_outcome(
             tripped,
             evidence,
             partial,
+            ..
         }) => Py::new(
             py,
             PyQueryOutcome {

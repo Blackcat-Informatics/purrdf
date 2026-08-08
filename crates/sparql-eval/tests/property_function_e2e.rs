@@ -458,7 +458,10 @@ fn a_governed_query_answers_from_the_relation_and_charges_it() {
             &QueryGovernors::METERED,
         )
         .expect("the call resolves and evaluates under governors");
-    let GovernedOutcome::Complete { result, evidence } = outcome else {
+    let GovernedOutcome::Complete {
+        result, evidence, ..
+    } = outcome
+    else {
         panic!("METERED bounds nothing, so this must complete");
     };
     assert!(evidence.is_complete());

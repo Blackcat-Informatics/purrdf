@@ -768,17 +768,28 @@ fn collect_term_vars(term: &TermPattern, out: &mut DetHashSet<Variable>) {
 // The registry fingerprint
 // ---------------------------------------------------------------------------
 
-/// A deterministic fingerprint of everything about `relations` that can change the
-/// plan this module produces: every registered IRI, its arity, and its declared modes
-/// with their row bounds, IRI-sorted.
+/// A deterministic fingerprint of everything about `relations` that can change either
+/// the plan this module produces OR the answer/parallel-safety of the execution that
+/// runs it: every registered IRI, its arity, its declared volatility, and its declared
+/// modes with their row bounds, IRI-sorted.
 ///
 /// This belongs in the plan cache's key. The rewrite above is a function of the query
 /// text AND the registry's declarations, so two differently-configured registries can
 /// order the same text differently — and a cache keyed on the text alone would hand the
-/// second host the first host's plan. Derived from
-/// [`PropertyFunctionRegistry::describe`], which is already IRI-sorted, so the
-/// fingerprint is a pure function of the registry's contents rather than of its
-/// construction order.
+/// second host the first host's plan. Volatility belongs here for a reason the ORDERING
+/// pass never sees: it is not read while planning, but it IS read at evaluation time to
+/// decide whether a call may run on a fork-join worker (see
+/// [`Volatility`](crate::user_fn::Volatility)), so two registries that agree on every
+/// arity and mode but disagree about which relation is stable must still be treated as
+/// two distinct configurations — sharing a cache entry between them would be silent only
+/// until one relation actually depended on sequential evaluation.
+///
+/// Derived from [`PropertyFunctionRegistry::describe`], which is already IRI-sorted, so
+/// the fingerprint is a pure function of the registry's contents rather than of its
+/// construction order. Also the identity a governed receipt carries (see
+/// `RelationIdentity` in `crate::governed`) — the same reason it belongs in the cache
+/// key applies to the receipt: two registries that produce different fingerprints can
+/// produce different answers, so a receipt that cannot tell them apart is not a receipt.
 pub(crate) fn registry_fingerprint(relations: Option<&PropertyFunctionRegistry>) -> String {
     let Some(registry) = relations.filter(|registry| !registry.is_empty()) else {
         return String::new();
@@ -790,6 +801,8 @@ pub(crate) fn registry_fingerprint(relations: Option<&PropertyFunctionRegistry>)
         out.push_str(&descriptor.subject_arity.to_string());
         out.push(',');
         out.push_str(&descriptor.object_arity.to_string());
+        out.push('\u{2}');
+        out.push_str(descriptor.volatility.label());
         for mode in &descriptor.modes {
             out.push('\u{3}');
             out.push_str(&mode.code);
