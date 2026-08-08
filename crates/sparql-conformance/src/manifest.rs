@@ -84,6 +84,20 @@ pub enum ExpectedResult {
         /// Expected named graphs as `(graph IRI, file)`.
         graph_data: Vec<(String, PathBuf)>,
     },
+    /// A hard **evaluation failure**: the query must parse and then refuse to run,
+    /// and the refusal must name the reason the file records.
+    ///
+    /// The W3C `mf:` vocabulary models a negative *syntax* test but no negative
+    /// evaluation test, and this harness mints no vocabulary of its own. So the
+    /// expectation rides the channel the harness already routes on — the
+    /// `mf:result` file's extension (see `classify_result`) — exactly as `.srx`
+    /// selects SPARQL Results XML and `.ttl` a graph. A `.err` file holds the text
+    /// the diagnostic must contain, one expectation per line, all of which must
+    /// appear; a case whose query SUCCEEDS fails, so the expectation can never be
+    /// satisfied vacuously.
+    ///
+    /// First-party only: no vendored manifest carries a `.err` result.
+    EvalError(PathBuf),
     /// Syntax tests carry no result.
     None,
     /// A result file whose extension the harness does not model.
@@ -456,6 +470,7 @@ fn classify_result(path: &Path) -> ExpectedResult {
     match path.extension().and_then(|e| e.to_str()) {
         Some("srx") => ExpectedResult::Srx(path.to_path_buf()),
         Some("srj") => ExpectedResult::Srj(path.to_path_buf()),
+        Some("err") => ExpectedResult::EvalError(path.to_path_buf()),
         Some("ttl") if is_rs_resultset_turtle(path) => {
             ExpectedResult::ResultSetTurtle(path.to_path_buf())
         }

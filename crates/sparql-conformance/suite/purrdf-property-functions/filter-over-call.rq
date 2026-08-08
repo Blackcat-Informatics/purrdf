@@ -1,3 +1,2 @@
 PREFIX rel: <https://example.org/rel/>
-PREFIX : <http://purrdf.test/relations#>
-SELECT ?person WHERE { ?person rel:memberOf ?team . FILTER(?team = :alpha) }
+SELECT ?person ?city WHERE { ?person rel:memberOf ?team . ?team rel:teamSite ( ?city ?headcount ) . FILTER(?headcount > 1) }

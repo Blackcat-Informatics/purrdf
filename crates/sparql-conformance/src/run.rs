@@ -7,7 +7,7 @@ use std::sync::{Arc, OnceLock};
 
 use purrdf::{SerializeGraph, serialize_dataset};
 use purrdf_core::{
-    RdfDataset, RdfTextDirection, SparqlEngine, SparqlRequest, SparqlResult, TermValue,
+    GraphMatch, RdfDataset, RdfTextDirection, SparqlEngine, SparqlRequest, SparqlResult, TermValue,
 };
 use purrdf_entail::{QNode, QTriple};
 use purrdf_sparql_algebra::{
@@ -65,15 +65,30 @@ pub enum RunOutcome {
     },
 }
 
+/// The suite fixture graph the harness relation tables are read out of: an
+/// `rdf:List` of `rdf:List`s per table, in the encoding
+/// [`MemoryRelation::from_graph`] defines.
+const RELATION_TABLES: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/suite/purrdf-property-functions/relations.ttl"
+);
+
+/// The namespace the relation TABLE HEADS in [`RELATION_TABLES`] are named under —
+/// the same test namespace the tables' own values use, because a head is a node of
+/// that fixture graph rather than a call site.
+const TABLE_NS: &str = "http://purrdf.test/relations#";
+
 /// The relation table the harness injects for every non-federated
 /// `QueryEvaluationTest`, built once and shared.
 ///
-/// These are HARNESS configuration in exactly the sense `EXT_NS` is: three
-/// [`MemoryRelation`]s under `REL_NS`, whose rows are written here rather than in a
-/// fixture graph, because a relation is host code that a deployment injects — the
-/// point of the seam is that the rows do NOT come from the queried dataset. The
-/// tables are small and total, so every case's expected result is readable next to
-/// its query.
+/// These are HARNESS configuration in exactly the sense `EXT_NS` is: relations under
+/// `REL_NS` a deployment injects as host code, so the rows do NOT come from the
+/// queried dataset. They come from a **fixture graph** instead
+/// (`suite/purrdf-property-functions/relations.ttl`), read through
+/// [`MemoryRelation::from_graph`]: the mapping below still decides which predicate
+/// IRI resolves to which table head and with what arity — that is configuration, and
+/// it is code — but the tuples are data, and a reader checking a case's expected
+/// result reads them in the same RDF the rest of the suite is written in.
 ///
 /// Registering them for every case is harmless for the vendored W3C suites: no
 /// vendored query spells a predicate under `REL_NS`, and a registered relation is
@@ -82,64 +97,77 @@ pub enum RunOutcome {
 /// Public for the same reason `REL_NS` is: a differential corpus that re-runs a
 /// suite case has to inject the same relations, or it would be measuring a query
 /// whose calls resolve to nothing.
+///
+/// # Panics
+///
+/// If the fixture graph is missing, unparseable, or does not hold every declared
+/// table in the declared shape. A harness whose relations silently came up empty
+/// would turn every relation case into a vacuous pass, so the failure is loud and
+/// immediate rather than deferred to a confusing per-case mismatch.
 #[must_use]
 pub fn harness_relations() -> &'static PropertyFunctionRegistry {
     static RELATIONS: OnceLock<PropertyFunctionRegistry> = OnceLock::new();
     RELATIONS.get_or_init(|| {
-        let iri = |local: &str| TermValue::iri(format!("http://purrdf.test/relations#{local}"));
-        let count = |n: &str| {
-            TermValue::typed_literal(n, "http://www.w3.org/2001/XMLSchema#integer".to_owned())
-        };
+        let tables = relation_tables();
         let mut registry = PropertyFunctionRegistry::new();
-        // person → team. One team has two members and one has one, so an `ff`
-        // enumeration, a `bf` lookup and an `fb` reverse lookup each return a
-        // different number of rows.
+        // (call IRI local name, table head local name, subject arity, object arity).
+        for (call, head, subject_arity, object_arity) in [
+            ("memberOf", "memberOfTable", 1, 1),
+            ("teamSite", "teamSiteTable", 1, 2),
+            ("seeds", "seedsTable", 0, 1),
+        ] {
+            registry.register(
+                format!("{REL_NS}{call}"),
+                Arc::new(memory_table(&tables, head, subject_arity, object_arity)),
+            );
+        }
+        // The MODE-RESTRICTED relation. Every table above declares the all-free mode,
+        // which subsumes every access pattern — so without this one no suite case can
+        // reach mode restriction, the subsumption rule, or the feasibility reorder
+        // that exists to serve a relation that is not computable in every direction.
         registry.register(
-            format!("{REL_NS}memberOf"),
+            format!("{REL_NS}rank"),
             Arc::new(
-                MemoryRelation::new(
-                    1,
-                    1,
-                    vec![
-                        vec![iri("ada"), iri("alpha")],
-                        vec![iri("brian"), iri("alpha")],
-                        vec![iri("chen"), iri("beta")],
-                    ],
+                crate::mode_restricted::BoundSubjectLookup::from_graph(
+                    &*tables,
+                    &table_head("rankTable"),
+                    GraphMatch::Default,
                 )
-                .expect("every memberOf row is two values wide"),
-            ),
-        );
-        // team → (city, headcount): two OUTPUT positions on the object side, which
-        // no ordinary triple pattern can bind at once.
-        registry.register(
-            format!("{REL_NS}teamSite"),
-            Arc::new(
-                MemoryRelation::new(
-                    1,
-                    2,
-                    vec![
-                        vec![
-                            iri("alpha"),
-                            TermValue::simple_literal("Zurich"),
-                            count("2"),
-                        ],
-                        vec![iri("beta"), TermValue::simple_literal("Osaka"), count("1")],
-                    ],
-                )
-                .expect("every teamSite row is three values wide"),
-            ),
-        );
-        // A generator with an EMPTY subject side: `() rel:seeds ?t` takes no input
-        // and enumerates its whole table.
-        registry.register(
-            format!("{REL_NS}seeds"),
-            Arc::new(
-                MemoryRelation::new(0, 1, vec![vec![iri("alpha")], vec![iri("beta")]])
-                    .expect("every seeds row is one value wide"),
+                .unwrap_or_else(|e| panic!("harness relation table <{TABLE_NS}rankTable>: {e}")),
             ),
         );
         registry
     })
+}
+
+/// Parse [`RELATION_TABLES`] into the dataset every table is read out of.
+fn relation_tables() -> Arc<RdfDataset> {
+    let bytes = std::fs::read(RELATION_TABLES)
+        .unwrap_or_else(|e| panic!("read harness relation tables {RELATION_TABLES}: {e}"));
+    purrdf::parse_dataset(&bytes, "text/turtle", Some(BASE))
+        .unwrap_or_else(|e| panic!("parse harness relation tables {RELATION_TABLES}: {e}"))
+}
+
+/// Read one table out of the fixture graph as a [`MemoryRelation`].
+fn memory_table(
+    tables: &RdfDataset,
+    head: &str,
+    subject_arity: usize,
+    object_arity: usize,
+) -> MemoryRelation {
+    MemoryRelation::from_graph(
+        tables,
+        &table_head(head),
+        GraphMatch::Default,
+        subject_arity,
+        object_arity,
+    )
+    .unwrap_or_else(|e| panic!("harness relation table <{TABLE_NS}{head}>: {e}"))
+}
+
+/// The term a table's head IRI denotes in the fixture graph.
+fn table_head(local: &str) -> TermValue {
+    TermValue::iri(format!("{TABLE_NS}{local}"))
 }
 
 /// Load the case's `qt:data` and `qt:graphData` files into a combined dataset.

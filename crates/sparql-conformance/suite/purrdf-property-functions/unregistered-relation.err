@@ -1,0 +1,5 @@
+# Every non-comment, non-blank line is text the failure diagnostic must contain.
+# The IRI is named in full: a diagnostic that refused some OTHER call would not
+# satisfy this file.
+native-sparql-property-function
+no property function is registered for <https://example.org/rel/notRegistered>

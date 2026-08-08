@@ -37,7 +37,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, SparqlRequest, SparqlResult};
-use purrdf_sparql_conformance::manifest::TestKind;
+use purrdf_sparql_conformance::manifest::{ExpectedResult, TestKind};
 use purrdf_sparql_eval::{
     EvalOptions, GovernedOutcome, NativeSparqlEngine, ParserOptions, QueryGovernors, QueryOptions,
     StandpointPredicates,
@@ -165,6 +165,12 @@ fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
     let mut compared = 0_usize;
     let mut skipped = 0_usize;
     let mut agreed_errors = 0_usize;
+    // Cases whose manifest expects the run to be REFUSED (a `.err` `mf:result`): the
+    // seam's hard errors. They cannot produce two comparable answers, but they are
+    // not excused either — D0 still owes that both paths refuse, and refuse
+    // identically, which the `(Err, Err)` arm below checks. Counted so the identity
+    // asserted at the end stays exact rather than being loosened to an inequality.
+    let mut expected_failures = 0_usize;
     let mut mismatches: Vec<(String, String)> = Vec::new();
 
     for manifest in &manifests {
@@ -175,6 +181,9 @@ fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
                 continue;
             }
             cases += 1;
+            if matches!(case.expected, ExpectedResult::EvalError(_)) {
+                expected_failures += 1;
+            }
             let query = std::fs::read_to_string(&case.query)
                 .unwrap_or_else(|error| panic!("read query {}: {error}", case.query.display()));
 
@@ -309,14 +318,17 @@ fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
         "the query-evaluation corpus shrank: only {cases} cases were enumerated"
     );
     // Every case in the corpus is genuinely exercised: nothing is skipped for unloadable
-    // fixtures, and nothing is excused by both paths agreeing to fail. A floor on
-    // `compared` alone would let the walk quietly stop reaching cases as long as enough
-    // of them still worked, so the counts are pinned as an identity instead.
+    // fixtures, and the only cases excused from producing two comparable answers are the
+    // ones whose manifest EXPECTS a refusal — where agreeing to fail, identically, is the
+    // whole of what D0 can owe. A floor on `compared` alone would let the walk quietly
+    // stop reaching cases as long as enough of them still worked, so the counts are
+    // pinned as an identity instead.
     assert_eq!(
-        (compared, skipped, agreed_errors),
-        (cases, 0, 0),
+        (compared + agreed_errors, skipped, agreed_errors),
+        (cases, 0, expected_failures),
         "the byte-identity claim rests on the comparisons, not on the enumeration: \
          {compared} of {cases} cases produced two comparable answers, {skipped} were \
-         skipped and {agreed_errors} agreed to fail"
+         skipped, and {agreed_errors} agreed to fail against {expected_failures} case(s) \
+         whose manifest expects a refusal"
     );
 }

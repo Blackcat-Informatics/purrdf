@@ -14,8 +14,9 @@ the result against SPARQL Results or canonical graph goldens.
 | Module | Responsibility |
 | --- | --- |
 | `manifest` / `paths` | Discover and parse test manifests. |
-| `run` | Execute a modeled case against the native evaluator. |
-| `compare` | Compare SELECT/ASK/CONSTRUCT outputs. |
+| `run` | Execute a modeled case against the native evaluator, and register the harness's property-function relations (their tuples are read out of `suite/purrdf-property-functions/relations.ttl`). |
+| `mode_restricted` | A harness relation declaring only the `bf` access pattern, so the suite reaches mode restriction, subsumption, and the feasibility reorder. |
+| `compare` | Compare SELECT/ASK/CONSTRUCT outputs — and grade the diagnostic of a case whose `mf:result` is a `.err` file, which expects the run to be refused. |
 | `service` | Resolve federated SERVICE cases through in-memory data sources. |
 | `xfail` | Record expected failures as hard-accounted registry entries. |
 

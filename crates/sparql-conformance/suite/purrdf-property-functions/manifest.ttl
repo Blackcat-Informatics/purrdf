@@ -5,22 +5,38 @@
 # that invokes a registered RELATION instead of matching data in the graph —
 # exercised through the W3C mf: harness.
 #
-# The three relations these cases call are spelled under the harness-configured
+# The four relations these cases call are spelled under the harness-configured
 # https://example.org/rel/ namespace and are registered by the harness itself
 # (`run::harness_relations`), because a relation is host code a deployment injects:
-# the rows do NOT come from the queried dataset. Most cases therefore declare no
-# qt:data at all — the call is the only row source in the query, and its answer is
+# the rows do NOT come from the queried dataset. Their tuples live in relations.ttl
+# beside this manifest and are read out of it as data. Most cases therefore declare
+# no qt:data at all — the call is the only row source in the query, and its answer is
 # the same over an empty dataset as over any other.
 #
 #   rel:memberOf  1 subject / 1 object  (ada alpha) (brian alpha) (chen beta)
 #   rel:teamSite  1 subject / 2 object  (alpha "Zurich" 2) (beta "Osaka" 1)
 #   rel:seeds     0 subject / 1 object  (alpha) (beta)
+#   rel:rank      1 subject / 1 object  (ada 3) (brian 1) (chen 2)   — `bf` ONLY
+#
+# The first three declare the all-free mode, which subsumes every access pattern of
+# their arity. rel:rank does not: it is a lookup that must be handed its subject, so
+# it declares the single mode `bf` and the cases below reach what mode restriction
+# implies — an infeasible written order that the prepare-time feasibility pass must
+# REORDER before it can run, a fully bound call served by SUBSUMPTION, and a chain no
+# total order can serve, which is refused by name.
 #
 # The cases walk the access-pattern lattice (ff / bf / fb / bb), the multi-output
 # and empty-argument-vector shapes no ordinary triple pattern can express, the
 # scope rule (a FILTER in the same group sees an argument variable), a chain in
-# which one call's output is the next call's input, and a call driven by a bag of
-# rows the GRAPH produced.
+# which one call's output is the next call's input, a call driven by a bag of
+# rows the GRAPH produced, and the two hard errors the seam raises before a
+# governed run has spent anything: an unregistered call IRI and an infeasible chain.
+#
+# The two negative cases carry a `.err` mf:result rather than a solutions file: the
+# W3C mf: vocabulary models no negative EVALUATION test, and this harness mints no
+# vocabulary, so the expectation rides the result file's extension exactly as .srx
+# and .ttl do. Each line of a .err file is text the diagnostic must contain, and a
+# case whose query succeeds fails — the expectation cannot be met vacuously.
 
 @prefix mf:  <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
 @prefix qt:  <http://www.w3.org/2001/sw/DataAccess/tests/test-query#> .
@@ -29,7 +45,8 @@
 :manifest a mf:Manifest ;
     mf:entries ( :ffEnumeration :bfLookup :fbBoundOutput :bbMemberTrue :bbMemberFalse
                  :naryOutput :filterOverCall :multiCallChain :emptySideCall
-                 :dataDrivenCall ) .
+                 :dataDrivenCall :modeRestrictedReorder :modeRestrictedSubsumption
+                 :unregisteredRelation :infeasibleChain ) .
 
 :ffEnumeration a mf:QueryEvaluationTest ;
     mf:name "a call with both sides free enumerates the whole relation" ;
@@ -51,8 +68,14 @@
     mf:action [ qt:query <bb-member-true.rq> ] ;
     mf:result <bb-member-true.srx> .
 
+# The negative half of the membership test, written so that it cannot be answered by
+# a relation that never ran. A bare `ASK { :ada rel:memberOf :beta }` expecting false
+# is exactly what an unregistered predicate over an empty dataset returns, so it
+# grades nothing. Here the answer is TRUE, and reaching it needs both halves: the
+# positive probe must produce a row (so the call was invoked and the table was read)
+# and the negative membership must produce none (so the bound positions were applied).
 :bbMemberFalse a mf:QueryEvaluationTest ;
-    mf:name "a fully bound call is a membership test that fails" ;
+    mf:name "a fully bound call that matches nothing yields no row, beside one that does" ;
     mf:action [ qt:query <bb-member-false.rq> ] ;
     mf:result <bb-member-false.srx> .
 
@@ -62,9 +85,12 @@
     mf:result <nary-output.srx> .
 
 # The scope rule: every argument variable is visible in the enclosing group graph
-# pattern, so a FILTER written beside the call constrains what the call bound.
+# pattern, so a FILTER written beside the call constrains what the call bound. The
+# filtered variable is ?headcount — an argument position of the second call that the
+# projection does NOT keep — and it cuts a row every unfiltered variant of this query
+# returns, so the expected result is reachable by no other case here.
 :filterOverCall a mf:QueryEvaluationTest ;
-    mf:name "a FILTER in the same group sees a call's argument variable" ;
+    mf:name "a FILTER in the same group sees a call's unprojected argument variable" ;
     mf:action [ qt:query <filter-over-call.rq> ] ;
     mf:result <filter-over-call.srx> .
 
@@ -78,9 +104,55 @@
     mf:action [ qt:query <empty-side-call.rq> ] ;
     mf:result <empty-side-call.srx> .
 
-# The only case with data: the graph pattern written before the call produces the
-# driving bag, and the call is invoked once per row of it.
+# The graph pattern written before the call produces the driving bag, and the call
+# is invoked once per row of it. (The reordered case below reads the same data, from
+# the other written order.)
 :dataDrivenCall a mf:QueryEvaluationTest ;
     mf:name "a call is driven by the rows the graph pattern before it bound" ;
     mf:action [ qt:query <data-driven-call.rq> ; qt:data <data.ttl> ] ;
     mf:result <data-driven-call.srx> .
+
+# --- mode restriction -------------------------------------------------------
+#
+# rel:rank declares only `bf`, and this query WRITES the call first, where its
+# subject is still free — an `ff` invocation no declared mode subsumes. The query can
+# therefore only answer at all if the feasibility pass moved the data pattern ahead
+# of the call, making ?person bound and the call `bf`. The rows are the proof the
+# reordering happened; the infeasibleChain case below is the proof that the pass
+# refuses rather than guesses when no order works.
+:modeRestrictedReorder a mf:QueryEvaluationTest ;
+    mf:name "an infeasible written order is reordered into a feasible one" ;
+    mf:action [ qt:query <mode-restricted-reorder.rq> ; qt:data <data.ttl> ] ;
+    mf:result <mode-restricted-reorder.srx> .
+
+# Subsumption: `bf` covers `bb`, so a fully bound call IS feasible against a relation
+# that declares only the lookup. The bound-subject lookup ignores its object-side
+# argument and emits every row for the bound subject, so the false half of this ASK
+# is decided by the ENGINE's equality filter on bound positions — the query is true
+# only if that filter cut the (ada 3) candidate the relation offered for `:ada
+# rel:rank 1`.
+:modeRestrictedSubsumption a mf:QueryEvaluationTest ;
+    mf:name "a bf-only relation serves a fully bound call, and the engine filters the bound position" ;
+    mf:action [ qt:query <mode-restricted-subsumption.rq> ] ;
+    mf:result <mode-restricted-subsumption.srx> .
+
+# --- the hard errors --------------------------------------------------------
+#
+# An IRI under the configured call namespace that no relation is registered for. It
+# is NOT a data triple that silently matches nothing: the parser minted a call node
+# for it because the harness declared the namespace, and a call with nothing to
+# resolve against is a host configuration naming a relation it never supplied.
+:unregisteredRelation a mf:QueryEvaluationTest ;
+    mf:name "a call to an unregistered IRI is refused by name" ;
+    mf:action [ qt:query <unregistered-relation.rq> ] ;
+    mf:result <unregistered-relation.err> .
+
+# A chain no total order can serve. rel:memberOf is all-free so it can go first, but
+# it binds ?score rather than ?person, leaving rel:rank reachable only as `fb`; and
+# rel:rank cannot go first, because that is `ff`. The refusal happens at prepare
+# time, before a governed run has spent any of its budget, and names the mode the
+# call could not be reached in and the modes it declares.
+:infeasibleChain a mf:QueryEvaluationTest ;
+    mf:name "a chain with no feasible total order is refused, naming the stuck call" ;
+    mf:action [ qt:query <infeasible-chain.rq> ] ;
+    mf:result <infeasible-chain.err> .

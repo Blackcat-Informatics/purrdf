@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
 #
-# The only graph data this manifest uses: the two people the `dataDrivenCall`
-# case's basic graph pattern selects before it invokes the relation. `:brian` is
-# deliberately absent, so the driving bag is a strict subset of the relation's
-# subject column and the answer shows the call was invoked per driving row rather
-# than enumerated whole.
+# The only graph data this manifest uses (`dataDrivenCall` and
+# `modeRestrictedReorder` both read it): the two people whose basic graph pattern
+# drives a call. `:brian` is deliberately absent, so the driving bag is a strict
+# subset of the relation's subject column and the answer shows the call was invoked
+# per driving row rather than enumerated whole — and, for the reordered case, that
+# the row source the feasibility pass moved ahead of the call is this one.
 @prefix : <http://purrdf.test/relations#> .
 
 :ada :status :active .
