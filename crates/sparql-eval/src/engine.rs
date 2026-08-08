@@ -79,12 +79,18 @@ impl PreparedQuery {
     /// witnesses) and must hand the rewrite back to a governed entry. `options` must be
     /// the options the ORIGINAL plan was prepared under, and the same options the
     /// rewrite will be evaluated under.
-    #[must_use]
-    pub fn rewritten(query: Query, options: QueryOptions<'_>) -> Self {
-        Self {
-            query,
-            relations: crate::property_fn_plan::registry_fingerprint(options.property_functions),
-        }
+    ///
+    /// # Errors
+    ///
+    /// An [`RdfDiagnostic`] (`native-sparql-property-function`) if a relation in
+    /// `options.property_functions` panics while its declaration is read to compute the
+    /// registry's fingerprint.
+    pub fn rewritten(query: Query, options: QueryOptions<'_>) -> Result<Self, RdfDiagnostic> {
+        let relations = crate::property_fn_plan::registry_fingerprint(options.property_functions)
+            .map_err(|e| {
+            RdfDiagnostic::error("native-sparql-property-function", e.to_string())
+        })?;
+        Ok(Self { query, relations })
     }
 }
 
@@ -160,7 +166,8 @@ impl PlanCache {
         // namespace set, the property-function exact-IRI set, and the registry
         // fingerprint join it for the same reason one step later: together they
         // decide which triples become calls, and how those calls are ordered.
-        let fingerprint = crate::property_fn_plan::registry_fingerprint(relations);
+        let fingerprint = crate::property_fn_plan::registry_fingerprint(relations)
+            .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
         let key = format!(
             "{}\u{0}{}\u{0}{}\u{0}{}\u{0}{}\u{0}{}",
             base_iri.unwrap_or(""),
@@ -504,7 +511,7 @@ impl NativeSparqlEngine {
         // `prepared.relations` is the registry fingerprint computed once at prepare and
         // just validated against `options.property_functions` above — reused rather than
         // re-derived, so this receipt's identity and the plan cache's key never disagree.
-        let identity = relation_identity(prepared, options.property_functions);
+        let identity = relation_identity(prepared, options.property_functions)?;
         if let Some(refused) = self.admit(
             dataset,
             &prepared.query,
@@ -883,7 +890,7 @@ impl NativeSparqlEngine {
         if let Some(base) = request.base_iri {
             parser = parser.with_base_iri(base);
         }
-        let options = self.parser_options_for(registry);
+        let options = self.parser_options_for(registry)?;
         parser
             .parse_update_with(request.query, &options)
             .map_err(|e| RdfDiagnostic::error("native-sparql-update-parse", e.to_string()))
@@ -1029,7 +1036,7 @@ impl NativeSparqlEngine {
         relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
         let relations = relations.filter(|registry| !registry.is_empty());
-        let options = self.parser_options_for(relations);
+        let options = self.parser_options_for(relations)?;
         self.cache
             .borrow_mut()
             .prepare_with_relations(query, base_iri, &options, relations)
@@ -1053,20 +1060,28 @@ impl NativeSparqlEngine {
     /// engine's own options unmodified — no clone, no allocation — when `registry`
     /// is absent or empty, which is every request on a host that has not
     /// configured the seam.
+    ///
+    /// # Errors
+    ///
+    /// An [`RdfDiagnostic`] (`native-sparql-property-function`) if a registered
+    /// relation's declaration methods panic.
     fn parser_options_for(
         &self,
         registry: Option<&crate::property_fn::PropertyFunctionRegistry>,
-    ) -> Cow<'_, ParserOptions> {
+    ) -> Result<Cow<'_, ParserOptions>, RdfDiagnostic> {
         let Some(registry) = registry.filter(|r| !r.is_empty()) else {
-            return Cow::Borrowed(&self.parser_options);
+            return Ok(Cow::Borrowed(&self.parser_options));
         };
         let mut options = self.parser_options.clone();
-        for descriptor in registry.describe() {
+        let described = registry
+            .describe()
+            .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
+        for descriptor in described {
             if !options.property_fn_iris.contains(&descriptor.iri) {
                 options.property_fn_iris.push(descriptor.iri);
             }
         }
-        Cow::Owned(options)
+        Ok(Cow::Owned(options))
     }
 
     /// Build the per-query evaluation context, threading the engine-level
@@ -1221,10 +1236,11 @@ impl NativeSparqlEngine {
         // travels, not just the IRI: arity, declared modes, and volatility are all part of
         // what a relation IS, and two impls sharing an IRI but disagreeing on any of them
         // must render as two different receipts.
-        let registered = relations.map_or_else(
-            Vec::new,
-            crate::property_fn::PropertyFunctionRegistry::describe,
-        );
+        let registered = relations
+            .map(crate::property_fn::PropertyFunctionRegistry::describe)
+            .transpose()
+            .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?
+            .unwrap_or_default();
         Ok(QueryExplanation::new(
             survey.orders,
             ledger.snapshot(),
@@ -1853,12 +1869,15 @@ impl Default for QueryOptions<'_> {
 ///
 /// # Errors
 ///
-/// An [`RdfDiagnostic`] (`native-sparql-property-function`) when the identities differ.
+/// An [`RdfDiagnostic`] (`native-sparql-property-function`) when the identities differ,
+/// or when a relation panics while its declaration is read to compute the supplied
+/// registry's fingerprint.
 fn check_plan_matches_relations(
     prepared: &PreparedQuery,
     options: QueryOptions<'_>,
 ) -> Result<(), RdfDiagnostic> {
-    let supplied = crate::property_fn_plan::registry_fingerprint(options.property_functions);
+    let supplied = crate::property_fn_plan::registry_fingerprint(options.property_functions)
+        .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
     if supplied == prepared.relations {
         return Ok(());
     }
@@ -1881,23 +1900,28 @@ fn check_plan_matches_relations(
 /// ([`NativeSparqlEngine::admit`]), the complete path, and the truncated path all carry
 /// the SAME identity for the SAME execution — there is exactly one place this is computed
 /// and every [`GovernedOutcome`] arm reads from it.
+///
+/// # Errors
+///
+/// An [`RdfDiagnostic`] (`native-sparql-property-function`) if a registered relation's
+/// declaration methods panic.
 fn relation_identity(
     prepared: &PreparedQuery,
     relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
-) -> RelationIdentity {
-    let iris = relations
-        .filter(|registry| !registry.is_empty())
-        .map_or_else(Vec::new, |registry| {
-            registry
-                .describe()
-                .into_iter()
-                .map(|descriptor| descriptor.iri)
-                .collect()
-        });
-    RelationIdentity {
+) -> Result<RelationIdentity, RdfDiagnostic> {
+    let iris = match relations.filter(|registry| !registry.is_empty()) {
+        None => Vec::new(),
+        Some(registry) => registry
+            .describe()
+            .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?
+            .into_iter()
+            .map(|descriptor| descriptor.iri)
+            .collect(),
+    };
+    Ok(RelationIdentity {
         fingerprint: prepared.relations.clone(),
         iris,
-    }
+    })
 }
 
 pub(crate) fn apply_query_options<'d, D: DatasetView + Sync>(
@@ -3491,8 +3515,8 @@ mod tests {
         );
 
         assert_ne!(
-            crate::property_fn_plan::registry_fingerprint(Some(&stable)),
-            crate::property_fn_plan::registry_fingerprint(Some(&volatile)),
+            crate::property_fn_plan::registry_fingerprint(Some(&stable)).expect("no panic"),
+            crate::property_fn_plan::registry_fingerprint(Some(&volatile)).expect("no panic"),
             "the fingerprint itself must be sensitive to volatility"
         );
 

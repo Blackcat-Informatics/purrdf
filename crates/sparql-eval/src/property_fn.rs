@@ -39,10 +39,12 @@
 //! A relation is arbitrary host Rust. Every invariant the evaluator needs from it is
 //! therefore either **checked before host code runs** (arity, in
 //! [`open_contained`]), **contained when host code misbehaves** (a panic, in
-//! [`open_contained`]/[`next_contained`]), or **applied to what host code returns**
-//! (equality on bound positions, and the row-width check, in the dispatch). A relation
-//! that ignores its own declarations cannot make the engine unsound; it can only make
-//! it slow, or make its own call fail.
+//! [`open_contained`]/[`next_contained`] for `open`/`next`, and in
+//! [`declaration_contained`] for `arity`/`modes`/`volatility`/`rows_per_invocation` —
+//! every one of the four is host code exactly as `open`/`next` is, so nothing reads one
+//! directly), or **applied to what host code returns** (equality on bound positions, and
+//! the row-width check, in the dispatch). A relation that ignores its own declarations
+//! cannot make the engine unsound; it can only make it slow, or make its own call fail.
 //!
 //! The row ceiling [`PropertyFunction::open`] receives is the one place that asks a
 //! relation for cooperation rather than checking it, because "I stopped early" and "I
@@ -369,7 +371,7 @@ pub fn open_contained(
     args: &PfArgs<'_>,
     ceiling: Option<u64>,
 ) -> Result<Box<dyn PfCursor>, EvalError> {
-    let declared = relation.arity();
+    let declared = declaration_contained(iri, "arity", || relation.arity())?;
     let supplied = args.arity();
     if declared != supplied {
         return Err(EvalError::function(format!(
@@ -398,6 +400,35 @@ pub fn next_contained(cursor: &mut dyn PfCursor, iri: &str) -> Result<Option<PfR
         Ok(row) => row,
         Err(_) => Err(EvalError::function(format!(
             "property function <{iri}> panicked while producing a row"
+        ))),
+    }
+}
+
+/// Read one of a relation's DECLARATIONS — `arity`, `modes`, `volatility`, or
+/// `rows_per_invocation` — with the panic contained.
+///
+/// The [`open_contained`]/[`next_contained`] twin for the other host calls a relation
+/// receives. `arity`, `modes`, `volatility` and `rows_per_invocation` are exactly as much
+/// host Rust as `open`/`next` — a lazily-built mode table indexed out of bounds, an
+/// assertion a relation's author left in by mistake — and every one of them is reachable
+/// from a caller-supplied `dyn PropertyFunction` exactly as `open`/`next` are. Routing
+/// every declaration read through this is what makes this module's trust-boundary claim
+/// (every invariant is checked, contained, or applied) true of the declaration surface
+/// too, not merely of `open`/`next`: `what` names the declaration being read, so every
+/// caller's message says which one panicked without leaking the panic's own payload.
+///
+/// # Errors
+///
+/// [`EvalError::Function`] on a caught panic; otherwise `Ok` of `read`'s result.
+pub fn declaration_contained<T>(
+    iri: &str,
+    what: &str,
+    read: impl FnOnce() -> T,
+) -> Result<T, EvalError> {
+    match catch_unwind(AssertUnwindSafe(read)) {
+        Ok(value) => Ok(value),
+        Err(_) => Err(EvalError::function(format!(
+            "property function <{iri}> panicked while reporting its {what}"
         ))),
     }
 }
@@ -523,31 +554,41 @@ impl PropertyFunctionRegistry {
     /// The sort makes the output a pure function of the registry's contents rather
     /// than of its construction order, so two hosts that register the same relations
     /// in different orders describe identically.
-    #[must_use]
-    pub fn describe(&self) -> Vec<PfDescriptor> {
-        let mut out: Vec<PfDescriptor> = self
-            .relations
-            .iter()
-            .map(|(iri, relation)| {
-                let arity = relation.arity();
-                PfDescriptor {
-                    iri: iri.clone(),
-                    subject_arity: arity.subject,
-                    object_arity: arity.object,
-                    volatility: relation.volatility(),
-                    modes: relation
-                        .modes()
-                        .iter()
-                        .map(|mode| PfMode {
-                            code: mode.code(),
-                            rows_per_invocation: relation.rows_per_invocation(*mode),
-                        })
-                        .collect(),
-                }
-            })
-            .collect();
+    ///
+    /// Every declaration read (`arity`, `volatility`, `modes`, `rows_per_invocation`)
+    /// goes through [`declaration_contained`], because this runs on every prepare (it
+    /// feeds the plan cache's fingerprint) — a relation whose declaration methods panic
+    /// must fail that prepare cleanly, not abort it.
+    ///
+    /// # Errors
+    ///
+    /// [`EvalError::Function`] if any registered relation's declaration methods panic.
+    pub fn describe(&self) -> Result<Vec<PfDescriptor>, EvalError> {
+        let mut out: Vec<PfDescriptor> = Vec::with_capacity(self.relations.len());
+        for (iri, relation) in &self.relations {
+            let arity = declaration_contained(iri, "arity", || relation.arity())?;
+            let volatility =
+                declaration_contained(iri, "determinism class", || relation.volatility())?;
+            let modes = declaration_contained(iri, "declared modes", || relation.modes().to_vec())?;
+            let mut described_modes = Vec::with_capacity(modes.len());
+            for mode in modes {
+                let rows_per_invocation =
+                    declaration_contained(iri, "row bound", || relation.rows_per_invocation(mode))?;
+                described_modes.push(PfMode {
+                    code: mode.code(),
+                    rows_per_invocation,
+                });
+            }
+            out.push(PfDescriptor {
+                iri: iri.clone(),
+                subject_arity: arity.subject,
+                object_arity: arity.object,
+                volatility,
+                modes: described_modes,
+            });
+        }
         out.sort_by(|a, b| a.iri.cmp(&b.iri));
-        out
+        Ok(out)
     }
 }
 
@@ -926,7 +967,7 @@ mod tests {
         // Registered in reverse IRI order, so the sort is observable.
         registry.register(EX_SPLIT, Arc::new(table()));
         registry.register(EX_OTHER, Arc::new(table()));
-        let described = registry.describe();
+        let described = registry.describe().expect("no relation panics");
         assert_eq!(
             described.iter().map(|d| d.iri.as_str()).collect::<Vec<_>>(),
             vec![EX_OTHER, EX_SPLIT],
@@ -1331,6 +1372,103 @@ mod tests {
         assert!(
             !error.to_string().contains("panicked"),
             "the check must run before the host code: {error}"
+        );
+    }
+
+    // ---- declaration-read panic containment --------------------------------
+
+    /// A relation whose `arity` panics — the declaration-read half of the trust
+    /// boundary, distinct from [`PanickingRelation`]'s `open`/`next` half.
+    #[derive(Debug)]
+    struct PanickingArityRelation;
+
+    impl PropertyFunction for PanickingArityRelation {
+        fn volatility(&self) -> Volatility {
+            Volatility::Stable
+        }
+
+        fn arity(&self) -> PfArity {
+            panic!("arity exploded")
+        }
+
+        fn modes(&self) -> &[BindingPattern] {
+            &[]
+        }
+
+        fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
+            0
+        }
+
+        fn open(
+            &self,
+            _args: &PfArgs<'_>,
+            _ceiling: Option<u64>,
+        ) -> Result<Box<dyn PfCursor>, EvalError> {
+            unreachable!("arity panics before open is ever reached")
+        }
+    }
+
+    #[test]
+    fn declaration_contained_catches_a_panic() {
+        let error = without_panic_output(|| {
+            declaration_contained(EX_SPLIT, "arity", || {
+                let relation = PanickingArityRelation;
+                relation.arity()
+            })
+            .expect_err("a panicking read must not escape")
+        });
+        assert!(
+            error
+                .to_string()
+                .contains("panicked while reporting its arity"),
+            "got {error}"
+        );
+        assert!(
+            !error.to_string().contains("exploded"),
+            "the payload must not leak into the deterministic message: {error}"
+        );
+    }
+
+    #[test]
+    fn describe_contains_a_panicking_relations_declaration() {
+        // `describe()` is the registry fingerprint's engine — read on every prepare — so
+        // a relation whose declaration methods panic must fail it cleanly, not abort.
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register(EX_SPLIT, Arc::new(PanickingArityRelation));
+        let error = without_panic_output(|| {
+            registry
+                .describe()
+                .expect_err("a panicking arity must not escape describe")
+        });
+        assert!(
+            error
+                .to_string()
+                .contains("panicked while reporting its arity"),
+            "got {error}"
+        );
+        assert!(
+            !error.to_string().contains("exploded"),
+            "the payload must not leak into the deterministic message: {error}"
+        );
+    }
+
+    #[test]
+    fn prepare_contains_a_panicking_relations_declaration() {
+        // The same failure, reached through the query-lane entry a host actually calls:
+        // `registry_fingerprint` (which `prepare_with_relations`/`prepare_for` consult on
+        // every prepare) drives `describe()` internally, so a panicking declaration must
+        // surface as a contained `EvalError`, never an abort of the caller's thread.
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register(EX_SPLIT, Arc::new(PanickingArityRelation));
+        let error = without_panic_output(|| {
+            crate::property_fn_plan::registry_fingerprint(Some(&registry))
+                .expect_err("a panicking declaration must not escape the fingerprint")
+        });
+        assert!(
+            error
+                .to_string()
+                .contains("panicked while reporting its arity"),
+            "got {error}"
         );
     }
 }

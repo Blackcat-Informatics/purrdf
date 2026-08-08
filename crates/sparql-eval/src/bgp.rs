@@ -1435,7 +1435,7 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
                     predicted_rows(left, survey).unwrap_or(1),
                     relations,
                     survey,
-                );
+                )?;
             } else {
                 survey_pattern_plans(
                     dataset,
@@ -1503,7 +1503,7 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
         // A call with nothing written before it: its driving bag is the identity table,
         // which is one row, so its whole prediction is the relation's declared bound.
         GraphPattern::PropertyFunction(call) => {
-            record_call_estimate(pattern, call, &DetHashSet::default(), 1, relations, survey);
+            record_call_estimate(pattern, call, &DetHashSet::default(), 1, relations, survey)?;
         }
         // Leaves that hold no BGP: there is no triple-pattern join order to choose and
         // no base cardinality to probe.
@@ -1516,6 +1516,14 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
 /// address exactly as a basic graph pattern's is.
 ///
 /// See [`survey_pattern_plans`] for the composition rule this implements.
+///
+/// # Errors
+///
+/// [`EvalError::Function`] if the resolved relation's declaration methods (`arity`,
+/// `rows_per_invocation`) panic — read through
+/// [`crate::property_fn::declaration_contained`] exactly as every other reader of a
+/// `dyn PropertyFunction` declaration is, since this walk runs at prepare/explain time
+/// over caller-injected host code just as the feasibility pass does.
 fn record_call_estimate(
     node: &GraphPattern,
     call: &PropertyFunctionCall,
@@ -1523,19 +1531,21 @@ fn record_call_estimate(
     driving_rows: u64,
     relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
     survey: &mut PlanSurvey,
-) {
+) -> Result<(), EvalError> {
     let Some(relation) = relations.and_then(|registry| registry.resolve(&call.iri)) else {
-        return;
+        return Ok(());
     };
-    let rows = relation
-        .rows_per_invocation(crate::property_fn_plan::invocation_mode(call, bound))
-        .saturating_mul(driving_rows);
+    let mode = crate::property_fn_plan::invocation_mode(call, bound);
+    let rows_per_invocation =
+        crate::property_fn::declaration_contained(&call.iri, "row bound", || {
+            relation.rows_per_invocation(mode)
+        })?;
+    let rows = rows_per_invocation.saturating_mul(driving_rows);
+    let arity = crate::property_fn::declaration_contained(&call.iri, "arity", || relation.arity())?;
     // The positions the relation fills on every row it emits. Never zero, so a declared
     // bound cannot be denominated out of a cell ceiling; saturating, because a `usize`
     // arity beyond `u64` is already past any ceiling a caller can express.
-    let columns = u64::try_from(relation.arity().total())
-        .unwrap_or(u64::MAX)
-        .max(1);
+    let columns = u64::try_from(arity.total()).unwrap_or(u64::MAX).max(1);
     survey.estimates.insert(
         std::ptr::from_ref(node) as usize,
         PlanEstimate {
@@ -1544,6 +1554,7 @@ fn record_call_estimate(
             columns,
         },
     );
+    Ok(())
 }
 
 /// The row count this walk predicts for `pattern`, when it predicts one at all.

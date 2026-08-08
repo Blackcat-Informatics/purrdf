@@ -231,16 +231,22 @@ fn order_chain(
                 continue;
             };
             let relation = resolve(call, relations)?;
-            check_arity(call, relation.arity())?;
+            let declared_arity =
+                crate::property_fn::declaration_contained(&call.iri, "arity", || relation.arity())?;
+            check_arity(call, declared_arity)?;
             let mode = invocation_mode(call, &bound);
-            if !relation.admits(mode) {
+            let modes =
+                crate::property_fn::declaration_contained(&call.iri, "declared modes", || {
+                    relation.modes().to_vec()
+                })?;
+            if !modes.iter().any(|declared| declared.subsumes(mode)) {
                 continue;
             }
-            let key = (
-                relation.rows_per_invocation(mode),
-                call.iri.as_str(),
-                atom.position,
-            );
+            let rows_bound =
+                crate::property_fn::declaration_contained(&call.iri, "row bound", || {
+                    relation.rows_per_invocation(mode)
+                })?;
+            let key = (rows_bound, call.iri.as_str(), atom.position);
             if best.is_none_or(|(_, current)| key < current) {
                 best = Some((index, key));
             }
@@ -341,9 +347,22 @@ fn stuck(
             .filter(|&(_, code)| code == 'f')
             .map(|(position, _)| position.to_string())
             .collect();
+        // Best-effort: this is already an admission failure being reported, so a
+        // relation whose `modes` ALSO panics degrades the diagnostic to an empty
+        // declared-modes list rather than losing the admission failure itself.
         let declared: Vec<String> = relations
             .and_then(|registry| registry.resolve(&call.iri))
-            .map(|relation| relation.modes().iter().map(|mode| mode.code()).collect())
+            .and_then(|relation| {
+                crate::property_fn::declaration_contained(&call.iri, "declared modes", || {
+                    relation
+                        .modes()
+                        .iter()
+                        .copied()
+                        .map(BindingPattern::code)
+                        .collect::<Vec<_>>()
+                })
+                .ok()
+            })
             .unwrap_or_default();
         described.push(format!(
             "<{}> reachable only as `{}` (free position(s) {}), declaring [{}]",
@@ -790,12 +809,21 @@ fn collect_term_vars(term: &TermPattern, out: &mut DetHashSet<Variable>) {
 /// `RelationIdentity` in `crate::governed`) — the same reason it belongs in the cache
 /// key applies to the receipt: two registries that produce different fingerprints can
 /// produce different answers, so a receipt that cannot tell them apart is not a receipt.
-pub(crate) fn registry_fingerprint(relations: Option<&PropertyFunctionRegistry>) -> String {
+///
+/// # Errors
+///
+/// [`EvalError::Function`] if a registered relation's declaration methods panic —
+/// [`PropertyFunctionRegistry::describe`]'s own failure, propagated unchanged. Never
+/// raised when `relations` is `None` or empty: that case returns before any relation's
+/// declaration is read at all.
+pub(crate) fn registry_fingerprint(
+    relations: Option<&PropertyFunctionRegistry>,
+) -> Result<String, EvalError> {
     let Some(registry) = relations.filter(|registry| !registry.is_empty()) else {
-        return String::new();
+        return Ok(String::new());
     };
     let mut out = String::new();
-    for descriptor in registry.describe() {
+    for descriptor in registry.describe()? {
         out.push_str(&descriptor.iri);
         out.push('\u{2}');
         out.push_str(&descriptor.subject_arity.to_string());
@@ -811,5 +839,5 @@ pub(crate) fn registry_fingerprint(relations: Option<&PropertyFunctionRegistry>)
         }
         out.push('\u{4}');
     }
-    out
+    Ok(out)
 }

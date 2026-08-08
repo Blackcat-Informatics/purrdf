@@ -268,12 +268,14 @@ pub fn query_with_entailment(
     // sees the filtered sequence) and a constructed graph (scrubbed after, because a
     // `DESCRIBE` draws triples from the dataset rather than from a variable binding).
     let surrogates = combined_surrogates.unwrap_or_default();
-    let restricted = (!surrogates.is_empty()).then(|| {
-        PreparedQuery::rewritten(
-            restrict_witness_bindings(&prepared_query.query, &surrogates),
-            QueryOptions::EMPTY,
-        )
-    });
+    let restricted = (!surrogates.is_empty())
+        .then(|| {
+            PreparedQuery::rewritten(
+                restrict_witness_bindings(&prepared_query.query, &surrogates),
+                QueryOptions::EMPTY,
+            )
+        })
+        .transpose()?;
     let plan = restricted.as_ref().unwrap_or(&prepared_query);
     let mut result = engine.query_prepared(&prepared, plan, request.substitutions)?;
     let _ = withhold_surrogate_triples(&mut result, &surrogates);
@@ -574,12 +576,14 @@ pub fn query_with_entailment_governed(
     // any truncation), and the scrub is over the result (so it reaches a `DESCRIBE`'s
     // triples). See this function's documentation for why a partial answer needs both.
     let surrogates = combined_surrogates.unwrap_or_default();
-    let restricted = (!surrogates.is_empty()).then(|| {
-        PreparedQuery::rewritten(
-            restrict_witness_bindings(&prepared_query.query, &surrogates),
-            QueryOptions::EMPTY,
-        )
-    });
+    let restricted = (!surrogates.is_empty())
+        .then(|| {
+            PreparedQuery::rewritten(
+                restrict_witness_bindings(&prepared_query.query, &surrogates),
+                QueryOptions::EMPTY,
+            )
+        })
+        .transpose()?;
     let plan = restricted.as_ref().unwrap_or(&prepared_query);
     // `QueryOptions::EMPTY`: this lane owns its plan (it rewrites the algebra to restrict
     // chase-minted witnesses) and exposes no registry seam of its own, so there is nothing

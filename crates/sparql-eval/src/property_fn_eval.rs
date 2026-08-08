@@ -392,7 +392,8 @@ fn eval_call_over<D: DatasetView + Sync>(
 ) -> Result<(SolutionSeq<D::Id>, Option<TrippedGovernor>), EvalError> {
     let relation = resolve(call, ctx)?;
     let plan = CallPlan::compile(call, &input.schema)?;
-    let declared = relation.arity();
+    let declared =
+        crate::property_fn::declaration_contained(&call.iri, "arity", || relation.arity())?;
     let supplied = PfArity::new(plan.subject_len, plan.args.len() - plan.subject_len);
     if declared != supplied {
         return Err(EvalError::function(format!(
@@ -401,6 +402,14 @@ fn eval_call_over<D: DatasetView + Sync>(
             call.iri
         )));
     }
+    // Read once per node evaluation rather than once per input row: the declaration
+    // cannot change between rows of the SAME invocation loop, so the previous per-row
+    // `modes()`/`admits()` call was repeated, uncontained host-code work for an answer
+    // that could not change. `admit_mode` below checks each row's own access pattern
+    // against this cached list rather than asking the relation again.
+    let modes = crate::property_fn::declaration_contained(&call.iri, "declared modes", || {
+        relation.modes().to_vec()
+    })?;
 
     let width = plan.schema.len();
     let left_len = input.schema.len();
@@ -415,6 +424,11 @@ fn eval_call_over<D: DatasetView + Sync>(
 
     let mut seed: Vec<Option<TermValue>> = vec![None; plan.slot_count()];
     let mut values: Vec<Option<TermValue>> = vec![None; plan.slot_count()];
+    // The per-invocation argument buffer: fixed length (`plan.args.len()`), hoisted out
+    // of the row loop and refilled in place, so every row reuses the same allocation
+    // instead of paying for a fresh `Vec` per input row. Owned `TermValue`s, so nothing
+    // borrows from it across a mutation and reuse is unconditionally sound.
+    let mut args: Vec<Option<TermValue>> = vec![None; plan.args.len()];
 
     'input: for mu in &input.rows {
         // The invocation's inputs, read straight off this row: a slot seeded from the
@@ -424,13 +438,24 @@ fn eval_call_over<D: DatasetView + Sync>(
                 .and_then(|column| mu.get(column).copied().flatten())
                 .map(|term| ctx.scratch.value_of(ctx.dataset, term));
         }
-        let args: Vec<Option<TermValue>> =
-            plan.args.iter().map(|arg| arg_value(arg, &seed)).collect();
-        let refs: Vec<Option<&TermValue>> = args.iter().map(Option::as_ref).collect();
+        for (dst, arg) in args.iter_mut().zip(&plan.args) {
+            *dst = arg_value(arg, &seed);
+        }
+        // The borrowed view `PfArgs` needs. This one is NOT hoisted the way `args` is
+        // above: it borrows `args`, which this loop mutates every row, and reusing a
+        // `Vec<Option<&TermValue>>` across a mutation of its own referent is exactly the
+        // reborrow shape today's (non-Polonius) borrow checker cannot verify sound
+        // across a loop back-edge. `SmallVec` sidesteps the problem rather than fighting
+        // it: built fresh each row, but on the STACK for every relation of `Solution`'s
+        // own usual width (inline capacity 4, matching `crate::solution::Solution`) —
+        // so the common case pays no heap allocation at all, and only an arity wider
+        // than that spills, exactly as the plain `Vec` it replaces always did.
+        let refs: smallvec::SmallVec<[Option<&TermValue>; 4]> =
+            args.iter().map(Option::as_ref).collect();
         let (subject, object) = refs.split_at(plan.subject_len);
         let pf_args = PfArgs::new(subject, object);
         let mode = pf_args.mode();
-        admit_mode(relation.as_ref(), &call.iri, mode)?;
+        admit_mode(&modes, &call.iri, mode)?;
 
         // The `property-function-invocation` charge point. Charged once per invocation
         // that actually reaches host code — the arity and access-pattern refusals above
@@ -550,7 +575,8 @@ fn resolve<D: DatasetView + Sync>(
         })
 }
 
-/// Check that `relation` can serve an invocation whose access pattern is `mode`.
+/// Check that a relation whose declared modes are `modes` can serve an invocation whose
+/// access pattern is `mode`.
 ///
 /// The prepare-time feasibility ordering
 /// ([`crate::property_fn_plan`]) already proved a feasible order exists for the
@@ -561,15 +587,19 @@ fn resolve<D: DatasetView + Sync>(
 /// not an engine bug, so it is a typed failure naming both patterns — and it is a
 /// failure rather than zero rows, because a relation that cannot compute an answer has
 /// not established that there is none.
-fn admit_mode(
-    relation: &dyn PropertyFunction,
-    iri: &str,
-    mode: BindingPattern,
-) -> Result<(), EvalError> {
-    if relation.admits(mode) {
+///
+/// Takes the ALREADY-READ declared-mode list rather than the relation itself: this runs
+/// once per input row, and re-reading [`PropertyFunction::modes`] from the relation on
+/// every row would repeat host-code work — and an uncontained host call — for an answer
+/// that cannot change within one invocation loop. [`eval_call_over`] reads it once,
+/// contained, before the row loop starts. This is the same lattice rule
+/// [`PropertyFunction::admits`] states; it is restated here rather than called because
+/// the cached list, not a live relation reference, is what this check has to hand.
+fn admit_mode(modes: &[BindingPattern], iri: &str, mode: BindingPattern) -> Result<(), EvalError> {
+    if modes.iter().any(|declared| declared.subsumes(mode)) {
         return Ok(());
     }
-    let declared: Vec<String> = relation.modes().iter().map(|m| m.code()).collect();
+    let declared: Vec<String> = modes.iter().copied().map(BindingPattern::code).collect();
     Err(EvalError::function(format!(
         "property function <{iri}> cannot serve the invocation `{}`; it declares [{}] — a \
          position the plan expected to be bound is unbound in this row",
