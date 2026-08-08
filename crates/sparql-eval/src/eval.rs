@@ -825,6 +825,16 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         }
     }
 
+    /// The caller-injected tables the fork-join safety walk consults — the one place
+    /// this context's two registries are paired, so a call site cannot pass one and
+    /// forget the other.
+    pub(crate) fn safety_registries(&self) -> crate::parallel::SafetyRegistries<'d> {
+        crate::parallel::SafetyRegistries {
+            functions: self.user_functions,
+            relations: self.property_functions,
+        }
+    }
+
     /// Whether a per-row loop evaluating `expr` may be forked across parallel workers.
     ///
     /// Two independent conditions, and both are about what a forked child does **not**
@@ -843,16 +853,6 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// Asked here rather than at the four fork sites (`FILTER`, `BIND`, `OPTIONAL`'s
     /// inline condition, and the per-group aggregate compute) so the rule is stated once
     /// and a new fork site cannot inherit half of it.
-    /// The caller-injected tables the fork-join safety walk consults — the one place
-    /// this context's two registries are paired, so a call site cannot pass one and
-    /// forget the other.
-    pub(crate) fn safety_registries(&self) -> crate::parallel::SafetyRegistries<'d> {
-        crate::parallel::SafetyRegistries {
-            functions: self.user_functions,
-            relations: self.property_functions,
-        }
-    }
-
     pub(crate) fn may_fork_row_loop(&self, expr: &purrdf_sparql_algebra::Expression) -> bool {
         if !crate::parallel::is_parallel_safe(expr, self.safety_registries()) {
             return false;

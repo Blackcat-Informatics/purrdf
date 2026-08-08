@@ -994,11 +994,6 @@ impl NativeSparqlEngine {
         self
     }
 
-    /// Build the per-query evaluation context, threading the engine-level
-    /// configuration (order cache + standpoint predicate table + loss vocabulary +
-    /// eval options) into it. `NOW()`/`RAND()`/`UUID()`/`STRUUID()` are already
-    /// correct by construction: [`EvalCtx::new`] samples the real host wall clock
-    /// and OS entropy itself.
     /// Parse and feasibility-order one request against the property-function registry
     /// that will be in scope for its evaluation.
     ///
@@ -1074,6 +1069,11 @@ impl NativeSparqlEngine {
         Cow::Owned(options)
     }
 
+    /// Build the per-query evaluation context, threading the engine-level
+    /// configuration (order cache + standpoint predicate table + loss vocabulary +
+    /// eval options) into it. `NOW()`/`RAND()`/`UUID()`/`STRUUID()` are already
+    /// correct by construction: [`EvalCtx::new`] samples the real host wall clock
+    /// and OS entropy itself.
     fn eval_ctx<'d, D: DatasetView + Sync>(&'d self, dataset: &'d D) -> EvalCtx<'d, D> {
         let mut ctx = EvalCtx::new(dataset)
             .with_order_cache(&self.order_cache)
