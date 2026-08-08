@@ -1247,8 +1247,8 @@ mod tests {
             )
             .expect_err("closure error must fail the query");
         assert!(
-            err.to_string().contains("user function error"),
-            "expected generalized 'user function error' text, got {err}"
+            err.to_string().contains("host function error"),
+            "expected generalized 'host function error' text, got {err}"
         );
         assert!(
             err.to_string().contains("boom"),

@@ -479,7 +479,7 @@ mod tests {
             "unregistered-relation.err",
         )));
         let real = "evaluate http://purrdf.test/property-functions#unregisteredRelation: error \
-                    native-sparql-property-function: user function error: no property function \
+                    native-sparql-property-function: host function error: no property function \
                     is registered for <https://example.org/rel/notRegistered>";
         assert!(compare_failure(&case, real).is_ok());
 

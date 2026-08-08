@@ -147,7 +147,7 @@ impl core::fmt::Display for EvalError {
             Self::Internal(msg) => write!(f, "internal evaluator error: {msg}"),
             Self::Remote(msg) => write!(f, "SERVICE federation error: {msg}"),
             Self::Data(msg) => write!(f, "malformed RDF input: {msg}"),
-            Self::Function(msg) => write!(f, "user function error: {msg}"),
+            Self::Function(msg) => write!(f, "host function error: {msg}"),
             Self::Config(msg) => write!(f, "invalid evaluation configuration: {msg}"),
         }
     }
