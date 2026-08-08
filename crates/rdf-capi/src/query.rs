@@ -650,6 +650,7 @@ pub unsafe extern "C" fn purrdf_update_governed(
                         base_iri,
                         substitutions: &[],
                     },
+                    QueryOptions::EMPTY,
                     &governors,
                 )
                 .map_err(|diagnostic| {

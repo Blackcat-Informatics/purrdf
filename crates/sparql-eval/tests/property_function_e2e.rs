@@ -18,10 +18,10 @@ use purrdf_sparql_algebra::{
     GraphPattern, Query, SparqlParser, TermPattern, Variable, pattern_to_select_query,
 };
 use purrdf_sparql_eval::{
-    BindingPattern, ChargePoint, EvalError, GovernedOutcome, GovernorState, MemoryRelation,
-    NativeSparqlEngine, NodeCharges, ParserOptions, PfArgs, PfArity, PfCursor, PfRow,
-    PropertyFunction, PropertyFunctionRegistry, QueryGovernors, QueryOptions, ResourceDimension,
-    TrippedGovernor, Volatility,
+    BindingPattern, ChargePoint, EvalError, GovernedOutcome, GovernedUpdateOutcome, GovernorState,
+    MemoryRelation, NativeSparqlEngine, NodeCharges, ParserOptions, PfArgs, PfArity, PfCursor,
+    PfRow, PropertyFunction, PropertyFunctionRegistry, QueryGovernors, QueryOptions,
+    ResourceDimension, TrippedGovernor, Volatility,
 };
 
 /// The namespace this host configured. PurRDF mints none: without this line in the
@@ -739,4 +739,137 @@ fn a_plan_prepared_without_the_registry_is_refused_when_evaluated_with_it() {
         panic!("METERED bounds nothing");
     };
     assert_eq!(rows_of(&result).len(), 3);
+}
+
+// ── UPDATE: the same seam, on the mutation surface ─────────────────────────────────
+//
+// A property-function call reaches an UPDATE's `WHERE` exactly the way it reaches a
+// `SELECT`'s: `?person rel:memberOf ?team` is admitted, feasibility-ordered, evaluated
+// against the injected relation, and DELETE/INSERT templates run over the rows it
+// answers with — never over an empty scan of the graph.
+
+/// `INSERT { ?person ex:member ?team } WHERE { ?person rel:memberOf ?team }`: the
+/// template text every UPDATE test below carries.
+const UPDATE_TEXT: &str = "PREFIX ex: <https://example.org/d/>\n\
+                           PREFIX rel: <https://example.org/rel/>\n\
+                           INSERT { ?person ex:member ?team } WHERE { ?person rel:memberOf ?team }\n";
+
+/// Reads back what [`UPDATE_TEXT`] should have written, as ordinary (non-call) data.
+const CHECK_QUERY: &str = "PREFIX ex: <https://example.org/d/>\n\
+                           SELECT ?person ?team WHERE { ?person ex:member ?team } ORDER BY ?person\n";
+
+/// The ungoverned entry: `NativeSparqlEngine::update_with_options`, the UPDATE sibling of
+/// [`NativeSparqlEngine::query_with_property_functions`]. It inserts EXACTLY the
+/// relation's three rows — not a subset, and nothing from the graph, which holds no
+/// `rel:memberOf` triple to have matched instead.
+#[test]
+fn an_update_where_inserts_exactly_the_relations_rows() {
+    let engine = NativeSparqlEngine::new();
+    let registry = relations();
+    let mut ds = dataset();
+    let before = ds.quad_count();
+
+    engine
+        .update_with_options(&mut ds, request(UPDATE_TEXT), with_relations(&registry))
+        .expect("the call resolves, evaluates, and the mutation applies");
+
+    assert_eq!(
+        ds.quad_count(),
+        before + 3,
+        "exactly the relation's three rows were inserted — the pre-existing unrelated \
+         triple is untouched and nothing else was added"
+    );
+
+    let result = engine
+        .query(&ds, request(CHECK_QUERY))
+        .expect("the inserted triples are ordinary data now, readable with no registry");
+    assert_eq!(
+        rows_of(&result),
+        vec![
+            vec![format!("{EX}ada"), format!("{EX}alpha")],
+            vec![format!("{EX}brian"), format!("{EX}alpha")],
+            vec![format!("{EX}chen"), format!("{EX}beta")],
+        ]
+    );
+}
+
+/// The governed sibling: `update_governed` spends fuel on the relation's dispatch (the
+/// same [`ChargePoint::PropertyFunctionInvocation`] / [`ChargePoint::PropertyFunctionRow`]
+/// points a governed `SELECT` spends — there is no ledger reader for an UPDATE, so this
+/// reads the same evidence the query-side test does, through
+/// [`purrdf_core::GovernorEvidence::consumed`]), and a ceiling one unit below that
+/// measured spend trips deterministically while a ceiling exactly at it applies.
+#[test]
+fn a_governed_update_where_charges_the_relation_and_trips_on_fuel() {
+    let engine = NativeSparqlEngine::new();
+    let registry = relations();
+
+    let run = |governors: &QueryGovernors| -> (Arc<RdfDataset>, GovernedUpdateOutcome) {
+        let mut ds = dataset();
+        let outcome = engine
+            .update_governed(
+                &mut ds,
+                request(UPDATE_TEXT),
+                with_relations(&registry),
+                governors,
+            )
+            .expect("a governor trip is an outcome, never an update error");
+        (ds, outcome)
+    };
+
+    let (metered_ds, metered) = run(&QueryGovernors::METERED);
+    let GovernedUpdateOutcome::Applied { evidence } = metered else {
+        panic!("METERED bounds nothing, so this must apply");
+    };
+    assert_eq!(
+        metered_ds.quad_count(),
+        dataset().quad_count() + 3,
+        "the metered run applied exactly the relation's rows"
+    );
+    let spend = evidence.consumed.get(ResourceDimension::Fuel);
+    assert!(
+        spend > 0,
+        "dispatching the relation into an INSERT is not free"
+    );
+
+    let (_, exact) = run(&QueryGovernors::UNBOUNDED.with_fuel(spend));
+    assert!(
+        matches!(exact, GovernedUpdateOutcome::Applied { .. }),
+        "the measured spend is exactly affordable"
+    );
+
+    let (short_ds, short) = run(&QueryGovernors::UNBOUNDED.with_fuel(spend - 1));
+    let GovernedUpdateOutcome::BudgetExhausted { .. } = short else {
+        panic!("one unit less than the measured spend must trip");
+    };
+    // A trip applies nothing: the base handed to this run is untouched.
+    assert_eq!(
+        short_ds.quad_count(),
+        dataset().quad_count(),
+        "a tripped UPDATE must not have inserted any of the relation's rows"
+    );
+}
+
+/// A call node reaching evaluation with nothing to resolve against is a hard error, not
+/// an empty `WHERE` — the same distinction [`resolve`](property_fn_eval) draws on the
+/// query lane. The engine here declares `rel:` as a property-function NAMESPACE (so the
+/// predicate parses to a call regardless of what registry, if any, is supplied to
+/// evaluation), and this run supplies none.
+#[test]
+fn an_update_where_call_with_no_registry_hard_errors_precisely() {
+    let engine = NativeSparqlEngine::new().with_parser_options(options());
+    let mut ds = dataset();
+    let before = ds.quad_count();
+
+    let error = engine
+        .update(&mut ds, request(UPDATE_TEXT))
+        .expect_err("a call with nothing to resolve against must not read the graph instead");
+    assert_eq!(error.code, "native-sparql-property-function");
+    assert!(
+        error.message.contains("no property function is registered"),
+        "got: {}",
+        error.message
+    );
+    // The failed request must not have mutated the dataset handle at all.
+    assert_eq!(ds.quad_count(), before);
 }

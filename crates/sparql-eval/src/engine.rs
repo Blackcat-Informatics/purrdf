@@ -22,6 +22,7 @@
 //! to algebra once, not per run. Full cost-based planning is out of scope here; the
 //! cache holds only the parsed [`Query`].
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::sync::Arc;
 
@@ -784,6 +785,17 @@ impl NativeSparqlEngine {
     /// The live accounting state is built here, for this request, and dropped with it —
     /// the same rule, for the same reason, as [`Self::query_governed`].
     ///
+    /// # Options are a parameter, not an overload
+    ///
+    /// `options` carries the registries this request's `WHERE` clauses run under —
+    /// pass [`QueryOptions::EMPTY`] to configure none. Required for the identical
+    /// reason [`Self::query_governed`] requires it: a
+    /// [`PropertyFunctionRegistry`](crate::property_fn::PropertyFunctionRegistry) is
+    /// *parse* configuration, and an UPDATE's `WHERE` is a triple-pattern context —
+    /// an entry that could not be handed a registry would parse a registered
+    /// relation's predicate as an ordinary triple pattern and either match nothing
+    /// or hard-error, never dispatch the call. See [`QueryOptions`].
+    ///
     /// # Errors
     ///
     /// Propagates parse and evaluation errors as an [`RdfDiagnostic`]. A tripped governor
@@ -792,15 +804,17 @@ impl NativeSparqlEngine {
         &self,
         dataset: &mut Arc<RdfDataset>,
         request: SparqlRequest<'_>,
+        options: QueryOptions<'_>,
         governors: &QueryGovernors,
     ) -> Result<GovernedUpdateOutcome, RdfDiagnostic> {
-        let update = self.parse_update(&request)?;
+        let update = self.parse_update(&request, options.property_functions)?;
         let state = Arc::new(GovernorState::new(governors));
         let mut m = MutableDataset::new(Arc::clone(dataset));
         let cfg = crate::update::UpdateEvalConfig {
             standpoint_predicates: self.standpoint_predicates.as_ref(),
             order_cache: &self.order_cache,
             governors: Some(&state),
+            options,
         };
         let tripped = match eval_update(&update, &mut m, self.resolver.as_deref(), &cfg) {
             // A request that ran to the end still does not publish while a trip is latched
@@ -840,24 +854,79 @@ impl NativeSparqlEngine {
         }
     }
 
-    /// Parse one UPDATE request into algebra.
+    /// Parse one UPDATE request into algebra, under the [`ParserOptions`] `registry`
+    /// derives (see [`Self::parser_options_for`]) — the `prepare_for`-equivalent for
+    /// updates: a registered relation's predicate is recognized as a call node by
+    /// EXACT IRI here exactly as it is on the query lane, whether or not the engine
+    /// also declared the relation's namespace via [`Self::with_parser_options`].
     ///
     /// UPDATE deliberately bypasses the plan cache: these requests are side-effecting and
     /// are not the hot static-query set the cache exists for; caching a mutating statement
     /// would be a correctness hazard. Shared by the two UPDATE seams so that a governed and
-    /// an ungoverned request of the same text parse identically — including the base IRI and
-    /// the engine's [`ParserOptions`].
+    /// an ungoverned request of the same text, under the same registry, parse identically —
+    /// including the base IRI and the engine's [`ParserOptions`].
     fn parse_update(
         &self,
         request: &SparqlRequest<'_>,
+        registry: Option<&crate::property_fn::PropertyFunctionRegistry>,
     ) -> Result<purrdf_sparql_algebra::Update, RdfDiagnostic> {
         let mut parser = SparqlParser::new();
         if let Some(base) = request.base_iri {
             parser = parser.with_base_iri(base);
         }
+        let options = self.parser_options_for(registry);
         parser
-            .parse_update_with(request.query, &self.parser_options)
+            .parse_update_with(request.query, &options)
             .map_err(|e| RdfDiagnostic::error("native-sparql-update-parse", e.to_string()))
+    }
+
+    /// The one **ungoverned** options-carrying UPDATE entry, parameterized by
+    /// [`QueryOptions`]: injects a property-function registry (and, symmetrically, a
+    /// SHACL-AF function registry and a deterministic blank-mint prefix) into the
+    /// `WHERE` evaluation of every `DELETE`/`INSERT … WHERE` in the request.
+    /// [`SparqlEngine::update`] is this entry under [`QueryOptions::EMPTY`] — the
+    /// ungoverned sibling of [`Self::update_governed`], the same relationship
+    /// [`Self::query_with_options_view`] has to [`Self::query_governed`].
+    ///
+    /// # Errors
+    ///
+    /// Propagates parse and evaluation errors as an [`RdfDiagnostic`].
+    pub fn update_with_options(
+        &self,
+        dataset: &mut Arc<RdfDataset>,
+        request: SparqlRequest<'_>,
+        options: QueryOptions<'_>,
+    ) -> Result<(), RdfDiagnostic> {
+        let update = self.parse_update(&request, options.property_functions)?;
+        // Atomicity is structural: branch a COW MutableDataset off the frozen base,
+        // apply every op to the delta, and only on FULL success freeze back. Any
+        // error drops `m` and leaves `*dataset` untouched.
+        let mut m = MutableDataset::new(Arc::clone(dataset));
+        let cfg = crate::update::UpdateEvalConfig {
+            standpoint_predicates: self.standpoint_predicates.as_ref(),
+            order_cache: &self.order_cache,
+            // Exactly ungoverned, exactly as this seam was before governors existed —
+            // `None` is the absence of the state, not an unbounded one, so no charge site
+            // or stop poll is reachable from here at all. A caller who wants ceilings on a
+            // mutation names them at `NativeSparqlEngine::update_governed`.
+            governors: None,
+            options,
+        };
+        match eval_update(&update, &mut m, self.resolver.as_deref(), &cfg) {
+            Ok(()) => {}
+            Err(UpdateAbort::Failed(diagnostic)) => return Err(diagnostic),
+            // Unreachable by construction: a trip can only originate from the
+            // `GovernorState` this seam declines to build, so there is no governor here to
+            // stop anything. Stated as an invariant rather than re-rendered as a
+            // diagnostic, because a diagnostic on this arm would be a place for a real
+            // trip to hide if the invariant ever broke.
+            Err(UpdateAbort::Tripped(tripped)) => unreachable!(
+                "the ungoverned UPDATE seam attaches no GovernorState, yet {} was reported",
+                tripped.label()
+            ),
+        }
+        *dataset = m.freeze()?;
+        Ok(())
     }
 
     /// A fresh engine with an empty plan cache and no `LOAD` resolver.
@@ -956,29 +1025,44 @@ impl NativeSparqlEngine {
         relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
         let relations = relations.filter(|registry| !registry.is_empty());
-        let Some(registry) = relations else {
-            return self.cache.borrow_mut().prepare_with_relations(
-                query,
-                base_iri,
-                &self.parser_options,
-                None,
-            );
+        let options = self.parser_options_for(relations);
+        self.cache
+            .borrow_mut()
+            .prepare_with_relations(query, base_iri, &options, relations)
+    }
+
+    /// This engine's [`ParserOptions`], augmented with `registry`'s exact predicate
+    /// IRIs (EXACT match — [`ParserOptions::property_fn_iris`] — never PREFIX; see
+    /// [`Self::prepare_for`]'s doc comment for why folding a registered IRI in as a
+    /// namespace prefix would hijack an unrelated, merely-same-prefixed data
+    /// predicate).
+    ///
+    /// Shared by [`Self::prepare_for`] (the query lane) and [`Self::parse_update`]
+    /// (the UPDATE lane) so a registered relation's predicate is recognized as a
+    /// call node identically in a `SELECT` and in an UPDATE's `WHERE` — an UPDATE
+    /// WHERE clause is a triple-pattern context exactly like a query's, and a
+    /// registry that can drive one but not the other is a registry with two
+    /// meanings depending on which clause spelled the predicate.
+    ///
+    /// `describe()` is IRI-sorted, so the derived set is a pure function of the
+    /// registry's contents rather than of its registration order. Returns the
+    /// engine's own options unmodified — no clone, no allocation — when `registry`
+    /// is absent or empty, which is every request on a host that has not
+    /// configured the seam.
+    fn parser_options_for(
+        &self,
+        registry: Option<&crate::property_fn::PropertyFunctionRegistry>,
+    ) -> Cow<'_, ParserOptions> {
+        let Some(registry) = registry.filter(|r| !r.is_empty()) else {
+            return Cow::Borrowed(&self.parser_options);
         };
         let mut options = self.parser_options.clone();
-        // `describe()` is IRI-sorted, so the derived set is a pure function of the
-        // registry's contents rather than of its registration order — which matters,
-        // because the set is part of the plan-cache key. EXACT match
-        // (`property_fn_iris`), never prefix (`property_fn_namespaces`): see the
-        // doc comment above for why folding a registered IRI in as a namespace
-        // prefix is a category error that hijacks unrelated data predicates.
         for descriptor in registry.describe() {
             if !options.property_fn_iris.contains(&descriptor.iri) {
                 options.property_fn_iris.push(descriptor.iri);
             }
         }
-        self.cache
-            .borrow_mut()
-            .prepare_with_relations(query, base_iri, &options, relations)
+        Cow::Owned(options)
     }
 
     fn eval_ctx<'d, D: DatasetView + Sync>(&'d self, dataset: &'d D) -> EvalCtx<'d, D> {
@@ -1776,7 +1860,7 @@ fn check_plan_matches_relations(
     ))
 }
 
-fn apply_query_options<'d, D: DatasetView + Sync>(
+pub(crate) fn apply_query_options<'d, D: DatasetView + Sync>(
     mut ctx: EvalCtx<'d, D>,
     options: QueryOptions<'d>,
 ) -> Result<EvalCtx<'d, D>, RdfDiagnostic> {
@@ -1835,35 +1919,10 @@ impl SparqlEngine for NativeSparqlEngine {
         dataset: &mut Self::Dataset,
         request: SparqlRequest<'_>,
     ) -> Result<(), RdfDiagnostic> {
-        let update = self.parse_update(&request)?;
-        // Atomicity is structural: branch a COW MutableDataset off the frozen base,
-        // apply every op to the delta, and only on FULL success freeze back. Any
-        // error drops `m` and leaves `*dataset` untouched.
-        let mut m = MutableDataset::new(Arc::clone(dataset));
-        let cfg = crate::update::UpdateEvalConfig {
-            standpoint_predicates: self.standpoint_predicates.as_ref(),
-            order_cache: &self.order_cache,
-            // Exactly ungoverned, exactly as this seam was before governors existed —
-            // `None` is the absence of the state, not an unbounded one, so no charge site
-            // or stop poll is reachable from here at all. A caller who wants ceilings on a
-            // mutation names them at `NativeSparqlEngine::update_governed`.
-            governors: None,
-        };
-        match eval_update(&update, &mut m, self.resolver.as_deref(), &cfg) {
-            Ok(()) => {}
-            Err(UpdateAbort::Failed(diagnostic)) => return Err(diagnostic),
-            // Unreachable by construction: a trip can only originate from the
-            // `GovernorState` this seam declines to build, so there is no governor here to
-            // stop anything. Stated as an invariant rather than re-rendered as a
-            // diagnostic, because a diagnostic on this arm would be a place for a real
-            // trip to hide if the invariant ever broke.
-            Err(UpdateAbort::Tripped(tripped)) => unreachable!(
-                "the ungoverned UPDATE seam attaches no GovernorState, yet {} was reported",
-                tripped.label()
-            ),
-        }
-        *dataset = m.freeze()?;
-        Ok(())
+        // The trait seam configures nothing: a caller who wants a property-function
+        // registry (or any other `QueryOptions` piece) reachable from an UPDATE's
+        // `WHERE` names it at `NativeSparqlEngine::update_with_options`.
+        self.update_with_options(dataset, request, QueryOptions::EMPTY)
     }
 }
 

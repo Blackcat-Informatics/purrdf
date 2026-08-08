@@ -63,10 +63,9 @@ pub(crate) fn plan_query(
         | Query::Construct { pattern, .. }
         | Query::Describe { pattern, .. } => pattern,
     };
-    if !crate::property_fn_eval::pattern_reaches_property_function(pattern) {
+    let Some(planned) = plan_where_pattern(pattern, relations)? else {
         return Ok(None);
-    }
-    let planned = plan_pattern(pattern, relations, &DetHashSet::default())?;
+    };
     let mut planned_query = query.clone();
     match &mut planned_query {
         Query::Select { pattern, .. }
@@ -75,6 +74,33 @@ pub(crate) fn plan_query(
         | Query::Describe { pattern, .. } => *pattern = planned,
     }
     Ok(Some(planned_query))
+}
+
+/// [`plan_query`] on a standalone [`GraphPattern`] rather than a full [`Query`] — the
+/// entry an UPDATE's `WHERE` clause uses, because a `DELETE`/`INSERT … WHERE`
+/// operation has no `Query` wrapper to hand in. Same admission (unregistered IRI,
+/// arity mismatch, an infeasible chain), same feasibility rewrite, same "untouched,
+/// no work at all, when the pattern carries no call node" contract — an UPDATE
+/// WHERE is a triple-pattern context exactly like a query's, so it is planned
+/// exactly like one.
+///
+/// Returns `Ok(None)` unchanged (not merely equal) when `pattern` carries no call
+/// node, so a caller can keep evaluating its own borrowed `pattern` rather than a
+/// clone that happens to match it.
+///
+/// # Errors
+///
+/// [`EvalError::Function`] for an unregistered predicate IRI, an arity mismatch
+/// between the call site and the relation's declaration, or a chain no total order
+/// can serve.
+pub(crate) fn plan_where_pattern(
+    pattern: &GraphPattern,
+    relations: Option<&PropertyFunctionRegistry>,
+) -> Result<Option<GraphPattern>, EvalError> {
+    if !crate::property_fn_eval::pattern_reaches_property_function(pattern) {
+        return Ok(None);
+    }
+    plan_pattern(pattern, relations, &DetHashSet::default()).map(Some)
 }
 
 // ---------------------------------------------------------------------------

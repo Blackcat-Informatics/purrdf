@@ -95,6 +95,7 @@ use purrdf_sparql_algebra::{
 use crate::DetHashMap;
 use crate::convert::named_node_to_value;
 use crate::dataset_spec::ActiveDataset;
+use crate::engine::{QueryOptions, apply_query_options};
 use crate::eval::{BgpOrderCache, EvalCtx, StandpointPredicates, eval_evaluated};
 use crate::governor::{ChargePoint, GovernorState, StopSignal};
 use crate::solution::{Solution, VarSchema};
@@ -143,6 +144,14 @@ pub(crate) struct UpdateEvalConfig<'e> {
     /// truncation channel is reachable. It is also what makes [`UpdateAbort::Tripped`]
     /// structurally impossible on the ungoverned seam.
     pub(crate) governors: Option<&'e Arc<GovernorState>>,
+    /// The registries this request's `WHERE` clauses run under: the property-function
+    /// registry (read at admission and applied to the `WHERE` [`EvalCtx`] through the
+    /// same seam a governed query applies it — see [`apply_query_options`]), the
+    /// SHACL-AF function registry, and the blank-mint prefix. An UPDATE `WHERE` is a
+    /// triple-pattern context exactly like a query's, so it takes the identical
+    /// [`QueryOptions`] a query takes — [`QueryOptions::EMPTY`] is "configure nothing",
+    /// what every UPDATE ran under before this seam existed.
+    pub(crate) options: QueryOptions<'e>,
 }
 
 /// Poll the request's stop signal, converting a fired signal into a trip.
@@ -456,8 +465,26 @@ fn delete_insert(
     let with_value = with.map(named_node_to_value);
 
     let snap = m.freeze()?;
-    let mut ctx = EvalCtx::new(&*snap);
-    ctx = ctx.with_order_cache(cfg.order_cache);
+
+    // The `prepare_for`-equivalent for an UPDATE's `WHERE`: an UPDATE `WHERE` is a
+    // triple-pattern context exactly like a query's, so a registered relation's
+    // predicate is admitted and feasibility-ordered here exactly as it would be in a
+    // governed `SELECT` — before this operation's mutation, or its governor charges,
+    // read a single cell of it. `Ok(None)` (no call node in this pattern — every
+    // pattern on a host that has not configured the seam) leaves `pattern` as parsed.
+    let planned =
+        crate::property_fn_plan::plan_where_pattern(pattern, cfg.options.property_functions)
+            .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
+    let pattern: &purrdf_sparql_algebra::GraphPattern = planned.as_ref().unwrap_or(pattern);
+
+    let ctx = EvalCtx::new(&*snap).with_order_cache(cfg.order_cache);
+    // The property-function registry, the SHACL-AF function registry and the
+    // blank-mint prefix, applied through the SAME seam a governed/ungoverned query
+    // applies them — see `crate::engine::apply_query_options`. This is what lets a
+    // call node reach evaluation at all: without it `ctx` carries no registry and
+    // every call in this `WHERE` hard-errors "no property function is registered",
+    // regardless of whether one was configured for the request.
+    let mut ctx = apply_query_options(ctx, cfg.options)?;
     // The request's governors, so the `WHERE` charges and stops exactly as the same
     // pattern would inside a governed `SELECT`. Without this the ceilings a caller set
     // would bound their queries and silently not bound their mutations.
@@ -485,7 +512,13 @@ fn delete_insert(
         ActiveDataset::store_default()
     };
 
-    admit_where(pattern, &snap, &ctx.active_dataset, cfg.governors)?;
+    admit_where(
+        pattern,
+        &snap,
+        &ctx.active_dataset,
+        cfg.governors,
+        cfg.options.property_functions,
+    )?;
 
     // A truncated `WHERE` must apply NO mutation: a half-applied UPDATE is not an
     // incomplete result, it is a corrupt store. Refusing the whole operation is the only
@@ -613,6 +646,7 @@ fn admit_where(
     snap: &RdfDataset,
     active_dataset: &ActiveDataset<purrdf_core::TermId>,
     governors: Option<&Arc<GovernorState>>,
+    relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
 ) -> Result<(), UpdateAbort> {
     let Some(state) = governors else {
         return Ok(());
@@ -627,9 +661,13 @@ fn admit_where(
         active_dataset,
         purrdf_core::GraphMatch::Default,
         pattern,
-        // A SPARQL `UPDATE` request carries no property-function registry: the update
-        // surface has no entry that supplies one, so a call node cannot appear here.
-        None,
+        // A call node CAN appear here: an UPDATE's `WHERE` is a triple-pattern
+        // context exactly like a query's (`delete_insert` already feasibility-orders
+        // `pattern` against this same registry through `plan_where_pattern` before
+        // this survey runs), so the survey must price the call the same way a
+        // governed `SELECT`'s admission does — `relations` is `cfg.options
+        // .property_functions`, `None` on a request that configured no registry.
+        relations,
         &mut survey,
     )
     .map_err(|e| RdfDiagnostic::error("native-sparql-update-eval", e.to_string()))?;
@@ -986,6 +1024,7 @@ mod tests {
             standpoint_predicates: None,
             order_cache,
             governors: None,
+            options: QueryOptions::EMPTY,
         }
     }
 

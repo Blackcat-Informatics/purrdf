@@ -1155,6 +1155,7 @@ impl QueryEngine {
             .update_governed(
                 &mut frozen,
                 sparql_request(sparql, base.as_deref()),
+                QueryOptions::EMPTY,
                 &governors,
             )
             .map_err(|e| diag_to_err(&e))?;
