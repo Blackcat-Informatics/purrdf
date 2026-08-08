@@ -48,6 +48,28 @@
 //!   before the node's rows leave — the same treatment `crate::bgp` gives a blank in a
 //!   triple pattern, using the same synthetic-slot machinery.
 //!
+//! # Where a call's row ceiling comes from
+//!
+//! A call stops producing once the node whose output its rows are can use no more of
+//! them — the answer-cap / `LIMIT` pushdown's verdict. Which node that is depends on the
+//! shape, and the two are genuinely different nodes:
+//!
+//! * A call written with nothing before it in its group is a plan node evaluated at its
+//!   own address, and the ceiling recorded there is its own.
+//! * A call written after a data pattern is the right operand of a `Lateral`, and
+//!   [`crate::binop::eval_lateral`] FUSES the pair: the rows produced below are already
+//!   joined with the left row, so they are the `Lateral`'s output rows and the ceiling
+//!   that bounds them is the `Lateral`'s. That node's certificate is what licensed it;
+//!   nothing new is licensed by the fusion, and the call node itself carries no ceiling
+//!   (see [`crate::governor::soundness::child_row_ceiling`]).
+//!
+//! The ceiling is consumed twice over: this dispatch stops accumulating at it, and — for
+//! a call whose positions leave the engine nothing to filter — it is passed on to the
+//! relation as the licence to stop generating. The intermediate-cell ceiling is a
+//! separate, live governor and is applied to the same bag through the shared
+//! [`crate::row_ingest::GovernedRowIngest`], exactly as `crate::bgp` applies both to a
+//! join order's last stage.
+//!
 //! # Emission order is preserved verbatim
 //!
 //! Rows leave in the order the relation emitted them, per input row in input-row
@@ -87,11 +109,20 @@ pub(crate) fn eval_property_function<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let unit = SolutionSeq::unit();
-    finish(eval_call_over(call, &unit, ctx)?)
+    // This node IS the plan node being evaluated, so the ceiling that bounds its output
+    // is its own.
+    let ceiling = ctx.row_ceiling();
+    finish(eval_call_over(call, &unit, ceiling, ctx)?)
 }
 
 /// Evaluate `Lateral(left, PropertyFunction(call))` given `left`'s already-evaluated
 /// rows: one invocation per left row, output rows in left-row order.
+///
+/// `ceiling` is the row ceiling of the **`Lateral`**, not of the call node: the rows
+/// produced here are already joined with `left`, so they are the fused operator's — that
+/// is, the `Lateral`'s — output rows. [`crate::binop::eval_lateral`] reads it there and
+/// hands it over; see [`crate::governor::soundness::child_row_ceiling`] for why the
+/// licence lives at that node and is not pushed across the edge.
 ///
 /// # Errors
 ///
@@ -99,9 +130,10 @@ pub(crate) fn eval_property_function<D: DatasetView + Sync>(
 pub(crate) fn eval_lateral_property_function<D: DatasetView + Sync>(
     call: &PropertyFunctionCall,
     left: &SolutionSeq<D::Id>,
+    ceiling: Option<usize>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    finish(eval_call_over(call, left, ctx)?)
+    finish(eval_call_over(call, left, ceiling, ctx)?)
 }
 
 /// Wrap a driven call's bag in the governed outcome channel: a complete bag, or the
@@ -156,6 +188,9 @@ struct CallPlan {
     /// Slot → the input schema column it reads its seed value from, when the input
     /// schema already carries that variable.
     slot_seed: Vec<Option<usize>>,
+    /// Whether a row ceiling may be handed to the relation for this call — see
+    /// [`args_are_admission_transparent`].
+    ceiling_is_offerable: bool,
 }
 
 impl CallPlan {
@@ -181,6 +216,7 @@ impl CallPlan {
             .enumerate()
             .filter_map(|(slot, col)| col.map(|col| (slot, col)))
             .collect();
+        let ceiling_is_offerable = args_are_admission_transparent(&args, slot_cols.len());
         Ok(Self {
             args,
             subject_len: call.subject_args.len(),
@@ -188,6 +224,7 @@ impl CallPlan {
             schema: Arc::new(schema),
             bound_cols,
             slot_seed,
+            ceiling_is_offerable,
         })
     }
 
@@ -195,6 +232,43 @@ impl CallPlan {
     fn slot_count(&self) -> usize {
         self.slot_cols.len()
     }
+}
+
+/// Whether this call's positions are **admission-transparent**: every row the relation
+/// emits that agrees with the invocation's bound positions is admitted by
+/// [`unify_row`], with nothing left for the engine to drop.
+///
+/// This is the precondition for offering the relation a row ceiling at all, and it is a
+/// question about what the relation can *see*. A ceiling says "you may stop after this
+/// many rows"; a relation can only honour it against rows it knows the engine wants, and
+/// the invocation's bound values are the whole of what it is told. Two things the engine
+/// filters on are invisible from there:
+///
+/// * **A repeated slot.** `?x <rel> ?x` hands the relation two FREE positions; it cannot
+///   know they must be equal, and the engine drops the rows where they are not. A
+///   relation stopping at `k` emitted rows could then hand back none at all — a short
+///   answer reported as complete. A slot seeded from the input row is not affected: both
+///   of its occurrences arrive bound, so agreement at the bound positions already implies
+///   unification. The test below is nonetheless purely syntactic, because seeding is a
+///   per-row fact (an `OPTIONAL` can leave the column unbound on one row and not the
+///   next) and withholding a ceiling only costs an optimization.
+/// * **A quoted-triple position that is not fully bound.** It reaches the relation as a
+///   free position, so the relation may put any term there, and [`unify_row`] then drops
+///   whatever fails to match structurally.
+///
+/// Everything else — constants, and slots that occur once — is either bound (and so
+/// visible to the relation as the value the engine will compare against) or unconstrained
+/// (and so always unifies).
+fn args_are_admission_transparent(args: &[Arg], slot_count: usize) -> bool {
+    fn walk(arg: &Arg, seen: &mut [bool]) -> bool {
+        match arg {
+            Arg::Constant(_) => true,
+            Arg::Slot(slot) => !std::mem::replace(&mut seen[*slot], true),
+            Arg::Triple(_) => false,
+        }
+    }
+    let mut seen = vec![false; slot_count];
+    args.iter().all(|arg| walk(arg, &mut seen))
 }
 
 /// Compile one argument position, registering any variable/blank it introduces.
@@ -299,10 +373,21 @@ fn triple_is_ground(triple: &TriplePattern) -> bool {
 
 /// Drive `call` over every row of `input`, in order.
 ///
+/// `ceiling` is the answer-cap / `LIMIT` row ceiling of the node whose OUTPUT this bag
+/// is — the call node itself when the call stands alone, the enclosing `Lateral` when
+/// this is the fused correlated shape. Both callers read it from that node; it is a
+/// parameter rather than a second `ctx.row_ceiling()` here precisely because the two
+/// shapes read it at different nodes.
+///
+/// It is applied exactly as `crate::bgp` applies its ceiling to the last stage of a join
+/// order: the rows accumulated below are that node's output rows, produced in order, so
+/// stopping at `k` of them yields the first `k` — a genuine positional prefix.
+///
 /// Returns the output bag together with the governor that stopped it, if one did.
 fn eval_call_over<D: DatasetView + Sync>(
     call: &PropertyFunctionCall,
     input: &SolutionSeq<D::Id>,
+    ceiling: Option<usize>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<(SolutionSeq<D::Id>, Option<TrippedGovernor>), EvalError> {
     let relation = resolve(call, ctx)?;
@@ -319,11 +404,6 @@ fn eval_call_over<D: DatasetView + Sync>(
 
     let width = plan.schema.len();
     let left_len = input.schema.len();
-    // The answer-cap / `LIMIT` pushdown's verdict for THIS node, applied exactly as
-    // `crate::bgp` applies it to the last stage of a join order: the rows this node
-    // emits are the rows the plan licensed a ceiling against, so stopping at `k` of
-    // them yields the first `k` — a genuine positional prefix.
-    let semantic_ceiling = ctx.row_ceiling();
     // A call's own per-row point. It rides the shared governed ingest core exactly as
     // `SERVICE`'s does, because a relation's output is the other bag in this evaluator
     // whose size an outside party picks: the generic per-node accounting every algebra
@@ -369,9 +449,20 @@ fn eval_call_over<D: DatasetView + Sync>(
             tripped = Some(governor);
             break 'input;
         }
-        let ceiling = semantic_ceiling
+        // The relation's own licence to stop early: what is LEFT of the node's ceiling
+        // once the invocations already driven have contributed. Remaining rather than the
+        // whole ceiling because the accumulated bag is the node's output — the tightest
+        // honest number is what this invocation could still add to it.
+        //
+        // Withheld entirely unless the call is admission-transparent: a ceiling honoured
+        // against rows this engine then drops for a reason the relation cannot see would
+        // turn a short bag into a "complete" answer. See
+        // [`args_are_admission_transparent`].
+        let invocation_ceiling = ceiling
+            .filter(|_| plan.ceiling_is_offerable)
             .map(|ceiling| u64::try_from(ceiling.saturating_sub(rows.len())).unwrap_or(u64::MAX));
-        let mut cursor = open_contained(relation.as_ref(), &call.iri, &pf_args, ceiling)?;
+        let mut cursor =
+            open_contained(relation.as_ref(), &call.iri, &pf_args, invocation_ceiling)?;
 
         loop {
             if let Some(governor) = ctx.stop_check() {
@@ -381,7 +472,7 @@ fn eval_call_over<D: DatasetView + Sync>(
             // The semantic ceiling: rows past it cannot reach the query's answer, so
             // this node stops producing. It is a plan licence, not a governor, so it
             // ends the work without certifying a truncation.
-            if semantic_ceiling.is_some_and(|ceiling| rows.len() >= ceiling) {
+            if ceiling.is_some_and(|ceiling| rows.len() >= ceiling) {
                 break 'input;
             }
             let Some(emitted) = next_contained(&mut *cursor, &call.iri)? else {
@@ -823,6 +914,89 @@ mod tests {
         }
     }
 
+    /// A relation that records the row ceiling of every invocation it is opened with.
+    ///
+    /// It emits its fixture rows with every BOUND position echoed back, so nothing it
+    /// produces is dropped for disagreeing with an input — which keeps these tests about
+    /// the ceiling and not about the equality filter.
+    #[derive(Debug)]
+    struct CeilingSpy {
+        modes: [BindingPattern; 1],
+        rows: Vec<PfRow>,
+        echo_bound: bool,
+        ceilings: Mutex<Vec<Option<u64>>>,
+    }
+
+    impl CeilingSpy {
+        /// A 1/1 relation emitting `rows`, echoing bound positions.
+        fn new(rows: Vec<PfRow>) -> Self {
+            Self {
+                modes: [PfArity::new(1, 1).all_free_mode()],
+                rows,
+                echo_bound: true,
+                ceilings: Mutex::new(Vec::new()),
+            }
+        }
+
+        /// The same, emitting its rows VERBATIM — for the repeated-variable call, where
+        /// the point is that the engine's own filter cuts some of them.
+        fn verbatim(rows: Vec<PfRow>) -> Self {
+            Self {
+                echo_bound: false,
+                ..Self::new(rows)
+            }
+        }
+
+        /// One row per invocation, `ex:r0`, for the shape tests.
+        fn single() -> Self {
+            Self::new(vec![vec![iri("w0"), iri("r0")]])
+        }
+
+        fn ceilings(&self) -> Vec<Option<u64>> {
+            self.ceilings.lock().expect("uncontended").clone()
+        }
+    }
+
+    impl PropertyFunction for CeilingSpy {
+        fn volatility(&self) -> Volatility {
+            Volatility::Stable
+        }
+
+        fn arity(&self) -> PfArity {
+            PfArity::new(1, 1)
+        }
+
+        fn modes(&self) -> &[BindingPattern] {
+            &self.modes
+        }
+
+        fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
+            self.rows.len() as u64
+        }
+
+        fn open(
+            &self,
+            args: &PfArgs<'_>,
+            ceiling: Option<u64>,
+        ) -> Result<Box<dyn PfCursor>, EvalError> {
+            self.ceilings.lock().expect("uncontended").push(ceiling);
+            let rows = self
+                .rows
+                .iter()
+                .map(|row| {
+                    row.iter()
+                        .enumerate()
+                        .map(|(position, value)| match args.get(position) {
+                            Some(bound) if self.echo_bound => bound.clone(),
+                            Some(_) | None => value.clone(),
+                        })
+                        .collect()
+                })
+                .collect();
+            Ok(Box::new(VecCursor { rows, next: 0 }))
+        }
+    }
+
     /// A relation that MINTS a term absent from the dataset: `?doc ex:tag ?label`
     /// emits the document's own IRI paired with a freshly-built literal.
     #[derive(Debug)]
@@ -1004,6 +1178,144 @@ mod tests {
             ]]
         );
         assert_eq!(relation.calls(), vec!["bbf".to_owned()]);
+    }
+
+    // ---- the row ceiling --------------------------------------------------
+
+    #[test]
+    fn a_correlated_call_is_opened_with_the_lateral_s_row_ceiling() {
+        // The shape the parser builds for a call written after a data pattern:
+        // `Lateral(Bgp, PropertyFunction)`. The ceiling belongs to the Lateral — the
+        // dispatch emits that node's output rows — and reaches the relation through the
+        // fusion. Before this it never arrived at all, and the "tell the index that ten
+        // rows matter" licence fired only for a call standing on its own.
+        let spy = Arc::new(CeilingSpy::single());
+        let registry = registry_of(vec![(PF_SPLIT, spy.clone())]);
+        let rows = rows_of(
+            &format!("SELECT ?s ?x WHERE {{ ?s <{EX}section> ?o . ?s <{PF_SPLIT}> ?x }} LIMIT 2"),
+            &registry,
+        );
+        assert_eq!(rows.len(), 2, "two documents, one relation row each");
+        assert_eq!(
+            spy.ceilings(),
+            vec![Some(2), Some(1)],
+            "the first invocation may serve the whole LIMIT; the second is offered what \
+             the first left, because the accumulated bag is the node's output"
+        );
+    }
+
+    #[test]
+    fn a_standalone_call_is_opened_with_its_own_row_ceiling() {
+        // The other shape: nothing written before the call, so the node IS the plan node
+        // the ceiling was recorded at. It is driven over the identity table, hence one
+        // invocation.
+        let spy = Arc::new(CeilingSpy::new(vec![
+            vec![iri("w0"), iri("r0")],
+            vec![iri("w1"), iri("r1")],
+            vec![iri("w2"), iri("r2")],
+        ]));
+        let registry = registry_of(vec![(PF_SPLIT, spy.clone())]);
+        let rows = rows_of(
+            &format!("SELECT ?w ?p WHERE {{ ?w <{PF_SPLIT}> ?p }} LIMIT 2"),
+            &registry,
+        );
+        assert_eq!(rows.len(), 2);
+        assert_eq!(spy.ceilings(), vec![Some(2)]);
+    }
+
+    #[test]
+    fn a_call_under_a_sort_is_offered_no_ceiling() {
+        // `ORDER BY` + `LIMIT` is a top-k problem: the row that sorts first can be
+        // produced last, so no prefix of this node's output is the answer's prefix and
+        // the plan licenses nothing. The guard that withholds it is the same certificate
+        // that grants it above — see `crate::governor::soundness`.
+        let spy = Arc::new(CeilingSpy::single());
+        let registry = registry_of(vec![(PF_SPLIT, spy.clone())]);
+        let rows = rows_of(
+            &format!(
+                "SELECT ?s ?x WHERE {{ ?s <{EX}section> ?o . ?s <{PF_SPLIT}> ?x }} \
+                 ORDER BY ?s LIMIT 2"
+            ),
+            &registry,
+        );
+        assert_eq!(
+            rows.len(),
+            2,
+            "the answer is unchanged; only the licence is"
+        );
+        assert_eq!(
+            spy.ceilings(),
+            vec![None, None],
+            "a ceiling under a sort would let a relation stop before producing the row \
+             that sorts first"
+        );
+    }
+
+    #[test]
+    fn a_repeated_variable_withholds_the_ceiling_from_the_relation() {
+        // `?x <rel> ?x` hands the relation two FREE positions. It cannot know they must
+        // agree, so a licence to stop after `k` rows would be counted against rows this
+        // engine then drops — and a stop at the first, dropped, row would report an empty
+        // answer for a query that has one.
+        let spy = Arc::new(CeilingSpy::verbatim(vec![
+            vec![iri("a"), iri("1")],
+            vec![iri("c"), iri("c")],
+        ]));
+        let registry = registry_of(vec![(PF_SPLIT, spy.clone())]);
+        let rows = rows_of(
+            &format!("SELECT ?x WHERE {{ ?x <{PF_SPLIT}> ?x }} LIMIT 1"),
+            &registry,
+        );
+        assert_eq!(rows, vec![vec!["<http://example.org/c>".to_owned()]]);
+        assert_eq!(
+            spy.ceilings(),
+            vec![None],
+            "the engine withholds a ceiling it would have to trust the relation to \
+             account for against something the relation was never told"
+        );
+
+        // The same call against the reference relation, which DOES honour a ceiling: the
+        // answer is the same, which it would not be if the ceiling had been offered.
+        let table = MemoryRelation::new(
+            1,
+            1,
+            vec![vec![iri("a"), iri("1")], vec![iri("c"), iri("c")]],
+        )
+        .expect("uniform rows");
+        let rows = rows_of(
+            &format!("SELECT ?x WHERE {{ ?x <{PF_SPLIT}> ?x }} LIMIT 1"),
+            &registry_of(vec![(PF_SPLIT, Arc::new(table))]),
+        );
+        assert_eq!(
+            rows,
+            vec![vec!["<http://example.org/c>".to_owned()]],
+            "a relation that stopped after one emitted row would have emitted only the \
+             row the repeated variable rejects, and the answer would be empty"
+        );
+    }
+
+    #[test]
+    fn a_ceiling_honouring_relation_answers_the_same_query() {
+        // The end-to-end oracle for the licence: a hundred-row table under a LIMIT 3,
+        // correlated so the ceiling arrives through the fused Lateral. The reference
+        // relation stops generating at the ceiling; the answer must still be the first
+        // three rows the unbounded scan would have produced.
+        let rows: Vec<PfRow> = (0..100)
+            .map(|i| vec![iri("d1"), iri(&format!("r{i:03}"))])
+            .collect();
+        let table = MemoryRelation::new(1, 1, rows).expect("uniform rows");
+        let registry = registry_of(vec![(PF_SPLIT, Arc::new(table))]);
+        let query = format!("SELECT ?x WHERE {{ ?s <{EX}kind> ?k . ?s <{PF_SPLIT}> ?x }}");
+
+        let all = rows_of(&query, &registry);
+        assert_eq!(all.len(), 100, "the unbounded answer is the whole table");
+
+        let limited = rows_of(&format!("{query} LIMIT 3"), &registry);
+        assert_eq!(
+            limited,
+            all[..3].to_vec(),
+            "the ceiling changes how much of the table is scanned, never the answer"
+        );
     }
 
     // ---- filtering, order, consistency ------------------------------------
@@ -1531,6 +1843,59 @@ mod tests {
             again.tripped(),
             exhausted.evidence.tripped(),
             "the same budget trips the same governor"
+        );
+    }
+
+    #[test]
+    fn a_correlated_call_under_an_answer_cap_reports_the_same_prefix_as_an_uncapped_run() {
+        // The answer cap reaches the fused dispatch as a row ceiling of cap + 1 — one row
+        // past what the answer can use, which is what tells "exactly full" from
+        // "overflowed". The differential statement is the one that matters: capping must
+        // change how much of the relation runs, never WHICH rows come back.
+        let relation = Arc::new(CeilingSpy::new(vec![
+            vec![iri("d"), iri("r0")],
+            vec![iri("d"), iri("r1")],
+            vec![iri("d"), iri("r2")],
+        ]));
+        let registry = registry_of(vec![(PF_SPLIT, relation.clone())]);
+        let query = format!("SELECT ?x WHERE {{ ?s <{EX}section> ?o . ?s <{PF_SPLIT}> ?x }}");
+
+        let complete = rows_of(&query, &registry);
+        assert_eq!(complete.len(), 6, "two documents, three relation rows each");
+        assert_eq!(
+            relation.ceilings(),
+            vec![None, None],
+            "the uncapped run drives both documents under no ceiling at all"
+        );
+
+        let capped = run_governed(
+            &query,
+            &registry,
+            &crate::governor::QueryGovernors::UNBOUNDED.with_max_answers(2),
+        );
+        let crate::GovernedOutcome::BudgetExhausted(exhausted) = capped else {
+            panic!("an answer cap below the correlated output must truncate");
+        };
+        let crate::PartialAnswers::Certain(partial) = &exhausted.partial else {
+            panic!("the surviving rows are a certified lower bound: {exhausted:?}");
+        };
+        let SparqlResult::Solutions { rows, .. } = partial.result() else {
+            panic!("expected solutions");
+        };
+        let rendered: Vec<Vec<String>> = rows
+            .iter()
+            .map(|row| row.iter().map(|c| cell(c.as_ref())).collect())
+            .collect();
+        assert_eq!(
+            rendered,
+            complete[..2].to_vec(),
+            "the capped answer is the uncapped answer's first rows, verbatim"
+        );
+        assert_eq!(
+            relation.ceilings(),
+            vec![None, None, Some(3)],
+            "the capped run added ONE invocation, opened at cap + 1: the ceiling stopped \
+             the drive inside the first document's block instead of driving the second"
         );
     }
 

@@ -43,6 +43,14 @@
 //! (equality on bound positions, and the row-width check, in the dispatch). A relation
 //! that ignores its own declarations cannot make the engine unsound; it can only make
 //! it slow, or make its own call fail.
+//!
+//! The row ceiling [`PropertyFunction::open`] receives is the one place that asks a
+//! relation for cooperation rather than checking it, because "I stopped early" and "I
+//! am exhausted" are the same empty cursor and no engine-side measure can tell them
+//! apart. The obligation is kept as small as the seam allows: the ceiling counts rows
+//! the relation emits that agree with the bound values it was handed — everything the
+//! engine filters on that the relation cannot see makes the engine withhold the ceiling
+//! instead (see [`PropertyFunction`]'s ceiling contract).
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
@@ -257,10 +265,23 @@ pub trait PfCursor {
 /// # The ceiling is a licence, not a contract
 ///
 /// [`open`](Self::open) receives the row ceiling the engine's answer-cap pushdown
-/// computed for this call, when it has one. It is permission to stop early — a
-/// generator may use it to bound its own work — and nothing more. The engine stops
-/// consuming at its own ceiling regardless, so a relation that ignores the argument
-/// entirely is correct, merely less efficient.
+/// computed for the node this invocation's rows belong to, when it has one — a `LIMIT`
+/// or an answer cap, arrived at through the plan's soundness certificate. It is
+/// permission to stop early, so that a generator (a text index, a nearest-neighbour
+/// search) can bound its own work instead of producing rows nobody will read. The
+/// engine stops consuming at its own ceiling regardless, so a relation that ignores the
+/// argument entirely is correct, merely less efficient.
+///
+/// A relation that *does* use it counts **rows it emits that agree with the bound
+/// positions it was handed**. That distinction is the whole of the obligation, and it
+/// exists because a relation is entitled to generate candidates and let the engine's
+/// equality filter cut them (see [`PfRow`]): candidates the relation itself can see are
+/// doomed must not be counted against the licence, or a stop at `k` would hand back
+/// fewer than `k` usable rows and the engine would read the short bag as an exhausted
+/// one. Everything the engine filters on that a relation could *not* see — a repeated
+/// variable across two free positions, a partially-bound quoted triple — is handled on
+/// the engine's side: it withholds the ceiling entirely for such a call rather than ask
+/// a relation to account for something it was never told.
 pub trait PropertyFunction: Send + Sync {
     /// The relation's determinism class. Read by the fork-join parallel gate exactly
     /// as [`crate::user_fn::NativeFunction`]'s is: only
@@ -295,8 +316,10 @@ pub trait PropertyFunction: Send + Sync {
 
     /// Begin one invocation, returning its row cursor.
     ///
-    /// `ceiling` is the optimization licence described in the trait docs; `args`
-    /// carries the bound/free shape of this call.
+    /// `ceiling` is the optimization licence described in the trait docs — the number
+    /// of further emitted-and-agreeing rows that can still reach the query's answer, or
+    /// `None` for "no bound, or none the engine can offer here". `args` carries the
+    /// bound/free shape of this call.
     ///
     /// # Errors
     ///
@@ -546,6 +569,11 @@ impl PropertyFunctionRegistry {
 ///   then has nothing left to remove.
 /// * **Order is insertion order.** Rows are emitted in the order they were supplied,
 ///   filtered but never reordered.
+/// * **The row ceiling is honoured.** Given a ceiling, the cursor stops after emitting
+///   that many rows — counting the rows it emits, not the rows it skips, which is the
+///   accounting the licence requires (see [`PropertyFunction`]'s ceiling contract).
+///   Because the emitted rows are the first ones the unbounded scan would have produced,
+///   the answer is the same one, computed over less of the table.
 /// * **The row bound is exact.** [`PropertyFunction::rows_per_invocation`] reports the
 ///   table's row count, which no invocation can exceed.
 /// * **It is [`Volatility::Stable`]**: a frozen table is deterministic for the
@@ -730,7 +758,7 @@ impl PropertyFunction for MemoryRelation {
     fn open(
         &self,
         args: &PfArgs<'_>,
-        _ceiling: Option<u64>,
+        ceiling: Option<u64>,
     ) -> Result<Box<dyn PfCursor>, EvalError> {
         // `open_contained` already checked this for every engine-driven call; a
         // direct caller (a doctest, a host wiring its own harness) gets the same
@@ -751,6 +779,7 @@ impl PropertyFunction for MemoryRelation {
             rows: Arc::clone(&self.rows),
             filter,
             next_index: 0,
+            remaining: ceiling,
         }))
     }
 }
@@ -763,10 +792,27 @@ struct MemoryCursor {
     /// The invocation's bound values by flattened position (`None` = free).
     filter: Vec<Option<TermValue>>,
     next_index: usize,
+    /// The rows this invocation may still emit under the engine's licence, or `None`
+    /// when it was given no ceiling.
+    ///
+    /// This is the reference implementation of the licence, and the shape a host
+    /// relation copies. Two properties make it sound, and both are load-bearing:
+    ///
+    /// * It counts **emitted** rows, never scanned ones. The rows this scan skips
+    ///   disagree with a bound position and would have been cut by the engine's own
+    ///   equality filter anyway, so counting them would spend the licence on rows the
+    ///   engine was never going to keep — the miscount the trait docs warn about.
+    /// * It stops **producing**, it does not report an error or a short-but-different
+    ///   bag: the rows already emitted are the first rows of the full scan, in the
+    ///   same order, which is exactly what the licence was granted against.
+    remaining: Option<u64>,
 }
 
 impl PfCursor for MemoryCursor {
     fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
+        if self.remaining == Some(0) {
+            return Ok(None);
+        }
         while let Some(row) = self.rows.get(self.next_index) {
             self.next_index += 1;
             let matches = self
@@ -775,6 +821,9 @@ impl PfCursor for MemoryCursor {
                 .zip(row.iter())
                 .all(|(bound, value)| bound.as_ref().is_none_or(|bound| bound == value));
             if matches {
+                if let Some(remaining) = self.remaining.as_mut() {
+                    *remaining = remaining.saturating_sub(1);
+                }
                 return Ok(Some(row.clone()));
             }
         }
@@ -976,6 +1025,70 @@ mod tests {
             invoke(&relation, &[None, None]),
             vec![vec![iri(EX_B), iri(EX_TWO)], vec![iri(EX_A), iri(EX_ONE)],],
             "rows are emitted as supplied, never sorted"
+        );
+    }
+
+    /// Open `relation` all-free under `ceiling` and drain it.
+    fn invoke_under_ceiling(relation: &MemoryRelation, ceiling: Option<u64>) -> Vec<PfRow> {
+        let subject = [None];
+        let object = [None];
+        let args = PfArgs::new(&subject, &object);
+        let mut cursor = relation.open(&args, ceiling).expect("open");
+        drain(&mut *cursor)
+    }
+
+    #[test]
+    fn memory_relation_stops_at_the_row_ceiling() {
+        // The reference implementation of the licence, and the behaviour a host relation
+        // copies: a ceiling of `k` yields the FIRST `k` rows of the unbounded scan, in
+        // the same order, and then reports exhaustion.
+        let rows: Vec<PfRow> = (0..100)
+            .map(|i| vec![iri(EX_A), iri(&format!("http://example.org/r{i:03}"))])
+            .collect();
+        let relation = MemoryRelation::new(1, 1, rows.clone()).expect("uniform rows");
+
+        let full = invoke_under_ceiling(&relation, None);
+        assert_eq!(full.len(), 100, "no ceiling scans the whole table");
+
+        let capped = invoke_under_ceiling(&relation, Some(3));
+        assert_eq!(
+            capped,
+            rows[..3].to_vec(),
+            "a ceiling of 3 emits the first three rows and nothing else"
+        );
+
+        // A ceiling of zero emits nothing at all, without a first pull into the table.
+        assert!(invoke_under_ceiling(&relation, Some(0)).is_empty());
+        // A ceiling above the table is simply never reached.
+        assert_eq!(invoke_under_ceiling(&relation, Some(1_000)).len(), 100);
+    }
+
+    #[test]
+    fn memory_relation_counts_emitted_rows_not_scanned_ones() {
+        // The accounting that makes the licence sound: rows the scan SKIPS disagree with
+        // a bound position and would have been cut by the engine's equality filter
+        // anyway, so spending the ceiling on them would hand back fewer usable rows than
+        // the engine asked for.
+        let relation = MemoryRelation::new(
+            1,
+            1,
+            vec![
+                vec![iri(EX_A), iri(EX_ONE)],
+                vec![iri(EX_B), iri(EX_TWO)],
+                vec![iri(EX_B), iri(EX_ONE)],
+            ],
+        )
+        .expect("uniform rows");
+
+        let subject_value = iri(EX_B);
+        let subject = [Some(&subject_value)];
+        let object = [None];
+        let args = PfArgs::new(&subject, &object);
+        let mut cursor = relation.open(&args, Some(1)).expect("open");
+        assert_eq!(
+            drain(&mut *cursor),
+            vec![vec![iri(EX_B), iri(EX_TWO)]],
+            "the skipped ex:a row must not have consumed the single-row licence"
         );
     }
 
