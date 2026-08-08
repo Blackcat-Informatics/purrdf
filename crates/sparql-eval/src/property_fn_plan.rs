@@ -186,6 +186,13 @@ fn order_chain(
     let mut remaining: Vec<Atom<'_>> = atoms;
     let mut ordered: Vec<&GraphPattern> = Vec::with_capacity(remaining.len());
     let mut is_call: Vec<bool> = Vec::with_capacity(remaining.len());
+    // The set `bound` held at the moment each atom was CHOSEN — i.e. exactly the
+    // variables its own subtree is allowed to see when it is recursively planned
+    // below. Capturing it here (rather than reusing the fully-accumulated `bound`
+    // after the loop) is what keeps a call NESTED inside an earlier atom (a `Union`
+    // arm's own chain, say) from being planned as though sibling atoms chosen AFTER
+    // it — and everything they bind — were already in scope.
+    let mut bound_before: Vec<DetHashSet<Variable>> = Vec::with_capacity(remaining.len());
 
     while !remaining.is_empty() {
         let mut best: Option<(usize, (u64, &str, usize))> = None;
@@ -216,6 +223,7 @@ fn order_chain(
             return Err(stuck(&remaining, relations, &bound));
         };
         let atom = remaining.remove(index);
+        bound_before.push(bound.clone());
         collect_certainly_bound(atom.pattern, &mut bound);
         ordered.push(atom.pattern);
         is_call.push(atom.call.is_some());
@@ -223,9 +231,12 @@ fn order_chain(
 
     // Rebuild the left-deep spine in the chosen order: a call re-attaches through a
     // `Lateral` (it depends on what is to its left), everything else through a `Join`.
+    // Each atom is planned against ITS OWN `bound_before` snapshot — never the final,
+    // fully-accumulated `bound` — so a chain nested inside atom i sees exactly the
+    // variables atoms `0..i` bound, matching the set it was chosen against above.
     let mut chain: Option<GraphPattern> = None;
-    for (pattern, call) in ordered.into_iter().zip(is_call) {
-        let planned = plan_pattern(pattern, relations, &bound)?;
+    for ((pattern, call), scope) in ordered.into_iter().zip(is_call).zip(bound_before) {
+        let planned = plan_pattern(pattern, relations, &scope)?;
         chain = Some(match chain {
             None => planned,
             Some(left) => {

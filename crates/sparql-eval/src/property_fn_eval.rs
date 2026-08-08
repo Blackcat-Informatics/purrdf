@@ -1239,6 +1239,75 @@ mod tests {
         assert_eq!(relation.calls(), vec!["bf".to_owned()]);
     }
 
+    /// THE GAP-4 regression: a call NESTED inside an earlier atom's own subtree (here,
+    /// a `UNION` arm's own one-call chain) must be planned against the bound set THAT
+    /// ATOM was itself CHOSEN against — never the fully-accumulated set left behind
+    /// once every atom in the enclosing chain has committed.
+    ///
+    /// The outer chain has three atoms, in this TEXTUAL order: an unrelated, always-
+    /// feasible call to `PF_SPLIT` (written first so its own `Lateral` anchors the
+    /// chain the parser assembles — this is what makes the group a `collect_chain`
+    /// chain at all, rather than an opaque node `map_children` recurses into
+    /// structurally, which is already correct and does not exercise this bug); a
+    /// `UNION` whose each arm is its own nested call to `PF_LOOKUP` (subject-bound
+    /// only, `bf`); and a `Bgp` that binds `?x`. The two non-call atoms (`UNION`,
+    /// `Bgp`) tie on the ordering key's first two components — a data atom always
+    /// sorts ahead of a call — so the tie-break falls to TEXTUAL position and the
+    /// `UNION` is scheduled BEFORE the `Bgp` that binds `?x`. The nested call inside
+    /// the `UNION`'s arms therefore genuinely cannot see `?x` bound: nothing the outer
+    /// chain has committed by the time it runs supplies it.
+    ///
+    /// Before the fix, the rebuild loop planned every atom — including the `UNION` —
+    /// against the FINAL bound set (which, by the time the selection loop finished,
+    /// held `?x` from the `Bgp` atom committed AFTER it). The nested call was wrongly
+    /// admitted at prepare time as feasible, an admission the evaluator cannot honor:
+    /// `?x` is unbound when the `UNION`'s `Lateral` actually runs, and the failure
+    /// surfaced later as a per-row `admit_mode` hard error instead of a prepare-time
+    /// refusal. After the fix, each atom is planned against the snapshot `bound` held
+    /// BEFORE it was chosen, so the nested call is (correctly) found infeasible and the
+    /// whole query is refused HERE, at prepare time, naming `PF_LOOKUP` — never opening
+    /// a cursor.
+    #[test]
+    fn a_call_nested_inside_an_earlier_atom_is_planned_against_its_own_bound_set() {
+        let lookup = Arc::new(RecordingRelation::new(
+            1,
+            1,
+            &["bf"],
+            vec![vec![iri("d1"), iri("1")]],
+        ));
+        let trigger = Arc::new(RecordingRelation::new(0, 1, &["f"], vec![vec![iri("t1")]]));
+        let registry = registry_of(vec![
+            (PF_LOOKUP, lookup.clone() as Arc<dyn PropertyFunction>),
+            (PF_SPLIT, trigger as Arc<dyn PropertyFunction>),
+        ]);
+        let message = error_of(
+            &format!(
+                "SELECT ?x ?p WHERE {{ \
+                 () <{PF_SPLIT}> ?dummy . \
+                 {{ ?x <{PF_LOOKUP}> ?p }} UNION {{ ?x <{PF_LOOKUP}> ?p }} . \
+                 ?x <{EX}kind> \"report\" }}"
+            ),
+            &registry,
+        );
+        assert!(
+            message.contains("no feasible evaluation order"),
+            "the nested call must be refused at PREPARE time, not left to a per-row \
+             `admit_mode` failure: got {message}"
+        );
+        assert!(message.contains(PF_LOOKUP), "got {message}");
+        assert!(
+            !message.contains("cannot serve the invocation"),
+            "this must be the prepare-time ordering diagnostic, never the per-row \
+             admit_mode message that a wrongly-admitted plan would surface instead: \
+             got {message}"
+        );
+        assert!(
+            lookup.calls().is_empty(),
+            "a query refused at prepare time never opens a cursor: {:?}",
+            lookup.calls()
+        );
+    }
+
     // ---- the seam is off by default ---------------------------------------
 
     #[test]
