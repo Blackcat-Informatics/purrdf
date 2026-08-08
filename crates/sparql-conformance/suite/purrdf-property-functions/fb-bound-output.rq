@@ -1,0 +1,3 @@
+PREFIX rel: <https://example.org/rel/>
+PREFIX : <http://purrdf.test/relations#>
+SELECT ?person WHERE { ?person rel:memberOf :alpha }

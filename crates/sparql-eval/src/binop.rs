@@ -105,6 +105,45 @@ pub(crate) fn eval_lateral<D: DatasetView + Sync>(
     if lift.is_truncated() {
         return Ok(lift.finish(SolutionSeq::empty(l.schema)));
     }
+    // A property-function call is driven PER LEFT ROW with the row in hand, rather than
+    // substituted into and re-evaluated like an ordinary right operand. The generic path
+    // below would work — the lateral join's compatibility test reconciles everything the
+    // IRI-only substitution could not carry — but it would hand the relation the wrong
+    // access pattern: a literal, blank-node or quoted-triple binding would arrive as a
+    // FREE position, so a relation that can only be invoked with that position bound
+    // would be refused an invocation the engine can make. See `crate::property_fn_eval`.
+    if let GraphPattern::PropertyFunction(call) = right {
+        // The answer-cap / `LIMIT` ceiling the plan licensed for THIS node, read while
+        // the cursor is still on it. The interception FUSES `Lateral(left, call)` into
+        // one driven operator: the dispatch reads each left row itself and emits rows
+        // that are already joined, so what it produces is this node's OUTPUT bag — one
+        // row for one row, in order — and the ceiling that bounds it is the one recorded
+        // here rather than one pushed to the call node, which carries none (see
+        // `crate::governor::soundness::child_row_ceiling`). No new licence is minted:
+        // the operator consumes its own node's ceiling, which is what every operator
+        // that stops early does.
+        let ceiling = ctx.row_ceiling();
+        let restore = ctx.enter_node(right);
+        // The node-entry charge the generic path pays on each of this node's
+        // evaluations, kept here so the call is metered exactly as an ordinary right
+        // operand is.
+        let evaluated = match ctx.charge(crate::governor::ChargePoint::AlgebraNodeEntry) {
+            Err(tripped) => Ok(Evaluated::Truncated(Truncation::origin(
+                SolutionSeq::empty(crate::eval::syntactic_schema(right)),
+                tripped,
+            ))),
+            Ok(()) => {
+                crate::property_fn_eval::eval_lateral_property_function(call, &l, ceiling, ctx)
+            }
+        };
+        ctx.leave_node(restore);
+        let absorbed = lift.absorb(1, evaluated?);
+        return Ok(match absorbed {
+            Some(seq) => lift.finish(seq),
+            None => lift.withheld(),
+        });
+    }
+
     let left_schema = Arc::clone(&l.schema);
     let left_len = left_schema.len();
 
@@ -232,8 +271,8 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
         // with it the trip point and the certified rows — a lottery. See
         // `EvalCtx::may_fork_sibling_patterns`.
         || !ctx.may_fork_sibling_patterns()
-        || !crate::parallel::is_parallel_safe_pattern(left, ctx.user_functions)
-        || !crate::parallel::is_parallel_safe_pattern(right, ctx.user_functions)
+        || !crate::parallel::is_parallel_safe_pattern(left, ctx.safety_registries())
+        || !crate::parallel::is_parallel_safe_pattern(right, ctx.safety_registries())
     {
         let Some(l) = lift.absorb(0, eval_evaluated(left, ctx)?) else {
             return Ok(lift.withheld());

@@ -1,0 +1,33 @@
+# Scripted property-function wiring and expectation, for every case whose manifest
+# `source` is `relation` — and for no other case.
+# Columns: case <TAB> emits <TAB> stop-handling <TAB> cancel-on-pull <TAB> invocations <TAB> pulls
+#   emits          rows the relation emits per invocation, which is also the bound it
+#                  DECLARES (`PropertyFunction::rows_per_invocation`). The declaration is
+#                  held to an upper-bound honesty contract; the corpus keeps it exact so a
+#                  change to what a relation declares shows up as a change in spend.
+#   stop-handling  honours  the cursor polls the caller's signal and abandons the
+#                           invocation on a fired one — what a relation CAN do
+#                  ignores  the cursor never reads the signal at all — what a relation
+#                           that cannot abandon an invocation it is inside does
+#   cancel-on-pull never    the relation has no effect on the caller's signal
+#                  <n>      the relation cancels the caller's flag at the start of its
+#                           n-th pull (1-based), standing in for a host that cancels while
+#                           the evaluator is inside a relation and can poll nothing
+#   invocations    the exact number of times the relation was opened
+#   pulls          the exact number of rows the relation was asked to produce
+#
+# `invocations` and `pulls` are DERIVED by the corpus regeneration step and re-checked on
+# every run. They are the observations that separate "the ceiling prevented the work" from
+# "the work was done and its rows discarded", which no governor evidence can distinguish.
+property-function-fuel-zero	2	ignores	never	0	0
+property-function-fuel-boundary	2	ignores	never	3	9
+property-function-fuel-over-bound	2	ignores	never	3	9
+property-function-deaf-relation-cancel-mid-invocation	2	ignores	2	1	2
+property-function-cooperating-relation-cancel-mid-invocation	2	honours	2	1	2
+property-function-invocation-fuel-boundary	0	ignores	never	12	12
+property-function-invocation-fuel-over-bound	0	ignores	never	11	11
+property-function-row-fuel-boundary	12	ignores	never	1	13
+property-function-row-fuel-over-bound	12	ignores	never	1	13
+property-function-first-row-fuel-ceiling	12	ignores	never	1	1
+property-function-parallel-fuel-boundary	0	ignores	never	1200	1200
+property-function-parallel-fuel-over-bound	0	ignores	never	1199	1199

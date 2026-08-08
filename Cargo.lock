@@ -1347,6 +1347,7 @@ dependencies = [
  "blake3",
  "criterion",
  "hashbrown 0.15.5",
+ "purrdf-core",
  "rayon",
  "smallvec",
 ]

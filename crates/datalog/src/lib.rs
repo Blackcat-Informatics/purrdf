@@ -236,7 +236,11 @@
 //! reachability of a cycle, the same-generation pairs of a two-level tree — asserted by
 //! exact set equality against a golden built by construction rather than by an engine.
 
-pub mod binding_pattern;
+// The arity-generic binding-pattern adornment lattice now lives in the shared
+// kernel (`purrdf-core`), which has a second, non-Datalog consumer for it; this
+// re-export keeps the crate's public module path unchanged for every existing
+// caller.
+pub use purrdf_core::binding_pattern;
 pub mod cache;
 pub mod chase;
 pub mod clause;

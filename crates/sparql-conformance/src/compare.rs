@@ -38,6 +38,16 @@ use crate::run::RunOutcome;
 ///
 /// Returns a human-readable mismatch description; `Ok(())` means the case passed.
 pub fn compare(case: &SparqlTestCase, outcome: &RunOutcome) -> Result<(), String> {
+    // A case that expects a hard failure produced an outcome instead. Checked here,
+    // before any kind-specific comparison, so the verdict is the same sentence
+    // whether the case was a query, an update, or a syntax test — and so the
+    // expectation can never be satisfied by a run that quietly succeeded.
+    if let ExpectedResult::EvalError(path) = &case.expected {
+        return Err(format!(
+            "expected a hard failure matching {} — the case ran to completion instead",
+            path.display()
+        ));
+    }
     match outcome {
         RunOutcome::Syntax { parsed_ok } => match case.kind {
             TestKind::PositiveSyntax | TestKind::PositiveUpdateSyntax if *parsed_ok => Ok(()),
@@ -53,6 +63,53 @@ pub fn compare(case: &SparqlTestCase, outcome: &RunOutcome) -> Result<(), String
         RunOutcome::Eval { result, ordered } => compare_eval(case, result, *ordered),
         RunOutcome::Update(actual) => compare_update(case, actual),
     }
+}
+
+/// Grade the diagnostic a case FAILED with against its expectation.
+///
+/// A case whose `mf:result` is a `.err` file
+/// ([`ExpectedResult::EvalError`]) expects the run to refuse: every non-empty,
+/// non-comment line of that file is a substring the diagnostic must contain, and all
+/// of them must appear. Substrings rather than a whole-message match, so the
+/// expectation pins the *reason* (which relation, which mode, which position) without
+/// freezing incidental framing like the case IRI a caller prefixes; several of them,
+/// so a one-word expectation cannot pass by accident.
+///
+/// A case that expected an ordinary result gets its diagnostic back unchanged, which
+/// is exactly the failure it always was — so this is the single seam through which a
+/// run failure becomes a verdict.
+///
+/// # Errors
+///
+/// The message to report as the case's failure: the original diagnostic when no
+/// failure was expected, or a description of how the diagnostic missed the
+/// expectation.
+pub fn compare_failure(case: &SparqlTestCase, message: &str) -> Result<(), String> {
+    let ExpectedResult::EvalError(path) = &case.expected else {
+        return Err(message.to_owned());
+    };
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("read expected-error file {}: {e}", path.display()))?;
+    let expectations: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect();
+    if expectations.is_empty() {
+        return Err(format!(
+            "expected-error file {} names no expectation, so it would accept ANY failure",
+            path.display()
+        ));
+    }
+    for expectation in expectations {
+        if !message.contains(expectation) {
+            return Err(format!(
+                "the failure diagnostic does not contain the expected text\n    \
+                 expected: {expectation}\n    diagnostic: {message}"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Compare two SPARQL results for equality.
@@ -391,6 +448,78 @@ fn result_kind(result: &SparqlResult) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::manifest::TestKind;
+
+    /// A minimal case whose `mf:result` is the given expectation.
+    fn case_with(expected: ExpectedResult) -> SparqlTestCase {
+        SparqlTestCase {
+            iri: "http://purrdf.test/property-functions#probe".to_owned(),
+            name: "probe".to_owned(),
+            kind: TestKind::QueryEval,
+            query: std::path::PathBuf::new(),
+            data: Vec::new(),
+            graph_data: Vec::new(),
+            service_data: Vec::new(),
+            regime: None,
+            expected,
+        }
+    }
+
+    /// The suite's own expected-error fixture, so the test grades the file the
+    /// harness actually reads rather than a copy of it.
+    fn suite_error_file(name: &str) -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("suite/purrdf-property-functions")
+            .join(name)
+    }
+
+    #[test]
+    fn an_expected_error_file_grades_the_diagnostic_it_names() {
+        let case = case_with(ExpectedResult::EvalError(suite_error_file(
+            "unregistered-relation.err",
+        )));
+        let real = "evaluate http://purrdf.test/property-functions#unregisteredRelation: error \
+                    native-sparql-property-function: host function error: no property function \
+                    is registered for <https://example.org/rel/notRegistered>";
+        assert!(compare_failure(&case, real).is_ok());
+
+        // A refusal of some OTHER call is not this case's refusal.
+        let wrong_iri = real.replace("notRegistered", "somethingElse");
+        let error = compare_failure(&case, &wrong_iri).expect_err("the IRI is named in full");
+        assert!(
+            error.contains("does not contain the expected text"),
+            "{error}"
+        );
+
+        // Nor is an unrelated failure that happens to mention a property function.
+        let unrelated = "evaluate x: error native-sparql-parse: syntax error";
+        assert!(compare_failure(&case, unrelated).is_err());
+    }
+
+    #[test]
+    fn a_case_with_no_error_expectation_gets_its_diagnostic_back_unchanged() {
+        let case = case_with(ExpectedResult::None);
+        assert_eq!(
+            compare_failure(&case, "boom").expect_err("a failure is still a failure"),
+            "boom"
+        );
+    }
+
+    #[test]
+    fn an_expected_failure_is_not_satisfied_by_a_run_that_succeeded() {
+        let case = case_with(ExpectedResult::EvalError(suite_error_file(
+            "infeasible-chain.err",
+        )));
+        let error = compare(
+            &case,
+            &RunOutcome::Eval {
+                result: SparqlResult::Boolean(true),
+                ordered: false,
+            },
+        )
+        .expect_err("an expected refusal cannot be met by a completed run");
+        assert!(error.contains("ran to completion instead"), "{error}");
+    }
 
     fn lit(lexical_form: &str, datatype: &str) -> TermValue {
         TermValue::Literal {

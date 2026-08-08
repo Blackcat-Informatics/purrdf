@@ -1,0 +1,8 @@
+# Every non-comment, non-blank line is text the failure diagnostic must contain.
+# The first pins the diagnostic's code (so an unrelated failure cannot satisfy it),
+# the second the refusal, and the third the mode the call could not be reached in
+# together with the mode it declares — which is what makes this a test of the
+# feasibility pass rather than of "something went wrong".
+native-sparql-property-function
+no feasible evaluation order exists for this group's property-function call(s)
+<https://example.org/rel/rank> reachable only as `fb` (free position(s) 0), declaring [bf]

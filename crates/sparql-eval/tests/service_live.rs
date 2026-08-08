@@ -14,7 +14,7 @@ use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult, StopCause, Tri
 use purrdf_sparql_algebra::Variable;
 use purrdf_sparql_eval::{
     CancellationFlag, HttpRemoteQuerySource, HttpRequest, NativeSparqlEngine, PartialAnswers,
-    QueryGovernors, RemoteError, RemoteQuerySource, StopSignal,
+    QueryGovernors, QueryOptions, RemoteError, RemoteQuerySource, StopSignal,
 };
 
 const ENDPOINT: &str = "https://query.example/sparql";
@@ -139,6 +139,7 @@ fn service_clause_federates_through_injected_http_transport() {
                 substitutions: &[],
             },
             &source,
+            QueryOptions::EMPTY,
         )
         .expect("federated query");
     match result {
@@ -174,6 +175,7 @@ fn missing_named_graph_does_not_execute_its_inner_service() {
                 substitutions: &[],
             },
             &source,
+            QueryOptions::EMPTY,
         )
         .expect("a missing named graph is an empty result, not a SERVICE evaluation");
     let SparqlResult::Solutions {
@@ -219,6 +221,7 @@ fn terminal_service_cancelled_during_post(silent: bool) {
                 substitutions: &[],
             },
             &source,
+            QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_stop_signal(Arc::new(flag)),
         )
         .expect("a stop is a typed outcome");

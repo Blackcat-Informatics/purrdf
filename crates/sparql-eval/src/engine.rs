@@ -22,6 +22,7 @@
 //! to algebra once, not per run. Full cost-based planning is out of scope here; the
 //! cache holds only the parsed [`Query`].
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::sync::Arc;
 
@@ -44,6 +45,7 @@ use crate::update::{GraphResolver, UpdateAbort, eval_update};
 use crate::{
     BudgetExhausted, CompleteSparqlResult, FallibleSparqlError, FallibleSparqlResult,
     GovernedEvidence, GovernedOutcome, GovernedUpdateOutcome, PartialAnswers, PartialSparqlResult,
+    RelationIdentity,
 };
 
 /// A parsed, ready-to-evaluate query (the cached unit of the [`PlanCache`]).
@@ -51,10 +53,60 @@ use crate::{
 pub struct PreparedQuery {
     /// The parsed algebra.
     pub query: Query,
+    /// The identity of the property-function registry this plan was parsed and
+    /// feasibility-ordered against — empty when there was none.
+    ///
+    /// Carried on the plan rather than left implicit because a plan and a registry can
+    /// DISAGREE, and the disagreement is silent in the worst direction: a plan parsed
+    /// with no registry lowered a registered relation's predicate to an ordinary triple
+    /// pattern, so handing that plan to a governed entry along with the registry would
+    /// evaluate a BGP scan that matches nothing and answer the empty bag. The
+    /// prepared-plan entries compare this against the registry in their
+    /// [`QueryOptions`] and refuse the mismatch (see
+    /// [`NativeSparqlEngine::query_prepared_governed_view`]), which turns the one
+    /// remaining way to reach that wrong answer into a diagnostic.
+    relations: String,
+}
+
+impl PreparedQuery {
+    /// A plan for an algebra a caller built or rewrote itself, tagged with the
+    /// registry identity the plan is valid under.
+    ///
+    /// The ordinary way to get a [`PreparedQuery`] is
+    /// [`NativeSparqlEngine::prepare_query`] or
+    /// [`NativeSparqlEngine::prepare_query_with_options`]; this is for a caller that
+    /// rewrites a prepared plan's algebra (the entailment lane restricts chase-minted
+    /// witnesses) and must hand the rewrite back to a governed entry. `options` must be
+    /// the options the ORIGINAL plan was prepared under, and the same options the
+    /// rewrite will be evaluated under.
+    ///
+    /// # Errors
+    ///
+    /// An [`RdfDiagnostic`] (`native-sparql-property-function`) if a relation in
+    /// `options.property_functions` panics while its declaration is read to compute the
+    /// registry's fingerprint.
+    pub fn rewritten(query: Query, options: QueryOptions<'_>) -> Result<Self, RdfDiagnostic> {
+        let relations = crate::property_fn_plan::registry_fingerprint(options.property_functions)
+            .map_err(|e| {
+            RdfDiagnostic::error("native-sparql-property-function", e.to_string())
+        })?;
+        Ok(Self { query, relations })
+    }
 }
 
 /// A parse-memoizing cache keyed on `(base IRI, extension-function namespace set,
-/// query text)`.
+/// property-function namespace set, property-function exact-IRI set,
+/// property-function registry fingerprint, query text)`.
+///
+/// The last two are there because a cached entry is not merely a parse: a query
+/// carrying a property-function call is also **feasibility-ordered** against the
+/// registry's declarations before it is stored (the feasibility-ordering pass). Two
+/// differently-configured registries can order the same text differently, so a key
+/// without the registry's fingerprint would hand the second host the first host's plan.
+/// The exact-IRI set joins the namespace set for the same reason as the namespace
+/// set itself: it too decides which triples become calls
+/// ([`ParserOptions::property_fn_iris`]), so two configurations that agree on
+/// everything else but differ there must not share a plan.
 #[derive(Debug, Default)]
 pub struct PlanCache {
     entries: DetHashMap<String, Arc<PreparedQuery>>,
@@ -84,13 +136,45 @@ impl PlanCache {
         base_iri: Option<&str>,
         options: &ParserOptions,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
+        self.prepare_with_relations(query, base_iri, options, None)
+    }
+
+    /// [`Self::prepare_with`], resolving any property-function call against `relations`.
+    ///
+    /// This is where a call's **admission** happens, and it happens here rather than at
+    /// evaluation time on purpose: an unregistered IRI, an arity mismatch, and a chain
+    /// no relation can serve are all configuration errors, and a caller's governor
+    /// budget is for the work its query does, not for discovering the query could never
+    /// have run. `relations` of `None` (or an empty registry) does not soften any of
+    /// them — a call node with nothing to resolve against IS the unregistered case.
+    ///
+    /// # Errors
+    ///
+    /// An [`RdfDiagnostic`] if the query text does not parse (`native-sparql-query-parse`)
+    /// or if a property-function call cannot be admitted
+    /// (`native-sparql-property-function`).
+    pub fn prepare_with_relations(
+        &mut self,
+        query: &str,
+        base_iri: Option<&str>,
+        options: &ParserOptions,
+        relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
+    ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
         // The cache key must include the base IRI AND the extension-function
         // namespace set: the same text under a different base or namespace
-        // configuration parses to a different algebra.
+        // configuration parses to a different algebra. The property-function
+        // namespace set, the property-function exact-IRI set, and the registry
+        // fingerprint join it for the same reason one step later: together they
+        // decide which triples become calls, and how those calls are ordered.
+        let fingerprint = crate::property_fn_plan::registry_fingerprint(relations)
+            .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
         let key = format!(
-            "{}\u{0}{}\u{0}{}",
+            "{}\u{0}{}\u{0}{}\u{0}{}\u{0}{}\u{0}{}",
             base_iri.unwrap_or(""),
             options.extension_fn_namespaces.join("\u{1}"),
+            options.property_fn_namespaces.join("\u{1}"),
+            options.property_fn_iris.join("\u{1}"),
+            fingerprint,
             query
         );
         if let Some(prepared) = self.entries.get(&key) {
@@ -103,7 +187,12 @@ impl PlanCache {
         let parsed = parser
             .parse_query_with(query, options)
             .map_err(|e| RdfDiagnostic::error("native-sparql-query-parse", e.to_string()))?;
-        let prepared = Arc::new(PreparedQuery { query: parsed });
+        let planned = crate::property_fn_plan::plan_query(&parsed, relations)
+            .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
+        let prepared = Arc::new(PreparedQuery {
+            query: planned.unwrap_or(parsed),
+            relations: fingerprint,
+        });
         self.entries.insert(key, prepared.clone());
         Ok(prepared)
     }
@@ -187,23 +276,54 @@ impl NativeSparqlEngine {
         query: &str,
         base_iri: Option<&str>,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
-        self.cache
-            .borrow_mut()
-            .prepare_with(query, base_iri, &self.parser_options)
+        self.prepare_query_with_options(query, base_iri, QueryOptions::EMPTY)
     }
 
-    /// Evaluate a plan returned by [`Self::prepare_query`].
+    /// [`Self::prepare_query`] against the [`QueryOptions`] the plan will be evaluated
+    /// under — the registry-aware parse.
+    ///
+    /// A caller that holds a plan across executions (the CLI's view-op seam, the
+    /// entailment lane's rewritten plan) must prepare it here when it has a
+    /// property-function registry, and hand the SAME options to the governed entry that
+    /// runs it: the registry decides which predicates became call nodes, so a plan
+    /// prepared without it has already lost every relation the query named.
     ///
     /// # Errors
     ///
-    /// Propagates evaluation errors as an [`RdfDiagnostic`].
+    /// Returns an [`RdfDiagnostic`] if the query text does not parse, or if a
+    /// property-function call cannot be admitted against the registry.
+    pub fn prepare_query_with_options(
+        &self,
+        query: &str,
+        base_iri: Option<&str>,
+        options: QueryOptions<'_>,
+    ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
+        self.prepare_for(query, base_iri, options.property_functions)
+    }
+
+    /// Evaluate a plan returned by [`Self::prepare_query`] or
+    /// [`Self::prepare_query_with_options`].
+    ///
+    /// `options` must name the same property-function registry the plan was prepared
+    /// against — the identical requirement [`Self::query_prepared_governed_view`]
+    /// states, checked the same way: a plan/registry disagreement refuses the plan
+    /// rather than silently evaluating it under the wrong (or no) registry, because a
+    /// plan prepared without a registry has already lowered every relation's predicate
+    /// to an ordinary triple pattern.
+    ///
+    /// # Errors
+    ///
+    /// Propagates evaluation errors as an [`RdfDiagnostic`], and refuses
+    /// (`native-sparql-property-function`) a plan prepared against a different registry
+    /// than `options` supplies.
     pub fn query_prepared(
         &self,
         dataset: &Arc<RdfDataset>,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
+        options: QueryOptions<'_>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
-        self.query_prepared_view(&**dataset, prepared, substitutions)
+        self.query_prepared_view(&**dataset, prepared, substitutions, options)
     }
 
     /// [`Self::query_prepared`] over any operationally infallible [`DatasetView`]
@@ -216,15 +336,27 @@ impl NativeSparqlEngine {
     ///
     /// # Errors
     ///
-    /// Propagates evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_prepared_view<D: DatasetView + Sync>(
-        &self,
-        dataset: &D,
+    /// Propagates evaluation errors as an [`RdfDiagnostic`], and refuses
+    /// (`native-sparql-property-function`) a plan prepared against a different registry
+    /// than `options` supplies (see [`Self::query_prepared`]).
+    pub fn query_prepared_view<'d, D: DatasetView + Sync>(
+        &'d self,
+        dataset: &'d D,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
+        options: QueryOptions<'d>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
-        let mut ctx = self.eval_ctx(dataset);
-        let outcome = evaluate_with_substitutions(prepared, substitutions, &mut ctx)?;
+        check_plan_matches_relations(prepared, options)?;
+        let ctx = self.eval_ctx(dataset);
+        let mut ctx = apply_query_options(ctx, options)?;
+        let outcome = match options.prebinding {
+            ShaclPrebinding::Applied => {
+                evaluate_with_shacl_prebinding(prepared, substitutions, &mut ctx)?
+            }
+            ShaclPrebinding::None => {
+                evaluate_with_substitutions(prepared, substitutions, &mut ctx)?
+            }
+        };
         Ok(materialize(outcome, &ctx))
     }
 
@@ -235,18 +367,25 @@ impl NativeSparqlEngine {
     /// budget boundaries are deterministic. The ordinary resident/pack entry points
     /// remain unchanged and retain their parallel fast path.
     ///
+    /// `options` must name the same property-function registry the plan was prepared
+    /// against — the identical requirement [`Self::query_prepared`] states, checked the
+    /// same way: a plan/registry disagreement refuses the plan rather than silently
+    /// evaluating it under the wrong (or no) registry.
+    ///
     /// # Errors
     ///
     /// Returns [`FallibleSparqlError::Operational`] when either checkpoint or any
     /// lazy read fails. That root cause takes precedence over an evaluator diagnostic,
     /// and all internal partial rows are discarded. Returns
-    /// [`FallibleSparqlError::Query`] only when the view remains ready and ordinary
-    /// evaluation fails.
-    pub fn query_prepared_fallible_view<D>(
-        &self,
-        dataset: &D,
+    /// [`FallibleSparqlError::Query`] when the view remains ready and either ordinary
+    /// evaluation fails or `prepared` was prepared against a different registry than
+    /// `options` supplies (`native-sparql-property-function`).
+    pub fn query_prepared_fallible_view<'d, D>(
+        &'d self,
+        dataset: &'d D,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
+        options: QueryOptions<'d>,
     ) -> FallibleSparqlResult<D::Error, D::Evidence>
     where
         D: FallibleDatasetView + Sync,
@@ -254,11 +393,20 @@ impl NativeSparqlEngine {
         preflight_fallible_view(dataset)?;
         let evaluation = {
             let _sequential = crate::parallel::force_sequential_operation();
-            let mut ctx = self.eval_ctx(dataset);
-            match evaluate_with_substitutions(prepared, substitutions, &mut ctx) {
-                Ok(outcome) => Ok(materialize(outcome, &ctx)),
-                Err(diagnostic) => Err(diagnostic),
-            }
+            (|| {
+                check_plan_matches_relations(prepared, options)?;
+                let ctx = self.eval_ctx(dataset);
+                let mut ctx = apply_query_options(ctx, options)?;
+                let outcome = match options.prebinding {
+                    ShaclPrebinding::Applied => {
+                        evaluate_with_shacl_prebinding(prepared, substitutions, &mut ctx)?
+                    }
+                    ShaclPrebinding::None => {
+                        evaluate_with_substitutions(prepared, substitutions, &mut ctx)?
+                    }
+                };
+                Ok(materialize(outcome, &ctx))
+            })()
         };
         finish_fallible_query(dataset, evaluation)
     }
@@ -267,27 +415,31 @@ impl NativeSparqlEngine {
     ///
     /// This is the convenience sibling of
     /// [`query_prepared_fallible_view`](Self::query_prepared_fallible_view). Parsing
-    /// still uses the engine's memoizing plan cache; execution applies the same
-    /// preflight/final completeness checkpoints and deterministic sequential scope.
+    /// still uses the engine's memoizing plan cache, through the same registry-aware
+    /// path [`Self::prepare_query_with_options`] uses, so `options.property_functions`
+    /// decides which predicates are calls; execution applies the same preflight/final
+    /// completeness checkpoints and deterministic sequential scope.
     ///
     /// # Errors
     ///
     /// Returns a typed [`FallibleSparqlError`] carrying evidence for either an
     /// operational root cause or an ordinary parse/evaluation diagnostic.
-    pub fn query_fallible_view<D>(
-        &self,
-        dataset: &D,
+    pub fn query_fallible_view<'d, D>(
+        &'d self,
+        dataset: &'d D,
         request: SparqlRequest<'_>,
+        options: QueryOptions<'d>,
     ) -> FallibleSparqlResult<D::Error, D::Evidence>
     where
         D: FallibleDatasetView + Sync,
     {
         preflight_fallible_view(dataset)?;
-        let prepared = match self.prepare_query(request.query, request.base_iri) {
-            Ok(prepared) => prepared,
-            Err(diagnostic) => return finish_fallible_query(dataset, Err(diagnostic)),
-        };
-        self.query_prepared_fallible_view(dataset, &prepared, request.substitutions)
+        let prepared =
+            match self.prepare_for(request.query, request.base_iri, options.property_functions) {
+                Ok(prepared) => prepared,
+                Err(diagnostic) => return finish_fallible_query(dataset, Err(diagnostic)),
+            };
+        self.query_prepared_fallible_view(dataset, &prepared, request.substitutions, options)
     }
 
     /// Parse and execute one request under caller-supplied execution governors.
@@ -313,6 +465,15 @@ impl NativeSparqlEngine {
     /// Pass [`QueryGovernors::UNBOUNDED`] to decline every ceiling explicitly, or
     /// [`QueryGovernors::METERED`] to measure an execution without bounding it.
     ///
+    /// # Options are a parameter, not an overload
+    ///
+    /// `options` carries the registries and rewrites this execution runs under —
+    /// pass [`QueryOptions::EMPTY`] to configure none. It is required rather than
+    /// defaulted because a [`PropertyFunctionRegistry`](crate::property_fn::PropertyFunctionRegistry)
+    /// is *parse* configuration: an entry that could not be handed one would parse a
+    /// registered relation's predicate as an ordinary triple pattern and answer the
+    /// empty bag, silently. See [`QueryOptions`].
+    ///
     /// # Errors
     ///
     /// Propagates parse and evaluation errors as an [`RdfDiagnostic`]. A tripped governor
@@ -321,18 +482,32 @@ impl NativeSparqlEngine {
         &self,
         dataset: &Arc<RdfDataset>,
         request: SparqlRequest<'_>,
+        options: QueryOptions<'_>,
         governors: &QueryGovernors,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
-        let prepared = self.prepare_query(request.query, request.base_iri)?;
-        self.query_prepared_governed_view(&**dataset, &prepared, request.substitutions, governors)
+        let prepared =
+            self.prepare_for(request.query, request.base_iri, options.property_functions)?;
+        self.query_prepared_governed_view(
+            &**dataset,
+            &prepared,
+            request.substitutions,
+            options,
+            governors,
+        )
     }
 
     /// [`Self::query_governed`] over any operationally infallible [`DatasetView`] backend,
-    /// for a plan already returned by [`Self::prepare_query`].
+    /// for a plan already returned by [`Self::prepare_query`] or
+    /// [`Self::prepare_query_with_options`].
     ///
     /// Governors are per call here too — `governors` configures this one execution and
     /// nothing else, so the same `prepared` plan can be run under different budgets
     /// without one run's consumption reaching the next.
+    ///
+    /// `options` must name the same property-function registry the plan was prepared
+    /// against: the registry decides both which predicates became call nodes and which
+    /// relation each call resolves to, and the admission estimate prices a call from its
+    /// declared row bound.
     ///
     /// # Errors
     ///
@@ -343,15 +518,66 @@ impl NativeSparqlEngine {
         dataset: &D,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
+        options: QueryOptions<'_>,
         governors: &QueryGovernors,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
         let state = Arc::new(GovernorState::new(governors));
-        if let Some(refused) = self.admit(dataset, &prepared.query, &state) {
+        self.query_governed_prepared_in_state(
+            dataset,
+            prepared,
+            substitutions,
+            options,
+            None,
+            &state,
+        )
+    }
+
+    /// The ONE governed evaluation body: admit the plan under `state`'s ceilings, build
+    /// the context, apply `options`, evaluate on the trip-aware channel, materialize.
+    ///
+    /// Every governed entry — per-call or operation-scoped, local or federated, over an
+    /// infallible or a fallible view — reaches evaluation through here, so the charge
+    /// points, the admission estimate, and the options application are wired once. The
+    /// two axes the entries differ on are parameters: `source` (a federated entry injects
+    /// one) and who owns `state` (a per-call entry built it; an operation entry was
+    /// handed the one its whole operation charges).
+    fn query_governed_prepared_in_state<'d, D: DatasetView + Sync>(
+        &'d self,
+        dataset: &'d D,
+        prepared: &PreparedQuery,
+        substitutions: &[(String, TermValue)],
+        options: QueryOptions<'d>,
+        source: Option<&'d (dyn crate::remote::RemoteQuerySource + Sync)>,
+        state: &Arc<GovernorState>,
+    ) -> Result<GovernedOutcome, RdfDiagnostic> {
+        check_plan_matches_relations(prepared, options)?;
+        // `prepared.relations` is the registry fingerprint computed once at prepare and
+        // just validated against `options.property_functions` above — reused rather than
+        // re-derived, so this receipt's identity and the plan cache's key never disagree.
+        let identity = relation_identity(prepared, options.property_functions)?;
+        if let Some(refused) = self.admit(
+            dataset,
+            &prepared.query,
+            options.property_functions,
+            state,
+            &identity,
+        ) {
             return refused;
         }
-        let mut ctx = self.eval_ctx(dataset).with_governors(Arc::clone(&state));
-        let evaluated = evaluate_governed_with_substitutions(prepared, substitutions, &mut ctx)?;
-        Ok(materialize_governed(evaluated, &ctx, &state))
+        let mut ctx = self.eval_ctx(dataset).with_governors(Arc::clone(state));
+        if let Some(source) = source {
+            ctx = ctx.with_remote(source);
+        }
+        let mut ctx = apply_query_options(ctx, options)?;
+        let evaluated = match options.prebinding {
+            ShaclPrebinding::Applied => {
+                evaluate_governed_with_shacl_prebinding(prepared, substitutions, &mut ctx)?
+            }
+            ShaclPrebinding::None => {
+                evaluate_governed_with_substitutions(prepared, substitutions, &mut ctx)?
+            }
+        };
+        Ok(materialize_governed(evaluated, &ctx, state, identity))
     }
 
     /// [`Self::query_governed`] with a
@@ -374,9 +600,10 @@ impl NativeSparqlEngine {
         dataset: &Arc<RdfDataset>,
         request: SparqlRequest<'_>,
         source: &(dyn crate::remote::RemoteQuerySource + Sync),
+        options: QueryOptions<'_>,
         governors: &QueryGovernors,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
-        self.query_governed_with_source_view(&**dataset, request, source, governors)
+        self.query_governed_with_source_view(&**dataset, request, source, options, governors)
     }
 
     /// [`Self::query_governed_with_source`] over any [`DatasetView`] backend whose id type
@@ -386,29 +613,25 @@ impl NativeSparqlEngine {
     ///
     /// Propagates parse and evaluation errors as an [`RdfDiagnostic`]. A tripped governor
     /// is **not** an error and does not surface here.
-    pub fn query_governed_with_source_view<D: DatasetView + Sync>(
-        &self,
-        dataset: &D,
+    pub fn query_governed_with_source_view<'d, D: DatasetView + Sync>(
+        &'d self,
+        dataset: &'d D,
         request: SparqlRequest<'_>,
-        source: &(dyn crate::remote::RemoteQuerySource + Sync),
+        source: &'d (dyn crate::remote::RemoteQuerySource + Sync),
+        options: QueryOptions<'d>,
         governors: &QueryGovernors,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
-        let prepared = self.cache.borrow_mut().prepare_with(
-            request.query,
-            request.base_iri,
-            &self.parser_options,
-        )?;
+        let prepared =
+            self.prepare_for(request.query, request.base_iri, options.property_functions)?;
         let state = Arc::new(GovernorState::new(governors));
-        if let Some(refused) = self.admit(dataset, &prepared.query, &state) {
-            return refused;
-        }
-        let mut ctx = self
-            .eval_ctx(dataset)
-            .with_governors(Arc::clone(&state))
-            .with_remote(source);
-        let evaluated =
-            evaluate_governed_with_substitutions(&prepared, request.substitutions, &mut ctx)?;
-        Ok(materialize_governed(evaluated, &ctx, &state))
+        self.query_governed_prepared_in_state(
+            dataset,
+            &prepared,
+            request.substitutions,
+            options,
+            Some(source),
+            &state,
+        )
     }
 
     /// One governed query of a **multi-query operation**, charged against a
@@ -430,71 +653,36 @@ impl NativeSparqlEngine {
     /// [`GovernorState`] and every query inside it charges the same one; the state is
     /// `Sync`, so the operation may run its queries on workers.
     ///
-    /// `functions` is the SHACL-AF function registry, if the caller has one in scope.
-    /// `prebind` selects the SHACL pre-binding rewrite (`sh:sparql` constraint and
-    /// component bodies, `sh:SPARQLRule`, `sh:ask`/`sh:select` validators) over the
-    /// ordinary substitution rewrite (SHACL-AF node expressions and `sh:SPARQLTarget`).
+    /// `options` carries what the operation configured: the SHACL-AF function registry
+    /// and the property-function registry if it has them, the deterministic blank-mint
+    /// prefix a rules run gives each focus node
+    /// ([`EvalCtx::with_bnode_mint_prefix`]), and
+    /// [`QueryOptions::prebinding`], which selects the SHACL pre-binding rewrite
+    /// (`sh:sparql` constraint and component bodies, `sh:SPARQLRule`, `sh:ask`/`sh:select`
+    /// validators) over the ordinary substitution rewrite (SHACL-AF node expressions and
+    /// `sh:SPARQLTarget`).
     ///
     /// # Errors
     ///
     /// Propagates parse and evaluation errors as an [`RdfDiagnostic`]. A tripped governor
     /// is **not** an error and does not surface here.
-    pub fn query_governed_in_operation<D: DatasetView + Sync>(
-        &self,
-        dataset: &D,
+    pub fn query_governed_in_operation<'d, D: DatasetView + Sync>(
+        &'d self,
+        dataset: &'d D,
         request: SparqlRequest<'_>,
-        prebind: ShaclPrebinding,
-        functions: Option<&crate::user_fn::UserFunctionRegistry>,
+        options: QueryOptions<'d>,
         state: &Arc<GovernorState>,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
-        self.query_governed_in_operation_with_options(
+        let prepared =
+            self.prepare_for(request.query, request.base_iri, options.property_functions)?;
+        self.query_governed_prepared_in_state(
             dataset,
-            request,
-            ShaclQueryOptions {
-                prebinding: prebind,
-                functions,
-                bnode_mint_prefix: None,
-            },
+            &prepared,
+            request.substitutions,
+            options,
+            None,
             state,
         )
-    }
-
-    /// [`Self::query_governed_in_operation`] with the full [`ShaclQueryOptions`]
-    /// surface — in particular a deterministic blank-mint prefix
-    /// ([`EvalCtx::with_bnode_mint_prefix`]), so a governed SHACL rules run can
-    /// give each focus node its own mint identity exactly like the ungoverned
-    /// [`Self::query_shacl_view`] path.
-    ///
-    /// # Errors
-    ///
-    /// Propagates parse and evaluation errors as an [`RdfDiagnostic`]. A tripped governor
-    /// is **not** an error and does not surface here.
-    pub fn query_governed_in_operation_with_options<D: DatasetView + Sync>(
-        &self,
-        dataset: &D,
-        request: SparqlRequest<'_>,
-        options: ShaclQueryOptions<'_>,
-        state: &Arc<GovernorState>,
-    ) -> Result<GovernedOutcome, RdfDiagnostic> {
-        let prepared = self.cache.borrow_mut().prepare_with(
-            request.query,
-            request.base_iri,
-            &self.parser_options,
-        )?;
-        if let Some(refused) = self.admit(dataset, &prepared.query, state) {
-            return refused;
-        }
-        let ctx = self.eval_ctx(dataset).with_governors(Arc::clone(state));
-        let mut ctx = apply_shacl_query_options(ctx, options)?;
-        let evaluated = match options.prebinding {
-            ShaclPrebinding::Applied => {
-                evaluate_governed_with_shacl_prebinding(&prepared, request.substitutions, &mut ctx)?
-            }
-            ShaclPrebinding::None => {
-                evaluate_governed_with_substitutions(&prepared, request.substitutions, &mut ctx)?
-            }
-        };
-        Ok(materialize_governed(evaluated, &ctx, state))
     }
 
     /// Parse and execute one request under caller-supplied governors over an
@@ -525,16 +713,17 @@ impl NativeSparqlEngine {
                   partial answers; boxing it would put an allocation on the reporting path \
                   of every non-complete outcome to save one move per query"
     )]
-    pub fn query_governed_fallible_view<D>(
-        &self,
-        dataset: &D,
+    pub fn query_governed_fallible_view<'d, D>(
+        &'d self,
+        dataset: &'d D,
         request: SparqlRequest<'_>,
+        options: QueryOptions<'d>,
         governors: &QueryGovernors,
     ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>>
     where
         D: FallibleDatasetView + Sync,
     {
-        self.query_governed_fallible_view_inner(dataset, request, None, governors)
+        self.query_governed_fallible_view_inner(dataset, request, None, options, governors)
     }
 
     /// [`Self::query_governed_fallible_view`] with a federation source injected.
@@ -554,28 +743,30 @@ impl NativeSparqlEngine {
         clippy::result_large_err,
         reason = "the Err side carries both operation receipts and certified partial answers"
     )]
-    pub fn query_governed_fallible_with_source_view<'a, D>(
-        &self,
-        dataset: &'a D,
+    pub fn query_governed_fallible_with_source_view<'d, D>(
+        &'d self,
+        dataset: &'d D,
         request: SparqlRequest<'_>,
-        source: &'a (dyn crate::remote::RemoteQuerySource + Sync),
+        source: &'d (dyn crate::remote::RemoteQuerySource + Sync),
+        options: QueryOptions<'d>,
         governors: &QueryGovernors,
     ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>>
     where
         D: FallibleDatasetView + Sync,
     {
-        self.query_governed_fallible_view_inner(dataset, request, Some(source), governors)
+        self.query_governed_fallible_view_inner(dataset, request, Some(source), options, governors)
     }
 
     #[allow(
         clippy::result_large_err,
         reason = "the Err side carries both operation receipts and certified partial answers"
     )]
-    fn query_governed_fallible_view_inner<'a, D>(
-        &self,
-        dataset: &'a D,
+    fn query_governed_fallible_view_inner<'d, D>(
+        &'d self,
+        dataset: &'d D,
         request: SparqlRequest<'_>,
-        source: Option<&'a (dyn crate::remote::RemoteQuerySource + Sync)>,
+        source: Option<&'d (dyn crate::remote::RemoteQuerySource + Sync)>,
+        options: QueryOptions<'d>,
         governors: &QueryGovernors,
     ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>>
     where
@@ -590,25 +781,23 @@ impl NativeSparqlEngine {
                 evidence: GovernedEvidence::new(evidence, state.evidence()),
             });
         }
-        let prepared = match self.prepare_query(request.query, request.base_iri) {
-            Ok(prepared) => prepared,
-            Err(diagnostic) => {
-                return finish_governed_fallible_query(dataset, &state, Err(diagnostic));
-            }
-        };
-        if let Some(refused) = self.admit(dataset, &prepared.query, &state) {
-            return finish_governed_fallible_query(dataset, &state, refused);
-        }
+        let prepared =
+            match self.prepare_for(request.query, request.base_iri, options.property_functions) {
+                Ok(prepared) => prepared,
+                Err(diagnostic) => {
+                    return finish_governed_fallible_query(dataset, &state, Err(diagnostic));
+                }
+            };
         let evaluation = {
             let _sequential = crate::parallel::force_sequential_operation();
-            let mut ctx = self.eval_ctx(dataset).with_governors(Arc::clone(&state));
-            if let Some(source) = source {
-                ctx = ctx.with_remote(source);
-            }
-            match evaluate_governed_with_substitutions(&prepared, request.substitutions, &mut ctx) {
-                Ok(evaluated) => Ok(materialize_governed(evaluated, &ctx, &state)),
-                Err(diagnostic) => Err(diagnostic),
-            }
+            self.query_governed_prepared_in_state(
+                dataset,
+                &prepared,
+                request.substitutions,
+                options,
+                source,
+                &state,
+            )
         };
         finish_governed_fallible_query(dataset, &state, evaluation)
     }
@@ -655,6 +844,17 @@ impl NativeSparqlEngine {
     /// The live accounting state is built here, for this request, and dropped with it —
     /// the same rule, for the same reason, as [`Self::query_governed`].
     ///
+    /// # Options are a parameter, not an overload
+    ///
+    /// `options` carries the registries this request's `WHERE` clauses run under —
+    /// pass [`QueryOptions::EMPTY`] to configure none. Required for the identical
+    /// reason [`Self::query_governed`] requires it: a
+    /// [`PropertyFunctionRegistry`](crate::property_fn::PropertyFunctionRegistry) is
+    /// *parse* configuration, and an UPDATE's `WHERE` is a triple-pattern context —
+    /// an entry that could not be handed a registry would parse a registered
+    /// relation's predicate as an ordinary triple pattern and either match nothing
+    /// or hard-error, never dispatch the call. See [`QueryOptions`].
+    ///
     /// # Errors
     ///
     /// Propagates parse and evaluation errors as an [`RdfDiagnostic`]. A tripped governor
@@ -663,15 +863,17 @@ impl NativeSparqlEngine {
         &self,
         dataset: &mut Arc<RdfDataset>,
         request: SparqlRequest<'_>,
+        options: QueryOptions<'_>,
         governors: &QueryGovernors,
     ) -> Result<GovernedUpdateOutcome, RdfDiagnostic> {
-        let update = self.parse_update(&request)?;
+        let update = self.parse_update(&request, options.property_functions)?;
         let state = Arc::new(GovernorState::new(governors));
         let mut m = MutableDataset::new(Arc::clone(dataset));
         let cfg = crate::update::UpdateEvalConfig {
             standpoint_predicates: self.standpoint_predicates.as_ref(),
             order_cache: &self.order_cache,
             governors: Some(&state),
+            options,
         };
         let tripped = match eval_update(&update, &mut m, self.resolver.as_deref(), &cfg) {
             // A request that ran to the end still does not publish while a trip is latched
@@ -711,24 +913,79 @@ impl NativeSparqlEngine {
         }
     }
 
-    /// Parse one UPDATE request into algebra.
+    /// Parse one UPDATE request into algebra, under the [`ParserOptions`] `registry`
+    /// derives (see [`Self::parser_options_for`]) — the `prepare_for`-equivalent for
+    /// updates: a registered relation's predicate is recognized as a call node by
+    /// EXACT IRI here exactly as it is on the query lane, whether or not the engine
+    /// also declared the relation's namespace via [`Self::with_parser_options`].
     ///
     /// UPDATE deliberately bypasses the plan cache: these requests are side-effecting and
     /// are not the hot static-query set the cache exists for; caching a mutating statement
     /// would be a correctness hazard. Shared by the two UPDATE seams so that a governed and
-    /// an ungoverned request of the same text parse identically — including the base IRI and
-    /// the engine's [`ParserOptions`].
+    /// an ungoverned request of the same text, under the same registry, parse identically —
+    /// including the base IRI and the engine's [`ParserOptions`].
     fn parse_update(
         &self,
         request: &SparqlRequest<'_>,
+        registry: Option<&crate::property_fn::PropertyFunctionRegistry>,
     ) -> Result<purrdf_sparql_algebra::Update, RdfDiagnostic> {
         let mut parser = SparqlParser::new();
         if let Some(base) = request.base_iri {
             parser = parser.with_base_iri(base);
         }
+        let options = self.parser_options_for(registry)?;
         parser
-            .parse_update_with(request.query, &self.parser_options)
+            .parse_update_with(request.query, &options)
             .map_err(|e| RdfDiagnostic::error("native-sparql-update-parse", e.to_string()))
+    }
+
+    /// The one **ungoverned** options-carrying UPDATE entry, parameterized by
+    /// [`QueryOptions`]: injects a property-function registry (and, symmetrically, a
+    /// SHACL-AF function registry and a deterministic blank-mint prefix) into the
+    /// `WHERE` evaluation of every `DELETE`/`INSERT … WHERE` in the request.
+    /// [`SparqlEngine::update`] is this entry under [`QueryOptions::EMPTY`] — the
+    /// ungoverned sibling of [`Self::update_governed`], the same relationship
+    /// [`Self::query_with_options_view`] has to [`Self::query_governed`].
+    ///
+    /// # Errors
+    ///
+    /// Propagates parse and evaluation errors as an [`RdfDiagnostic`].
+    pub fn update_with_options(
+        &self,
+        dataset: &mut Arc<RdfDataset>,
+        request: SparqlRequest<'_>,
+        options: QueryOptions<'_>,
+    ) -> Result<(), RdfDiagnostic> {
+        let update = self.parse_update(&request, options.property_functions)?;
+        // Atomicity is structural: branch a COW MutableDataset off the frozen base,
+        // apply every op to the delta, and only on FULL success freeze back. Any
+        // error drops `m` and leaves `*dataset` untouched.
+        let mut m = MutableDataset::new(Arc::clone(dataset));
+        let cfg = crate::update::UpdateEvalConfig {
+            standpoint_predicates: self.standpoint_predicates.as_ref(),
+            order_cache: &self.order_cache,
+            // Exactly ungoverned, exactly as this seam was before governors existed —
+            // `None` is the absence of the state, not an unbounded one, so no charge site
+            // or stop poll is reachable from here at all. A caller who wants ceilings on a
+            // mutation names them at `NativeSparqlEngine::update_governed`.
+            governors: None,
+            options,
+        };
+        match eval_update(&update, &mut m, self.resolver.as_deref(), &cfg) {
+            Ok(()) => {}
+            Err(UpdateAbort::Failed(diagnostic)) => return Err(diagnostic),
+            // Unreachable by construction: a trip can only originate from the
+            // `GovernorState` this seam declines to build, so there is no governor here to
+            // stop anything. Stated as an invariant rather than re-rendered as a
+            // diagnostic, because a diagnostic on this arm would be a place for a real
+            // trip to hide if the invariant ever broke.
+            Err(UpdateAbort::Tripped(tripped)) => unreachable!(
+                "the ungoverned UPDATE seam attaches no GovernorState, yet {} was reported",
+                tripped.label()
+            ),
+        }
+        *dataset = m.freeze()?;
+        Ok(())
     }
 
     /// A fresh engine with an empty plan cache and no `LOAD` resolver.
@@ -787,6 +1044,89 @@ impl NativeSparqlEngine {
         self
     }
 
+    /// Parse and feasibility-order one request against the property-function registry
+    /// that will be in scope for its evaluation.
+    ///
+    /// **The single point where a registry becomes parse configuration.** A relation is
+    /// reachable from SPARQL only if the parser lowered its predicate IRI to a call
+    /// node, and the parser does that only for an IRI under a configured
+    /// [`ParserOptions::property_fn_namespaces`] entry OR an entry of
+    /// [`ParserOptions::property_fn_iris`]. Deriving [`ParserOptions::property_fn_iris`]
+    /// here, from the very registry the evaluation will resolve against, is what keeps
+    /// the two from drifting: a host cannot register a relation the parser does not
+    /// recognize, and cannot configure an IRI whose call resolves against a different
+    /// table.
+    ///
+    /// Registered IRIs go into [`ParserOptions::property_fn_iris`] — EXACT match — and
+    /// deliberately never into [`ParserOptions::property_fn_namespaces`] — PREFIX
+    /// match. A registry's keys are exact IRIs, not namespaces: folding
+    /// `https://example.org/rel/a` in as a prefix would reclassify the unrelated,
+    /// merely-same-prefixed data predicate `https://example.org/rel/ab` as a call to
+    /// an unregistered relation, which then hard-errors — a previously-working query
+    /// breaking with a diagnostic that names the wrong cause. A host that wants a
+    /// whole namespace recognized — including IRIs it has deliberately left
+    /// unregistered, so that spelling one is a hard error rather than a silent data
+    /// triple — still declares that namespace through [`Self::with_parser_options`];
+    /// the two sets (caller-declared namespaces, registry-derived exact IRIs) are
+    /// unioned, never conflated.
+    ///
+    /// No registry (or an empty one) contributes nothing, so a query on a host that has
+    /// not configured the seam parses under exactly the options it always did.
+    fn prepare_for(
+        &self,
+        query: &str,
+        base_iri: Option<&str>,
+        relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
+    ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
+        let relations = relations.filter(|registry| !registry.is_empty());
+        let options = self.parser_options_for(relations)?;
+        self.cache
+            .borrow_mut()
+            .prepare_with_relations(query, base_iri, &options, relations)
+    }
+
+    /// This engine's [`ParserOptions`], augmented with `registry`'s exact predicate
+    /// IRIs (EXACT match — [`ParserOptions::property_fn_iris`] — never PREFIX; see
+    /// [`Self::prepare_for`]'s doc comment for why folding a registered IRI in as a
+    /// namespace prefix would hijack an unrelated, merely-same-prefixed data
+    /// predicate).
+    ///
+    /// Shared by [`Self::prepare_for`] (the query lane) and [`Self::parse_update`]
+    /// (the UPDATE lane) so a registered relation's predicate is recognized as a
+    /// call node identically in a `SELECT` and in an UPDATE's `WHERE` — an UPDATE
+    /// WHERE clause is a triple-pattern context exactly like a query's, and a
+    /// registry that can drive one but not the other is a registry with two
+    /// meanings depending on which clause spelled the predicate.
+    ///
+    /// `describe()` is IRI-sorted, so the derived set is a pure function of the
+    /// registry's contents rather than of its registration order. Returns the
+    /// engine's own options unmodified — no clone, no allocation — when `registry`
+    /// is absent or empty, which is every request on a host that has not
+    /// configured the seam.
+    ///
+    /// # Errors
+    ///
+    /// An [`RdfDiagnostic`] (`native-sparql-property-function`) if a registered
+    /// relation's declaration methods panic.
+    fn parser_options_for(
+        &self,
+        registry: Option<&crate::property_fn::PropertyFunctionRegistry>,
+    ) -> Result<Cow<'_, ParserOptions>, RdfDiagnostic> {
+        let Some(registry) = registry.filter(|r| !r.is_empty()) else {
+            return Ok(Cow::Borrowed(&self.parser_options));
+        };
+        let mut options = self.parser_options.clone();
+        let described = registry
+            .describe()
+            .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
+        for descriptor in described {
+            if !options.property_fn_iris.contains(&descriptor.iri) {
+                options.property_fn_iris.push(descriptor.iri);
+            }
+        }
+        Ok(Cow::Owned(options))
+    }
+
     /// Build the per-query evaluation context, threading the engine-level
     /// configuration (order cache + standpoint predicate table + loss vocabulary +
     /// eval options) into it. `NOW()`/`RAND()`/`UUID()`/`STRUUID()` are already
@@ -843,6 +1183,48 @@ impl NativeSparqlEngine {
         self.explain_query_view(&**dataset, query_text, base_iri)
     }
 
+    /// [`Self::explain_query`] with a property-function registry injected, so a query
+    /// whose predicates resolve to relations can be explained at all — and so the
+    /// explanation NAMES them.
+    ///
+    /// A relation is host code whose rows no index sized and no dataset holds, which
+    /// makes it part of what produced the answer in exactly the way the charge schedule
+    /// is: [`QueryExplanation::relations`] carries the registered IRIs, sorted, and
+    /// [`QueryExplanation::render`] prints them. Two hosts that ran the same query text
+    /// over the same dataset under two different registries therefore hold two receipts
+    /// that say so.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`RdfDiagnostic`] if the query text does not parse, or if evaluating it
+    /// fails.
+    pub fn explain_query_with_property_functions(
+        &self,
+        dataset: &Arc<RdfDataset>,
+        query_text: &str,
+        base_iri: Option<&str>,
+        registry: &crate::property_fn::PropertyFunctionRegistry,
+    ) -> Result<QueryExplanation, RdfDiagnostic> {
+        self.explain_query_with_property_functions_view(&**dataset, query_text, base_iri, registry)
+    }
+
+    /// [`Self::explain_query_with_property_functions`] over any [`DatasetView`] backend
+    /// whose id type is the production [`TermId`](purrdf_core::TermId).
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`RdfDiagnostic`] if the query text does not parse, or if evaluating it
+    /// fails.
+    pub fn explain_query_with_property_functions_view<D: DatasetView + Sync>(
+        &self,
+        dataset: &D,
+        query_text: &str,
+        base_iri: Option<&str>,
+        registry: &crate::property_fn::PropertyFunctionRegistry,
+    ) -> Result<QueryExplanation, RdfDiagnostic> {
+        self.explain_for(dataset, query_text, base_iri, Some(registry))
+    }
+
     /// [`Self::explain_query`] over any [`DatasetView`] backend whose id type is the
     /// production [`TermId`](purrdf_core::TermId). The cost-based join order is computed against the given
     /// view's cardinalities exactly as the concrete path does.
@@ -857,11 +1239,24 @@ impl NativeSparqlEngine {
         query_text: &str,
         base_iri: Option<&str>,
     ) -> Result<QueryExplanation, RdfDiagnostic> {
-        let prepared =
-            self.cache
-                .borrow_mut()
-                .prepare_with(query_text, base_iri, &self.parser_options)?;
-        let survey = self.survey_plan(dataset, &prepared.query)?;
+        self.explain_for(dataset, query_text, base_iri, None)
+    }
+
+    /// The one explain body, parameterized by the property-function registry in scope.
+    ///
+    /// `relations` is threaded everywhere it changes the answer: into the parse (which is
+    /// where a predicate becomes a call node and the plan is feasibility-ordered), into
+    /// the survey (a relation's declared row bound is the only prediction a call has), and
+    /// into the receipt (which names the registered IRIs).
+    fn explain_for<D: DatasetView + Sync>(
+        &self,
+        dataset: &D,
+        query_text: &str,
+        base_iri: Option<&str>,
+        relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
+    ) -> Result<QueryExplanation, RdfDiagnostic> {
+        let prepared = self.prepare_for(query_text, base_iri, relations)?;
+        let survey = self.survey_plan(dataset, &prepared.query, relations)?;
         // The ledger's node table is fixed against the plan that is about to be evaluated.
         // No substitutions are applied on this path, so the addresses the ledger records
         // are the addresses the evaluator visits.
@@ -874,11 +1269,25 @@ impl NativeSparqlEngine {
             .eval_ctx(dataset)
             .with_governors(Arc::clone(&state))
             .with_charge_ledger(Arc::clone(&ledger));
+        if let Some(registry) = relations {
+            ctx = ctx.with_property_functions(registry);
+        }
         evaluate_query_evaluated(&prepared.query, &mut ctx)
             .map_err(|e| RdfDiagnostic::error("native-sparql-query-explain", e.to_string()))?;
+        // `describe()` is IRI-sorted, so the receipt's relation list is a function of what
+        // was registered and not of the order it was registered in. The full descriptor
+        // travels, not just the IRI: arity, declared modes, and volatility are all part of
+        // what a relation IS, and two impls sharing an IRI but disagreeing on any of them
+        // must render as two different receipts.
+        let registered = relations
+            .map(crate::property_fn::PropertyFunctionRegistry::describe)
+            .transpose()
+            .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?
+            .unwrap_or_default();
         Ok(QueryExplanation::new(
             survey.orders,
             ledger.snapshot(),
+            registered,
             state.evidence(),
         ))
     }
@@ -889,10 +1298,15 @@ impl NativeSparqlEngine {
     /// One walk feeds both consumers — admission control, which refuses a plan whose
     /// predicted peak already exceeds the caller's ceiling, and the ledger, which prints
     /// that prediction beside the count that materialised.
+    ///
+    /// `relations` is the caller's property-function registry, when it supplied one. It is
+    /// what lets a call node be priced at all: a relation's declared row bound is the only
+    /// prediction there is for a bag no index sized.
     fn survey_plan<D: DatasetView + Sync>(
         &self,
         dataset: &D,
         query: &Query,
+        relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
     ) -> Result<crate::bgp::PlanSurvey, RdfDiagnostic> {
         let _ = self;
         let active_dataset = ActiveDataset::from_query_dataset(query.dataset(), dataset);
@@ -902,6 +1316,7 @@ impl NativeSparqlEngine {
             &active_dataset,
             GraphMatch::Default,
             query_pattern(query),
+            relations,
             &mut survey,
         )
         .map_err(|e| RdfDiagnostic::error("native-sparql-query-explain", e.to_string()))?;
@@ -953,14 +1368,16 @@ impl NativeSparqlEngine {
         &self,
         dataset: &D,
         query: &Query,
+        relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
         state: &GovernorState,
+        identity: &RelationIdentity,
     ) -> Option<Result<GovernedOutcome, RdfDiagnostic>> {
         let dimension = purrdf_core::ResourceDimension::IntermediateCells;
         if !state.is_engaged_in(dimension) {
             return None;
         }
         let limit = state.limits().get(dimension);
-        let estimate = match self.survey_plan(dataset, query) {
+        let estimate = match self.survey_plan(dataset, query, relations) {
             Ok(survey) => survey.peak_cells(),
             Err(diagnostic) => return Some(Err(diagnostic)),
         };
@@ -978,6 +1395,7 @@ impl NativeSparqlEngine {
         Some(Ok(GovernedOutcome::BudgetExhausted(BudgetExhausted {
             tripped,
             evidence: state.evidence(),
+            relations: identity.clone(),
             // For SELECT and graph forms this is a certified lower bound over nothing:
             // every item here is an answer, and there are none. ASK has no public witness
             // set, however; its `false` value would read as a settled answer, so the helper
@@ -991,9 +1409,9 @@ impl NativeSparqlEngine {
     /// Pre-bound variables are substituted into FILTER/EXISTS expressions and
     /// `BOUND($v)` is rewritten to `true` for pre-bound variables, while
     /// triple-pattern positions still receive the VALUES-join rewrite. This is
-    /// a convenience wrapper equivalent to [`Self::query_shacl_view`] with
-    /// prebinding enabled and no function registry or mint prefix; the SHACL
-    /// validator itself drives [`Self::query_shacl_view`] directly. Normal
+    /// a convenience wrapper equivalent to [`Self::query_with_options_view`] with
+    /// [`ShaclPrebinding::Applied`] and no registry or mint prefix; the SHACL
+    /// validator itself drives [`Self::query_with_options_view`] directly. Normal
     /// SPARQL evaluation uses [`SparqlEngine::query`].
     ///
     /// # Errors
@@ -1022,13 +1440,18 @@ impl NativeSparqlEngine {
         base_iri: Option<&str>,
         substitutions: &[(String, TermValue)],
     ) -> Result<SparqlResult, RdfDiagnostic> {
-        let prepared =
-            self.cache
-                .borrow_mut()
-                .prepare_with(query, base_iri, &self.parser_options)?;
-        let mut ctx = self.eval_ctx(dataset);
-        let outcome = evaluate_with_shacl_prebinding(&prepared, substitutions, &mut ctx)?;
-        Ok(materialize(outcome, &ctx))
+        self.query_with_options_view(
+            dataset,
+            SparqlRequest {
+                query,
+                base_iri,
+                substitutions,
+            },
+            QueryOptions {
+                prebinding: ShaclPrebinding::Applied,
+                ..QueryOptions::EMPTY
+            },
+        )
     }
 
     /// Like [`NativeSparqlEngine::query_with_shacl_prebinding`], but with a SHACL-AF
@@ -1060,56 +1483,61 @@ impl NativeSparqlEngine {
     /// # Errors
     ///
     /// Propagates parse/evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_with_shacl_prebinding_and_functions_view<D: DatasetView + Sync>(
-        &self,
-        dataset: &D,
+    pub fn query_with_shacl_prebinding_and_functions_view<'d, D: DatasetView + Sync>(
+        &'d self,
+        dataset: &'d D,
         query: &str,
         base_iri: Option<&str>,
         substitutions: &[(String, TermValue)],
-        registry: &crate::user_fn::UserFunctionRegistry,
+        registry: &'d crate::user_fn::UserFunctionRegistry,
     ) -> Result<SparqlResult, RdfDiagnostic> {
-        let prepared =
-            self.cache
-                .borrow_mut()
-                .prepare_with(query, base_iri, &self.parser_options)?;
-        let mut ctx = self.eval_ctx(dataset).with_user_functions(registry);
-        let outcome = evaluate_with_shacl_prebinding(&prepared, substitutions, &mut ctx)?;
-        Ok(materialize(outcome, &ctx))
+        self.query_with_options_view(
+            dataset,
+            SparqlRequest {
+                query,
+                base_iri,
+                substitutions,
+            },
+            QueryOptions {
+                prebinding: ShaclPrebinding::Applied,
+                functions: Some(registry),
+                ..QueryOptions::EMPTY
+            },
+        )
     }
 
-    /// The one **ungoverned** SHACL-facing query entry, parameterized by
-    /// [`ShaclQueryOptions`]: selects the substitution rewrite
-    /// ([`ShaclQueryOptions::prebinding`]), optionally injects a SHACL-AF function
-    /// registry, and optionally installs a deterministic blank-mint prefix
-    /// ([`EvalCtx::with_bnode_mint_prefix`]) so every blank this evaluation mints
-    /// carries a caller-supplied identity — the seam the SHACL rules engine uses
-    /// to make distinct focus nodes mint distinct `CONSTRUCT` blanks at mint
-    /// time. With default-shaped options this behaves exactly like the narrower
-    /// entries above.
+    /// The one **ungoverned** options-carrying query entry, parameterized by
+    /// [`QueryOptions`]: selects the substitution rewrite
+    /// ([`QueryOptions::prebinding`]), optionally injects a SHACL-AF function
+    /// registry and a property-function registry, and optionally installs a
+    /// deterministic blank-mint prefix ([`EvalCtx::with_bnode_mint_prefix`]) so every
+    /// blank this evaluation mints carries a caller-supplied identity — the seam the
+    /// SHACL rules engine uses to make distinct focus nodes mint distinct `CONSTRUCT`
+    /// blanks at mint time.
+    ///
+    /// This is the ungoverned sibling of [`Self::query_governed_in_operation`], and
+    /// the body every narrower ungoverned entry above delegates to. Under
+    /// [`QueryOptions::EMPTY`] it behaves exactly like [`SparqlEngine::query`].
     ///
     /// # Errors
     ///
     /// Propagates parse/evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_shacl_view<D: DatasetView + Sync>(
-        &self,
-        dataset: &D,
-        query: &str,
-        base_iri: Option<&str>,
-        substitutions: &[(String, TermValue)],
-        options: ShaclQueryOptions<'_>,
+    pub fn query_with_options_view<'d, D: DatasetView + Sync>(
+        &'d self,
+        dataset: &'d D,
+        request: SparqlRequest<'_>,
+        options: QueryOptions<'d>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
         let prepared =
-            self.cache
-                .borrow_mut()
-                .prepare_with(query, base_iri, &self.parser_options)?;
+            self.prepare_for(request.query, request.base_iri, options.property_functions)?;
         let ctx = self.eval_ctx(dataset);
-        let mut ctx = apply_shacl_query_options(ctx, options)?;
+        let mut ctx = apply_query_options(ctx, options)?;
         let outcome = match options.prebinding {
             ShaclPrebinding::Applied => {
-                evaluate_with_shacl_prebinding(&prepared, substitutions, &mut ctx)?
+                evaluate_with_shacl_prebinding(&prepared, request.substitutions, &mut ctx)?
             }
             ShaclPrebinding::None => {
-                evaluate_with_substitutions(&prepared, substitutions, &mut ctx)?
+                evaluate_with_substitutions(&prepared, request.substitutions, &mut ctx)?
             }
         };
         Ok(materialize(outcome, &ctx))
@@ -1122,6 +1550,19 @@ impl NativeSparqlEngine {
     /// hard-fails. This is the public entry the conformance harness and
     /// federated callers use.
     ///
+    /// # Options are a parameter, not an overload
+    ///
+    /// `options` carries the registries and rewrites this execution runs under —
+    /// pass [`QueryOptions::EMPTY`] to configure none — for the identical reason
+    /// [`Self::query_governed`] requires it: a property-function registry is *parse*
+    /// configuration, so an entry that could not be handed one would parse a
+    /// registered relation's predicate as an ordinary triple pattern and answer the
+    /// empty bag, silently, for every call whose `SERVICE` body is federated. The
+    /// query's OUTER pattern resolves against `options.property_functions` exactly
+    /// as [`Self::query_with_property_functions`] resolves it; a call node inside the
+    /// `SERVICE` body itself is refused at forwarding regardless (see
+    /// [`crate::remote::RemoteQuerySource`]).
+    ///
     /// # Errors
     ///
     /// Propagates parse and evaluation errors as an [`RdfDiagnostic`].
@@ -1130,8 +1571,9 @@ impl NativeSparqlEngine {
         dataset: &Arc<RdfDataset>,
         request: SparqlRequest<'_>,
         source: &(dyn crate::remote::RemoteQuerySource + Sync),
+        options: QueryOptions<'_>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
-        self.query_with_source_view(&**dataset, request, source)
+        self.query_with_source_view(&**dataset, request, source, options)
     }
 
     /// [`Self::query_with_source`] over any [`DatasetView`] backend whose id type is
@@ -1140,19 +1582,25 @@ impl NativeSparqlEngine {
     /// # Errors
     ///
     /// Propagates parse and evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_with_source_view<D: DatasetView + Sync>(
-        &self,
-        dataset: &D,
+    pub fn query_with_source_view<'d, D: DatasetView + Sync>(
+        &'d self,
+        dataset: &'d D,
         request: SparqlRequest<'_>,
-        source: &(dyn crate::remote::RemoteQuerySource + Sync),
+        source: &'d (dyn crate::remote::RemoteQuerySource + Sync),
+        options: QueryOptions<'d>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
-        let prepared = self.cache.borrow_mut().prepare_with(
-            request.query,
-            request.base_iri,
-            &self.parser_options,
-        )?;
-        let mut ctx = self.eval_ctx(dataset).with_remote(source);
-        let outcome = evaluate_with_substitutions(&prepared, request.substitutions, &mut ctx)?;
+        let prepared =
+            self.prepare_for(request.query, request.base_iri, options.property_functions)?;
+        let ctx = self.eval_ctx(dataset).with_remote(source);
+        let mut ctx = apply_query_options(ctx, options)?;
+        let outcome = match options.prebinding {
+            ShaclPrebinding::Applied => {
+                evaluate_with_shacl_prebinding(&prepared, request.substitutions, &mut ctx)?
+            }
+            ShaclPrebinding::None => {
+                evaluate_with_substitutions(&prepared, request.substitutions, &mut ctx)?
+            }
+        };
         Ok(materialize(outcome, &ctx))
     }
 
@@ -1161,6 +1609,11 @@ impl NativeSparqlEngine {
     /// declared function evaluates its body at eval time. This is the entry the
     /// shapes validator uses; the registry is built once per shapes graph and
     /// borrowed for the call. An empty registry behaves exactly like [`Self::query`].
+    ///
+    /// This is [`Self::query_with_options_view`] with one field set. A caller that also
+    /// has a property-function registry, a pre-binding rewrite, or a blank-mint prefix in
+    /// scope names them together there rather than reaching for a narrower entry that
+    /// would drop them.
     ///
     /// # Errors
     ///
@@ -1180,20 +1633,70 @@ impl NativeSparqlEngine {
     /// # Errors
     ///
     /// Propagates parse and evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_with_user_functions_view<D: DatasetView + Sync>(
-        &self,
-        dataset: &D,
+    pub fn query_with_user_functions_view<'d, D: DatasetView + Sync>(
+        &'d self,
+        dataset: &'d D,
         request: SparqlRequest<'_>,
-        registry: &crate::user_fn::UserFunctionRegistry,
+        registry: &'d crate::user_fn::UserFunctionRegistry,
     ) -> Result<SparqlResult, RdfDiagnostic> {
-        let prepared = self.cache.borrow_mut().prepare_with(
-            request.query,
-            request.base_iri,
-            &self.parser_options,
-        )?;
-        let mut ctx = self.eval_ctx(dataset).with_user_functions(registry);
-        let outcome = evaluate_with_substitutions(&prepared, request.substitutions, &mut ctx)?;
-        Ok(materialize(outcome, &ctx))
+        self.query_with_options_view(
+            dataset,
+            request,
+            QueryOptions {
+                functions: Some(registry),
+                ..QueryOptions::EMPTY
+            },
+        )
+    }
+
+    /// Like [`SparqlEngine::query`], but with a caller-supplied property-function
+    /// registry injected, so a predicate IRI the parser lowered to a
+    /// [`purrdf_sparql_algebra::GraphPattern::PropertyFunction`]
+    /// — which it does only for an IRI that EXACTLY matches a registered relation
+    /// (via [`ParserOptions::property_fn_iris`](purrdf_sparql_algebra::ParserOptions),
+    /// derived from `registry`) or that falls under a caller-declared
+    /// [`ParserOptions::property_fn_namespaces`](purrdf_sparql_algebra::ParserOptions)
+    /// entry — resolves to a registered relation. The registry is built once per host
+    /// configuration and borrowed for the call. An empty registry behaves exactly like
+    /// [`Self::query`].
+    ///
+    /// This is [`Self::query_with_options_view`] with one field set, and
+    /// [`Self::query_governed`] under [`QueryGovernors::UNBOUNDED`] is its governed
+    /// sibling. A caller that also has a SHACL-AF function registry or a blank-mint
+    /// prefix in scope names them together at the options entry.
+    ///
+    /// # Errors
+    ///
+    /// Propagates parse and evaluation errors as an [`RdfDiagnostic`].
+    pub fn query_with_property_functions(
+        &self,
+        dataset: &Arc<RdfDataset>,
+        request: SparqlRequest<'_>,
+        registry: &crate::property_fn::PropertyFunctionRegistry,
+    ) -> Result<SparqlResult, RdfDiagnostic> {
+        self.query_with_property_functions_view(&**dataset, request, registry)
+    }
+
+    /// [`Self::query_with_property_functions`] over any [`DatasetView`] backend whose
+    /// id type is the production [`TermId`](purrdf_core::TermId).
+    ///
+    /// # Errors
+    ///
+    /// Propagates parse and evaluation errors as an [`RdfDiagnostic`].
+    pub fn query_with_property_functions_view<'d, D: DatasetView + Sync>(
+        &'d self,
+        dataset: &'d D,
+        request: SparqlRequest<'_>,
+        registry: &'d crate::property_fn::PropertyFunctionRegistry,
+    ) -> Result<SparqlResult, RdfDiagnostic> {
+        self.query_with_options_view(
+            dataset,
+            request,
+            QueryOptions {
+                property_functions: Some(registry),
+                ..QueryOptions::EMPTY
+            },
+        )
     }
 }
 
@@ -1338,22 +1841,42 @@ pub enum ShaclPrebinding {
     None,
 }
 
-/// Per-call options for the SHACL-facing query entries
-/// ([`NativeSparqlEngine::query_shacl_view`] and
-/// [`NativeSparqlEngine::query_governed_in_operation_with_options`]).
+/// The per-call configuration every options-carrying query entry takes — governed
+/// and ungoverned, SHACL-facing and not.
 ///
-/// Bundles the three independently optional pieces every SHACL query path
-/// selects from: which substitution rewrite to apply, whether a SHACL-AF
-/// function registry is in scope, and whether minted blank-node labels carry a
-/// deterministic caller-supplied prefix (see
+/// Bundles the four independently optional pieces a query evaluation selects from:
+/// which substitution rewrite to apply, whether a SHACL-AF function registry is in
+/// scope, whether a **property-function registry** is in scope, and whether minted
+/// blank-node labels carry a deterministic caller-supplied prefix (see
 /// [`EvalCtx::with_bnode_mint_prefix`](crate::eval::EvalCtx::with_bnode_mint_prefix)).
+///
+/// # Why one struct on every entry rather than a registry-free sibling per lane
+///
+/// The property-function registry is not merely an evaluation-time table: it is
+/// *parse* configuration — a registered IRI becomes a call node only because the
+/// registry contributed it to
+/// [`ParserOptions::property_fn_iris`](purrdf_sparql_algebra::ParserOptions). An entry that
+/// cannot be handed one parses a registered relation's predicate as an ORDINARY
+/// triple pattern, which matches no data and returns an empty bag — a wrong answer
+/// with no diagnostic. Making the options a required parameter of every entry means
+/// a host that registered relations cannot reach an entry that would silently drop
+/// them: there is no registry-free overload to fall into. Callers with nothing to
+/// configure pass [`QueryOptions::EMPTY`], which is exactly the behavior those
+/// entries had before the seam existed.
+///
+/// Construct with struct-update syntax over the empty value, e.g.
+/// `QueryOptions { property_functions: Some(&registry), ..QueryOptions::EMPTY }`.
 #[derive(Debug, Clone, Copy)]
-pub struct ShaclQueryOptions<'a> {
+pub struct QueryOptions<'a> {
     /// Which substitution rewrite to apply (see [`ShaclPrebinding`]).
     pub prebinding: ShaclPrebinding,
     /// The SHACL-AF function registry in scope, if any; `None` behaves exactly
     /// like the registry-free entries.
     pub functions: Option<&'a crate::user_fn::UserFunctionRegistry>,
+    /// The property-function registry in scope, if any; `None` behaves exactly
+    /// like an empty registry (see
+    /// [`EvalCtx::with_property_functions`](crate::eval::EvalCtx::with_property_functions)).
+    pub property_functions: Option<&'a crate::property_fn::PropertyFunctionRegistry>,
     /// A deterministic prefix for every blank-node label the evaluation mints;
     /// `None` (the pre-existing behavior) leaves minted labels unprefixed. The
     /// prefix is caller-supplied data — the SHACL rules engine passes a
@@ -1362,25 +1885,117 @@ pub struct ShaclQueryOptions<'a> {
     pub bnode_mint_prefix: Option<&'a str>,
 }
 
-/// Apply the two independently-optional [`ShaclQueryOptions`] pieces that are
-/// wired identically on both SHACL-facing query entries
-/// ([`NativeSparqlEngine::query_shacl_view`] and
-/// [`NativeSparqlEngine::query_governed_in_operation_with_options`]): the
-/// SHACL-AF function registry ([`EvalCtx::with_user_functions`]) and the
-/// deterministic blank-mint prefix ([`EvalCtx::with_bnode_mint_prefix`]).
-/// Centralized so a future `ShaclQueryOptions` field is wired once instead of
-/// at each call site.
+impl QueryOptions<'_> {
+    /// Configure nothing: the ordinary substitution rewrite, no function registry,
+    /// no property-function registry, unprefixed blank mints. What every entry did
+    /// before it took options.
+    pub const EMPTY: Self = Self {
+        prebinding: ShaclPrebinding::None,
+        functions: None,
+        property_functions: None,
+        bnode_mint_prefix: None,
+    };
+}
+
+impl Default for QueryOptions<'_> {
+    fn default() -> Self {
+        Self::EMPTY
+    }
+}
+
+/// Refuse a plan that was prepared against a different property-function registry than
+/// the one it is about to be evaluated under.
+///
+/// The last way to reach a silently-empty answer from a registered relation, closed. A
+/// plan prepared with no registry lowered the relation's predicate to an ORDINARY triple
+/// pattern; evaluating it with the registry attached would scan a dataset that holds no
+/// such triple and answer the empty bag, with every governor reporting a clean complete
+/// run. The plan carries the identity it was parsed under
+/// ([`PreparedQuery::relations`]), so the disagreement is a fact rather than an
+/// inference, and it is reported as a configuration error — which is what it is.
+///
+/// # Errors
+///
+/// An [`RdfDiagnostic`] (`native-sparql-property-function`) when the identities differ,
+/// or when a relation panics while its declaration is read to compute the supplied
+/// registry's fingerprint.
+fn check_plan_matches_relations(
+    prepared: &PreparedQuery,
+    options: QueryOptions<'_>,
+) -> Result<(), RdfDiagnostic> {
+    let supplied = crate::property_fn_plan::registry_fingerprint(options.property_functions)
+        .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
+    if supplied == prepared.relations {
+        return Ok(());
+    }
+    Err(RdfDiagnostic::error(
+        "native-sparql-property-function",
+        "this plan was prepared against a different property-function registry than the one \
+         supplied for its evaluation; prepare it with \
+         `NativeSparqlEngine::prepare_query_with_options` under the SAME `QueryOptions` the \
+         evaluation uses, because the registry is what decides which predicates are calls",
+    ))
+}
+
+/// The [`RelationIdentity`] a governed outcome carries: `prepared`'s already-computed
+/// registry fingerprint — validated against `relations` by
+/// [`check_plan_matches_relations`] at every call site before this runs, so it is safe to
+/// reuse rather than re-derive — paired with the registered IRIs the fingerprint was
+/// taken over, sorted.
+///
+/// Called once per governed execution rather than per outcome arm, so the refusal path
+/// ([`NativeSparqlEngine::admit`]), the complete path, and the truncated path all carry
+/// the SAME identity for the SAME execution — there is exactly one place this is computed
+/// and every [`GovernedOutcome`] arm reads from it.
+///
+/// # Errors
+///
+/// An [`RdfDiagnostic`] (`native-sparql-property-function`) if a registered relation's
+/// declaration methods panic.
+fn relation_identity(
+    prepared: &PreparedQuery,
+    relations: Option<&crate::property_fn::PropertyFunctionRegistry>,
+) -> Result<RelationIdentity, RdfDiagnostic> {
+    let iris = match relations.filter(|registry| !registry.is_empty()) {
+        None => Vec::new(),
+        Some(registry) => registry
+            .describe()
+            .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?
+            .into_iter()
+            .map(|descriptor| descriptor.iri)
+            .collect(),
+    };
+    Ok(RelationIdentity {
+        fingerprint: prepared.relations.clone(),
+        iris,
+    })
+}
+
+/// Apply the independently-optional [`QueryOptions`] pieces to a freshly built
+/// evaluation context: the SHACL-AF function registry
+/// ([`EvalCtx::with_user_functions`]), the property-function registry
+/// ([`EvalCtx::with_property_functions`]), and the deterministic blank-mint prefix
+/// ([`EvalCtx::with_bnode_mint_prefix`]).
+///
+/// The ONE application seam — every options-carrying entry, governed and ungoverned,
+/// routes through here, so a future [`QueryOptions`] field is wired once instead of
+/// at each call site. [`QueryOptions::prebinding`] is deliberately not applied here:
+/// it selects an *evaluator entry point* rather than a context field, so it is read
+/// at the two evaluation sites instead.
 ///
 /// # Errors
 ///
 /// Returns [`RdfDiagnostic`] when `options.bnode_mint_prefix` is not a legal
 /// `BLANK_NODE_LABEL` prefix.
-fn apply_shacl_query_options<'d, D: DatasetView + Sync>(
+pub(crate) fn apply_query_options<'d, D: DatasetView + Sync>(
     mut ctx: EvalCtx<'d, D>,
-    options: ShaclQueryOptions<'d>,
+    options: QueryOptions<'d>,
 ) -> Result<EvalCtx<'d, D>, RdfDiagnostic> {
     if let Some(registry) = options.functions {
         ctx = ctx.with_user_functions(registry);
+    }
+    if let Some(registry) = options.property_functions {
+        ctx = ctx.with_property_functions(registry);
     }
     if let Some(prefix) = options.bnode_mint_prefix {
         ctx = ctx
@@ -1423,7 +2038,12 @@ impl SparqlEngine for NativeSparqlEngine {
         request: SparqlRequest<'_>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
         let prepared = self.prepare_query(request.query, request.base_iri)?;
-        self.query_prepared(dataset, &prepared, request.substitutions)
+        self.query_prepared(
+            dataset,
+            &prepared,
+            request.substitutions,
+            QueryOptions::EMPTY,
+        )
     }
 
     fn update(
@@ -1431,35 +2051,10 @@ impl SparqlEngine for NativeSparqlEngine {
         dataset: &mut Self::Dataset,
         request: SparqlRequest<'_>,
     ) -> Result<(), RdfDiagnostic> {
-        let update = self.parse_update(&request)?;
-        // Atomicity is structural: branch a COW MutableDataset off the frozen base,
-        // apply every op to the delta, and only on FULL success freeze back. Any
-        // error drops `m` and leaves `*dataset` untouched.
-        let mut m = MutableDataset::new(Arc::clone(dataset));
-        let cfg = crate::update::UpdateEvalConfig {
-            standpoint_predicates: self.standpoint_predicates.as_ref(),
-            order_cache: &self.order_cache,
-            // Exactly ungoverned, exactly as this seam was before governors existed —
-            // `None` is the absence of the state, not an unbounded one, so no charge site
-            // or stop poll is reachable from here at all. A caller who wants ceilings on a
-            // mutation names them at `NativeSparqlEngine::update_governed`.
-            governors: None,
-        };
-        match eval_update(&update, &mut m, self.resolver.as_deref(), &cfg) {
-            Ok(()) => {}
-            Err(UpdateAbort::Failed(diagnostic)) => return Err(diagnostic),
-            // Unreachable by construction: a trip can only originate from the
-            // `GovernorState` this seam declines to build, so there is no governor here to
-            // stop anything. Stated as an invariant rather than re-rendered as a
-            // diagnostic, because a diagnostic on this arm would be a place for a real
-            // trip to hide if the invariant ever broke.
-            Err(UpdateAbort::Tripped(tripped)) => unreachable!(
-                "the ungoverned UPDATE seam attaches no GovernorState, yet {} was reported",
-                tripped.label()
-            ),
-        }
-        *dataset = m.freeze()?;
-        Ok(())
+        // The trait seam configures nothing: a caller who wants a property-function
+        // registry (or any other `QueryOptions` piece) reachable from an UPDATE's
+        // `WHERE` names it at `NativeSparqlEngine::update_with_options`.
+        self.update_with_options(dataset, request, QueryOptions::EMPTY)
     }
 }
 
@@ -1545,16 +2140,22 @@ fn materialize_governed<D: DatasetView + Sync>(
     evaluated: EvaluatedOutcome<D::Id>,
     ctx: &EvalCtx<'_, D>,
     state: &GovernorState,
+    relations: RelationIdentity,
 ) -> GovernedOutcome {
     match evaluated {
         EvaluatedOutcome::Complete(outcome) => {
             let result = materialize(outcome, ctx);
             let evidence = state.evidence();
             match evidence.tripped {
-                None => GovernedOutcome::Complete { result, evidence },
+                None => GovernedOutcome::Complete {
+                    result,
+                    evidence,
+                    relations,
+                },
                 Some(tripped) => GovernedOutcome::BudgetExhausted(BudgetExhausted {
                     tripped,
                     evidence,
+                    relations,
                     partial: certain_partial(result, true),
                 }),
             }
@@ -1589,6 +2190,7 @@ fn materialize_governed<D: DatasetView + Sync>(
             GovernedOutcome::BudgetExhausted(BudgetExhausted {
                 tripped: certificate.tripped(),
                 evidence: state.evidence(),
+                relations,
                 partial,
             })
         }
@@ -1599,6 +2201,7 @@ fn materialize_governed<D: DatasetView + Sync>(
 mod tests {
     use super::*;
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfLiteral, TermValue};
+    use purrdf_sparql_algebra::GraphPattern;
 
     /// Regression: `=` is RDFterm-equality, so `?a != ?b` over two *distinct IRIs*
     /// must be `true` (the row survives), NOT a type error. Routing `=` through the
@@ -1913,15 +2516,17 @@ mod tests {
         let ds = subst_ds();
         let engine = NativeSparqlEngine::new();
         let result = engine
-            .query_shacl_view(
+            .query_with_options_view(
                 &*ds,
-                "CONSTRUCT { ?s <http://ex/derived> _:b } WHERE { ?s <http://ex/p> <http://ex/x> }",
-                None,
-                &[],
-                ShaclQueryOptions {
+                SparqlRequest {
+                    query: "CONSTRUCT { ?s <http://ex/derived> _:b } WHERE { ?s <http://ex/p> <http://ex/x> }",
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                QueryOptions {
                     prebinding: ShaclPrebinding::Applied,
-                    functions: None,
                     bnode_mint_prefix: Some("fTag_"),
+                    ..QueryOptions::EMPTY
                 },
             )
             .expect("construct");
@@ -1939,6 +2544,146 @@ mod tests {
         );
     }
 
+    /// An EMPTY property-function registry is indistinguishable from none: the same
+    /// query over the same data returns byte-identical results through
+    /// [`NativeSparqlEngine::query_with_property_functions`] and through the plain
+    /// registry-free entry.
+    ///
+    /// This pins the equivalence the registry's `None` handling rests on. Without it,
+    /// "no registry configured" and "a registry with nothing in it" could drift into
+    /// two different evaluation paths, and a host that wires an empty table — the
+    /// normal state of a host that has declared no relation yet — would silently get a
+    /// different engine from one that wires none.
+    #[test]
+    fn an_empty_property_function_registry_is_indistinguishable_from_none() {
+        let ds = subst_ds();
+        let engine = NativeSparqlEngine::new();
+        let query = "SELECT ?s ?o WHERE { ?s <http://ex/p> ?o } ORDER BY ?s ?o";
+        let request = || SparqlRequest {
+            query,
+            base_iri: None,
+            substitutions: &[],
+        };
+
+        let without = engine.query(&ds, request()).expect("registry-free query");
+        let registry = crate::property_fn::PropertyFunctionRegistry::new();
+        assert!(registry.is_empty());
+        let with_empty = engine
+            .query_with_property_functions(&ds, request(), &registry)
+            .expect("empty-registry query");
+
+        let (
+            SparqlResult::Solutions {
+                variables: without_vars,
+                rows: without_rows,
+                ..
+            },
+            SparqlResult::Solutions {
+                variables: with_vars,
+                rows: with_rows,
+                ..
+            },
+        ) = (without, with_empty)
+        else {
+            panic!("both queries must return solutions");
+        };
+        assert_eq!(without_vars, with_vars);
+        assert_eq!(
+            without_rows, with_rows,
+            "an empty registry must not change a single row"
+        );
+    }
+
+    /// The explain receipt NAMES the relations that were in scope, sorted, so two runs
+    /// of the same query text over the same dataset under two different registries are
+    /// two distinguishable receipts.
+    ///
+    /// The rows a relation emits are host code's, not the dataset's: without the list, a
+    /// receipt would attribute an answer to a query and a dataset that between them do
+    /// not determine it.
+    #[test]
+    fn the_explain_receipt_names_the_registered_relations() {
+        let ds = subst_ds();
+        let engine = NativeSparqlEngine::new();
+        let query = "SELECT ?s ?o WHERE { ?s <http://ex/p> ?o } ORDER BY ?s ?o";
+        let table = || {
+            Arc::new(
+                crate::property_fn::MemoryRelation::new(
+                    1,
+                    1,
+                    vec![vec![
+                        TermValue::iri("http://example.org/a"),
+                        TermValue::iri("http://example.org/1"),
+                    ]],
+                )
+                .expect("a one-row two-column table"),
+            )
+        };
+
+        // Registered in the reverse of their sorted order, so a receipt that echoed
+        // registration order would disagree with one that sorted.
+        let mut left = crate::property_fn::PropertyFunctionRegistry::new();
+        left.register("http://example.org/rel/second", table());
+        left.register("http://example.org/rel/first", table());
+        let mut right = crate::property_fn::PropertyFunctionRegistry::new();
+        right.register("http://example.org/rel/first", table());
+
+        let explain = |registry: &crate::property_fn::PropertyFunctionRegistry| {
+            engine
+                .explain_query_with_property_functions(&ds, query, None, registry)
+                .expect("explain")
+        };
+        let left_receipt = explain(&left);
+        let right_receipt = explain(&right);
+
+        let left_iris: Vec<&str> = left_receipt
+            .relations()
+            .iter()
+            .map(|descriptor| descriptor.iri.as_str())
+            .collect();
+        assert_eq!(
+            left_iris,
+            [
+                "http://example.org/rel/first",
+                "http://example.org/rel/second"
+            ],
+            "the receipt lists every registered IRI, sorted"
+        );
+        let right_iris: Vec<&str> = right_receipt
+            .relations()
+            .iter()
+            .map(|descriptor| descriptor.iri.as_str())
+            .collect();
+        assert_eq!(right_iris, ["http://example.org/rel/first"]);
+
+        // The receipt is more than the bare IRI: arity, volatility, and declared modes
+        // all ride along, because two impls sharing an IRI can disagree on any of them.
+        let first = &left_receipt.relations()[0];
+        assert_eq!(first.subject_arity, 1);
+        assert_eq!(first.object_arity, 1);
+        assert_eq!(first.volatility, crate::Volatility::Stable);
+        assert!(!first.modes.is_empty());
+
+        assert_ne!(
+            left_receipt.render(),
+            right_receipt.render(),
+            "two registries must not render as the same receipt"
+        );
+        assert!(
+            left_receipt
+                .render()
+                .contains("http://example.org/rel/first arity=1,1 volatility=stable"),
+            "the rendering names them, with arity and volatility: {}",
+            left_receipt.render()
+        );
+
+        // With no registry the block is present and empty — "nothing was in scope",
+        // not "this build does not report what was".
+        let bare = engine.explain_query(&ds, query, None).expect("explain");
+        assert!(bare.relations().is_empty());
+        assert!(bare.render().contains("relations\njoin-orders"));
+    }
+
     #[test]
     fn shacl_query_options_without_prefix_mint_exact_c_labels() {
         // `bnode_mint_prefix: None` must be byte-identical to the pre-options
@@ -1946,15 +2691,16 @@ mod tests {
         let ds = subst_ds();
         let engine = NativeSparqlEngine::new();
         let result = engine
-            .query_shacl_view(
+            .query_with_options_view(
                 &*ds,
-                "CONSTRUCT { ?s <http://ex/derived> _:b } WHERE { ?s <http://ex/p> <http://ex/x> }",
-                None,
-                &[],
-                ShaclQueryOptions {
+                SparqlRequest {
+                    query: "CONSTRUCT { ?s <http://ex/derived> _:b } WHERE { ?s <http://ex/p> <http://ex/x> }",
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                QueryOptions {
                     prebinding: ShaclPrebinding::Applied,
-                    functions: None,
-                    bnode_mint_prefix: None,
+                    ..QueryOptions::EMPTY
                 },
             )
             .expect("construct");
@@ -2453,6 +3199,8 @@ mod tests {
         let configured = NativeSparqlEngine::new()
             .with_parser_options(ParserOptions {
                 extension_fn_namespaces: vec![GMEOW_NS.to_owned()],
+                property_fn_namespaces: Vec::new(),
+                property_fn_iris: Vec::new(),
             })
             .with_standpoint_predicates(StandpointPredicates::new(
                 format!("{GMEOW_NS}accordingTo"),
@@ -2484,6 +3232,8 @@ mod tests {
         // Same UPDATE, unconfigured engine: heldIn hard-errors (never a silent default).
         let unconfigured = NativeSparqlEngine::new().with_parser_options(ParserOptions {
             extension_fn_namespaces: vec![GMEOW_NS.to_owned()],
+            property_fn_namespaces: Vec::new(),
+            property_fn_iris: Vec::new(),
         });
         let mut unconfigured_ds = Arc::clone(&ds);
         let err = unconfigured
@@ -2592,6 +3342,8 @@ mod tests {
         let engine = NativeSparqlEngine::new()
             .with_parser_options(ParserOptions {
                 extension_fn_namespaces: vec![GMEOW_NS.to_owned()],
+                property_fn_namespaces: Vec::new(),
+                property_fn_iris: Vec::new(),
             })
             .with_standpoint_predicates(StandpointPredicates::new(
                 format!("{GMEOW_NS}accordingTo"),
@@ -2627,6 +3379,8 @@ mod tests {
         let ds = gmeow_standpoint_ds();
         let engine = NativeSparqlEngine::new().with_parser_options(ParserOptions {
             extension_fn_namespaces: vec![GMEOW_NS.to_owned()],
+            property_fn_namespaces: Vec::new(),
+            property_fn_iris: Vec::new(),
         });
         let q = format!(
             "PREFIX gmeow: <{GMEOW_NS}>\n\
@@ -2661,6 +3415,8 @@ mod tests {
         );
         let with_alias = ParserOptions {
             extension_fn_namespaces: vec![GMEOW_NS.to_owned()],
+            property_fn_namespaces: Vec::new(),
+            property_fn_iris: Vec::new(),
         };
         let a = cache
             .prepare_with(&q, None, &with_alias)
@@ -2672,6 +3428,243 @@ mod tests {
         assert!(
             !Arc::ptr_eq(&a, &b),
             "different namespace configurations must not share a cache entry"
+        );
+    }
+
+    #[test]
+    fn plan_cache_keys_on_the_property_function_exact_iri_set() {
+        // Two configurations that agree on everything else — same text, same base,
+        // same extension/namespace sets, same registry — but differ only in
+        // `property_fn_iris` must not share a cache entry: one recognizes the
+        // predicate as a call (and resolves/feasibility-orders it against the
+        // registry), the other reads the very same text as an ordinary triple
+        // pattern. Sharing a plan would hand one host's algebra to the other.
+        let mut cache = PlanCache::new();
+        let iri = format!("{GMEOW_NS}rel");
+        let q = format!("SELECT ?s ?o WHERE {{ ?s <{iri}> ?o }}");
+
+        let mut registry = crate::property_fn::PropertyFunctionRegistry::new();
+        registry.register(
+            iri.clone(),
+            Arc::new(
+                crate::property_fn::MemoryRelation::new(1, 1, vec![])
+                    .expect("an empty table is a valid one-in-one-out relation"),
+            ),
+        );
+
+        let with_exact_iri = ParserOptions {
+            extension_fn_namespaces: Vec::new(),
+            property_fn_namespaces: Vec::new(),
+            property_fn_iris: vec![iri],
+        };
+        let a = cache
+            .prepare_with_relations(&q, None, &with_exact_iri, Some(&registry))
+            .expect("parse with the exact IRI recognized and resolved against the registry");
+        // Under the DEFAULT options the same predicate is an ordinary triple.
+        let b = cache
+            .prepare_with_relations(&q, None, &ParserOptions::default(), Some(&registry))
+            .expect("parse without the exact IRI configured");
+        assert!(
+            !Arc::ptr_eq(&a, &b),
+            "different property_fn_iris configurations must not share a cache entry"
+        );
+        let Query::Select {
+            pattern: b_pattern, ..
+        } = &b.query
+        else {
+            panic!("a SELECT's algebra root is a Select, got {:?}", b.query);
+        };
+        let GraphPattern::Project { inner: b_inner, .. } = b_pattern else {
+            panic!("a SELECT's algebra root is a Project, got {b_pattern:?}");
+        };
+        assert!(
+            matches!(&**b_inner, GraphPattern::Bgp { .. }),
+            "without property_fn_iris the predicate stays an ordinary BGP triple: {b_inner:?}"
+        );
+        let Query::Select {
+            pattern: a_pattern, ..
+        } = &a.query
+        else {
+            panic!("a SELECT's algebra root is a Select, got {:?}", a.query);
+        };
+        let GraphPattern::Project { inner: a_inner, .. } = a_pattern else {
+            panic!("a SELECT's algebra root is a Project, got {a_pattern:?}");
+        };
+        assert!(
+            matches!(&**a_inner, GraphPattern::PropertyFunction(_)),
+            "with property_fn_iris configured the predicate becomes a call: {a_inner:?}"
+        );
+    }
+
+    /// A one-in-one-out relation whose declared [`Volatility`](crate::Volatility) is the
+    /// only thing the constructor varies — built to prove that the registry fingerprint
+    /// (and therefore the plan cache, and the governed receipt) is sensitive to
+    /// volatility rather than only to arity and declared modes.
+    #[derive(Debug)]
+    struct FixedVolatilityRelation {
+        volatility: crate::Volatility,
+        modes: [crate::BindingPattern; 1],
+    }
+
+    impl FixedVolatilityRelation {
+        fn new(volatility: crate::Volatility) -> Self {
+            let arity = crate::PfArity::new(1, 1);
+            Self {
+                volatility,
+                modes: [arity.all_free_mode()],
+            }
+        }
+    }
+
+    /// The empty cursor `FixedVolatilityRelation::open` hands out: these fixtures exist
+    /// to be registered and described, never dispatched.
+    struct EmptyCursor;
+
+    impl crate::PfCursor for EmptyCursor {
+        fn next(&mut self) -> Result<Option<crate::property_fn::PfRow>, crate::EvalError> {
+            Ok(None)
+        }
+    }
+
+    impl crate::property_fn::PropertyFunction for FixedVolatilityRelation {
+        fn volatility(&self) -> crate::Volatility {
+            self.volatility
+        }
+
+        fn arity(&self) -> crate::PfArity {
+            crate::PfArity::new(1, 1)
+        }
+
+        fn modes(&self) -> &[crate::BindingPattern] {
+            &self.modes
+        }
+
+        fn rows_per_invocation(&self, _mode: crate::BindingPattern) -> u64 {
+            0
+        }
+
+        fn open(
+            &self,
+            _args: &crate::PfArgs<'_>,
+            _ceiling: Option<u64>,
+        ) -> Result<Box<dyn crate::PfCursor>, crate::EvalError> {
+            Ok(Box::new(EmptyCursor))
+        }
+    }
+
+    /// GAP-7 (registry fingerprint): two registries that agree on IRI, arity, and every
+    /// declared mode — differing ONLY in volatility — must not share a plan-cache entry.
+    ///
+    /// Volatility is not read by the feasibility-ordering pass at all (it decides
+    /// whether a call may run on a fork-join worker, an EVALUATION-time question), so
+    /// before this fingerprint carried it, two such registries planned identically AND
+    /// shared a cache slot — silently handing one registry's plan to a call the other
+    /// registry declared unsafe to parallelize.
+    #[test]
+    fn plan_cache_keys_on_registry_volatility() {
+        let mut cache = PlanCache::new();
+        let iri = format!("{GMEOW_NS}rel");
+        let q = format!("SELECT ?s ?o WHERE {{ ?s <{iri}> ?o }}");
+        let options = ParserOptions {
+            extension_fn_namespaces: Vec::new(),
+            property_fn_namespaces: Vec::new(),
+            property_fn_iris: vec![iri.clone()],
+        };
+
+        let mut stable = crate::property_fn::PropertyFunctionRegistry::new();
+        stable.register(
+            iri.clone(),
+            Arc::new(FixedVolatilityRelation::new(crate::Volatility::Stable)),
+        );
+        let mut volatile = crate::property_fn::PropertyFunctionRegistry::new();
+        volatile.register(
+            iri,
+            Arc::new(FixedVolatilityRelation::new(crate::Volatility::Volatile)),
+        );
+
+        assert_ne!(
+            crate::property_fn_plan::registry_fingerprint(Some(&stable)).expect("no panic"),
+            crate::property_fn_plan::registry_fingerprint(Some(&volatile)).expect("no panic"),
+            "the fingerprint itself must be sensitive to volatility"
+        );
+
+        let a = cache
+            .prepare_with_relations(&q, None, &options, Some(&stable))
+            .expect("the stable registry admits and plans the call");
+        let b = cache
+            .prepare_with_relations(&q, None, &options, Some(&volatile))
+            .expect("the volatile registry admits and plans the call");
+        assert!(
+            !Arc::ptr_eq(&a, &b),
+            "registries differing only in declared volatility must not share a cache entry"
+        );
+    }
+
+    /// GAP-7 (governed receipt): two relation implementations registered under the SAME
+    /// IRI, differing only in declared volatility, must produce DISTINGUISHABLE governed
+    /// receipts and distinguishable explanations — never bytes that could be mistaken for
+    /// the same execution.
+    #[test]
+    fn same_iri_different_volatility_produces_distinguishable_governed_receipts() {
+        let ds = subst_ds();
+        let engine = NativeSparqlEngine::new();
+        let iri = "http://example.org/rel/shared";
+        let query = format!("SELECT ?s ?o WHERE {{ ?s <{iri}> ?o }}");
+
+        let mut stable = crate::property_fn::PropertyFunctionRegistry::new();
+        stable.register(
+            iri,
+            Arc::new(FixedVolatilityRelation::new(crate::Volatility::Stable)),
+        );
+        let mut volatile = crate::property_fn::PropertyFunctionRegistry::new();
+        volatile.register(
+            iri,
+            Arc::new(FixedVolatilityRelation::new(crate::Volatility::Volatile)),
+        );
+
+        let request = || SparqlRequest {
+            query: query.as_str(),
+            base_iri: None,
+            substitutions: &[],
+        };
+        let run = |registry: &crate::property_fn::PropertyFunctionRegistry| {
+            engine
+                .query_governed(
+                    &ds,
+                    request(),
+                    QueryOptions {
+                        property_functions: Some(registry),
+                        ..QueryOptions::EMPTY
+                    },
+                    &QueryGovernors::METERED,
+                )
+                .expect("METERED bounds nothing, so both registries must admit and complete")
+        };
+        let stable_outcome = run(&stable);
+        let volatile_outcome = run(&volatile);
+
+        assert_ne!(
+            stable_outcome.relations().fingerprint,
+            volatile_outcome.relations().fingerprint,
+            "two registries differing only in volatility must not carry the same \
+             governed-receipt identity"
+        );
+        assert_eq!(
+            stable_outcome.relations().iris,
+            volatile_outcome.relations().iris,
+            "the IRI list itself is identical — only the fingerprint tells them apart"
+        );
+
+        // The explain surface must disagree the same way.
+        let explain = |registry: &crate::property_fn::PropertyFunctionRegistry| {
+            engine
+                .explain_query_with_property_functions(&ds, &query, None, registry)
+                .expect("explain")
+        };
+        assert_ne!(
+            explain(&stable).render(),
+            explain(&volatile).render(),
+            "two relation impls sharing an IRI must not render as the same explanation"
         );
     }
 

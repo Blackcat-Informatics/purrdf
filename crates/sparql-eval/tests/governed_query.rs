@@ -20,8 +20,8 @@ use purrdf_core::{
 use purrdf_sparql_eval::{
     CHARGE_SCHEDULE, CancellationFlag, ChargePoint, FallibleSparqlError, GOVERNOR_PROFILE_DIGEST,
     GOVERNOR_PROFILE_ID, GOVERNOR_PROFILE_VERSION, GovernedOutcome, HttpRemoteQuerySource,
-    HttpRequest, NativeSparqlEngine, PartialAnswers, QueryExplanation, QueryGovernors, RemoteError,
-    STOP_POLL_FUEL, StopSignal, WallDeadline, resolve_precedence,
+    HttpRequest, NativeSparqlEngine, PartialAnswers, QueryExplanation, QueryGovernors,
+    QueryOptions, RemoteError, STOP_POLL_FUEL, StopSignal, WallDeadline, resolve_precedence,
 };
 
 /// The number of `ex:p` edges in the fixture dataset.
@@ -76,7 +76,7 @@ const ALL_ROWS: &str = "SELECT ?s ?o WHERE { ?s <http://example.org/p> ?o }";
 /// error — a trip is an outcome, never an `Err`.
 fn governed(query: &str, governors: &QueryGovernors) -> GovernedOutcome {
     NativeSparqlEngine::new()
-        .query_governed(&fixture(), request(query), governors)
+        .query_governed(&fixture(), request(query), QueryOptions::EMPTY, governors)
         .expect("a tripped governor is an outcome, not a query error")
 }
 
@@ -179,6 +179,7 @@ fn stopped_partial_rows(dataset: &Arc<RdfDataset>, query: &str) -> usize {
         .query_governed(
             dataset,
             request(query),
+            QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_stop_signal(PollCountdown::new(16)),
         )
         .expect("a stop is an outcome");
@@ -241,7 +242,10 @@ fn ac1_query_governors_accepts_every_governor_and_reaches_evaluation() {
         .with_stop_signal(Arc::new(signal.clone()));
 
     let outcome = governed(ALL_ROWS, &governors);
-    let GovernedOutcome::Complete { result, evidence } = &outcome else {
+    let GovernedOutcome::Complete {
+        result, evidence, ..
+    } = &outcome
+    else {
         panic!("no governor could fire, so the query must complete: {outcome:?}");
     };
     assert_eq!(row_count(result), EDGES);
@@ -561,7 +565,12 @@ fn public_blank_node_filter_cannot_forge_an_upper_bound() {
     }";
     let engine = NativeSparqlEngine::new();
     let measured = engine
-        .query_governed(&dataset, request(query), &QueryGovernors::METERED)
+        .query_governed(
+            &dataset,
+            request(query),
+            QueryOptions::EMPTY,
+            &QueryGovernors::METERED,
+        )
         .expect("metered query")
         .evidence()
         .consumed_in(ResourceDimension::Fuel);
@@ -572,6 +581,7 @@ fn public_blank_node_filter_cannot_forge_an_upper_bound() {
             .query_governed(
                 &dataset,
                 request(query),
+                QueryOptions::EMPTY,
                 &QueryGovernors::UNBOUNDED.with_fuel(fuel),
             )
             .expect("a fuel trip is an outcome");
@@ -663,7 +673,10 @@ fn answer_cap_boundary_is_inclusive() {
         ALL_ROWS,
         &QueryGovernors::UNBOUNDED.with_max_answers(EDGES as u64),
     );
-    let GovernedOutcome::Complete { result, evidence } = &at_the_cap else {
+    let GovernedOutcome::Complete {
+        result, evidence, ..
+    } = &at_the_cap
+    else {
         panic!("cap == result size is complete: {at_the_cap:?}");
     };
     assert_eq!(row_count(result), EDGES);
@@ -733,7 +746,10 @@ fn metered_governors_measure_an_execution_without_bounding_it() {
     // The intended way to size a budget: run under METERED, read the cost, then set the
     // real ceilings from it. Nothing can trip, so the outcome is complete.
     let outcome = governed(ALL_ROWS, &QueryGovernors::METERED);
-    let GovernedOutcome::Complete { result, evidence } = &outcome else {
+    let GovernedOutcome::Complete {
+        result, evidence, ..
+    } = &outcome
+    else {
         panic!("METERED bounds nothing and cannot trip: {outcome:?}");
     };
     assert_eq!(row_count(result), EDGES);
@@ -875,6 +891,7 @@ fn d6_precedence_order() {
         .query_governed(
             &fixture(),
             request("SELECT * WHERE { SERVICE <http://example.org/remote> { ?a ?b ?c } }"),
+            QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .expect_err("a federation failure is an error, not an exhausted budget");
@@ -888,6 +905,7 @@ fn d6_precedence_order() {
         .query_governed(
             &fixture(),
             request("SELECT WHERE {"),
+            QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_stop_signal(Arc::new(flag)),
         )
         .expect_err("an unparseable query is a parse error, not an exhausted budget");
@@ -909,9 +927,18 @@ fn prepared_plans_do_not_share_a_budget_across_runs() {
     let mut fuel_spent = Vec::new();
     for run in 0..3 {
         let outcome = engine
-            .query_prepared_governed_view(&*dataset, &prepared, &[], &governors)
+            .query_prepared_governed_view(
+                &*dataset,
+                &prepared,
+                &[],
+                QueryOptions::EMPTY,
+                &governors,
+            )
             .expect("prepared governed run");
-        let GovernedOutcome::Complete { result, evidence } = &outcome else {
+        let GovernedOutcome::Complete {
+            result, evidence, ..
+        } = &outcome
+        else {
             panic!("run {run} must complete under a budget sized for it: {outcome:?}");
         };
         assert_eq!(row_count(result), EDGES);
@@ -934,7 +961,12 @@ fn a_fallible_view_reports_a_trip_as_budget_exhausted_with_both_meters() {
 
     let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
     let complete = engine
-        .query_governed_fallible_view(&view, request(ALL_ROWS), &QueryGovernors::METERED)
+        .query_governed_fallible_view(
+            &view,
+            request(ALL_ROWS),
+            QueryOptions::EMPTY,
+            &QueryGovernors::METERED,
+        )
         .expect("a metered run over a ready view completes");
     assert_eq!(row_count(&complete.result), EDGES);
     assert!(complete.evidence.governors.is_complete());
@@ -951,6 +983,7 @@ fn a_fallible_view_reports_a_trip_as_budget_exhausted_with_both_meters() {
         .query_governed_fallible_view(
             &view,
             request(ALL_ROWS),
+            QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_max_answers(2),
         )
         .expect_err("a trip is not a complete result");
@@ -1006,6 +1039,7 @@ fn a_fallible_federated_view_composes_page_and_remote_evidence() {
             &view,
             request(query),
             &source,
+            QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .expect("the local page and remote response are both ready");
@@ -1030,6 +1064,7 @@ fn a_fallible_federated_view_composes_page_and_remote_evidence() {
             &view,
             request(query),
             &source,
+            QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_fuel(complete_fuel - 1),
         )
         .expect_err("the final fuel unit prevents a completeness certificate");
@@ -1097,7 +1132,7 @@ fn answer_cap_stops_the_scan_rather_than_materializing_everything() {
     for edges in [WIDE_EDGES, WIDE_EDGES * 4] {
         let dataset = wide_fixture(edges);
         let outcome = engine
-            .query_governed(&dataset, request(ALL_ROWS), &capped)
+            .query_governed(&dataset, request(ALL_ROWS), QueryOptions::EMPTY, &capped)
             .expect("a capped run is an outcome, not an error");
         let exhausted = outcome
             .exhausted()
@@ -1124,7 +1159,12 @@ fn answer_cap_stops_the_scan_rather_than_materializing_everything() {
         // The scale the capped cost is being separated from: the same query over the same
         // store with nothing capped.
         let whole = engine
-            .query_governed(&dataset, request(ALL_ROWS), &QueryGovernors::METERED)
+            .query_governed(
+                &dataset,
+                request(ALL_ROWS),
+                QueryOptions::EMPTY,
+                &QueryGovernors::METERED,
+            )
             .expect("a metered run completes");
         assert!(
             spent[spent.len() - 1] * 20 < whole.evidence().consumed_in(ResourceDimension::Fuel),
@@ -1174,7 +1214,12 @@ fn answer_cap_stops_the_scan_rather_than_materializing_everything() {
     // And the answers agree, which is the guarantee the pushdown is not allowed to buy
     // performance with: the limited plan's rows are the unlimited plan's first rows.
     let unlimited_rows = engine
-        .query_governed(&dataset, request(ALL_ROWS), &QueryGovernors::UNBOUNDED)
+        .query_governed(
+            &dataset,
+            request(ALL_ROWS),
+            QueryOptions::EMPTY,
+            &QueryGovernors::UNBOUNDED,
+        )
         .expect("the unlimited query");
     let GovernedOutcome::Complete { result, .. } = &unlimited_rows else {
         panic!("nothing is bounded, so it completes: {unlimited_rows:?}");
@@ -1183,6 +1228,7 @@ fn answer_cap_stops_the_scan_rather_than_materializing_everything() {
         .query_governed(
             &dataset,
             request("SELECT ?s ?o WHERE { ?s <http://example.org/p> ?o } LIMIT 5"),
+            QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED,
         )
         .expect("the limited query");
@@ -1221,6 +1267,7 @@ fn admission_refuses_an_estimated_ceiling_breach_before_evaluating() {
         .query_governed(
             &dataset,
             request(ALL_ROWS),
+            QueryOptions::EMPTY,
             &QueryGovernors::METERED.with_max_intermediate_cells(1),
         )
         .expect("a refusal is an outcome, not an error");
@@ -1281,6 +1328,7 @@ fn admission_refuses_an_estimated_ceiling_breach_before_evaluating() {
             .query_governed(
                 &dataset,
                 request(ALL_ROWS),
+                QueryOptions::EMPTY,
                 &QueryGovernors::METERED.with_max_intermediate_cells(1),
             )
             .expect("a refusal is an outcome");
@@ -1297,6 +1345,7 @@ fn admission_refuses_an_estimated_ceiling_breach_before_evaluating() {
         .query_governed(
             &dataset,
             request(ALL_ROWS),
+            QueryOptions::EMPTY,
             &QueryGovernors::METERED.with_max_intermediate_cells(estimate),
         )
         .expect("an admitted run");
@@ -1318,6 +1367,7 @@ fn admission_refuses_an_estimated_ceiling_breach_before_evaluating() {
             .query_governed(
                 &dataset,
                 request(query),
+                QueryOptions::EMPTY,
                 &QueryGovernors::METERED.with_max_intermediate_cells(1),
             )
             .expect("a refusal is an outcome");
@@ -1352,6 +1402,7 @@ fn admission_refuses_an_estimated_ceiling_breach_before_evaluating() {
         .query_governed(
             &dataset,
             request("SELECT ?s ?o WHERE { ?s <http://example.org/p>+ ?o }"),
+            QueryOptions::EMPTY,
             &QueryGovernors::METERED.with_max_intermediate_cells(1),
         )
         .expect("an observed trip is an outcome");
@@ -1519,7 +1570,7 @@ fn explain_reports_a_deterministic_per_node_ledger() {
 /// The graph a query returns under `governors`, and whether it completed.
 fn graph_outcome(query: &str, governors: &QueryGovernors) -> GovernedOutcome {
     NativeSparqlEngine::new()
-        .query_governed(&fixture(), request(query), governors)
+        .query_governed(&fixture(), request(query), QueryOptions::EMPTY, governors)
         .expect("a tripped governor is an outcome, not a query error")
 }
 
@@ -1544,7 +1595,10 @@ fn assert_graph_cap_boundary(query: &str) -> usize {
         query,
         &QueryGovernors::UNBOUNDED.with_max_answers(size as u64),
     );
-    let GovernedOutcome::Complete { result, evidence } = &at_the_cap else {
+    let GovernedOutcome::Complete {
+        result, evidence, ..
+    } = &at_the_cap
+    else {
         panic!("{query}: cap == size must be complete: {at_the_cap:?}");
     };
     assert_eq!(statement_count(graph_of(result)), size);

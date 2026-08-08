@@ -1,0 +1,10 @@
+outcome	budget-exhausted
+tripped	budget	fuel	fuel-exhausted	limit=30	consumed=31
+certificate	certain	positional-prefix=true
+variables	s	x
+row	<http://example.org/s0>	<http://example.org/pf/r0>
+row	<http://example.org/s0>	<http://example.org/pf/r1>
+row	<http://example.org/s1>	<http://example.org/pf/r0>
+row	<http://example.org/s1>	<http://example.org/pf/r1>
+row	<http://example.org/s2>	<http://example.org/pf/r0>
+row	<http://example.org/s2>	<http://example.org/pf/r1>

@@ -3,11 +3,11 @@
 
 //! Running a discovered case: load data, parse + evaluate the query.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use purrdf::{SerializeGraph, serialize_dataset};
 use purrdf_core::{
-    RdfDataset, RdfTextDirection, SparqlEngine, SparqlRequest, SparqlResult, TermValue,
+    GraphMatch, RdfDataset, RdfTextDirection, SparqlEngine, SparqlRequest, SparqlResult, TermValue,
 };
 use purrdf_entail::{QNode, QTriple};
 use purrdf_sparql_algebra::{
@@ -15,7 +15,8 @@ use purrdf_sparql_algebra::{
     TriplePattern,
 };
 use purrdf_sparql_eval::{
-    LossVocabulary, NativeSparqlEngine, ParserOptions, RemoteQuerySource, StandpointPredicates,
+    LossVocabulary, MemoryRelation, NativeSparqlEngine, ParserOptions, PropertyFunctionRegistry,
+    QueryOptions, RemoteQuerySource, StandpointPredicates,
 };
 
 use crate::manifest::{SparqlTestCase, TestKind};
@@ -31,6 +32,16 @@ const EXT_NS: &str = "https://example.org/ext/";
 /// The loss-declaration namespace used by the first-party loss-aware CONSTRUCT
 /// cases. Like `EXT_NS`, this is harness configuration, not an engine constant.
 const LOSS_NS: &str = "https://example.org/ext/loss/";
+
+/// The **property-function** namespace the first-party relation fixtures spell
+/// their calls under, and the prefix of every IRI `harness_relations` registers.
+/// Like `EXT_NS`, this is HARNESS configuration: PurRDF recognizes a predicate as
+/// a relation call only because this harness configured the namespace, and it
+/// mints no such namespace of its own.
+///
+/// Public because the differential corpora in `tests/` re-evaluate the same suite
+/// cases and must configure the parser identically to be comparing the same query.
+pub const REL_NS: &str = "https://example.org/rel/";
 
 /// The outcome of running a case (before comparison against the expected result).
 #[derive(Debug)]
@@ -52,6 +63,111 @@ pub enum RunOutcome {
         /// `true` when the query text parsed without error.
         parsed_ok: bool,
     },
+}
+
+/// The suite fixture graph the harness relation tables are read out of: an
+/// `rdf:List` of `rdf:List`s per table, in the encoding
+/// [`MemoryRelation::from_graph`] defines.
+const RELATION_TABLES: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/suite/purrdf-property-functions/relations.ttl"
+);
+
+/// The namespace the relation TABLE HEADS in [`RELATION_TABLES`] are named under —
+/// the same test namespace the tables' own values use, because a head is a node of
+/// that fixture graph rather than a call site.
+const TABLE_NS: &str = "http://purrdf.test/relations#";
+
+/// The relation table the harness injects for every non-federated
+/// `QueryEvaluationTest`, built once and shared.
+///
+/// These are HARNESS configuration in exactly the sense `EXT_NS` is: relations under
+/// `REL_NS` a deployment injects as host code, so the rows do NOT come from the
+/// queried dataset. They come from a **fixture graph** instead
+/// (`suite/purrdf-property-functions/relations.ttl`), read through
+/// [`MemoryRelation::from_graph`]: the mapping below still decides which predicate
+/// IRI resolves to which table head and with what arity — that is configuration, and
+/// it is code — but the tuples are data, and a reader checking a case's expected
+/// result reads them in the same RDF the rest of the suite is written in.
+///
+/// Registering them for every case is harmless for the vendored W3C suites: no
+/// vendored query spells a predicate under `REL_NS`, and a registered relation is
+/// only ever reached through a call node the parser mints from that namespace.
+///
+/// Public for the same reason `REL_NS` is: a differential corpus that re-runs a
+/// suite case has to inject the same relations, or it would be measuring a query
+/// whose calls resolve to nothing.
+///
+/// # Panics
+///
+/// If the fixture graph is missing, unparseable, or does not hold every declared
+/// table in the declared shape. A harness whose relations silently came up empty
+/// would turn every relation case into a vacuous pass, so the failure is loud and
+/// immediate rather than deferred to a confusing per-case mismatch.
+#[must_use]
+pub fn harness_relations() -> &'static PropertyFunctionRegistry {
+    static RELATIONS: OnceLock<PropertyFunctionRegistry> = OnceLock::new();
+    RELATIONS.get_or_init(|| {
+        let tables = relation_tables();
+        let mut registry = PropertyFunctionRegistry::new();
+        // (call IRI local name, table head local name, subject arity, object arity).
+        for (call, head, subject_arity, object_arity) in [
+            ("memberOf", "memberOfTable", 1, 1),
+            ("teamSite", "teamSiteTable", 1, 2),
+            ("seeds", "seedsTable", 0, 1),
+        ] {
+            registry.register(
+                format!("{REL_NS}{call}"),
+                Arc::new(memory_table(&tables, head, subject_arity, object_arity)),
+            );
+        }
+        // The MODE-RESTRICTED relation. Every table above declares the all-free mode,
+        // which subsumes every access pattern — so without this one no suite case can
+        // reach mode restriction, the subsumption rule, or the feasibility reorder
+        // that exists to serve a relation that is not computable in every direction.
+        registry.register(
+            format!("{REL_NS}rank"),
+            Arc::new(
+                crate::mode_restricted::BoundSubjectLookup::from_graph(
+                    &*tables,
+                    &table_head("rankTable"),
+                    GraphMatch::Default,
+                )
+                .unwrap_or_else(|e| panic!("harness relation table <{TABLE_NS}rankTable>: {e}")),
+            ),
+        );
+        registry
+    })
+}
+
+/// Parse [`RELATION_TABLES`] into the dataset every table is read out of.
+fn relation_tables() -> Arc<RdfDataset> {
+    let bytes = std::fs::read(RELATION_TABLES)
+        .unwrap_or_else(|e| panic!("read harness relation tables {RELATION_TABLES}: {e}"));
+    purrdf::parse_dataset(&bytes, "text/turtle", Some(BASE))
+        .unwrap_or_else(|e| panic!("parse harness relation tables {RELATION_TABLES}: {e}"))
+}
+
+/// Read one table out of the fixture graph as a [`MemoryRelation`].
+fn memory_table(
+    tables: &RdfDataset,
+    head: &str,
+    subject_arity: usize,
+    object_arity: usize,
+) -> MemoryRelation {
+    MemoryRelation::from_graph(
+        tables,
+        &table_head(head),
+        GraphMatch::Default,
+        subject_arity,
+        object_arity,
+    )
+    .unwrap_or_else(|e| panic!("harness relation table <{TABLE_NS}{head}>: {e}"))
+}
+
+/// The term a table's head IRI denotes in the fixture graph.
+fn table_head(local: &str) -> TermValue {
+    TermValue::iri(format!("{TABLE_NS}{local}"))
 }
 
 /// Load the case's `qt:data` and `qt:graphData` files into a combined dataset.
@@ -288,6 +404,8 @@ pub fn run(
             // suites, which never call the extension functions.
             let parser_options = ParserOptions {
                 extension_fn_namespaces: vec![EXT_NS.to_owned()],
+                property_fn_namespaces: vec![REL_NS.to_owned()],
+                property_fn_iris: Vec::new(),
             };
             let engine = NativeSparqlEngine::new()
                 .with_parser_options(parser_options.clone())
@@ -305,9 +423,23 @@ pub fn run(
                 base_iri: Some(BASE),
                 substitutions: &[],
             };
+            // A federated case resolves `SERVICE` through the injected source; every case
+            // (federated or not) carries the harness relation table for its OUTER
+            // pattern — a call node inside a `SERVICE` body is refused at forwarding
+            // regardless, so handing `query_with_source` the registry only extends what
+            // the query's own top-level patterns can reach. The vendored federated
+            // fixtures happen to spell no `REL_NS` predicate today, but the registry
+            // costs nothing to carry and keeps the two branches from silently
+            // disagreeing about which predicates are calls.
+            let options = QueryOptions {
+                property_functions: Some(harness_relations()),
+                ..QueryOptions::EMPTY
+            };
             let result = match remote {
-                Some(source) => engine.query_with_source(&dataset, request, source),
-                None => engine.query(&dataset, request),
+                Some(source) => engine.query_with_source(&dataset, request, source, options),
+                None => {
+                    engine.query_with_property_functions(&dataset, request, harness_relations())
+                }
             }
             .map_err(|e| format!("evaluate {}: {e}", case.iri))?;
             let ordered = query_is_top_level_ordered(&query_text, &parser_options);
@@ -319,6 +451,8 @@ pub fn run(
             let mut dataset = build_dataset(&case.data, &case.graph_data)?;
             let engine = NativeSparqlEngine::new().with_parser_options(ParserOptions {
                 extension_fn_namespaces: vec![EXT_NS.to_owned()],
+                property_fn_namespaces: vec![REL_NS.to_owned()],
+                property_fn_iris: Vec::new(),
             });
             let request = SparqlRequest {
                 query: &query_text,
@@ -482,7 +616,13 @@ fn collect_bgp<'a>(p: &'a GraphPattern, out: &mut Vec<&'a TriplePattern>) {
         | GraphPattern::Reduced { inner }
         | GraphPattern::Slice { inner, .. }
         | GraphPattern::Group { inner, .. } => collect_bgp(inner, out),
-        GraphPattern::Path { .. } | GraphPattern::Values { .. } => {}
+        // Leaves that hold no triple pattern. A property-function call matches no
+        // triple in any graph — its rows come from the injected relation table — so
+        // it scaffolds no class expression for the OWL-Direct augmentation, exactly
+        // as a path or an inline `VALUES` scaffolds none.
+        GraphPattern::Path { .. }
+        | GraphPattern::Values { .. }
+        | GraphPattern::PropertyFunction(_) => {}
     }
 }
 

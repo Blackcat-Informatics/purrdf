@@ -35,6 +35,7 @@
 
 pub mod compare;
 pub mod manifest;
+pub mod mode_restricted;
 pub mod owl2;
 pub mod owl2_rl;
 pub mod paths;
@@ -168,7 +169,13 @@ fn verdict_of(case: &SparqlTestCase) -> Verdict {
             Ok(()) => Verdict::Pass,
             Err(msg) => Verdict::Fail(msg),
         },
-        Err(msg) => Verdict::Fail(msg),
+        // A run failure is graded, not assumed: a case whose `mf:result` is a `.err`
+        // file EXPECTED to be refused and passes when the diagnostic says what the
+        // file says. Every other case gets its diagnostic back unchanged.
+        Err(msg) => match compare::compare_failure(case, &msg) {
+            Ok(()) => Verdict::Pass,
+            Err(reported) => Verdict::Fail(reported),
+        },
     }
 }
 

@@ -23,7 +23,7 @@ use std::hash::{Hash, Hasher};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 
-use crate::{RdfLiteral, RdfQuad, RdfTerm, RdfTextDirection, RdfTriple};
+use crate::{BlankScope, RdfLiteral, RdfQuad, RdfTerm, RdfTextDirection, RdfTriple, TermValue};
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
@@ -635,6 +635,76 @@ pub(crate) fn extract_term(obj: &Bound<'_, PyAny>) -> PyResult<RdfTerm> {
     Err(PyTypeError::new_err(
         "expected an RDF term (NamedNode, BlankNode, Literal, or Triple)",
     ))
+}
+
+/// Convert a Python term object straight to the value model, under the default
+/// blank scope: [`extract_term`] followed by [`rdf_term_to_value`].
+///
+/// The one converter every seam that hands Python-authored terms to the engine goes
+/// through — a substitution value, a property-function relation cell, a relation
+/// table head — so a literal, an IRI, a blank node, and a triple term all reach the
+/// engine as the same [`TermValue`] whichever keyword carried them.
+pub(super) fn extract_term_value(obj: &Bound<'_, PyAny>) -> PyResult<TermValue> {
+    Ok(rdf_term_to_value(&extract_term(obj)?))
+}
+
+/// Convert a native owned [`RdfTerm`] into the `MutableDataset` [`TermValue`] model
+/// under the default blank scope.
+pub(super) fn rdf_term_to_value(term: &RdfTerm) -> TermValue {
+    rdf_term_to_value_scoped(term, BlankScope::DEFAULT)
+}
+
+/// [`rdf_term_to_value`], tagging every blank node with `scope` (the per-load
+/// isolation scope).
+pub(super) fn rdf_term_to_value_scoped(term: &RdfTerm, scope: BlankScope) -> TermValue {
+    match term {
+        RdfTerm::Iri(iri) => TermValue::Iri(iri.clone()),
+        RdfTerm::BlankNode(label) => blank_value_scoped(label, scope),
+        RdfTerm::Literal(lit) => TermValue::Literal {
+            lexical_form: lit.lexical_form.clone(),
+            datatype: literal_datatype_iri(lit).to_owned(),
+            language: lit.language.clone(),
+            direction: lit.direction,
+        },
+        RdfTerm::Triple(t) => TermValue::Triple {
+            s: Box::new(rdf_term_to_value_scoped(&t.subject, scope)),
+            p: Box::new(TermValue::Iri(t.predicate.clone())),
+            o: Box::new(rdf_term_to_value_scoped(&t.object, scope)),
+        },
+    }
+}
+
+/// Build the `TermValue::Blank` for a surfaced blank-node `label`.
+///
+/// Under a non-default `scope` (the per-load isolation path), the bare label is
+/// tagged with that scope verbatim. Under the DEFAULT scope (a blank node arriving
+/// FROM Python — `add`/`remove`/`contains`/a substitution/pattern), the label may
+/// already be the `purrdfesc{n}_{body}` scope envelope [`BlankScope::qualify_label`]
+/// emitted on the way OUT; decode it back to its `(label, scope)` so a
+/// round-tripped blank matches the stored node (the inverse of `qualify_label`).
+fn blank_value_scoped(label: &str, scope: BlankScope) -> TermValue {
+    if scope == BlankScope::DEFAULT {
+        blank_value_from_external_label(label)
+    } else {
+        TermValue::Blank {
+            label: label.to_owned(),
+            scope,
+        }
+    }
+}
+
+/// Decode a surfaced blank label through [`BlankScope::unqualify_label`], the
+/// EXACT inverse of the [`BlankScope::qualify_label`] rendering this surface
+/// emits: a `purrdfesc{n}_{body}` scope envelope is unwrapped back into its
+/// `(label, scope)` pair, so a label round-tripped through Python matches the
+/// stored node. A label Python authored itself is not an envelope, so it decodes
+/// to itself at the default scope, byte for byte, whatever dots it carries.
+fn blank_value_from_external_label(label: &str) -> TermValue {
+    let (label, scope) = BlankScope::unqualify_label(label);
+    TermValue::Blank {
+        label: label.into_owned(),
+        scope,
+    }
 }
 
 /// Coerce a Python term to an RDF 1.2 subject. RDF 1.2 (unlike the obsolete

@@ -1,0 +1,5 @@
+outcome	budget-exhausted
+tripped	stopped	cancelled
+certificate	certain	positional-prefix=false
+variables	s	x
+row	<http://example.org/s0>	<http://example.org/pf/r0>

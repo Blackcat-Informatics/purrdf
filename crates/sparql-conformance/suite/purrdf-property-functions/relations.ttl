@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# The ROWS of every relation the harness registers (`run::harness_relations`),
+# carried as data rather than as Rust literals.
+#
+# A relation is host code a deployment injects, so WHICH predicate IRI resolves to
+# WHICH table stays harness configuration in `run.rs`. The tuples themselves do not
+# have to be code, and here they are not: each table is an `rdf:List` of `rdf:List`s
+# — one inner list per row, holding that row's values in the flattened order
+# `PfArity` documents (subject-side arguments first, then object-side) — which is
+# exactly the encoding `MemoryRelation::from_graph` reads. Row order is list order,
+# so the relation's emission order is the order written here.
+#
+# Every table head is an IRI rather than a blank node, so `from_graph` can be handed
+# a stable name: the head cell is spelled out (`rdf:first` / `rdf:rest`) and only its
+# tail uses the collection shorthand.
+#
+# This file is NOT a manifest entry. It is the harness's own configuration, loaded
+# once for every case in every suite, and it lives beside the manifest whose cases
+# call the relations it describes.
+
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix :    <http://purrdf.test/relations#> .
+
+# rel:memberOf — 1 subject / 1 object. One team has two members and one has one, so
+# an `ff` enumeration, a `bf` lookup and an `fb` reverse lookup each return a
+# different number of rows.
+:memberOfTable
+    rdf:first ( :ada :alpha ) ;
+    rdf:rest  ( ( :brian :alpha ) ( :chen :beta ) ) .
+
+# rel:teamSite — 1 subject / 2 object: two OUTPUT positions on the object side,
+# which no ordinary triple pattern can bind at once.
+:teamSiteTable
+    rdf:first ( :alpha "Zurich" 2 ) ;
+    rdf:rest  ( ( :beta "Osaka" 1 ) ) .
+
+# rel:seeds — 0 subject / 1 object: a generator with an EMPTY subject side, so
+# `() rel:seeds ?t` takes no input and enumerates the whole table.
+:seedsTable
+    rdf:first ( :alpha ) ;
+    rdf:rest  ( ( :beta ) ) .
+
+# rel:rank — 1 subject / 1 object, and the ONLY table not read as a
+# `MemoryRelation`: it is handed to `mode_restricted::BoundSubjectLookup`, which
+# declares the single mode `bf`. Every other table declares the all-free mode, so
+# this is the one whose calls must be ordered into feasibility before they can run.
+:rankTable
+    rdf:first ( :ada 3 ) ;
+    rdf:rest  ( ( :brian 1 ) ( :chen 2 ) ) .

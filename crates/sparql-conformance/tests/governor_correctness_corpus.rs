@@ -36,10 +36,10 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use purrdf_core::{RdfDataset, SparqlEngine, SparqlRequest, SparqlResult};
-use purrdf_sparql_conformance::manifest::TestKind;
+use purrdf_core::{RdfDataset, SparqlRequest, SparqlResult};
+use purrdf_sparql_conformance::manifest::{ExpectedResult, TestKind};
 use purrdf_sparql_eval::{
-    EvalOptions, GovernedOutcome, NativeSparqlEngine, ParserOptions, QueryGovernors,
+    EvalOptions, GovernedOutcome, NativeSparqlEngine, ParserOptions, QueryGovernors, QueryOptions,
     StandpointPredicates,
 };
 
@@ -55,6 +55,8 @@ fn harness_engine() -> NativeSparqlEngine {
     NativeSparqlEngine::new()
         .with_parser_options(ParserOptions {
             extension_fn_namespaces: vec![EXT_NS.to_owned()],
+            property_fn_namespaces: vec![purrdf_sparql_conformance::run::REL_NS.to_owned()],
+            property_fn_iris: Vec::new(),
         })
         .with_standpoint_predicates(StandpointPredicates::new(
             format!("{EXT_NS}accordingTo"),
@@ -134,8 +136,20 @@ fn ungoverned(
     remote: Option<&purrdf_sparql_eval::LocalRemoteQuerySource>,
 ) -> Result<SparqlResult, String> {
     match remote {
-        Some(source) => engine.query_with_source(dataset, request(query), source),
-        None => engine.query(dataset, request(query)),
+        Some(source) => engine.query_with_source(
+            dataset,
+            request(query),
+            source,
+            QueryOptions {
+                property_functions: Some(purrdf_sparql_conformance::run::harness_relations()),
+                ..QueryOptions::EMPTY
+            },
+        ),
+        None => engine.query_with_property_functions(
+            dataset,
+            request(query),
+            purrdf_sparql_conformance::run::harness_relations(),
+        ),
     }
     .map_err(|error| error.to_string())
 }
@@ -159,6 +173,12 @@ fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
     let mut compared = 0_usize;
     let mut skipped = 0_usize;
     let mut agreed_errors = 0_usize;
+    // Cases whose manifest expects the run to be REFUSED (a `.err` `mf:result`): the
+    // seam's hard errors. They cannot produce two comparable answers, but they are
+    // not excused either — D0 still owes that both paths refuse, and refuse
+    // identically, which the `(Err, Err)` arm below checks. Counted so the identity
+    // asserted at the end stays exact rather than being loosened to an inequality.
+    let mut expected_failures = 0_usize;
     let mut mismatches: Vec<(String, String)> = Vec::new();
 
     for manifest in &manifests {
@@ -169,6 +189,9 @@ fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
                 continue;
             }
             cases += 1;
+            if matches!(case.expected, ExpectedResult::EvalError(_)) {
+                expected_failures += 1;
+            }
             let query = std::fs::read_to_string(&case.query)
                 .unwrap_or_else(|error| panic!("read query {}: {error}", case.query.display()));
 
@@ -193,18 +216,34 @@ fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
                     &dataset,
                     request(&query),
                     source,
+                    QueryOptions::EMPTY,
                     &QueryGovernors::UNBOUNDED,
                 ),
+                // The relation table travels on the governed path too, in the same
+                // options every governed entry takes: a first-party relation case must
+                // be COMPARED here, and a governed run whose calls resolved to nothing
+                // would be comparing a different query against the oracle.
                 None => governed_engine.query_governed(
                     &dataset,
                     request(&query),
+                    QueryOptions {
+                        property_functions: Some(
+                            purrdf_sparql_conformance::run::harness_relations(),
+                        ),
+                        ..QueryOptions::EMPTY
+                    },
                     &QueryGovernors::UNBOUNDED,
                 ),
             }
             .map_err(|error| error.to_string());
 
             match (expected, actual) {
-                (Ok(expected), Ok(GovernedOutcome::Complete { result, evidence })) => {
+                (
+                    Ok(expected),
+                    Ok(GovernedOutcome::Complete {
+                        result, evidence, ..
+                    }),
+                ) => {
                     compared += 1;
                     if !evidence.is_complete() {
                         mismatches.push((
@@ -287,14 +326,17 @@ fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
         "the query-evaluation corpus shrank: only {cases} cases were enumerated"
     );
     // Every case in the corpus is genuinely exercised: nothing is skipped for unloadable
-    // fixtures, and nothing is excused by both paths agreeing to fail. A floor on
-    // `compared` alone would let the walk quietly stop reaching cases as long as enough
-    // of them still worked, so the counts are pinned as an identity instead.
+    // fixtures, and the only cases excused from producing two comparable answers are the
+    // ones whose manifest EXPECTS a refusal — where agreeing to fail, identically, is the
+    // whole of what D0 can owe. A floor on `compared` alone would let the walk quietly
+    // stop reaching cases as long as enough of them still worked, so the counts are
+    // pinned as an identity instead.
     assert_eq!(
-        (compared, skipped, agreed_errors),
-        (cases, 0, 0),
+        (compared + agreed_errors, skipped, agreed_errors),
+        (cases, 0, expected_failures),
         "the byte-identity claim rests on the comparisons, not on the enumeration: \
          {compared} of {cases} cases produced two comparable answers, {skipped} were \
-         skipped and {agreed_errors} agreed to fail"
+         skipped, and {agreed_errors} agreed to fail against {expected_failures} case(s) \
+         whose manifest expects a refusal"
     );
 }

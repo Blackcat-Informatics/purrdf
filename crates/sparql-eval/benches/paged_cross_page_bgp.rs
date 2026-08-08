@@ -31,7 +31,7 @@ use purrdf_core::{
     DatasetView, InMemoryPageProvider, PagedDataset, RdfDataset, RdfDatasetBuilder, RdfLiteral,
     TermId, TermValue,
 };
-use purrdf_sparql_eval::NativeSparqlEngine;
+use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
 
 /// Entity count. Each entity contributes 3 quads (`knows`/`name`/`age`), so 200
 /// entities is 600 triples — a "few hundred" moderate corpus.
@@ -154,10 +154,10 @@ fn bench_cross_page_bgp(c: &mut Criterion) {
     // silently benchmark a no-op). `age > 30` keeps roughly (60 - 13) / 60 of the
     // ring, so this is comfortably non-empty for `ENTITIES = 200`.
     let single_rows = engine
-        .query_prepared(&single, &prepared, &[])
+        .query_prepared(&single, &prepared, &[], QueryOptions::EMPTY)
         .expect("single query");
     let paged_rows = engine
-        .query_prepared_view(&paged, &prepared, &[])
+        .query_prepared_view(&paged, &prepared, &[], QueryOptions::EMPTY)
         .expect("paged query");
     let row_count = |r: &purrdf_core::SparqlResult| match r {
         purrdf_core::SparqlResult::Solutions { rows, .. } => rows.len(),
@@ -181,6 +181,7 @@ fn bench_cross_page_bgp(c: &mut Criterion) {
                     criterion::black_box(&single),
                     criterion::black_box(&prepared),
                     &[],
+                    QueryOptions::EMPTY,
                 )
                 .expect("single query");
             criterion::black_box(result);
@@ -193,6 +194,7 @@ fn bench_cross_page_bgp(c: &mut Criterion) {
                     criterion::black_box(&paged),
                     criterion::black_box(&prepared),
                     &[],
+                    QueryOptions::EMPTY,
                 )
                 .expect("paged query");
             criterion::black_box(result);

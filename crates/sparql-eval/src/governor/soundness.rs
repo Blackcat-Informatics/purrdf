@@ -441,6 +441,24 @@ where
             variables: _,
             bindings: _,
         } => false,
+        // A property-function call is a leaf too: its argument vectors are term
+        // positions, not nested graph patterns, so there is no child to classify and no
+        // expression to walk. It is a row source in the same sense `Bgp` and `Values`
+        // are — the relation emits a deterministic, contractually ordered sequence
+        // (see `crate::property_fn::PfCursor`) that the engine preserves — so it needs
+        // no edge of its own and inherits whatever context the spine above it carries,
+        // exactly like the other three leaves. That is also what makes a row ceiling
+        // applicable at this node: stopping the cursor after `k` rows yields the FIRST
+        // `k` rows of the call, not merely some `k` of them.
+        //
+        // That ceiling reaches the dispatch by one of two routes, and which one depends
+        // on the shape the call sits in. Written with nothing before it in its group the
+        // call IS a node of the plan, evaluated at its own address, and it consumes the
+        // ceiling recorded here. Written after a data pattern it is the right operand of
+        // a `Lateral`, which `crate::binop::eval_lateral` fuses into one driven operator
+        // — and the fused operator's rows are the `Lateral`'s output rows, so it consumes
+        // the `Lateral`'s ceiling instead. See [`child_row_ceiling`]'s `Lateral` arm.
+        GraphPattern::PropertyFunction(_) => false,
 
         // A hash join's output is left-major (each left row's matches, in left order), so
         // a prefix of the left input yields a prefix of the output, while a prefix of the
@@ -452,6 +470,16 @@ where
         }
         // `LATERAL` evaluates its right side once per left row and emits left-major, so
         // it has exactly the join's shape.
+        //
+        // The bag-only right edge is kept even for the property-function right operand
+        // that `crate::binop::eval_lateral` fuses into this node. A truncation from the
+        // fused dispatch really is a positional prefix of this node's output, so the
+        // stronger edge would be sound for that one shape — but this classification is a
+        // property of the ALGEBRA, read by three consumers, and making one child's edge
+        // depend on which operator the evaluator happens to fuse would make it a property
+        // of the evaluator instead. The weaker edge only ever withholds a licence, and
+        // the fusion needs nothing from it: it consumes the ceiling recorded at this
+        // node, not one pushed across this edge.
         GraphPattern::Lateral { left, right } => {
             visit(PatternPart::Child(left, ChildEdge::MONOTONE))
                 || visit(PatternPart::Child(right, ChildEdge::MONOTONE_BAG))
@@ -808,7 +836,8 @@ pub(crate) const fn child_row_ceiling(
         | GraphPattern::Values {
             variables: _,
             bindings: _,
-        } => None,
+        }
+        | GraphPattern::PropertyFunction(_) => None,
 
         // One row in, one row out, in order: `BIND` adds a column, `GRAPH` rescopes, and
         // `PROJECT` drops columns. None of them drops, adds, or moves a row.
@@ -851,6 +880,41 @@ pub(crate) const fn child_row_ceiling(
             }
         }
 
+        // `LATERAL` is the arm that looks pushable and is not, so it is stated on its own
+        // rather than left to inherit the paragraph below.
+        //
+        // The block structure is not the problem. The operator emits left-major — each
+        // left row's block, in left order — so the first `k` output rows all come from the
+        // first few blocks, and no single invocation of the right side has to produce more
+        // than `k` rows however far into the output its block starts.
+        //
+        // What defeats the count is that this operator can DROP a row. The generic path
+        // substitutes the left row into the right operand, evaluates the rewritten
+        // pattern, and then applies the lateral join's **compatibility test** to what comes
+        // back — the substitution is IRI-only by doctrine
+        // ([`crate::expr::substitute_pattern`]), so a literal, blank or quoted-triple
+        // binding is reconciled afterwards instead of being pushed in. `k` rows out of the
+        // right operand can therefore yield fewer than `k` output rows, and no finite
+        // prefix of that child is enough — exactly as `k` intermediate rows of a BGP join
+        // order can yield fewer than `k` answers, which is why [`crate::bgp`] applies its
+        // ceiling to the LAST stage and to no other. A number pushed here would let a
+        // query report a short answer as a complete one. (The left arm fails the same test
+        // from the other side: `k` left rows whose blocks are all empty produce no output
+        // row at all.)
+        //
+        // The correlated property-function call — `Lateral(left, PropertyFunction)`, the
+        // shape the parser builds for a call written after a data pattern — still gets its
+        // ceiling, by a route that creates no new licence. [`crate::binop::eval_lateral`]
+        // FUSES that pair into a single driven operator: the dispatch reads each left row
+        // itself, so the rows it emits are already joined and are this `Lateral`'s OUTPUT
+        // rows, one for one and in emission order. It therefore consumes the ceiling
+        // recorded at **this** node — the node whose output those rows are, and whose own
+        // certificate licensed it — rather than one pushed down to the call node. Nothing
+        // is licensed below: the call node inherits this node's bag-only right edge (see
+        // [`visit_pattern_parts`]) and so admits no pushdown of its own, which is exactly
+        // right for the unfused path, where that node is never the one evaluated.
+        GraphPattern::Lateral { left: _, right: _ } => None,
+
         // Everything below can drop rows, duplicate them, reorder them, or interleave two
         // arms, so no finite prefix of a child bounds the parent's first `k` rows.
         //
@@ -859,7 +923,6 @@ pub(crate) const fn child_row_ceiling(
         // `DISTINCT`/`REDUCED` are the other trap — `k` distinct rows can take arbitrarily
         // many input rows to reach.
         GraphPattern::Join { left: _, right: _ }
-        | GraphPattern::Lateral { left: _, right: _ }
         | GraphPattern::Union { left: _, right: _ }
         | GraphPattern::LeftJoin {
             left: _,
@@ -1014,13 +1077,31 @@ const fn pattern_label_index(pattern: &GraphPattern) -> usize {
             variables: _,
             aggregates: _,
         } => 17,
+        GraphPattern::PropertyFunction(_) => 18,
     }
 }
 
 /// Every [`GraphPattern`] variant's stable label, indexed by [`pattern_label_index`].
-pub(crate) const PATTERN_LABELS: [&str; 18] = [
-    "Bgp", "Path", "Join", "LeftJoin", "Lateral", "Filter", "Union", "Graph", "Extend", "Minus",
-    "Service", "Values", "OrderBy", "Project", "Distinct", "Reduced", "Slice", "Group",
+pub(crate) const PATTERN_LABELS: [&str; 19] = [
+    "Bgp",
+    "Path",
+    "Join",
+    "LeftJoin",
+    "Lateral",
+    "Filter",
+    "Union",
+    "Graph",
+    "Extend",
+    "Minus",
+    "Service",
+    "Values",
+    "OrderBy",
+    "Project",
+    "Distinct",
+    "Reduced",
+    "Slice",
+    "Group",
+    "PropertyFunction",
 ];
 
 /// `pattern`'s variant label, for diagnostics and for the coverage test.
@@ -1555,6 +1636,108 @@ mod tests {
         });
     }
 
+    /// The `Lateral(Bgp, PropertyFunction)` the parser builds for a call written after a
+    /// data pattern, under `LIMIT 2` — `Slice(Project(Lateral(..)))`.
+    fn correlated_call_plan(sorted: bool) -> GraphPattern {
+        let call = GraphPattern::PropertyFunction(purrdf_sparql_algebra::PropertyFunctionCall {
+            iri: "https://example.org/ns#split".to_owned(),
+            subject_args: vec![TermPattern::Variable(Variable::new("s"))],
+            object_args: vec![TermPattern::Variable(Variable::new("x"))],
+        });
+        let lateral = GraphPattern::Lateral {
+            left: boxed(bgp()),
+            right: boxed(call),
+        };
+        let inner = if sorted {
+            GraphPattern::OrderBy {
+                inner: boxed(lateral),
+                expression: vec![OrderExpression::Asc(Expression::Variable(Variable::new(
+                    "x",
+                )))],
+            }
+        } else {
+            lateral
+        };
+        GraphPattern::Slice {
+            inner: boxed(GraphPattern::Project {
+                inner: boxed(inner),
+                variables: vec![Variable::new("s"), Variable::new("x")],
+            }),
+            start: 0,
+            length: Some(2),
+        }
+    }
+
+    /// The `Lateral` of [`correlated_call_plan`], and the call node under it: the first
+    /// `Lateral` on the single spine down from the root.
+    fn lateral_and_call(plan: &GraphPattern) -> (&GraphPattern, &GraphPattern) {
+        let mut node = plan;
+        loop {
+            if let GraphPattern::Lateral { left: _, right } = node {
+                return (node, right);
+            }
+            let mut child = None;
+            visit_classified_children(node, &mut |candidate, _edge| {
+                child = Some(candidate);
+                true
+            });
+            node = child.expect("the spine reaches a Lateral before a leaf");
+        }
+    }
+
+    #[test]
+    fn lateral_pushes_no_row_ceiling_to_either_arm() {
+        let plan = GraphPattern::Lateral {
+            left: boxed(bgp()),
+            right: boxed(other_bgp()),
+        };
+        // The left arm: `k` left rows whose blocks are all empty produce no output row,
+        // so no finite prefix of it bounds the parent's first `k`.
+        assert_eq!(child_row_ceiling(&plan, 0, 10), None);
+        // The right arm: the generic path applies the lateral join's compatibility test
+        // to what the substituted operand returns, and that test drops rows — exactly the
+        // gap that stops `crate::bgp` from applying its ceiling to any stage but the last.
+        assert_eq!(child_row_ceiling(&plan, 1, 10), None);
+    }
+
+    #[test]
+    fn a_correlated_call_is_licensed_at_its_lateral_and_nowhere_below() {
+        // The licence the fused property-function dispatch consumes. It is recorded at
+        // the `Lateral` — the node whose OUTPUT the fused operator's rows are — and NOT
+        // at the call node, which is never evaluated at its own address in this shape.
+        let plan = correlated_call_plan(false);
+        let pushdown = plan_cap_pushdown(&plan, Some(u64::MAX));
+        let (lateral, call) = lateral_and_call(&plan);
+        assert_eq!(
+            pushdown.ceiling_at(std::ptr::from_ref(lateral) as usize),
+            Some(2),
+            "LIMIT 2 reaches the Lateral down a spine of Project and Slice, both of which \
+             are 1:1 and position-for-position"
+        );
+        assert_eq!(
+            pushdown.ceiling_at(std::ptr::from_ref(call) as usize),
+            None,
+            "the call node inherits the Lateral's bag-only right edge, so it admits no \
+             pushdown of its own — which is right for the unfused path, where the node \
+             evaluated is a per-row substituted copy at a different address"
+        );
+
+        // And the guard that must refuse: under a sort, the first rows of this node's
+        // output are not the answer's first rows, so nothing is licensed at all.
+        let sorted = correlated_call_plan(true);
+        let sorted_pushdown = plan_cap_pushdown(&sorted, Some(u64::MAX));
+        let (sorted_lateral, sorted_call) = lateral_and_call(&sorted);
+        assert!(!context_at(&sorted, &[0, 0, 0]).admits_cap_pushdown());
+        assert_eq!(
+            sorted_pushdown.ceiling_at(std::ptr::from_ref(sorted_lateral) as usize),
+            None
+        );
+        assert_eq!(
+            sorted_pushdown.ceiling_at(std::ptr::from_ref(sorted_call) as usize),
+            None
+        );
+    }
+
     // ---- exhaustiveness ---------------------------------------------------
 
     /// A plan containing every [`GraphPattern`] variant at least once.
@@ -1583,12 +1766,22 @@ mod tests {
             name: NamedNodePattern::NamedNode(NamedNode::new_unchecked("https://example.org/g")),
             inner: boxed(path),
         };
+        let property_function =
+            GraphPattern::PropertyFunction(purrdf_sparql_algebra::PropertyFunctionCall {
+                iri: "https://example.org/ns#split".to_owned(),
+                subject_args: vec![TermPattern::Variable(Variable::new("s"))],
+                object_args: vec![TermPattern::Variable(Variable::new("o"))],
+            });
         let joined = GraphPattern::Join {
             left: boxed(graph),
             right: boxed(values),
         };
-        let lateral = GraphPattern::Lateral {
+        let called = GraphPattern::Join {
             left: boxed(joined),
+            right: boxed(property_function),
+        };
+        let lateral = GraphPattern::Lateral {
+            left: boxed(called),
             right: boxed(service),
         };
         let optional = GraphPattern::LeftJoin {
@@ -1694,9 +1887,12 @@ mod tests {
 
         assert_eq!(
             leaves,
-            ["Bgp", "Path", "Values"].into_iter().collect(),
-            "only BGP, property paths and inline VALUES are leaves; anything else \
-             reporting no children means its subtree escaped classification"
+            ["Bgp", "Path", "PropertyFunction", "Values"]
+                .into_iter()
+                .collect(),
+            "only BGP, property paths, inline VALUES and property-function calls are \
+             leaves; anything else reporting no children means its subtree escaped \
+             classification"
         );
         assert_eq!(with_children.len(), PATTERN_LABELS.len() - leaves.len());
     }

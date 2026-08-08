@@ -35,6 +35,10 @@
 //!   blank node per row, so the tracked path (§16.2 freshness bookkeeping) runs for
 //!   real. Comparing this against `i_construct_blank_free` at equal row/data-blank
 //!   volume is what makes the fast path's savings visible in the report.
+//! - `k_property_function_join` — a 30k-row graph arm driving a **property-function**
+//!   call into a host-injected 50-row relation: one `bf` invocation per driving row,
+//!   which is the per-row dispatch path (argument evaluation, cursor open, filtered
+//!   scan, row bind) beside the ordinary joins above.
 //!
 //! Report-only, `cargo bench -p purrdf-sparql-eval --bench query_eval` (the
 //! `make bench` lane) — excluded from `make check`. Timings are not asserted;
@@ -46,9 +50,9 @@ use criterion::{Criterion, criterion_group, criterion_main};
 
 use purrdf_core::{
     BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest,
-    SparqlResult,
+    SparqlResult, TermValue,
 };
-use purrdf_sparql_eval::NativeSparqlEngine;
+use purrdf_sparql_eval::{MemoryRelation, NativeSparqlEngine, PropertyFunctionRegistry};
 
 /// Entity count. Each person contributes ~10 quads, so 30k people ≈ 303k quads
 /// (within the 200k–500k target band).
@@ -233,6 +237,40 @@ CONSTRUCT { ?p ex:related _:x } WHERE {
   ?p ex:note ?n .
 }";
 
+/// (k) A **property-function** join: the 30k-row `ex:city` arm drives a call into a
+/// host-injected relation, which is invoked once per driving row with its subject
+/// position bound (`bf`) and answers from a 50-row in-memory table no index sized.
+/// This is the per-row dispatch path — argument evaluation, cursor open, filtered
+/// scan, row bind — laid beside the ordinary joins above.
+const Q_K: &str = "\
+PREFIX ex: <https://example.org/>
+PREFIX rel: <https://example.org/rel/>
+SELECT ?p ?region WHERE {
+  ?p ex:city ?c .
+  ?c rel:cityRegion ?region .
+}";
+
+/// The namespace the benchmark host configures for its one relation.
+const REL_NS: &str = "https://example.org/rel/";
+
+/// The relation case (k) calls: each of the 50 synthetic cities to one of 5 regions.
+fn city_regions() -> PropertyFunctionRegistry {
+    let rows = (0..50)
+        .map(|c| {
+            vec![
+                TermValue::iri(format!("{EX}city{c}")),
+                TermValue::iri(format!("{EX}region{}", c % 5)),
+            ]
+        })
+        .collect();
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register(
+        format!("{REL_NS}cityRegion"),
+        Arc::new(MemoryRelation::new(1, 1, rows).expect("every row is two values wide")),
+    );
+    registry
+}
+
 /// The full case list as `(criterion id, query text, minimum expected rows)`.
 /// The row floor is a sanity check that every case does real work (an empty
 /// result would silently benchmark a no-op plan).
@@ -261,6 +299,33 @@ fn run(engine: &NativeSparqlEngine, ds: &Arc<RdfDataset>, query: &str) -> usize 
             },
         )
         .expect("query evaluates");
+    count(result)
+}
+
+/// [`run`] with a property-function registry injected — the entry case (k) needs, and
+/// the only difference between the two paths.
+fn run_with_relations(
+    engine: &NativeSparqlEngine,
+    ds: &Arc<RdfDataset>,
+    query: &str,
+    relations: &PropertyFunctionRegistry,
+) -> usize {
+    let result = engine
+        .query_with_property_functions(
+            ds,
+            SparqlRequest {
+                query,
+                base_iri: None,
+                substitutions: &[],
+            },
+            relations,
+        )
+        .expect("query evaluates");
+    count(result)
+}
+
+/// The size of one result, whatever shape it has.
+fn count(result: SparqlResult) -> usize {
     match result {
         SparqlResult::Solutions { rows, .. } => rows.len(),
         SparqlResult::Graph(graph) => graph.quad_count(),
@@ -283,6 +348,16 @@ fn bench_query_eval(c: &mut Criterion) {
         );
     }
 
+    // Case (k) runs through the registry-carrying entry, so it warms up and benches
+    // beside the others rather than inside their table.
+    let relations = city_regions();
+    let rows = run_with_relations(&engine, &ds, Q_K, &relations);
+    assert!(
+        rows >= PEOPLE,
+        "case k_property_function_join returned {rows} rows (< {PEOPLE}) — the benchmark \
+         would be a no-op"
+    );
+
     let mut group = c.benchmark_group("query_eval");
     // Whole-dataset evaluations run tens of milliseconds; keep sampling light so
     // the full mix (and `--profile-time` runs under `perf`) stays tractable.
@@ -292,6 +367,9 @@ fn bench_query_eval(c: &mut Criterion) {
             bencher.iter(|| criterion::black_box(run(&engine, &ds, query)));
         });
     }
+    group.bench_function("k_property_function_join", |bencher| {
+        bencher.iter(|| criterion::black_box(run_with_relations(&engine, &ds, Q_K, &relations)));
+    });
     group.finish();
 }
 

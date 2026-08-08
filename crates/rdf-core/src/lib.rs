@@ -32,6 +32,10 @@
 
 // Blank-node label syntax shared by parser and serializer egress contracts.
 pub mod blank_label;
+// The arity-generic binding-pattern adornment lattice shared by the Datalog
+// evaluator's demand keying and the SPARQL property-function access-pattern
+// feasibility check.
+pub mod binding_pattern;
 pub mod bundle;
 // Narrow purrdf backend traits (P2d): term interning, parser ingress,
 // SPARQL execution, and serializer egress. PyO3-free, oxigraph-free — pure

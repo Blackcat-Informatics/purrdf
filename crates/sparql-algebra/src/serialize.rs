@@ -29,7 +29,9 @@
 
 use core::fmt::Write as _;
 
-use crate::algebra::{AggregateExpression, Expression, Function, GraphPattern, OrderExpression};
+use crate::algebra::{
+    AggregateExpression, Expression, Function, GraphPattern, OrderExpression, PropertyFunctionCall,
+};
 use crate::ast::{
     BaseDirection, GroundTerm, GroundTriple, Literal, NamedNodePattern, RDF_LANG_STRING,
     TermPattern, TriplePattern, Variable, XSD_STRING,
@@ -117,7 +119,7 @@ fn fmt_group_body(s: &mut String, p: &GraphPattern) {
         GraphPattern::Join { left, right } => {
             fmt_group_body(s, left);
             s.push(' ');
-            fmt_group_body(s, right);
+            fmt_join_right_operand(s, right);
         }
         GraphPattern::LeftJoin {
             left,
@@ -136,10 +138,21 @@ fn fmt_group_body(s: &mut String, p: &GraphPattern) {
         }
         GraphPattern::Lateral { left, right } => {
             fmt_group_body(s, left);
+            if matches!(**right, GraphPattern::PropertyFunction(_)) {
+                // A property function is written as a triple, and the parser
+                // rebuilds exactly this lateral chain from that surface form, so
+                // the LATERAL wrapper is neither needed nor re-parseable here.
+                if !is_empty_group_body(left) {
+                    s.push(' ');
+                }
+                fmt_group_body(s, right);
+                return;
+            }
             s.push_str(" LATERAL { ");
             fmt_group_body(s, right);
             s.push_str(" }");
         }
+        GraphPattern::PropertyFunction(call) => fmt_property_function(s, call),
         GraphPattern::Filter { expr, inner } => {
             fmt_group_body(s, inner);
             s.push_str(" FILTER(");
@@ -202,6 +215,92 @@ fn fmt_group_body(s: &mut String, p: &GraphPattern) {
         | GraphPattern::OrderBy { .. }
         | GraphPattern::Group { .. } => unreachable!("handled by is_subselect_node"),
     }
+}
+
+/// Emit the RIGHT operand of a `Join`, braced as its own group when it contains
+/// a property function.
+///
+/// A property function renders as a plain triple, and the parser folds every
+/// property-function triple of ONE triples block into a single left-deep
+/// `Lateral` chain rooted at the triples written before it. A right operand that
+/// was a separate group (`{ … }`, a `GRAPH`, a nested join) would therefore be
+/// absorbed into the left operand's chain on re-parse; the explicit `{ … }`
+/// keeps it its own group and the round-trip exact. A LEFT operand needs no such
+/// brace: the parser's own left-deep assembly reproduces it. Everything without
+/// a property function keeps the historical brace-free rendering.
+fn fmt_join_right_operand(s: &mut String, p: &GraphPattern) {
+    if contains_property_function(p) && !is_subselect_node(p) {
+        s.push_str("{ ");
+        fmt_group_body(s, p);
+        s.push_str(" }");
+    } else {
+        fmt_group_body(s, p);
+    }
+}
+
+/// Does this pattern contain a [`GraphPattern::PropertyFunction`] anywhere in the
+/// group structure it renders inline (it does not descend into `Expression`s,
+/// which are always emitted inside their own braces)?
+fn contains_property_function(p: &GraphPattern) -> bool {
+    match p {
+        GraphPattern::PropertyFunction(_) => true,
+        GraphPattern::Join { left, right }
+        | GraphPattern::Lateral { left, right }
+        | GraphPattern::Union { left, right }
+        | GraphPattern::Minus { left, right }
+        | GraphPattern::LeftJoin { left, right, .. } => {
+            contains_property_function(left) || contains_property_function(right)
+        }
+        GraphPattern::Filter { inner, .. }
+        | GraphPattern::Graph { inner, .. }
+        | GraphPattern::Service { inner, .. }
+        | GraphPattern::Extend { inner, .. }
+        | GraphPattern::Project { inner, .. }
+        | GraphPattern::Distinct { inner }
+        | GraphPattern::Reduced { inner }
+        | GraphPattern::Slice { inner, .. }
+        | GraphPattern::OrderBy { inner, .. }
+        | GraphPattern::Group { inner, .. } => contains_property_function(inner),
+        GraphPattern::Bgp { .. } | GraphPattern::Path { .. } | GraphPattern::Values { .. } => false,
+    }
+}
+
+/// `true` for a group body that renders as the empty string (the identity table
+/// `Z`), so a caller can skip the separating space before the next element.
+fn is_empty_group_body(p: &GraphPattern) -> bool {
+    matches!(p, GraphPattern::Bgp { patterns } if patterns.is_empty())
+}
+
+/// Emit a property-function call as the triple `subjectArgs <iri> objectArgs .`
+///
+/// The IRI is re-emitted byte-exact (PurRDF fabricates no namespace on output).
+/// A ONE-element argument vector renders as the bare term; a zero- or
+/// multi-element vector renders as collection syntax `( … )`, which the parser
+/// reads back as an argument list — never as an `rdf:first`/`rdf:rest` chain —
+/// because the predicate names a property function.
+fn fmt_property_function(s: &mut String, call: &PropertyFunctionCall) {
+    fmt_property_function_args(s, &call.subject_args);
+    let _ = write!(s, " <{}> ", call.iri);
+    fmt_property_function_args(s, &call.object_args);
+    s.push_str(" .");
+}
+
+/// Emit one side of a property-function call (see [`fmt_property_function`]).
+fn fmt_property_function_args(s: &mut String, args: &[TermPattern]) {
+    if let [single] = args {
+        fmt_term(s, single);
+        return;
+    }
+    if args.is_empty() {
+        s.push_str("()");
+        return;
+    }
+    s.push('(');
+    for arg in args {
+        s.push(' ');
+        fmt_term(s, arg);
+    }
+    s.push_str(" )");
 }
 
 /// Emit a basic graph pattern (a conjunction of triple patterns).
@@ -780,7 +879,7 @@ fn fmt_aggregate(s: &mut String, agg: &AggregateExpression) {
 mod tests {
     use super::*;
     use crate::Query;
-    use crate::parser::SparqlParser;
+    use crate::parser::{ParserOptions, SparqlParser};
 
     /// Parse a full query and return its root pattern.
     fn pattern_of(query: &str) -> GraphPattern {
@@ -975,5 +1074,161 @@ mod tests {
         let mut s = String::new();
         fmt_aggregate(&mut s, &agg);
         assert_eq!(s, "GROUP_CONCAT(?x; SEPARATOR=\"|\")");
+    }
+
+    // ── property functions ────────────────────────────────────────────────────
+
+    /// The caller-configured property-function namespace these tests use.
+    const PF_NS: &str = "https://example.org/pf/";
+
+    /// A prologue binding `pf:` to [`PF_NS`] and `ex:` to a data namespace.
+    const PF_PROLOGUE: &str =
+        "PREFIX pf: <https://example.org/pf/>\nPREFIX ex: <https://example.org/d/>\n";
+
+    /// Options with [`PF_NS`] configured as a property-function namespace.
+    fn pf_options() -> ParserOptions {
+        ParserOptions {
+            extension_fn_namespaces: Vec::new(),
+            property_fn_namespaces: vec![PF_NS.to_owned()],
+            property_fn_iris: Vec::new(),
+        }
+    }
+
+    /// Parse a SELECT under [`pf_options`] and return its WHERE body.
+    fn pf_body(query: &str) -> GraphPattern {
+        let text = format!("{PF_PROLOGUE}{query}");
+        match SparqlParser::new()
+            .parse_query_with(&text, &pf_options())
+            .unwrap_or_else(|e| panic!("parse `{text}`: {e:?}"))
+        {
+            Query::Select { pattern, .. } => where_body(&pattern),
+            other => panic!("expected SELECT, got {other:?}"),
+        }
+    }
+
+    /// Serialize the WHERE body of `query` and re-parse it under the SAME
+    /// options: the algebra must come back identical, and the emitted text must
+    /// carry the byte-exact predicate IRI. Returns the serialized text.
+    fn assert_pf_roundtrip(query: &str) -> String {
+        let body = pf_body(query);
+        let text = pattern_to_select_query(&body);
+        let reparsed = match SparqlParser::new()
+            .parse_query_with(&text, &pf_options())
+            .unwrap_or_else(|e| panic!("re-parse `{text}`: {e:?}"))
+        {
+            Query::Select { pattern, .. } => where_body(&pattern),
+            other => panic!("expected SELECT, got {other:?}"),
+        };
+        assert_eq!(
+            reparsed, body,
+            "round-trip mismatch for `{query}`\n serialized: {text}"
+        );
+        text
+    }
+
+    #[test]
+    fn roundtrip_property_function_unary() {
+        let text = assert_pf_roundtrip("SELECT * WHERE { ?s pf:related ?o }");
+        assert!(
+            text.contains(&format!("?s <{PF_NS}related> ?o .")),
+            "a 1-ary side emits the bare term; got: {text}"
+        );
+    }
+
+    #[test]
+    fn roundtrip_property_function_n_ary_object() {
+        let text = assert_pf_roundtrip("SELECT * WHERE { ?s pf:solve ( ?a ?b ?c ) }");
+        assert!(
+            text.contains("( ?a ?b ?c )"),
+            "a multi-element side emits collection syntax; got: {text}"
+        );
+    }
+
+    #[test]
+    fn roundtrip_property_function_n_ary_subject() {
+        let text = assert_pf_roundtrip("SELECT * WHERE { ( ?a ?b ) pf:solve ?o }");
+        assert!(text.contains("( ?a ?b )"), "got: {text}");
+    }
+
+    #[test]
+    fn roundtrip_property_function_empty_side() {
+        let text = assert_pf_roundtrip("SELECT * WHERE { () pf:solve ( ?o ) }");
+        assert!(
+            text.contains("() <"),
+            "a zero-length side emits `()`; got: {text}"
+        );
+    }
+
+    #[test]
+    fn roundtrip_property_function_literal_args() {
+        assert_pf_roundtrip(
+            "SELECT * WHERE { ?s pf:solve ( \"purr\" \"42\"^^<http://www.w3.org/2001/XMLSchema#integer> \"hi\"@en ) }",
+        );
+    }
+
+    #[test]
+    fn roundtrip_property_function_quoted_triple_arg() {
+        assert_pf_roundtrip("SELECT * WHERE { ?s pf:solve <<( ?a ex:p ?b )>> }");
+    }
+
+    #[test]
+    fn roundtrip_property_function_blank_arg() {
+        assert_pf_roundtrip("SELECT * WHERE { _:b pf:solve ( _:c ?o ) }");
+    }
+
+    #[test]
+    fn roundtrip_property_function_repeated_vars() {
+        assert_pf_roundtrip("SELECT * WHERE { ( ?x ?x ) pf:solve ( ?x ?y ) }");
+    }
+
+    #[test]
+    fn roundtrip_property_function_iri_and_nil_args() {
+        // A bare rdf:nil argument stays a one-element vector across the trip
+        // (it must not collapse into the empty `()` spelling).
+        let text = assert_pf_roundtrip(
+            "SELECT * WHERE { <http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> pf:solve ex:o }",
+        );
+        assert!(
+            !text.contains("() <"),
+            "an explicit rdf:nil must not be re-emitted as the empty list; got: {text}"
+        );
+    }
+
+    #[test]
+    fn roundtrip_property_functions_mixed_with_data_triples() {
+        let text = assert_pf_roundtrip(
+            "SELECT * WHERE { ?s ex:name ?n . ?s pf:first ?a . ?a ex:p ?q . ( ?a ?q ) pf:second ( ) }",
+        );
+        assert!(text.contains(&format!("<{PF_NS}first>")), "got: {text}");
+        assert!(text.contains(&format!("<{PF_NS}second>")), "got: {text}");
+    }
+
+    #[test]
+    fn property_function_serializes_without_a_lateral_keyword() {
+        // The node is written as a triple; the LATERAL scaffold the parser builds
+        // around it is implicit in that surface form (and `LATERAL` has no
+        // parser production, so emitting it would break the round-trip).
+        let text = assert_pf_roundtrip("SELECT * WHERE { ?s ex:p ?o . ?s pf:related ?o }");
+        assert!(!text.contains("LATERAL"), "got: {text}");
+    }
+
+    #[test]
+    fn roundtrip_property_function_in_a_nested_group() {
+        // A call reached through a braced sub-group is joined onto the outer
+        // triples rather than folded into their lateral chain; the serializer
+        // must keep that grouping so the re-parse does not re-associate.
+        let text = assert_pf_roundtrip("SELECT * WHERE { ?s ex:p ?o . { ?x pf:solve ?y } }");
+        assert!(
+            text.contains('{'),
+            "the nested group must survive; got: {text}"
+        );
+        assert_pf_roundtrip("SELECT * WHERE { ?s ex:p ?o . { ?x pf:a ?y } ?m pf:b ?n }");
+        assert_pf_roundtrip(
+            "SELECT * WHERE { ?s pf:a ?o OPTIONAL { ?o pf:b ?z } MINUS { ?s ex:q ?o } }",
+        );
+        assert_pf_roundtrip(
+            "SELECT * WHERE { { ?s pf:a ?o } UNION { ?s pf:b ?o } FILTER(?o > 1) }",
+        );
+        assert_pf_roundtrip("SELECT * WHERE { GRAPH ?g { ?s pf:a ?o } ?s ex:p ?o }");
     }
 }

@@ -55,6 +55,7 @@ use purrdf_core::{
 };
 use purrdf_sparql_eval::{
     GovernedOutcome, NativeSparqlEngine, PartialAnswers, PartialSparqlResult, QueryGovernors,
+    QueryOptions,
 };
 
 /// The fixture namespace. PurRDF mints no vocabulary IRIs; these are test data.
@@ -476,7 +477,7 @@ fn governed(
     governors: &QueryGovernors,
 ) -> Result<GovernedOutcome, String> {
     NativeSparqlEngine::new()
-        .query_governed(dataset, request(query), governors)
+        .query_governed(dataset, request(query), QueryOptions::EMPTY, governors)
         .map_err(|diagnostic| diagnostic.to_string())
 }
 
@@ -503,7 +504,10 @@ fn every_non_select_result_form_matches_the_ungoverned_oracle() {
             .unwrap_or_else(|error| panic!("the ungoverned {label} oracle must answer: {error}"));
         let actual = governed(&dataset, &query, &QueryGovernors::UNBOUNDED)
             .unwrap_or_else(|error| panic!("the governed {label} lane must answer: {error}"));
-        let GovernedOutcome::Complete { result, evidence } = actual else {
+        let GovernedOutcome::Complete {
+            result, evidence, ..
+        } = actual
+        else {
             panic!("UNBOUNDED cannot truncate {label}: {actual:?}");
         };
         assert!(evidence.is_complete(), "{label} carried tripped evidence");

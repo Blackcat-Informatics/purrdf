@@ -451,6 +451,53 @@ same shared boundary the WebAssembly and C hosts call, checked against one
 committed golden-vector artifact, so the four hosts return byte-identical results
 for the same input.
 
+## SPARQL property functions
+
+A **property function** is a host-supplied relation invoked from predicate
+position. Unlike an extension function it is a row source, so one call may emit
+zero, one, or many rows. `Store.query` / `Store.query_governed` / `Store.update` /
+`Store.update_governed` (and the same four on `MutableDataset`) take relations as
+data, registered for that call only:
+
+```python
+import purrdf
+
+EX = "http://example.org/"
+store = purrdf.Store()
+
+rows = store.query(
+    f"SELECT ?person ?team WHERE {{ ?person <{EX}rel/memberOf> ?team }}",
+    relations={
+        f"{EX}rel/memberOf": (
+            1,  # subject-side arity
+            1,  # object-side arity
+            [
+                [purrdf.NamedNode(f"{EX}ada"), purrdf.NamedNode(f"{EX}alpha")],
+                [purrdf.NamedNode(f"{EX}chen"), purrdf.NamedNode(f"{EX}beta")],
+            ],
+        )
+    },
+)
+```
+
+A table can also be written as RDF rather than as Python — an `rdf:List` of
+`rdf:List`s in the store's own default graph, one inner list per row — and named by
+its head:
+
+```python
+store.query(query, relations_from_graph={f"{EX}rel/memberOf": (purrdf.NamedNode(f"{EX}memberTable"), 1, 1)})
+```
+
+A registered IRI is recognized in predicate position **exactly**, so reaching one
+needs no namespace declaration. Passing `property_fn_namespaces=[f"{EX}rel/"]` asks
+for the stricter reading instead: every predicate under that prefix becomes a call,
+and an *unregistered* one is a hard error rather than a triple pattern that quietly
+matches nothing. A duplicate IRI, a ragged table, a torn list, or a head naming
+nothing raises `ValueError` where it is supplied.
+
+Registration is per call and carries no callable, so the whole evaluation still
+runs with the GIL released.
+
 ## rdflib compatibility layer
 
 The package ships an rdflib-shaped API over the native engine:

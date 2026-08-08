@@ -16,8 +16,8 @@ use std::collections::HashMap;
 
 use crate::algebra::{
     AggregateExpression, AggregateFunction, Expression, Function, GraphPattern, GraphTarget,
-    GraphUpdateOperation, NegatedPathElement, OrderExpression, PropertyPathExpression, Query,
-    QueryDataset, Update, UsingClause,
+    GraphUpdateOperation, NegatedPathElement, OrderExpression, PropertyFunctionCall,
+    PropertyPathExpression, Query, QueryDataset, Update, UsingClause,
 };
 use crate::ast::{
     BaseDirection, BlankNode, GroundTerm, GroundTriple, Literal, NamedNode, NamedNodePattern,
@@ -45,7 +45,9 @@ pub const MAX_GRAPH_PATTERN_DEPTH: usize = 128;
 
 /// Parse-time configuration for the SPARQL front-end.
 ///
-/// The single knob today is [`Self::extension_fn_namespaces`]: the set of IRI
+/// Both knobs are caller-supplied IRI-namespace sets that default to EMPTY.
+///
+/// [`Self::extension_fn_namespaces`] is the set of IRI
 /// namespaces the parser recognizes as the **extension-function seam**. An IRI
 /// in call position (immediately followed by `(`) whose string starts with any
 /// configured namespace is stripped to its local name and dispatched into the
@@ -61,17 +63,60 @@ pub const MAX_GRAPH_PATTERN_DEPTH: usize = 128;
 /// `https://blackcatinformatics.ca/gmeow/` with `gmeow:heldIn(...)` — supplies
 /// that namespace here; the local names are fixed.
 ///
+/// [`Self::property_fn_namespaces`] is the same idea one position over: the set
+/// of IRI namespaces recognized as the **property-function seam** in PREDICATE
+/// position. A triple whose predicate is a plain IRI under a configured
+/// namespace becomes a [`GraphPattern::PropertyFunction`] node — a call into a
+/// registered relation — instead of a triple pattern matched against the data; a
+/// variable predicate and a property-path predicate are never property functions.
+/// Its default is EMPTY too: with no configured namespace the seam is off and
+/// every such triple stays an ordinary BGP triple pattern, bit for bit as before.
+///
+/// [`Self::property_fn_iris`] recognizes the same seam by a different, narrower
+/// rule: EXACT-IRI match rather than prefix match. It exists because a relation
+/// registry's keys are exact IRIs, not namespaces — a host that registers
+/// `https://example.org/rel/a` has registered exactly that IRI, and treating it
+/// as a *prefix* would silently reclassify the unrelated, ordinary data
+/// predicate `https://example.org/rel/ab` as a call to an unregistered relation,
+/// which then hard-errors with a diagnostic that points at the wrong cause (a
+/// previously-working query breaking because of a same-prefixed sibling it never
+/// mentioned). Populating [`Self::property_fn_namespaces`] from a registry would
+/// be that mistake; [`Self::property_fn_iris`] is the field that is safe to
+/// derive from one. The two sets are independent and their recognition is a
+/// union: an IRI is a property function iff it prefix-matches an entry of
+/// [`Self::property_fn_namespaces`] OR exactly matches an entry of
+/// [`Self::property_fn_iris`]. Its default is EMPTY as well.
+///
 /// Note the serializer does **not** consult this configuration: a
 /// [`Function::Purrdf`] re-emits the ORIGINAL IRI it was parsed from (recorded
 /// in [`crate::algebra::PurrdfCall::iri`] — see `serialize.rs`), so re-parsing
 /// that output with the same options round-trips to the same algebra and no
-/// namespace is ever fabricated on output.
+/// namespace is ever fabricated on output. A
+/// [`GraphPattern::PropertyFunction`] keeps its own IRI the same way.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ParserOptions {
     /// The namespaces recognized as the extension-function seam in call position.
     /// Defaults to empty (extension functions off); order is first-match-wins
     /// for prefix stripping.
     pub extension_fn_namespaces: Vec<String>,
+    /// The namespaces recognized as the property-function seam in predicate
+    /// position, by PREFIX match. Defaults to empty (property functions off);
+    /// recognition is order-independent — an IRI is claimed by the seam if it
+    /// prefix-matches ANY configured entry, and nothing is stripped from it, so
+    /// no entry's position in the list changes what a call's IRI is. Caller-declared:
+    /// a host that wants a whole namespace claimed by the seam — including IRIs it
+    /// has deliberately left unregistered, so spelling one is a hard error rather
+    /// than a silent data triple — declares it here.
+    pub property_fn_namespaces: Vec<String>,
+    /// The individual IRIs recognized as the property-function seam in
+    /// predicate position, by EXACT match. Defaults to empty (property
+    /// functions off). This is the registry-derived set: a relation registry's
+    /// keys are exact IRIs, and matching them here rather than folding them into
+    /// [`Self::property_fn_namespaces`] as prefixes is what stops registering
+    /// `https://example.org/rel/a` from hijacking the unrelated data predicate
+    /// `https://example.org/rel/ab` into an (unregistered, hard-erroring)
+    /// property-function call.
+    pub property_fn_iris: Vec<String>,
 }
 
 /// A reusable SPARQL query parser.
@@ -856,8 +901,14 @@ impl<'a> Parser<'a, '_> {
         }
         match self.parse_triples_block()? {
             GraphPattern::Bgp { patterns } => Ok(patterns),
-            _ => Err(ParseError::syntax(
-                "property paths are not allowed in a CONSTRUCT template",
+            // A template asserts triples; neither a property path nor a property
+            // function (a relation call) can be asserted.
+            other => Err(ParseError::syntax(
+                if block_has_property_function(&other) {
+                    "property functions are not allowed in a CONSTRUCT template"
+                } else {
+                    "property paths are not allowed in a CONSTRUCT template"
+                },
                 self.span(),
             )),
         }
@@ -1214,16 +1265,13 @@ impl<'a> Parser<'a, '_> {
     /// reifiers, annotations, triple terms, collections and blank-node property
     /// lists all desugar identically; property paths are not admissible here.
     fn parse_template_triple(&mut self, triples: &mut Vec<TriplePattern>) -> Result<()> {
-        let mut paths = Vec::new();
+        let mut sink = BlockSink::default();
         let (subject, standalone_ok) = if self.at(&Token::LBracket) {
-            (
-                self.parse_blank_node_property_list(triples, &mut paths)?,
-                true,
-            )
+            (self.parse_blank_node_property_list(&mut sink)?, true)
         } else if self.at(&Token::LParen) {
-            (self.parse_collection(triples, &mut paths)?, false)
+            (self.parse_collection(&mut sink)?, false)
         } else if self.at(&Token::TripleOpen) {
-            let node = self.parse_triple_node(triples, &mut paths)?;
+            let node = self.parse_triple_node(&mut sink)?;
             let standalone = !matches!(node, TermPattern::Triple(_));
             (node, standalone)
         } else {
@@ -1232,14 +1280,24 @@ impl<'a> Parser<'a, '_> {
         let standalone = standalone_ok
             && (self.at(&Token::Dot) || self.at(&Token::RBrace) || self.at(&Token::LBrace));
         if !standalone {
-            self.parse_predicate_object_list(&subject, triples, &mut paths)?;
+            self.parse_predicate_object_list(&SubjectArgs::Term(subject), &mut sink)?;
         }
-        if !paths.is_empty() {
+        if !sink.paths.is_empty() {
             return Err(ParseError::syntax(
                 "property paths are not allowed in an update template",
                 self.span(),
             ));
         }
+        // A template asserts triples; a property function is a relation call and
+        // has nothing to assert, so a configured property-function predicate is a
+        // hard error here rather than a silently-asserted data triple.
+        if !sink.prop_fns.is_empty() {
+            return Err(ParseError::syntax(
+                "property functions are not allowed in an update template",
+                self.span(),
+            ));
+        }
+        triples.append(&mut sink.triples);
         Ok(())
     }
 
@@ -1477,32 +1535,43 @@ impl<'a> Parser<'a, '_> {
         Ok(g)
     }
 
-    /// Parse a run of triples (subject + predicate-object lists) into a BGP and
-    /// any complex property-path `Path` nodes, joined together.
+    /// Parse a run of triples (subject + predicate-object lists) into a BGP, any
+    /// complex property-path `Path` nodes, and any property-function calls,
+    /// assembled together by [`BlockSink::into_pattern`].
     fn parse_triples_block(&mut self) -> Result<GraphPattern> {
-        let mut triples: Vec<TriplePattern> = Vec::new();
-        let mut paths: Vec<GraphPattern> = Vec::new();
+        let mut sink = BlockSink::default();
         loop {
             // The subject may be a blank-node property list `[ p o ; … ]` or an RDF
             // collection `( … )`, each of which emits its own triples and yields a
             // fresh node (the BNPL blank, or the collection's head).
             let (subject, standalone_capable) = if self.at(&Token::LBracket) {
                 (
-                    self.parse_blank_node_property_list(&mut triples, &mut paths)?,
+                    SubjectArgs::Term(self.parse_blank_node_property_list(&mut sink)?),
                     true,
                 )
             } else if self.at(&Token::LParen) {
-                (self.parse_collection(&mut triples, &mut paths)?, false)
+                // A parenthesized subject is an RDF collection — UNLESS the
+                // predicate that follows it is a configured property-function IRI,
+                // in which case the parentheses are that call's SUBJECT ARGUMENT
+                // LIST and must not be desugared into cons cells. The distinction
+                // is settled by a pure token scan to the matching `)` (below),
+                // BEFORE anything is parsed, so the collection path is untouched
+                // whenever the seam does not fire.
+                if self.property_fn_after_group().is_some() {
+                    (SubjectArgs::Args(self.parse_prop_fn_arg_list()?), false)
+                } else {
+                    (SubjectArgs::Term(self.parse_collection(&mut sink)?), false)
+                }
             } else if self.at(&Token::TripleOpen) {
                 // A reifying triple `<< s p o >>` emits its own reifier triples, so
                 // it may stand alone (`<< s p o >> .`) with no predicate-object
                 // list. A *triple term* `<<( s p o )>>` is a value: it may head a
                 // subject's predicate-object list but must not stand alone.
-                let node = self.parse_triple_node(&mut triples, &mut paths)?;
+                let node = self.parse_triple_node(&mut sink)?;
                 let standalone_ok = !matches!(node, TermPattern::Triple(_));
-                (node, standalone_ok)
+                (SubjectArgs::Term(node), standalone_ok)
             } else {
-                (self.parse_term_pattern()?, false)
+                (SubjectArgs::Term(self.parse_term_pattern()?), false)
             };
             // A standalone `[ … ] .` needs no following predicate-object list (its
             // triples are already emitted); any other subject requires one. A
@@ -1510,7 +1579,7 @@ impl<'a> Parser<'a, '_> {
             let standalone = standalone_capable
                 && (self.at(&Token::Dot) || self.at(&Token::RBrace) || self.block_boundary());
             if !standalone {
-                self.parse_predicate_object_list(&subject, &mut triples, &mut paths)?;
+                self.parse_predicate_object_list(&subject, &mut sink)?;
             }
             if !self.eat(&Token::Dot) {
                 break;
@@ -1520,11 +1589,141 @@ impl<'a> Parser<'a, '_> {
                 break;
             }
         }
-        let mut g = GraphPattern::Bgp { patterns: triples };
-        for path in paths {
-            g = join(g, path);
+        Ok(sink.into_pattern())
+    }
+
+    /// Is `iri` a property function under the configured options — a PREFIX match
+    /// against [`ParserOptions::property_fn_namespaces`] OR an EXACT match against
+    /// [`ParserOptions::property_fn_iris`]? Always `false` under the default (both
+    /// empty) configuration.
+    fn is_property_fn(&self, iri: &str) -> bool {
+        self.options
+            .property_fn_namespaces
+            .iter()
+            .any(|ns| iri.starts_with(ns.as_str()))
+            || self
+                .options
+                .property_fn_iris
+                .iter()
+                .any(|exact| exact == iri)
+    }
+
+    /// Pure lookahead over a parenthesized subject group starting at the cursor
+    /// (which must be at `(`): scan to the MATCHING `)` and resolve the predicate
+    /// token that follows it, returning its IRI when that IRI names a configured
+    /// property function — i.e. when the group is an argument list rather than an
+    /// RDF collection. The cursor is not moved and no error is raised: an
+    /// unbalanced group, an unresolvable predicate, or a predicate outside every
+    /// configured namespace simply yields `None` and the ordinary collection path
+    /// runs (and reports any real error itself).
+    fn property_fn_after_group(&self) -> Option<String> {
+        if (self.options.property_fn_namespaces.is_empty()
+            && self.options.property_fn_iris.is_empty())
+            || !matches!(self.token_at(self.pos), Some(Token::LParen))
+        {
+            return None;
         }
-        Ok(g)
+        let mut depth = 0usize;
+        let mut idx = self.pos;
+        let after = loop {
+            match self.token_at(idx)? {
+                Token::LParen => depth += 1,
+                Token::RParen => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break idx + 1;
+                    }
+                }
+                _ => {}
+            }
+            idx += 1;
+        };
+        let iri = match self.token_at(after)? {
+            Token::Iri(s) => self.resolve_iri(s).ok()?,
+            Token::PrefixedName(p, l) => self
+                .resolve_prefixed(p, l.as_ref())
+                .ok()?
+                .as_str()
+                .to_owned(),
+            // `a` is rdf:type spelled as a keyword.
+            Token::Word(w) if *w == "a" => RDF_TYPE.to_owned(),
+            _ => return None,
+        };
+        // Only a BARE predicate IRI can be a property function: a path operator
+        // trailing it (`pf:p+`, `pf:p/q`, …) makes it a property path, which the
+        // seam never claims — so the group before it is an ordinary collection.
+        if matches!(
+            self.token_at(after + 1),
+            Some(
+                Token::Star
+                    | Token::Plus
+                    | Token::Question
+                    | Token::Slash
+                    | Token::Pipe
+                    | Token::LBrace
+            )
+        ) {
+            return None;
+        }
+        self.is_property_fn(&iri).then_some(iri)
+    }
+
+    /// The token at absolute index `idx`, or `None` past the end (or at an
+    /// already-consumed slot).
+    fn token_at(&self, idx: usize) -> Option<&Token<'a>> {
+        self.tokens
+            .get(idx)
+            .and_then(Option::as_ref)
+            .map(|s| &s.token)
+    }
+
+    /// Parse one side of a property-function call: a parenthesized argument list
+    /// `( … )` or a single bare term (a one-element vector).
+    fn parse_prop_fn_args(&mut self) -> Result<Vec<TermPattern>> {
+        if self.at(&Token::LParen) {
+            self.parse_prop_fn_arg_list()
+        } else {
+            Ok(vec![self.parse_prop_fn_arg_term()?])
+        }
+    }
+
+    /// Parse a parenthesized property-function argument list `( t1 t2 … )`,
+    /// STRUCTURALLY: the elements are the arguments, with no `rdf:first`/`rdf:rest`
+    /// cons-cell desugaring. The empty list `()` is a ZERO-length argument vector
+    /// (distinct from a one-element vector holding a bare `rdf:nil` IRI).
+    fn parse_prop_fn_arg_list(&mut self) -> Result<Vec<TermPattern>> {
+        self.expect(&Token::LParen)?;
+        let mut args = Vec::new();
+        while !self.at(&Token::RParen) {
+            args.push(self.parse_prop_fn_arg_term()?);
+        }
+        self.expect(&Token::RParen)?;
+        Ok(args)
+    }
+
+    /// Parse ONE property-function argument: any plain term (IRI, literal, blank
+    /// node, variable, RDF 1.2 quoted triple). A nested collection and a populated
+    /// blank-node property list are hard errors — each would need auxiliary
+    /// triples that an argument vector cannot carry.
+    fn parse_prop_fn_arg_term(&mut self) -> Result<TermPattern> {
+        match self.peek() {
+            Some(Token::LParen) => Err(ParseError::syntax(
+                "nested collection in property-function argument list",
+                self.span(),
+            )),
+            Some(Token::LBracket) => {
+                self.expect(&Token::LBracket)?;
+                if !self.eat(&Token::RBracket) {
+                    return Err(ParseError::syntax(
+                        "a populated blank-node property list is not allowed in a \
+                         property-function argument list",
+                        self.span(),
+                    ));
+                }
+                Ok(TermPattern::BlankNode(self.fresh_anon()))
+            }
+            _ => self.parse_term_pattern(),
+        }
     }
 
     /// Parse a blank-node property list `[ predicate object … ]` (RDF 1.1 §4.2,
@@ -1534,15 +1733,11 @@ impl<'a> Parser<'a, '_> {
     ///
     /// An empty `[]` (SPARQL ANON) is legal and simply mints a fresh blank node
     /// without any associated predicate-object pairs.
-    fn parse_blank_node_property_list(
-        &mut self,
-        triples: &mut Vec<TriplePattern>,
-        paths: &mut Vec<GraphPattern>,
-    ) -> Result<TermPattern> {
+    fn parse_blank_node_property_list(&mut self, sink: &mut BlockSink) -> Result<TermPattern> {
         self.expect(&Token::LBracket)?;
         let node = TermPattern::BlankNode(self.fresh_anon());
         if !self.at(&Token::RBracket) {
-            self.parse_predicate_object_list(&node, triples, paths)?;
+            self.parse_predicate_object_list(&SubjectArgs::Term(node.clone()), sink)?;
         }
         self.expect(&Token::RBracket)?;
         Ok(node)
@@ -1557,11 +1752,7 @@ impl<'a> Parser<'a, '_> {
     /// Each element is a `GraphNode` — a plain term, a nested blank-node property
     /// list `[ … ]`, or a nested collection `( … )` — so the recursion mirrors the
     /// `parse_blank_node_property_list` object idiom.
-    fn parse_collection(
-        &mut self,
-        triples: &mut Vec<TriplePattern>,
-        paths: &mut Vec<GraphPattern>,
-    ) -> Result<TermPattern> {
+    fn parse_collection(&mut self, sink: &mut BlockSink) -> Result<TermPattern> {
         self.expect(&Token::LParen)?;
         // The SPARQL grammar requires at least one node inside the parentheses, but
         // RDF's empty collection `()` is `rdf:nil`; accept it for robustness.
@@ -1575,15 +1766,15 @@ impl<'a> Parser<'a, '_> {
         let head = TermPattern::BlankNode(self.fresh_anon());
         let mut node = head.clone();
         loop {
-            let element = self.parse_graph_node(triples, paths)?;
-            triples.push(TriplePattern {
+            let element = self.parse_graph_node(sink)?;
+            sink.triples.push(TriplePattern {
                 subject: node.clone(),
                 predicate: first_pred.clone(),
                 object: element,
             });
             if self.at(&Token::RParen) {
                 // Last element: terminate the chain with rdf:nil.
-                triples.push(TriplePattern {
+                sink.triples.push(TriplePattern {
                     subject: node,
                     predicate: rest_pred,
                     object: nil,
@@ -1592,7 +1783,7 @@ impl<'a> Parser<'a, '_> {
             }
             // Another element follows: link to a fresh tail node.
             let next = TermPattern::BlankNode(self.fresh_anon());
-            triples.push(TriplePattern {
+            sink.triples.push(TriplePattern {
                 subject: node,
                 predicate: rest_pred.clone(),
                 object: next.clone(),
@@ -1605,17 +1796,13 @@ impl<'a> Parser<'a, '_> {
 
     /// Parse one `GraphNode` (collection element / object): a nested blank-node
     /// property list, a nested collection, or a plain term.
-    fn parse_graph_node(
-        &mut self,
-        triples: &mut Vec<TriplePattern>,
-        paths: &mut Vec<GraphPattern>,
-    ) -> Result<TermPattern> {
+    fn parse_graph_node(&mut self, sink: &mut BlockSink) -> Result<TermPattern> {
         if self.at(&Token::LBracket) {
-            self.parse_blank_node_property_list(triples, paths)
+            self.parse_blank_node_property_list(sink)
         } else if self.at(&Token::LParen) {
-            self.parse_collection(triples, paths)
+            self.parse_collection(sink)
         } else if self.at(&Token::TripleOpen) {
-            self.parse_triple_node(triples, paths)
+            self.parse_triple_node(sink)
         } else {
             self.parse_term_pattern()
         }
@@ -1629,14 +1816,10 @@ impl<'a> Parser<'a, '_> {
     ///   and `R` is the term.
     ///
     /// The inner `s`/`o` may themselves be triple nodes (nesting is supported).
-    fn parse_triple_node(
-        &mut self,
-        triples: &mut Vec<TriplePattern>,
-        paths: &mut Vec<GraphPattern>,
-    ) -> Result<TermPattern> {
+    fn parse_triple_node(&mut self, sink: &mut BlockSink) -> Result<TermPattern> {
         self.expect(&Token::TripleOpen)?;
         let is_triple_term = self.eat(&Token::LParen);
-        let inner = self.parse_inner_triple(triples, paths)?;
+        let inner = self.parse_inner_triple(sink)?;
         if is_triple_term {
             self.expect(&Token::RParen)?;
             self.expect(&Token::TripleClose)?;
@@ -1649,7 +1832,7 @@ impl<'a> Parser<'a, '_> {
             TermPattern::BlankNode(self.fresh_anon())
         };
         self.expect(&Token::TripleClose)?;
-        self.emit_reifies(&reifier, &inner, triples);
+        self.emit_reifies(&reifier, &inner, &mut sink.triples);
         Ok(reifier)
     }
 
@@ -1660,14 +1843,10 @@ impl<'a> Parser<'a, '_> {
     /// Neither admits an RDF collection or a populated blank-node property list in
     /// any position (both would emit auxiliary triples a single triple cannot
     /// carry).
-    fn parse_inner_triple(
-        &mut self,
-        triples: &mut Vec<TriplePattern>,
-        paths: &mut Vec<GraphPattern>,
-    ) -> Result<TriplePattern> {
-        let subject = self.parse_triple_node_component(triples, paths)?;
+    fn parse_inner_triple(&mut self, sink: &mut BlockSink) -> Result<TriplePattern> {
+        let subject = self.parse_triple_node_component(sink)?;
         let predicate = self.parse_predicate_name()?;
-        let object = self.parse_triple_node_component(triples, paths)?;
+        let object = self.parse_triple_node_component(sink)?;
         Ok(TriplePattern {
             subject,
             predicate,
@@ -1680,13 +1859,9 @@ impl<'a> Parser<'a, '_> {
     /// blank-node property list `[ p o … ]` is not (each would emit auxiliary
     /// triples a single triple cannot carry); only the anonymous `[]` (a fresh
     /// blank node) is.
-    fn parse_triple_node_component(
-        &mut self,
-        triples: &mut Vec<TriplePattern>,
-        paths: &mut Vec<GraphPattern>,
-    ) -> Result<TermPattern> {
+    fn parse_triple_node_component(&mut self, sink: &mut BlockSink) -> Result<TermPattern> {
         match self.peek() {
-            Some(Token::TripleOpen) => self.parse_triple_node(triples, paths),
+            Some(Token::TripleOpen) => self.parse_triple_node(sink),
             Some(Token::LParen) => Err(ParseError::syntax(
                 "an RDF collection is not allowed inside a triple term or reifying triple",
                 self.span(),
@@ -1757,8 +1932,7 @@ impl<'a> Parser<'a, '_> {
         subject: &TermPattern,
         pred: &NamedNodePattern,
         object: &TermPattern,
-        triples: &mut Vec<TriplePattern>,
-        paths: &mut Vec<GraphPattern>,
+        sink: &mut BlockSink,
     ) -> Result<()> {
         let base = TriplePattern {
             subject: subject.clone(),
@@ -1773,18 +1947,18 @@ impl<'a> Parser<'a, '_> {
         loop {
             if self.eat(&Token::Tilde) {
                 let reifier = self.parse_reifier_id()?;
-                self.emit_reifies(&reifier, &base, triples);
+                self.emit_reifies(&reifier, &base, &mut sink.triples);
                 pending = Some(reifier);
             } else if self.eat(&Token::AnnotationOpen) {
                 let reifier = match pending.take() {
                     Some(r) => r,
                     None => {
                         let r = TermPattern::BlankNode(self.fresh_anon());
-                        self.emit_reifies(&r, &base, triples);
+                        self.emit_reifies(&r, &base, &mut sink.triples);
                         r
                     }
                 };
-                self.parse_predicate_object_list(&reifier, triples, paths)?;
+                self.parse_predicate_object_list(&SubjectArgs::Term(reifier), sink)?;
                 self.expect(&Token::AnnotationClose)?;
             } else {
                 break;
@@ -1807,43 +1981,74 @@ impl<'a> Parser<'a, '_> {
 
     fn parse_predicate_object_list(
         &mut self,
-        subject: &TermPattern,
-        triples: &mut Vec<TriplePattern>,
-        paths: &mut Vec<GraphPattern>,
+        subject: &SubjectArgs,
+        sink: &mut BlockSink,
     ) -> Result<()> {
         loop {
             // Verb = VarOrIri | path. A bare variable predicate is a simple
-            // triple predicate, not a property path.
+            // triple predicate, not a property path — and never a property
+            // function, which is only ever a plain IRI.
             let verb = if let Some(Token::Variable(_)) = self.peek() {
                 Verb::Simple(NamedNodePattern::Variable(self.expect_var()?))
             } else {
                 let path = self.parse_path()?;
                 match simple_predicate(&path) {
+                    // A length-1 path is a plain predicate IRI, so it is the one
+                    // shape that can name a property function; a complex path
+                    // (`p+`, `p1/p2`, `!(…)`, …) never is.
+                    Some(NamedNodePattern::NamedNode(n)) if self.is_property_fn(n.as_str()) => {
+                        Verb::PropertyFn(n.as_str().to_owned())
+                    }
                     Some(pred) => Verb::Simple(pred),
                     None => Verb::Path(path),
                 }
             };
             // object list
             loop {
-                // An object may itself be a blank-node property list `[ … ]` or an
-                // RDF collection `( … )` (both emit their own triples here).
-                let object = self.parse_graph_node(triples, paths)?;
                 match &verb {
+                    Verb::PropertyFn(iri) => {
+                        // Both sides are argument VECTORS, captured structurally:
+                        // an object collection is the call's argument list, not a
+                        // cons-cell chain, so `parse_graph_node` is bypassed here.
+                        let object_args = self.parse_prop_fn_args()?;
+                        let subject_args = subject.as_args();
+                        sink.push_property_function(PropertyFunctionCall {
+                            iri: iri.clone(),
+                            subject_args,
+                            object_args,
+                        });
+                        if self.at(&Token::Tilde) || self.at(&Token::AnnotationOpen) {
+                            return Err(ParseError::syntax(
+                                "RDF 1.2 annotation syntax cannot annotate a \
+                                 property-function call (no triple is asserted)",
+                                self.span(),
+                            ));
+                        }
+                    }
                     Verb::Simple(pred) => {
-                        triples.push(TriplePattern {
+                        let subject = subject.as_term(self.span())?;
+                        // An object may itself be a blank-node property list
+                        // `[ … ]` or an RDF collection `( … )` (both emit their
+                        // own triples here).
+                        let object = self.parse_graph_node(sink)?;
+                        sink.triples.push(TriplePattern {
                             subject: subject.clone(),
                             predicate: pred.clone(),
                             object: object.clone(),
                         });
                         // RDF 1.2 annotation syntax (`~ reifier`, `{| … |}`) may
                         // trail the object, reifying the triple just asserted.
-                        self.parse_triple_annotations(subject, pred, &object, triples, paths)?;
+                        self.parse_triple_annotations(subject, pred, &object, sink)?;
                     }
-                    Verb::Path(path) => paths.push(GraphPattern::Path {
-                        subject: subject.clone(),
-                        path: path.clone(),
-                        object,
-                    }),
+                    Verb::Path(path) => {
+                        let subject = subject.as_term(self.span())?;
+                        let object = self.parse_graph_node(sink)?;
+                        sink.paths.push(GraphPattern::Path {
+                            subject: subject.clone(),
+                            path: path.clone(),
+                            object,
+                        });
+                    }
                 }
                 if !self.eat(&Token::Comma) {
                     break;
@@ -2902,11 +3107,95 @@ impl<'a> Parser<'a, '_> {
     }
 }
 
-/// A parsed predicate: a simple verb (IRI/`a`/variable) yielding a triple, or a
-/// complex property path yielding a `GraphPattern::Path`.
+/// A parsed predicate: a simple verb (IRI/`a`/variable) yielding a triple, a
+/// complex property path yielding a `GraphPattern::Path`, or a plain IRI under a
+/// configured property-function namespace yielding a
+/// `GraphPattern::PropertyFunction` (carrying that IRI byte-exact).
 enum Verb {
     Simple(NamedNodePattern),
     Path(PropertyPathExpression),
+    PropertyFn(String),
+}
+
+/// The subject a predicate-object list hangs off: either an ordinary term, or —
+/// when a parenthesized subject group is followed by a property-function
+/// predicate — that call's subject ARGUMENT VECTOR, taken structurally.
+enum SubjectArgs {
+    Term(TermPattern),
+    Args(Vec<TermPattern>),
+}
+
+impl SubjectArgs {
+    /// The subject as a single term. An argument vector has no term form: it is
+    /// only meaningful to a property function, so pairing it with a data
+    /// predicate is a hard error.
+    fn as_term(&self, at: usize) -> Result<&TermPattern> {
+        match self {
+            Self::Term(t) => Ok(t),
+            Self::Args(_) => Err(ParseError::syntax(
+                "a property-function argument list `( … )` cannot be the subject of \
+                 an ordinary triple pattern",
+                at,
+            )),
+        }
+    }
+
+    /// The subject as an argument vector: a plain term is a ONE-element vector.
+    fn as_args(&self) -> Vec<TermPattern> {
+        match self {
+            Self::Term(t) => vec![t.clone()],
+            Self::Args(a) => a.clone(),
+        }
+    }
+}
+
+/// The accumulator for ONE triples block: the data triples of its BGP, the
+/// property-path nodes it produced, and its property-function calls.
+///
+/// Each property-function call records the number of data triples that preceded
+/// it, so [`Self::into_pattern`] can rebuild the block as a LEFT-DEEP `Lateral`
+/// chain in TEXTUAL order — every call sees the triples written before it on its
+/// left. With no property functions the assembly is exactly `Bgp { triples }`,
+/// bit for bit what the block produced before the seam existed.
+#[derive(Default)]
+struct BlockSink {
+    triples: Vec<TriplePattern>,
+    paths: Vec<GraphPattern>,
+    prop_fns: Vec<(usize, PropertyFunctionCall)>,
+}
+
+impl BlockSink {
+    /// Record a property-function call at the current position in the block.
+    fn push_property_function(&mut self, call: PropertyFunctionCall) {
+        self.prop_fns.push((self.triples.len(), call));
+    }
+
+    /// Assemble the block: the data triples as a `Bgp`, each property-function
+    /// call laterally joined onto everything written before it, then the
+    /// property-path nodes joined on.
+    fn into_pattern(self) -> GraphPattern {
+        let mut triples = self.triples.into_iter();
+        let mut taken = 0usize;
+        let mut g = GraphPattern::Bgp { patterns: vec![] };
+        for (at, call) in self.prop_fns {
+            let residual: Vec<TriplePattern> = triples.by_ref().take(at - taken).collect();
+            taken = at;
+            g = GraphPattern::Lateral {
+                left: Box::new(join(g, GraphPattern::Bgp { patterns: residual })),
+                right: Box::new(GraphPattern::PropertyFunction(call)),
+            };
+        }
+        g = join(
+            g,
+            GraphPattern::Bgp {
+                patterns: triples.collect(),
+            },
+        );
+        for path in self.paths {
+            g = join(g, path);
+        }
+        g
+    }
 }
 
 #[derive(Default)]
@@ -2961,6 +3250,20 @@ fn join(left: GraphPattern, right: GraphPattern) -> GraphPattern {
 
 fn is_empty_bgp(p: &GraphPattern) -> bool {
     matches!(p, GraphPattern::Bgp { patterns } if patterns.is_empty())
+}
+
+/// Does a just-parsed triples block contain a property-function call? Walks only
+/// the shapes [`BlockSink::into_pattern`] can build (`Bgp`/`Path` leaves under
+/// `Join`/`Lateral` spines), which is all the template callers need to tell a
+/// property-function refusal from a property-path one.
+fn block_has_property_function(p: &GraphPattern) -> bool {
+    match p {
+        GraphPattern::PropertyFunction(_) => true,
+        GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
+            block_has_property_function(left) || block_has_property_function(right)
+        }
+        _ => false,
+    }
 }
 
 /// If a property path is length-1 (a single predicate), return it as a triple
@@ -3029,6 +3332,14 @@ fn collect_vars(p: &GraphPattern, out: &mut Vec<Variable>) {
         } => {
             collect_term_vars(subject, out);
             collect_term_vars(object, out);
+        }
+        // Every argument variable of a property function — on either side — is
+        // in scope in the enclosing group: the arguments are the call's inputs
+        // AND its bindings.
+        GraphPattern::PropertyFunction(call) => {
+            for t in call.subject_args.iter().chain(&call.object_args) {
+                collect_term_vars(t, out);
+            }
         }
         GraphPattern::Join { left, right }
         | GraphPattern::Union { left, right }
@@ -4532,6 +4843,8 @@ mod tests {
     fn ext_options() -> ParserOptions {
         ParserOptions {
             extension_fn_namespaces: vec![EXT_NS.to_owned()],
+            property_fn_namespaces: Vec::new(),
+            property_fn_iris: Vec::new(),
         }
     }
 
@@ -4655,6 +4968,8 @@ mod tests {
     fn gmeow_options() -> ParserOptions {
         ParserOptions {
             extension_fn_namespaces: vec![EXT_NS.to_owned(), GMEOW_NS.to_owned()],
+            property_fn_namespaces: Vec::new(),
+            property_fn_iris: Vec::new(),
         }
     }
 
@@ -4779,5 +5094,637 @@ mod tests {
             | GraphPattern::OrderBy { inner, .. } => find_held_in(inner),
             _ => None,
         }
+    }
+
+    // ── property-function seam (caller-configured; OFF by default) ────────────
+
+    /// A caller-configured property-function namespace for these tests (a
+    /// neutral example.org name — purrdf itself mints no vocabulary IRIs).
+    const PF_NS: &str = "https://example.org/pf/";
+
+    /// A prologue binding `pf:` to the test property-function namespace and `ex:`
+    /// to an ordinary data namespace outside it.
+    const PFP: &str = "PREFIX pf: <https://example.org/pf/>\nPREFIX ex: <https://example.org/d/>\n";
+
+    /// Options with only [`PF_NS`] configured as a property-function namespace.
+    fn pf_options() -> ParserOptions {
+        ParserOptions {
+            extension_fn_namespaces: Vec::new(),
+            property_fn_namespaces: vec![PF_NS.to_owned()],
+            property_fn_iris: Vec::new(),
+        }
+    }
+
+    /// Parse a SELECT (with the `PFP` prologue) under [`pf_options`] and return
+    /// its WHERE algebra.
+    fn pf_pattern(q: &str) -> GraphPattern {
+        unproject(select_pattern_with(&format!("{PFP}{q}"), &pf_options()))
+    }
+
+    /// [`pf_pattern`] under the DEFAULT options (the seam off).
+    fn pf_pattern_off(q: &str) -> GraphPattern {
+        unproject(select_pattern_with(
+            &format!("{PFP}{q}"),
+            &ParserOptions::default(),
+        ))
+    }
+
+    /// The parse error of a SELECT parsed under [`pf_options`].
+    fn pf_err(q: &str) -> ParseError {
+        SparqlParser::new()
+            .parse_query_with(&format!("{PFP}{q}"), &pf_options())
+            .expect_err("query should fail to parse")
+    }
+
+    fn pf_var(n: &str) -> TermPattern {
+        TermPattern::Variable(Variable::new(n))
+    }
+
+    fn pf_iri(s: &str) -> TermPattern {
+        TermPattern::NamedNode(NamedNode::new_unchecked(s))
+    }
+
+    /// Collect every property-function call of a pattern, in left-to-right order.
+    fn pf_calls(p: &GraphPattern) -> Vec<&PropertyFunctionCall> {
+        let mut out = Vec::new();
+        fn walk<'a>(p: &'a GraphPattern, out: &mut Vec<&'a PropertyFunctionCall>) {
+            match p {
+                GraphPattern::PropertyFunction(c) => out.push(c),
+                GraphPattern::Join { left, right }
+                | GraphPattern::Lateral { left, right }
+                | GraphPattern::Union { left, right }
+                | GraphPattern::Minus { left, right } => {
+                    walk(left, out);
+                    walk(right, out);
+                }
+                GraphPattern::LeftJoin { left, right, .. } => {
+                    walk(left, out);
+                    walk(right, out);
+                }
+                GraphPattern::Filter { inner, .. }
+                | GraphPattern::Graph { inner, .. }
+                | GraphPattern::Project { inner, .. }
+                | GraphPattern::Extend { inner, .. } => walk(inner, out),
+                _ => {}
+            }
+        }
+        walk(p, &mut out);
+        out
+    }
+
+    /// The one property-function call of a pattern.
+    fn pf_only_call(p: &GraphPattern) -> &PropertyFunctionCall {
+        let calls = pf_calls(p);
+        assert_eq!(calls.len(), 1, "expected exactly one call in {p:?}");
+        calls[0]
+    }
+
+    /// Every triple pattern of a parsed block, in order.
+    fn pf_triples(p: &GraphPattern) -> Vec<TriplePattern> {
+        let mut out = Vec::new();
+        fn walk(p: &GraphPattern, out: &mut Vec<TriplePattern>) {
+            match p {
+                GraphPattern::Bgp { patterns } => out.extend(patterns.iter().cloned()),
+                GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
+                    walk(left, out);
+                    walk(right, out);
+                }
+                _ => {}
+            }
+        }
+        walk(p, &mut out);
+        out
+    }
+
+    #[test]
+    fn default_options_have_no_property_fn_namespaces() {
+        // The seam is OFF by default: with no configured namespace the very same
+        // query text parses to the ordinary BGP triple pattern it always did.
+        assert!(ParserOptions::default().property_fn_namespaces.is_empty());
+        let q = "SELECT * WHERE { ?s pf:related ?o }";
+        assert_eq!(
+            pf_pattern_off(q),
+            GraphPattern::Bgp {
+                patterns: vec![TriplePattern {
+                    subject: pf_var("s"),
+                    predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
+                        "https://example.org/pf/related"
+                    )),
+                    object: pf_var("o"),
+                }]
+            }
+        );
+        assert!(pf_calls(&pf_pattern_off(q)).is_empty());
+    }
+
+    #[test]
+    fn seam_off_keeps_collection_desugaring_byte_identical() {
+        // With no configured namespace a collection in either position is still
+        // the standard rdf:first/rdf:rest cons-cell chain — unchanged, including
+        // the synthetic blank-node numbering.
+        let q = "SELECT * WHERE { ( ?a ?b ) pf:related ( ?c ) }";
+        let GraphPattern::Bgp { patterns } = pf_pattern_off(q) else {
+            panic!("expected a plain BGP with the seam off");
+        };
+        // 2-element list (4 triples) + 1-element list (2 triples) + the triple.
+        assert_eq!(patterns.len(), 7);
+        assert!(patterns.iter().any(
+            |t| t.predicate == NamedNodePattern::NamedNode(NamedNode::new_unchecked(RDF_FIRST))
+        ));
+    }
+
+    #[test]
+    fn seam_on_leaves_non_matching_predicates_untouched() {
+        // Configuring a namespace changes NOTHING for a predicate outside it —
+        // the collection subject still desugars, blank numbering and all.
+        let q = "SELECT * WHERE { ( ?a ?b ) ex:data ?o . ?s ex:p ( ?c ) }";
+        assert_eq!(pf_pattern(q), pf_pattern_off(q));
+        // The same for every other blank-minting form in one block (nested
+        // collections, blank-node property lists, reifiers and annotations):
+        // the synthetic blank-node numbering is untouched by the seam.
+        let rich = "SELECT * WHERE { \
+                    ( ?a ( ?b ) [ ex:q ?c ] ) ex:data [ ex:r ?d ] . \
+                    ?s ex:p ?o ~ ?r {| ex:note \"n\" |} . \
+                    << ?x ex:y ?z >> ex:p ?w }";
+        assert_eq!(pf_pattern(rich), pf_pattern_off(rich));
+    }
+
+    #[test]
+    fn a_call_may_hang_off_a_blank_node_property_list() {
+        // The seam lives in the shared predicate-object-list path, so a call
+        // inside `[ … ]` works and its subject argument is that blank node.
+        let p = pf_pattern("SELECT * WHERE { [ pf:solve ?x ] ex:p ?o }");
+        let call = pf_only_call(&p);
+        assert!(matches!(call.subject_args[0], TermPattern::BlankNode(_)));
+        assert_eq!(call.object_args, vec![pf_var("x")]);
+        let triples = pf_triples(&p);
+        assert_eq!(triples.len(), 1);
+        assert_eq!(triples[0].subject, call.subject_args[0]);
+    }
+
+    #[test]
+    fn configured_predicate_mints_a_property_function() {
+        let p = pf_pattern("SELECT * WHERE { ?s pf:related ?o }");
+        assert_eq!(
+            p,
+            GraphPattern::Lateral {
+                left: Box::new(GraphPattern::Bgp { patterns: vec![] }),
+                right: Box::new(GraphPattern::PropertyFunction(PropertyFunctionCall {
+                    iri: format!("{PF_NS}related"),
+                    subject_args: vec![pf_var("s")],
+                    object_args: vec![pf_var("o")],
+                })),
+            }
+        );
+    }
+
+    #[test]
+    fn full_iri_predicate_mints_a_property_function() {
+        // The same recognition via a full (non-prefixed) IRI, retained byte-exact.
+        let p = pf_pattern("SELECT * WHERE { ?s <https://example.org/pf/related> ?o }");
+        assert_eq!(pf_only_call(&p).iri, format!("{PF_NS}related"));
+    }
+
+    #[test]
+    fn object_collection_is_an_argument_vector_not_cons_cells() {
+        let p = pf_pattern("SELECT * WHERE { ?s pf:solve ( ?a ?b ?c ) }");
+        let call = pf_only_call(&p);
+        assert_eq!(call.subject_args, vec![pf_var("s")]);
+        assert_eq!(
+            call.object_args,
+            vec![pf_var("a"), pf_var("b"), pf_var("c")]
+        );
+        // NO cons cells were emitted for the argument list.
+        assert!(
+            pf_triples(&p).is_empty(),
+            "no rdf:first/rdf:rest desugaring"
+        );
+    }
+
+    #[test]
+    fn subject_collection_is_an_argument_vector_not_cons_cells() {
+        let p = pf_pattern("SELECT * WHERE { ( ?a ?b ) pf:solve ?o }");
+        let call = pf_only_call(&p);
+        assert_eq!(call.subject_args, vec![pf_var("a"), pf_var("b")]);
+        assert_eq!(call.object_args, vec![pf_var("o")]);
+        assert!(
+            pf_triples(&p).is_empty(),
+            "no rdf:first/rdf:rest desugaring"
+        );
+    }
+
+    #[test]
+    fn empty_collection_is_a_zero_length_argument_vector() {
+        // `()` denotes NO arguments on that side …
+        let p = pf_pattern("SELECT * WHERE { () pf:solve ( ) }");
+        let call = pf_only_call(&p);
+        assert!(call.subject_args.is_empty());
+        assert!(call.object_args.is_empty());
+    }
+
+    #[test]
+    fn bare_rdf_nil_is_a_one_element_argument_vector() {
+        // … whereas an explicitly-spelled rdf:nil IRI is a one-element vector
+        // holding that IRI — the two spellings are deliberately distinct.
+        let p = pf_pattern(&format!("SELECT * WHERE {{ <{RDF_NIL}> pf:solve ?o }}"));
+        let call = pf_only_call(&p);
+        assert_eq!(call.subject_args, vec![pf_iri(RDF_NIL)]);
+        let p2 = pf_pattern("SELECT * WHERE { () pf:solve ?o }");
+        assert!(pf_only_call(&p2).subject_args.is_empty());
+        assert_ne!(call.subject_args, pf_only_call(&p2).subject_args);
+    }
+
+    #[test]
+    fn nested_collection_in_an_object_argument_list_is_a_hard_error() {
+        let err = pf_err("SELECT * WHERE { ?s pf:solve ( ?a ( ?b ) ) }");
+        assert!(
+            matches!(&err, ParseError::Syntax { reason, .. }
+                if reason.contains("nested collection in property-function argument list")),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn nested_collection_in_a_subject_argument_list_is_a_hard_error() {
+        let err = pf_err("SELECT * WHERE { ( ( ?a ) ?b ) pf:solve ?o }");
+        assert!(
+            matches!(&err, ParseError::Syntax { reason, .. }
+                if reason.contains("nested collection in property-function argument list")),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn blank_nodes_are_admitted_as_arguments() {
+        // A blank node in an argument position is a non-distinguished variable;
+        // the parser passes it through unchanged (labelled and anonymous alike).
+        let p = pf_pattern("SELECT * WHERE { _:b pf:solve ( [] ?o ) }");
+        let call = pf_only_call(&p);
+        assert_eq!(
+            call.subject_args,
+            vec![TermPattern::BlankNode(BlankNode::new("b"))]
+        );
+        assert!(matches!(call.object_args[0], TermPattern::BlankNode(_)));
+        assert_eq!(call.object_args[1], pf_var("o"));
+    }
+
+    #[test]
+    fn populated_blank_node_property_list_argument_is_a_hard_error() {
+        let err = pf_err("SELECT * WHERE { ?s pf:solve ( [ ex:p ?x ] ) }");
+        assert!(
+            matches!(&err, ParseError::Syntax { reason, .. }
+                if reason.contains("blank-node property list")),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn repeated_variables_pass_through_unchanged() {
+        // Within one side and across both: the parser never de-duplicates or
+        // rewrites — the equality semantics belong to the evaluator.
+        let p = pf_pattern("SELECT * WHERE { ( ?x ?x ) pf:solve ( ?x ?y ) }");
+        let call = pf_only_call(&p);
+        assert_eq!(call.subject_args, vec![pf_var("x"), pf_var("x")]);
+        assert_eq!(call.object_args, vec![pf_var("x"), pf_var("y")]);
+    }
+
+    #[test]
+    fn literal_and_quoted_triple_arguments_are_ordinary_terms() {
+        let p = pf_pattern("SELECT * WHERE { ?s pf:solve ( \"purr\" 42 <<( ?a ex:p ?b )>> ) }");
+        let call = pf_only_call(&p);
+        assert_eq!(call.object_args.len(), 3);
+        assert!(matches!(call.object_args[0], TermPattern::Literal(_)));
+        assert!(matches!(call.object_args[1], TermPattern::Literal(_)));
+        let TermPattern::Triple(t) = &call.object_args[2] else {
+            panic!(
+                "expected a quoted triple argument, got {:?}",
+                call.object_args[2]
+            );
+        };
+        assert_eq!(t.subject, pf_var("a"));
+    }
+
+    #[test]
+    fn data_triples_before_a_call_become_its_lateral_left() {
+        let p = pf_pattern("SELECT * WHERE { ?s ex:name ?n . ?s pf:related ?o . ?o ex:name ?m }");
+        // Textual order: Bgp(before) LATERAL PropertyFunction, then the residual
+        // Bgp(after) joined on.
+        let GraphPattern::Join { left, right } = &p else {
+            panic!("expected the trailing data triple to join on, got {p:?}");
+        };
+        let GraphPattern::Lateral {
+            left: inner_left,
+            right: inner_right,
+        } = &**left
+        else {
+            panic!("expected a Lateral chain, got {left:?}");
+        };
+        let GraphPattern::Bgp { patterns } = &**inner_left else {
+            panic!("expected the preceding triples as a BGP");
+        };
+        assert_eq!(patterns.len(), 1);
+        assert_eq!(patterns[0].object, pf_var("n"));
+        assert!(matches!(**inner_right, GraphPattern::PropertyFunction(_)));
+        let GraphPattern::Bgp { patterns } = &**right else {
+            panic!("expected the trailing triples as a BGP");
+        };
+        assert_eq!(patterns.len(), 1);
+        assert_eq!(patterns[0].object, pf_var("m"));
+    }
+
+    #[test]
+    fn multiple_calls_chain_left_deep_in_textual_order() {
+        let p = pf_pattern(
+            "SELECT * WHERE { ?s ex:name ?n . ?s pf:first ?a . ?a ex:p ?q . ?a pf:second ?b }",
+        );
+        let GraphPattern::Lateral { left, right } = &p else {
+            panic!("expected the outermost Lateral to be the LAST call, got {p:?}");
+        };
+        let GraphPattern::PropertyFunction(second) = &**right else {
+            panic!("expected the second call outermost");
+        };
+        assert_eq!(second.iri, format!("{PF_NS}second"));
+        // Its left is the first call's Lateral joined with the triples between.
+        let GraphPattern::Join {
+            left: chain,
+            right: between,
+        } = &**left
+        else {
+            panic!("expected the intervening triples joined onto the first call, got {left:?}");
+        };
+        let GraphPattern::Lateral { right: first, .. } = &**chain else {
+            panic!("expected the first call's Lateral innermost");
+        };
+        let GraphPattern::PropertyFunction(first) = &**first else {
+            panic!("expected a PropertyFunction node");
+        };
+        assert_eq!(first.iri, format!("{PF_NS}first"));
+        let GraphPattern::Bgp { patterns } = &**between else {
+            panic!("expected the intervening data triples as a BGP");
+        };
+        assert_eq!(patterns.len(), 1);
+        // Order is the order the author wrote them.
+        let calls = pf_calls(&p);
+        assert_eq!(
+            calls.iter().map(|c| c.iri.as_str()).collect::<Vec<_>>(),
+            vec![format!("{PF_NS}first"), format!("{PF_NS}second")]
+        );
+    }
+
+    #[test]
+    fn object_list_gives_each_object_its_own_call() {
+        // `?s pf:solve (…) , (…) ; ex:data ?o` — one call per object; the other
+        // predicate of the same predicate-object list stays a data triple.
+        let p = pf_pattern("SELECT * WHERE { ?s pf:solve ( ?a ) , ( ?b ?c ) ; ex:data ?o }");
+        let calls = pf_calls(&p);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].object_args, vec![pf_var("a")]);
+        assert_eq!(calls[1].object_args, vec![pf_var("b"), pf_var("c")]);
+        assert_eq!(calls[0].subject_args, vec![pf_var("s")]);
+        let triples = pf_triples(&p);
+        assert_eq!(
+            triples.len(),
+            1,
+            "the ex:data triple stays in the residual BGP"
+        );
+        assert_eq!(triples[0].object, pf_var("o"));
+    }
+
+    #[test]
+    fn variable_predicate_is_never_a_property_function() {
+        // Even when the variable would bind to a configured-namespace IRI: only a
+        // plain IRI predicate is recognized, at parse time.
+        let p = pf_pattern("SELECT * WHERE { ?s ?p ?o }");
+        assert!(pf_calls(&p).is_empty());
+        assert_eq!(pf_triples(&p).len(), 1);
+    }
+
+    #[test]
+    fn property_path_predicate_is_never_a_property_function() {
+        for q in [
+            "SELECT * WHERE { ?s pf:related+ ?o }",
+            "SELECT * WHERE { ?s pf:related/ex:p ?o }",
+            "SELECT * WHERE { ?s ^pf:related ?o }",
+            "SELECT * WHERE { ?s !(pf:related) ?o }",
+        ] {
+            let p = pf_pattern(q);
+            assert!(pf_calls(&p).is_empty(), "`{q}` must stay a property path");
+            assert!(matches!(p, GraphPattern::Path { .. }), "`{q}` → {p:?}");
+        }
+        // …so a collection subject in front of one is still an ordinary
+        // collection, cons cells and all — identical to the seam-off parse.
+        let q = "SELECT * WHERE { ( ?a ?b ) pf:related+ ?o }";
+        assert_eq!(pf_pattern(q), pf_pattern_off(q));
+        assert!(pf_calls(&pf_pattern(q)).is_empty());
+    }
+
+    #[test]
+    fn argument_variables_are_visible_in_the_enclosing_group() {
+        // SELECT * projects every argument variable, both sides, in order.
+        let q = format!("{PFP}SELECT * WHERE {{ ( ?a ?b ) pf:solve ( ?c ?d ) }}");
+        let GraphPattern::Project { variables, .. } = select_pattern_with(&q, &pf_options()) else {
+            panic!("expected a Project wrapper");
+        };
+        assert_eq!(
+            variables,
+            vec![
+                Variable::new("a"),
+                Variable::new("b"),
+                Variable::new("c"),
+                Variable::new("d"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_filter_in_the_group_sees_an_argument_variable() {
+        let p = pf_pattern("SELECT * WHERE { ?s pf:solve ?o FILTER(?o > 2) }");
+        let GraphPattern::Filter { inner, .. } = &p else {
+            panic!("expected a Filter, got {p:?}");
+        };
+        assert_eq!(pf_calls(inner).len(), 1);
+        // §19.6: BIND may not re-bind a variable already in scope — proof that the
+        // scope walker really does see the call's argument variables.
+        let err = pf_err("SELECT * WHERE { ?s pf:solve ?o BIND(1 AS ?o) }");
+        assert!(
+            matches!(&err, ParseError::Syntax { reason, .. } if reason.contains("already in scope")),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn annotation_syntax_cannot_annotate_a_call() {
+        let err = pf_err("SELECT * WHERE { ?s pf:solve ?o {| ex:p ?x |} }");
+        assert!(
+            matches!(&err, ParseError::Syntax { reason, .. }
+                if reason.contains("cannot annotate a property-function call")),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn an_argument_list_cannot_head_a_data_triple() {
+        // `( ?a ?b ) pf:solve ?o ; ex:data ?x` — the subject group is an argument
+        // vector, which has no term form to hang the second predicate off.
+        let err = pf_err("SELECT * WHERE { ( ?a ?b ) pf:solve ?o ; ex:data ?x }");
+        assert!(
+            matches!(&err, ParseError::Syntax { reason, .. }
+                if reason.contains("cannot be the subject of an ordinary triple pattern")),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn property_functions_are_rejected_in_templates() {
+        // A template asserts triples; a relation call has nothing to assert.
+        let update = format!("{PFP}INSERT {{ ?s pf:solve ?o }} WHERE {{ ?s ex:p ?o }}");
+        let err = SparqlParser::new()
+            .parse_update_with(&update, &pf_options())
+            .expect_err("a property function in an INSERT template must be refused");
+        assert!(
+            matches!(&err, ParseError::Syntax { reason, .. }
+                if reason.contains("property functions are not allowed in an update template")),
+            "got {err:?}"
+        );
+        let construct = format!("{PFP}CONSTRUCT {{ ?s pf:solve ?o }} WHERE {{ ?s ex:p ?o }}");
+        let err = SparqlParser::new()
+            .parse_query_with(&construct, &pf_options())
+            .expect_err("a property function in a CONSTRUCT template must be refused");
+        assert!(
+            matches!(&err, ParseError::Syntax { reason, .. }
+                if reason.contains("property functions are not allowed in a CONSTRUCT template")),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_call_is_recognized_inside_every_group_construct() {
+        // The seam lives in the triples-block path, so it fires wherever a
+        // triples block may appear.
+        for q in [
+            "SELECT * WHERE { GRAPH ?g { ?s pf:solve ?o } }",
+            "SELECT * WHERE { OPTIONAL { ?s pf:solve ?o } }",
+            "SELECT * WHERE { { ?s pf:solve ?o } UNION { ?s ex:p ?o } }",
+            "SELECT * WHERE { ?s ex:p ?o . { SELECT * WHERE { ?s pf:solve ?o } } }",
+        ] {
+            assert_eq!(pf_calls(&pf_pattern(q)).len(), 1, "`{q}`");
+        }
+        // …including the group graph pattern of a FILTER EXISTS.
+        let p = pf_pattern("SELECT * WHERE { ?s ex:p ?o FILTER EXISTS { ?s pf:solve ?o } }");
+        let GraphPattern::Filter { expr, .. } = &p else {
+            panic!("expected a Filter, got {p:?}");
+        };
+        let Expression::Exists(inner) = expr else {
+            panic!("expected an EXISTS expression, got {expr:?}");
+        };
+        assert_eq!(pf_calls(inner).len(), 1);
+    }
+
+    #[test]
+    fn every_configured_namespace_is_recognized_independently() {
+        // Several namespaces may be configured; each is recognized, and the IRI
+        // is retained exactly as spelled under whichever matched — recognition is
+        // order-independent, unlike the extension-function seam's prefix stripping.
+        let options = ParserOptions {
+            extension_fn_namespaces: Vec::new(),
+            property_fn_namespaces: vec![PF_NS.to_owned(), "https://example.org/other/".to_owned()],
+            property_fn_iris: Vec::new(),
+        };
+        let q = "PREFIX o: <https://example.org/other/>\n\
+                 PREFIX pf: <https://example.org/pf/>\n\
+                 SELECT * WHERE { ?s pf:a ?x . ?s o:b ?y }";
+        let calls = pf_calls(&select_pattern_with(q, &options))
+            .iter()
+            .map(|c| c.iri.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            calls,
+            vec![
+                format!("{PF_NS}a"),
+                "https://example.org/other/b".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn a_configured_namespace_iri_in_term_position_is_an_ordinary_iri() {
+        // Only the PREDICATE position is the seam; the same IRI as a subject or
+        // object is an ordinary term.
+        let p = pf_pattern("SELECT * WHERE { pf:related ex:p pf:related }");
+        assert!(pf_calls(&p).is_empty());
+        let triples = pf_triples(&p);
+        assert_eq!(triples.len(), 1);
+        assert_eq!(triples[0].subject, pf_iri(&format!("{PF_NS}related")));
+        assert_eq!(triples[0].object, pf_iri(&format!("{PF_NS}related")));
+    }
+
+    // ── property_fn_iris: EXACT-match seam (registry-derived) ─────────────────
+
+    /// Options with only `a` under [`PF_NS`] configured as an EXACT
+    /// property-function IRI — no namespace configured at all.
+    fn pf_exact_options() -> ParserOptions {
+        ParserOptions {
+            extension_fn_namespaces: Vec::new(),
+            property_fn_namespaces: Vec::new(),
+            property_fn_iris: vec![format!("{PF_NS}a")],
+        }
+    }
+
+    #[test]
+    fn an_exact_registered_iri_is_recognized_with_no_namespace_configured() {
+        // property_fn_iris alone (property_fn_namespaces empty) is enough to
+        // recognize the exact call — this is the shape `prepare_for` uses.
+        let q = format!("{PFP}SELECT * WHERE {{ ?s <{PF_NS}a> ?o }}");
+        let p = unproject(select_pattern_with(&q, &pf_exact_options()));
+        assert_eq!(pf_only_call(&p).iri, format!("{PF_NS}a"));
+    }
+
+    #[test]
+    fn an_exact_iri_registration_does_not_hijack_a_sibling_data_predicate() {
+        // THE regression: registering `.../pf/a` as an exact property-function
+        // IRI must NOT reclassify the unrelated, longer, same-prefixed data
+        // predicate `.../pf/ab` as a property-function call. Before this fix,
+        // registering an IRI pushed it into the PREFIX set, so `ab` (which
+        // starts with `a`) parsed as a call to an unregistered relation and
+        // hard-errored — a category error, since a registry's keys are exact
+        // IRIs, not namespaces.
+        let q = format!("{PFP}SELECT * WHERE {{ ?s <{PF_NS}ab> ?o }}");
+        let p = unproject(select_pattern_with(&q, &pf_exact_options()));
+        assert!(
+            pf_calls(&p).is_empty(),
+            "a longer, merely-prefix-sharing IRI must stay an ordinary triple \
+             pattern, got {p:?}"
+        );
+        let triples = pf_triples(&p);
+        assert_eq!(triples.len(), 1);
+        assert_eq!(
+            triples[0].predicate,
+            NamedNodePattern::NamedNode(NamedNode::new_unchecked(format!("{PF_NS}ab")))
+        );
+    }
+
+    #[test]
+    fn property_fn_iris_and_property_fn_namespaces_recognition_is_a_union() {
+        // A caller-declared namespace still prefix-matches, and an exact IRI
+        // still exact-matches, when both are configured at once.
+        let options = ParserOptions {
+            extension_fn_namespaces: Vec::new(),
+            property_fn_namespaces: vec!["https://example.org/other/".to_owned()],
+            property_fn_iris: vec![format!("{PF_NS}a")],
+        };
+        let q = "PREFIX o: <https://example.org/other/>\n\
+                 PREFIX pf: <https://example.org/pf/>\n\
+                 SELECT * WHERE { ?s pf:a ?x . ?s o:anything ?y }";
+        let calls = pf_calls(&select_pattern_with(q, &options))
+            .iter()
+            .map(|c| c.iri.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            calls,
+            vec![
+                format!("{PF_NS}a"),
+                "https://example.org/other/anything".to_owned()
+            ]
+        );
     }
 }

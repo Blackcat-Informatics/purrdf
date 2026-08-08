@@ -64,6 +64,9 @@ pub enum GovernedOutcome {
         result: SparqlResult,
         /// This execution's consumption, ceilings, and (here, always absent) trip.
         evidence: GovernorEvidence,
+        /// The identity of the property-function registry this execution ran under.
+        /// See [`RelationIdentity`].
+        relations: RelationIdentity,
     },
     /// A governor stopped the execution before it finished. See [`BudgetExhausted`].
     BudgetExhausted(BudgetExhausted),
@@ -76,6 +79,19 @@ impl GovernedOutcome {
         match self {
             Self::Complete { evidence, .. } => evidence,
             Self::BudgetExhausted(exhausted) => &exhausted.evidence,
+        }
+    }
+
+    /// The identity of the property-function registry this execution ran under,
+    /// whichever outcome it reached.
+    ///
+    /// Empty ([`RelationIdentity::is_empty`]) when no registry, or an empty one, was in
+    /// scope — never absent, for the reason [`RelationIdentity`] gives.
+    #[must_use]
+    pub const fn relations(&self) -> &RelationIdentity {
+        match self {
+            Self::Complete { relations, .. } => relations,
+            Self::BudgetExhausted(exhausted) => &exhausted.relations,
         }
     }
 
@@ -217,8 +233,68 @@ pub struct BudgetExhausted {
     pub tripped: TrippedGovernor,
     /// This execution's consumption, ceilings, and trip.
     pub evidence: GovernorEvidence,
+    /// The identity of the property-function registry this execution ran under. See
+    /// [`RelationIdentity`].
+    pub relations: RelationIdentity,
     /// What the rows the execution reached bound, and what they are.
     pub partial: PartialAnswers,
+}
+
+/// The identity of the property-function registry a governed execution ran under: the
+/// registry's fingerprint (`crate::property_fn_plan::registry_fingerprint`, already
+/// computed once at prepare time) paired with the IRIs it covers, sorted.
+///
+/// # Why a governed receipt needs this at all
+///
+/// A relation is host code, not data the queried dataset or the query text determine —
+/// two runs of the same query, over the same snapshot, under two registries that
+/// disagree about nothing but one relation's arity or declared volatility can produce
+/// different rows AND a different parallel-safety classification for the same call. See
+/// [`QueryExplanation::relations`](crate::governor::QueryExplanation::relations) for the
+/// sibling receipt this pairs with on the explain path; this is the same fact carried on
+/// the governed path, where an explain call was never made. Without it, a governed
+/// receipt that looked identical to another could have answered a different query.
+///
+/// # Why the fingerprint rather than the full descriptor list
+///
+/// [`QueryExplanation`](crate::governor::QueryExplanation) already carries the full
+/// per-relation descriptors when a caller asked to explain — that is the receipt for a
+/// human or a diagnostic to read. [`GovernedOutcome`] is on the hot path of every
+/// governed query, so it carries the fingerprint two registries are compared with
+/// (already computed once, at prepare, and validated against the plan before evaluation
+/// begins — see `check_plan_matches_relations`) rather than re-deriving or re-carrying
+/// the full descriptor set on every call. A caller that needs the full description reads
+/// it from an explain call over the same registry.
+///
+/// # Absence, not omission
+///
+/// Empty (both the fingerprint and the IRI list) when no registry, or an empty one, was
+/// in scope — the same "present but empty" convention every other absence on this
+/// receipt uses (see [`QueryExplanation::relations`](crate::governor::QueryExplanation::relations)),
+/// never a missing value that could be mistaken for "this build does not report it".
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RelationIdentity {
+    /// The registry's fingerprint — everything about its contents that can change a
+    /// plan, an answer, or a parallel-safety classification, taken IRI-sorted so it is a
+    /// function of what was registered rather than of registration order. Empty when no
+    /// registry was in scope.
+    pub fingerprint: String,
+    /// The registered IRIs the fingerprint was taken over, sorted.
+    pub iris: Vec<String>,
+}
+
+impl RelationIdentity {
+    /// The empty identity: no registry, or an empty one, was in scope.
+    pub const EMPTY: Self = Self {
+        fingerprint: String::new(),
+        iris: Vec::new(),
+    };
+
+    /// Whether no registry, or an empty one, was in scope.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.fingerprint.is_empty()
+    }
 }
 
 /// What a truncated execution's rows bound relative to the query's true answer.

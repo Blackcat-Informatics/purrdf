@@ -21,8 +21,8 @@ use std::sync::Arc;
 use ::purrdf::{DatasetView, RdfDataset};
 use ::purrdf::{SparqlRequest, SparqlResult, TermValue};
 use purrdf_sparql_eval::{
-    GovernedOutcome, GovernorState, NativeSparqlEngine, ShaclPrebinding, ShaclQueryOptions,
-    UserFunctionRegistry,
+    GovernedOutcome, GovernorState, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions,
+    ShaclPrebinding, UserFunctionRegistry,
 };
 
 use crate::model::xsd;
@@ -463,6 +463,16 @@ thread_local! {
     /// `EvalCtx` (propagated in `fork_for_worker`).
     static CURRENT_FUNCTIONS: RefCell<Option<Arc<UserFunctionRegistry>>> = const { RefCell::new(None) };
 
+    /// The property-function registry in scope for the current validation, set by
+    /// [`enter_property_function_scope`]. [`run_query_view`] snapshots it into the
+    /// query options so a `sh:select`/`sh:ask` body whose predicate IRI sits under a
+    /// configured property-function namespace resolves to a registered relation.
+    /// The exact twin of [`CURRENT_FUNCTIONS`], for the exact same reasons: one guard
+    /// per focus chunk, so every rayon worker sees the same registry without shared
+    /// mutation, and the evaluator's own parallel workers receive it through `EvalCtx`
+    /// rather than by reading this thread-local.
+    static CURRENT_PROPERTY_FUNCTIONS: RefCell<Option<Arc<PropertyFunctionRegistry>>> = const { RefCell::new(None) };
+
     /// The execution governors in force for the current validation, set by
     /// [`enter_governor_scope`]. Every SPARQL query this module runs charges the state
     /// found here, and a validation with nothing installed runs exactly as it always did
@@ -545,29 +555,32 @@ fn run_query_view<D: DatasetView + Sync>(
     // scopes via `borrow_mut`, which would panic ("already borrowed") if an outer
     // immutable borrow were still live.
     let functions = CURRENT_FUNCTIONS.with(|slot| slot.borrow().clone());
+    let relations = current_property_functions();
     let governors = current_governors();
     let registry = functions.as_deref().filter(|reg| !reg.is_empty());
+    // An empty table is indistinguishable from no table at the resolution point, so it
+    // is dropped here rather than carried — the same treatment `registry` gets above.
+    let property_functions = relations.as_deref().filter(|reg| !reg.is_empty());
     let request = SparqlRequest {
         query,
         base_iri: None,
         substitutions,
     };
-    let options = ShaclQueryOptions {
+    let options = QueryOptions {
         prebinding: prebind,
         functions: registry,
+        property_functions,
         bnode_mint_prefix,
     };
 
     let Some(state) = governors else {
         return SPARQL_ENGINE
-            .with(|engine| engine.query_shacl_view(dataset, query, None, substitutions, options))
+            .with(|engine| engine.query_with_options_view(dataset, request, options))
             .map_err(|e| format!("query evaluation error: {e}"));
     };
 
     let outcome = SPARQL_ENGINE
-        .with(|engine| {
-            engine.query_governed_in_operation_with_options(dataset, request, options, &state)
-        })
+        .with(|engine| engine.query_governed_in_operation(dataset, request, options, &state))
         .map_err(|e| format!("query evaluation error: {e}"))?;
     match outcome {
         GovernedOutcome::Complete { result, .. } => Ok(result),
@@ -606,6 +619,48 @@ pub fn enter_function_scope(registry: Arc<UserFunctionRegistry>) -> FunctionScop
         previous,
         _not_send: PhantomData,
     }
+}
+
+/// An RAII scope that installs `registry` as the current property-function table for
+/// the duration of a validation, restoring the previous value on drop (so nested
+/// validations compose). The exact twin of [`FunctionScope`].
+#[must_use]
+#[derive(Debug)]
+pub struct PropertyFunctionScope {
+    previous: Option<Arc<PropertyFunctionRegistry>>,
+    /// A thread-local restoration guard must be dropped on the thread where it
+    /// was created; this marker makes that invariant compile-time enforced.
+    _not_send: PhantomData<Rc<()>>,
+}
+
+impl Drop for PropertyFunctionScope {
+    fn drop(&mut self) {
+        let restore = self.previous.take();
+        CURRENT_PROPERTY_FUNCTIONS.with(|slot| *slot.borrow_mut() = restore);
+    }
+}
+
+/// Install `registry` as the current property-function table, returning a guard that
+/// restores the previous table when dropped.
+pub fn enter_property_function_scope(
+    registry: Arc<PropertyFunctionRegistry>,
+) -> PropertyFunctionScope {
+    let previous = CURRENT_PROPERTY_FUNCTIONS.with(|slot| slot.borrow_mut().replace(registry));
+    PropertyFunctionScope {
+        previous,
+        _not_send: PhantomData,
+    }
+}
+
+/// The property-function table installed on this thread, if a validation installed
+/// one.
+///
+/// Read on the orchestrating thread and handed to each focus worker's
+/// [`enter_property_function_scope`], because a thread-local is not visible from the
+/// threads a worker pool forks — the same reason [`current_governors`] exists.
+#[must_use]
+pub fn current_property_functions() -> Option<Arc<PropertyFunctionRegistry>> {
+    CURRENT_PROPERTY_FUNCTIONS.with(|slot| slot.borrow().clone())
 }
 
 /// Run a SELECT query over the dataset using the generic SPARQL `query` path
@@ -677,7 +732,7 @@ pub(crate) fn run_select_with_shacl_prebinding_view<D: DatasetView + Sync>(
 /// [`run_select_with_shacl_prebinding_view`] that returns the `Graph` arm.
 ///
 /// `bnode_mint_prefix` is the deterministic blank-mint prefix installed on the
-/// evaluation ([`purrdf_sparql_eval::ShaclQueryOptions::bnode_mint_prefix`]): the
+/// evaluation ([`purrdf_sparql_eval::QueryOptions::bnode_mint_prefix`]): the
 /// rules engine passes a per-focus-node identity tag so every blank the CONSTRUCT
 /// mints carries the focus's identity at mint time, while data blanks carried
 /// through variables pass through untouched.
@@ -1042,6 +1097,197 @@ mod tests {
         let result = eval_scalar_expr(&dataset, "STRLEN(1 + 2)", &[])
             .expect("scalar eval must succeed despite the SPARQL type error");
         assert_eq!(result, None);
+    }
+
+    // ── property functions in a SHACL body ────────────────────────────────────
+
+    /// A relation that answers "is this value on the deny list?": invoked with its
+    /// subject bound (mode `bf`), it emits one row naming the reason when the value is
+    /// the banned literal, and nothing otherwise.
+    ///
+    /// Two things about it are load-bearing for the test below. It declares ONLY `bf`,
+    /// so the query is evaluable at all only if the engine invokes it with its argument
+    /// bound; and its argument is a LITERAL, which the IRI-only outer-binding
+    /// substitution could not have carried — so a passing test is evidence the dispatch
+    /// reads the row itself.
+    #[derive(Debug)]
+    struct DenyListRelation {
+        modes: [purrdf_sparql_eval::BindingPattern; 1],
+    }
+
+    impl DenyListRelation {
+        fn new() -> Self {
+            Self {
+                modes: [purrdf_sparql_eval::BindingPattern::from_code("bf")],
+            }
+        }
+    }
+
+    impl purrdf_sparql_eval::PropertyFunction for DenyListRelation {
+        fn volatility(&self) -> purrdf_sparql_eval::Volatility {
+            purrdf_sparql_eval::Volatility::Stable
+        }
+
+        fn arity(&self) -> purrdf_sparql_eval::PfArity {
+            purrdf_sparql_eval::PfArity::new(1, 1)
+        }
+
+        fn modes(&self) -> &[purrdf_sparql_eval::BindingPattern] {
+            &self.modes
+        }
+
+        fn rows_per_invocation(&self, _mode: purrdf_sparql_eval::BindingPattern) -> u64 {
+            1
+        }
+
+        fn open(
+            &self,
+            args: &purrdf_sparql_eval::PfArgs<'_>,
+            _ceiling: Option<u64>,
+        ) -> Result<Box<dyn purrdf_sparql_eval::PfCursor>, purrdf_sparql_eval::EvalError> {
+            let banned = matches!(
+                args.get(0),
+                Some(TermValue::Literal { lexical_form, .. }) if lexical_form == "banned"
+            );
+            let rows = if banned {
+                let subject = args.get(0).cloned().expect("the bound subject");
+                vec![vec![
+                    subject,
+                    TermValue::Literal {
+                        lexical_form: "on the deny list".to_owned(),
+                        datatype: "http://www.w3.org/2001/XMLSchema#string".to_owned(),
+                        language: None,
+                        direction: None,
+                    },
+                ]]
+            } else {
+                Vec::new()
+            };
+            Ok(Box::new(DenyListCursor { rows, next: 0 }))
+        }
+    }
+
+    struct DenyListCursor {
+        rows: Vec<purrdf_sparql_eval::PfRow>,
+        next: usize,
+    }
+
+    impl purrdf_sparql_eval::PfCursor for DenyListCursor {
+        fn next(
+            &mut self,
+        ) -> Result<Option<purrdf_sparql_eval::PfRow>, purrdf_sparql_eval::EvalError> {
+            let row = self.rows.get(self.next).cloned();
+            self.next += 1;
+            Ok(row)
+        }
+    }
+
+    /// A `sh:sparql` constraint whose body calls a property function actually INVOKES
+    /// the relation: the violation fires for exactly the focus node whose value the
+    /// relation reports, and not for the other one.
+    ///
+    /// The negative half is the point. A constraint whose body silently degraded — the
+    /// predicate read as an ordinary data triple that matches nothing — would report
+    /// zero violations and be indistinguishable from a conforming graph, which is the
+    /// always-passing failure mode this test exists to forbid.
+    #[test]
+    fn a_sparql_constraint_body_invokes_a_registered_property_function() {
+        let shapes_ttl = r#"
+            @prefix ex: <http://example.org/> .
+            @prefix sh: <http://www.w3.org/ns/shacl#> .
+            ex:Shape a sh:NodeShape ;
+                sh:targetClass ex:Thing ;
+                sh:sparql ex:Constraint .
+            ex:Constraint sh:select """
+                SELECT $this ?value
+                WHERE {
+                    $this <http://example.org/tag> ?value .
+                    ?value <http://example.org/pf/denied> ?why .
+                }
+            """ .
+        "#;
+        let shapes_dataset =
+            crate::text_ingest::parse_turtle_to_dataset(shapes_ttl).expect("valid shapes");
+        let prefixes = crate::text_ingest::extract_prefixes(shapes_ttl);
+        let shapes = crate::shapes::from_dataset_with_config(&shapes_dataset, &prefixes, None)
+            .expect("parse shapes");
+
+        let data = dataset_from_ntriples(&[
+            "<http://example.org/n1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+             <http://example.org/Thing> .",
+            "<http://example.org/n1> <http://example.org/tag> \"ok\" .",
+            "<http://example.org/n2> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+             <http://example.org/Thing> .",
+            "<http://example.org/n2> <http://example.org/tag> \"banned\" .",
+        ]);
+
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register(
+            "http://example.org/pf/denied",
+            Arc::new(DenyListRelation::new()),
+        );
+        let _scope = enter_property_function_scope(Arc::new(registry));
+
+        let report = crate::engine::validate_dataset(data.as_ref(), &shapes).expect("validate");
+        assert!(
+            !report.conforms,
+            "the relation reports the banned value, so the constraint must fire"
+        );
+        assert_eq!(
+            report.results.len(),
+            1,
+            "exactly the focus node whose value the relation named: {:?}",
+            report.results
+        );
+        assert_eq!(
+            report.results[0].focus_node,
+            named_term("http://example.org/n2")
+        );
+    }
+
+    /// The same shapes and data with an EMPTY registry in scope: the seam is off, the
+    /// predicate is ordinary data, and the constraint body matches nothing.
+    ///
+    /// The pair of tests is what makes each one mean something. This one shows the
+    /// graph is NOT intrinsically violating, so the violation the test above reports can
+    /// only have come from the relation actually running.
+    #[test]
+    fn an_empty_registry_leaves_the_constraint_body_s_predicate_as_ordinary_data() {
+        let shapes_ttl = r#"
+            @prefix ex: <http://example.org/> .
+            @prefix sh: <http://www.w3.org/ns/shacl#> .
+            ex:Shape a sh:NodeShape ;
+                sh:targetClass ex:Thing ;
+                sh:sparql ex:Constraint .
+            ex:Constraint sh:select """
+                SELECT $this ?value
+                WHERE {
+                    $this <http://example.org/tag> ?value .
+                    ?value <http://example.org/pf/denied> ?why .
+                }
+            """ .
+        "#;
+        let shapes_dataset =
+            crate::text_ingest::parse_turtle_to_dataset(shapes_ttl).expect("valid shapes");
+        let prefixes = crate::text_ingest::extract_prefixes(shapes_ttl);
+        let shapes = crate::shapes::from_dataset_with_config(&shapes_dataset, &prefixes, None)
+            .expect("parse shapes");
+        let data = dataset_from_ntriples(&[
+            "<http://example.org/n2> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+             <http://example.org/Thing> .",
+            "<http://example.org/n2> <http://example.org/tag> \"banned\" .",
+        ]);
+
+        // With an EMPTY registry in scope the predicate is not a configured
+        // property-function IRI at all, so the body reads it as data and matches
+        // nothing — the seam is off, exactly as it is for every host that never
+        // configured it.
+        let _scope = enter_property_function_scope(Arc::new(PropertyFunctionRegistry::new()));
+        let report = crate::engine::validate_dataset(data.as_ref(), &shapes).expect("validate");
+        assert!(
+            report.conforms,
+            "with the seam off the predicate is ordinary data that matches nothing"
+        );
     }
 
     #[test]

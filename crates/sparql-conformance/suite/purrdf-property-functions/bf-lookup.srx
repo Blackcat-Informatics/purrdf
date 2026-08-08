@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<sparql xmlns="http://www.w3.org/2005/sparql-results#">
+  <head><variable name="team"/></head>
+  <results>
+    <result>
+      <binding name="team"><uri>http://purrdf.test/relations#beta</uri></binding>
+    </result>
+  </results>
+</sparql>

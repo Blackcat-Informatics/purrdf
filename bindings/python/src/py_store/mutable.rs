@@ -14,16 +14,20 @@ use pyo3::types::{PyBytes, PyDict};
 
 use super::io::{PyRdfFormat, dataset_from_quads_verbatim, parse_quads, read_input};
 use super::query::{
-    GovernorArgs, PyCancellationToken, PyEntailmentQueryOutcome, PyQueryOutcome, PyUpdateOutcome,
-    build_engine, materialize_entailment_outcome, materialize_outcome, materialize_results,
+    EngineConfig, GovernorArgs, PyCancellationToken, PyEntailmentQueryOutcome, PyQueryOutcome,
+    PyUpdateOutcome, build_engine, build_relations, collect_relations,
+    materialize_entailment_outcome, materialize_outcome, materialize_results,
     materialize_update_outcome, run_governed,
 };
 use super::store::PyQuadIter;
-use super::term::{PyQuad, PyVariable, extract_graph_name, extract_term};
+use super::term::{
+    PyQuad, PyVariable, extract_graph_name, extract_term, rdf_term_to_value,
+    rdf_term_to_value_scoped,
+};
 use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs};
 use crate::{
     BlankScope, DatasetMut, GraphMatchValue, QueryEntailmentPlan, RdfDatasetBuilder, RdfLiteral,
-    RdfQuad, RdfTerm, RdfTriple, SerializeGraph, SparqlEngine, SparqlRequest, TermValue,
+    RdfQuad, RdfTerm, RdfTriple, SerializeGraph, SparqlRequest, TermValue,
     query_with_entailment_governed, serialize_dataset, serialize_dataset_with_jsonld_options,
 };
 
@@ -204,21 +208,43 @@ impl PyMutableDataset {
 
     /// Run a SPARQL query over the effective dataset.
     ///
-    /// Engine configuration (unset = engine defaults, see
-    /// [`build_engine`](super::query::build_engine)): `extension_namespaces`
-    /// enables the closed extension-function set under the caller's namespaces
-    /// (OFF by default); `standpoint_predicates` is the `(according_to,
-    /// sharpens)` predicate table `heldIn` requires.
-    #[pyo3(signature = (query, *, substitutions=None, extension_namespaces=None, standpoint_predicates=None))]
+    /// The engine-configuration and relation keywords are exactly those of
+    /// `Store.query`: `extension_namespaces` / `property_fn_namespaces` declare
+    /// prefix recognition, `standpoint_predicates` is the `(according_to, sharpens)`
+    /// table `heldIn` requires, and `relations` / `relations_from_graph` register
+    /// host relations for this call.
+    #[pyo3(signature = (
+        query,
+        *,
+        substitutions=None,
+        extension_namespaces=None,
+        property_fn_namespaces=None,
+        standpoint_predicates=None,
+        relations=None,
+        relations_from_graph=None,
+    ))]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each engine-configuration axis is named explicitly at the call site"
+    )]
     fn query(
         &self,
         py: Python<'_>,
         query: &str,
         substitutions: Option<&Bound<'_, PyDict>>,
         extension_namespaces: Option<Vec<String>>,
+        property_fn_namespaces: Option<Vec<String>>,
         standpoint_predicates: Option<(String, String)>,
+        relations: Option<&Bound<'_, PyDict>>,
+        relations_from_graph: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Py<PyAny>> {
         let subs = collect_substitutions(substitutions)?;
+        let specs = collect_relations(relations, relations_from_graph)?;
+        let config = EngineConfig {
+            extension_namespaces,
+            property_fn_namespaces,
+            standpoint_predicates,
+        };
         let inner = &self.inner;
         // Snapshot + engine build + evaluation run detached (GIL released);
         // results are materialized into Python objects after reacquiring.
@@ -226,14 +252,19 @@ impl PyMutableDataset {
             let dataset = inner
                 .freeze()
                 .map_err(|e| PyValueError::new_err(format!("snapshot failed: {e}")))?;
-            let engine = build_engine(extension_namespaces, standpoint_predicates);
+            let registry = build_relations(specs, &dataset)?;
+            let engine = build_engine(config);
             engine
-                .query(
-                    &dataset,
+                .query_with_options_view(
+                    &*dataset,
                     SparqlRequest {
                         query,
                         base_iri: None,
                         substitutions: &subs,
+                    },
+                    purrdf_sparql_eval::QueryOptions {
+                        property_functions: registry.as_ref(),
+                        ..purrdf_sparql_eval::QueryOptions::EMPTY
                     },
                 )
                 .map_err(|e| PyValueError::new_err(format!("query evaluation error: {e}")))
@@ -249,7 +280,10 @@ impl PyMutableDataset {
         *,
         substitutions=None,
         extension_namespaces=None,
+        property_fn_namespaces=None,
         standpoint_predicates=None,
+        relations=None,
+        relations_from_graph=None,
         fuel=None,
         deadline_ms=None,
         max_answers=None,
@@ -269,7 +303,10 @@ impl PyMutableDataset {
         query: &str,
         substitutions: Option<&Bound<'_, PyDict>>,
         extension_namespaces: Option<Vec<String>>,
+        property_fn_namespaces: Option<Vec<String>>,
         standpoint_predicates: Option<(String, String)>,
+        relations: Option<&Bound<'_, PyDict>>,
+        relations_from_graph: Option<&Bound<'_, PyDict>>,
         fuel: Option<u64>,
         deadline_ms: Option<u64>,
         max_answers: Option<u64>,
@@ -279,6 +316,12 @@ impl PyMutableDataset {
         cancel: Option<&PyCancellationToken>,
     ) -> PyResult<Py<PyQueryOutcome>> {
         let subs = collect_substitutions(substitutions)?;
+        let specs = collect_relations(relations, relations_from_graph)?;
+        let config = EngineConfig {
+            extension_namespaces,
+            property_fn_namespaces,
+            standpoint_predicates,
+        };
         let args = GovernorArgs {
             fuel,
             deadline_ms,
@@ -294,7 +337,8 @@ impl PyMutableDataset {
             let dataset = inner
                 .freeze()
                 .map_err(|e| PyValueError::new_err(format!("snapshot failed: {e}")))?;
-            let engine = build_engine(extension_namespaces, standpoint_predicates);
+            let registry = build_relations(specs, &dataset)?;
+            let engine = build_engine(config);
             engine
                 .query_governed(
                     &dataset,
@@ -302,6 +346,10 @@ impl PyMutableDataset {
                         query,
                         base_iri: None,
                         substitutions: &subs,
+                    },
+                    purrdf_sparql_eval::QueryOptions {
+                        property_functions: registry.as_ref(),
+                        ..purrdf_sparql_eval::QueryOptions::EMPTY
                     },
                     governors,
                 )
@@ -360,11 +408,16 @@ impl PyMutableDataset {
             max_remote_requests,
         };
         let inner = &self.inner;
+        let config = EngineConfig {
+            extension_namespaces,
+            property_fn_namespaces: None,
+            standpoint_predicates,
+        };
         let outcome = run_governed(py, args, cancel, move |governors| {
             let dataset = inner
                 .freeze()
                 .map_err(|e| PyValueError::new_err(format!("snapshot failed: {e}")))?;
-            let engine = build_engine(extension_namespaces, standpoint_predicates);
+            let engine = build_engine(config);
             query_with_entailment_governed(
                 &engine,
                 &dataset,
@@ -382,13 +435,17 @@ impl PyMutableDataset {
     }
 
     /// Run a SPARQL UPDATE under caller-supplied execution governors, returning an
-    /// `UpdateOutcome`. The keywords and the all-or-nothing guarantee are exactly those
-    /// of `Store.update_governed`.
+    /// `UpdateOutcome`. The keywords — governors, engine configuration, and the
+    /// `relations` / `relations_from_graph` tables — and the all-or-nothing guarantee
+    /// are exactly those of `Store.update_governed`.
     #[pyo3(signature = (
         update,
         *,
         extension_namespaces=None,
+        property_fn_namespaces=None,
         standpoint_predicates=None,
+        relations=None,
+        relations_from_graph=None,
         fuel=None,
         deadline_ms=None,
         max_intermediate_cells=None,
@@ -406,7 +463,10 @@ impl PyMutableDataset {
         py: Python<'_>,
         update: &str,
         extension_namespaces: Option<Vec<String>>,
+        property_fn_namespaces: Option<Vec<String>>,
         standpoint_predicates: Option<(String, String)>,
+        relations: Option<&Bound<'_, PyDict>>,
+        relations_from_graph: Option<&Bound<'_, PyDict>>,
         fuel: Option<u64>,
         deadline_ms: Option<u64>,
         max_intermediate_cells: Option<u64>,
@@ -414,6 +474,12 @@ impl PyMutableDataset {
         max_remote_requests: Option<u64>,
         cancel: Option<&PyCancellationToken>,
     ) -> PyResult<Py<PyUpdateOutcome>> {
+        let specs = collect_relations(relations, relations_from_graph)?;
+        let config = EngineConfig {
+            extension_namespaces,
+            property_fn_namespaces,
+            standpoint_predicates,
+        };
         let args = GovernorArgs {
             fuel,
             deadline_ms,
@@ -428,13 +494,18 @@ impl PyMutableDataset {
             let mut dataset = inner
                 .freeze()
                 .map_err(|e| PyValueError::new_err(format!("snapshot failed: {e}")))?;
-            let outcome = build_engine(extension_namespaces, standpoint_predicates)
+            let registry = build_relations(specs, &dataset)?;
+            let outcome = build_engine(config)
                 .update_governed(
                     &mut dataset,
                     SparqlRequest {
                         query: update,
                         base_iri: None,
                         substitutions: &[],
+                    },
+                    purrdf_sparql_eval::QueryOptions {
+                        property_functions: registry.as_ref(),
+                        ..purrdf_sparql_eval::QueryOptions::EMPTY
                     },
                     governors,
                 )
@@ -450,16 +521,38 @@ impl PyMutableDataset {
     }
 
     /// Run a SPARQL UPDATE (COW-atomic: a failed update leaves the set unchanged).
-    /// `extension_namespaces` / `standpoint_predicates` configure the engine
-    /// exactly as on [`query`](Self::query).
-    #[pyo3(signature = (update, *, extension_namespaces=None, standpoint_predicates=None))]
+    /// The engine-configuration and relation keywords configure the engine exactly
+    /// as on [`query`](Self::query); a `relations_from_graph` table is read from the
+    /// PRE-update snapshot, the state the `WHERE` clause matches.
+    #[pyo3(signature = (
+        update,
+        *,
+        extension_namespaces=None,
+        property_fn_namespaces=None,
+        standpoint_predicates=None,
+        relations=None,
+        relations_from_graph=None,
+    ))]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each engine-configuration axis is named explicitly at the call site"
+    )]
     fn update(
         &mut self,
         py: Python<'_>,
         update: &str,
         extension_namespaces: Option<Vec<String>>,
+        property_fn_namespaces: Option<Vec<String>>,
         standpoint_predicates: Option<(String, String)>,
+        relations: Option<&Bound<'_, PyDict>>,
+        relations_from_graph: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<()> {
+        let specs = collect_relations(relations, relations_from_graph)?;
+        let config = EngineConfig {
+            extension_namespaces,
+            property_fn_namespaces,
+            standpoint_predicates,
+        };
         // Snapshot + evaluation run detached (GIL released); the fresh frozen
         // base is adopted after reacquiring.
         let inner = &self.inner;
@@ -467,14 +560,19 @@ impl PyMutableDataset {
             let mut dataset = inner
                 .freeze()
                 .map_err(|e| PyValueError::new_err(format!("snapshot failed: {e}")))?;
-            let engine = build_engine(extension_namespaces, standpoint_predicates);
+            let registry = build_relations(specs, &dataset)?;
+            let engine = build_engine(config);
             engine
-                .update(
+                .update_with_options(
                     &mut dataset,
                     SparqlRequest {
                         query: update,
                         base_iri: None,
                         substitutions: &[],
+                    },
+                    purrdf_sparql_eval::QueryOptions {
+                        property_functions: registry.as_ref(),
+                        ..purrdf_sparql_eval::QueryOptions::EMPTY
                     },
                 )
                 .map_err(|e| PyValueError::new_err(format!("update evaluation error: {e}")))?;
@@ -583,64 +681,6 @@ fn rdf_quad_to_values_scoped(quad: &RdfQuad, scope: BlankScope) -> QuadValues {
             .graph_name
             .as_ref()
             .map(|g| rdf_term_to_value_scoped(g, scope)),
-    }
-}
-
-fn rdf_term_to_value(term: &RdfTerm) -> TermValue {
-    rdf_term_to_value_scoped(term, BlankScope::DEFAULT)
-}
-
-fn rdf_term_to_value_scoped(term: &RdfTerm, scope: BlankScope) -> TermValue {
-    match term {
-        RdfTerm::Iri(iri) => TermValue::Iri(iri.clone()),
-        RdfTerm::BlankNode(label) => blank_value_scoped(label, scope),
-        RdfTerm::Literal(lit) => TermValue::Literal {
-            lexical_form: lit.lexical_form.clone(),
-            datatype: match (&lit.datatype, &lit.language) {
-                (Some(dt), _) => dt.clone(),
-                (None, Some(_)) => RDF_LANG_STRING.to_owned(),
-                (None, None) => XSD_STRING.to_owned(),
-            },
-            language: lit.language.clone(),
-            direction: lit.direction,
-        },
-        RdfTerm::Triple(t) => TermValue::Triple {
-            s: Box::new(rdf_term_to_value_scoped(&t.subject, scope)),
-            p: Box::new(TermValue::Iri(t.predicate.clone())),
-            o: Box::new(rdf_term_to_value_scoped(&t.object, scope)),
-        },
-    }
-}
-
-/// Build the `TermValue::Blank` for a surfaced blank-node `label`.
-///
-/// Under a non-default `scope` (the per-load isolation path), the bare label is
-/// tagged with that scope verbatim. Under the DEFAULT scope (a blank node arriving
-/// FROM Python), the label may already be the `purrdfesc{n}_{body}` scope envelope
-/// [`BlankScope::qualify_label`] emitted on the way OUT; decode it back to its
-/// `(label, scope)` so a round-tripped blank matches the stored node.
-fn blank_value_scoped(label: &str, scope: BlankScope) -> TermValue {
-    if scope == BlankScope::DEFAULT {
-        blank_value_from_external_label(label)
-    } else {
-        TermValue::Blank {
-            label: label.to_owned(),
-            scope,
-        }
-    }
-}
-
-/// Decode a surfaced blank label through [`BlankScope::unqualify_label`], the
-/// EXACT inverse of the [`BlankScope::qualify_label`] rendering this surface
-/// emits: a `purrdfesc{n}_{body}` scope envelope is unwrapped back into its
-/// `(label, scope)` pair, so a label round-tripped through Python matches the
-/// stored node. A label Python authored itself is not an envelope, so it decodes
-/// to itself at the default scope, byte for byte, whatever dots it carries.
-fn blank_value_from_external_label(label: &str) -> TermValue {
-    let (label, scope) = BlankScope::unqualify_label(label);
-    TermValue::Blank {
-        label: label.into_owned(),
-        scope,
     }
 }
 

@@ -30,15 +30,19 @@
 //!   (`* + ? / | ^ !()` and the PurRDF `{n,m}` / `<any>` extensions) — see the
 //!   `path` module.
 //! - **Hard-fail, no degraded fallback.** `SERVICE` federation ([`remote`],
-//!   [`remote_http`]), `LATERAL` (`binop`), and SPARQL `UPDATE` ([`update`]) are all
-//!   evaluated in-engine — none of them is out of scope. What remains a typed
-//!   [`EvalError::Unsupported`] is a narrow, enumerated residue: a variable-bound
-//!   quoted-triple-term component in a BGP or property-path pattern (`convert`),
-//!   an unresolved custom SPARQL function or aggregate IRI (`expr`, `modifier`),
-//!   `heldIn` called without a caller-supplied standpoint-predicate configuration,
-//!   and a manually constructed graph pattern whose nesting exceeds the parser's
-//!   safety bound (`governor::soundness`). Never a wrong answer, and never a partial
-//!   one *offered as complete* (the project `no-optionality` doctrine).
+//!   [`remote_http`]), `LATERAL` (`binop`), host-injected **property-function**
+//!   relations ([`property_fn`], `property_fn_plan`, `property_fn_eval`), and SPARQL
+//!   `UPDATE` ([`update`]) are all evaluated in-engine — none of them is out of scope.
+//!   What remains a typed [`EvalError::Unsupported`] is a narrow, enumerated residue:
+//!   a variable-bound quoted-triple-term component in a BGP or property-path pattern
+//!   (`convert`), an unresolved custom SPARQL function or aggregate IRI (`expr`,
+//!   `modifier`), `heldIn` called without a caller-supplied standpoint-predicate
+//!   configuration, and a manually constructed graph pattern whose nesting exceeds the
+//!   parser's safety bound (`governor::soundness`). A call into a relation the host did
+//!   not register, or one no declared access pattern admits, is not in that residue
+//!   either: it is a typed [`EvalError::Function`], because the construct is supported
+//!   and the host's table is what does not answer it. Never a wrong answer, and never a
+//!   partial one *offered as complete* (the project `no-optionality` doctrine).
 //! - **Governed execution, when a caller asks for it.** A caller may attach ceilings
 //!   and a stop signal ([`governor::QueryGovernors`]) and run
 //!   [`NativeSparqlEngine::query_governed`], which either completes or returns
@@ -86,10 +90,14 @@ pub(crate) mod parallel;
 #[cfg(test)]
 mod parallel_determinism_gate;
 mod path;
+pub mod property_fn;
+mod property_fn_eval;
+mod property_fn_plan;
 pub mod remote;
 // HTTP-shaped SERVICE source. The actual POST transport is host-injected so this
 // crate stays wasm-portable.
 pub mod remote_http;
+mod row_ingest;
 pub mod scratch;
 pub mod solution;
 mod substitute;
@@ -97,9 +105,7 @@ mod template;
 pub mod update;
 pub mod user_fn;
 
-pub use engine::{
-    NativeSparqlEngine, PlanCache, PreparedQuery, ShaclPrebinding, ShaclQueryOptions,
-};
+pub use engine::{NativeSparqlEngine, PlanCache, PreparedQuery, QueryOptions, ShaclPrebinding};
 pub use error::EvalError;
 pub use eval::{
     EvalCtx, EvalOptions, LossVocabulary, Outcome, StandpointPredicates, eval, evaluate_query,
@@ -107,7 +113,7 @@ pub use eval::{
 pub use fallible::{CompleteSparqlResult, FallibleSparqlError, FallibleSparqlResult};
 pub use governed::{
     BudgetExhausted, GovernedEvidence, GovernedOutcome, GovernedUpdateOutcome, PartialAnswers,
-    PartialSparqlResult,
+    PartialSparqlResult, RelationIdentity,
 };
 pub use governor::{
     CHARGE_SCHEDULE, CancellationFlag, ChargePoint, GOVERNOR_CORPUS_DIGEST,
@@ -121,10 +127,22 @@ pub use governor::{
 // governed surface whose outcome types are unnameable from the crate that produces them
 // is one no consumer can match on.
 pub use purrdf_core::{GovernorEvidence, ResourceDimension, StopCause, TrippedGovernor};
+// The adornment lattice, re-exported for the same reason: it appears in
+// [`PropertyFunction`]'s own signature (`modes`, `rows_per_invocation`, `admits`), so a
+// host implementing the trait cannot write the impl without naming it.
+pub use purrdf_core::binding_pattern::BindingPattern;
 // Re-exported so engine hosts can configure the extension-function namespace set
 // (see [`NativeSparqlEngine::with_parser_options`]) without depending on the
 // front-end crate directly.
 pub use purrdf_sparql_algebra::ParserOptions;
+// The property-function seam: the relation trait a host implements, the argument /
+// row / arity types its calls speak in, the registry evaluation resolves a predicate
+// IRI against, and the in-memory reference relation. Re-exported so a host wires a
+// relation into the engine without naming the module path.
+pub use property_fn::{
+    MemoryRelation, PfArgs, PfArity, PfCursor, PfDescriptor, PfMode, PfRow, PropertyFunction,
+    PropertyFunctionRegistry,
+};
 pub use remote::{LocalRemoteQuerySource, RemoteError, RemoteQuerySource, ResolvedBindings};
 pub use remote_http::{HttpRemoteQuerySource, HttpRequest, HttpTransport};
 pub use scratch::{ScratchId, ScratchInterner, SolutionTerm};

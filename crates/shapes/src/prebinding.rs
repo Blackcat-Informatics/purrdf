@@ -100,7 +100,15 @@ pub(crate) fn check_ask(query: &Query, prebound: &[&str]) -> Result<(), String> 
 /// restrictions forbid.
 fn check_pattern(pattern: &GraphPattern, prebound: &[&str]) -> Result<(), String> {
     match pattern {
-        GraphPattern::Bgp { .. } | GraphPattern::Path { .. } => Ok(()),
+        // A property-function call's argument vectors are term positions, exactly like
+        // a BGP triple's or a property path's endpoints: a pre-bound variable there is
+        // constrained by the pre-binding rewrite and changes no SPARQL semantics, so
+        // there is nothing for §5.2.1 to forbid. The restricted constructs are the ones
+        // whose *evaluation* breaks under pre-binding (`MINUS`, `SERVICE`, `VALUES`) or
+        // that would ASSIGN a pre-bound variable; a call does neither.
+        GraphPattern::Bgp { .. }
+        | GraphPattern::Path { .. }
+        | GraphPattern::PropertyFunction(_) => Ok(()),
         GraphPattern::Minus { .. } => Err(
             "MINUS is not allowed in a query with pre-bound variables (SHACL-SPARQL §5.2.1)"
                 .to_owned(),

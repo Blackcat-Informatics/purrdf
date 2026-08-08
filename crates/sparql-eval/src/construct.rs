@@ -757,7 +757,13 @@ fn is_reifies(tp: &TriplePattern) -> bool {
 fn collect_where_triples<'a>(pattern: &'a GraphPattern, out: &mut Vec<&'a TriplePattern>) {
     match pattern {
         GraphPattern::Bgp { patterns } => out.extend(patterns.iter()),
-        GraphPattern::Path { .. } | GraphPattern::Values { .. } | GraphPattern::Service { .. } => {}
+        // A property function's argument vectors are argument positions, not triple
+        // patterns: the call matches no triple in the graph, so it contributes nothing
+        // to the reifier-dropping analysis that reads this set.
+        GraphPattern::Path { .. }
+        | GraphPattern::Values { .. }
+        | GraphPattern::Service { .. }
+        | GraphPattern::PropertyFunction(_) => {}
         GraphPattern::Join { left, right }
         | GraphPattern::Lateral { left, right }
         | GraphPattern::Union { left, right }

@@ -59,8 +59,8 @@ use purrdf_core::{SparqlEngine, SparqlRequest, SparqlResult};
 use purrdf_sparql_eval::{
     BudgetExhausted, CancellationFlag, GovernedOutcome, GovernedUpdateOutcome,
     GovernorEvidence as EvidenceValue, NativeSparqlEngine, PartialAnswers as PartialValue,
-    QueryGovernors, ResourceDimension, StopCause, StopSignal, TrippedGovernor as TrippedValue,
-    WallDeadline,
+    QueryGovernors, QueryOptions, ResourceDimension, StopCause, StopSignal,
+    TrippedGovernor as TrippedValue, WallDeadline,
 };
 use purrdf_sparql_results::{
     ResultProvenance, SparqlResultsFormat, serialize as serialize_results,
@@ -1034,7 +1034,12 @@ impl QueryEngine {
         let frozen = dataset.inner.freeze().map_err(|e| diag_to_err(&e))?;
         let outcome = self
             .inner
-            .query_governed(&frozen, sparql_request(sparql, base.as_deref()), &governors)
+            .query_governed(
+                &frozen,
+                sparql_request(sparql, base.as_deref()),
+                QueryOptions::EMPTY,
+                &governors,
+            )
             .map_err(|e| diag_to_err(&e))?;
         query_outcome_from_governed(outcome)
     }
@@ -1150,6 +1155,7 @@ impl QueryEngine {
             .update_governed(
                 &mut frozen,
                 sparql_request(sparql, base.as_deref()),
+                QueryOptions::EMPTY,
                 &governors,
             )
             .map_err(|e| diag_to_err(&e))?;
@@ -1317,7 +1323,9 @@ fn graph_result_from_sparql(result: SparqlResult) -> Result<Dataset, JsError> {
 /// `Result` is the whole point of the type.
 fn query_outcome_from_governed(outcome: GovernedOutcome) -> Result<QueryOutcome, JsError> {
     match outcome {
-        GovernedOutcome::Complete { result, evidence } => Ok(QueryOutcome {
+        GovernedOutcome::Complete {
+            result, evidence, ..
+        } => Ok(QueryOutcome {
             result: Some(query_result_from_sparql(result)?),
             partial: None,
             tripped: None,
@@ -1328,6 +1336,7 @@ fn query_outcome_from_governed(outcome: GovernedOutcome) -> Result<QueryOutcome,
             tripped,
             evidence,
             partial,
+            ..
         }) => Ok(QueryOutcome {
             result: None,
             partial: Some(partial_answers_from_native(partial)?),

@@ -1,0 +1,2 @@
+PREFIX rel: <https://example.org/rel/>
+SELECT ?person ?city WHERE { ?person rel:memberOf ?team . ?team rel:teamSite ( ?city ?headcount ) . FILTER(?headcount > 1) }

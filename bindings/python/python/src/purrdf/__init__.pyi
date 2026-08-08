@@ -267,6 +267,38 @@ class Variable:
 _Subject = NamedNode | BlankNode
 _Term = NamedNode | BlankNode | Literal | Triple
 
+# A host-supplied PROPERTY FUNCTION: a relation invoked from predicate position,
+# which — unlike a function — may emit zero, one, or many rows per call. Both
+# spellings declare a positional arity, `subject_arity` values written on the
+# subject side of the predicate and `object_arity` on the object side, and both
+# name the relation by the IRI a query spells in predicate position.
+#
+# `_Relation` carries the table as Python data: `(subject_arity, object_arity,
+# rows)`, where `rows` is a sequence of rows and each row is a sequence of terms
+# in flattened order (subject-side values first, then object-side). Rows are
+# emitted in the order given.
+#
+# `_RelationFromGraph` carries the table as RDF instead: `(head, subject_arity,
+# object_arity)`, where `head` names an `rdf:List` of `rdf:List`s — one inner list
+# per row — in the store's own DEFAULT graph. Row order is list order.
+#
+#     store.query(
+#         "SELECT ?team WHERE { <http://example.org/ann> "
+#         "<http://example.org/rel/memberOf> ?team }",
+#         relations={
+#             "http://example.org/rel/memberOf": (
+#                 1,
+#                 1,
+#                 [
+#                     [NamedNode("http://example.org/ann"), NamedNode("http://example.org/blue")],
+#                     [NamedNode("http://example.org/bob"), NamedNode("http://example.org/red")],
+#                 ],
+#             )
+#         },
+#     )
+_Relation = tuple[int, int, Sequence[Sequence[_Term]]]
+_RelationFromGraph = tuple[_Term, int, int]
+
 # ── Query results ───────────────────────────────────────────────────────────────
 
 class QuerySolution:
@@ -412,15 +444,27 @@ class Store:
     def remove(self, quad: Quad) -> None: ...
     # Engine configuration kwargs (unset = engine defaults): `extension_namespaces`
     # enables the closed extension-function set under the caller's namespaces (OFF
-    # by default), `standpoint_predicates` is the `(according_to, sharpens)`
+    # by default), `property_fn_namespaces` does the same for property-function
+    # PREFIX recognition, `standpoint_predicates` is the `(according_to, sharpens)`
     # predicate table the `heldIn` extension requires.
+    #
+    # `relations` / `relations_from_graph` register host relations for THIS call
+    # (see `_Relation` / `_RelationFromGraph`). A registered IRI is recognized in
+    # predicate position EXACTLY, so reaching one needs no namespace declaration;
+    # declaring `property_fn_namespaces` is how a caller asks for the stricter
+    # reading, in which an UNREGISTERED IRI under the namespace is a hard error
+    # instead of a triple pattern that matches nothing. A duplicate IRI, a ragged
+    # table, or a torn `rdf:List` raises `ValueError`.
     def query(
         self,
         query: str,
         *,
         substitutions: dict[Variable, _Term] | None = ...,
         extension_namespaces: list[str] | None = ...,
+        property_fn_namespaces: list[str] | None = ...,
         standpoint_predicates: tuple[str, str] | None = ...,
+        relations: dict[str, _Relation] | None = ...,
+        relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
     ) -> QuerySolutions | QueryTriples | QueryBoolean: ...
     # Governed sibling of `query`: every ceiling is inclusive; an omitted dimension
     # remains metered at an effectively unreachable ceiling. `deadline_ms` is a
@@ -432,7 +476,10 @@ class Store:
         *,
         substitutions: dict[Variable, _Term] | None = ...,
         extension_namespaces: list[str] | None = ...,
+        property_fn_namespaces: list[str] | None = ...,
         standpoint_predicates: tuple[str, str] | None = ...,
+        relations: dict[str, _Relation] | None = ...,
+        relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
         max_answers: int | None = ...,
@@ -465,7 +512,10 @@ class Store:
         update: str,
         *,
         extension_namespaces: list[str] | None = ...,
+        property_fn_namespaces: list[str] | None = ...,
         standpoint_predicates: tuple[str, str] | None = ...,
+        relations: dict[str, _Relation] | None = ...,
+        relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
     ) -> None: ...
     # Governed sibling of `update`. No `max_answers`: it bounds an answer sequence
     # an UPDATE does not have.
@@ -474,7 +524,10 @@ class Store:
         update: str,
         *,
         extension_namespaces: list[str] | None = ...,
+        property_fn_namespaces: list[str] | None = ...,
         standpoint_predicates: tuple[str, str] | None = ...,
+        relations: dict[str, _Relation] | None = ...,
+        relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
         max_intermediate_cells: int | None = ...,
@@ -558,7 +611,10 @@ class MutableDataset:
         *,
         substitutions: dict[Variable, _Term] | None = ...,
         extension_namespaces: list[str] | None = ...,
+        property_fn_namespaces: list[str] | None = ...,
         standpoint_predicates: tuple[str, str] | None = ...,
+        relations: dict[str, _Relation] | None = ...,
+        relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
     ) -> QuerySolutions | QueryTriples | QueryBoolean: ...
     # Governed siblings: keywords, outcome, and Ctrl-C interaction exactly as on
     # `Store.query_governed` / `Store.update_governed`.
@@ -568,7 +624,10 @@ class MutableDataset:
         *,
         substitutions: dict[Variable, _Term] | None = ...,
         extension_namespaces: list[str] | None = ...,
+        property_fn_namespaces: list[str] | None = ...,
         standpoint_predicates: tuple[str, str] | None = ...,
+        relations: dict[str, _Relation] | None = ...,
+        relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
         max_answers: int | None = ...,
@@ -599,14 +658,20 @@ class MutableDataset:
         update: str,
         *,
         extension_namespaces: list[str] | None = ...,
+        property_fn_namespaces: list[str] | None = ...,
         standpoint_predicates: tuple[str, str] | None = ...,
+        relations: dict[str, _Relation] | None = ...,
+        relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
     ) -> None: ...
     def update_governed(
         self,
         update: str,
         *,
         extension_namespaces: list[str] | None = ...,
+        property_fn_namespaces: list[str] | None = ...,
         standpoint_predicates: tuple[str, str] | None = ...,
+        relations: dict[str, _Relation] | None = ...,
+        relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
         max_intermediate_cells: int | None = ...,

@@ -91,6 +91,15 @@
 //! different entry point with no explanation to give — and both refusals name what to drop.
 //! Those two are now the WHOLE refusal list: `--entailment` beside a governor flag used to
 //! be a third, and it runs instead (see [`refuse_unenforceable_combinations`]).
+//!
+//! The rendered `relations` block is always empty here: the CLI has no property-function
+//! registration surface at all — [`ExplainOp::run`] calls the registry-free
+//! [`NativeSparqlEngine::explain_query_view`], never
+//! [`NativeSparqlEngine::explain_query_with_property_functions_view`] — so there is never
+//! anything for it to list. That is the honest minimal form, not a missing feature —
+//! [`QueryExplanation::render`] always emits the block, empty or not, precisely so "no
+//! relations were in scope" and "this build does not report relations" stay distinguishable
+//! bytes.
 
 use purrdf::GovernedEntailment;
 use purrdf_core::{DatasetView, LossLedger, SparqlRequest, SparqlResult};
@@ -98,6 +107,7 @@ use purrdf_entail::EntailError;
 use purrdf_rdf::JsonLdSerializeOptions;
 use purrdf_sparql_eval::{
     GovernedOutcome, NativeSparqlEngine, PreparedQuery, QueryExplanation, QueryGovernors,
+    QueryOptions as EngineQueryOptions,
 };
 use purrdf_sparql_results::{ResultProvenance, serialize};
 
@@ -126,7 +136,9 @@ impl ViewOp for QueryOp<'_> {
     type Output = SparqlResult;
 
     fn run<D: DatasetView + Sync>(self, view: &D) -> Result<SparqlResult, CliError> {
-        Ok(self.engine.query_prepared_view(view, self.prepared, &[])?)
+        Ok(self
+            .engine
+            .query_prepared_view(view, self.prepared, &[], EngineQueryOptions::EMPTY)?)
     }
 }
 
@@ -155,9 +167,16 @@ impl ViewOp for GovernedQueryOp<'_> {
 
     fn run<D: DatasetView + Sync>(self, view: &D) -> Result<GovernedOutcome, CliError> {
         let governors: QueryGovernors = self.flags.to_governors();
-        Ok(self
-            .engine
-            .query_prepared_governed_view(view, self.prepared, &[], &governors)?)
+        // `QueryOptions::EMPTY`: the CLI wires no SHACL-AF function table and no
+        // property-function registry, and it prepared this plan through the matching
+        // registry-free parse — so the plan and the evaluation agree on an empty seam.
+        Ok(self.engine.query_prepared_governed_view(
+            view,
+            self.prepared,
+            &[],
+            purrdf_sparql_eval::QueryOptions::EMPTY,
+            &governors,
+        )?)
     }
 }
 

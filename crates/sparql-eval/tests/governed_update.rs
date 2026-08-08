@@ -24,7 +24,7 @@ use purrdf_core::{
 };
 use purrdf_sparql_eval::{
     CancellationFlag, GovernedUpdateOutcome, GraphResolver, NativeSparqlEngine, QueryGovernors,
-    StopSignal,
+    QueryOptions, StopSignal,
 };
 
 /// The number of `ex:p` edges in the fixture store.
@@ -80,7 +80,12 @@ fn governed(update: &str, governors: &QueryGovernors) -> (Arc<RdfDataset>, Gover
     let engine = NativeSparqlEngine::new();
     let mut dataset = fixture();
     let outcome = engine
-        .update_governed(&mut dataset, request(update), governors)
+        .update_governed(
+            &mut dataset,
+            request(update),
+            QueryOptions::EMPTY,
+            governors,
+        )
         .expect("a tripped governor is an outcome, not an update error");
     (dataset, outcome)
 }
@@ -112,7 +117,12 @@ fn metered_fuel(update: &str) -> u64 {
 /// `WHERE` is the same pattern.
 fn metered_query_fuel(select: &str) -> u64 {
     let outcome = NativeSparqlEngine::new()
-        .query_governed(&fixture(), request(select), &QueryGovernors::METERED)
+        .query_governed(
+            &fixture(),
+            request(select),
+            QueryOptions::EMPTY,
+            &QueryGovernors::METERED,
+        )
         .expect("the metering query runs");
     outcome.evidence().consumed.get(ResourceDimension::Fuel)
 }
@@ -287,6 +297,7 @@ fn update_governed_trip_leaves_the_store_byte_identical() {
         .update_governed(
             &mut dataset,
             request(&whole),
+            QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_fuel(ceiling),
         )
         .expect("a tripped governor is an outcome, not an update error");
@@ -334,6 +345,7 @@ fn a_trip_inside_a_bulk_operation_still_leaves_the_store_byte_identical() {
         .update_governed(
             &mut dataset,
             request(&update),
+            QueryOptions::EMPTY,
             // Enough for the INSERT DATA and part of the CLEAR, never enough for all of it.
             &QueryGovernors::UNBOUNDED.with_fuel(full - 1),
         )
@@ -366,6 +378,7 @@ fn load_is_not_issued_when_the_stop_signal_is_already_latched() {
             request(&format!(
                 "{PREFIX}INSERT DATA {{ ex:added ex:p ex:one }} ;\nLOAD ex:doc"
             )),
+            QueryOptions::EMPTY,
             &cancelled_governors(),
         )
         .expect("a tripped governor is an outcome, not an update error");
@@ -402,6 +415,7 @@ fn load_is_not_issued_when_the_stop_signal_latches_at_the_host_seam() {
         .update_governed(
             &mut dataset,
             request(&format!("{PREFIX}LOAD ex:doc")),
+            QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_stop_signal(QuietThenCancelled::new(1)),
         )
         .expect("a tripped governor is an outcome");
@@ -432,6 +446,7 @@ fn load_silent_does_not_launder_a_governor_trip_into_a_noop_success() {
         .update_governed(
             &mut dataset,
             request(&format!("{PREFIX}LOAD SILENT ex:doc")),
+            QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_stop_signal(QuietThenCancelled::new(1)),
         )
         .expect("a tripped governor is an outcome");
@@ -458,6 +473,7 @@ fn load_returning_after_cancellation_is_discarded_before_publication() {
             .update_governed(
                 &mut dataset,
                 request(&format!("{PREFIX}LOAD{silent} ex:doc")),
+                QueryOptions::EMPTY,
                 &QueryGovernors::UNBOUNDED.with_stop_signal(Arc::new(flag)),
             )
             .expect("a post-return stop is an outcome");
@@ -488,7 +504,12 @@ fn load_charges_for_the_document_it_ingests() {
 
     let mut metered = fixture();
     let applied = engine
-        .update_governed(&mut metered, request(&update), &QueryGovernors::METERED)
+        .update_governed(
+            &mut metered,
+            request(&update),
+            QueryOptions::EMPTY,
+            &QueryGovernors::METERED,
+        )
         .expect("the metering run");
     assert!(applied.is_applied());
     assert_eq!(
@@ -512,6 +533,7 @@ fn load_charges_for_the_document_it_ingests() {
         .update_governed(
             &mut dataset,
             request(&update),
+            QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_fuel(0),
         )
         .expect("a tripped governor is an outcome");
@@ -530,6 +552,7 @@ fn load_charges_for_the_document_it_ingests() {
         .update_governed(
             &mut dataset,
             request(&update),
+            QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_fuel(1),
         )
         .expect("a tripped governor is an outcome");
@@ -566,6 +589,7 @@ fn a_remote_request_ceiling_bounds_load_before_the_fetch() {
         .update_governed(
             &mut dataset,
             request(&format!("{PREFIX}LOAD ex:doc")),
+            QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_max_remote_requests(0),
         )
         .expect("a tripped governor is an outcome");
@@ -695,6 +719,7 @@ fn a_where_clause_stops_on_the_fuel_ceiling_and_applies_nothing() {
         .update_governed(
             &mut dataset,
             request(&update),
+            QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_fuel(full / 2),
         )
         .expect("a tripped governor is an outcome");
@@ -734,6 +759,7 @@ fn a_governor_trip_inside_the_where_crosses_as_a_typed_governor_not_a_diagnostic
         .update_governed(
             &mut dataset,
             request(&update),
+            QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_fuel(fuel - 1),
         )
         .expect("a WHERE-clause trip is an outcome, not a diagnostic");
@@ -778,6 +804,7 @@ fn a_where_stopped_part_way_applies_none_of_the_mutation_it_had_computed() {
         .update_governed(
             &mut dataset,
             request(&update),
+            QueryOptions::EMPTY,
             // No ceiling on any dimension: a stop signal, and nothing else.
             &QueryGovernors::UNBOUNDED.with_stop_signal(QuietThenCancelled::new(1)),
         )
@@ -816,6 +843,7 @@ fn an_intermediate_cell_ceiling_refuses_an_update_whose_where_would_breach_it() 
         .update_governed(
             &mut dataset,
             request(&update),
+            QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_max_intermediate_cells(4),
         )
         .expect("a refusal is an outcome, not an update error");
@@ -855,6 +883,7 @@ fn an_intermediate_cell_ceiling_bounds_update_staging_before_limit_plus_one() {
         .update_governed(
             &mut dataset,
             request(&update),
+            QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_max_intermediate_cells(8),
         )
         .expect("a staging trip is an outcome, not an update error");
@@ -950,6 +979,7 @@ fn every_mutating_operation_kind_charges_and_stops() {
             .update_governed(
                 &mut dataset,
                 request(&update),
+                QueryOptions::EMPTY,
                 &QueryGovernors::UNBOUNDED.with_fuel(fuel - 1),
             )
             .unwrap_or_else(|error| panic!("{kind} reported a trip as an error: {error:?}"));
@@ -989,7 +1019,12 @@ fn a_latched_stop_signal_stops_every_operation_kind_before_it_runs() {
         let mut dataset = fixture();
         let image_before = store_image(&dataset);
         let outcome = engine
-            .update_governed(&mut dataset, request(&update), &cancelled_governors())
+            .update_governed(
+                &mut dataset,
+                request(&update),
+                QueryOptions::EMPTY,
+                &cancelled_governors(),
+            )
             .expect("a tripped governor is an outcome");
         assert_eq!(
             outcome.tripped(),
@@ -1017,6 +1052,7 @@ fn a_parse_failure_is_an_error_not_an_exhausted_budget() {
         .update_governed(
             &mut dataset,
             request("INSERT DATA { this is not sparql"),
+            QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .expect_err("a malformed request is an error");
@@ -1033,6 +1069,7 @@ fn a_missing_host_seam_is_an_error_not_an_exhausted_budget() {
         .update_governed(
             &mut dataset,
             request(&format!("{PREFIX}LOAD ex:doc")),
+            QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .expect_err("a LOAD with no resolver is an error");
@@ -1077,6 +1114,7 @@ fn a_governed_update_over_triple_terms_charges_and_rolls_back() {
         .update_governed(
             &mut dataset,
             request(&update),
+            QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_fuel(fuel - 1),
         )
         .expect("a tripped governor is an outcome");

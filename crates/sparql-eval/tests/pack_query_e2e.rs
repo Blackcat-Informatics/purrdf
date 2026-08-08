@@ -27,7 +27,7 @@ use purrdf_core::{
     BlankScope, DatasetView, PackBuilder, PackView, RdfDataset, RdfDatasetBuilder, RdfLiteral,
     RdfTextDirection, SparqlResult, TermValue,
 };
-use purrdf_sparql_eval::NativeSparqlEngine;
+use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
 
 // ── shared fixture ───────────────────────────────────────────────────────────────
 
@@ -151,7 +151,7 @@ fn run<D: DatasetView + Sync>(dataset: &D, query: &str) -> SparqlResult {
     let engine = NativeSparqlEngine::new();
     let prepared = engine.prepare_query(query, None).expect("prepare");
     engine
-        .query_prepared_view(dataset, &prepared, &[])
+        .query_prepared_view(dataset, &prepared, &[], QueryOptions::EMPTY)
         .expect("query")
 }
 

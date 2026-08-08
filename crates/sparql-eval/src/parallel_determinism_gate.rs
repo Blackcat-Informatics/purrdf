@@ -525,3 +525,177 @@ SELECT ?p ?f WHERE {
         other => panic!("expected Solutions, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// The property-function corpus case
+// ---------------------------------------------------------------------------
+
+/// A `Stable` relation that MINTS a term absent from the dataset: `?p ex:tagOf ?tag`
+/// pairs a person with a freshly-built literal derived from their IRI.
+///
+/// Minting is what makes this case load-bearing for the gate. A minted value is not in
+/// the dataset, so its cell is a [`crate::scratch::SolutionTerm::Computed`] id into the
+/// *evaluating context's* scratch table — and a forked worker has its own clone of that
+/// table. If a worker's minted row escaped without being re-interned against the parent
+/// ([`crate::parallel::portable_row`] / `reintern_minted_row`), the id would resolve to
+/// a different value on the parallel path than on the sequential one. Nothing in the
+/// dataset can make that divergence visible; only a relation that mints can.
+#[derive(Debug)]
+struct TagRelation {
+    modes: [purrdf_core::binding_pattern::BindingPattern; 1],
+}
+
+impl TagRelation {
+    fn new() -> Self {
+        Self {
+            modes: [crate::property_fn::PfArity::new(1, 1).all_free_mode()],
+        }
+    }
+}
+
+impl crate::property_fn::PropertyFunction for TagRelation {
+    fn volatility(&self) -> crate::user_fn::Volatility {
+        crate::user_fn::Volatility::Stable
+    }
+
+    fn arity(&self) -> crate::property_fn::PfArity {
+        crate::property_fn::PfArity::new(1, 1)
+    }
+
+    fn modes(&self) -> &[purrdf_core::binding_pattern::BindingPattern] {
+        &self.modes
+    }
+
+    fn rows_per_invocation(&self, _mode: purrdf_core::binding_pattern::BindingPattern) -> u64 {
+        1
+    }
+
+    fn open(
+        &self,
+        args: &crate::property_fn::PfArgs<'_>,
+        _ceiling: Option<u64>,
+    ) -> Result<Box<dyn crate::property_fn::PfCursor>, crate::EvalError> {
+        let rows = match args.get(0) {
+            Some(purrdf_core::TermValue::Iri(subject)) => {
+                let tag = purrdf_core::TermValue::Literal {
+                    lexical_form: format!("tag:{subject}"),
+                    datatype: "http://www.w3.org/2001/XMLSchema#string".to_owned(),
+                    language: None,
+                    direction: None,
+                };
+                vec![vec![purrdf_core::TermValue::Iri(subject.clone()), tag]]
+            }
+            _ => Vec::new(),
+        };
+        Ok(Box::new(TagCursor { rows, next: 0 }))
+    }
+}
+
+struct TagCursor {
+    rows: Vec<crate::property_fn::PfRow>,
+    next: usize,
+}
+
+impl crate::property_fn::PfCursor for TagCursor {
+    fn next(&mut self) -> Result<Option<crate::property_fn::PfRow>, crate::EvalError> {
+        let row = self.rows.get(self.next).cloned();
+        self.next += 1;
+        Ok(row)
+    }
+}
+
+/// (name, query text) corpus for the property-function seam, evaluated with a registry
+/// injected. Every case invokes a relation that mints, so the byte-identity assertion
+/// below is about values that exist only in the evaluating context's scratch space.
+const PF_CORPUS: &[(&str, &str)] = &[
+    (
+        "pf_minting_join",
+        "PREFIX ex: <https://example.org/>
+SELECT ?p ?tag WHERE {
+  ?p ex:city ex:city20 .
+  ?p <https://example.org/pf/tagOf> ?tag .
+}",
+    ),
+    (
+        "pf_minting_union_branches",
+        "PREFIX ex: <https://example.org/>
+SELECT ?p ?tag WHERE {
+  { ?p ex:city ex:city20 . ?p <https://example.org/pf/tagOf> ?tag }
+  UNION
+  { ?p ex:city ex:city21 . ?p <https://example.org/pf/tagOf> ?tag }
+}",
+    ),
+    (
+        "pf_minting_written_before_its_data_pattern",
+        // Textual order puts the call first; the prepare-time feasibility ordering
+        // schedules the data pattern ahead of it, and the answer must be the same on
+        // both scheduling paths.
+        "PREFIX ex: <https://example.org/>
+SELECT ?p ?tag WHERE {
+  ?p <https://example.org/pf/tagOf> ?tag .
+  ?p ex:city ex:city20 .
+}",
+    ),
+    (
+        "pf_minting_filtered_and_ordered",
+        "PREFIX ex: <https://example.org/>
+SELECT ?p ?tag WHERE {
+  ?p ex:city ex:city20 .
+  ?p <https://example.org/pf/tagOf> ?tag .
+  FILTER(STRSTARTS(STR(?tag), \"tag:\"))
+} ORDER BY ?tag LIMIT 25",
+    ),
+];
+
+/// The determinism gate for a **term-minting property function**: every case in
+/// [`PF_CORPUS`], run twice against the same engine and dataset with the same registry
+/// — once forced parallel, once forced sequential — must be byte-identical.
+#[test]
+fn property_function_paths_are_byte_identical_across_the_corpus() {
+    let ds = people_dataset();
+    let engine = NativeSparqlEngine::new();
+    let mut registry = crate::property_fn::PropertyFunctionRegistry::new();
+    registry.register("https://example.org/pf/tagOf", Arc::new(TagRelation::new()));
+
+    for &(name, query) in PF_CORPUS {
+        let run = |force: bool| {
+            let _guard = force_parallel_for_test(force);
+            engine
+                .query_with_property_functions(
+                    &ds,
+                    SparqlRequest {
+                        query,
+                        base_iri: None,
+                        substitutions: &[],
+                    },
+                    &registry,
+                )
+                .unwrap_or_else(|e| panic!("query `{name}` failed: {e:?}\n{query}"))
+        };
+        let parallel = run(true);
+        let sequential = run(false);
+        assert_eq!(
+            comparable(&parallel),
+            comparable(&sequential),
+            "query `{name}` diverged between forced-parallel and forced-sequential \
+             evaluation:\n{query}"
+        );
+        let SparqlResult::Solutions { rows, .. } = &parallel else {
+            panic!("query `{name}` must return solutions");
+        };
+        assert!(
+            !rows.is_empty(),
+            "query `{name}` returned no rows on both paths — the assertion above would \
+             be vacuous"
+        );
+        assert!(
+            rows.iter().all(|row| matches!(
+                row.get(1),
+                Some(Some(purrdf_core::TermValue::Literal { lexical_form, .. }))
+                    if lexical_form.starts_with("tag:")
+            )),
+            "every row must carry the relation's MINTED tag, resolved to the value the \
+             relation produced"
+        );
+    }
+}

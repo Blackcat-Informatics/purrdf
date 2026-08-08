@@ -12,11 +12,12 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use purrdf_core::{RdfDataset, SparqlEngine, SparqlRequest, SparqlResult};
+use purrdf_core::{RdfDataset, SparqlRequest, SparqlResult};
 use purrdf_sparql_algebra::{GraphPattern, Query, SparqlParser};
-use purrdf_sparql_conformance::manifest::{SparqlTestCase, TestKind};
+use purrdf_sparql_conformance::manifest::{ExpectedResult, SparqlTestCase, TestKind};
 use purrdf_sparql_eval::{
-    EvalOptions, LocalRemoteQuerySource, NativeSparqlEngine, ParserOptions, StandpointPredicates,
+    EvalOptions, LocalRemoteQuerySource, NativeSparqlEngine, ParserOptions, QueryOptions,
+    StandpointPredicates,
 };
 
 const BASE: &str = "http://purrdf.test/manifest/";
@@ -33,6 +34,8 @@ fn make_engine(cost: bool) -> NativeSparqlEngine {
     NativeSparqlEngine::new()
         .with_parser_options(ParserOptions {
             extension_fn_namespaces: vec![EXT_NS.to_owned()],
+            property_fn_namespaces: vec![purrdf_sparql_conformance::run::REL_NS.to_owned()],
+            property_fn_iris: Vec::new(),
         })
         .with_standpoint_predicates(StandpointPredicates::new(
             format!("{EXT_NS}accordingTo"),
@@ -57,8 +60,20 @@ fn eval_case(
         substitutions: &[],
     };
     let result = match remote {
-        Some(source) => engine.query_with_source(dataset, request, source),
-        None => engine.query(dataset, request),
+        Some(source) => engine.query_with_source(
+            dataset,
+            request,
+            source,
+            QueryOptions {
+                property_functions: Some(purrdf_sparql_conformance::run::harness_relations()),
+                ..QueryOptions::EMPTY
+            },
+        ),
+        None => engine.query_with_property_functions(
+            dataset,
+            request,
+            purrdf_sparql_conformance::run::harness_relations(),
+        ),
     }
     .map_err(|e| format!("evaluate {}: {e}", case.iri))?;
     Ok(result)
@@ -116,6 +131,7 @@ fn cost_and_structural_planner_produce_identical_results() {
 
     let mut cases = 0usize;
     let mut skipped = 0usize;
+    let mut expected_failures = 0usize;
     let mut mismatches: Vec<(String, String)> = Vec::new();
 
     for manifest in &manifests {
@@ -126,6 +142,13 @@ fn cost_and_structural_planner_produce_identical_results() {
                 continue;
             }
             cases += 1;
+            if matches!(case.expected, ExpectedResult::EvalError(_)) {
+                // A case whose manifest expects the run to be REFUSED. Both planners
+                // refuse it — the refusal is a prepare-time admission decision neither
+                // BGP order can change — so it lands in `skipped` below, and it is
+                // counted here so that tally stays an identity rather than a licence.
+                expected_failures += 1;
+            }
             let query_text = std::fs::read_to_string(&case.query)
                 .unwrap_or_else(|e| panic!("read query {}: {e}", case.query.display()));
             let ordered = query_is_top_level_ordered(&query_text);
@@ -209,5 +232,14 @@ fn cost_and_structural_planner_produce_identical_results() {
     assert!(
         cases >= 100,
         "differential corpus shrank: only {cases} query-eval cases"
+    );
+    // The only cases excused from the differential are the ones whose manifest expects
+    // a refusal: there, both planners agreeing to fail is the whole of what the
+    // comparison can say. Pinned as an identity so a case that started erroring for
+    // some OTHER reason cannot hide in the skip count.
+    assert_eq!(
+        skipped, expected_failures,
+        "{skipped} case(s) were skipped for erroring under both planners, but only \
+         {expected_failures} case(s) expect a refusal"
     );
 }

@@ -4,9 +4,15 @@
 //! The graph-pattern evaluation recursion and its [`EvalCtx`].
 //!
 //! [`eval`] maps a [`GraphPattern`] to a [`SolutionSeq`] over the dataset in
-//! [`EvalCtx`]. The recursion is filled in across the S6 build tasks; each
-//! not-yet-implemented variant hard-errors ([`EvalError::Unsupported`]) rather than
-//! returning a partial bag (the `no-optionality` doctrine).
+//! [`EvalCtx`]. Every algebra variant is evaluated here, the host-injected
+//! property-function call included: a
+//! [`GraphPattern::PropertyFunction`]
+//! is dispatched per driving row against the registry
+//! [`EvalCtx::with_property_functions`] injected (`crate::property_fn_eval`), and a
+//! call the host's table cannot answer is a typed error rather than a short row
+//! stream. Anything a variant cannot evaluate hard-errors
+//! ([`EvalError::Unsupported`], or [`EvalError::Function`] for a call into host code)
+//! rather than returning a partial bag (the `no-optionality` doctrine).
 //!
 //! Evaluation pins the **concrete** [`RdfDataset`] rather than a generic
 //! `DatasetView`: the value→id bridge [`RdfDataset::term_id_by_value`] (P4),
@@ -381,6 +387,15 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// [`Self::remote`]/[`Self::bgp_order_cache`]), so carrying it is a `Copy`
     /// pointer, never a clone.
     pub(crate) user_functions: Option<&'d crate::user_fn::UserFunctionRegistry>,
+    /// The caller-injected property-function table, if any. `None` (the default)
+    /// means no relation is registered, which is exactly equivalent to an empty
+    /// registry: a predicate IRI only reaches this table when the parser already
+    /// lowered it to a
+    /// [`purrdf_sparql_algebra::GraphPattern::PropertyFunction`]
+    /// under a caller-configured namespace, and an unresolved call is the same
+    /// failure either way. Borrowed for the dataset lifetime like
+    /// [`Self::user_functions`], so carrying it is a `Copy` pointer, never a clone.
+    pub(crate) property_functions: Option<&'d crate::property_fn::PropertyFunctionRegistry>,
     /// The current SHACL-AF function call depth, incremented by
     /// [`Self::child_for_user_fn`] and bounded by [`MAX_UDF_DEPTH`] so
     /// mutually-recursive functions fail closed rather than overflow the stack.
@@ -498,6 +513,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             in_substituted_exists: false,
             base_iri: None,
             user_functions: None,
+            property_functions: None,
             udf_depth: 0,
             governors: None,
             expression_barrier: ExpressionBarrier::default(),
@@ -809,6 +825,16 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         }
     }
 
+    /// The caller-injected tables the fork-join safety walk consults — the one place
+    /// this context's two registries are paired, so a call site cannot pass one and
+    /// forget the other.
+    pub(crate) fn safety_registries(&self) -> crate::parallel::SafetyRegistries<'d> {
+        crate::parallel::SafetyRegistries {
+            functions: self.user_functions,
+            relations: self.property_functions,
+        }
+    }
+
     /// Whether a per-row loop evaluating `expr` may be forked across parallel workers.
     ///
     /// Two independent conditions, and both are about what a forked child does **not**
@@ -828,7 +854,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// inline condition, and the per-group aggregate compute) so the rule is stated once
     /// and a new fork site cannot inherit half of it.
     pub(crate) fn may_fork_row_loop(&self, expr: &purrdf_sparql_algebra::Expression) -> bool {
-        if !crate::parallel::is_parallel_safe(expr, self.user_functions) {
+        if !crate::parallel::is_parallel_safe(expr, self.safety_registries()) {
             return false;
         }
         !self.governors_are_engaged() || !crate::parallel::expression_re_enters_evaluation(expr)
@@ -1223,6 +1249,10 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // depth: a worker that evaluates a `Function::Custom` user-function call
             // must see the same table and depth bound as its parent.
             user_functions: self.user_functions,
+            // Read-only shared registry (a `Copy` pointer), for the same reason: a
+            // worker that evaluates a property-function call must resolve the
+            // predicate IRI against the same table its parent would.
+            property_functions: self.property_functions,
             udf_depth: self.udf_depth,
             // SHARED, not fresh: one live accounting state across every worker, so the
             // budget is not multiplied by the thread count.
@@ -1252,6 +1282,23 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         registry: &'d crate::user_fn::UserFunctionRegistry,
     ) -> Self {
         self.user_functions = Some(registry);
+        self
+    }
+
+    /// Attach a caller-injected property-function registry for this evaluation, so a
+    /// predicate IRI the parser lowered to a
+    /// [`purrdf_sparql_algebra::GraphPattern::PropertyFunction`]
+    /// resolves to a registered relation. The borrow shares the dataset lifetime `'d`.
+    ///
+    /// Attaching an EMPTY registry is exactly equivalent to attaching none: the
+    /// resolution path asks the same question of both and gets the same answer, so no
+    /// query's result can distinguish the two configurations.
+    #[must_use]
+    pub fn with_property_functions(
+        mut self,
+        registry: &'d crate::property_fn::PropertyFunctionRegistry,
+    ) -> Self {
+        self.property_functions = Some(registry);
         self
     }
 
@@ -1333,6 +1380,10 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             in_substituted_exists: false,
             base_iri: None,
             user_functions: self.user_functions,
+            // Inherited with the function table: a function body is SPARQL like any
+            // other, so a property-function call inside it resolves against the same
+            // relations the calling query sees.
+            property_functions: self.property_functions,
             udf_depth: next_depth,
             // SHARED: a function body's evaluation spends the caller's budget, not a
             // fresh one — otherwise a query could evade its ceiling by calling a
@@ -1679,6 +1730,13 @@ fn eval_node<D: DatasetView + Sync>(
         GraphPattern::Lateral { left, right } => {
             crate::binop::eval_lateral(pattern, left, right, ctx)
         }
+        // A call reached without an enclosing `Lateral` — nothing was written before it
+        // in its group — so it is driven over the identity table. The correlated shape
+        // (the parser's usual one) is intercepted by `binop::eval_lateral`, which hands
+        // the dispatch its left rows directly instead of substituting into this node.
+        GraphPattern::PropertyFunction(call) => {
+            crate::property_fn_eval::eval_property_function(call, ctx)
+        }
     }
 }
 
@@ -1784,6 +1842,18 @@ pub(crate) fn syntactic_schema(pattern: &GraphPattern) -> Arc<VarSchema> {
                 let mut schema = VarSchema::from_vars(variables.iter().cloned());
                 for (variable, _) in aggregates {
                     schema.push(variable.clone());
+                }
+                schema
+            }
+            // Every argument variable of a property function is in scope in the
+            // enclosing group (the arguments are simultaneously the call's inputs and
+            // its bindings), so the node's columns are exactly those variables — in
+            // flattened first-seen order, subject side then object side, which is the
+            // order the dispatch fills them in.
+            GraphPattern::PropertyFunction(call) => {
+                let mut schema = VarSchema::new();
+                for term in call.subject_args.iter().chain(&call.object_args) {
+                    push_term(term, &mut schema);
                 }
                 schema
             }

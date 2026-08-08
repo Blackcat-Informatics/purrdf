@@ -59,9 +59,29 @@ use crate::governor::ItemCharge;
 use crate::governor::soundness::{
     ExpressionPart, PatternPart, visit_expression_parts, visit_pattern_parts,
 };
+use crate::property_fn::PropertyFunctionRegistry;
 use crate::scratch::{ScratchInterner, SolutionTerm};
 use crate::solution::Solution;
 use crate::user_fn::{UserFunctionRegistry, Volatility};
+
+/// The caller-injected tables the parallel-safety walk consults when it reaches a
+/// host-supplied callee: a [`Function::Custom`] expression call, or a
+/// [`GraphPattern::PropertyFunction`] node.
+///
+/// Carried as one `Copy` value rather than as two arguments so a future third table is
+/// threaded through the recursion once instead of at every call site — and so a call
+/// site cannot pass the two in the wrong order. `None` in either slot means "no such
+/// table was configured", which the two classifications read DIFFERENTLY and
+/// deliberately: an unresolvable function IRI is a deterministic XSD cast or a hard
+/// error (safe), while an unresolvable relation is a callee whose volatility is
+/// unknown (unsafe). See [`function_is_unsafe`] and [`property_function_is_unsafe`].
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct SafetyRegistries<'a> {
+    /// The SHACL-AF / native function table (`EvalCtx::user_functions`).
+    pub(crate) functions: Option<&'a UserFunctionRegistry>,
+    /// The property-function table (`EvalCtx::property_functions`).
+    pub(crate) relations: Option<&'a PropertyFunctionRegistry>,
+}
 
 /// Rows/groups at or below this stay sequential (thread spin-up would dominate
 /// the work for small inputs). Tuned against the criterion benches in
@@ -237,13 +257,12 @@ pub(crate) fn should_parallelize(work_items: usize) -> bool {
 /// left safe. When in doubt this walk flags UNSAFE — a sequential fallback is
 /// always a correct (if slower) answer.
 ///
-/// `registry` is the caller's [`UserFunctionRegistry`] (`ctx.user_functions`), if
-/// any: it is consulted only when the walk reaches a [`Function::Custom`] call —
-/// see [`function_is_unsafe`] for exactly how a native-vs-SPARQL-bodied callee is
-/// classified. `None` (no registry configured) makes every `Custom` IRI resolve
-/// to the deterministic XSD-cast/hard-error fallback, hence safe.
-pub(crate) fn is_parallel_safe(expr: &Expression, registry: Option<&UserFunctionRegistry>) -> bool {
-    !expr_reaches_unsafe_builtin(expr, registry)
+/// `registries` carries the caller's injected tables (see [`SafetyRegistries`]); they
+/// are consulted only when the walk reaches a host-supplied callee — a
+/// [`Function::Custom`] call ([`function_is_unsafe`]) or, inside an `EXISTS` pattern, a
+/// property-function node ([`property_function_is_unsafe`]).
+pub(crate) fn is_parallel_safe(expr: &Expression, registries: SafetyRegistries<'_>) -> bool {
+    !expr_reaches_unsafe_builtin(expr, registries)
 }
 
 /// Whether evaluating `expr` for one row can **re-enter whole-pattern evaluation**, and
@@ -297,13 +316,13 @@ pub(crate) fn expression_re_enters_evaluation(expr: &Expression) -> bool {
 /// parallel model — the pattern-level twin of [`is_parallel_safe`], for callers
 /// (e.g. `UNION`) that must gate a whole sub-pattern rather than a single
 /// expression. Exposes the same walk [`is_parallel_safe`] already runs
-/// internally for `EXISTS`. `registry` is threaded through exactly as in
+/// internally for `EXISTS`. `registries` is threaded through exactly as in
 /// [`is_parallel_safe`].
 pub(crate) fn is_parallel_safe_pattern(
     pattern: &GraphPattern,
-    registry: Option<&UserFunctionRegistry>,
+    registries: SafetyRegistries<'_>,
 ) -> bool {
-    !pattern_reaches_unsafe_builtin(pattern, registry)
+    !pattern_reaches_unsafe_builtin(pattern, registries)
 }
 
 /// `true` iff `expr` (recursively) reaches an unsafe builtin — see
@@ -318,13 +337,13 @@ pub(crate) fn is_parallel_safe_pattern(
 /// the moment this closure returns `true` — so the answer is identical to the
 /// `||` chain this replaces, including for expressions whose later arms would
 /// have been skipped.
-fn expr_reaches_unsafe_builtin(expr: &Expression, registry: Option<&UserFunctionRegistry>) -> bool {
+fn expr_reaches_unsafe_builtin(expr: &Expression, registries: SafetyRegistries<'_>) -> bool {
     let mut found = false;
     visit_expression_parts(expr, &mut |part| {
         found |= match part {
-            ExpressionPart::Sub(sub) => expr_reaches_unsafe_builtin(sub, registry),
-            ExpressionPart::Call(f) => function_is_unsafe(f, registry),
-            ExpressionPart::Exists(pattern) => pattern_reaches_unsafe_builtin(pattern, registry),
+            ExpressionPart::Sub(sub) => expr_reaches_unsafe_builtin(sub, registries),
+            ExpressionPart::Call(f) => function_is_unsafe(f, registries.functions),
+            ExpressionPart::Exists(pattern) => pattern_reaches_unsafe_builtin(pattern, registries),
         };
         found
     });
@@ -392,17 +411,52 @@ fn function_is_unsafe(f: &Function, registry: Option<&UserFunctionRegistry>) -> 
 /// independent edits of which only two get found.
 fn pattern_reaches_unsafe_builtin(
     pattern: &GraphPattern,
-    registry: Option<&UserFunctionRegistry>,
+    registries: SafetyRegistries<'_>,
 ) -> bool {
+    // A property-function node is a LEAF for the shared decomposition — it has neither
+    // a child pattern nor an attached expression — so the visitor yields nothing for
+    // it and the walk below would classify it safe by omission. Its callee is host
+    // Rust, which is exactly the case this gate exists for, so it is decided here,
+    // before the walk.
+    if let GraphPattern::PropertyFunction(call) = pattern {
+        return property_function_is_unsafe(&call.iri, registries.relations);
+    }
     let mut found = false;
     visit_pattern_parts(pattern, &mut |part| {
         found |= match part {
-            PatternPart::Child(child, _edge) => pattern_reaches_unsafe_builtin(child, registry),
-            PatternPart::Expression(expr) => expr_reaches_unsafe_builtin(expr, registry),
+            PatternPart::Child(child, _edge) => pattern_reaches_unsafe_builtin(child, registries),
+            PatternPart::Expression(expr) => expr_reaches_unsafe_builtin(expr, registries),
         };
         found
     });
     found
+}
+
+/// Whether a property-function call on `iri` is unsafe to evaluate from a forked
+/// worker.
+///
+/// Safe in exactly one case: the registry is present, it resolves `iri`, and the
+/// resolved relation declares [`Volatility::Stable`] — deterministic for the lifetime
+/// of the query, hence identical whichever worker runs it, exactly like a `Stable`
+/// native function.
+///
+/// Every other case is UNSAFE, including the two absences. This is the reverse of
+/// [`function_is_unsafe`]'s treatment of an unresolvable IRI, and the asymmetry is the
+/// point: an unresolved *function* IRI has a defined deterministic meaning (an XSD cast,
+/// or a hard error), so nothing can diverge; an unresolved *relation* IRI has no
+/// meaning yet, and classifying an unknown callee's volatility as `Stable` would be a
+/// guess in the one direction that can silently change an answer. A sequential fallback
+/// is always correct, so "when in doubt, UNSAFE".
+fn property_function_is_unsafe(iri: &str, relations: Option<&PropertyFunctionRegistry>) -> bool {
+    let Some(registry) = relations else {
+        return true;
+    };
+    let Some(relation) = registry.resolve(iri) else {
+        return true;
+    };
+    // Wildcard-shaped match — `Volatility` is `#[non_exhaustive]`, and a class added
+    // later must be unsafe here until it is deliberately admitted.
+    !matches!(relation.volatility(), Volatility::Stable)
 }
 
 /// Chunk-based, infallible parallel collect: split `items` into index-ordered
@@ -977,6 +1031,28 @@ mod tests {
 
     // ---- is_parallel_safe ----------------------------------------------------
 
+    /// No caller-injected table of either kind.
+    const NONE: SafetyRegistries<'static> = SafetyRegistries {
+        functions: None,
+        relations: None,
+    };
+
+    /// Only a function table configured.
+    fn fns(registry: &UserFunctionRegistry) -> SafetyRegistries<'_> {
+        SafetyRegistries {
+            functions: Some(registry),
+            relations: None,
+        }
+    }
+
+    /// Only a relation table configured.
+    fn relations(registry: &PropertyFunctionRegistry) -> SafetyRegistries<'_> {
+        SafetyRegistries {
+            functions: None,
+            relations: Some(registry),
+        }
+    }
+
     fn call(f: Function, args: Vec<Expression>) -> Expression {
         Expression::FunctionCall(f, args)
     }
@@ -987,7 +1063,7 @@ mod tests {
             Box::new(Expression::Literal(Literal::new_simple("1"))),
             Box::new(Expression::Literal(Literal::new_simple("2"))),
         );
-        assert!(is_parallel_safe(&arith, None));
+        assert!(is_parallel_safe(&arith, NONE));
 
         let regex = call(
             Function::Regex,
@@ -996,15 +1072,15 @@ mod tests {
                 Expression::Literal(Literal::new_simple("^a")),
             ],
         );
-        assert!(is_parallel_safe(&regex, None));
+        assert!(is_parallel_safe(&regex, NONE));
     }
 
     #[test]
     fn rand_uuid_struuid_bnode_are_unsafe() {
-        assert!(!is_parallel_safe(&call(Function::Rand, vec![]), None));
-        assert!(!is_parallel_safe(&call(Function::Uuid, vec![]), None));
-        assert!(!is_parallel_safe(&call(Function::StrUuid, vec![]), None));
-        assert!(!is_parallel_safe(&call(Function::BNode, vec![]), None));
+        assert!(!is_parallel_safe(&call(Function::Rand, vec![]), NONE));
+        assert!(!is_parallel_safe(&call(Function::Uuid, vec![]), NONE));
+        assert!(!is_parallel_safe(&call(Function::StrUuid, vec![]), NONE));
+        assert!(!is_parallel_safe(&call(Function::BNode, vec![]), NONE));
         assert!(!is_parallel_safe(
             &call(
                 Function::BNode,
@@ -1012,7 +1088,7 @@ mod tests {
                     "x"
                 ))]
             ),
-            None
+            NONE
         ));
     }
 
@@ -1029,19 +1105,19 @@ mod tests {
         };
         assert!(!is_parallel_safe(
             &mk(PurrdfFn::ListSlice, "http://ex/listSlice"),
-            None
+            NONE
         ));
         assert!(!is_parallel_safe(
             &mk(PurrdfFn::ListConcat, "http://ex/listConcat"),
-            None
+            NONE
         ));
         assert!(is_parallel_safe(
             &mk(PurrdfFn::ListLength, "http://ex/listLength"),
-            None
+            NONE
         ));
         assert!(is_parallel_safe(
             &mk(PurrdfFn::HeldIn, "http://ex/heldIn"),
-            None
+            NONE
         ));
     }
 
@@ -1056,13 +1132,13 @@ mod tests {
             Box::new(safe.clone()),
             Box::new(rand.clone()),
         );
-        assert!(!is_parallel_safe(&in_if, None));
+        assert!(!is_parallel_safe(&in_if, NONE));
 
         let in_coalesce = Expression::Coalesce(vec![safe.clone(), rand.clone()]);
-        assert!(!is_parallel_safe(&in_coalesce, None));
+        assert!(!is_parallel_safe(&in_coalesce, NONE));
 
         let in_fn_args = call(Function::Concat, vec![safe, rand]);
-        assert!(!is_parallel_safe(&in_fn_args, None));
+        assert!(!is_parallel_safe(&in_fn_args, NONE));
     }
 
     #[test]
@@ -1085,7 +1161,7 @@ mod tests {
             inner: Box::new(inner_bgp),
         };
         let exists = Expression::Exists(Box::new(filtered_inner));
-        assert!(!is_parallel_safe(&exists, None));
+        assert!(!is_parallel_safe(&exists, NONE));
 
         // Sanity: the same shape without RAND() is safe.
         let inner_bgp2 = GraphPattern::Bgp {
@@ -1096,7 +1172,7 @@ mod tests {
             }],
         };
         let safe_exists = Expression::Exists(Box::new(inner_bgp2));
-        assert!(is_parallel_safe(&safe_exists, None));
+        assert!(is_parallel_safe(&safe_exists, NONE));
     }
 
     // ---- is_parallel_safe: Function::Custom / UserFunctionRegistry ----------
@@ -1141,10 +1217,7 @@ mod tests {
             Volatility::Stable,
             trivial_native_body(),
         );
-        assert!(is_parallel_safe(
-            &custom_call(CUSTOM_NATIVE_IRI),
-            Some(&reg)
-        ));
+        assert!(is_parallel_safe(&custom_call(CUSTOM_NATIVE_IRI), fns(&reg)));
     }
 
     #[test]
@@ -1158,7 +1231,7 @@ mod tests {
         );
         assert!(!is_parallel_safe(
             &custom_call(CUSTOM_NATIVE_IRI),
-            Some(&reg)
+            fns(&reg)
         ));
     }
 
@@ -1168,19 +1241,138 @@ mod tests {
         reg.insert(CUSTOM_SPARQL_IRI, trivial_sparql_function());
         assert!(!is_parallel_safe(
             &custom_call(CUSTOM_SPARQL_IRI),
-            Some(&reg)
+            fns(&reg)
         ));
     }
 
     #[test]
     fn unknown_custom_without_registry_stays_safe() {
-        assert!(is_parallel_safe(&custom_call(CUSTOM_UNKNOWN_IRI), None));
+        assert!(is_parallel_safe(&custom_call(CUSTOM_UNKNOWN_IRI), NONE));
 
         let reg = UserFunctionRegistry::new();
         assert!(is_parallel_safe(
             &custom_call(CUSTOM_UNKNOWN_IRI),
-            Some(&reg)
+            fns(&reg)
         ));
+    }
+
+    // ---- is_parallel_safe_pattern: property functions ----------------------
+
+    const RELATION_IRI: &str = "http://example.org/ns#split";
+
+    /// A one-subject/one-object property-function call node.
+    fn property_function_call() -> GraphPattern {
+        GraphPattern::PropertyFunction(purrdf_sparql_algebra::PropertyFunctionCall {
+            iri: RELATION_IRI.to_owned(),
+            subject_args: vec![purrdf_sparql_algebra::TermPattern::Variable(
+                purrdf_sparql_algebra::Variable::new("s"),
+            )],
+            object_args: vec![purrdf_sparql_algebra::TermPattern::Variable(
+                purrdf_sparql_algebra::Variable::new("o"),
+            )],
+        })
+    }
+
+    /// A relation whose declared volatility is `volatility`, with no rows.
+    #[derive(Debug)]
+    struct DeclaredRelation {
+        volatility: Volatility,
+        modes: [purrdf_core::binding_pattern::BindingPattern; 1],
+    }
+
+    impl DeclaredRelation {
+        fn new(volatility: Volatility) -> Self {
+            Self {
+                volatility,
+                modes: [crate::property_fn::PfArity::new(1, 1).all_free_mode()],
+            }
+        }
+    }
+
+    impl crate::property_fn::PropertyFunction for DeclaredRelation {
+        fn volatility(&self) -> Volatility {
+            self.volatility
+        }
+
+        fn arity(&self) -> crate::property_fn::PfArity {
+            crate::property_fn::PfArity::new(1, 1)
+        }
+
+        fn modes(&self) -> &[purrdf_core::binding_pattern::BindingPattern] {
+            &self.modes
+        }
+
+        fn rows_per_invocation(&self, _mode: purrdf_core::binding_pattern::BindingPattern) -> u64 {
+            0
+        }
+
+        fn open(
+            &self,
+            _args: &crate::property_fn::PfArgs<'_>,
+            _ceiling: Option<u64>,
+        ) -> Result<Box<dyn crate::property_fn::PfCursor>, EvalError> {
+            Err(EvalError::function("not invoked by the safety gate"))
+        }
+    }
+
+    fn registry_with(volatility: Volatility) -> PropertyFunctionRegistry {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register(
+            RELATION_IRI,
+            std::sync::Arc::new(DeclaredRelation::new(volatility)),
+        );
+        registry
+    }
+
+    #[test]
+    fn stable_property_function_is_parallel_safe() {
+        let registry = registry_with(Volatility::Stable);
+        assert!(is_parallel_safe_pattern(
+            &property_function_call(),
+            relations(&registry)
+        ));
+    }
+
+    #[test]
+    fn volatile_property_function_is_parallel_unsafe() {
+        let registry = registry_with(Volatility::Volatile);
+        assert!(!is_parallel_safe_pattern(
+            &property_function_call(),
+            relations(&registry)
+        ));
+    }
+
+    #[test]
+    fn property_function_without_a_registry_is_parallel_unsafe() {
+        // Both absences: no registry at all, and a registry that does not resolve the
+        // IRI. An unknown relation's volatility is unknown, so the gate refuses.
+        assert!(!is_parallel_safe_pattern(&property_function_call(), NONE));
+        let empty = PropertyFunctionRegistry::new();
+        assert!(!is_parallel_safe_pattern(
+            &property_function_call(),
+            relations(&empty)
+        ));
+    }
+
+    #[test]
+    fn an_unsafe_property_function_taints_the_enclosing_pattern() {
+        // The classification must survive being nested: a `UNION` arm containing the
+        // call is unsafe, and so is an `EXISTS` whose inner pattern contains it.
+        let volatile = registry_with(Volatility::Volatile);
+        let union = GraphPattern::Union {
+            left: Box::new(GraphPattern::Bgp {
+                patterns: Vec::new(),
+            }),
+            right: Box::new(property_function_call()),
+        };
+        assert!(!is_parallel_safe_pattern(&union, relations(&volatile)));
+
+        let exists = Expression::Exists(Box::new(property_function_call()));
+        assert!(!is_parallel_safe(&exists, relations(&volatile)));
+
+        let stable = registry_with(Volatility::Stable);
+        assert!(is_parallel_safe_pattern(&union, relations(&stable)));
+        assert!(is_parallel_safe(&exists, relations(&stable)));
     }
 
     // ---- par_chunk_map ----------------------------------------------------

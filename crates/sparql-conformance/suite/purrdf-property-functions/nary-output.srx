@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<sparql xmlns="http://www.w3.org/2005/sparql-results#">
+  <head><variable name="city"/><variable name="headcount"/></head>
+  <results>
+    <result>
+      <binding name="city"><literal>Zurich</literal></binding>
+      <binding name="headcount"><literal datatype="http://www.w3.org/2001/XMLSchema#integer">2</literal></binding>
+    </result>
+  </results>
+</sparql>

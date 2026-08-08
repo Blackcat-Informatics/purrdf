@@ -5,7 +5,7 @@
 
 use purrdf_core::{SparqlEngine, SparqlRequest};
 use purrdf_rdf::JsonLdSerializeOptions;
-use purrdf_sparql_eval::{GovernedUpdateOutcome, NativeSparqlEngine};
+use purrdf_sparql_eval::{GovernedUpdateOutcome, NativeSparqlEngine, QueryOptions};
 
 use crate::cli::{CliRdfFormat, LedgerTarget};
 use crate::error::{CliError, CliOutcome};
@@ -42,7 +42,9 @@ pub(crate) fn run(
 
     if options.governors.is_engaged() {
         let governors = options.governors.to_governors();
-        match engine.update_governed(&mut dataset, request, &governors)? {
+        // `QueryOptions::EMPTY`: the CLI wires no SHACL-AF function table and no
+        // property-function registry.
+        match engine.update_governed(&mut dataset, request, QueryOptions::EMPTY, &governors)? {
             GovernedUpdateOutcome::Applied { .. } => {}
             GovernedUpdateOutcome::BudgetExhausted {
                 tripped, evidence, ..

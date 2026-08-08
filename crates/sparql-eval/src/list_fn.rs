@@ -502,6 +502,8 @@ mod tests {
     fn ext_options() -> purrdf_sparql_algebra::ParserOptions {
         purrdf_sparql_algebra::ParserOptions {
             extension_fn_namespaces: vec!["https://example.org/ext/".to_owned()],
+            property_fn_namespaces: Vec::new(),
+            property_fn_iris: Vec::new(),
         }
     }
 
