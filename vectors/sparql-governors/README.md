@@ -92,6 +92,13 @@ The harness re-derives it on every run and additionally checks that the eleven
 counts add back up to the `.metered` fuel — a decomposition that did not sum to
 the quantity it claims to decompose would be a decomposition of something else.
 
+Note that `.charges` and `relations.tsv` describe **different runs**: the
+`.charges` sidecar decomposes the unconstrained METERED measurement, while the
+`relations.tsv` invocation/pull counts record the banded (ceiling-constrained)
+run. For a zero-fuel band the two legitimately disagree — the METERED
+decomposition shows what the seam spends when it runs, the banded row shows the
+trip firing before any relation resolves (`0/0`).
+
 ## The boundary is measured, never guessed
 
 For a numeric ceiling, `expected/<case>.metered` is the consumption vector of
