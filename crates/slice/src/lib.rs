@@ -51,6 +51,9 @@ pub use ownership::{
 };
 pub use prefix_emit::{emit_core_prefixes, emit_jsonld_context};
 pub use prefix_lint::lint_prefix_consistency;
+/// Re-exported so callers can configure [`OwnershipAnalyzer::with_parser_options`]
+/// (the property-function seam) without a direct `purrdf-sparql-algebra` dependency.
+pub use purrdf_sparql_algebra::ParserOptions;
 pub use rdf_query::NamedNode;
 pub use standpoint_emit::emit_standpoint_sets;
 pub use vocab::SliceVocab;

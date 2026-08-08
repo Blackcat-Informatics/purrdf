@@ -11,7 +11,7 @@ use std::path::Path;
 use tempfile::TempDir;
 
 use purrdf_slice::{
-    EdgeKind, NamedNode, OwnershipAnalyzer, OwnershipDiagnostic, OwnershipStatus,
+    EdgeKind, NamedNode, OwnershipAnalyzer, OwnershipDiagnostic, OwnershipStatus, ParserOptions,
     ReconciliationStatus, SliceCatalog, SliceVocab,
 };
 
@@ -719,6 +719,118 @@ fn values_quoted_triple_iri_reaches_dependency_walk() {
     assert!(
         ev.contains(&nn("quotedPred")),
         "predicate inside a quoted-triple VALUES cell must be dependency evidence; got {ev:?}"
+    );
+}
+
+// ── Property-function seam (GAP-9): caller-supplied ParserOptions ─────────────
+
+#[test]
+fn property_function_relation_iri_is_excluded_from_dependency_walk_when_configured() {
+    // GAP-9: `OwnershipAnalyzer::analyze` used to parse every query artifact
+    // under `ParserOptions::default`, so `GraphPattern::PropertyFunction` could
+    // never be produced and the `walk_graph_pattern` arm documenting that a
+    // relation IRI is "NOT a dependency edge" was dead code — the relation
+    // predicate was in reality walked as an ordinary term reference. This test
+    // pins both halves: under the DEFAULT (unconfigured) seam the predicate is
+    // ordinary evidence exactly as before, and under a CONFIGURED seam
+    // (`with_parser_options`) the same predicate is recognized as a call and
+    // excluded, while a genuinely ordinary predicate in the same query still
+    // evidences as usual.
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+
+    write(
+        root,
+        "slices/grpA/sliceA/manifest.ttl",
+        &manifest("sliceA", &[]),
+    );
+    write(
+        root,
+        "slices/grpA/sliceA/module.ttl",
+        &format!(
+            "@prefix vocab: <{NS}> .\n\
+             @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
+             @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\n\
+             vocab:relatedThing a owl:ObjectProperty ; rdfs:isDefinedBy vocab:sliceA .\n\
+             vocab:ordinaryThing a owl:ObjectProperty ; rdfs:isDefinedBy vocab:sliceA .\n"
+        ),
+    );
+    write(
+        root,
+        "slices/grpB/sliceB/manifest.ttl",
+        &manifest("sliceB", &["sliceA"]),
+    );
+    write(
+        root,
+        "slices/grpB/sliceB/queries/competency/q.rq",
+        &format!(
+            "PREFIX vocab: <{NS}>\n\
+             SELECT ?s ?o WHERE {{ ?s vocab:relatedThing ?o . ?s vocab:ordinaryThing ?o2 }}\n"
+        ),
+    );
+
+    let catalog = SliceCatalog::discover(root, test_vocab()).unwrap();
+
+    let find_query_edge = |report: &purrdf_slice::OwnershipReport| {
+        report
+            .edges
+            .iter()
+            .find(|e| {
+                e.from_slice == iri("sliceB")
+                    && e.to_slice == iri("sliceA")
+                    && e.edge_kind == EdgeKind::Query
+            })
+            .cloned()
+            .expect("expected a sliceB → sliceA Query edge")
+    };
+
+    // Default options: the seam is off, so `relatedThing` parses as an
+    // ordinary predicate and IS walked into the dependency evidence.
+    let default_report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
+    let default_edge = find_query_edge(&default_report);
+    assert!(
+        default_edge
+            .evidence
+            .iter()
+            .any(|e| e.referenced_term == nn("relatedThing")),
+        "under the default (unconfigured) seam the relation predicate must still \
+         be an ordinary term reference; got {:?}",
+        default_edge.evidence
+    );
+    assert!(
+        default_edge
+            .evidence
+            .iter()
+            .any(|e| e.referenced_term == nn("ordinaryThing"))
+    );
+
+    // Configured options: `relatedThing` is recognized as a property-function
+    // relation call and excluded from the walk; `ordinaryThing` still evidences.
+    let options = ParserOptions {
+        property_fn_iris: vec![iri("relatedThing")],
+        ..ParserOptions::default()
+    };
+    let configured_report = OwnershipAnalyzer::new(&catalog)
+        .with_parser_options(options)
+        .analyze()
+        .unwrap();
+    let configured_edge = find_query_edge(&configured_report);
+    assert!(
+        !configured_edge
+            .evidence
+            .iter()
+            .any(|e| e.referenced_term == nn("relatedThing")),
+        "a relation IRI recognized as a property-function call must not become \
+         dependency evidence; got {:?}",
+        configured_edge.evidence
+    );
+    assert!(
+        configured_edge
+            .evidence
+            .iter()
+            .any(|e| e.referenced_term == nn("ordinaryThing")),
+        "an ordinary predicate in the same query must still evidence; got {:?}",
+        configured_edge.evidence
     );
 }
 

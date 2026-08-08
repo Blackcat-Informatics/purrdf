@@ -31,6 +31,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use purrdf::{RdfDataset, TermId, TermRef};
+use purrdf_sparql_algebra::{ParserOptions, SparqlParser};
 
 use crate::artifact::{ArtifactRecord, ArtifactRole};
 use crate::catalog::{SliceCatalog, SliceRecord};
@@ -282,12 +283,40 @@ impl OwnershipReport {
 #[derive(Debug)]
 pub struct OwnershipAnalyzer<'a> {
     catalog: &'a SliceCatalog,
+    /// Parse-time configuration for SPARQL query artifacts (the
+    /// property-function seam). Defaults to empty (the seam off — every
+    /// predicate position parses as an ordinary term reference); see
+    /// [`Self::with_parser_options`].
+    parser_options: ParserOptions,
 }
 
 impl<'a> OwnershipAnalyzer<'a> {
-    /// Create an analyzer over a discovered catalog.
+    /// Create an analyzer over a discovered catalog, under [`ParserOptions::default`]
+    /// (the property-function seam off).
     pub fn new(catalog: &'a SliceCatalog) -> Self {
-        Self { catalog }
+        Self {
+            catalog,
+            parser_options: ParserOptions::default(),
+        }
+    }
+
+    /// Configure the property-function seam (`property_fn_namespaces` /
+    /// `property_fn_iris`) recognized while parsing SPARQL query artifacts
+    /// (`queries/competency/`, `queries/verify/`).
+    ///
+    /// Without this, the SPARQL query parse this analyzer runs has no registry
+    /// to recognize a relation predicate by, so every predicate position — including one a
+    /// caller's runtime property-function registry would resolve as a host
+    /// relation — parses as an ordinary term reference and is walked into the
+    /// dependency graph like any other IRI. Supplying the SAME
+    /// [`ParserOptions`] the caller's query-evaluation registry derives makes
+    /// a relation predicate parse as [`purrdf_sparql_algebra::GraphPattern::PropertyFunction`]
+    /// instead, so it is excluded from the dependency walk (see the
+    /// `PropertyFunction` arm of `walk_graph_pattern`).
+    #[must_use]
+    pub fn with_parser_options(mut self, options: ParserOptions) -> Self {
+        self.parser_options = options;
+        self
     }
 
     /// Run the full analysis: build the validated ownership table, then derive
@@ -458,7 +487,7 @@ impl<'a> OwnershipAnalyzer<'a> {
                 };
 
                 if kind == EdgeKind::Query {
-                    let referenced = match extract_query_iris(artifact) {
+                    let referenced = match extract_query_iris(artifact, &self.parser_options) {
                         Ok(set) => set,
                         Err(message) => {
                             diagnostics.push(OwnershipDiagnostic::UnparseableQuery {
@@ -758,13 +787,19 @@ fn collect_term_iri_refs<'a>(store: &'a RdfDataset, term: TermId, out: &mut BTre
 /// using the native `purrdf-sparql-algebra` parser. An IRI mentioned only inside
 /// a string literal is never returned — that is the whole point of parsing
 /// rather than text-searching.
-fn extract_query_iris(artifact: &ArtifactRecord) -> Result<BTreeSet<NamedNode>, String> {
-    use purrdf_sparql_algebra::SparqlParser;
-
+///
+/// `options` is the caller's property-function seam (see
+/// [`OwnershipAnalyzer::with_parser_options`]): a predicate position it
+/// recognizes parses as a property-function call, whose relation IRI is then
+/// excluded from the walk rather than collected as an ordinary term reference.
+fn extract_query_iris(
+    artifact: &ArtifactRecord,
+    options: &ParserOptions,
+) -> Result<BTreeSet<NamedNode>, String> {
     let text = std::str::from_utf8(&artifact.content)
         .map_err(|e| format!("query is not valid UTF-8: {e}"))?;
     let query = SparqlParser::new()
-        .parse_query(text)
+        .parse_query_with(text, options)
         .map_err(|e| e.to_string())?;
 
     let mut out: BTreeSet<NamedNode> = BTreeSet::new();
@@ -960,9 +995,13 @@ fn walk_graph_pattern(g: &purrdf_sparql_algebra::GraphPattern, out: &mut BTreeSe
         }
         // A property-function call's predicate IRI is NOT a dependency edge: it names a
         // host-injected relation resolved against a runtime registry, not a term any
-        // slice defines. Its ARGUMENTS are ordinary term positions, though, and an IRI
-        // constant written in one references the slice defining it exactly as the same
-        // IRI in a triple pattern would — so both vectors are walked.
+        // slice defines. Recognizing a predicate position as a call at all requires the
+        // caller to have configured the seam (`OwnershipAnalyzer::with_parser_options`);
+        // under the default (empty) options this arm never fires and the same predicate
+        // parses as an ordinary triple pattern, walked like any other IRI. Its ARGUMENTS
+        // are ordinary term positions, though, and an IRI constant written in one
+        // references the slice defining it exactly as the same IRI in a triple pattern
+        // would — so both vectors are walked.
         G::PropertyFunction(call) => {
             for arg in call.subject_args.iter().chain(&call.object_args) {
                 walk_term_pattern(arg, out);

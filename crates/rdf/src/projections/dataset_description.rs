@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use purrdf_core::{DatasetView, LossLedger, RdfDataset, SparqlResult, TermRef};
 use purrdf_sparql_algebra::{
-    AggregateExpression, Expression, Function, GraphPattern, OrderExpression, PurrdfFn, Query,
-    SparqlParser, TermPattern, TriplePattern,
+    AggregateExpression, Expression, Function, GraphPattern, OrderExpression, ParserOptions,
+    PurrdfFn, Query, SparqlParser, TermPattern, TriplePattern,
 };
 use purrdf_sparql_eval::NativeSparqlEngine;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -29,7 +29,9 @@ pub struct ConstructViewConfig {
 }
 
 impl ConstructViewConfig {
-    /// Construct and parse a bounded CONSTRUCT-view policy.
+    /// Construct and parse a bounded CONSTRUCT-view policy, under
+    /// [`ParserOptions::default`] (the property-function seam off — every
+    /// predicate position parses as an ordinary term reference).
     ///
     /// # Errors
     ///
@@ -46,6 +48,43 @@ impl ConstructViewConfig {
         max_query_bytes: usize,
         max_input_records: usize,
         max_output_records: usize,
+    ) -> Result<Self, ProjectionError> {
+        Self::new_with_parser_options(
+            query,
+            base_iri,
+            limits,
+            max_query_bytes,
+            max_input_records,
+            max_output_records,
+            &ParserOptions::default(),
+        )
+    }
+
+    /// [`Self::new`] with explicit [`ParserOptions`] (e.g. a caller's
+    /// property-function seam) applied to the reproducibility-validation parse.
+    ///
+    /// A predicate position `parser_options` recognizes as a property-function
+    /// call parses as [`GraphPattern::PropertyFunction`] rather than an ordinary
+    /// triple pattern, so the crate's reproducibility check can apply its
+    /// documented conservative refusal to it — see the `PropertyFunction` arm of
+    /// the pattern walk below. Under the default (empty) options that arm never
+    /// fires, because the parser has nothing to recognize the predicate by.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::new`].
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "all independent resource and query policies are mandatory"
+    )]
+    pub fn new_with_parser_options(
+        query: impl Into<String>,
+        base_iri: Option<String>,
+        limits: ProjectionLimits,
+        max_query_bytes: usize,
+        max_input_records: usize,
+        max_output_records: usize,
+        parser_options: &ParserOptions,
     ) -> Result<Self, ProjectionError> {
         let query = query.into();
         validate_portable_bound(max_query_bytes, "CONSTRUCT max_query_bytes")?;
@@ -65,7 +104,7 @@ impl ConstructViewConfig {
         if let Some(base_iri) = &base_iri {
             super::validate_absolute_iri(base_iri, "CONSTRUCT base IRI")?;
         }
-        parse_construct(&query, base_iri.as_deref())?;
+        parse_construct(&query, base_iri.as_deref(), parser_options)?;
         Ok(Self {
             query,
             base_iri,
@@ -221,14 +260,18 @@ pub fn project_construct_view<D: DatasetView + Sync>(
     })
 }
 
-fn parse_construct(query: &str, base_iri: Option<&str>) -> Result<(), ProjectionError> {
+fn parse_construct(
+    query: &str,
+    base_iri: Option<&str>,
+    parser_options: &ParserOptions,
+) -> Result<(), ProjectionError> {
     let parser = if let Some(base_iri) = base_iri {
         SparqlParser::new().with_base_iri(base_iri)
     } else {
         SparqlParser::new()
     };
     let parsed = parser
-        .parse_query(query)
+        .parse_query_with(query, parser_options)
         .map_err(|error| ProjectionError::syntax(format!("parse CONSTRUCT query: {error}")))?;
     validate_reproducible_construct(&parsed)
 }
@@ -329,6 +372,14 @@ fn pattern_reaches_non_reproducible_builtin(pattern: &GraphPattern) -> bool {
         // be inferred from the IRI. A dataset description must be byte-reproducible, so
         // the unknowable case is refused: `true` conservatively classifies every call as
         // non-reproducible.
+        //
+        // Reaching this arm at all requires the caller to have recognized the
+        // predicate as a call in the first place: `parse_construct` parses under
+        // caller-supplied `ParserOptions` ([`ConstructViewConfig::new_with_parser_options`]),
+        // and only a predicate matching that configuration's `property_fn_namespaces` /
+        // `property_fn_iris` produces `GraphPattern::PropertyFunction` rather than an
+        // ordinary triple pattern. Under [`ParserOptions::default`] (what
+        // [`ConstructViewConfig::new`] uses) this arm never fires.
         GraphPattern::PropertyFunction(_) => true,
     }
 }
@@ -873,6 +924,62 @@ mod tests {
                 "query must be rejected: {query}"
             );
         }
+    }
+
+    #[test]
+    fn property_function_predicate_is_refused_only_when_parser_options_recognize_it() {
+        // GAP-9 coverage: `parse_construct` used to parse with `ParserOptions::default`
+        // unconditionally, so `GraphPattern::PropertyFunction` could never be produced
+        // and the `pattern_reaches_non_reproducible_builtin` arm documenting the
+        // conservative refusal was dead code. This pins both halves.
+        let call_query = "CONSTRUCT { ?s <https://example.org/copied> ?o } \
+             WHERE { ?s <https://example.org/pf/related> ?o }";
+
+        // Default options (`ConstructViewConfig::new`): the seam is off, so the
+        // predicate is an ordinary triple pattern and the query is accepted.
+        assert!(
+            ConstructViewConfig::new(call_query, None, limits(), 1_000, 10, 10).is_ok(),
+            "under the default seam the predicate must parse as ordinary data"
+        );
+
+        // Configured options recognizing the SAME predicate IRI as a
+        // property-function relation: the call is refused as unknowably
+        // reproducible, per the documented conservative semantics.
+        let options = ParserOptions {
+            property_fn_iris: vec!["https://example.org/pf/related".to_owned()],
+            ..ParserOptions::default()
+        };
+        let error = ConstructViewConfig::new_with_parser_options(
+            call_query,
+            None,
+            limits(),
+            1_000,
+            10,
+            10,
+            &options,
+        )
+        .expect_err("a recognized property-function call must be refused");
+        assert_eq!(
+            error.kind(),
+            super::super::ProjectionErrorKind::Configuration
+        );
+
+        // An ordinary predicate that the configured options do NOT recognize is
+        // still accepted even with the seam configured for a different IRI.
+        let ordinary_query = "CONSTRUCT { ?s <https://example.org/copied> ?o } \
+             WHERE { ?s <https://example.org/pf/unrelated> ?o }";
+        assert!(
+            ConstructViewConfig::new_with_parser_options(
+                ordinary_query,
+                None,
+                limits(),
+                1_000,
+                10,
+                10,
+                &options,
+            )
+            .is_ok()
+        );
     }
 
     #[test]
