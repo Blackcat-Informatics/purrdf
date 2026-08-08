@@ -644,10 +644,11 @@ pub enum GraphPattern {
     /// # Only ever produced from configuration
     ///
     /// The parser mints this node ONLY when the predicate IRI matches an entry of
-    /// [`crate::parser::ParserOptions::property_fn_namespaces`], whose default is
-    /// EMPTY. With no configured namespace the seam is off and such a triple is an
-    /// ordinary BGP triple pattern — PurRDF mints no vocabulary IRIs of its own,
-    /// so nothing is ever recognized by default.
+    /// [`crate::parser::ParserOptions::property_fn_namespaces`] (prefix match) OR
+    /// [`crate::parser::ParserOptions::property_fn_iris`] (exact match), both of
+    /// which default to EMPTY. With neither configured the seam is off and such a
+    /// triple is an ordinary BGP triple pattern — PurRDF mints no vocabulary IRIs
+    /// of its own, so nothing is ever recognized by default.
     PropertyFunction(PropertyFunctionCall),
 }
 

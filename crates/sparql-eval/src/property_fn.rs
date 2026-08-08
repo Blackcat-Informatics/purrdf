@@ -5,7 +5,11 @@
 //!
 //! A predicate IRI under a caller-configured
 //! [`ParserOptions::property_fn_namespaces`](purrdf_sparql_algebra::ParserOptions)
-//! is lowered by the parser to
+//! (prefix match), or one that exactly matches an entry of
+//! [`ParserOptions::property_fn_iris`](purrdf_sparql_algebra::ParserOptions) — the
+//! set [`NativeSparqlEngine`](crate::NativeSparqlEngine) derives one-to-one from
+//! this registry's keys, so a registered relation is reachable without also
+//! reclassifying every other IRI under its namespace — is lowered by the parser to
 //! [`purrdf_sparql_algebra::GraphPattern::PropertyFunction`]
 //! instead of an ordinary triple pattern, and resolved at evaluation time against a
 //! caller-injected [`PropertyFunctionRegistry`]. Where [`crate::user_fn`] injects

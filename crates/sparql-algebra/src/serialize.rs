@@ -1090,6 +1090,7 @@ mod tests {
         ParserOptions {
             extension_fn_namespaces: Vec::new(),
             property_fn_namespaces: vec![PF_NS.to_owned()],
+            property_fn_iris: Vec::new(),
         }
     }
 

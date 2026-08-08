@@ -72,6 +72,21 @@ pub const MAX_GRAPH_PATTERN_DEPTH: usize = 128;
 /// Its default is EMPTY too: with no configured namespace the seam is off and
 /// every such triple stays an ordinary BGP triple pattern, bit for bit as before.
 ///
+/// [`Self::property_fn_iris`] recognizes the same seam by a different, narrower
+/// rule: EXACT-IRI match rather than prefix match. It exists because a relation
+/// registry's keys are exact IRIs, not namespaces — a host that registers
+/// `https://example.org/rel/a` has registered exactly that IRI, and treating it
+/// as a *prefix* would silently reclassify the unrelated, ordinary data
+/// predicate `https://example.org/rel/ab` as a call to an unregistered relation,
+/// which then hard-errors with a diagnostic that points at the wrong cause (a
+/// previously-working query breaking because of a same-prefixed sibling it never
+/// mentioned). Populating [`Self::property_fn_namespaces`] from a registry would
+/// be that mistake; [`Self::property_fn_iris`] is the field that is safe to
+/// derive from one. The two sets are independent and their recognition is a
+/// union: an IRI is a property function iff it prefix-matches an entry of
+/// [`Self::property_fn_namespaces`] OR exactly matches an entry of
+/// [`Self::property_fn_iris`]. Its default is EMPTY as well.
+///
 /// Note the serializer does **not** consult this configuration: a
 /// [`Function::Purrdf`] re-emits the ORIGINAL IRI it was parsed from (recorded
 /// in [`crate::algebra::PurrdfCall::iri`] — see `serialize.rs`), so re-parsing
@@ -85,9 +100,21 @@ pub struct ParserOptions {
     /// for prefix stripping.
     pub extension_fn_namespaces: Vec<String>,
     /// The namespaces recognized as the property-function seam in predicate
-    /// position. Defaults to empty (property functions off); order is
-    /// first-match-wins for prefix matching.
+    /// position, by PREFIX match. Defaults to empty (property functions off);
+    /// order is first-match-wins for prefix matching. Caller-declared: a host
+    /// that wants a whole namespace claimed by the seam — including IRIs it has
+    /// deliberately left unregistered, so spelling one is a hard error rather
+    /// than a silent data triple — declares it here.
     pub property_fn_namespaces: Vec<String>,
+    /// The individual IRIs recognized as the property-function seam in
+    /// predicate position, by EXACT match. Defaults to empty (property
+    /// functions off). This is the registry-derived set: a relation registry's
+    /// keys are exact IRIs, and matching them here rather than folding them into
+    /// [`Self::property_fn_namespaces`] as prefixes is what stops registering
+    /// `https://example.org/rel/a` from hijacking the unrelated data predicate
+    /// `https://example.org/rel/ab` into an (unregistered, hard-erroring)
+    /// property-function call.
+    pub property_fn_iris: Vec<String>,
 }
 
 /// A reusable SPARQL query parser.
@@ -1563,13 +1590,20 @@ impl<'a> Parser<'a, '_> {
         Ok(sink.into_pattern())
     }
 
-    /// Does the IRI `iri` fall under a configured property-function namespace?
-    /// Always `false` under the default (empty) configuration.
+    /// Is `iri` a property function under the configured options — a PREFIX match
+    /// against [`ParserOptions::property_fn_namespaces`] OR an EXACT match against
+    /// [`ParserOptions::property_fn_iris`]? Always `false` under the default (both
+    /// empty) configuration.
     fn is_property_fn(&self, iri: &str) -> bool {
         self.options
             .property_fn_namespaces
             .iter()
             .any(|ns| iri.starts_with(ns.as_str()))
+            || self
+                .options
+                .property_fn_iris
+                .iter()
+                .any(|exact| exact == iri)
     }
 
     /// Pure lookahead over a parenthesized subject group starting at the cursor
@@ -1581,7 +1615,8 @@ impl<'a> Parser<'a, '_> {
     /// configured namespace simply yields `None` and the ordinary collection path
     /// runs (and reports any real error itself).
     fn property_fn_after_group(&self) -> Option<String> {
-        if self.options.property_fn_namespaces.is_empty()
+        if (self.options.property_fn_namespaces.is_empty()
+            && self.options.property_fn_iris.is_empty())
             || !matches!(self.token_at(self.pos), Some(Token::LParen))
         {
             return None;
@@ -4807,6 +4842,7 @@ mod tests {
         ParserOptions {
             extension_fn_namespaces: vec![EXT_NS.to_owned()],
             property_fn_namespaces: Vec::new(),
+            property_fn_iris: Vec::new(),
         }
     }
 
@@ -4931,6 +4967,7 @@ mod tests {
         ParserOptions {
             extension_fn_namespaces: vec![EXT_NS.to_owned(), GMEOW_NS.to_owned()],
             property_fn_namespaces: Vec::new(),
+            property_fn_iris: Vec::new(),
         }
     }
 
@@ -5072,6 +5109,7 @@ mod tests {
         ParserOptions {
             extension_fn_namespaces: Vec::new(),
             property_fn_namespaces: vec![PF_NS.to_owned()],
+            property_fn_iris: Vec::new(),
         }
     }
 
@@ -5587,6 +5625,7 @@ mod tests {
         let options = ParserOptions {
             extension_fn_namespaces: Vec::new(),
             property_fn_namespaces: vec![PF_NS.to_owned(), "https://example.org/other/".to_owned()],
+            property_fn_iris: Vec::new(),
         };
         let q = "PREFIX o: <https://example.org/other/>\n\
                  PREFIX pf: <https://example.org/pf/>\n\
@@ -5614,5 +5653,75 @@ mod tests {
         assert_eq!(triples.len(), 1);
         assert_eq!(triples[0].subject, pf_iri(&format!("{PF_NS}related")));
         assert_eq!(triples[0].object, pf_iri(&format!("{PF_NS}related")));
+    }
+
+    // ── property_fn_iris: EXACT-match seam (registry-derived) ─────────────────
+
+    /// Options with only `a` under [`PF_NS`] configured as an EXACT
+    /// property-function IRI — no namespace configured at all.
+    fn pf_exact_options() -> ParserOptions {
+        ParserOptions {
+            extension_fn_namespaces: Vec::new(),
+            property_fn_namespaces: Vec::new(),
+            property_fn_iris: vec![format!("{PF_NS}a")],
+        }
+    }
+
+    #[test]
+    fn an_exact_registered_iri_is_recognized_with_no_namespace_configured() {
+        // property_fn_iris alone (property_fn_namespaces empty) is enough to
+        // recognize the exact call — this is the shape `prepare_for` uses.
+        let q = format!("{PFP}SELECT * WHERE {{ ?s <{PF_NS}a> ?o }}");
+        let p = unproject(select_pattern_with(&q, &pf_exact_options()));
+        assert_eq!(pf_only_call(&p).iri, format!("{PF_NS}a"));
+    }
+
+    #[test]
+    fn an_exact_iri_registration_does_not_hijack_a_sibling_data_predicate() {
+        // THE regression: registering `.../pf/a` as an exact property-function
+        // IRI must NOT reclassify the unrelated, longer, same-prefixed data
+        // predicate `.../pf/ab` as a property-function call. Before this fix,
+        // registering an IRI pushed it into the PREFIX set, so `ab` (which
+        // starts with `a`) parsed as a call to an unregistered relation and
+        // hard-errored — a category error, since a registry's keys are exact
+        // IRIs, not namespaces.
+        let q = format!("{PFP}SELECT * WHERE {{ ?s <{PF_NS}ab> ?o }}");
+        let p = unproject(select_pattern_with(&q, &pf_exact_options()));
+        assert!(
+            pf_calls(&p).is_empty(),
+            "a longer, merely-prefix-sharing IRI must stay an ordinary triple \
+             pattern, got {p:?}"
+        );
+        let triples = pf_triples(&p);
+        assert_eq!(triples.len(), 1);
+        assert_eq!(
+            triples[0].predicate,
+            NamedNodePattern::NamedNode(NamedNode::new_unchecked(format!("{PF_NS}ab")))
+        );
+    }
+
+    #[test]
+    fn property_fn_iris_and_property_fn_namespaces_recognition_is_a_union() {
+        // A caller-declared namespace still prefix-matches, and an exact IRI
+        // still exact-matches, when both are configured at once.
+        let options = ParserOptions {
+            extension_fn_namespaces: Vec::new(),
+            property_fn_namespaces: vec!["https://example.org/other/".to_owned()],
+            property_fn_iris: vec![format!("{PF_NS}a")],
+        };
+        let q = "PREFIX o: <https://example.org/other/>\n\
+                 PREFIX pf: <https://example.org/pf/>\n\
+                 SELECT * WHERE { ?s pf:a ?x . ?s o:anything ?y }";
+        let calls = pf_calls(&select_pattern_with(q, &options))
+            .iter()
+            .map(|c| c.iri.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            calls,
+            vec![
+                format!("{PF_NS}a"),
+                "https://example.org/other/anything".to_owned()
+            ]
+        );
     }
 }

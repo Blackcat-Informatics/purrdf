@@ -1111,17 +1111,49 @@ mod tests {
     // ---- admission --------------------------------------------------------
 
     #[test]
-    fn an_unregistered_iri_is_refused_before_evaluation() {
-        // The namespace is configured (by `PF_SPLIT`'s registration); the call names a
-        // DIFFERENT IRI under it, which nothing supplies.
-        let message = error_of(
-            &format!("SELECT ?w WHERE {{ ?w <{PF_SPLIT}x> ?p }}"),
-            &split_registry(),
-        );
+    fn an_unregistered_iri_under_a_configured_namespace_is_refused_before_evaluation() {
+        // A CALLER-DECLARED namespace (not the registry-derived exact-IRI set) still
+        // claims every IRI under it: a call whose specific IRI nothing supplies is
+        // refused before evaluation.
+        let engine = NativeSparqlEngine::new().with_parser_options(crate::ParserOptions {
+            extension_fn_namespaces: vec![],
+            property_fn_namespaces: vec![format!("{EX}pf/")],
+            property_fn_iris: Vec::new(),
+        });
+        let message = engine
+            .query(
+                &documents(),
+                SparqlRequest {
+                    query: &format!("SELECT ?w WHERE {{ ?w <{PF_SPLIT}x> ?p }}"),
+                    base_iri: None,
+                    substitutions: &[],
+                },
+            )
+            .expect_err("nothing is registered under the configured namespace")
+            .to_string();
         assert!(
             message.contains("no property function is registered")
                 && message.contains(&format!("{PF_SPLIT}x")),
             "got {message}"
+        );
+    }
+
+    /// THE GAP-3 regression, at the registry-injection layer this module owns:
+    /// registering `PF_SPLIT` must not hijack the DIFFERENT, merely
+    /// prefix-sharing IRI `PF_SPLIT`+`x` into a call. `query_with_property_functions`
+    /// (unlike the test above) configures NO caller namespace — the only seam in
+    /// scope is the registry-derived exact-IRI set — so `PF_SPLIT`+`x` stays an
+    /// ordinary triple pattern and the query evaluates against the graph, which
+    /// holds no such predicate, rather than hard-erroring as unregistered.
+    #[test]
+    fn a_sibling_iri_that_merely_shares_a_registered_iri_s_prefix_is_ordinary_data() {
+        let rows = rows_of(
+            &format!("SELECT ?w ?p WHERE {{ ?w <{PF_SPLIT}x> ?p }}"),
+            &split_registry(),
+        );
+        assert!(
+            rows.is_empty(),
+            "the dataset holds no <{PF_SPLIT}x> triple, and the call is never made: {rows:?}"
         );
     }
 
@@ -1130,6 +1162,7 @@ mod tests {
         let engine = NativeSparqlEngine::new().with_parser_options(crate::ParserOptions {
             extension_fn_namespaces: vec![],
             property_fn_namespaces: vec![format!("{EX}pf/")],
+            property_fn_iris: Vec::new(),
         });
         let message = engine
             .query(

@@ -377,6 +377,7 @@ pub fn run(
             let parser_options = ParserOptions {
                 extension_fn_namespaces: vec![EXT_NS.to_owned()],
                 property_fn_namespaces: vec![REL_NS.to_owned()],
+                property_fn_iris: Vec::new(),
             };
             let engine = NativeSparqlEngine::new()
                 .with_parser_options(parser_options.clone())
@@ -416,6 +417,7 @@ pub fn run(
             let engine = NativeSparqlEngine::new().with_parser_options(ParserOptions {
                 extension_fn_namespaces: vec![EXT_NS.to_owned()],
                 property_fn_namespaces: vec![REL_NS.to_owned()],
+                property_fn_iris: Vec::new(),
             });
             let request = SparqlRequest {
                 query: &query_text,

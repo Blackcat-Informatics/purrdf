@@ -54,14 +54,18 @@ pub struct PreparedQuery {
 }
 
 /// A parse-memoizing cache keyed on `(base IRI, extension-function namespace set,
-/// property-function namespace set, property-function registry fingerprint, query
-/// text)`.
+/// property-function namespace set, property-function exact-IRI set,
+/// property-function registry fingerprint, query text)`.
 ///
 /// The last two are there because a cached entry is not merely a parse: a query
 /// carrying a property-function call is also **feasibility-ordered** against the
 /// registry's declarations before it is stored (the feasibility-ordering pass). Two
 /// differently-configured registries can order the same text differently, so a key
 /// without the registry's fingerprint would hand the second host the first host's plan.
+/// The exact-IRI set joins the namespace set for the same reason as the namespace
+/// set itself: it too decides which triples become calls
+/// ([`ParserOptions::property_fn_iris`]), so two configurations that agree on
+/// everything else but differ there must not share a plan.
 #[derive(Debug, Default)]
 pub struct PlanCache {
     entries: DetHashMap<String, Arc<PreparedQuery>>,
@@ -118,14 +122,15 @@ impl PlanCache {
         // The cache key must include the base IRI AND the extension-function
         // namespace set: the same text under a different base or namespace
         // configuration parses to a different algebra. The property-function
-        // namespace set and the registry fingerprint join it for the same reason one
-        // step later: they decide which triples become calls, and how those calls are
-        // ordered.
+        // namespace set, the property-function exact-IRI set, and the registry
+        // fingerprint join it for the same reason one step later: together they
+        // decide which triples become calls, and how those calls are ordered.
         let key = format!(
-            "{}\u{0}{}\u{0}{}\u{0}{}\u{0}{}",
+            "{}\u{0}{}\u{0}{}\u{0}{}\u{0}{}\u{0}{}",
             base_iri.unwrap_or(""),
             options.extension_fn_namespaces.join("\u{1}"),
             options.property_fn_namespaces.join("\u{1}"),
+            options.property_fn_iris.join("\u{1}"),
             crate::property_fn_plan::registry_fingerprint(relations),
             query
         );
@@ -838,14 +843,25 @@ impl NativeSparqlEngine {
     /// **The single point where a registry becomes parse configuration.** A relation is
     /// reachable from SPARQL only if the parser lowered its predicate IRI to a call
     /// node, and the parser does that only for an IRI under a configured
-    /// [`ParserOptions::property_fn_namespaces`] entry. Deriving those namespaces here,
-    /// from the very registry the evaluation will resolve against, is what keeps the two
-    /// from drifting: a host cannot register a relation the parser does not recognize,
-    /// and cannot configure a namespace whose calls resolve against a different table.
-    /// A host that wants a whole namespace recognized — including IRIs it has
-    /// deliberately left unregistered, so that spelling one is a hard error rather than
-    /// a silent data triple — still declares it through
-    /// [`Self::with_parser_options`]; the two sets are unioned.
+    /// [`ParserOptions::property_fn_namespaces`] entry OR an entry of
+    /// [`ParserOptions::property_fn_iris`]. Deriving [`ParserOptions::property_fn_iris`]
+    /// here, from the very registry the evaluation will resolve against, is what keeps
+    /// the two from drifting: a host cannot register a relation the parser does not
+    /// recognize, and cannot configure an IRI whose call resolves against a different
+    /// table.
+    ///
+    /// Registered IRIs go into [`ParserOptions::property_fn_iris`] — EXACT match — and
+    /// deliberately never into [`ParserOptions::property_fn_namespaces`] — PREFIX
+    /// match. A registry's keys are exact IRIs, not namespaces: folding
+    /// `https://example.org/rel/a` in as a prefix would reclassify the unrelated,
+    /// merely-same-prefixed data predicate `https://example.org/rel/ab` as a call to
+    /// an unregistered relation, which then hard-errors — a previously-working query
+    /// breaking with a diagnostic that names the wrong cause. A host that wants a
+    /// whole namespace recognized — including IRIs it has deliberately left
+    /// unregistered, so that spelling one is a hard error rather than a silent data
+    /// triple — still declares that namespace through [`Self::with_parser_options`];
+    /// the two sets (caller-declared namespaces, registry-derived exact IRIs) are
+    /// unioned, never conflated.
     ///
     /// No registry (or an empty one) contributes nothing, so a query on a host that has
     /// not configured the seam parses under exactly the options it always did.
@@ -867,10 +883,13 @@ impl NativeSparqlEngine {
         let mut options = self.parser_options.clone();
         // `describe()` is IRI-sorted, so the derived set is a pure function of the
         // registry's contents rather than of its registration order — which matters,
-        // because the set is part of the plan-cache key.
+        // because the set is part of the plan-cache key. EXACT match
+        // (`property_fn_iris`), never prefix (`property_fn_namespaces`): see the
+        // doc comment above for why folding a registered IRI in as a namespace
+        // prefix is a category error that hijacks unrelated data predicates.
         for descriptor in registry.describe() {
-            if !options.property_fn_namespaces.contains(&descriptor.iri) {
-                options.property_fn_namespaces.push(descriptor.iri);
+            if !options.property_fn_iris.contains(&descriptor.iri) {
+                options.property_fn_iris.push(descriptor.iri);
             }
         }
         self.cache
@@ -1357,7 +1376,9 @@ impl NativeSparqlEngine {
     /// Like [`SparqlEngine::query`], but with a caller-supplied property-function
     /// registry injected, so a predicate IRI the parser lowered to a
     /// [`purrdf_sparql_algebra::GraphPattern::PropertyFunction`]
-    /// — which it does only under a configured
+    /// — which it does only for an IRI that EXACTLY matches a registered relation
+    /// (via [`ParserOptions::property_fn_iris`](purrdf_sparql_algebra::ParserOptions),
+    /// derived from `registry`) or that falls under a caller-declared
     /// [`ParserOptions::property_fn_namespaces`](purrdf_sparql_algebra::ParserOptions)
     /// entry — resolves to a registered relation. The registry is built once per host
     /// configuration and borrowed for the call. An empty registry behaves exactly like
@@ -1805,6 +1826,7 @@ fn materialize_governed<D: DatasetView + Sync>(
 mod tests {
     use super::*;
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfLiteral, TermValue};
+    use purrdf_sparql_algebra::GraphPattern;
 
     /// Regression: `=` is RDFterm-equality, so `?a != ?b` over two *distinct IRIs*
     /// must be `true` (the row survives), NOT a type error. Routing `=` through the
@@ -2786,6 +2808,7 @@ mod tests {
             .with_parser_options(ParserOptions {
                 extension_fn_namespaces: vec![GMEOW_NS.to_owned()],
                 property_fn_namespaces: Vec::new(),
+                property_fn_iris: Vec::new(),
             })
             .with_standpoint_predicates(StandpointPredicates::new(
                 format!("{GMEOW_NS}accordingTo"),
@@ -2818,6 +2841,7 @@ mod tests {
         let unconfigured = NativeSparqlEngine::new().with_parser_options(ParserOptions {
             extension_fn_namespaces: vec![GMEOW_NS.to_owned()],
             property_fn_namespaces: Vec::new(),
+            property_fn_iris: Vec::new(),
         });
         let mut unconfigured_ds = Arc::clone(&ds);
         let err = unconfigured
@@ -2927,6 +2951,7 @@ mod tests {
             .with_parser_options(ParserOptions {
                 extension_fn_namespaces: vec![GMEOW_NS.to_owned()],
                 property_fn_namespaces: Vec::new(),
+                property_fn_iris: Vec::new(),
             })
             .with_standpoint_predicates(StandpointPredicates::new(
                 format!("{GMEOW_NS}accordingTo"),
@@ -2963,6 +2988,7 @@ mod tests {
         let engine = NativeSparqlEngine::new().with_parser_options(ParserOptions {
             extension_fn_namespaces: vec![GMEOW_NS.to_owned()],
             property_fn_namespaces: Vec::new(),
+            property_fn_iris: Vec::new(),
         });
         let q = format!(
             "PREFIX gmeow: <{GMEOW_NS}>\n\
@@ -2998,6 +3024,7 @@ mod tests {
         let with_alias = ParserOptions {
             extension_fn_namespaces: vec![GMEOW_NS.to_owned()],
             property_fn_namespaces: Vec::new(),
+            property_fn_iris: Vec::new(),
         };
         let a = cache
             .prepare_with(&q, None, &with_alias)
@@ -3009,6 +3036,71 @@ mod tests {
         assert!(
             !Arc::ptr_eq(&a, &b),
             "different namespace configurations must not share a cache entry"
+        );
+    }
+
+    #[test]
+    fn plan_cache_keys_on_the_property_function_exact_iri_set() {
+        // Two configurations that agree on everything else — same text, same base,
+        // same extension/namespace sets, same registry — but differ only in
+        // `property_fn_iris` must not share a cache entry: one recognizes the
+        // predicate as a call (and resolves/feasibility-orders it against the
+        // registry), the other reads the very same text as an ordinary triple
+        // pattern. Sharing a plan would hand one host's algebra to the other.
+        let mut cache = PlanCache::new();
+        let iri = format!("{GMEOW_NS}rel");
+        let q = format!("SELECT ?s ?o WHERE {{ ?s <{iri}> ?o }}");
+
+        let mut registry = crate::property_fn::PropertyFunctionRegistry::new();
+        registry.register(
+            iri.clone(),
+            Arc::new(
+                crate::property_fn::MemoryRelation::new(1, 1, vec![])
+                    .expect("an empty table is a valid one-in-one-out relation"),
+            ),
+        );
+
+        let with_exact_iri = ParserOptions {
+            extension_fn_namespaces: Vec::new(),
+            property_fn_namespaces: Vec::new(),
+            property_fn_iris: vec![iri],
+        };
+        let a = cache
+            .prepare_with_relations(&q, None, &with_exact_iri, Some(&registry))
+            .expect("parse with the exact IRI recognized and resolved against the registry");
+        // Under the DEFAULT options the same predicate is an ordinary triple.
+        let b = cache
+            .prepare_with_relations(&q, None, &ParserOptions::default(), Some(&registry))
+            .expect("parse without the exact IRI configured");
+        assert!(
+            !Arc::ptr_eq(&a, &b),
+            "different property_fn_iris configurations must not share a cache entry"
+        );
+        let Query::Select {
+            pattern: b_pattern, ..
+        } = &b.query
+        else {
+            panic!("a SELECT's algebra root is a Select, got {:?}", b.query);
+        };
+        let GraphPattern::Project { inner: b_inner, .. } = b_pattern else {
+            panic!("a SELECT's algebra root is a Project, got {b_pattern:?}");
+        };
+        assert!(
+            matches!(&**b_inner, GraphPattern::Bgp { .. }),
+            "without property_fn_iris the predicate stays an ordinary BGP triple: {b_inner:?}"
+        );
+        let Query::Select {
+            pattern: a_pattern, ..
+        } = &a.query
+        else {
+            panic!("a SELECT's algebra root is a Select, got {:?}", a.query);
+        };
+        let GraphPattern::Project { inner: a_inner, .. } = a_pattern else {
+            panic!("a SELECT's algebra root is a Project, got {a_pattern:?}");
+        };
+        assert!(
+            matches!(&**a_inner, GraphPattern::PropertyFunction(_)),
+            "with property_fn_iris configured the predicate becomes a call: {a_inner:?}"
         );
     }
 

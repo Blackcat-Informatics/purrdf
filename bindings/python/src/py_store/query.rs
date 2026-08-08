@@ -71,6 +71,7 @@ pub(super) fn build_engine(
         engine = engine.with_parser_options(ParserOptions {
             extension_fn_namespaces: namespaces,
             property_fn_namespaces: Vec::new(),
+            property_fn_iris: Vec::new(),
         });
     }
     if let Some((according_to, sharpens)) = standpoint_predicates {

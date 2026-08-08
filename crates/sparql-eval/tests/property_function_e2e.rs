@@ -37,6 +37,7 @@ fn options() -> ParserOptions {
     ParserOptions {
         extension_fn_namespaces: Vec::new(),
         property_fn_namespaces: vec![REL_NS.to_owned()],
+        property_fn_iris: Vec::new(),
     }
 }
 
@@ -251,5 +252,75 @@ fn the_same_text_without_the_namespace_is_an_ordinary_triple_pattern() {
     assert!(
         rows.is_empty(),
         "the dataset holds no rel:memberOf triple: {rows:?}"
+    );
+}
+
+/// THE data-predicate-hijack regression (GAP-3): registering a relation must not
+/// turn a merely prefix-sharing, unregistered, LONGER predicate into a
+/// hard-erroring property-function call.
+///
+/// `NativeSparqlEngine::prepare_for` derives parse-time recognition from the
+/// registry (see the doc comment there): it used to push each registered
+/// relation's exact IRI into the parser's PREFIX namespace set, so registering
+/// `{REL_NS}a` made the ordinary, unrelated data predicate `{REL_NS}ab` parse as
+/// an (unregistered) property-function call and hard-error — a previously
+/// working query breaking with a diagnostic that names the wrong cause. A
+/// registry's keys are exact IRIs, not namespaces, and exact match is the only
+/// rule that respects that.
+#[test]
+fn registering_a_relation_does_not_hijack_a_longer_sibling_data_predicate() {
+    let short_iri = format!("{REL_NS}a");
+    let long_predicate = format!("{REL_NS}ab");
+
+    // Register a relation under the SHORT IRI only.
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register(
+        short_iri,
+        Arc::new(
+            MemoryRelation::new(
+                1,
+                1,
+                vec![vec![
+                    TermValue::iri(format!("{EX}from_relation_x")),
+                    TermValue::iri(format!("{EX}from_relation_y")),
+                ]],
+            )
+            .expect("one row, two values wide"),
+        ),
+    );
+
+    // The dataset holds an ordinary triple under the LONGER, unregistered IRI —
+    // it merely shares the short IRI's characters as a prefix.
+    let mut builder = RdfDatasetBuilder::new();
+    let s = builder.intern_iri(&format!("{EX}subject"));
+    let p = builder.intern_iri(&long_predicate);
+    let o = builder.intern_iri(&format!("{EX}object"));
+    builder.push_quad(s, p, o, None);
+    let dataset = builder.freeze().expect("freeze fixture");
+
+    let query = format!("SELECT ?s ?o WHERE {{ ?s <{long_predicate}> ?o }}");
+    let result = NativeSparqlEngine::new()
+        .query_with_property_functions(
+            &dataset,
+            SparqlRequest {
+                query: &query,
+                base_iri: None,
+                substitutions: &[],
+            },
+            &registry,
+        )
+        .expect(
+            "an unregistered, merely-prefix-sharing predicate must parse and evaluate as an \
+             ordinary data triple, never a hard-erroring call",
+        );
+
+    let SparqlResult::Solutions { rows, .. } = result else {
+        panic!("a SELECT returns solutions");
+    };
+    assert_eq!(
+        rows.len(),
+        1,
+        "the triple under the longer predicate is read from the graph as an ordinary BGP \
+         triple, not routed through the relation: {rows:?}"
     );
 }

@@ -1408,6 +1408,7 @@ mod tests {
         let options = ParserOptions {
             extension_fn_namespaces: Vec::new(),
             property_fn_namespaces: vec!["https://example.org/rel/".to_owned()],
+            property_fn_iris: Vec::new(),
         };
         let query = SparqlParser::new()
             .parse_query_with(

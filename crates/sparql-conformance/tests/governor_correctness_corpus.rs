@@ -56,6 +56,7 @@ fn harness_engine() -> NativeSparqlEngine {
         .with_parser_options(ParserOptions {
             extension_fn_namespaces: vec![EXT_NS.to_owned()],
             property_fn_namespaces: vec![purrdf_sparql_conformance::run::REL_NS.to_owned()],
+            property_fn_iris: Vec::new(),
         })
         .with_standpoint_predicates(StandpointPredicates::new(
             format!("{EXT_NS}accordingTo"),
