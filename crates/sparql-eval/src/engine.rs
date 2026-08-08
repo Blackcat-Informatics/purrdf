@@ -1356,7 +1356,7 @@ impl NativeSparqlEngine {
 
     /// Like [`SparqlEngine::query`], but with a caller-supplied property-function
     /// registry injected, so a predicate IRI the parser lowered to a
-    /// [`GraphPattern::PropertyFunction`](purrdf_sparql_algebra::GraphPattern::PropertyFunction)
+    /// [`purrdf_sparql_algebra::GraphPattern::PropertyFunction`]
     /// — which it does only under a configured
     /// [`ParserOptions::property_fn_namespaces`](purrdf_sparql_algebra::ParserOptions)
     /// entry — resolves to a registered relation. The registry is built once per host

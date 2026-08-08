@@ -6,7 +6,7 @@
 //! A predicate IRI under a caller-configured
 //! [`ParserOptions::property_fn_namespaces`](purrdf_sparql_algebra::ParserOptions)
 //! is lowered by the parser to
-//! [`GraphPattern::PropertyFunction`](purrdf_sparql_algebra::GraphPattern::PropertyFunction)
+//! [`purrdf_sparql_algebra::GraphPattern::PropertyFunction`]
 //! instead of an ordinary triple pattern, and resolved at evaluation time against a
 //! caller-injected [`PropertyFunctionRegistry`]. Where [`crate::user_fn`] injects
 //! *functions* — one value per call, in an expression position — this module injects

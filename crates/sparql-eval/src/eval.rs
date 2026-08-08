@@ -6,7 +6,7 @@
 //! [`eval`] maps a [`GraphPattern`] to a [`SolutionSeq`] over the dataset in
 //! [`EvalCtx`]. Every algebra variant is evaluated here, the host-injected
 //! property-function call included: a
-//! [`GraphPattern::PropertyFunction`](purrdf_sparql_algebra::GraphPattern::PropertyFunction)
+//! [`GraphPattern::PropertyFunction`]
 //! is dispatched per driving row against the registry
 //! [`EvalCtx::with_property_functions`] injected (`crate::property_fn_eval`), and a
 //! call the host's table cannot answer is a typed error rather than a short row
