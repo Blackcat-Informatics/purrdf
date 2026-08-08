@@ -59,8 +59,8 @@ use purrdf_core::{SparqlEngine, SparqlRequest, SparqlResult};
 use purrdf_sparql_eval::{
     BudgetExhausted, CancellationFlag, GovernedOutcome, GovernedUpdateOutcome,
     GovernorEvidence as EvidenceValue, NativeSparqlEngine, PartialAnswers as PartialValue,
-    QueryGovernors, ResourceDimension, StopCause, StopSignal, TrippedGovernor as TrippedValue,
-    WallDeadline,
+    QueryGovernors, QueryOptions, ResourceDimension, StopCause, StopSignal,
+    TrippedGovernor as TrippedValue, WallDeadline,
 };
 use purrdf_sparql_results::{
     ResultProvenance, SparqlResultsFormat, serialize as serialize_results,
@@ -1034,7 +1034,12 @@ impl QueryEngine {
         let frozen = dataset.inner.freeze().map_err(|e| diag_to_err(&e))?;
         let outcome = self
             .inner
-            .query_governed(&frozen, sparql_request(sparql, base.as_deref()), &governors)
+            .query_governed(
+                &frozen,
+                sparql_request(sparql, base.as_deref()),
+                QueryOptions::EMPTY,
+                &governors,
+            )
             .map_err(|e| diag_to_err(&e))?;
         query_outcome_from_governed(outcome)
     }

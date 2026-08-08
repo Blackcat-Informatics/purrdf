@@ -25,7 +25,7 @@ use std::sync::Arc;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, ResourceDimension, SparqlResult, TermValue};
 use purrdf_sparql_eval::{
-    EvalOptions, GovernedOutcome, NativeSparqlEngine, PreparedQuery, QueryGovernors,
+    EvalOptions, GovernedOutcome, NativeSparqlEngine, PreparedQuery, QueryGovernors, QueryOptions,
 };
 
 const EX: &str = "https://example.org/";
@@ -93,6 +93,7 @@ fn run_governed(
             &**dataset,
             prepared,
             &[] as &[(String, TermValue)],
+            QueryOptions::EMPTY,
             governors,
         )
         .expect("governed benchmark query evaluates");

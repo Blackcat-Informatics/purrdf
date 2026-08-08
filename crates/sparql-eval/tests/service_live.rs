@@ -14,7 +14,7 @@ use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult, StopCause, Tri
 use purrdf_sparql_algebra::Variable;
 use purrdf_sparql_eval::{
     CancellationFlag, HttpRemoteQuerySource, HttpRequest, NativeSparqlEngine, PartialAnswers,
-    QueryGovernors, RemoteError, RemoteQuerySource, StopSignal,
+    QueryGovernors, QueryOptions, RemoteError, RemoteQuerySource, StopSignal,
 };
 
 const ENDPOINT: &str = "https://query.example/sparql";
@@ -219,6 +219,7 @@ fn terminal_service_cancelled_during_post(silent: bool) {
                 substitutions: &[],
             },
             &source,
+            QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_stop_signal(Arc::new(flag)),
         )
         .expect("a stop is a typed outcome");

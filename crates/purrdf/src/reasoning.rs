@@ -21,8 +21,8 @@ use purrdf_sparql_algebra::{
     NamedNodePattern, PropertyFunctionCall, Query, TermPattern, TriplePattern, Variable,
 };
 use purrdf_sparql_eval::{
-    BudgetExhausted, GovernedOutcome, NativeSparqlEngine, PreparedQuery, QueryGovernors, StopCause,
-    StopSignal, TrippedGovernor,
+    BudgetExhausted, GovernedOutcome, NativeSparqlEngine, PreparedQuery, QueryGovernors,
+    QueryOptions, StopCause, StopSignal, TrippedGovernor,
 };
 
 /// A reasoning session over one ontology — the OWL 2 Direct-Semantics services, held
@@ -268,8 +268,11 @@ pub fn query_with_entailment(
     // sees the filtered sequence) and a constructed graph (scrubbed after, because a
     // `DESCRIBE` draws triples from the dataset rather than from a variable binding).
     let surrogates = combined_surrogates.unwrap_or_default();
-    let restricted = (!surrogates.is_empty()).then(|| PreparedQuery {
-        query: restrict_witness_bindings(&prepared_query.query, &surrogates),
+    let restricted = (!surrogates.is_empty()).then(|| {
+        PreparedQuery::rewritten(
+            restrict_witness_bindings(&prepared_query.query, &surrogates),
+            QueryOptions::EMPTY,
+        )
     });
     let plan = restricted.as_ref().unwrap_or(&prepared_query);
     let mut result = engine.query_prepared(&prepared, plan, request.substitutions)?;
@@ -571,12 +574,24 @@ pub fn query_with_entailment_governed(
     // any truncation), and the scrub is over the result (so it reaches a `DESCRIBE`'s
     // triples). See this function's documentation for why a partial answer needs both.
     let surrogates = combined_surrogates.unwrap_or_default();
-    let restricted = (!surrogates.is_empty()).then(|| PreparedQuery {
-        query: restrict_witness_bindings(&prepared_query.query, &surrogates),
+    let restricted = (!surrogates.is_empty()).then(|| {
+        PreparedQuery::rewritten(
+            restrict_witness_bindings(&prepared_query.query, &surrogates),
+            QueryOptions::EMPTY,
+        )
     });
     let plan = restricted.as_ref().unwrap_or(&prepared_query);
-    let outcome =
-        engine.query_prepared_governed_view(&*prepared, plan, request.substitutions, governors)?;
+    // `QueryOptions::EMPTY`: this lane owns its plan (it rewrites the algebra to restrict
+    // chase-minted witnesses) and exposes no registry seam of its own, so there is nothing
+    // for a caller to have configured and nothing that could be silently dropped here. A
+    // host that wants relations in scope names them at the engine's own governed entries.
+    let outcome = engine.query_prepared_governed_view(
+        &*prepared,
+        plan,
+        request.substitutions,
+        QueryOptions::EMPTY,
+        governors,
+    )?;
     Ok(GovernedEntailment::Answered {
         outcome: withhold_surrogates_from_outcome(outcome, &surrogates),
         report,

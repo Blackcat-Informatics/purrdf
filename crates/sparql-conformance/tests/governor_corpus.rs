@@ -85,10 +85,10 @@ use purrdf_core::{
     StopCause, TermValue, TrippedGovernor,
 };
 use purrdf_sparql_eval::{
-    BindingPattern, CancellationFlag, EvalError, GovernedOutcome, GovernorState,
-    HttpRemoteQuerySource, HttpRequest, HttpTransport, NativeSparqlEngine, PartialAnswers, PfArgs,
-    PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, QueryGovernors,
-    RemoteError, ShaclPrebinding, ShaclQueryOptions, StopSignal, Volatility, WallDeadline,
+    BindingPattern, CancellationFlag, EvalError, GovernedOutcome, HttpRemoteQuerySource,
+    HttpRequest, HttpTransport, NativeSparqlEngine, PartialAnswers, PfArgs, PfArity, PfCursor,
+    PfRow, PropertyFunction, PropertyFunctionRegistry, QueryGovernors, QueryOptions, RemoteError,
+    StopSignal, Volatility, WallDeadline,
 };
 
 /// The dimensions a case may set a ceiling on, in the order every pinned consumption
@@ -939,7 +939,13 @@ fn observe(
                     None
                 },
             });
-            engine.query_governed_with_source(&dataset, request, &source, &configured.governors)
+            engine.query_governed_with_source(
+                &dataset,
+                request,
+                &source,
+                QueryOptions::EMPTY,
+                &configured.governors,
+            )
         }
         Source::Relation => {
             let spec = relation_spec.unwrap_or_else(|| {
@@ -955,24 +961,26 @@ fn observe(
                 RELATION_IRI,
                 Arc::clone(&scripted) as Arc<dyn PropertyFunction>,
             );
-            // The relation lane runs through the operation entry, which is the only
-            // governed surface that carries a property-function registry. The state is
-            // built here and dropped with this call, exactly as `query_governed` builds
-            // its own: one execution, one budget.
-            let state = Arc::new(GovernorState::new(&configured.governors));
-            engine.query_governed_in_operation_with_options(
-                &*dataset,
+            // The relation lane is the headline governed entry, with the registry
+            // handed to it in the options: same entry, same per-call state, same
+            // budget as every other lane. It differs from `Source::Dataset` in
+            // exactly one field.
+            engine.query_governed(
+                &dataset,
                 request,
-                ShaclQueryOptions {
-                    prebinding: ShaclPrebinding::None,
-                    functions: None,
+                QueryOptions {
                     property_functions: Some(&registry),
-                    bnode_mint_prefix: None,
+                    ..QueryOptions::EMPTY
                 },
-                &state,
+                &configured.governors,
             )
         }
-        Source::Dataset => engine.query_governed(&dataset, request, &configured.governors),
+        Source::Dataset => engine.query_governed(
+            &dataset,
+            request,
+            QueryOptions::EMPTY,
+            &configured.governors,
+        ),
     }
     .unwrap_or_else(|error| panic!("{} must evaluate: {error}", case.name));
 

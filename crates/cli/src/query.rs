@@ -155,9 +155,16 @@ impl ViewOp for GovernedQueryOp<'_> {
 
     fn run<D: DatasetView + Sync>(self, view: &D) -> Result<GovernedOutcome, CliError> {
         let governors: QueryGovernors = self.flags.to_governors();
-        Ok(self
-            .engine
-            .query_prepared_governed_view(view, self.prepared, &[], &governors)?)
+        // `QueryOptions::EMPTY`: the CLI wires no SHACL-AF function table and no
+        // property-function registry, and it prepared this plan through the matching
+        // registry-free parse — so the plan and the evaluation agree on an empty seam.
+        Ok(self.engine.query_prepared_governed_view(
+            view,
+            self.prepared,
+            &[],
+            purrdf_sparql_eval::QueryOptions::EMPTY,
+            &governors,
+        )?)
     }
 }
 

@@ -105,9 +105,7 @@ mod template;
 pub mod update;
 pub mod user_fn;
 
-pub use engine::{
-    NativeSparqlEngine, PlanCache, PreparedQuery, ShaclPrebinding, ShaclQueryOptions,
-};
+pub use engine::{NativeSparqlEngine, PlanCache, PreparedQuery, QueryOptions, ShaclPrebinding};
 pub use error::EvalError;
 pub use eval::{
     EvalCtx, EvalOptions, LossVocabulary, Outcome, StandpointPredicates, eval, evaluate_query,

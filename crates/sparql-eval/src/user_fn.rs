@@ -580,7 +580,6 @@ mod tests {
 
     use crate::{
         GovernedOutcome, GovernorState, NativeSparqlEngine, PartialAnswers, QueryGovernors,
-        ShaclPrebinding,
     };
 
     const EX_INC: &str = "http://example.org/ns#inc";
@@ -1102,8 +1101,10 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                ShaclPrebinding::None,
-                Some(&registry),
+                crate::QueryOptions {
+                    functions: Some(&registry),
+                    ..crate::QueryOptions::EMPTY
+                },
                 &state,
             )
             .expect("a governed recursion ceiling is an outcome");

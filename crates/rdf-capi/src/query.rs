@@ -12,6 +12,7 @@ use purrdf_rs::{
 };
 use purrdf_sparql_eval::{
     BudgetExhausted, GovernedOutcome, GovernedUpdateOutcome, NativeSparqlEngine, PartialAnswers,
+    QueryOptions,
 };
 
 use crate::buffer::PurrdfBuffer;
@@ -454,6 +455,7 @@ pub unsafe extern "C" fn purrdf_query_governed(
                         base_iri,
                         substitutions: &[],
                     },
+                    QueryOptions::EMPTY,
                     &governors,
                 )
                 .map_err(|diagnostic| {

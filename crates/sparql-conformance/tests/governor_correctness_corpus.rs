@@ -39,8 +39,8 @@ use std::sync::Arc;
 use purrdf_core::{RdfDataset, SparqlRequest, SparqlResult};
 use purrdf_sparql_conformance::manifest::TestKind;
 use purrdf_sparql_eval::{
-    EvalOptions, GovernedOutcome, GovernorState, NativeSparqlEngine, ParserOptions, QueryGovernors,
-    ShaclPrebinding, ShaclQueryOptions, StandpointPredicates,
+    EvalOptions, GovernedOutcome, NativeSparqlEngine, ParserOptions, QueryGovernors, QueryOptions,
+    StandpointPredicates,
 };
 
 /// The sentinel base the manifest loader resolves case IRIs against.
@@ -199,25 +199,23 @@ fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
                     &dataset,
                     request(&query),
                     source,
+                    QueryOptions::EMPTY,
                     &QueryGovernors::UNBOUNDED,
                 ),
-                // The relation table travels on the governed path too, through the
-                // one governed entry that carries a property-function registry: a
-                // first-party relation case must be COMPARED here, and a governed
-                // run whose calls resolved to nothing would be comparing a
-                // different query against the oracle.
-                None => governed_engine.query_governed_in_operation_with_options(
-                    &*dataset,
+                // The relation table travels on the governed path too, in the same
+                // options every governed entry takes: a first-party relation case must
+                // be COMPARED here, and a governed run whose calls resolved to nothing
+                // would be comparing a different query against the oracle.
+                None => governed_engine.query_governed(
+                    &dataset,
                     request(&query),
-                    ShaclQueryOptions {
-                        prebinding: ShaclPrebinding::None,
-                        functions: None,
+                    QueryOptions {
                         property_functions: Some(
                             purrdf_sparql_conformance::run::harness_relations(),
                         ),
-                        bnode_mint_prefix: None,
+                        ..QueryOptions::EMPTY
                     },
-                    &Arc::new(GovernorState::new(&QueryGovernors::UNBOUNDED)),
+                    &QueryGovernors::UNBOUNDED,
                 ),
             }
             .map_err(|error| error.to_string());

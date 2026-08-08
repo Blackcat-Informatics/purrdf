@@ -303,6 +303,7 @@ impl PyMutableDataset {
                         base_iri: None,
                         substitutions: &subs,
                     },
+                    purrdf_sparql_eval::QueryOptions::EMPTY,
                     governors,
                 )
                 .map_err(|e| PyValueError::new_err(format!("query evaluation error: {e}")))

@@ -1461,18 +1461,16 @@ mod tests {
         let dataset = documents();
         let state = Arc::new(crate::governor::GovernorState::new(governors));
         engine
-            .query_governed_in_operation_with_options(
+            .query_governed_in_operation(
                 &*dataset,
                 SparqlRequest {
                     query,
                     base_iri: None,
                     substitutions: &[],
                 },
-                crate::ShaclQueryOptions {
-                    prebinding: crate::ShaclPrebinding::None,
-                    functions: None,
+                crate::QueryOptions {
                     property_functions: Some(registry),
-                    bnode_mint_prefix: None,
+                    ..crate::QueryOptions::EMPTY
                 },
                 &state,
             )

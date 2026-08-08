@@ -24,7 +24,7 @@ use purrdf_core::{
 };
 use purrdf_sparql_eval::{
     CancellationFlag, GovernedUpdateOutcome, GraphResolver, NativeSparqlEngine, QueryGovernors,
-    StopSignal,
+    QueryOptions, StopSignal,
 };
 
 /// The number of `ex:p` edges in the fixture store.
@@ -112,7 +112,12 @@ fn metered_fuel(update: &str) -> u64 {
 /// `WHERE` is the same pattern.
 fn metered_query_fuel(select: &str) -> u64 {
     let outcome = NativeSparqlEngine::new()
-        .query_governed(&fixture(), request(select), &QueryGovernors::METERED)
+        .query_governed(
+            &fixture(),
+            request(select),
+            QueryOptions::EMPTY,
+            &QueryGovernors::METERED,
+        )
         .expect("the metering query runs");
     outcome.evidence().consumed.get(ResourceDimension::Fuel)
 }

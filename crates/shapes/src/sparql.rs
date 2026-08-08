@@ -21,8 +21,8 @@ use std::sync::Arc;
 use ::purrdf::{DatasetView, RdfDataset};
 use ::purrdf::{SparqlRequest, SparqlResult, TermValue};
 use purrdf_sparql_eval::{
-    GovernedOutcome, GovernorState, NativeSparqlEngine, PropertyFunctionRegistry, ShaclPrebinding,
-    ShaclQueryOptions, UserFunctionRegistry,
+    GovernedOutcome, GovernorState, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions,
+    ShaclPrebinding, UserFunctionRegistry,
 };
 
 use crate::model::xsd;
@@ -566,7 +566,7 @@ fn run_query_view<D: DatasetView + Sync>(
         base_iri: None,
         substitutions,
     };
-    let options = ShaclQueryOptions {
+    let options = QueryOptions {
         prebinding: prebind,
         functions: registry,
         property_functions,
@@ -575,14 +575,12 @@ fn run_query_view<D: DatasetView + Sync>(
 
     let Some(state) = governors else {
         return SPARQL_ENGINE
-            .with(|engine| engine.query_shacl_view(dataset, query, None, substitutions, options))
+            .with(|engine| engine.query_with_options_view(dataset, request, options))
             .map_err(|e| format!("query evaluation error: {e}"));
     };
 
     let outcome = SPARQL_ENGINE
-        .with(|engine| {
-            engine.query_governed_in_operation_with_options(dataset, request, options, &state)
-        })
+        .with(|engine| engine.query_governed_in_operation(dataset, request, options, &state))
         .map_err(|e| format!("query evaluation error: {e}"))?;
     match outcome {
         GovernedOutcome::Complete { result, .. } => Ok(result),
@@ -734,7 +732,7 @@ pub(crate) fn run_select_with_shacl_prebinding_view<D: DatasetView + Sync>(
 /// [`run_select_with_shacl_prebinding_view`] that returns the `Graph` arm.
 ///
 /// `bnode_mint_prefix` is the deterministic blank-mint prefix installed on the
-/// evaluation ([`purrdf_sparql_eval::ShaclQueryOptions::bnode_mint_prefix`]): the
+/// evaluation ([`purrdf_sparql_eval::QueryOptions::bnode_mint_prefix`]): the
 /// rules engine passes a per-focus-node identity tag so every blank the CONSTRUCT
 /// mints carries the focus's identity at mint time, while data blanks carried
 /// through variables pass through untouched.
