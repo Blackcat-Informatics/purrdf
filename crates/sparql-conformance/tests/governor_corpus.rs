@@ -51,12 +51,35 @@
 //!
 //! # The relation lane
 //!
-//! Three cases wire a **scripted property-function relation** instead of a remote
+//! Several cases wire a **scripted property-function relation** instead of a remote
 //! endpoint. It is the second producer whose bag size an outside party picks, so it owes
 //! the same two records the transport lane owes: how many invocations host code was
 //! entered for, and how many rows it was asked to produce. Neither is derivable from
 //! governor evidence, and both are what separate "the ceiling prevented the work" from
 //! "the work was done and its rows discarded". `relations.tsv` holds them.
+//!
+//! It also owes a fourth record no other lane needs. Fuel is one number, and v5 of the
+//! schedule put **two** new charge points inside it — `property-function-invocation` and
+//! `property-function-row`. A band on the aggregate is satisfied by any schedule whose
+//! total happens to land in the same place, so it pins the pair rather than either point.
+//! Each relation case therefore also carries `expected/<case>.charges`: the metered run's
+//! fuel decomposed **per charge point**, read off the public per-node ledger
+//! ([`QueryExplanation::ledger`]), whose own totals must add back up to the `.metered`
+//! fuel. Two of the lanes then exist purely to separate the two points: an
+//! *invocation-isolating* pair whose relation emits nothing at all (many invocations, zero
+//! row charges) and a *row-isolating* pair driven by a single row (one invocation, many
+//! row charges). A cost change at either point moves exactly one of them.
+//!
+//! # The parallel drive
+//!
+//! One relation pair drives more rows than `parallel::PARALLEL_MIN_ROWS`, so the BGP
+//! feeding the call folds its rows through the rayon chunk driver. Its band is the parity
+//! statement, and it needs no test-only seam to make it: `QueryGovernors::METERED` engages
+//! the intermediate-cell counter, which routes the measuring run through the **sequential**
+//! cell-bounded driver, while the band run sets fuel alone and takes the **parallel** one.
+//! A boundary that is exactly the metered cost — and an over-bound that is one less and
+//! must trip — is therefore the claim "the two drivers spend the same, and stop at the same
+//! item", stated as a frozen vector instead of as prose.
 //!
 //! # Regenerating
 //!
@@ -72,6 +95,7 @@
 //!
 //! [`TrippedGovernor::label`]: purrdf_core::TrippedGovernor::label
 //! [`QueryGovernors::METERED`]: purrdf_sparql_eval::QueryGovernors::METERED
+//! [`QueryExplanation::ledger`]: purrdf_sparql_eval::QueryExplanation::ledger
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -85,10 +109,10 @@ use purrdf_core::{
     StopCause, TermValue, TrippedGovernor,
 };
 use purrdf_sparql_eval::{
-    BindingPattern, CancellationFlag, EvalError, GovernedOutcome, HttpRemoteQuerySource,
-    HttpRequest, HttpTransport, NativeSparqlEngine, PartialAnswers, PfArgs, PfArity, PfCursor,
-    PfRow, PropertyFunction, PropertyFunctionRegistry, QueryGovernors, QueryOptions, RemoteError,
-    StopSignal, Volatility, WallDeadline,
+    BindingPattern, CancellationFlag, ChargePoint, EvalError, GovernedOutcome,
+    HttpRemoteQuerySource, HttpRequest, HttpTransport, NativeSparqlEngine, PartialAnswers, PfArgs,
+    PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, QueryGovernors,
+    QueryOptions, RemoteError, StopSignal, Volatility, WallDeadline,
 };
 
 /// The dimensions a case may set a ceiling on, in the order every pinned consumption
@@ -106,9 +130,22 @@ const PINNED_DIMENSIONS: [ResourceDimension; 5] = [
 ];
 
 /// The floor on the zero/boundary/over-bound matrix: one of each band for each of the five
-/// numeric dimensions, an injected deterministic deadline, and the property-function
-/// charge points' own fuel lane.
-const REQUIRED_BAND_CASES: usize = 21;
+/// numeric dimensions (15), an injected deterministic deadline (3), the property-function
+/// charge points' joint fuel lane (3), and the three relation lanes that exist to take that
+/// joint lane apart — invocation-isolating, row-isolating, and the parallel drive, a
+/// boundary and an over-bound each (6).
+const REQUIRED_BAND_CASES: usize = 27;
+
+/// The driving-row count above which the evaluator's chunk drivers fork.
+///
+/// A copy of `purrdf_sparql_eval`'s crate-private `parallel::PARALLEL_MIN_ROWS`, which is
+/// deliberately not public: it is a scheduling threshold, and a schedule change that made
+/// it *observable* in a receipt would be the bug this corpus exists to catch. The copy
+/// exists so [`the_parallel_drive_is_actually_above_the_fork_threshold`] can state what the
+/// parallel lane's fixture is for. Raising the real constant above this value does not make
+/// any case wrong — it makes the parallel pair an ordinary band pair, and that test is what
+/// says so out loud instead of leaving the lane quietly inert.
+const PARALLEL_FORK_MIN_ROWS: usize = 1024;
 
 // ---------------------------------------------------------------------------
 // Corpus locations
@@ -1051,6 +1088,66 @@ fn metered(
     }
 }
 
+/// The metered run's fuel, decomposed **per charge point**.
+///
+/// Fuel is one number, and the property-function seam put two charge points inside it. A
+/// band on the aggregate cannot tell a schedule that moved
+/// [`ChargePoint::PropertyFunctionInvocation`] from one that moved
+/// [`ChargePoint::PropertyFunctionRow`] the other way; this record can, and it is what the
+/// invocation-isolating and row-isolating lanes are read through.
+///
+/// Taken from the public per-node ledger
+/// ([`NativeSparqlEngine::explain_query_with_property_functions`]), which runs the same
+/// query under the same [`QueryGovernors::METERED`] the `.metered` record is measured with —
+/// so the totals here must add back up to that record's fuel, and
+/// [`every_boundary_is_derived_from_a_metered_run`] checks that they do. A decomposition
+/// that did not sum to the quantity it claims to decompose would be a decomposition of
+/// something else.
+fn charge_decomposition(case: &Case, spec: RelationSpec) -> String {
+    let dataset = load_dataset(case);
+    let query = load_query(case);
+    let scripted = Arc::new(ScriptedRelation::new(spec, None));
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register(
+        RELATION_IRI,
+        Arc::clone(&scripted) as Arc<dyn PropertyFunction>,
+    );
+    let explanation = NativeSparqlEngine::new()
+        .explain_query_with_property_functions(&dataset, &query, None, &registry)
+        .unwrap_or_else(|error| panic!("{} must explain: {error}", case.name));
+    let mut out = String::new();
+    for point in ChargePoint::ALL {
+        let total: u64 = explanation
+            .ledger()
+            .iter()
+            .map(|node| node.fuel_at(point))
+            .sum();
+        writeln!(out, "{point}\t{total}").expect("writing to a String cannot fail");
+    }
+    out
+}
+
+/// The fuel a rendered decomposition attributes to `point`.
+fn charged_at(record: &str, point: ChargePoint) -> u64 {
+    for line in record.lines() {
+        let Some((label, value)) = line.split_once('\t') else {
+            continue;
+        };
+        if label == point.label() {
+            return value.parse().expect("a rendered charge count is a number");
+        }
+    }
+    panic!("no {point} row in {record:?}")
+}
+
+/// Every charge point's fuel in a rendered decomposition, summed.
+fn charged_total(record: &str) -> u64 {
+    ChargePoint::ALL
+        .into_iter()
+        .map(|point| charged_at(record, point))
+        .sum()
+}
+
 // ---------------------------------------------------------------------------
 // Deterministic rendering
 // ---------------------------------------------------------------------------
@@ -1394,6 +1491,13 @@ fn regenerate_case(
     relation_spec: Option<RelationSpec>,
 ) -> Regenerated {
     let mut case = case.clone();
+    if let Some(relation_spec) = relation_spec {
+        write_expected(
+            &case,
+            "charges",
+            &charge_decomposition(&case, relation_spec),
+        );
+    }
     if case.is_pinned_deterministic() {
         let measured = metered(&case, spec, relation_spec);
         write_expected(&case, "metered", &measured.spend);
@@ -1663,6 +1767,27 @@ fn every_boundary_is_derived_from_a_metered_run() {
             "{}: the measuring run's cost moved without the corpus being regenerated",
             case.name
         );
+
+        // A relation case's fuel is two new charge points plus the generic accounting, and
+        // an aggregate band cannot tell them apart. The decomposition is re-derived here
+        // for the same reason the boundary is: a number nobody re-measures is a number
+        // nobody can trust.
+        if let Some(relation_spec) = relations.get(&case.name).copied() {
+            let decomposition = charge_decomposition(case, relation_spec);
+            assert_eq!(
+                decomposition,
+                read_expected(case, "charges"),
+                "{}: the per-charge-point decomposition of the metered fuel moved without \
+                 the corpus being regenerated",
+                case.name
+            );
+            assert_eq!(
+                charged_total(&decomposition),
+                consumed_in(&measured.spend, ResourceDimension::Fuel),
+                "{}: the pinned decomposition does not add up to the fuel it decomposes",
+                case.name
+            );
+        }
 
         if case.band == Band::NotApplicable {
             continue;
@@ -1996,6 +2121,279 @@ fn a_relation_that_ignores_the_stop_signal_is_bounded_per_invocation() {
         rows < usize::try_from(pulls).expect("a pull count fits a usize"),
         "the deaf cursor emitted more rows than reached the answer; if every pulled row \
          were ingested the per-row admission point would not be a checkpoint at all"
+    );
+}
+
+/// The number of `row` records a pinned answer carries.
+fn pinned_row_count(case: &Case) -> usize {
+    read_expected(case, "answer")
+        .lines()
+        .filter(|line| line.starts_with("row"))
+        .count()
+}
+
+/// The two property-function charge points are banded **separately**, not only jointly.
+///
+/// `property-function-invocation` and `property-function-row` both denominate fuel, so a
+/// band on the aggregate is satisfied by any schedule whose total lands in the same place —
+/// including one that doubled the invocation cost and halved the row cost. Two lanes exist
+/// to take the pair apart, and this is the test that says what makes each of them isolating
+/// rather than merely differently shaped:
+///
+/// - the **invocation** lane's relation emits nothing at all, so its band contains many
+///   invocation charges and provably **zero** row charges. The seam really fires — the
+///   pinned invocation count is what says so — and a row-cost change cannot move it.
+/// - the **row** lane is driven by a single row, so its band contains exactly **one**
+///   invocation charge and many row charges. An invocation-cost change moves it by one; a
+///   row-cost change moves it by the emitted count.
+///
+/// Read off the pinned `.charges` decomposition rather than recomputed, so what this
+/// asserts is the published numbers. There is deliberately no `zero` member on either lane:
+/// a zero fuel ceiling trips at the first node entry, before any relation is resolved, so a
+/// zero band would pin a case in which the seam never fires at all — which is exactly the
+/// thing this test exists to rule out.
+#[test]
+fn the_two_property_function_charge_points_are_banded_separately() {
+    if updating() {
+        return;
+    }
+    let cases = load_manifest();
+    let relations = load_relations();
+
+    for band in ["boundary", "over-bound"] {
+        let invocation = case_named(&cases, &format!("property-function-invocation-fuel-{band}"));
+        let spec = relations[&invocation.name];
+        assert_eq!(
+            spec.emits, 0,
+            "{}: the invocation lane isolates by emitting nothing; a relation that emits \
+             rows puts row charges back into the band",
+            invocation.name
+        );
+        let charges = read_expected(invocation, "charges");
+        assert_eq!(
+            charged_at(&charges, ChargePoint::PropertyFunctionRow),
+            0,
+            "{}: the invocation lane's fuel must contain no row charge at all",
+            invocation.name
+        );
+        let invocations = charged_at(&charges, ChargePoint::PropertyFunctionInvocation);
+        assert!(
+            invocations > 1,
+            "{}: the seam must actually fire, many times over — a band that charged the \
+             invocation point once or not at all isolates nothing",
+            invocation.name
+        );
+        let observed = spec
+            .invocations
+            .expect("a pinned case carries its invocation count");
+        // At the boundary the whole measurement is admitted, so the charge point counts
+        // exactly the invocations the relation observed. One unit below it, the trip
+        // arrives first and the relation is opened strictly fewer times — which is the
+        // charge point doing its job rather than a discrepancy.
+        if band == "boundary" {
+            assert_eq!(
+                observed, invocations,
+                "{}: the charge point counts the invocations the relation observed",
+                invocation.name
+            );
+        } else {
+            assert!(
+                observed > 0 && observed < invocations,
+                "{}: an over-bound ceiling must stop the drive part way through, having \
+                 entered host code at least once",
+                invocation.name
+            );
+        }
+        assert_eq!(
+            pinned_row_count(invocation),
+            0,
+            "{}: a relation that emits nothing hands back nothing",
+            invocation.name
+        );
+
+        let row = case_named(&cases, &format!("property-function-row-fuel-{band}"));
+        let spec = relations[&row.name];
+        let charges = read_expected(row, "charges");
+        assert_eq!(
+            charged_at(&charges, ChargePoint::PropertyFunctionInvocation),
+            1,
+            "{}: the row lane isolates by driving exactly one invocation",
+            row.name
+        );
+        assert_eq!(
+            charged_at(&charges, ChargePoint::PropertyFunctionRow),
+            spec.emits,
+            "{}: every row the relation emitted crossed the admission point and was \
+             charged there",
+            row.name
+        );
+        assert!(
+            spec.emits > 1,
+            "{}: the row point must dominate its own lane, or the lane is a second \
+             invocation band",
+            row.name
+        );
+    }
+}
+
+/// The parallel drive lane is genuinely above the evaluator's fork threshold.
+///
+/// Stated against the pinned counts rather than against the evaluator's internals, which
+/// are crate-private: the relation is opened once per driving row, so its pinned invocation
+/// count IS the number of rows the BGP folded into the call. See
+/// [`PARALLEL_FORK_MIN_ROWS`] for what this constant is a copy of, and for why a raised
+/// threshold makes this test fail loudly instead of leaving the lane silently inert.
+#[test]
+fn the_parallel_drive_is_actually_above_the_fork_threshold() {
+    if updating() {
+        return;
+    }
+    let cases = load_manifest();
+    let relations = load_relations();
+    let boundary = case_named(&cases, "property-function-parallel-fuel-boundary");
+    let driving = relations[&boundary.name]
+        .invocations
+        .expect("a pinned case carries its invocation count");
+    assert!(
+        driving > u64::try_from(PARALLEL_FORK_MIN_ROWS).expect("the threshold fits a u64"),
+        "the parallel lane drove {driving} rows, which is at or below the {PARALLEL_FORK_MIN_ROWS}-row \
+         fork threshold: the lane then measures the same sequential driver every other case \
+         does, and the parity it claims is vacuous"
+    );
+}
+
+/// The parallel driver spends exactly what the sequential driver spends.
+///
+/// The claim the whole corpus rests on is that consumption is a pure function of
+/// `(query, data, budget)` — not of the worker count, the chunk geometry, or the completion
+/// order. The parallel lane is where that is checked against a real fork, and it needs no
+/// test-only seam to arrange one:
+///
+/// - [`QueryGovernors::METERED`] engages the intermediate-cell counter, and a BGP stage with
+///   a cell ceiling folds through the evaluator's **sequential** cell-bounded driver — a
+///   parallel chunk cannot enforce a ceiling it cannot know the running total of. So the
+///   `.metered` measurement of this case is a sequential run.
+/// - a band case sets **fuel alone**, leaving the cell counter disengaged, so the same BGP
+///   stage folds through the **parallel** chunk driver instead.
+///
+/// The boundary case therefore completes under a ceiling that is exactly what a *sequential*
+/// run cost, and the over-bound case — one unit below it — must trip. Byte-equal totals
+/// would already be a strong statement; the over-bound member makes it the sharper one,
+/// because a ceiling one below the measurement can only be crossed at all if the parallel
+/// fold charged the same items in the same order.
+#[test]
+fn the_parallel_drive_spends_what_the_sequential_measurement_spent() {
+    if updating() {
+        return;
+    }
+    let cases = load_manifest();
+    let relations = load_relations();
+
+    let boundary = case_named(&cases, "property-function-parallel-fuel-boundary");
+    let over_bound = case_named(&cases, "property-function-parallel-fuel-over-bound");
+    let measured = consumed_in(&read_expected(boundary, "metered"), ResourceDimension::Fuel);
+    assert_eq!(
+        boundary.ceiling,
+        Some((ResourceDimension::Fuel, measured)),
+        "the parallel boundary must be the sequential measurement, exactly"
+    );
+    assert_eq!(boundary.outcome, "complete");
+    assert_eq!(
+        over_bound.ceiling,
+        Some((ResourceDimension::Fuel, measured - 1))
+    );
+    assert_eq!(over_bound.outcome, "budget-exhausted fuel");
+
+    // And the run really is parallel-driven: the observation is taken live, under the
+    // manifest's own ceiling, and must reproduce the pinned spend of a measurement the
+    // sequential driver produced.
+    let spec = relations.get(&boundary.name).copied();
+    let observation = observe(boundary, &governors_for(boundary), None, spec);
+    assert_eq!(
+        consumed_in(&observation.spend, ResourceDimension::Fuel),
+        measured,
+        "the parallel drive spent a different amount than the sequential measurement: a \
+         receipt that depends on which driver ran is not a receipt anyone can size a budget \
+         against"
+    );
+}
+
+/// A fuel ceiling that lands **between** an invocation and its first row truncates at a
+/// pinned, deterministic point.
+///
+/// The narrowest window the property-function seam has, and the one an aggregate band can
+/// never sit in: the relation was entered — host code ran, a cursor was opened, one row was
+/// produced — and then the budget refused that row at the engine's admission point. The
+/// caller receives an empty bag that is nevertheless a certified positional prefix, and the
+/// pinned pull count is what separates this from "the ceiling prevented the call".
+///
+/// The ceiling is authored rather than derived, exactly as
+/// `service-deaf-transport-request-ceiling`'s is: it names a seam, not a band. Authored is
+/// not unchecked, though — the assertions below re-derive that it is the *unique* such
+/// value, by re-running the same case one unit higher and finding exactly one more pull and
+/// exactly one admitted row.
+#[test]
+fn a_fuel_ceiling_between_an_invocation_and_its_first_row_truncates_deterministically() {
+    if updating() {
+        return;
+    }
+    let cases = load_manifest();
+    let relations = load_relations();
+    let case = case_named(&cases, "property-function-first-row-fuel-ceiling");
+    let spec = relations[&case.name];
+    let (dimension, ceiling) = case.ceiling.expect("the seam case sets a fuel ceiling");
+    assert_eq!(dimension, ResourceDimension::Fuel);
+    assert_eq!(case.band, Band::NotApplicable, "a seam, not a band");
+    assert_eq!(case.outcome, "budget-exhausted fuel");
+
+    // Above the invocation charge: host code was entered and asked for a row.
+    assert_eq!(
+        spec.invocations,
+        Some(1),
+        "a ceiling below the invocation charge would pin a case in which the seam never \
+         fired at all"
+    );
+    assert_eq!(
+        spec.pulls,
+        Some(1),
+        "below the first row charge: the cursor answered exactly one pull, and the engine \
+         never asked for a second"
+    );
+
+    // Below the first row charge: nothing that pull produced reached the caller. The bag is
+    // empty and is still CERTIFIED — every row in it is an answer, vacuously — but the
+    // resumption licence is withdrawn, and that is pinned rather than smoothed over. The
+    // call is driven laterally, so its own emission order is not the joined output's order;
+    // a truncation originating inside it bounds the answer from below without saying where
+    // in the answer the cut fell. (The standalone shape, where the call IS the node under
+    // the projection, keeps the licence — `property-fn-eval`'s own truncation test pins
+    // that half.)
+    let answer = read_expected(case, "answer");
+    assert_eq!(pinned_row_count(case), 0, "got:\n{answer}");
+    assert!(
+        answer.contains("certificate\tcertain\tpositional-prefix=false"),
+        "an empty bag from inside a driven call is a certified lower bound that licenses no \
+         resumption point; got:\n{answer}"
+    );
+
+    // The ceiling is the unique value with that property: one unit more admits exactly one
+    // row, from exactly one more pull.
+    let mut admitting = case.clone();
+    admitting.ceiling = Some((ResourceDimension::Fuel, ceiling + 1));
+    let observation = observe(&admitting, &governors_for(&admitting), None, Some(spec));
+    assert_eq!(
+        (observation.invocations, observation.pulls),
+        (1, 2),
+        "one unit above the seam must buy exactly the first row's charge"
+    );
+    assert_eq!(
+        observation
+            .answer
+            .lines()
+            .filter(|line| line.starts_with("row"))
+            .count(),
+        1,
+        "one unit above the seam must admit exactly one row"
     );
 }
 

@@ -1,0 +1,4 @@
+outcome	budget-exhausted
+tripped	budget	fuel	fuel-exhausted	limit=39	consumed=40
+certificate	certain	positional-prefix=false
+variables	s	x

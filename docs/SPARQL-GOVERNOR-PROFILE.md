@@ -504,6 +504,12 @@ Each reproducible case pins **three** records, and keeping them apart is deliber
    `unknown`, plus the positional-prefix bit);
 3. **what the execution spent**, recorded independently of the rows.
 
+A property-function case pins a **fourth**: the metered fuel decomposed *per charge
+point*, read off the per-node ledger. Fuel is one number and v5 put two charge points
+inside it, so an aggregate band alone cannot tell a schedule that moved
+`property-function-invocation` from one that moved `property-function-row` the other
+way.
+
 The third is the one easy to omit and impossible to reconstruct afterwards: a corpus
 pinning only rows could not detect a charge-schedule change that happened to cut in
 the same place — the answer would be unchanged, the receipt would not, and every
@@ -512,8 +518,8 @@ green.
 
 The wall-deadline smoke case is the deliberate exception: it has only the outcome
 discriminant because rows and spend depend on elapsed time. Across the corpus there
-are 34 cases total, of which 28 form zero, boundary, or over-bound lanes and the
-remaining six are transport, relation, and wall-clock seam cases.
+are 41 cases total, of which 34 form zero, boundary, or over-bound lanes and the
+remaining seven are transport, relation, charge-seam, and wall-clock cases.
 
 Boundaries are **measured, never authored**. For each caller-settable dimension the
 corpus carries a `zero` ceiling (must trip), a ceiling equal to the metered cost (must
@@ -521,10 +527,21 @@ corpus carries a `zero` ceiling (must trip), a ceiling equal to the metered cost
 harness re-measures under `METERED` and re-derives that relation on every run rather
 than trusting the numbers in the file.
 
+Three of the band lanes exist to separate the two property-function charge points from
+each other rather than to cover a dimension: one drives many invocations of a relation
+that emits nothing (so its band carries zero row charges), one drives a single
+invocation emitting many rows, and one drives 1200 rows — above the evaluator's fork
+threshold. That last one is where the parallel-invariance claim of §1 becomes a
+frozen vector rather than prose: `METERED` engages the intermediate-cell counter, which
+routes the *measuring* run through the sequential chunk driver, while a band case sets
+fuel alone and takes the parallel one. A boundary that is exactly the sequential
+measurement, and an over-bound one unit below it that must trip, is the statement that
+the two drivers charge the same items in the same order.
+
 ### 11.1 The corpus digest, and how to pin it
 
 ```text
-GOVERNOR_CORPUS_DIGEST = 4533b01e942bc41a57740b9599b72b8477e036b9a04745d65f293af68afaabf3
+GOVERNOR_CORPUS_DIGEST = cde71eb36c54cb9b09ebb419827d6214d35dd8110b93e8cad9589584c090d51a
 ```
 
 It is the SHA-256 of the corpus freeze manifest, which in turn covers every payload

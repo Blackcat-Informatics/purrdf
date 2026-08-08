@@ -52,3 +52,10 @@ property-function-fuel-boundary	cases/property-function.ttl	cases/property-funct
 property-function-fuel-over-bound	cases/property-function.ttl	cases/property-function.rq	relation	fuel=30	over-bound	budget-exhausted fuel
 property-function-deaf-relation-cancel-mid-invocation	cases/property-function.ttl	cases/property-function.rq	relation	stop=cancellation	n/a	stopped cancelled
 property-function-cooperating-relation-cancel-mid-invocation	cases/property-function.ttl	cases/property-function.rq	relation	stop=cancellation	n/a	stopped cancelled
+property-function-invocation-fuel-boundary	cases/property-function-miss.ttl	cases/property-function.rq	relation	fuel=40	boundary	complete
+property-function-invocation-fuel-over-bound	cases/property-function-miss.ttl	cases/property-function.rq	relation	fuel=39	over-bound	budget-exhausted fuel
+property-function-row-fuel-boundary	cases/property-function-single.ttl	cases/property-function.rq	relation	fuel=43	boundary	complete
+property-function-row-fuel-over-bound	cases/property-function-single.ttl	cases/property-function.rq	relation	fuel=42	over-bound	budget-exhausted fuel
+property-function-first-row-fuel-ceiling	cases/property-function-single.ttl	cases/property-function.rq	relation	fuel=7	n/a	budget-exhausted fuel
+property-function-parallel-fuel-boundary	cases/property-function-wide.ttl	cases/property-function-wide.rq	relation	fuel=4804	boundary	complete
+property-function-parallel-fuel-over-bound	cases/property-function-wide.ttl	cases/property-function-wide.rq	relation	fuel=4803	over-bound	budget-exhausted fuel

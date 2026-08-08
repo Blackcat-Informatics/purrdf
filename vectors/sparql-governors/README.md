@@ -47,6 +47,7 @@ regenerating a digest.
 | `expected/<case>.answer` | the certified rows and their certificate class |
 | `expected/<case>.spend` | what the execution consumed, per dimension |
 | `expected/<case>.metered` | what the same case costs under `QueryGovernors::METERED` |
+| `expected/<case>.charges` | *relation cases only* — the metered fuel decomposed per charge point |
 
 A case's data syntax is taken from its **extension**, not from the manifest, so
 a fixture cannot be listed under a syntax it is not written in. Endpoint
@@ -77,6 +78,19 @@ corpus that pinned only rows could not detect a charge-schedule change that
 happened to cut in the same place: the answer would be unchanged, the receipt
 would not, and every budget a consumer sized against the old schedule would be
 silently wrong while the corpus stayed green.
+
+### A fourth, for the relation lane
+
+Fuel is **one** number, and profile v5 put **two** new charge points inside it —
+`property-function-invocation` and `property-function-row`. A band on the
+aggregate is satisfied by any schedule whose total happens to land in the same
+place, including one that doubled the invocation cost and halved the row cost.
+So every relation case also carries `expected/<case>.charges`: the metered run's
+fuel decomposed **per charge point**, read off the public per-node ledger
+(`QueryExplanation::ledger`, taken under the same `QueryGovernors::METERED`).
+The harness re-derives it on every run and additionally checks that the eleven
+counts add back up to the `.metered` fuel — a decomposition that did not sum to
+the quantity it claims to decompose would be a decomposition of something else.
 
 ## The boundary is measured, never guessed
 
@@ -125,7 +139,13 @@ A **cancellation** is not a clock, so cancellation cases are pinned in full.
 | Lane | Inputs | Covers |
 |---|---|---|
 | `fuel-*` | `chain` | abstract execution steps |
-| `property-function-fuel-*` | `property-function` | the two property-function charge points: one per invocation of a host relation, one per row it emits and this engine accepts |
+| `property-function-fuel-*` | `property-function` | the two property-function charge points **together**: three driving rows, two emitted rows each |
+| `property-function-invocation-fuel-*` | `property-function-miss` | the invocation point **alone** — twelve driving rows against a relation that emits nothing, so the band contains twelve invocation charges and zero row charges |
+| `property-function-row-fuel-*` | `property-function-single` | the row point **alone** — one driving row against a relation that emits twelve, so the band contains one invocation charge and twelve row charges |
+| `property-function-parallel-fuel-*` | `property-function-wide` | the same seam at 1200 driving rows, above the evaluator's fork threshold |
+
+The three lanes above carry a `boundary` and an `over-bound` member but no
+`zero`; the section on the relation seam says why that is the honest shape.
 | `answer-rows-*` | `chain` | what the query commits to its answer sequence |
 | `intermediate-cells-*` | `join` | the largest intermediate bag; the zero and over-bound cases are refused at **admission**, because the planner's estimate already exceeds the ceiling |
 | `scratch-bytes-*` | `concat` | arena growth, which is independent of every row and cell count |
@@ -188,6 +208,70 @@ costs the caller nothing.
 separate "the ceiling prevented the work" from "the work was done and its rows
 discarded". Here they are what makes the paragraph above checkable — the deaf
 case is pulled exactly once more than it delivers.
+
+#### Separating the two charge points
+
+| Case | Relation | Pinned | Isolates |
+|---|---|---|---|
+| `property-function-invocation-fuel-boundary` | emits **0** rows | 12 invocations, 12 pulls, 0 rows; fuel 40 | 12 `property-function-invocation` charges, **0** `property-function-row` charges |
+| `property-function-invocation-fuel-over-bound` | emits **0** rows | 11 invocations, 11 pulls | one unit below the measurement stops the drive an invocation short — the invocation point is what cut |
+| `property-function-row-fuel-boundary` | emits **12** rows | 1 invocation, 13 pulls, 12 rows; fuel 43 | **1** `property-function-invocation` charge, 12 `property-function-row` charges |
+| `property-function-row-fuel-over-bound` | emits **12** rows | 1 invocation, 13 pulls | one unit below the measurement trips at the final charge, rows intact |
+
+A cost change at either point moves exactly one of these lanes, which the joint
+`property-function-fuel-*` lane cannot tell you. Neither lane has a `zero`
+member, deliberately: a zero fuel ceiling trips at the first algebra-node entry,
+before any relation is resolved, so a `property-function-*-fuel-zero` case pins
+0 invocations and 0 pulls — a band in which the seam never fires, and therefore
+one that says nothing about the seam. (The joint lane's `zero` member is kept: it
+pins that a zero budget admits *no* charged work at all, which is a statement
+about the ceiling rather than about the relation.)
+
+#### The seam between an invocation and its first row
+
+| Case | Ceiling | Pinned |
+|---|---|---|
+| `property-function-first-row-fuel-ceiling` | `fuel=7` | 1 invocation, **1** pull, 0 rows, `budget-exhausted fuel` |
+
+The narrowest window the seam has: host code was entered, a cursor was opened,
+one row was produced — and the budget refused that row at the engine's admission
+point, before it reached the bag. The pull count is what separates this from "the
+ceiling prevented the call". The ceiling is **authored**, exactly as
+`service-deaf-transport-request-ceiling`'s is, because it names a seam rather
+than a band; authored is not unchecked, though — the harness re-derives that 7 is
+the *unique* such value by re-running the same case at 8 and finding exactly one
+more pull and exactly one admitted row.
+
+The certificate is `certain` with `positional-prefix=false`, and that is pinned
+rather than smoothed over. The call is driven laterally, so its own emission
+order is not the joined output's order: the empty bag bounds the answer from
+below (vacuously, but soundly) while licensing no resumption point. A
+*standalone* call keeps the licence, and `property_fn_eval`'s own truncation test
+pins that half.
+
+#### The parallel drive
+
+| Case | Ceiling | Pinned |
+|---|---|---|
+| `property-function-parallel-fuel-boundary` | `fuel=4804` | 1200 invocations, 1200 pulls, `complete` |
+| `property-function-parallel-fuel-over-bound` | `fuel=4803` | 1199 invocations, `budget-exhausted fuel` |
+
+`property-function-wide` drives 1200 rows through a two-pattern BGP, so the stage
+that feeds the call folds above the evaluator's fork threshold. The band **is**
+the parity statement, and it needs no test-only seam to arrange one:
+
+* `QueryGovernors::METERED` engages the intermediate-cell counter, and a BGP
+  stage carrying a cell ceiling folds through the **sequential** cell-bounded
+  driver — a parallel chunk cannot enforce a ceiling whose running total it
+  cannot see. So the `.metered` measurement is a sequential run.
+* a band case sets **fuel alone**, leaving the cell counter disengaged, so the
+  same stage folds through the **parallel** chunk driver.
+
+The boundary therefore completes under a ceiling that is exactly what a
+sequential run cost, and the over-bound member — one unit below it — must trip.
+Equal totals alone would be a strong statement; the over-bound member makes it
+the sharper one, because a ceiling one below the measurement can only be crossed
+at all if the parallel fold charged the same items in the same order.
 
 ### Deadlines
 
