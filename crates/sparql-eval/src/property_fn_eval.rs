@@ -1462,7 +1462,7 @@ mod tests {
             property_fn_namespaces: vec![format!("{EX}pf/")],
             property_fn_iris: Vec::new(),
         });
-        let message = engine
+        let error = engine
             .query(
                 &documents(),
                 SparqlRequest {
@@ -1471,8 +1471,9 @@ mod tests {
                     substitutions: &[],
                 },
             )
-            .expect_err("nothing is registered under the configured namespace")
-            .to_string();
+            .expect_err("nothing is registered under the configured namespace");
+        assert_eq!(error.code, "native-sparql-property-function");
+        let message = error.to_string();
         assert!(
             message.contains("no property function is registered")
                 && message.contains(&format!("{PF_SPLIT}x")),
@@ -1506,7 +1507,7 @@ mod tests {
             property_fn_namespaces: vec![format!("{EX}pf/")],
             property_fn_iris: Vec::new(),
         });
-        let message = engine
+        let error = engine
             .query(
                 &documents(),
                 SparqlRequest {
@@ -1515,8 +1516,9 @@ mod tests {
                     substitutions: &[],
                 },
             )
-            .expect_err("a configured namespace with nothing registered cannot evaluate")
-            .to_string();
+            .expect_err("a configured namespace with nothing registered cannot evaluate");
+        assert_eq!(error.code, "native-sparql-property-function");
+        let message = error.to_string();
         assert!(
             message.contains("no property function is registered"),
             "got {message}"

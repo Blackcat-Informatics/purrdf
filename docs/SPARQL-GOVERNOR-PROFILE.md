@@ -196,8 +196,7 @@ host code from predicate position and ingests whatever rows that relation choose
 emit, so without them a call's whole cost would ride the generic per-node accounting —
 one `algebra-node-entry` in and one `committed-output-row` per committed row out — which
 prices a relation emitting a million rows from one invocation exactly as it prices one
-emitting ten, and prices a thousand invocations that each emit nothing at nothing at
-all.
+emitting ten, and prices a thousand invocations that each emit nothing at all.
 
 * `property-function-invocation` is charged **after** the call's admission refusals (an
   arity mismatch, an access pattern no declared mode serves) and immediately before the
@@ -429,6 +428,18 @@ contract is stronger here than for a transport, because a relation's output is a
   the invocation and one that ignores the signal entirely: the two answers are
   **byte-identical**, certificate included. Reading the signal inside an invocation is an
   optimisation, never the thing that makes the query bounded.
+
+Both cases in that pair carry `positional-prefix=false`, and that is not the deaf/
+cooperating distinction leaking through — the corpus drives the call laterally
+(`?s ex:p ?m . ?s ex:pf:emit ?x`, the driving pattern joined to the call through
+`LATERAL`), so the call's own emission order is not the joined output's order. A
+truncation that originates inside a laterally-driven call therefore bounds the answer
+from below without being able to say where in the answer the cut fell, and the licence
+is withdrawn for that structural reason, independent of whether the cursor was deaf or
+cooperating. The standalone shape — where the call IS the node directly under the
+projection, so its own order and the output's order coincide — keeps the licence; see
+the `property-function-first-row-fuel-ceiling` case and `property-fn-eval`'s own
+truncation test for that half.
 
 `rows_per_invocation` is a separate obligation and it is an **honesty contract**, not a
 hint: admission control refuses a plan whose declared bound already breaches the cell

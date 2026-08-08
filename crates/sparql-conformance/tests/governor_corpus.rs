@@ -54,7 +54,8 @@
 //! Several cases wire a **scripted property-function relation** instead of a remote
 //! endpoint. It is the second producer whose bag size an outside party picks, so it owes
 //! the same two records the transport lane owes: how many invocations host code was
-//! entered for, and how many rows it was asked to produce. Neither is derivable from
+//! entered for, and how many calls to `PfCursor::next` it received (the terminating,
+//! exhausted call included, so this is not a row count). Neither is derivable from
 //! governor evidence, and both are what separate "the ceiling prevented the work" from
 //! "the work was done and its rows discarded". `relations.tsv` holds them.
 //!
@@ -854,7 +855,9 @@ struct Observation {
     stop_polls: u64,
     /// Invocations the scripted relation was opened for.
     invocations: u64,
-    /// Rows the scripted relation was asked to produce, across every invocation.
+    /// Calls to `PfCursor::next` the scripted relation's cursor received, across every
+    /// invocation. The counter increments before the exhaustion check, so the terminating
+    /// `Ok(None)` call is counted too — this is a call count, not a row count.
     pulls: u64,
 }
 

@@ -101,9 +101,11 @@ pub struct ParserOptions {
     pub extension_fn_namespaces: Vec<String>,
     /// The namespaces recognized as the property-function seam in predicate
     /// position, by PREFIX match. Defaults to empty (property functions off);
-    /// order is first-match-wins for prefix matching. Caller-declared: a host
-    /// that wants a whole namespace claimed by the seam — including IRIs it has
-    /// deliberately left unregistered, so spelling one is a hard error rather
+    /// recognition is order-independent — an IRI is claimed by the seam if it
+    /// prefix-matches ANY configured entry, and nothing is stripped from it, so
+    /// no entry's position in the list changes what a call's IRI is. Caller-declared:
+    /// a host that wants a whole namespace claimed by the seam — including IRIs it
+    /// has deliberately left unregistered, so spelling one is a hard error rather
     /// than a silent data triple — declares it here.
     pub property_fn_namespaces: Vec<String>,
     /// The individual IRIs recognized as the property-function seam in
@@ -5619,9 +5621,10 @@ mod tests {
     }
 
     #[test]
-    fn first_match_wins_across_configured_namespaces() {
+    fn every_configured_namespace_is_recognized_independently() {
         // Several namespaces may be configured; each is recognized, and the IRI
-        // is retained exactly as spelled under whichever matched.
+        // is retained exactly as spelled under whichever matched — recognition is
+        // order-independent, unlike the extension-function seam's prefix stripping.
         let options = ParserOptions {
             extension_fn_namespaces: Vec::new(),
             property_fn_namespaces: vec![PF_NS.to_owned(), "https://example.org/other/".to_owned()],

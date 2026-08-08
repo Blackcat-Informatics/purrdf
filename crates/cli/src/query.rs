@@ -91,6 +91,15 @@
 //! different entry point with no explanation to give — and both refusals name what to drop.
 //! Those two are now the WHOLE refusal list: `--entailment` beside a governor flag used to
 //! be a third, and it runs instead (see [`refuse_unenforceable_combinations`]).
+//!
+//! The rendered `relations` block is always empty here: the CLI has no property-function
+//! registration surface at all — [`ExplainOp::run`] calls the registry-free
+//! [`NativeSparqlEngine::explain_query_view`], never
+//! [`NativeSparqlEngine::explain_query_with_property_functions_view`] — so there is never
+//! anything for it to list. That is the honest minimal form, not a missing feature —
+//! [`QueryExplanation::render`] always emits the block, empty or not, precisely so "no
+//! relations were in scope" and "this build does not report relations" stay distinguishable
+//! bytes.
 
 use purrdf::GovernedEntailment;
 use purrdf_core::{DatasetView, LossLedger, SparqlRequest, SparqlResult};

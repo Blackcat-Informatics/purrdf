@@ -186,8 +186,9 @@ deterministic resumption, while a completed-then-discarded one withdraws it.
 
 `PfCursor::next` is handed no signal it is obliged to read, and nothing forces a
 host to write a cursor that stops early. The evaluator polls before opening a
-cursor and between successive pulls, so the seam is bounded per **invocation**
-whatever the relation does.
+cursor and between successive pulls, and every emitted row crosses the per-row
+admission point on its way into the bag, so the seam is bounded per **row**,
+not merely per invocation, whatever the relation does.
 
 | Case | Covers |
 |---|---|

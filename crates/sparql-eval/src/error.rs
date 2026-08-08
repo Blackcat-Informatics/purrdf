@@ -39,11 +39,11 @@ pub enum EvalError {
     /// A well-formed construct this evaluator does not (or cannot) evaluate.
     ///
     /// This is the hard-fail boundary. `SERVICE` federation, `LATERAL`,
-    /// property-function calls, and SPARQL `UPDATE` are all evaluated in-engine, so
-    /// none of them surfaces here; what remains is a narrow, enumerated residue: a
-    /// variable-bound quoted-triple-term component in a BGP or property-path pattern
-    /// (structural triple-term matching is out of scope), an unresolved custom SPARQL
-    /// function or aggregate IRI, `heldIn` called without a caller-supplied
+    /// property-function calls, and SPARQL `UPDATE` are all evaluated in-engine, so none
+    /// of them surfaces here on its own account; what remains is a narrow, enumerated
+    /// residue: a variable-bound quoted-triple-term component in a BGP or property-path
+    /// pattern (structural triple-term matching is out of scope), an unresolved custom
+    /// SPARQL function or aggregate IRI, `heldIn` called without a caller-supplied
     /// standpoint-predicate configuration, and a manually constructed graph pattern
     /// whose nesting exceeds the parser's safety bound. The string names the
     /// unsupported construct. (Property paths are evaluated in-engine — S8 — and
@@ -51,7 +51,12 @@ pub enum EvalError {
     /// either. A property-function call whose predicate IRI resolves to no registered
     /// relation, or whose access pattern no declared mode admits, is
     /// [`EvalError::Function`]: the construct is supported and the host's table is
-    /// what does not answer it.)
+    /// what does not answer it. One property-function shape DOES surface here: a call
+    /// inside a `SERVICE` body is refused at the forwarding boundary
+    /// (`crate::remote::eval_service`), because the body is serialized and sent as
+    /// SPARQL text and a call serializes as an ordinary triple — forwarding it would
+    /// match it against the remote endpoint's data instead of invoking the relation, with
+    /// no symptom anywhere.)
     Unsupported(String),
 
     /// An internal invariant was violated — e.g. a solution row whose width does
