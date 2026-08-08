@@ -139,6 +139,7 @@ fn service_clause_federates_through_injected_http_transport() {
                 substitutions: &[],
             },
             &source,
+            QueryOptions::EMPTY,
         )
         .expect("federated query");
     match result {
@@ -174,6 +175,7 @@ fn missing_named_graph_does_not_execute_its_inner_service() {
                 substitutions: &[],
             },
             &source,
+            QueryOptions::EMPTY,
         )
         .expect("a missing named graph is an empty result, not a SERVICE evaluation");
     let SparqlResult::Solutions {

@@ -317,7 +317,10 @@ fn registering_a_relation_does_not_hijack_a_longer_sibling_data_predicate() {
              ordinary data triple, never a hard-erroring call",
         );
 
-    let SparqlResult::Solutions { rows, .. } = result else {
+    let SparqlResult::Solutions {
+        variables, rows, ..
+    } = result
+    else {
         panic!("a SELECT returns solutions");
     };
     assert_eq!(
@@ -325,6 +328,29 @@ fn registering_a_relation_does_not_hijack_a_longer_sibling_data_predicate() {
         1,
         "the triple under the longer predicate is read from the graph as an ordinary BGP \
          triple, not routed through the relation: {rows:?}"
+    );
+    // A relation fire would also produce exactly one row (`MemoryRelation` above has a
+    // single row), so `rows.len() == 1` alone does not distinguish "read from the graph"
+    // from "hijacked by the relation" — only the bound CELLS do. The graph triple binds
+    // `?s`/`?o` to `{EX}subject`/`{EX}object`; the relation's row would instead bind
+    // `{EX}from_relation_x`/`{EX}from_relation_y`.
+    let s_index = variables
+        .iter()
+        .position(|v| v == "s")
+        .expect("?s is projected");
+    let o_index = variables
+        .iter()
+        .position(|v| v == "o")
+        .expect("?o is projected");
+    assert_eq!(
+        rows[0][s_index],
+        Some(TermValue::iri(format!("{EX}subject"))),
+        "?s must be bound from the graph triple's subject, not the relation's row: {rows:?}"
+    );
+    assert_eq!(
+        rows[0][o_index],
+        Some(TermValue::iri(format!("{EX}object"))),
+        "?o must be bound from the graph triple's object, not the relation's row: {rows:?}"
     );
 }
 
@@ -741,6 +767,77 @@ fn a_plan_prepared_without_the_registry_is_refused_when_evaluated_with_it() {
     else {
         panic!("METERED bounds nothing");
     };
+    assert_eq!(rows_of(&result).len(), 3);
+}
+
+// ---------------------------------------------------------------------------
+// The UNGOVERNED prepared and federated entries (FB-B)
+// ---------------------------------------------------------------------------
+//
+// `query_with_source(_view)` and `query_prepared(_view)` used to be the last two
+// public entries with no `QueryOptions` parameter at all: the federated pair parsed
+// through the bare, registry-free `prepare_with`, and the prepared-plan pair applied
+// no options and ran no `check_plan_matches_relations` refusal. Both shapes could
+// silently drop a registered relation exactly the way the governed lane's gap (above)
+// could. These tests are what makes that shape unreachable on the ungoverned lane too.
+
+/// A registered relation is reachable through `query_with_source_view` once `options`
+/// carries it — the federation entry's OUTER pattern now parses and resolves through
+/// the SAME registry-aware path every other options-carrying entry uses. No `SERVICE`
+/// clause is exercised here (the source has no endpoints registered): the point is
+/// that the relation's own predicate, sitting outside any `SERVICE` block, dispatches.
+#[test]
+fn query_with_source_view_dispatches_a_registered_relation_with_options() {
+    let engine = NativeSparqlEngine::new();
+    let registry = relations();
+    let dataset = dataset();
+    let source = purrdf_sparql_eval::LocalRemoteQuerySource::new();
+
+    let result = engine
+        .query_with_source_view(
+            &*dataset,
+            request(GOVERNED_QUERY),
+            &source,
+            with_relations(&registry),
+        )
+        .expect("a registered relation's outer-pattern call evaluates through the federated entry");
+
+    assert_eq!(
+        rows_of(&result).len(),
+        3,
+        "with the registry carried in `options`, the call is dispatched exactly as it is \
+         through `query_with_property_functions`"
+    );
+}
+
+/// The ungoverned prepared-plan pair's residue, closed the same way the governed pair's
+/// is: a plan parsed WITHOUT the registry is refused rather than silently evaluated with
+/// it, and the SAME text prepared WITH the registry answers.
+#[test]
+fn query_prepared_with_a_mismatched_registry_is_refused_and_the_matched_registry_answers() {
+    let engine = NativeSparqlEngine::new();
+    let registry = relations();
+    let dataset = dataset();
+
+    let stale = engine
+        .prepare_query(GOVERNED_QUERY, None)
+        .expect("the text parses as ordinary data with no registry in scope");
+    let refused = engine.query_prepared(&dataset, &stale, &[], with_relations(&registry));
+    let error = refused.expect_err(
+        "a plan/registry disagreement must be a diagnostic, not a \
+                                     silent empty-bag answer",
+    );
+    assert_eq!(error.code, "native-sparql-property-function");
+
+    // Prepared under the SAME options, the very same text runs and answers from the
+    // relation — never from the graph, which holds no `rel:memberOf` triple to have
+    // matched instead.
+    let matched = engine
+        .prepare_query_with_options(GOVERNED_QUERY, None, with_relations(&registry))
+        .expect("the registry-aware parse lowers the predicate to a call");
+    let result = engine
+        .query_prepared(&dataset, &matched, &[], with_relations(&registry))
+        .expect("a plan and options that agree on the registry evaluate");
     assert_eq!(rows_of(&result).len(), 3);
 }
 

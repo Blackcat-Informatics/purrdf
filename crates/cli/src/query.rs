@@ -107,6 +107,7 @@ use purrdf_entail::EntailError;
 use purrdf_rdf::JsonLdSerializeOptions;
 use purrdf_sparql_eval::{
     GovernedOutcome, NativeSparqlEngine, PreparedQuery, QueryExplanation, QueryGovernors,
+    QueryOptions as EngineQueryOptions,
 };
 use purrdf_sparql_results::{ResultProvenance, serialize};
 
@@ -135,7 +136,9 @@ impl ViewOp for QueryOp<'_> {
     type Output = SparqlResult;
 
     fn run<D: DatasetView + Sync>(self, view: &D) -> Result<SparqlResult, CliError> {
-        Ok(self.engine.query_prepared_view(view, self.prepared, &[])?)
+        Ok(self
+            .engine
+            .query_prepared_view(view, self.prepared, &[], EngineQueryOptions::EMPTY)?)
     }
 }
 

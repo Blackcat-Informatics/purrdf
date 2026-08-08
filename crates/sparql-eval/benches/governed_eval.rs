@@ -77,7 +77,7 @@ fn run_plain(
     prepared: &PreparedQuery,
 ) -> usize {
     let result = engine
-        .query_prepared(dataset, prepared, &[])
+        .query_prepared(dataset, prepared, &[], QueryOptions::EMPTY)
         .expect("benchmark query evaluates");
     result_rows(&result)
 }

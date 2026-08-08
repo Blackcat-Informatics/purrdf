@@ -10,7 +10,7 @@ use purrdf_sparql_algebra::{
     AggregateExpression, Expression, Function, GraphPattern, OrderExpression, ParserOptions,
     PurrdfFn, Query, SparqlParser, TermPattern, TriplePattern,
 };
-use purrdf_sparql_eval::NativeSparqlEngine;
+use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::native_codecs::{NativeRdfFormat, serialize_dataset_to_format};
@@ -231,7 +231,7 @@ pub fn project_construct_view<D: DatasetView + Sync>(
         ));
     }
     let result = engine
-        .query_prepared_view(view, &prepared, &[])
+        .query_prepared_view(view, &prepared, &[], QueryOptions::EMPTY)
         .map_err(|error| {
             ProjectionError::integrity(format!("evaluate CONSTRUCT query: {error}"))
         })?;

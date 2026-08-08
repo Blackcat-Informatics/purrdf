@@ -136,7 +136,15 @@ fn ungoverned(
     remote: Option<&purrdf_sparql_eval::LocalRemoteQuerySource>,
 ) -> Result<SparqlResult, String> {
     match remote {
-        Some(source) => engine.query_with_source(dataset, request(query), source),
+        Some(source) => engine.query_with_source(
+            dataset,
+            request(query),
+            source,
+            QueryOptions {
+                property_functions: Some(purrdf_sparql_conformance::run::harness_relations()),
+                ..QueryOptions::EMPTY
+            },
+        ),
         None => engine.query_with_property_functions(
             dataset,
             request(query),

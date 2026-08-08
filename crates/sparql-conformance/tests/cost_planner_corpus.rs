@@ -16,7 +16,8 @@ use purrdf_core::{RdfDataset, SparqlRequest, SparqlResult};
 use purrdf_sparql_algebra::{GraphPattern, Query, SparqlParser};
 use purrdf_sparql_conformance::manifest::{ExpectedResult, SparqlTestCase, TestKind};
 use purrdf_sparql_eval::{
-    EvalOptions, LocalRemoteQuerySource, NativeSparqlEngine, ParserOptions, StandpointPredicates,
+    EvalOptions, LocalRemoteQuerySource, NativeSparqlEngine, ParserOptions, QueryOptions,
+    StandpointPredicates,
 };
 
 const BASE: &str = "http://purrdf.test/manifest/";
@@ -59,7 +60,15 @@ fn eval_case(
         substitutions: &[],
     };
     let result = match remote {
-        Some(source) => engine.query_with_source(dataset, request, source),
+        Some(source) => engine.query_with_source(
+            dataset,
+            request,
+            source,
+            QueryOptions {
+                property_functions: Some(purrdf_sparql_conformance::run::harness_relations()),
+                ..QueryOptions::EMPTY
+            },
+        ),
         None => engine.query_with_property_functions(
             dataset,
             request,

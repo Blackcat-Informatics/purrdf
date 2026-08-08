@@ -16,7 +16,7 @@ use purrdf_sparql_algebra::{
 };
 use purrdf_sparql_eval::{
     LossVocabulary, MemoryRelation, NativeSparqlEngine, ParserOptions, PropertyFunctionRegistry,
-    RemoteQuerySource, StandpointPredicates,
+    QueryOptions, RemoteQuerySource, StandpointPredicates,
 };
 
 use crate::manifest::{SparqlTestCase, TestKind};
@@ -423,13 +423,20 @@ pub fn run(
                 base_iri: Some(BASE),
                 substitutions: &[],
             };
-            // A federated case resolves `SERVICE` through the injected source; every
-            // other case carries the harness relation table. The two injections are
-            // independent seams, and each entry supplies the one its cases need: the
-            // vendored federated fixtures spell no `REL_NS` predicate, and the
-            // first-party relation fixtures issue no `SERVICE`.
+            // A federated case resolves `SERVICE` through the injected source; every case
+            // (federated or not) carries the harness relation table for its OUTER
+            // pattern — a call node inside a `SERVICE` body is refused at forwarding
+            // regardless, so handing `query_with_source` the registry only extends what
+            // the query's own top-level patterns can reach. The vendored federated
+            // fixtures happen to spell no `REL_NS` predicate today, but the registry
+            // costs nothing to carry and keeps the two branches from silently
+            // disagreeing about which predicates are calls.
+            let options = QueryOptions {
+                property_functions: Some(harness_relations()),
+                ..QueryOptions::EMPTY
+            };
             let result = match remote {
-                Some(source) => engine.query_with_source(&dataset, request, source),
+                Some(source) => engine.query_with_source(&dataset, request, source, options),
                 None => {
                     engine.query_with_property_functions(&dataset, request, harness_relations())
                 }

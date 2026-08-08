@@ -301,18 +301,29 @@ impl NativeSparqlEngine {
         self.prepare_for(query, base_iri, options.property_functions)
     }
 
-    /// Evaluate a plan returned by [`Self::prepare_query`].
+    /// Evaluate a plan returned by [`Self::prepare_query`] or
+    /// [`Self::prepare_query_with_options`].
+    ///
+    /// `options` must name the same property-function registry the plan was prepared
+    /// against — the identical requirement [`Self::query_prepared_governed_view`]
+    /// states, checked the same way: a plan/registry disagreement refuses the plan
+    /// rather than silently evaluating it under the wrong (or no) registry, because a
+    /// plan prepared without a registry has already lowered every relation's predicate
+    /// to an ordinary triple pattern.
     ///
     /// # Errors
     ///
-    /// Propagates evaluation errors as an [`RdfDiagnostic`].
+    /// Propagates evaluation errors as an [`RdfDiagnostic`], and refuses
+    /// (`native-sparql-property-function`) a plan prepared against a different registry
+    /// than `options` supplies.
     pub fn query_prepared(
         &self,
         dataset: &Arc<RdfDataset>,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
+        options: QueryOptions<'_>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
-        self.query_prepared_view(&**dataset, prepared, substitutions)
+        self.query_prepared_view(&**dataset, prepared, substitutions, options)
     }
 
     /// [`Self::query_prepared`] over any operationally infallible [`DatasetView`]
@@ -325,15 +336,27 @@ impl NativeSparqlEngine {
     ///
     /// # Errors
     ///
-    /// Propagates evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_prepared_view<D: DatasetView + Sync>(
-        &self,
-        dataset: &D,
+    /// Propagates evaluation errors as an [`RdfDiagnostic`], and refuses
+    /// (`native-sparql-property-function`) a plan prepared against a different registry
+    /// than `options` supplies (see [`Self::query_prepared`]).
+    pub fn query_prepared_view<'d, D: DatasetView + Sync>(
+        &'d self,
+        dataset: &'d D,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
+        options: QueryOptions<'d>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
-        let mut ctx = self.eval_ctx(dataset);
-        let outcome = evaluate_with_substitutions(prepared, substitutions, &mut ctx)?;
+        check_plan_matches_relations(prepared, options)?;
+        let ctx = self.eval_ctx(dataset);
+        let mut ctx = apply_query_options(ctx, options)?;
+        let outcome = match options.prebinding {
+            ShaclPrebinding::Applied => {
+                evaluate_with_shacl_prebinding(prepared, substitutions, &mut ctx)?
+            }
+            ShaclPrebinding::None => {
+                evaluate_with_substitutions(prepared, substitutions, &mut ctx)?
+            }
+        };
         Ok(materialize(outcome, &ctx))
     }
 
@@ -344,18 +367,25 @@ impl NativeSparqlEngine {
     /// budget boundaries are deterministic. The ordinary resident/pack entry points
     /// remain unchanged and retain their parallel fast path.
     ///
+    /// `options` must name the same property-function registry the plan was prepared
+    /// against — the identical requirement [`Self::query_prepared`] states, checked the
+    /// same way: a plan/registry disagreement refuses the plan rather than silently
+    /// evaluating it under the wrong (or no) registry.
+    ///
     /// # Errors
     ///
     /// Returns [`FallibleSparqlError::Operational`] when either checkpoint or any
     /// lazy read fails. That root cause takes precedence over an evaluator diagnostic,
     /// and all internal partial rows are discarded. Returns
-    /// [`FallibleSparqlError::Query`] only when the view remains ready and ordinary
-    /// evaluation fails.
-    pub fn query_prepared_fallible_view<D>(
-        &self,
-        dataset: &D,
+    /// [`FallibleSparqlError::Query`] when the view remains ready and either ordinary
+    /// evaluation fails or `prepared` was prepared against a different registry than
+    /// `options` supplies (`native-sparql-property-function`).
+    pub fn query_prepared_fallible_view<'d, D>(
+        &'d self,
+        dataset: &'d D,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
+        options: QueryOptions<'d>,
     ) -> FallibleSparqlResult<D::Error, D::Evidence>
     where
         D: FallibleDatasetView + Sync,
@@ -363,11 +393,20 @@ impl NativeSparqlEngine {
         preflight_fallible_view(dataset)?;
         let evaluation = {
             let _sequential = crate::parallel::force_sequential_operation();
-            let mut ctx = self.eval_ctx(dataset);
-            match evaluate_with_substitutions(prepared, substitutions, &mut ctx) {
-                Ok(outcome) => Ok(materialize(outcome, &ctx)),
-                Err(diagnostic) => Err(diagnostic),
-            }
+            (|| {
+                check_plan_matches_relations(prepared, options)?;
+                let ctx = self.eval_ctx(dataset);
+                let mut ctx = apply_query_options(ctx, options)?;
+                let outcome = match options.prebinding {
+                    ShaclPrebinding::Applied => {
+                        evaluate_with_shacl_prebinding(prepared, substitutions, &mut ctx)?
+                    }
+                    ShaclPrebinding::None => {
+                        evaluate_with_substitutions(prepared, substitutions, &mut ctx)?
+                    }
+                };
+                Ok(materialize(outcome, &ctx))
+            })()
         };
         finish_fallible_query(dataset, evaluation)
     }
@@ -376,27 +415,31 @@ impl NativeSparqlEngine {
     ///
     /// This is the convenience sibling of
     /// [`query_prepared_fallible_view`](Self::query_prepared_fallible_view). Parsing
-    /// still uses the engine's memoizing plan cache; execution applies the same
-    /// preflight/final completeness checkpoints and deterministic sequential scope.
+    /// still uses the engine's memoizing plan cache, through the same registry-aware
+    /// path [`Self::prepare_query_with_options`] uses, so `options.property_functions`
+    /// decides which predicates are calls; execution applies the same preflight/final
+    /// completeness checkpoints and deterministic sequential scope.
     ///
     /// # Errors
     ///
     /// Returns a typed [`FallibleSparqlError`] carrying evidence for either an
     /// operational root cause or an ordinary parse/evaluation diagnostic.
-    pub fn query_fallible_view<D>(
-        &self,
-        dataset: &D,
+    pub fn query_fallible_view<'d, D>(
+        &'d self,
+        dataset: &'d D,
         request: SparqlRequest<'_>,
+        options: QueryOptions<'d>,
     ) -> FallibleSparqlResult<D::Error, D::Evidence>
     where
         D: FallibleDatasetView + Sync,
     {
         preflight_fallible_view(dataset)?;
-        let prepared = match self.prepare_query(request.query, request.base_iri) {
-            Ok(prepared) => prepared,
-            Err(diagnostic) => return finish_fallible_query(dataset, Err(diagnostic)),
-        };
-        self.query_prepared_fallible_view(dataset, &prepared, request.substitutions)
+        let prepared =
+            match self.prepare_for(request.query, request.base_iri, options.property_functions) {
+                Ok(prepared) => prepared,
+                Err(diagnostic) => return finish_fallible_query(dataset, Err(diagnostic)),
+            };
+        self.query_prepared_fallible_view(dataset, &prepared, request.substitutions, options)
     }
 
     /// Parse and execute one request under caller-supplied execution governors.
@@ -1507,6 +1550,19 @@ impl NativeSparqlEngine {
     /// hard-fails. This is the public entry the conformance harness and
     /// federated callers use.
     ///
+    /// # Options are a parameter, not an overload
+    ///
+    /// `options` carries the registries and rewrites this execution runs under —
+    /// pass [`QueryOptions::EMPTY`] to configure none — for the identical reason
+    /// [`Self::query_governed`] requires it: a property-function registry is *parse*
+    /// configuration, so an entry that could not be handed one would parse a
+    /// registered relation's predicate as an ordinary triple pattern and answer the
+    /// empty bag, silently, for every call whose `SERVICE` body is federated. The
+    /// query's OUTER pattern resolves against `options.property_functions` exactly
+    /// as [`Self::query_with_property_functions`] resolves it; a call node inside the
+    /// `SERVICE` body itself is refused at forwarding regardless (see
+    /// [`crate::remote::RemoteQuerySource`]).
+    ///
     /// # Errors
     ///
     /// Propagates parse and evaluation errors as an [`RdfDiagnostic`].
@@ -1515,8 +1571,9 @@ impl NativeSparqlEngine {
         dataset: &Arc<RdfDataset>,
         request: SparqlRequest<'_>,
         source: &(dyn crate::remote::RemoteQuerySource + Sync),
+        options: QueryOptions<'_>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
-        self.query_with_source_view(&**dataset, request, source)
+        self.query_with_source_view(&**dataset, request, source, options)
     }
 
     /// [`Self::query_with_source`] over any [`DatasetView`] backend whose id type is
@@ -1525,19 +1582,25 @@ impl NativeSparqlEngine {
     /// # Errors
     ///
     /// Propagates parse and evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_with_source_view<D: DatasetView + Sync>(
-        &self,
-        dataset: &D,
+    pub fn query_with_source_view<'d, D: DatasetView + Sync>(
+        &'d self,
+        dataset: &'d D,
         request: SparqlRequest<'_>,
-        source: &(dyn crate::remote::RemoteQuerySource + Sync),
+        source: &'d (dyn crate::remote::RemoteQuerySource + Sync),
+        options: QueryOptions<'d>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
-        let prepared = self.cache.borrow_mut().prepare_with(
-            request.query,
-            request.base_iri,
-            &self.parser_options,
-        )?;
-        let mut ctx = self.eval_ctx(dataset).with_remote(source);
-        let outcome = evaluate_with_substitutions(&prepared, request.substitutions, &mut ctx)?;
+        let prepared =
+            self.prepare_for(request.query, request.base_iri, options.property_functions)?;
+        let ctx = self.eval_ctx(dataset).with_remote(source);
+        let mut ctx = apply_query_options(ctx, options)?;
+        let outcome = match options.prebinding {
+            ShaclPrebinding::Applied => {
+                evaluate_with_shacl_prebinding(&prepared, request.substitutions, &mut ctx)?
+            }
+            ShaclPrebinding::None => {
+                evaluate_with_substitutions(&prepared, request.substitutions, &mut ctx)?
+            }
+        };
         Ok(materialize(outcome, &ctx))
     }
 
@@ -1840,22 +1903,6 @@ impl Default for QueryOptions<'_> {
     }
 }
 
-/// Apply the independently-optional [`QueryOptions`] pieces to a freshly built
-/// evaluation context: the SHACL-AF function registry
-/// ([`EvalCtx::with_user_functions`]), the property-function registry
-/// ([`EvalCtx::with_property_functions`]), and the deterministic blank-mint prefix
-/// ([`EvalCtx::with_bnode_mint_prefix`]).
-///
-/// The ONE application seam — every options-carrying entry, governed and ungoverned,
-/// routes through here, so a future [`QueryOptions`] field is wired once instead of
-/// at each call site. [`QueryOptions::prebinding`] is deliberately not applied here:
-/// it selects an *evaluator entry point* rather than a context field, so it is read
-/// at the two evaluation sites instead.
-///
-/// # Errors
-///
-/// Returns [`RdfDiagnostic`] when `options.bnode_mint_prefix` is not a legal
-/// `BLANK_NODE_LABEL` prefix.
 /// Refuse a plan that was prepared against a different property-function registry than
 /// the one it is about to be evaluated under.
 ///
@@ -1924,6 +1971,22 @@ fn relation_identity(
     })
 }
 
+/// Apply the independently-optional [`QueryOptions`] pieces to a freshly built
+/// evaluation context: the SHACL-AF function registry
+/// ([`EvalCtx::with_user_functions`]), the property-function registry
+/// ([`EvalCtx::with_property_functions`]), and the deterministic blank-mint prefix
+/// ([`EvalCtx::with_bnode_mint_prefix`]).
+///
+/// The ONE application seam — every options-carrying entry, governed and ungoverned,
+/// routes through here, so a future [`QueryOptions`] field is wired once instead of
+/// at each call site. [`QueryOptions::prebinding`] is deliberately not applied here:
+/// it selects an *evaluator entry point* rather than a context field, so it is read
+/// at the two evaluation sites instead.
+///
+/// # Errors
+///
+/// Returns [`RdfDiagnostic`] when `options.bnode_mint_prefix` is not a legal
+/// `BLANK_NODE_LABEL` prefix.
 pub(crate) fn apply_query_options<'d, D: DatasetView + Sync>(
     mut ctx: EvalCtx<'d, D>,
     options: QueryOptions<'d>,
@@ -1975,7 +2038,12 @@ impl SparqlEngine for NativeSparqlEngine {
         request: SparqlRequest<'_>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
         let prepared = self.prepare_query(request.query, request.base_iri)?;
-        self.query_prepared(dataset, &prepared, request.substitutions)
+        self.query_prepared(
+            dataset,
+            &prepared,
+            request.substitutions,
+            QueryOptions::EMPTY,
+        )
     }
 
     fn update(

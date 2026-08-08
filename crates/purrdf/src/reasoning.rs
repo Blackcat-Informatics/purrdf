@@ -277,7 +277,8 @@ pub fn query_with_entailment(
         })
         .transpose()?;
     let plan = restricted.as_ref().unwrap_or(&prepared_query);
-    let mut result = engine.query_prepared(&prepared, plan, request.substitutions)?;
+    let mut result =
+        engine.query_prepared(&prepared, plan, request.substitutions, QueryOptions::EMPTY)?;
     let _ = withhold_surrogate_triples(&mut result, &surrogates);
     Ok((result, report))
 }
@@ -1884,7 +1885,7 @@ mod tests {
         let (closure, _) =
             purrdf_entail::materialize(ds, Materialization::OwlDirect(&pattern)).expect("augment");
         engine
-            .query_prepared(&closure, &prepared, &[])
+            .query_prepared(&closure, &prepared, &[], QueryOptions::EMPTY)
             .expect("evaluate")
     }
 

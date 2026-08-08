@@ -32,7 +32,7 @@ use purrdf_core::{
     CountingDemandProvider, DatasetView, GraphMatch, InMemoryPageProvider, PagedDataset,
     RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlResult, TermId, TermValue,
 };
-use purrdf_sparql_eval::NativeSparqlEngine;
+use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
 
 // ── shared fixture helpers ─────────────────────────────────────────────────────
 
@@ -189,12 +189,12 @@ fn paged_query_parity_is_byte_identical_to_single_dataset() {
 
     let (single_vars, single_rows) = solutions(
         engine
-            .query_prepared(&single, &prepared, &[])
+            .query_prepared(&single, &prepared, &[], QueryOptions::EMPTY)
             .expect("single query"),
     );
     let (paged_vars, paged_rows) = solutions(
         engine
-            .query_prepared_view(&paged, &prepared, &[])
+            .query_prepared_view(&paged, &prepared, &[], QueryOptions::EMPTY)
             .expect("paged query"),
     );
 
@@ -343,7 +343,7 @@ fn query_materializes_only_the_pages_the_plan_needs() {
     // Run the bound-subject query through the PUBLIC generic entry point.
     let (_vars, rows) = solutions(
         engine
-            .query_prepared_view(&paged, &prepared, &[])
+            .query_prepared_view(&paged, &prepared, &[], QueryOptions::EMPTY)
             .expect("paged query"),
     );
     // Correctness: the query is genuinely served — `:alice :knows :bob`.
@@ -360,7 +360,7 @@ fn query_materializes_only_the_pages_the_plan_needs() {
 
     // A second identical run hits the per-page OnceLock cache — no further pulls.
     let _ = engine
-        .query_prepared_view(&paged, &prepared, &[])
+        .query_prepared_view(&paged, &prepared, &[], QueryOptions::EMPTY)
         .expect("paged query (rerun)");
     assert_eq!(
         provider.hits() - hits_after_seal,
@@ -395,12 +395,12 @@ fn assert_paged_matches_single(
 
     let (single_vars, single_rows) = solutions(
         engine
-            .query_prepared(&single, &prepared, &[])
+            .query_prepared(&single, &prepared, &[], QueryOptions::EMPTY)
             .expect("single query"),
     );
     let (paged_vars, paged_rows) = solutions(
         engine
-            .query_prepared_view(&paged, &prepared, &[])
+            .query_prepared_view(&paged, &prepared, &[], QueryOptions::EMPTY)
             .expect("paged query"),
     );
 
