@@ -1008,4 +1008,37 @@ mod boundary_tests {
         );
         assert!(kb.boundaries().is_empty(), "{:?}", kb.boundaries());
     }
+
+    /// `rdfs:range` is the general concept inclusion `⊤ ⊑ ∀r.C`, which internalizes to
+    /// `nnf(¬⊤ ⊔ ∀r.C)`. The internalized concept the completion graph seeds into EVERY node
+    /// must be the bare `∀r.C`, not a two-way disjunction whose first branch is `⊥`.
+    ///
+    /// A `⊥` disjunct is a branch that can only clash, so leaving it in would put a
+    /// guaranteed-failing case split on every node of every completion — a multiplicative
+    /// cost paid on ontologies that state nothing but a range.
+    #[test]
+    fn a_range_axiom_internalizes_to_a_universal_and_not_a_disjunction() {
+        use crate::owl_dl::concept::Decomp;
+        use crate::vocab::RDFS_RANGE;
+
+        let mut b = RdfDatasetBuilder::new();
+        let r = b.intern_iri(EX_R);
+        let range = b.intern_iri(RDFS_RANGE);
+        let c = b.intern_iri(EX_C);
+        b.push_quad(r, range, c, None);
+        let ds = b.freeze().expect("freeze");
+        let kb = Kb::from_dataset(&ds).expect("parse");
+
+        assert_eq!(
+            kb.meta.len(),
+            1,
+            "one range axiom, one internalized concept"
+        );
+        let meta = kb.meta[0];
+        assert!(
+            matches!(kb.table.decomp(meta), Decomp::All(..)),
+            "the range axiom seeded {:?} into every node instead of ∀r.C",
+            kb.table.decomp(meta)
+        );
+    }
 }

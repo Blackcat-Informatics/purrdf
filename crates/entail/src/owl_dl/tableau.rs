@@ -756,6 +756,34 @@ mod tests {
         assert!(!consistent_by_both(&kb), "A ⊓ ¬A must be unsatisfiable");
     }
 
+    /// A COMPOSITE complementary pair closes: `C ⊓ ¬C` for a `C` whose normal form is
+    /// reordered, flattened and deduped on the way into the interner.
+    ///
+    /// The clash is decided by comparing a concept id with the id the negation cache holds,
+    /// so it fires only if canonicalization is an involution — if `¬¬C` landed on a second id
+    /// for the same concept, this knowledge base would be reported CONSISTENT, which is the
+    /// unsoundness the shared canonical form of `⊓` and `⊔` rules out.
+    #[test]
+    fn a_composite_complementary_pair_is_unsat() {
+        // C = ∀r.(A ⊔ B ⊔ A), spelled with a duplicate and a nested disjunction; ¬C is
+        // ∃r.(¬A ⊓ ¬B), which the same normalization must produce from the same tree.
+        let composite = Concept::All(
+            role(5),
+            Box::new(Concept::Or(vec![
+                Concept::Named(11),
+                Concept::Or(vec![Concept::Named(10), Concept::Named(11)]),
+            ])),
+        );
+        let mut b = Builder::new();
+        b.ty(1, composite.clone());
+        b.ty(1, Concept::Not(Box::new(composite)));
+        let kb = b.finish();
+        assert!(
+            !consistent_by_both(&kb),
+            "∀r.(A ⊔ B) together with its complement must clash"
+        );
+    }
+
     #[test]
     fn some_and_all_bottom_is_unsat() {
         // ∃r.⊤ ⊓ ∀r.⊥

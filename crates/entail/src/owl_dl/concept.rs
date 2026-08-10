@@ -5,8 +5,14 @@
 //!
 //! [`Concept`] is a structural syntax tree over interned term ids (class IRIs,
 //! property IRIs, individual IRIs). [`Concept::nnf`] rewrites a concept into
-//! negation-normal form — negation pushed to the atomic leaves — which is what the
-//! tableau completion rules assume. [`ConceptTable`] structurally interns every
+//! negation-normal form — negation pushed to the atomic leaves, and every `⊓`/`⊔`
+//! flattened, constant-folded, deduped and SORTED — which is what the tableau
+//! completion rules assume. The boolean normalization is part of the normal form
+//! rather than a pass over it, so a semantic shape reaching the structural interner by
+//! any construction path reaches ONE id: `nnf` is the only door, and it is the door
+//! [`ConceptTable::intern`] and the negation cache both go through.
+//!
+//! [`ConceptTable`] structurally interns every
 //! (NNF) concept and each of its sub-concepts to a dense `u32` *concept id*, records
 //! an id-indexed [`Decomp`]osition so the tableau reads structure by id without ever
 //! touching the tree, and precomputes each concept's negation id for O(1) clash
@@ -40,9 +46,11 @@ pub(crate) enum Concept {
     Named(u32),
     /// `¬C`.
     Not(Box<Self>),
-    /// `C₁ ⊓ … ⊓ Cₙ`.
+    /// `C₁ ⊓ … ⊓ Cₙ` — in NNF, the canonical form [`Concept::and`] builds: at least two
+    /// members, sorted and deduped, none of them `⊤`, `⊥`, or a nested `⊓`.
     And(Vec<Self>),
-    /// `C₁ ⊔ … ⊔ Cₙ`.
+    /// `C₁ ⊔ … ⊔ Cₙ` — in NNF, the canonical form [`Concept::or`] builds: at least two
+    /// members, sorted and deduped, none of them `⊤`, `⊥`, or a nested `⊔`.
     Or(Vec<Self>),
     /// `∃r.C`.
     Some(Role, Box<Self>),
@@ -84,8 +92,91 @@ impl Concept {
         Self::Nominal(ids)
     }
 
+    /// The CANONICAL `⊔` over `members`: the only way a [`Concept::Or`] is ever built.
+    ///
+    /// Nested disjunctions are flattened, `⊥` members are dropped (they can satisfy no
+    /// disjunct), a `⊤` member collapses the whole disjunction to `⊤`, duplicate members are
+    /// removed, and what survives is sorted under [`Concept`]'s derived total order.
+    /// `⊔{}` is `⊥` and `⊔{C}` is `C`, so an interned `Or` always has at least two members,
+    /// none of which is a constant.
+    ///
+    /// # Why a boolean simplifier belongs in the NORMAL FORM rather than in the search
+    ///
+    /// A disjunction is the one concept shape the tableau cannot decide locally: it is a
+    /// BRANCH POINT, and every branch costs a step. `⊥` as a disjunct is a branch whose only
+    /// outcome is a clash, so leaving it in the tree buys nothing but multiplies the search
+    /// by the number of nodes the disjunction is seeded into — and the general concept
+    /// inclusion `⊤ ⊑ C` (which is what `rdfs:range` and `rdfs:domain` internalize to) is
+    /// exactly `⊔{⊥, C}` seeded into EVERY node. Simplifying here, in front of the interner,
+    /// makes that axiom the deterministic `C` it always was.
+    ///
+    /// Sorting is what makes the simplification structural rather than syntactic: the
+    /// interner is a STRUCTURAL table, so one semantic shape reaching one id requires
+    /// commutativity to be normalized away. The order is [`Concept`]'s derived `Ord` — a
+    /// total order over the tree itself, so it is a pure function of the concept and
+    /// introduces no dependence on parse order, hashing, or interning sequence.
+    fn or(members: Vec<Self>) -> Self {
+        let mut flat: Vec<Self> = Vec::with_capacity(members.len());
+        let mut pending = members;
+        while let Some(member) = pending.pop() {
+            match member {
+                // ⊤ is the annihilator of ⊔.
+                Self::Top => return Self::Top,
+                // ⊥ is the unit of ⊔.
+                Self::Bottom => {}
+                Self::Or(inner) => pending.extend(inner),
+                other => flat.push(other),
+            }
+        }
+        flat.sort_unstable();
+        flat.dedup();
+        match flat.len() {
+            0 => Self::Bottom,
+            1 => flat.pop().expect("a one-member disjunction has a member"),
+            _ => Self::Or(flat),
+        }
+    }
+
+    /// The CANONICAL `⊓` over `members` — the exact dual of [`Concept::or`], and the only
+    /// way a [`Concept::And`] is ever built.
+    ///
+    /// Nested conjunctions are flattened, `⊤` members are dropped, a `⊥` member collapses the
+    /// whole conjunction to `⊥`, duplicates are removed, and the survivors are sorted under
+    /// [`Concept`]'s derived total order. `⊓{}` is `⊤` and `⊓{C}` is `C`.
+    ///
+    /// The dual must be normalized in lockstep with [`Concept::or`], because
+    /// [`Concept::neg`] maps one onto the other: were only the disjunction canonical, the
+    /// negation cache [`ConceptTable::finalize`] builds would hand back a DIFFERENT id for a
+    /// concept's double negation, and the complementary-pair clash — which is a comparison of
+    /// two ids — would stop firing on a pair it should close.
+    fn and(members: Vec<Self>) -> Self {
+        let mut flat: Vec<Self> = Vec::with_capacity(members.len());
+        let mut pending = members;
+        while let Some(member) = pending.pop() {
+            match member {
+                // ⊤ is the unit of ⊓.
+                Self::Top => {}
+                // ⊥ is the annihilator of ⊓.
+                Self::Bottom => return Self::Bottom,
+                Self::And(inner) => pending.extend(inner),
+                other => flat.push(other),
+            }
+        }
+        flat.sort_unstable();
+        flat.dedup();
+        match flat.len() {
+            0 => Self::Top,
+            1 => flat.pop().expect("a one-member conjunction has a member"),
+            _ => Self::And(flat),
+        }
+    }
+
     /// Rewrite into negation-normal form: every `¬` pushed to an atomic
-    /// (`Named` / `Nominal`) leaf.
+    /// (`Named` / `Nominal`) leaf, and every `⊓`/`⊔` in the canonical form
+    /// [`Concept::and`] / [`Concept::or`] define.
+    ///
+    /// Idempotent: the canonical form is hereditary (children are normalized before their
+    /// parent is built), so re-normalizing a normalized concept is the identity.
     pub(crate) fn nnf(self) -> Self {
         match self {
             Self::Top
@@ -94,10 +185,16 @@ impl Concept {
             | Self::SelfRestriction(_)
             | Self::Data(_) => self,
             Self::Nominal(ids) => Self::nominal(ids),
-            Self::And(cs) => Self::And(cs.into_iter().map(Self::nnf).collect()),
-            Self::Or(cs) => Self::Or(cs.into_iter().map(Self::nnf).collect()),
+            Self::And(cs) => Self::and(cs.into_iter().map(Self::nnf).collect()),
+            Self::Or(cs) => Self::or(cs.into_iter().map(Self::nnf).collect()),
             Self::Some(r, c) => Self::Some(r, Box::new(c.nnf())),
             Self::All(r, c) => Self::All(r, Box::new(c.nnf())),
+            // `≥0 r.C` is satisfied by every element, so it IS `⊤` — and it has to be spelled
+            // `⊤` here, not merely treated as one downstream. `¬(≥0 r.C)` is `⊥`, whose own
+            // negation is `⊤`; leaving `≥0 r.C` as a distinct concept would make double
+            // negation land on a different id than it started from, and the negation cache
+            // the complementary-pair clash reads is built by negating twice.
+            Self::Min(0, _, _) => Self::Top,
             Self::Min(n, r, c) => Self::Min(n, r, Box::new(c.nnf())),
             Self::Max(n, r, c) => Self::Max(n, r, Box::new(c.nnf())),
             Self::Not(inner) => Self::neg(*inner),
@@ -112,8 +209,8 @@ impl Concept {
             Self::Named(_) | Self::SelfRestriction(_) | Self::Data(_) => Self::Not(Box::new(c)),
             Self::Nominal(ids) => Self::Not(Box::new(Self::nominal(ids))),
             Self::Not(inner) => inner.nnf(),
-            Self::And(cs) => Self::Or(cs.into_iter().map(Self::neg).collect()),
-            Self::Or(cs) => Self::And(cs.into_iter().map(Self::neg).collect()),
+            Self::And(cs) => Self::or(cs.into_iter().map(Self::neg).collect()),
+            Self::Or(cs) => Self::and(cs.into_iter().map(Self::neg).collect()),
             Self::Some(r, c) => Self::All(r, Box::new(Self::neg(*c))),
             Self::All(r, c) => Self::Some(r, Box::new(Self::neg(*c))),
             // ¬(≥n r.C) = ≤(n-1) r.C, and ¬(≥0 r.C) = ⊥.
@@ -147,9 +244,11 @@ pub(crate) enum Decomp {
     Named,
     /// `¬A` for an atomic class `A` (atomic negative leaf).
     NegNamed,
-    /// `⊓` over child concept ids.
+    /// `⊓` over child concept ids — at least two, no child being `⊤`, `⊥`, or another `⊓`
+    /// (the canonical [`Concept::and`] form, read out by id).
     And(Vec<u32>),
-    /// `⊔` over child concept ids.
+    /// `⊔` over child concept ids — at least two, no child being `⊤`, `⊥`, or another `⊔`
+    /// (the canonical [`Concept::or`] form, read out by id).
     Or(Vec<u32>),
     /// `∃r.C` (child concept id).
     Some(Role, u32),
@@ -364,8 +463,10 @@ mod tests {
         // ¬(≥2 r.A) = ≤1 r.A
         let lhs = Concept::Not(Box::new(Concept::Min(2, r(), Box::new(a.clone())))).nnf();
         assert_eq!(lhs, Concept::Max(1, r(), Box::new(a.clone())));
-        // ¬(≥0 r.A) = ⊥
-        let lhs = Concept::Not(Box::new(Concept::Min(0, r(), Box::new(a.clone())))).nnf();
+        // ≥0 r.A = ⊤, and ¬(≥0 r.A) = ⊥ — a matched pair, so double negation returns.
+        let zero = Concept::Min(0, r(), Box::new(a.clone()));
+        assert_eq!(zero.clone().nnf(), Concept::Top);
+        let lhs = Concept::Not(Box::new(zero)).nnf();
         assert_eq!(lhs, Concept::Bottom);
         // ¬(≤3 r.A) = ≥4 r.A
         let lhs = Concept::Not(Box::new(Concept::Max(3, r(), Box::new(a.clone())))).nnf();
@@ -384,5 +485,231 @@ mod tests {
         let na = t.negate(a);
         assert_eq!(t.negate(na), a, "negation is involutive");
         assert!(matches!(t.decomp(na), Decomp::NegNamed));
+    }
+
+    #[test]
+    fn a_disjunction_is_flattened_constant_folded_deduped_and_sorted() {
+        let a = Concept::Named(1);
+        let b = Concept::Named(2);
+        // ⊔{⊥, B, ⊔{A, B}} = ⊔{A, B}, in sorted order.
+        let folded = Concept::Or(vec![
+            Concept::Bottom,
+            b.clone(),
+            Concept::Or(vec![a.clone(), b.clone()]),
+        ])
+        .nnf();
+        assert_eq!(folded, Concept::Or(vec![a.clone(), b.clone()]));
+        // Commutativity is normalized away: the reversed spelling is the SAME tree.
+        assert_eq!(Concept::Or(vec![b, a.clone()]).nnf(), folded);
+        // ⊤ annihilates, ⊥ is dropped to nothing, and a singleton is its member.
+        assert_eq!(
+            Concept::Or(vec![a.clone(), Concept::Top]).nnf(),
+            Concept::Top
+        );
+        assert_eq!(
+            Concept::Or(vec![Concept::Bottom, a.clone()]).nnf(),
+            Concept::Named(1)
+        );
+        assert_eq!(Concept::Or(vec![]).nnf(), Concept::Bottom);
+        assert_eq!(Concept::Or(vec![a]).nnf(), Concept::Named(1));
+    }
+
+    #[test]
+    fn a_conjunction_is_flattened_constant_folded_deduped_and_sorted() {
+        let a = Concept::Named(1);
+        let b = Concept::Named(2);
+        // ⊓{⊤, B, ⊓{A, B}} = ⊓{A, B}, in sorted order.
+        let folded = Concept::And(vec![
+            Concept::Top,
+            b.clone(),
+            Concept::And(vec![a.clone(), b.clone()]),
+        ])
+        .nnf();
+        assert_eq!(folded, Concept::And(vec![a.clone(), b.clone()]));
+        assert_eq!(Concept::And(vec![b, a.clone()]).nnf(), folded);
+        assert_eq!(
+            Concept::And(vec![a.clone(), Concept::Bottom]).nnf(),
+            Concept::Bottom
+        );
+        assert_eq!(
+            Concept::And(vec![Concept::Top, a.clone()]).nnf(),
+            Concept::Named(1)
+        );
+        assert_eq!(Concept::And(vec![]).nnf(), Concept::Top);
+        assert_eq!(Concept::And(vec![a]).nnf(), Concept::Named(1));
+    }
+
+    /// The shape a general concept inclusion `⊤ ⊑ C` internalizes to — which is what
+    /// `rdfs:range` and `rdfs:domain` become — is the DETERMINISTIC `C`, not a disjunction
+    /// with a guaranteed-clash branch. `nnf(¬⊤ ⊔ C)` is `⊔{⊥, C}` before folding, and a
+    /// disjunction is a branch point seeded into every node.
+    #[test]
+    fn internalizing_a_top_subsumption_leaves_no_branch_point() {
+        let range = Concept::All(r(), Box::new(Concept::Named(7)));
+        let meta = Concept::Or(vec![Concept::Not(Box::new(Concept::Top)), range.clone()]).nnf();
+        assert_eq!(meta, range, "⊤ ⊑ ∀r.S internalizes to the bare ∀r.S");
+        let mut t = ConceptTable::default();
+        let id = t.intern(meta);
+        assert!(
+            matches!(t.decomp(id), Decomp::All(..)),
+            "the internalized axiom must decompose to the universal, not a disjunction"
+        );
+    }
+
+    /// A deterministic pseudo-random concept generator: a fixed-seed SplitMix64 walk over the
+    /// variants, so the corpus below is byte-identical on every run and on every platform.
+    /// No clock, no thread-local entropy, no floating point.
+    struct Gen(u64);
+
+    impl Gen {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+
+        fn below(&mut self, bound: u64) -> u64 {
+            self.next() % bound
+        }
+
+        /// A concept of at most `depth` nested constructors over a three-name, two-role,
+        /// two-individual signature — small enough that duplicate and complementary members
+        /// arise often, which is precisely what the canonicalization must survive.
+        fn concept(&mut self, depth: u32) -> Concept {
+            let leaves = 6;
+            if depth == 0 {
+                return self.leaf();
+            }
+            match self.below(leaves + 8) {
+                0..=5 => self.leaf(),
+                6 => Concept::Not(Box::new(self.concept(depth - 1))),
+                7 => {
+                    let n = 1 + self.below(3);
+                    Concept::And((0..n).map(|_| self.concept(depth - 1)).collect())
+                }
+                8 => {
+                    let n = 1 + self.below(3);
+                    Concept::Or((0..n).map(|_| self.concept(depth - 1)).collect())
+                }
+                9 => Concept::Some(self.role(), Box::new(self.concept(depth - 1))),
+                10 => Concept::All(self.role(), Box::new(self.concept(depth - 1))),
+                11 => {
+                    let n = u32::try_from(self.below(3)).expect("a count below three fits u32");
+                    Concept::Min(n, self.role(), Box::new(self.concept(depth - 1)))
+                }
+                12 => {
+                    let n = u32::try_from(self.below(3)).expect("a count below three fits u32");
+                    Concept::Max(n, self.role(), Box::new(self.concept(depth - 1)))
+                }
+                _ => Concept::SelfRestriction(self.role()),
+            }
+        }
+
+        fn leaf(&mut self) -> Concept {
+            match self.below(6) {
+                0 => Concept::Top,
+                1 => Concept::Bottom,
+                2 => Concept::Nominal(vec![
+                    u32::try_from(self.below(2)).expect("an index below two fits u32"),
+                ]),
+                3 => Concept::Data(u32::try_from(self.below(2)).expect("an index below two fits")),
+                other => {
+                    Concept::Named(u32::try_from(other).expect("a small index fits u32") - 4 + 10)
+                }
+            }
+        }
+
+        fn role(&mut self) -> Role {
+            if self.below(2) == 0 {
+                Role::Named(20)
+            } else {
+                Role::Inv(21)
+            }
+        }
+    }
+
+    /// The generated corpus: fixed seeds, fixed depths, fixed count.
+    fn corpus() -> Vec<Concept> {
+        let mut out = Vec::new();
+        for seed in [1u64, 0x5EED, 0xC0FF_EE00, 0xDEAD_BEEF] {
+            let mut g = Gen(seed);
+            for _ in 0..250 {
+                out.push(g.concept(4));
+            }
+        }
+        out
+    }
+
+    /// NEGATION IS AN INVOLUTION on the canonical normal form: `nnf(¬¬C) = nnf(C)`, both as
+    /// trees and — the property the tableau actually depends on — as interned IDS.
+    ///
+    /// The complementary-pair clash is the comparison of a concept id with the id in the
+    /// negation cache. If double negation could land on a different id, a node carrying `C`
+    /// and `¬C` would not close, and the calculus would report a model where there is none.
+    #[test]
+    fn negation_is_involutive_over_the_generated_corpus() {
+        let mut t = ConceptTable::default();
+        for c in corpus() {
+            let normal = c.clone().nnf();
+            let twice = Concept::neg(Concept::neg(normal.clone())).nnf();
+            assert_eq!(
+                twice, normal,
+                "¬¬C is not C as a tree, for C = {c:?} (normal form {normal:?})"
+            );
+            let id = t.intern(c.clone());
+            t.finalize();
+            let neg = t.negate(id);
+            assert_eq!(t.negate(neg), id, "¬¬C is not C as an id, for C = {c:?}");
+        }
+    }
+
+    /// DE MORGAN IS AN IDENTITY ON IDS, not merely on trees: `¬(C₁ ⊔ … ⊔ Cₙ)` and
+    /// `¬C₁ ⊓ … ⊓ ¬Cₙ` intern to the SAME id, and dually. This is the property the shared
+    /// canonical form of [`Concept::and`] and [`Concept::or`] buys — without the sort, the two
+    /// spellings differ by member order and the structural interner would hand out two ids for
+    /// one concept.
+    #[test]
+    fn de_morgan_interns_to_one_id_over_the_generated_corpus() {
+        let mut t = ConceptTable::default();
+        let members = corpus();
+        for group in members.chunks_exact(3) {
+            let parts: Vec<Concept> = group.to_vec();
+            let negated: Vec<Concept> = parts.iter().cloned().map(Concept::neg).collect();
+
+            let or = Concept::Or(parts.clone());
+            let left = t.intern(Concept::Not(Box::new(or)));
+            let right = t.intern(Concept::And(negated.clone()));
+            assert_eq!(left, right, "¬⊔{parts:?} and ⊓¬{parts:?} interned apart");
+
+            let and = Concept::And(parts.clone());
+            let left = t.intern(Concept::Not(Box::new(and)));
+            let right = t.intern(Concept::Or(negated));
+            assert_eq!(left, right, "¬⊓{parts:?} and ⊔¬{parts:?} interned apart");
+        }
+    }
+
+    /// The normal form is IDEMPOTENT and the interner is INSENSITIVE to member order: two
+    /// spellings that differ only by permutation, duplication or a nested same-operator group
+    /// reach one id.
+    #[test]
+    fn normalization_is_idempotent_and_order_insensitive() {
+        let mut t = ConceptTable::default();
+        for c in corpus() {
+            let once = c.clone().nnf();
+            assert_eq!(once.clone().nnf(), once, "nnf is not idempotent on {c:?}");
+        }
+        let a = Concept::Named(1);
+        let b = Concept::Named(2);
+        let c = Concept::Named(3);
+        let straight = t.intern(Concept::Or(vec![a.clone(), b.clone(), c.clone()]));
+        let permuted = t.intern(Concept::Or(vec![c.clone(), a.clone(), b.clone()]));
+        let nested = t.intern(Concept::Or(vec![
+            Concept::Or(vec![b, c]),
+            Concept::Or(vec![a.clone(), a]),
+        ]));
+        assert_eq!(straight, permuted, "member order must not mint a new id");
+        assert_eq!(straight, nested, "nesting must not mint a new id");
     }
 }
