@@ -1459,6 +1459,9 @@ fn write_axiom(axiom: &DlAxiom, out: &mut String) {
 /// steps <n>
 /// budget <n>
 /// decisions <n>
+/// peak-nodes <n>
+/// disjunctions <n>
+/// peak-depth <n>
 /// ```
 ///
 /// `completeness` is the DL lane's own notion and NOT the chase's: the middle value
@@ -1472,6 +1475,15 @@ fn write_axiom(axiom: &DlAxiom, out: &mut String) {
 /// `steps` is a count of saturation rounds and `budget` the per-DECISION cap, so
 /// `steps` may legitimately exceed `budget` when `decisions` is greater than one.
 /// Neither is a clock reading, so the rendering is identical on `wasm32`.
+///
+/// The last three lines say WHERE those rounds went, which `steps` alone cannot:
+/// `peak-nodes` is the largest completion graph any decision built,
+/// `disjunctions` is how many times the `⊔`-rule case split (summed, and often
+/// zero — an ontology whose inclusions all absorb is decided without a split), and
+/// `peak-depth` is the deepest that rule's branch stack got. The two peaks are
+/// MAXIMA over the run's decisions and `disjunctions` is a SUM, because the first
+/// two are sizes reached and the third is work done. All three are counts over a
+/// deterministic search, so they move only when the search does.
 ///
 /// There is deliberately no trailing `overclaims` line. [`DlCertificate`] stores no
 /// completeness field beside its boundary list for one to contradict:
@@ -1504,6 +1516,9 @@ pub fn render_dl_certificate(service: &str, certificate: &DlCertificate) -> Stri
     let _ = writeln!(out, "steps {}", certificate.steps());
     let _ = writeln!(out, "budget {}", certificate.budget());
     let _ = writeln!(out, "decisions {}", certificate.decisions());
+    let _ = writeln!(out, "peak-nodes {}", certificate.peak_nodes());
+    let _ = writeln!(out, "disjunctions {}", certificate.disjunctions());
+    let _ = writeln!(out, "peak-depth {}", certificate.peak_depth());
     out
 }
 

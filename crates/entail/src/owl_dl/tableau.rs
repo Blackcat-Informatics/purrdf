@@ -28,7 +28,7 @@
 //! difference between them is a difference of CALCULUS — which is exactly what the
 //! differential test exists to find, and why no divergence may be ledgered.
 //!
-//! Every generated knowledge base of [`crate::owl_dl::oracle`] (5,700 per run) and every
+//! Every generated knowledge base of [`crate::owl_dl::oracle`] (8,900 per run) and every
 //! hand-written knowledge base in this module is decided by both.
 //!
 //! # Shape of the search
@@ -103,6 +103,16 @@ struct Tableau<'a> {
     /// Whether the caller's stop signal — not the cap — ended the search. Recorded for the
     /// reason [`crate::owl_dl::hyper`]'s driver records it: one private refusal, two facts.
     stopped: bool,
+    /// The largest node vector any state reached — see [`Decision::peak_nodes`].
+    peak_nodes: u64,
+    /// How many times a non-deterministic rule case split — see [`Decision::disjunctions`].
+    disjunctions: u64,
+    /// How deep the recursion currently is, in case splits. Not reported; it is what
+    /// [`Self::peak_depth`] takes its maximum of, and it exists because this search is
+    /// recursive and so has no explicit stack to measure.
+    depth: u64,
+    /// The deepest the recursion ever got, in case splits — see [`Decision::peak_depth`].
+    peak_depth: u64,
 }
 
 /// Decide whether the knowledge base plus `assumptions` has a consistent completion,
@@ -116,12 +126,18 @@ pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, cap: u64) -> Decisi
             steps: t.steps,
             exhausted: false,
             stopped: false,
+            peak_nodes: t.peak_nodes,
+            disjunctions: t.disjunctions,
+            peak_depth: t.peak_depth,
         },
         Err(Exhausted) => Decision {
             consistent: false,
             steps: t.steps,
             exhausted: !t.stopped,
             stopped: t.stopped,
+            peak_nodes: t.peak_nodes,
+            disjunctions: t.disjunctions,
+            peak_depth: t.peak_depth,
         },
     }
 }
@@ -152,21 +168,35 @@ impl<'a> Tableau<'a> {
             steps: 0,
             cap,
             stopped: false,
+            peak_nodes: 0,
+            disjunctions: 0,
+            depth: 0,
+            peak_depth: 0,
         }
     }
 
     /// The depth-first, deterministic search: saturate, then branch.
+    ///
+    /// The three shape counters of [`Decision`] are measured at the same points the
+    /// hypertableau measures them — a case split when one is opened, a depth when the
+    /// search descends — so the reference procedure reports the same three quantities and
+    /// the differential can compare COST as well as verdict.
     fn solve(&mut self, mut st: State) -> Result<bool, Exhausted> {
         if !self.saturate(&mut st)? {
             return Ok(false);
         }
         if let Some(branches) = self.find_branch(&st) {
+            self.disjunctions = self.disjunctions.saturating_add(1);
+            self.depth += 1;
+            self.peak_depth = self.peak_depth.max(self.depth);
             for br in branches {
                 let mut s2 = st.clone();
                 if self.apply_branch(&mut s2, &br) && self.solve(s2)? {
+                    self.depth -= 1;
                     return Ok(true);
                 }
             }
+            self.depth -= 1;
             return Ok(false);
         }
         Ok(true)
@@ -178,11 +208,16 @@ impl<'a> Tableau<'a> {
     fn saturate(&mut self, st: &mut State) -> Result<bool, Exhausted> {
         loop {
             self.tick()?;
+            // The same two observation points the hypertableau uses, for the same reason:
+            // the graph a round inherited, then the graph it minted. Only the first is ever
+            // reached by a state that clashes on sight, and only the second sees a witness.
+            self.observe(st);
             self.detect_clash(st);
             if st.clash {
                 return Ok(false);
             }
             let changed = self.apply_deterministic(st);
+            self.observe(st);
             if st.clique_exhausted.get() {
                 return Err(Exhausted);
             }
@@ -193,6 +228,11 @@ impl<'a> Tableau<'a> {
                 return Ok(true);
             }
         }
+    }
+
+    /// Record how large `st` is against [`Decision::peak_nodes`].
+    fn observe(&mut self, st: &State) {
+        self.peak_nodes = self.peak_nodes.max(st.nodes.len() as u64);
     }
 
     /// Consume one step against the cap.

@@ -155,8 +155,9 @@
 //! the same knowledge bases are generated on every run, on every machine, and a failure
 //! reproduces. Nothing here reads a clock or a `HashMap`. The hypertableau's own determinism
 //! is itself asserted: every generated knowledge base is decided twice and the two
-//! [`Decision`](graph::Decision)s must agree on `consistent`, on `steps`, and on
-//! `exhausted`.
+//! [`Decision`](graph::Decision)s must be the same WHOLE struct — verdict, round count, both
+//! stop flags and all three shape counters — which is also why each property's round total can
+//! be held to a measured ceiling ([`run_property`]) rather than to a timing.
 
 use std::cell::RefCell;
 
@@ -311,6 +312,33 @@ const ABSORPTION: Signature = Signature {
     concepts: 3,
     roles: 0,
     individuals: 3,
+    max_domain: 3,
+};
+
+/// The REPORTED-SHAPE signature: three classes and two roles, at the domain bound two roles
+/// allow.
+///
+/// Sized for the interaction the reported ontology is made of — a `∀`-restriction whose filler
+/// is an intersection, an exact cardinality, and an inverse role — which needs a class for the
+/// restricted concept, one for the intersection's named conjunct and one for the inner `∀`'s
+/// filler, plus a role to quantify over and a second to count.
+const REPORTED: Signature = Signature {
+    concepts: 3,
+    roles: 2,
+    individuals: 2,
+    max_domain: 2,
+};
+
+/// The CYCLE signature: two classes over one role, which is what buys a three-element domain.
+///
+/// One role is all a cycle needs — `A ≡ ∃r.A` uses one, and the two-cycle
+/// `A ≡ ∃r.B`, `B ≡ ∃r⁻.A` uses the same one in both directions — and spending the second on
+/// nothing would cost the third domain element, which is exactly the element a two-cycle's
+/// smallest model needs.
+const CYCLE: Signature = Signature {
+    concepts: 2,
+    roles: 1,
+    individuals: 2,
     max_domain: 3,
 };
 
@@ -884,12 +912,39 @@ struct Tally {
     /// nothing passes silently, and absorption's whole soundness argument is the claim this
     /// population checks.
     encodings: u32,
+    /// Derivation rounds the hypertableau spent over EVERY case of this property, summed.
+    ///
+    /// The property's cost, in the cap's own units. Ceilinged in [`run_property`] against a
+    /// measured literal, because the whole corpus is generated from a fixed seed and decided
+    /// by a deterministic search: this number is reproducible, so a change that makes the
+    /// search do materially more work has a place to show up other than the wall clock.
+    steps: u64,
+    /// The most rounds any ONE case of this property spent.
+    ///
+    /// What [`STEP_CAP`] has to accommodate, and the number that says whether the cap is
+    /// truncating a search that would otherwise have decided.
+    max_case_steps: u64,
+    /// The largest completion graph any case of this property built, in nodes.
+    peak_nodes: u64,
+    /// `⊔`-rule applications over every case, summed.
+    disjunctions: u64,
+    /// The deepest any case's branch stack got.
+    peak_depth: u64,
 }
 
 impl Tally {
     /// How many cases were seen.
     fn total(&self) -> u32 {
         self.modelled + self.refuted + self.unbounded + self.exhausted
+    }
+
+    /// Fold one hypertableau decision's cost in: work sums, sizes peak.
+    fn spent(&mut self, decision: &graph::Decision) {
+        self.steps = self.steps.saturating_add(decision.steps);
+        self.max_case_steps = self.max_case_steps.max(decision.steps);
+        self.peak_nodes = self.peak_nodes.max(decision.peak_nodes);
+        self.disjunctions = self.disjunctions.saturating_add(decision.disjunctions);
+        self.peak_depth = self.peak_depth.max(decision.peak_depth);
     }
 }
 
@@ -908,7 +963,29 @@ impl Tally {
 /// [`check`] skips the case rather than reading "no branch succeeded yet" as a verdict. The
 /// skipped share is asserted to stay negligible in [`run_property`], so narrowing the cap
 /// cannot quietly become a way of not testing anything.
-const STEP_CAP: u64 = 400;
+///
+/// # Where the number comes from
+///
+/// It is MEASURED, and the measurement is this: over the whole corpus, the most rounds any
+/// case that DECIDES spends is 439 — one knowledge base in `complement ⊗ disjunction`, whose
+/// cost the narrowest-first `⊔`-rule raised from 178 (see
+/// [`Hyper::find_branch`](crate::owl_dl::hyper) for why that trade is worth making). 500 is
+/// that maximum plus about a seventh.
+///
+/// The criterion is deliberate: a case the calculus can decide must not be reported as
+/// exhausted, because an exhausted case is one [`check`] compares NEITHER differential on —
+/// so a cap set below a decidable case's cost quietly shrinks what the suite checks while
+/// every assertion still passes. A cap of 400 did exactly that to the 439-round case.
+///
+/// What the cap does NOT try to accommodate is the one case that no affordable cap decides.
+/// The `wide` corpus contains a knowledge base whose completion graph simply grows with
+/// whatever it is given — 139 nodes at a cap of 400, 172 at 500, 205 at 600, 339 at 1000 —
+/// and it exhausts at every one of them. Chasing it is what the superlinear cost above buys
+/// nothing for: the whole suite costs about 6 s at a cap of 400, 7.4 s at 450, 9.2 s at 500
+/// and 15 s at 600, and almost all of that increase is that single case running longer before
+/// being truncated anyway. So the cap is set to decide everything decidable and to truncate
+/// that one, which the ≤5% exhausted quota in [`run_property`] absorbs at 1 case in 8,900.
+const STEP_CAP: u64 = 500;
 
 /// Whether "no model up to the signature's bound" means "no model" for this knowledge base.
 ///
@@ -947,10 +1024,52 @@ fn forces_unnamed_element(c: &Concept) -> bool {
     }
 }
 
+/// Hold one decision's three shape counters to the invariants that give them meaning.
+///
+/// Three of them, and each rules out a different way a counter can be plumbed wrong:
+///
+/// * a search that spent a round built a graph, so `peak_nodes ≥ 1` — a counter observed at
+///   the wrong point in the loop, or never observed at all, reads zero here. That direction
+///   holds for THIS suite rather than in general: every signature names at least one
+///   individual and [`Case::encoded`] declares every one of them, so the completion graph is
+///   never empty. A TBox-only question elsewhere in the crate legitimately has no root at all;
+/// * a branch stack cannot be deeper than the number of case splits that pushed onto it, so
+///   `peak_depth ≤ disjunctions` — a depth taken from the wrong quantity fails this;
+/// * a case split costs at least the round that derived the head it split on, so
+///   `disjunctions ≤ steps` — a count incremented per ALTERNATIVE rather than per rule
+///   application would exceed the round count on a wide disjunction.
+///
+/// Applied to BOTH cores, which is what keeps the reference tableau's counters honest: it is
+/// `cfg(test)`-only and no service reads its numbers, so without this they would be three
+/// fields nothing ever looks at.
+fn counters_are_coherent(
+    core: &str,
+    decision: &graph::Decision,
+    case: &Case,
+) -> Result<(), TestCaseError> {
+    let complaint = |detail: &str| {
+        TestCaseError::fail(format!(
+            "the {core}'s shape counters are incoherent: {detail}\n{decision:?}\naxioms:\n{}",
+            case.axioms_text()
+        ))
+    };
+    if decision.steps > 0 && decision.peak_nodes == 0 {
+        return Err(complaint("it spent rounds over a graph of no nodes"));
+    }
+    if decision.peak_depth > decision.disjunctions {
+        return Err(complaint("its branch stack is deeper than its case splits"));
+    }
+    if decision.disjunctions > decision.steps {
+        return Err(complaint("it case split more often than it derived"));
+    }
+    Ok(())
+}
+
 /// Check one generated knowledge base, recording how it resolved.
 ///
-/// Six things happen here: the hypertableau is asked twice and must answer identically; its
-/// verdict is compared against the concept-tree tableau's, which must AGREE; it is compared
+/// Seven things happen here: the hypertableau is asked twice and must answer identically; its
+/// verdict is compared against the concept-tree tableau's, which must AGREE; BOTH cores' shape
+/// counters are held to [`counters_are_coherent`]; it is compared
 /// against ITSELF over the all-meta encoding of the same terminology, which must also agree;
 /// a case neither core could finish is skipped; where the oracle exhibits a model the
 /// hypertableau's `consistent` is asserted unconditionally; and where the oracle finds NO
@@ -965,6 +1084,7 @@ fn check(sig: Signature, axioms: &[Axiom], tally: &RefCell<Tally>) -> Result<(),
     // The WHOLE decision, not three of its fields: a field added to `Decision` that varied run
     // to run would slip past a tuple comparison naming the fields that existed when it was
     // written.
+    tally.borrow_mut().spent(&first);
     if first != again {
         return Err(TestCaseError::fail(format!(
             "the hypertableau decided the same knowledge base two different ways:\n\
@@ -976,6 +1096,16 @@ fn check(sig: Signature, axioms: &[Axiom], tally: &RefCell<Tally>) -> Result<(),
     // rule set, so where both finish their verdicts must be the same verdict. A divergence is
     // a soundness or completeness bug in one of the two — never a recorded difference.
     let reference = tableau::decide(&case.kb, &Assumptions::of_kb(), cap);
+    // The shape counters of BOTH cores, held to the invariants that make them meaningful.
+    // The two calculi are expected to cost different amounts — that is what makes them a
+    // differential rather than a copy — so what is checked is not that their numbers agree
+    // but that each core's own three are consistent with the search it ran.
+    for (core, decision) in [
+        ("hypertableau", &first),
+        ("concept-tree tableau", &reference),
+    ] {
+        counters_are_coherent(core, decision, &case)?;
+    }
     if !first.exhausted && !reference.exhausted {
         if first.consistent != reference.consistent {
             return Err(TestCaseError::fail(format!(
@@ -1079,12 +1209,14 @@ fn seed(tag: u8) -> [u8; 32] {
 /// Run one property: `cases` generated knowledge bases over `sig`, each put through
 /// [`check`], and then a health check on the tally so the property cannot pass by asserting
 /// nothing.
+#[allow(clippy::too_many_arguments)]
 fn run_property(
     name: &str,
     sig: Signature,
     cases: u32,
     tag: u8,
     bound_floor: u32,
+    step_ceiling: u64,
     strategy: &BoxedStrategy<Vec<Axiom>>,
 ) {
     let config = Config {
@@ -1110,6 +1242,21 @@ fn run_property(
         tally.exhausted * 20 <= cases,
         "{name} skipped more than 5% of its cases on the step cap, so it is no longer \
          checking the decision core: {tally:?}"
+    );
+    // THE COST CEILING. The corpus is generated from a fixed seed and decided by a
+    // deterministic search, so the round total below is a reproducible number rather than a
+    // timing, and pinning a ceiling on it is what makes a search regression fail a test
+    // instead of slowly making the suite slower. It is a CEILING with stated headroom rather
+    // than an equality: the question is "did the search's cost change materially", and an
+    // equality would turn every generator tweak into a mechanical re-pin of seven constants.
+    // Each caller's literal is the measured total plus roughly a tenth, and the comment at
+    // the call site states the measurement.
+    assert!(
+        tally.steps <= step_ceiling,
+        "{name} spent {} derivation rounds over its {cases} cases, above its ceiling of \
+         {step_ceiling}. The search is doing materially more work than when this ceiling was \
+         measured: {tally:?}",
+        tally.steps
     );
     // The DIFFERENTIAL population. Both cores decide almost every generated case inside the
     // narrowed cap, so a share that collapses means the two are no longer being compared —
@@ -1391,6 +1538,27 @@ fn arb_axioms(axiom: BoxedStrategy<Axiom>) -> BoxedStrategy<Vec<Axiom>> {
     prop::collection::vec(axiom, 1..=6).boxed()
 }
 
+/// One to three axiom GROUPS drawn from `group`, flattened.
+///
+/// The unit of the two families below is an EQUIVALENCE, which [`Kb`] holds as two inclusions
+/// that have to travel together: generating them independently would produce one half of an
+/// equivalence far more often than both, and the whole point of those families is what the
+/// CONVERSE direction does to the clause set. Three groups of up to four inclusions is the
+/// same order of axiom count as [`arb_axioms`]' one to six.
+fn arb_axiom_groups(group: BoxedStrategy<Vec<Axiom>>) -> BoxedStrategy<Vec<Axiom>> {
+    prop::collection::vec(group, 1..=3)
+        .prop_map(|groups| groups.concat())
+        .boxed()
+}
+
+/// `left ≡ right`, as the two inclusions [`Kb`] holds an equivalence as.
+fn equivalence(left: &Concept, right: &Concept) -> Vec<Axiom> {
+    vec![
+        Axiom::Gci(left.clone(), right.clone()),
+        Axiom::Gci(right.clone(), left.clone()),
+    ]
+}
+
 // ── The general properties ──────────────────────────────────────────────────────
 
 /// Knowledge bases checked by the widest-signature property.
@@ -1403,7 +1571,16 @@ const DEEP_CASES: u32 = 300;
 /// individuals, models up to two elements.
 #[test]
 fn a_random_knowledge_base_is_consistent_whenever_the_oracle_exhibits_a_model() {
-    run_property("wide", WIDE, WIDE_CASES, 1, 0, &arb_axioms(arb_axiom(WIDE)));
+    run_property(
+        "wide",
+        WIDE,
+        WIDE_CASES,
+        1,
+        0,
+        // Measured 2,090 rounds, of which 500 are the one case that exhausts at any cap.
+        2_300,
+        &arb_axioms(arb_axiom(WIDE)),
+    );
 }
 
 /// The same property one domain element deeper: with a single role name a third element is
@@ -1416,6 +1593,8 @@ fn a_random_knowledge_base_agrees_with_the_oracle_over_a_three_element_domain() 
         DEEP_CASES,
         2,
         20,
+        // Measured 1,179 rounds.
+        1_300,
         &arb_axioms(arb_axiom(DEEP)),
     );
 }
@@ -1513,6 +1692,8 @@ fn nominals_under_inverse_roles_and_cardinality_agree_with_the_oracle() {
         NOMINAL_INVERSE_CASES,
         3,
         10,
+        // Measured 777 rounds.
+        860,
         &arb_axioms(axiom),
     );
 }
@@ -1586,6 +1767,8 @@ fn multi_member_nominals_against_distinctness_agree_with_the_oracle() {
         ONE_OF_CASES,
         4,
         250,
+        // Measured 699 rounds.
+        770,
         &arb_axioms(axiom),
     );
 }
@@ -1667,6 +1850,8 @@ fn qualified_cardinality_under_a_role_hierarchy_agrees_with_the_oracle() {
         ROLE_HIERARCHY_CASES,
         5,
         0,
+        // Measured 2,273 rounds.
+        2_500,
         &arb_axioms(axiom),
     );
 }
@@ -1738,6 +1923,9 @@ fn complement_against_disjunction_agrees_with_the_oracle() {
         BOOLEAN_CASES,
         6,
         700,
+        // Measured 9,248 rounds — the most expensive property, and the one holding the
+        // 439-round case STEP_CAP is sized for.
+        10_200,
         &arb_axioms(axiom),
     );
 }
@@ -1870,7 +2058,234 @@ fn the_absorbable_inclusion_shapes_agree_with_the_oracle() {
         ABSORPTION_CASES,
         7,
         300,
+        // Measured 3,923 rounds.
+        4_320,
         &arb_axioms(axiom),
+    );
+}
+
+// ── The reported-shape family ───────────────────────────────────────────────────
+
+/// Knowledge bases checked by the reported-shape property.
+const REPORTED_CASES: u32 = 600;
+
+/// The interaction an ordinary ontology reached the search's step cap on: a `∀`-restriction
+/// under an EQUIVALENCE, an exact cardinality under another, and an inverse role.
+///
+/// The other families reach equivalences incidentally and mostly over named classes, where
+/// both directions absorb into guarded clauses and neither branches. This one generates the
+/// converse direction on purpose, because that is where the cost lives: `A ≡ ∀r.(S ⊓ ∀p.D)` is
+/// two inclusions, and the second — `∀r.(S ⊓ ∀p.D) ⊑ A` — has an antecedent no faithful
+/// absorption can guard, so it reaches the search as a disjunction that every node must
+/// resolve. An exact cardinality does the same on the counting side: `A ≡ =n c.⊤` puts
+/// `≥n c.⊤ ⊓ ≤n c.⊤ ⊑ A` in front of the search, whose antecedent is a conjunction of two
+/// counting concepts.
+///
+/// The shapes, and what each is here for:
+///
+/// * `A ≡ ∀r.(S ⊓ ∀p.D)` — the non-absorbable `∀`-GCI, over a mostly-INVERSE outer role, so
+///   the obligation the converse direction derives flows back up an edge;
+/// * `A ≡ ≥n c.⊤ ⊓ ≤n c.⊤` — an exact cardinality equivalence, whose converse antecedent is
+///   two counting concepts at once;
+/// * `r owl:inverseOf s` — the axiom that makes the `∀r⁻` obligations above reach a
+///   predecessor rather than dead-end;
+/// * `⊤ ⊑ ∀p.S` — an `rdfs:range`, the unguarded inclusion the reported ontology carried;
+/// * plain inclusions, type assertions and `owl:differentFrom`, so the family is a knowledge
+///   base rather than a terminology.
+#[test]
+fn the_reported_equivalence_shape_agrees_with_the_oracle() {
+    let sig = REPORTED;
+    let individuals = sig.individual_names().to_vec();
+    let roles = sig.role_names().to_vec();
+    let named = arb_named(sig);
+    let group = Union::new_weighted(vec![
+        (
+            6,
+            (
+                named.clone(),
+                arb_inverse_role(sig),
+                named.clone(),
+                arb_role(sig),
+                named.clone(),
+            )
+                .prop_map(|(a, outer, conjunct, inner, filler)| {
+                    equivalence(
+                        &a,
+                        &Concept::All(
+                            outer,
+                            Box::new(Concept::And(vec![
+                                conjunct,
+                                Concept::All(inner, Box::new(filler)),
+                            ])),
+                        ),
+                    )
+                })
+                .boxed(),
+        ),
+        (
+            5,
+            (named.clone(), 0u32..=2, arb_role(sig))
+                .prop_map(|(a, n, counted)| {
+                    equivalence(
+                        &a,
+                        &Concept::And(vec![
+                            Concept::Min(n, counted, Box::new(Concept::Top)),
+                            Concept::Max(n, counted, Box::new(Concept::Top)),
+                        ]),
+                    )
+                })
+                .boxed(),
+        ),
+        (
+            3,
+            (
+                prop::sample::select(roles.clone()),
+                prop::sample::select(roles),
+            )
+                .prop_map(|(r, s)| vec![Axiom::InverseOf(r, s)])
+                .boxed(),
+        ),
+        (
+            3,
+            (arb_role(sig), named.clone())
+                .prop_map(|(p, s)| vec![Axiom::Gci(Concept::Top, Concept::All(p, Box::new(s)))])
+                .boxed(),
+        ),
+        (
+            5,
+            (prop::sample::select(individuals.clone()), named.clone())
+                .prop_map(|(a, c)| vec![Axiom::Type(a, c)])
+                .boxed(),
+        ),
+        (
+            3,
+            (named.clone(), named)
+                .prop_map(|(a, b)| vec![Axiom::Gci(a, b)])
+                .boxed(),
+        ),
+        (
+            2,
+            (
+                prop::sample::select(individuals.clone()),
+                prop::sample::select(individuals),
+            )
+                .prop_map(|(a, b)| vec![Axiom::DifferentFrom(a, b)])
+                .boxed(),
+        ),
+    ])
+    .boxed();
+    run_property(
+        "∀-equivalence ⊗ exact cardinality ⊗ inverse",
+        sig,
+        REPORTED_CASES,
+        8,
+        12,
+        // Measured 2,724 rounds over 973 case splits — the second most branch-heavy
+        // property in the suite, which is the point of it.
+        3_000,
+        &arb_axiom_groups(group),
+    );
+}
+
+// ── The cycle family ────────────────────────────────────────────────────────────
+
+/// Knowledge bases checked by the cyclic-equivalence property.
+const CYCLE_CASES: u32 = 600;
+
+/// CYCLIC equivalences: `A ≡ ∃r.A`, and the two-cycle `A ≡ ∃r.B` with `B ≡ ∃r⁻.A`.
+///
+/// A cyclic definition is the shape whose completion graph is INFINITE and whose termination
+/// is therefore blocking's alone: `A ≡ ∃r.A` forces every `A`-node to mint an `A`-successor
+/// forever, and nothing in the clause set stops it — what stops it is that the second such
+/// node has the first's blocking signature. The two-cycle is the same argument one step
+/// harder, because the role alternates direction and so the signature has to agree on the
+/// INCOMING edge as well as on the two labels.
+///
+/// The converse halves are what make these equivalences rather than inclusions, and they are
+/// the expensive ones: `∃r.A ⊑ A` re-roots at the filler and lands its head on the matched
+/// node's PREDECESSOR, which is the clause form whose interaction with blocking the calculus's
+/// model construction has to make good. A family that generated only `A ⊑ ∃r.A` would exercise
+/// the minting and never that.
+///
+/// The bounded oracle is mostly silent here — a cycle forces elements beyond the named
+/// individuals, so `bounded_domain` is false of nearly every case — and that is exactly why
+/// the family is worth having: the concept-tree tableau is UNBOUNDED, and this is the corner
+/// where it, rather than the enumeration, is the reference.
+#[test]
+fn cyclic_equivalences_agree_with_the_oracle() {
+    let sig = CYCLE;
+    let individuals = sig.individual_names().to_vec();
+    let named = arb_named(sig);
+    let group = Union::new_weighted(vec![
+        (
+            6,
+            (named.clone(), arb_role(sig))
+                .prop_map(|(a, r)| equivalence(&a, &Concept::Some(r, Box::new(a.clone()))))
+                .boxed(),
+        ),
+        (
+            6,
+            (named.clone(), named.clone(), arb_role(sig))
+                .prop_map(|(a, b, r)| {
+                    let back = match r {
+                        Role::Named(p) => Role::Inv(p),
+                        Role::Inv(p) => Role::Named(p),
+                    };
+                    let mut out = equivalence(&a, &Concept::Some(r, Box::new(b.clone())));
+                    out.extend(equivalence(&b, &Concept::Some(back, Box::new(a))));
+                    out
+                })
+                .boxed(),
+        ),
+        (
+            4,
+            (named.clone(), arb_role(sig), named.clone())
+                .prop_map(|(a, r, b)| vec![Axiom::Gci(a, Concept::All(r, Box::new(b)))])
+                .boxed(),
+        ),
+        (
+            4,
+            (named.clone(), 0u32..=2, arb_role(sig))
+                .prop_map(|(a, n, r)| {
+                    vec![Axiom::Gci(a, Concept::Max(n, r, Box::new(Concept::Top)))]
+                })
+                .boxed(),
+        ),
+        (
+            3,
+            (named.clone(), named.clone())
+                .prop_map(|(a, b)| vec![Axiom::Gci(a, Concept::Not(Box::new(b)))])
+                .boxed(),
+        ),
+        (
+            5,
+            (prop::sample::select(individuals.clone()), named)
+                .prop_map(|(a, c)| vec![Axiom::Type(a, c)])
+                .boxed(),
+        ),
+        (
+            2,
+            (
+                prop::sample::select(individuals.clone()),
+                prop::sample::select(individuals),
+            )
+                .prop_map(|(a, b)| vec![Axiom::DifferentFrom(a, b)])
+                .boxed(),
+        ),
+    ])
+    .boxed();
+    run_property(
+        "cyclic equivalence",
+        sig,
+        CYCLE_CASES,
+        9,
+        11,
+        // Measured 887 rounds over THREE case splits in 600 knowledge bases: a cyclic
+        // equivalence absorbs on both sides, so what makes these cases hard is blocking
+        // rather than branching, and the number that would move if blocking stopped
+        // biting is this one.
+        980,
+        &arb_axiom_groups(group),
     );
 }
 
@@ -1883,7 +2298,9 @@ const TOTAL_CASES: u32 = WIDE_CASES
     + ONE_OF_CASES
     + ROLE_HIERARCHY_CASES
     + BOOLEAN_CASES
-    + ABSORPTION_CASES;
+    + ABSORPTION_CASES
+    + REPORTED_CASES
+    + CYCLE_CASES;
 
 /// The exhaustive search is the price of an oracle nobody has to trust, so its size is
 /// stated rather than discovered: each literal below is
@@ -1902,8 +2319,10 @@ fn the_enumerated_search_spaces_are_pinned() {
     assert_eq!(ROLE_HIERARCHY.search_space(), 32_784);
     assert_eq!(BOOLEAN.search_space(), 14_344);
     assert_eq!(ABSORPTION.search_space(), 14_344);
+    assert_eq!(REPORTED.search_space(), 65_568);
+    assert_eq!(CYCLE.search_space(), 295_944);
     assert_eq!(HAND.search_space(), 65_552);
-    assert_eq!(TOTAL_CASES, 7700, "generated knowledge bases per run");
+    assert_eq!(TOTAL_CASES, 8900, "generated knowledge bases per run");
 }
 
 // ── Hand-written regressions ───────────────────────────────────────────────────

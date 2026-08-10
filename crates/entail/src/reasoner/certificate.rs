@@ -59,7 +59,11 @@
 //!
 //! [`DlCertificate::boundaries`] is in [`Construct`] declaration order, never map order.
 //! [`DlCertificate::steps`] is a count of saturation rounds, not a clock reading — so it
-//! is identical run to run and on `wasm32`, where there is no clock to read.
+//! is identical run to run and on `wasm32`, where there is no clock to read. The same holds
+//! of the three shape counters [`DlCertificate::peak_nodes`],
+//! [`DlCertificate::disjunctions`] and [`DlCertificate::peak_depth`], which say where those
+//! rounds went: all three are counts over the decision core's deterministic search, so a
+//! certificate is byte-identical run to run in every field it renders.
 
 use std::collections::BTreeSet;
 
@@ -190,6 +194,12 @@ pub struct DlCertificate {
     budget: u64,
     /// How many hypertableau runs the service made.
     decisions: u64,
+    /// The largest completion graph any of those runs built, in nodes.
+    peak_nodes: u64,
+    /// `⊔`-rule applications, summed over every run.
+    disjunctions: u64,
+    /// The deepest branch stack any of those runs reached, in levels.
+    peak_depth: u64,
 }
 
 impl DlCertificate {
@@ -261,6 +271,48 @@ impl DlCertificate {
     pub const fn decisions(&self) -> u64 {
         self.decisions
     }
+
+    /// The largest completion graph any run of this service built, in NODES.
+    ///
+    /// A maximum over runs and over the branches inside each, never a sum: every branch is a
+    /// completion graph of its own, and the question this answers is how big one got. It
+    /// counts nodes the graph allocated, merged-away ones included — a merge forwards a node
+    /// rather than freeing it — which is the quantity the calculus's blocking discipline is
+    /// there to bound, so a number that grows with the ontology instead of with its distinct
+    /// label signatures is blocking failing to bite.
+    ///
+    /// Together with [`Self::disjunctions`] and [`Self::peak_depth`] this says WHERE
+    /// [`Self::steps`] went. A round count alone cannot distinguish a search that built one
+    /// enormous graph from one that split a thousand times over a small one, and those are
+    /// different problems with different fixes.
+    #[must_use]
+    pub const fn peak_nodes(&self) -> u64 {
+        self.peak_nodes
+    }
+
+    /// `⊔`-RULE APPLICATIONS, summed over every run this service made.
+    ///
+    /// One per case split opened — the number of interior nodes of the search tree the
+    /// service walked, and so the direct measure of how much non-determinism survived
+    /// clausification. Zero is the good case and an ordinary one: an ontology whose every
+    /// inclusion absorbs into a guarded clause is decided without a single split.
+    ///
+    /// A SUM, unlike the two peaks, because a split is WORK done rather than a size reached.
+    #[must_use]
+    pub const fn disjunctions(&self) -> u64 {
+        self.disjunctions
+    }
+
+    /// The deepest the `⊔`-rule's branch stack got, in LEVELS.
+    ///
+    /// A maximum over runs. With [`Self::disjunctions`] it separates a wide, shallow search
+    /// from a narrow, deep one — two shapes that cost the same rounds and mean opposite
+    /// things — and it is the number that says how much of the search's memory went into
+    /// held-open alternatives rather than into any one graph.
+    #[must_use]
+    pub const fn peak_depth(&self) -> u64 {
+        self.peak_depth
+    }
 }
 
 /// An answer plus the certificate of the run that produced it.
@@ -327,6 +379,14 @@ pub(crate) struct Session<'a> {
     decisions: u64,
     /// Whether any decision reached the cap.
     exhausted: bool,
+    /// The largest completion graph any decision built — a MAXIMUM, see
+    /// [`DlCertificate::peak_nodes`].
+    peak_nodes: u64,
+    /// `⊔`-rule applications, SUMMED — see [`DlCertificate::disjunctions`].
+    disjunctions: u64,
+    /// The deepest branch stack any decision reached — a MAXIMUM, see
+    /// [`DlCertificate::peak_depth`].
+    peak_depth: u64,
 }
 
 impl<'a> Session<'a> {
@@ -338,6 +398,9 @@ impl<'a> Session<'a> {
             steps: 0,
             decisions: 0,
             exhausted: false,
+            peak_nodes: 0,
+            disjunctions: 0,
+            peak_depth: 0,
         }
     }
 
@@ -347,11 +410,20 @@ impl<'a> Session<'a> {
     }
 
     /// Run one hypertableau decision, tallying its cost.
+    ///
+    /// Two aggregations, and which one each counter gets is not a style choice: WORK sums
+    /// and SIZE peaks. `steps` and `disjunctions` are work a service spent and are summed
+    /// over its decisions; `peak_nodes` and `peak_depth` are how large one search got, and
+    /// summing them would report a service that made a thousand tiny decisions as having
+    /// built one enormous graph.
     pub(crate) fn decide(&mut self, assumptions: &Assumptions<'_>) -> Decision {
         let decision = decide(self.kb, assumptions, self.cap);
         self.steps = self.steps.saturating_add(decision.steps);
         self.decisions += 1;
         self.exhausted |= decision.exhausted;
+        self.peak_nodes = self.peak_nodes.max(decision.peak_nodes);
+        self.disjunctions = self.disjunctions.saturating_add(decision.disjunctions);
+        self.peak_depth = self.peak_depth.max(decision.peak_depth);
         decision
     }
 
@@ -392,6 +464,9 @@ impl<'a> Session<'a> {
             steps: self.steps,
             budget: self.cap,
             decisions: self.decisions,
+            peak_nodes: self.peak_nodes,
+            disjunctions: self.disjunctions,
+            peak_depth: self.peak_depth,
         }
     }
 }

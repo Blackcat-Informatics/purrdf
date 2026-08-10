@@ -682,7 +682,7 @@ mod tests {
     /// THE TWO DECISION CORES AGREE ON EVERY PAIR OF EVERY REVERSE-MAPPED FIXTURE.
     ///
     /// The hypertableau (`owl_dl::hyper`) is the production core; the concept-tree tableau
-    /// (`owl_dl::tableau`) is kept as its reference. `owl_dl::oracle` compares them over 5,700
+    /// (`owl_dl::tableau`) is kept as its reference. `owl_dl::oracle` compares them over 8,900
     /// GENERATED knowledge bases, but those are assembled axiom-by-axiom in memory; this
     /// corpus reaches the core through the OWL-2-RDF reverse mapping instead, so it is where a
     /// clause derived from a parsed class expression — a `owl:unionOf`, an

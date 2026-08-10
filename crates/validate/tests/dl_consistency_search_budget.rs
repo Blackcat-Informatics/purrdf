@@ -26,6 +26,10 @@
 //! every time the derivation changed; a ratio between two rendered fields survives that and
 //! keeps saying the same thing — this ontology is nowhere near its ceiling.
 //!
+//! The EXACT cost — rounds, peak nodes, case splits and branch depth — is pinned in
+//! `dl_step_ledger` beside this ontology's control, where every exact search-cost figure in
+//! the workspace lives in one table. This file is the narrative; that one is the ledger.
+//!
 //! # Why the restrictions carry no `rdf:type`
 //!
 //! Verbatim from the reported ontology, and deliberately kept so. The anonymous class

@@ -148,7 +148,21 @@ impl Assumptions<'_> {
 /// Equality is over the WHOLE struct, and it is there so determinism can be asserted as one
 /// comparison rather than as a list of field comparisons that a fourth field would silently
 /// escape: two runs over one knowledge base must produce the same verdict, the same round
-/// count and the same two stop flags.
+/// count, the same two stop flags and the same three shape counters.
+///
+/// # The three shape counters
+///
+/// `steps` is the number the cap is denominated in, and it says how much a search cost. It
+/// does not say WHY. Three searches costing a thousand rounds each — one that built a
+/// thousand-node graph without branching once, one that branched a thousand times over a
+/// two-node graph, and one that went a thousand levels deep down a single spine — are three
+/// different situations with three different fixes, and a single round count cannot tell
+/// them apart. [`Self::peak_nodes`], [`Self::disjunctions`] and [`Self::peak_depth`] are
+/// the three quantities that do, and they are measured rather than derived: each is
+/// observed at the one point in the search where the thing it names changes.
+///
+/// All three are counts over a deterministic search, so they are byte-identical run to run
+/// and on `wasm32` for exactly the reason `steps` is — nothing here reads a clock.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Decision {
     /// Whether a clash-free completion was found. Only meaningful when `!exhausted`.
@@ -164,6 +178,32 @@ pub(crate) struct Decision {
     /// tripping, while this is the host having asked for the run to end. `consistent` is
     /// meaningless under either, and every consumer in this crate reads both before it.
     pub(crate) stopped: bool,
+    /// The largest node vector any completion graph the search built ever held.
+    ///
+    /// A MAXIMUM over branches, not a sum: each branch is a graph of its own, and what a
+    /// reader wants to know is how big one got. Merged-away nodes are counted, because a
+    /// merge forwards a node through [`find`] rather than freeing it — the vector is what
+    /// the search allocated, and it is the quantity blocking is supposed to bound.
+    pub(crate) peak_nodes: u64,
+    /// How many times the `⊔`-rule branched.
+    ///
+    /// A SUM over the whole search, one per branch point opened — which is the number of
+    /// interior nodes of the search tree, and so the quantity the clausification and the
+    /// narrowest-first selection rule exist to hold down.
+    ///
+    /// In [`crate::owl_dl::hyper`] this is literally the `⊔`-rule and nothing else: that
+    /// calculus has exactly one non-deterministic rule, because a `≤n` violation, the
+    /// `o`-rule's identification and a disjunctive head are all one clause form. The
+    /// `cfg(test)` reference tableau counts the same thing under its own four
+    /// non-deterministic rules, which are what the hypertableau compiles INTO the `⊔`-rule,
+    /// so the two numbers measure one quantity and are comparable as case splits.
+    pub(crate) disjunctions: u64,
+    /// The deepest the `⊔`-rule's branch stack ever got, in levels.
+    ///
+    /// A MAXIMUM, and the one counter that is about the SHAPE of the search tree rather
+    /// than its size: a search that is wide and shallow and one that is narrow and deep
+    /// spend their rounds very differently, and only this number separates them.
+    pub(crate) peak_depth: u64,
 }
 
 /// The search reached its step cap. A private marker rather than an

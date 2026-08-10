@@ -194,7 +194,9 @@
 //! TOTAL key over the state; and it branches in the alternatives' authored order, which
 //! [`crate::owl_dl::clause`] fixed once from the concept table and the absorbed clauses.
 //! Nothing is read out of a hash map and nothing consults a clock, so a [`Decision`] — verdict,
-//! round count and exhausted flag alike — is byte-identical run to run and on wasm32, and that
+//! round count, exhausted flag and the three shape counters
+//! ([`Decision::peak_nodes`](crate::owl_dl::graph::Decision), `disjunctions`, `peak_depth`)
+//! alike — is byte-identical run to run and on wasm32, and that
 //! is asserted rather than merely stated: `a_decision_is_byte_identical_run_to_run` below
 //! decides one knowledge base twice and compares the whole struct.
 
@@ -300,6 +302,12 @@ struct Hyper<'a> {
     /// exactly what it was: the two stops travel out of the search identically and are
     /// separated once, where the [`Decision`] is assembled.
     stopped: bool,
+    /// The largest node vector any state reached — see [`Decision::peak_nodes`].
+    peak_nodes: u64,
+    /// How many times the `⊔`-rule branched — see [`Decision::disjunctions`].
+    disjunctions: u64,
+    /// The deepest the branch stack got — see [`Decision::peak_depth`].
+    peak_depth: u64,
 }
 
 /// Decide whether the knowledge base plus `assumptions` has a consistent completion,
@@ -313,15 +321,25 @@ pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, cap: u64) -> Decisi
             steps: h.steps,
             exhausted: false,
             stopped: false,
+            peak_nodes: h.peak_nodes,
+            disjunctions: h.disjunctions,
+            peak_depth: h.peak_depth,
         },
         // One private refusal, two public facts: `stopped` is what the driver recorded when
         // it turned the poll into an `Exhausted`, and `exhausted` is therefore reserved for
         // the cap it is named after.
+        //
+        // The three shape counters are reported for a truncated search too, and they are the
+        // measurements a reader of a `budget-exhausted` certificate most needs: they say
+        // whether the rounds went into a graph, into a branch factor or into a depth.
         Err(Exhausted) => Decision {
             consistent: false,
             steps: h.steps,
             exhausted: !h.stopped,
             stopped: h.stopped,
+            peak_nodes: h.peak_nodes,
+            disjunctions: h.disjunctions,
+            peak_depth: h.peak_depth,
         },
     }
 }
@@ -354,6 +372,9 @@ impl<'a> Hyper<'a> {
             steps: 0,
             cap,
             stopped: false,
+            peak_nodes: 0,
+            disjunctions: 0,
+            peak_depth: 0,
         }
     }
 
@@ -403,10 +424,18 @@ impl<'a> Hyper<'a> {
                 continue;
             }
             match self.find_branch(&st) {
-                Some(alternatives) => stack.push(Branches {
-                    state: st,
-                    alternatives: alternatives.into_iter(),
-                }),
+                Some(alternatives) => {
+                    // One `⊔`-rule application, and one more level of search tree. Counted
+                    // here rather than where an alternative is taken, because the rule is
+                    // applied once and then its alternatives are walked: counting the walk
+                    // would report the tree's EDGES under a name that says rule.
+                    self.disjunctions = self.disjunctions.saturating_add(1);
+                    stack.push(Branches {
+                        state: st,
+                        alternatives: alternatives.into_iter(),
+                    });
+                    self.peak_depth = self.peak_depth.max(stack.len() as u64);
+                }
                 // No disjunction left to branch on: a clash-free completion, which is the
                 // answer for the whole search rather than for this level alone.
                 None => return Ok(true),
@@ -421,11 +450,19 @@ impl<'a> Hyper<'a> {
     fn saturate(&mut self, st: &mut State) -> Result<bool, Exhausted> {
         loop {
             self.tick()?;
+            // Twice per round, and both are needed. The first measures the graph this round
+            // INHERITED, which is the only observation a round that clashes before deriving
+            // anything ever makes; the second measures what the round MINTED, and is taken
+            // before the clash test so that a branch which closed only after growing large is
+            // measured rather than discarded — that branch is exactly the one a reader of this
+            // counter is looking for.
+            self.observe(st);
             if self.concrete_domain_clashes(st) {
                 st.clash = true;
                 return Ok(false);
             }
             let changed = self.round(st);
+            self.observe(st);
             Self::check_clique(st)?;
             if st.clash {
                 return Ok(false);
@@ -443,6 +480,11 @@ impl<'a> Hyper<'a> {
             return Err(Exhausted);
         }
         Ok(())
+    }
+
+    /// Record how large `st` is against [`Decision::peak_nodes`](crate::owl_dl::graph::Decision).
+    fn observe(&mut self, st: &State) {
+        self.peak_nodes = self.peak_nodes.max(st.nodes.len() as u64);
     }
 
     fn tick(&mut self) -> Result<(), Exhausted> {
@@ -597,7 +639,7 @@ impl<'a> Hyper<'a> {
     ///
     /// # What it is measured to be worth, and what it costs
     ///
-    /// Over the generated corpora of [`crate::owl_dl::oracle`] — 7,700 knowledge bases —
+    /// Over the generated corpora of [`crate::owl_dl::oracle`] — 8,900 knowledge bases —
     /// narrowest-first is close to a wash BY ITSELF: it saves rounds on the nominal and
     /// counting families and spends them on the boolean and two-role ones, netting a fraction
     /// of a percent against a run of some twenty thousand rounds. What it reliably buys is a

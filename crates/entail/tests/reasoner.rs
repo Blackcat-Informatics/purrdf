@@ -186,6 +186,27 @@ fn honest<T>(answer: &purrdf_entail::Certified<T>) -> &purrdf_entail::DlCertific
         certificate.decisions(),
         certificate.budget()
     );
+    // The three shape counters, held to the invariants that make them readable — and held
+    // here, in the helper EVERY service test runs its answer through, because what they are
+    // aggregated by differs per counter (work sums, sizes peak) and an aggregation applied to
+    // the wrong one is invisible on any single service.
+    // Deliberately NOT "a search that spent a round built a node". A question about the
+    // terminology alone — which is what `classify` asks once the classifying saturation has
+    // derived what it can — has no individual to build a root for, so its completion graph is
+    // legitimately EMPTY and saturates in one round over nothing. Asserting otherwise would
+    // pin an accident of which ontologies these tests happen to use.
+    assert!(
+        certificate.peak_depth() <= certificate.disjunctions(),
+        "a branch stack {} deep over {} case splits",
+        certificate.peak_depth(),
+        certificate.disjunctions()
+    );
+    assert!(
+        certificate.disjunctions() <= certificate.steps(),
+        "{} case splits over {} rounds: a split costs at least the round that derived it",
+        certificate.disjunctions(),
+        certificate.steps()
+    );
     certificate
 }
 
@@ -751,7 +772,17 @@ fn a_narrowed_budget_reports_unknown_rather_than_a_false_negative() {
     let certificate = honest(&answer);
     assert_eq!(certificate.completeness(), DlCompleteness::BudgetExhausted);
     assert!(!certificate.completeness().is_decided());
-    assert_eq!(certificate.steps(), 1, "it spent exactly its cap");
+    // What a truncated search COSTS is pinned exactly in the workspace's one step ledger
+    // (`purrdf-validate`'s `dl_step_ledger`), which decides this same shape under this same
+    // cap of one and holds its rounds, nodes, case splits and depth in a single table. An
+    // exact literal here would be a second copy of one of those figures, and two copies of a
+    // number are how a re-pin comes to move one of them. What belongs in this test is the
+    // SHAPE of the truncated answer: `unknown`, `budget-exhausted`, and no more spent than
+    // the cap allowed.
+    assert!(
+        certificate.steps() <= certificate.budget(),
+        "a truncated search cannot have spent more than the cap that truncated it"
+    );
 
     // Every aggregate service degrades the same way: an empty answer under an exhausted
     // certificate, rather than a confidently wrong one.
