@@ -14,8 +14,10 @@
 //!
 //! # Two references, because they fail differently
 //!
-//! Every generated knowledge base is decided THREE times: by the hypertableau, by the
-//! hypertableau again (determinism), and by the concept-tree tableau. The oracle is exact and
+//! Every generated knowledge base is decided FOUR times: by the hypertableau, by the
+//! hypertableau again (determinism), by the hypertableau over the ALL-META encoding of the
+//! same terminology (the ENCODING differential — see [`check`]), and by the concept-tree
+//! tableau. The oracle is exact and
 //! shares nothing with either calculus, but it is bounded — over a knowledge base that can
 //! force an element beyond the named individuals it can only ever exhibit a model, never rule
 //! one out (see [`bounded_domain`]). The concept-tree tableau is not exact, but it is
@@ -31,7 +33,7 @@
 //!
 //! The oracle is deliberately the stupidest possible program that answers the question. It
 //! guesses; it does not reason. Nothing in it is shared with the thing it checks: it never
-//! reads [`Kb::meta`] or [`Kb::unfold`] (the tableau's two encodings of the terminology) but
+//! reads [`Kb::meta`] or [`Kb::absorbed`] (the two encodings of the terminology) but
 //! only [`Kb::tbox`], the authoritative inclusion list, and it never asks the tableau what a
 //! role's extension is — it CHECKS a guessed extension against the role axioms instead of
 //! computing a closure, because a check is smaller than a closure and this file's whole
@@ -298,6 +300,20 @@ const BOOLEAN: Signature = Signature {
     max_domain: 3,
 };
 
+/// The ABSORPTION signature: quantifier-free, so `bounded_domain` holds of every case it
+/// generates and the over-permissive direction is asserted rather than counted.
+///
+/// No role at all is what buys three class names AND a three-element domain together, and
+/// three class names are what the shapes this family is about need: `A ≡ B ⊓ C` alongside
+/// `A ⊑ D` is a conjunctive antecedent whose consequent splits, and `A ≡ B ⊔ C` alongside a
+/// disjointness axiom is a disjunctive antecedent that splits the other way.
+const ABSORPTION: Signature = Signature {
+    concepts: 3,
+    roles: 0,
+    individuals: 3,
+    max_domain: 3,
+};
+
 /// The signature the hand-written regressions are stated over: everything they need
 /// (two classes, two roles, four individuals) at the domain bound two roles allow.
 const HAND: Signature = Signature {
@@ -437,18 +453,32 @@ struct Case {
 }
 
 impl Case {
-    /// Build the knowledge base the axioms describe.
+    /// Build the knowledge base the axioms describe, under the encoding this crate decides
+    /// with: every faithful antecedent absorbed into a guarded clause, everything else
+    /// internalized.
     ///
-    /// Every general concept inclusion goes through [`Kb::push_gci`], the same
-    /// absorption/internalization path the reverse mapping uses, so both terminology
-    /// encodings — the absorbed [`Kb::unfold`] index and the internalized [`Kb::meta`]
-    /// disjunction — are exercised, while the oracle reads neither.
+    /// Every general concept inclusion goes through [`Kb::push_gci`] and is clausified by
+    /// [`Kb::finalize`] — the same path the reverse mapping takes — so both terminology
+    /// encodings are exercised, while the oracle reads neither and only ever consults
+    /// [`Kb::tbox`].
     ///
     /// Every individual the signature names is declared, whether an axiom mentions it or
     /// not, so the tableau always has a root node and the oracle always has an element to
     /// map it to.
     fn assemble(sig: Signature, axioms: &[Axiom]) -> Self {
+        Self::encoded(sig, axioms, false)
+    }
+
+    /// The same knowledge base under a chosen ENCODING of its terminology.
+    ///
+    /// `internalize_only` builds the textbook encoding — every inclusion becomes
+    /// `nnf(¬C ⊔ D)` in every node's label, nothing is absorbed — which is what the encoding
+    /// differential in [`check`] decides beside the absorbed one. Absorption is a claim that
+    /// two encodings of one terminology have one meaning, and the only way to check a claim
+    /// about two encodings is to have both.
+    fn encoded(sig: Signature, axioms: &[Axiom], internalize_only: bool) -> Self {
         let mut kb = Kb::empty();
+        kb.internalize_only = internalize_only;
         for &a in sig.individual_names() {
             kb.individuals.insert(a);
         }
@@ -847,6 +877,13 @@ struct Tally {
     /// compares nothing passes silently. This is the population over which zero divergence
     /// between the hypertableau and the concept-tree tableau is asserted.
     differential: u32,
+    /// Cases where BOTH TBox ENCODINGS finished, so the absorbed clause table and the
+    /// all-meta internalization were compared and agreed.
+    ///
+    /// Floored for the reason `differential` is: an encoding differential that compares
+    /// nothing passes silently, and absorption's whole soundness argument is the claim this
+    /// population checks.
+    encodings: u32,
 }
 
 impl Tally {
@@ -912,10 +949,12 @@ fn forces_unnamed_element(c: &Concept) -> bool {
 
 /// Check one generated knowledge base, recording how it resolved.
 ///
-/// Five things happen here: the hypertableau is asked twice and must answer identically; its
-/// verdict is compared against the concept-tree tableau's, which must AGREE; a case neither
-/// could finish is skipped; where the oracle exhibits a model the hypertableau's `consistent`
-/// is asserted unconditionally; and where the oracle finds NO model and
+/// Six things happen here: the hypertableau is asked twice and must answer identically; its
+/// verdict is compared against the concept-tree tableau's, which must AGREE; it is compared
+/// against ITSELF over the all-meta encoding of the same terminology, which must also agree;
+/// a case neither core could finish is skipped; where the oracle exhibits a model the
+/// hypertableau's `consistent` is asserted unconditionally; and where the oracle finds NO
+/// model and
 /// [`forces_unnamed_element`] says the bound was sufficient, `consistent` is asserted to be
 /// false.
 fn check(sig: Signature, axioms: &[Axiom], tally: &RefCell<Tally>) -> Result<(), TestCaseError> {
@@ -951,6 +990,29 @@ fn check(sig: Signature, axioms: &[Axiom], tally: &RefCell<Tally>) -> Result<(),
             )));
         }
         tally.borrow_mut().differential += 1;
+    }
+    // THE ENCODING DIFFERENTIAL. The same knowledge base, the same calculus, the OTHER
+    // encoding of its terminology: every inclusion internalized, nothing absorbed. Absorption
+    // rests on a semantic claim — that a guarded clause fires exactly where the antecedent
+    // holds in the model read off a completion graph — and a claim of that shape cannot be
+    // checked by a rule set agreeing with itself. A guard that matched too FEW nodes would
+    // leave an axiom unenforced and show up here as a knowledge base the absorbed encoding
+    // calls consistent and the internalized one refutes.
+    let internalized = Case::encoded(sig, axioms, true);
+    let other = hyper::decide(&internalized.kb, &Assumptions::of_kb(), cap);
+    if !first.exhausted && !other.exhausted {
+        if first.consistent != other.consistent {
+            return Err(TestCaseError::fail(format!(
+                "the two TBox encodings disagree: absorbed says {}, all-meta says {}\n\
+                 absorbed clauses: {:?}\nmeta: {:?}\naxioms:\n{}",
+                first.consistent,
+                other.consistent,
+                case.kb.absorbed,
+                case.kb.meta,
+                case.axioms_text(),
+            )));
+        }
+        tally.borrow_mut().encodings += 1;
     }
     if first.exhausted {
         tally.borrow_mut().exhausted += 1;
@@ -1055,6 +1117,14 @@ fn run_property(
         tally.differential * 20 >= cases * 19,
         "{name} compared the two decision cores on fewer than 95% of its cases, so the \
          zero-divergence claim rests on almost nothing: {tally:?}"
+    );
+    // The ENCODING population, floored on the same argument: the absorbed clause table and
+    // the internalized disjunction are two spellings of one terminology, and a comparison
+    // that ran on almost nothing would let a guard that fires too narrowly pass.
+    assert!(
+        tally.encodings * 20 >= cases * 19,
+        "{name} compared the two TBox encodings on fewer than 95% of its cases, so the \
+         absorption claim rests on almost nothing: {tally:?}"
     );
     assert!(
         tally.modelled * 4 >= cases,
@@ -1671,6 +1741,138 @@ fn complement_against_disjunction_agrees_with_the_oracle() {
     );
 }
 
+// ── The absorption property ─────────────────────────────────────────────────────
+
+/// Knowledge bases checked by the absorption property.
+const ABSORPTION_CASES: u32 = 2000;
+
+/// Every ABSORBABLE inclusion shape, in the fragment where "no bounded model" IS "no model".
+///
+/// The other properties reach absorption incidentally and mostly through antecedents that
+/// quantify, which is exactly the fragment `bounded_domain` disqualifies — so their
+/// over-permissive direction is silent about the shapes this pass actually rewrites. This one
+/// is quantifier-free by construction: every axiom it generates is a boolean combination or a
+/// nominal, `forces_unnamed_element` is false of all of them, and a `consistent` verdict the
+/// oracle cannot exhibit a model for is therefore an UNSOUNDNESS that fails the run rather
+/// than a case that gets counted.
+///
+/// The shapes, and what each is here to exercise:
+///
+/// * `A ≡ B ⊓ C` — one direction absorbs to a conjunctive GUARD (`B(x) ∧ C(x) → A(x)`), the
+///   other splits its conjunctive consequent into two one-atom clauses;
+/// * `A ≡ B ⊔ C` — one direction splits its disjunctive antecedent into two clauses, the
+///   other keeps a `⊔` consequent that still branches;
+/// * `A ⊓ B ⊑ ⊥` — disjointness, whose guard is the pair and whose head is the clash;
+/// * `⊤ ⊑ D` — the unguarded clause, which is what a range-less domain-less global axiom is;
+/// * `{a} ⊑ D` — the nominal guard, matched against the node's identity and never its label;
+/// * `A ⊑ ¬B` — a NEGATED consequent under a guard, beside the negative ANTECEDENT `¬A ⊑ B`
+///   that absorption must refuse and internalize.
+#[test]
+fn the_absorbable_inclusion_shapes_agree_with_the_oracle() {
+    let sig = ABSORPTION;
+    let individuals = sig.individual_names().to_vec();
+    let named = arb_named(sig);
+    let axiom = Union::new_weighted(vec![
+        (
+            5,
+            (named.clone(), named.clone(), named.clone())
+                .prop_map(|(a, b, c)| Axiom::Gci(a, Concept::And(vec![b, c])))
+                .boxed(),
+        ),
+        (
+            5,
+            (named.clone(), named.clone(), named.clone())
+                .prop_map(|(a, b, c)| Axiom::Gci(Concept::And(vec![b, c]), a))
+                .boxed(),
+        ),
+        (
+            4,
+            (named.clone(), named.clone(), named.clone())
+                .prop_map(|(a, b, c)| Axiom::Gci(Concept::Or(vec![b, c]), a))
+                .boxed(),
+        ),
+        (
+            4,
+            (named.clone(), named.clone(), named.clone())
+                .prop_map(|(a, b, c)| Axiom::Gci(a, Concept::Or(vec![b, c])))
+                .boxed(),
+        ),
+        (
+            4,
+            (named.clone(), named.clone())
+                .prop_map(|(a, b)| Axiom::Gci(Concept::And(vec![a, b]), Concept::Bottom))
+                .boxed(),
+        ),
+        (
+            4,
+            (named.clone(), named.clone())
+                .prop_map(|(a, b)| Axiom::Gci(a, Concept::Not(Box::new(b))))
+                .boxed(),
+        ),
+        (
+            3,
+            (named.clone(), named.clone())
+                .prop_map(|(a, b)| Axiom::Gci(Concept::Not(Box::new(a)), b))
+                .boxed(),
+        ),
+        (
+            3,
+            named
+                .clone()
+                .prop_map(|a| Axiom::Gci(Concept::Top, a))
+                .boxed(),
+        ),
+        (
+            3,
+            (arb_nominal(sig, 2), named.clone())
+                .prop_map(|(members, a)| Axiom::Gci(members, a))
+                .boxed(),
+        ),
+        (
+            6,
+            (prop::sample::select(individuals.clone()), named)
+                .prop_map(|(a, c)| Axiom::Type(a, c))
+                .boxed(),
+        ),
+        (
+            4,
+            (
+                prop::sample::select(individuals.clone()),
+                arb_nominal(sig, 2),
+            )
+                .prop_map(|(a, c)| Axiom::Type(a, c))
+                .boxed(),
+        ),
+        (
+            4,
+            (
+                prop::sample::select(individuals.clone()),
+                prop::sample::select(individuals.clone()),
+            )
+                .prop_map(|(a, b)| Axiom::DifferentFrom(a, b))
+                .boxed(),
+        ),
+        (
+            2,
+            (
+                prop::sample::select(individuals.clone()),
+                prop::sample::select(individuals),
+            )
+                .prop_map(|(a, b)| Axiom::SameAs(a, b))
+                .boxed(),
+        ),
+    ])
+    .boxed();
+    run_property(
+        "absorption ⊗ boolean",
+        sig,
+        ABSORPTION_CASES,
+        7,
+        300,
+        &arb_axioms(axiom),
+    );
+}
+
 // ── What the suite costs, pinned ────────────────────────────────────────────────
 
 /// How many knowledge bases the whole suite decides.
@@ -1679,7 +1881,8 @@ const TOTAL_CASES: u32 = WIDE_CASES
     + NOMINAL_INVERSE_CASES
     + ONE_OF_CASES
     + ROLE_HIERARCHY_CASES
-    + BOOLEAN_CASES;
+    + BOOLEAN_CASES
+    + ABSORPTION_CASES;
 
 /// The exhaustive search is the price of an oracle nobody has to trust, so its size is
 /// stated rather than discovered: each literal below is
@@ -1697,8 +1900,9 @@ fn the_enumerated_search_spaces_are_pinned() {
     assert_eq!(ONE_OF.search_space(), 111_108);
     assert_eq!(ROLE_HIERARCHY.search_space(), 32_784);
     assert_eq!(BOOLEAN.search_space(), 14_344);
+    assert_eq!(ABSORPTION.search_space(), 14_344);
     assert_eq!(HAND.search_space(), 65_552);
-    assert_eq!(TOTAL_CASES, 5700, "generated knowledge bases per run");
+    assert_eq!(TOTAL_CASES, 7700, "generated knowledge bases per run");
 }
 
 // ── Hand-written regressions ───────────────────────────────────────────────────

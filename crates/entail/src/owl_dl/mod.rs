@@ -3,11 +3,13 @@
 
 //! The native OWL-Direct (Description-Logic) reasoner core.
 //!
-//! Seven layers compose here: [`concept`] is the DL syntax and its structural
+//! Eight layers compose here: [`concept`] is the DL syntax and its structural
 //! interner; [`data`] is the CONCRETE domain — the data ranges and literal values a
 //! datatype map fixes rather than the ontology; [`parser`] reverse-maps an [`RdfDataset`]
-//! into a [`Kb`] (TBox, RBox, ABox, plus anonymous class expressions); [`clause`] compiles
-//! the concept table into DL-clauses; [`graph`] is the completion graph and the two-domain
+//! into a [`Kb`] (TBox, RBox, ABox, plus anonymous class expressions); [`absorb`] decides,
+//! per general concept inclusion, whether it becomes a GUARDED CLAUSE or is internalized into
+//! every node's label; [`clause`] compiles the concept table and that decision into
+//! DL-clauses; [`graph`] is the completion graph and the two-domain
 //! semantics of a node; [`hyper`] is the `SHOIQ(D)` HYPERTABLEAU that decides consistency
 //! over those clauses; and [`saturate`] is the consequence-based
 //! calculus that derives the WHOLE named-class subsumption relation in one fixpoint,
@@ -36,11 +38,13 @@ use purrdf_datalog::StopSignal;
 
 use crate::EntailError;
 use crate::interner::Interner;
+use crate::owl_dl::absorb::{Encoding, GuardedClause};
 use crate::owl_dl::concept::ConceptTable;
 use crate::owl_dl::concept::{Concept, Decomp, Role};
 use crate::owl_dl::graph::Assumptions;
 use crate::report::Construct;
 
+pub(crate) mod absorb;
 pub(crate) mod clause;
 pub(crate) mod concept;
 pub(crate) mod constructs;
@@ -91,14 +95,21 @@ pub(crate) struct Kb {
     pub(crate) bottom: u32,
     /// General concept inclusions `sub ⊑ sup`, as concept-id pairs.
     pub(crate) tbox: Vec<(u32, u32)>,
-    /// The internalized TBox: meta-concept ids `nnf(¬sub ⊔ sup)`, one per
-    /// non-absorbable GCI (a GCI whose left side is not a single named class).
+    /// The internalized TBox: meta-concept ids `nnf(¬sub ⊔ sup)`, one per inclusion whose
+    /// antecedent [`absorb`] could not guard.
+    ///
+    /// Seeded into every ABSTRACT node's label, where the `⊔`-clause of each branches. That
+    /// is the encoding a general concept inclusion gets when nothing better applies, and
+    /// [`Kb::absorbed`] is what "better" means.
     pub(crate) meta: Vec<u32>,
-    /// The **absorbed** TBox: a named-class concept id `A` → the super-concept ids it
-    /// entails (`A ⊑ D`). A lazy-unfolding rule adds each `D` to any node labelled `A`
-    /// rather than branching a `¬A ⊔ D` disjunction on *every* node — the standard
-    /// absorption optimization that keeps a many-axiom TBox from exploding.
-    pub(crate) unfold: BTreeMap<u32, Vec<u32>>,
+    /// The **absorbed** TBox: one guarded clause `⋀ body → head` per inclusion whose
+    /// antecedent is FAITHFUL — see [`absorb`] for the criterion, the per-shape dispositions
+    /// and why a guarded clause is not merely an optimization of the internalized form.
+    ///
+    /// It subsumes the lazy-unfolding index this field replaced: `A ⊑ D` is the degenerate
+    /// one-atom guard `A(x) → D(x)`, and `∃r.C ⊑ D`, `A ⊓ B ⊑ D`, `{a} ⊑ D`, `rdfs:domain`
+    /// and `rdfs:range` are the cases that used to branch on every node instead.
+    pub(crate) absorbed: Vec<GuardedClause>,
     /// `owl:inverseOf` partners (symmetric), property term id → its inverses.
     pub(crate) inverses: BTreeMap<u32, BTreeSet<u32>>,
     /// Role hierarchy: super-property term id → its sub-property term ids.
@@ -161,6 +172,18 @@ pub(crate) struct Kb {
     /// It is NOT a budget: see [`purrdf_datalog::stop`] for the distinction, which is what
     /// admits it into a crate whose ceilings are deliberately constants.
     pub(crate) stop: Option<Arc<dyn StopSignal>>,
+    /// Whether [`Kb::finalize`] must INTERNALIZE every general concept inclusion instead of
+    /// absorbing the ones [`absorb`] can guard.
+    ///
+    /// Compiled only under `cfg(test)`, because the one thing that reads it is the ENCODING
+    /// DIFFERENTIAL in [`crate::owl_dl::oracle`]: every generated knowledge base is built
+    /// twice — absorbed and all-meta — and decided by the SAME calculus, which must reach the
+    /// same verdict. Absorption is a claim about two encodings of one terminology, and a
+    /// claim about two encodings can only be checked by having both. It is deliberately not
+    /// a mode a caller can select: there is one encoding this crate decides under, and the
+    /// other exists to check it.
+    #[cfg(test)]
+    pub(crate) internalize_only: bool,
 }
 
 impl Kb {
@@ -178,7 +201,7 @@ impl Kb {
             bottom,
             tbox: Vec::new(),
             meta: Vec::new(),
-            unfold: BTreeMap::new(),
+            absorbed: Vec::new(),
             inverses: BTreeMap::new(),
             role_sub: BTreeMap::new(),
             abox_types: Vec::new(),
@@ -194,6 +217,7 @@ impl Kb {
             literal_class: BTreeMap::new(),
             boundaries: BTreeSet::new(),
             stop: None,
+            internalize_only: false,
         }
     }
 
@@ -312,22 +336,19 @@ impl Kb {
         &self.boundaries
     }
 
-    /// Record a general concept inclusion `sub ⊑ sup`, absorbing it into the lazy
-    /// [`Kb::unfold`] index when its left side is a single named class, else
-    /// internalizing it as a meta-concept disjunction. Used by the tableau unit tests
-    /// (the RDF build path records inclusions inline in [`parser`]).
+    /// Record a general concept inclusion `sub ⊑ sup`. Used by the tableau unit tests and by
+    /// the oracle's generators (the RDF build path records inclusions inline in [`parser`]).
+    ///
+    /// Recording is all it does: which ENCODING an inclusion gets — a guarded clause in
+    /// [`Kb::absorbed`] or a meta-concept in [`Kb::meta`] — is decided once, over the whole
+    /// TBox, by [`Kb::finalize`]. It has to be: absorption SPLITS `C ⊑ D ⊓ E` and
+    /// `C ⊔ D ⊑ E`, and a streaming per-axiom decision cannot split what it has not yet seen
+    /// the rest of.
     #[cfg(test)]
     pub(crate) fn push_gci(&mut self, sub: Concept, sup: Concept) {
-        let sub_id = self.table.intern(sub.clone());
-        let sup_id = self.table.intern(sup.clone());
+        let sub_id = self.table.intern(sub);
+        let sup_id = self.table.intern(sup);
         self.tbox.push((sub_id, sup_id));
-        if matches!(sub, Concept::Named(_)) {
-            self.unfold.entry(sub_id).or_default().push(sup_id);
-        } else {
-            let meta = Concept::Or(vec![Concept::Not(Box::new(sub)), sup]);
-            let meta_id = self.table.intern(meta);
-            self.meta.push(meta_id);
-        }
     }
 
     /// Intern a query concept and refresh the negation cache so it can be negated by
@@ -340,13 +361,74 @@ impl Kb {
         id
     }
 
-    /// Finalize the concept table (populate the negation cache). Call once after all
-    /// axioms and assertions are in place.
+    /// Finalize the knowledge base for DECIDING: clausify the TBox, and disclose the
+    /// completeness limit the finished terminology forces. Call once after all axioms and
+    /// assertions are in place.
     pub(crate) fn finalize(&mut self) {
-        self.table.finalize();
+        match self.encode_until(|| Ok::<(), std::convert::Infallible>(())) {
+            Ok(()) => {}
+            Err(never) => match never {},
+        }
         if self.counts_over_an_inverse() {
             self.boundaries.insert(Construct::CountingOnInverse);
         }
+    }
+
+    /// Clausify the TBox, polling a caller-supplied fallible work boundary.
+    ///
+    /// The ENCODING half of [`Self::finalize`], and the half the reverse mapping needs: a
+    /// parsed knowledge base is not yet a question, while
+    /// [`Construct::CountingOnInverse`] is a statement about the DECISION core's completeness
+    /// rather than about the ontology's syntax. So the disclosure stays where a decision is
+    /// prepared — the query layer's finalize, and the key-inference pass — which is exactly
+    /// where it was made before the TBox needed a pass of its own.
+    ///
+    /// Three passes, in this order and for this reason: the negation cache first, because
+    /// PARTIAL absorption negates the conjuncts it cannot guard; then [`absorb`], which
+    /// derives [`Kb::absorbed`] and [`Kb::meta`] from [`Kb::tbox`] and interns whatever
+    /// residual and internalized concepts those dispositions need; then the negation cache
+    /// again, over exactly those new concepts.
+    ///
+    /// It recomputes both encodings from the authoritative inclusion list rather than
+    /// appending to them, so calling it twice — which the key-inference pass and the query
+    /// layer both do, each after interning more concepts — answers what calling it once
+    /// would. An encoding that accumulated instead would give the second call a doubled
+    /// clause table and a search that derived every absorbed head twice.
+    pub(crate) fn encode_until<E>(
+        &mut self,
+        mut poll: impl FnMut() -> Result<(), E>,
+    ) -> Result<(), E> {
+        let encoding = self.encoding();
+        self.table.finalize_until(&mut poll)?;
+        let absorption = absorb::absorb(
+            &mut self.table,
+            &self.tbox,
+            self.top,
+            self.bottom,
+            encoding,
+            &mut poll,
+        )?;
+        self.absorbed = absorption.clauses;
+        self.meta = absorption.meta;
+        self.table.finalize_until(&mut poll)?;
+        Ok(())
+    }
+
+    /// The encoding [`Self::encode_until`] clausifies the TBox under.
+    #[cfg(test)]
+    const fn encoding(&self) -> Encoding {
+        if self.internalize_only {
+            Encoding::Internalizing
+        } else {
+            Encoding::Absorbing
+        }
+    }
+
+    /// The encoding [`Self::encode_until`] clausifies the TBox under — the only one a
+    /// shipped build has.
+    #[cfg(not(test))]
+    const fn encoding(&self) -> Encoding {
+        Encoding::Absorbing
     }
 
     /// Whether the ontology counts successors of a role that is SOMETHING's inverse — the
@@ -830,6 +912,132 @@ mod tests {
     }
 }
 
+/// The ABSORBED terminology, driven through the real reverse mapping.
+///
+/// Everything here reaches the decision core the way an ontology does — RDF triples, the
+/// parser, [`Kb::finalize`] — rather than through a hand-assembled knowledge base, because
+/// what these cases pin is the WIRING: which clause a reverse-mapped axiom becomes, and which
+/// nodes it is allowed to fire at. Every verdict is taken from BOTH calculi, so a case here
+/// cannot pass by one of them being wrong in the same direction as the other.
+#[cfg(test)]
+mod absorption_tests {
+    use super::{Kb, hyper, tableau};
+    use crate::owl_dl::graph::{Assumptions, step_cap};
+    use crate::vocab::{
+        OWL_NOTHING, OWL_ONPROPERTY, OWL_RESTRICTION, OWL_SOMEVALUESFROM, OWL_THING, RDF_TYPE,
+        RDFS_RANGE, RDFS_SUBCLASSOF,
+    };
+    use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, TermValue};
+
+    /// The fixture property.
+    const EX_R: &str = "http://example.org/r";
+    /// A fixture class.
+    const EX_A: &str = "http://example.org/A";
+    /// A fixture individual.
+    const EX_SUBJECT: &str = "http://example.org/a";
+    /// A second fixture individual.
+    const EX_OBJECT: &str = "http://example.org/b";
+
+    /// Whether the dataset is consistent, DECIDED BY BOTH cores, which must agree.
+    fn consistent_by_both(ds: &RdfDataset) -> bool {
+        let kb = Kb::from_dataset(ds).expect("the fixture parses");
+        let cap = step_cap(&kb);
+        let hyper = hyper::decide(&kb, &Assumptions::of_kb(), cap);
+        let reference = tableau::decide(&kb, &Assumptions::of_kb(), cap);
+        assert!(
+            !hyper.exhausted && !reference.exhausted,
+            "a fixture this small must decide inside the step cap"
+        );
+        assert_eq!(
+            hyper.consistent, reference.consistent,
+            "the hypertableau and the concept-tree tableau disagree about the absorbed \
+             terminology"
+        );
+        hyper.consistent
+    }
+
+    /// `∃r.⊤ ⊑ A`, `A ⊑ ⊥`, `a r b` — INCONSISTENT, and the case that refutes reading an
+    /// absorbed antecedent contrapositively.
+    ///
+    /// `a` has an `r`-successor, so `a ∈ (∃r.⊤)^I`, so `a ∈ A^I`, which `A ⊑ ⊥` forbids. The
+    /// derivation has to run FORWARDS from the edge; a design that fired the axiom on nodes
+    /// LABELLED with the antecedent's negation would see nothing here at all, because nothing
+    /// ever labels `a` with `¬∃r.⊤` — the completion graph simply has the edge. That reading
+    /// was refuted before it was written, and this is the knowledge base that refutes it.
+    #[test]
+    fn an_existential_antecedent_fires_from_the_edge_and_not_from_a_label() {
+        let mut b = RdfDatasetBuilder::new();
+        let ty = b.intern_iri(RDF_TYPE);
+        let sub_class = b.intern_iri(RDFS_SUBCLASSOF);
+        let restriction = b.intern_iri(OWL_RESTRICTION);
+        let on_property = b.intern_iri(OWL_ONPROPERTY);
+        let some_values = b.intern_iri(OWL_SOMEVALUESFROM);
+        let thing = b.intern_iri(OWL_THING);
+        let nothing = b.intern_iri(OWL_NOTHING);
+        let r = b.intern_iri(EX_R);
+        let a_class = b.intern_iri(EX_A);
+        let subject = b.intern_iri(EX_SUBJECT);
+        let object = b.intern_iri(EX_OBJECT);
+        let node = b.intern_blank("restriction", BlankScope::DEFAULT);
+        b.push_quad(node, ty, restriction, None);
+        b.push_quad(node, on_property, r, None);
+        b.push_quad(node, some_values, thing, None);
+        b.push_quad(node, sub_class, a_class, None);
+        b.push_quad(a_class, sub_class, nothing, None);
+        b.push_quad(subject, r, object, None);
+        let ds = b.freeze().expect("freeze");
+        assert!(
+            !consistent_by_both(&ds),
+            "an r-edge out of `a` puts it in ∃r.⊤, and ∃r.⊤ ⊑ A ⊑ ⊥ closes every branch"
+        );
+    }
+
+    /// A TBox clause fires on the OBJECT domain only.
+    ///
+    /// `rdfs:range` propagates the named class `A` onto whatever an `r`-edge reaches, and an
+    /// `r`-edge can reach a LITERAL — a node of `Δ_D`. The inclusion `A ⊑ ⊥` quantifies over
+    /// `owl:Thing`, so it says nothing about a literal value, and firing it there would refute
+    /// a knowledge base on the strength of an axiom that never ranged over the element it
+    /// closed. The internalized encoding never had this exposure (a concrete node is not
+    /// seeded with the TBox); the absorbed encoding is a CLAUSE, so the scope has to be stated
+    /// in the rule that fires it.
+    ///
+    /// The two halves are the observable: the literal object is consistent and the IRI object
+    /// is not, over axioms that are otherwise identical. So the clause is still firing — it is
+    /// firing on exactly the domain the axiom quantifies over.
+    #[test]
+    fn a_tbox_clause_does_not_fire_on_a_node_of_the_data_domain() {
+        let build = |literal_object: bool| {
+            let mut b = RdfDatasetBuilder::new();
+            let sub_class = b.intern_iri(RDFS_SUBCLASSOF);
+            let range = b.intern_iri(RDFS_RANGE);
+            let nothing = b.intern_iri(OWL_NOTHING);
+            let r = b.intern_iri(EX_R);
+            let a_class = b.intern_iri(EX_A);
+            let subject = b.intern_iri(EX_SUBJECT);
+            let object = if literal_object {
+                crate::interner::intern_into(&mut b, &TermValue::simple_literal("cat"))
+            } else {
+                b.intern_iri(EX_OBJECT)
+            };
+            b.push_quad(r, range, a_class, None);
+            b.push_quad(a_class, sub_class, nothing, None);
+            b.push_quad(subject, r, object, None);
+            b.freeze().expect("freeze")
+        };
+        assert!(
+            consistent_by_both(&build(true)),
+            "a general concept inclusion does not quantify over literal VALUES, so it cannot \
+             close a branch on one"
+        );
+        assert!(
+            !consistent_by_both(&build(false)),
+            "the same axioms over an IRI object ARE refuted, which is what makes the case \
+             above a scope and not a dropped clause"
+        );
+    }
+}
+
 #[cfg(test)]
 mod boundary_tests {
     use crate::owl_dl::Kb;
@@ -1009,16 +1217,19 @@ mod boundary_tests {
         assert!(kb.boundaries().is_empty(), "{:?}", kb.boundaries());
     }
 
-    /// `rdfs:range` is the general concept inclusion `⊤ ⊑ ∀r.C`, which internalizes to
-    /// `nnf(¬⊤ ⊔ ∀r.C)`. The internalized concept the completion graph seeds into EVERY node
-    /// must be the bare `∀r.C`, not a two-way disjunction whose first branch is `⊥`.
+    /// `rdfs:range` is the general concept inclusion `⊤ ⊑ ∀r.C`, and it reaches the search as
+    /// the EDGE CLAUSE `r(x,y) → C(y)` — nothing enters any node's label for it.
     ///
-    /// A `⊥` disjunct is a branch that can only clash, so leaving it in would put a
-    /// guaranteed-failing case split on every node of every completion — a multiplicative
-    /// cost paid on ontologies that state nothing but a range.
+    /// Two costs are what this pins away. Internalized, the axiom is a concept seeded into
+    /// EVERY node of every completion, so it widens every blocking signature and is re-read by
+    /// the `∀`-rule at every node in every round; and before the concept table canonicalized
+    /// its disjunctions it arrived as `⊔{⊥, ∀r.C}`, a guaranteed-failing case split paid on
+    /// ontologies that state nothing but a range. As a clause it is one body atom that fails
+    /// immediately at a node with no `r`-edge.
     #[test]
-    fn a_range_axiom_internalizes_to_a_universal_and_not_a_disjunction() {
-        use crate::owl_dl::concept::Decomp;
+    fn a_range_axiom_becomes_an_edge_clause_rather_than_a_label() {
+        use crate::owl_dl::clause::BodyAtom;
+        use crate::owl_dl::concept::{Concept, Role};
         use crate::vocab::RDFS_RANGE;
 
         let mut b = RdfDatasetBuilder::new();
@@ -1029,16 +1240,28 @@ mod boundary_tests {
         let ds = b.freeze().expect("freeze");
         let kb = Kb::from_dataset(&ds).expect("parse");
 
-        assert_eq!(
-            kb.meta.len(),
-            1,
-            "one range axiom, one internalized concept"
-        );
-        let meta = kb.meta[0];
         assert!(
-            matches!(kb.table.decomp(meta), Decomp::All(..)),
-            "the range axiom seeded {:?} into every node instead of ∀r.C",
-            kb.table.decomp(meta)
+            kb.meta.is_empty(),
+            "a range axiom must seed nothing into a node label: {:?}",
+            kb.meta
+        );
+        assert_eq!(kb.absorbed.len(), 1, "one range axiom, one clause");
+        let clause = &kb.absorbed[0];
+        let property = kb.iri_id(EX_R).expect("the property was interned");
+        assert_eq!(
+            clause.body,
+            vec![BodyAtom::Role {
+                from: 0,
+                to: 1,
+                role: Role::Named(property),
+            }]
+        );
+        assert_eq!(clause.head_var, 1, "the filler lands on the SUCCESSOR");
+        let class = kb.iri_id(EX_C).expect("the class was interned");
+        assert_eq!(
+            kb.table.concept(clause.head),
+            &Concept::Named(class),
+            "the head is the range class itself"
         );
     }
 }

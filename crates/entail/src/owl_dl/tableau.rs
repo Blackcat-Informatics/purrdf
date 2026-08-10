@@ -22,9 +22,9 @@
 //! for that calculus — the same pattern as
 //! [`Subsumptions::decide_by_tableau`](crate::reasoner::classify::Subsumptions::decide_by_tableau).
 //! Two implementations of one contract can be held against each other; one
-//! implementation can only be held against itself. The two read the SAME clause-free
-//! input (the concept table, the internalized TBox [`Kb::meta`], the absorbed
-//! [`Kb::unfold`]) and build the SAME completion graph through [`Graph`], so a verdict
+//! implementation can only be held against itself. The two read the SAME
+//! input (the concept table, the internalized TBox [`Kb::meta`], the absorbed guarded clauses
+//! of [`Kb::absorbed`]) and build the SAME completion graph through [`Graph`], so a verdict
 //! difference between them is a difference of CALCULUS — which is exactly what the
 //! differential test exists to find, and why no divergence may be ledgered.
 //!
@@ -72,6 +72,8 @@
 
 use crate::EntailError;
 use crate::owl_dl::Kb;
+use crate::owl_dl::absorb::GuardedClause;
+use crate::owl_dl::clause::BodyAtom;
 use crate::owl_dl::concept::{Decomp, Role};
 use crate::owl_dl::graph::{
     Assumptions, Decision, Exhausted, Graph, State, are_distinct, find, max_clique, set_distinct,
@@ -332,7 +334,7 @@ impl<'a> Tableau<'a> {
             if find(st, i) != i {
                 continue;
             }
-            changed |= self.rule_unfold(st, i);
+            changed |= self.rule_absorbed(st, i);
             changed |= self.rule_and(st, i);
             changed |= self.rule_all(st, i);
             changed |= self.rule_nominal(st, i);
@@ -348,23 +350,82 @@ impl<'a> Tableau<'a> {
         changed
     }
 
-    /// Absorption (lazy-unfolding) rule: a named class `A ∈ L(x)` adds every `D` with
-    /// an absorbed GCI `A ⊑ D`. This replaces branching a `¬A ⊔ D` disjunction on every
-    /// node with a deterministic add triggered only where `A` actually holds.
-    fn rule_unfold(&self, st: &mut State, x: usize) -> bool {
-        let mut adds: Vec<u32> = Vec::new();
-        for &cid in &st.nodes[x].label {
-            if let Some(sups) = self.g.kb().unfold.get(&cid) {
-                for &s in sups {
-                    if !st.nodes[x].label.contains(&s) {
-                        adds.push(s);
+    /// ABSORPTION rule: every guarded clause of [`Kb::absorbed`] whose body matches with
+    /// variable `0` bound to `x` asserts its consequent on the node its head variable bound.
+    ///
+    /// This is the rule that replaces branching an internalized `¬C ⊔ D` disjunction on every
+    /// node with a deterministic add wherever the antecedent actually holds — for the whole
+    /// faithful-antecedent fragment, not merely for a single named class. It is the reference
+    /// calculus's OWN reading of the shared table: the guard matcher below is written here
+    /// rather than borrowed from [`crate::owl_dl::hyper`], so the two calculi agree about the
+    /// terminology's ENCODING and still share no code that could make them agree about a
+    /// derivation neither should have made.
+    ///
+    /// The scope is the OBJECT domain, for the reason `Hyper::round` states: a general concept
+    /// inclusion quantifies over `owl:Thing`, so a literal's node is not a node it constrains.
+    fn rule_absorbed(&self, st: &mut State, x: usize) -> bool {
+        if st.nodes[x].concrete {
+            return false;
+        }
+        let mut heads: Vec<(usize, u32)> = Vec::new();
+        for clause in &self.g.kb().absorbed {
+            self.match_guard(st, clause, 0, &mut vec![x], &mut heads);
+        }
+        let mut changed = false;
+        for (node, concept) in heads {
+            changed |= self.g.add_concept(st, node, concept);
+        }
+        changed
+    }
+
+    /// Extend `frame` over `clause.body[at..]`, recording the head each complete match derives.
+    ///
+    /// The join plan is the body's own order, which [`crate::owl_dl::absorb`] authors so that
+    /// every variable is bound before it is used: a concept or `denotes` atom filters a bound
+    /// variable, and a role atom binds the next one.
+    fn match_guard(
+        &self,
+        st: &State,
+        clause: &GuardedClause,
+        at: usize,
+        frame: &mut Vec<usize>,
+        out: &mut Vec<(usize, u32)>,
+    ) {
+        let Some(&atom) = clause.body.get(at) else {
+            out.push((frame[clause.head_var as usize], clause.head));
+            return;
+        };
+        match atom {
+            BodyAtom::Concept { var, concept } => {
+                if self.g.has_concept(st, frame[var as usize], concept) {
+                    self.match_guard(st, clause, at + 1, frame, out);
+                }
+            }
+            BodyAtom::Denotes { var, individual } => {
+                let node = find(st, frame[var as usize]);
+                if st.nodes[node].nominals.contains(&individual) {
+                    self.match_guard(st, clause, at + 1, frame, out);
+                }
+            }
+            BodyAtom::Role { from, to, role } => {
+                let source = frame[from as usize];
+                if (to as usize) < frame.len() {
+                    let target = find(st, frame[to as usize]);
+                    if self.g.neighbors(st, source, role).contains(&target) {
+                        self.match_guard(st, clause, at + 1, frame, out);
+                    }
+                } else {
+                    for y in self.g.neighbors(st, source, role) {
+                        frame.push(y);
+                        self.match_guard(st, clause, at + 1, frame, out);
+                        frame.pop();
                     }
                 }
             }
+            // A counting atom is the `≤n`-restriction's schematic body atom, which no guard is
+            // ever authored with: absorption emits concept, `denotes` and role atoms only.
+            BodyAtom::Successors { .. } => {}
         }
-        let changed = !adds.is_empty();
-        st.nodes[x].label.extend(adds);
-        changed
     }
 
     /// `⊓`-rule: `C₁ ⊓ … ⊓ Cₙ ∈ L(x)` adds each `Cᵢ`.

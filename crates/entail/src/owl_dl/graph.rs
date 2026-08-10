@@ -38,6 +38,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::owl_dl::Kb;
+use crate::owl_dl::clause::BodyAtom;
 use crate::owl_dl::concept::{Decomp, Role};
 
 /// A single completion-graph node.
@@ -325,14 +326,37 @@ pub(crate) struct Graph<'a> {
     kb: &'a Kb,
     /// The internalized TBox: meta-concept ids placed in every abstract node's label.
     meta: BTreeSet<u32>,
+    /// Every concept the TBox asserts UNCONDITIONALLY of an element of the object domain: the
+    /// internalized meta-concepts, plus the heads of the absorbed clauses with an empty guard
+    /// (the `⊤ ⊑ D` inclusions).
+    ///
+    /// This is what an identification with a literal WITHDRAWS — see [`Graph::merge_nodes`].
+    /// The two spellings have to be withdrawn together because they are the same axiom: `⊤ ⊑ D`
+    /// reaches an abstract node's label as a seeded meta-concept under one encoding and as a
+    /// derived clause head under the other, and a node that turns out to inhabit `Δ_D` was
+    /// never constrained by it either way.
+    ///
+    /// A GUARDED head is deliberately not here. `A ⊑ D` fired because the node carried `A`,
+    /// which is a derivation the search made rather than a blanket assertion, and withdrawing
+    /// it would need a provenance a label set does not carry.
+    unconditional: BTreeSet<u32>,
 }
 
 impl<'a> Graph<'a> {
     /// Build the graph operations over `kb`, snapshotting the internalized TBox.
     pub(crate) fn new(kb: &'a Kb) -> Self {
+        let meta: BTreeSet<u32> = kb.meta.iter().copied().collect();
+        let mut unconditional = meta.clone();
+        unconditional.extend(
+            kb.absorbed
+                .iter()
+                .filter(|clause| clause.body.is_empty())
+                .map(|clause| clause.head),
+        );
         Self {
             kb,
-            meta: kb.meta.iter().copied().collect(),
+            meta,
+            unconditional,
         }
     }
 
@@ -455,13 +479,13 @@ impl<'a> Graph<'a> {
     /// Orientation keeps a root over a tree node, else the lower index. A forced merge of
     /// a `≠` pair sets [`State::clash`].
     ///
-    /// # Why this needs the internalized TBox
+    /// # Why this needs the TBox
     ///
     /// Identifying an abstract node with a literal's node says the abstract node WAS that
-    /// literal value all along, and every meta-concept the internalized TBox put on it
+    /// literal value all along, and every concept the TBox asserted of it unconditionally
     /// therefore never applied: a general concept inclusion quantifies over `owl:Thing`, and no
-    /// literal value is in it. Dropping them needs [`Graph::meta`] in scope, which is what
-    /// makes this a method rather than a free function over the state.
+    /// literal value is in it. Dropping them needs [`Graph::unconditional`] in scope, which is
+    /// what makes this a method rather than a free function over the state.
     pub(crate) fn merge_nodes(&self, st: &mut State, keep: usize, discard: usize) {
         let mut keep = find(st, keep);
         let mut discard = find(st, discard);
@@ -511,12 +535,13 @@ impl<'a> Graph<'a> {
         if st.nodes[keep].value_class.is_none() {
             st.nodes[keep].value_class = st.nodes[discard].value_class;
         }
-        // The keeper is now known to inhabit the DATA domain, so the internalized TBox never
-        // constrained it. Withdrawing those meta-concepts can only remove a clash, never add
-        // one, which is the direction an identification is allowed to move the answer in.
+        // The keeper is now known to inhabit the DATA domain, so the TBox's unconditional
+        // assertions never constrained it — whichever encoding they arrived in. Withdrawing
+        // them can only remove a clash, never add one, which is the direction an
+        // identification is allowed to move the answer in.
         if st.nodes[keep].concrete {
-            for meta in &self.meta {
-                st.nodes[keep].label.remove(meta);
+            for concept in &self.unconditional {
+                st.nodes[keep].label.remove(concept);
             }
         }
         st.nodes[discard].merged = Some(keep);
@@ -777,6 +802,28 @@ impl<'a> Graph<'a> {
                 if let Decomp::All(universal_role, universal_filler) = *self.kb.table.decomp(other)
                     && universal_role == role
                     && let Decomp::Data(narrowed) = *self.kb.table.decomp(universal_filler)
+                {
+                    demanded.push(narrowed);
+                }
+            }
+            // A `⊤ ⊑ ∀r.DR` axiom — every `rdfs:range` over a data property — is an EDGE
+            // CLAUSE rather than a label ([`crate::owl_dl::absorb`]), so the narrowing it
+            // contributes is read from the absorbed table. It narrows every node's
+            // `r`-successors unconditionally, which is what an unguarded range clause says,
+            // and it used to be read off this node's own label back when a range axiom was
+            // internalized into it. Losing it here would silently weaken the counting
+            // question below on exactly the ontologies that state a range.
+            for clause in &self.kb.absorbed {
+                if let [
+                    BodyAtom::Role {
+                        from: 0,
+                        to: 1,
+                        role: edge,
+                    },
+                ] = clause.body.as_slice()
+                    && *edge == role
+                    && clause.head_var == 1
+                    && let Decomp::Data(narrowed) = *self.kb.table.decomp(clause.head)
                 {
                     demanded.push(narrowed);
                 }

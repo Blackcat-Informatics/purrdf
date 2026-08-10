@@ -32,7 +32,8 @@
 //! Everything the incumbent spread over ten rules and eight clash triggers is one of those
 //! three, because the clause set carries the difference:
 //!
-//! * `⊓`, absorption and the `∀`-propagation are hyperresolution with an
+//! * `⊓`, the whole ABSORBED terminology (`A ⊑ D`, `∃r.C ⊑ D`, `A ⊓ B ⊑ D`, `rdfs:domain`,
+//!   `rdfs:range`) and the `∀`-propagation are hyperresolution with an
 //!   [`Atomic`](HeadForm::Atomic)/[`Conjunctive`](HeadForm::Conjunctive) head — and `∀r.C`'s
 //!   body `c(x) ∧ r(x,y)` is matched against an EDGE, so one derivation step consumes the
 //!   whole rule instance instead of a label scan per node per round;
@@ -104,11 +105,46 @@
 //! (3) prevents a cycle of nodes justifying one another with no expanded representative, and
 //! (1) makes the "not blocked" test well-founded.
 //!
+//! ## The clauses whose head lands on the matched node's PREDECESSOR
+//!
+//! Absorption ([`crate::owl_dl::absorb`]) authors `∃r.C ⊑ D` re-rooted at the filler, as
+//! `C(y) ∧ r⁻(y, x) → D(x)`. The head is therefore asserted on a node the match REACHED
+//! rather than on the node the round is visiting, and for a tree node `y` that node is its
+//! predecessor. Two things have to be said about that, and neither weakens the argument above.
+//!
+//! First, DERIVATION. Blocking withholds exactly one rule, the `≥`-rule, and it withholds it
+//! at the node whose label carries the at-least concept — an at-least head atom is always on
+//! variable `0`, because it comes from a concept clause `c(x) → ≥n r.C(x)` and an absorbed
+//! clause's head is a single concept atom, never a counting one. Hyperresolution keeps
+//! matching blocked nodes, so `D(pred(y))` is derived at `y` whether or not `y` is blocked.
+//! No obligation is deferred onto a predecessor and left unmade.
+//!
+//! Second, the MODEL CONSTRUCTION. Unravelling replaces a blocked `x` with copies of its
+//! blocker `y`'s successors. Take a copy `z′` of a successor `z` of `y`, now attached under
+//! `x`, and suppose the clause matches at `z′` — `C ∈ L(z)`, and the connecting edge is an
+//! `r`-edge. The same instance matched at `z` in the graph, so `D ∈ L(y)`; and condition (4)'s
+//! `L(x) = L(y)` gives `D ∈ L(x)`, which is exactly what the copy needs. The
+//! head-on-predecessor direction is discharged by the SAME label equality that discharges the
+//! ordinary direction — no new condition, and none of (1)–(4) becomes dispensable.
+//!
+//! Where the predecessor-label half of (4) begins to carry weight is a CHAIN of such clauses:
+//! the `D` derived on `pred(x)` may itself guard another head-on-predecessor clause, whose
+//! head lands on `pred(pred(x))`. The one-step argument covers each link only because
+//! `L(pred(x)) = L(pred(y))` makes the next link's premise agree too. That is a reason to keep
+//! the pairwise condition, not evidence that label-only blocking breaks — and the deliberate
+//! hunt below was re-run after absorption landed, over corpora that now generate exactly these
+//! clauses.
+//!
 //! One empirical honesty about condition (4)'s predecessor-label half: no knowledge base is
 //! KNOWN that separates it from label-only blocking in this rule set. A deliberate hunt —
 //! the generated corpora run under a label-only mutation, plus a hand-targeted family of
 //! inverse-role/∀⁻ chains (kept as a permanent differential test in the oracle) — changed
-//! tallies but never a verdict. The structural reason narrows the classic separation:
+//! tallies but never a verdict. It was RE-RUN after absorption began authoring the
+//! head-on-predecessor clauses above, so the corpora it swept now generate exactly the shape
+//! the condition was suspected to be needed for: mutating [`Hyper::same_signature`] to compare
+//! labels alone leaves every verdict, every differential and every oracle comparison in this
+//! crate unchanged, and moves only which cases exhaust the narrowed step cap. The structural
+//! reason narrows the classic separation:
 //! blocking here withholds ONLY `≥`-rule applications, while every clause body — including
 //! the `∀r⁻` back-propagation whose obligations the pairwise condition guards in the
 //! published calculus — keeps matching blocked nodes, and blocking is recomputed every
@@ -396,9 +432,25 @@ impl<'a> Hyper<'a> {
             if find(st, x) != x {
                 continue;
             }
+            // A general concept inclusion quantifies over `owl:Thing`, so a TBox clause is
+            // matched from ABSTRACT nodes only. This is the same restriction the internalized
+            // encoding gets for free by not being seeded into a concrete node's label
+            // ([`Graph::root`], [`Graph::new_successor`], [`Graph::merge_nodes`]), and it has
+            // to be stated here because the absorbed encoding is a CLAUSE rather than a label:
+            // a `∀p.A` propagates the named class `A` onto a literal's node, and firing
+            // `A ⊑ D` there would derive `D` of a VALUE the axiom never quantified over.
+            //
+            // The scope is the node variable 0 binds. A clause's HEAD may still land on a
+            // concrete node — `rdfs:range` over a data property is exactly `r(x,y) → DR(y)`
+            // with `y` a literal — which is the range axiom doing its job rather than a TBox
+            // axiom escaping its domain.
+            let object_domain = !st.nodes[x].concrete;
             let triggers: Vec<u32> = st.nodes[x].label.iter().copied().collect();
             for concept in triggers {
                 for &index in self.clauses.triggered_by(concept) {
+                    if !object_domain && self.clauses.is_tbox(index) {
+                        continue;
+                    }
                     changed |= self.fire(st, index, x, &blocked);
                     if st.clash {
                         return changed;
@@ -406,6 +458,9 @@ impl<'a> Hyper<'a> {
                 }
             }
             for &index in self.clauses.untriggered() {
+                if !object_domain && self.clauses.is_tbox(index) {
+                    continue;
+                }
                 changed |= self.fire(st, index, x, &blocked);
                 if st.clash {
                     return changed;

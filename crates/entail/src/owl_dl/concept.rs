@@ -35,6 +35,21 @@ pub(crate) enum Role {
     Inv(u32),
 }
 
+impl Role {
+    /// The inverse of this role: `r⁻` of a named property, and the named property of an
+    /// inverse one.
+    ///
+    /// An involution, which is what lets a clause body be RE-ROOTED: reading the edge
+    /// `r(x, y)` from `y`'s side is reading `r⁻(y, x)`, and a guard authored at the filler
+    /// of `∃r.C` reaches the node the axiom constrains by exactly that step.
+    pub(crate) const fn inverse(self) -> Self {
+        match self {
+            Self::Named(p) => Self::Inv(p),
+            Self::Inv(p) => Self::Named(p),
+        }
+    }
+}
+
 /// A Description-Logic concept (class expression) over interned term ids.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum Concept {
@@ -346,6 +361,17 @@ impl ConceptTable {
     /// The decomposed structure behind a concept id.
     pub(crate) fn decomp(&self, id: u32) -> &Decomp {
         &self.decomp[id as usize]
+    }
+
+    /// The canonical NNF concept behind a concept id.
+    ///
+    /// The one reader is [`crate::owl_dl::absorb`], which DERIVES concepts from interned ones
+    /// — the residual `D ⊔ ¬C₂` of a partial absorption, the internalized `¬C ⊔ D` of an
+    /// inclusion nothing absorbs. Building those needs the trees the ids stand for, and
+    /// re-deriving them from [`Decomp`] would be a second, drifting spelling of the syntax
+    /// this table already holds.
+    pub(crate) fn concept(&self, id: u32) -> &Concept {
+        &self.concepts[id as usize]
     }
 
     /// The id of the NNF of `¬c` where `c` is the concept with id `id`.
