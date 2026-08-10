@@ -102,6 +102,13 @@
 //! every body and head is a `Vec` in the order emitted. Nothing here is read out of a hash
 //! map, so the clause set — and therefore the branch order of every search over it — is a
 //! pure function of the knowledge base.
+//!
+//! A DISJUNCTIVE head's alternatives are emitted in the order [`Kb::order_disjuncts`] gives —
+//! the alternatives that mint no witnesses first, and a STABLE sort, so the canonical order the
+//! members already carry survives inside each rank. It is a pure function of the concept table
+//! and the absorbed clauses and it is decided ONCE, here, rather than at each case split. That
+//! ordering is deliberately not the interner's: `Kb::order_disjuncts` states why the identity
+//! order and the search order must stay two orders.
 
 use std::collections::BTreeMap;
 
@@ -612,9 +619,15 @@ fn derive_concept(kb: &Kb, id: u32, out: &mut ClauseSet) {
             }
         }
         Decomp::Or(ref children) => {
-            let disjuncts: Vec<Vec<HeadAtom>> = children
-                .iter()
-                .map(|&concept| vec![HeadAtom::Concept { var: 0, concept }])
+            // AUTHORED in search order, not in the interner's: see [`Kb::order_disjuncts`] for
+            // why the canonical member order and this one are different orders with different
+            // jobs. The `⊔`-rule branches in the order it finds here, so this is where a
+            // terminology's cheap alternatives are put first — once, in front of every search
+            // over the clause set, rather than re-decided at each case split.
+            let disjuncts: Vec<Vec<HeadAtom>> = kb
+                .order_disjuncts(children)
+                .into_iter()
+                .map(|concept| vec![HeadAtom::Concept { var: 0, concept }])
                 .collect();
             // An EMPTY disjunction is `⊥`, which is exactly the empty head — so the degenerate
             // `⊔` of nothing needs no special case.
@@ -710,6 +723,14 @@ fn derive_concept(kb: &Kb, id: u32, out: &mut ClauseSet) {
 /// `≤n` violation becomes a clash without a second clash rule to state it.
 fn derive_at_most(kb: &Kb, id: u32, n: u32, role: Role, filler: u32, out: &mut ClauseSet) {
     if let Some(negated) = kb.table.negation(filler) {
+        // The two alternatives are ordered like any other authored case split: deciding a
+        // neighbour's membership one way may force it to mint successors of its own, and the
+        // way that does not is the one to try first.
+        let decided: Vec<Vec<HeadAtom>> = kb
+            .order_disjuncts(&[filler, negated])
+            .into_iter()
+            .map(|concept| vec![HeadAtom::Concept { var: 1, concept }])
+            .collect();
         out.push_triggered(
             id,
             vec![BodyAtom::Role {
@@ -717,16 +738,7 @@ fn derive_at_most(kb: &Kb, id: u32, n: u32, role: Role, filler: u32, out: &mut C
                 to: 1,
                 role,
             }],
-            vec![
-                vec![HeadAtom::Concept {
-                    var: 1,
-                    concept: filler,
-                }],
-                vec![HeadAtom::Concept {
-                    var: 1,
-                    concept: negated,
-                }],
-            ],
+            decided,
         );
     }
     // The counting clause, schematic in `n + 1`: one body atom for the counted successors and

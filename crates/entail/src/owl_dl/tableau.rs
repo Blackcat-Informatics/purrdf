@@ -660,7 +660,18 @@ impl<'a> Tableau<'a> {
                 match *self.g.kb().table.decomp(cid) {
                     Decomp::Or(ref cs) => {
                         if !cs.iter().any(|c| st.nodes[i].label.contains(c)) {
-                            return Some(cs.iter().map(|&c| Branch::AddConcept(i, c)).collect());
+                            // The SAME authored order the hypertableau's clause set carries
+                            // ([`Kb::order_disjuncts`]): the two calculi are meant to differ in
+                            // their rules and not in which alternative they try first, so a
+                            // step-count difference between them stays a difference of rules.
+                            return Some(
+                                self.g
+                                    .kb()
+                                    .order_disjuncts(cs)
+                                    .into_iter()
+                                    .map(|c| Branch::AddConcept(i, c))
+                                    .collect(),
+                            );
                         }
                     }
                     // `o`-rule, non-deterministic form: `{a₁,…,aₙ} ∈ L(x)` with `n > 1`
@@ -679,13 +690,18 @@ impl<'a> Tableau<'a> {
                         let neigh = self.g.neighbors(st, i, role);
                         // `≤`-choose rule: some neighbour lacks both `C` and `¬C`.
                         for &y in &neigh {
+                            let negated = self.g.kb().table.negate(filler);
                             if !self.g.has_concept(st, y, filler)
-                                && !self.g.has_concept(st, y, self.g.kb().table.negate(filler))
+                                && !self.g.has_concept(st, y, negated)
                             {
-                                return Some(vec![
-                                    Branch::AddConcept(y, filler),
-                                    Branch::AddConcept(y, self.g.kb().table.negate(filler)),
-                                ]);
+                                return Some(
+                                    self.g
+                                        .kb()
+                                        .order_disjuncts(&[filler, negated])
+                                        .into_iter()
+                                        .map(|c| Branch::AddConcept(y, c))
+                                        .collect(),
+                                );
                             }
                         }
                         // `≤`-merge rule: too many C-neighbours, some pair mergeable.

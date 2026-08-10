@@ -1094,6 +1094,8 @@ pub(crate) fn build_until(
         // an axiom against inclusions the scan had not yet reached.
         meta: Vec::new(),
         absorbed: Vec::new(),
+        // Derived with them, and from them: the generating closure reads the absorbed table.
+        generating: Vec::new(),
         inverses: acc.inverses,
         role_sub: acc.role_sub,
         abox_types: acc.abox_types,

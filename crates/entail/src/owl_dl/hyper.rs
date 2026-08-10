@@ -27,7 +27,7 @@
 //! |---|---|---|
 //! | **Hyperresolution** | a clause BODY matches the graph | derives the clause's head |
 //! | **`≥`-rule** | an at-least head atom is unsatisfied at an UNBLOCKED node | mints anonymous witnesses, pairwise distinct |
-//! | **`⊔`-rule** | a derived head has more than one disjunct, none satisfied | branches, depth-first, in clause-and-disjunct order |
+//! | **`⊔`-rule** | a derived head has more than one disjunct, none satisfied | branches, depth-first, over the NARROWEST open disjunction, in authored disjunct order |
 //!
 //! Everything the incumbent spread over ten rules and eight clash triggers is one of those
 //! three, because the clause set carries the difference:
@@ -190,9 +190,13 @@
 //! index order and, at each node, its label's concepts in ascending order and their clauses in
 //! derivation order; a role atom is matched over
 //! [`Graph::neighbors`](crate::owl_dl::graph::Graph::neighbors), which is first-seen edge
-//! order; and the `⊔`-rule branches in authored disjunct order. Nothing is read out of a hash
-//! map and nothing consults a clock, so a [`Decision`] — verdict, round count and exhausted
-//! flag alike — is byte-identical run to run and on wasm32.
+//! order; the `⊔`-rule takes the open disjunction minimizing `(alternatives, discovery)`, a
+//! TOTAL key over the state; and it branches in the alternatives' authored order, which
+//! [`crate::owl_dl::clause`] fixed once from the concept table and the absorbed clauses.
+//! Nothing is read out of a hash map and nothing consults a clock, so a [`Decision`] — verdict,
+//! round count and exhausted flag alike — is byte-identical run to run and on wasm32, and that
+//! is asserted rather than merely stated: `a_decision_is_byte_identical_run_to_run` below
+//! decides one knowledge base twice and compares the whole struct.
 
 use purrdf_datalog::clause::HeadForm;
 
@@ -233,6 +237,50 @@ struct Branches {
     state: State,
     /// The disjuncts not yet tried, in authored order.
     alternatives: std::vec::IntoIter<Vec<Ground>>,
+}
+
+/// One open disjunction the `⊔`-rule could branch on, and the key
+/// [`Hyper::find_branch`] selects the minimum of.
+struct Candidate {
+    /// How many grounded alternatives it offers — the primary key, minimized.
+    width: usize,
+    /// Where the scan met it: nodes ascending and, within a node, the label's concepts
+    /// ascending and their clauses in derivation order, then the untriggered clauses.
+    ///
+    /// # Why DISCOVERY order rather than the clause index
+    ///
+    /// It is the order the derivation round itself visits, so among equally narrow
+    /// disjunctions the one selected is the one the search would have reached anyway — which
+    /// makes the whole rule a REFINEMENT of the first-open one it replaces rather than a
+    /// second, unrelated order laid over it. A clause INDEX would be a different order and not
+    /// a more principled one: the index is an artifact of how the clause set was assembled —
+    /// every concept's own clauses first, then the whole absorbed table appended — so ordering
+    /// by it would make an absorbed axiom's branch point lose to a structural one for no
+    /// reason a terminology can see.
+    found: usize,
+    /// The grounded alternatives, in authored order.
+    alternatives: Vec<Vec<Ground>>,
+}
+
+/// Replace `best` with this candidate when the selection rule prefers it.
+///
+/// The comparison is the whole rule: `(width, found)`, ascending, over a `found` the caller
+/// increments once per candidate in scan order. Written once, as a free function over the
+/// accumulator, so the triggered and untriggered scans in [`Hyper::find_branch`] cannot drift
+/// into two rules.
+fn keep_narrower(best: &mut Option<Candidate>, found: usize, alternatives: Vec<Vec<Ground>>) {
+    let key = (alternatives.len(), found);
+    if best
+        .as_ref()
+        .is_some_and(|held| (held.width, held.found) <= key)
+    {
+        return;
+    }
+    *best = Some(Candidate {
+        width: key.0,
+        found: key.1,
+        alternatives,
+    });
 }
 
 /// The hypertableau driver: the graph operations, the clause set, and a budget.
@@ -521,9 +569,46 @@ impl<'a> Hyper<'a> {
         changed
     }
 
-    /// The first derived head disjunction none of whose disjuncts holds, grounded — the
-    /// `⊔`-rule's alternatives, in clause-and-disjunct order.
+    /// The open head disjunction with the FEWEST grounded alternatives, or `None` when none is
+    /// open — the `⊔`-rule's branch point.
+    ///
+    /// # Why the fewest, and why it is still one order
+    ///
+    /// Every open disjunction has to be resolved before a completion is clash-free, so which
+    /// one is taken FIRST changes no verdict — it changes the shape of the tree the search
+    /// walks to reach it. A level of `k` alternatives multiplies the subtree below it by `k`,
+    /// and the levels below a branch point are explored once per alternative of it; taking the
+    /// narrowest open disjunction first therefore puts the widest ones deepest, where the
+    /// branches that reach them have already been pruned by the clashes above. A two-way split
+    /// resolved first can close a state that a five-way split would have re-derived five times.
+    ///
+    /// It is a pure function of the state and it is TOTAL: the alternative count first, then
+    /// the position the scan met the candidate at — nodes ascending, and within a node the
+    /// label's concepts ascending with their clauses in derivation order, then the untriggered
+    /// clauses. Two disjunctions of equal width are therefore separated by the order the
+    /// derivation round itself visits, which means this rule REFINES the previous one (take the
+    /// first open disjunction) rather than replacing it: where every open disjunction is
+    /// equally wide, the two select the same one. [`Candidate::found`] records why that
+    /// property is worth having.
+    ///
+    /// The scan visits every node and every clause instead of stopping at the first match,
+    /// which is the price of the minimum; it costs no derivation round, because a branch point
+    /// is chosen between rounds rather than inside one.
+    ///
+    /// # What it is measured to be worth, and what it costs
+    ///
+    /// Over the generated corpora of [`crate::owl_dl::oracle`] — 7,700 knowledge bases —
+    /// narrowest-first is close to a wash BY ITSELF: it saves rounds on the nominal and
+    /// counting families and spends them on the boolean and two-role ones, netting a fraction
+    /// of a percent against a run of some twenty thousand rounds. What it reliably buys is a
+    /// bound on the WIDTH of a level, and one knowledge base in the boolean corpus pays for
+    /// that: it decides in 439 rounds under this rule where the first-open rule decided it in
+    /// 178. Both are two orders of magnitude inside the cap that knowledge base would be
+    /// decided under in earnest ([`step_cap`]), so the difference is a shape of tree and not a
+    /// verdict — and it is recorded here rather than left for the next reader to rediscover.
     fn find_branch(&self, st: &State) -> Option<Vec<Vec<Ground>>> {
+        let mut best: Option<Candidate> = None;
+        let mut found = 0usize;
         for x in 0..st.nodes.len() {
             if find(st, x) != x {
                 continue;
@@ -532,17 +617,19 @@ impl<'a> Hyper<'a> {
             for concept in triggers {
                 for &index in self.clauses.triggered_by(concept) {
                     if let Some(branch) = self.branch_of(st, index, x) {
-                        return Some(branch);
+                        keep_narrower(&mut best, found, branch);
+                        found += 1;
                     }
                 }
             }
             for &index in self.clauses.untriggered() {
                 if let Some(branch) = self.branch_of(st, index, x) {
-                    return Some(branch);
+                    keep_narrower(&mut best, found, branch);
+                    found += 1;
                 }
             }
         }
-        None
+        best.map(|candidate| candidate.alternatives)
     }
 
     /// The grounded alternatives of clause `index` at node `x`, if it is a disjunction with no
@@ -862,4 +949,198 @@ fn ground(disjunct: &[HeadAtom], frame: &[usize]) -> Vec<Ground> {
             ),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Hyper, decide};
+    use crate::owl_dl::Kb;
+    use crate::owl_dl::clause::{HeadAtom, derive};
+    use crate::owl_dl::concept::{Concept, Role};
+    use crate::owl_dl::graph::{Assumptions, step_cap};
+
+    /// A class term id.
+    const A: u32 = 10;
+    /// A second class term id.
+    const B: u32 = 11;
+    /// A third class term id.
+    const C: u32 = 12;
+    /// A fourth class term id.
+    const D: u32 = 13;
+    /// A role term id.
+    const R: u32 = 20;
+    /// An individual term id.
+    const IND: u32 = 30;
+
+    /// A knowledge base that branches, mints and counts: a three-way disjunction, a two-way
+    /// one, an existential the first reaches, and a cardinality bound over the witnesses.
+    fn branching_kb() -> Kb {
+        let mut kb = Kb::empty();
+        kb.push_gci(
+            Concept::Named(A),
+            Concept::Some(Role::Named(R), Box::new(Concept::Named(C))),
+        );
+        kb.push_gci(
+            Concept::Named(B),
+            Concept::Max(1, Role::Named(R), Box::new(Concept::Named(C))),
+        );
+        let wide = kb.table.intern(Concept::Or(vec![
+            Concept::Named(A),
+            Concept::Named(B),
+            Concept::Named(C),
+        ]));
+        let narrow = kb
+            .table
+            .intern(Concept::Or(vec![Concept::Named(C), Concept::Named(D)]));
+        kb.abox_types.push((IND, wide));
+        kb.abox_types.push((IND, narrow));
+        kb.individuals.insert(IND);
+        kb.finalize();
+        kb
+    }
+
+    /// A [`Decision`](crate::owl_dl::graph::Decision) is a pure function of the knowledge base:
+    /// the same one decided twice gives back the same WHOLE struct — verdict, round count and
+    /// both stop flags.
+    ///
+    /// The determinism doctrine is stated in the module docs; this is what makes it an
+    /// observation. A search that read a `HashMap`, a clock or a float would still answer the
+    /// same verdict most runs, and it is the round count that would move first.
+    #[test]
+    fn a_decision_is_byte_identical_run_to_run() {
+        let kb = branching_kb();
+        let cap = step_cap(&kb);
+        let first = decide(&kb, &Assumptions::of_kb(), cap);
+        let again = decide(&kb, &Assumptions::of_kb(), cap);
+        assert_eq!(first, again, "two runs, one decision");
+        assert!(!first.exhausted && !first.stopped, "{first:?}");
+    }
+
+    /// The `⊔`-rule takes the NARROWEST open disjunction, not the first one found.
+    ///
+    /// The three-way disjunction is interned first, so it is derived first and is what the
+    /// label enumerates first; the selection rule must still hand back the two-way one.
+    #[test]
+    fn the_branch_point_is_the_disjunction_with_the_fewest_alternatives() {
+        let kb = branching_kb();
+        let mut h = Hyper::new(&kb, step_cap(&kb));
+        let mut st = h.g.init_state(&Assumptions::of_kb());
+        assert!(
+            h.saturate(&mut st).expect("a fixture this small saturates"),
+            "the state must be clash-free before a branch point is chosen"
+        );
+        let branch = h.find_branch(&st).expect("two disjunctions are open");
+        assert_eq!(
+            branch.len(),
+            2,
+            "the two-way disjunction is the branch point, not the three-way one: {branch:?}"
+        );
+    }
+
+    /// A disjunction's alternatives are AUTHORED non-generating first, whatever order the
+    /// interner's canonical form put its members in.
+    ///
+    /// `A ⊑ ∃r.C` makes `A` generating through the absorbed table — the closure, since `A`
+    /// itself is an atomic leaf — while `B` forces nothing. The canonical form sorts `A` before
+    /// `B` (concept ids ascend), so the emitted order is the reverse of it, and that is the
+    /// whole observable difference between the identity order and the search order.
+    #[test]
+    fn a_disjunct_that_forces_witnesses_is_authored_last() {
+        let mut kb = Kb::empty();
+        kb.push_gci(
+            Concept::Named(A),
+            Concept::Some(Role::Named(R), Box::new(Concept::Named(C))),
+        );
+        let disjunction = kb
+            .table
+            .intern(Concept::Or(vec![Concept::Named(A), Concept::Named(B)]));
+        kb.abox_types.push((IND, disjunction));
+        kb.individuals.insert(IND);
+        kb.finalize();
+        let generating = kb.table.intern(Concept::Named(A));
+        let inert = kb.table.intern(Concept::Named(B));
+        assert!(
+            kb.generates(generating),
+            "A ⊑ ∃r.C makes A generating through the absorbed clause it triggers"
+        );
+        assert!(!kb.generates(inert), "B forces nothing");
+        assert!(
+            generating < inert,
+            "the canonical order puts A first, so the cost order is observable"
+        );
+
+        let clauses = derive(&kb);
+        let clause = clauses
+            .triggered_by(disjunction)
+            .iter()
+            .map(|&index| clauses.clause(index))
+            .find(|clause| clause.head.len() == 2)
+            .expect("the disjunction derives its ⊔-clause");
+        let authored: Vec<u32> = clause
+            .head
+            .iter()
+            .map(|disjunct| match disjunct.as_slice() {
+                [HeadAtom::Concept { concept, .. }] => *concept,
+                other => panic!("a ⊔-clause disjunct is one concept atom: {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            authored,
+            vec![inert, generating],
+            "the alternative that mints witnesses is tried last"
+        );
+    }
+
+    /// The generating closure is TRANSITIVE over the absorbed table: `A ⊑ B` and `B ⊑ ∃r.C`
+    /// make `A` generating, though nothing about `A`'s own decomposition says so.
+    ///
+    /// This is the row of the cost table that cannot be read off a concept: a named class is an
+    /// atomic leaf, and what it forces is a fact about the clauses it triggers.
+    #[test]
+    fn the_generating_closure_follows_a_chain_of_absorbed_clauses() {
+        let mut kb = Kb::empty();
+        kb.push_gci(Concept::Named(A), Concept::Named(B));
+        kb.push_gci(
+            Concept::Named(B),
+            Concept::Some(Role::Named(R), Box::new(Concept::Named(C))),
+        );
+        kb.finalize();
+        let a = kb.table.intern(Concept::Named(A));
+        let b = kb.table.intern(Concept::Named(B));
+        let c = kb.table.intern(Concept::Named(C));
+        assert!(kb.generates(b), "B ⊑ ∃r.C is one link");
+        assert!(kb.generates(a), "A ⊑ B ⊑ ∃r.C is two");
+        assert!(!kb.generates(c), "the filler forces nothing of its own");
+    }
+
+    /// A disjunction is generating only when EVERY alternative is: one alternative that mints
+    /// nothing is a way to satisfy it that mints nothing.
+    #[test]
+    fn a_disjunction_is_generating_only_when_every_alternative_is() {
+        let mut kb = Kb::empty();
+        kb.push_gci(
+            Concept::Named(A),
+            Concept::Some(Role::Named(R), Box::new(Concept::Named(C))),
+        );
+        kb.push_gci(
+            Concept::Named(B),
+            Concept::Some(Role::Named(R), Box::new(Concept::Named(D))),
+        );
+        let mixed = kb
+            .table
+            .intern(Concept::Or(vec![Concept::Named(A), Concept::Named(C)]));
+        let both = kb
+            .table
+            .intern(Concept::Or(vec![Concept::Named(A), Concept::Named(B)]));
+        let conjunction = kb
+            .table
+            .intern(Concept::And(vec![Concept::Named(A), Concept::Named(C)]));
+        kb.finalize();
+        assert!(!kb.generates(mixed), "C is a way out of the disjunction");
+        assert!(kb.generates(both), "both alternatives mint");
+        assert!(
+            kb.generates(conjunction),
+            "a conjunction holds every conjunct, so ONE generating conjunct generates"
+        );
+    }
 }

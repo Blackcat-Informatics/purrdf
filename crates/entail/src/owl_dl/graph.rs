@@ -144,7 +144,12 @@ impl Assumptions<'_> {
 /// cap has closed some branches and not others, and reporting the "no branch succeeded
 /// *yet*" state as `false` would turn a resource limit into an entailment. Every consumer
 /// in this crate reads `exhausted` first.
-#[derive(Debug, Clone, Copy)]
+///
+/// Equality is over the WHOLE struct, and it is there so determinism can be asserted as one
+/// comparison rather than as a list of field comparisons that a fourth field would silently
+/// escape: two runs over one knowledge base must produce the same verdict, the same round
+/// count and the same two stop flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Decision {
     /// Whether a clash-free completion was found. Only meaningful when `!exhausted`.
     pub(crate) consistent: bool,
@@ -164,15 +169,36 @@ pub(crate) struct Decision {
 /// The search reached its step cap. A private marker rather than an
 /// [`EntailError`](crate::EntailError): it is not a failure at this layer, it is one of the
 /// three things a decision reports.
+#[derive(Debug)]
 pub(crate) struct Exhausted;
 
 /// The step cap for a knowledge base: generous and size-proportional.
 ///
-/// Blocking bounds the real work far below this, so reaching it means a termination bug or
-/// an adversarial instance rather than an ordinary ontology. It is a pure function of the
-/// knowledge base — same input, same cap — so a [`Decision`] is reproducible run to run, and
-/// it is a STEP count rather than a clock reading, which is what keeps it reproducible on
-/// wasm32 (where there is no clock to read).
+/// # What it bounds, and what it does not
+///
+/// It is a GLOBAL search budget, summed over every branch the search explores — [`Decision`]'s
+/// `steps` says so — and not a bound on one completion graph. Blocking bounds a different
+/// quantity: how many NODES one branch may expand, by making the unblocked nodes finitely many
+/// (see the signature argument in [`crate::owl_dl::hyper`]). The two are independent, and
+/// conflating them is a mistake this comment used to make: it claimed the cap could only be
+/// reached by a termination bug or an adversarial instance, and an ordinary satisfiable
+/// 17-triple ontology — one `owl:equivalentClass` over an untyped restriction, one
+/// `rdfs:range`, one assertion — reached it, because a terminology internalized into every
+/// node's label branches once per node per axiom and the SUM over those branches is what this
+/// number bounds.
+///
+/// So what keeps an ordinary ontology far below the cap is not blocking but the encoding it
+/// reaches the search under: the canonical normal form
+/// ([`Concept::or`](crate::owl_dl::concept::Concept)) deletes the branch points a `⊤`-subsumption
+/// used to seed, absorption ([`crate::owl_dl::absorb`]) turns the axioms whose antecedent is
+/// faithful into guarded clauses that branch not at all, and what disjunctions survive are
+/// tried narrowest-first with their cheap alternatives first. Reaching the cap means one of
+/// those did not bite — which is a fact about the terminology, reportable as
+/// `budget-exhausted`, and not a claim that the ontology was adversarial.
+///
+/// It is a pure function of the knowledge base — same input, same cap — so a [`Decision`] is
+/// reproducible run to run, and it is a STEP count rather than a clock reading, which is what
+/// keeps it reproducible on wasm32 (where there is no clock to read).
 pub(crate) fn step_cap(kb: &Kb) -> u64 {
     let base =
         (kb.abox_types.len() + kb.abox_roles.len() + kb.tbox.len() + kb.individuals.len() + 16)

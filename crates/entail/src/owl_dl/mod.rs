@@ -110,6 +110,15 @@ pub(crate) struct Kb {
     /// one-atom guard `A(x) → D(x)`, and `∃r.C ⊑ D`, `A ⊓ B ⊑ D`, `{a} ⊑ D`, `rdfs:domain`
     /// and `rdfs:range` are the cases that used to branch on every node instead.
     pub(crate) absorbed: Vec<GuardedClause>,
+    /// Concept id → whether holding it FORCES an at-least head, over the absorbed table's own
+    /// closure — see [`absorb::generating`], which computes it.
+    ///
+    /// Read only to ORDER the alternatives of a case split, never to decide one: a generating
+    /// alternative opens a subtree of minted witnesses and a non-generating one does not, so
+    /// trying the cheap alternative first is the difference between a search that answers from
+    /// one label and a search that builds a graph to find out. Both calculi read it through
+    /// [`Kb::order_disjuncts`], so the two branch in the same order.
+    pub(crate) generating: Vec<bool>,
     /// `owl:inverseOf` partners (symmetric), property term id → its inverses.
     pub(crate) inverses: BTreeMap<u32, BTreeSet<u32>>,
     /// Role hierarchy: super-property term id → its sub-property term ids.
@@ -202,6 +211,7 @@ impl Kb {
             tbox: Vec::new(),
             meta: Vec::new(),
             absorbed: Vec::new(),
+            generating: Vec::new(),
             inverses: BTreeMap::new(),
             role_sub: BTreeMap::new(),
             abox_types: Vec::new(),
@@ -411,7 +421,57 @@ impl Kb {
         self.absorbed = absorption.clauses;
         self.meta = absorption.meta;
         self.table.finalize_until(&mut poll)?;
+        // LAST, over the finished table: the closure reads the absorbed clauses just derived,
+        // and the negation pass above interned the residual concepts a partial absorption or a
+        // `≤n` restriction's decided filler puts into a case split.
+        self.generating = absorb::generating(&self.table, &self.absorbed);
         Ok(())
+    }
+
+    /// Whether holding `concept` forces witnesses to be minted — see [`Kb::generating`].
+    ///
+    /// A concept interned AFTER the last [`Self::encode_until`] is answered `false` rather than
+    /// panicking on a short table: the closure orders a case split and does not decide one, so
+    /// a missing entry costs the ordering and never the verdict.
+    pub(crate) fn generates(&self, concept: u32) -> bool {
+        self.generating
+            .get(concept as usize)
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// `members` in the order a case split over them should be TRIED: the alternatives that
+    /// mint no witnesses first, everything else after, and the members' own incoming order
+    /// preserved inside each of the two ranks.
+    ///
+    /// # Why this is not the canonical member order, and must not become it
+    ///
+    /// [`Concept::or`](concept::Concept) sorts a disjunction's members under the concept tree's
+    /// own total order, and that sort is about IDENTITY: it is what makes two spellings of one
+    /// disjunction reach one interned id, and it is therefore a pure function of the syntax
+    /// that must not depend on anything the terminology decides. This order is about SEARCH:
+    /// it depends on the absorbed table, which depends on the whole TBox, and it changes when
+    /// an unrelated axiom is added. The two are kept apart deliberately — an interner whose
+    /// keys moved with the terminology would mint a fresh id for an unchanged concept, and a
+    /// search that branched in interning order would try the expensive alternative first
+    /// whenever the cheap one happened to sort later.
+    ///
+    /// # Why the tie-break is STABILITY and not the concept id
+    ///
+    /// Inside one rank this changes nothing at all, and that is the point. The members arrive
+    /// in an order that is already a total, deterministic function of the concept — the
+    /// canonical `⊔` order for a disjunction, `[filler, ¬filler]` for a `≤n` restriction's
+    /// decided neighbour — and re-sorting them by concept id would replace it with a
+    /// DIFFERENT total order for no reason connected to cost. That is not a neutral choice:
+    /// measured over the generated corpora, a by-id tie-break took one knowledge base from 14
+    /// rounds to 494 and another from 96 to 3,072, purely by permuting members that rank
+    /// identically — where the stable sort takes the second to 56. So this function does one
+    /// thing and only that thing: it moves the generating alternatives last, and leaves every
+    /// order it was not asked about exactly as it found it.
+    pub(crate) fn order_disjuncts(&self, members: &[u32]) -> Vec<u32> {
+        let mut out = members.to_vec();
+        out.sort_by_key(|&member| u8::from(self.generates(member)));
+        out
     }
 
     /// The encoding [`Self::encode_until`] clausifies the TBox under.

@@ -962,9 +962,10 @@ fn check(sig: Signature, axioms: &[Axiom], tally: &RefCell<Tally>) -> Result<(),
     let cap = graph::step_cap(&case.kb).min(STEP_CAP);
     let first = hyper::decide(&case.kb, &Assumptions::of_kb(), cap);
     let again = hyper::decide(&case.kb, &Assumptions::of_kb(), cap);
-    if (first.consistent, first.steps, first.exhausted)
-        != (again.consistent, again.steps, again.exhausted)
-    {
+    // The WHOLE decision, not three of its fields: a field added to `Decision` that varied run
+    // to run would slip past a tuple comparison naming the fields that existed when it was
+    // written.
+    if first != again {
         return Err(TestCaseError::fail(format!(
             "the hypertableau decided the same knowledge base two different ways:\n\
              {first:?}\nthen\n{again:?}\naxioms:\n{}",

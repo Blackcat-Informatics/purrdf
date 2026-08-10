@@ -107,6 +107,21 @@
 //! untriggered by necessity; [`crate::owl_dl::clause`] states the bound that makes that
 //! affordable.
 //!
+//! # The generating closure: what a case split COSTS
+//!
+//! Absorption also answers a second question about the finished terminology, and it is the
+//! question the search asks when it has to choose which alternative of a disjunction to try
+//! first. A disjunct that forces the `≥`-rule to mint witnesses opens a subtree of fresh nodes,
+//! each of them seeded, matched and blocked; a disjunct that only adds a concept to a label
+//! does not. So the alternatives of a case split are ordered NON-GENERATING FIRST, and
+//! [`generating`] is the predicate that decides which is which.
+//!
+//! It has to be a CLOSURE over the absorbed table rather than a look at the concept itself,
+//! because a named class is opaque: `A` decomposes to an atomic leaf, and whether holding it
+//! mints anything is a fact about the clauses `A` triggers. `A ⊑ ∃r.C` makes `A` generating,
+//! and `A ⊑ B` with `B ⊑ ∃r.C` makes it generating one link further out — which is exactly the
+//! table this module just built, read transitively.
+//!
 //! # Determinism
 //!
 //! The inclusions are processed in [`Kb::tbox`](crate::owl_dl::Kb::tbox) order, which is parse
@@ -115,7 +130,7 @@
 //! root chosen by first position. Nothing is read out of a hash map, so the clause table — and
 //! therefore the branch order of every search over it — is a pure function of the parse.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
 use crate::owl_dl::clause::{BodyAtom, Var};
 use crate::owl_dl::concept::{Concept, ConceptTable, Decomp, Role};
@@ -331,6 +346,107 @@ fn residual(table: &mut ConceptTable, sup: u32, residue: &[u32]) -> Option<u32> 
         members.push(table.concept(table.negation(conjunct)?).clone());
     }
     Some(table.intern(Concept::Or(members)))
+}
+
+/// Which concept ids are GENERATING: holding one FORCES an at-least head, and therefore the
+/// `≥`-rule and the witnesses it mints.
+///
+/// Indexed by concept id over the whole table. The answer is the fixpoint of the four forcings
+/// below, each of them a step the search takes DETERMINISTICALLY once the concept is in a
+/// label, so a `true` here means "choosing this cannot avoid minting" rather than "this might
+/// mint":
+///
+/// | concept | generating when |
+/// |---|---|
+/// | `∃r.C`, `≥n r.C` (`n ≥ 1`) | always — it IS the at-least head |
+/// | `C₁ ⊓ … ⊓ Cₙ` | SOME conjunct is: holding the conjunction holds every conjunct |
+/// | `C₁ ⊔ … ⊔ Cₙ` | EVERY disjunct is: one alternative that avoids minting is enough to avoid it |
+/// | `A` (or any concept) | some absorbed clause it triggers ALONE has a generating head |
+///
+/// The last row is the [module docs](self)' closure and the reason this is not a look at a
+/// [`Decomp`]: only a clause whose whole guard is `C(x₀)` with the head on `x₀` fires on the
+/// strength of `C` alone, so a longer guard — an edge join, a second conjunct — is deliberately
+/// NOT read as forcing its head. That under-approximates, which is the harmless direction: a
+/// concept wrongly ranked non-generating costs an ordering, never a verdict.
+///
+/// Everything else — `∀`, `≤n`, the atomic leaves, the negations, the nominals — is
+/// non-generating. `∀r.C` propagates onto successors that already exist, and `≤n r.C` merges
+/// them; neither creates a node.
+///
+/// # Cost
+///
+/// A worklist over the forcing edges, not a re-scan per pass: each concept is re-evaluated only
+/// when one of the concepts it depends on becomes generating, and a concept becomes generating
+/// at most once, so the pass is linear in the table plus the absorbed clauses. The dependency
+/// lists are built in ascending concept-id order and the worklist is a FIFO, so the answer —
+/// and the branch order every search over it inherits — is a pure function of the table.
+pub(crate) fn generating(table: &ConceptTable, clauses: &[GuardedClause]) -> Vec<bool> {
+    let len = table.len();
+    // Trigger concept → the heads of the absorbed clauses it fires on its own.
+    let mut heads: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    for clause in clauses {
+        if let [BodyAtom::Concept { var: 0, concept }] = clause.body.as_slice()
+            && clause.head_var == 0
+        {
+            heads.entry(*concept).or_default().push(clause.head);
+        }
+    }
+    // `depends[c]` — the concepts whose answer may change once `c` is known generating.
+    let mut depends: Vec<Vec<u32>> = vec![Vec::new(); len];
+    for id in 0..len {
+        let id = u32::try_from(id).expect("concept count fits u32");
+        if let Decomp::And(ref members) | Decomp::Or(ref members) = *table.decomp(id) {
+            for &member in members {
+                depends[member as usize].push(id);
+            }
+        }
+    }
+    for (&trigger, targets) in &heads {
+        for &head in targets {
+            depends[head as usize].push(trigger);
+        }
+    }
+    let mut out = vec![false; len];
+    let mut queue: VecDeque<u32> = (0..len)
+        .map(|id| u32::try_from(id).expect("concept count fits u32"))
+        .collect();
+    while let Some(id) = queue.pop_front() {
+        if out[id as usize] || !forces_at_least(table, &heads, &out, id) {
+            continue;
+        }
+        out[id as usize] = true;
+        for &dependent in &depends[id as usize] {
+            if !out[dependent as usize] {
+                queue.push_back(dependent);
+            }
+        }
+    }
+    out
+}
+
+/// Whether `id` is generating GIVEN what `known` already establishes — one step of
+/// [`generating`]'s fixpoint.
+fn forces_at_least(
+    table: &ConceptTable,
+    heads: &BTreeMap<u32, Vec<u32>>,
+    known: &[bool],
+    id: u32,
+) -> bool {
+    let structural = match *table.decomp(id) {
+        // `≥0 r.C` is `⊤` and is folded away by the normal form, so every surviving `Min` is a
+        // demand for a witness; the guard is kept because a `0` reaching here must not mint.
+        Decomp::Some(..) => true,
+        Decomp::Min(n, _, _) => n > 0,
+        Decomp::And(ref members) => members.iter().any(|&member| known[member as usize]),
+        Decomp::Or(ref members) => {
+            !members.is_empty() && members.iter().all(|&member| known[member as usize])
+        }
+        _ => false,
+    };
+    structural
+        || heads
+            .get(&id)
+            .is_some_and(|targets| targets.iter().any(|&head| known[head as usize]))
 }
 
 /// One variable of a guard tree: the atoms constraining it, and the edges to the variables it
