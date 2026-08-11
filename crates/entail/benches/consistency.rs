@@ -25,7 +25,7 @@
 //! # Report-only
 //!
 //! This asserts nothing and gates nothing. It exists so a later change to the clausification,
-//! the absorption pass or the `⊔`-rule's selection has a NUMBER to move — not so that a
+//! the absorption pass or the `⊔`-rule's disjunct order has a NUMBER to move — not so that a
 //! speedup can be claimed. The measuring machine is not quiet, so the timings are indicative
 //! only, and every claim this workspace makes about the search's cost is made where it can be
 //! made exactly: `purrdf-validate`'s step ledger pins the rounds, peak nodes, case splits and

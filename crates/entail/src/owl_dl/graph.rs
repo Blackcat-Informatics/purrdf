@@ -189,7 +189,7 @@ pub(crate) struct Decision {
     ///
     /// A SUM over the whole search, one per branch point opened — which is the number of
     /// interior nodes of the search tree, and so the quantity the clausification and the
-    /// narrowest-first selection rule exist to hold down.
+    /// authored disjunct order exist to hold down.
     ///
     /// In [`crate::owl_dl::hyper`] this is literally the `⊔`-rule and nothing else: that
     /// calculus has exactly one non-deterministic rule, because a `≤n` violation, the
@@ -232,7 +232,8 @@ pub(crate) struct Exhausted;
 /// ([`Concept::or`](crate::owl_dl::concept::Concept)) deletes the branch points a `⊤`-subsumption
 /// used to seed, absorption ([`crate::owl_dl::absorb`]) turns the axioms whose antecedent is
 /// faithful into guarded clauses that branch not at all, and what disjunctions survive are
-/// tried narrowest-first with their cheap alternatives first. Reaching the cap means one of
+/// tried with their cheap alternatives first
+/// ([`Kb::order_disjuncts`](crate::owl_dl::Kb::order_disjuncts)). Reaching the cap means one of
 /// those did not bite — which is a fact about the terminology, reportable as
 /// `budget-exhausted`, and not a claim that the ontology was adversarial.
 ///

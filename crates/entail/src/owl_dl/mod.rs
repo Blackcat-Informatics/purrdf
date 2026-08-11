@@ -462,12 +462,15 @@ impl Kb {
     /// in an order that is already a total, deterministic function of the concept — the
     /// canonical `⊔` order for a disjunction, `[filler, ¬filler]` for a `≤n` restriction's
     /// decided neighbour — and re-sorting them by concept id would replace it with a
-    /// DIFFERENT total order for no reason connected to cost. That is not a neutral choice:
-    /// measured over the generated corpora, a by-id tie-break took one knowledge base from 14
-    /// rounds to 494 and another from 96 to 3,072, purely by permuting members that rank
-    /// identically — where the stable sort takes the second to 56. So this function does one
-    /// thing and only that thing: it moves the generating alternatives last, and leaves every
-    /// order it was not asked about exactly as it found it.
+    /// DIFFERENT total order for no reason connected to cost. That is not a neutral choice,
+    /// and it is MEASURED rather than assumed: adding the concept id as a tie-break inside a
+    /// rank — permuting only members that rank identically — costs the generated corpora of
+    /// the DL oracle suite 1,900 rounds → 2,558 on the `wide` family and 1,179 → 1,524 on the
+    /// `deep` one. Two `wide` knowledge bases that decide in 14 and 56 rounds stop deciding
+    /// inside that suite's cap at all; with the cap lifted, the worst `deep` case goes from
+    /// 175 rounds to 438. So this function does one thing and only that thing: it moves the
+    /// generating alternatives last, and leaves every order it was not asked about exactly as
+    /// it found it.
     pub(crate) fn order_disjuncts(&self, members: &[u32]) -> Vec<u32> {
         let mut out = members.to_vec();
         out.sort_by_key(|&member| u8::from(self.generates(member)));

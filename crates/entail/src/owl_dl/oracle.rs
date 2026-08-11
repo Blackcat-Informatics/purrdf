@@ -967,25 +967,31 @@ impl Tally {
 /// # Where the number comes from
 ///
 /// It is MEASURED, and the measurement is this: over the whole corpus, the most rounds any
-/// case that DECIDES spends is 439 — one knowledge base in `complement ⊗ disjunction`, whose
-/// cost the narrowest-first `⊔`-rule raised from 178 (see
-/// [`Hyper::find_branch`](crate::owl_dl::hyper) for why that trade is worth making). 500 is
+/// case that DECIDES spends is 306 — one knowledge base in `complement ⊗ disjunction`. 350 is
 /// that maximum plus about a seventh.
 ///
 /// The criterion is deliberate: a case the calculus can decide must not be reported as
 /// exhausted, because an exhausted case is one [`check`] compares NEITHER differential on —
 /// so a cap set below a decidable case's cost quietly shrinks what the suite checks while
-/// every assertion still passes. A cap of 400 did exactly that to the 439-round case.
+/// every assertion still passes. A cap of 300 does exactly that to the 306-round case, and
+/// the way it shows is one `exhausted` case in a corpus that otherwise has none.
+///
+/// The maximum used to be 439, and 500 was this constant, because the `⊔`-rule selected the
+/// NARROWEST open disjunction rather than the first one — a rule whose own measurements
+/// ([`Hyper::find_branch`](crate::owl_dl::hyper)) retired it. The case it cost 439 rounds
+/// decides in 178 under the first-open rule; the 306-round case above costs the same under
+/// both, which is what makes it the corpus's ceiling rather than an artifact of either.
 ///
 /// What the cap does NOT try to accommodate is the one case that no affordable cap decides.
 /// The `wide` corpus contains a knowledge base whose completion graph simply grows with
-/// whatever it is given — 139 nodes at a cap of 400, 172 at 500, 205 at 600, 339 at 1000 —
-/// and it exhausts at every one of them. Chasing it is what the superlinear cost above buys
-/// nothing for: the whole suite costs about 6 s at a cap of 400, 7.4 s at 450, 9.2 s at 500
-/// and 15 s at 600, and almost all of that increase is that single case running longer before
-/// being truncated anyway. So the cap is set to decide everything decidable and to truncate
-/// that one, which the ≤5% exhausted quota in [`run_property`] absorbs at 1 case in 8,900.
-const STEP_CAP: u64 = 500;
+/// whatever it is given — 122 nodes at a cap of 350, 139 at 400, 172 at 500, 205 at 600, 339
+/// at 1000 — and it exhausts at every one of them. Chasing it is what the superlinear cost
+/// above buys nothing for: raising the cap from 350 to 500 costs the whole suite about two
+/// and a half times its wall time, and almost all of that increase is that single case running
+/// longer before being truncated anyway. So the cap is set to decide everything decidable and
+/// to truncate that one, which the ≤5% exhausted quota in [`run_property`] absorbs at 1 case
+/// in 8,900.
+const STEP_CAP: u64 = 350;
 
 /// Whether "no model up to the signature's bound" means "no model" for this knowledge base.
 ///
@@ -1577,8 +1583,8 @@ fn a_random_knowledge_base_is_consistent_whenever_the_oracle_exhibits_a_model() 
         WIDE_CASES,
         1,
         0,
-        // Measured 2,090 rounds, of which 500 are the one case that exhausts at any cap.
-        2_300,
+        // Measured 1,900 rounds, of which 350 are the one case that exhausts at any cap.
+        2_100,
         &arb_axioms(arb_axiom(WIDE)),
     );
 }
@@ -1692,8 +1698,10 @@ fn nominals_under_inverse_roles_and_cardinality_agree_with_the_oracle() {
         NOMINAL_INVERSE_CASES,
         3,
         10,
-        // Measured 777 rounds.
-        860,
+        // Measured 848 rounds — the counting family is where the first-open `⊔`-rule is
+        // dearest (777 under the narrowest-first selection whose own measurements, recorded
+        // at `Hyper::find_branch`, retired it), and this is what that rule costs here.
+        940,
         &arb_axioms(axiom),
     );
 }
@@ -1850,8 +1858,8 @@ fn qualified_cardinality_under_a_role_hierarchy_agrees_with_the_oracle() {
         ROLE_HIERARCHY_CASES,
         5,
         0,
-        // Measured 2,273 rounds.
-        2_500,
+        // Measured 2,305 rounds.
+        2_540,
         &arb_axioms(axiom),
     );
 }
@@ -1923,10 +1931,75 @@ fn complement_against_disjunction_agrees_with_the_oracle() {
         BOOLEAN_CASES,
         6,
         700,
-        // Measured 9,248 rounds — the most expensive property, and the one holding the
-        // 439-round case STEP_CAP is sized for.
-        10_200,
+        // Measured 9,221 rounds — the most expensive property, and the one holding the
+        // 306-round case STEP_CAP is sized for.
+        10_150,
         &arb_axioms(axiom),
+    );
+}
+
+/// THE CASE THE `⊔`-RULE'S BRANCH SELECTION WAS MEASURED ON, lifted out of the corpus above
+/// and pinned by COST.
+///
+/// It is one knowledge base of `complement ⊗ disjunction`, written out verbatim — triple
+/// negation, duplicated disjunct and all — because what it pins is a number and a number is
+/// only reproducible from the exact axioms. Under the narrowest-first selection rule that
+/// [`Hyper::find_branch`](crate::owl_dl::hyper) used to apply it cost 439 rounds, the most of
+/// any deciding case in the whole suite and the reason [`STEP_CAP`] had to be 500; under the
+/// first-open rule that replaced it, it costs 178.
+///
+/// # Why this needs its own pin, when the property already has a ceiling
+///
+/// The property ceiling is a SUM over 2,500 cases with a tenth of headroom, and 261 extra
+/// rounds is under 3% of that sum: the regression passed the ceiling comfortably and showed up
+/// only as a cap that had to be widened, which is a knob rather than a failure. A per-case pin
+/// is what turns it back into one. The reverse-mapping boundary cannot carry this row either —
+/// the same axioms written as OWL and put through
+/// `purrdf_validate::regime::consistency_to_string` cost 202 rounds under BOTH rules, because
+/// that path interns the concepts in a different order — so the step ledger in `purrdf-validate`
+/// is not where this belongs; here, over the generator's own encoding, is.
+///
+/// The whole of [`check`] runs on it, so the cost is asserted without weakening anything a
+/// generated case is otherwise held to: both differentials, the encoding comparison and the
+/// oracle's own verdict all apply.
+#[test]
+fn the_case_the_branch_selection_was_measured_on_costs_exactly_what_it_is_pinned_to() {
+    let a = INDIVIDUAL_NAMES[0];
+    let b = INDIVIDUAL_NAMES[1];
+    let c = INDIVIDUAL_NAMES[2];
+    let cls = |i: usize| Concept::Named(CONCEPT_NAMES[i]);
+    let not = |c: Concept| Concept::Not(Box::new(c));
+    let axioms = [
+        Axiom::Gci(
+            not(not(not(Concept::nominal(vec![a, b])))),
+            not(Concept::Or(vec![cls(0), cls(2)])),
+        ),
+        Axiom::Type(c, not(Concept::Or(vec![cls(1), cls(2)]))),
+        Axiom::DifferentFrom(a, b),
+        Axiom::Type(b, Concept::Top),
+        Axiom::Gci(
+            not(Concept::Or(vec![cls(1), cls(2)])),
+            Concept::nominal(vec![a]),
+        ),
+        Axiom::Gci(
+            not(Concept::Or(vec![cls(1), cls(2)])),
+            Concept::Or(vec![Concept::And(vec![cls(0), not(cls(0))]), cls(0)]),
+        ),
+    ];
+    let tally = RefCell::new(Tally::default());
+    if let Err(failure) = check(BOOLEAN, &axioms, &tally) {
+        panic!("the pinned case no longer passes what every generated case passes: {failure}");
+    }
+    let tally = tally.into_inner();
+    assert_eq!(
+        tally.exhausted, 0,
+        "the pinned case must DECIDE inside STEP_CAP — an exhausted one pins nothing: {tally:?}"
+    );
+    assert_eq!(
+        tally.max_case_steps, 178,
+        "the case the branch selection was measured on now costs a different number of \
+         rounds. It cost 439 under the narrowest-first selection rule and 178 under the \
+         first-open one; if this moved back towards 439, the selection is back: {tally:?}"
     );
 }
 
@@ -2180,9 +2253,9 @@ fn the_reported_equivalence_shape_agrees_with_the_oracle() {
         REPORTED_CASES,
         8,
         12,
-        // Measured 2,724 rounds over 973 case splits — the second most branch-heavy
+        // Measured 2,644 rounds over 959 case splits — the second most branch-heavy
         // property in the suite, which is the point of it.
-        3_000,
+        2_910,
         &arb_axiom_groups(group),
     );
 }

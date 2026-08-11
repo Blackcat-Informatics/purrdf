@@ -27,7 +27,7 @@
 //! |---|---|---|
 //! | **Hyperresolution** | a clause BODY matches the graph | derives the clause's head |
 //! | **`≥`-rule** | an at-least head atom is unsatisfied at an UNBLOCKED node | mints anonymous witnesses, pairwise distinct |
-//! | **`⊔`-rule** | a derived head has more than one disjunct, none satisfied | branches, depth-first, over the NARROWEST open disjunction, in authored disjunct order |
+//! | **`⊔`-rule** | a derived head has more than one disjunct, none satisfied | branches, depth-first, over the FIRST open disjunction, in authored disjunct order |
 //!
 //! Everything the incumbent spread over ten rules and eight clash triggers is one of those
 //! three, because the clause set carries the difference:
@@ -190,9 +190,9 @@
 //! index order and, at each node, its label's concepts in ascending order and their clauses in
 //! derivation order; a role atom is matched over
 //! [`Graph::neighbors`](crate::owl_dl::graph::Graph::neighbors), which is first-seen edge
-//! order; the `⊔`-rule takes the open disjunction minimizing `(alternatives, discovery)`, a
-//! TOTAL key over the state; and it branches in the alternatives' authored order, which
-//! [`crate::owl_dl::clause`] fixed once from the concept table and the absorbed clauses.
+//! order; the `⊔`-rule takes the FIRST open disjunction that same scan meets; and it branches
+//! in the alternatives' authored order, which [`crate::owl_dl::clause`] fixed once from the
+//! concept table and the absorbed clauses.
 //! Nothing is read out of a hash map and nothing consults a clock, so a [`Decision`] — verdict,
 //! round count, exhausted flag and the three shape counters
 //! ([`Decision::peak_nodes`](crate::owl_dl::graph::Decision), `disjunctions`, `peak_depth`)
@@ -239,50 +239,6 @@ struct Branches {
     state: State,
     /// The disjuncts not yet tried, in authored order.
     alternatives: std::vec::IntoIter<Vec<Ground>>,
-}
-
-/// One open disjunction the `⊔`-rule could branch on, and the key
-/// [`Hyper::find_branch`] selects the minimum of.
-struct Candidate {
-    /// How many grounded alternatives it offers — the primary key, minimized.
-    width: usize,
-    /// Where the scan met it: nodes ascending and, within a node, the label's concepts
-    /// ascending and their clauses in derivation order, then the untriggered clauses.
-    ///
-    /// # Why DISCOVERY order rather than the clause index
-    ///
-    /// It is the order the derivation round itself visits, so among equally narrow
-    /// disjunctions the one selected is the one the search would have reached anyway — which
-    /// makes the whole rule a REFINEMENT of the first-open one it replaces rather than a
-    /// second, unrelated order laid over it. A clause INDEX would be a different order and not
-    /// a more principled one: the index is an artifact of how the clause set was assembled —
-    /// every concept's own clauses first, then the whole absorbed table appended — so ordering
-    /// by it would make an absorbed axiom's branch point lose to a structural one for no
-    /// reason a terminology can see.
-    found: usize,
-    /// The grounded alternatives, in authored order.
-    alternatives: Vec<Vec<Ground>>,
-}
-
-/// Replace `best` with this candidate when the selection rule prefers it.
-///
-/// The comparison is the whole rule: `(width, found)`, ascending, over a `found` the caller
-/// increments once per candidate in scan order. Written once, as a free function over the
-/// accumulator, so the triggered and untriggered scans in [`Hyper::find_branch`] cannot drift
-/// into two rules.
-fn keep_narrower(best: &mut Option<Candidate>, found: usize, alternatives: Vec<Vec<Ground>>) {
-    let key = (alternatives.len(), found);
-    if best
-        .as_ref()
-        .is_some_and(|held| (held.width, held.found) <= key)
-    {
-        return;
-    }
-    *best = Some(Candidate {
-        width: key.0,
-        found: key.1,
-        alternatives,
-    });
 }
 
 /// The hypertableau driver: the graph operations, the clause set, and a budget.
@@ -611,46 +567,45 @@ impl<'a> Hyper<'a> {
         changed
     }
 
-    /// The open head disjunction with the FEWEST grounded alternatives, or `None` when none is
-    /// open — the `⊔`-rule's branch point.
+    /// The FIRST open head disjunction the derivation order meets, or `None` when none is open
+    /// — the `⊔`-rule's branch point.
     ///
-    /// # Why the fewest, and why it is still one order
+    /// The order is the round's own: nodes ascending, and within a node the label's concepts
+    /// ascending with their clauses in derivation order, then the untriggered clauses. So the
+    /// disjunction branched on is the one the search had already reached, the rule is a pure
+    /// function of the state, and the scan stops at the first match instead of running to the
+    /// end.
+    ///
+    /// # Why not the NARROWEST open disjunction, which is the textbook rule
     ///
     /// Every open disjunction has to be resolved before a completion is clash-free, so which
-    /// one is taken FIRST changes no verdict — it changes the shape of the tree the search
-    /// walks to reach it. A level of `k` alternatives multiplies the subtree below it by `k`,
-    /// and the levels below a branch point are explored once per alternative of it; taking the
-    /// narrowest open disjunction first therefore puts the widest ones deepest, where the
-    /// branches that reach them have already been pruned by the clashes above. A two-way split
-    /// resolved first can close a state that a five-way split would have re-derived five times.
+    /// one is taken first changes no verdict — it changes the shape of the tree the search
+    /// walks to reach it. The published argument for taking the narrowest first is that a level
+    /// of `k` alternatives multiplies the subtree below it by `k`, so putting the widest levels
+    /// deepest lets the clashes above prune them. This calculus was MEASURED under that rule,
+    /// over the generated corpora of [`crate::owl_dl::oracle`] — 8,900 knowledge bases — and
+    /// the argument did not pay here:
     ///
-    /// It is a pure function of the state and it is TOTAL: the alternative count first, then
-    /// the position the scan met the candidate at — nodes ascending, and within a node the
-    /// label's concepts ascending with their clauses in derivation order, then the untriggered
-    /// clauses. Two disjunctions of equal width are therefore separated by the order the
-    /// derivation round itself visits, which means this rule REFINES the previous one (take the
-    /// first open disjunction) rather than replacing it: where every open disjunction is
-    /// equally wide, the two select the same one. [`Candidate::found`] records why that
-    /// property is worth having.
+    /// * by itself it was close to a wash, saving rounds on the nominal and counting families
+    ///   and spending them on the boolean and two-role ones, for a fraction of a percent
+    ///   against a run of some twenty thousand rounds;
+    /// * it made one knowledge base in the boolean corpus (`complement ⊗ disjunction`) cost
+    ///   439 rounds where this rule decides it in 178 — the corpus's most expensive DECIDING
+    ///   case under it, and the number the suite's own cap had to be widened to clear;
+    /// * and the minimum is only known once the scan has matched every clause of every label
+    ///   concept of every node, including the `≤n` clauses whose body enumerates the
+    ///   count-element SUBSETS of a node's successors. That work is charged to no derivation
+    ///   round, because a branch point is chosen between rounds rather than inside one, so it
+    ///   is cost the [`step_cap`] cannot see.
     ///
-    /// The scan visits every node and every clause instead of stopping at the first match,
-    /// which is the price of the minimum; it costs no derivation round, because a branch point
-    /// is chosen between rounds rather than inside one.
-    ///
-    /// # What it is measured to be worth, and what it costs
-    ///
-    /// Over the generated corpora of [`crate::owl_dl::oracle`] — 8,900 knowledge bases —
-    /// narrowest-first is close to a wash BY ITSELF: it saves rounds on the nominal and
-    /// counting families and spends them on the boolean and two-role ones, netting a fraction
-    /// of a percent against a run of some twenty thousand rounds. What it reliably buys is a
-    /// bound on the WIDTH of a level, and one knowledge base in the boolean corpus pays for
-    /// that: it decides in 439 rounds under this rule where the first-open rule decided it in
-    /// 178. Both are two orders of magnitude inside the cap that knowledge base would be
-    /// decided under in earnest ([`step_cap`]), so the difference is a shape of tree and not a
-    /// verdict — and it is recorded here rather than left for the next reader to rediscover.
+    /// What DOES pay is which alternative of the chosen disjunction is tried first, and that is
+    /// a property of the clause set rather than of this scan:
+    /// [`Kb::order_disjuncts`](crate::owl_dl::Kb::order_disjuncts) authors the alternatives that
+    /// mint no witnesses ahead of the ones that do, and the corpus-wide win the two levers were
+    /// first measured together for is entirely that one's. The measurements above are kept
+    /// here, rather than deleted with the rule they retired, so the next reader who reaches for
+    /// narrowest-first finds out what it was worth without re-running the corpus.
     fn find_branch(&self, st: &State) -> Option<Vec<Vec<Ground>>> {
-        let mut best: Option<Candidate> = None;
-        let mut found = 0usize;
         for x in 0..st.nodes.len() {
             if find(st, x) != x {
                 continue;
@@ -659,19 +614,17 @@ impl<'a> Hyper<'a> {
             for concept in triggers {
                 for &index in self.clauses.triggered_by(concept) {
                     if let Some(branch) = self.branch_of(st, index, x) {
-                        keep_narrower(&mut best, found, branch);
-                        found += 1;
+                        return Some(branch);
                     }
                 }
             }
             for &index in self.clauses.untriggered() {
                 if let Some(branch) = self.branch_of(st, index, x) {
-                    keep_narrower(&mut best, found, branch);
-                    found += 1;
+                    return Some(branch);
                 }
             }
         }
-        best.map(|candidate| candidate.alternatives)
+        None
     }
 
     /// The grounded alternatives of clause `index` at node `x`, if it is a disjunction with no
@@ -1058,12 +1011,16 @@ mod tests {
         assert!(!first.exhausted && !first.stopped, "{first:?}");
     }
 
-    /// The `⊔`-rule takes the NARROWEST open disjunction, not the first one found.
+    /// The `⊔`-rule takes the FIRST open disjunction the derivation order meets, and NOT the
+    /// narrowest — the rule the measurements at [`Hyper::find_branch`] retired.
     ///
-    /// The three-way disjunction is interned first, so it is derived first and is what the
-    /// label enumerates first; the selection rule must still hand back the two-way one.
+    /// The three-way disjunction is interned first, so it has the smaller concept id, is what
+    /// the individual's label enumerates first, and is therefore the branch point — although a
+    /// two-way disjunction is open on the same node. Asserting the WIDE one is what makes this
+    /// a test of the selection rule rather than of the fixture: a scan that ranked its
+    /// candidates by width would hand back the other one.
     #[test]
-    fn the_branch_point_is_the_disjunction_with_the_fewest_alternatives() {
+    fn the_branch_point_is_the_first_open_disjunction_in_derivation_order() {
         let kb = branching_kb();
         let mut h = Hyper::new(&kb, step_cap(&kb));
         let mut st = h.g.init_state(&Assumptions::of_kb());
@@ -1074,8 +1031,8 @@ mod tests {
         let branch = h.find_branch(&st).expect("two disjunctions are open");
         assert_eq!(
             branch.len(),
-            2,
-            "the two-way disjunction is the branch point, not the three-way one: {branch:?}"
+            3,
+            "the three-way disjunction is met first, so it is the branch point: {branch:?}"
         );
     }
 
