@@ -1316,7 +1316,7 @@ impl Tally {
 /// and a half times its wall time, and almost all of that increase is that single case running
 /// longer before being truncated anyway. So the cap is set to decide everything decidable and
 /// to truncate that one, which the ≤5% exhausted quota in [`run_property`] absorbs at 1 case
-/// in 9,200.
+/// in 9,800.
 const STEP_CAP: u64 = 350;
 
 /// The budget this suite decides a generated knowledge base under: the narrowed round cap
@@ -3029,7 +3029,7 @@ fn four_co_typed_definitions_on_one_individual_agree_with_the_oracle() {
         // two differentials over it.
         Bound::Impossible,
         // A WIDER round narrowing than [`STEP_CAP`], and the only family that takes one.
-        // The suite's cap is what 9,200 cases can afford EACH, and this family is 300
+        // The suite's cap is what 9,800 cases can afford EACH, and this family is 300
         // structurally deeper ones: four definitions internalized as eight disjunctions in
         // every node's label is what the ENCODING differential decides here, and at 350
         // rounds a quarter of its cases could not finish that side — which would quietly
@@ -3041,9 +3041,9 @@ fn four_co_typed_definitions_on_one_individual_agree_with_the_oracle() {
         // Measured 5,350 rounds — the most branch-heavy family in the suite by a factor of
         // three, over 1,403 case splits in 300 knowledge bases.
         5_900,
-        // Measured 12,424,523 work units, the most of any family, over a peak of 2,988,210
+        // Measured 12,292,228 work units, the most of any family, over a peak of 2,986,922
         // in ONE case. That per-case figure is what co-typing costs: the `wide` corpus's
-        // dearest case spends 6.7 million over a search the round cap truncates, and this
+        // dearest case spends 6.9 million over a search the round cap truncates, and this
         // one spends nearly half of that while DECIDING in 188 rounds.
         13_700_000,
         &arb_co_typed_axioms(sig),

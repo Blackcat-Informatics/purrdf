@@ -380,25 +380,33 @@ fn cap_base(kb: &Kb) -> u64 {
 /// MEASURED, over three populations, against the criterion "an ontology this reasoner is
 /// expected to decide keeps at least ten times the work it actually spends in hand":
 ///
-/// * **the ledgered fixtures.** The equivalence-over-untyped-restrictions ontology's 17-triple
-///   `owl:equivalentClass` shape spends 2,926 units; its `rdfs:subClassOf` control 221.
-/// * **the differential corpora** of [`crate::owl_dl::oracle`] — 9,200 generated, deliberately
-///   adversarial knowledge bases. Their most expensive DECIDING case spends 6.1 million units,
-///   over a THREE-axiom knowledge base whose completion graph reaches 101 nodes. That case is
-///   what fixes the constant term: work is a function of the SEARCH rather than of the input's
-///   size, so a size-derived cap has to carry a floor generous enough for a small ontology
-///   whose search is not, and 64 million is that measurement times ten.
-/// * **the two block families** of this crate's consistency bench, at 1/2/4/8/16 blocks. The
-///   INDEPENDENT family (one individual per block) spends 2,926 / 18,760 / 184,539 / 2,463,669
-///   / 41,097,049 units and decides at every size, the largest with fifteen times its budget
-///   left. The STACKED family — the same blocks co-typed on ONE individual, which is the shape
-///   this cap exists for — spends 2,926 / 195,727 / 77,233,830 at 1/2/4 blocks and decides
-///   them, and from five blocks on it reaches the cap: `unknown` in 0.27 s at five, 0.6 s at
-///   ten, 1.8 s at sixteen. Run UNCAPPED the same family spends 5,366,941 units at three
-///   blocks, 77 million at four, 695 million at five and 4.4 BILLION at six — about a factor
-///   of nine per added block — so ten blocks is some 10¹³ units of grinding, which is what
-///   this class did before the cap existed while its round count sat at a few percent of the
-///   round budget.
+/// * **the ledgered fixtures** (`crates/validate/tests/dl_step_ledger.rs`, pinned by
+///   `every_ledgered_search_costs_exactly_what_it_is_pinned_to`). The equivalence-over-
+///   untyped-restrictions ontology's 17-triple `owl:equivalentClass` shape spends 2,724
+///   units; its `rdfs:subClassOf` control — the same seventeen triples with BOTH
+///   restrictions moved off the equivalence — 206.
+/// * **the differential corpora** of [`crate::owl_dl::oracle`] — 9,800 generated,
+///   deliberately adversarial knowledge bases (pinned by
+///   `the_enumerated_search_spaces_are_pinned`). Their most expensive DECIDING case spends
+///   6.1 million units, over a THREE-axiom knowledge base whose completion graph reaches 101
+///   nodes. That case is what fixes the constant term: work is a function of the SEARCH
+///   rather than of the input's size, so a size-derived cap has to carry a floor generous
+///   enough for a small ontology whose search is not, and 64 million is that measurement
+///   times ten.
+/// * **the two block families** of this crate's consistency bench (`benches/consistency.rs`),
+///   at 1/2/4/8/16 blocks. The INDEPENDENT family (one individual per block) spends 2,724 /
+///   17,750 / 177,461 / 2,398,087 / 40,349,307 units and decides at every size, the largest
+///   with fifteen times its budget left. The STACKED family — the same blocks co-typed on
+///   ONE individual, which is the shape this cap exists for — spends 2,724 / 185,099 /
+///   75,826,178 at 1/2/4 blocks and decides them (the two-block knowledge base is the same
+///   one the step ledger pins as `co-typed-equivalence-blocks`, at the same 185,099), and
+///   from five blocks on it reaches the cap: `unknown` under `completeness
+///   budget-exhausted`, with `work` equal to `work-budget` in the certificate — the same
+///   signature `crates/validate/tests/dl_work_budget.rs` pins at ten co-typed copies. Run
+///   UNCAPPED the same family spends 5,194,168 units at three blocks, 75,826,178 at four,
+///   687,884,004 at five and 4.4 BILLION at six — roughly a factor of nine per added block —
+///   so ten blocks is some 10¹³ units of grinding, which is what this class did before the
+///   cap existed while its round count sat at a few percent of the round budget.
 ///
 /// The base is [`cap_base`] — the same size the round cap is derived from — and the formula is
 /// `64,000,000 + base³ × 256`. CUBIC rather than the round cap's quadratic, because the two
@@ -410,7 +418,7 @@ fn cap_base(kb: &Kb) -> u64 {
 /// the number bigger. Its work grows by roughly a factor of ten per added block against a
 /// cubic budget, so every cap has an `n` it stops at; the honest curve is stated above, and
 /// what a cap buys is that the ontology past that `n` ANSWERS — `unknown`, with
-/// `completeness budget-exhausted` and `work` equal to `work-budget` — in under a second
+/// `completeness budget-exhausted` and `work` equal to `work-budget` — in a few seconds
 /// instead of grinding.
 ///
 /// It is a pure function of the knowledge base — same input, same cap — and it is a COUNT

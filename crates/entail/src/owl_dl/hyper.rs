@@ -676,7 +676,7 @@ impl<'a> Hyper<'a> {
     /// of `k` alternatives multiplies the subtree below it by `k`, so putting the widest levels
     /// deepest lets the clashes above prune them. This calculus was MEASURED under that rule,
     /// over the generated corpora of [`crate::owl_dl::oracle`] — 8,900 knowledge bases at the
-    /// time, 9,200 now — and
+    /// time, 9,800 now — and
     /// the argument did not pay here:
     ///
     /// * by itself it was close to a wash, saving rounds on the nominal and counting families

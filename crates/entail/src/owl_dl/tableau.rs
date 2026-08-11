@@ -28,7 +28,7 @@
 //! difference between them is a difference of CALCULUS — which is exactly what the
 //! differential test exists to find, and why no divergence may be ledgered.
 //!
-//! Every generated knowledge base of [`crate::owl_dl::oracle`] (9,200 per run) and every
+//! Every generated knowledge base of [`crate::owl_dl::oracle`] (9,800 per run) and every
 //! hand-written knowledge base in this module is decided by both.
 //!
 //! # Shape of the search
