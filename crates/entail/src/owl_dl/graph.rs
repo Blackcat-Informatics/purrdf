@@ -506,8 +506,7 @@ pub(crate) fn max_clique(
     let mut best: Vec<usize> = Vec::new();
     let mut current: Vec<usize> = Vec::new();
     let mut work: u64 = 0;
-    let finished = rec_clique(items, compat, 0, &mut current, &mut best, &mut work);
-    meter.charge(work);
+    let finished = rec_clique(items, compat, 0, &mut current, &mut best, &mut work, meter);
     if finished { Some(best) } else { None }
 }
 
@@ -528,7 +527,27 @@ const MAX_CLIQUE_WORK: u64 = 1 << 20;
 /// never changes a verdict, only whether one is reached inside the budget.
 pub(crate) const MAX_COUNTING_WITNESSES: usize = 4096;
 
-/// Backtracking helper for [`max_clique`]; `false` means the work budget ran out.
+/// Backtracking helper for [`max_clique`]; `false` means a work budget ran out — either this
+/// search's own local ceiling, or the run's shared [`Work`] meter.
+///
+/// # The meter is polled DURING the recursion, not after it
+///
+/// The local `work` counter used to be the only thing charged to `meter`, and only once, after
+/// the whole search returned — so a run whose shared meter had almost nothing left still paid
+/// for this search's full local ceiling (up to [`MAX_CLIQUE_WORK`]) before anyone found out. A
+/// NARROW work cap has to see the exhaustion while the search is still inside it, so every unit
+/// is now charged to `meter` at the moment it is spent, and `meter.exhausted()` is checked
+/// beside the local ceiling everywhere `work` is — at each call, so a chain of compatible
+/// candidates that recurses deeply stops promptly, and inside the candidate loop, so a level
+/// whose candidates mostly fail `compat` and never recurse — the scan `compat` alone can make
+/// arbitrarily long — stops promptly too. Nothing here reads a clock or a hash iteration order,
+/// so which candidate the search is on when it stops is a pure function of `items` and `compat`,
+/// and two runs over the same inputs under the same cap stop at the same candidate.
+///
+/// A caller reads `false` as "budget exhausted" whichever budget it was — [`max_clique`]'s
+/// `None` does not distinguish them — because both mean the same thing to every caller: the
+/// clique found so far cannot be trusted as maximum, so the decision this feeds must report
+/// itself EXHAUSTED rather than a wrong answer built on a truncated search.
 fn rec_clique(
     items: &[usize],
     compat: &dyn Fn(usize, usize) -> bool,
@@ -536,9 +555,11 @@ fn rec_clique(
     current: &mut Vec<usize>,
     best: &mut Vec<usize>,
     work: &mut u64,
+    meter: &Work,
 ) -> bool {
     *work += 1;
-    if *work > MAX_CLIQUE_WORK {
+    meter.charge(1);
+    if *work > MAX_CLIQUE_WORK || meter.exhausted() {
         return false;
     }
     if current.len() > best.len() {
@@ -549,10 +570,19 @@ fn rec_clique(
         return true;
     }
     for i in start..items.len() {
+        // One unit per CANDIDATE CONSIDERED, not only per recursive call: a level whose
+        // candidates mostly fail `compat` never recurses, so without this charge the loop
+        // below could walk the whole remaining slice — items.len() - start candidates, which
+        // a mixed `≠`-graph can make large — with neither budget seeing it.
+        *work += 1;
+        meter.charge(1);
+        if *work > MAX_CLIQUE_WORK || meter.exhausted() {
+            return false;
+        }
         let cand = items[i];
         if current.iter().all(|&m| compat(m, cand)) {
             current.push(cand);
-            if !rec_clique(items, compat, i + 1, current, best, work) {
+            if !rec_clique(items, compat, i + 1, current, best, work, meter) {
                 return false;
             }
             current.pop();
@@ -1025,6 +1055,14 @@ impl<'a> Graph<'a> {
         // below visits every edge unconditionally, so the cost is known in advance and one
         // charge is cheaper than one per iteration.
         self.work.charge(st.edges.len() as u64);
+        // The charge above is what a NARROW cap needs to see, and seeing it is only useful if
+        // the scan then honours it: a graph whose edge count alone exhausts the meter must not
+        // still walk every edge before this method returns, or the latency between the cap
+        // being reached and the search reporting it would be the size of the edge vector
+        // rather than one charge, exactly the gap this bulk charge exists to close.
+        if self.work.exhausted() {
+            return;
+        }
         let x = find(st, x);
         for &(from, to, prop) in &st.edges {
             let f = find(st, from);
@@ -1058,13 +1096,24 @@ impl<'a> Graph<'a> {
         };
         let mut set: BTreeSet<(u32, bool)> = BTreeSet::new();
         let mut stack = vec![start];
-        // One unit per closure expansion, plus one for the call itself. The `+ 1` is what
-        // makes EVERY cache MISS cost something: a role with no sub-roles and no inverse
-        // closes in one expansion over an edgeless graph, and a scan that charged zero would
-        // let a rule call it forever without the meter moving.
-        let mut expansions: u64 = 1;
+        // One unit for the call itself, charged up front, so a role with no sub-roles and no
+        // inverse — which closes without a single stack pop — still moves the meter: a scan
+        // that charged zero would let a rule call it forever without the meter ever seeing it.
+        self.work.charge(1);
+        // One unit per closure expansion, charged and POLLED as the stack is walked rather than
+        // summed and charged once after — a role hierarchy deep or wide enough to make this
+        // walk itself the expensive part must be cut off by a NARROW cap exactly as every other
+        // bulk enumeration here is, rather than running the whole walk before the meter is
+        // consulted.
         while let Some((q, dir)) = stack.pop() {
-            expansions += 1;
+            if self.work.exhausted() {
+                // Exhausted mid-walk: the closure this stack was building is incomplete, so it
+                // must never be memoized — a cached partial closure would silently answer every
+                // later call for this role, in this run or (were the cap raised) a later one,
+                // with fewer achievers than the role hierarchy actually has.
+                return set;
+            }
+            self.work.charge(1);
             if !set.insert((q, dir)) {
                 continue;
             }
@@ -1079,7 +1128,6 @@ impl<'a> Graph<'a> {
                 }
             }
         }
-        self.work.charge(expansions);
         self.achiever_cache.borrow_mut().insert(role, set.clone());
         set
     }
@@ -1303,5 +1351,241 @@ impl<'a> Graph<'a> {
                 false
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A bare tree node: no label, no incoming edge, not a root — the minimal shape these
+    /// tests need to populate a [`State`] by hand rather than through a knowledge base.
+    fn bare_node(root: bool) -> Node {
+        Node {
+            label: BTreeSet::new(),
+            parent: None,
+            incoming: None,
+            root,
+            nominals: BTreeSet::new(),
+            neq: BTreeSet::new(),
+            merged: None,
+            concrete: false,
+            value_class: None,
+        }
+    }
+
+    /// A two-node state, source `0` reaching target `1` over `n` copies of the same edge —
+    /// large enough that scanning every one of them is the cost these tests exist to bound.
+    fn two_node_state_with_edges(n: usize, prop: u32) -> State {
+        State {
+            nodes: vec![bare_node(true), bare_node(true)],
+            edges: std::iter::repeat_n((0usize, 1usize, prop), n).collect(),
+            root_of: BTreeMap::new(),
+            clash: false,
+            clique_exhausted: std::cell::Cell::new(false),
+        }
+    }
+
+    // --- FB-1: `max_clique`/`rec_clique` poll the shared meter DURING the search -----------
+
+    /// [`rec_clique`]'s CANDIDATE loop — not only its recursive calls — must stop the moment
+    /// the shared meter is exhausted, because a candidate set most of which is pairwise
+    /// INCOMPATIBLE never recurses past depth one: the whole cost is one call's `for` loop
+    /// over the remaining candidates, calling `compat` once each. Before this fix that loop
+    /// carried no charge and no poll at all, so neither the shared meter nor `rec_clique`'s
+    /// own [`MAX_CLIQUE_WORK`] ceiling ever saw it — a search over a multi-million item slice
+    /// would run to completion under a cap of ONE.
+    #[test]
+    fn max_clique_stops_a_wide_incompatible_scan_when_the_meter_is_narrow() {
+        let items: Vec<usize> = (0..2_000_000).collect();
+        let compat_calls = std::cell::Cell::new(0u64);
+        // Every pair incompatible: `current` never grows past depth one, so the whole search
+        // is one call's linear scan over `items` — exactly the shape a per-call-only poll
+        // cannot see.
+        let compat = |_a: usize, _b: usize| {
+            compat_calls.set(compat_calls.get() + 1);
+            false
+        };
+        let meter = Work::new(50);
+
+        let result = max_clique(&items, &compat, &meter);
+
+        assert!(
+            result.is_none(),
+            "a meter exhausted mid-search must never be read as a decided maximum clique"
+        );
+        assert!(meter.exhausted());
+        assert_eq!(
+            meter.spent(),
+            50,
+            "the meter clamps exactly at its cap, whatever the search still had left to do"
+        );
+        assert!(
+            compat_calls.get() < 200,
+            "a narrow meter must cut the candidate scan off near its cap ({}), not after \
+             walking all {} items compat was given: {} calls",
+            meter.spent(),
+            items.len(),
+            compat_calls.get()
+        );
+    }
+
+    /// The comparison the test above needs to be evidence rather than an accident: the SAME
+    /// fixture under a cap ample for the whole scan lets `compat` see (almost) every item, so
+    /// the narrow-cap test's small count is the meter cutting the search off — not a fixture
+    /// that never drove `compat` past a handful of calls regardless of the cap.
+    #[test]
+    fn max_clique_runs_the_whole_wide_scan_when_the_meter_is_ample() {
+        // Every pair incompatible is the ADVERSARIAL mixed-`≠`-graph shape the module docs
+        // name: with nothing ever compatible, `current` empties on every backtrack and the
+        // search re-tries every suffix from every starting index, which is quadratic in
+        // `items.len()` (about `n²/2` candidate charges) rather than linear. Sized so that
+        // quadratic cost stays comfortably under [`MAX_CLIQUE_WORK`] — the search's own local
+        // ceiling, independent of the meter — so what stops this run is the meter cap chosen
+        // below finishing the search, not that unrelated one.
+        let items: Vec<usize> = (0..1_000).collect();
+        let compat_calls = std::cell::Cell::new(0u64);
+        let compat = |_a: usize, _b: usize| {
+            compat_calls.set(compat_calls.get() + 1);
+            false
+        };
+        let meter = Work::new(1_000_000);
+
+        let result = max_clique(&items, &compat, &meter);
+
+        assert_eq!(
+            result,
+            Some(vec![0]),
+            "the first candidate is the whole clique"
+        );
+        assert!(!meter.exhausted());
+        assert!(
+            compat_calls.get() as usize >= items.len() - 1,
+            "an ample meter must let the scan reach (almost) every one of the {} items: only \
+             {} compat calls",
+            items.len(),
+            compat_calls.get()
+        );
+        assert!(
+            compat_calls.get() > 10 * items.len() as u64,
+            "the quadratic shape this fixture is FOR: far more compat calls than items, \
+             because every backtrack re-scans a suffix: {} calls over {} items",
+            compat_calls.get(),
+            items.len()
+        );
+    }
+
+    /// Two runs of the SAME exhausting search agree exactly — on the verdict (`None`), on the
+    /// meter's own reading, and on how many candidates it got through — because every charge
+    /// [`rec_clique`] makes is a pure function of `items` and `compat`, never of a clock or a
+    /// hash iteration order.
+    #[test]
+    fn max_clique_exhaustion_is_deterministic_run_to_run() {
+        let items: Vec<usize> = (0..500_000).collect();
+        let compat = |_a: usize, _b: usize| false;
+        let meter_a = Work::new(37);
+        let meter_b = Work::new(37);
+
+        let first = max_clique(&items, &compat, &meter_a);
+        let again = max_clique(&items, &compat, &meter_b);
+
+        assert!(first.is_none() && again.is_none());
+        assert_eq!(
+            meter_a.spent(),
+            meter_b.spent(),
+            "two runs, one work figure"
+        );
+        assert_eq!(
+            meter_a.spent(),
+            37,
+            "the meter clamps at its cap on every run"
+        );
+    }
+
+    // --- FB-1: `Graph::neighbors`'s edge scan stops when its own bulk charge exhausts the
+    // meter --------------------------------------------------------------------------------
+
+    /// [`Graph::step`] charges the WHOLE edge scan's cost up front, in one bulk charge, so a
+    /// NARROW cap sees the true cost of the scan it is about to refuse before that scan runs
+    /// even one comparison. Without the check right after that charge, the loop below it
+    /// would walk every one of a graph's edges regardless — which is exactly the gap this
+    /// test pins shut: a cap far smaller than the edge count must come back with NO neighbours
+    /// rather than the true one, because it never got to look.
+    #[test]
+    fn neighbors_stops_the_edge_scan_when_the_bulk_charge_exhausts_the_meter() {
+        const PROP: u32 = 7;
+        let kb = Kb::empty();
+        let st = two_node_state_with_edges(2_000_000, PROP);
+
+        let narrow = Graph::new(&kb, 5);
+        let truncated = narrow.neighbors(&st, 0, Role::Named(PROP));
+        assert!(
+            truncated.is_empty(),
+            "a cap of 5 against two million edges must see none of them: {truncated:?}"
+        );
+        assert!(narrow.work().exhausted());
+        assert_eq!(
+            narrow.work().spent(),
+            5,
+            "the meter clamps exactly at its cap"
+        );
+
+        // The control: the identical graph under a cap ample for the whole scan finds the
+        // one true neighbour, so the truncation above is the meter's doing and not a fixture
+        // that could never have found it.
+        let ample = Graph::new(&kb, 10_000_000);
+        let full = ample.neighbors(&st, 0, Role::Named(PROP));
+        assert_eq!(
+            full,
+            vec![1],
+            "the true neighbour, once the scan is allowed to run"
+        );
+    }
+
+    // --- FB-1: `Graph::achievers`'s role-closure walk polls per expansion, and never caches a
+    // truncated closure ----------------------------------------------------------------------
+
+    /// A role hierarchy that chains `n` super/sub-property links closes over `n` expansions.
+    /// [`Graph::achievers`] used to charge and check that cost only ONCE, after the whole
+    /// stack-walk finished — so a cap far smaller than the chain would still walk the whole
+    /// chain before reporting itself exhausted, and it would then MEMOIZE the (complete, in
+    /// that old code) closure. This test pins the fixed behaviour: the walk stops near the
+    /// cap, and — because what it stopped with is a PARTIAL closure — the cache must not hold
+    /// it, or a later call in the same search would silently read fewer achievers than the
+    /// role hierarchy actually has.
+    #[test]
+    fn achievers_polls_the_role_closure_walk_and_never_caches_a_truncated_one() {
+        const N: u32 = 200_000;
+        let mut kb = Kb::empty();
+        for i in 0..N {
+            kb.role_sub.entry(i).or_default().insert(i + 1);
+        }
+        let role = Role::Named(0);
+
+        let narrow = Graph::new(&kb, 10);
+        let closure = narrow.achievers(role);
+        assert!(narrow.work().exhausted());
+        assert!(
+            closure.len() < 40,
+            "a cap of 10 against a {N}-link chain must stop near it, not after closing the \
+             whole chain: {} achievers",
+            closure.len()
+        );
+        assert!(
+            narrow.achiever_cache.borrow().is_empty(),
+            "a closure the walk could not finish must never be memoized"
+        );
+
+        // The control: an ample cap closes the whole chain (N + 1 roles: 0..=N, each in the
+        // forward direction) and DOES cache it.
+        let ample = Graph::new(&kb, 10_000_000);
+        let full = ample.achievers(role);
+        assert_eq!(
+            full.len(),
+            (N + 1) as usize,
+            "the whole chain, once the walk is allowed to finish"
+        );
+        assert!(!ample.work().exhausted());
+        assert!(ample.achiever_cache.borrow().contains_key(&role));
     }
 }

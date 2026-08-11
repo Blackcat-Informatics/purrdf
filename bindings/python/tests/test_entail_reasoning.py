@@ -373,8 +373,10 @@ def test_the_certificate_reports_both_budgets_it_ran_under() -> None:
     lines = certificate.splitlines()
     fields = {line.split(" ", 1)[0] for line in lines}
     assert {"steps", "budget", "work", "work-budget"} <= fields
-    work = int(next(l for l in lines if l.startswith("work ")).split(" ")[1])
-    work_budget = int(next(l for l in lines if l.startswith("work-budget ")).split(" ")[1])
+    work = int(next(line for line in lines if line.startswith("work ")).split(" ")[1])
+    work_budget = int(
+        next(line for line in lines if line.startswith("work-budget ")).split(" ")[1]
+    )
     assert 0 < work * 10 < work_budget, certificate
 
 

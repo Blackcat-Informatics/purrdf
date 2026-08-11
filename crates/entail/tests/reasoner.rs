@@ -834,6 +834,77 @@ fn a_narrowed_work_budget_reports_unknown_through_the_same_channel() {
     );
 }
 
+/// A NARROW work cap must cut a LARGE bulk scan off near its own cap rather than letting one
+/// oversized enumeration run to completion first — the stability gap FB-1 closed.
+///
+/// `:a` gets five thousand `:p`-neighbours and a `∀p.C` restriction that has to read every one
+/// of them through the completion graph's role-neighbour scan. Before the fix, a scan already
+/// in flight when the meter's bulk charge exhausted it kept walking its own bulk regardless —
+/// the edge loop behind `Graph::neighbors`, the role-hierarchy closure behind it, and the
+/// per-node clause scan `Hyper::round` drives it all from — so a cap far smaller than the
+/// scan still paid for (most of) the scan before reporting itself exhausted. What is asserted
+/// here is the OUTWARD-FACING half of that fix: the certificate says exhausted honestly
+/// (`Unknown`, `BudgetExhausted`, `work == work-budget`), and it says the SAME thing twice —
+/// determinism is not a property that survives an early exit by accident, since a search that
+/// stopped at a different point on its second run would report a different round/work/shape
+/// tuple. The crate-internal mechanism itself — that the scan's own inner loops poll the meter
+/// rather than run unconditionally to the end — is pinned directly against `Graph`/`Hyper` in
+/// `owl_dl::graph::tests` and `owl_dl::hyper::tests`, where the truncated candidate/edge/role
+/// counts are countable; nothing crosses the `Reasoner` boundary that could make that latency
+/// observable without timing, which this crate does not assert.
+#[test]
+fn a_narrow_work_cap_exhausts_promptly_over_a_large_role_scan_and_is_deterministic() {
+    const NEIGHBOURS: usize = 5_000;
+    let mut triples: Vec<(N, N, N)> = vec![
+        typed(N::E("p"), N::V(OBJECT_PROPERTY)),
+        typed(N::E("C"), N::V(OWL_CLASS)),
+        typed(N::E("A"), N::V(OWL_CLASS)),
+        sub(N::E("A"), N::B("allP")),
+        typed(N::B("allP"), N::V(RESTRICTION)),
+        (N::B("allP"), N::V(ON_PROPERTY), N::E("p")),
+        (N::B("allP"), N::V(ALL_VALUES), N::E("C")),
+        typed(N::E("a"), N::E("A")),
+    ];
+    let neighbours: Vec<String> = (0..NEIGHBOURS).map(|i| format!("n{i}")).collect();
+    for label in &neighbours {
+        // `N::E` needs a `&'static str`; leaking a handful of kilobytes for the run of one
+        // test is the ordinary price of that in a fixture built at runtime.
+        let leaked: &'static str = Box::leak(label.clone().into_boxed_str());
+        triples.push((N::E("a"), N::E("p"), N::E(leaked)));
+    }
+    let dataset = ds(&triples);
+
+    let reasoner = Reasoner::new(&dataset)
+        .expect("reverse-map")
+        .with_work_cap(64);
+    assert_eq!(reasoner.work_cap(), 64);
+
+    let answer = reasoner.consistency();
+    assert_eq!(
+        *answer.answer(),
+        Verdict::Unknown,
+        "a work-exhausted search over a large scan is UNKNOWN, never a guessed verdict"
+    );
+    let certificate = honest(&answer);
+    assert_eq!(certificate.completeness(), DlCompleteness::BudgetExhausted);
+    assert_eq!(
+        certificate.work(),
+        certificate.work_budget(),
+        "the meter clamps exactly at its cap, whatever the {NEIGHBOURS}-edge scan it cut \
+         short still had left to walk: {certificate:?}"
+    );
+
+    // Two runs, one exhausted certificate: nothing behind the scans this cap cut off reads a
+    // clock or a hash iteration order, so an early exit lands at the same candidate every time.
+    let again = reasoner.consistency();
+    assert_eq!(*again.answer(), Verdict::Unknown);
+    let again_certificate = honest(&again);
+    assert_eq!(
+        certificate, again_certificate,
+        "two runs of the same narrow-cap search must agree on every field, truncation included"
+    );
+}
+
 #[test]
 fn the_step_cap_can_be_narrowed_and_never_widened() {
     let dataset = kittens();

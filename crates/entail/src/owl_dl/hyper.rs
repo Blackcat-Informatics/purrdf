@@ -536,7 +536,16 @@ impl<'a> Hyper<'a> {
     fn round(&self, st: &mut State) -> bool {
         let blocked = self.blocking(st);
         let mut changed = false;
-        for x in 0..st.nodes.len() {
+        // Labelled so the trigger and clause scans below can bail out of the WHOLE round the
+        // moment the meter reports exhausted, rather than finishing the node they were on and
+        // every node after it. `saturate` still gates the verdict on `check_work` before it
+        // trusts this round's `changed` — see [`Hyper::check_work`] — so stopping here only
+        // shortens the latency between the cap being reached and that gate firing; it can never
+        // by itself turn a truncated scan into a wrong answer.
+        'nodes: for x in 0..st.nodes.len() {
+            if self.g.work().exhausted() {
+                break 'nodes;
+            }
             if find(st, x) != x {
                 continue;
             }
@@ -558,11 +567,21 @@ impl<'a> Hyper<'a> {
             // makes a round more expensive without making the search take more rounds.
             self.g.work().charge(triggers.len() as u64 + 1);
             for concept in triggers {
+                // A node whose label grew large is what makes the trigger scan itself the
+                // remaining cost — the outer node-level check above only runs once per node,
+                // and a node with thousands of triggered concepts must not run them all before
+                // the meter is consulted again.
+                if self.g.work().exhausted() {
+                    break 'nodes;
+                }
                 for &index in self.clauses.triggered_by(concept) {
                     // One unit per clause CONSIDERED, whether or not it is fired: a
                     // disjunctive clause is skipped here without being matched, and a skip
                     // this round repeats is still a scan.
                     self.g.work().charge(1);
+                    if self.g.work().exhausted() {
+                        break 'nodes;
+                    }
                     if !object_domain && self.clauses.is_tbox(index) {
                         continue;
                     }
@@ -574,6 +593,9 @@ impl<'a> Hyper<'a> {
             }
             for &index in self.clauses.untriggered() {
                 self.g.work().charge(1);
+                if self.g.work().exhausted() {
+                    break 'nodes;
+                }
                 if !object_domain && self.clauses.is_tbox(index) {
                     continue;
                 }
@@ -1276,6 +1298,51 @@ mod tests {
         assert!(
             kb.generates(conjunction),
             "a conjunction holds every conjunct, so ONE generating conjunct generates"
+        );
+    }
+
+    /// FB-1 (bulk enumerations honour an exhausted work meter immediately): [`Hyper::round`]'s
+    /// node loop must stop visiting nodes the moment the shared work meter is exhausted,
+    /// rather than finishing every remaining node's trigger and clause scan first.
+    ///
+    /// Five thousand individuals share one trigger (`A ⊑ B`, a faithful guard that fires at
+    /// every `A`-typed node), so a completed round would derive `B` at every one of them. Under
+    /// a work cap far smaller than that scan, this pins that only a SMALL PREFIX of the five
+    /// thousand nodes gets visited before the meter reports itself exhausted and the loop
+    /// breaks — not that the derivation comes out wrong: `Hyper::saturate` gates the verdict on
+    /// `check_work` before it ever trusts a round's `changed` flag (see [`Hyper::check_work`]),
+    /// so a truncated round here can only ever surface as `Exhausted`, never as an answer.
+    #[test]
+    fn round_stops_visiting_nodes_once_the_work_meter_is_exhausted() {
+        const MANY: u32 = 5_000;
+        let mut kb = Kb::empty();
+        kb.push_gci(Concept::Named(A), Concept::Named(B));
+        for i in 0..MANY {
+            let individual = 1_000 + i;
+            kb.abox_types.push((individual, A));
+            kb.individuals.insert(individual);
+        }
+        kb.finalize();
+        let b = kb.table.intern(Concept::Named(B));
+
+        let budget = Budget {
+            steps: Budget::for_kb(&kb).steps,
+            work: 40,
+        };
+        let h = Hyper::new(&kb, budget);
+        let mut st = h.g.init_state(&Assumptions::of_kb());
+
+        h.round(&mut st);
+
+        assert!(
+            h.g.work().exhausted(),
+            "a cap of 40 against five thousand nodes' worth of trigger scanning must exhaust"
+        );
+        let derived = st.nodes.iter().filter(|n| n.label.contains(&b)).count();
+        assert!(
+            derived < MANY as usize,
+            "a narrow work cap must stop the node scan before every one of the {MANY} nodes \
+             is visited: {derived} nodes already carry B"
         );
     }
 }

@@ -851,7 +851,8 @@ int main(int argc, char **argv) {
                                &error);
     CHECK(rc == PURRDF_STATUS_OK, "entail_entails under a narrowed cap");
     purrdf_buffer_data(answer, &abytes, &alen);
-    CHECK(memcmp(abytes, "entails unknown\n", strlen("entails unknown\n")) == 0,
+    CHECK(alen > strlen("entails unknown\n") &&
+              memcmp(abytes, "entails unknown\n", strlen("entails unknown\n")) == 0,
           "an exhausted search is unknown, not false");
     purrdf_buffer_data(certificate, &cbytes, &clen);
     CHECK(contains_bytes(cbytes, clen, "completeness budget-exhausted\n"),
@@ -866,7 +867,8 @@ int main(int argc, char **argv) {
                                &error);
     CHECK(rc == PURRDF_STATUS_OK, "entail_entails under a narrowed work cap");
     purrdf_buffer_data(answer, &abytes, &alen);
-    CHECK(memcmp(abytes, "entails unknown\n", strlen("entails unknown\n")) == 0,
+    CHECK(alen > strlen("entails unknown\n") &&
+              memcmp(abytes, "entails unknown\n", strlen("entails unknown\n")) == 0,
           "a work-exhausted search is unknown, not false");
     purrdf_buffer_data(certificate, &cbytes, &clen);
     CHECK(contains_bytes(cbytes, clen, "completeness budget-exhausted\n") &&
