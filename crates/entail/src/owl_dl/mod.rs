@@ -166,6 +166,26 @@ pub(crate) struct Kb {
     pub(crate) literal_class: BTreeMap<u32, u32>,
     /// The constructs this knowledge base could not fully handle, in `Construct` order.
     pub(crate) boundaries: BTreeSet<Construct>,
+    /// Whether [`Kb::absorbed`]/[`Kb::meta`]/[`Kb::generating`] already reflect [`Kb::tbox`].
+    ///
+    /// [`Kb::encode_until`] runs three passes, and only the middle one — deriving the
+    /// absorbed table from the WHOLE inclusion list — is a pure function of [`Kb::tbox`]
+    /// alone; the two negation-cache passes around it also cover concepts a caller interned
+    /// since the last call (a named class, a query concept, a refutation witness), so they
+    /// stay unconditional. This flag gates only the middle pass: [`Kb::from_dataset`] already
+    /// runs it once inside [`parser::build_until`], and every caller downstream that finalizes
+    /// again after interning MORE concepts — [`Reasoner::new`](crate::reasoner::Reasoner::new)
+    /// chief among them — would otherwise re-derive an identical absorbed table from an
+    /// unchanged inclusion list. [`Kb::push_gci`] is the only way [`Kb::tbox`] grows after
+    /// construction, and it clears this, so the flag cannot go stale.
+    pub(crate) encoded: bool,
+    /// How many times [`Kb::encode_until`] actually ran its absorption pass.
+    ///
+    /// Compiled only under `cfg(test)`: the one thing that reads it is the regression proving
+    /// [`Kb::encoded`] does what its doc claims — that `Reasoner::new`'s `finalize()` call
+    /// after `Kb::from_dataset` already encoded costs no second absorption pass.
+    #[cfg(test)]
+    pub(crate) absorb_calls: u32,
     /// The caller's latching stop signal, polled at every search and saturation round.
     ///
     /// Held on the knowledge base rather than passed down through
@@ -242,6 +262,9 @@ impl Kb {
             data_ranges: data::DataRangeTable::default(),
             literal_class: BTreeMap::new(),
             boundaries: BTreeSet::new(),
+            encoded: false,
+            #[cfg(test)]
+            absorb_calls: 0,
             stop: None,
             internalize_only: false,
             label_only_blocking: false,
@@ -371,11 +394,16 @@ impl Kb {
     /// TBox, by [`Kb::finalize`]. It has to be: absorption SPLITS `C ⊑ D ⊓ E` and
     /// `C ⊔ D ⊑ E`, and a streaming per-axiom decision cannot split what it has not yet seen
     /// the rest of.
+    ///
+    /// Clears [`Kb::encoded`]: this is the one way [`Kb::tbox`] grows after construction, and
+    /// [`Kb::encode_until`]'s absorption pass must see the grown list on the next call rather
+    /// than skip itself over an inclusion it has not yet absorbed.
     #[cfg(test)]
     pub(crate) fn push_gci(&mut self, sub: Concept, sup: Concept) {
         let sub_id = self.table.intern(sub);
         let sup_id = self.table.intern(sup);
         self.tbox.push((sub_id, sup_id));
+        self.encoded = false;
     }
 
     /// Intern a query concept and refresh the negation cache so it can be negated by
@@ -421,26 +449,49 @@ impl Kb {
     /// layer both do, each after interning more concepts — answers what calling it once
     /// would. An encoding that accumulated instead would give the second call a doubled
     /// clause table and a search that derived every absorbed head twice.
+    ///
+    /// # Why the middle pass alone is skippable, and the other two are not
+    ///
+    /// [`absorb::absorb`] is a pure function of [`Kb::tbox`] (and the encoding choice, fixed
+    /// for a `Kb`'s lifetime outside `cfg(test)`), so re-running it over an UNCHANGED
+    /// inclusion list re-derives the identical [`Kb::absorbed`]/[`Kb::meta`] at real cost and
+    /// no benefit — [`parser::build_until`] already ran it once, and
+    /// [`Reasoner::new`](crate::reasoner::Reasoner::new) used to pay for it again on every
+    /// construction. [`Kb::encoded`] gates exactly that pass. The two [`ConceptTable::finalize_until`]
+    /// calls around it stay unconditional: a caller between two `encode_until`s regularly
+    /// interns MORE concepts — a named class, a query concept, a refutation witness — that
+    /// need negation-cache entries of their own, and [`ConceptTable::finalize_until`] is
+    /// already cheap for a concept it has already covered (a single `is_none` check per id).
     pub(crate) fn encode_until<E>(
         &mut self,
         mut poll: impl FnMut() -> Result<(), E>,
     ) -> Result<(), E> {
-        let encoding = self.encoding();
         self.table.finalize_until(&mut poll)?;
-        let absorption = absorb::absorb(
-            &mut self.table,
-            &self.tbox,
-            self.top,
-            self.bottom,
-            encoding,
-            &mut poll,
-        )?;
-        self.absorbed = absorption.clauses;
-        self.meta = absorption.meta;
+        if !self.encoded {
+            let encoding = self.encoding();
+            let absorption = absorb::absorb(
+                &mut self.table,
+                &self.tbox,
+                self.top,
+                self.bottom,
+                encoding,
+                &mut poll,
+            )?;
+            self.absorbed = absorption.clauses;
+            self.meta = absorption.meta;
+            self.encoded = true;
+            #[cfg(test)]
+            {
+                self.absorb_calls += 1;
+            }
+        }
         self.table.finalize_until(&mut poll)?;
         // LAST, over the finished table: the closure reads the absorbed clauses just derived,
         // and the negation pass above interned the residual concepts a partial absorption or a
-        // `≤n` restriction's decided filler puts into a case split.
+        // `≤n` restriction's decided filler puts into a case split. Cheap even when the middle
+        // pass was skipped — [`absorb::generating`] walks [`Kb::absorbed`], not [`Kb::tbox`] —
+        // so it stays unconditional rather than adding a second flag to keep in step with the
+        // first.
         self.generating = absorb::generating(&self.table, &self.absorbed);
         Ok(())
     }
@@ -449,7 +500,11 @@ impl Kb {
     ///
     /// A concept interned AFTER the last [`Self::encode_until`] is answered `false` rather than
     /// panicking on a short table: the closure orders a case split and does not decide one, so
-    /// a missing entry costs the ordering and never the verdict.
+    /// a missing entry costs the ordering and never the verdict. Unreachable via every named
+    /// path this crate ships, though: every caller that orders a case split has already
+    /// finalized the concept it is ordering, since a disjunct reaching [`Kb::order_disjuncts`]
+    /// was interned by absorption or by the reverse mapping, both of which run before the
+    /// search that reads this.
     pub(crate) fn generates(&self, concept: u32) -> bool {
         self.generating
             .get(concept as usize)
@@ -1004,6 +1059,40 @@ mod tests {
         assert!(kb.entails_subclass(bottom, parent_id).unwrap());
         // Parent ⋢ Father (not every parent is male).
         assert!(!kb.entails_subclass(parent_id, father_id).unwrap());
+    }
+
+    /// `Kb::from_dataset` already runs [`Kb::encode_until`]'s absorption pass once (inside
+    /// `parser::build_until`), so a caller that finalizes again after interning MORE
+    /// concepts — the shape `Reasoner::new` is — must not pay for a second absorption over
+    /// an unchanged [`Kb::tbox`].
+    #[test]
+    fn finalizing_again_after_interning_more_concepts_does_not_re_absorb() {
+        let ds = simple_dataset();
+        let mut kb = Kb::from_dataset(&ds).expect("parse");
+        assert_eq!(
+            kb.absorb_calls, 1,
+            "the reverse mapping's own encode_until call is the first and only absorption"
+        );
+
+        // Mirror what `Reasoner::new` does before its own `finalize()`: intern a fresh
+        // concept — a named class the reverse mapping never had reason to intern — then
+        // finalize again.
+        let acls = kb.iri_id(&format!("{NS}A")).unwrap();
+        kb.table.intern(Concept::Named(acls));
+        kb.finalize();
+        assert_eq!(
+            kb.absorb_calls, 1,
+            "Kb::tbox did not change, so the second finalize() must not re-absorb it"
+        );
+
+        // Growing the TBox is the one thing that must force a re-absorption, proving the
+        // skip is conditional on `Kb::tbox` rather than a blanket no-op after the first call.
+        kb.push_gci(Concept::Named(acls), Concept::Top);
+        kb.finalize();
+        assert_eq!(
+            kb.absorb_calls, 2,
+            "a grown Kb::tbox must be re-absorbed on the next finalize()"
+        );
     }
 }
 

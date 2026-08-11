@@ -1118,6 +1118,9 @@ pub(crate) fn build_until(
         data_ranges: ranges,
         literal_class,
         boundaries: acc.boundaries,
+        encoded: false,
+        #[cfg(test)]
+        absorb_calls: 0,
         // The reverse mapping is not the place a caller's stop signal is named:
         // `Kb::with_stop` installs it on the knowledge base the caller then reasons over.
         stop: None,

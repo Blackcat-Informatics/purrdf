@@ -558,12 +558,28 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
     // chosen. Marked as TBox-derived, which is what scopes it to the OBJECT domain — a
     // general concept inclusion quantifies over `owl:Thing`, and no literal value is in it.
     for clause in &kb.absorbed {
+        // ATOMIC-HEAD invariant: a [`GuardedClause`] head is ONE concept id on ONE variable
+        // (see its doc), so its translation is ONE disjunct of ONE atom — never a case split
+        // of this clause's own. A `⊔` reached by way of an absorbed head still branches, but
+        // through the SEPARATE per-concept clause [`derive_concept`] emits for that head id
+        // when its decomposition is [`Decomp::Or`] — a clause that is NOT `push_tbox`, so it
+        // is not scoped away from `Δ_D`. If a future edit ever flattened a disjunctive head
+        // in here instead, this TBox-scoped, `Δ_D`-excluded clause would start branching on
+        // whichever domain a node inhabited, silently past the object-domain scope the
+        // `push_tbox` marking exists to hold — which is exactly what this assertion is here
+        // to catch before it reaches the search.
+        let head = vec![vec![HeadAtom::Concept {
+            var: clause.head_var,
+            concept: clause.head,
+        }]];
+        debug_assert_eq!(
+            (head.len(), head[0].len()),
+            (1, 1),
+            "an absorbed TBox clause's head must be one concept on one variable"
+        );
         out.push_tbox(DlClause {
             body: clause.body.clone(),
-            head: vec![vec![HeadAtom::Concept {
-                var: clause.head_var,
-                concept: clause.head,
-            }]],
+            head,
         });
     }
     // The two role axioms that constrain EDGES rather than labels, so neither can be
