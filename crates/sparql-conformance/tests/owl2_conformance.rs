@@ -59,8 +59,14 @@ const EXPECTED_INCONSISTENT: usize = 35;
 const EXPECTED_EXCLUDED: usize = 221;
 /// …of which PurRDF's tableau does not terminate on. These are the cases the
 /// reasoner genuinely cannot decide; they are pinned here so their number is a
-/// checked fact on the scoreboard rather than a claim in a document.
-const EXPECTED_EXCLUDED_NON_TERMINATING: usize = 30;
+/// checked fact on the scoreboard rather than a claim in a document. Zero as of
+/// the most recent probe: the search's whole-TBox clausification and
+/// refinement made every previously non-terminating case resolve — some
+/// decide outright, the rest reach the search's own budget and answer
+/// `budget-exhausted` rather than exhausting the wall-clock ceiling — so this
+/// is the tightest this count can read without a new non-terminating case
+/// entering the excluded set.
+const EXPECTED_EXCLUDED_NON_TERMINATING: usize = 0;
 
 /// Grade the whole vendored corpus and emit the matrix scoreboard line.
 #[test]

@@ -377,30 +377,59 @@ slug. Columns:
 
 `dl_probe` is a **measurement**, not an inherited claim. Every one of the 198
 excluded consistency-shaped cases that carries an RDF/XML premise was run through
-`purrdf_entail::materialize_dl_reported` on **2026-07-29**, in a debug build, one process
+`purrdf_entail::materialize_dl_reported` on **2026-08-10**, in a release build, one process
 per case, four at a time, with a **40 s wall-clock ceiling** per case:
 
 | `dl_probe` | Cases | Meaning |
 |------------|------:|---------|
-| `decides-consistent` | 93 | the tableau terminates and answers |
-| `decides-inconsistent` | 63 | likewise |
-| `non-terminating` | 30 | killed at the 40 s ceiling — the reasoner cannot decide these |
-| `withholds-reasoner` | 7 | an honest `EntailError` (a step cap, an unread cardinality/list shape) |
+| `decides-consistent` | 109 | the tableau terminates and answers |
+| `decides-inconsistent` | 64 | likewise |
+| `non-terminating` | 0 | killed at the 40 s ceiling — the reasoner cannot decide these |
+| `withholds-reasoner` | 20 | an honest `EntailError`, or a `budget-exhausted`/boundary-caveated answer (a step cap, an unread cardinality/list shape, a nominal/inverse/counting boundary) |
 | `withholds-parse` | 5 | the RDF/XML codec refuses (a DTD, an `rdf:datatype` with node content) |
 | `no-rdfxml-premise` | 23 | functional-syntax-only; nothing to load |
 
-`../w3c-owl2/PROVENANCE.md` said 32 cases were excluded for non-termination. This
-measurement finds **30** at a 40 s ceiling, and names them — the number is
-budget-dependent, so it is recorded here with its budget rather than quoted
-loose. `webont-i5-8-001`, the one case that document named, is among them. The
-`owl2_conformance` harness pins both 221 and 30 as constants and prints the 30 by
-name, so the exclusion cannot go quiet again.
+The prior measurement (2026-07-29, debug build) found 30 non-terminating cases,
+including `webont-i5-8-001`. The whole-TBox clausification and search-refinement
+work this reasoner underwent since then made every one of those 30 terminate
+within the same ceiling: 17 now decide outright, 13 now reach the search's own
+budget and answer `budget-exhausted` (a `withholds-reasoner` disposition, not a
+capability the harness's wall clock cuts short). Non-termination is therefore
+**empty** at this ceiling for the first time this file has recorded a
+measurement; the `owl2_conformance` harness's non-terminating constant moved from
+30 to 0 to match.
+
+**Two decided verdicts changed direction against the prior measurement**, and
+both are named here rather than folded silently into the tally above:
+
+- `datatype-float-discrete-001` moved `decides-consistent` → `decides-inconsistent`.
+  The published verdict is `InconsistencyTest`, so the prior measurement had this
+  one wrong; the new run decides it in 2 rounds with `completeness decided` (no
+  boundary), and is now correct. Its premise types an individual by an
+  `xsd:float` open interval `(0.0, 1.401298464324817e-45)` — the smallest
+  positive `float` — whose value space a discrete datatype makes empty, so the
+  ontology is unsatisfiable; the prior search evidently never reached that
+  data-range check.
+- `webont-description-logic-035` moved `decides-inconsistent` → `decides-consistent`,
+  the one direction this file's own doctrine treats as suspect rather than a
+  quiet win. The published verdict is `InconsistencyTest`, so the new answer
+  disagrees with W3C — but it is rendered `completeness decided-within-boundaries`
+  with a `boundary counting-on-inverse`: a nominal ("spy point") bounded by an
+  `owl:maxCardinality` over an *inverse* role, textbook of the one completeness
+  gap this reasoner already discloses by name (the missing NN/NI
+  nominal-introduction rule; see `Construct::CountingOnInverse` in
+  `crates/entail/src/report.rs`). The prior measurement, on a reasoner that took
+  a different search path through the same axioms, apparently found the clash
+  without ever exercising that gap; the current path does not, and says so
+  rather than guessing. This is a genuine, pre-existing incompleteness corner
+  surfacing on a case it previously missed, not a new defect — and it is why
+  this row is not silently absorbed into the tally.
 
 The other headline the probe produced: of the 221 consistency-shaped cases the DL
-corpus leaves out, **156 the tableau decided when probed**. Their exclusion is a
-payload-size and triage decision, not a capability limit, and reporting
-"257 agreed of 261" without that context overstates the coverage. That is why the harness prints
-`OWL2-DL-EXCLUDED` next to `OWL2-ENTAILMENT`.
+corpus leaves out, **173 the tableau decided when probed** (up from 156). Their
+exclusion is a payload-size and triage decision, not a capability limit, and
+reporting "257 agreed of 261" without that context overstates the coverage. That
+is why the harness prints `OWL2-DL-EXCLUDED` next to `OWL2-ENTAILMENT`.
 
 ## License
 
