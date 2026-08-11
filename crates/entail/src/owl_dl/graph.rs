@@ -1178,7 +1178,24 @@ impl<'a> Graph<'a> {
             // than unsound, and completeness for the syntactic cases this table cannot see is
             // recovered by the meta-encoding of the same `rdfs:range` axiom on every other
             // role spelling.
-            let role_ranges = self.range_by_role.get(&role).map_or(&[][..], Vec::as_slice);
+            //
+            // AND IT NARROWS NOTHING AT A NODE OF `Δ_D`, for the reason a TBox clause is not
+            // fired from one ([`crate::owl_dl::hyper`]'s round) and unconditional consequents
+            // are withdrawn from one ([`Self::merge_nodes`]): `⊤ ⊑ ∀r.DR` quantifies over
+            // `owl:Thing`, so it says nothing about the `r`-successors of an element that
+            // turns out to be a literal VALUE. The gate has to be here as well as at the
+            // firing site because this is a SECOND reader of the same clause — one that
+            // consults the clause table directly rather than waiting for a head to be
+            // derived — and without it the two TBox encodings answer differently: the
+            // internalized `∀r.DR` is withdrawn from the merged node's label while the
+            // absorbed clause was still folded in here. That is a knowledge base the absorbed
+            // encoding refuted and the all-meta one satisfied, which is how the differential
+            // corpus of [`crate::owl_dl::oracle`] found it.
+            let role_ranges = if st.nodes[x].concrete {
+                &[][..]
+            } else {
+                self.range_by_role.get(&role).map_or(&[][..], Vec::as_slice)
+            };
             self.work
                 .charge((st.nodes[x].label.len() + role_ranges.len()) as u64);
             for &other in &st.nodes[x].label {

@@ -1074,7 +1074,15 @@ pub(crate) fn build_until(
     // Every literal that reaches the knowledge base carries its VALUE into the completion
     // graph, and the literals' value classes decide which of them are one element of the data
     // domain and which are provably different ones.
-    let literal_class = register_literals(&interner, &mut table, &mut ranges, &mut acc, stop)?;
+    let literal_class = register_literals(
+        &interner,
+        &mut table,
+        &mut ranges,
+        &acc.abox_roles,
+        &mut acc.abox_types,
+        &mut acc.boundaries,
+        stop,
+    )?;
     // A data range this layer cannot decide EXACTLY is a reported boundary rather than a
     // silent weakening. The predicate is `purrdf-xsd`'s own, so the boundary and the decision
     // procedure cannot drift apart.
@@ -1146,15 +1154,28 @@ pub(crate) fn build_until(
 /// assertions, and the members of every interned nominal. A literal that only ever appears in
 /// an annotation is not one of them, and OWL 2's Direct Semantics agrees — an annotation
 /// constrains no interpretation, so its literal need not even denote.
-fn register_literals(
+///
+/// # Why the accumulators are passed apart rather than as one struct
+///
+/// The three pieces this reads and writes — the ingested role assertions, the concept
+/// assertions it appends a singleton range to, and the boundary set — are all this pass
+/// touches, and naming them individually is what lets the DIFFERENTIAL corpus generator
+/// ([`crate::owl_dl::oracle`]) register its literals through this function rather than
+/// through a test-only imitation of it. A generated knowledge base is assembled axiom by
+/// axiom and has no [`Accums`] to hand; the alternative was a second copy of the ill-typed,
+/// unmodelled and value-class rules, which is exactly the drift a differential exists to
+/// prevent.
+pub(crate) fn register_literals(
     interner: &Interner,
     table: &mut ConceptTable,
     ranges: &mut DataRangeTable,
-    acc: &mut Accums,
+    abox_roles: &[(u32, u32, u32)],
+    abox_types: &mut Vec<(u32, u32)>,
+    boundaries: &mut BTreeSet<Construct>,
     stop: Option<&dyn StopSignal>,
 ) -> Result<BTreeMap<u32, u32>, EntailError> {
     let mut terms = BTreeSet::new();
-    for &(_, _, object) in &acc.abox_roles {
+    for &(_, _, object) in abox_roles {
         poll(stop)?;
         terms.insert(object);
     }
@@ -1189,10 +1210,10 @@ fn register_literals(
         };
         let id = ranges.intern(range);
         let concept = table.intern(Concept::Data(id));
-        acc.abox_types.push((*term, concept));
+        abox_types.push((*term, concept));
     }
     if classes.any_unmodelled {
-        acc.boundaries.insert(Construct::DataRange);
+        boundaries.insert(Construct::DataRange);
     }
     Ok(classes.class_of)
 }
