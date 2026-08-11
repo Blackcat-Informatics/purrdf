@@ -253,10 +253,79 @@ const CO_TYPED_SHAPE: &str = r"
 :a a :A1 .
 ";
 
+/// THE SCHEMA-HEAVY SHAPE: many disjoint `rdfs:domain`/`rdfs:range` pairs over a tiny ABox.
+///
+/// Twenty-four properties, each declared `rdfs:domain :Dᵢ` and `rdfs:range :Rᵢ` and never once
+/// used by the three-triple ABox below — so every one of the forty-eight axioms is a CLASS-FREE
+/// guard (`purrdf_entail`'s `owl_dl::clause::ClauseSet::untriggered`) tried at every node of
+/// every round, over a role the completion graph has no edge for. That is the shape the
+/// hypertableau's per-role achiever memo (`owl_dl::graph::Graph`'s role-achiever cache) exists
+/// for: before it, each of those tries rebuilt property `pᵢ`'s (trivial, one-element) achiever
+/// closure from scratch — `axioms × nodes × rounds` closure builds — where the property count
+/// is the whole reason to grow the ontology and the ABox deliberately does not.
+const SCHEMA_HEAVY_SHAPE: &str = r"
+@prefix : <https://example.org/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+:p0 rdfs:domain :D0 ;
+      rdfs:range :R0 .
+:p1 rdfs:domain :D1 ;
+      rdfs:range :R1 .
+:p2 rdfs:domain :D2 ;
+      rdfs:range :R2 .
+:p3 rdfs:domain :D3 ;
+      rdfs:range :R3 .
+:p4 rdfs:domain :D4 ;
+      rdfs:range :R4 .
+:p5 rdfs:domain :D5 ;
+      rdfs:range :R5 .
+:p6 rdfs:domain :D6 ;
+      rdfs:range :R6 .
+:p7 rdfs:domain :D7 ;
+      rdfs:range :R7 .
+:p8 rdfs:domain :D8 ;
+      rdfs:range :R8 .
+:p9 rdfs:domain :D9 ;
+      rdfs:range :R9 .
+:p10 rdfs:domain :D10 ;
+      rdfs:range :R10 .
+:p11 rdfs:domain :D11 ;
+      rdfs:range :R11 .
+:p12 rdfs:domain :D12 ;
+      rdfs:range :R12 .
+:p13 rdfs:domain :D13 ;
+      rdfs:range :R13 .
+:p14 rdfs:domain :D14 ;
+      rdfs:range :R14 .
+:p15 rdfs:domain :D15 ;
+      rdfs:range :R15 .
+:p16 rdfs:domain :D16 ;
+      rdfs:range :R16 .
+:p17 rdfs:domain :D17 ;
+      rdfs:range :R17 .
+:p18 rdfs:domain :D18 ;
+      rdfs:range :R18 .
+:p19 rdfs:domain :D19 ;
+      rdfs:range :R19 .
+:p20 rdfs:domain :D20 ;
+      rdfs:range :R20 .
+:p21 rdfs:domain :D21 ;
+      rdfs:range :R21 .
+:p22 rdfs:domain :D22 ;
+      rdfs:range :R22 .
+:p23 rdfs:domain :D23 ;
+      rdfs:range :R23 .
+
+:a0 :chain :a1 .
+:a1 :chain :a2 .
+:a2 a :T .
+";
+
 /// THE LEDGER.
 ///
 /// Rows are in the order a reader wants them: the shape the search was hardened for, its
-/// control, the co-typed shape the work budget exists for, then the truncated path.
+/// control, the co-typed shape the work budget exists for, the schema-heavy shape the achiever
+/// cache exists for, then the truncated path.
 const LEDGER: &[Pin] = &[
     Pin {
         name: "equivalent-class-allvalues-cardinality",
@@ -267,7 +336,7 @@ const LEDGER: &[Pin] = &[
         answer: "consistency true\n",
         completeness: "decided",
         steps: 11,
-        work: 2926,
+        work: 2706,
         peak_nodes: 4,
         disjunctions: 3,
         peak_depth: 3,
@@ -281,7 +350,7 @@ const LEDGER: &[Pin] = &[
         answer: "consistency true\n",
         completeness: "decided",
         steps: 3,
-        work: 221,
+        work: 205,
         peak_nodes: 2,
         disjunctions: 0,
         peak_depth: 0,
@@ -295,10 +364,24 @@ const LEDGER: &[Pin] = &[
         answer: "consistency true\n",
         completeness: "decided",
         steps: 71,
-        work: 195_727,
+        work: 184_367,
         peak_nodes: 15,
         disjunctions: 28,
         peak_depth: 28,
+    },
+    Pin {
+        name: "schema-heavy-domain-range-pairs",
+        ontology: SCHEMA_HEAVY_SHAPE,
+        triples: 51,
+        step_cap: 0,
+        work_cap: 0,
+        answer: "consistency true\n",
+        completeness: "decided",
+        steps: 1,
+        work: 1048,
+        peak_nodes: 3,
+        disjunctions: 0,
+        peak_depth: 0,
     },
     Pin {
         name: "narrowed-budget-subclass-chain",

@@ -424,14 +424,21 @@ pub(crate) struct ClauseSet {
     /// Everything else is re-rooted at a named class by
     /// [`crate::owl_dl::absorb`] and reaches [`Self::by_trigger`]: an `∃r.C ⊑ D` with a named
     /// filler is authored `C(x₀) ∧ r⁻(x₀,x₁) → D(x₁)`, so the common absorbed shape does NOT
-    /// land here. The count is therefore bounded by the ontology's AXIOM count, and the per
-    /// -node cost of one of them is a single [`Graph::neighbors`](crate::owl_dl::graph::Graph::neighbors)
-    /// call that fails immediately at a node with no such edge.
+    /// land here. The count is therefore bounded by the ontology's AXIOM count — but the
+    /// per-node cost of one of them is NOT a free failure. A single
+    /// [`Graph::neighbors`](crate::owl_dl::graph::Graph::neighbors) call resolves the role's
+    /// achiever closure (memoized per role for the run, see
+    /// [`Graph::achiever_cache`](crate::owl_dl::graph::Graph); a role queried for the first
+    /// time still walks the role hierarchy to build it) and then scans every edge the
+    /// completion graph holds, whether or not one matches — a node with no such edge pays
+    /// that scan in full before `neighbors` can report it has nothing. What the bound above
+    /// buys is a per-node cost independent of the ontology's CONCEPT count, not a per-node
+    /// cost of zero.
     ///
     /// An edge-driven index over these would need a role's ACHIEVERS — its sub-roles and its
-    /// inverse partners — recomputed per edge to find the clauses an edge could trigger,
-    /// which is the closure `neighbors` already takes once per attempt. The bound above is
-    /// what makes that trade unnecessary rather than merely unmeasured.
+    /// inverse partners — resolved to find the clauses an edge could trigger, which is what
+    /// `neighbors` already does (and now caches). The bound above is what makes building a
+    /// second, edge-keyed index unnecessary rather than merely unmeasured.
     untriggered: Vec<usize>,
     /// Whether each clause is TBox-DERIVED, by clause index.
     ///

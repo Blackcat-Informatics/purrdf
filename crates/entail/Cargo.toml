@@ -86,3 +86,11 @@ harness = false
 # round ceilings, not as timings.
 name = "consistency"
 harness = false
+
+[[bench]]
+# OWL-Direct consistency latency over a schema-heavy ontology — many disjoint
+# `rdfs:domain`/`rdfs:range` pairs over a FIXED small ABox — sweeping the axiom-count axis the
+# equivalence shape above does not touch. Report-only; the same shape at a hand-verifiable size
+# is pinned as WORK in `purrdf-validate`'s step ledger.
+name = "schema_scan"
+harness = false

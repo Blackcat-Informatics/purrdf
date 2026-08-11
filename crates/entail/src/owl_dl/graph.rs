@@ -35,6 +35,7 @@
 //! clash. [`Graph::merge_nodes`] is the one place identification happens, so neither
 //! calculus can grow a second, name-comparing answer to the same question.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::owl_dl::Kb;
@@ -594,6 +595,17 @@ pub(crate) struct Graph<'a> {
     /// which is a derivation the search made rather than a blanket assertion, and withdrawing
     /// it would need a provenance a label set does not carry.
     unconditional: BTreeSet<u32>,
+    /// Memoized [`Self::achievers`] closures, by role.
+    ///
+    /// The closure is a pure function of the KB's role hierarchy and inverse declarations —
+    /// neither changes once a `Graph` is built — so it is computed at most once per role for
+    /// the WHOLE search this `Graph` runs, however many nodes and rounds call
+    /// [`Self::neighbors`] on it. That matters most for a role that only ever labels an
+    /// UNTRIGGERED clause (an `rdfs:domain`/`rdfs:range` axiom with no class in its guard,
+    /// see [`crate::owl_dl::clause::ClauseSet::untriggered`]): those clauses are retried at
+    /// every node of every round, and before this cache each retry rebuilt the same closure
+    /// from scratch.
+    achiever_cache: RefCell<BTreeMap<Role, BTreeSet<(u32, bool)>>>,
     /// Absorbed range clauses (`⊤ ⊑ ∀r.DR`, from `rdfs:range` over a data property),
     /// pre-indexed by the edge role — the narrowed data-range ids a `≥n r.DR` counting
     /// question at [`Self::data_clashes`] must fold in.
@@ -638,6 +650,7 @@ impl<'a> Graph<'a> {
             work: Work::new(work_cap),
             meta,
             unconditional,
+            achiever_cache: RefCell::new(BTreeMap::new()),
             range_by_role,
         }
     }
@@ -1026,7 +1039,18 @@ impl<'a> Graph<'a> {
 
     /// The `(property, forward?)` edge patterns that realize `role`, closed under the
     /// role hierarchy and inverse-role declarations.
+    ///
+    /// Memoized in [`Self::achiever_cache`]: the closure is a pure function of the KB's role
+    /// axioms, which do not change while this `Graph` runs a search, so it is built at most
+    /// once per role however many times [`Self::neighbors`] asks for it. A HIT is charged one
+    /// unit — a lookup and a clone of a small set — and only a MISS pays for the stack walk
+    /// below, so the meter still moves on every call but the search now pays the closure's
+    /// real cost once rather than once per call.
     fn achievers(&self, role: Role) -> BTreeSet<(u32, bool)> {
+        if let Some(cached) = self.achiever_cache.borrow().get(&role) {
+            self.work.charge(1);
+            return cached.clone();
+        }
         let start = match role {
             Role::Named(p) => (p, true),
             Role::Inv(p) => (p, false),
@@ -1034,9 +1058,9 @@ impl<'a> Graph<'a> {
         let mut set: BTreeSet<(u32, bool)> = BTreeSet::new();
         let mut stack = vec![start];
         // One unit per closure expansion, plus one for the call itself. The `+ 1` is what
-        // makes EVERY neighbourhood read cost something: a role with no sub-roles and no
-        // inverse closes in one expansion over an edgeless graph, and a scan that charged
-        // zero would let a rule call it forever without the meter moving.
+        // makes EVERY cache MISS cost something: a role with no sub-roles and no inverse
+        // closes in one expansion over an edgeless graph, and a scan that charged zero would
+        // let a rule call it forever without the meter moving.
         let mut expansions: u64 = 1;
         while let Some((q, dir)) = stack.pop() {
             expansions += 1;
@@ -1055,6 +1079,7 @@ impl<'a> Graph<'a> {
             }
         }
         self.work.charge(expansions);
+        self.achiever_cache.borrow_mut().insert(role, set.clone());
         set
     }
 
