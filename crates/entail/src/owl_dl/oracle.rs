@@ -14,10 +14,11 @@
 //!
 //! # Two references, because they fail differently
 //!
-//! Every generated knowledge base is decided FOUR times: by the hypertableau, by the
+//! Every generated knowledge base is decided FIVE times: by the hypertableau, by the
 //! hypertableau again (determinism), by the hypertableau over the ALL-META encoding of the
-//! same terminology (the ENCODING differential — see [`check`]), and by the concept-tree
-//! tableau. The oracle is exact and
+//! same terminology (the ENCODING differential — see [`check`]), by the hypertableau under a
+//! WEAKENED blocking condition (the BLOCKING differential — see [`blocking_differential`]),
+//! and by the concept-tree tableau. The oracle is exact and
 //! shares nothing with either calculus, but it is bounded — over a knowledge base that can
 //! force an element beyond the named individuals it can only ever exhibit a model, never rule
 //! one out (see [`bounded_domain`]). The concept-tree tableau is not exact, but it is
@@ -1224,6 +1225,13 @@ struct Tally {
     /// nothing passes silently, and absorption's whole soundness argument is the claim this
     /// population checks.
     encodings: u32,
+    /// Cases where the hypertableau finished under BOTH blocking conditions — the shipped
+    /// pairwise one and the label-only mutation — so their verdicts were compared and agreed.
+    ///
+    /// This is the population the `hyper` module docs' empirical claim about the
+    /// predecessor-label half of the blocking signature rests on, and it is floored for the
+    /// same reason the other two differentials are.
+    blocking: u32,
     /// WORK units the hypertableau spent over EVERY case of this property, summed.
     work: u64,
     /// The most work any ONE case of this property spent.
@@ -1407,16 +1415,77 @@ fn counters_are_coherent(
     Ok(())
 }
 
+/// THE BLOCKING DIFFERENTIAL: decide `case` a second time with the hypertableau's blocking
+/// signature MUTATED to compare labels alone, and require the verdict to be the one the
+/// shipped pairwise condition reached.
+///
+/// # What this is evidence about
+///
+/// The [`hyper`] module documents the pairwise (double) blocking condition — same label, same
+/// PREDECESSOR label, same incoming edge — and, beside it, an empirical honesty: no knowledge
+/// base is known that separates the predecessor-label half from label-only blocking in this
+/// rule set. That claim used to be a paragraph describing a mutation nobody could re-run. This
+/// function is the mutation, and it runs over every knowledge base every property in this file
+/// generates.
+///
+/// Label-only blocking blocks at least as many nodes — every pairwise blocker is a label
+/// blocker, and some label blockers are not pairwise ones — and blocking withholds exactly one
+/// rule, the `≥`-rule. So the mutation never builds a LARGER completion graph than the shipped
+/// condition does, and the direction a difference would show up in is
+/// therefore sharp: a knowledge base the shipped condition refutes and the mutation calls
+/// consistent is a witness that the withheld expansion was the one that closed the branch, and
+/// that the predecessor-label half is load-bearing after all. That is a discovery about the
+/// calculus, not a tolerance, so it fails the run.
+///
+/// # Why the flag is flipped rather than a third knowledge base assembled
+///
+/// Blocking is a property of the SEARCH and not of the encoding: the clause table, the concept
+/// ids, the ABox and both TBox encodings are untouched by it. Assembling a second `Kb` would
+/// therefore compare two searches over knowledge bases that are equal by construction while
+/// costing every case another clausification, and the comparison would be over a `Kb` whose
+/// only interesting property is that it is the same one. The flag is set for the one call and
+/// cleared immediately, so everything downstream — the failure messages, the oracle — sees the
+/// knowledge base as the shipped discipline decides it.
+fn blocking_differential(
+    case: &mut Case,
+    shipped: &graph::Decision,
+    cap: graph::Budget,
+    tally: &RefCell<Tally>,
+) -> Result<(), TestCaseError> {
+    case.kb.label_only_blocking = true;
+    let mutated = hyper::decide(&case.kb, &Assumptions::of_kb(), cap);
+    case.kb.label_only_blocking = false;
+    if shipped.exhausted || mutated.exhausted {
+        return Ok(());
+    }
+    if shipped.consistent != mutated.consistent {
+        return Err(TestCaseError::fail(format!(
+            "THE BLOCKING CONDITION IS LOAD-BEARING: pairwise blocking says {}, label-only \
+             blocking says {}. This is the knowledge base the `hyper` module docs say is not \
+             known to exist — it separates the predecessor-label half of the blocking \
+             signature from label-only blocking, and the docs' empirical claim is false of \
+             it.\npairwise: {shipped:?}\nlabel-only: {mutated:?}\naxioms:\n{}\n{}",
+            shipped.consistent,
+            mutated.consistent,
+            case.axioms_text(),
+            case.oracle_text()
+        )));
+    }
+    tally.borrow_mut().blocking += 1;
+    Ok(())
+}
+
 /// Check one generated knowledge base, recording how it resolved.
 ///
-/// Eight things happen here: the hypertableau is asked twice and must answer identically; its
+/// Nine things happen here: the hypertableau is asked twice and must answer identically; its
 /// verdict is compared against the concept-tree tableau's, which must AGREE; BOTH cores' shape
 /// counters are held to [`counters_are_coherent`]; it is compared
 /// against ITSELF over the all-meta encoding of the same terminology, which must also agree;
-/// a case neither core could finish is skipped; a case whose knowledge base reaches `Δ_D` is
-/// recorded as one the enumeration cannot speak to ([`Case::enumerable`]); where the oracle
-/// exhibits a model the hypertableau's `consistent` is asserted unconditionally; and where the
-/// oracle finds NO model and
+/// it is compared against ITSELF again under the label-only blocking mutation, which must
+/// agree too ([`blocking_differential`]); a case neither core could finish is skipped; a case
+/// whose knowledge base reaches `Δ_D` is recorded as one the enumeration cannot speak to
+/// ([`Case::enumerable`]); where the oracle exhibits a model the hypertableau's `consistent`
+/// is asserted unconditionally; and where the oracle finds NO model and
 /// [`forces_unnamed_element`] says the bound was sufficient, `consistent` is asserted to be
 /// false.
 fn check(
@@ -1425,7 +1494,7 @@ fn check(
     tally: &RefCell<Tally>,
     rounds: u64,
 ) -> Result<(), TestCaseError> {
-    let case = Case::assemble(sig, axioms);
+    let mut case = Case::assemble(sig, axioms);
     let cap = suite_budget(&case.kb, rounds);
     let first = hyper::decide(&case.kb, &Assumptions::of_kb(), cap);
     let again = hyper::decide(&case.kb, &Assumptions::of_kb(), cap);
@@ -1440,6 +1509,9 @@ fn check(
             case.axioms_text()
         )));
     }
+    // THE BLOCKING DIFFERENTIAL: the same knowledge base, the same encoding and the same
+    // calculus, under a WEAKENED blocking condition.
+    blocking_differential(&mut case, &first, cap, tally)?;
     // THE DIFFERENTIAL. The concept-tree tableau decides the same fragment by a different
     // rule set, so where both finish their verdicts must be the same verdict. A divergence is
     // a soundness or completeness bug in one of the two — never a recorded difference.
@@ -1698,6 +1770,16 @@ fn run_property(
         tally.encodings * 20 >= cases * 19,
         "{name} compared the two TBox encodings on fewer than 95% of its cases, so the \
          absorption claim rests on almost nothing: {tally:?}"
+    );
+    // The BLOCKING population, floored on the same argument. The `hyper` module docs make an
+    // empirical claim about the predecessor-label half of the blocking signature, and this is
+    // the population that claim is measured over: a share that collapsed would leave the claim
+    // resting on whatever cases happened to survive both caps.
+    assert!(
+        tally.blocking * 20 >= cases * 19,
+        "{name} compared the two blocking conditions on fewer than 95% of its cases, so the \
+         claim that the pairwise condition changes no verdict rests on almost nothing: \
+         {tally:?}"
     );
     // The ORACLE direction, in whichever of its three forms this property has — see [`Bound`],
     // where each arm says what it is asserting and why the other two would be dishonest for
@@ -4006,17 +4088,15 @@ fn disjoint_roles_reject_a_shared_pair() {
 /// The inverse-role/∀⁻ family the generated corpus reaches thinly: chains under
 /// `X ⊑ ∃r.X` with universal obligations flowing back through `r⁻` across two and three
 /// levels, where blocking-discipline differences would live if this rule set could
-/// exhibit one.
+/// exhibit one, as `(axioms, satisfiable, has a model inside the oracle's bound)`.
 ///
-/// Both cores decide every case and must agree; the satisfiable ones are additionally
-/// confirmed by a looping bounded model. These shapes were first written as a deliberate
-/// hunt for a knowledge base separating pairwise from label-only blocking (see the
-/// blocking notes in [`crate::owl_dl::hyper`]); none separated, and the family is kept
-/// so the differential's reach over this corner is a fixture, not an accident of the
-/// generators.
-#[test]
-fn inverse_universal_chains_decide_identically_in_both_cores() {
-    use crate::owl_dl::{graph, hyper, tableau};
+/// These shapes were written as a deliberate hunt for a knowledge base separating pairwise
+/// blocking from label-only blocking (see the blocking notes in [`crate::owl_dl::hyper`]).
+/// None separated, and they are kept as a permanent fixture so that the differential's reach
+/// over this corner is a decision somebody made rather than an accident of the generators —
+/// which is why the list is a function: two tests read it, one deciding each chain by both
+/// CALCULI and one deciding it under both BLOCKING conditions.
+fn inverse_universal_chains() -> Vec<(Vec<Axiom>, bool, bool)> {
     let x = HAND.concept_names()[0];
     let a = HAND.concept_names()[1];
     let b = *HAND.concept_names().get(2).unwrap_or(&a);
@@ -4099,24 +4179,112 @@ fn inverse_universal_chains_decide_identically_in_both_cores() {
             false,
         ),
     ];
-    for (k, (extra, satisfiable, bounded_model)) in cases.iter().enumerate() {
-        let mut axioms = vec![
-            Axiom::Type(i0, and(named(x), named(a))),
-            Axiom::Gci(named(x), some(r, named(x))),
-        ];
-        axioms.extend(extra.iter().cloned());
+    cases
+        .into_iter()
+        .map(|(extra, satisfiable, bounded_model)| {
+            let mut axioms = vec![
+                Axiom::Type(i0, and(named(x), named(a))),
+                Axiom::Gci(named(x), some(r, named(x))),
+            ];
+            axioms.extend(extra);
+            (axioms, satisfiable, bounded_model)
+        })
+        .collect()
+}
+
+/// Both calculi decide every chain above, agree, and reach the verdict its own comment
+/// derives; a satisfiable one whose loop model fits the oracle's bound is confirmed by the
+/// enumeration too.
+#[test]
+fn inverse_universal_chains_decide_identically_in_both_cores() {
+    for (k, (axioms, satisfiable, bounded_model)) in
+        inverse_universal_chains().into_iter().enumerate()
+    {
         let case = Case::assemble(HAND, &axioms);
         let cap = graph::Budget::for_kb(&case.kb);
         let h = hyper::decide(&case.kb, &Assumptions::of_kb(), cap);
         let t = tableau::decide(&case.kb, &Assumptions::of_kb(), cap);
         assert!(!h.exhausted && !t.exhausted, "case {k} must decide");
         assert_eq!(h.consistent, t.consistent, "case {k}: the cores diverge");
-        assert_eq!(h.consistent, *satisfiable, "case {k}: wrong verdict");
-        if *bounded_model {
+        assert_eq!(h.consistent, satisfiable, "case {k}: wrong verdict");
+        if bounded_model {
             assert!(
                 case.smallest_model().is_some(),
                 "case {k}: this satisfiable chain has a loop model inside the bound"
             );
         }
     }
+}
+
+/// …AND EVERY ONE OF THEM DECIDES THE SAME WAY UNDER LABEL-ONLY BLOCKING.
+///
+/// This is the hand-targeted half of the blocking claim, beside the corpus-wide half
+/// [`blocking_differential`] runs: these chains were written as a deliberate hunt for a
+/// knowledge base separating the pairwise condition from label-only blocking, so the family is
+/// worth nothing as evidence unless the mutation is actually applied to it. It is applied
+/// here, case by case, and the verdict must be the one the shipped condition reached.
+#[test]
+fn label_only_blocking_decides_the_inverse_universal_chains_identically() {
+    for (k, (axioms, satisfiable, _)) in inverse_universal_chains().into_iter().enumerate() {
+        let mut case = Case::assemble(HAND, &axioms);
+        case.kb.label_only_blocking = true;
+        let cap = graph::Budget::for_kb(&case.kb);
+        let mutated = hyper::decide(&case.kb, &Assumptions::of_kb(), cap);
+        assert!(
+            !mutated.exhausted,
+            "case {k} must decide under label-only blocking too"
+        );
+        assert_eq!(
+            mutated.consistent, satisfiable,
+            "case {k}: label-only blocking reaches a different verdict, which is the \
+             separating knowledge base the `hyper` module docs say is not known to exist"
+        );
+    }
+}
+
+/// THE MUTATION IS OBSERVED: a knowledge base label-only blocking builds a strictly smaller
+/// completion graph for.
+///
+/// Every assertion above is about a VERDICT that does not change, and an assertion of that
+/// shape has a failure mode: a switch that is never read reaches the same verdict too, and
+/// the whole blocking differential would then be the hypertableau agreeing with itself over
+/// 9,800 knowledge bases. So one case pins the other direction — that the two conditions
+/// really are two conditions.
+///
+/// `A ⊑ ∃r.B`, `A ⊑ ∃s.B` and `B ⊑ ∃r.B` over an `A`-individual give the root two successors
+/// with the SAME label `{B}` reached by DIFFERENT roles. Label-only blocking blocks the second
+/// against the first at once and expands neither chain; the pairwise condition separates them
+/// on the incoming edge, expands both, and stops one level further down where the
+/// predecessor labels finally agree. The verdict is the same — the knowledge base is plainly
+/// consistent — and the graph is not.
+#[test]
+fn label_only_blocking_builds_a_smaller_graph_than_the_pairwise_condition() {
+    let a_class = HAND.concept_names()[0];
+    let b_class = HAND.concept_names()[1];
+    let some =
+        |role: u32, filler: u32| Concept::Some(Role::Named(role), Box::new(Concept::Named(filler)));
+    let axioms = [
+        Axiom::Type(HAND.individual_names()[0], Concept::Named(a_class)),
+        Axiom::Gci(Concept::Named(a_class), some(HAND.role_names()[0], b_class)),
+        Axiom::Gci(Concept::Named(a_class), some(HAND.role_names()[1], b_class)),
+        Axiom::Gci(Concept::Named(b_class), some(HAND.role_names()[0], b_class)),
+    ];
+    let mut case = Case::assemble(HAND, &axioms);
+    let cap = graph::Budget::for_kb(&case.kb);
+    let pairwise = hyper::decide(&case.kb, &Assumptions::of_kb(), cap);
+    case.kb.label_only_blocking = true;
+    let label_only = hyper::decide(&case.kb, &Assumptions::of_kb(), cap);
+    case.kb.label_only_blocking = false;
+    assert!(
+        pairwise.consistent && label_only.consistent,
+        "both conditions decide this knowledge base consistent"
+    );
+    assert!(
+        label_only.peak_nodes < pairwise.peak_nodes,
+        "label-only blocking must build a SMALLER graph here ({} nodes) than the pairwise \
+         condition ({} nodes) — if the two are equal the mutation is not being read, and \
+         every blocking comparison in this file is the calculus agreeing with itself",
+        label_only.peak_nodes,
+        pairwise.peak_nodes
+    );
 }

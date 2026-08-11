@@ -193,6 +193,22 @@ pub(crate) struct Kb {
     /// other exists to check it.
     #[cfg(test)]
     pub(crate) internalize_only: bool,
+    /// Whether the hypertableau's blocking condition must compare LABELS ALONE, dropping the
+    /// predecessor-label and incoming-edge halves of the pairwise signature.
+    ///
+    /// Compiled only under `cfg(test)`, and for the same reason [`Kb::internalize_only`] is:
+    /// the module docs of [`hyper`] state an EMPIRICAL claim — that no knowledge base in this
+    /// crate's corpora separates pairwise blocking from label-only blocking — and a claim of
+    /// that shape is worth nothing unless the mutation it names can be run. The BLOCKING
+    /// DIFFERENTIAL in [`crate::owl_dl::oracle`] sets this on every generated knowledge base
+    /// and requires the verdict to be the one the shipped condition reached.
+    ///
+    /// It is deliberately not a mode a caller can select. Pairwise blocking is the published
+    /// calculus's condition and the one this crate decides under; label-only blocking exists
+    /// to be compared against, and a verdict difference under it would be a discovery about
+    /// the calculus rather than a setting somebody wanted.
+    #[cfg(test)]
+    pub(crate) label_only_blocking: bool,
 }
 
 impl Kb {
@@ -228,6 +244,7 @@ impl Kb {
             boundaries: BTreeSet::new(),
             stop: None,
             internalize_only: false,
+            label_only_blocking: false,
         }
     }
 
@@ -492,6 +509,21 @@ impl Kb {
     #[cfg(not(test))]
     const fn encoding(&self) -> Encoding {
         Encoding::Absorbing
+    }
+
+    /// Whether the hypertableau's blocking signature is LABELS ALONE — see
+    /// [`Kb::label_only_blocking`], which the differential corpus sets.
+    #[cfg(test)]
+    pub(crate) const fn labels_alone_block(&self) -> bool {
+        self.label_only_blocking
+    }
+
+    /// Whether the hypertableau's blocking signature is LABELS ALONE. A shipped build blocks
+    /// PAIRWISE — labels, predecessor labels and the incoming edge — which is the published
+    /// calculus's condition and the only one outside a test.
+    #[cfg(not(test))]
+    pub(crate) const fn labels_alone_block(&self) -> bool {
+        false
     }
 
     /// Whether the ontology counts successors of a role that is SOMETHING's inverse — the

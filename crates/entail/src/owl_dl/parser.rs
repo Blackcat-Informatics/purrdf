@@ -1123,6 +1123,8 @@ pub(crate) fn build_until(
         stop: None,
         #[cfg(test)]
         internalize_only: false,
+        #[cfg(test)]
+        label_only_blocking: false,
     };
     kb.encode_until(|| poll(stop))?;
     Ok(kb)

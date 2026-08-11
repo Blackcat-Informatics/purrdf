@@ -136,21 +136,37 @@
 //! clauses.
 //!
 //! One empirical honesty about condition (4)'s predecessor-label half: no knowledge base is
-//! KNOWN that separates it from label-only blocking in this rule set. A deliberate hunt —
-//! the generated corpora run under a label-only mutation, plus a hand-targeted family of
-//! inverse-role/∀⁻ chains (kept as a permanent differential test in the oracle) — changed
-//! tallies but never a verdict. It was RE-RUN after absorption began authoring the
-//! head-on-predecessor clauses above, so the corpora it swept now generate exactly the shape
-//! the condition was suspected to be needed for: mutating [`Hyper::same_signature`] to compare
-//! labels alone leaves every verdict, every differential and every oracle comparison in this
-//! crate unchanged, and moves only which cases exhaust the narrowed step cap. The structural
-//! reason narrows the classic separation:
+//! KNOWN that separates it from label-only blocking in this rule set. That is not a hunt
+//! somebody once conducted and wrote down — it is a claim this crate re-checks on every test
+//! run, because the mutation it names EXISTS. `Kb::label_only_blocking` (a `cfg(test)` field
+//! on [`Kb`], mirroring the `internalize_only` switch the encoding differential uses) makes
+//! [`Hyper::same_signature`] compare labels alone, dropping the predecessor-label and
+//! incoming-edge halves, and three tests in `crate::owl_dl::oracle` read it:
+//!
+//! * `blocking_differential` decides EVERY generated knowledge base twice, once under each
+//!   condition, and fails the run on a verdict difference. Measured population: 9,799 of the
+//!   suite's 9,800 cases — the one exclusion is the single `wide` knowledge base that exhausts
+//!   the narrowed round cap whatever it is given — and every verdict agrees. Each property
+//!   floors that share at 95%, so the claim cannot quietly come to rest on a handful of cases;
+//! * `label_only_blocking_decides_the_inverse_universal_chains_identically` applies the same
+//!   mutation to the hand-targeted family of inverse-role/∀⁻ chains that was written as a
+//!   deliberate hunt for a separating knowledge base — the corner the generators reach thinly;
+//! * `label_only_blocking_builds_a_smaller_graph_than_the_pairwise_condition` pins the OTHER
+//!   direction: a knowledge base whose completion graph is strictly smaller under label-only
+//!   blocking. Without it, a switch nobody read would produce the same agreement, and the two
+//!   tests above would be the calculus agreeing with itself.
+//!
+//! The sweep covers the corpora as they are TODAY, which is what re-running it after
+//! absorption began authoring the head-on-predecessor clauses above bought: those corpora now
+//! generate exactly the shape the condition was suspected to be needed for. What moves under
+//! the mutation is cost — a smaller graph, and which cases reach the narrowed step cap — never
+//! an answer. The structural reason narrows the classic separation:
 //! blocking here withholds ONLY `≥`-rule applications, while every clause body — including
 //! the `∀r⁻` back-propagation whose obligations the pairwise condition guards in the
 //! published calculus — keeps matching blocked nodes, and blocking is recomputed every
 //! round as labels grow. The condition is kept because it is the published calculus's and
 //! costs one comparison; what must not be claimed is that the test corpus DEMONSTRATES its
-//! necessity, and this paragraph is that claim's replacement.
+//! necessity, and the tests named above are what that claim was replaced with.
 //!
 //! Termination follows from (1) and (4) alone: a node's blocking signature is
 //! `(L(x), L(pred(x)), incoming(x))`, drawn from the FIXED, finalized concept table, so there
@@ -962,7 +978,7 @@ impl<'a> Hyper<'a> {
             self.g.work().charge(candidates.len() as u64 + 1);
             let directly = candidates
                 .iter()
-                .any(|&y| Self::same_signature(st, x, y, parent));
+                .any(|&y| self.same_signature(st, x, y, parent));
             let indirectly = parent < x && blocked[parent];
             if directly || indirectly {
                 blocked[x] = true;
@@ -975,12 +991,28 @@ impl<'a> Hyper<'a> {
 
     /// Whether `x` (whose predecessor is `parent`) has `y`'s blocking signature: same label,
     /// same predecessor label, same incoming edge.
-    fn same_signature(st: &State, x: usize, y: usize, parent: usize) -> bool {
+    ///
+    /// # The mutation this method carries
+    ///
+    /// Under [`Kb::labels_alone_block`](crate::owl_dl::Kb) — a `cfg(test)` switch nothing
+    /// outside the differential corpus sets — the two PAIRWISE halves are dropped and the
+    /// comparison is the labels alone. That is the weaker blocking condition the module docs
+    /// discuss: it blocks strictly more nodes, so it withholds strictly more `≥`-rule
+    /// applications, and if the predecessor-label half were load-bearing for this rule set a
+    /// knowledge base would come out consistent under it that the shipped condition refutes.
+    /// The claim that none does is checked over every generated corpus by the blocking
+    /// differential in [`crate::owl_dl::oracle`] rather than asserted in prose.
+    fn same_signature(&self, st: &State, x: usize, y: usize, parent: usize) -> bool {
+        if st.nodes[x].label != st.nodes[y].label {
+            return false;
+        }
+        if self.g.kb().labels_alone_block() {
+            return true;
+        }
         let Some(other_parent) = st.nodes[y].parent.map(|p| find(st, p)) else {
             return false;
         };
         st.nodes[x].incoming == st.nodes[y].incoming
-            && st.nodes[x].label == st.nodes[y].label
             && st.nodes[parent].label == st.nodes[other_parent].label
     }
 }
