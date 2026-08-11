@@ -594,6 +594,16 @@ pub(crate) struct Graph<'a> {
     /// which is a derivation the search made rather than a blanket assertion, and withdrawing
     /// it would need a provenance a label set does not carry.
     unconditional: BTreeSet<u32>,
+    /// Absorbed range clauses (`⊤ ⊑ ∀r.DR`, from `rdfs:range` over a data property),
+    /// pre-indexed by the edge role — the narrowed data-range ids a `≥n r.DR` counting
+    /// question at [`Self::data_clashes`] must fold in.
+    ///
+    /// Built once here rather than walked per call: [`Self::data_clashes`] used to scan the
+    /// WHOLE absorbed table per `Min` concept in a node's label, looking for the one shape
+    /// that matches, and an ontology with many domain/range axioms pays for every one of them
+    /// at every such node. The lookup is by the role the clause's body atom names VERBATIM —
+    /// see the soundness note at [`Self::data_clashes`].
+    range_by_role: BTreeMap<Role, Vec<u32>>,
 }
 
 impl<'a> Graph<'a> {
@@ -608,11 +618,27 @@ impl<'a> Graph<'a> {
                 .filter(|clause| clause.body.is_empty())
                 .map(|clause| clause.head),
         );
+        let mut range_by_role: BTreeMap<Role, Vec<u32>> = BTreeMap::new();
+        for clause in &kb.absorbed {
+            if let [
+                BodyAtom::Role {
+                    from: 0,
+                    to: 1,
+                    role,
+                },
+            ] = clause.body.as_slice()
+                && clause.head_var == 1
+                && let Decomp::Data(narrowed) = *kb.table.decomp(clause.head)
+            {
+                range_by_role.entry(*role).or_default().push(narrowed);
+            }
+        }
         Self {
             kb,
             work: Work::new(work_cap),
             meta,
             unconditional,
+            range_by_role,
         }
     }
 
@@ -1078,9 +1104,10 @@ impl<'a> Graph<'a> {
         if self.kb.data_ranges.is_empty() {
             return false;
         }
-        // Two label scans and, per at-least-over-a-data-range concept, a third plus a pass
-        // over the absorbed table. An ontology that states no data range paid nothing above;
-        // one that does pays for what it made this method read.
+        // Two label scans and, per at-least-over-a-data-range concept, a third plus a lookup
+        // in the pre-indexed range clauses ([`Self::range_by_role`]). An ontology that states
+        // no data range paid nothing above; one that does pays for what it made this method
+        // read.
         self.work.charge(st.nodes[x].label.len() as u64 + 1);
         let mut positive: Vec<u32> = Vec::new();
         let mut negative: Vec<u32> = Vec::new();
@@ -1107,8 +1134,28 @@ impl<'a> Graph<'a> {
                 continue;
             };
             let mut demanded = vec![range];
+            // A `⊤ ⊑ ∀r.DR` axiom — every `rdfs:range` over a data property — is an EDGE
+            // CLAUSE rather than a label ([`crate::owl_dl::absorb`]), so the narrowing it
+            // contributes is read from [`Self::range_by_role`] rather than off this node's
+            // own label. It narrows every node's `r`-successors unconditionally, which is
+            // what an unguarded range clause says, and it used to be read off the label back
+            // when a range axiom was internalized into it. Losing it here would silently
+            // weaken the counting question below on exactly the ontologies that state a
+            // range.
+            //
+            // The lookup key is the role a range clause's body atom names VERBATIM, at
+            // absorption time — not the achiever closure [`Self::achievers`] resolves for a
+            // `neighbors` scan. A range stated over `Named(p)` therefore narrows a `Min`
+            // counted over `Named(p)` itself but is silently absent for one counted over
+            // `Inv(p)` or over a super-role of `p`: the match is SYNTACTIC, so it can only
+            // WITHHOLD a clash a sub-role or inverse relationship would in fact justify, never
+            // manufacture one that is not there. That keeps this sound and incomplete rather
+            // than unsound, and completeness for the syntactic cases this table cannot see is
+            // recovered by the meta-encoding of the same `rdfs:range` axiom on every other
+            // role spelling.
+            let role_ranges = self.range_by_role.get(&role).map_or(&[][..], Vec::as_slice);
             self.work
-                .charge((st.nodes[x].label.len() + self.kb.absorbed.len()) as u64);
+                .charge((st.nodes[x].label.len() + role_ranges.len()) as u64);
             for &other in &st.nodes[x].label {
                 if let Decomp::All(universal_role, universal_filler) = *self.kb.table.decomp(other)
                     && universal_role == role
@@ -1117,28 +1164,7 @@ impl<'a> Graph<'a> {
                     demanded.push(narrowed);
                 }
             }
-            // A `⊤ ⊑ ∀r.DR` axiom — every `rdfs:range` over a data property — is an EDGE
-            // CLAUSE rather than a label ([`crate::owl_dl::absorb`]), so the narrowing it
-            // contributes is read from the absorbed table. It narrows every node's
-            // `r`-successors unconditionally, which is what an unguarded range clause says,
-            // and it used to be read off this node's own label back when a range axiom was
-            // internalized into it. Losing it here would silently weaken the counting
-            // question below on exactly the ontologies that state a range.
-            for clause in &self.kb.absorbed {
-                if let [
-                    BodyAtom::Role {
-                        from: 0,
-                        to: 1,
-                        role: edge,
-                    },
-                ] = clause.body.as_slice()
-                    && *edge == role
-                    && clause.head_var == 1
-                    && let Decomp::Data(narrowed) = *self.kb.table.decomp(clause.head)
-                {
-                    demanded.push(narrowed);
-                }
-            }
+            demanded.extend_from_slice(role_ranges);
             if self.kb.data_ranges.provably_fewer_than(&demanded, n) {
                 return true;
             }

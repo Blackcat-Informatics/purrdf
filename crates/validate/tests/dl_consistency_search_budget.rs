@@ -46,6 +46,9 @@
 
 use purrdf_rdf::{SerializeGraph, parse_dataset, serialize_dataset};
 
+mod common;
+use common::measurement;
+
 /// The reported ontology, verbatim.
 const ONTOLOGY: &str = r"
 @prefix : <https://example.org/> .
@@ -76,21 +79,6 @@ const ONTOLOGY: &str = r"
 
 :a a :A .
 ";
-
-/// The value of the certificate's `field` line, as a number.
-///
-/// Read out of the RENDERED certificate rather than from a reasoner API, because what this
-/// test is about is the pair of numbers a caller actually sees.
-fn measurement(certificate: &str, field: &str) -> u64 {
-    let line = certificate
-        .lines()
-        .find(|line| line.starts_with(&format!("{field} ")))
-        .unwrap_or_else(|| panic!("the certificate states no `{field}` line:\n{certificate}"));
-    line[field.len() + 1..]
-        .trim()
-        .parse()
-        .unwrap_or_else(|error| panic!("`{line}` is not a number: {error}"))
-}
 
 #[test]
 fn an_ordinary_ontology_decides_far_inside_its_step_budget() {

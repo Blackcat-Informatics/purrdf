@@ -413,7 +413,7 @@ pub(crate) struct ClauseSet {
     ///
     /// # What lands here, and the bound that makes it affordable
     ///
-    /// Exactly three populations, and none of them scales with the ontology's CONCEPT count:
+    /// Exactly two populations, and neither scales with the ontology's CONCEPT count:
     ///
     /// * the two role axioms (`owl:AsymmetricProperty`, `owl:propertyDisjointWith`), one
     ///   clause each;

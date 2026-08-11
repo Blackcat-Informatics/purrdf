@@ -49,6 +49,9 @@
 
 use purrdf_rdf::{SerializeGraph, parse_dataset, serialize_dataset};
 
+mod common;
+use common::measurement;
+
 /// One ledgered fixture: an ontology, and exactly what deciding it costs.
 struct Pin {
     /// The fixture's name, which names its SHAPE — the constructs whose interaction the
@@ -313,30 +316,14 @@ const LEDGER: &[Pin] = &[
     },
 ];
 
-/// The ontology as canonical N-Quads, and how many triples that is.
+/// The ontology as canonical N-Quads. `pin.triples` is the separate, hand-counted figure a
+/// caller checks the parse against — this function returns only the document text.
 fn as_nquads(pin: &Pin) -> String {
     let dataset = parse_dataset(pin.ontology.as_bytes(), "text/turtle", None)
         .unwrap_or_else(|error| panic!("{}: the ontology parses: {error}", pin.name));
     let bytes = serialize_dataset(&*dataset, "application/n-quads", SerializeGraph::Dataset)
         .unwrap_or_else(|error| panic!("{}: the ontology serializes: {error}", pin.name));
     String::from_utf8(bytes).expect("N-Quads is UTF-8")
-}
-
-/// The value of the certificate's `field` line, as a number.
-///
-/// Matched on the field name plus a space, so a line ADDED to the rendering cannot be read as
-/// another one's value and a reader of this ledger does not have to re-check the parser every
-/// time the certificate grows a measurement.
-fn measurement(certificate: &str, field: &str) -> u64 {
-    let prefix = format!("{field} ");
-    let line = certificate
-        .lines()
-        .find(|line| line.starts_with(&prefix))
-        .unwrap_or_else(|| panic!("the certificate states no `{field}` line:\n{certificate}"));
-    line[prefix.len()..]
-        .trim()
-        .parse()
-        .unwrap_or_else(|error| panic!("`{line}` is not a number: {error}"))
 }
 
 #[test]

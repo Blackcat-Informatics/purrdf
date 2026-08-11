@@ -114,6 +114,20 @@ const INCONSISTENT_ONTOLOGY: &str = concat!(
     ":a a :A .\n",
 );
 
+/// The same shape as [`INCONSISTENT_ONTOLOGY`] — `A ⊑ B`, `A ⊑ ¬B`, `a : A` — but every
+/// class/individual term is a RELATIVE IRI (no `@prefix`, no scheme), so the document only
+/// parses, and only decides `false` rather than erroring, when `--base` resolves `<A>`/`<B>`/
+/// `<a>` to the SAME absolute IRIs everywhere they occur.
+const RELATIVE_INCONSISTENT_ONTOLOGY: &str = concat!(
+    "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+    "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+    "<A> a owl:Class .\n",
+    "<B> a owl:Class .\n",
+    "<A> rdfs:subClassOf <B> .\n",
+    "<A> rdfs:subClassOf [ owl:complementOf <B> ] .\n",
+    "<a> a <A> .\n",
+);
+
 /// A consistent ontology decides `consistency true`, `completeness decided`, and exits 0.
 ///
 /// Both the verdict AND the full certificate — including the peak-nodes/disjunctions/
@@ -312,8 +326,9 @@ fn stdin_requires_an_explicit_from_format() {
     );
 }
 
+/// `--from` alone resolves stdin: an ABSOLUTE-IRI document needs no `--base` to decide.
 #[test]
-fn from_and_base_resolve_stdin_turtle() {
+fn from_resolves_stdin_turtle() {
     use std::io::Write as _;
     use std::process::Stdio;
 
@@ -334,6 +349,66 @@ fn from_and_base_resolve_stdin_turtle() {
 
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(stdout(&out).starts_with("consistency true\n"));
+}
+
+/// `--base` resolves RELATIVE IRIs in a stdin-piped Turtle document before deciding it: without
+/// it the same bytes cannot even parse (`<A>` names no scheme), and with it
+/// [`RELATIVE_INCONSISTENT_ONTOLOGY`] resolves `<A>`/`<B>`/`<a>` to the SAME absolute IRIs
+/// everywhere they recur and decides `false` — the one answer that is only reachable if every
+/// occurrence resolved identically rather than, say, each parse call minting its own blank
+/// term for an unresolved relative reference.
+#[test]
+fn base_resolves_relative_iris_piped_via_stdin() {
+    use std::io::Write as _;
+    use std::process::Stdio;
+
+    let pipe = |args: &[&str]| -> Output {
+        let mut child = purrdf()
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn purrdf");
+        child
+            .stdin
+            .take()
+            .expect("piped stdin")
+            .write_all(RELATIVE_INCONSISTENT_ONTOLOGY.as_bytes())
+            .expect("write stdin");
+        child.wait_with_output().expect("wait for purrdf")
+    };
+
+    // Without `--base`, a relative IRI has no scheme to be absolute with — the negative
+    // control that keeps the assertion below from passing by accident.
+    let unbased = pipe(&["consistency", "--from", "turtle", "-"]);
+    assert_eq!(
+        code(&unbased),
+        1,
+        "a relative IRI with no --base must fail to parse: {}",
+        stderr(&unbased)
+    );
+    assert!(
+        stderr(&unbased).contains("absolute"),
+        "the refusal names what a relative IRI is missing: {}",
+        stderr(&unbased)
+    );
+
+    let based = pipe(&[
+        "consistency",
+        "--from",
+        "turtle",
+        "--base",
+        "https://example.org/",
+        "-",
+    ]);
+    assert!(based.status.success(), "{}", stderr(&based));
+    assert!(
+        stdout(&based).starts_with("consistency false\n"),
+        "resolved relative IRIs must decide the same inconsistency as \
+         INCONSISTENT_ONTOLOGY's absolute ones: {}",
+        stdout(&based)
+    );
 }
 
 /// N-Triples needs no `--from` override either — the sibling verbs' default format

@@ -1191,13 +1191,20 @@ fn check(
     let other = hyper::decide(&internalized.kb, &Assumptions::of_kb(), cap);
     if !first.exhausted && !other.exhausted {
         if first.consistent != other.consistent {
+            // Both sides of the differential, not just the absorbed one: `case.kb.meta` is
+            // whatever [`absorb`](crate::owl_dl::absorb) left un-guarded under the encoding
+            // that DID absorb, and `internalized.kb.meta` is the comparand that actually
+            // decided `other` — the full internalized TBox with nothing absorbed. Printing
+            // only the first would show a reader the antecedents absorption chose to guard
+            // and never the axioms the all-meta run reasoned over instead.
             return Err(TestCaseError::fail(format!(
                 "the two TBox encodings disagree: absorbed says {}, all-meta says {}\n\
-                 absorbed clauses: {:?}\nmeta: {:?}\naxioms:\n{}",
+                 absorbed clauses: {:?}\nabsorbed meta: {:?}\nall-meta meta: {:?}\naxioms:\n{}",
                 first.consistent,
                 other.consistent,
                 case.kb.absorbed,
                 case.kb.meta,
+                internalized.kb.meta,
                 case.axioms_text(),
             )));
         }
@@ -1267,6 +1274,11 @@ fn seed(tag: u8) -> [u8; 32] {
 /// Run one property: `cases` generated knowledge bases over `sig`, each put through
 /// [`check`], and then a health check on the tally so the property cannot pass by asserting
 /// nothing.
+// Nine parameters because nine independent knobs are what a `proptest` property over a
+// generated corpus needs named at the call site — the test's name, the signature, the case
+// count, the seed tag, the domain-bound floor, the round and step ceilings, the work
+// ceiling, and the axiom strategy — and bundling them into a struct would hide which ones a
+// given `#[test]` chose to override.
 #[allow(clippy::too_many_arguments)]
 fn run_property(
     name: &str,

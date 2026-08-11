@@ -600,9 +600,16 @@ mod tests {
             self.next() % bound
         }
 
-        /// A concept of at most `depth` nested constructors over a three-name, two-role,
+        /// A concept of at most `depth` nested constructors over a two-name, two-role,
         /// two-individual signature — small enough that duplicate and complementary members
-        /// arise often, which is precisely what the canonicalization must survive.
+        /// arise often, which is precisely what the canonicalization must survive. [`Gen::leaf`]
+        /// is the whole signature: `below(6)` reserves one case each for `⊤` and `⊥`, one for a
+        /// nominal over one of two individuals, one for a data range over one of two ranges,
+        /// and the remaining two cases for [`Concept::Named`] — so exactly two named classes,
+        /// not three. This generator is unrelated to the oracle module's own differential
+        /// corpus generator (`owl_dl::oracle::CONCEPT_NAMES`, four class names for a
+        /// separate, wider signature) — the two live in different test modules and share no
+        /// code.
         fn concept(&mut self, depth: u32) -> Concept {
             let leaves = 6;
             if depth == 0 {

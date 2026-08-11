@@ -46,6 +46,9 @@ use std::fmt::Write as _;
 
 use purrdf_rdf::{SerializeGraph, parse_dataset, serialize_dataset};
 
+mod common;
+use common::measurement;
+
 /// `blocks` copies of the reported ontology, each over its own vocabulary, ALL asserted of the
 /// single individual `:a`.
 ///
@@ -98,22 +101,6 @@ fn document(blocks: usize) -> String {
     let bytes = serialize_dataset(&*dataset, "application/n-quads", SerializeGraph::Dataset)
         .expect("the ontology serializes");
     String::from_utf8(bytes).expect("N-Quads is UTF-8")
-}
-
-/// The value of the certificate's `field` line, as a number.
-///
-/// Matched on the field name plus a space, so `work` and `work-budget` are two different
-/// lines and neither can be read as the other.
-fn measurement(certificate: &str, field: &str) -> u64 {
-    let prefix = format!("{field} ");
-    let line = certificate
-        .lines()
-        .find(|line| line.starts_with(&prefix))
-        .unwrap_or_else(|| panic!("the certificate states no `{field}` line:\n{certificate}"));
-    line[prefix.len()..]
-        .trim()
-        .parse()
-        .unwrap_or_else(|error| panic!("`{line}` is not a number: {error}"))
 }
 
 /// Two co-typed copies still DECIDE, and nowhere near either ceiling.
