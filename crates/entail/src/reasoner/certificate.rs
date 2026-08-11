@@ -43,7 +43,7 @@
 //! A search the caller's stop signal ended, rather than a cap, is not a fourth state: it
 //! reaches the same [`DlCompleteness::BudgetExhausted`] a capped search does, because
 //! `consistent` is exactly as meaningless under either — see
-//! [`crate::owl_dl::graph::Decision`]. [`DlCertificate::stopped`] is where the two stay
+//! the crate-private search decision record. [`DlCertificate::stopped`] is where the two stay
 //! tellable apart. There is no way to construct a certificate that omits any of its
 //! signals: the crate-internal session type is the only producer, and it derives the
 //! verdict from what the decision core reported.
@@ -205,7 +205,7 @@ pub struct DlCertificate {
     /// Whether any decision this run made ended because the caller's stop signal fired,
     /// rather than because it reached a cap.
     ///
-    /// A run cannot be both: [`crate::owl_dl::graph::Decision`] reports exactly one of
+    /// A run cannot be both: the underlying search decision reports exactly one of
     /// `exhausted`/`stopped` for a truncated search, and this field is that same fact
     /// carried through the session. [`Self::completeness`] folds it into
     /// [`DlCompleteness::BudgetExhausted`] exactly as it folds `exhausted` — a stopped run
