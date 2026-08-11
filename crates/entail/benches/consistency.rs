@@ -7,17 +7,18 @@
 
 //! OWL-Direct CONSISTENCY benchmark over the shape whose search cost was the defect.
 //!
-//! The fixture is the reported ontology, replicated: an `owl:equivalentClass` over two
-//! untyped restrictions — a `∀`-restriction whose filler is an intersection, and an exact
-//! cardinality — beside an `owl:inverseOf` and an `rdfs:range`, with one typed individual per
-//! block. Seventeen triples of it once exhausted the search budget outright, because the
-//! CONVERSE direction of that equivalence has an antecedent no faithful absorption can guard
-//! and so reaches the search as a disjunction every node must resolve.
+//! The fixture is the equivalence-over-untyped-restrictions ontology, replicated: an
+//! `owl:equivalentClass` over two untyped restrictions — a `∀`-restriction whose filler is an
+//! intersection, and an exact cardinality — beside an `owl:inverseOf` and an `rdfs:range`, with
+//! one typed individual per block. Seventeen triples of it once exhausted the search budget
+//! outright, because the CONVERSE direction of that equivalence has an antecedent no faithful
+//! absorption can guard and so reaches the search as a disjunction every node must resolve.
 //!
 //! # Two shapes, and the difference between them is the whole point
 //!
-//! Each block is generated twice: once as the `owl:equivalentClass` the report carried, and
-//! once as the CONTROL — the same restrictions asserted with `rdfs:subClassOf`, which is one
+//! Each block is generated twice: once as the `owl:equivalentClass` the equivalence-over-
+//! untyped-restrictions ontology states, and once as the CONTROL — the same restrictions
+//! asserted with `rdfs:subClassOf`, which is one
 //! direction rather than two and absorbs into guarded clauses that never branch. Benching only
 //! the expensive shape would show a number with nothing to read it against; benching both
 //! shows what the case splits cost, at each size, in the same run.
@@ -48,7 +49,7 @@
 //! Deciding 17 triples of it costs 11 rounds where it once cost the entire budget; deciding
 //! sixteen copies costs 821. That is a search whose cost is bounded and legible rather than
 //! one that is linear, and this bench is here so the shape of that curve has somewhere to be
-//! seen rather than being re-derived from a report.
+//! seen rather than needing to be re-measured by hand every time it matters.
 //!
 //! # The third group: the same blocks CO-TYPED on one individual
 //!
@@ -134,12 +135,12 @@ impl Shape {
     }
 }
 
-/// `blocks` copies of the reported shape, stated as `shape` says.
+/// `blocks` copies of the ∀-equivalence shape, stated as `shape` says.
 ///
 /// The restrictions deliberately carry NO `rdf:type owl:Restriction`: they are restrictions by
 /// their `owl:onProperty` / `owl:allValuesFrom` / `owl:cardinality` triples alone, which is
-/// legal OWL 2 RDF and is what the reported ontology looked like. Retyping them would bench a
-/// different parse.
+/// legal OWL 2 RDF and is what the equivalence-over-untyped-restrictions ontology states.
+/// Retyping them would bench a different parse.
 fn ontology(blocks: usize, shape: Shape) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
     let ty = b.intern_iri(RDF_TYPE);

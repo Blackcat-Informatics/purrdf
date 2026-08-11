@@ -380,8 +380,8 @@ fn cap_base(kb: &Kb) -> u64 {
 /// MEASURED, over three populations, against the criterion "an ontology this reasoner is
 /// expected to decide keeps at least ten times the work it actually spends in hand":
 ///
-/// * **the ledgered fixtures.** The reported 17-triple `owl:equivalentClass` shape spends
-///   2,926 units; its `rdfs:subClassOf` control 221.
+/// * **the ledgered fixtures.** The equivalence-over-untyped-restrictions ontology's 17-triple
+///   `owl:equivalentClass` shape spends 2,926 units; its `rdfs:subClassOf` control 221.
 /// * **the differential corpora** of [`crate::owl_dl::oracle`] — 9,200 generated, deliberately
 ///   adversarial knowledge bases. Their most expensive DECIDING case spends 6.1 million units,
 ///   over a THREE-axiom knowledge base whose completion graph reaches 101 nodes. That case is

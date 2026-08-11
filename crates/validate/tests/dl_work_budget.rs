@@ -4,10 +4,10 @@
 //! THE CO-TYPED SHAPE: the class of ontology the round cap cannot bound, and the answer it
 //! gets now.
 //!
-//! `dl_consistency_search_budget` holds one copy of the reported ontology — an
-//! `owl:equivalentClass` over two untyped restrictions, an `owl:inverseOf`, an `rdfs:range`,
-//! one type assertion — and shows it decides far inside its budgets. This file holds `n`
-//! copies of it, each over its own vocabulary, all asserted of ONE individual. That single
+//! `dl_consistency_search_budget` holds one copy of the equivalence-over-untyped-restrictions
+//! ontology — an `owl:equivalentClass` over two untyped restrictions, an `owl:inverseOf`, an
+//! `rdfs:range`, one type assertion — and shows it decides far inside its budgets. This file
+//! holds `n` copies of it, each over its own vocabulary, all asserted of ONE individual. That single
 //! difference is the whole fixture: the converse direction of each equivalence has an
 //! antecedent no faithful absorption can guard and so reaches the search as a disjunction, and
 //! `n` such disjunctions on ONE node interleave instead of standing beside each other.
@@ -49,13 +49,13 @@ use purrdf_rdf::{SerializeGraph, parse_dataset, serialize_dataset};
 mod common;
 use common::measurement;
 
-/// `blocks` copies of the reported ontology, each over its own vocabulary, ALL asserted of the
-/// single individual `:a`.
+/// `blocks` copies of the equivalence-over-untyped-restrictions ontology, each over its own
+/// vocabulary, ALL asserted of the single individual `:a`.
 ///
-/// Every block is the reported seventeen-triple shape with its names suffixed, so a block is
-/// the same ontology this workspace already ledgers rather than a fixture invented to be
-/// expensive. The restrictions deliberately carry no `rdf:type owl:Restriction`, exactly as
-/// the reported ontology did not: they are restrictions by their `owl:onProperty` /
+/// Every block is the same seventeen-triple ∀-equivalence shape with its names suffixed, so a
+/// block is the same ontology this workspace already ledgers rather than a fixture invented to
+/// be expensive. The restrictions deliberately carry no `rdf:type owl:Restriction`, exactly as
+/// that ontology does not: they are restrictions by their `owl:onProperty` /
 /// `owl:allValuesFrom` / `owl:cardinality` triples alone, which is legal OWL 2 RDF and is the
 /// shape the reverse mapping must recognize structurally.
 fn co_typed(blocks: usize) -> String {

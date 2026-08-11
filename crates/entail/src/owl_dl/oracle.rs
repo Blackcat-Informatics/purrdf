@@ -418,14 +418,14 @@ const ABSORPTION: Signature = Signature {
     max_domain: 3,
 };
 
-/// The REPORTED-SHAPE signature: three classes and two roles, at the domain bound two roles
+/// The ∀-EQUIVALENCE signature: three classes and two roles, at the domain bound two roles
 /// allow.
 ///
-/// Sized for the interaction the reported ontology is made of — a `∀`-restriction whose filler
-/// is an intersection, an exact cardinality, and an inverse role — which needs a class for the
-/// restricted concept, one for the intersection's named conjunct and one for the inner `∀`'s
-/// filler, plus a role to quantify over and a second to count.
-const REPORTED: Signature = Signature {
+/// Sized for the interaction the equivalence-over-untyped-restrictions ontology is made of — a
+/// `∀`-restriction whose filler is an intersection, an exact cardinality, and an inverse role —
+/// which needs a class for the restricted concept, one for the intersection's named conjunct
+/// and one for the inner `∀`'s filler, plus a role to quantify over and a second to count.
+const FORALL_EQUIVALENCE: Signature = Signature {
     concepts: 3,
     roles: 2,
     individuals: 2,
@@ -2695,10 +2695,10 @@ fn the_absorbable_inclusion_shapes_agree_with_the_oracle() {
     );
 }
 
-// ── The reported-shape family ───────────────────────────────────────────────────
+// ── The ∀-equivalence family ────────────────────────────────────────────────────
 
-/// Knowledge bases checked by the reported-shape property.
-const REPORTED_CASES: u32 = 600;
+/// Knowledge bases checked by the ∀-equivalence property.
+const FORALL_EQUIVALENCE_CASES: u32 = 600;
 
 /// The interaction an ordinary ontology reached the search's step cap on: a `∀`-restriction
 /// under an EQUIVALENCE, an exact cardinality under another, and an inverse role.
@@ -2720,12 +2720,13 @@ const REPORTED_CASES: u32 = 600;
 ///   two counting concepts at once;
 /// * `r owl:inverseOf s` — the axiom that makes the `∀r⁻` obligations above reach a
 ///   predecessor rather than dead-end;
-/// * `⊤ ⊑ ∀p.S` — an `rdfs:range`, the unguarded inclusion the reported ontology carried;
+/// * `⊤ ⊑ ∀p.S` — an `rdfs:range`, the unguarded inclusion the equivalence-over-untyped-
+///   restrictions ontology states;
 /// * plain inclusions, type assertions and `owl:differentFrom`, so the family is a knowledge
 ///   base rather than a terminology.
 #[test]
-fn the_reported_equivalence_shape_agrees_with_the_oracle() {
-    let sig = REPORTED;
+fn the_forall_equivalence_shape_agrees_with_the_oracle() {
+    let sig = FORALL_EQUIVALENCE;
     let individuals = sig.individual_names().to_vec();
     let roles = sig.role_names().to_vec();
     let named = arb_named(sig);
@@ -2808,7 +2809,7 @@ fn the_reported_equivalence_shape_agrees_with_the_oracle() {
     run_property(
         "∀-equivalence ⊗ exact cardinality ⊗ inverse",
         sig,
-        REPORTED_CASES,
+        FORALL_EQUIVALENCE_CASES,
         8,
         Bound::Asserted(12),
         STEP_CAP,
@@ -2933,11 +2934,11 @@ const CO_TYPED_CASES: u32 = 300;
 
 /// One equivalence-defined class, as the co-typed property states them.
 ///
-/// The three bodies are the reported ontology's own, reduced to what a four-class, one-role
-/// signature can carry AND to what four of them at once stay affordable at: the
-/// `∀`-restriction whose filler is an intersection, the exact cardinality, and an
-/// existential. The intersection is two named conjuncts rather than the reported shape's
-/// nested `∀`, because four nested-`∀` definitions on one node cost the internalized
+/// The three bodies are the equivalence-over-untyped-restrictions ontology's own, reduced to
+/// what a four-class, one-role signature can carry AND to what four of them at once stay
+/// affordable at: the `∀`-restriction whose filler is an intersection, the exact cardinality,
+/// and an existential. The intersection is two named conjuncts rather than the ∀-equivalence
+/// shape's nested `∀`, because four nested-`∀` definitions on one node cost the internalized
 /// reference encoding more than the suite's narrowed round cap allows — which would shrink
 /// the encoding differential this family is also checked by. Each is a definition whose CONVERSE direction —
 /// `body ⊑ A` — has an antecedent no faithful absorption can guard, so each contributes a
@@ -3773,7 +3774,7 @@ const TOTAL_CASES: u32 = WIDE_CASES
     + ROLE_HIERARCHY_CASES
     + BOOLEAN_CASES
     + ABSORPTION_CASES
-    + REPORTED_CASES
+    + FORALL_EQUIVALENCE_CASES
     + CYCLE_CASES
     + CO_TYPED_CASES
     + DATA_CASES;
@@ -3795,7 +3796,7 @@ fn the_enumerated_search_spaces_are_pinned() {
     assert_eq!(ROLE_HIERARCHY.search_space(), 32_784);
     assert_eq!(BOOLEAN.search_space(), 14_344);
     assert_eq!(ABSORPTION.search_space(), 14_344);
-    assert_eq!(REPORTED.search_space(), 65_568);
+    assert_eq!(FORALL_EQUIVALENCE.search_space(), 65_568);
     assert_eq!(CYCLE.search_space(), 295_944);
     assert_eq!(CO_TYPED.search_space(), 8_224);
     assert_eq!(HAND.search_space(), 65_552);

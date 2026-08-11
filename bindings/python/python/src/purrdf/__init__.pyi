@@ -1105,6 +1105,18 @@ class entail:
     # enormously more expensive without making the search take more rounds. A run
     # that reaches it answers `unknown` with `work` equal to `work-budget` in its
     # certificate.
+    #
+    # The certificate's search-cost counters, one line each:
+    #   * `steps` — rounds spent, against the per-decision round cap.
+    #   * `budget` — the round cap the decision ran under (the knowledge base's own
+    #     derived cap, or `step_cap` if that narrowed it).
+    #   * `work` — matcher, scan, closure and clone work spent, against the work cap.
+    #   * `work-budget` — the work cap the decision ran under (derived, or
+    #     `work_cap` if that narrowed it).
+    #   * `decisions` — how many sub-decisions the run made.
+    #   * `peak-nodes` — the largest completion graph a decision built.
+    #   * `disjunctions` — how many times the tableau's case-split rule fired.
+    #   * `peak-depth` — how deep that rule's branch stack got.
 
     # Does the knowledge base have a model at all? The answer is one line,
     # `consistency true|false|unknown`. The only DL service that answers for an
@@ -1258,6 +1270,12 @@ class entail:
     # `extract_module`, `justify` and `explain_conclusion` never reason, and
     # `profile` answers for any parseable document — including one whose
     # `owl:hasKey` axioms would exhaust the tableau while it was reverse-mapped.
+    #
+    # `step_cap` and `work_cap` are the same tighten-only round/work narrowings
+    # the module-level functions above take, fixed once at construction and then
+    # applied to EVERY decision the session goes on to make — not re-askable per
+    # call — so every question asked through one `Reasoner` runs under the same
+    # pair of caps.
     class Reasoner:
         def __init__(
             self, data: str, step_cap: int = ..., work_cap: int = ...

@@ -11,8 +11,9 @@
 //! ontology have a model at all", because both are built on top of an answer to that
 //! question rather than able to give it. Before this subcommand existed the only way to
 //! reach it from the command line was indirectly — run `reason` or `entails` and read the
-//! refusal — which is how a bug in the tableau's own consistency search came to be
-//! reproduced through a throwaway Python harness instead of one command.
+//! refusal — which yields a bare verdict with no certificate behind it, and no way to
+//! exercise the consistency search on its own, apart from the entailment machinery layered
+//! on top of it.
 //!
 //! # The same boundary every other host calls
 //!

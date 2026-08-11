@@ -20,7 +20,7 @@ text/XML/JSON codecs, the pack container, the SPARQL 1.2 evaluator, and the
 entailment closures — so anything the CLI does, it does with byte-for-byte the
 same behavior as the Rust, Python, WebAssembly, and C surfaces.
 
-Every invocation is one `Source → [transform] → Sink` pipeline, exposed as six
+Every invocation is one `Source → [transform] → Sink` pipeline, exposed as seven
 subcommands:
 
 | Subcommand | Pipeline |
@@ -29,6 +29,7 @@ subcommands:
 | [`query`](#query) | evaluate a SPARQL query over an RDF or pack data source |
 | [`reason`](#reason) | materialize an entailment regime's closure over a source graph |
 | [`entails`](#entails) | decide whether a premise entails a conclusion, or answer a pattern's certain answers |
+| [`consistency`](#consistency) | decide whether an OWL-Direct ontology has a model at all |
 | [`project`](#project) | materialize a deterministic graph/tabular USTAR carrier |
 | [`lift`](#lift) | reconstruct RDF from a strict bidirectional carrier |
 
@@ -461,6 +462,89 @@ purrdf entails --regime owl-rl --premise ontology.ttl --conclusion claim.ttl \
 purrdf entails --regime rdfs --premise people.ttl --pattern types.bgp
 ```
 
+## `consistency`
+
+```text
+purrdf consistency [--step-cap <N>] [--work-cap <N>] [--from <F>] [--base <IRI>] [IN]
+```
+
+Decide whether an OWL-Direct ontology has a model at all. This is the one DL question
+`reason` and `entails` cannot reach: `reason --regime owl-direct` **refuses** an
+inconsistent ontology outright (an inconsistent knowledge base entails every triple, so
+there is no closure to materialize), and `entails` decides a conclusion against a premise
+that is presupposed to have a model. Neither can answer "does this ontology have a model
+at all", because both are built on top of an answer to that question rather than able to
+give it. `consistency` asks it directly, through the same string boundary the Python,
+WebAssembly and C-ABI hosts already reach, so a verdict this binary prints is byte-for-byte
+the verdict those three print for the same document.
+
+- `--step-cap <N>` — narrows the per-decision **round** cap the ontology's own size already
+  derives; `0` (the default) applies no narrowing and runs under the derived cap alone.
+  This can only **tighten** the cap, never loosen it: a run this narrows into its cap
+  answers `unknown`, never `false`.
+- `--work-cap <N>` — narrows the per-decision **work** cap the ontology's own size already
+  derives, on the same `0`-means-no-narrowing, tighten-only rule. It bounds what
+  `--step-cap` structurally cannot: a round is a PASS over the completion graph rather than
+  a unit of cost, so an ontology can make every round enormously more expensive without
+  making the search take more rounds — one individual co-typed with several
+  equivalence-defined classes does exactly that. This cap counts the matcher, scan, closure
+  and clone work spent inside a round.
+- `--from <F>` — input-format override; inferred from `IN`'s extension when omitted.
+- `--base <IRI>` — base IRI for resolving relative IRIs while parsing the input.
+- `IN` — the ontology, or `-` for stdin (which requires `--from`); defaults to `-`.
+
+The boundary parses N-Quads (which accepts N-Triples unchanged), so a caller handing this
+command Turtle, RDF/XML, JSON-LD or a verified pack crosses into it exactly as `entails`
+crosses its premise: resolved through `--from`/the path's extension, parsed with the native
+codecs, and re-serialized into N-Quads. That crossing is lossless by construction, and a
+**realized** drop is refused rather than recorded, because a lossily transcoded ontology is
+a different ontology and the verdict would be about that one.
+
+**Two things go to stdout, always.** The one-line verdict —
+
+```text
+consistency true | false | unknown
+```
+
+— followed immediately by the full DL certificate: `completeness`, the reverse mapping's
+boundary list, and eight search-cost counters. Unlike `--report` on the four materializing
+subcommands, the certificate here is **not optional and not redirectable**: this command
+answers exactly one question, and the certificate is the *second half* of that answer, not
+secondary evidence about a document sitting beside it — hiding it behind a flag would
+restore the "the reasoner says no" ambiguity the certificate exists to remove.
+
+| Certificate line | What it counts |
+|---|---|
+| `steps` | rounds spent, against the per-decision round cap |
+| `budget` | the round cap the decision ran under (derived, or narrowed by `--step-cap`) |
+| `work` | matcher, scan, closure and clone work spent, against the work cap |
+| `work-budget` | the work cap the decision ran under (derived, or narrowed by `--work-cap`) |
+| `decisions` | how many sub-decisions the run made |
+| `peak-nodes` | the largest completion graph a decision built |
+| `disjunctions` | how many times the `⊔`-rule case split |
+| `peak-depth` | how deep that rule's branch stack got |
+
+**No document flags.** `--loss-ledger` records what a conversion dropped and
+`--jsonld-options` configures an RDF serializer; `consistency` writes a verdict plus a
+certificate, neither of which is RDF, so both are refused (exit 2) rather than silently
+doing nothing.
+
+```sh
+# An ordinary ontology decides well inside its derived budgets.
+purrdf consistency ontology.ttl
+# consistency true
+# completeness decided
+# …
+
+# Narrow the round cap to force an early `unknown` rather than let the search run to
+# its derived budget.
+purrdf consistency --step-cap 1 ontology.ttl
+echo $?   # 3
+
+# A pack source: verified, then reverse-mapped into the tableau like any other input.
+purrdf consistency ontology.purrpck
+```
+
 ## `project`
 
 ```text
@@ -609,7 +693,7 @@ purrdf --loss-ledger=convert.loss.json convert star-data.ttl plain.trix
 | `0` | success |
 | `1` | runtime failure — a parse/serialize diagnostic, a pack-integrity failure, an I/O error, a result/shape mismatch, or a refusal from the entailment boundary (an unserved regime, an unresolved `owl:imports`, an inconsistent premise) |
 | `2` | usage error — a malformed command line (clap), or a pipeline usage error such as `-` without an explicit format, `--regime rif` without `--rules`, or a malformed `--import` pair |
-| `3` | a caller-set [execution governor](#execution-governors) stopped a `query`. **Not a failure**: the certified answers are on stdout and the governor report is on stderr |
+| `3` | a caller-set [execution governor](#execution-governors) stopped a `query`, or [`consistency`](#consistency) answered `unknown`. **Not a failure**: for `query`, the certified answers are on stdout and the governor report is on stderr; for `consistency`, the verdict and the full certificate — including which cap it was — are on stdout as always |
 
 On any failure the error's message is printed to stderr and its category becomes
 the process exit code; nothing is swallowed.

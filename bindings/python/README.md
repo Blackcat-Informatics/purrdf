@@ -446,6 +446,26 @@ deliberately not called a proof; `explain_conclusion` is the chase lane's
 genuinely derivational one. They are different kinds of thing rather than two
 spellings of one, which is why there is no single `explain`.
 
+Beside `completeness`, a `purrdf-dl-certificate 1` block carries eight search-cost
+counters — the numbers a caller needs to tell a decision that finished from one that
+merely stopped:
+
+| Line | What it counts |
+| --- | --- |
+| `steps` | rounds spent, against the per-decision round cap |
+| `budget` | the round cap the decision ran under (the knowledge base's own derived cap, or `step_cap` if that narrowed it) |
+| `work` | matcher, scan, closure and clone work spent, against the work cap |
+| `work-budget` | the work cap the decision ran under (derived, or `work_cap` if that narrowed it) |
+| `decisions` | how many sub-decisions the run made |
+| `peak-nodes` | the largest completion graph a decision built |
+| `disjunctions` | how many times the tableau's case-split rule fired |
+| `peak-depth` | how deep that rule's branch stack got |
+
+`step_cap` and `work_cap` (both `0` by default, meaning "no narrowing") appear on
+every DL service above and on `Reasoner`'s constructor; each can only **tighten** the
+knowledge base's own derived cap, never loosen it, and a run narrowed into its cap
+answers `unknown` rather than a `false` it has not actually decided.
+
 Nothing here re-implements the reasoner: every entry point routes through the
 same shared boundary the WebAssembly and C hosts call, checked against one
 committed golden-vector artifact, so the four hosts return byte-identical results

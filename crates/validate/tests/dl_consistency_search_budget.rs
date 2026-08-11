@@ -38,7 +38,8 @@
 //!
 //! # Why the restrictions carry no `rdf:type`
 //!
-//! Verbatim from the reported ontology, and deliberately kept so. The anonymous class
+//! Verbatim from the equivalence-over-untyped-restrictions ontology, and deliberately kept so.
+//! The anonymous class
 //! expressions are `owl:Restriction`s by their `owl:onProperty`/`owl:allValuesFrom` and
 //! `owl:cardinality` triples alone — no `rdf:type owl:Restriction` states it — which is legal
 //! OWL 2 RDF and is the shape the reverse mapping has to recognize structurally. Retyping them
@@ -49,7 +50,7 @@ use purrdf_rdf::{SerializeGraph, parse_dataset, serialize_dataset};
 mod common;
 use common::measurement;
 
-/// The reported ontology, verbatim.
+/// The equivalence-over-untyped-restrictions ontology, verbatim.
 const ONTOLOGY: &str = r"
 @prefix : <https://example.org/> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
@@ -90,7 +91,8 @@ fn an_ordinary_ontology_decides_far_inside_its_step_budget() {
     assert_eq!(
         document.lines().count(),
         17,
-        "the fixture is the reported seventeen triples:\n{document}"
+        "the fixture is the equivalence-over-untyped-restrictions ontology's seventeen \
+         triples:\n{document}"
     );
 
     let answer = purrdf_validate::regime::consistency_to_string(&document, 0, 0)

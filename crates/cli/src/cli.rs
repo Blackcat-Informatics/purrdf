@@ -427,8 +427,8 @@ pub(crate) enum Command {
     /// redirectable: this command answers exactly one question, and the certificate is
     /// the ONLY evidence of how completely the tableau answered it — hiding it behind a
     /// flag would restore the "the reasoner says no" ambiguity the certificate exists to
-    /// remove, for the one caller (an operator reproducing a reported answer in one
-    /// command) who most needs it in hand by default.
+    /// remove, for the one caller — running this command by hand and reading the search's
+    /// own completeness off it — who most needs it in hand by default.
     ///
     /// Exit codes: **0** for `true` OR `false` — both are DECIDED verdicts, and a decided
     /// `false` is not a failure of this command any more than a `false` ASK answer is a

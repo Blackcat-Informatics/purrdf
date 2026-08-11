@@ -85,15 +85,14 @@ struct Pin {
     peak_depth: u64,
 }
 
-/// The reported ontology: an `owl:equivalentClass` over two untyped restrictions — a
-/// `∀`-restriction whose filler is an intersection, and an exact cardinality — beside an
-/// `owl:inverseOf` and an `rdfs:range`.
+/// The equivalence-over-untyped-restrictions ontology: an `owl:equivalentClass` over two
+/// untyped restrictions — a `∀`-restriction whose filler is an intersection, and an exact
+/// cardinality — beside an `owl:inverseOf` and an `rdfs:range`.
 ///
-/// Seventeen triples, verbatim as reported, and the restrictions deliberately carry no
-/// `rdf:type owl:Restriction`: they are restrictions by their `owl:onProperty` /
-/// `owl:allValuesFrom` / `owl:cardinality` triples alone, which is legal OWL 2 RDF and is the
-/// shape the reverse mapping has to recognize structurally. Retyping them would quietly pin a
-/// different parse.
+/// Seventeen triples, and the restrictions deliberately carry no `rdf:type owl:Restriction`:
+/// they are restrictions by their `owl:onProperty` / `owl:allValuesFrom` / `owl:cardinality`
+/// triples alone, which is legal OWL 2 RDF and is the shape the reverse mapping has to
+/// recognize structurally. Retyping them would quietly pin a different parse.
 ///
 /// This ontology once exhausted its search budget outright. The row below is what says it no
 /// longer does, and by how much.
@@ -131,7 +130,7 @@ const EQUIVALENT_CLASS_SHAPE: &str = r"
 /// from `owl:equivalentClass` to `rdfs:subClassOf`, so the fixture states no equivalence at
 /// all.
 ///
-/// This is NOT the shape the report that motivated this ledger used as its control — see
+/// This is NOT the shape the cardinality-only-equivalence control below isolates — see
 /// [`CARDINALITY_EQUIVALENCE_SHAPE`] for that one. It is kept alongside it as a second, more
 /// extreme data point: with NEITHER restriction reachable as a non-atomic antecedent, the
 /// search absorbs into guarded clauses that branch not at all, at whatever cost the inverse
@@ -171,12 +170,13 @@ const SUBCLASS_SHAPE: &str = r"
 :a a :A .
 ";
 
-/// THE REPORTER'S ACTUAL CONTROL: the same seventeen triples with ONLY the `∀`-restriction
-/// moved from `owl:equivalentClass` to `rdfs:subClassOf`. The `owl:cardinality 1` restriction
-/// stays exactly where [`EQUIVALENT_CLASS_SHAPE`] put it, as an `owl:equivalentClass` member.
+/// THE CARDINALITY-ONLY-EQUIVALENCE CONTROL: the same seventeen triples with ONLY the
+/// `∀`-restriction moved from `owl:equivalentClass` to `rdfs:subClassOf`. The
+/// `owl:cardinality 1` restriction stays exactly where [`EQUIVALENT_CLASS_SHAPE`] put it, as an
+/// `owl:equivalentClass` member.
 ///
-/// The report that motivated this ledger identified the `∀`-restriction, not the equivalence
-/// as such, as what the search could not guard: `∀r.(S ⊓ ∀p.D) ⊑ A`, the converse direction an
+/// The `∀`-restriction, not the equivalence as such, is what the search cannot guard:
+/// `∀r.(S ⊓ ∀p.D) ⊑ A`, the converse direction an
 /// equivalence over a universal restriction reaches the search as, has no atomic antecedent a
 /// faithful absorption can trigger on. `=1 c ⊑ A` — the cardinality restriction's own
 /// converse — does: a `≥1`/`≤1` pair guards on the `≥1` conjunct with the `≤1` half moved to
@@ -367,9 +367,9 @@ const SCHEMA_HEAVY_SHAPE: &str = r"
 /// THE LEDGER.
 ///
 /// Rows are in the order a reader wants them: the shape the search was hardened for, the
-/// reporter's own control that isolates why, a stronger both-moved variant kept beside it,
-/// the co-typed shape the work budget exists for, the schema-heavy shape the achiever cache
-/// exists for, then the truncated path.
+/// cardinality-only-equivalence control that isolates why, a stronger both-moved variant kept
+/// beside it, the co-typed shape the work budget exists for, the schema-heavy shape the
+/// achiever cache exists for, then the truncated path.
 const LEDGER: &[Pin] = &[
     Pin {
         name: "equivalent-class-allvalues-cardinality",
@@ -517,19 +517,19 @@ fn every_ledgered_search_costs_exactly_what_it_is_pinned_to() {
     }
 }
 
-/// The reporter's control and the stronger both-moved variant read as seventeen triples
-/// each, and [`Pin`] does not pin a per-row budget — the round cap is DERIVED from the
-/// knowledge base's size, not stated. So this is where the two rows are told apart instead:
-/// moving only the `∀`-restriction states an equivalence [`SUBCLASS_SHAPE`] does not, and
-/// that is a different ontology with a different cap, not the same fixture measured twice.
-/// The reporter's own figure — 133,856 — is pinned here directly, on the derived cap rather
-/// than on a search figure a re-pin could move for an unrelated reason.
+/// The cardinality-only-equivalence control and the stronger both-moved variant read as
+/// seventeen triples each, and [`Pin`] does not pin a per-row budget — the round cap is
+/// DERIVED from the knowledge base's size, not stated. So this is where the two rows are told
+/// apart instead: moving only the `∀`-restriction states an equivalence [`SUBCLASS_SHAPE`]
+/// does not, and that is a different ontology with a different cap, not the same fixture
+/// measured twice. The control's own figure — 133,856 — is pinned here directly, on the
+/// derived cap rather than on a search figure a re-pin could move for an unrelated reason.
 #[test]
-fn the_reporters_control_is_a_distinct_ontology_from_the_both_moved_variant() {
+fn the_cardinality_only_control_is_a_distinct_ontology_from_the_both_moved_variant() {
     let cardinality_only = LEDGER
         .iter()
         .find(|pin| pin.name == "cardinality-only-equivalence")
-        .expect("the reporter's control is ledgered");
+        .expect("the cardinality-only-equivalence control is ledgered");
     let both_moved = LEDGER
         .iter()
         .find(|pin| pin.name == "subclass-only-both-restrictions")
@@ -551,7 +551,8 @@ fn the_reporters_control_is_a_distinct_ontology_from_the_both_moved_variant() {
     assert_eq!(
         budget,
         133_856,
-        "the reporter's own figure for this control's round cap must still hold:\n{}",
+        "the cardinality-only-equivalence control's own figure for its round cap must still \
+         hold:\n{}",
         answer.certificate()
     );
 
@@ -566,8 +567,8 @@ fn the_reporters_control_is_a_distinct_ontology_from_the_both_moved_variant() {
     assert_ne!(
         budget,
         both_moved_budget,
-        "the reporter's control and the both-moved variant must be DISTINCT ontologies, not \
-         the same fixture measured twice:\ncontrol:\n{}\nboth-moved:\n{}",
+        "the cardinality-only-equivalence control and the both-moved variant must be DISTINCT \
+         ontologies, not the same fixture measured twice:\ncontrol:\n{}\nboth-moved:\n{}",
         answer.certificate(),
         both_moved_answer.certificate()
     );

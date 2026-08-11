@@ -7,14 +7,16 @@
 //!
 //! ## The fixtures
 //!
-//! [`ORDINARY_ONTOLOGY`] is the seventeen-triple ontology
-//! `crates/validate/tests/dl_consistency_search_budget.rs` pins: one `owl:equivalentClass`
-//! over two anonymous restrictions, an `owl:inverseOf`, an `rdfs:range`, one type assertion
-//! — a document that once exhausted the DL search's step budget outright before the
-//! clausification and search-refinement fixes this subcommand exists to make one-command
-//! reproducible. Kept verbatim, including the anonymous restrictions carrying no
+//! [`ORDINARY_ONTOLOGY`] is the seventeen-triple equivalence-over-untyped-restrictions
+//! ontology `crates/validate/tests/dl_consistency_search_budget.rs` pins: one
+//! `owl:equivalentClass` over two anonymous restrictions, an `owl:inverseOf`, an
+//! `rdfs:range`, one type assertion — a document that once exhausted the DL search's step
+//! budget outright, because the CONVERSE direction of its equivalence has an antecedent no
+//! faithful absorption can guard and so reaches the search as a disjunction every node must
+//! resolve. Kept verbatim, including the anonymous restrictions carrying no
 //! `rdf:type owl:Restriction` (legal OWL 2 RDF; the reverse mapping recognizes the shape
-//! structurally), so this pins the actual reported document rather than a retyped one.
+//! structurally), so this pins the exact ontology the search has to answer for, rather than
+//! a retyped one.
 //!
 //! [`INCONSISTENT_ONTOLOGY`] is `A ⊑ B`, `A ⊑ ¬B`, `a : A` — no model, the same shape
 //! `crates/entail/tests/reasoner.rs` decides `Verdict::False` for the reasoner facade.
@@ -70,7 +72,7 @@ fn write_file(dir: &Path, name: &str, contents: &str) -> String {
     p.to_str().expect("temp path is valid UTF-8").to_owned()
 }
 
-/// The reported seventeen-triple ontology, verbatim — see
+/// The seventeen-triple equivalence-over-untyped-restrictions ontology, verbatim — see
 /// `crates/validate/tests/dl_consistency_search_budget.rs`.
 const ORDINARY_ONTOLOGY: &str = r"
 @prefix : <https://example.org/> .
