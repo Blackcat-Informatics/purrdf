@@ -127,21 +127,20 @@ const EQUIVALENT_CLASS_SHAPE: &str = r"
 :a a :A .
 ";
 
-/// THE CONTROL: the same seventeen triples with the two restrictions moved from
-/// `owl:equivalentClass` to `rdfs:subClassOf`.
+/// A STRONGER, both-moved variant: the same seventeen triples with BOTH restrictions moved
+/// from `owl:equivalentClass` to `rdfs:subClassOf`, so the fixture states no equivalence at
+/// all.
 ///
-/// One character of difference in meaning and a large one in clausification. An equivalence
-/// is two inclusions, and the converse one — `∀r.(S ⊓ ∀p.D) ⊓ =1 c ⊑ A` — has a non-atomic
-/// antecedent that no faithful absorption can guard, so it reaches the search as a global
-/// disjunction seeded into every node. The sub-class direction alone absorbs into guarded
-/// clauses that branch not at all.
+/// This is NOT the shape the report that motivated this ledger used as its control — see
+/// [`CARDINALITY_EQUIVALENCE_SHAPE`] for that one. It is kept alongside it as a second, more
+/// extreme data point: with NEITHER restriction reachable as a non-atomic antecedent, the
+/// search absorbs into guarded clauses that branch not at all, at whatever cost the inverse
+/// role and the range still book.
 ///
-/// The control is here to keep the row above HONEST. A pinned number is only evidence if the
-/// thing it measures could have come out otherwise, and holding the two rows side by side is
-/// what shows that this fixture's cost is about the equivalence rather than about the
-/// restrictions, the inverse role or the range. Both decide consistent and both decide, and
-/// the rows below say what the one-word difference costs: three case splits over four nodes
-/// against none at all over two.
+/// A pinned number is only evidence if the thing it measures could have come out otherwise,
+/// and holding this row beside [`EQUIVALENT_CLASS_SHAPE`] is part of what shows that shape's
+/// cost is about the equivalence rather than about the restrictions, the inverse role or the
+/// range.
 const SUBCLASS_SHAPE: &str = r"
 @prefix : <https://example.org/> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
@@ -166,6 +165,50 @@ const SUBCLASS_SHAPE: &str = r"
         [
             owl:onProperty :c ;
             owl:cardinality 1
+        ] ,
+        :S .
+
+:a a :A .
+";
+
+/// THE REPORTER'S ACTUAL CONTROL: the same seventeen triples with ONLY the `∀`-restriction
+/// moved from `owl:equivalentClass` to `rdfs:subClassOf`. The `owl:cardinality 1` restriction
+/// stays exactly where [`EQUIVALENT_CLASS_SHAPE`] put it, as an `owl:equivalentClass` member.
+///
+/// The report that motivated this ledger identified the `∀`-restriction, not the equivalence
+/// as such, as what the search could not guard: `∀r.(S ⊓ ∀p.D) ⊑ A`, the converse direction an
+/// equivalence over a universal restriction reaches the search as, has no atomic antecedent a
+/// faithful absorption can trigger on. `=1 c ⊑ A` — the cardinality restriction's own
+/// converse — does: a `≥1`/`≤1` pair guards on the `≥1` conjunct with the `≤1` half moved to
+/// the head, the same disposition an ordinary qualified cardinality gets. So moving ONLY the
+/// `∀`-restriction should already recover most of [`SUBCLASS_SHAPE`]'s cost while the fixture
+/// still states an equivalence — which is what makes this the control that isolates the
+/// actual culprit, rather than [`SUBCLASS_SHAPE`]'s stronger both-moved rewrite.
+const CARDINALITY_EQUIVALENCE_SHAPE: &str = r"
+@prefix : <https://example.org/> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+:r owl:inverseOf :ri .
+:ri rdfs:range :S .
+
+:A owl:equivalentClass
+        [
+            owl:onProperty :c ;
+            owl:cardinality 1
+        ] ;
+    rdfs:subClassOf
+        [
+            owl:onProperty :r ;
+            owl:allValuesFrom [
+                owl:intersectionOf (
+                    :S
+                    [
+                        owl:onProperty :p ;
+                        owl:allValuesFrom :D
+                    ]
+                )
+            ]
         ] ,
         :S .
 
@@ -323,9 +366,10 @@ const SCHEMA_HEAVY_SHAPE: &str = r"
 
 /// THE LEDGER.
 ///
-/// Rows are in the order a reader wants them: the shape the search was hardened for, its
-/// control, the co-typed shape the work budget exists for, the schema-heavy shape the achiever
-/// cache exists for, then the truncated path.
+/// Rows are in the order a reader wants them: the shape the search was hardened for, the
+/// reporter's own control that isolates why, a stronger both-moved variant kept beside it,
+/// the co-typed shape the work budget exists for, the schema-heavy shape the achiever cache
+/// exists for, then the truncated path.
 const LEDGER: &[Pin] = &[
     Pin {
         name: "equivalent-class-allvalues-cardinality",
@@ -342,7 +386,21 @@ const LEDGER: &[Pin] = &[
         peak_depth: 3,
     },
     Pin {
-        name: "subclass-allvalues-cardinality",
+        name: "cardinality-only-equivalence",
+        ontology: CARDINALITY_EQUIVALENCE_SHAPE,
+        triples: 17,
+        step_cap: 0,
+        work_cap: 0,
+        answer: "consistency true\n",
+        completeness: "decided",
+        steps: 3,
+        work: 242,
+        peak_nodes: 2,
+        disjunctions: 0,
+        peak_depth: 0,
+    },
+    Pin {
+        name: "subclass-only-both-restrictions",
         ontology: SUBCLASS_SHAPE,
         triples: 17,
         step_cap: 0,
@@ -457,6 +515,62 @@ fn every_ledgered_search_costs_exactly_what_it_is_pinned_to() {
             pin.name
         );
     }
+}
+
+/// The reporter's control and the stronger both-moved variant read as seventeen triples
+/// each, and [`Pin`] does not pin a per-row budget — the round cap is DERIVED from the
+/// knowledge base's size, not stated. So this is where the two rows are told apart instead:
+/// moving only the `∀`-restriction states an equivalence [`SUBCLASS_SHAPE`] does not, and
+/// that is a different ontology with a different cap, not the same fixture measured twice.
+/// The reporter's own figure — 133,856 — is pinned here directly, on the derived cap rather
+/// than on a search figure a re-pin could move for an unrelated reason.
+#[test]
+fn the_reporters_control_is_a_distinct_ontology_from_the_both_moved_variant() {
+    let cardinality_only = LEDGER
+        .iter()
+        .find(|pin| pin.name == "cardinality-only-equivalence")
+        .expect("the reporter's control is ledgered");
+    let both_moved = LEDGER
+        .iter()
+        .find(|pin| pin.name == "subclass-only-both-restrictions")
+        .expect("the both-moved variant is ledgered");
+
+    let document = as_nquads(cardinality_only);
+    let answer = purrdf_validate::regime::consistency_to_string(
+        &document,
+        cardinality_only.step_cap,
+        cardinality_only.work_cap,
+    )
+    .unwrap_or_else(|error| {
+        panic!(
+            "{}: the ontology reverse-maps: {error}",
+            cardinality_only.name
+        )
+    });
+    let budget = measurement(answer.certificate(), "budget");
+    assert_eq!(
+        budget,
+        133_856,
+        "the reporter's own figure for this control's round cap must still hold:\n{}",
+        answer.certificate()
+    );
+
+    let both_moved_document = as_nquads(both_moved);
+    let both_moved_answer = purrdf_validate::regime::consistency_to_string(
+        &both_moved_document,
+        both_moved.step_cap,
+        both_moved.work_cap,
+    )
+    .unwrap_or_else(|error| panic!("{}: the ontology reverse-maps: {error}", both_moved.name));
+    let both_moved_budget = measurement(both_moved_answer.certificate(), "budget");
+    assert_ne!(
+        budget,
+        both_moved_budget,
+        "the reporter's control and the both-moved variant must be DISTINCT ontologies, not \
+         the same fixture measured twice:\ncontrol:\n{}\nboth-moved:\n{}",
+        answer.certificate(),
+        both_moved_answer.certificate()
+    );
 }
 
 #[test]
