@@ -312,7 +312,10 @@ impl Reasoner {
     pub fn consistency(&self) -> Certified<Verdict> {
         let mut session = Session::new(&self.kb, self.budget);
         let decision = session.decide(&Assumptions::of_kb());
-        let answer = if decision.exhausted {
+        // `stopped` is checked beside `exhausted`: a run the caller cancelled has closed
+        // some branches and not others, exactly like a capped one, and `decision.consistent`
+        // is meaningless under either — see [`Decision`].
+        let answer = if decision.exhausted || decision.stopped {
             Verdict::Unknown
         } else if decision.consistent {
             Verdict::True
@@ -344,7 +347,9 @@ impl Reasoner {
                 fresh_types: &[concept],
                 ..Assumptions::of_kb()
             });
-            if decision.exhausted {
+            // See [`Reasoner::consistency`]: `stopped` is read beside `exhausted` for the
+            // same reason.
+            if decision.exhausted || decision.stopped {
                 Verdict::Unknown
             } else if decision.consistent {
                 Verdict::True
@@ -590,7 +595,10 @@ impl Reasoner {
     fn open(&self) -> Result<(Session<'_>, bool), EntailError> {
         let mut session = Session::new(&self.kb, self.budget);
         let decision = session.decide(&Assumptions::of_kb());
-        if decision.exhausted {
+        // A stopped consistency check is exactly as unusable as an exhausted one: neither
+        // tells the caller whether the ontology has a model, so both leave the session
+        // unusable rather than falling through to `!decision.consistent`.
+        if decision.exhausted || decision.stopped {
             return Ok((session, false));
         }
         if !decision.consistent {
@@ -685,5 +693,90 @@ impl Refutation {
                 negated_reach,
             } => holds_role_inclusion(session, x, sub, y, negated_reach),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use purrdf_core::RdfDatasetBuilder;
+    use purrdf_datalog::StopSignal;
+
+    use super::*;
+
+    /// A stop signal that has already fired — see `certificate::tests::AlreadyStopped` for
+    /// why this is how the stop-aware path is reached here: [`Reasoner::new`] never threads a
+    /// signal in on its own, so the test attaches one to the built [`Kb`] directly.
+    #[derive(Debug)]
+    struct AlreadyStopped;
+
+    impl StopSignal for AlreadyStopped {
+        fn stopped(&self) -> bool {
+            true
+        }
+    }
+
+    /// A trivially consistent one-axiom ontology, reasoned over with the stop signal already
+    /// firing before the first decision this `Reasoner` makes.
+    fn stopped_reasoner() -> Reasoner {
+        let mut b = RdfDatasetBuilder::new();
+        let cat = b.intern_iri("https://example.org/Cat");
+        let animal = b.intern_iri("https://example.org/Animal");
+        let sub = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
+        b.push_quad(cat, sub, animal, None);
+        let ds = b.freeze().expect("freeze");
+        let mut reasoner = Reasoner::new(&ds).expect("a bare subclass axiom is consistent");
+        reasoner.kb.stop = Some(Arc::new(AlreadyStopped) as Arc<dyn StopSignal>);
+        reasoner
+    }
+
+    /// [`Reasoner::consistency`] — the first of the three sites. Before this fix, a stopped
+    /// decision (`exhausted: false, consistent: false`) fell through to `Verdict::False`: a
+    /// host cancellation reported as "no model".
+    #[test]
+    fn a_stopped_consistency_check_answers_unknown_not_false() {
+        let reasoner = stopped_reasoner();
+        let answer = reasoner.consistency();
+        assert_eq!(
+            *answer.answer(),
+            Verdict::Unknown,
+            "a cancellation must not be reported as a refutation"
+        );
+        assert_eq!(
+            answer.certificate().completeness(),
+            DlCompleteness::BudgetExhausted
+        );
+        assert!(answer.certificate().stopped());
+    }
+
+    /// [`Reasoner::class_satisfiability`] — the second site. It must not surface the stopped
+    /// consistency pre-check as [`EntailError::Unsatisfiable`], and its own answer must be
+    /// `Unknown`.
+    #[test]
+    fn a_stopped_class_satisfiability_check_answers_unknown_not_a_refutation() {
+        let mut reasoner = stopped_reasoner();
+        let cat = TermValue::iri("https://example.org/Cat");
+        let answer = reasoner
+            .class_satisfiability(&cat)
+            .expect("a stopped pre-check must not surface as EntailError::Unsatisfiable");
+        assert_eq!(*answer.answer(), Verdict::Unknown);
+        assert!(answer.certificate().stopped());
+    }
+
+    /// [`Reasoner::open`] — the third site, shared by `classify`/`realize`/`instances`/
+    /// `entails`. A stopped consistency check must leave the session UNUSABLE rather than
+    /// being read as `!decision.consistent` and surfaced as [`EntailError::Unsatisfiable`].
+    #[test]
+    fn open_reports_a_stopped_session_as_unusable_rather_than_unsatisfiable() {
+        let reasoner = stopped_reasoner();
+        let hierarchy = reasoner
+            .classify()
+            .expect("a stopped consistency check must not surface as EntailError::Unsatisfiable");
+        assert!(hierarchy.certificate().stopped());
+        assert_eq!(
+            hierarchy.certificate().completeness(),
+            DlCompleteness::BudgetExhausted
+        );
     }
 }

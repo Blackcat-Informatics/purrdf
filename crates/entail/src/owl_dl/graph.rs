@@ -237,10 +237,11 @@ impl Work {
 
 /// What one decision procedure run decided, and what it consumed deciding it.
 ///
-/// `consistent` is meaningful only when `exhausted` is false: a run that stopped at its
-/// cap has closed some branches and not others, and reporting the "no branch succeeded
-/// *yet*" state as `false` would turn a resource limit into an entailment. Every consumer
-/// in this crate reads `exhausted` first.
+/// `consistent` is meaningful only when NEITHER `exhausted` NOR `stopped` is true: a run
+/// that stopped at its cap, or that stopped because the caller asked it to, has closed
+/// some branches and not others, and reporting the "no branch succeeded *yet*" state as
+/// `false` would turn a resource limit — or a cancellation — into an entailment. Every
+/// consumer in this crate reads BOTH flags before `consistent`.
 ///
 /// Equality is over the WHOLE struct, and it is there so determinism can be asserted as one
 /// comparison rather than as a list of field comparisons that a fourth field would silently

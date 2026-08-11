@@ -40,8 +40,12 @@
 //!   [`Verdict::Unknown`] and drives the certificate to
 //!   [`DlCompleteness::BudgetExhausted`] whichever cap it was.
 //!
-//! There is deliberately no fourth state and no way to construct a certificate that omits
-//! both signals: the crate-internal session type is the only producer, and it derives the
+//! A search the caller's stop signal ended, rather than a cap, is not a fourth state: it
+//! reaches the same [`DlCompleteness::BudgetExhausted`] a capped search does, because
+//! `consistent` is exactly as meaningless under either — see
+//! [`crate::owl_dl::graph::Decision`]. [`DlCertificate::stopped`] is where the two stay
+//! tellable apart. There is no way to construct a certificate that omits any of its
+//! signals: the crate-internal session type is the only producer, and it derives the
 //! verdict from what the decision core reported.
 //!
 //! # There is no overclaim, because there is no field to disagree with
@@ -52,12 +56,12 @@
 //! reader of such a certificate cannot tell which half to believe.
 //!
 //! That state is not detected here. It is UNREPRESENTABLE: [`DlCertificate`] stores no
-//! completeness field at all, only the exhausted flag and the boundary list
-//! the reasoning session actually measured. [`DlCertificate::completeness`] COMPUTES the verdict from
-//! those two on every call, so `Decided` beside a non-empty boundary list is a value no
-//! caller — inside this crate or outside it — has a constructor for. This crate's tests
-//! exercise the derivation over every reachable combination rather than gating a predicate
-//! that could only ever answer `false`.
+//! completeness field at all, only the exhausted flag, the stopped flag and the boundary
+//! list the reasoning session actually measured. [`DlCertificate::completeness`] COMPUTES
+//! the verdict from those three on every call, so `Decided` beside a non-empty boundary
+//! list is a value no caller — inside this crate or outside it — has a constructor for.
+//! This crate's tests exercise the derivation over every reachable combination rather than
+//! gating a predicate that could only ever answer `false`.
 //!
 //! # Determinism
 //!
@@ -144,13 +148,19 @@ pub enum DlCompleteness {
     /// so a `True` here stays true for the full ontology, while a `False` means only "not
     /// entailed by what was read". [`DlCertificate::boundaries`] names each one.
     DecidedWithinBoundaries,
-    /// At least one hypertableau run reached its round cap or its work cap before deciding.
+    /// At least one hypertableau run reached its round cap or its work cap before deciding,
+    /// OR the caller's stop signal ended one before it finished.
     ///
     /// Strictly the weakest state, and it takes precedence over the other two: a service
     /// that could not decide one sub-question has not decided the aggregate either. Every
     /// answer that IS reported alongside this is still sound — a refutation that closed is
     /// a refutation — but the answer set is not complete, and a boolean service reports
     /// [`Verdict::Unknown`] rather than guessing.
+    ///
+    /// A cap reached and a caller cancellation are different FACTS about a run — one is a
+    /// termination-bug backstop tripping, the other is the host asking to stop — but they
+    /// are the same fact about the ANSWER: neither leaves a decided result, so both drive
+    /// this one variant. [`DlCertificate::stopped`] is where the two are told apart.
     BudgetExhausted,
 }
 
@@ -188,10 +198,21 @@ impl std::fmt::Display for DlCompleteness {
 pub struct DlCertificate {
     /// Whether any decision this run made reached its round cap or its work cap.
     ///
-    /// Together with [`Self::boundaries`], this is the minimal state
+    /// Together with [`Self::boundaries`] and [`Self::stopped`], this is the minimal state
     /// [`Self::completeness`] derives its verdict from — there is deliberately no
-    /// separately stored completeness for the two to disagree with.
+    /// separately stored completeness for the three to disagree with.
     exhausted: bool,
+    /// Whether any decision this run made ended because the caller's stop signal fired,
+    /// rather than because it reached a cap.
+    ///
+    /// A run cannot be both: [`crate::owl_dl::graph::Decision`] reports exactly one of
+    /// `exhausted`/`stopped` for a truncated search, and this field is that same fact
+    /// carried through the session. [`Self::completeness`] folds it into
+    /// [`DlCompleteness::BudgetExhausted`] exactly as it folds `exhausted` — a stopped run
+    /// is precisely as incomplete as a capped one — but a reader who needs to tell a
+    /// cancellation apart from a resource ceiling reads this rather than guessing from
+    /// [`Self::steps`] falling short of [`Self::budget`].
+    stopped: bool,
     /// The constructs the reverse mapping could not turn into DL clauses.
     boundaries: Vec<Boundary>,
     /// Derivation rounds consumed, summed over every hypertableau run the service made.
@@ -226,13 +247,25 @@ impl DlCertificate {
     /// the two to disagree over.
     #[must_use]
     pub fn completeness(&self) -> DlCompleteness {
-        if self.exhausted {
+        if self.exhausted || self.stopped {
             DlCompleteness::BudgetExhausted
         } else if self.boundaries.is_empty() {
             DlCompleteness::Decided
         } else {
             DlCompleteness::DecidedWithinBoundaries
         }
+    }
+
+    /// Whether any decision this run made ended because the caller's stop signal fired
+    /// rather than because it reached a cap.
+    ///
+    /// `false` under every OTHER completeness, [`DlCompleteness::BudgetExhausted`]
+    /// included: that variant covers both a cap reached and a cancellation, and this is
+    /// the one bit that tells a reader which. See the field doc for why the two are folded
+    /// into one [`DlCompleteness`] variant rather than a fourth.
+    #[must_use]
+    pub const fn stopped(&self) -> bool {
+        self.stopped
     }
 
     /// The constructs the reverse mapping could not turn into DL clauses, in
@@ -423,6 +456,8 @@ pub(crate) struct Session<'a> {
     decisions: u64,
     /// Whether any decision reached either cap.
     exhausted: bool,
+    /// Whether any decision ended because the caller's stop signal fired.
+    stopped: bool,
     /// The largest completion graph any decision built — a MAXIMUM, see
     /// [`DlCertificate::peak_nodes`].
     peak_nodes: u64,
@@ -443,6 +478,7 @@ impl<'a> Session<'a> {
             work: 0,
             decisions: 0,
             exhausted: false,
+            stopped: false,
             peak_nodes: 0,
             disjunctions: 0,
             peak_depth: 0,
@@ -467,6 +503,7 @@ impl<'a> Session<'a> {
         self.work = self.work.saturating_add(decision.work);
         self.decisions += 1;
         self.exhausted |= decision.exhausted;
+        self.stopped |= decision.stopped;
         self.peak_nodes = self.peak_nodes.max(decision.peak_nodes);
         self.disjunctions = self.disjunctions.saturating_add(decision.disjunctions);
         self.peak_depth = self.peak_depth.max(decision.peak_depth);
@@ -482,7 +519,10 @@ impl<'a> Session<'a> {
     /// exists to make impossible to write at a call site.
     pub(crate) fn refutes(&mut self, assumptions: &Assumptions<'_>) -> Verdict {
         let decision = self.decide(assumptions);
-        if decision.exhausted {
+        // `stopped` is checked beside `exhausted` for the reason [`Decision`] documents: a
+        // cancelled run is exactly as undecided as a capped one, and `decision.consistent`
+        // is not a fact about the refutation under either.
+        if decision.exhausted || decision.stopped {
             Verdict::Unknown
         } else if decision.consistent {
             Verdict::False
@@ -506,6 +546,7 @@ impl<'a> Session<'a> {
             .collect();
         DlCertificate {
             exhausted: self.exhausted,
+            stopped: self.stopped,
             boundaries,
             steps: self.steps,
             budget: self.budget.steps,
@@ -516,5 +557,82 @@ impl<'a> Session<'a> {
             disjunctions: self.disjunctions,
             peak_depth: self.peak_depth,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use purrdf_datalog::StopSignal;
+
+    use super::*;
+    use crate::owl_dl::Kb;
+
+    /// A stop signal that has already fired. `Reasoner::new` never threads a signal into the
+    /// [`Kb`] it builds, so this is how the stop-aware path — real code with real callers
+    /// elsewhere in this crate (`materialize_dl_reported_until`'s cousins) — gets exercised
+    /// here: attach one directly to a [`Kb`] built for the test, exactly as the stop-aware
+    /// constructors do.
+    #[derive(Debug)]
+    struct AlreadyStopped;
+
+    impl StopSignal for AlreadyStopped {
+        fn stopped(&self) -> bool {
+            true
+        }
+    }
+
+    /// An otherwise-trivial knowledge base whose stop signal has already fired.
+    fn stopped_kb() -> Kb {
+        let mut kb = Kb::empty();
+        kb.stop = Some(Arc::new(AlreadyStopped) as Arc<dyn StopSignal>);
+        kb
+    }
+
+    /// The decision core must report a cancelled run as `stopped`, never as `exhausted` — the
+    /// two are different facts ([`Decision`]'s doc), and collapsing them would make a
+    /// `budget-exhausted` certificate lie about why the run did not decide.
+    #[test]
+    fn a_stopped_decision_is_reported_as_stopped_not_exhausted() {
+        let kb = stopped_kb();
+        let budget = Budget::for_kb(&kb);
+        let mut session = Session::new(&kb, budget);
+        let decision = session.decide(&Assumptions::of_kb());
+        assert!(
+            decision.stopped,
+            "the kb's stop signal must be read by the search"
+        );
+        assert!(
+            !decision.exhausted,
+            "stopped and exhausted are different facts about a run"
+        );
+    }
+
+    /// Before this fix, [`Session::decide`]'s caller could see `exhausted: false, consistent:
+    /// false` on a stopped run and report a definite `Verdict::False` — a cancellation
+    /// rendered as "no model". The certificate must instead say `budget-exhausted` and name
+    /// the stop as the reason.
+    #[test]
+    fn session_certificate_reports_a_stopped_run_as_budget_exhausted_and_says_why() {
+        let kb = stopped_kb();
+        let budget = Budget::for_kb(&kb);
+        let mut session = Session::new(&kb, budget);
+        session.decide(&Assumptions::of_kb());
+        let certificate = session.certificate(&BTreeSet::new());
+        assert_eq!(certificate.completeness(), DlCompleteness::BudgetExhausted);
+        assert!(
+            certificate.stopped(),
+            "the certificate must say the run was CANCELLED, not merely incomplete"
+        );
+    }
+
+    /// [`Session::refutes`] must not read a cancelled run's `consistent` field either.
+    #[test]
+    fn refutes_answers_unknown_rather_than_a_guessed_verdict_when_stopped() {
+        let kb = stopped_kb();
+        let budget = Budget::for_kb(&kb);
+        let mut session = Session::new(&kb, budget);
+        assert_eq!(session.refutes(&Assumptions::of_kb()), Verdict::Unknown);
     }
 }
