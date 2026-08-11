@@ -28,7 +28,7 @@
 //! difference between them is a difference of CALCULUS — which is exactly what the
 //! differential test exists to find, and why no divergence may be ledgered.
 //!
-//! Every generated knowledge base of [`crate::owl_dl::oracle`] (8,900 per run) and every
+//! Every generated knowledge base of [`crate::owl_dl::oracle`] (9,200 per run) and every
 //! hand-written knowledge base in this module is decided by both.
 //!
 //! # Shape of the search
@@ -76,8 +76,8 @@ use crate::owl_dl::absorb::GuardedClause;
 use crate::owl_dl::clause::BodyAtom;
 use crate::owl_dl::concept::{Decomp, Role};
 use crate::owl_dl::graph::{
-    Assumptions, Decision, Exhausted, Graph, State, are_distinct, find, max_clique, set_distinct,
-    step_cap,
+    Assumptions, Budget, Decision, Exhausted, Graph, State, are_distinct, find, max_clique,
+    set_distinct,
 };
 
 /// A non-deterministic expansion alternative.
@@ -116,14 +116,15 @@ struct Tableau<'a> {
 }
 
 /// Decide whether the knowledge base plus `assumptions` has a consistent completion,
-/// spending at most `cap` steps.
-pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, cap: u64) -> Decision {
-    let mut t = Tableau::new(kb, cap);
+/// spending at most `budget`'s steps and work units.
+pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, budget: Budget) -> Decision {
+    let mut t = Tableau::new(kb, budget);
     let st = t.g.init_state(assumptions);
     match t.solve(st) {
         Ok(consistent) => Decision {
             consistent,
             steps: t.steps,
+            work: t.g.work().spent(),
             exhausted: false,
             stopped: false,
             peak_nodes: t.peak_nodes,
@@ -133,6 +134,7 @@ pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, cap: u64) -> Decisi
         Err(Exhausted) => Decision {
             consistent: false,
             steps: t.steps,
+            work: t.g.work().spent(),
             exhausted: !t.stopped,
             stopped: t.stopped,
             peak_nodes: t.peak_nodes,
@@ -146,27 +148,30 @@ pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, cap: u64) -> Decisi
 ///
 /// # Errors
 ///
-/// [`EntailError::Build`] if the step cap is exceeded (a termination-bug backstop).
+/// [`EntailError::Build`] if either cap is exceeded (a termination-bug backstop for the round
+/// cap, and the honest ceiling on per-round work for the other).
 pub(crate) fn consistent(kb: &Kb, assumptions: &Assumptions<'_>) -> Result<bool, EntailError> {
-    let decision = decide(kb, assumptions, step_cap(kb));
+    let decision = decide(kb, assumptions, Budget::for_kb(kb));
     if decision.stopped {
         return Err(EntailError::Stopped);
     }
     if decision.exhausted {
         return Err(EntailError::Build(
-            "OWL-Direct tableau exceeded its step cap (possible non-termination)".to_owned(),
+            "OWL-Direct tableau exceeded its search budget (possible non-termination, or an \
+             ontology whose per-round work is beyond the work cap)"
+                .to_owned(),
         ));
     }
     Ok(decision.consistent)
 }
 
 impl<'a> Tableau<'a> {
-    /// Build a driver over `kb` bounded by `cap` steps.
-    fn new(kb: &'a Kb, cap: u64) -> Self {
+    /// Build a driver over `kb` bounded by `budget`.
+    fn new(kb: &'a Kb, budget: Budget) -> Self {
         Self {
-            g: Graph::new(kb),
+            g: Graph::new(kb, budget.work),
             steps: 0,
-            cap,
+            cap: budget.steps,
             stopped: false,
             peak_nodes: 0,
             disjunctions: 0,
@@ -190,6 +195,12 @@ impl<'a> Tableau<'a> {
             self.depth += 1;
             self.peak_depth = self.peak_depth.max(self.depth);
             for br in branches {
+                // A branch copies the completion graph, and the copy costs its size — the
+                // same charge the hypertableau's own clone takes, so the two calculi count
+                // one quantity.
+                self.g
+                    .work()
+                    .charge((st.nodes.len() + st.edges.len()) as u64 + 1);
                 let mut s2 = st.clone();
                 if self.apply_branch(&mut s2, &br) && self.solve(s2)? {
                     self.depth -= 1;
@@ -199,6 +210,9 @@ impl<'a> Tableau<'a> {
             self.depth -= 1;
             return Ok(false);
         }
+        // A scan that found no branch point while out of budget found nothing because it
+        // stopped, so the completion it would report is not one.
+        self.check_work()?;
         Ok(true)
     }
 
@@ -221,6 +235,9 @@ impl<'a> Tableau<'a> {
             if st.clique_exhausted.get() {
                 return Err(Exhausted);
             }
+            // The work budget, read for the reason the hypertableau reads it here: a round
+            // whose scans stopped short is neither a fixpoint nor a refutation.
+            self.check_work()?;
             if st.clash {
                 return Ok(false);
             }
@@ -244,10 +261,23 @@ impl<'a> Tableau<'a> {
             self.stopped = true;
             return Err(Exhausted);
         }
+        self.check_work()?;
         if self.steps >= self.cap {
             return Err(Exhausted);
         }
         self.steps += 1;
+        Ok(())
+    }
+
+    /// Convert work-budget exhaustion into the search's own exhaustion.
+    ///
+    /// The meter is [`Graph`]'s, so this reference procedure is bounded by the SAME counted
+    /// work the hypertableau is, charged at the same shared graph operations — which is what
+    /// keeps the differential a difference of calculus rather than of budget.
+    fn check_work(&self) -> Result<(), Exhausted> {
+        if self.g.work().exhausted() {
+            return Err(Exhausted);
+        }
         Ok(())
     }
 
@@ -354,7 +384,9 @@ impl<'a> Tableau<'a> {
                     .collect();
                 // Budget exhaustion is recorded on the state; the driver's saturate
                 // loop converts it to `Exhausted`, so a `None` here only withholds.
-                let Some(clique) = max_clique(&with_c, &|a, b| are_distinct(st, a, b)) else {
+                let Some(clique) =
+                    max_clique(&with_c, &|a, b| are_distinct(st, a, b), self.g.work())
+                else {
                     st.clique_exhausted.set(true);
                     continue;
                 };
@@ -551,7 +583,9 @@ impl<'a> Tableau<'a> {
                 .into_iter()
                 .filter(|&y| self.g.has_concept(st, y, c))
                 .collect();
-            let Some(mut clique) = max_clique(&with_c, &|a, b| are_distinct(st, a, b)) else {
+            let Some(mut clique) =
+                max_clique(&with_c, &|a, b| are_distinct(st, a, b), self.g.work())
+            else {
                 st.clique_exhausted.set(true);
                 continue;
             };

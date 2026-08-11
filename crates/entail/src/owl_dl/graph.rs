@@ -138,6 +138,102 @@ impl Assumptions<'_> {
     }
 }
 
+/// The two caps one decision procedure run spends against.
+///
+/// One struct rather than two positional `u64`s for the reason [`Assumptions`] is one struct:
+/// two same-typed budgets in a signature are two arguments a caller can silently swap, and
+/// swapping them here would run a rounds-denominated search under a work cap thousands of
+/// times its size and call the result decided.
+///
+/// The two bound DIFFERENT quantities and neither implies the other — see [`work_cap`] for
+/// why a rounds cap cannot see inside a round, which is the whole reason there are two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Budget {
+    /// Derivation ROUNDS the search may consume, summed over every branch.
+    pub(crate) steps: u64,
+    /// WORK UNITS the search may consume — the counted matcher, scan and clone work that
+    /// happens INSIDE those rounds.
+    pub(crate) work: u64,
+}
+
+impl Budget {
+    /// The knowledge base's own two caps, both pure functions of its size.
+    pub(crate) fn for_kb(kb: &Kb) -> Self {
+        Self {
+            steps: step_cap(kb),
+            work: work_cap(kb),
+        }
+    }
+}
+
+/// The deterministic WORK meter one decision procedure run charges against.
+///
+/// # Why a second budget exists at all
+///
+/// [`step_cap`] is denominated in derivation ROUNDS, and a round is not a unit of work: it
+/// is a pass whose cost is the graph it runs over times the clause set it matches. One
+/// individual co-typed with several equivalence-defined classes makes every round enumerate
+/// clause matches, successor subsets, achiever closures and branch-state clones whose count
+/// grows with the co-typing, so the search can spend hours a few percent into a rounds
+/// budget — reporting a cap it is nowhere near while it grinds. That is not a cap being
+/// generous; it is a cap that cannot see the quantity that grew. This meter is charged at
+/// the sites where that work actually happens, so the class of ontology above stops at a
+/// declared ceiling and reports `budget-exhausted` instead of running unbounded.
+///
+/// # Every charge is a pure function of the search
+///
+/// The units are integers counted off the state — edges scanned, body atoms joined, subsets
+/// enumerated, nodes cloned — never a clock reading, never a float, never a hash iteration
+/// order. So a run's work figure is byte-identical run to run and on `wasm32`, exactly as
+/// its round count is, and the [`Decision`] carrying both stays comparable as one struct.
+///
+/// # Why it saturates at the cap
+///
+/// A charge that would cross the cap is clamped to it. Two reasons: the search stops there
+/// anyway, so the excess measures nothing; and a reader of an exhausted certificate can then
+/// see `work` and `work-budget` agree exactly, which is what says WHICH of the two budgets
+/// ended the run.
+///
+/// A [`std::cell::Cell`] because the sites that do the work — a neighbour scan, a
+/// satisfaction test — hold the graph through `&self` and the state through `&State`, and
+/// threading `&mut` through them would turn a measurement into a refactor of every rule.
+pub(crate) struct Work {
+    /// Units charged so far, clamped at [`Self::cap`].
+    spent: std::cell::Cell<u64>,
+    /// The ceiling this meter stops at.
+    cap: u64,
+}
+
+impl Work {
+    /// A meter that stops at `cap`.
+    const fn new(cap: u64) -> Self {
+        Self {
+            spent: std::cell::Cell::new(0),
+            cap,
+        }
+    }
+
+    /// Charge `units` of work, clamping at the cap.
+    pub(crate) fn charge(&self, units: u64) {
+        self.spent
+            .set(self.spent.get().saturating_add(units).min(self.cap));
+    }
+
+    /// Work charged so far.
+    pub(crate) fn spent(&self) -> u64 {
+        self.spent.get()
+    }
+
+    /// Whether the budget is gone.
+    ///
+    /// Every enumerator that could run long consults this and stops, so the latency between
+    /// the cap being reached and the search reporting it is bounded by one charge rather than
+    /// by whatever the enumeration would have cost.
+    pub(crate) fn exhausted(&self) -> bool {
+        self.spent.get() >= self.cap
+    }
+}
+
 /// What one decision procedure run decided, and what it consumed deciding it.
 ///
 /// `consistent` is meaningful only when `exhausted` is false: a run that stopped at its
@@ -148,16 +244,16 @@ impl Assumptions<'_> {
 /// Equality is over the WHOLE struct, and it is there so determinism can be asserted as one
 /// comparison rather than as a list of field comparisons that a fourth field would silently
 /// escape: two runs over one knowledge base must produce the same verdict, the same round
-/// count, the same two stop flags and the same three shape counters.
+/// count, the same work figure, the same two stop flags and the same three shape counters.
 ///
 /// # The three shape counters
 ///
-/// `steps` is the number the cap is denominated in, and it says how much a search cost. It
-/// does not say WHY. Three searches costing a thousand rounds each — one that built a
-/// thousand-node graph without branching once, one that branched a thousand times over a
-/// two-node graph, and one that went a thousand levels deep down a single spine — are three
-/// different situations with three different fixes, and a single round count cannot tell
-/// them apart. [`Self::peak_nodes`], [`Self::disjunctions`] and [`Self::peak_depth`] are
+/// `steps` and `work` are the two numbers the two caps are denominated in, and together they
+/// say how much a search cost. Neither says WHY. Three searches costing a thousand rounds
+/// each — one that built a thousand-node graph without branching once, one that branched a
+/// thousand times over a two-node graph, and one that went a thousand levels deep down a
+/// single spine — are three different situations with three different fixes, and a total
+/// cannot tell them apart. [`Self::peak_nodes`], [`Self::disjunctions`] and [`Self::peak_depth`] are
 /// the three quantities that do, and they are measured rather than derived: each is
 /// observed at the one point in the search where the thing it names changes.
 ///
@@ -169,7 +265,18 @@ pub(crate) struct Decision {
     pub(crate) consistent: bool,
     /// Derivation rounds consumed, summed over every branch the search explored.
     pub(crate) steps: u64,
-    /// Whether the search stopped because it reached its step cap.
+    /// WORK units consumed — the counted cost INSIDE those rounds.
+    ///
+    /// The quantity `steps` cannot see: matcher join steps, successor-subset enumeration,
+    /// achiever closures, neighbour scans and branch-state clones. See [`Work`] for why the
+    /// two are separate budgets, and [`work_cap`] for what bounds this one.
+    pub(crate) work: u64,
+    /// Whether the search stopped because it reached one of its two caps.
+    ///
+    /// One flag for both, deliberately: a caller's question is whether the answer is a
+    /// verdict or a resource limit, and that is one fact. WHICH cap ended the run is read
+    /// off the figures — an exhausted run has `steps == step cap` or `work == work cap`,
+    /// and both are reported.
     pub(crate) exhausted: bool,
     /// Whether the search stopped because the caller's stop signal fired.
     ///
@@ -206,7 +313,7 @@ pub(crate) struct Decision {
     pub(crate) peak_depth: u64,
 }
 
-/// The search reached its step cap. A private marker rather than an
+/// The search reached one of its two caps. A private marker rather than an
 /// [`EntailError`](crate::EntailError): it is not a failure at this layer, it is one of the
 /// three things a decision reports.
 #[derive(Debug)]
@@ -241,10 +348,79 @@ pub(crate) struct Exhausted;
 /// reproducible run to run, and it is a STEP count rather than a clock reading, which is what
 /// keeps it reproducible on wasm32 (where there is no clock to read).
 pub(crate) fn step_cap(kb: &Kb) -> u64 {
-    let base =
-        (kb.abox_types.len() + kb.abox_roles.len() + kb.tbox.len() + kb.individuals.len() + 16)
-            as u64;
-    100_000 + base.saturating_mul(base).saturating_mul(64)
+    100_000 + cap_base(kb).saturating_mul(cap_base(kb)).saturating_mul(64)
+}
+
+/// The size both caps are derived from: the axioms, assertions and individuals the search
+/// runs over, plus a floor so a tiny knowledge base still gets a usable budget.
+fn cap_base(kb: &Kb) -> u64 {
+    (kb.abox_types.len() + kb.abox_roles.len() + kb.tbox.len() + kb.individuals.len() + 16) as u64
+}
+
+/// The WORK cap for a knowledge base: generous and size-proportional, in the units
+/// [`Work`] counts.
+///
+/// # What it bounds that [`step_cap`] cannot
+///
+/// A round is not a unit of work. Its cost is the completion graph it runs over times the
+/// clauses it matches against it, so per-round work grows with the ontology while the round
+/// count need not — and a search can therefore spend unbounded time a few percent into its
+/// rounds budget. The shape that demonstrates it is one individual co-typed with `n`
+/// equivalence-defined classes: the converse direction of each equivalence reaches the search
+/// as a disjunction, the `n` of them interleave on ONE node, and what grows is the matching,
+/// the successor-subset enumeration, the achiever closures and the branch-state clones inside
+/// each round rather than the number of rounds. This cap is what bounds that class, and the
+/// two caps together are what make an unanswerable ontology answer `budget-exhausted`
+/// promptly instead of grinding.
+///
+/// # Where the formula comes from
+///
+/// MEASURED, over three populations, against the criterion "an ontology this reasoner is
+/// expected to decide keeps at least ten times the work it actually spends in hand":
+///
+/// * **the ledgered fixtures.** The reported 17-triple `owl:equivalentClass` shape spends
+///   2,926 units; its `rdfs:subClassOf` control 221.
+/// * **the differential corpora** of [`crate::owl_dl::oracle`] — 9,200 generated, deliberately
+///   adversarial knowledge bases. Their most expensive DECIDING case spends 6.1 million units,
+///   over a THREE-axiom knowledge base whose completion graph reaches 101 nodes. That case is
+///   what fixes the constant term: work is a function of the SEARCH rather than of the input's
+///   size, so a size-derived cap has to carry a floor generous enough for a small ontology
+///   whose search is not, and 64 million is that measurement times ten.
+/// * **the two block families** of this crate's consistency bench, at 1/2/4/8/16 blocks. The
+///   INDEPENDENT family (one individual per block) spends 2,926 / 18,760 / 184,539 / 2,463,669
+///   / 41,097,049 units and decides at every size, the largest with fifteen times its budget
+///   left. The STACKED family — the same blocks co-typed on ONE individual, which is the shape
+///   this cap exists for — spends 2,926 / 195,727 / 77,233,830 at 1/2/4 blocks and decides
+///   them, and from five blocks on it reaches the cap: `unknown` in 0.27 s at five, 0.6 s at
+///   ten, 1.8 s at sixteen. Run UNCAPPED the same family spends 5,366,941 units at three
+///   blocks, 77 million at four, 695 million at five and 4.4 BILLION at six — about a factor
+///   of nine per added block — so ten blocks is some 10¹³ units of grinding, which is what
+///   this class did before the cap existed while its round count sat at a few percent of the
+///   round budget.
+///
+/// The base is [`cap_base`] — the same size the round cap is derived from — and the formula is
+/// `64,000,000 + base³ × 256`. CUBIC rather than the round cap's quadratic, because the two
+/// bound quantities one degree apart: a round's own cost is about quadratic in the size (nodes
+/// times clauses) and the number of rounds is about linear in it, so a work bound that grew
+/// only as fast as the round cap would tighten as ontologies grow.
+///
+/// What the formula does NOT promise is that the stacked family becomes decidable by making
+/// the number bigger. Its work grows by roughly a factor of ten per added block against a
+/// cubic budget, so every cap has an `n` it stops at; the honest curve is stated above, and
+/// what a cap buys is that the ontology past that `n` ANSWERS — `unknown`, with
+/// `completeness budget-exhausted` and `work` equal to `work-budget` — in under a second
+/// instead of grinding.
+///
+/// It is a pure function of the knowledge base — same input, same cap — and it is a COUNT
+/// rather than a clock reading, which is what keeps a [`Decision`] reproducible run to run
+/// and on `wasm32`.
+pub(crate) fn work_cap(kb: &Kb) -> u64 {
+    let base = cap_base(kb);
+    64_000_000
+        + base
+            .saturating_mul(base)
+            .saturating_mul(base)
+            .saturating_mul(256)
 }
 
 /// Resolve a node index to its union-find representative.
@@ -314,18 +490,23 @@ pub(crate) fn set_distinct(st: &mut State, a: usize, b: usize) {
 /// callers report as a budget-exhausted decision (`Verdict::Unknown` upstream), never
 /// as a hang and never as a guessed verdict. A search cap that counts rounds cannot see
 /// work INSIDE a round; this one counts the work itself.
+///
+/// Its expansions are also charged to the SEARCH's own [`Work`] meter, so a clique search
+/// that stays inside its private ceiling still shows up in what the whole decision spent.
+/// The two budgets answer different questions — this one bounds ONE clique search, that one
+/// bounds the run — and a rule that calls this a thousand times is only visible in the
+/// second.
 pub(crate) fn max_clique(
     items: &[usize],
     compat: &dyn Fn(usize, usize) -> bool,
+    meter: &Work,
 ) -> Option<Vec<usize>> {
     let mut best: Vec<usize> = Vec::new();
     let mut current: Vec<usize> = Vec::new();
     let mut work: u64 = 0;
-    if rec_clique(items, compat, 0, &mut current, &mut best, &mut work) {
-        Some(best)
-    } else {
-        None
-    }
+    let finished = rec_clique(items, compat, 0, &mut current, &mut best, &mut work);
+    meter.charge(work);
+    if finished { Some(best) } else { None }
 }
 
 /// Expansion-count ceiling for one [`max_clique`] search.
@@ -385,12 +566,18 @@ fn rec_clique(
 /// The knowledge base plus the internalized TBox, and every operation on a completion graph
 /// over them.
 ///
-/// Read-only in the knowledge base and stateless in itself: a decision procedure owns its own
-/// budget and its own rule set, and borrows this for the graph operations both procedures must
-/// perform identically.
+/// Read-only in the knowledge base and carrying exactly one piece of state of its own — the
+/// run's [`Work`] meter. A decision procedure owns its round budget and its rule set, and
+/// borrows this for the graph operations both procedures must perform identically; the meter
+/// lives here because the work worth counting is done here, and because a counter reachable
+/// through `&self` is what lets a scan charge itself without every rule in both calculi
+/// growing a `&mut`.
 pub(crate) struct Graph<'a> {
     /// The knowledge base (concept table, role hierarchy, inverses).
     kb: &'a Kb,
+    /// The run's work meter — charged by every scan and enumeration below, and by the two
+    /// drivers for the work they do outside these methods.
+    work: Work,
     /// The internalized TBox: meta-concept ids placed in every abstract node's label.
     meta: BTreeSet<u32>,
     /// Every concept the TBox asserts UNCONDITIONALLY of an element of the object domain: the
@@ -410,8 +597,9 @@ pub(crate) struct Graph<'a> {
 }
 
 impl<'a> Graph<'a> {
-    /// Build the graph operations over `kb`, snapshotting the internalized TBox.
-    pub(crate) fn new(kb: &'a Kb) -> Self {
+    /// Build the graph operations over `kb`, snapshotting the internalized TBox, with a work
+    /// meter stopping at `work_cap`.
+    pub(crate) fn new(kb: &'a Kb, work_cap: u64) -> Self {
         let meta: BTreeSet<u32> = kb.meta.iter().copied().collect();
         let mut unconditional = meta.clone();
         unconditional.extend(
@@ -422,6 +610,7 @@ impl<'a> Graph<'a> {
         );
         Self {
             kb,
+            work: Work::new(work_cap),
             meta,
             unconditional,
         }
@@ -430,6 +619,12 @@ impl<'a> Graph<'a> {
     /// The knowledge base every rule reads.
     pub(crate) const fn kb(&self) -> &'a Kb {
         self.kb
+    }
+
+    /// The run's work meter — what both drivers charge their own scans and clones to, and
+    /// read the run's work figure off.
+    pub(crate) const fn work(&self) -> &Work {
+        &self.work
     }
 
     /// A fresh label seeded with the internalized TBox.
@@ -522,6 +717,9 @@ impl<'a> Graph<'a> {
         }
         let idx = st.nodes.len();
         let concrete = self.kb.interner.is_literal(a);
+        // Minting a node copies the internalized TBox into its label; the meta set's size is
+        // therefore what a node costs.
+        self.work.charge(self.meta.len() as u64 + 1);
         st.nodes.push(Node {
             label: if concrete {
                 BTreeSet::new()
@@ -569,6 +767,15 @@ impl<'a> Graph<'a> {
             st.clash = true;
             return;
         }
+        // Folding one node into another copies its label, its inequalities and its names, so
+        // the cost is the size of what is folded. Charged here because identification is how
+        // a nominal-heavy ontology spends a round without adding a node to count.
+        self.work.charge(
+            (st.nodes[discard].label.len()
+                + st.nodes[discard].neq.len()
+                + st.nodes[discard].nominals.len()) as u64
+                + 1,
+        );
         // Fold the discarded node's label and distinctness into the keeper.
         let disc_label = st.nodes[discard].label.clone();
         st.nodes[keep].label.extend(disc_label);
@@ -667,6 +874,9 @@ impl<'a> Graph<'a> {
                 label.insert(c);
             }
         }
+        // The same node cost as [`Graph::root`], plus the fillers placed on it.
+        self.work
+            .charge((self.meta.len() + fillers.len()) as u64 + 1);
         let idx = st.nodes.len();
         let (prop, inverted) = match role {
             Role::Named(p) => (p, false),
@@ -714,6 +924,14 @@ impl<'a> Graph<'a> {
     /// OWL 2 DL and the reverse mapping raises
     /// [`Construct::NonSimpleRole`](crate::Construct::NonSimpleRole) for it.
     pub(crate) fn neighbors(&self, st: &State, x: usize, role: Role) -> Vec<usize> {
+        // A neighbourhood read is the single most-called scan in either calculus — every
+        // clause body atom over a role, every counting rule and every satisfaction test goes
+        // through it — so it is where an unbounded search spends most of what a round cap
+        // cannot see. Charged whole: the achiever closure below, then one unit per edge each
+        // step examines.
+        if self.work.exhausted() {
+            return Vec::new();
+        }
         let ach = self.achievers(role);
         let x = find(st, x);
         let mut out: Vec<usize> = Vec::new();
@@ -723,12 +941,21 @@ impl<'a> Graph<'a> {
             if !self.kb.transitive.contains(&prop) {
                 continue;
             }
+            if self.work.exhausted() {
+                return out;
+            }
             let single: BTreeSet<(u32, bool)> = std::iter::once((prop, dir)).collect();
             // Breadth-first over this one transitive role, seeded from `x`'s own step.
             let mut frontier: Vec<usize> = Vec::new();
             self.step(st, x, &single, &mut BTreeSet::new(), &mut frontier);
             let mut visited: BTreeSet<usize> = frontier.iter().copied().collect();
             while let Some(y) = frontier.pop() {
+                // The transitive closure is the one loop here whose length is a function of
+                // the graph rather than of the role hierarchy, so it is polled as well as
+                // charged: a run whose budget went while this was running stops here.
+                if self.work.exhausted() {
+                    return out;
+                }
                 if seen.insert(y) {
                     out.push(y);
                 }
@@ -754,6 +981,10 @@ impl<'a> Graph<'a> {
         seen: &mut BTreeSet<usize>,
         out: &mut Vec<usize>,
     ) {
+        // One unit per edge examined, charged before the scan rather than inside it: the loop
+        // below visits every edge unconditionally, so the cost is known in advance and one
+        // charge is cheaper than one per iteration.
+        self.work.charge(st.edges.len() as u64);
         let x = find(st, x);
         for &(from, to, prop) in &st.edges {
             let f = find(st, from);
@@ -776,7 +1007,13 @@ impl<'a> Graph<'a> {
         };
         let mut set: BTreeSet<(u32, bool)> = BTreeSet::new();
         let mut stack = vec![start];
+        // One unit per closure expansion, plus one for the call itself. The `+ 1` is what
+        // makes EVERY neighbourhood read cost something: a role with no sub-roles and no
+        // inverse closes in one expansion over an edgeless graph, and a scan that charged
+        // zero would let a rule call it forever without the meter moving.
+        let mut expansions: u64 = 1;
         while let Some((q, dir)) = stack.pop() {
+            expansions += 1;
             if !set.insert((q, dir)) {
                 continue;
             }
@@ -791,6 +1028,7 @@ impl<'a> Graph<'a> {
                 }
             }
         }
+        self.work.charge(expansions);
         set
     }
 
@@ -840,6 +1078,10 @@ impl<'a> Graph<'a> {
         if self.kb.data_ranges.is_empty() {
             return false;
         }
+        // Two label scans and, per at-least-over-a-data-range concept, a third plus a pass
+        // over the absorbed table. An ontology that states no data range paid nothing above;
+        // one that does pays for what it made this method read.
+        self.work.charge(st.nodes[x].label.len() as u64 + 1);
         let mut positive: Vec<u32> = Vec::new();
         let mut negative: Vec<u32> = Vec::new();
         for &cid in &st.nodes[x].label {
@@ -865,6 +1107,8 @@ impl<'a> Graph<'a> {
                 continue;
             };
             let mut demanded = vec![range];
+            self.work
+                .charge((st.nodes[x].label.len() + self.kb.absorbed.len()) as u64);
             for &other in &st.nodes[x].label {
                 if let Decomp::All(universal_role, universal_filler) = *self.kb.table.decomp(other)
                     && universal_role == role
@@ -928,7 +1172,8 @@ impl<'a> Graph<'a> {
             .into_iter()
             .filter(|&y| self.has_concept(st, y, filler))
             .collect();
-        let Some(mut clique) = max_clique(&with_filler, &|a, b| are_distinct(st, a, b)) else {
+        let Some(mut clique) = max_clique(&with_filler, &|a, b| are_distinct(st, a, b), &self.work)
+        else {
             // Clique-work exhaustion: surface as search exhaustion, never as a guess.
             st.clique_exhausted.set(true);
             return false;
@@ -949,6 +1194,11 @@ impl<'a> Graph<'a> {
             let y = self.new_successor(st, x, role, &[filler]);
             clique.push(y);
         }
+        // Forcing the witness set pairwise distinct records `n·(n-1)/2` inequalities, which is
+        // quadratic bookkeeping the `≥`-rule does in ONE round however large `n` is — the
+        // clearest example of work a rounds cap cannot see.
+        self.work
+            .charge((clique.len() as u64).saturating_mul(clique.len() as u64));
         for a in 0..clique.len() {
             for b in (a + 1)..clique.len() {
                 set_distinct(st, clique[a], clique[b]);
@@ -974,7 +1224,7 @@ impl<'a> Graph<'a> {
             .into_iter()
             .filter(|&y| self.has_concept(st, y, filler))
             .collect();
-        match max_clique(&with_filler, &|a, b| are_distinct(st, a, b)) {
+        match max_clique(&with_filler, &|a, b| are_distinct(st, a, b), &self.work) {
             Some(clique) => clique.len() >= n as usize,
             None => {
                 // Exhaustion is recorded on the state the caller already consults; a

@@ -177,7 +177,7 @@
 //!
 //! # Two ways to ask
 //!
-//! [`consistent`] answers `bool` and turns an exhausted cap into [`EntailError::Build`] — the
+//! [`consistent`] answers `bool` and turns an exhausted budget into [`EntailError::Build`] — the
 //! shape the query-directed materialization layer wants, where a truncated search has no
 //! honest answer to return. [`decide`] answers a [`Decision`], which carries the round count
 //! and an `exhausted` flag instead of throwing one; that is what the reasoner services need,
@@ -192,9 +192,11 @@
 //! [`Graph::neighbors`](crate::owl_dl::graph::Graph::neighbors), which is first-seen edge
 //! order; the `⊔`-rule takes the FIRST open disjunction that same scan meets; and it branches
 //! in the alternatives' authored order, which [`crate::owl_dl::clause`] fixed once from the
-//! concept table and the absorbed clauses.
+//! concept table and the absorbed clauses. The WORK figure is counted off the same search —
+//! edges scanned, body atoms joined, subsets enumerated, nodes cloned — so it moves only when
+//! the search does.
 //! Nothing is read out of a hash map and nothing consults a clock, so a [`Decision`] — verdict,
-//! round count, exhausted flag and the three shape counters
+//! round count, work figure, exhausted flag and the three shape counters
 //! ([`Decision::peak_nodes`](crate::owl_dl::graph::Decision), `disjunctions`, `peak_depth`)
 //! alike — is byte-identical run to run and on wasm32, and that
 //! is asserted rather than merely stated: `a_decision_is_byte_identical_run_to_run` below
@@ -206,7 +208,7 @@ use crate::EntailError;
 use crate::owl_dl::Kb;
 use crate::owl_dl::clause::{BodyAtom, ClauseSet, DlClause, HeadAtom, derive};
 use crate::owl_dl::concept::Role;
-use crate::owl_dl::graph::{Assumptions, Decision, Exhausted, Graph, State, find, step_cap};
+use crate::owl_dl::graph::{Assumptions, Budget, Decision, Exhausted, Graph, State, find};
 
 /// One head atom with its variables replaced by the nodes a match bound them to.
 ///
@@ -250,6 +252,10 @@ struct Hyper<'a> {
     /// Derivation rounds consumed so far.
     steps: u64,
     /// Hard round cap; exceeding it is a hard error (a termination-bug backstop).
+    ///
+    /// The run's second cap is not here: it lives on [`Graph`]'s work meter, because the
+    /// work it bounds is done inside the graph operations and this driver reads it through
+    /// [`Hyper::check_work`].
     cap: u64,
     /// Whether the caller's stop signal — not the cap — ended the search.
     ///
@@ -267,14 +273,15 @@ struct Hyper<'a> {
 }
 
 /// Decide whether the knowledge base plus `assumptions` has a consistent completion,
-/// spending at most `cap` derivation rounds.
-pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, cap: u64) -> Decision {
-    let mut h = Hyper::new(kb, cap);
+/// spending at most `budget`'s derivation rounds and work units.
+pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, budget: Budget) -> Decision {
+    let mut h = Hyper::new(kb, budget);
     let st = h.g.init_state(assumptions);
     match h.solve(st) {
         Ok(consistent) => Decision {
             consistent,
             steps: h.steps,
+            work: h.g.work().spent(),
             exhausted: false,
             stopped: false,
             peak_nodes: h.peak_nodes,
@@ -291,6 +298,7 @@ pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, cap: u64) -> Decisi
         Err(Exhausted) => Decision {
             consistent: false,
             steps: h.steps,
+            work: h.g.work().spent(),
             exhausted: !h.stopped,
             stopped: h.stopped,
             peak_nodes: h.peak_nodes,
@@ -304,29 +312,32 @@ pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, cap: u64) -> Decisi
 ///
 /// # Errors
 ///
-/// [`EntailError::Build`] if the step cap is exceeded (a termination-bug backstop).
+/// [`EntailError::Build`] if either cap is exceeded (a termination-bug backstop for the
+/// round cap, and the honest ceiling on per-round work for the other).
 pub(crate) fn consistent(kb: &Kb, assumptions: &Assumptions<'_>) -> Result<bool, EntailError> {
-    let decision = decide(kb, assumptions, step_cap(kb));
+    let decision = decide(kb, assumptions, Budget::for_kb(kb));
     if decision.stopped {
         return Err(EntailError::Stopped);
     }
     if decision.exhausted {
         return Err(EntailError::Build(
-            "OWL-Direct hypertableau exceeded its step cap (possible non-termination)".to_owned(),
+            "OWL-Direct hypertableau exceeded its search budget (possible non-termination, or an \
+             ontology whose per-round work is beyond the work cap)"
+                .to_owned(),
         ));
     }
     Ok(decision.consistent)
 }
 
 impl<'a> Hyper<'a> {
-    /// Build a driver over `kb` bounded by `cap` rounds, deriving its clause set.
-    fn new(kb: &'a Kb, cap: u64) -> Self {
-        let g = Graph::new(kb);
+    /// Build a driver over `kb` bounded by `budget`, deriving its clause set.
+    fn new(kb: &'a Kb, budget: Budget) -> Self {
+        let g = Graph::new(kb, budget.work);
         Self {
             clauses: derive(g.kb()),
             g,
             steps: 0,
-            cap,
+            cap: budget.steps,
             stopped: false,
             peak_nodes: 0,
             disjunctions: 0,
@@ -359,11 +370,23 @@ impl<'a> Hyper<'a> {
                 // Nothing to descend into, so back up: take the next alternative of the
                 // deepest level that still has one, and drop a level that has none.
                 let Some(level) = stack.last_mut() else {
-                    // Every alternative of every level clashed.
+                    // Every alternative of every level clashed — but only a search that still
+                    // had budget when it said so is reporting a refutation rather than a
+                    // truncation, because an out-of-budget enumeration stops short and a
+                    // branch can close for want of a match it never looked for.
+                    self.check_work()?;
                     return Ok(false);
                 };
                 match level.alternatives.next() {
                     Some(disjunct) => {
+                        // A sibling starts from a COPY of the level's state, and copying a
+                        // completion graph costs its size. That is work the round cap cannot
+                        // see at all — a clone happens between rounds — and on a knowledge
+                        // base whose disjunctions interleave it is where a large share of an
+                        // unbounded search goes.
+                        self.g
+                            .work()
+                            .charge((level.state.nodes.len() + level.state.edges.len()) as u64 + 1);
                         let mut next = level.state.clone();
                         if self.apply(&mut next, &disjunct) {
                             pending = Some(next);
@@ -393,8 +416,13 @@ impl<'a> Hyper<'a> {
                     self.peak_depth = self.peak_depth.max(stack.len() as u64);
                 }
                 // No disjunction left to branch on: a clash-free completion, which is the
-                // answer for the whole search rather than for this level alone.
-                None => return Ok(true),
+                // answer for the whole search rather than for this level alone — provided the
+                // scan that found no open disjunction ran to the end, which an out-of-budget
+                // one does not.
+                None => {
+                    self.check_work()?;
+                    return Ok(true);
+                }
             }
         }
     }
@@ -420,6 +448,10 @@ impl<'a> Hyper<'a> {
             let changed = self.round(st);
             self.observe(st);
             Self::check_clique(st)?;
+            // A round whose enumerations stopped for want of budget derived less than the
+            // rule set says it should, so its `changed = false` is not a fixpoint and its
+            // clash is not a refutation. Checked before both readings.
+            self.check_work()?;
             if st.clash {
                 return Ok(false);
             }
@@ -429,10 +461,23 @@ impl<'a> Hyper<'a> {
         }
     }
 
-    /// Consume one round against the cap.
     /// Convert a mid-rule clique-budget exhaustion into the search's own exhaustion.
     fn check_clique(st: &State) -> Result<(), Exhausted> {
         if st.clique_exhausted.get() {
+            return Err(Exhausted);
+        }
+        Ok(())
+    }
+
+    /// Convert work-budget exhaustion into the search's own exhaustion.
+    ///
+    /// The meter is consulted rather than decremented here: the charges happen where the work
+    /// does — inside [`Graph`]'s scans and this driver's matcher and clones — and this is the
+    /// one place they become a decision. Every enumerator polls the same meter and stops, so
+    /// the search reaches this within a bounded amount of work of the cap rather than after
+    /// whatever the enumeration in flight would have cost.
+    fn check_work(&self) -> Result<(), Exhausted> {
+        if self.g.work().exhausted() {
             return Err(Exhausted);
         }
         Ok(())
@@ -450,6 +495,7 @@ impl<'a> Hyper<'a> {
             self.stopped = true;
             return Err(Exhausted);
         }
+        self.check_work()?;
         if self.steps >= self.cap {
             return Err(Exhausted);
         }
@@ -492,8 +538,15 @@ impl<'a> Hyper<'a> {
             // axiom escaping its domain.
             let object_domain = !st.nodes[x].concrete;
             let triggers: Vec<u32> = st.nodes[x].label.iter().copied().collect();
+            // One unit per label concept enumerated at this node. A label that grows is what
+            // makes a round more expensive without making the search take more rounds.
+            self.g.work().charge(triggers.len() as u64 + 1);
             for concept in triggers {
                 for &index in self.clauses.triggered_by(concept) {
+                    // One unit per clause CONSIDERED, whether or not it is fired: a
+                    // disjunctive clause is skipped here without being matched, and a skip
+                    // this round repeats is still a scan.
+                    self.g.work().charge(1);
                     if !object_domain && self.clauses.is_tbox(index) {
                         continue;
                     }
@@ -504,6 +557,7 @@ impl<'a> Hyper<'a> {
                 }
             }
             for &index in self.clauses.untriggered() {
+                self.g.work().charge(1);
                 if !object_domain && self.clauses.is_tbox(index) {
                     continue;
                 }
@@ -583,7 +637,8 @@ impl<'a> Hyper<'a> {
     /// walks to reach it. The published argument for taking the narrowest first is that a level
     /// of `k` alternatives multiplies the subtree below it by `k`, so putting the widest levels
     /// deepest lets the clashes above prune them. This calculus was MEASURED under that rule,
-    /// over the generated corpora of [`crate::owl_dl::oracle`] — 8,900 knowledge bases — and
+    /// over the generated corpora of [`crate::owl_dl::oracle`] — 8,900 knowledge bases at the
+    /// time, 9,200 now — and
     /// the argument did not pay here:
     ///
     /// * by itself it was close to a wash, saving rounds on the nominal and counting families
@@ -596,7 +651,8 @@ impl<'a> Hyper<'a> {
     ///   concept of every node, including the `≤n` clauses whose body enumerates the
     ///   count-element SUBSETS of a node's successors. That work is charged to no derivation
     ///   round, because a branch point is chosen between rounds rather than inside one, so it
-    ///   is cost the [`step_cap`] cannot see.
+    ///   is cost the ROUND cap cannot see — it is charged to the work meter
+    ///   ([`work_cap`](crate::owl_dl::graph::work_cap)) instead, which is the budget that can.
     ///
     /// What DOES pay is which alternative of the chosen disjunction is tried first, and that is
     /// a property of the clause set rather than of this scan:
@@ -611,17 +667,31 @@ impl<'a> Hyper<'a> {
                 continue;
             }
             let triggers: Vec<u32> = st.nodes[x].label.iter().copied().collect();
+            // The branch-point scan is charged exactly as the round's is, and it is charged
+            // for the reason [`Hyper::find_branch`]'s own measurements give: a branch point is
+            // chosen BETWEEN rounds, so every clause this scan matches — including the `≤n`
+            // clauses whose bodies enumerate successor subsets — used to be work no budget
+            // could see. This is the counter that sees it.
+            self.g.work().charge(triggers.len() as u64 + 1);
             for concept in triggers {
                 for &index in self.clauses.triggered_by(concept) {
+                    self.g.work().charge(1);
                     if let Some(branch) = self.branch_of(st, index, x) {
                         return Some(branch);
                     }
                 }
             }
             for &index in self.clauses.untriggered() {
+                self.g.work().charge(1);
                 if let Some(branch) = self.branch_of(st, index, x) {
                     return Some(branch);
                 }
+            }
+            if self.g.work().exhausted() {
+                // Out of budget mid-scan: stop rather than walk the rest of the graph for an
+                // answer the driver is about to discard. The `None` is not read as "no open
+                // disjunction" — `solve` checks the meter before it believes one.
+                return None;
             }
         }
         None
@@ -637,6 +707,10 @@ impl<'a> Hyper<'a> {
         let mut found: Option<Vec<Vec<Ground>>> = None;
         Self::for_each_match(&self.g, st, clause, x, &mut |frame| {
             let disjuncts = ground_head(&clause.head, frame);
+            // Grounding a `≤n` head expands one schematic atom into one alternative per PAIR
+            // of counted successors, so the alternatives a single match produces are
+            // quadratic in the count. Charged by what came out.
+            self.g.work().charge(disjuncts.len() as u64);
             if disjuncts
                 .iter()
                 .any(|disjunct| self.satisfied(st, disjunct))
@@ -706,6 +780,11 @@ impl<'a> Hyper<'a> {
         x: usize,
         visit: &mut dyn FnMut(&[usize]) -> bool,
     ) -> bool {
+        // One unit for the attempt itself, so a clause that matches nothing at a node still
+        // costs what it took to find that out. A round tries every clause of every label
+        // concept of every node, so this charge alone is what makes the ROUND's own size
+        // visible to the work budget.
+        g.work().charge(1);
         let mut frame = vec![find(st, x)];
         Self::walk(g, st, clause, 0, &mut frame, visit)
     }
@@ -722,6 +801,17 @@ impl<'a> Hyper<'a> {
         frame: &mut Vec<usize>,
         visit: &mut dyn FnMut(&[usize]) -> bool,
     ) -> bool {
+        // One unit per JOIN STEP — one body atom, at one partial binding. This is the
+        // matcher's own cost, and the quantity that grows when a knowledge base makes many
+        // clauses match at one node: the join tree's size, not the number of rounds it is
+        // walked in.
+        g.work().charge(1);
+        // Out of budget: stop the walk rather than finish an enumeration whose result is
+        // about to be discarded. `true` is the stop signal the callers already understand,
+        // and the driver reports the exhaustion before any verdict is read off this state.
+        if g.work().exhausted() {
+            return true;
+        }
         let Some(&atom) = clause.body.get(at) else {
             return visit(frame);
         };
@@ -803,6 +893,15 @@ impl<'a> Hyper<'a> {
         remaining: u32,
         visit: &mut dyn FnMut(&[usize]) -> bool,
     ) -> bool {
+        // One unit per selection step. A `≤n` clause enumerates the `count`-element SUBSETS
+        // of a node's counted successors, which is `C(k, count)` selections from `k`
+        // successors — the most violently super-linear enumeration in the calculus, done
+        // inside a single round, and the reason a rounds-denominated cap could watch a search
+        // grind at three percent of its budget.
+        g.work().charge(1);
+        if g.work().exhausted() {
+            return true;
+        }
         if remaining == 0 {
             return Self::walk(g, st, clause, at + 1, frame, visit);
         }
@@ -857,6 +956,10 @@ impl<'a> Hyper<'a> {
             let Some(parent) = st.nodes[x].parent.map(|p| find(st, p)) else {
                 continue;
             };
+            // One unit per candidate blocker considered. Anywhere blocking compares a node
+            // against every earlier unblocked node, so this scan is quadratic in the graph
+            // and runs once per ROUND — work the round count reports as one.
+            self.g.work().charge(candidates.len() as u64 + 1);
             let directly = candidates
                 .iter()
                 .any(|&y| Self::same_signature(st, x, y, parent));
@@ -952,7 +1055,7 @@ mod tests {
     use crate::owl_dl::Kb;
     use crate::owl_dl::clause::{HeadAtom, derive};
     use crate::owl_dl::concept::{Concept, Role};
-    use crate::owl_dl::graph::{Assumptions, step_cap};
+    use crate::owl_dl::graph::{Assumptions, Budget};
 
     /// A class term id.
     const A: u32 = 10;
@@ -995,16 +1098,17 @@ mod tests {
     }
 
     /// A [`Decision`](crate::owl_dl::graph::Decision) is a pure function of the knowledge base:
-    /// the same one decided twice gives back the same WHOLE struct — verdict, round count and
-    /// both stop flags.
+    /// the same one decided twice gives back the same WHOLE struct — verdict, round count,
+    /// WORK figure and both stop flags.
     ///
     /// The determinism doctrine is stated in the module docs; this is what makes it an
     /// observation. A search that read a `HashMap`, a clock or a float would still answer the
-    /// same verdict most runs, and it is the round count that would move first.
+    /// same verdict most runs, and it is the two cost figures that would move first — the work
+    /// figure soonest of all, because it counts every scan rather than every round.
     #[test]
     fn a_decision_is_byte_identical_run_to_run() {
         let kb = branching_kb();
-        let cap = step_cap(&kb);
+        let cap = Budget::for_kb(&kb);
         let first = decide(&kb, &Assumptions::of_kb(), cap);
         let again = decide(&kb, &Assumptions::of_kb(), cap);
         assert_eq!(first, again, "two runs, one decision");
@@ -1022,7 +1126,7 @@ mod tests {
     #[test]
     fn the_branch_point_is_the_first_open_disjunction_in_derivation_order() {
         let kb = branching_kb();
-        let mut h = Hyper::new(&kb, step_cap(&kb));
+        let mut h = Hyper::new(&kb, Budget::for_kb(&kb));
         let mut st = h.g.init_state(&Assumptions::of_kb());
         assert!(
             h.saturate(&mut st).expect("a fixture this small saturates"),

@@ -338,6 +338,12 @@ fn extensions(regime: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
 /// cap**, not a cap of zero steps. It can only NARROW, so it cannot make a hard
 /// instance answerable — only make the `budget-exhausted` certificate reachable.
 ///
+/// `work_cap` narrows the per-decision WORK cap on the same `0`-means-the-knowledge-base's-own-cap
+/// rule, and can only NARROW too. It bounds what `step_cap` structurally cannot: a round is a
+/// PASS over the completion graph rather than a unit of cost, so an ontology can make every
+/// round enormously more expensive without making the search take more rounds. A run that
+/// reaches it answers `unknown` with `work` equal to `work-budget` in its certificate.
+///
 /// Returns `(answer, certificate)`. The answer is `consistency true|false|unknown`;
 /// `unknown` means the search reached its step cap and is NEVER collapsed to
 /// `false`. The certificate is the `purrdf-dl-certificate 1` block, whose
@@ -350,10 +356,15 @@ fn extensions(regime: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
 ///
 /// Raises `ValueError` on a malformed document or a failed reverse mapping.
 #[pyfunction]
-#[pyo3(signature = (data, step_cap = 0))]
-fn consistency(py: Python<'_>, data: &str, step_cap: u32) -> PyResult<(String, String)> {
+#[pyo3(signature = (data, step_cap = 0, work_cap = 0))]
+fn consistency(
+    py: Python<'_>,
+    data: &str,
+    step_cap: u32,
+    work_cap: u32,
+) -> PyResult<(String, String)> {
     let answer = py
-        .detach(|| consistency_to_string(data, step_cap))
+        .detach(|| consistency_to_string(data, step_cap, work_cap))
         .map_err(PyValueError::new_err)?;
     Ok(answer.into_parts())
 }
@@ -374,10 +385,15 @@ fn consistency(py: Python<'_>, data: &str, step_cap: u32) -> PyResult<(String, S
 /// every class then subsumes every other and the hierarchy would carry no
 /// information.
 #[pyfunction]
-#[pyo3(signature = (data, step_cap = 0))]
-fn classify(py: Python<'_>, data: &str, step_cap: u32) -> PyResult<(String, String)> {
+#[pyo3(signature = (data, step_cap = 0, work_cap = 0))]
+fn classify(
+    py: Python<'_>,
+    data: &str,
+    step_cap: u32,
+    work_cap: u32,
+) -> PyResult<(String, String)> {
     let answer = py
-        .detach(|| classify_to_string(data, step_cap))
+        .detach(|| classify_to_string(data, step_cap, work_cap))
         .map_err(PyValueError::new_err)?;
     Ok(answer.into_parts())
 }
@@ -390,10 +406,10 @@ fn classify(py: Python<'_>, data: &str, step_cap: u32) -> PyResult<(String, Stri
 ///
 /// Raises `ValueError` on a malformed document or an ontology with no model.
 #[pyfunction]
-#[pyo3(signature = (data, step_cap = 0))]
-fn realize(py: Python<'_>, data: &str, step_cap: u32) -> PyResult<(String, String)> {
+#[pyo3(signature = (data, step_cap = 0, work_cap = 0))]
+fn realize(py: Python<'_>, data: &str, step_cap: u32, work_cap: u32) -> PyResult<(String, String)> {
     let answer = py
-        .detach(|| realize_to_string(data, step_cap))
+        .detach(|| realize_to_string(data, step_cap, work_cap))
         .map_err(PyValueError::new_err)?;
     Ok(answer.into_parts())
 }
@@ -409,15 +425,16 @@ fn realize(py: Python<'_>, data: &str, step_cap: u32) -> PyResult<(String, Strin
 /// Raises `ValueError` on a malformed document, a `class_` that is not one
 /// N-Triples term, or an ontology with no model.
 #[pyfunction]
-#[pyo3(signature = (data, class_, step_cap = 0))]
+#[pyo3(signature = (data, class_, step_cap = 0, work_cap = 0))]
 fn instances(
     py: Python<'_>,
     data: &str,
     class_: &str,
     step_cap: u32,
+    work_cap: u32,
 ) -> PyResult<(String, String)> {
     let answer = py
-        .detach(|| instances_to_string(data, class_, step_cap))
+        .detach(|| instances_to_string(data, class_, step_cap, work_cap))
         .map_err(PyValueError::new_err)?;
     Ok(answer.into_parts())
 }
@@ -438,10 +455,16 @@ fn instances(
 /// Raises `ValueError` on a malformed document, an `axiom` that is not one triple,
 /// an axiom statement that names a graph, or an ontology with no model.
 #[pyfunction]
-#[pyo3(signature = (data, axiom, step_cap = 0))]
-fn entails(py: Python<'_>, data: &str, axiom: &str, step_cap: u32) -> PyResult<(String, String)> {
+#[pyo3(signature = (data, axiom, step_cap = 0, work_cap = 0))]
+fn entails(
+    py: Python<'_>,
+    data: &str,
+    axiom: &str,
+    step_cap: u32,
+    work_cap: u32,
+) -> PyResult<(String, String)> {
     let answer = py
-        .detach(|| entails_to_string(data, axiom, step_cap))
+        .detach(|| entails_to_string(data, axiom, step_cap, work_cap))
         .map_err(PyValueError::new_err)?;
     Ok(answer.into_parts())
 }
@@ -754,7 +777,9 @@ impl PyReasoner {
     /// `data` is an N-Quads (or N-Triples) document. `step_cap` narrows the per-decision
     /// tableau step cap for every question asked through this session; **0 (the default)
     /// means the knowledge base's own cap**, not a cap of zero steps, and it can only
-    /// NARROW.
+    /// NARROW. `work_cap` narrows the per-decision WORK cap on the same rule — the cap on
+    /// the matcher, scan, closure and clone work done INSIDE a round, which a round cap
+    /// cannot see.
     ///
     /// Nothing is reverse-mapped here, so an ontology whose knowledge base cannot be
     /// built still constructs — and raises on the first question that needs one. That is
@@ -763,10 +788,10 @@ impl PyReasoner {
     ///
     /// Raises `ValueError` on a malformed document.
     #[new]
-    #[pyo3(signature = (data, step_cap = 0))]
-    fn new(py: Python<'_>, data: &str, step_cap: u32) -> PyResult<Self> {
+    #[pyo3(signature = (data, step_cap = 0, work_cap = 0))]
+    fn new(py: Python<'_>, data: &str, step_cap: u32, work_cap: u32) -> PyResult<Self> {
         let session = py
-            .detach(|| ReasonerSession::open(data, step_cap))
+            .detach(|| ReasonerSession::open(data, step_cap, work_cap))
             .map_err(PyValueError::new_err)?;
         Ok(Self { session })
     }

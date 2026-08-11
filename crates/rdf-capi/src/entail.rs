@@ -339,6 +339,13 @@ fn null_argument(entry: &str) -> PurrdfError {
 /// base's own ceiling has no effect — so this cannot be used to make a hard
 /// instance answerable, only to make the `budget-exhausted` certificate reachable.
 ///
+/// `work_cap` narrows the per-decision WORK cap on the same rules — **0 means the
+/// knowledge base's own cap**, and it can only NARROW. It bounds what `step_cap`
+/// structurally cannot: a round is a PASS over the completion graph rather than a
+/// unit of cost, so an ontology can make each round enormously more expensive
+/// without making the search take more rounds. A run that reaches it answers
+/// `unknown` with `work` equal to `work-budget` in its certificate.
+///
 /// On success `*out_answer` receives `consistency true|false|unknown` and
 /// `*out_certificate` the rendered `purrdf-dl-certificate 1` block, which says
 /// whether the search was `decided`, `decided-within-boundaries` (some axiom of the
@@ -357,6 +364,7 @@ fn null_argument(entry: &str) -> PurrdfError {
 pub unsafe extern "C" fn purrdf_entail_consistency(
     document: *const c_char,
     step_cap: u32,
+    work_cap: u32,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
@@ -370,7 +378,7 @@ pub unsafe extern "C" fn purrdf_entail_consistency(
             }
             let document = cstr_to_str(document)?;
             store_answer(
-                consistency_to_string(document, step_cap),
+                consistency_to_string(document, step_cap, work_cap),
                 out_answer,
                 out_certificate,
             )
@@ -382,8 +390,8 @@ pub unsafe extern "C" fn purrdf_entail_consistency(
 ///
 /// `*out_answer` receives `equivalent`, `subclass`, `direct` and `unsatisfiable`
 /// lines (in that block order); `*out_certificate` the `purrdf-dl-certificate 1`
-/// block. **Free BOTH with `purrdf_buffer_free`.** `step_cap` behaves exactly as in
-/// [`purrdf_entail_consistency`].
+/// block. **Free BOTH with `purrdf_buffer_free`.** `step_cap` and `work_cap` behave
+/// exactly as in [`purrdf_entail_consistency`].
 ///
 /// Costs one tableau decision per ORDERED pair of named classes plus the
 /// consistency check, which the certificate's `decisions` line reports so the cost
@@ -395,6 +403,7 @@ pub unsafe extern "C" fn purrdf_entail_consistency(
 pub unsafe extern "C" fn purrdf_entail_classify(
     document: *const c_char,
     step_cap: u32,
+    work_cap: u32,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
@@ -407,7 +416,7 @@ pub unsafe extern "C" fn purrdf_entail_classify(
             }
             let document = cstr_to_str(document)?;
             store_answer(
-                classify_to_string(document, step_cap),
+                classify_to_string(document, step_cap, work_cap),
                 out_answer,
                 out_certificate,
             )
@@ -420,7 +429,8 @@ pub unsafe extern "C" fn purrdf_entail_classify(
 ///
 /// `*out_answer` receives `type` lines followed by `direct-type` lines;
 /// `*out_certificate` the `purrdf-dl-certificate 1` block. **Free BOTH with
-/// `purrdf_buffer_free`.**
+/// `purrdf_buffer_free`.** `step_cap` and `work_cap` behave exactly as in
+/// [`purrdf_entail_consistency`].
 ///
 /// # Safety
 /// As [`purrdf_entail_consistency`].
@@ -428,6 +438,7 @@ pub unsafe extern "C" fn purrdf_entail_classify(
 pub unsafe extern "C" fn purrdf_entail_realize(
     document: *const c_char,
     step_cap: u32,
+    work_cap: u32,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
@@ -440,7 +451,7 @@ pub unsafe extern "C" fn purrdf_entail_realize(
             }
             let document = cstr_to_str(document)?;
             store_answer(
-                realize_to_string(document, step_cap),
+                realize_to_string(document, step_cap, work_cap),
                 out_answer,
                 out_certificate,
             )
@@ -456,6 +467,7 @@ pub unsafe extern "C" fn purrdf_entail_realize(
 ///
 /// `*out_answer` receives `instance <term>` lines; `*out_certificate` the
 /// `purrdf-dl-certificate 1` block. **Free BOTH with `purrdf_buffer_free`.**
+/// `step_cap` and `work_cap` behave exactly as in [`purrdf_entail_consistency`].
 ///
 /// # Safety
 /// `document` and `class` must be non-null, NUL-terminated C strings; `out_answer`
@@ -466,6 +478,7 @@ pub unsafe extern "C" fn purrdf_entail_instances(
     document: *const c_char,
     class: *const c_char,
     step_cap: u32,
+    work_cap: u32,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
@@ -483,7 +496,7 @@ pub unsafe extern "C" fn purrdf_entail_instances(
             let document = cstr_to_str(document)?;
             let class = cstr_to_str(class)?;
             store_answer(
-                instances_to_string(document, class, step_cap),
+                instances_to_string(document, class, step_cap, work_cap),
                 out_answer,
                 out_certificate,
             )
@@ -514,6 +527,7 @@ pub unsafe extern "C" fn purrdf_entail_entails(
     document: *const c_char,
     axiom: *const c_char,
     step_cap: u32,
+    work_cap: u32,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
@@ -531,7 +545,7 @@ pub unsafe extern "C" fn purrdf_entail_entails(
             let document = cstr_to_str(document)?;
             let axiom = cstr_to_str(axiom)?;
             store_answer(
-                entails_to_string(document, axiom, step_cap),
+                entails_to_string(document, axiom, step_cap, work_cap),
                 out_answer,
                 out_certificate,
             )
@@ -1072,6 +1086,9 @@ const _: fn() = || {
 /// `step_cap` narrows the per-decision tableau step cap for every question asked through
 /// this session, and behaves exactly as in [`purrdf_entail_consistency`]: **0 means the
 /// knowledge base's own cap**, not a cap of zero steps, and it can only NARROW.
+/// `work_cap` narrows the per-decision WORK cap on the same rule — the cap on the
+/// matcher, scan, closure and clone work done INSIDE a round, which a round cap cannot
+/// see.
 ///
 /// On success `*out_reasoner` receives a handle to free with [`purrdf_reasoner_free`].
 ///
@@ -1087,6 +1104,7 @@ const _: fn() = || {
 pub unsafe extern "C" fn purrdf_reasoner_open(
     document: *const c_char,
     step_cap: u32,
+    work_cap: u32,
     out_reasoner: *mut *mut PurrdfReasoner,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
@@ -1098,7 +1116,7 @@ pub unsafe extern "C" fn purrdf_reasoner_open(
                 return Err(null_argument("purrdf_reasoner_open"));
             }
             let document = cstr_to_str(document)?;
-            let session = ReasonerSession::open(document, step_cap)
+            let session = ReasonerSession::open(document, step_cap, work_cap)
                 .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
             *out_reasoner = Box::into_raw(Box::new(PurrdfReasoner(session)));
             Ok(PurrdfStatus::Ok)
@@ -1744,26 +1762,26 @@ mod tests {
             vec![
                 (
                     "consistency",
-                    pair(|a, c, e| purrdf_entail_consistency(document.as_ptr(), 0, a, c, e)),
+                    pair(|a, c, e| purrdf_entail_consistency(document.as_ptr(), 0, 0, a, c, e)),
                 ),
                 (
                     "classify",
-                    pair(|a, c, e| purrdf_entail_classify(document.as_ptr(), 0, a, c, e)),
+                    pair(|a, c, e| purrdf_entail_classify(document.as_ptr(), 0, 0, a, c, e)),
                 ),
                 (
                     "realize",
-                    pair(|a, c, e| purrdf_entail_realize(document.as_ptr(), 0, a, c, e)),
+                    pair(|a, c, e| purrdf_entail_realize(document.as_ptr(), 0, 0, a, c, e)),
                 ),
                 (
                     "instances",
                     pair(|a, c, e| {
-                        purrdf_entail_instances(document.as_ptr(), class.as_ptr(), 0, a, c, e)
+                        purrdf_entail_instances(document.as_ptr(), class.as_ptr(), 0, 0, a, c, e)
                     }),
                 ),
                 (
                     "entails",
                     pair(|a, c, e| {
-                        purrdf_entail_entails(document.as_ptr(), axiom.as_ptr(), 0, a, c, e)
+                        purrdf_entail_entails(document.as_ptr(), axiom.as_ptr(), 0, 0, a, c, e)
                     }),
                 ),
                 (
@@ -2142,13 +2160,13 @@ mod tests {
         let axiom = CString::new(CHAIN_AXIOM).expect("no interior NUL");
         // SAFETY: both C strings are live for the calls; `pair` owns the pointers.
         let (starved, certificate) = unsafe {
-            pair(|a, c, e| purrdf_entail_entails(document.as_ptr(), axiom.as_ptr(), 1, a, c, e))
+            pair(|a, c, e| purrdf_entail_entails(document.as_ptr(), axiom.as_ptr(), 1, 0, a, c, e))
         };
         assert_eq!(starved.lines().next(), Some("entails unknown"));
         assert!(certificate.contains("\ncompleteness budget-exhausted\n"));
         // SAFETY: as above.
         let (decided, certificate) = unsafe {
-            pair(|a, c, e| purrdf_entail_entails(document.as_ptr(), axiom.as_ptr(), 0, a, c, e))
+            pair(|a, c, e| purrdf_entail_entails(document.as_ptr(), axiom.as_ptr(), 0, 0, a, c, e))
         };
         assert!(decided.starts_with("entails true\n"));
         assert!(certificate.contains("\ncompleteness decided\n"));
@@ -2169,6 +2187,7 @@ mod tests {
                 purrdf_entail_instances(
                     document.as_ptr(),
                     class.as_ptr(),
+                    0,
                     0,
                     &raw mut answer,
                     &raw mut certificate,
@@ -2195,11 +2214,11 @@ mod tests {
         unsafe {
             let (a, c) = (&raw mut answer, &raw mut certificate);
             for status in [
-                purrdf_entail_consistency(null, 0, a, c, std::ptr::null_mut()),
-                purrdf_entail_classify(null, 0, a, c, std::ptr::null_mut()),
-                purrdf_entail_realize(null, 0, a, c, std::ptr::null_mut()),
-                purrdf_entail_instances(null, null, 0, a, c, std::ptr::null_mut()),
-                purrdf_entail_entails(null, null, 0, a, c, std::ptr::null_mut()),
+                purrdf_entail_consistency(null, 0, 0, a, c, std::ptr::null_mut()),
+                purrdf_entail_classify(null, 0, 0, a, c, std::ptr::null_mut()),
+                purrdf_entail_realize(null, 0, 0, a, c, std::ptr::null_mut()),
+                purrdf_entail_instances(null, null, 0, 0, a, c, std::ptr::null_mut()),
+                purrdf_entail_entails(null, null, 0, 0, a, c, std::ptr::null_mut()),
                 purrdf_entail_profile(null, a, c, std::ptr::null_mut()),
                 purrdf_entail_extract_module(null, null, null, a, c, std::ptr::null_mut()),
                 purrdf_entail_justify(null, null, a, c, std::ptr::null_mut()),

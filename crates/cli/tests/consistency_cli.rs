@@ -26,6 +26,9 @@
 //! * `true` and `false` both exit 0 — DECIDED verdicts, neither a failure;
 //! * `--step-cap 1` narrows the ordinary ontology into `unknown` / `completeness
 //!   budget-exhausted`, exiting 3 exactly like a governed `query` cut short;
+//! * `--work-cap 1` does the same through the OTHER budget, and the certificate's
+//!   `work`/`work-budget` lines say which one it was — a round is a pass rather than a
+//!   unit of cost, so the two caps bound different quantities and a run can reach either;
 //! * `--loss-ledger`/`--jsonld-options` are refused rather than silently ignored, since
 //!   clap makes both global and this subcommand produces neither a ledger nor RDF.
 
@@ -221,6 +224,45 @@ fn a_narrow_step_cap_reports_unknown_and_exits_three() {
     );
 }
 
+/// `--work-cap 1` narrows the OTHER budget to the same effect, and the certificate says
+/// which one ran out.
+///
+/// Not a duplicate of the test above. The round cap bounds derivation PASSES and the work
+/// cap bounds the matcher, scan, closure and clone work done inside them — an ontology can
+/// make each pass enormously more expensive without taking more passes, which is the class
+/// `dl_work_budget` demonstrates. Both reach the same honest three-valued answer, and the
+/// four rendered budget lines are what distinguish them.
+#[test]
+fn a_narrow_work_cap_reports_unknown_and_exits_three() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = write_file(dir.path(), "ontology.ttl", ORDINARY_ONTOLOGY);
+
+    let out = run(&["consistency", "--work-cap", "1", &input]);
+    assert_eq!(
+        code(&out),
+        3,
+        "an unknown verdict exits 3, whichever budget produced it"
+    );
+
+    let text = stdout(&out);
+    assert!(
+        text.starts_with(
+            "consistency unknown
+"
+        ),
+        "the verdict line:\n{text}"
+    );
+    assert!(
+        text.contains("\ncompleteness budget-exhausted\n"),
+        "the certificate names the exhausted budget in its own words:\n{text}"
+    );
+    assert!(
+        text.contains("\nwork 1\n") && text.contains("\nwork-budget 1\n"),
+        "the two work lines say WHICH cap ended the run — an exhausted search has its work \
+         figure at its work budget:\n{text}"
+    );
+}
+
 /// Without `--step-cap` the same ontology decides comfortably inside its own derived
 /// budget (see `dl_consistency_search_budget.rs`), so narrowing is what changed the
 /// answer above rather than an ontology that was always undecidable.
@@ -229,10 +271,15 @@ fn the_same_ontology_decides_true_without_narrowing() {
     let dir = tempfile::tempdir().expect("tempdir");
     let input = write_file(dir.path(), "ontology.ttl", ORDINARY_ONTOLOGY);
 
-    let out = run(&["consistency", "--step-cap", "0", &input]);
+    let out = run(&["consistency", "--step-cap", "0", "--work-cap", "0", &input]);
     assert!(out.status.success(), "unnarrowed: {}", stderr(&out));
     assert_eq!(code(&out), 0);
-    assert!(stdout(&out).starts_with("consistency true\n"));
+    let text = stdout(&out);
+    assert!(text.starts_with("consistency true\n"));
+    assert!(
+        text.contains("\nwork ") && text.contains("\nwork-budget "),
+        "an unnarrowed run still reports both work figures:\n{text}"
+    );
 }
 
 /// `--from`/`--base` resolve exactly as they do for `reason`/`entails`: a `.ttl`

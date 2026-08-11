@@ -12,19 +12,25 @@
 //! label, branching per node per axiom — and the sum over those branches is what the cap
 //! bounds.
 //!
-//! So this is a budget test rather than a verdict test, and it asserts three separate things:
+//! So this is a budget test rather than a verdict test, and it asserts four separate things:
 //!
 //! 1. the ontology is CONSISTENT, which is the answer a case split that never terminated could
 //!    not give;
 //! 2. the certificate says `completeness decided`, so the verdict is a decision and not a
 //!    truncation reported as one;
-//! 3. the rounds spent are under a TENTH of the budget the run itself declared.
+//! 3. the rounds spent are under a TENTH of the budget the run itself declared;
+//! 4. the WORK spent is under a tenth of the work budget the run itself declared.
 //!
-//! The third is asserted against the certificate's OWN two numbers rather than against a
-//! literal. The cap is derived from the knowledge base's size (`step_cap` in the reasoner
+//! The fourth is not a restatement of the third. A round is a PASS rather than a unit of cost,
+//! so "three percent of the round budget" is compatible with a search that runs for hours —
+//! which is exactly what the co-typed shape in `dl_work_budget` does — and only a counted work
+//! figure separates the two. An ontology this ordinary must be far inside BOTH ceilings.
+//!
+//! Both are asserted against the certificate's OWN numbers rather than against literals. The
+//! caps are derived from the knowledge base's size (`step_cap` and `work_cap` in the reasoner
 //! core), so a literal here would pin an implementation detail and would have to be revised
-//! every time the derivation changed; a ratio between two rendered fields survives that and
-//! keeps saying the same thing — this ontology is nowhere near its ceiling.
+//! every time a derivation changed; a ratio between two rendered fields survives that and
+//! keeps saying the same thing — this ontology is nowhere near either ceiling.
 //!
 //! The EXACT cost — rounds, peak nodes, case splits and branch depth — is pinned in
 //! `dl_step_ledger` beside this ontology's control, where every exact search-cost figure in
@@ -99,7 +105,7 @@ fn an_ordinary_ontology_decides_far_inside_its_step_budget() {
         "the fixture is the reported seventeen triples:\n{document}"
     );
 
-    let answer = purrdf_validate::regime::consistency_to_string(&document, 0)
+    let answer = purrdf_validate::regime::consistency_to_string(&document, 0, 0)
         .expect("the ontology reverse-maps");
     assert_eq!(
         answer.answer(),
@@ -120,5 +126,15 @@ fn an_ordinary_ontology_decides_far_inside_its_step_budget() {
         steps * 10 < budget,
         "the search spent {steps} of its own declared {budget}-round budget, which is not \
          `far inside` it:\n{certificate}"
+    );
+
+    let work = measurement(certificate, "work");
+    let work_budget = measurement(certificate, "work-budget");
+    assert!(
+        work * 10 < work_budget,
+        "the search spent {work} of its own declared {work_budget}-unit work budget, which is \
+         not `far inside` it. This is the ceiling the round count cannot see — see \
+         `dl_work_budget` for the shape that reaches it while `steps` reports a few \
+         percent:\n{certificate}"
     );
 }

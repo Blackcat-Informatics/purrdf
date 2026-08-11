@@ -258,6 +258,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
         .map(|()| CliOutcome::Complete),
         Command::Consistency {
             step_cap,
+            work_cap,
             from,
             base,
             input,
@@ -267,6 +268,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 from: *from,
                 base: base.as_deref(),
                 step_cap: *step_cap,
+                work_cap: *work_cap,
             },
             &ledger_target,
             jsonld_options.as_ref(),

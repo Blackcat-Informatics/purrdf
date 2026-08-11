@@ -35,9 +35,9 @@
 //!
 //! # Why blocks are the parameter, and what the sweep actually shows
 //!
-//! `blocks` is how many independent copies of the shape the ontology carries. Each copy has
-//! its own class and its own individual and shares the two role axioms, so the ABox and the
-//! TBox grow together the way a real ontology's do.
+//! `blocks` is how many copies of the shape the ontology carries. Each copy has its own class
+//! and its own individual and shares the two role axioms, so the ABox and the TBox grow
+//! together the way a real ontology's do.
 //!
 //! The two shapes answer that sweep very differently, and the honest statement of the
 //! difference is not "the equivalence is now cheap". The control is FLAT in rounds — three,
@@ -49,6 +49,28 @@
 //! sixteen copies costs 821. That is a search whose cost is bounded and legible rather than
 //! one that is linear, and this bench is here so the shape of that curve has somewhere to be
 //! seen rather than being re-derived from a report.
+//!
+//! # The third group: the same blocks CO-TYPED on one individual
+//!
+//! The two groups above give every block its own individual, so the blocks stand beside each
+//! other. The `stacked` group asserts all `n` of them of ONE individual, over `n` disjoint
+//! vocabularies, and that single change is a different cost class: the disjunctions interleave
+//! on one node instead of nesting under separate roots.
+//!
+//! The measured curve, stated as it came out rather than as a speedup. Rounds and WORK units
+//! at 1/2/4/8 blocks: independent 11/23/65/221 rounds and 2,926 / 18,760 / 184,539 / 2,463,669
+//! units; stacked 11/71/755 rounds and 2,926 / 195,727 / 77,233,830 units at 1/2/4, and from
+//! five blocks on the stacked shape does not decide at all — it reaches the work cap
+//! (`work_cap` in the decision core) and answers `unknown` under
+//! `completeness budget-exhausted`, in 0.27 s at five blocks and 0.43 s at eight. Run without
+//! that cap the same shape costs 695 million units at five blocks and 4.4 BILLION at six,
+//! about a factor of nine per added block, and does not finish at ten.
+//!
+//! So the eight-block stacked timing below is NOT comparable to the eight-block independent
+//! one: the first is how long a bounded search takes to reach its ceiling and report it, the
+//! second is how long a decision takes. That is the honest reading, and it is why the group
+//! exists — the shape whose cost the round count could not see now has a number, and the
+//! number is bounded.
 
 use std::sync::Arc;
 
@@ -75,13 +97,17 @@ const OWL_ALLVALUESFROM: &str = "http://www.w3.org/2002/07/owl#allValuesFrom";
 const OWL_CARDINALITY: &str = "http://www.w3.org/2002/07/owl#cardinality";
 const XSD_NON_NEGATIVE_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#nonNegativeInteger";
 
-/// Which way each block states its restrictions.
+/// Which way each block states its restrictions, and whose individual it is asserted of.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Shape {
-    /// `owl:equivalentClass` — two inclusions, one of which cannot be absorbed.
+    /// `owl:equivalentClass` — two inclusions, one of which cannot be absorbed. One
+    /// individual per block, so the blocks stand beside each other.
     Equivalence,
     /// `rdfs:subClassOf` — one inclusion, absorbed into guarded clauses. The control.
     SubClass,
+    /// `owl:equivalentClass` again, but every block asserted of ONE individual, over its own
+    /// vocabulary — the co-typed shape whose per-round work the round cap cannot see.
+    Stacked,
 }
 
 impl Shape {
@@ -90,7 +116,21 @@ impl Shape {
         match self {
             Self::Equivalence => "owl_direct_consistency_equivalence",
             Self::SubClass => "owl_direct_consistency_subclass",
+            Self::Stacked => "owl_direct_consistency_stacked",
         }
+    }
+
+    /// The predicate this shape states its two restrictions under.
+    const fn states(self, equivalent: TermId, sub_class: TermId) -> TermId {
+        match self {
+            Self::Equivalence | Self::Stacked => equivalent,
+            Self::SubClass => sub_class,
+        }
+    }
+
+    /// Whether every block is asserted of the SAME individual.
+    const fn co_typed(self) -> bool {
+        matches!(self, Self::Stacked)
     }
 }
 
@@ -115,24 +155,7 @@ fn ontology(blocks: usize, shape: Shape) -> Arc<RdfDataset> {
     let all_values = b.intern_iri(OWL_ALLVALUESFROM);
     let cardinality = b.intern_iri(OWL_CARDINALITY);
 
-    // The predicate each block states its two restrictions under — the one difference
-    // between the two shapes.
-    let states: TermId = match shape {
-        Shape::Equivalence => equivalent,
-        Shape::SubClass => sub_class,
-    };
-
-    // The role axioms, shared by every block: `r ≡ ri⁻` with a range on `ri`, so the
-    // universal obligations a block derives flow back through an inverse rather than
-    // dead-ending at the successor.
-    let r = b.intern_iri(&format!("{EX}r"));
-    let ri = b.intern_iri(&format!("{EX}ri"));
-    let p = b.intern_iri(&format!("{EX}p"));
-    let c = b.intern_iri(&format!("{EX}c"));
-    let s = b.intern_iri(&format!("{EX}S"));
-    let d = b.intern_iri(&format!("{EX}D"));
-    b.push_quad(r, inverse_of, ri, None);
-    b.push_quad(ri, range, s, None);
+    let states: TermId = shape.states(equivalent, sub_class);
 
     let one = b.intern_literal(RdfLiteral {
         lexical_form: "1".to_owned(),
@@ -142,8 +165,32 @@ fn ontology(blocks: usize, shape: Shape) -> Arc<RdfDataset> {
     });
 
     for k in 0..blocks {
+        // The role axioms: `r ≡ ri⁻` with a range on `ri`, so the universal obligations a
+        // block derives flow back through an inverse rather than dead-ending at the
+        // successor. SHARED by every block in the two side-by-side groups, and per-block in
+        // the co-typed one — a co-typed block needs its own vocabulary, or the `n` copies
+        // collapse into one concept and the shape being benched disappears.
+        let tag = if shape.co_typed() {
+            k.to_string()
+        } else {
+            String::new()
+        };
+        let r = b.intern_iri(&format!("{EX}r{tag}"));
+        let ri = b.intern_iri(&format!("{EX}ri{tag}"));
+        let p = b.intern_iri(&format!("{EX}p{tag}"));
+        let c = b.intern_iri(&format!("{EX}c{tag}"));
+        let s = b.intern_iri(&format!("{EX}S{tag}"));
+        let d = b.intern_iri(&format!("{EX}D{tag}"));
+        b.push_quad(r, inverse_of, ri, None);
+        b.push_quad(ri, range, s, None);
+
         let class = b.intern_iri(&format!("{EX}A{k}"));
-        let individual = b.intern_iri(&format!("{EX}a{k}"));
+        // The one difference the third group is about: every block on ONE individual.
+        let individual = if shape.co_typed() {
+            b.intern_iri(&format!("{EX}a"))
+        } else {
+            b.intern_iri(&format!("{EX}a{k}"))
+        };
 
         // `∀r.(S ⊓ ∀p.D)`, with the intersection as an RDF collection.
         let inner = b.intern_blank(&format!("inner{k}"), BlankScope::DEFAULT);
@@ -176,9 +223,17 @@ fn ontology(blocks: usize, shape: Shape) -> Arc<RdfDataset> {
 }
 
 fn bench_consistency(c: &mut Criterion) {
-    for shape in [Shape::Equivalence, Shape::SubClass] {
+    for shape in [Shape::Equivalence, Shape::SubClass, Shape::Stacked] {
         let mut group = c.benchmark_group(shape.label());
-        for blocks in [1usize, 4, 16] {
+        // The co-typed group stops at eight: past four blocks it reaches the work cap rather
+        // than deciding, and sixteen would spend one and eight tenths of a second per sample
+        // reaching a ceiling the eight-block case already demonstrates.
+        let sizes: &[usize] = if shape.co_typed() {
+            &[1, 2, 4, 8]
+        } else {
+            &[1, 4, 16]
+        };
+        for &blocks in sizes {
             let dataset = ontology(blocks, shape);
             let reasoner = Reasoner::new(&dataset).expect("reverse-map the ontology");
             group.bench_with_input(

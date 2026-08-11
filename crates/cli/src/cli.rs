@@ -421,8 +421,8 @@ pub(crate) enum Command {
     ///
     /// Prints two things to stdout, always: the one-line verdict (`consistency true |
     /// false | unknown`), then the full DL certificate — completeness, the reverse
-    /// mapping's boundary list, and the search-cost counters (`steps`, `budget`,
-    /// `decisions`, `peak-nodes`, `disjunctions`, `peak-depth`). Unlike `--report` on the
+    /// mapping's boundary list, and the search-cost counters (`steps`, `budget`, `work`,
+    /// `work-budget`, `decisions`, `peak-nodes`, `disjunctions`, `peak-depth`). Unlike `--report` on the
     /// four materializing subcommands, the certificate here is not optional and not
     /// redirectable: this command answers exactly one question, and the certificate is
     /// the ONLY evidence of how completely the tableau answered it — hiding it behind a
@@ -434,9 +434,10 @@ pub(crate) enum Command {
     /// `false` is not a failure of this command any more than a `false` ASK answer is a
     /// failure of `query`. **3** for `unknown`, exactly like a `query` a governor cut
     /// short: the certificate's `completeness budget-exhausted` line says a hypertableau
-    /// run reached its round cap before saturating, so the run stopped incomplete rather
-    /// than failed, and the exit code carries that distinction to a shell the same way it
-    /// does for a tripped query.
+    /// run reached its round cap OR its work cap before saturating, so the run stopped
+    /// incomplete rather than failed, and the exit code carries that distinction to a
+    /// shell the same way it does for a tripped query. Which cap it was is read off the
+    /// certificate: an exhausted run has `steps` at `budget` or `work` at `work-budget`.
     Consistency {
         /// Narrow the per-decision round cap the ontology's own size already derives;
         /// `0` (the default) applies no narrowing and runs under the derived cap alone.
@@ -447,6 +448,21 @@ pub(crate) enum Command {
         /// `false`, never the reverse.
         #[arg(long, value_name = "N", default_value_t = 0)]
         step_cap: u32,
+        /// Narrow the per-decision WORK cap the ontology's own size already derives; `0`
+        /// (the default) applies no narrowing and runs under the derived cap alone. Like
+        /// `--step-cap` this can only TIGHTEN, and it mirrors the `work_cap` parameter
+        /// [`purrdf_validate::regime::consistency_to_string`] takes.
+        ///
+        /// It bounds what `--step-cap` structurally cannot. A round is a PASS over the
+        /// completion graph rather than a unit of cost, so an ontology can make every
+        /// round enormously more expensive without making the search take more rounds —
+        /// one individual co-typed with several equivalence-defined classes does exactly
+        /// that, and used to grind while the certificate reported a few percent of the
+        /// round budget. This cap counts the matcher, scan, closure and clone work
+        /// itself, and a run that reaches it answers `unknown` (exit 3) with `work` equal
+        /// to `work-budget` in its certificate.
+        #[arg(long, value_name = "N", default_value_t = 0)]
+        work_cap: u32,
         /// Input format override; inferred from the input extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,

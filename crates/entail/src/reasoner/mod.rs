@@ -46,9 +46,9 @@
 //! Named classes and individuals are visited in ascending interned-term-id order — which
 //! is parse order, a function of the dataset alone — every decision matrix is a dense
 //! positional `Vec`, and every emitted sequence is sorted by a total, dataset-independent term key. No result is
-//! read out of a hash map, and the tableau's budget is a STEP count rather than a clock
-//! reading, so two runs over one dataset produce byte-identical answers and byte-identical
-//! certificates, on native targets and on `wasm32` alike.
+//! read out of a hash map, and the tableau's two budgets are a STEP count and a WORK count
+//! rather than clock readings, so two runs over one dataset produce byte-identical answers and
+//! byte-identical certificates, on native targets and on `wasm32` alike.
 
 use std::collections::BTreeSet;
 
@@ -56,7 +56,7 @@ use purrdf_core::{RdfDataset, TermValue};
 
 use crate::EntailError;
 use crate::owl_dl::concept::Concept;
-use crate::owl_dl::graph::{Assumptions, step_cap};
+use crate::owl_dl::graph::{Assumptions, Budget};
 use crate::owl_dl::parser::Vocab;
 use crate::owl_dl::query::{build_data_index, collect_named_classes};
 use crate::owl_dl::{Kb, class_concept};
@@ -173,8 +173,8 @@ pub struct Reasoner {
     classes: Vec<(u32, u32)>,
     /// The named individuals to range over, ascending by term id.
     individuals: Vec<u32>,
-    /// The per-decision step cap.
-    cap: u64,
+    /// The per-decision budget: a round cap and a work cap.
+    budget: Budget,
     /// The constructs the reverse mapping could not turn into DL clauses.
     boundaries: BTreeSet<Construct>,
     /// The refutation symbol generator, seeded to avoid every blank label in the data.
@@ -194,7 +194,8 @@ impl std::fmt::Debug for Reasoner {
         f.debug_struct("Reasoner")
             .field("classes", &self.classes.len())
             .field("individuals", &self.individuals.len())
-            .field("step_cap", &self.cap)
+            .field("step_cap", &self.budget.steps)
+            .field("work_cap", &self.budget.work)
             .field("boundaries", &self.boundaries)
             .finish_non_exhaustive()
     }
@@ -224,7 +225,7 @@ impl Reasoner {
             .collect();
         let individuals: Vec<u32> = kb.individuals.iter().copied().collect();
         kb.finalize();
-        let cap = step_cap(&kb);
+        let budget = Budget::for_kb(&kb);
         let boundaries = kb.boundaries().clone();
         let fresh = FreshSymbols::for_interner(&kb.interner);
         Ok(Self {
@@ -232,7 +233,7 @@ impl Reasoner {
             vocab,
             classes,
             individuals,
-            cap,
+            budget,
             boundaries,
             fresh,
         })
@@ -251,14 +252,37 @@ impl Reasoner {
     /// rather than being a branch nobody has ever executed.
     #[must_use]
     pub fn with_step_cap(mut self, cap: u64) -> Self {
-        self.cap = self.cap.min(cap);
+        self.budget.steps = self.budget.steps.min(cap);
         self
     }
 
     /// The per-decision step cap every tableau run of this reasoner runs under.
     #[must_use]
     pub const fn step_cap(&self) -> u64 {
-        self.cap
+        self.budget.steps
+    }
+
+    /// Narrow the per-decision WORK cap to `cap`.
+    ///
+    /// **Narrow only**, clamped exactly as [`Reasoner::with_step_cap`] is and for the same
+    /// reason: the ceiling is a pure function of the knowledge base's size, and the honest way
+    /// to make a hard instance answerable is to make the reasoner cheaper — which shows up as
+    /// a smaller [`DlCertificate::work`] rather than as a bigger cap.
+    ///
+    /// The cap this narrows bounds what [`Reasoner::step_cap`] structurally cannot: the
+    /// matcher, scan, closure and clone work done INSIDE a round. An ontology that makes each
+    /// round enormously expensive without making the search take more rounds is bounded here
+    /// and nowhere else.
+    #[must_use]
+    pub fn with_work_cap(mut self, cap: u64) -> Self {
+        self.budget.work = self.budget.work.min(cap);
+        self
+    }
+
+    /// The per-decision work cap every tableau run of this reasoner runs under.
+    #[must_use]
+    pub const fn work_cap(&self) -> u64 {
+        self.budget.work
     }
 
     /// The named classes this reasoner ranges over, in the order it visits them.
@@ -286,7 +310,7 @@ impl Reasoner {
     /// service answers [`EntailError::Unsatisfiable`].
     #[must_use]
     pub fn consistency(&self) -> Certified<Verdict> {
-        let mut session = Session::new(&self.kb, self.cap);
+        let mut session = Session::new(&self.kb, self.budget);
         let decision = session.decide(&Assumptions::of_kb());
         let answer = if decision.exhausted {
             Verdict::Unknown
@@ -564,7 +588,7 @@ impl Reasoner {
     ///
     /// [`EntailError::Unsatisfiable`] if the ontology has no model.
     fn open(&self) -> Result<(Session<'_>, bool), EntailError> {
-        let mut session = Session::new(&self.kb, self.cap);
+        let mut session = Session::new(&self.kb, self.budget);
         let decision = session.decide(&Assumptions::of_kb());
         if decision.exhausted {
             return Ok((session, false));

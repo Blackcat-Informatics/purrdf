@@ -1458,6 +1458,8 @@ fn write_axiom(axiom: &DlAxiom, out: &mut String) {
 /// boundary <construct> <reason>           (0..n, Construct declaration order)
 /// steps <n>
 /// budget <n>
+/// work <n>
+/// work-budget <n>
 /// decisions <n>
 /// peak-nodes <n>
 /// disjunctions <n>
@@ -1475,6 +1477,16 @@ fn write_axiom(axiom: &DlAxiom, out: &mut String) {
 /// `steps` is a count of saturation rounds and `budget` the per-DECISION cap, so
 /// `steps` may legitimately exceed `budget` when `decisions` is greater than one.
 /// Neither is a clock reading, so the rendering is identical on `wasm32`.
+///
+/// `work` and `work-budget` are the SECOND budget, and they are what say which cap a
+/// `budget-exhausted` run reached. A round is a pass rather than a unit of cost — its
+/// price is the completion graph it runs over times the clauses matched against it — so
+/// an ontology can make every round enormously more expensive without making the search
+/// take more rounds, and a certificate reporting three percent of its `budget` while the
+/// run grinds is reporting the only number it had. `work` counts the matcher join steps,
+/// successor-subset enumerations, achiever closures, neighbour scans and branch-state
+/// clones the run actually performed; it sums over decisions exactly as `steps` does, and
+/// it is a count rather than a clock, so it too is identical on `wasm32`.
 ///
 /// The last three lines say WHERE those rounds went, which `steps` alone cannot:
 /// `peak-nodes` is the largest completion graph any decision built,
@@ -1515,6 +1527,8 @@ pub fn render_dl_certificate(service: &str, certificate: &DlCertificate) -> Stri
     }
     let _ = writeln!(out, "steps {}", certificate.steps());
     let _ = writeln!(out, "budget {}", certificate.budget());
+    let _ = writeln!(out, "work {}", certificate.work());
+    let _ = writeln!(out, "work-budget {}", certificate.work_budget());
     let _ = writeln!(out, "decisions {}", certificate.decisions());
     let _ = writeln!(out, "peak-nodes {}", certificate.peak_nodes());
     let _ = writeln!(out, "disjunctions {}", certificate.disjunctions());
@@ -1562,7 +1576,7 @@ fn verdict_name(verdict: Verdict) -> &'static str {
 ///
 /// let data = "<http://example.org/tom> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .\n";
-/// let mut session = ReasonerSession::open(data, 0).expect("parses");
+/// let mut session = ReasonerSession::open(data, 0, 0).expect("parses");
 /// // Two questions, one parse and one reverse mapping.
 /// assert_eq!(session.consistency().expect("decides").answer(), "consistency true\n");
 /// assert!(session.classify().expect("decides").answer().contains("subclass"));
@@ -1570,8 +1584,10 @@ fn verdict_name(verdict: Verdict) -> &'static str {
 pub struct ReasonerSession {
     /// The parsed document. Every service reads it; `Arc` because parsing hands one back.
     dataset: std::sync::Arc<purrdf_rdf::RdfDataset>,
-    /// The requested per-decision cap, applied when the knowledge base is built.
+    /// The requested per-decision ROUND cap, applied when the knowledge base is built.
     step_cap: u32,
+    /// The requested per-decision WORK cap, applied when the knowledge base is built.
+    work_cap: u32,
     /// The reverse-mapped knowledge base, built by the first service that needs it.
     reasoner: Option<Reasoner>,
 }
@@ -1587,6 +1603,7 @@ impl std::fmt::Debug for ReasonerSession {
         f.debug_struct("ReasonerSession")
             .field("quads", &self.dataset.quad_count())
             .field("step_cap", &self.step_cap)
+            .field("work_cap", &self.work_cap)
             .field("reasoned", &self.reasoner.is_some())
             .finish_non_exhaustive()
     }
@@ -1595,22 +1612,28 @@ impl std::fmt::Debug for ReasonerSession {
 impl ReasonerSession {
     /// Parse `document` and open a session over it.
     ///
-    /// `step_cap` can only NARROW: [`Reasoner::with_step_cap`] clamps to the knowledge
-    /// base's own cap, which is a pure function of its size. `0` means "do not narrow"
-    /// rather than "a cap of zero steps", because a zero cap would exhaust every
-    /// decision and make the parameter a footgun at three language boundaries.
+    /// `step_cap` and `work_cap` can only NARROW: [`Reasoner::with_step_cap`] and
+    /// [`Reasoner::with_work_cap`] clamp to the knowledge base's own caps, which are pure
+    /// functions of its size. `0` means "do not narrow" for BOTH rather than "a cap of
+    /// zero", because a zero cap would exhaust every decision and make either parameter a
+    /// footgun at three language boundaries.
+    ///
+    /// The two bound different quantities and neither implies the other: `step_cap` bounds
+    /// derivation ROUNDS, `work_cap` bounds the matcher, scan, closure and clone WORK done
+    /// inside them — which is what a rounds cap structurally cannot see.
     ///
     /// # Errors
     ///
     /// A malformed document (the native codec's own diagnostic). Nothing is reverse-mapped
     /// here, so an ontology whose knowledge base cannot be built still opens — and fails on
     /// the first service that needs one, with that service's own message.
-    pub fn open(document: &str, step_cap: u32) -> Result<Self, String> {
+    pub fn open(document: &str, step_cap: u32, work_cap: u32) -> Result<Self, String> {
         let dataset = purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
             .map_err(|diagnostic| diagnostic.to_string())?;
         Ok(Self {
             dataset,
             step_cap,
+            work_cap,
             reasoner: None,
         })
     }
@@ -1620,10 +1643,15 @@ impl ReasonerSession {
         if self.reasoner.is_none() {
             let reasoner =
                 Reasoner::new(&self.dataset).map_err(|error| format!("reasoner: {error}"))?;
-            self.reasoner = Some(if self.step_cap == 0 {
+            let reasoner = if self.step_cap == 0 {
                 reasoner
             } else {
                 reasoner.with_step_cap(u64::from(self.step_cap))
+            };
+            self.reasoner = Some(if self.work_cap == 0 {
+                reasoner
+            } else {
+                reasoner.with_work_cap(u64::from(self.work_cap))
             });
         }
         Ok(self
@@ -1862,7 +1890,7 @@ impl ReasonerSession {
 ///
 /// let data = "<http://example.org/x> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .\n";
-/// let decided = consistency_to_string(data, 0).expect("reverse-maps");
+/// let decided = consistency_to_string(data, 0, 0).expect("reverse-maps");
 /// assert_eq!(decided.answer(), "consistency true\n");
 /// // The certificate is never optional and never claims more than it decided: `decided`
 /// // is reported here only because the boundary list beside it is, in fact, empty.
@@ -1870,8 +1898,12 @@ impl ReasonerSession {
 /// assert!(decided.certificate().contains("\ncompleteness decided\n"));
 /// assert!(!decided.certificate().contains("\nboundary "));
 /// ```
-pub fn consistency_to_string(document: &str, step_cap: u32) -> Result<ReasoningAnswer, String> {
-    ReasonerSession::open(document, step_cap)?.consistency()
+pub fn consistency_to_string(
+    document: &str,
+    step_cap: u32,
+    work_cap: u32,
+) -> Result<ReasoningAnswer, String> {
+    ReasonerSession::open(document, step_cap, work_cap)?.consistency()
 }
 
 /// The subsumption hierarchy over the ontology's named classes.
@@ -1895,8 +1927,12 @@ pub fn consistency_to_string(document: &str, step_cap: u32) -> Result<ReasoningA
 ///
 /// A malformed document, or an ontology with no model — every class then subsumes
 /// every other and the hierarchy would be a complete graph.
-pub fn classify_to_string(document: &str, step_cap: u32) -> Result<ReasoningAnswer, String> {
-    ReasonerSession::open(document, step_cap)?.classify()
+pub fn classify_to_string(
+    document: &str,
+    step_cap: u32,
+    work_cap: u32,
+) -> Result<ReasoningAnswer, String> {
+    ReasonerSession::open(document, step_cap, work_cap)?.classify()
 }
 
 /// The entailed types of the ontology's named individuals, and the most specific
@@ -1916,8 +1952,12 @@ pub fn classify_to_string(document: &str, step_cap: u32) -> Result<ReasoningAnsw
 /// # Errors
 ///
 /// A malformed document, or an ontology with no model.
-pub fn realize_to_string(document: &str, step_cap: u32) -> Result<ReasoningAnswer, String> {
-    ReasonerSession::open(document, step_cap)?.realize()
+pub fn realize_to_string(
+    document: &str,
+    step_cap: u32,
+    work_cap: u32,
+) -> Result<ReasoningAnswer, String> {
+    ReasonerSession::open(document, step_cap, work_cap)?.realize()
 }
 
 /// The named individuals entailed to be instances of `class`.
@@ -1936,8 +1976,9 @@ pub fn instances_to_string(
     document: &str,
     class: &str,
     step_cap: u32,
+    work_cap: u32,
 ) -> Result<ReasoningAnswer, String> {
-    ReasonerSession::open(document, step_cap)?.instances(class)
+    ReasonerSession::open(document, step_cap, work_cap)?.instances(class)
 }
 
 /// Does the ontology entail `axiom`?
@@ -1973,7 +2014,7 @@ pub fn instances_to_string(
 /// // Not asserted, and entailed.
 /// let asked = "<http://example.org/tom> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Animal> .\n";
-/// let decided = entails_to_string(data, asked, 0).expect("decides");
+/// let decided = entails_to_string(data, asked, 0, 0).expect("decides");
 /// assert!(decided.answer().starts_with("entails true\n"));
 /// assert!(decided.answer().contains("\naxiom ClassAssertion\n"));
 /// ```
@@ -1981,8 +2022,9 @@ pub fn entails_to_string(
     document: &str,
     axiom: &str,
     step_cap: u32,
+    work_cap: u32,
 ) -> Result<ReasoningAnswer, String> {
-    ReasonerSession::open(document, step_cap)?.entails(axiom)
+    ReasonerSession::open(document, step_cap, work_cap)?.entails(axiom)
 }
 
 /// Which OWL 2 profiles the ontology is provably in, and what blocked the others.
@@ -2036,7 +2078,7 @@ pub fn entails_to_string(
 /// assert!(certified.certificate().ends_with("one-directional true\n"));
 /// ```
 pub fn profile_to_string(document: &str) -> Result<ReasoningAnswer, String> {
-    Ok(ReasonerSession::open(document, 0)?.profile())
+    Ok(ReasonerSession::open(document, 0, 0)?.profile())
 }
 
 /// The `certified <profile>` block of [`profile_to_string`]'s answer.
@@ -2116,7 +2158,7 @@ pub fn extract_module_to_string(
     signature: &str,
     method: &str,
 ) -> Result<ReasoningAnswer, String> {
-    ReasonerSession::open(document, 0)?.extract_module(signature, method)
+    ReasonerSession::open(document, 0, 0)?.extract_module(signature, method)
 }
 
 /// Parse a locality-module method from its CLI spelling.
@@ -2197,7 +2239,7 @@ fn parse_module_method(name: &str) -> Result<ModuleMethod, String> {
 /// assert!(why.certificate().ends_with("minimal true\n"));
 /// ```
 pub fn justify_to_string(document: &str, axiom: &str) -> Result<ReasoningAnswer, String> {
-    ReasonerSession::open(document, 0)?.justify(axiom)
+    ReasonerSession::open(document, 0, 0)?.justify(axiom)
 }
 
 /// The certificate of [`ReasonerSession::extract_module`].
@@ -2320,7 +2362,7 @@ pub fn explain_conclusion_to_string(
     regime: &str,
     conclusion: &str,
 ) -> Result<ReasoningAnswer, String> {
-    ReasonerSession::open(document, 0)?.explain_conclusion(regime, conclusion)
+    ReasonerSession::open(document, 0, 0)?.explain_conclusion(regime, conclusion)
 }
 
 /// The `asserted`/`steps`/`rule` block of [`explain_conclusion_to_string`].
@@ -3271,7 +3313,7 @@ mod tests {
     /// Asks each service twice: once with a sibling run before it, once on its own.
     #[test]
     fn a_session_answers_the_same_as_a_fresh_one_whatever_ran_before() {
-        let mut session = ReasonerSession::open(SCHEMA, 0).expect("parses");
+        let mut session = ReasonerSession::open(SCHEMA, 0, 0).expect("parses");
         // Deliberately interleaved: the two `&mut self` services run BETWEEN the three
         // that only read, so any state they leave behind would show up downstream.
         let consistency = session.consistency().expect("decides");
@@ -3292,13 +3334,16 @@ mod tests {
         for (asked_in_sequence, fresh) in [
             (
                 &consistency,
-                consistency_to_string(SCHEMA, 0).expect("decides"),
+                consistency_to_string(SCHEMA, 0, 0).expect("decides"),
             ),
             (
                 &instances,
-                instances_to_string(SCHEMA, "<http://example.org/C>", 0).expect("decides"),
+                instances_to_string(SCHEMA, "<http://example.org/C>", 0, 0).expect("decides"),
             ),
-            (&classify, classify_to_string(SCHEMA, 0).expect("decides")),
+            (
+                &classify,
+                classify_to_string(SCHEMA, 0, 0).expect("decides"),
+            ),
             (
                 &entails,
                 entails_to_string(
@@ -3306,10 +3351,11 @@ mod tests {
                     "<http://example.org/A> \
 <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .",
                     0,
+                    0,
                 )
                 .expect("decides"),
             ),
-            (&realize, realize_to_string(SCHEMA, 0).expect("decides")),
+            (&realize, realize_to_string(SCHEMA, 0, 0).expect("decides")),
             (&profile, profile_to_string(SCHEMA).expect("parses")),
         ] {
             assert_eq!(asked_in_sequence.answer(), fresh.answer());
@@ -3326,7 +3372,7 @@ mod tests {
     /// so this asserts a session opens, and profiles, without ever reasoning.
     #[test]
     fn opening_a_session_does_not_build_a_knowledge_base() {
-        let session = ReasonerSession::open(SCHEMA, 0).expect("parses");
+        let session = ReasonerSession::open(SCHEMA, 0, 0).expect("parses");
         assert!(
             session.reasoner.is_none(),
             "open must not reverse-map: `profile` answers for documents whose knowledge \
@@ -3961,14 +4007,14 @@ mod tests {
     /// error at this call site rather than an omission nobody notices.
     fn every_service(document: &str) -> Vec<(&'static str, Result<ReasoningAnswer, String>)> {
         vec![
-            ("consistency", consistency_to_string(document, 0)),
-            ("classify", classify_to_string(document, 0)),
-            ("realize", realize_to_string(document, 0)),
+            ("consistency", consistency_to_string(document, 0, 0)),
+            ("classify", classify_to_string(document, 0, 0)),
+            ("realize", realize_to_string(document, 0, 0)),
             (
                 "instances",
-                instances_to_string(document, "<http://example.org/C>", 0),
+                instances_to_string(document, "<http://example.org/C>", 0, 0),
             ),
-            ("entails", entails_to_string(document, CHAIN_AXIOM, 0)),
+            ("entails", entails_to_string(document, CHAIN_AXIOM, 0, 0)),
             ("profile", profile_to_string(document)),
             (
                 "extract-module",
@@ -4003,7 +4049,7 @@ mod tests {
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
 <http://www.w3.org/2002/07/owl#InverseFunctionalProperty> .\n\
 <http://example.org/a> <http://example.org/ssn> <http://example.org/n1> .\n";
-        let answer = consistency_to_string(ifp, 0).expect("decides");
+        let answer = consistency_to_string(ifp, 0, 0).expect("decides");
         assert!(
             answer.answer().starts_with("consistency true"),
             "{answer:?}"
@@ -4037,7 +4083,7 @@ _:c <http://www.w3.org/2002/07/owl#onProperty> <http://example.org/q> .\n\
 _:c <http://www.w3.org/2002/07/owl#maxCardinality> \
 \"1\"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .\n\
 <http://example.org/a> <http://example.org/p> <http://example.org/b> .\n";
-        let answer = consistency_to_string(named_inverse, 0).expect("decides");
+        let answer = consistency_to_string(named_inverse, 0, 0).expect("decides");
         assert!(
             answer
                 .certificate()
@@ -4055,7 +4101,7 @@ _:c <http://www.w3.org/2002/07/owl#onProperty> <http://example.org/p> .\n\
 _:c <http://www.w3.org/2002/07/owl#maxCardinality> \
 \"1\"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .\n\
 <http://example.org/a> <http://example.org/p> <http://example.org/b> .\n";
-        let answer = consistency_to_string(counted_only, 0).expect("decides");
+        let answer = consistency_to_string(counted_only, 0, 0).expect("decides");
         assert!(
             !answer.certificate().contains("counting-on-inverse"),
             "counting with no inverse partner anywhere is not the corner: {}",
@@ -4063,7 +4109,7 @@ _:c <http://www.w3.org/2002/07/owl#maxCardinality> \
         );
 
         let plain = "<http://example.org/a> <http://example.org/p> <http://example.org/b> .\n";
-        let answer = consistency_to_string(plain, 0).expect("decides");
+        let answer = consistency_to_string(plain, 0, 0).expect("decides");
         assert!(
             !answer.certificate().contains("counting-on-inverse"),
             "no counting at all, no boundary: {}",
@@ -4098,12 +4144,12 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
         // u32::MAX cannot be incremented in this representation: refused BY NAME at
         // parse, for every counting construct, never decided.
         for kind in ["maxCardinality", "minCardinality", "cardinality"] {
-            let error = consistency_to_string(&restriction(kind, "4294967295"), 0)
+            let error = consistency_to_string(&restriction(kind, "4294967295"), 0, 0)
                 .expect_err("an unrepresentable cardinality is a refusal");
             assert!(error.contains("representable"), "{kind}: {error}");
         }
         // One below the bound is representable and trivially satisfiable.
-        let answer = consistency_to_string(&restriction("maxCardinality", "4294967294"), 0)
+        let answer = consistency_to_string(&restriction("maxCardinality", "4294967294"), 0, 0)
             .expect("representable");
         assert!(
             answer.answer().starts_with("consistency true"),
@@ -4112,7 +4158,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
 
         // The clique cliff: n=30 hung for over forty-five seconds before the
         // branch-and-bound prune; it must now decide immediately.
-        let answer = consistency_to_string(&restriction("minCardinality", "30"), 0)
+        let answer = consistency_to_string(&restriction("minCardinality", "30"), 0, 0)
             .expect("well inside every budget");
         assert!(
             answer.answer().starts_with("consistency true"),
@@ -4122,7 +4168,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
         // Past the witness-minting ceiling the decision is UNKNOWN — three-valued
         // honesty, the same shape as every other exhausted budget — not a hang and
         // not a verdict.
-        let answer = consistency_to_string(&restriction("minCardinality", "100000"), 0)
+        let answer = consistency_to_string(&restriction("minCardinality", "100000"), 0, 0)
             .expect("exhaustion is an answer, not an error");
         assert!(
             answer.answer().starts_with("consistency unknown"),
@@ -4200,7 +4246,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
     fn the_two_lanes_render_different_certificates() {
         let chase = materialize_to_nquads_string("owl-rl", TAXONOMY, "").expect("owl-rl");
         assert!(chase.report().starts_with(REPORT_FORMAT_BANNER));
-        let tableau = consistency_to_string(TAXONOMY, 0).expect("consistency");
+        let tableau = consistency_to_string(TAXONOMY, 0, 0).expect("consistency");
         assert!(tableau.certificate().starts_with(DL_CERTIFICATE_BANNER));
         assert_ne!(REPORT_FORMAT_BANNER, DL_CERTIFICATE_BANNER);
         // …and neither completeness vocabulary appears in the other's rendering.
@@ -4233,7 +4279,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
     /// are emitted because they are different facts.
     #[test]
     fn classify_emits_the_closure_and_its_reduction() {
-        let answer = classify_to_string(TAXONOMY, 0)
+        let answer = classify_to_string(TAXONOMY, 0, 0)
             .expect("classify")
             .into_parts()
             .0;
@@ -4259,7 +4305,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
     /// Realization lists every entailed type and marks the most specific one.
     #[test]
     fn realize_marks_the_most_specific_type() {
-        let answer = realize_to_string(TAXONOMY, 0)
+        let answer = realize_to_string(TAXONOMY, 0, 0)
             .expect("realize")
             .into_parts()
             .0;
@@ -4291,13 +4337,13 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
     /// is an empty answer rather than an error.
     #[test]
     fn instances_retrieves_through_the_hierarchy() {
-        let answer = instances_to_string(TAXONOMY, "<http://example.org/C>", 0)
+        let answer = instances_to_string(TAXONOMY, "<http://example.org/C>", 0, 0)
             .expect("instances")
             .into_parts()
             .0;
         assert_eq!(answer, "instance <http://example.org/x>\n");
         // A class no axiom constrains: a real question with a real, empty answer.
-        let unknown = instances_to_string(TAXONOMY, "<http://example.org/Unmentioned>", 0)
+        let unknown = instances_to_string(TAXONOMY, "<http://example.org/Unmentioned>", 0, 0)
             .expect("an unconstrained name is a real name");
         assert_eq!(unknown.answer(), "");
         // An empty answer is still a DECIDED one: no boundary was met deciding it.
@@ -4322,7 +4368,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
         for (predicate, kind) in cases {
             let statement =
                 format!("<http://example.org/s> <{predicate}> <http://example.org/o> .\n");
-            let answer = entails_to_string(TAXONOMY, &statement, 0)
+            let answer = entails_to_string(TAXONOMY, &statement, 0, 0)
                 .unwrap_or_else(|error| panic!("{kind}: {error}"))
                 .into_parts()
                 .0;
@@ -4337,11 +4383,11 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
     /// invented: `A ⊑ C` follows from the chain, `C ⊑ A` does not.
     #[test]
     fn entails_decides_both_directions() {
-        let entailed = entails_to_string(TAXONOMY, CHAIN_AXIOM, 0).expect("decides");
+        let entailed = entails_to_string(TAXONOMY, CHAIN_AXIOM, 0, 0).expect("decides");
         assert!(entailed.answer().starts_with("entails true\n"));
         let reversed = "<http://example.org/C> \
 <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/A> .\n";
-        let refuted = entails_to_string(TAXONOMY, reversed, 0).expect("decides");
+        let refuted = entails_to_string(TAXONOMY, reversed, 0, 0).expect("decides");
         assert!(refuted.answer().starts_with("entails false\n"));
     }
 
@@ -4353,7 +4399,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
     /// answerable — it can only make this branch executable.
     #[test]
     fn an_exhausted_budget_is_unknown_and_never_false() {
-        let starved = entails_to_string(TAXONOMY, CHAIN_AXIOM, 1).expect("decides nothing");
+        let starved = entails_to_string(TAXONOMY, CHAIN_AXIOM, 1, 0).expect("decides nothing");
         assert_eq!(starved.answer().lines().next(), Some("entails unknown"));
         assert!(
             starved
@@ -4370,7 +4416,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
         assert!(!starved.certificate().contains("\nboundary "));
         // …and the un-narrowed call decides the same question.
         assert!(
-            entails_to_string(TAXONOMY, CHAIN_AXIOM, 0)
+            entails_to_string(TAXONOMY, CHAIN_AXIOM, 0, 0)
                 .expect("decides")
                 .answer()
                 .starts_with("entails true\n")
@@ -4381,12 +4427,12 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
     /// detects it — and that one answers `false`.
     #[test]
     fn an_unsatisfiable_ontology_is_refused_rather_than_answered_vacuously() {
-        let detected = consistency_to_string(UNSATISFIABLE, 0).expect("consistency answers");
+        let detected = consistency_to_string(UNSATISFIABLE, 0, 0).expect("consistency answers");
         assert_eq!(detected.answer(), "consistency false\n");
         for service in ["classify", "realize"] {
             let produced = match service {
-                "classify" => classify_to_string(UNSATISFIABLE, 0),
-                _ => realize_to_string(UNSATISFIABLE, 0),
+                "classify" => classify_to_string(UNSATISFIABLE, 0, 0),
+                _ => realize_to_string(UNSATISFIABLE, 0, 0),
             };
             let error = produced.expect_err("no model");
             assert!(error.starts_with(service), "{error}");
@@ -5592,25 +5638,30 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
     /// A malformed term, axiom or document is an error, never a silent empty answer.
     #[test]
     fn malformed_boundary_input_is_an_error() {
-        assert!(consistency_to_string("this is not n-quads\n", 0).is_err());
+        assert!(consistency_to_string("this is not n-quads\n", 0, 0).is_err());
         assert!(profile_to_string("this is not n-quads\n").is_err());
-        assert!(instances_to_string(TAXONOMY, "not a term", 0).is_err());
+        assert!(instances_to_string(TAXONOMY, "not a term", 0, 0).is_err());
         // Two terms where one was asked for.
         assert!(
-            instances_to_string(TAXONOMY, "<http://example.org/A> <http://example.org/B>", 0)
-                .is_err()
+            instances_to_string(
+                TAXONOMY,
+                "<http://example.org/A> <http://example.org/B>",
+                0,
+                0
+            )
+            .is_err()
         );
         // Two statements where one axiom was asked for.
         let two = format!(
             "{CHAIN_AXIOM}<http://example.org/D> \
 <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .\n"
         );
-        assert!(entails_to_string(TAXONOMY, &two, 0).is_err());
+        assert!(entails_to_string(TAXONOMY, &two, 0, 0).is_err());
         // An axiom is one triple and is not graph-scoped.
         let scoped = "<http://example.org/A> \
 <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> \
 <http://example.org/g> .\n";
-        let error = entails_to_string(TAXONOMY, scoped, 0).expect_err("graph-scoped");
+        let error = entails_to_string(TAXONOMY, scoped, 0, 0).expect_err("graph-scoped");
         assert!(error.contains("names a graph"), "{error}");
     }
 
@@ -5742,7 +5793,7 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
             )
         }));
         let answer = on_the_smallest_stack(move || {
-            consistency_to_string(&ontology, 0).map(|decided| decided.answer().to_owned())
+            consistency_to_string(&ontology, 0, 0).map(|decided| decided.answer().to_owned())
         })
         .expect("decides");
         // Nothing in the ontology is contradictory: `A ⊔ B` is satisfied by choosing `A`
@@ -5773,7 +5824,7 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
         chain.push_str(
             "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> _:c0 .\n",
         );
-        let refused = on_the_smallest_stack(move || consistency_to_string(&chain, 0))
+        let refused = on_the_smallest_stack(move || consistency_to_string(&chain, 0, 0))
             .expect_err("a 2 000-deep class expression is past the ceiling");
         assert!(refused.contains("nests deeper than 256"), "{refused}");
 
@@ -5783,7 +5834,7 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
 _:b <http://www.w3.org/2002/07/owl#datatypeComplementOf> _:a .\n\
 <http://example.org/p> <http://www.w3.org/2000/01/rdf-schema#range> _:a .\n\
 <http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .\n";
-        let refused = on_the_smallest_stack(move || consistency_to_string(cycle, 0))
+        let refused = on_the_smallest_stack(move || consistency_to_string(cycle, 0, 0))
             .expect_err("a data range cannot be its own complement");
         assert!(refused.contains("cyclic OWL data range"), "{refused}");
     }

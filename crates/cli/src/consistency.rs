@@ -51,8 +51,10 @@
 //! no more a failure of this command than a `false` ASK answer is a failure of `query`.
 //! `unknown` exits **3**, the same code `query`/`update` use when a caller-set governor
 //! stops a run short — the certificate's `completeness budget-exhausted` line says a
-//! hypertableau run reached its round cap before saturating, which is a run that stopped
-//! incomplete rather than one that failed, exactly the distinction exit 3 exists to carry.
+//! hypertableau run reached its round cap or its work cap before saturating, which is a run
+//! that stopped incomplete rather than one that failed, exactly the distinction exit 3 exists
+//! to carry. The certificate's four budget lines say WHICH cap: an exhausted run has `steps`
+//! at `budget`, or `work` at `work-budget`.
 
 use purrdf_rdf::{JsonLdSerializeOptions, NativeRdfFormat, serialize_dataset_to_format};
 use purrdf_validate::regime::consistency_to_string;
@@ -78,6 +80,11 @@ pub(crate) struct ConsistencyOptions<'a> {
     /// derives. `0` (clap's default) applies no narrowing, mirroring the `step_cap`
     /// parameter [`consistency_to_string`] takes.
     pub(crate) step_cap: u32,
+    /// `--work-cap`: narrows the per-decision WORK cap the ontology's own size already
+    /// derives, on the same `0`-means-no-narrowing rule and mirroring the `work_cap`
+    /// parameter [`consistency_to_string`] takes. It bounds the matcher, scan, closure and
+    /// clone work done INSIDE a round, which the round cap cannot see.
+    pub(crate) work_cap: u32,
 }
 
 /// Run the `consistency` subcommand.
@@ -88,7 +95,8 @@ pub(crate) fn run(
 ) -> Result<CliOutcome, CliError> {
     refuse_document_flags(ledger_target, jsonld_options)?;
     let document = read_as_nquads(options)?;
-    let answer = consistency_to_string(&document, options.step_cap).map_err(CliError::Runtime)?;
+    let answer = consistency_to_string(&document, options.step_cap, options.work_cap)
+        .map_err(CliError::Runtime)?;
 
     let mut rendered = String::with_capacity(answer.answer().len() + answer.certificate().len());
     rendered.push_str(answer.answer());

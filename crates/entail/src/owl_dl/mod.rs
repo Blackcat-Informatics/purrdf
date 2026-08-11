@@ -985,7 +985,7 @@ mod tests {
 #[cfg(test)]
 mod absorption_tests {
     use super::{Kb, hyper, tableau};
-    use crate::owl_dl::graph::{Assumptions, step_cap};
+    use crate::owl_dl::graph::{Assumptions, Budget};
     use crate::vocab::{
         OWL_NOTHING, OWL_ONPROPERTY, OWL_RESTRICTION, OWL_SOMEVALUESFROM, OWL_THING, RDF_TYPE,
         RDFS_RANGE, RDFS_SUBCLASSOF,
@@ -1004,12 +1004,12 @@ mod absorption_tests {
     /// Whether the dataset is consistent, DECIDED BY BOTH cores, which must agree.
     fn consistent_by_both(ds: &RdfDataset) -> bool {
         let kb = Kb::from_dataset(ds).expect("the fixture parses");
-        let cap = step_cap(&kb);
+        let cap = Budget::for_kb(&kb);
         let hyper = hyper::decide(&kb, &Assumptions::of_kb(), cap);
         let reference = tableau::decide(&kb, &Assumptions::of_kb(), cap);
         assert!(
             !hyper.exhausted && !reference.exhausted,
-            "a fixture this small must decide inside the step cap"
+            "a fixture this small must decide inside both caps"
         );
         assert_eq!(
             hyper.consistent, reference.consistent,

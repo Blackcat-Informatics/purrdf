@@ -29,12 +29,16 @@
 //!   an operand, inert, or BOUNDED — and a bounded term's axiom does not become a DL
 //!   clause. The knowledge base then describes a strictly smaller ontology than the caller
 //!   supplied, and [`DlCertificate::boundaries`] names every construct that was left out.
-//! * **The budget.** Every decision runs under a deterministic step cap
-//!   (a pure function of the knowledge base's size). A search that reaches it has closed some
+//! * **The budget.** Every decision runs under two deterministic caps, both pure functions of
+//!   the knowledge base's size: a ROUND cap ([`DlCertificate::budget`]) and a WORK cap
+//!   ([`DlCertificate::work_budget`]). Two, because a round is a pass rather than a unit of
+//!   work — an ontology can make each round enormously more expensive without making the
+//!   search take more rounds, and a rounds-only budget watches that case grind at a few
+//!   percent of a ceiling it never reaches. A search that reaches EITHER has closed some
 //!   branches and not others; reporting "no branch succeeded *yet*" as "no model exists"
 //!   would turn a resource limit into an entailment, so an exhausted run answers
 //!   [`Verdict::Unknown`] and drives the certificate to
-//!   [`DlCompleteness::BudgetExhausted`].
+//!   [`DlCompleteness::BudgetExhausted`] whichever cap it was.
 //!
 //! There is deliberately no fourth state and no way to construct a certificate that omits
 //! both signals: the crate-internal session type is the only producer, and it derives the
@@ -58,8 +62,9 @@
 //! # Determinism
 //!
 //! [`DlCertificate::boundaries`] is in [`Construct`] declaration order, never map order.
-//! [`DlCertificate::steps`] is a count of saturation rounds, not a clock reading — so it
-//! is identical run to run and on `wasm32`, where there is no clock to read. The same holds
+//! [`DlCertificate::steps`] is a count of saturation rounds and [`DlCertificate::work`] a
+//! count of charged work units, not clock readings — so both are identical run to run and on
+//! `wasm32`, where there is no clock to read. The same holds
 //! of the three shape counters [`DlCertificate::peak_nodes`],
 //! [`DlCertificate::disjunctions`] and [`DlCertificate::peak_depth`], which say where those
 //! rounds went: all three are counts over the decision core's deterministic search, so a
@@ -68,7 +73,7 @@
 use std::collections::BTreeSet;
 
 use crate::owl_dl::Kb;
-use crate::owl_dl::graph::{Assumptions, Decision};
+use crate::owl_dl::graph::{Assumptions, Budget, Decision};
 use crate::owl_dl::hyper::decide;
 use crate::report::{Boundary, Construct};
 
@@ -84,8 +89,9 @@ pub enum Verdict {
     True,
     /// The question is answered no: a clash-free completion witnesses a counter-model.
     False,
-    /// The search stopped at its round cap before deciding. See
-    /// [`DlCertificate::steps`] and [`DlCertificate::budget`].
+    /// The search stopped at one of its two caps before deciding. See
+    /// [`DlCertificate::steps`]/[`DlCertificate::budget`] for the round cap and
+    /// [`DlCertificate::work`]/[`DlCertificate::work_budget`] for the work cap.
     Unknown,
 }
 
@@ -123,22 +129,22 @@ impl std::fmt::Display for Verdict {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DlCompleteness {
     /// Every axiom of the ontology became a DL-clause, and every hypertableau run this
-    /// service made saturated inside its round cap.
+    /// service made saturated inside both of its caps.
     ///
     /// The strongest thing the DL lane can say: the answer is the OWL 2 Direct-Semantics
     /// answer for the ontology as supplied. [`DlCertificate::completeness`] returns this
     /// variant only when [`DlCertificate::boundaries`] is empty, so a certificate reporting
     /// it beside a non-empty boundary list is not a state anything can construct.
     Decided,
-    /// Every hypertableau run saturated, and the ontology ALSO carried at least one construct
-    /// the reverse mapping bounds.
+    /// Every hypertableau run saturated inside both caps, and the ontology ALSO carried at
+    /// least one construct the reverse mapping bounds.
     ///
     /// The answer is sound and complete for the sub-ontology that was read. The bounded
     /// axioms are premises this run did not have, and premises can only ADD entailments —
     /// so a `True` here stays true for the full ontology, while a `False` means only "not
     /// entailed by what was read". [`DlCertificate::boundaries`] names each one.
     DecidedWithinBoundaries,
-    /// At least one hypertableau run reached its round cap before deciding.
+    /// At least one hypertableau run reached its round cap or its work cap before deciding.
     ///
     /// Strictly the weakest state, and it takes precedence over the other two: a service
     /// that could not decide one sub-question has not decided the aggregate either. Every
@@ -180,7 +186,7 @@ impl std::fmt::Display for DlCompleteness {
 /// the interesting failure of a reasoner is a missing answer presented as a complete one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DlCertificate {
-    /// Whether any decision this run made reached its step cap.
+    /// Whether any decision this run made reached its round cap or its work cap.
     ///
     /// Together with [`Self::boundaries`], this is the minimal state
     /// [`Self::completeness`] derives its verdict from — there is deliberately no
@@ -192,6 +198,10 @@ pub struct DlCertificate {
     steps: u64,
     /// The per-decision round cap each of those runs ran under.
     budget: u64,
+    /// WORK units consumed, summed over every hypertableau run the service made.
+    work: u64,
+    /// The per-decision work cap each of those runs ran under.
+    work_budget: u64,
     /// How many hypertableau runs the service made.
     decisions: u64,
     /// The largest completion graph any of those runs built, in nodes.
@@ -256,6 +266,38 @@ impl DlCertificate {
     #[must_use]
     pub const fn budget(&self) -> u64 {
         self.budget
+    }
+
+    /// WORK UNITS consumed, summed over every hypertableau run this service made.
+    ///
+    /// The measurement [`Self::steps`] structurally cannot make. A round is a PASS, not a
+    /// unit of work: its cost is the completion graph it runs over times the clauses it
+    /// matches against it, so an ontology can make each round enormously more expensive
+    /// without making the search take more rounds — and a service reporting three percent of
+    /// its round budget while it grinds for hours is reporting the only number it had. This
+    /// one is charged where the work happens: each clause-match join step, each successor
+    /// subset enumerated, each achiever closure, each neighbour scan's edges, each identified
+    /// node's label, each branch-state clone.
+    ///
+    /// A SUM over the service's decisions, like [`Self::steps`], because it is work done
+    /// rather than a size reached. Every charge is an integer counted off the search — never a
+    /// clock, a float or a hash iteration order — so it is byte-identical run to run and on
+    /// `wasm32`.
+    #[must_use]
+    pub const fn work(&self) -> u64 {
+        self.work
+    }
+
+    /// The per-decision WORK cap every run of this service ran under.
+    ///
+    /// Per DECISION for the reason [`Self::budget`] is, and derived from the knowledge base's
+    /// size by the same discipline: a pure function of the input, narrowable by a caller and
+    /// never widenable. When [`Self::work`] equals this and [`Self::decisions`] is one, the
+    /// work cap is what ended the run — which is the fact a `budget-exhausted` certificate
+    /// otherwise leaves a reader to guess at.
+    #[must_use]
+    pub const fn work_budget(&self) -> u64 {
+        self.work_budget
     }
 
     /// How many hypertableau runs this service made.
@@ -371,13 +413,15 @@ impl<T> Certified<T> {
 pub(crate) struct Session<'a> {
     /// The knowledge base every decision is made against.
     kb: &'a Kb,
-    /// The per-decision step cap.
-    cap: u64,
+    /// The per-decision budget: a round cap and a work cap.
+    budget: Budget,
     /// Steps consumed so far, summed over every decision.
     steps: u64,
+    /// Work units consumed so far, summed over every decision.
+    work: u64,
     /// Decisions made so far.
     decisions: u64,
-    /// Whether any decision reached the cap.
+    /// Whether any decision reached either cap.
     exhausted: bool,
     /// The largest completion graph any decision built — a MAXIMUM, see
     /// [`DlCertificate::peak_nodes`].
@@ -390,12 +434,13 @@ pub(crate) struct Session<'a> {
 }
 
 impl<'a> Session<'a> {
-    /// Open a session over `kb` in which each decision may spend `cap` steps.
-    pub(crate) const fn new(kb: &'a Kb, cap: u64) -> Self {
+    /// Open a session over `kb` in which each decision may spend `budget`.
+    pub(crate) const fn new(kb: &'a Kb, budget: Budget) -> Self {
         Self {
             kb,
-            cap,
+            budget,
             steps: 0,
+            work: 0,
             decisions: 0,
             exhausted: false,
             peak_nodes: 0,
@@ -417,8 +462,9 @@ impl<'a> Session<'a> {
     /// summing them would report a service that made a thousand tiny decisions as having
     /// built one enormous graph.
     pub(crate) fn decide(&mut self, assumptions: &Assumptions<'_>) -> Decision {
-        let decision = decide(self.kb, assumptions, self.cap);
+        let decision = decide(self.kb, assumptions, self.budget);
         self.steps = self.steps.saturating_add(decision.steps);
+        self.work = self.work.saturating_add(decision.work);
         self.decisions += 1;
         self.exhausted |= decision.exhausted;
         self.peak_nodes = self.peak_nodes.max(decision.peak_nodes);
@@ -462,7 +508,9 @@ impl<'a> Session<'a> {
             exhausted: self.exhausted,
             boundaries,
             steps: self.steps,
-            budget: self.cap,
+            budget: self.budget.steps,
+            work: self.work,
+            work_budget: self.budget.work,
             decisions: self.decisions,
             peak_nodes: self.peak_nodes,
             disjunctions: self.disjunctions,

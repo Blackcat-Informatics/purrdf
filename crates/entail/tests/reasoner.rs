@@ -795,6 +795,45 @@ fn a_narrowed_budget_reports_unknown_rather_than_a_false_negative() {
     honest(&hierarchy);
 }
 
+/// The SECOND budget degrades the same way, and the certificate says it was the one.
+///
+/// Not a duplicate of the test above. A derivation round is a PASS over the completion graph
+/// rather than a unit of cost, so the two caps bound different quantities: an ontology can
+/// make each round enormously more expensive without making the search take more rounds, and
+/// only this one sees that. What is checked is that work exhaustion travels the SAME honest
+/// channel — `Verdict::Unknown`, `DlCompleteness::BudgetExhausted` — and that the two work
+/// figures identify it, which the round figures in the same certificate cannot.
+#[test]
+fn a_narrowed_work_budget_reports_unknown_through_the_same_channel() {
+    let dataset = kittens();
+    let reasoner = Reasoner::new(&dataset)
+        .expect("reverse-map")
+        .with_work_cap(1);
+    assert_eq!(reasoner.work_cap(), 1);
+    assert!(
+        reasoner.step_cap() > 1,
+        "the ROUND cap is untouched, so what truncates this run is unambiguous"
+    );
+
+    let answer = reasoner.consistency();
+    assert_eq!(
+        *answer.answer(),
+        Verdict::Unknown,
+        "a work-exhausted search is UNKNOWN, never `false`"
+    );
+    let certificate = honest(&answer);
+    assert_eq!(certificate.completeness(), DlCompleteness::BudgetExhausted);
+    assert_eq!(
+        certificate.work(),
+        certificate.work_budget(),
+        "the run stopped at its work cap, and the two figures say so"
+    );
+    assert!(
+        certificate.steps() * 10 < certificate.budget(),
+        "the ROUND figures show what they could not see: {certificate:?}"
+    );
+}
+
 #[test]
 fn the_step_cap_can_be_narrowed_and_never_widened() {
     let dataset = kittens();
@@ -805,6 +844,25 @@ fn the_step_cap_can_be_narrowed_and_never_widened() {
         .with_step_cap(u64::MAX);
     assert_eq!(
         widened.step_cap(),
+        ceiling,
+        "a request above the ceiling is CLAMPED, never honoured"
+    );
+}
+
+/// The work cap clamps exactly as the round cap does: narrow only.
+///
+/// Ceilings here are measured and reported, never tuned upward until a hard instance fits, and
+/// this is the assertion that keeps the second one honest too.
+#[test]
+fn the_work_cap_can_be_narrowed_and_never_widened() {
+    let dataset = kittens();
+    let ceiling = Reasoner::new(&dataset).expect("reverse-map").work_cap();
+    assert!(ceiling > 1, "the derived ceiling is generous: {ceiling}");
+    let widened = Reasoner::new(&dataset)
+        .expect("reverse-map")
+        .with_work_cap(u64::MAX);
+    assert_eq!(
+        widened.work_cap(),
         ceiling,
         "a request above the ceiling is CLAMPED, never honoured"
     );

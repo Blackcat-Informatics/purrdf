@@ -172,8 +172,14 @@ use crate::owl_dl::{hyper, tableau};
 
 // ── The signature ───────────────────────────────────────────────────────────────
 
-/// The class term ids a generated concept's named leaves are drawn from (`A`, `B`, `C`).
-const CONCEPT_NAMES: [u32; 3] = [10, 11, 12];
+/// The class term ids a generated concept's named leaves are drawn from (`A`, `B`, `C`, `D`).
+///
+/// Four rather than three because one family needs four: the co-typed property defines every
+/// class of its signature by an equivalence and asserts every one of them of ONE individual,
+/// and `n = 4` is the size of the shape it is about. Every other signature takes the first
+/// two or three, so the fourth name costs them nothing — a signature enumerates
+/// `2^(k · self.concepts)` concept extensions, never `2^(k · CONCEPT_NAMES.len())`.
+const CONCEPT_NAMES: [u32; 4] = [10, 11, 12, 13];
 
 /// The object-property term ids a generated role is drawn from (`r`, `s`).
 const ROLE_NAMES: [u32; 2] = [20, 21];
@@ -188,7 +194,7 @@ const MAX_DOMAIN: usize = 3;
 
 /// A readable name for a signature term id, for a failure message.
 fn term_name(id: u32) -> String {
-    let letters = ["A", "B", "C"];
+    let letters = ["A", "B", "C", "D"];
     if let Some(i) = CONCEPT_NAMES.iter().position(|&x| x == id) {
         return letters[i].to_owned();
     }
@@ -326,6 +332,23 @@ const REPORTED: Signature = Signature {
     concepts: 3,
     roles: 2,
     individuals: 2,
+    max_domain: 2,
+};
+
+/// The CO-TYPED signature: four class names, ONE role, ONE individual, two domain elements.
+///
+/// Sized by what the co-typed shape needs and by what the oracle can afford. FOUR class names,
+/// because the property below defines every one of them by an equivalence and asserts every
+/// one of them of the single individual — four is the `n` the shape is about, and a signature
+/// of three could not reach it. ONE individual, because co-typing is the whole point: the
+/// disjunctions the four converse inclusions produce have to interleave on one node rather
+/// than stand beside each other. And that is what pays for four classes — the enumeration is
+/// `2^(k·4) · 2^(k²) · k`, which at `k ≤ 2` is 8,224 interpretations, less than any other
+/// family here.
+const CO_TYPED: Signature = Signature {
+    concepts: 4,
+    roles: 1,
+    individuals: 1,
     max_domain: 2,
 };
 
@@ -912,6 +935,10 @@ struct Tally {
     /// nothing passes silently, and absorption's whole soundness argument is the claim this
     /// population checks.
     encodings: u32,
+    /// WORK units the hypertableau spent over EVERY case of this property, summed.
+    work: u64,
+    /// The most work any ONE case of this property spent.
+    max_case_work: u64,
     /// Derivation rounds the hypertableau spent over EVERY case of this property, summed.
     ///
     /// The property's cost, in the cap's own units. Ceilinged in [`run_property`] against a
@@ -940,6 +967,8 @@ impl Tally {
 
     /// Fold one hypertableau decision's cost in: work sums, sizes peak.
     fn spent(&mut self, decision: &graph::Decision) {
+        self.work = self.work.saturating_add(decision.work);
+        self.max_case_work = self.max_case_work.max(decision.work);
         self.steps = self.steps.saturating_add(decision.steps);
         self.max_case_steps = self.max_case_steps.max(decision.steps);
         self.peak_nodes = self.peak_nodes.max(decision.peak_nodes);
@@ -990,8 +1019,26 @@ impl Tally {
 /// and a half times its wall time, and almost all of that increase is that single case running
 /// longer before being truncated anyway. So the cap is set to decide everything decidable and
 /// to truncate that one, which the ≤5% exhausted quota in [`run_property`] absorbs at 1 case
-/// in 8,900.
+/// in 9,200.
 const STEP_CAP: u64 = 350;
+
+/// The budget this suite decides a generated knowledge base under: the narrowed round cap
+/// above, and the knowledge base's OWN work cap.
+///
+/// The round cap is narrowed and the work cap is not, and the asymmetry is the point. The
+/// round cap has to be narrowed because rounds are not a cost — the work inside one grows
+/// geometrically with the completion graph, so a corpus of thousands of adversarial knowledge
+/// bases cannot let a round budget stand. The work cap already IS a cost, sized by
+/// [`work_cap`](graph::work_cap) from the knowledge base's size, and these knowledge bases are
+/// tiny: narrowing it would only trade one truncation criterion for another while making the
+/// suite's exhausted share depend on two numbers instead of one.
+fn suite_budget(kb: &Kb, rounds: u64) -> graph::Budget {
+    let derived = graph::Budget::for_kb(kb);
+    graph::Budget {
+        steps: derived.steps.min(rounds),
+        work: derived.work,
+    }
+}
 
 /// Whether "no model up to the signature's bound" means "no model" for this knowledge base.
 ///
@@ -1082,9 +1129,14 @@ fn counters_are_coherent(
 /// model and
 /// [`forces_unnamed_element`] says the bound was sufficient, `consistent` is asserted to be
 /// false.
-fn check(sig: Signature, axioms: &[Axiom], tally: &RefCell<Tally>) -> Result<(), TestCaseError> {
+fn check(
+    sig: Signature,
+    axioms: &[Axiom],
+    tally: &RefCell<Tally>,
+    rounds: u64,
+) -> Result<(), TestCaseError> {
     let case = Case::assemble(sig, axioms);
-    let cap = graph::step_cap(&case.kb).min(STEP_CAP);
+    let cap = suite_budget(&case.kb, rounds);
     let first = hyper::decide(&case.kb, &Assumptions::of_kb(), cap);
     let again = hyper::decide(&case.kb, &Assumptions::of_kb(), cap);
     // The WHOLE decision, not three of its fields: a field added to `Decision` that varied run
@@ -1222,7 +1274,9 @@ fn run_property(
     cases: u32,
     tag: u8,
     bound_floor: u32,
+    rounds: u64,
     step_ceiling: u64,
+    work_ceiling: u64,
     strategy: &BoxedStrategy<Vec<Axiom>>,
 ) {
     let config = Config {
@@ -1234,7 +1288,7 @@ fn run_property(
     let mut runner =
         TestRunner::new_with_rng(config, TestRng::from_seed(RngAlgorithm::ChaCha, &seed(tag)));
     let tally = RefCell::new(Tally::default());
-    if let Err(failure) = runner.run(strategy, |axioms| check(sig, &axioms, &tally)) {
+    if let Err(failure) = runner.run(strategy, |axioms| check(sig, &axioms, &tally, rounds)) {
         panic!("{name} over {sig:?}: {failure}");
     }
     let tally = tally.into_inner();
@@ -1263,6 +1317,17 @@ fn run_property(
          {step_ceiling}. The search is doing materially more work than when this ceiling was \
          measured: {tally:?}",
         tally.steps
+    );
+    // THE WORK CEILING, on the same argument and for the quantity the round total cannot
+    // express. A round is a PASS rather than a unit of cost, so a change that made each round
+    // several times more expensive while taking fewer of them would pass the ceiling above
+    // and fail here — which is exactly the direction the work budget exists to watch.
+    assert!(
+        tally.work <= work_ceiling,
+        "{name} spent {} work units over its {cases} cases, above its ceiling of \
+         {work_ceiling}. The search's per-round cost has changed materially, which the round \
+         total above cannot show: {tally:?}",
+        tally.work
     );
     // The DIFFERENTIAL population. Both cores decide almost every generated case inside the
     // narrowed cap, so a share that collapses means the two are no longer being compared —
@@ -1583,8 +1648,12 @@ fn a_random_knowledge_base_is_consistent_whenever_the_oracle_exhibits_a_model() 
         WIDE_CASES,
         1,
         0,
+        STEP_CAP,
         // Measured 1,900 rounds, of which 350 are the one case that exhausts at any cap.
         2_100,
+        // Measured 9,088,012 work units — the most of any property, because the case that
+        // exhausts at any cap grows its completion graph for every round it is given.
+        10_000_000,
         &arb_axioms(arb_axiom(WIDE)),
     );
 }
@@ -1599,8 +1668,12 @@ fn a_random_knowledge_base_agrees_with_the_oracle_over_a_three_element_domain() 
         DEEP_CASES,
         2,
         20,
+        STEP_CAP,
         // Measured 1,179 rounds.
         1_300,
+        // Measured 7,116,702 work units over 1,179 rounds: this family's rounds are the
+        // dearest in the suite, which is a fact only this counter states.
+        7_830_000,
         &arb_axioms(arb_axiom(DEEP)),
     );
 }
@@ -1698,10 +1771,13 @@ fn nominals_under_inverse_roles_and_cardinality_agree_with_the_oracle() {
         NOMINAL_INVERSE_CASES,
         3,
         10,
+        STEP_CAP,
         // Measured 848 rounds — the counting family is where the first-open `⊔`-rule is
         // dearest (777 under the narrowest-first selection whose own measurements, recorded
         // at `Hyper::find_branch`, retired it), and this is what that rule costs here.
         940,
+        // Measured 53,946 work units.
+        59_500,
         &arb_axioms(axiom),
     );
 }
@@ -1775,8 +1851,11 @@ fn multi_member_nominals_against_distinctness_agree_with_the_oracle() {
         ONE_OF_CASES,
         4,
         250,
+        STEP_CAP,
         // Measured 699 rounds.
         770,
+        // Measured 13,294 work units.
+        14_700,
         &arb_axioms(axiom),
     );
 }
@@ -1858,8 +1937,11 @@ fn qualified_cardinality_under_a_role_hierarchy_agrees_with_the_oracle() {
         ROLE_HIERARCHY_CASES,
         5,
         0,
+        STEP_CAP,
         // Measured 2,305 rounds.
         2_540,
+        // Measured 113,908 work units.
+        125_400,
         &arb_axioms(axiom),
     );
 }
@@ -1931,9 +2013,13 @@ fn complement_against_disjunction_agrees_with_the_oracle() {
         BOOLEAN_CASES,
         6,
         700,
+        STEP_CAP,
         // Measured 9,221 rounds — the most expensive property, and the one holding the
         // 306-round case STEP_CAP is sized for.
         10_150,
+        // Measured 594,418 work units — many cheap rounds rather than few dear ones, which
+        // is the opposite shape to `deep` and is what the two counters together say.
+        654_000,
         &arb_axioms(axiom),
     );
 }
@@ -1987,7 +2073,7 @@ fn the_case_the_branch_selection_was_measured_on_costs_exactly_what_it_is_pinned
         ),
     ];
     let tally = RefCell::new(Tally::default());
-    if let Err(failure) = check(BOOLEAN, &axioms, &tally) {
+    if let Err(failure) = check(BOOLEAN, &axioms, &tally, STEP_CAP) {
         panic!("the pinned case no longer passes what every generated case passes: {failure}");
     }
     let tally = tally.into_inner();
@@ -2131,8 +2217,11 @@ fn the_absorbable_inclusion_shapes_agree_with_the_oracle() {
         ABSORPTION_CASES,
         7,
         300,
+        STEP_CAP,
         // Measured 3,923 rounds.
         4_320,
+        // Measured 149,265 work units.
+        164_200,
         &arb_axioms(axiom),
     );
 }
@@ -2253,9 +2342,12 @@ fn the_reported_equivalence_shape_agrees_with_the_oracle() {
         REPORTED_CASES,
         8,
         12,
+        STEP_CAP,
         // Measured 2,644 rounds over 959 case splits — the second most branch-heavy
         // property in the suite, which is the point of it.
         2_910,
+        // Measured 806,279 work units.
+        887_000,
         &arb_axiom_groups(group),
     );
 }
@@ -2353,12 +2445,138 @@ fn cyclic_equivalences_agree_with_the_oracle() {
         CYCLE_CASES,
         9,
         11,
+        STEP_CAP,
         // Measured 887 rounds over THREE case splits in 600 knowledge bases: a cyclic
         // equivalence absorbs on both sides, so what makes these cases hard is blocking
         // rather than branching, and the number that would move if blocking stopped
         // biting is this one.
         980,
+        // Measured 56,207 work units.
+        61_900,
         &arb_axiom_groups(group),
+    );
+}
+
+// ── The co-typed family ─────────────────────────────────────────────────────────
+
+/// Knowledge bases checked by the co-typed property.
+const CO_TYPED_CASES: u32 = 300;
+
+/// One equivalence-defined class, as the co-typed property states them.
+///
+/// The three bodies are the reported ontology's own, reduced to what a four-class, one-role
+/// signature can carry AND to what four of them at once stay affordable at: the
+/// `∀`-restriction whose filler is an intersection, the exact cardinality, and an
+/// existential. The intersection is two named conjuncts rather than the reported shape's
+/// nested `∀`, because four nested-`∀` definitions on one node cost the internalized
+/// reference encoding more than the suite's narrowed round cap allows — which would shrink
+/// the encoding differential this family is also checked by. Each is a definition whose CONVERSE direction —
+/// `body ⊑ A` — has an antecedent no faithful absorption can guard, so each contributes a
+/// disjunction to the search rather than a guarded clause. That is the property being
+/// checked: four such disjunctions, all on one node.
+fn arb_co_typed_body(sig: Signature) -> BoxedStrategy<Concept> {
+    let named = arb_named(sig);
+    Union::new_weighted(vec![
+        (
+            2,
+            (arb_role(sig), named.clone(), named.clone())
+                .prop_map(|(outer, left, right)| {
+                    Concept::All(outer, Box::new(Concept::And(vec![left, right])))
+                })
+                .boxed(),
+        ),
+        (
+            4,
+            (0u32..=1, arb_role(sig))
+                .prop_map(|(n, counted)| {
+                    Concept::And(vec![
+                        Concept::Min(n, counted, Box::new(Concept::Top)),
+                        Concept::Max(n, counted, Box::new(Concept::Top)),
+                    ])
+                })
+                .boxed(),
+        ),
+        (
+            3,
+            (arb_role(sig), named)
+                .prop_map(|(r, c)| Concept::Some(r, Box::new(c)))
+                .boxed(),
+        ),
+    ])
+    .boxed()
+}
+
+/// FOUR equivalence-defined classes, every one of them asserted of the SAME individual.
+///
+/// Not a random axiom list, deliberately. Every other property here samples axioms and lets
+/// the interesting shapes co-occur by chance; co-typing four definitions on one individual by
+/// chance would essentially never happen, and a family that reached its own subject matter
+/// occasionally would report a population it never checked. So the SHAPE is fixed — four
+/// definitions, four type assertions, one individual — and what varies is the four bodies.
+fn arb_co_typed_axioms(sig: Signature) -> BoxedStrategy<Vec<Axiom>> {
+    let subject = sig.individual_names()[0];
+    let names = sig.concept_names().to_vec();
+    let body = arb_co_typed_body(sig);
+    (body.clone(), body.clone(), body.clone(), body)
+        .prop_map(move |bodies| {
+            let mut axioms: Vec<Axiom> = Vec::new();
+            for (&name, body) in names.iter().zip([bodies.0, bodies.1, bodies.2, bodies.3]) {
+                axioms.extend(equivalence(&Concept::Named(name), &body));
+                axioms.push(Axiom::Type(subject, Concept::Named(name)));
+            }
+            axioms
+        })
+        .boxed()
+}
+
+/// FOUR equivalence-defined classes co-typed on ONE individual — the shape whose per-round
+/// cost the round budget cannot see.
+///
+/// Every other family here checks the calculus over knowledge bases whose disjunctions are
+/// spread across nodes. This one puts them all on one, which is the difference between a
+/// search whose cost grows with the ontology and one whose cost grows with the CO-TYPING: the
+/// converse direction of each of the four definitions reaches the search as a disjunction, and
+/// four disjunctions on one node interleave.
+///
+/// What is asserted here is what every family asserts — the two calculi agree, the two TBox
+/// encodings agree, an exhibited model is accepted and a bounded refutation is refuted — over
+/// a population the others do not reach. The COST of that population is the second half: the
+/// round and work ceilings below are the measured evidence that this shape is bounded, and
+/// they sit an order of magnitude apart per case from the families whose disjunctions are
+/// spread out.
+#[test]
+fn four_co_typed_definitions_on_one_individual_agree_with_the_oracle() {
+    let sig = CO_TYPED;
+    run_property(
+        "co-typed definitions",
+        sig,
+        CO_TYPED_CASES,
+        10,
+        // ZERO, and asserted as an equality: every body this family generates carries a
+        // quantifier or a counting concept, so `forces_unnamed_element` holds of all of them
+        // and `bounded_domain` can never hold. The over-permissive direction is checked by
+        // the OTHER families; what this one is for is the cost of the co-typed search and the
+        // two differentials over it.
+        0,
+        // A WIDER round narrowing than [`STEP_CAP`], and the only family that takes one.
+        // The suite's cap is what 9,200 cases can afford EACH, and this family is 300
+        // structurally deeper ones: four definitions internalized as eight disjunctions in
+        // every node's label is what the ENCODING differential decides here, and at 350
+        // rounds a quarter of its cases could not finish that side — which would quietly
+        // shrink the population absorption's soundness claim is checked over. At 4,000 the
+        // encoding comparison covers 290 of the 300 cases; the HYPERTABLEAU side never needs
+        // it, spending at most 188 rounds on any case here, so what the wider cap buys is
+        // entirely the reference encoding's ability to keep up.
+        4_000,
+        // Measured 5,350 rounds — the most branch-heavy family in the suite by a factor of
+        // three, over 1,403 case splits in 300 knowledge bases.
+        5_900,
+        // Measured 12,424,523 work units, the most of any family, over a peak of 2,988,210
+        // in ONE case. That per-case figure is what co-typing costs: the `wide` corpus's
+        // dearest case spends 6.7 million over a search the round cap truncates, and this
+        // one spends nearly half of that while DECIDING in 188 rounds.
+        13_700_000,
+        &arb_co_typed_axioms(sig),
     );
 }
 
@@ -2373,7 +2591,8 @@ const TOTAL_CASES: u32 = WIDE_CASES
     + BOOLEAN_CASES
     + ABSORPTION_CASES
     + REPORTED_CASES
-    + CYCLE_CASES;
+    + CYCLE_CASES
+    + CO_TYPED_CASES;
 
 /// The exhaustive search is the price of an oracle nobody has to trust, so its size is
 /// stated rather than discovered: each literal below is
@@ -2394,8 +2613,9 @@ fn the_enumerated_search_spaces_are_pinned() {
     assert_eq!(ABSORPTION.search_space(), 14_344);
     assert_eq!(REPORTED.search_space(), 65_568);
     assert_eq!(CYCLE.search_space(), 295_944);
+    assert_eq!(CO_TYPED.search_space(), 8_224);
     assert_eq!(HAND.search_space(), 65_552);
-    assert_eq!(TOTAL_CASES, 8900, "generated knowledge bases per run");
+    assert_eq!(TOTAL_CASES, 9200, "generated knowledge bases per run");
 }
 
 // ── Hand-written regressions ───────────────────────────────────────────────────
@@ -2405,7 +2625,7 @@ fn the_enumerated_search_spaces_are_pinned() {
 /// compared two implementations could be wrong twice over.
 fn assert_verdict(axioms: &[Axiom], satisfiable: bool) {
     let case = Case::assemble(HAND, axioms);
-    let cap = graph::step_cap(&case.kb);
+    let cap = graph::Budget::for_kb(&case.kb);
     let decision = hyper::decide(&case.kb, &Assumptions::of_kb(), cap);
     let reference = tableau::decide(&case.kb, &Assumptions::of_kb(), cap);
     assert!(
@@ -2779,7 +2999,7 @@ fn inverse_universal_chains_decide_identically_in_both_cores() {
         ];
         axioms.extend(extra.iter().cloned());
         let case = Case::assemble(HAND, &axioms);
-        let cap = graph::step_cap(&case.kb);
+        let cap = graph::Budget::for_kb(&case.kb);
         let h = hyper::decide(&case.kb, &Assumptions::of_kb(), cap);
         let t = tableau::decide(&case.kb, &Assumptions::of_kb(), cap);
         assert!(!h.exhausted && !t.exhausted, "case {k} must decide");

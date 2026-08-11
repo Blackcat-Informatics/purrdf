@@ -1070,6 +1070,13 @@ int32_t purrdf_entail_extensions(const char *regime,
  * base's own ceiling has no effect — so this cannot be used to make a hard
  * instance answerable, only to make the `budget-exhausted` certificate reachable.
  *
+ * `work_cap` narrows the per-decision WORK cap on the same rules — **0 means the
+ * knowledge base's own cap**, and it can only NARROW. It bounds what `step_cap`
+ * structurally cannot: a round is a PASS over the completion graph rather than a
+ * unit of cost, so an ontology can make each round enormously more expensive
+ * without making the search take more rounds. A run that reaches it answers
+ * `unknown` with `work` equal to `work-budget` in its certificate.
+ *
  * On success `*out_answer` receives `consistency true|false|unknown` and
  * `*out_certificate` the rendered `purrdf-dl-certificate 1` block, which says
  * whether the search was `decided`, `decided-within-boundaries` (some axiom of the
@@ -1087,6 +1094,7 @@ int32_t purrdf_entail_extensions(const char *regime,
  */
 int32_t purrdf_entail_consistency(const char *document,
                                   uint32_t step_cap,
+                                  uint32_t work_cap,
                                   PurrdfBuffer **out_answer,
                                   PurrdfBuffer **out_certificate,
                                   PurrdfError **out_error);
@@ -1096,8 +1104,8 @@ int32_t purrdf_entail_consistency(const char *document,
  *
  * `*out_answer` receives `equivalent`, `subclass`, `direct` and `unsatisfiable`
  * lines (in that block order); `*out_certificate` the `purrdf-dl-certificate 1`
- * block. **Free BOTH with `purrdf_buffer_free`.** `step_cap` behaves exactly as in
- * [`purrdf_entail_consistency`].
+ * block. **Free BOTH with `purrdf_buffer_free`.** `step_cap` and `work_cap` behave
+ * exactly as in [`purrdf_entail_consistency`].
  *
  * Costs one tableau decision per ORDERED pair of named classes plus the
  * consistency check, which the certificate's `decisions` line reports so the cost
@@ -1108,6 +1116,7 @@ int32_t purrdf_entail_consistency(const char *document,
  */
 int32_t purrdf_entail_classify(const char *document,
                                uint32_t step_cap,
+                               uint32_t work_cap,
                                PurrdfBuffer **out_answer,
                                PurrdfBuffer **out_certificate,
                                PurrdfError **out_error);
@@ -1118,13 +1127,15 @@ int32_t purrdf_entail_classify(const char *document,
  *
  * `*out_answer` receives `type` lines followed by `direct-type` lines;
  * `*out_certificate` the `purrdf-dl-certificate 1` block. **Free BOTH with
- * `purrdf_buffer_free`.**
+ * `purrdf_buffer_free`.** `step_cap` and `work_cap` behave exactly as in
+ * [`purrdf_entail_consistency`].
  *
  * # Safety
  * As [`purrdf_entail_consistency`].
  */
 int32_t purrdf_entail_realize(const char *document,
                               uint32_t step_cap,
+                              uint32_t work_cap,
                               PurrdfBuffer **out_answer,
                               PurrdfBuffer **out_certificate,
                               PurrdfError **out_error);
@@ -1138,6 +1149,7 @@ int32_t purrdf_entail_realize(const char *document,
  *
  * `*out_answer` receives `instance <term>` lines; `*out_certificate` the
  * `purrdf-dl-certificate 1` block. **Free BOTH with `purrdf_buffer_free`.**
+ * `step_cap` and `work_cap` behave exactly as in [`purrdf_entail_consistency`].
  *
  * # Safety
  * `document` and `class` must be non-null, NUL-terminated C strings; `out_answer`
@@ -1147,6 +1159,7 @@ int32_t purrdf_entail_realize(const char *document,
 int32_t purrdf_entail_instances(const char *document,
                                 const char *class_,
                                 uint32_t step_cap,
+                                uint32_t work_cap,
                                 PurrdfBuffer **out_answer,
                                 PurrdfBuffer **out_certificate,
                                 PurrdfError **out_error);
@@ -1174,6 +1187,7 @@ int32_t purrdf_entail_instances(const char *document,
 int32_t purrdf_entail_entails(const char *document,
                               const char *axiom,
                               uint32_t step_cap,
+                              uint32_t work_cap,
                               PurrdfBuffer **out_answer,
                               PurrdfBuffer **out_certificate,
                               PurrdfError **out_error);
@@ -1450,6 +1464,9 @@ int32_t purrdf_entail_verify_entailment(const char *regime,
  * `step_cap` narrows the per-decision tableau step cap for every question asked through
  * this session, and behaves exactly as in [`purrdf_entail_consistency`]: **0 means the
  * knowledge base's own cap**, not a cap of zero steps, and it can only NARROW.
+ * `work_cap` narrows the per-decision WORK cap on the same rule — the cap on the
+ * matcher, scan, closure and clone work done INSIDE a round, which a round cap cannot
+ * see.
  *
  * On success `*out_reasoner` receives a handle to free with [`purrdf_reasoner_free`].
  *
@@ -1464,6 +1481,7 @@ int32_t purrdf_entail_verify_entailment(const char *regime,
  */
 int32_t purrdf_reasoner_open(const char *document,
                              uint32_t step_cap,
+                             uint32_t work_cap,
                              PurrdfReasoner **out_reasoner,
                              PurrdfError **out_error);
 

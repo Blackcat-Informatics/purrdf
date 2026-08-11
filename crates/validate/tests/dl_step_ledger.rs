@@ -17,14 +17,16 @@
 //! LEDGER — a re-pin is one reviewable diff over one table, and a row that moves in the wrong
 //! direction is visible beside the rows that did not.
 //!
-//! # What a row pins, and why all six numbers
+//! # What a row pins, and why all five numbers
 //!
-//! `steps` is the round count the budget is denominated in. The other counters say where those
-//! rounds went, which `steps` alone cannot: `peak-nodes` is the largest completion graph a
-//! decision built, `disjunctions` how many times the `⊔`-rule case split, `peak-depth` how deep
-//! that rule's branch stack got. A change that halves the rounds by building a graph twice as
-//! large is not the same change as one that halves them by splitting half as often, and a
-//! ledger holding only `steps` would call them the same.
+//! `steps` is the round count one budget is denominated in, and `work` is the count the OTHER
+//! is: a round is a pass rather than a unit of cost, so an ontology can make each round
+//! enormously more expensive without taking more rounds, and only `work` moves when it does.
+//! The remaining three say where the cost went, which neither total can: `peak-nodes` is the
+//! largest completion graph a decision built, `disjunctions` how many times the `⊔`-rule case
+//! split, `peak-depth` how deep that rule's branch stack got. A change that halves the rounds
+//! by building a graph twice as large is not the same change as one that halves them by
+//! splitting half as often, and a ledger holding only `steps` would call them the same.
 //!
 //! Every figure is read out of the RENDERED certificate rather than from a Rust API, because
 //! the rendering is what a caller across the Python, WASM and C boundaries actually sees — each
@@ -33,14 +35,15 @@
 //! # The two guards every decided row also passes
 //!
 //! An exact pin says a number did not move. It does not say the number is GOOD, and a
-//! re-pinning that walked every row back towards the cap one commit at a time would satisfy it
-//! the whole way. So each decided row is additionally held to `steps × 10 < budget` — the
-//! ontology is nowhere near its ceiling — and decided TWICE, with the whole rendering compared,
-//! so determinism is asserted at the boundary and not only inside the decision core.
+//! re-pinning that walked every row back towards a cap one commit at a time would satisfy it
+//! the whole way. So each decided row is additionally held to `steps × 10 < budget` AND
+//! `work × 10 < work-budget` — the ontology is nowhere near EITHER ceiling — and decided
+//! TWICE, with the whole rendering compared, so determinism is asserted at the boundary and
+//! not only inside the decision core.
 //!
 //! # Determinism
 //!
-//! The step cap is a pure function of the knowledge base's size and the search reads no clock
+//! Both caps are pure functions of the knowledge base's size and the search reads no clock
 //! and no hash map, so every figure below is reproducible on every machine and on `wasm32`.
 //! That is what makes an exact pin honest here and a flake anywhere a clock is involved.
 
@@ -56,15 +59,21 @@ struct Pin {
     /// How many triples it is, so a fixture edited into a different ontology fails HERE
     /// rather than silently re-pinning a number for something else.
     triples: usize,
-    /// The per-decision step cap to decide under; `0` means the knowledge base's own derived
+    /// The per-decision ROUND cap to decide under; `0` means the knowledge base's own derived
     /// cap, which is what every row but the deliberately-truncated one uses.
     step_cap: u32,
+    /// The per-decision WORK cap to decide under; `0` means the knowledge base's own derived
+    /// cap, which is what every row uses — the truncated row truncates on ROUNDS, so that the
+    /// two caps are exercised by different rows rather than one masking the other.
+    work_cap: u32,
     /// The `consistency` answer line, verbatim.
     answer: &'static str,
     /// The certificate's `completeness` value, verbatim.
     completeness: &'static str,
     /// The exact `steps` figure.
     steps: u64,
+    /// The exact `work` figure.
+    work: u64,
     /// The exact `peak-nodes` figure.
     peak_nodes: u64,
     /// The exact `disjunctions` figure.
@@ -177,19 +186,85 @@ const NARROWED_BUDGET_SHAPE: &str = r"
 :tom a :Kitten .
 ";
 
+/// THE CO-TYPED SHAPE, at two copies: the same seventeen triples twice over, each copy with
+/// its own vocabulary, BOTH asserted of one individual.
+///
+/// The row that pins the shape the WORK cap exists for, at the size that still decides. Each
+/// copy contributes a disjunction no absorption can guard, and co-typing makes them interleave
+/// on ONE node rather than stand beside each other: two copies already cost sixty-six times
+/// the rounds and sixty-seven times the work of one, where two INDEPENDENT copies (one
+/// individual each) cost about twice. That ratio is what this row exists to hold still — the
+/// full curve, and where it stops deciding, is in `dl_work_budget` and in the reasoner core's
+/// own `work_cap` documentation.
+const CO_TYPED_SHAPE: &str = r"
+@prefix : <https://example.org/> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+:r0 owl:inverseOf :ri0 .
+:ri0 rdfs:range :S0 .
+
+:A0 owl:equivalentClass
+        [
+            owl:onProperty :r0 ;
+            owl:allValuesFrom [
+                owl:intersectionOf (
+                    :S0
+                    [
+                        owl:onProperty :p0 ;
+                        owl:allValuesFrom :D0
+                    ]
+                )
+            ]
+        ] ,
+        [
+            owl:onProperty :c0 ;
+            owl:cardinality 1
+        ] ;
+    rdfs:subClassOf :S0 .
+
+:a a :A0 .
+
+:r1 owl:inverseOf :ri1 .
+:ri1 rdfs:range :S1 .
+
+:A1 owl:equivalentClass
+        [
+            owl:onProperty :r1 ;
+            owl:allValuesFrom [
+                owl:intersectionOf (
+                    :S1
+                    [
+                        owl:onProperty :p1 ;
+                        owl:allValuesFrom :D1
+                    ]
+                )
+            ]
+        ] ,
+        [
+            owl:onProperty :c1 ;
+            owl:cardinality 1
+        ] ;
+    rdfs:subClassOf :S1 .
+
+:a a :A1 .
+";
+
 /// THE LEDGER.
 ///
 /// Rows are in the order a reader wants them: the shape the search was hardened for, its
-/// control, then the truncated path.
+/// control, the co-typed shape the work budget exists for, then the truncated path.
 const LEDGER: &[Pin] = &[
     Pin {
         name: "equivalent-class-allvalues-cardinality",
         ontology: EQUIVALENT_CLASS_SHAPE,
         triples: 17,
         step_cap: 0,
+        work_cap: 0,
         answer: "consistency true\n",
         completeness: "decided",
         steps: 11,
+        work: 2926,
         peak_nodes: 4,
         disjunctions: 3,
         peak_depth: 3,
@@ -199,21 +274,39 @@ const LEDGER: &[Pin] = &[
         ontology: SUBCLASS_SHAPE,
         triples: 17,
         step_cap: 0,
+        work_cap: 0,
         answer: "consistency true\n",
         completeness: "decided",
         steps: 3,
+        work: 221,
         peak_nodes: 2,
         disjunctions: 0,
         peak_depth: 0,
+    },
+    Pin {
+        name: "co-typed-equivalence-blocks",
+        ontology: CO_TYPED_SHAPE,
+        triples: 34,
+        step_cap: 0,
+        work_cap: 0,
+        answer: "consistency true\n",
+        completeness: "decided",
+        steps: 71,
+        work: 195_727,
+        peak_nodes: 15,
+        disjunctions: 28,
+        peak_depth: 28,
     },
     Pin {
         name: "narrowed-budget-subclass-chain",
         ontology: NARROWED_BUDGET_SHAPE,
         triples: 3,
         step_cap: 1,
+        work_cap: 0,
         answer: "consistency unknown\n",
         completeness: "budget-exhausted",
         steps: 1,
+        work: 11,
         peak_nodes: 1,
         disjunctions: 0,
         peak_depth: 0,
@@ -257,8 +350,9 @@ fn every_ledgered_search_costs_exactly_what_it_is_pinned_to() {
             pin.name
         );
 
-        let answer = purrdf_validate::regime::consistency_to_string(&document, pin.step_cap)
-            .unwrap_or_else(|error| panic!("{}: the ontology reverse-maps: {error}", pin.name));
+        let answer =
+            purrdf_validate::regime::consistency_to_string(&document, pin.step_cap, pin.work_cap)
+                .unwrap_or_else(|error| panic!("{}: the ontology reverse-maps: {error}", pin.name));
         let certificate = answer.certificate();
         assert_eq!(
             answer.answer(),
@@ -274,15 +368,22 @@ fn every_ledgered_search_costs_exactly_what_it_is_pinned_to() {
 
         let measured = (
             measurement(certificate, "steps"),
+            measurement(certificate, "work"),
             measurement(certificate, "peak-nodes"),
             measurement(certificate, "disjunctions"),
             measurement(certificate, "peak-depth"),
         );
         assert_eq!(
             measured,
-            (pin.steps, pin.peak_nodes, pin.disjunctions, pin.peak_depth),
-            "{}: (steps, peak-nodes, disjunctions, peak-depth) moved. Re-pin the row \
-             DELIBERATELY, and only after reading which of the four moved and why:\n{certificate}",
+            (
+                pin.steps,
+                pin.work,
+                pin.peak_nodes,
+                pin.disjunctions,
+                pin.peak_depth
+            ),
+            "{}: (steps, work, peak-nodes, disjunctions, peak-depth) moved. Re-pin the row \
+             DELIBERATELY, and only after reading which of the five moved and why:\n{certificate}",
             pin.name
         );
     }
@@ -295,8 +396,9 @@ fn every_decided_ledgered_search_stays_far_inside_its_budget() {
             continue;
         }
         let document = as_nquads(pin);
-        let answer = purrdf_validate::regime::consistency_to_string(&document, pin.step_cap)
-            .unwrap_or_else(|error| panic!("{}: the ontology reverse-maps: {error}", pin.name));
+        let answer =
+            purrdf_validate::regime::consistency_to_string(&document, pin.step_cap, pin.work_cap)
+                .unwrap_or_else(|error| panic!("{}: the ontology reverse-maps: {error}", pin.name));
         let certificate = answer.certificate();
         let steps = measurement(certificate, "steps");
         let budget = measurement(certificate, "budget");
@@ -307,6 +409,15 @@ fn every_decided_ledgered_search_stays_far_inside_its_budget() {
              commit at a time; this guard is what does not:\n{certificate}",
             pin.name
         );
+        let work = measurement(certificate, "work");
+        let work_budget = measurement(certificate, "work-budget");
+        assert!(
+            work * 10 < work_budget,
+            "{}: the search spent {work} of its own declared {work_budget}-unit work budget, \
+             which is not `far inside` it. A row drifting towards THIS ceiling is the one the \
+             round figures cannot show:\n{certificate}",
+            pin.name
+        );
     }
 }
 
@@ -314,10 +425,12 @@ fn every_decided_ledgered_search_stays_far_inside_its_budget() {
 fn every_ledgered_search_renders_identically_twice() {
     for pin in LEDGER {
         let document = as_nquads(pin);
-        let first = purrdf_validate::regime::consistency_to_string(&document, pin.step_cap)
-            .unwrap_or_else(|error| panic!("{}: the ontology reverse-maps: {error}", pin.name));
-        let again = purrdf_validate::regime::consistency_to_string(&document, pin.step_cap)
-            .unwrap_or_else(|error| panic!("{}: the ontology reverse-maps: {error}", pin.name));
+        let first =
+            purrdf_validate::regime::consistency_to_string(&document, pin.step_cap, pin.work_cap)
+                .unwrap_or_else(|error| panic!("{}: the ontology reverse-maps: {error}", pin.name));
+        let again =
+            purrdf_validate::regime::consistency_to_string(&document, pin.step_cap, pin.work_cap)
+                .unwrap_or_else(|error| panic!("{}: the ontology reverse-maps: {error}", pin.name));
         assert_eq!(
             first, again,
             "{}: two runs, one rendering — answer AND certificate, every counter included",
