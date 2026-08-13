@@ -186,6 +186,27 @@ fn honest<T>(answer: &purrdf_entail::Certified<T>) -> &purrdf_entail::DlCertific
         certificate.decisions(),
         certificate.budget()
     );
+    // The three shape counters, held to the invariants that make them readable — and held
+    // here, in the helper EVERY service test runs its answer through, because what they are
+    // aggregated by differs per counter (work sums, sizes peak) and an aggregation applied to
+    // the wrong one is invisible on any single service.
+    // Deliberately NOT "a search that spent a round built a node". A question about the
+    // terminology alone — which is what `classify` asks once the classifying saturation has
+    // derived what it can — has no individual to build a root for, so its completion graph is
+    // legitimately EMPTY and saturates in one round over nothing. Asserting otherwise would
+    // pin an accident of which ontologies these tests happen to use.
+    assert!(
+        certificate.peak_depth() <= certificate.disjunctions(),
+        "a branch stack {} deep over {} case splits",
+        certificate.peak_depth(),
+        certificate.disjunctions()
+    );
+    assert!(
+        certificate.disjunctions() <= certificate.steps(),
+        "{} case splits over {} rounds: a split costs at least the round that derived it",
+        certificate.disjunctions(),
+        certificate.steps()
+    );
     certificate
 }
 
@@ -751,7 +772,17 @@ fn a_narrowed_budget_reports_unknown_rather_than_a_false_negative() {
     let certificate = honest(&answer);
     assert_eq!(certificate.completeness(), DlCompleteness::BudgetExhausted);
     assert!(!certificate.completeness().is_decided());
-    assert_eq!(certificate.steps(), 1, "it spent exactly its cap");
+    // What a truncated search COSTS is pinned exactly in the workspace's one step ledger
+    // (`purrdf-validate`'s `dl_step_ledger`), which decides this same shape under this same
+    // cap of one and holds its rounds, nodes, case splits and depth in a single table. An
+    // exact literal here would be a second copy of one of those figures, and two copies of a
+    // number are how a re-pin comes to move one of them. What belongs in this test is the
+    // SHAPE of the truncated answer: `unknown`, `budget-exhausted`, and no more spent than
+    // the cap allowed.
+    assert!(
+        certificate.steps() <= certificate.budget(),
+        "a truncated search cannot have spent more than the cap that truncated it"
+    );
 
     // Every aggregate service degrades the same way: an empty answer under an exhausted
     // certificate, rather than a confidently wrong one.
@@ -764,6 +795,116 @@ fn a_narrowed_budget_reports_unknown_rather_than_a_false_negative() {
     honest(&hierarchy);
 }
 
+/// The SECOND budget degrades the same way, and the certificate says it was the one.
+///
+/// Not a duplicate of the test above. A derivation round is a PASS over the completion graph
+/// rather than a unit of cost, so the two caps bound different quantities: an ontology can
+/// make each round enormously more expensive without making the search take more rounds, and
+/// only this one sees that. What is checked is that work exhaustion travels the SAME honest
+/// channel — `Verdict::Unknown`, `DlCompleteness::BudgetExhausted` — and that the two work
+/// figures identify it, which the round figures in the same certificate cannot.
+#[test]
+fn a_narrowed_work_budget_reports_unknown_through_the_same_channel() {
+    let dataset = kittens();
+    let reasoner = Reasoner::new(&dataset)
+        .expect("reverse-map")
+        .with_work_cap(1);
+    assert_eq!(reasoner.work_cap(), 1);
+    assert!(
+        reasoner.step_cap() > 1,
+        "the ROUND cap is untouched, so what truncates this run is unambiguous"
+    );
+
+    let answer = reasoner.consistency();
+    assert_eq!(
+        *answer.answer(),
+        Verdict::Unknown,
+        "a work-exhausted search is UNKNOWN, never `false`"
+    );
+    let certificate = honest(&answer);
+    assert_eq!(certificate.completeness(), DlCompleteness::BudgetExhausted);
+    assert_eq!(
+        certificate.work(),
+        certificate.work_budget(),
+        "the run stopped at its work cap, and the two figures say so"
+    );
+    assert!(
+        certificate.steps() * 10 < certificate.budget(),
+        "the ROUND figures show what they could not see: {certificate:?}"
+    );
+}
+
+/// A NARROW work cap must cut a LARGE bulk scan off near its own cap rather than letting one
+/// oversized enumeration run to completion first — the stability gap FB-1 closed.
+///
+/// `:a` gets five thousand `:p`-neighbours and a `∀p.C` restriction that has to read every one
+/// of them through the completion graph's role-neighbour scan. Before the fix, a scan already
+/// in flight when the meter's bulk charge exhausted it kept walking its own bulk regardless —
+/// the edge loop behind `Graph::neighbors`, the role-hierarchy closure behind it, and the
+/// per-node clause scan `Hyper::round` drives it all from — so a cap far smaller than the
+/// scan still paid for (most of) the scan before reporting itself exhausted. What is asserted
+/// here is the OUTWARD-FACING half of that fix: the certificate says exhausted honestly
+/// (`Unknown`, `BudgetExhausted`, `work == work-budget`), and it says the SAME thing twice —
+/// determinism is not a property that survives an early exit by accident, since a search that
+/// stopped at a different point on its second run would report a different round/work/shape
+/// tuple. The crate-internal mechanism itself — that the scan's own inner loops poll the meter
+/// rather than run unconditionally to the end — is pinned directly against `Graph`/`Hyper` in
+/// `owl_dl::graph::tests` and `owl_dl::hyper::tests`, where the truncated candidate/edge/role
+/// counts are countable; nothing crosses the `Reasoner` boundary that could make that latency
+/// observable without timing, which this crate does not assert.
+#[test]
+fn a_narrow_work_cap_exhausts_promptly_over_a_large_role_scan_and_is_deterministic() {
+    const NEIGHBOURS: usize = 5_000;
+    let mut triples: Vec<(N, N, N)> = vec![
+        typed(N::E("p"), N::V(OBJECT_PROPERTY)),
+        typed(N::E("C"), N::V(OWL_CLASS)),
+        typed(N::E("A"), N::V(OWL_CLASS)),
+        sub(N::E("A"), N::B("allP")),
+        typed(N::B("allP"), N::V(RESTRICTION)),
+        (N::B("allP"), N::V(ON_PROPERTY), N::E("p")),
+        (N::B("allP"), N::V(ALL_VALUES), N::E("C")),
+        typed(N::E("a"), N::E("A")),
+    ];
+    let neighbours: Vec<String> = (0..NEIGHBOURS).map(|i| format!("n{i}")).collect();
+    for label in &neighbours {
+        // `N::E` needs a `&'static str`; leaking a handful of kilobytes for the run of one
+        // test is the ordinary price of that in a fixture built at runtime.
+        let leaked: &'static str = Box::leak(label.clone().into_boxed_str());
+        triples.push((N::E("a"), N::E("p"), N::E(leaked)));
+    }
+    let dataset = ds(&triples);
+
+    let reasoner = Reasoner::new(&dataset)
+        .expect("reverse-map")
+        .with_work_cap(64);
+    assert_eq!(reasoner.work_cap(), 64);
+
+    let answer = reasoner.consistency();
+    assert_eq!(
+        *answer.answer(),
+        Verdict::Unknown,
+        "a work-exhausted search over a large scan is UNKNOWN, never a guessed verdict"
+    );
+    let certificate = honest(&answer);
+    assert_eq!(certificate.completeness(), DlCompleteness::BudgetExhausted);
+    assert_eq!(
+        certificate.work(),
+        certificate.work_budget(),
+        "the meter clamps exactly at its cap, whatever the {NEIGHBOURS}-edge scan it cut \
+         short still had left to walk: {certificate:?}"
+    );
+
+    // Two runs, one exhausted certificate: nothing behind the scans this cap cut off reads a
+    // clock or a hash iteration order, so an early exit lands at the same candidate every time.
+    let again = reasoner.consistency();
+    assert_eq!(*again.answer(), Verdict::Unknown);
+    let again_certificate = honest(&again);
+    assert_eq!(
+        certificate, again_certificate,
+        "two runs of the same narrow-cap search must agree on every field, truncation included"
+    );
+}
+
 #[test]
 fn the_step_cap_can_be_narrowed_and_never_widened() {
     let dataset = kittens();
@@ -774,6 +915,25 @@ fn the_step_cap_can_be_narrowed_and_never_widened() {
         .with_step_cap(u64::MAX);
     assert_eq!(
         widened.step_cap(),
+        ceiling,
+        "a request above the ceiling is CLAMPED, never honoured"
+    );
+}
+
+/// The work cap clamps exactly as the round cap does: narrow only.
+///
+/// Ceilings here are measured and reported, never tuned upward until a hard instance fits, and
+/// this is the assertion that keeps the second one honest too.
+#[test]
+fn the_work_cap_can_be_narrowed_and_never_widened() {
+    let dataset = kittens();
+    let ceiling = Reasoner::new(&dataset).expect("reverse-map").work_cap();
+    assert!(ceiling > 1, "the derived ceiling is generous: {ceiling}");
+    let widened = Reasoner::new(&dataset)
+        .expect("reverse-map")
+        .with_work_cap(u64::MAX);
+    assert_eq!(
+        widened.work_cap(),
         ceiling,
         "a request above the ceiling is CLAMPED, never honoured"
     );

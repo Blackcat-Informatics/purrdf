@@ -822,7 +822,7 @@ int main(int argc, char **argv) {
     const uint8_t *cbytes = NULL;
     size_t clen = 0;
 
-    rc = purrdf_entail_consistency(taxonomy, 0, &answer, &certificate, &error);
+    rc = purrdf_entail_consistency(taxonomy, 0, 0, &answer, &certificate, &error);
     CHECK(rc == PURRDF_STATUS_OK && answer != NULL && certificate != NULL,
           "entail_consistency");
     purrdf_buffer_data(answer, &abytes, &alen);
@@ -836,7 +836,7 @@ int main(int argc, char **argv) {
     purrdf_buffer_free(certificate);
     purrdf_buffer_free(answer);
 
-    rc = purrdf_entail_entails(taxonomy, chain_axiom, 0, &answer, &certificate, &error);
+    rc = purrdf_entail_entails(taxonomy, chain_axiom, 0, 0, &answer, &certificate, &error);
     CHECK(rc == PURRDF_STATUS_OK, "entail_entails");
     purrdf_buffer_data(answer, &abytes, &alen);
     CHECK(alen > strlen("entails true\n") &&
@@ -847,10 +847,12 @@ int main(int argc, char **argv) {
 
     /* a narrowed step cap answers `unknown`, never `false`: the third
      * completeness state, reachable through the C ABI. */
-    rc = purrdf_entail_entails(taxonomy, chain_axiom, 1, &answer, &certificate, &error);
+    rc = purrdf_entail_entails(taxonomy, chain_axiom, 1, 0, &answer, &certificate,
+                               &error);
     CHECK(rc == PURRDF_STATUS_OK, "entail_entails under a narrowed cap");
     purrdf_buffer_data(answer, &abytes, &alen);
-    CHECK(memcmp(abytes, "entails unknown\n", strlen("entails unknown\n")) == 0,
+    CHECK(alen > strlen("entails unknown\n") &&
+              memcmp(abytes, "entails unknown\n", strlen("entails unknown\n")) == 0,
           "an exhausted search is unknown, not false");
     purrdf_buffer_data(certificate, &cbytes, &clen);
     CHECK(contains_bytes(cbytes, clen, "completeness budget-exhausted\n"),
@@ -858,7 +860,24 @@ int main(int argc, char **argv) {
     purrdf_buffer_free(certificate);
     purrdf_buffer_free(answer);
 
-    rc = purrdf_entail_classify(taxonomy, 0, &answer, &certificate, &error);
+    /* the SECOND cap, narrowed the same way. A round is a pass rather than a
+     * unit of cost, so this one bounds the work done inside a round — and it
+     * reaches the same three-valued answer through the C ABI. */
+    rc = purrdf_entail_entails(taxonomy, chain_axiom, 0, 1, &answer, &certificate,
+                               &error);
+    CHECK(rc == PURRDF_STATUS_OK, "entail_entails under a narrowed work cap");
+    purrdf_buffer_data(answer, &abytes, &alen);
+    CHECK(alen > strlen("entails unknown\n") &&
+              memcmp(abytes, "entails unknown\n", strlen("entails unknown\n")) == 0,
+          "a work-exhausted search is unknown, not false");
+    purrdf_buffer_data(certificate, &cbytes, &clen);
+    CHECK(contains_bytes(cbytes, clen, "completeness budget-exhausted\n") &&
+              contains_bytes(cbytes, clen, "work-budget 1\n"),
+          "the certificate reports the narrowed WORK budget it ran under");
+    purrdf_buffer_free(certificate);
+    purrdf_buffer_free(answer);
+
+    rc = purrdf_entail_classify(taxonomy, 0, 0, &answer, &certificate, &error);
     CHECK(rc == PURRDF_STATUS_OK, "entail_classify");
     purrdf_buffer_data(answer, &abytes, &alen);
     CHECK(contains_bytes(abytes, alen, "subclass <http://example.org/A> <http://example.org/C>\n"),
@@ -866,12 +885,12 @@ int main(int argc, char **argv) {
     purrdf_buffer_free(certificate);
     purrdf_buffer_free(answer);
 
-    rc = purrdf_entail_realize(taxonomy, 0, &answer, &certificate, &error);
+    rc = purrdf_entail_realize(taxonomy, 0, 0, &answer, &certificate, &error);
     CHECK(rc == PURRDF_STATUS_OK, "entail_realize");
     purrdf_buffer_free(certificate);
     purrdf_buffer_free(answer);
 
-    rc = purrdf_entail_instances(taxonomy, "<http://example.org/C>", 0, &answer,
+    rc = purrdf_entail_instances(taxonomy, "<http://example.org/C>", 0, 0, &answer,
                                  &certificate, &error);
     CHECK(rc == PURRDF_STATUS_OK, "entail_instances");
     purrdf_buffer_data(answer, &abytes, &alen);
@@ -926,7 +945,7 @@ int main(int argc, char **argv) {
     PurrdfError *dl_error = NULL;
     answer = NULL;
     certificate = NULL;
-    rc = purrdf_entail_instances(taxonomy, "not a term", 0, &answer, &certificate,
+    rc = purrdf_entail_instances(taxonomy, "not a term", 0, 0, &answer, &certificate,
                                  &dl_error);
     CHECK(rc == PURRDF_STATUS_PARSE_ERROR, "a malformed class term is refused");
     CHECK(answer == NULL && certificate == NULL, "a failing DL call frees nothing");
@@ -941,7 +960,7 @@ int main(int argc, char **argv) {
        macro, which compiled and exported from the cdylib while cbindgen left
        them out of this header, so the code below would not have linked. */
     PurrdfReasoner *session = NULL;
-    rc = purrdf_reasoner_open(taxonomy, 0, &session, &error);
+    rc = purrdf_reasoner_open(taxonomy, 0, 0, &session, &error);
     CHECK(rc == PURRDF_STATUS_OK && session != NULL, "reasoner_open");
 
     /* Every service, through the handle, reusing ONE session: `instances` and

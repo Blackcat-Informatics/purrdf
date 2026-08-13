@@ -64,15 +64,23 @@
 //!
 //! | axiom | clause |
 //! |---|---|
-//! | absorbed `A ⊑ D` ([`Kb::unfold`]) | `A(x) → D(x)` |
+//! | absorbed inclusion ([`Kb::absorbed`]) | `⋀ guard → D(x_head)`, verbatim |
 //! | `owl:AsymmetricProperty` `r` | `r(x,y) ∧ r(y,x) → ` |
 //! | `owl:propertyDisjointWith` `r`, `s` | `r(x,y) ∧ s(x,y) → ` |
 //!
-//! The non-absorbable general concept inclusions are NOT clauses here: they are internalized
-//! as the meta-concepts [`Kb::meta`], which the completion graph seeds into every abstract
-//! node's label, so the `⊔`-clause of `nnf(¬C ⊔ D)` fires on every node. That is the same
-//! internalization the incumbent uses, kept so the two calculi differ in their rules and not
-//! in their input.
+//! The absorbed table is [`crate::owl_dl::absorb`]'s output and it arrives here already
+//! clausified — guard, head variable, head concept — so this module TRANSLATES it and does
+//! not decide it. That is deliberate: which inclusions become guarded clauses is a claim about
+//! the semantics of a completion graph (the faithful-antecedent criterion), and it belongs
+//! where that argument is written down rather than spread over a clause emitter. `A ⊑ D` is
+//! the degenerate one-atom guard; `∃r.C ⊑ D`, `A ⊓ B ⊑ D`, `rdfs:domain` and `rdfs:range` are
+//! the shapes an earlier revision could not absorb at all.
+//!
+//! The inclusions whose antecedent nothing can guard are NOT clauses here: they are
+//! internalized as the meta-concepts [`Kb::meta`], which the completion graph seeds into every
+//! abstract node's label, so the `⊔`-clause of `nnf(¬C ⊔ D)` fires on every node. That is the
+//! same internalization the incumbent uses, kept so the two calculi differ in their rules and
+//! not in their input.
 //!
 //! # The two things this table deliberately does NOT encode
 //!
@@ -94,6 +102,13 @@
 //! every body and head is a `Vec` in the order emitted. Nothing here is read out of a hash
 //! map, so the clause set — and therefore the branch order of every search over it — is a
 //! pure function of the knowledge base.
+//!
+//! A DISJUNCTIVE head's alternatives are emitted in the order [`Kb::order_disjuncts`] gives —
+//! the alternatives that mint no witnesses first, and a STABLE sort, so the canonical order the
+//! members already carry survives inside each rank. It is a pure function of the concept table
+//! and the absorbed clauses and it is decided ONCE, here, rather than at each case split. That
+//! ordering is deliberately not the interner's: `Kb::order_disjuncts` states why the identity
+//! order and the search order must stay two orders.
 
 use std::collections::BTreeMap;
 
@@ -393,10 +408,46 @@ pub(crate) struct ClauseSet {
     clauses: Vec<DlClause>,
     /// Trigger concept id → the indices of the clauses it can make applicable, ascending.
     by_trigger: BTreeMap<u32, Vec<usize>>,
-    /// The clauses whose body opens with a role atom, so no concept triggers them; they are
-    /// tried at every node. Only the two role axioms land here, so the cost is bounded by the
-    /// ontology's role-axiom count rather than by its concept count.
+    /// The clauses no CONCEPT triggers — a body that opens with a role atom, a `denotes` atom
+    /// or nothing at all — so they are tried at every node of every round.
+    ///
+    /// # What lands here, and the bound that makes it affordable
+    ///
+    /// Exactly two populations, and neither scales with the ontology's CONCEPT count:
+    ///
+    /// * the two role axioms (`owl:AsymmetricProperty`, `owl:propertyDisjointWith`), one
+    ///   clause each;
+    /// * an absorbed inclusion whose faithful antecedent names no class anywhere —
+    ///   `⊤ ⊑ D` (an empty body), `rdfs:range` and `rdfs:domain` (`r(x,y)`), `{a} ⊑ D`
+    ///   (`denotes_a(x)`). One clause per such axiom.
+    ///
+    /// Everything else is re-rooted at a named class by
+    /// [`crate::owl_dl::absorb`] and reaches [`Self::by_trigger`]: an `∃r.C ⊑ D` with a named
+    /// filler is authored `C(x₀) ∧ r⁻(x₀,x₁) → D(x₁)`, so the common absorbed shape does NOT
+    /// land here. The count is therefore bounded by the ontology's AXIOM count — but the
+    /// per-node cost of one of them is NOT a free failure. A single
+    /// [`Graph::neighbors`](crate::owl_dl::graph::Graph::neighbors) call resolves the role's
+    /// achiever closure (memoized per role for the run, see
+    /// [`Graph::achiever_cache`](crate::owl_dl::graph::Graph); a role queried for the first
+    /// time still walks the role hierarchy to build it) and then scans every edge the
+    /// completion graph holds, whether or not one matches — a node with no such edge pays
+    /// that scan in full before `neighbors` can report it has nothing. What the bound above
+    /// buys is a per-node cost independent of the ontology's CONCEPT count, not a per-node
+    /// cost of zero.
+    ///
+    /// An edge-driven index over these would need a role's ACHIEVERS — its sub-roles and its
+    /// inverse partners — resolved to find the clauses an edge could trigger, which is what
+    /// `neighbors` already does (and now caches). The bound above is what makes building a
+    /// second, edge-keyed index unnecessary rather than merely unmeasured.
     untriggered: Vec<usize>,
+    /// Whether each clause is TBox-DERIVED, by clause index.
+    ///
+    /// A TBox clause is scoped to the OBJECT domain: a general concept inclusion quantifies
+    /// over `owl:Thing`, and a literal value is not in it, so firing one at a node of `Δ_D`
+    /// would derive a consequence the ontology does not state. The concept-structure clauses
+    /// carry no such flag — `C ⊓ ¬C ⊑ ⊥` and the decomposition of a concept a node's label
+    /// actually carries are statements about that concept, valid over either domain.
+    tbox: Vec<bool>,
 }
 
 impl ClauseSet {
@@ -432,14 +483,30 @@ impl ClauseSet {
             .collect()
     }
 
+    /// Whether the clause at `index` is TBox-derived, and so scoped to the object domain.
+    pub(crate) fn is_tbox(&self, index: usize) -> bool {
+        self.tbox[index]
+    }
+
     /// Record one clause, indexing it by its trigger.
     fn push(&mut self, clause: DlClause) {
+        self.record(clause, false);
+    }
+
+    /// Record one TBox-derived clause — see [`ClauseSet::tbox`].
+    fn push_tbox(&mut self, clause: DlClause) {
+        self.record(clause, true);
+    }
+
+    /// Record one clause, indexing it by its trigger and noting its provenance.
+    fn record(&mut self, clause: DlClause, tbox: bool) {
         let index = self.clauses.len();
         match clause.trigger() {
             Some(concept) => self.by_trigger.entry(concept).or_default().push(index),
             None => self.untriggered.push(index),
         }
         self.clauses.push(clause);
+        self.tbox.push(tbox);
     }
 
     /// Record `body → head` where the body opens with the trigger concept `trigger` on
@@ -465,6 +532,7 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
         clauses: Vec::new(),
         by_trigger: BTreeMap::new(),
         untriggered: Vec::new(),
+        tbox: Vec::new(),
     };
     for id in 0..kb.table.len() {
         let id = u32::try_from(id).expect("concept count fits u32");
@@ -485,20 +553,34 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
             );
         }
     }
-    // The absorbed TBox: a named class entails its recorded super-concepts. Absorption is
-    // what keeps a many-axiom terminology from branching a `¬A ⊔ D` disjunction on every
-    // node — the clause fires only where `A` actually holds.
-    for (&class, supers) in &kb.unfold {
-        for &sup in supers {
-            out.push_triggered(
-                class,
-                Vec::new(),
-                vec![vec![HeadAtom::Concept {
-                    var: 0,
-                    concept: sup,
-                }]],
-            );
-        }
+    // The absorbed TBox, verbatim: [`crate::owl_dl::absorb`] has already decided each
+    // inclusion's guard, so emission is a translation and not a second place the encoding is
+    // chosen. Marked as TBox-derived, which is what scopes it to the OBJECT domain — a
+    // general concept inclusion quantifies over `owl:Thing`, and no literal value is in it.
+    for clause in &kb.absorbed {
+        // ATOMIC-HEAD invariant: a [`GuardedClause`] head is ONE concept id on ONE variable
+        // (see its doc), so its translation is ONE disjunct of ONE atom — never a case split
+        // of this clause's own. A `⊔` reached by way of an absorbed head still branches, but
+        // through the SEPARATE per-concept clause [`derive_concept`] emits for that head id
+        // when its decomposition is [`Decomp::Or`] — a clause that is NOT `push_tbox`, so it
+        // is not scoped away from `Δ_D`. If a future edit ever flattened a disjunctive head
+        // in here instead, this TBox-scoped, `Δ_D`-excluded clause would start branching on
+        // whichever domain a node inhabited, silently past the object-domain scope the
+        // `push_tbox` marking exists to hold — which is exactly what this assertion is here
+        // to catch before it reaches the search.
+        let head = vec![vec![HeadAtom::Concept {
+            var: clause.head_var,
+            concept: clause.head,
+        }]];
+        debug_assert_eq!(
+            (head.len(), head[0].len()),
+            (1, 1),
+            "an absorbed TBox clause's head must be one concept on one variable"
+        );
+        out.push_tbox(DlClause {
+            body: clause.body.clone(),
+            head,
+        });
     }
     // The two role axioms that constrain EDGES rather than labels, so neither can be
     // internalized as a general concept inclusion and neither has a concept to trigger it.
@@ -560,9 +642,15 @@ fn derive_concept(kb: &Kb, id: u32, out: &mut ClauseSet) {
             }
         }
         Decomp::Or(ref children) => {
-            let disjuncts: Vec<Vec<HeadAtom>> = children
-                .iter()
-                .map(|&concept| vec![HeadAtom::Concept { var: 0, concept }])
+            // AUTHORED in search order, not in the interner's: see [`Kb::order_disjuncts`] for
+            // why the canonical member order and this one are different orders with different
+            // jobs. The `⊔`-rule branches in the order it finds here, so this is where a
+            // terminology's cheap alternatives are put first — once, in front of every search
+            // over the clause set, rather than re-decided at each case split.
+            let disjuncts: Vec<Vec<HeadAtom>> = kb
+                .order_disjuncts(children)
+                .into_iter()
+                .map(|concept| vec![HeadAtom::Concept { var: 0, concept }])
                 .collect();
             // An EMPTY disjunction is `⊥`, which is exactly the empty head — so the degenerate
             // `⊔` of nothing needs no special case.
@@ -658,6 +746,14 @@ fn derive_concept(kb: &Kb, id: u32, out: &mut ClauseSet) {
 /// `≤n` violation becomes a clash without a second clash rule to state it.
 fn derive_at_most(kb: &Kb, id: u32, n: u32, role: Role, filler: u32, out: &mut ClauseSet) {
     if let Some(negated) = kb.table.negation(filler) {
+        // The two alternatives are ordered like any other authored case split: deciding a
+        // neighbour's membership one way may force it to mint successors of its own, and the
+        // way that does not is the one to try first.
+        let decided: Vec<Vec<HeadAtom>> = kb
+            .order_disjuncts(&[filler, negated])
+            .into_iter()
+            .map(|concept| vec![HeadAtom::Concept { var: 1, concept }])
+            .collect();
         out.push_triggered(
             id,
             vec![BodyAtom::Role {
@@ -665,16 +761,7 @@ fn derive_at_most(kb: &Kb, id: u32, n: u32, role: Role, filler: u32, out: &mut C
                 to: 1,
                 role,
             }],
-            vec![
-                vec![HeadAtom::Concept {
-                    var: 1,
-                    concept: filler,
-                }],
-                vec![HeadAtom::Concept {
-                    var: 1,
-                    concept: negated,
-                }],
-            ],
+            decided,
         );
     }
     // The counting clause, schematic in `n + 1`: one body atom for the counted successors and
@@ -698,7 +785,7 @@ fn derive_at_most(kb: &Kb, id: u32, n: u32, role: Role, filler: u32, out: &mut C
 mod tests {
     use purrdf_datalog::clause::HeadForm;
 
-    use super::{BodyAtom, HeadAtom, derive};
+    use super::{BodyAtom, DlClause, HeadAtom, derive};
     use crate::owl_dl::Kb;
     use crate::owl_dl::concept::{Concept, Role};
 
@@ -967,6 +1054,94 @@ mod tests {
                     && matches!(clause.head[0][0], HeadAtom::Concept { var: 0, .. })
             }),
             "A ⊑ D is a clause triggered by A: {triggered:?}"
+        );
+    }
+
+    /// An absorbed `∃r.C ⊑ D` is TRIGGERED, not untriggered — the whole point of authoring it
+    /// re-rooted at its filler. It is the shape a terminology states most often after the
+    /// named-class one, and head-first it would be retried at every node of every round.
+    #[test]
+    fn an_absorbed_existential_antecedent_is_triggered_by_its_filler() {
+        let mut kb = Kb::empty();
+        kb.push_gci(
+            Concept::Some(Role::Named(20), Box::new(Concept::Named(10))),
+            Concept::Named(11),
+        );
+        kb.finalize();
+        let filler = kb.table.intern(Concept::Named(10));
+        let clauses = derive(&kb);
+        assert!(
+            clauses.untriggered().is_empty(),
+            "∃r.C ⊑ D must not land in the untriggered set: {:?}",
+            clauses.untriggered()
+        );
+        assert!(
+            clauses.triggered_by(filler).iter().any(|&index| {
+                matches!(
+                    clauses.clause(index).body.as_slice(),
+                    [
+                        BodyAtom::Concept { var: 0, .. },
+                        BodyAtom::Role {
+                            from: 0,
+                            to: 1,
+                            role: Role::Inv(20)
+                        },
+                    ]
+                )
+            }),
+            "the clause is triggered by the FILLER and walks back through r⁻"
+        );
+    }
+
+    /// THE UNTRIGGERED INVARIANT, as a population rather than a promise.
+    ///
+    /// Every clause that no concept triggers is tried at every node of every round, so what
+    /// may land there is a bounded, enumerable set — the two role axioms, and the absorbed
+    /// inclusions whose faithful antecedent names no class anywhere. This knowledge base
+    /// states one of each of the five, and the count is exactly five: nothing that could have
+    /// been re-rooted onto a trigger is here, and in particular the concept table's own
+    /// clauses — one per interned concept, the population that scales — are all triggered.
+    #[test]
+    fn only_the_role_axioms_and_the_class_free_guards_are_untriggered() {
+        let mut kb = Kb::empty();
+        // `⊤ ⊑ A` — an empty body.
+        kb.push_gci(Concept::Top, Concept::Named(10));
+        // `rdfs:range` — `r(x,y) → A(y)`.
+        kb.push_gci(
+            Concept::Top,
+            Concept::All(Role::Named(20), Box::new(Concept::Named(10))),
+        );
+        // `rdfs:domain` — `r(x,y) → A(x)`.
+        kb.push_gci(
+            Concept::Some(Role::Named(20), Box::new(Concept::Top)),
+            Concept::Named(10),
+        );
+        // A nominal guard — `denotes_a(x) → A(x)`.
+        kb.push_gci(Concept::Nominal(vec![30]), Concept::Named(10));
+        // …beside inclusions that MUST be triggered rather than untriggered.
+        kb.push_gci(Concept::Named(11), Concept::Named(10));
+        kb.push_gci(
+            Concept::Some(Role::Named(20), Box::new(Concept::Named(11))),
+            Concept::Named(10),
+        );
+        kb.asymmetric.insert(21);
+        kb.disjoint_roles.insert((20, 21));
+        kb.disjoint_roles.insert((21, 20));
+        kb.finalize();
+        let clauses = derive(&kb);
+        assert_eq!(
+            clauses.untriggered().len(),
+            6,
+            "four class-free guards and the two role axioms: {:?}",
+            clauses
+                .untriggered()
+                .iter()
+                .map(|&index| clauses.clause(index))
+                .collect::<Vec<&DlClause>>()
+        );
+        assert!(
+            clauses.untriggered().len() < clauses.count(),
+            "the population that scales with the concept table is the TRIGGERED one"
         );
     }
 }

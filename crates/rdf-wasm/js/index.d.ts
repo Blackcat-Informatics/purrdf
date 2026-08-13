@@ -701,8 +701,11 @@ export class Reasoner {
    * @param stepCap Narrows the per-decision tableau step cap for every question asked
    *   through this session. 0 means the knowledge base's own cap, NOT a cap of zero
    *   steps, and it can only narrow.
+   * @param workCap Narrows the per-decision WORK cap on the same rule — the cap on the
+   *   matcher, scan, closure and clone work done INSIDE a round, which a rounds cap
+   *   cannot see.
    */
-  constructor(document: string, stepCap: number);
+  constructor(document: string, stepCap: number, workCap: number);
   consistency(): ReasoningAnswer;
   classify(): ReasoningAnswer;
   realize(): ReasoningAnswer;
@@ -875,35 +878,50 @@ export function entailCheckInconsistentRefusal(): void;
 export type ModuleExtractionMethod = "bot" | "top" | "star";
 
 /**
- * `entailConsistency(document, stepCap)` → is the knowledge base consistent?
+ * `entailConsistency(document, stepCap, workCap)` → is the knowledge base consistent?
  *
- * `stepCap` narrows the per-decision tableau step cap; `0` means the knowledge
- * base's own cap, not a cap of zero steps. The one DL service that answers for an
+ * `stepCap` narrows the per-decision tableau step cap and `workCap` the per-decision
+ * WORK cap; `0` means the knowledge base's own cap for either, not a cap of zero, and
+ * both can only narrow. The two bound different quantities: `stepCap` bounds derivation
+ * ROUNDS, `workCap` the matcher, scan, closure and clone work done inside them — which a
+ * rounds cap structurally cannot see. The one DL service that answers for an
  * unsatisfiable ontology, because it is the one that detects one.
  *
  * Throws if `document` fails to parse or the reverse mapping fails.
  */
-export function entailConsistency(document: string, stepCap: number): ReasoningAnswer;
+export function entailConsistency(
+  document: string,
+  stepCap: number,
+  workCap: number,
+): ReasoningAnswer;
 
 /**
- * `entailClassify(document, stepCap)` → the entailed subsumption hierarchy over the
+ * `entailClassify(document, stepCap, workCap)` → the entailed subsumption hierarchy over the
  * ontology's named classes: `equivalent`, `subclass` (the full transitively-closed
  * relation), `direct` (its transitive reduction) and `unsatisfiable` lines.
  *
  * Throws on a malformed document, or on an ontology with no model.
  */
-export function entailClassify(document: string, stepCap: number): ReasoningAnswer;
+export function entailClassify(
+  document: string,
+  stepCap: number,
+  workCap: number,
+): ReasoningAnswer;
 
 /**
- * `entailRealize(document, stepCap)` → the entailed types of the ontology's named
+ * `entailRealize(document, stepCap, workCap)` → the entailed types of the ontology's named
  * individuals, and the most specific of them (`type` then `direct-type` lines).
  *
  * Throws on a malformed document or an ontology with no model.
  */
-export function entailRealize(document: string, stepCap: number): ReasoningAnswer;
+export function entailRealize(
+  document: string,
+  stepCap: number,
+  workCap: number,
+): ReasoningAnswer;
 
 /**
- * `entailInstances(document, classTerm, stepCap)` → the named individuals entailed
+ * `entailInstances(document, classTerm, stepCap, workCap)` → the named individuals entailed
  * to be instances of `classTerm`, as `instance <term>` lines.
  *
  * `classTerm` is ONE N-Triples term — `"<http://example.org/Cat>"`, angle brackets
@@ -917,10 +935,11 @@ export function entailInstances(
   document: string,
   classTerm: string,
   stepCap: number,
+  workCap: number,
 ): ReasoningAnswer;
 
 /**
- * `entailEntails(document, axiom, stepCap)` → does the ontology entail `axiom`?
+ * `entailEntails(document, axiom, stepCap, workCap)` → does the ontology entail `axiom`?
  *
  * `axiom` is ONE triple of the OWL 2 RDF mapping, in N-Triples syntax; seven
  * reserved predicates select the seven named axiom kinds and any other predicate is
@@ -934,6 +953,7 @@ export function entailEntails(
   document: string,
   axiom: string,
   stepCap: number,
+  workCap: number,
 ): ReasoningAnswer;
 
 /**

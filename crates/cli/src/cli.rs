@@ -78,7 +78,8 @@ use crate::format::CliFormat;
 #[command(
     name = "purrdf",
     version,
-    about = "PurRDF: convert, query, update, reason, decide entailment, project, and lift RDF 1.2 data",
+    about = "PurRDF: convert, query, update, reason, decide entailment, decide consistency, \
+             project, and lift RDF 1.2 data",
     propagate_version = true
 )]
 pub(crate) struct Cli {
@@ -169,7 +170,7 @@ impl Cli {
     }
 }
 
-/// The seven pipeline subcommands.
+/// The eight pipeline subcommands.
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
     /// Convert RDF between syntaxes, and to/from the native pack container.
@@ -408,6 +409,69 @@ pub(crate) enum Command {
         /// Answer path `OUT`, or `-` for stdout.
         #[arg(value_name = "OUT", default_value = "-")]
         output: String,
+    },
+    /// Decide whether an OWL-Direct ontology has a model.
+    ///
+    /// The one DL service `reason`/`entails` cannot reach: both require a closure or a
+    /// conclusion to exist, and an INCONSISTENT ontology has neither — it entails every
+    /// triple, so `reason --regime owl-direct` refuses it and `entails` has no closure to
+    /// decide a conclusion against. `consistency` asks the question directly, through
+    /// [`purrdf_validate::regime::consistency_to_string`], the same string boundary the
+    /// Python, WebAssembly and C-ABI hosts already reach.
+    ///
+    /// Prints two things to stdout, always: the one-line verdict (`consistency true |
+    /// false | unknown`), then the full DL certificate — completeness, the reverse
+    /// mapping's boundary list, and the search-cost counters (`steps`, `budget`, `work`,
+    /// `work-budget`, `decisions`, `peak-nodes`, `disjunctions`, `peak-depth`). Unlike `--report` on the
+    /// four materializing subcommands, the certificate here is not optional and not
+    /// redirectable: this command answers exactly one question, and the certificate is
+    /// the ONLY evidence of how completely the tableau answered it — hiding it behind a
+    /// flag would restore the "the reasoner says no" ambiguity the certificate exists to
+    /// remove, for the one caller — running this command by hand and reading the search's
+    /// own completeness off it — who most needs it in hand by default.
+    ///
+    /// Exit codes: **0** for `true` OR `false` — both are DECIDED verdicts, and a decided
+    /// `false` is not a failure of this command any more than a `false` ASK answer is a
+    /// failure of `query`. **3** for `unknown`, exactly like a `query` a governor cut
+    /// short: the certificate's `completeness budget-exhausted` line says a hypertableau
+    /// run reached its round cap OR its work cap before saturating, so the run stopped
+    /// incomplete rather than failed, and the exit code carries that distinction to a
+    /// shell the same way it does for a tripped query. Which cap it was is read off the
+    /// certificate: an exhausted run has `steps` at `budget` or `work` at `work-budget`.
+    Consistency {
+        /// Narrow the per-decision round cap the ontology's own size already derives;
+        /// `0` (the default) applies no narrowing and runs under the derived cap alone.
+        /// This can only TIGHTEN the cap, never loosen it — mirrors the `step_cap`
+        /// parameter [`purrdf_validate::regime::consistency_to_string`] takes, so a
+        /// caller narrowing here narrows the exact same knob the Python/WASM/C-ABI hosts
+        /// do. A run this narrows into its cap answers `unknown` (exit 3) rather than
+        /// `false`, never the reverse.
+        #[arg(long, value_name = "N", default_value_t = 0)]
+        step_cap: u32,
+        /// Narrow the per-decision WORK cap the ontology's own size already derives; `0`
+        /// (the default) applies no narrowing and runs under the derived cap alone. Like
+        /// `--step-cap` this can only TIGHTEN, and it mirrors the `work_cap` parameter
+        /// [`purrdf_validate::regime::consistency_to_string`] takes.
+        ///
+        /// It bounds what `--step-cap` structurally cannot. A round is a PASS over the
+        /// completion graph rather than a unit of cost, so an ontology can make every
+        /// round enormously more expensive without making the search take more rounds —
+        /// one individual co-typed with several equivalence-defined classes does exactly
+        /// that, and used to grind while the certificate reported a few percent of the
+        /// round budget. This cap counts the matcher, scan, closure and clone work
+        /// itself, and a run that reaches it answers `unknown` (exit 3) with `work` equal
+        /// to `work-budget` in its certificate.
+        #[arg(long, value_name = "N", default_value_t = 0)]
+        work_cap: u32,
+        /// Input format override; inferred from the input extension when omitted.
+        #[arg(long, value_enum)]
+        from: Option<CliRdfFormat>,
+        /// Base IRI for resolving relative IRIs while parsing the input.
+        #[arg(long, value_name = "IRI")]
+        base: Option<String>,
+        /// Input path `IN`, or `-` for stdin (which requires `--from`).
+        #[arg(value_name = "IN", default_value = "-")]
+        input: String,
     },
     /// Project RDF into a deterministic graph, tabular, or research-object USTAR carrier.
     Project {

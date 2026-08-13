@@ -44,7 +44,7 @@ use purrdf_sparql_eval::{
 ///
 /// let data = "<http://example.org/tom> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .\n";
-/// let mut session = ReasonerSession::open(data, 0).expect("parses");
+/// let mut session = ReasonerSession::open(data, 0, 0).expect("parses");
 /// assert_eq!(session.consistency().expect("decides").answer(), "consistency true\n");
 /// let hierarchy = session.classify().expect("decides"); // no second parse
 /// assert!(hierarchy.certificate().starts_with("purrdf-dl-certificate 1\n"));

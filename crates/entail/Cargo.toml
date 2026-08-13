@@ -77,3 +77,20 @@ harness = false
 # in the signature rather than in the axiom count. Report-only.
 name = "classify"
 harness = false
+
+[[bench]]
+# OWL-Direct consistency latency over the equivalence shape whose search cost was the
+# defect, beside its sub-class control, at three ontology sizes — a regression watch on the
+# clausification and the ⊔-rule's selection. Report-only; the exact costs are pinned as
+# COUNTS in `purrdf-validate`'s step ledger and in the differential suite's per-property
+# round ceilings, not as timings.
+name = "consistency"
+harness = false
+
+[[bench]]
+# OWL-Direct consistency latency over a schema-heavy ontology — many disjoint
+# `rdfs:domain`/`rdfs:range` pairs over a FIXED small ABox — sweeping the axiom-count axis the
+# equivalence shape above does not touch. Report-only; the same shape at a hand-verifiable size
+# is pinned as WORK in `purrdf-validate`'s step ledger.
+name = "schema_scan"
+harness = false

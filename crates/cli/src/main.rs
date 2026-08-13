@@ -3,7 +3,7 @@
 
 //! The `purrdf` command-line interface.
 //!
-//! A single `Source → [transform] → Sink` pipeline exposed as seven subcommands:
+//! A single `Source → [transform] → Sink` pipeline exposed as eight subcommands:
 //!
 //! * `convert` — transcode RDF between the native syntaxes and the pack container;
 //! * `query` — evaluate a SPARQL query over an RDF or pack source;
@@ -11,6 +11,7 @@
 //! * `reason` — materialize an entailment regime's closure over a source graph;
 //! * `entails` — decide whether a premise entails a conclusion, or answer a basic
 //!   graph pattern's certain answers, under an entailment regime;
+//! * `consistency` — decide whether an OWL-Direct ontology has a model at all;
 //! * `project` — materialize a deterministic graph/tabular carrier archive;
 //! * `lift` — reconstruct RDF from a strict bidirectional carrier.
 //!
@@ -18,7 +19,10 @@
 //! other: `reason` computes a CLOSURE, which is what a caller wants who will go on
 //! asking many questions of one premise, and `entails` decides ONE question, which
 //! is not the membership test in that closure it looks like — see
-//! [`entails`] for why.
+//! [`entails`] for why. `consistency` is the question neither of those two can
+//! answer: an inconsistent ontology has no closure for `reason` to materialize and
+//! no closure for `entails` to decide a conclusion against, so it is its own
+//! subcommand rather than a mode of either — see [`consistency`].
 //!
 //! plus the global `--loss-ledger` flag, which surfaces the machine-readable
 //! loss ledger for a conversion, projection, or lift, and the `--report` flag the
@@ -32,9 +36,13 @@
 //! message is printed to stderr and its category becomes the process exit code.
 //! A `query` or `update` whose caller-set governor tripped is not a failure and exits
 //! **3**. A query carries its certified answers on stdout; an update emits no dataset
-//! because the mutation was not applied — see [`error::CliOutcome`].
+//! because the mutation was not applied — see [`error::CliOutcome`]. `consistency`
+//! reuses the same **3**, for the same reason, when its answer is `unknown`: the
+//! hypertableau reached its round cap rather than saturating, and `true`/`false` both
+//! exit **0** as decided verdicts.
 
 mod cli;
+mod consistency;
 mod convert;
 mod entails;
 mod error;
@@ -248,6 +256,23 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             &ReportTarget::decode(report.as_ref()),
         )
         .map(|()| CliOutcome::Complete),
+        Command::Consistency {
+            step_cap,
+            work_cap,
+            from,
+            base,
+            input,
+        } => consistency::run(
+            &consistency::ConsistencyOptions {
+                input,
+                from: *from,
+                base: base.as_deref(),
+                step_cap: *step_cap,
+                work_cap: *work_cap,
+            },
+            &ledger_target,
+            jsonld_options.as_ref(),
+        ),
         Command::Project {
             profile,
             config,

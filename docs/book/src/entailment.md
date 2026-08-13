@@ -309,8 +309,8 @@ Two corpora measure two different things, and the distinction matters:
   literal, which is exactly the half an entailment grade needs. They are
   vendored and graded by the next bullet. Second, the corpus is a **subset**:
   261 of the 482 consistency-shaped cases upstream. Of the 221 it leaves out,
-  **156 the tableau decided when the exclusion was measured** (93 consistent, 63
-  inconsistent), 30 did not terminate under a 40 s ceiling, 12 were withheld (7
+  **173 the tableau decided when the exclusion was measured** (109 consistent, 64
+  inconsistent), 0 did not terminate under a 40 s ceiling, 25 were withheld (20
   reasoner, 5 parse), and 23 carry no RDF/XML premise — so the exclusion was
   payload triage, not a capability limit, and "257 of 261" is a number over a
   corpus rather than over what W3C published.

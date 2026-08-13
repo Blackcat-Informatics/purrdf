@@ -318,6 +318,68 @@ def test_an_exhausted_budget_is_unknown_and_never_false() -> None:
     assert "\ncompleteness decided\n" in certificate
 
 
+def test_a_narrowed_work_cap_is_the_second_budget_and_reports_itself() -> None:
+    """The other cap, on the other quantity, through the same honest channel.
+
+    A derivation round is a PASS over the completion graph rather than a unit of
+    cost, so an ontology can make every round enormously more expensive without
+    making the search take more rounds — and a rounds-only budget watches that
+    class grind while reporting a few percent of a ceiling it never reaches. The
+    `work_cap` parameter bounds the matcher, scan, closure and clone work done
+    INSIDE a round, narrows only, and takes 0 to mean the knowledge base's own
+    cap exactly as `step_cap` does.
+
+    What is checked here is the plumbing this binding is responsible for: the
+    parameter arrives, it is keyword-addressable, and the two lines it produces
+    reach the caller. Which cap ended a run is read off `work` and `work-budget`
+    being equal.
+    """
+    answer, certificate = entail.consistency(TAXONOMY, 0, 1)
+    assert answer == "consistency unknown\n"
+    assert "\ncompleteness budget-exhausted\n" in certificate
+    assert "\nwork 1\n" in certificate
+    assert "\nwork-budget 1\n" in certificate
+    # By keyword, and on every service that takes it.
+    assert entail.classify(TAXONOMY, work_cap=1)[1].count("\nwork-budget 1\n") == 1
+    assert entail.realize(TAXONOMY, work_cap=1)[1].count("\nwork-budget 1\n") == 1
+    assert (
+        entail.instances(TAXONOMY, "<https://example.org/Cat>", work_cap=1)[1].count(
+            "\nwork-budget 1\n"
+        )
+        == 1
+    )
+    assert entail.entails(TAXONOMY, CHAIN_AXIOM, work_cap=1)[1].count(
+        "\nwork-budget 1\n"
+    ) == 1
+    # …and the session takes it too, for every question asked through it.
+    session = entail.Reasoner(TAXONOMY, work_cap=1)
+    session_answer, session_certificate = session.consistency()
+    assert session_answer == "consistency unknown\n"
+    assert "\nwork-budget 1\n" in session_certificate
+    # 0 means the knowledge base's own cap, not a cap of zero work.
+    answer, certificate = entail.consistency(TAXONOMY, 0, 0)
+    assert answer == "consistency true\n"
+    assert "\ncompleteness decided\n" in certificate
+
+
+def test_the_certificate_reports_both_budgets_it_ran_under() -> None:
+    """Four budget lines, because there are two budgets and each has a figure.
+
+    `steps`/`budget` are rounds and `work`/`work-budget` are the counted cost
+    inside them. A caller that sees only the first pair cannot tell a search with
+    room to spare from one that is about to be stopped by the other cap.
+    """
+    _answer, certificate = entail.consistency(TAXONOMY)
+    lines = certificate.splitlines()
+    fields = {line.split(" ", 1)[0] for line in lines}
+    assert {"steps", "budget", "work", "work-budget"} <= fields
+    work = int(next(line for line in lines if line.startswith("work ")).split(" ")[1])
+    work_budget = int(
+        next(line for line in lines if line.startswith("work-budget ")).split(" ")[1]
+    )
+    assert 0 < work * 10 < work_budget, certificate
+
+
 def test_an_unsatisfiable_ontology_is_refused_rather_than_answered_vacuously() -> None:
     """Every class subsumes every other with no model, so no answer is given."""
     for call in (

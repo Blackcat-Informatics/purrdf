@@ -101,7 +101,7 @@ The flattened source holds five W3C OWL 2 buckets. Exactly one is vendored here:
 |-----------------|------:|-----------|-----|
 | `w3c-owl2-full` | 261 | **yes** | The mainline bucket of `all.rdf`, taken whole. 226 consistency + 35 inconsistency cases, 202 KB, graded end-to-end in ~180 ms in a debug build. |
 | `w3c-owl2-el` | 19 | no | All 19 case names are, name-for-name, a subset of `w3c-owl2-full`. Vendoring them would duplicate payload for zero additional coverage. |
-| `w3c-owl2-full-decided` | 32 | no | Held to contain premises on which PurRDF's SHOIQ(D) tableau does not terminate inside any budget a required gate can carry. That is now **measured** rather than inherited — see *The exclusions, measured* below — and the measurement finds **30** non-terminating cases at a 40 s ceiling, `webont-i5-8-001` among them. A conformance row that cannot finish is not a conformance row, but the count is budget-dependent and is recorded with its budget. |
+| `w3c-owl2-full-decided` | 32 | no | Named for premises on which PurRDF's SHOIQ(D) tableau once did not terminate inside any budget a required gate could carry. That is **measured** rather than inherited — see *The exclusions, measured* below — and the current measurement finds **0** non-terminating cases at a 40 s ceiling: `webont-i5-8-001`, the case an earlier revision of this bucket was named for, now decides. The bucket is still excluded on size grounds, not on the termination grounds that motivated it originally. |
 | `w3c-owl2-full-divergence` | 122 | no | 3.9 MB — roughly twenty times the vendored payload — dominated by `webont-description-logic-*` premises of 100–220 KB each. Left out under the size discipline that governs this tree. |
 | `w3c-owl2-el-divergence` | 2 | no | Two cases from the same triage bucket as `w3c-owl2-full-divergence`, excluded with it. |
 
@@ -120,18 +120,25 @@ cannot enter or leave the exclusion set unnoticed:
 
 | Disposition | Cases |
 |-------------|------:|
-| the tableau **cannot decide** it (no answer within a 40 s per-case ceiling) | **30** |
-| the tableau decides it today (would grade if vendored) | 156 |
-| the run withholds with an honest error (step cap, unread construct, codec refusal) | 12 |
+| the tableau **cannot decide** it (no answer within a 40 s per-case ceiling) | **0** |
+| the tableau decides it today (would grade if vendored) | 173 |
+| the run withholds with an honest error (step cap, unread construct, codec refusal) | 25 |
 | no `otest:rdfXmlPremiseOntology` at all (functional syntax only) | 23 |
 | **total excluded** | **221** |
 
-Measured 2026-07-29, debug build, one process per case, four concurrent, 40 s
-wall-clock ceiling each. The headline is the second row: **156 of the 221
-exclusions are cases the reasoner decides**, so the exclusion is a payload-size
-and triage decision and not a capability limit, and the 261 denominator
-understates neither the reasoner nor overstates it by accident — it simply is not
-the W3C denominator, and the harness now says so out loud.
+Measured 2026-08-10, release build, one process per case, four concurrent, 40 s
+wall-clock ceiling each — re-measured from the 2026-07-29 debug-build figures
+(30 / 156 / 12 / 23) after clausification and search-refinement work changed
+what the tableau does with every one of these premises. The headline is the
+second row: **173 of the 221 exclusions are cases the reasoner decides** (up
+from 156), and the non-terminating row is now empty — every case that used to
+exhaust its wall-clock budget resolves one way or the other today. The
+exclusion remains a payload-size and triage decision and not a capability
+limit, and the 261 denominator understates neither the reasoner nor overstates
+it by accident — it simply is not the W3C denominator, and the harness now
+says so out loud. See `../w3c-owl2-rl/PROVENANCE.md`'s census section for the
+two decided cases whose verdict direction moved between the two
+measurements.
 
 ### Correction: there ARE upstream entailment tests
 

@@ -321,7 +321,7 @@ const CHAIN_AXIOM =
   "<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .\n";
 
 test("entailConsistency decides consistency ON WASM, with its certificate", () => {
-  const decided = entailConsistency(TAXONOMY, 0);
+  const decided = entailConsistency(TAXONOMY, 0, 0);
   assert.equal(decided.answer, "consistency true\n");
   // Never optional. `completeness decided` is reported only because the boundary
   // list beside it is, in fact, empty — the DL certificate's own honesty gate.
@@ -332,7 +332,7 @@ test("entailConsistency decides consistency ON WASM, with its certificate", () =
 });
 
 test("entailClassify reaches the full subsumption hierarchy ON WASM", () => {
-  const classified = entailClassify(TAXONOMY, 0);
+  const classified = entailClassify(TAXONOMY, 0, 0);
   // Direct: only the asserted edges. Transitive: also the chain A -> C.
   assert.ok(
     classified.answer.includes(
@@ -356,7 +356,7 @@ test("entailClassify reaches the full subsumption hierarchy ON WASM", () => {
 });
 
 test("entailRealize reaches the individuals' entailed types ON WASM", () => {
-  const realized = entailRealize(TAXONOMY, 0);
+  const realized = entailRealize(TAXONOMY, 0, 0);
   assert.ok(
     realized.answer.includes(
       "type <http://example.org/x> <http://example.org/C>\n",
@@ -373,7 +373,7 @@ test("entailRealize reaches the individuals' entailed types ON WASM", () => {
 });
 
 test("entailInstances retrieves instances for a class the schema never asserts them of ON WASM", () => {
-  const instances = entailInstances(TAXONOMY, "<http://example.org/C>", 0);
+  const instances = entailInstances(TAXONOMY, "<http://example.org/C>", 0, 0);
   assert.ok(
     instances.answer.includes("instance <http://example.org/x>\n"),
     instances.answer,
@@ -382,7 +382,7 @@ test("entailInstances retrieves instances for a class the schema never asserts t
 });
 
 test("entailEntails decides an axiom entailed nowhere by assertion ON WASM", () => {
-  const decided = entailEntails(TAXONOMY, CHAIN_AXIOM, 0);
+  const decided = entailEntails(TAXONOMY, CHAIN_AXIOM, 0, 0);
   assert.ok(decided.answer.startsWith("entails true\n"), decided.answer);
   assert.ok(decided.answer.includes("\naxiom SubClassOf\n"));
   assert.ok(decided.answer.includes("\nterm <http://example.org/A>\n"));
@@ -391,9 +391,17 @@ test("entailEntails decides an axiom entailed nowhere by assertion ON WASM", () 
 });
 
 test("entailEntails answers unknown (never false) on an exhausted budget ON WASM", () => {
-  const starved = entailEntails(TAXONOMY, CHAIN_AXIOM, 1);
+  const starved = entailEntails(TAXONOMY, CHAIN_AXIOM, 1, 0);
   assert.equal(starved.answer.split("\n")[0], "entails unknown");
   assert.ok(starved.certificate.includes("\ncompleteness budget-exhausted\n"));
+
+  // The SECOND budget, narrowed on its own. A round is a pass rather than a unit of
+  // cost, so this cap bounds the work done INSIDE a round — the quantity a rounds cap
+  // structurally cannot see — and it reaches the same three-valued answer here.
+  const overworked = entailEntails(TAXONOMY, CHAIN_AXIOM, 0, 1);
+  assert.equal(overworked.answer.split("\n")[0], "entails unknown");
+  assert.ok(overworked.certificate.includes("\ncompleteness budget-exhausted\n"));
+  assert.ok(overworked.certificate.includes("\nwork-budget 1\n"), overworked.certificate);
 });
 
 test("entailProfile certifies the most restrictive profile first ON WASM", () => {

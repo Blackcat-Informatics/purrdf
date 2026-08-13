@@ -298,16 +298,26 @@ impl From<BoundaryAnswer> for ReasoningAnswer {
 
 /// Decide whether `document`'s ontology has a model at all. See
 /// [`entail_consistency`].
-pub(crate) fn consistency_impl(document: &str, step_cap: u32) -> Result<ReasoningAnswer, String> {
-    consistency_to_string(document, step_cap).map(ReasoningAnswer::from)
+pub(crate) fn consistency_impl(
+    document: &str,
+    step_cap: u32,
+    work_cap: u32,
+) -> Result<ReasoningAnswer, String> {
+    consistency_to_string(document, step_cap, work_cap).map(ReasoningAnswer::from)
 }
 
-/// `entailConsistency(document, stepCap)` → is the knowledge base consistent?
+/// `entailConsistency(document, stepCap, workCap)` → is the knowledge base consistent?
 ///
 /// `stepCap` narrows the per-decision tableau step cap; **0 means the knowledge
 /// base's own cap**, not a cap of zero steps. It can only NARROW, so it cannot be
 /// used to make a hard instance answerable — only to make the `budget-exhausted`
 /// certificate reachable from a test.
+///
+/// `workCap` narrows the per-decision WORK cap on the same `0`-means-the-knowledge-base's-own-cap
+/// rule and narrows only, and it bounds what `stepCap` cannot: a round is a PASS over the
+/// completion graph rather than a unit of cost, so an ontology can make each round enormously
+/// more expensive without taking more rounds. A run that reaches it answers `unknown` with
+/// `work` equal to `work-budget` in its certificate.
 ///
 /// The one DL service that answers for an unsatisfiable ontology, because it is the
 /// one that detects one; every other throws rather than returning the vacuous
@@ -315,16 +325,24 @@ pub(crate) fn consistency_impl(document: &str, step_cap: u32) -> Result<Reasonin
 ///
 /// Throws if `document` fails to parse or the reverse mapping fails.
 #[wasm_bindgen(js_name = entailConsistency)]
-pub fn entail_consistency(document: &str, step_cap: u32) -> Result<ReasoningAnswer, JsError> {
-    consistency_impl(document, step_cap).map_err(|e| JsError::new(&e))
+pub fn entail_consistency(
+    document: &str,
+    step_cap: u32,
+    work_cap: u32,
+) -> Result<ReasoningAnswer, JsError> {
+    consistency_impl(document, step_cap, work_cap).map_err(|e| JsError::new(&e))
 }
 
 /// The subsumption hierarchy over the named classes. See [`entail_classify`].
-pub(crate) fn classify_impl(document: &str, step_cap: u32) -> Result<ReasoningAnswer, String> {
-    classify_to_string(document, step_cap).map(ReasoningAnswer::from)
+pub(crate) fn classify_impl(
+    document: &str,
+    step_cap: u32,
+    work_cap: u32,
+) -> Result<ReasoningAnswer, String> {
+    classify_to_string(document, step_cap, work_cap).map(ReasoningAnswer::from)
 }
 
-/// `entailClassify(document, stepCap)` → the entailed subsumption hierarchy over
+/// `entailClassify(document, stepCap, workCap)` → the entailed subsumption hierarchy over
 /// the ontology's named classes.
 ///
 /// The answer carries `equivalent`, `subclass` (the full transitively-closed
@@ -337,22 +355,34 @@ pub(crate) fn classify_impl(document: &str, step_cap: u32) -> Result<ReasoningAn
 /// Throws on a malformed document, or on an ontology with no model — every class
 /// then subsumes every other and the hierarchy would be a complete graph.
 #[wasm_bindgen(js_name = entailClassify)]
-pub fn entail_classify(document: &str, step_cap: u32) -> Result<ReasoningAnswer, JsError> {
-    classify_impl(document, step_cap).map_err(|e| JsError::new(&e))
+pub fn entail_classify(
+    document: &str,
+    step_cap: u32,
+    work_cap: u32,
+) -> Result<ReasoningAnswer, JsError> {
+    classify_impl(document, step_cap, work_cap).map_err(|e| JsError::new(&e))
 }
 
 /// The entailed types of the named individuals. See [`entail_realize`].
-pub(crate) fn realize_impl(document: &str, step_cap: u32) -> Result<ReasoningAnswer, String> {
-    realize_to_string(document, step_cap).map(ReasoningAnswer::from)
+pub(crate) fn realize_impl(
+    document: &str,
+    step_cap: u32,
+    work_cap: u32,
+) -> Result<ReasoningAnswer, String> {
+    realize_to_string(document, step_cap, work_cap).map(ReasoningAnswer::from)
 }
 
-/// `entailRealize(document, stepCap)` → the entailed types of the ontology's named
+/// `entailRealize(document, stepCap, workCap)` → the entailed types of the ontology's named
 /// individuals, and the most specific of them (`type` then `direct-type` lines).
 ///
 /// Throws on a malformed document or an ontology with no model.
 #[wasm_bindgen(js_name = entailRealize)]
-pub fn entail_realize(document: &str, step_cap: u32) -> Result<ReasoningAnswer, JsError> {
-    realize_impl(document, step_cap).map_err(|e| JsError::new(&e))
+pub fn entail_realize(
+    document: &str,
+    step_cap: u32,
+    work_cap: u32,
+) -> Result<ReasoningAnswer, JsError> {
+    realize_impl(document, step_cap, work_cap).map_err(|e| JsError::new(&e))
 }
 
 /// Instance retrieval for one named class. See [`entail_instances`].
@@ -360,11 +390,12 @@ pub(crate) fn instances_impl(
     document: &str,
     class: &str,
     step_cap: u32,
+    work_cap: u32,
 ) -> Result<ReasoningAnswer, String> {
-    instances_to_string(document, class, step_cap).map(ReasoningAnswer::from)
+    instances_to_string(document, class, step_cap, work_cap).map(ReasoningAnswer::from)
 }
 
-/// `entailInstances(document, class, stepCap)` → the named individuals entailed to
+/// `entailInstances(document, class, stepCap, workCap)` → the named individuals entailed to
 /// be instances of `class`, as `instance <term>` lines.
 ///
 /// `class` is ONE N-Triples term — `"<http://example.org/Cat>"`, angle brackets
@@ -378,8 +409,9 @@ pub fn entail_instances(
     document: &str,
     class: &str,
     step_cap: u32,
+    work_cap: u32,
 ) -> Result<ReasoningAnswer, JsError> {
-    instances_impl(document, class, step_cap).map_err(|e| JsError::new(&e))
+    instances_impl(document, class, step_cap, work_cap).map_err(|e| JsError::new(&e))
 }
 
 /// Axiom entailment by refutation. See [`entail_entails`].
@@ -387,11 +419,12 @@ pub(crate) fn entails_impl(
     document: &str,
     axiom: &str,
     step_cap: u32,
+    work_cap: u32,
 ) -> Result<ReasoningAnswer, String> {
-    entails_to_string(document, axiom, step_cap).map(ReasoningAnswer::from)
+    entails_to_string(document, axiom, step_cap, work_cap).map(ReasoningAnswer::from)
 }
 
-/// `entailEntails(document, axiom, stepCap)` → does the ontology entail `axiom`?
+/// `entailEntails(document, axiom, stepCap, workCap)` → does the ontology entail `axiom`?
 ///
 /// `axiom` is ONE triple of the OWL 2 RDF mapping, in N-Triples syntax. Seven
 /// reserved predicates select the seven named axiom kinds — `rdfs:subClassOf`,
@@ -402,8 +435,8 @@ pub(crate) fn entails_impl(
 ///
 /// The answer is `entails true|false|unknown` followed by the axiom as it was READ,
 /// so a caller can see which axiom its predicate selected. `unknown` is never
-/// collapsed to `false`: it means the search reached its step cap, which the
-/// certificate says in its own words.
+/// collapsed to `false`: it means the search reached its step cap or its work cap, which
+/// the certificate says in its own words.
 ///
 /// Throws on a malformed document, an `axiom` that is not one triple, or an
 /// ontology with no model.
@@ -412,8 +445,9 @@ pub fn entail_entails(
     document: &str,
     axiom: &str,
     step_cap: u32,
+    work_cap: u32,
 ) -> Result<ReasoningAnswer, JsError> {
-    entails_impl(document, axiom, step_cap).map_err(|e| JsError::new(&e))
+    entails_impl(document, axiom, step_cap, work_cap).map_err(|e| JsError::new(&e))
 }
 
 /// OWL 2 profile certification. See [`entail_profile`].
@@ -774,7 +808,9 @@ impl Reasoner {
     ///
     /// `stepCap` narrows the per-decision tableau step cap for every question asked
     /// through this session; **0 means the knowledge base's own cap**, not a cap of zero
-    /// steps, and it can only NARROW.
+    /// steps, and it can only NARROW. `workCap` narrows the per-decision WORK cap on the
+    /// same rule — the cap on the matcher, scan, closure and clone work done INSIDE a
+    /// round, which a round cap cannot see.
     ///
     /// Nothing is reverse-mapped here, so an ontology whose knowledge base cannot be
     /// built still constructs — and throws on the first question that needs one. That is
@@ -783,8 +819,8 @@ impl Reasoner {
     ///
     /// Throws if `document` fails to parse.
     #[wasm_bindgen(constructor)]
-    pub fn new(document: &str, step_cap: u32) -> Result<Self, JsError> {
-        ReasonerSession::open(document, step_cap)
+    pub fn new(document: &str, step_cap: u32, work_cap: u32) -> Result<Self, JsError> {
+        ReasonerSession::open(document, step_cap, work_cap)
             .map(|session| Self { session })
             .map_err(|e| JsError::new(&e))
     }
@@ -889,28 +925,28 @@ mod tests {
     /// reason `codec::resolve_media_type` returns a `String` error.
     #[test]
     fn the_session_answers_what_the_one_shot_functions_answer() {
-        let mut session = ReasonerSession::open(SCHEMA, 0).expect("parses");
+        let mut session = ReasonerSession::open(SCHEMA, 0, 0).expect("parses");
         let class = "<http://example.org/B>";
         for (service, from_session, one_shot) in [
             (
                 "consistency",
                 session.consistency().expect("decides"),
-                consistency_impl(SCHEMA, 0).expect("decides"),
+                consistency_impl(SCHEMA, 0, 0).expect("decides"),
             ),
             (
                 "classify",
                 session.classify().expect("decides"),
-                classify_impl(SCHEMA, 0).expect("decides"),
+                classify_impl(SCHEMA, 0, 0).expect("decides"),
             ),
             (
                 "realize",
                 session.realize().expect("decides"),
-                realize_impl(SCHEMA, 0).expect("decides"),
+                realize_impl(SCHEMA, 0, 0).expect("decides"),
             ),
             (
                 "instances",
                 session.instances(class).expect("decides"),
-                instances_impl(SCHEMA, class, 0).expect("decides"),
+                instances_impl(SCHEMA, class, 0, 0).expect("decides"),
             ),
         ] {
             let from_session = ReasoningAnswer::from(from_session);
@@ -1168,14 +1204,14 @@ mod tests {
     #[test]
     fn every_dl_service_reaches_this_host_with_its_certificate() {
         let services = [
-            ("consistency", consistency_impl(TAXONOMY, 0)),
-            ("classify", classify_impl(TAXONOMY, 0)),
-            ("realize", realize_impl(TAXONOMY, 0)),
+            ("consistency", consistency_impl(TAXONOMY, 0, 0)),
+            ("classify", classify_impl(TAXONOMY, 0, 0)),
+            ("realize", realize_impl(TAXONOMY, 0, 0)),
             (
                 "instances",
-                instances_impl(TAXONOMY, "<http://example.org/C>", 0),
+                instances_impl(TAXONOMY, "<http://example.org/C>", 0, 0),
             ),
-            ("entails", entails_impl(TAXONOMY, CHAIN_AXIOM, 0)),
+            ("entails", entails_impl(TAXONOMY, CHAIN_AXIOM, 0, 0)),
             ("profile", profile_impl(TAXONOMY)),
             (
                 "extract-module",
@@ -1240,7 +1276,7 @@ mod tests {
     /// chase's — the distinction the whole certificate exists to make.
     #[test]
     fn the_dl_certificate_is_not_the_chase_report() {
-        let tableau = consistency_impl(TAXONOMY, 0).expect("consistency");
+        let tableau = consistency_impl(TAXONOMY, 0, 0).expect("consistency");
         assert_eq!(tableau.answer(), "consistency true\n");
         assert!(
             tableau
@@ -1256,15 +1292,26 @@ mod tests {
     /// A starved search answers `unknown`, never `false`, and says so.
     #[test]
     fn an_exhausted_budget_crosses_this_host_intact() {
-        let starved = entails_impl(TAXONOMY, CHAIN_AXIOM, 1).expect("decides nothing");
+        let starved = entails_impl(TAXONOMY, CHAIN_AXIOM, 1, 0).expect("decides nothing");
         assert_eq!(starved.answer().lines().next(), Some("entails unknown"));
         assert!(
             starved
                 .certificate()
                 .contains("\ncompleteness budget-exhausted\n")
         );
+        // The SECOND cap, starved on its own: a round is a pass rather than a unit of
+        // cost, so this one bounds the work done inside a round — and it reaches the
+        // same honest three-valued answer through this host.
+        let overworked = entails_impl(TAXONOMY, CHAIN_AXIOM, 0, 1).expect("decides nothing");
+        assert_eq!(overworked.answer().lines().next(), Some("entails unknown"));
         assert!(
-            entails_impl(TAXONOMY, CHAIN_AXIOM, 0)
+            overworked
+                .certificate()
+                .contains("\ncompleteness budget-exhausted\n")
+        );
+        assert!(overworked.certificate().contains("\nwork-budget 1\n"));
+        assert!(
+            entails_impl(TAXONOMY, CHAIN_AXIOM, 0, 0)
                 .expect("decides")
                 .answer()
                 .starts_with("entails true\n")
@@ -1274,8 +1321,8 @@ mod tests {
     /// Refusals cross this host as messages a JS caller can act on.
     #[test]
     fn dl_refusals_name_what_went_wrong() {
-        assert!(consistency_impl("this is not n-quads\n", 0).is_err());
-        assert!(instances_impl(TAXONOMY, "not a term", 0).is_err());
+        assert!(consistency_impl("this is not n-quads\n", 0, 0).is_err());
+        assert!(instances_impl(TAXONOMY, "not a term", 0, 0).is_err());
         let error = extract_module_impl(TAXONOMY, "", "nested").expect_err("unknown method");
         assert!(error.contains("bot, top, star"), "{error}");
         // The existential refusal is per CONCLUSION, not per regime: `rdfs`

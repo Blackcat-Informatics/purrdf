@@ -877,7 +877,7 @@ mod tests {
     fn axiom_count(kb: &Kb) -> usize {
         kb.tbox.len()
             + kb.meta.len()
-            + kb.unfold.len()
+            + kb.absorbed.len()
             + kb.inverses.len()
             + kb.role_sub.len()
             + kb.abox_types.len()

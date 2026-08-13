@@ -1098,35 +1098,64 @@ class entail:
     # the knowledge base's own cap, NOT a cap of zero steps. It can only narrow,
     # so it cannot make a hard instance answerable — only make the
     # `budget-exhausted` certificate reachable.
+    #
+    # `work_cap` narrows the per-decision WORK cap on the same rules. It bounds
+    # what `step_cap` structurally cannot: a round is a PASS over the completion
+    # graph rather than a unit of cost, so an ontology can make each round
+    # enormously more expensive without making the search take more rounds. A run
+    # that reaches it answers `unknown` with `work` equal to `work-budget` in its
+    # certificate.
+    #
+    # The certificate's search-cost counters, one line each:
+    #   * `steps` — rounds spent, against the per-decision round cap.
+    #   * `budget` — the round cap the decision ran under (the knowledge base's own
+    #     derived cap, or `step_cap` if that narrowed it).
+    #   * `work` — matcher, scan, closure and clone work spent, against the work cap.
+    #   * `work-budget` — the work cap the decision ran under (derived, or
+    #     `work_cap` if that narrowed it).
+    #   * `decisions` — how many sub-decisions the run made.
+    #   * `peak-nodes` — the largest completion graph a decision built.
+    #   * `disjunctions` — how many times the tableau's case-split rule fired.
+    #   * `peak-depth` — how deep that rule's branch stack got.
 
     # Does the knowledge base have a model at all? The answer is one line,
     # `consistency true|false|unknown`. The only DL service that answers for an
     # unsatisfiable ontology, because it is the one that detects one.
     @staticmethod
-    def consistency(data: str, step_cap: int = ...) -> tuple[str, str]: ...
+    def consistency(
+        data: str, step_cap: int = ..., work_cap: int = ...
+    ) -> tuple[str, str]: ...
     # The entailed subsumption hierarchy over the named classes: `equivalent`,
     # `subclass` (the full transitive closure), `direct` (its reduction) and
     # `unsatisfiable` lines, in that block order. Raises ValueError for an
     # ontology with no model, where every class subsumes every other.
     @staticmethod
-    def classify(data: str, step_cap: int = ...) -> tuple[str, str]: ...
+    def classify(
+        data: str, step_cap: int = ..., work_cap: int = ...
+    ) -> tuple[str, str]: ...
     # The entailed types of the named individuals (`type` lines) and the most
     # specific of them (`direct-type` lines).
     @staticmethod
-    def realize(data: str, step_cap: int = ...) -> tuple[str, str]: ...
+    def realize(
+        data: str, step_cap: int = ..., work_cap: int = ...
+    ) -> tuple[str, str]: ...
     # The named individuals entailed to be instances of `class_`, as
     # `instance <term>` lines. `class_` is ONE N-Triples term, angle brackets
     # included. A class the ontology never mentions yields an empty answer, which
     # is a real answer rather than an error.
     @staticmethod
-    def instances(data: str, class_: str, step_cap: int = ...) -> tuple[str, str]: ...
+    def instances(
+        data: str, class_: str, step_cap: int = ..., work_cap: int = ...
+    ) -> tuple[str, str]: ...
     # Does the ontology entail `axiom`? `axiom` is ONE triple of the OWL 2 RDF
     # mapping: rdfs:subClassOf, owl:equivalentClass, owl:disjointWith, rdf:type,
     # owl:sameAs, owl:differentFrom and rdfs:subPropertyOf select the seven named
     # axiom kinds, and any other predicate is an object-property assertion. The
     # answer is `entails true|false|unknown` followed by the axiom AS READ.
     @staticmethod
-    def entails(data: str, axiom: str, step_cap: int = ...) -> tuple[str, str]: ...
+    def entails(
+        data: str, axiom: str, step_cap: int = ..., work_cap: int = ...
+    ) -> tuple[str, str]: ...
     # Which OWL 2 profiles the ontology is provably in (`certified <profile>`
     # lines, most restrictive first: EL, QL, RL, DL, Full) and what blocked the
     # others. Purely syntactic, so the certificate is an OWL profile certificate
@@ -1241,8 +1270,16 @@ class entail:
     # `extract_module`, `justify` and `explain_conclusion` never reason, and
     # `profile` answers for any parseable document — including one whose
     # `owl:hasKey` axioms would exhaust the tableau while it was reverse-mapped.
+    #
+    # `step_cap` and `work_cap` are the same tighten-only round/work narrowings
+    # the module-level functions above take, fixed once at construction and then
+    # applied to EVERY decision the session goes on to make — not re-askable per
+    # call — so every question asked through one `Reasoner` runs under the same
+    # pair of caps.
     class Reasoner:
-        def __init__(self, data: str, step_cap: int = ...) -> None: ...
+        def __init__(
+            self, data: str, step_cap: int = ..., work_cap: int = ...
+        ) -> None: ...
         def consistency(self) -> tuple[str, str]: ...
         def classify(self) -> tuple[str, str]: ...
         def realize(self) -> tuple[str, str]: ...

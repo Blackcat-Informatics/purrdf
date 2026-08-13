@@ -22,13 +22,13 @@
 //! for that calculus — the same pattern as
 //! [`Subsumptions::decide_by_tableau`](crate::reasoner::classify::Subsumptions::decide_by_tableau).
 //! Two implementations of one contract can be held against each other; one
-//! implementation can only be held against itself. The two read the SAME clause-free
-//! input (the concept table, the internalized TBox [`Kb::meta`], the absorbed
-//! [`Kb::unfold`]) and build the SAME completion graph through [`Graph`], so a verdict
+//! implementation can only be held against itself. The two read the SAME
+//! input (the concept table, the internalized TBox [`Kb::meta`], the absorbed guarded clauses
+//! of [`Kb::absorbed`]) and build the SAME completion graph through [`Graph`], so a verdict
 //! difference between them is a difference of CALCULUS — which is exactly what the
 //! differential test exists to find, and why no divergence may be ledgered.
 //!
-//! Every generated knowledge base of [`crate::owl_dl::oracle`] (5,700 per run) and every
+//! Every generated knowledge base of [`crate::owl_dl::oracle`] (9,800 per run) and every
 //! hand-written knowledge base in this module is decided by both.
 //!
 //! # Shape of the search
@@ -72,10 +72,12 @@
 
 use crate::EntailError;
 use crate::owl_dl::Kb;
+use crate::owl_dl::absorb::GuardedClause;
+use crate::owl_dl::clause::BodyAtom;
 use crate::owl_dl::concept::{Decomp, Role};
 use crate::owl_dl::graph::{
-    Assumptions, Decision, Exhausted, Graph, State, are_distinct, find, max_clique, set_distinct,
-    step_cap,
+    Assumptions, Budget, Decision, Exhausted, Graph, State, are_distinct, find, max_clique,
+    set_distinct,
 };
 
 /// A non-deterministic expansion alternative.
@@ -101,25 +103,43 @@ struct Tableau<'a> {
     /// Whether the caller's stop signal — not the cap — ended the search. Recorded for the
     /// reason [`crate::owl_dl::hyper`]'s driver records it: one private refusal, two facts.
     stopped: bool,
+    /// The largest node vector any state reached — see [`Decision::peak_nodes`].
+    peak_nodes: u64,
+    /// How many times a non-deterministic rule case split — see [`Decision::disjunctions`].
+    disjunctions: u64,
+    /// How deep the recursion currently is, in case splits. Not reported; it is what
+    /// [`Self::peak_depth`] takes its maximum of, and it exists because this search is
+    /// recursive and so has no explicit stack to measure.
+    depth: u64,
+    /// The deepest the recursion ever got, in case splits — see [`Decision::peak_depth`].
+    peak_depth: u64,
 }
 
 /// Decide whether the knowledge base plus `assumptions` has a consistent completion,
-/// spending at most `cap` steps.
-pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, cap: u64) -> Decision {
-    let mut t = Tableau::new(kb, cap);
+/// spending at most `budget`'s steps and work units.
+pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, budget: Budget) -> Decision {
+    let mut t = Tableau::new(kb, budget);
     let st = t.g.init_state(assumptions);
     match t.solve(st) {
         Ok(consistent) => Decision {
             consistent,
             steps: t.steps,
+            work: t.g.work().spent(),
             exhausted: false,
             stopped: false,
+            peak_nodes: t.peak_nodes,
+            disjunctions: t.disjunctions,
+            peak_depth: t.peak_depth,
         },
         Err(Exhausted) => Decision {
             consistent: false,
             steps: t.steps,
+            work: t.g.work().spent(),
             exhausted: !t.stopped,
             stopped: t.stopped,
+            peak_nodes: t.peak_nodes,
+            disjunctions: t.disjunctions,
+            peak_depth: t.peak_depth,
         },
     }
 }
@@ -128,45 +148,71 @@ pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, cap: u64) -> Decisi
 ///
 /// # Errors
 ///
-/// [`EntailError::Build`] if the step cap is exceeded (a termination-bug backstop).
+/// [`EntailError::Build`] if either cap is exceeded (a termination-bug backstop for the round
+/// cap, and the honest ceiling on per-round work for the other).
 pub(crate) fn consistent(kb: &Kb, assumptions: &Assumptions<'_>) -> Result<bool, EntailError> {
-    let decision = decide(kb, assumptions, step_cap(kb));
+    let decision = decide(kb, assumptions, Budget::for_kb(kb));
     if decision.stopped {
         return Err(EntailError::Stopped);
     }
     if decision.exhausted {
         return Err(EntailError::Build(
-            "OWL-Direct tableau exceeded its step cap (possible non-termination)".to_owned(),
+            "OWL-Direct tableau exceeded its search budget (possible non-termination, or an \
+             ontology whose per-round work is beyond the work cap)"
+                .to_owned(),
         ));
     }
     Ok(decision.consistent)
 }
 
 impl<'a> Tableau<'a> {
-    /// Build a driver over `kb` bounded by `cap` steps.
-    fn new(kb: &'a Kb, cap: u64) -> Self {
+    /// Build a driver over `kb` bounded by `budget`.
+    fn new(kb: &'a Kb, budget: Budget) -> Self {
         Self {
-            g: Graph::new(kb),
+            g: Graph::new(kb, budget.work),
             steps: 0,
-            cap,
+            cap: budget.steps,
             stopped: false,
+            peak_nodes: 0,
+            disjunctions: 0,
+            depth: 0,
+            peak_depth: 0,
         }
     }
 
     /// The depth-first, deterministic search: saturate, then branch.
+    ///
+    /// The three shape counters of [`Decision`] are measured at the same points the
+    /// hypertableau measures them — a case split when one is opened, a depth when the
+    /// search descends — so the reference procedure reports the same three quantities and
+    /// the differential can compare COST as well as verdict.
     fn solve(&mut self, mut st: State) -> Result<bool, Exhausted> {
         if !self.saturate(&mut st)? {
             return Ok(false);
         }
         if let Some(branches) = self.find_branch(&st) {
+            self.disjunctions = self.disjunctions.saturating_add(1);
+            self.depth += 1;
+            self.peak_depth = self.peak_depth.max(self.depth);
             for br in branches {
+                // A branch copies the completion graph, and the copy costs its size — the
+                // same charge the hypertableau's own clone takes, so the two calculi count
+                // one quantity.
+                self.g
+                    .work()
+                    .charge((st.nodes.len() + st.edges.len()) as u64 + 1);
                 let mut s2 = st.clone();
                 if self.apply_branch(&mut s2, &br) && self.solve(s2)? {
+                    self.depth -= 1;
                     return Ok(true);
                 }
             }
+            self.depth -= 1;
             return Ok(false);
         }
+        // A scan that found no branch point while out of budget found nothing because it
+        // stopped, so the completion it would report is not one.
+        self.check_work()?;
         Ok(true)
     }
 
@@ -176,14 +222,22 @@ impl<'a> Tableau<'a> {
     fn saturate(&mut self, st: &mut State) -> Result<bool, Exhausted> {
         loop {
             self.tick()?;
+            // The same two observation points the hypertableau uses, for the same reason:
+            // the graph a round inherited, then the graph it minted. Only the first is ever
+            // reached by a state that clashes on sight, and only the second sees a witness.
+            self.observe(st);
             self.detect_clash(st);
             if st.clash {
                 return Ok(false);
             }
             let changed = self.apply_deterministic(st);
+            self.observe(st);
             if st.clique_exhausted.get() {
                 return Err(Exhausted);
             }
+            // The work budget, read for the reason the hypertableau reads it here: a round
+            // whose scans stopped short is neither a fixpoint nor a refutation.
+            self.check_work()?;
             if st.clash {
                 return Ok(false);
             }
@@ -191,6 +245,11 @@ impl<'a> Tableau<'a> {
                 return Ok(true);
             }
         }
+    }
+
+    /// Record how large `st` is against [`Decision::peak_nodes`].
+    fn observe(&mut self, st: &State) {
+        self.peak_nodes = self.peak_nodes.max(st.nodes.len() as u64);
     }
 
     /// Consume one step against the cap.
@@ -202,10 +261,23 @@ impl<'a> Tableau<'a> {
             self.stopped = true;
             return Err(Exhausted);
         }
+        self.check_work()?;
         if self.steps >= self.cap {
             return Err(Exhausted);
         }
         self.steps += 1;
+        Ok(())
+    }
+
+    /// Convert work-budget exhaustion into the search's own exhaustion.
+    ///
+    /// The meter is [`Graph`]'s, so this reference procedure is bounded by the SAME counted
+    /// work the hypertableau is, charged at the same shared graph operations — which is what
+    /// keeps the differential a difference of calculus rather than of budget.
+    fn check_work(&self) -> Result<(), Exhausted> {
+        if self.g.work().exhausted() {
+            return Err(Exhausted);
+        }
         Ok(())
     }
 
@@ -312,7 +384,9 @@ impl<'a> Tableau<'a> {
                     .collect();
                 // Budget exhaustion is recorded on the state; the driver's saturate
                 // loop converts it to `Exhausted`, so a `None` here only withholds.
-                let Some(clique) = max_clique(&with_c, &|a, b| are_distinct(st, a, b)) else {
+                let Some(clique) =
+                    max_clique(&with_c, &|a, b| are_distinct(st, a, b), self.g.work())
+                else {
                     st.clique_exhausted.set(true);
                     continue;
                 };
@@ -332,7 +406,7 @@ impl<'a> Tableau<'a> {
             if find(st, i) != i {
                 continue;
             }
-            changed |= self.rule_unfold(st, i);
+            changed |= self.rule_absorbed(st, i);
             changed |= self.rule_and(st, i);
             changed |= self.rule_all(st, i);
             changed |= self.rule_nominal(st, i);
@@ -348,23 +422,82 @@ impl<'a> Tableau<'a> {
         changed
     }
 
-    /// Absorption (lazy-unfolding) rule: a named class `A ∈ L(x)` adds every `D` with
-    /// an absorbed GCI `A ⊑ D`. This replaces branching a `¬A ⊔ D` disjunction on every
-    /// node with a deterministic add triggered only where `A` actually holds.
-    fn rule_unfold(&self, st: &mut State, x: usize) -> bool {
-        let mut adds: Vec<u32> = Vec::new();
-        for &cid in &st.nodes[x].label {
-            if let Some(sups) = self.g.kb().unfold.get(&cid) {
-                for &s in sups {
-                    if !st.nodes[x].label.contains(&s) {
-                        adds.push(s);
+    /// ABSORPTION rule: every guarded clause of [`Kb::absorbed`] whose body matches with
+    /// variable `0` bound to `x` asserts its consequent on the node its head variable bound.
+    ///
+    /// This is the rule that replaces branching an internalized `¬C ⊔ D` disjunction on every
+    /// node with a deterministic add wherever the antecedent actually holds — for the whole
+    /// faithful-antecedent fragment, not merely for a single named class. It is the reference
+    /// calculus's OWN reading of the shared table: the guard matcher below is written here
+    /// rather than borrowed from [`crate::owl_dl::hyper`], so the two calculi agree about the
+    /// terminology's ENCODING and still share no code that could make them agree about a
+    /// derivation neither should have made.
+    ///
+    /// The scope is the OBJECT domain, for the reason `Hyper::round` states: a general concept
+    /// inclusion quantifies over `owl:Thing`, so a literal's node is not a node it constrains.
+    fn rule_absorbed(&self, st: &mut State, x: usize) -> bool {
+        if st.nodes[x].concrete {
+            return false;
+        }
+        let mut heads: Vec<(usize, u32)> = Vec::new();
+        for clause in &self.g.kb().absorbed {
+            self.match_guard(st, clause, 0, &mut vec![x], &mut heads);
+        }
+        let mut changed = false;
+        for (node, concept) in heads {
+            changed |= self.g.add_concept(st, node, concept);
+        }
+        changed
+    }
+
+    /// Extend `frame` over `clause.body[at..]`, recording the head each complete match derives.
+    ///
+    /// The join plan is the body's own order, which [`crate::owl_dl::absorb`] authors so that
+    /// every variable is bound before it is used: a concept or `denotes` atom filters a bound
+    /// variable, and a role atom binds the next one.
+    fn match_guard(
+        &self,
+        st: &State,
+        clause: &GuardedClause,
+        at: usize,
+        frame: &mut Vec<usize>,
+        out: &mut Vec<(usize, u32)>,
+    ) {
+        let Some(&atom) = clause.body.get(at) else {
+            out.push((frame[clause.head_var as usize], clause.head));
+            return;
+        };
+        match atom {
+            BodyAtom::Concept { var, concept } => {
+                if self.g.has_concept(st, frame[var as usize], concept) {
+                    self.match_guard(st, clause, at + 1, frame, out);
+                }
+            }
+            BodyAtom::Denotes { var, individual } => {
+                let node = find(st, frame[var as usize]);
+                if st.nodes[node].nominals.contains(&individual) {
+                    self.match_guard(st, clause, at + 1, frame, out);
+                }
+            }
+            BodyAtom::Role { from, to, role } => {
+                let source = frame[from as usize];
+                if (to as usize) < frame.len() {
+                    let target = find(st, frame[to as usize]);
+                    if self.g.neighbors(st, source, role).contains(&target) {
+                        self.match_guard(st, clause, at + 1, frame, out);
+                    }
+                } else {
+                    for y in self.g.neighbors(st, source, role) {
+                        frame.push(y);
+                        self.match_guard(st, clause, at + 1, frame, out);
+                        frame.pop();
                     }
                 }
             }
+            // A counting atom is the `≤n`-restriction's schematic body atom, which no guard is
+            // ever authored with: absorption emits concept, `denotes` and role atoms only.
+            BodyAtom::Successors { .. } => {}
         }
-        let changed = !adds.is_empty();
-        st.nodes[x].label.extend(adds);
-        changed
     }
 
     /// `⊓`-rule: `C₁ ⊓ … ⊓ Cₙ ∈ L(x)` adds each `Cᵢ`.
@@ -450,7 +583,9 @@ impl<'a> Tableau<'a> {
                 .into_iter()
                 .filter(|&y| self.g.has_concept(st, y, c))
                 .collect();
-            let Some(mut clique) = max_clique(&with_c, &|a, b| are_distinct(st, a, b)) else {
+            let Some(mut clique) =
+                max_clique(&with_c, &|a, b| are_distinct(st, a, b), self.g.work())
+            else {
                 st.clique_exhausted.set(true);
                 continue;
             };
@@ -599,7 +734,18 @@ impl<'a> Tableau<'a> {
                 match *self.g.kb().table.decomp(cid) {
                     Decomp::Or(ref cs) => {
                         if !cs.iter().any(|c| st.nodes[i].label.contains(c)) {
-                            return Some(cs.iter().map(|&c| Branch::AddConcept(i, c)).collect());
+                            // The SAME authored order the hypertableau's clause set carries
+                            // ([`Kb::order_disjuncts`]): the two calculi are meant to differ in
+                            // their rules and not in which alternative they try first, so a
+                            // step-count difference between them stays a difference of rules.
+                            return Some(
+                                self.g
+                                    .kb()
+                                    .order_disjuncts(cs)
+                                    .into_iter()
+                                    .map(|c| Branch::AddConcept(i, c))
+                                    .collect(),
+                            );
                         }
                     }
                     // `o`-rule, non-deterministic form: `{a₁,…,aₙ} ∈ L(x)` with `n > 1`
@@ -618,13 +764,18 @@ impl<'a> Tableau<'a> {
                         let neigh = self.g.neighbors(st, i, role);
                         // `≤`-choose rule: some neighbour lacks both `C` and `¬C`.
                         for &y in &neigh {
+                            let negated = self.g.kb().table.negate(filler);
                             if !self.g.has_concept(st, y, filler)
-                                && !self.g.has_concept(st, y, self.g.kb().table.negate(filler))
+                                && !self.g.has_concept(st, y, negated)
                             {
-                                return Some(vec![
-                                    Branch::AddConcept(y, filler),
-                                    Branch::AddConcept(y, self.g.kb().table.negate(filler)),
-                                ]);
+                                return Some(
+                                    self.g
+                                        .kb()
+                                        .order_disjuncts(&[filler, negated])
+                                        .into_iter()
+                                        .map(|c| Branch::AddConcept(y, c))
+                                        .collect(),
+                                );
                             }
                         }
                         // `≤`-merge rule: too many C-neighbours, some pair mergeable.
@@ -754,6 +905,34 @@ mod tests {
         );
         let kb = b.finish();
         assert!(!consistent_by_both(&kb), "A ⊓ ¬A must be unsatisfiable");
+    }
+
+    /// A COMPOSITE complementary pair closes: `C ⊓ ¬C` for a `C` whose normal form is
+    /// reordered, flattened and deduped on the way into the interner.
+    ///
+    /// The clash is decided by comparing a concept id with the id the negation cache holds,
+    /// so it fires only if canonicalization is an involution — if `¬¬C` landed on a second id
+    /// for the same concept, this knowledge base would be reported CONSISTENT, which is the
+    /// unsoundness the shared canonical form of `⊓` and `⊔` rules out.
+    #[test]
+    fn a_composite_complementary_pair_is_unsat() {
+        // C = ∀r.(A ⊔ B ⊔ A), spelled with a duplicate and a nested disjunction; ¬C is
+        // ∃r.(¬A ⊓ ¬B), which the same normalization must produce from the same tree.
+        let composite = Concept::All(
+            role(5),
+            Box::new(Concept::Or(vec![
+                Concept::Named(11),
+                Concept::Or(vec![Concept::Named(10), Concept::Named(11)]),
+            ])),
+        );
+        let mut b = Builder::new();
+        b.ty(1, composite.clone());
+        b.ty(1, Concept::Not(Box::new(composite)));
+        let kb = b.finish();
+        assert!(
+            !consistent_by_both(&kb),
+            "∀r.(A ⊔ B) together with its complement must clash"
+        );
     }
 
     #[test]

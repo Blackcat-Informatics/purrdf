@@ -1074,7 +1074,15 @@ pub(crate) fn build_until(
     // Every literal that reaches the knowledge base carries its VALUE into the completion
     // graph, and the literals' value classes decide which of them are one element of the data
     // domain and which are provably different ones.
-    let literal_class = register_literals(&interner, &mut table, &mut ranges, &mut acc, stop)?;
+    let literal_class = register_literals(
+        &interner,
+        &mut table,
+        &mut ranges,
+        &acc.abox_roles,
+        &mut acc.abox_types,
+        &mut acc.boundaries,
+        stop,
+    )?;
     // A data range this layer cannot decide EXACTLY is a reported boundary rather than a
     // silent weakening. The predicate is `purrdf-xsd`'s own, so the boundary and the decision
     // procedure cannot drift apart.
@@ -1082,16 +1090,20 @@ pub(crate) fn build_until(
         acc.boundaries.insert(Construct::DataRange);
     }
 
-    table.finalize_until(|| poll(stop))?;
     poll(stop)?;
-    Ok(Kb {
+    let mut kb = Kb {
         interner,
         table,
         top,
         bottom,
         tbox: acc.tbox,
-        meta: acc.meta,
-        unfold: acc.unfold,
+        // Both TBox encodings are DERIVED, not accumulated: `Kb::encode_until` below
+        // clausifies the whole inclusion list at once, which is what lets absorption split
+        // an axiom against inclusions the scan had not yet reached.
+        meta: Vec::new(),
+        absorbed: Vec::new(),
+        // Derived with them, and from them: the generating closure reads the absorbed table.
+        generating: Vec::new(),
         inverses: acc.inverses,
         role_sub: acc.role_sub,
         abox_types: acc.abox_types,
@@ -1106,10 +1118,19 @@ pub(crate) fn build_until(
         data_ranges: ranges,
         literal_class,
         boundaries: acc.boundaries,
+        encoded: false,
+        #[cfg(test)]
+        absorb_calls: 0,
         // The reverse mapping is not the place a caller's stop signal is named:
         // `Kb::with_stop` installs it on the knowledge base the caller then reasons over.
         stop: None,
-    })
+        #[cfg(test)]
+        internalize_only: false,
+        #[cfg(test)]
+        label_only_blocking: false,
+    };
+    kb.encode_until(|| poll(stop))?;
+    Ok(kb)
 }
 
 /// Give every literal that reaches the knowledge base its VALUE, and return the value-class
@@ -1138,15 +1159,28 @@ pub(crate) fn build_until(
 /// assertions, and the members of every interned nominal. A literal that only ever appears in
 /// an annotation is not one of them, and OWL 2's Direct Semantics agrees — an annotation
 /// constrains no interpretation, so its literal need not even denote.
-fn register_literals(
+///
+/// # Why the accumulators are passed apart rather than as one struct
+///
+/// The three pieces this reads and writes — the ingested role assertions, the concept
+/// assertions it appends a singleton range to, and the boundary set — are all this pass
+/// touches, and naming them individually is what lets the DIFFERENTIAL corpus generator
+/// ([`crate::owl_dl::oracle`]) register its literals through this function rather than
+/// through a test-only imitation of it. A generated knowledge base is assembled axiom by
+/// axiom and has no [`Accums`] to hand; the alternative was a second copy of the ill-typed,
+/// unmodelled and value-class rules, which is exactly the drift a differential exists to
+/// prevent.
+pub(crate) fn register_literals(
     interner: &Interner,
     table: &mut ConceptTable,
     ranges: &mut DataRangeTable,
-    acc: &mut Accums,
+    abox_roles: &[(u32, u32, u32)],
+    abox_types: &mut Vec<(u32, u32)>,
+    boundaries: &mut BTreeSet<Construct>,
     stop: Option<&dyn StopSignal>,
 ) -> Result<BTreeMap<u32, u32>, EntailError> {
     let mut terms = BTreeSet::new();
-    for &(_, _, object) in &acc.abox_roles {
+    for &(_, _, object) in abox_roles {
         poll(stop)?;
         terms.insert(object);
     }
@@ -1181,10 +1215,10 @@ fn register_literals(
         };
         let id = ranges.intern(range);
         let concept = table.intern(Concept::Data(id));
-        acc.abox_types.push((*term, concept));
+        abox_types.push((*term, concept));
     }
     if classes.any_unmodelled {
-        acc.boundaries.insert(Construct::DataRange);
+        boundaries.insert(Construct::DataRange);
     }
     Ok(classes.class_of)
 }
@@ -1224,8 +1258,6 @@ fn is_non_simple(
 #[derive(Default)]
 struct Accums {
     tbox: Vec<(u32, u32)>,
-    meta: Vec<u32>,
-    unfold: BTreeMap<u32, Vec<u32>>,
     inverses: BTreeMap<u32, BTreeSet<u32>>,
     role_sub: BTreeMap<u32, BTreeSet<u32>>,
     abox_types: Vec<(u32, u32)>,
@@ -1610,18 +1642,17 @@ fn type_assertion(
     Ok(())
 }
 
-/// Record a GCI `sub ⊑ sup`, absorbing it into the lazy-unfolding index when its left
-/// side is a single named class, else internalizing it as `nnf(¬sub ⊔ sup)`.
+/// Record a GCI `sub ⊑ sup`.
+///
+/// Recording is all it does. Which encoding the inclusion gets — a guarded clause or an
+/// internalized meta-concept — is decided by [`crate::owl_dl::absorb`] over the WHOLE
+/// inclusion list once the scan is done, because the pass splits `C ⊑ D ⊓ E` and
+/// `C ⊔ D ⊑ E` and a streaming decision cannot split an axiom against inclusions it has not
+/// yet reached.
 fn gci(table: &mut ConceptTable, acc: &mut Accums, sub: Concept, sup: Concept) {
-    let sub_id = table.intern(sub.clone());
-    let sup_id = table.intern(sup.clone());
+    let sub_id = table.intern(sub);
+    let sup_id = table.intern(sup);
     acc.tbox.push((sub_id, sup_id));
-    if matches!(sub, Concept::Named(_)) {
-        acc.unfold.entry(sub_id).or_default().push(sup_id);
-    } else {
-        let meta = Concept::Or(vec![Concept::Not(Box::new(sub)), sup]);
-        acc.meta.push(table.intern(meta));
-    }
 }
 
 /// Build a nominal from `owl:oneOf` ids: a singleton stays `{a}`; a larger set is the
